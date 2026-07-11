@@ -266,85 +266,74 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
     abortForImmediateFallbackSignal(text);
   });
 
-  childProcess.on('error', async (err) => {
-    if (timeoutHandle) clearTimeout(timeoutHandle);
-    toolkit.services.runner.unregisterExternalRun(runId);
-    cleanupPromptFile();
-    console.error(`❌ Run ${runId} spawn error: ${err.message}`);
+  // Node emits `error` for a spawn failure and commonly follows it with `close`.
+  // Funnel both events through one promise so terminal persistence + hooks run
+  // exactly once. The finalizer always merges into createRun's metadata instead
+  // of replacing attribution fields on the spawn-error path.
+  let finalizationPromise = null;
+  const finalizeTerminal = async ({ exitCode, spawnError = null }) => {
+    const metadataStr = await readFile(metadataPath, 'utf-8').catch(() => '{}');
+    let metadata = {};
+    try {
+      const parsed = JSON.parse(metadataStr);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) metadata = parsed;
+    } catch {
+      console.log('⚠️ Corrupted metadata for run, using fresh');
+    }
 
-    const metadata = {
-      endTime: new Date().toISOString(),
-      duration: Date.now() - startTime,
-      exitCode: -1,
-      success: false,
-      error: `Spawn failed: ${err.message}`,
-      errorCategory: 'spawn_error',
-      outputSize: Buffer.byteLength(output)
-    };
+    // Direct callers may not have gone through createRun. Fill only absent
+    // attribution fields; never overwrite the persisted provider/workspace.
+    metadata.id ??= runId;
+    if (metadata.providerId == null && provider.id) metadata.providerId = provider.id;
+    if (metadata.providerName == null && (provider.name || provider.id)) metadata.providerName = provider.name || provider.id;
+    if (metadata.model == null && provider.defaultModel) metadata.model = provider.defaultModel;
+    if (metadata.workspacePath == null && workspacePath) metadata.workspacePath = workspacePath;
 
-    await writeFile(outputPath, output).catch(() => {});
-    await atomicWrite(metadataPath, metadata).catch(() => {});
-    // Isolate the hook from onComplete — a throwing onRunFailed must not block
-    // the caller from settling, and an uncaught throw here would crash the
-    // process (this runs outside the request lifecycle).
-    safeSettle(() => runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output), `Run ${runId} onRunFailed hook`);
-    safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
-  });
-
-  childProcess.on('close', async (code) => {
-    // This runs outside the Express request lifecycle — an uncaught throw
-    // (e.g. a failed metadata write) would crash the Node process, so wrap
-    // the whole body and log via the emoji-prefixed convention.
     try {
       if (timeoutHandle) clearTimeout(timeoutHandle);
       toolkit.services.runner.unregisterExternalRun(runId);
       cleanupPromptFile();
+      if (spawnError) console.error(`❌ Run ${runId} spawn error: ${spawnError.message}`);
 
       await writeFile(outputPath, output);
 
-      const metadataStr = await readFile(metadataPath, 'utf-8').catch(() => '{}');
-      let metadata = {};
-      try { metadata = JSON.parse(metadataStr); } catch { console.log('⚠️ Corrupted metadata for run, using fresh'); }
       metadata.endTime = new Date().toISOString();
       metadata.duration = Date.now() - startTime;
-      metadata.exitCode = code;
-      // A mid-stream fallback signal (e.g. usage-limit hit) SIGTERM-kills the
-      // child; if it happens to exit 0 in that race, don't record the run as
-      // successful — the fallback path (onRunFailed) must fire. Mirrors the TUI
-      // finish({ success: false }) handling of the same signal.
-      metadata.success = code === 0 && !immediateFallbackAnalysis;
+      metadata.exitCode = exitCode;
+      metadata.success = spawnError ? false : exitCode === 0 && !immediateFallbackAnalysis;
       metadata.outputSize = Buffer.byteLength(output);
 
-      // Analyze errors if the run failed (delegate to toolkit's error detection)
-      if (!metadata.success && toolkit.services.errorDetection) {
-        const errorAnalysis = immediateFallbackAnalysis || toolkit.services.errorDetection.analyzeError(output, code);
-        metadata.error = errorAnalysis.message || `Process exited with code ${code}`;
+      if (spawnError) {
+        metadata.error = `Spawn failed: ${spawnError.message}`;
+        metadata.errorCategory = 'spawn_error';
+      } else if (!metadata.success && toolkit.services.errorDetection) {
+        // A mid-stream fallback signal (e.g. usage-limit hit) SIGTERM-kills the
+        // child; even an exit 0 must remain a failure so fallback can run.
+        const errorAnalysis = immediateFallbackAnalysis || toolkit.services.errorDetection.analyzeError(output, exitCode);
+        metadata.error = errorAnalysis.message || `Process exited with code ${exitCode}`;
         metadata.errorCategory = errorAnalysis.category;
         metadata.errorAnalysis = errorAnalysis;
       }
 
       await atomicWrite(metadataPath, metadata);
 
-      // Isolate the completion hooks + onComplete from the outer catch — a
-      // throwing onRunCompleted must NOT be reinterpreted as a finalization
-      // failure that flips a successful run to success:false for the caller.
+      // Isolate lifecycle hooks from onComplete so a hook failure never changes
+      // the terminal result or prevents the caller from settling.
       if (metadata.success) {
         safeSettle(() => runnerConfig.hooks?.onRunCompleted?.(metadata, output), `Run ${runId} onRunCompleted hook`);
       } else {
         safeSettle(() => runnerConfig.hooks?.onRunFailed?.(metadata, metadata.error, output), `Run ${runId} onRunFailed hook`);
       }
       safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
+      return metadata;
     } catch (err) {
-      console.error(`❌ Run ${runId} close handler error: ${err.message}`);
-      // The timeout was already cleared and the child has closed, so callers
-      // waiting on onComplete would hang forever if we only logged. Settle them
-      // with failure metadata so a disk/hook failure surfaces as a failed run.
-      // The hook and onComplete are isolated from each other — a throwing
-      // onRunFailed must NOT prevent onComplete from settling the caller.
+      const handler = spawnError ? 'error' : 'close';
+      console.error(`❌ Run ${runId} ${handler} handler error: ${err.message}`);
       const failMetadata = {
+        ...metadata,
         endTime: new Date().toISOString(),
         duration: Date.now() - startTime,
-        exitCode: code,
+        exitCode,
         success: false,
         error: `Run finalization failed: ${err.message}`,
         errorCategory: 'finalization_error',
@@ -352,7 +341,20 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
       };
       safeSettle(() => runnerConfig.hooks?.onRunFailed?.(failMetadata, failMetadata.error, output), `Run ${runId} onRunFailed hook`);
       safeSettle(() => onComplete?.(failMetadata), `Run ${runId} onComplete`);
+      return failMetadata;
     }
+  };
+  const finalizeOnce = (terminal) => {
+    if (!finalizationPromise) finalizationPromise = finalizeTerminal(terminal);
+    return finalizationPromise;
+  };
+
+  childProcess.on('error', (err) => {
+    void finalizeOnce({ exitCode: -1, spawnError: err });
+  });
+
+  childProcess.on('close', (code) => {
+    void finalizeOnce({ exitCode: code });
   });
 
   return runId;

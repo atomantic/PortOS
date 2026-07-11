@@ -495,14 +495,19 @@
     let totalLines = 0;
     let autoScroll = true;
     let selectedProcess = null;
-    let processStatuses = {};
+    let processStatuses = new Map();
+    const processStatusClasses = new Map([
+      ['online', 'status-online'],
+      ['stopped', 'status-stopped'],
+      ['errored', 'status-errored']
+    ]);
 
     // Fetch PM2 status
     async function fetchStatus() {
       const res = await fetch('/api/status');
       const statuses = await res.json();
-      processStatuses = {};
-      statuses.forEach(s => { processStatuses[s.name] = s.status; });
+      processStatuses = new Map();
+      statuses.forEach(s => { processStatuses.set(String(s.name ?? ''), s.status); });
       updateProcessList();
     }
 
@@ -524,33 +529,39 @@
 
     function updateProcessList() {
       const processes = window.processesList || [];
-      processList.innerHTML = processes.map(p => {
-        const status = processStatuses[p.name] || 'unknown';
-        const selected = selectedProcess === p.name ? 'selected' : '';
-        return `
-          <div class="process-item ${selected}" data-name="${p.name}">
-            <div class="process-name">
-              <span class="process-status status-${status}"></span>
-              ${p.name}
-            </div>
-            <div class="process-app">${p.app}</div>
-          </div>
-        `;
-      }).join('');
+      processList.replaceChildren();
 
-      // Reattach click handlers
-      document.querySelectorAll('.process-item').forEach(item => {
+      processes.forEach(p => {
+        const name = String(p.name ?? '');
+        const item = document.createElement('div');
+        item.classList.add('process-item');
+        if (selectedProcess === name) item.classList.add('selected');
+        item.dataset.name = name;
+
+        const nameEl = document.createElement('div');
+        nameEl.className = 'process-name';
+
+        const statusEl = document.createElement('span');
+        const statusClass = processStatusClasses.get(processStatuses.get(name)) || 'status-unknown';
+        statusEl.classList.add('process-status', statusClass);
+        nameEl.append(statusEl, document.createTextNode(name));
+
+        const appEl = document.createElement('div');
+        appEl.className = 'process-app';
+        appEl.textContent = String(p.app ?? '');
+
+        item.append(nameEl, appEl);
         item.addEventListener('click', () => {
-          const name = item.dataset.name;
-          selectProcess(name);
+          selectProcess(item.dataset.name);
         });
+        processList.appendChild(item);
       });
     }
 
     function selectProcess(name) {
       selectedProcess = name;
       currentProcessEl.textContent = name;
-      logsContainer.innerHTML = '';
+      logsContainer.replaceChildren();
       totalLines = 0;
       lineCount.textContent = '0 lines';
       restartBtn.disabled = false;
@@ -647,24 +658,44 @@
     async function fetchHistory() {
       const res = await fetch('/api/history');
       const history = await res.json();
+      historyPanel.replaceChildren();
 
-      historyPanel.innerHTML = history.map(h => {
+      if (!Array.isArray(history) || history.length === 0) {
+        const empty = document.createElement('div');
+        empty.style.padding = '1rem';
+        empty.style.color = '#666';
+        empty.textContent = 'No fix history yet';
+        historyPanel.appendChild(empty);
+        return;
+      }
+
+      history.forEach(h => {
         const date = new Date(h.startTime).toLocaleString();
         const duration = Math.round(h.duration / 1000);
-        return `
-          <div class="history-item">
-            <div class="time">${date} (${duration}s)</div>
-            <div class="process">${h.processName} - ${h.appName || 'Unknown App'}</div>
-            <div class="result ${h.success ? 'success' : 'failed'}">
-              ${h.success ? 'Fixed successfully' : 'Fix failed'}
-            </div>
-          </div>
-        `;
-      }).join('') || '<div style="padding:1rem;color:#666">No fix history yet</div>';
+
+        const item = document.createElement('div');
+        item.className = 'history-item';
+
+        const timeEl = document.createElement('div');
+        timeEl.className = 'time';
+        timeEl.textContent = `${date} (${duration}s)`;
+
+        const processEl = document.createElement('div');
+        processEl.className = 'process';
+        processEl.textContent = `${String(h.processName ?? '')} - ${String(h.appName || 'Unknown App')}`;
+
+        const resultEl = document.createElement('div');
+        const succeeded = h.success === true;
+        resultEl.classList.add('result', succeeded ? 'success' : 'failed');
+        resultEl.textContent = succeeded ? 'Fixed successfully' : 'Fix failed';
+
+        item.append(timeEl, processEl, resultEl);
+        historyPanel.appendChild(item);
+      });
     }
 
     clearBtn.addEventListener('click', () => {
-      logsContainer.innerHTML = '';
+      logsContainer.replaceChildren();
       totalLines = 0;
       lineCount.textContent = '0 lines';
     });

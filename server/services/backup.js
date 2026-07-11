@@ -100,10 +100,18 @@ export function backupStatusForPg(pgResult) {
  * Run rsync from srcDir to destDir with optional flags.
  * Resolves with array of changed file lines. Rejects on non-zero exit (except 24).
  */
+export function resolveRsyncBinary(env = process.env) {
+  const override = typeof env.PORTOS_RSYNC === 'string' ? env.PORTOS_RSYNC.trim() : '';
+  // A bare command lets spawn resolve rsync through PATH on macOS, Linux,
+  // Windows/MSYS, and non-standard Unix layouts. PORTOS_RSYNC remains the
+  // explicit escape hatch for bundled or custom installations.
+  return override || 'rsync';
+}
+
 function runRsync(srcDir, destDir, flags = []) {
   return new Promise((resolve, reject) => {
     const args = ['--archive', '--itemize-changes', ...flags, srcDir + '/', destDir];
-    const proc = spawn('/usr/bin/rsync', args, { shell: false });
+    const proc = spawn(resolveRsyncBinary(), args, { shell: false });
 
     const changed = [];
     let stderr = '';

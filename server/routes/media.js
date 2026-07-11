@@ -68,7 +68,13 @@ router.get('/video', (req, res) => {
 
   let frameBuffer = Buffer.alloc(0);
 
-  videoStream.on('data', (chunk) => {
+  const cleanup = () => {
+    videoStream.off('data', onData);
+    videoStream.off('end', onEnd);
+    res.off('close', onClose);
+  };
+
+  const onData = (chunk) => {
     frameBuffer = Buffer.concat([frameBuffer, chunk]);
 
     // Look for JPEG markers
@@ -85,15 +91,21 @@ router.get('/video', (req, res) => {
       start = frameBuffer.indexOf(Buffer.from([0xFF, 0xD8]));
       end = frameBuffer.indexOf(Buffer.from([0xFF, 0xD9]), start + 2);
     }
-  });
+  };
 
-  videoStream.on('end', () => {
+  const onEnd = () => {
+    cleanup();
     res.end();
-  });
+  };
 
-  req.on('close', () => {
+  const onClose = () => {
+    cleanup();
     console.log('📹 Video client disconnected');
-  });
+  };
+
+  videoStream.on('data', onData);
+  videoStream.on('end', onEnd);
+  res.once('close', onClose);
 });
 
 // Stream audio
@@ -112,7 +124,8 @@ router.get('/audio', (req, res) => {
 
   audioStream.pipe(res);
 
-  req.on('close', () => {
+  res.once('close', () => {
+    audioStream.unpipe(res);
     console.log('🎤 Audio client disconnected');
   });
 });

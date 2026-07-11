@@ -134,3 +134,35 @@ describe('Layout — pinned single nav rows', () => {
     expect(within(pinned).getAllByRole('link')).toHaveLength(1);
   });
 });
+
+describe('Layout — persistent mobile touch targets', () => {
+  const expectAtLeast44px = (element) => {
+    expect(element.className).toContain('min-w-[44px]');
+    expect(element.className).toContain('min-h-[44px]');
+  };
+
+  it('keeps navigation and header controls 44px through the mobile layout', async () => {
+    await renderLayout();
+
+    const openMenu = screen.getByRole('button', { name: 'Open navigation menu' });
+    const closeMenu = screen.getByRole('button', { name: 'Close sidebar' });
+    expectAtLeast44px(openMenu);
+    expectAtLeast44px(closeMenu);
+    expect(openMenu.closest('header')?.className).toContain('lg:hidden');
+    expect(closeMenu.className).toContain('lg:hidden');
+
+    const ambientLinks = screen.getAllByRole('link', { name: 'Ambient display' });
+    expect(ambientLinks).toHaveLength(2);
+    ambientLinks.forEach(expectAtLeast44px);
+
+    const themeToggles = screen.getAllByRole('button', { name: 'Toggle day/night mode' });
+    expect(themeToggles).toHaveLength(2);
+    themeToggles.forEach((toggle) => {
+      expectAtLeast44px(toggle);
+      expect(toggle.className).toContain('lg:min-w-0');
+      expect(toggle.className).toContain('lg:min-h-0');
+      expect(toggle.className).not.toContain('sm:min-w-0');
+      expect(toggle.className).not.toContain('sm:min-h-0');
+    });
+  });
+});

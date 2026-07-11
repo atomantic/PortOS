@@ -1,6 +1,7 @@
 import { useMemo, useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
+import { computeDistrictBounds } from '../../utils/cityMiniMap';
 import { PIXEL_FONT_URL, cityDayMix } from './cityConstants';
 import { useCityPalette } from './CityPaletteContext';
 import CityLabel from './CityLabel';
@@ -83,19 +84,9 @@ export default function CitySignalBeacons({ positions, reviewCounts, instances, 
   const config = useMemo(() => {
     if (!positions || positions.size === 0) return [];
 
-    const entries = [];
-    positions.forEach((pos) => {
-      if (pos.district === 'downtown') entries.push(pos);
-    });
-    if (entries.length === 0) return [];
-
-    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    entries.forEach(p => {
-      minX = Math.min(minX, p.x);
-      maxX = Math.max(maxX, p.x);
-      minZ = Math.min(minZ, p.z);
-      maxZ = Math.max(maxZ, p.z);
-    });
+    const bounds = computeDistrictBounds(positions, 'downtown');
+    if (!bounds) return [];
+    const { minX, maxX, minZ, maxZ } = bounds;
 
     const pending = reviewCounts?.total || 0;
     const alerts = reviewCounts?.alert || 0;

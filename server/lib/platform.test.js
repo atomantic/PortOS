@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest'
-import { platform, getListeningPorts, isPortInUse, findAvailablePorts, isAppleSilicon } from './platform.js'
+import { describe, it, expect, vi } from 'vitest'
+import { platform, parseListeningPorts, getListeningPorts, isPortInUse, findAvailablePorts, isAppleSilicon } from './platform.js'
 
 describe('platform module', () => {
   describe('platform constant', () => {
@@ -10,56 +10,87 @@ describe('platform module', () => {
   })
 
   describe('getListeningPorts', () => {
-    it('should return an array of numbers', async () => {
-      const ports = await getListeningPorts()
-      expect(Array.isArray(ports)).toBe(true)
-      for (const port of ports) {
-        expect(typeof port).toBe('number')
-        expect(Number.isInteger(port)).toBe(true)
-      }
+    it('parses, deduplicates, and sorts deterministic lsof output', () => {
+      const stdout = [
+        'COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME',
+        'node 1 user 20u IPv4 0 0t0 TCP *:6001 (LISTEN)',
+        'node 2 user 21u IPv6 0 0t0 TCP [::1]:5555 (LISTEN)',
+        'node 3 user 22u IPv4 0 0t0 TCP 127.0.0.1:6001 (LISTEN)',
+      ].join('\n')
+      expect(parseListeningPorts(stdout, 'darwin')).toEqual([5555, 6001])
     })
 
-    it('should return ports in sorted order', async () => {
-      const ports = await getListeningPorts()
-      for (let i = 1; i < ports.length; i++) {
-        expect(ports[i]).toBeGreaterThanOrEqual(ports[i - 1])
-      }
+    it('parses deterministic ss output', () => {
+      const stdout = [
+        'State Recv-Q Send-Q Local Address:Port Peer Address:Port Process',
+        'LISTEN 0 511 0.0.0.0:7000 0.0.0.0:* users:(("node",pid=1,fd=1))',
+        'LISTEN 0 511 [::]:5555 [::]:* users:(("node",pid=2,fd=2))',
+      ].join('\n')
+      expect(parseListeningPorts(stdout, 'linux')).toEqual([5555, 7000])
     })
 
-    it('should return unique ports', async () => {
-      const ports = await getListeningPorts()
-      const unique = new Set(ports)
-      expect(unique.size).toBe(ports.length)
+    it('parses only LISTENING rows from deterministic netstat output', () => {
+      const stdout = [
+        '  TCP    0.0.0.0:445     0.0.0.0:0       LISTENING',
+        '  TCP    127.0.0.1:6000  127.0.0.1:50000 ESTABLISHED',
+        '  TCP    [::]:7000        [::]:0          LISTENING',
+      ].join('\n')
+      expect(parseListeningPorts(stdout, 'win32')).toEqual([445, 7000])
+    })
+
+    it('runs the platform probe and surfaces discovery failure explicitly', async () => {
+      const exec = vi.fn()
+        .mockResolvedValueOnce({ stdout: 'State Header\nLISTEN 0 511 0.0.0.0:6000 0.0.0.0:*' })
+        .mockRejectedValueOnce(new Error('ss: command not found'))
+
+      await expect(getListeningPorts({ platform: 'linux', exec })).resolves.toEqual([6000])
+      expect(exec).toHaveBeenCalledWith('ss -lntp', { windowsHide: true })
+      await expect(getListeningPorts({ platform: 'linux', exec })).rejects.toMatchObject({
+        code: 'PORT_DISCOVERY_FAILED',
+        command: 'ss -lntp',
+      })
     })
   })
 
   describe('isPortInUse', () => {
-    it('should return a boolean', async () => {
-      const result = await isPortInUse(59999)
-      expect(typeof result).toBe('boolean')
+    it('checks a port against deterministic discovery output', async () => {
+      const options = {
+        platform: 'linux',
+        exec: vi.fn().mockResolvedValue({ stdout: 'State Header\nLISTEN 0 511 0.0.0.0:6000 0.0.0.0:*' }),
+      }
+      await expect(isPortInUse(6000, options)).resolves.toBe(true)
+      await expect(isPortInUse(6001, options)).resolves.toBe(false)
     })
   })
 
   describe('findAvailablePorts', () => {
-    it('should return available ports within range', async () => {
-      const ports = await findAvailablePorts(49000, 49100, 3)
-      expect(Array.isArray(ports)).toBe(true)
-      expect(ports.length).toBeLessThanOrEqual(3)
-      for (const port of ports) {
-        expect(port).toBeGreaterThanOrEqual(49000)
-        expect(port).toBeLessThanOrEqual(49100)
+    it('excludes known occupied ports', async () => {
+      const options = {
+        platform: 'linux',
+        exec: vi.fn().mockResolvedValue({
+          stdout: 'State Header\nLISTEN 0 511 0.0.0.0:6000 0.0.0.0:*\nLISTEN 0 511 0.0.0.0:6002 0.0.0.0:*',
+        }),
       }
-    })
-
-    it('should default to finding 1 port', async () => {
-      const ports = await findAvailablePorts(49200, 49300)
-      expect(ports.length).toBeLessThanOrEqual(1)
+      await expect(findAvailablePorts(6000, 6003, 2, options)).resolves.toEqual([6001, 6003])
     })
 
     it('should return empty array when range is exhausted', async () => {
       // Range of 0 ports
-      const ports = await findAvailablePorts(49400, 49399, 1)
+      const ports = await findAvailablePorts(49400, 49399, 1, {
+        platform: 'linux',
+        exec: vi.fn().mockResolvedValue({ stdout: '' }),
+      })
       expect(ports).toEqual([])
+    })
+
+    it('does not advertise ports as free when discovery is unknown', async () => {
+      const options = {
+        platform: 'linux',
+        exec: vi.fn().mockRejectedValue(new Error('permission denied')),
+      }
+      await expect(findAvailablePorts(6000, 6003, 2, options)).rejects.toMatchObject({
+        code: 'PORT_DISCOVERY_FAILED',
+      })
     })
   })
 

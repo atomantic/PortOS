@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   MINI_MAP_PADDING,
   computeBounds,
+  computeDistrictBounds,
   projectPoint,
   computeMiniMap,
   geographyWorldPoints,
@@ -26,6 +27,32 @@ describe('computeBounds', () => {
   it('collapses to a zero-span box for a single point', () => {
     const b = computeBounds([pos(5, -3)]);
     expect(b).toEqual({ minX: 5, maxX: 5, minZ: -3, maxZ: -3 });
+  });
+});
+
+describe('computeDistrictBounds', () => {
+  it('returns null when a populated layout has no entries in the requested district', () => {
+    const positions = new Map([
+      ['archived-a', { x: -6, z: 16, district: 'warehouse' }],
+      ['archived-b', { x: 6, z: 16, district: 'warehouse' }],
+    ]);
+
+    expect(computeDistrictBounds(positions, 'downtown', { minCount: 2 })).toBeNull();
+  });
+
+  it('uses the canonical bounds reducer after applying the district and count gate', () => {
+    const positions = new Map([
+      ['a', { x: -4, z: 3, district: 'downtown' }],
+      ['b', { x: 7, z: -2, district: 'downtown' }],
+      ['archived', { x: 100, z: 100, district: 'warehouse' }],
+    ]);
+
+    expect(computeDistrictBounds(positions, 'downtown', { minCount: 2 })).toEqual({
+      minX: -4,
+      maxX: 7,
+      minZ: -2,
+      maxZ: 3,
+    });
   });
 });
 

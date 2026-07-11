@@ -584,11 +584,22 @@ export async function updateAppTaskTypeOverride(id, taskType, { enabled, interva
  * baselines on the next tick instead of waiting out the prior 30-min custom
  * interval — otherwise PRs opened in that delayed window slip past the firstRun
  * baseline. Dynamic import avoids a static apps↔taskSchedule cycle (taskSchedule
- * already imports this module). Best-effort: a missing history is a no-op.
+ * already imports this module). Best-effort: a missing history is a no-op and a
+ * storage failure must not block the primary app-disable write, but it is logged
+ * with app context instead of disappearing.
  */
 async function resetPrWatcherCooldown(appId) {
-  const { resetExecutionHistory } = await import('./taskSchedule.js');
-  await resetExecutionHistory('pr-watcher', appId).catch(() => {});
+  try {
+    const { resetExecutionHistory } = await import('./taskSchedule.js');
+    const result = await resetExecutionHistory('pr-watcher', appId);
+    if (result?.error && result.error !== 'No execution history found') {
+      console.error(`❌ Failed to reset pr-watcher cooldown for app ${appId}: ${result.error}`);
+    }
+    return result;
+  } catch (err) {
+    console.error(`❌ Failed to reset pr-watcher cooldown for app ${appId}: ${err.message}`);
+    return { error: err.message };
+  }
 }
 
 /**
