@@ -245,7 +245,10 @@ export async function probeBroker(broker, vectors, {
   // 404/5xx stay out of the wall gate even when the error page carries an
   // incidental antibot token — those statuses are inconclusive by contract
   // (classifyScanResult), and escalating them could adopt a substantive error
-  // page as a definitive not_found.
+  // page as a definitive not_found. 429 is also deliberately excluded: the
+  // host just asked us to back off, so firing a second (heavier) browser
+  // request at it is counterproductive — `blocked` + the 14-day recheck is
+  // the right verdict for a rate-limited probe.
   const walled = result && (status === 403 || (status < 400 && containsAntibot(html)));
   const jsShell = result && !walled && status >= 200 && status < 400 && looksLikeJsShell(html);
   if (walled || jsShell) {
