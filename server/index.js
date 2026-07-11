@@ -17,7 +17,7 @@ import appleHealthRoutes from './routes/appleHealth.js';
 import avatarRoutes from './routes/avatar.js';
 import systemHealthRoutes from './routes/systemHealth.js';
 import capabilitiesRoutes from './routes/capabilities.js';
-import appsRoutes from './routes/apps.js';
+import appsRoutes from './routes/apps/index.js';
 import workspaceContextsRoutes from './routes/workspaceContexts.js';
 import referenceReposRoutes from './routes/referenceRepos.js';
 import portsRoutes from './routes/ports.js';
