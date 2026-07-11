@@ -7,8 +7,13 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { ThemeProvider } from './components/ThemeContext';
 import { isStaleChunkError, reloadOnceForStaleChunk } from './utils/staleChunkReload';
 import { reportClientError } from './lib/clientErrorReporter';
+import { registerServiceWorker } from './lib/registerServiceWorker';
 import App from './App';
 import './index.css';
+
+// Offline app-shell + low-bandwidth asset caching (production, secure-context
+// only — no-op in dev and over plain-HTTP Tailnet). See lib/registerServiceWorker.
+registerServiceWorker();
 
 // Vite emits `vite:preloadError` when a code-split chunk's preload 404s —
 // usually because the server rebuilt and the chunk filename changed while
