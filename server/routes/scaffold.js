@@ -8,6 +8,7 @@ import { promisify } from 'util';
 import { platform } from 'os';
 import { createApp, getReservedPorts } from '../services/apps.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { validateRequest, scaffoldSchema } from '../lib/validation.js';
 import { ensureDir, expandHome } from '../lib/fileUtils.js';
 import { isWithinAllowedRoots } from '../lib/workspaceRoots.js';
 import { scaffoldVite } from './scaffoldVite.js';
@@ -210,23 +211,15 @@ async function findNextAvailablePorts(needsApi, needsUi) {
 
 // Shared scaffold logic
 async function scaffoldApp(req, res) {
-  let {
-    name,
-    template,
-    parentDir,
-    uiPort,
-    apiPort,
-    createGitHubRepo = false,
-    githubOrg = null
-  } = req.body;
-
-  // Validation
-  if (!name || !template || !parentDir) {
-    throw new ServerError('name, template, and parentDir are required', {
-      status: 400,
-      code: 'VALIDATION_ERROR'
-    });
-  }
+  // Validate + normalize the COMPLETE request before ANY filesystem write or
+  // subprocess spawn: unknown templates and out-of-range ports are rejected
+  // deterministically here, so no target directory or resource is allocated
+  // for a request the route can't fulfill (issue #2390).
+  const parsed = validateRequest(scaffoldSchema, req.body);
+  const { name, template, parentDir, createGitHubRepo, githubOrg } = parsed;
+  // uiPort/apiPort are reassigned by the auto-allocator below, so they need
+  // their own mutable bindings.
+  let { uiPort, apiPort } = parsed;
 
   // Auto-allocate ports if not provided
   const templateNeedsPorts = {
