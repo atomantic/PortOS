@@ -170,8 +170,21 @@ describe('scanBroker — classify → record wiring', () => {
   it('does NOT adopt a shell-length browser page on a wall (stays blocked, not not_found)', async () => {
     brokers.recordScanVerdict.mockClear();
     const fetchImpl = vi.fn(async () => ({ status: 403, text: async () => 'Access denied' }));
-    const browserFetch = vi.fn(async () => ({ text: 'Just a moment' }));
+    // Marker-free short text: if the adoption guard were dropped, this would
+    // classify as not_found (status rewritten to 200, no antibot marker) —
+    // so the blocked assertion genuinely pins the guard.
+    const browserFetch = vi.fn(async () => ({ text: 'Loading' }));
     const res = await scanBroker(broker, vectors, { fetchImpl, browserFetch, urlSafe: async () => true });
     expect(res.state).toBe('blocked');
+  });
+
+  it('a 404 carrying an incidental antibot token stays inconclusive (no wall escalation)', async () => {
+    brokers.recordScanVerdict.mockClear();
+    const fetchImpl = vi.fn(async () => ({ status: 404, text: async () => 'Not found — report a problem (reCAPTCHA)' }));
+    const browserFetch = vi.fn(async () => ({ text: `Nobody here. ${'x'.repeat(700)}` }));
+    const res = await scanBroker(broker, vectors, { fetchImpl, browserFetch, urlSafe: async () => true });
+    expect(res.skipped).toBe(true);
+    expect(browserFetch).not.toHaveBeenCalled();
+    expect(brokers.recordScanVerdict).not.toHaveBeenCalled();
   });
 });
