@@ -57,3 +57,30 @@ describe('TaskItem task source', () => {
     ));
   });
 });
+
+describe('TaskItem blocked reason', () => {
+  it('renders blockedReason when a blocked task has no user-set blocker', () => {
+    // Every server-side auto-block (max-spawns, retries, provider-config, …) writes
+    // metadata.blockedReason, never `blocker`, so the display must fall back to it.
+    const blocked = {
+      id: 'sys-blocked',
+      description: 'Blocked task',
+      status: 'blocked',
+      metadata: { blockedReason: 'Provider "ollama" is an HTTP API provider with no file-writing harness' },
+    };
+    render(<TaskItem task={blocked} isSystem onRefresh={vi.fn()} providers={providers} />);
+    expect(screen.getByText(/no file-writing harness/)).toBeInTheDocument();
+  });
+
+  it('prefers the user-set blocker over blockedReason', () => {
+    const blocked = {
+      id: 'sys-blocked-2',
+      description: 'Blocked task',
+      status: 'blocked',
+      metadata: { blocker: 'Paused by user', blockedReason: 'Max total spawns exceeded' },
+    };
+    render(<TaskItem task={blocked} isSystem onRefresh={vi.fn()} providers={providers} />);
+    expect(screen.getByText('Paused by user')).toBeInTheDocument();
+    expect(screen.queryByText(/Max total spawns/)).not.toBeInTheDocument();
+  });
+});

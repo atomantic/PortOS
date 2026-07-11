@@ -430,11 +430,14 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
                   ))}
                 </div>
               )}
-              {/* Blocker reason display */}
-              {task.status === 'blocked' && task.metadata?.blocker && (
+              {/* Blocker reason display. Prefer the user-set `blocker`, but fall
+                  back to `blockedReason` — the field every server-side block
+                  writes (max-spawns, retries, provider-config, terminated, …), so
+                  without this fallback an auto-blocked task shows no reason at all. */}
+              {task.status === 'blocked' && (task.metadata?.blocker || task.metadata?.blockedReason) && (
                 <div className="flex items-start gap-2 mt-2 px-2 py-1.5 bg-port-error/10 border border-port-error/20 rounded text-sm">
                   <AlertCircle size={14} className="text-port-error shrink-0 mt-0.5" aria-hidden="true" />
-                  <span className="text-port-error/90">{task.metadata.blocker}</span>
+                  <span className="text-port-error/90">{task.metadata.blocker || task.metadata.blockedReason}</span>
                 </div>
               )}
             </>
