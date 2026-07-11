@@ -52,6 +52,15 @@ const STATIC_FILE_RE = /^\/(manifest\.json|favicon\.(?:ico|svg)|apple-touch-icon
 // aggressively than a named SW cache).
 const FONT_HOSTS = new Set(['fonts.googleapis.com', 'fonts.gstatic.com']);
 
+// Paths (`/assets/...`) referenced by the CURRENTLY cached shell — the boot
+// JS/CSS the app can't start without. They live in ASSET_CACHE like any chunk
+// but are the *oldest* insertions (written at install), so a naive
+// insertion-order trim would evict them first and a later offline reload would
+// get the shell but no boot code. trimCache pins these. Repopulated to the
+// committed shell's asset set whenever the shell is (re)cached, so it tracks
+// the current build and old builds' boot assets become trimmable again.
+let bootAssetPaths = new Set();
+
 self.addEventListener('install', (event) => {
   // Adopt the new worker as soon as it's installed. Combined with network-first
   // navigations + the app's stale-chunk reload, this is safe: an open tab keeps
@@ -69,27 +78,14 @@ self.addEventListener('install', (event) => {
       if (!response || !response.ok) return;
       const shell = await caches.open(SHELL_CACHE);
       await shell.put(SHELL_KEY, response.clone());
-
-      // Precache the entry assets the shell references so a FIRST-VISIT offline
-      // reload can actually boot. On a fresh install the SW only starts
-      // controlling the page after window.load, so the initial page's
-      // /assets/*.js|.css were served from the network and never entered
-      // ASSET_CACHE — an offline reload before any second online load would
-      // return the shell but miss every asset. Parse the hashed asset URLs out
-      // of the shell HTML (entry chunk + its modulepreload deps + CSS) and warm
-      // ASSET_CACHE. Best-effort per asset; failures don't abort install.
-      const html = await response.text();
-      const assetUrls = [...new Set(
-        [...html.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map((m) => m[1])
-      )];
-      if (assetUrls.length) {
-        const assets = await caches.open(ASSET_CACHE);
-        await Promise.all(assetUrls.map((url) =>
-          assets.match(url).then((hit) =>
-            hit || fetch(url).then((r) => (r.ok ? assets.put(url, r) : null)).catch(() => {})
-          )
-        ));
-      }
+      // Precache this build's boot assets (entry chunk + modulepreload deps +
+      // CSS parsed from the shell) so a FIRST-VISIT offline reload can boot: on
+      // a fresh install the SW only starts controlling the page after
+      // window.load, so the initial page's /assets/* were network-served and
+      // never entered ASSET_CACHE. Pin them regardless of individual fetch
+      // failures — they match the shell we just committed.
+      const { urls } = await precacheBootAssets(await response.text());
+      bootAssetPaths = new Set(urls);
     })()
   );
 });
@@ -182,23 +178,62 @@ self.addEventListener('fetch', (event) => {
 // --- strategies ---------------------------------------------------------
 
 async function navigationHandler(event) {
-  const cache = await caches.open(SHELL_CACHE);
+  const shell = await caches.open(SHELL_CACHE);
   try {
     // Prefer the browser's navigation-preload response when available.
     const preload = await event.preloadResponse;
     const response = preload || (await fetch(event.request));
     if (response && response.ok) {
-      cache.put(SHELL_KEY, response.clone()).catch(() => {});
+      // Update the offline shell + boot assets in the BACKGROUND so the
+      // navigation response isn't delayed. Only REPLACE the known-good shell
+      // once this build's boot assets are all cached — so a half-downloaded
+      // deploy (new HTML fetched, its hashed assets not yet downloaded, e.g. a
+      // flaky link mid-rollout) can't strand the offline fallback on a shell
+      // whose assets are unavailable. Pin the boot set only when we commit the
+      // matching shell, so trimCache keeps pinning the OLD assets until the new
+      // shell actually takes over.
+      const toCache = response.clone();
+      event.waitUntil((async () => {
+        const { urls, cachedAll } = await precacheBootAssets(await toCache.clone().text());
+        if (cachedAll) {
+          await shell.put(SHELL_KEY, toCache);
+          bootAssetPaths = new Set(urls);
+        }
+      })().catch(() => {}));
     }
     return response;
   } catch {
-    const cached = await cache.match(SHELL_KEY);
+    const cached = await shell.match(SHELL_KEY);
     if (cached) return cached;
     // Last resort: whatever we have for this exact navigation URL.
     const exact = await caches.match(event.request);
     if (exact) return exact;
     return Response.error();
   }
+}
+
+// Parse the shell HTML's `/assets/...` references (entry chunk + its
+// modulepreload deps + CSS) and warm them into ASSET_CACHE. Returns the
+// referenced `urls` plus `cachedAll` — true iff every referenced asset is now
+// cached — which the caller uses to gate replacing a known-good offline shell.
+// Does NOT mutate the pinned set; the caller pins only when it commits the
+// matching shell, so the pin and the cached shell never disagree.
+async function precacheBootAssets(html) {
+  const urls = [...new Set(
+    [...html.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map((m) => m[1])
+  )];
+  if (!urls.length) return { urls, cachedAll: true };
+  const cache = await caches.open(ASSET_CACHE);
+  const results = await Promise.all(urls.map(async (url) => {
+    if (await cache.match(url)) return true;
+    const r = await fetch(url).catch(() => null);
+    if (r && r.ok) {
+      await cache.put(url, r);
+      return true;
+    }
+    return false;
+  }));
+  return { urls, cachedAll: results.every(Boolean) };
 }
 
 async function cacheFirst(request, cacheName, maxEntries) {
@@ -240,9 +275,15 @@ async function networkFallingBackToCache(request) {
 // Trim a cache to its N most-recently-added entries (cache.keys() preserves
 // insertion order, so the oldest are at the front). Takes an already-open
 // cache handle. Fire-and-forget; only enumerates on the rare over-cap put.
+//
+// The current shell's boot assets are NEVER evicted, even though they're the
+// oldest insertions: the shell can't start without them, so trimming them would
+// break a later offline reload. Trim only the runtime chunks (lazy route splits,
+// old builds' assets), oldest-first.
 async function trimCache(cache, maxEntries) {
   const keys = await cache.keys();
   if (keys.length <= maxEntries) return;
-  const excess = keys.slice(0, keys.length - maxEntries);
+  const trimmable = keys.filter((req) => !bootAssetPaths.has(new URL(req.url).pathname));
+  const excess = trimmable.slice(0, keys.length - maxEntries);
   await Promise.all(excess.map((key) => cache.delete(key)));
 }
