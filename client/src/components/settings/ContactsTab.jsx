@@ -117,7 +117,7 @@ export function ContactsTab() {
         <p className="text-sm text-gray-400 mb-4">
           Reads your local AddressBook databases read-only into a machine-local cache.
           Used to show names (and companies) on{' '}
-          <Link to="/imessage" className="text-port-accent hover:underline">Comms → iMessage</Link>
+          <Link to="/messages/imessage" className="text-port-accent hover:underline">Comms → iMessage</Link>
           {' '}and to fill missing phones/emails on{' '}
           <Link to="/tribe" className="text-port-accent hover:underline">Tribe</Link>
           {' '}people. Never writes Apple Contacts. Requires{' '}
