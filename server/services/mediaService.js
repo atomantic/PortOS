@@ -70,7 +70,7 @@ function startVideoStream(deviceId = '0') {
   const stream = new PassThrough();
 
   // Use MJPEG format for compatibility and low latency
-  const process = spawn('ffmpeg', [
+  const child = spawn('ffmpeg', [
     '-f', 'avfoundation',
     '-video_size', '1280x720',
     '-framerate', '30',
@@ -79,25 +79,25 @@ function startVideoStream(deviceId = '0') {
     '-q:v', '5',
     '-'
   ], { env: safeChildProcessEnv() });
-  videoProcess = process;
+  videoProcess = child;
   videoStream = stream;
 
-  process.stdout.pipe(stream);
+  child.stdout.pipe(stream);
 
-  process.stderr.on('data', (data) => {
+  child.stderr.on('data', (data) => {
     const msg = data.toString();
     if (!msg.includes('frame=') && !msg.includes('fps=')) {
       console.log(`📹 FFmpeg video: ${msg.trim()}`);
     }
   });
 
-  process.on('error', (err) => {
+  child.on('error', (err) => {
     console.error(`❌ Video stream error: ${err.message}`);
   });
 
-  process.on('close', () => {
+  child.on('close', () => {
     console.log('📹 Video stream stopped');
-    if (videoProcess === process) videoProcess = null;
+    if (videoProcess === child) videoProcess = null;
     if (videoStream === stream) videoStream = null;
   });
 
@@ -113,7 +113,7 @@ function startAudioStream(deviceId = '0') {
   const stream = new PassThrough();
 
   // Use WebM format with Opus codec for web compatibility
-  const process = spawn('ffmpeg', [
+  const child = spawn('ffmpeg', [
     '-f', 'avfoundation',
     '-i', `:${deviceId}`,
     '-f', 'webm',
@@ -123,25 +123,25 @@ function startAudioStream(deviceId = '0') {
     '-b:a', '128k',
     '-'
   ], { env: safeChildProcessEnv() });
-  audioProcess = process;
+  audioProcess = child;
   audioStream = stream;
 
-  process.stdout.pipe(stream);
+  child.stdout.pipe(stream);
 
-  process.stderr.on('data', (data) => {
+  child.stderr.on('data', (data) => {
     const msg = data.toString();
     if (!msg.includes('frame=') && !msg.includes('size=')) {
       console.log(`🎤 FFmpeg audio: ${msg.trim()}`);
     }
   });
 
-  process.on('error', (err) => {
+  child.on('error', (err) => {
     console.error(`❌ Audio stream error: ${err.message}`);
   });
 
-  process.on('close', () => {
+  child.on('close', () => {
     console.log('🎤 Audio stream stopped');
-    if (audioProcess === process) audioProcess = null;
+    if (audioProcess === child) audioProcess = null;
     if (audioStream === stream) audioStream = null;
   });
 
