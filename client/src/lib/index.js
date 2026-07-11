@@ -66,6 +66,7 @@ export * from './manuscriptFormat.js';
 export * from './mediaNavigation.js';
 export * from './mediaSearch.js';
 export * from './moodBoardItemSrc.js';
+export * from './registerServiceWorker.js';
 export * from './safeStorage.js';
 export * from './sameJsonShape.js';
 export * from './sketchCanvas.js';
