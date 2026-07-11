@@ -178,6 +178,15 @@ describe('scanBroker — classify → record wiring', () => {
     expect(res.state).toBe('blocked');
   });
 
+  it('adopts a SHORT browser page after a wall when it carries a positive name signal', async () => {
+    brokers.recordScanVerdict.mockClear();
+    const fetchImpl = vi.fn(async () => ({ status: 403, text: async () => 'Access denied' }));
+    // Concise real result page (< JS-shell length) naming the person + city.
+    const browserFetch = vi.fn(async () => ({ text: 'Jane Q Doe — Portland, OR. 1 record.' }));
+    const res = await scanBroker(broker, vectors, { fetchImpl, browserFetch, urlSafe: async () => true });
+    expect(res.state).toBe('found');
+  });
+
   it('a 404 carrying an incidental antibot token stays inconclusive (no wall escalation)', async () => {
     brokers.recordScanVerdict.mockClear();
     const fetchImpl = vi.fn(async () => ({ status: 404, text: async () => 'Not found — report a problem (reCAPTCHA)' }));

@@ -478,7 +478,14 @@ export async function transitionCase(caseId, toState, patch = {}) {
     const sets = ['state = $1', 'next_recheck_at = $2', 'updated_at = NOW()'];
     const params = [toState, computeNextRecheckAt(toState, now)];
     const add = (column, value) => { params.push(value); sets.push(`${column} = $${params.length}`); };
-    if (patch.found !== undefined) add('found', patch.found);
+    // A transition onto a verdict state implies the ledger's `found` flag
+    // (e.g. the blocked-case manual "I'm listed" → found), unless the caller
+    // supplied an explicit patch.found. indirect_exposure stays null: a
+    // name-only match is an unknown, not a confirmed listing.
+    const impliedFound = { found: true, not_found: false, indirect_exposure: null };
+    const foundValue = patch.found !== undefined ? patch.found
+      : (toState in impliedFound ? impliedFound[toState] : undefined);
+    if (foundValue !== undefined) add('found', foundValue);
     if (patch.channel !== undefined) add('channel', patch.channel);
     if (patch.reason !== undefined) add('reason', patch.reason);
     if (patch.disclosedFields !== undefined) add('disclosed_fields', patch.disclosedFields);
