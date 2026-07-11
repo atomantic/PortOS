@@ -66,9 +66,29 @@ self.addEventListener('install', (event) => {
       // pre-warm must write the same key (cache.add would key it by "/" and the
       // fallback would miss). Best-effort — a failure must not abort install.
       const response = await fetch(new Request('/', { cache: 'reload' })).catch(() => null);
-      if (response && response.ok) {
-        const cache = await caches.open(SHELL_CACHE);
-        await cache.put(SHELL_KEY, response);
+      if (!response || !response.ok) return;
+      const shell = await caches.open(SHELL_CACHE);
+      await shell.put(SHELL_KEY, response.clone());
+
+      // Precache the entry assets the shell references so a FIRST-VISIT offline
+      // reload can actually boot. On a fresh install the SW only starts
+      // controlling the page after window.load, so the initial page's
+      // /assets/*.js|.css were served from the network and never entered
+      // ASSET_CACHE — an offline reload before any second online load would
+      // return the shell but miss every asset. Parse the hashed asset URLs out
+      // of the shell HTML (entry chunk + its modulepreload deps + CSS) and warm
+      // ASSET_CACHE. Best-effort per asset; failures don't abort install.
+      const html = await response.text();
+      const assetUrls = [...new Set(
+        [...html.matchAll(/(?:src|href)="(\/assets\/[^"]+)"/g)].map((m) => m[1])
+      )];
+      if (assetUrls.length) {
+        const assets = await caches.open(ASSET_CACHE);
+        await Promise.all(assetUrls.map((url) =>
+          assets.match(url).then((hit) =>
+            hit || fetch(url).then((r) => (r.ok ? assets.put(url, r) : null)).catch(() => {})
+          )
+        ));
       }
     })()
   );
