@@ -31,6 +31,7 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '
 import { findFfmpeg, safeUnder, generateThumbnail, probeVideoDuration } from '../../lib/ffmpeg.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
 import { loadHistory, mutateVideoHistory } from '../videoGen/local.js';
 import { getTrack } from '../tracks/index.js';
 import { getProject, updateProject } from './projects.js';
@@ -301,18 +302,6 @@ export async function renderMusicVideo(projectId) {
     const proc = spawn(ffmpeg, args, { env: safeChildProcessEnv(), stdio: ['ignore', 'ignore', 'pipe'] });
     job.process = proc;
 
-    // 'error' fires for BOTH a genuine pre-spawn failure (ENOENT — the child
-    // never started, so no 'close' will follow) AND a later child-process error
-    // such as a failed kill (the ffmpeg is still live and 'close' still owes us
-    // a terminal event). Track spawn state so only the pre-spawn case finalizes
-    // immediately; a post-spawn error must retain process + project-mutex
-    // ownership until 'close' so a replacement render can't overlap the live
-    // ffmpeg process. `terminal` makes the terminal handling exactly-once,
-    // shared between the pre-spawn error branch and 'close'.
-    let spawned = false;
-    let terminal = false;
-    proc.on('spawn', () => { spawned = true; });
-
     let stderrBuf = '';
     proc.stderr.on('data', (chunk) => {
       stderrBuf += chunk.toString();
@@ -335,24 +324,21 @@ export async function renderMusicVideo(projectId) {
       }
     });
 
-    proc.on('error', async (err) => {
-      try {
-        // Already finalized (a pre-spawn error or 'close' won the race) — a late
-        // stray 'error' (e.g. ESRCH/EPERM from a kill on the now-dead pid) must
-        // not clobber lastError on a completed job.
-        if (terminal) return;
-        if (spawned) {
-          // Post-spawn error (e.g. a failed kill during cancel). The ffmpeg is
-          // still live — do NOT release the project mutex or null job.process
-          // here, or a replacement render could spawn and overlap it. Record
-          // the reason; the pending 'close' runs the sole terminal finalization.
-          job.lastError = `ffmpeg process error: ${err.message}`;
-          console.log(`⚠️ Music-video render post-spawn error [${jobId.slice(0, 8)}]: ${err.message}`);
-          return;
-        }
-        // Pre-spawn failure: the child never started, so 'close' won't follow —
-        // finalize here.
-        terminal = true;
+    // Spawn-state tracking + exactly-once terminal guard + pre-vs-post-spawn
+    // dispatch live in the shared helper; only the finalize bodies below are
+    // service-specific (music-video mutates the project's render status).
+    attachFfmpegRenderGuard(proc, {
+      label: `Music-video render [${jobId.slice(0, 8)}]`,
+      onProcessError: (err) => {
+        // Post-spawn error (e.g. a failed kill during cancel). The ffmpeg is
+        // still live — do NOT release the project mutex or null job.process
+        // here, or a replacement render could spawn and overlap it. Record
+        // the reason; the pending 'close' runs the sole terminal finalization.
+        job.lastError = `ffmpeg process error: ${err.message}`;
+        console.log(`⚠️ Music-video render post-spawn error [${jobId.slice(0, 8)}]: ${err.message}`);
+      },
+      onSpawnError: async (err) => {
+        // Pre-spawn failure: the child never started, so 'close' won't follow.
         job.process = null;
         job.status = 'error';
         const reason = `Failed to spawn ffmpeg: ${err.message}`;
@@ -362,65 +348,61 @@ export async function renderMusicVideo(projectId) {
         projectRenders.delete(projectId);
         await updateProject(projectId, { status: 'failed' }).catch(() => {});
         closeJobAfterDelay(jobs, jobId);
-      } catch (e) {
-        console.error(`❌ Music-video render error handler failed [${jobId.slice(0, 8)}]: ${e.message}`);
-      }
-    });
-
-    proc.on('close', async (code, signal) => {
-      if (terminal) return; // a pre-spawn error already finalized this job
-      terminal = true;
-      job.process = null;
-      if (code !== 0) {
-        const canceled = signal === 'SIGTERM' || signal === 'SIGKILL';
-        job.status = canceled ? 'canceled' : 'error';
-        const reason = canceled ? 'Render cancelled' : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`;
-        job.lastError = reason;
-        console.log(`${canceled ? '🛑' : '❌'} Music-video render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
-        await unlink(outputPath).catch(() => {});
-        broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
-        projectRenders.delete(projectId);
-        // A cancel restores the pre-render status (so a cancelled re-render of a
-        // 'complete' project stays 'complete'); a real failure marks it 'failed'.
-        await updateProject(projectId, { status: canceled ? priorStatus : 'failed' }).catch(() => {});
-        closeJobAfterDelay(jobs, jobId);
-        return;
-      }
-      // Success finalization runs in an event callback (no request to bubble to)
-      // — a throw in thumbnailing/history I/O would otherwise leave the project
-      // stuck 'rendering' and projectRenders un-cleared (every later render 409s).
-      // Wrap it so any failure still emits a terminal frame and releases the slot.
-      try {
-        job.status = 'complete';
-        const thumb = await generateThumbnail(outputPath, jobId);
-        const meta = {
-          id: jobId,
-          prompt: `Music Video: ${project.name}`,
-          modelId: 'music-video',
-          seed: 0,
-          width: canonW,
-          height: canonH,
-          numFrames: Math.round(totalDuration * (fps || 24)),
-          fps: fps || 24,
-          filename,
-          thumbnail: thumb,
-          createdAt: new Date().toISOString(),
-          musicVideoProjectId: projectId,
-        };
-        await appendToVideoHistory(meta);
-        await updateProject(projectId, { renderHistoryId: jobId, status: 'complete' }).catch(() => {});
-        console.log(`✅ Music video rendered [${jobId.slice(0, 8)}]: ${filename}`);
-        broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}` } });
-      } catch (err) {
-        job.status = 'error';
-        job.lastError = `Finalize failed: ${err.message}`;
-        console.error(`❌ Music-video render finalize failed [${jobId.slice(0, 8)}]: ${err.message}`);
-        broadcastSse(job, { type: 'error', error: 'Render finalize failed' });
-        await updateProject(projectId, { status: 'failed' }).catch(() => {});
-      } finally {
-        projectRenders.delete(projectId);
-        closeJobAfterDelay(jobs, jobId);
-      }
+      },
+      onClose: async (code, signal) => {
+        job.process = null;
+        if (code !== 0) {
+          const canceled = signal === 'SIGTERM' || signal === 'SIGKILL';
+          job.status = canceled ? 'canceled' : 'error';
+          const reason = canceled ? 'Render cancelled' : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`;
+          job.lastError = reason;
+          console.log(`${canceled ? '🛑' : '❌'} Music-video render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
+          await unlink(outputPath).catch(() => {});
+          broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
+          projectRenders.delete(projectId);
+          // A cancel restores the pre-render status (so a cancelled re-render of a
+          // 'complete' project stays 'complete'); a real failure marks it 'failed'.
+          await updateProject(projectId, { status: canceled ? priorStatus : 'failed' }).catch(() => {});
+          closeJobAfterDelay(jobs, jobId);
+          return;
+        }
+        // Success finalization runs in an event callback (no request to bubble
+        // to) — a throw in thumbnailing/history I/O would otherwise leave the
+        // project stuck 'rendering' and projectRenders un-cleared (every later
+        // render 409s). Wrap it so any failure still emits a terminal frame and
+        // releases the slot.
+        try {
+          job.status = 'complete';
+          const thumb = await generateThumbnail(outputPath, jobId);
+          const meta = {
+            id: jobId,
+            prompt: `Music Video: ${project.name}`,
+            modelId: 'music-video',
+            seed: 0,
+            width: canonW,
+            height: canonH,
+            numFrames: Math.round(totalDuration * (fps || 24)),
+            fps: fps || 24,
+            filename,
+            thumbnail: thumb,
+            createdAt: new Date().toISOString(),
+            musicVideoProjectId: projectId,
+          };
+          await appendToVideoHistory(meta);
+          await updateProject(projectId, { renderHistoryId: jobId, status: 'complete' }).catch(() => {});
+          console.log(`✅ Music video rendered [${jobId.slice(0, 8)}]: ${filename}`);
+          broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}` } });
+        } catch (err) {
+          job.status = 'error';
+          job.lastError = `Finalize failed: ${err.message}`;
+          console.error(`❌ Music-video render finalize failed [${jobId.slice(0, 8)}]: ${err.message}`);
+          broadcastSse(job, { type: 'error', error: 'Render finalize failed' });
+          await updateProject(projectId, { status: 'failed' }).catch(() => {});
+        } finally {
+          projectRenders.delete(projectId);
+          closeJobAfterDelay(jobs, jobId);
+        }
+      },
     });
 
     return { jobId };

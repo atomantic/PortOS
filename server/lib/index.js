@@ -135,6 +135,7 @@ export * from './commandSecurity.js';
 export * from './detachedSpawn.js';
 export * from './execGit.js';
 export * from './ffmpeg.js';
+export * from './ffmpegRenderGuard.js';
 export * from './gitArgs.js';
 export * from './gitForge.js';
 export * from './gitOutputParsers.js';
