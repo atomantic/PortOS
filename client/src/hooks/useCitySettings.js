@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { safeReadStorage, safeWriteStorage, safeRemoveStorage } from '../lib/safeStorage.js';
 
 // Exported so useTheme can reset the city's time-of-day override without
 // re-declaring these magic strings (a typo there would silently break the reset).
@@ -49,9 +50,16 @@ const DEFAULT_SETTINGS = {
 };
 
 const loadSettings = () => {
-  const saved = localStorage.getItem(STORAGE_KEY);
+  const saved = safeReadStorage(STORAGE_KEY);
   if (!saved) return DEFAULT_SETTINGS;
-  return { ...DEFAULT_SETTINGS, ...JSON.parse(saved) };
+  let parsed;
+  try {
+    parsed = JSON.parse(saved);
+  } catch {
+    return DEFAULT_SETTINGS; // Corrupt stored JSON — fall back to defaults.
+  }
+  if (!parsed || typeof parsed !== 'object') return DEFAULT_SETTINGS;
+  return { ...DEFAULT_SETTINGS, ...parsed };
 };
 
 export { QUALITY_PRESETS };
@@ -64,7 +72,7 @@ export default function useCitySettings() {
       setSettings(prev => {
         if (prev.timeOfDay === 'auto') return prev;
         const next = { ...prev, timeOfDay: 'auto' };
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        safeWriteStorage(STORAGE_KEY, JSON.stringify(next));
         return next;
       });
     };
@@ -77,17 +85,17 @@ export default function useCitySettings() {
       // If changing quality preset, apply bulk changes
       if (key === 'qualityPreset' && QUALITY_PRESETS[value]) {
         const next = { ...prev, qualityPreset: value, ...QUALITY_PRESETS[value] };
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+        safeWriteStorage(STORAGE_KEY, JSON.stringify(next));
         return next;
       }
       const next = { ...prev, [key]: value };
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+      safeWriteStorage(STORAGE_KEY, JSON.stringify(next));
       return next;
     });
   }, []);
 
   const resetSettings = useCallback(() => {
-    localStorage.removeItem(STORAGE_KEY);
+    safeRemoveStorage(STORAGE_KEY);
     setSettings(DEFAULT_SETTINGS);
   }, []);
 
