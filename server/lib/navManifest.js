@@ -100,6 +100,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.messages.drafts', path: '/messages/drafts', label: 'Drafts', section: 'Comms', aliases: ['drafts', 'comms-drafts'], keywords: ['comms'] },
   { id: 'nav.messages.config', path: '/messages/config', label: 'Config', section: 'Comms', aliases: ['messages-config', 'comms-config'], keywords: ['comms'] },
   { id: 'nav.messages.sync', path: '/messages/sync', label: 'Sync', section: 'Comms', aliases: ['messages-sync', 'comms-sync'], keywords: ['comms'] },
+  { id: 'nav.imessage', path: '/imessage', label: 'iMessage', section: 'Comms', aliases: ['imessage', 'i-message', 'apple-messages', 'comms-imessage'], keywords: ['comms', 'imessage', 'sms', 'text messages', 'chat.db', 'blocklist', 'spam'] },
   { id: 'nav.openclaw', path: '/openclaw', label: 'OpenClaw', section: 'Brain', aliases: ['openclaw'] },
   { id: 'nav.timeline', path: '/timeline', label: 'Timeline', section: 'Brain', aliases: ['activity-timeline', 'activity', 'my-day', 'life-log', 'life-timeline'], keywords: ['human activity', 'life log', 'timeline', 'messages', 'calendar', 'history', 'what did i do', 'daily', 'import', 'backfill', 'whatsapp', 'spotify', 'discord', 'youtube'] },
   { id: 'nav.tribe', path: '/tribe', label: 'Tribe', section: 'Brain', aliases: ['tribe', 'relationships', 'relationship-manager', 'people'], keywords: ['dunbar', 'friends', 'family', 'network', 'social graph', 'care cadence'] },
@@ -182,7 +183,9 @@ export const NAV_COMMANDS = [
   { id: 'nav.settings.database', path: '/settings/database', label: 'Database', section: 'Settings', aliases: ['settings-database', 'database'] },
   { id: 'nav.settings.embeddings', path: '/settings/embeddings', label: 'Embeddings', section: 'Settings', aliases: ['settings-embeddings', 'embeddings', 'embedding'], keywords: ['vector', 'pgvector', 'semantic search', 'nomic', 'ollama', 'lm studio'] },
   { id: 'nav.settings.general', path: '/settings/general', label: 'General', section: 'Settings', aliases: ['settings', 'settings-general', 'general'] },
-  { id: 'nav.settings.imessage', path: '/settings/imessage', label: 'iMessage', section: 'Settings', aliases: ['settings-imessage', 'imessage', 'imessage-settings'], keywords: ['imessage', 'sync', 'chat.db', 'sms', 'texts', 'tribe', 'timeline', 'full disk access'] },
+  // Alias `imessage` lives on Comms → iMessage (the manager page, #2413); settings
+  // keeps the explicit settings-* tokens so voice "open iMessage settings" still works.
+  { id: 'nav.settings.imessage', path: '/settings/imessage', label: 'iMessage', section: 'Settings', aliases: ['settings-imessage', 'imessage-settings'], keywords: ['imessage', 'sync', 'chat.db', 'sms', 'texts', 'tribe', 'timeline', 'full disk access'] },
   { id: 'nav.settings.local-llm', path: '/settings/local-llm', label: 'Local LLMs', section: 'Settings', aliases: ['local-llm', 'local-llms', 'ollama', 'lm-studio', 'lmstudio'], keywords: ['ollama', 'lm studio', 'local model', 'local llm', 'gguf', 'pull model', 'install model', 'migrate', 'switch backend'] },
   { id: 'nav.settings.local-llm-playground', path: '/local-llm/playground', label: 'Local LLM Playground', section: 'Settings', aliases: ['llm-playground', 'playground', 'model-playground', 'compare-models'], keywords: ['ollama', 'lm studio', 'compare', 'benchmark', 'chat', 'test model', 'ttft', 'tokens per second', 'local llm'] },
   { id: 'nav.settings.mortalloom', path: '/settings/mortalloom', label: 'MortalLoom', section: 'Settings', aliases: ['settings-mortalloom', 'mortalloom'] },

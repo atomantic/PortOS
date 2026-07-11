@@ -206,6 +206,7 @@ const navItems = [
     children: [
       { to: '/messages/config', label: 'Config', icon: Settings },
       { to: '/messages/drafts', label: 'Drafts', icon: FilePen },
+      { to: '/imessage', label: 'iMessage', icon: MessageSquare },
       { to: '/messages/inbox', label: 'Inbox', icon: Inbox },
       { to: '/messages/sync', label: 'Sync', icon: RefreshCw },
     ],
@@ -1167,6 +1168,7 @@ export default function Layout() {
             location.pathname.startsWith('/meatspace') ||
             location.pathname.startsWith('/media') ||
             location.pathname.startsWith('/messages') ||
+            location.pathname.startsWith('/imessage') ||
             location.pathname.startsWith('/local-llm/') ||
             location.pathname.startsWith('/pipeline/issues/') ||
             location.pathname.startsWith('/pipeline/series/') ||

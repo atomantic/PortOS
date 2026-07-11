@@ -30,6 +30,7 @@ const FeatureAgents = lazyWithReload(() => import('./pages/FeatureAgents'));
 const FeatureAgentDetail = lazyWithReload(() => import('./pages/FeatureAgentDetail'));
 const CalendarPage = lazyWithReload(() => import('./pages/Calendar'));
 const Messages = lazyWithReload(() => import('./pages/Messages'));
+const IMessage = lazyWithReload(() => import('./pages/IMessage'));
 const Tribe = lazyWithReload(() => import('./pages/Tribe'));
 const Timeline = lazyWithReload(() => import('./pages/Timeline'));
 const Goals = lazyWithReload(() => import('./pages/Goals'));
@@ -282,6 +283,8 @@ export default function App() {
           <Route path="review" element={<Review />} />
           <Route path="messages" element={<Navigate to="/messages/inbox" replace />} />
           <Route path="messages/:tab" element={<Messages />} />
+          <Route path="imessage" element={<IMessage />} />
+          <Route path="imessage/:chatKey" element={<IMessage />} />
           <Route path="tribe" element={<Tribe />} />
           <Route path="timeline" element={<Timeline />} />
           <Route path="timeline/:date" element={<Timeline />} />
