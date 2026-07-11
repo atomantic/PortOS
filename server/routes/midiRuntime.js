@@ -48,6 +48,39 @@ router.get('/install', asyncHandler(async (req, res) => {
   }
   installInFlight = true;
 
+  let child = null;
+  let finished = false;
+  let clientGone = false;
+  // Register disconnect handling BEFORE the first await (the readiness probe
+  // below spawns python and can take up to 30s on a partial venv). Without it, a
+  // client that closes the installer during the probe would be missed and we'd
+  // then spawn a multi-GB installer nobody is listening to — uncancellable, and
+  // holding the singleton until it finished on its own. `child` is a mutable
+  // outer var so this handler kills the process group once it exists.
+  req.on('close', () => {
+    clientGone = true;
+    if (finished) return;
+    if (child) {
+      if (!child.killed && child.pid) {
+        // Negative pid signals the whole process group — setup-image-video.sh
+        // shells out to uv / pip / git, and a plain SIGTERM on bash leaves those
+        // running. Guard against ESRCH on an already-dead group.
+        try { process.kill(-child.pid, 'SIGTERM'); }
+        catch { child.kill('SIGTERM'); }
+      }
+      // Do NOT clear installInFlight here — the SIGTERM'd process group is only
+      // signalled, not yet reaped, and a mid-download pip child can take seconds
+      // to exit. Releasing the singleton now would let an immediate retry spawn a
+      // second install against the same half-torn-down venv. child.on('close')
+      // clears it once the child has actually exited (mirrors music.js).
+    } else {
+      // Bailed before spawning (disconnect during the probe / early return) —
+      // no child to reap, so release the singleton now.
+      installInFlight = null;
+    }
+    safeEnd();
+  });
+
   // The venv may already exist (another surface installed it) — short-circuit
   // rather than re-running the multi-GB setup. Drop the cached resolve first so
   // this reflects on-disk truth, not a stale value from before a prior install.
@@ -58,6 +91,13 @@ router.get('/install', asyncHandler(async (req, res) => {
     installInFlight = null;
     send({ type: 'log', message: `MuScriptor already installed at ${resolveMuscriptorPython()}` });
     send({ type: 'complete', message: 'Already installed — nothing to do.' });
+    return safeEnd();
+  }
+
+  // The client may have closed the installer while the probe ran — the close
+  // handler above set the flag but had no child to kill. Don't spawn now.
+  if (clientGone) {
+    installInFlight = null;
     return safeEnd();
   }
 
@@ -72,13 +112,12 @@ router.get('/install', asyncHandler(async (req, res) => {
   // `detached: true` puts bash in its own process group so a cancel (client
   // closing the SSE stream) can SIGTERM uv / pip / git children too — otherwise
   // a multi-GB download keeps burning bandwidth after the modal closes.
-  const child = spawn('bash', [scriptPath], {
+  child = spawn('bash', [scriptPath], {
     env: safeChildProcessEnv({ [MUSCRIPTOR_INSTALL_ENV]: '1' }),
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
   });
   installInFlight = child;
-  let finished = false;
 
   const onChunk = (chunk) => {
     for (const line of chunk.toString().split(/[\r\n]+/)) {
@@ -110,23 +149,6 @@ router.get('/install', asyncHandler(async (req, res) => {
     } else {
       send({ type: 'error', message: `Installer exited with code ${code}.` });
     }
-    safeEnd();
-  });
-
-  req.on('close', () => {
-    if (finished) return;
-    if (!child.killed && child.pid) {
-      // Negative pid signals the whole process group — setup-image-video.sh
-      // shells out to uv / pip / git, and a plain SIGTERM on bash leaves those
-      // running. Guard against ESRCH on an already-dead group.
-      try { process.kill(-child.pid, 'SIGTERM'); }
-      catch { child.kill('SIGTERM'); }
-    }
-    // Do NOT clear installInFlight here — the SIGTERM'd process group is only
-    // signalled, not yet reaped, and a mid-download pip child can take seconds
-    // to exit. Releasing the singleton now would let an immediate retry spawn a
-    // second install against the same half-torn-down venv. child.on('close')
-    // clears it once the child has actually exited (mirrors music.js).
     safeEnd();
   });
 }));
