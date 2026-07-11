@@ -20,6 +20,9 @@ vi.mock('../services/apiMediaJobs', () => ({ getMediaJob: (...a) => getMediaJob(
 const useMediaJobProgress = (await import('./useMediaJobProgress.js')).default;
 
 const fire = (event, payload) => act(() => { handlers.get(event)?.(payload); });
+// Drain the mount hydrate fetch (a pre-resolved mock promise) inside act so its
+// setStatus can't land outside it after the test body.
+const settle = () => act(async () => {});
 
 describe('useMediaJobProgress — canceled handling (#1791)', () => {
   beforeEach(() => { handlers.clear(); getMediaJob.mockClear(); getMediaJob.mockResolvedValue({ status: 'running' }); });
@@ -42,16 +45,18 @@ describe('useMediaJobProgress — canceled handling (#1791)', () => {
     expect(result.current.status).toBe('running');
   });
 
-  it('subscribes to the video-gen:canceled event when kind=video', () => {
+  it('subscribes to the video-gen:canceled event when kind=video', async () => {
     renderHook(() => useMediaJobProgress('job-1', { kind: 'video' }));
+    await settle();
     expect(handlers.has('video-gen:canceled')).toBe(true);
     expect(handlers.has('image-gen:canceled')).toBe(false);
   });
 
   // Audio (first-pass music-bed, #1933) rides the audio-gen:* namespace so the
   // Creative Director detail page can surface a failed background render.
-  it('subscribes to audio-gen:* events when kind=audio', () => {
+  it('subscribes to audio-gen:* events when kind=audio', async () => {
     renderHook(() => useMediaJobProgress('job-1', { kind: 'audio' }));
+    await settle();
     expect(handlers.has('audio-gen:failed')).toBe(true);
     expect(handlers.has('audio-gen:completed')).toBe(true);
     expect(handlers.has('image-gen:failed')).toBe(false);

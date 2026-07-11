@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 
 // ── Mock router — capture navigate calls, no real Router needed ────────────────
 const mockNavigate = vi.hoisted(() => vi.fn());
@@ -57,6 +57,9 @@ const renderTab = async (overrides = {}) => {
   api.updateAppTaskTypeOverride.mockResolvedValue({ success: true });
   render(<AutomationTab appId="app-1" appName="MyApp" />);
   await screen.findByText('layered-intelligence');
+  // Drain the remaining mount fetches (CustomTasksSection's getCosJobs etc.)
+  // inside act — the schedule findByText above can win before they land.
+  await act(async () => {});
 };
 
 // Find the task-row card that contains the given task-type label.

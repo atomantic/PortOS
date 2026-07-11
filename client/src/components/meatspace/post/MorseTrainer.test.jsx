@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 
 // Stub the training-log API so mount-time fetches (refreshTrainingStats) and
@@ -61,8 +61,8 @@ function LocationProbe() {
   return <div data-testid="loc">{loc.pathname}{loc.search}</div>;
 }
 
-function renderMorse(props = {}, { route = '/post/morse' } = {}) {
-  return render(
+async function renderMorse(props = {}, { route = '/post/morse' } = {}) {
+  const result = render(
     <MemoryRouter initialEntries={[route]}>
       <Routes>
         <Route
@@ -72,6 +72,11 @@ function renderMorse(props = {}, { route = '/post/morse' } = {}) {
       </Routes>
     </MemoryRouter>,
   );
+  // Settle the mount-effect fetches (training stats + morse progress) inside
+  // act — the mocks are pre-resolved promises, so one microtask flush drains
+  // every pending .then before the test's own interactions begin.
+  await act(async () => {});
+  return result;
 }
 
 describe('MorseTrainer deep-linking', () => {
@@ -85,9 +90,9 @@ describe('MorseTrainer deep-linking', () => {
     expect(MODES.map((m) => m.id)).toEqual(MORSE_MODE_IDS);
   });
 
-  it('shows the mode grid and routes on pick (mode=null)', () => {
+  it('shows the mode grid and routes on pick (mode=null)', async () => {
     const onSelectMode = vi.fn();
-    renderMorse({ mode: null, onSelectMode });
+    await renderMorse({ mode: null, onSelectMode });
     // All three mode cards render as pickable entries.
     fireEvent.click(screen.getByText('Copy'));
     expect(onSelectMode).toHaveBeenCalledWith('copy');
@@ -97,27 +102,27 @@ describe('MorseTrainer deep-linking', () => {
     expect(onSelectMode).toHaveBeenCalledWith('send');
   });
 
-  it('defaults the reference tab to tree with no ?ref param', () => {
-    renderMorse({ mode: null, onSelectMode: vi.fn() });
+  it('defaults the reference tab to tree with no ?ref param', async () => {
+    await renderMorse({ mode: null, onSelectMode: vi.fn() });
     // Tree view legend is unique to the tree reference.
     expect(screen.getByText('start')).toBeInTheDocument();
   });
 
-  it('reads the reference tab from the ?ref search param', () => {
-    renderMorse({ mode: null, onSelectMode: vi.fn() }, { route: '/post/morse?ref=length' });
+  it('reads the reference tab from the ?ref search param', async () => {
+    await renderMorse({ mode: null, onSelectMode: vi.fn() }, { route: '/post/morse?ref=length' });
     // Length view groups by symbol count.
     expect(screen.getByText('1 symbol')).toBeInTheDocument();
   });
 
-  it('encodes the selected reference tab in the URL', () => {
-    renderMorse({ mode: null, onSelectMode: vi.fn() });
+  it('encodes the selected reference tab in the URL', async () => {
+    await renderMorse({ mode: null, onSelectMode: vi.fn() });
     // Exact name — a loose /List/ also matches the "Listen to Morse" mode card.
     fireEvent.click(screen.getByRole('button', { name: 'List' }));
     expect(screen.getByTestId('loc').textContent).toBe('/post/morse?ref=list');
   });
 
-  it('drops the ?ref param when returning to the default tree tab', () => {
-    renderMorse({ mode: null, onSelectMode: vi.fn() }, { route: '/post/morse?ref=list' });
+  it('drops the ?ref param when returning to the default tree tab', async () => {
+    await renderMorse({ mode: null, onSelectMode: vi.fn() }, { route: '/post/morse?ref=list' });
     fireEvent.click(screen.getByRole('button', { name: 'Tree' }));
     expect(screen.getByTestId('loc').textContent).toBe('/post/morse');
   });
@@ -129,16 +134,16 @@ describe('MorseTrainer head-copy mode', () => {
     getTrainingStats.mockClear();
   });
 
-  it('hides the reference cheat sheet and explains the audio-only rules', () => {
-    renderMorse({ mode: 'head-copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+  it('hides the reference cheat sheet and explains the audio-only rules', async () => {
+    await renderMorse({ mode: 'head-copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
     // The Tree/Length/List reference tabs only render via ReferenceWidget,
     // which head-copy mode suppresses entirely.
     expect(screen.queryByRole('button', { name: 'Tree' })).not.toBeInTheDocument();
     expect(screen.getByText(/No code hints on the results screen/)).toBeInTheDocument();
   });
 
-  it('keeps the reference widget visible in plain copy mode (unchanged behavior)', () => {
-    renderMorse({ mode: 'copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+  it('keeps the reference widget visible in plain copy mode (unchanged behavior)', async () => {
+    await renderMorse({ mode: 'copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
     expect(screen.getByRole('button', { name: 'Tree' })).toBeInTheDocument();
   });
 });
@@ -150,7 +155,7 @@ describe('MorseTrainer training log integration', () => {
   });
 
   it('fetches 30-day training stats on mount and renders the streak summary', async () => {
-    const { container } = renderMorse({ mode: null, onSelectMode: vi.fn() });
+    const { container } = await renderMorse({ mode: null, onSelectMode: vi.fn() });
     expect(getTrainingStats).toHaveBeenCalledWith(30);
     await waitFor(() => {
       expect(container.textContent).toContain('Training streak: 3d');
@@ -171,7 +176,7 @@ describe('MorseTrainer training log integration', () => {
     });
 
     it('logs a completed Head Copy round to the training log with the right payload shape', async () => {
-      renderMorse({ mode: 'head-copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+      await renderMorse({ mode: 'head-copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
 
       fireEvent.click(await screen.findByRole('button', { name: /Start Round/i }));
 
@@ -199,7 +204,7 @@ describe('MorseTrainer training log integration', () => {
 
     it('submits the completed round to the server with per-character items', async () => {
       submitMorseRound.mockClear();
-      renderMorse({ mode: 'head-copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+      await renderMorse({ mode: 'head-copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
 
       fireEvent.click(await screen.findByRole('button', { name: /Start Round/i }));
       for (let i = 0; i < 10; i++) {
@@ -272,7 +277,7 @@ describe('MorseTrainer server Koch-level hydration', () => {
   });
 
   it('fetches server progress on mount', async () => {
-    renderMorse({ mode: null, onSelectMode: vi.fn() });
+    await renderMorse({ mode: null, onSelectMode: vi.fn() });
     await waitFor(() => expect(getMorseProgress).toHaveBeenCalled());
   });
 
@@ -280,7 +285,7 @@ describe('MorseTrainer server Koch-level hydration', () => {
     // Cache a level beyond the base (2) and a server with kochLevelSet:false.
     window.localStorage.setItem('portos-post-morse-prefs', JSON.stringify({ kochLevel: 9 }));
     updateMorseLevel.mockResolvedValueOnce({ kochLevel: 9, kochLevelSet: true, adopted: true, settings: null });
-    renderMorse({ mode: null, onSelectMode: vi.fn() });
+    await renderMorse({ mode: null, onSelectMode: vi.fn() });
     await waitFor(() => {
       expect(updateMorseLevel).toHaveBeenCalledWith(
         expect.objectContaining({ kochLevel: 9, adopt: true }),
@@ -291,7 +296,7 @@ describe('MorseTrainer server Koch-level hydration', () => {
 
   it('does not adopt when the cached level is only the base default', async () => {
     window.localStorage.setItem('portos-post-morse-prefs', JSON.stringify({ kochLevel: 2 }));
-    renderMorse({ mode: null, onSelectMode: vi.fn() });
+    await renderMorse({ mode: null, onSelectMode: vi.fn() });
     await waitFor(() => expect(getMorseProgress).toHaveBeenCalled());
     expect(updateMorseLevel).not.toHaveBeenCalled();
   });
@@ -335,7 +340,7 @@ describe('MorseTrainer iOS audio unlock', () => {
   afterEach(() => { delete window.AudioContext; });
 
   it('awaits resume() before scheduling any tone (no oscillator while suspended)', async () => {
-    renderMorse({ mode: 'copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+    await renderMorse({ mode: 'copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
     fireEvent.click(await screen.findByRole('button', { name: /Start Round/i }));
     // The round input only renders once playMorse has finished, so by here the
     // first tone has been scheduled and played.
@@ -349,7 +354,7 @@ describe('MorseTrainer iOS audio unlock', () => {
     // window must be ignored — otherwise two playPrompt runs schedule two Morse
     // prompts over each other. playMorse uses exactly one oscillator per prompt, so
     // two overlapping prompts would create two oscillators for one round start.
-    renderMorse({ mode: 'copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
+    await renderMorse({ mode: 'copy', onSelectMode: vi.fn(), onExitMode: vi.fn() });
     const startBtn = await screen.findByRole('button', { name: /Start Round/i });
     // Two synchronous taps land inside the unlock window (resume() resolves on a
     // later macrotask, so neither startRound has reached createOscillator yet).
@@ -361,8 +366,8 @@ describe('MorseTrainer iOS audio unlock', () => {
 });
 
 describe('MorseTrainer Tree reference view', () => {
-  it('renders a labeled, reachable node for all 41 characters', () => {
-    const { container } = renderMorse({ mode: null, onSelectMode: vi.fn() });
+  it('renders a labeled, reachable node for all 41 characters', async () => {
+    const { container } = await renderMorse({ mode: null, onSelectMode: vi.fn() });
     // Every node (including the root) carries its own morse code (or 'start'
     // for the root) as its `title` — the most reliable way to pick each tree
     // node out individually, since letter text alone can collide with other
@@ -376,8 +381,8 @@ describe('MorseTrainer Tree reference view', () => {
     }
   });
 
-  it('centers the start node roughly under "start", not pinned to one edge', () => {
-    const { container } = renderMorse({ mode: null, onSelectMode: vi.fn() });
+  it('centers the start node roughly under "start", not pinned to one edge', async () => {
+    const { container } = await renderMorse({ mode: null, onSelectMode: vi.fn() });
     const root = container.querySelector('[title="start"]');
     expect(root).toBeTruthy();
     expect(root.textContent).toBe('·');

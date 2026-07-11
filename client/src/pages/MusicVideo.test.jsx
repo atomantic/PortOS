@@ -3,7 +3,7 @@
  * gates on a scene having a generated clip, and clicking it kicks off the render.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import toast from '../components/ui/Toast';
 
@@ -102,6 +102,10 @@ const renderMV = () => render(
     </Routes>
   </MemoryRouter>,
 );
+
+// Flush pending pre-resolved mock promises inside act so their .then setState
+// callbacks can't land outside it after the test body.
+const settle = () => act(async () => {});
 
 const openProject = async (project) => {
   listMusicVideoProjects.mockResolvedValue([project]);
@@ -408,6 +412,9 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     expect(listBtnA).toHaveClass('border-port-accent');
 
     resolveKickoff({ jobId: 'yt-job-pending' });
+    // Settle the kickoff's .then (jobId + SSE-subscription state) inside act —
+    // the pending-window assertions above must stay pre-settle.
+    await settle();
   });
 
   it('blocks creating the project while the create-form YouTube import is in flight', async () => {

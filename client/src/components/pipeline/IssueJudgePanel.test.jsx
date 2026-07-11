@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 vi.mock('../../services/apiPipeline', () => ({
   getIssueJudge: vi.fn(),
@@ -38,9 +38,12 @@ beforeEach(() => {
 });
 
 describe('IssueJudgePanel', () => {
-  it('renders nothing when no text stage has content', () => {
+  it('renders nothing when no text stage has content', async () => {
     const { container } = render(<IssueJudgePanel issue={{ id: 'iss-x', stages: {} }} stageId="prose" />);
     expect(container.firstChild).toBeNull();
+    // Drain the mount getIssueJudge fetch inside act so its state update
+    // can't land outside it after the test body.
+    await act(async () => {});
   });
 
   it('shows the not-judged state then the quality chip after a stored score loads', async () => {
