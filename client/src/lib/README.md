@@ -93,6 +93,7 @@ grep -i "what you want to do" client/src/lib/README.md
 | `mediaNavigation.js` | `getAdjacentMedia(items, item)` — prev/next computation for lightboxes. |
 | `mediaSearch.js` | `buildMediaHaystack`, `tokenizeQuery`, `matchHaystack`, `filterByQuery` — client-side AND-token search over normalized media items (prompt/model/seed/LoRA/universe tags). Shared by MediaHistory + the Image Gen gallery picker. |
 | `moodBoardItemSrc.js` | `moodBoardItemSrc(item)` resolves a mood-board item to a display image src (`imageUrl` → served `image:<file>` bytes → null). Shared by MoodBoardDetail + MoodBoardReferenceStrip. |
+| `safeStorage.js` | `safeReadStorage` / `safeWriteStorage` / `safeRemoveStorage` — guarded `localStorage` access that swallows throws (Safari private mode, blocked storage) and treats missing storage as absent (`null`). Use instead of touching `localStorage` inline so a storage failure never crashes init or a write path (#2387). Consumed by `useTheme` / `useCitySettings`. |
 | `sameJsonShape.js` | `sameJsonShape(prev, next)` — JSON.stringify-based equality for `useAutoRefetch`'s `compare` option on small, deterministically-shaped poll payloads. |
 | `sketchCanvas.js` | Pure stroke model + 2D-context renderer for the media annotation canvas (`createStroke`, `appendPoint`, `undoStrokes`, `drawStrokes`, `clampSize`). Points stored in natural-pixel space; erase strokes use `destination-out`. Used by `AnnotationCanvas.jsx` / `MediaAnnotate.jsx` (#2036). |
 | `unsorted.js` | Synthetic "Unsorted" collection from media not filed in any real collection. |

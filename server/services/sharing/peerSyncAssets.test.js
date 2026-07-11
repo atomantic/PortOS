@@ -89,6 +89,19 @@ describe('buildMusicVideoAssetManifest — master audio', () => {
     expect(manifest).toEqual([]);
   });
 
+  it('bundles the MuScriptor MIDI transcription alongside the master audio', async () => {
+    const audioBytes = Buffer.from('uploaded-audio');
+    const midiBytes = Buffer.from('MThd-midi-bytes');
+    writeMusic('upload.mp3', audioBytes);
+    writeMusic('neon-midi.mid', midiBytes);
+    const manifest = await buildMusicVideoAssetManifest({
+      trackId: null, uploadedAudioFilename: 'upload.mp3', scenes: [],
+      midiTranscription: { filename: 'neon-midi.mid', model: 'medium' },
+    });
+    expect(manifest).toContainEqual({ filename: 'upload.mp3', kind: 'music', sha256: sha(audioBytes) });
+    expect(manifest).toContainEqual({ filename: 'neon-midi.mid', kind: 'music', sha256: sha(midiBytes) });
+  });
+
   it('dedups when the upload basename and the linked track point at the same file', async () => {
     const bytes = Buffer.from('shared');
     writeMusic('shared.mp3', bytes);

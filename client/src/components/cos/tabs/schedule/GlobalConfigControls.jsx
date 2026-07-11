@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { RotateCcw, AlertCircle, Info } from 'lucide-react';
+import { RotateCcw, AlertCircle } from 'lucide-react';
 import CronInput from '../../../CronInput';
 import { AGENT_OPTIONS, DEFAULT_REVIEW_STOP_MODE, PR_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_OPTIONS, ISSUE_AUTHOR_FILTER_TASK_TYPES, SWARM_COUNT_OPTIONS, SWARM_TASK_TYPES } from '../../constants';
 import ReviewerPicker from '../../ReviewerPicker';
 import Banner from '../../../ui/Banner';
+import InfoTooltip from '../../../ui/InfoTooltip';
 import { FormField } from '../../../ui/FormField';
 import { formatDateTime } from '../../../../utils/formatters';
 import { useCodeReviewDefaults } from '../../../../hooks/useCodeReviewDefaults';
@@ -158,12 +159,9 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-1.5">
           <label className="text-sm text-gray-400">Global Pause</label>
-          <div className="group relative">
-            <Info size={14} className="text-gray-500 cursor-help" />
-            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-3 py-2 bg-gray-800 border border-port-border text-xs text-gray-300 rounded-lg shadow-lg w-56 opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto transition-opacity z-50">
-              When paused, no scheduled runs will execute for this task — even if individual apps are enabled.
-            </div>
-          </div>
+          <InfoTooltip label="What does Global Pause do?">
+            When paused, no scheduled runs will execute for this task — even if individual apps are enabled.
+          </InfoTooltip>
         </div>
         <ToggleSwitch
           enabled={isPaused}

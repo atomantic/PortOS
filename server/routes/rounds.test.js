@@ -36,6 +36,19 @@ const importMocks = vi.hoisted(() => ({
 }));
 vi.mock('../services/roundReferenceAudioImport.js', () => importMocks);
 
+// Isolate the route contract from the real MuScriptor/venv transcription
+// service — assert validation + dispatch, not the sidecar spawn. MUSCRIPTOR_
+// MODELS stays real so the route's z.enum matches the service's actual set.
+const midiMocks = vi.hoisted(() => ({
+  startMidiTranscription: vi.fn(),
+  attachMidiTranscriptionSseClient: vi.fn(),
+  cancelMidiTranscription: vi.fn(),
+}));
+vi.mock('../services/audioMidiTranscription.js', async () => {
+  const actual = await vi.importActual('../services/audioMidiTranscription.js');
+  return { ...actual, ...midiMocks };
+});
+
 import roundsRoutes from './rounds.js';
 
 const makeApp = () => {
@@ -51,6 +64,7 @@ describe('rounds route', () => {
     for (const fn of Object.values(mocks)) fn.mockReset();
     for (const fn of Object.values(aiMocks)) fn.mockReset();
     for (const fn of Object.values(importMocks)) fn.mockReset();
+    for (const fn of Object.values(midiMocks)) fn.mockReset();
   });
 
   it('GET / returns the song list', async () => {
@@ -365,5 +379,53 @@ describe('rounds route', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: true });
     expect(importMocks.cancelReferenceAudioImport).toHaveBeenCalledWith('job-1');
+  });
+
+  // --- Reference-audio → MIDI transcription (MuScriptor) ----------------------
+  it('POST /reference-audio/transcribe-midi 202s with the jobId, resolving the uploads path', async () => {
+    midiMocks.startMidiTranscription.mockResolvedValue({ jobId: 'midi-1', model: 'medium' });
+    const res = await request(makeApp())
+      .post('/api/rounds/reference-audio/transcribe-midi')
+      .send({ filename: 'abc123-ref.wav' });
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ jobId: 'midi-1', model: 'medium' });
+    const [arg] = midiMocks.startMidiTranscription.mock.calls[0];
+    expect(arg.audioPath).toMatch(/uploads[\\/]abc123-ref\.wav$/);
+    expect(arg.outputName).toBe('abc123-ref');
+    expect(arg.model).toBeUndefined();
+  });
+
+  it('POST /reference-audio/transcribe-midi forwards a valid model and rejects an unknown one', async () => {
+    midiMocks.startMidiTranscription.mockResolvedValue({ jobId: 'midi-1', model: 'large' });
+    const ok = await request(makeApp())
+      .post('/api/rounds/reference-audio/transcribe-midi')
+      .send({ filename: 'ref.wav', model: 'large' });
+    expect(ok.status).toBe(202);
+    expect(midiMocks.startMidiTranscription.mock.calls[0][0].model).toBe('large');
+
+    const bad = await request(makeApp())
+      .post('/api/rounds/reference-audio/transcribe-midi')
+      .send({ filename: 'ref.wav', model: 'xl' });
+    expect(bad.status).toBe(400);
+  });
+
+  it('POST /reference-audio/transcribe-midi 400s on a traversal filename and a missing one', async () => {
+    const traversal = await request(makeApp())
+      .post('/api/rounds/reference-audio/transcribe-midi')
+      .send({ filename: '../../etc/passwd' });
+    expect(traversal.status).toBe(400);
+    const missing = await request(makeApp())
+      .post('/api/rounds/reference-audio/transcribe-midi')
+      .send({});
+    expect(missing.status).toBe(400);
+    expect(midiMocks.startMidiTranscription).not.toHaveBeenCalled();
+  });
+
+  it('POST /reference-audio/transcribe-midi/:jobId/cancel reports the cancel result', async () => {
+    midiMocks.cancelMidiTranscription.mockReturnValue(true);
+    const res = await request(makeApp()).post('/api/rounds/reference-audio/transcribe-midi/midi-1/cancel');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+    expect(midiMocks.cancelMidiTranscription).toHaveBeenCalledWith('midi-1');
   });
 });

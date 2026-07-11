@@ -174,7 +174,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/`jira\/proj-123`/);
     });
 
-    it('renders the Completion Workflow with /do:pr for TUI + openPR', () => {
+    it('disables external review when a TUI task opens a PR without a Review Loop', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { simplify: true, openPR: true } }),
         '/r',
@@ -183,19 +183,19 @@ describe('buildLightContextPrompt', () => {
         { isTui: true });
       expect(prompt).toMatch(/## Completion Workflow/);
       expect(prompt).toMatch(/`\/simplify`/);
-      expect(prompt).toMatch(/`\/do:pr`/);
+      expect(prompt).toMatch(/`\/do:pr --review-with none`/);
+      expect(prompt).toMatch(/external review is disabled/i);
+      expect(prompt).not.toMatch(/Copilot review loop/i);
       expect(prompt).toMatch(/\.agent-done/);
       // The sentinel is the done signal — the agent must NOT be told to RUN
       // /quit (it's a UI command it can't invoke; PortOS closes the session on
       // poll). The prompt only mentions /quit to tell the agent NOT to run it.
       expect(prompt).not.toMatch(/^\s*\d+\.\s*`\/quit`/m);
       expect(prompt).toMatch(/NOT run `\/quit`/);
-      // After /do:pr drives the Copilot review loop clean, the agent must
-      // merge and verify — otherwise the PR sits open after the agent exits.
-      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --delete-branch/);
-      expect(prompt).not.toMatch(/gh pr merge[^\n]*--auto/);
-      expect(prompt).toMatch(/gh pr view "<PR_URL>" --json state -q \.state/);
-      expect(prompt).toMatch(/MERGED/);
+      // Without a Review Loop the task opens the PR for human follow-up and
+      // must not be told to auto-merge based on a review outcome.
+      expect(prompt).not.toMatch(/gh pr merge/);
+      expect(prompt).not.toMatch(/gh pr view "<PR_URL>" --json state/);
     });
 
     it('TUI simplify step is provider-aware — non-Claude TUI (codex-tui) gets the inline equivalent, not /simplify', () => {
@@ -292,7 +292,8 @@ describe('buildLightContextPrompt', () => {
         { branchName: 'b', worktreePath: '/tmp/wt' },
         isTruthyMeta,
         { isTui: true, providerId: 'claude-code-tui', providerCommand: 'claude' });
-      expect(prompt).toMatch(/`\/do:pr`/);
+      expect(prompt).toMatch(/`\/do:pr --review-with none`/);
+      expect(prompt).toMatch(/external review is disabled/i);
       expect(prompt).not.toMatch(/gh pr create/);
     });
 
@@ -327,7 +328,7 @@ describe('buildLightContextPrompt', () => {
 
     it('emits a slashdo Completion block (/simplify + /do:pr) for Claude Code CLI + openPR', () => {
       const prompt = buildLightContextPrompt(
-        makeTask({ metadata: { openPR: true, simplify: true } }),
+        makeTask({ metadata: { openPR: true, reviewLoop: true, simplify: true } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
         isTruthyMeta,
@@ -346,9 +347,23 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/MERGED/);
     });
 
-    it('skips /simplify in the slashdo Completion block when simplify is disabled', () => {
+    it('disables external review and omits merge guidance for Claude Code CLI when Review Loop is off', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { openPR: true, simplify: false } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: false, providerId: 'claude-code' });
+      expect(prompt).toMatch(/`\/do:pr --review-with none`/);
+      expect(prompt).toMatch(/external review disabled/i);
+      expect(prompt).not.toMatch(/Copilot review loop/i);
+      expect(prompt).not.toMatch(/gh pr merge/);
+      expect(prompt).not.toMatch(/gh pr view "<PR_URL>" --json state/);
+    });
+
+    it('skips /simplify in the slashdo Completion block when simplify is disabled', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true, simplify: false } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
         isTruthyMeta,

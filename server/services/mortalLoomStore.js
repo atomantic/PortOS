@@ -110,7 +110,7 @@ function pinAgainstEviction(path) {
 
   // detached + unref so a long-running `brctl download` (large evicted file,
   // slow network) can't keep the Node process alive on shutdown. Matches the
-  // repo's fire-and-forget spawn pattern in server/routes/apps.js +
+  // repo's fire-and-forget spawn pattern in server/routes/apps/launch.js +
   // server/routes/brain.js.
   const child = spawn('brctl', ['download', path], { detached: true, stdio: 'ignore' });
   child.unref();

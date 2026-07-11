@@ -322,6 +322,12 @@ const sanitizeReference = (r) => {
     // resurrect against a later, different recording.
     const segments = sanitizeList(r.segments, sanitizeRefSegment, REF_SEGMENTS_MAX);
     if (segments.length) ref.segments = segments;
+    // A MuScriptor transcription OF the attached audio (an /api/uploads .mid
+    // pointer) — same structural invariant as segments: derived from this
+    // audio, so removing the audio drops it and a stale transcription can't
+    // resurrect against a later, different recording.
+    const midiFilename = trimField(r.midiFilename, URL_MAX_LENGTH);
+    if (midiFilename) ref.midiFilename = midiFilename;
   }
   return ref;
 };

@@ -1083,6 +1083,35 @@ describe('cos.js source — priority + capacity invariants', () => {
   });
 });
 
+describe('forceSpawnTask — pre-validate provider before task:ready', () => {
+  // The play button on a pending task calls forceSpawnTask, which emits
+  // `task:ready`; the actual spawn happens asynchronously in a listener. If
+  // provider/model resolution fails there (e.g. the task is pinned to an
+  // `api`-type provider with no file-writing harness), the spawn bails
+  // silently and the task stays `pending` — but the HTTP call had already
+  // returned `{ success: true }` and the UI toasted "Spawning". Pin that
+  // forceSpawnTask resolves the provider FIRST and returns the resolution
+  // error (so the route surfaces a truthful 400) instead of emitting
+  // `task:ready` on a doomed spawn.
+  const forceFn = extractFnBody(COS_SRC, COS_SRC.indexOf('export async function forceSpawnTask'));
+
+  it('calls resolveAgentProviderAndModel and returns its error', () => {
+    expect(forceFn, 'forceSpawnTask must pre-resolve the provider/model')
+      .toMatch(/resolveAgentProviderAndModel\(\s*task\s*\)/);
+    expect(forceFn, 'forceSpawnTask must return the resolution error on failure')
+      .toMatch(/if\s*\(\s*!\s*resolution\.ok\s*\)\s*\{\s*return\s*\{\s*error:\s*resolution\.error\s*\}/);
+  });
+
+  it('bails on a failed resolution BEFORE emitting task:ready', () => {
+    const resolveIdx = forceFn.indexOf('resolveAgentProviderAndModel');
+    const readyIdx = forceFn.indexOf("cosEvents.emit('task:ready'");
+    expect(resolveIdx, 'resolution must happen in forceSpawnTask').toBeGreaterThan(-1);
+    expect(readyIdx, 'forceSpawnTask must still emit task:ready on success').toBeGreaterThan(-1);
+    expect(resolveIdx, 'provider resolution must precede the task:ready emit')
+      .toBeLessThan(readyIdx);
+  });
+});
+
 describe('addTask — first-line dedup', () => {
   it('returns the first non-empty trimmed line', () => {
     expect(firstLine('hello\nworld')).toBe('hello');

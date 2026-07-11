@@ -19,6 +19,7 @@ import { ServerError } from '../../lib/errorHandler.js';
 import {
   MUSIC_VIDEO_STATUSES,
   musicVideoAudioAnalysisSchema,
+  musicVideoMidiTranscriptionSchema,
   musicVideoSceneCreateSchema,
   musicVideoSceneUpdateSchema,
 } from '../../lib/validation.js';
@@ -71,6 +72,7 @@ export function buildProjectRecord(input, { id, now }) {
     uploadedAudioFilename,
     concept,
     audioAnalysis: null,
+    midiTranscription: null,
     scenes: [],
     renderHistoryId: null,
     // Soft-delete tombstone trio — kept so peer-sync federation (a follow-up)
@@ -108,7 +110,9 @@ export function applyProjectPatch(project, patch) {
   // analysis, so leave those untouched.
   const regressStatus = !patch.status && !['draft', 'failed'].includes(project.status);
   const statusPatch = regressStatus ? { status: 'draft' } : {};
-  return touch(project, { ...patch, ...statusPatch, audioAnalysis: null, scenes });
+  // The MIDI transcription was produced from the OLD audio too — clear it with
+  // the analysis so a stale .mid can't masquerade as the new track's score.
+  return touch(project, { ...patch, ...statusPatch, audioAnalysis: null, midiTranscription: null, scenes });
 }
 
 /**
@@ -121,6 +125,17 @@ export function setAudioAnalysis(project, analysis) {
   const validated = musicVideoAudioAnalysisSchema.parse(analysis);
   const status = project.status === 'draft' ? 'analyzed' : project.status;
   return touch(project, { audioAnalysis: validated, status });
+}
+
+/**
+ * Cache the MuScriptor audio → MIDI transcription pointer on the project (a
+ * .mid basename under /api/uploads). Validated so a hand-edited/legacy record
+ * can't store a malformed pointer; doesn't touch the lifecycle status — the
+ * MIDI is a parsing artifact, not an arrangement step.
+ */
+export function setMidiTranscription(project, midi) {
+  const validated = musicVideoMidiTranscriptionSchema.parse(midi);
+  return touch(project, { midiTranscription: validated });
 }
 
 /** Default runtime fields for a scene the director (or planner) didn't supply. */
