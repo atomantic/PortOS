@@ -550,6 +550,14 @@ export async function loadSchedule() {
   let needsSave = false;
   for (const [taskType, config] of Object.entries(schedule.tasks)) {
     if (enforceManagedAgentOptions(taskType, config)) needsSave = true;
+    // Stamp a creation timestamp the first time we see a task so the cron
+    // catch-up bound (shouldRunTask) never replays a slot that predates the
+    // task. Backfilling to "now" is conservative: it only suppresses catch-up
+    // for slots already in the past — future slots fire on their real cadence.
+    if (!config.createdAt) {
+      config.createdAt = new Date().toISOString();
+      needsSave = true;
+    }
     if (!config.prompt && DEFAULT_TASK_PROMPTS[taskType]) {
       // No prompt set — initialize with current default and version
       config.prompt = DEFAULT_TASK_PROMPTS[taskType];
@@ -628,7 +636,7 @@ export async function updateTaskInterval(taskType, settings) {
   const schedule = await loadSchedule();
 
   if (!schedule.tasks[taskType]) {
-    schedule.tasks[taskType] = { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null };
+    schedule.tasks[taskType] = { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, createdAt: new Date().toISOString() };
   }
 
   // Normalize empty/whitespace prompts to null (treated as "use default")
@@ -1094,12 +1102,16 @@ export async function shouldRunTask(taskType, appId = null) {
         if (lastRun) {
           lookbackBound = lastRun;
         } else {
-          // Never-run: only catch up if the most-recent occurrence is within ONE cron
-          // period of now (e.g. daily cron catches up to ~24h, hourly to ~1h). The bound
-          // is "the occurrence before prevRun" — anything older has already been missed
-          // by more than one period and shouldn't be replayed.
-          const beforePrev = parseCronToPrevRun(cronExpr, new Date(prevRunMs - 60_000), timezone);
-          lookbackBound = beforePrev ? beforePrev.getTime() : 0;
+          // Never-run: only catch up to a slot that elapsed AFTER the task was
+          // configured. Without this bound a never-run task always fires its most
+          // recent past slot, so a weekly "Sunday 09:00" task enabled on a Friday
+          // immediately reads as "due now (catch-up)" for last Sunday — a slot that
+          // predates the task and was never actually missed. `createdAt` is stamped
+          // when the task is first seen (loadSchedule backfills it for existing
+          // installs), so catch-up only recovers slots the task was around for. An
+          // un-backfilled task (createdAt absent) yields bound 0 → the legacy
+          // always-catch-up behavior.
+          lookbackBound = safeDate(interval.createdAt);
         }
         if (prevRunMs > lookbackBound && prevRunMs <= now) {
           // Compute nextRun for telemetry/reporting
