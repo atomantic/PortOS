@@ -15,6 +15,7 @@ export const TABS = [
   { id: 'autofixer', label: 'Autofixer', to: '/settings/autofixer' },
   { id: 'backup', label: 'Backup', to: '/settings/backup' },
   { id: 'catalog', label: 'Catalog', to: '/settings/catalog' },
+  { id: 'contacts', label: 'Contacts', to: '/settings/contacts' },
   { id: 'database', label: 'Database', to: '/settings/database' },
   { id: 'embeddings', label: 'Embeddings', to: '/settings/embeddings' },
   { id: 'general', label: 'General', to: '/settings/general' },

@@ -101,6 +101,9 @@ export function IMessageTab() {
             Comms → iMessage <ExternalLink size={12} />
           </Link>
           {' '}— deletes there remove PortOS copies only, never Apple Messages.
+          For names instead of phone numbers, sync{' '}
+          <Link to="/settings/contacts" className="text-port-accent hover:underline">Settings → Contacts</Link>
+          {' '}(and optionally fill Tribe phones/emails).
         </p>
 
         <div className="space-y-3">

@@ -91,16 +91,32 @@ function ConversationList({ conversations, selectedKey, onSelect, query, onQuery
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-1.5">
-                          <span className="truncate font-medium text-sm text-gray-100">{c.title}</span>
+                          <span className="truncate font-medium text-sm text-gray-100">
+                            {c.displayName || c.title}
+                          </span>
+                          {c.identitySource === 'tribe' && (
+                            <span className="shrink-0 rounded bg-port-accent/15 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-port-accent">
+                              Tribe
+                            </span>
+                          )}
+                          {c.identitySource === 'contacts' && (
+                            <span className="shrink-0 rounded bg-port-bg px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-gray-500 border border-port-border">
+                              Contact
+                            </span>
+                          )}
                           {c.blocked && (
                             <span className="shrink-0 rounded bg-port-error/15 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-port-error">
                               Blocked
                             </span>
                           )}
                         </div>
-                        {c.lastSummary && (
-                          <div className="mt-0.5 truncate text-xs text-gray-500">{c.lastSummary}</div>
-                        )}
+                        <div className="mt-0.5 truncate text-xs text-gray-500">
+                          {[
+                            c.organization && c.organization !== (c.displayName || c.title) ? c.organization : null,
+                            c.handle && c.handle !== (c.displayName || c.title) ? c.handle : null,
+                            c.lastSummary,
+                          ].filter(Boolean).join(' · ')}
+                        </div>
                       </div>
                       <div className="shrink-0 text-right">
                         <div className="text-[10px] text-gray-500">{formatWhen(c.lastAt)}</div>
@@ -122,6 +138,7 @@ function ConversationDetail({
   chatKey,
   conversation,
   events,
+  identity,
   loading,
   timezone,
   onBack,
@@ -133,6 +150,12 @@ function ConversationDetail({
   const [busy, setBusy] = useState(false);
 
   const handle = conversation?.handle;
+  const displayTitle = conversation?.displayName
+    || identity?.displayName
+    || conversation?.title
+    || 'Conversation';
+  const organization = conversation?.organization || identity?.organization;
+  const personId = conversation?.personId || identity?.personId;
 
   const runPurge = async () => {
     setBusy(true);
@@ -210,12 +233,18 @@ function ConversationDetail({
           </button>
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-base font-semibold text-white">
-              {conversation?.title || 'Conversation'}
+              {displayTitle}
             </h2>
             <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+              {organization && <span>{organization}</span>}
               {handle && <span className="font-mono">{handle}</span>}
               {conversation?.eventCount != null && (
                 <span>{conversation.eventCount} event(s)</span>
+              )}
+              {(conversation?.identitySource || identity?.identitySource) && (
+                <span className="rounded bg-port-bg border border-port-border px-1.5 py-0.5 text-[10px] uppercase">
+                  {conversation?.identitySource || identity?.identitySource}
+                </span>
               )}
               {conversation?.blocked && (
                 <span className="rounded bg-port-error/15 px-1.5 py-0.5 text-[10px] uppercase text-port-error">
@@ -292,13 +321,23 @@ function ConversationDetail({
                 <ExternalLink size={10} className="opacity-60" />
               </Link>
             )}
-            <Link
-              to="/tribe"
-              className="inline-flex items-center gap-1.5 rounded border border-port-border bg-port-bg px-2.5 py-1.5 text-xs text-gray-200 hover:border-port-accent"
-            >
-              <Users size={12} />
-              Tribe phones
-            </Link>
+            {personId ? (
+              <Link
+                to="/tribe"
+                className="inline-flex items-center gap-1.5 rounded border border-port-border bg-port-bg px-2.5 py-1.5 text-xs text-gray-200 hover:border-port-accent"
+              >
+                <Users size={12} />
+                Open Tribe
+              </Link>
+            ) : (
+              <Link
+                to="/settings/contacts"
+                className="inline-flex items-center gap-1.5 rounded border border-port-border bg-port-bg px-2.5 py-1.5 text-xs text-gray-200 hover:border-port-accent"
+              >
+                <Users size={12} />
+                Resolve names
+              </Link>
+            )}
           </div>
         )}
       </div>
@@ -355,6 +394,7 @@ export default function IMessage() {
   const [query, setQuery] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
   const [events, setEvents] = useState([]);
+  const [conversationIdentity, setConversationIdentity] = useState(null);
   const [eventsLoading, setEventsLoading] = useState(false);
   const [syncing, setSyncing] = useState(false);
 
@@ -381,17 +421,22 @@ export default function IMessage() {
   useEffect(() => {
     if (!selectedKey) {
       setEvents([]);
+      setConversationIdentity(null);
       return undefined;
     }
     let active = true;
     setEventsLoading(true);
     api.getImessageConversationEvents(selectedKey, { limit: 200, silent: true })
       .then((res) => {
-        if (active) setEvents(res?.events || []);
+        if (active) {
+          setEvents(res?.events || []);
+          setConversationIdentity(res?.identity || null);
+        }
       })
       .catch(() => {
         if (active) {
           setEvents([]);
+          setConversationIdentity(null);
           toast.error('Failed to load conversation');
         }
       })
@@ -475,6 +520,13 @@ export default function IMessage() {
         actions={(
           <div className="flex flex-wrap items-center gap-2">
             <Link
+              to="/settings/contacts"
+              className="inline-flex items-center gap-1.5 rounded border border-port-border bg-port-card px-3 py-1.5 text-xs text-gray-300 hover:border-port-accent"
+            >
+              <Users size={12} />
+              Contacts
+            </Link>
+            <Link
               to="/settings/imessage"
               className="inline-flex items-center gap-1.5 rounded border border-port-border bg-port-card px-3 py-1.5 text-xs text-gray-300 hover:border-port-accent"
             >
@@ -542,6 +594,7 @@ export default function IMessage() {
             chatKey={selectedKey}
             conversation={selectedConversation}
             events={events}
+            identity={conversationIdentity}
             loading={eventsLoading}
             timezone={undefined}
             onBack={() => select(null)}
