@@ -10,19 +10,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom';
 import {
-  Plus, Trash2, Sparkles, Wand2, Loader2, Save, FolderOpen,
+  Plus, Trash2, Sparkles, Wand2, Loader2, Save,
   Edit3, X, MessageSquarePlus, Play, Lock, Unlock,
   ArrowUpCircle, ArrowLeft,
   BookOpen, Users, MapPin, Package, Layers, ImagePlus, FolderTree, Images,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import InlineConfirmRow from '../components/ui/InlineConfirmRow';
-import { formatDateTime } from '../utils/formatters';
 import {
   listUniverses, getUniverse, createUniverse, updateUniverse, deleteUniverse, expandUniverse,
   generateCategoryVariations, promoteVariationToCanon, autoSortBuckets,
   renderWorld, listWorldRuns, getProviders, refineWorldPrompts, WORLD_CATEGORIES,
-  WORLD_CATEGORY_KEY_MAX, COMPOSITE_PROMPT_MAX, WORLD_LOGLINE_MAX,
+  WORLD_CATEGORY_KEY_MAX, WORLD_LOGLINE_MAX,
   WORLD_PREMISE_MAX, WORLD_STYLE_NOTES_MAX, WORLD_LOCKABLE_FIELDS,
   ensureInfluences, isInfluenceLockField,
   listImageModels, listLorasFull, getSettings,
@@ -32,12 +31,14 @@ import EntityCombobox from '../components/EntityCombobox';
 import { useLocalStoragePersisted } from '../hooks/useLocalStorageBool';
 import useUniverseAction from '../hooks/useUniverseAction';
 import { useUniverseNav } from '../hooks/useUniverseNav';
+import { useRenderJobQueue } from '../hooks/useRenderJobQueue';
 import InfluenceChipsInput from '../components/universeBuilder/InfluenceChipsInput';
+import CompositeSheetsEditor from '../components/universeBuilder/CompositeSheetsEditor';
+import BucketChipStrip from '../components/universeBuilder/BucketChipStrip';
+import RenderTab from '../components/universeBuilder/RenderTab';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import VisionProviderPicker from '../components/universe/VisionProviderPicker';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
-import ImageGenSettingsForm from '../components/imageGen/ImageGenSettingsForm';
-import { RUNNER_FAMILIES, loraCompatKey } from '../lib/runnerFamilies';
 import ShareToButton from '../components/sharing/ShareToButton';
 import SyncToPeerButton from '../components/sharing/SyncToPeerButton';
 import OriginBadge from '../components/sharing/OriginBadge';
@@ -55,7 +56,7 @@ import { listImageGallery } from '../services/apiImageVideo';
 import TabPills from '../components/ui/TabPills';
 import { deriveAvailableBackends, IMAGE_GEN_MODE } from '../lib/imageGenBackends';
 import { PIPELINE_IMAGE_DEFAULTS, readPipelineImageSettings } from '../lib/pipelineImageDefaults';
-import { hasCanonDescriptorContent, descriptorForCanonEntry } from '../lib/canonPrompt';
+import { descriptorForCanonEntry } from '../lib/canonPrompt';
 import { listSheetPointers } from '../lib/sheetPointers';
 import { upsertByIdPrepend } from '../lib/upsertByIdPrepend';
 import { sameJsonShape } from '../lib/sameJsonShape';
@@ -63,62 +64,16 @@ import { capImageRefs } from '../lib/bibleLimits';
 import {
   mergeVariations, mergeCanonByName, mergeExpandIntoDraft, extractPreservedFromDraft,
 } from '../lib/universeBuilderExpand';
-
-const CATEGORY_LABELS = {
-  landscapes: 'Landscapes',
-  environments: 'Environments',
-  structures: 'Structures',
-  vehicles: 'Vehicles',
-};
-
-// Tab order in the Universe Builder. Bible / Composites / Render are always
-// visible; the three canon trunks (Cast / Places / Objects) render even when
-// empty so the user has a discoverable target for canon+variation work; Other
-// only renders when at least one un-kinded bucket exists.
-const TAB_BIBLE = 'bible';
-const TAB_CAST = 'cast';
-const TAB_PLACES = 'places';
-const TAB_OBJECTS = 'objects';
-const TAB_OTHER = 'other';
-const TAB_COMPOSITES = 'composites';
-const TAB_RENDER = 'render';
-// Pseudo-bucket key for the canon-only view inside a trunk. Overloads
-// `?bucket=` (alongside real bucket keys) AND a `promptMode` value on the
-// render route; same string in both contexts to keep the contract consistent.
-const BUCKET_CANON = 'canon';
-// `kind` doubles as the canon-array key on the universe (`draft[kind]`) and
-// the canon-trunk identifier the server's `canonSelection` schema accepts.
-const TRUNK_TABS = [
-  { id: TAB_CAST, kind: 'characters', label: 'Cast', icon: Users },
-  { id: TAB_PLACES, kind: 'places', label: 'Places', icon: MapPin },
-  { id: TAB_OBJECTS, kind: 'objects', label: 'Objects', icon: Package },
-];
-const TRUNK_BY_ID = Object.fromEntries(TRUNK_TABS.map((t) => [t.id, t]));
-const TRUNK_BY_KIND = Object.fromEntries(TRUNK_TABS.map((t) => [t.kind, t]));
-
-// Group category buckets by their `kind` tag. Buckets with an unknown / missing
-// kind fall into the `other` bin — that bin drives whether the Other tab shows.
-const groupBucketsByKind = (categories = {}) => {
-  const out = { characters: [], places: [], objects: [], other: [] };
-  for (const [key, bucket] of Object.entries(categories || {})) {
-    const kind = bucket?.kind || 'other';
-    if (out[kind]) out[kind].push(key);
-    else out.other.push(key);
-  }
-  return out;
-};
-
-const normalizeCategoryKey = (raw) => (raw || '')
-  .trim()
-  .toLowerCase()
-  .replace(/&/g, ' and ')
-  .replace(/[^a-z0-9]+/g, '_')
-  .replace(/^_+|_+$/g, '')
-  .replace(/_{2,}/g, '_')
-  .slice(0, WORLD_CATEGORY_KEY_MAX);
-
-const humanizeCategory = (key) => CATEGORY_LABELS[key]
-  || key.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
+import {
+  TAB_BIBLE, TAB_CAST, TAB_PLACES, TAB_OBJECTS, TAB_OTHER, TAB_COMPOSITES, TAB_RENDER,
+  BUCKET_CANON, TRUNK_TABS, TRUNK_BY_ID, TRUNK_BY_KIND,
+  groupBucketsByKind, normalizeCategoryKey, humanizeCategory,
+  ensureDraftCategories, getCategoryKeys, DEFAULT_RENDER_OPTS,
+} from '../lib/universeBuilderShared';
+import {
+  totalVariationCount, canonEntryHasContent,
+  renderPromptCount, scopedPromptCount,
+} from '../lib/universeBuilderCounts';
 
 // Toast summary for handleExpand — same body, different tail depending on
 // whether the auto-save succeeded.
@@ -132,53 +87,6 @@ const expandToast = ({ variationCount, sheetCount, addedCanonCount, saved }) => 
   const base = `Expanded into ${variationCount} variations, ${sheetCount} boards, ${addedCanonCount} new canon entries`;
   return `${base} — ${saved ? 'saved' : 'review then Save'}`;
 };
-
-const ensureDraftCategories = (categories = {}) => ({
-  ...Object.fromEntries(WORLD_CATEGORIES.map((c) => [c, { variations: [] }])),
-  ...(categories || {}),
-});
-
-const getCategoryKeys = (categories = {}) => {
-  const seen = new Set();
-  const keys = [];
-  for (const key of [...WORLD_CATEGORIES, ...Object.keys(categories || {})]) {
-    const normalized = normalizeCategoryKey(key);
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
-    keys.push(normalized);
-  }
-  return keys;
-};
-
-// Default per-render knobs. Mirrors the Image Gen page's default chip.
-const DEFAULT_RENDER_OPTS = {
-  width: 1024,
-  height: 1024,
-  steps: 30,
-  guidance: '',
-  cfgScale: 7,
-  quantize: '8',
-  modelId: '',
-  mode: '',
-  promptMode: 'variations',
-  batchPerVariation: 1,
-  // Extended Image Gen surface used by the batch render form. Server accepts
-  // these as optional patches on top of the universe's stored influences.
-  seed: '',
-  negativePrompt: '',
-  extraStyle: '',
-  stylePreset: null,
-  loras: [],
-};
-
-// Mirror of COMPOSITE_SHEET_KINDS in server/services/universeBuilder.js — keep
-// in sync when adding kinds.
-const COMPOSITE_BOARD_KINDS = [
-  { value: 'reference_sheet', label: 'Reference sheet' },
-  { value: 'world_pitch_poster', label: 'World pitch poster' },
-];
-
-const compositeKindLabel = (kind) => COMPOSITE_BOARD_KINDS.find((k) => k.value === kind)?.label || 'Reference sheet';
 
 const emptyTemplate = () => ({
   name: '',
@@ -346,45 +254,12 @@ export default function UniverseBuilder() {
   const [saving, setSaving] = useState(false);
   const [expanding, setExpanding] = useState(false);
   const [rendering, setRendering] = useState(false);
-  // entryId → jobId[] queue for any row with one or more in-flight renders.
-  // Stores an ARRAY because `batchPerVariation > 1` (or any path that queues
-  // multiple jobs for the same entry) lands several jobIds against the same
-  // entryId — a scalar would overwrite siblings and the spinner would clear
-  // as soon as the first finished, even though others are still running.
-  // Canon entries are included here too (the batch `/render` route compiles
-  // canon prompts when the user picks "all" / "canon" mode, and those jobs
-  // don't go through `UniverseCanonSection.renderingJobs`).
-  const [pendingByEntryId, setPendingByEntryId] = useState({});
-  // First-jobId-per-entry view for components that just need a single
-  // subscription per row (MediaJobThumb takes one jobId). When the head
-  // finishes we shift it off and the next jobId in the queue takes over.
-  const pendingHeadByEntryId = useMemo(() => {
-    const out = {};
-    for (const [entryId, jobs] of Object.entries(pendingByEntryId)) {
-      if (Array.isArray(jobs) && jobs.length > 0) out[entryId] = jobs[0];
-    }
-    return out;
-  }, [pendingByEntryId]);
-  // Remove a specific completed jobId from the entry's queue (preferred path
-  // — handlers know which jobId finished). When called without a jobId
-  // (failure paths that want to bail entirely on the entry), drops every
-  // pending job for that entry.
-  const clearPendingForEntry = useCallback((entryId, jobId = null) => {
-    if (!entryId) return;
-    setPendingByEntryId((prev) => {
-      const jobs = prev[entryId];
-      if (!Array.isArray(jobs) || jobs.length === 0) return prev;
-      const next = { ...prev };
-      if (jobId == null) {
-        delete next[entryId];
-        return next;
-      }
-      const remaining = jobs.filter((j) => j !== jobId);
-      if (remaining.length === 0) delete next[entryId];
-      else next[entryId] = remaining;
-      return next;
-    });
-  }, []);
+  // Per-entry render-job queue (variations + canon). Extracted to
+  // useRenderJobQueue (#2374) — see the hook for the array-per-entry / head-map
+  // rationale and the variation/canon-only enqueue filter.
+  const {
+    pendingHeadByEntryId, clearPendingForEntry, enqueueEntryJobs,
+  } = useRenderJobQueue();
   const [providers, setProviders] = useState([]);
   const [activeProviderId, setActiveProviderId] = useState(null);
   // Image-gen plumbing for the batch-render form (reused from Image Gen).
@@ -1261,18 +1136,7 @@ export default function UniverseBuilder() {
     // renders on the same row should all stay tracked. Each completion
     // shifts its jobId out (see `clearPendingForEntry`); the head jobId
     // is the one MediaJobThumb subscribes to at any moment.
-    if (Array.isArray(result.entryJobs) && result.entryJobs.length > 0) {
-      setPendingByEntryId((prev) => {
-        const next = { ...prev };
-        for (const { jobId, entryRef } of result.entryJobs) {
-          if (!jobId || !entryRef?.id) continue;
-          if (entryRef.kind !== 'variation' && entryRef.kind !== 'canon') continue;
-          const existing = Array.isArray(next[entryRef.id]) ? next[entryRef.id] : [];
-          next[entryRef.id] = [...existing, jobId];
-        }
-        return next;
-      });
-    }
+    enqueueEntryJobs(result.entryJobs);
     toast.success(`Queued ${result.promptCount} renders → "${result.collectionName}"`);
     const updated = await listWorldRuns(selectedId).catch(() => runs);
     setRuns(updated);
@@ -1951,347 +1815,6 @@ export default function UniverseBuilder() {
   );
 }
 
-function totalVariationCount(world) {
-  return getCategoryKeys(world.categories).reduce((n, c) => n + (world.categories?.[c]?.variations?.length || 0), 0);
-}
-
-// Mirror the server's synthesizeCanonPrompt skip rule: entries with no
-// identity-anchor (name / slugline / prompt) AND no descriptive content for
-// the kind compile to an empty seed and get skipped at render time. The
-// "Render N images" button count must not overshoot what the server will
-// actually enqueue.
-const hasNonBlankString = (v) => typeof v === 'string' && v.trim().length > 0;
-
-const canonEntryHasContent = (e, kind) => {
-  if (!e) return false;
-  if (hasNonBlankString(e.prompt)) return true;
-  // Identifier anchors per kind — places allow slugline-only entries (bible
-  // sanitizer); characters/objects ignore stray slugline. Mirrors server
-  // synthesizeCanonPrompt's identifier-seed rule.
-  if (hasNonBlankString(e.name)) return true;
-  if (kind === 'places' && hasNonBlankString(e.slugline)) return true;
-  return hasCanonDescriptorContent(kind, e);
-};
-
-const countCanonWithContent = (world, kind) =>
-  (Array.isArray(world?.[kind]) ? world[kind] : []).filter((e) => canonEntryHasContent(e, kind)).length;
-
-function renderPromptCount(world, promptMode = 'variations') {
-  if (promptMode === 'variations') return totalVariationCount(world);
-  const sheets = world.compositeSheets?.length || 0;
-  if (promptMode === 'sheets') return sheets;
-  const canon = countCanonWithContent(world, 'characters')
-    + countCanonWithContent(world, 'places')
-    + countCanonWithContent(world, 'objects');
-  if (promptMode === 'canon') return canon;
-  return totalVariationCount(world) + sheets + canon;
-}
-
-// Mirrors the server's compilePrompts for selection/sheetSelection/canonSelection
-// so an inline "Render" button can disable itself + show an accurate count
-// without a round trip.
-//
-// Defaulting rules — mirror server/services/universeBuilder.js compilePrompts:
-//   - sheets/all + no sheetSelection → render every sheet (server defaults to 'all')
-//   - variations/all + no selection → render every category (server falls back
-//     to a full category map via getWorldCategoryKeys)
-//   - canon/all + no canonSelection → render NOTHING (server gates on a non-null
-//     canonSelection; missing key skips the trunk entirely)
-// Canon entries are filtered through `canonEntryHasContent(kind)` since the
-// server skips entries whose synthesized seed is empty.
-function scopedPromptCount(world, scope) {
-  if (!scope) return 0;
-  const mode = scope.promptMode || 'variations';
-  let n = 0;
-  if (mode === 'sheets' || mode === 'all') {
-    const sheets = world.compositeSheets || [];
-    if (scope.sheetSelection === 'all' || scope.sheetSelection === undefined || scope.sheetSelection === null) {
-      // Both `sheets` and `all` default to every sheet when sheetSelection is
-      // omitted — server: `options.sheetSelection || 'all'`.
-      n += sheets.length;
-    } else if (Array.isArray(scope.sheetSelection)) {
-      const set = new Set(scope.sheetSelection.map((s) => s.toLowerCase()));
-      n += sheets.filter((s) => set.has((s.label || '').toLowerCase())).length;
-    }
-  }
-  if (mode === 'variations' || mode === 'all') {
-    if (scope.selection) {
-      for (const [cat, pick] of Object.entries(scope.selection)) {
-        const vars = world.categories?.[cat]?.variations || [];
-        if (pick === 'all') n += vars.length;
-        else if (Array.isArray(pick)) {
-          const labels = new Set(pick.map((p) => p.toLowerCase()));
-          n += vars.filter((v) => labels.has((v.label || '').toLowerCase())).length;
-        }
-      }
-    } else {
-      // No selection ⇒ server treats this as "every category, all variations".
-      n += totalVariationCount(world);
-    }
-  }
-  if (mode === 'canon' || mode === 'all') {
-    if (scope.canonSelection) {
-      for (const trunk of ['characters', 'places', 'objects']) {
-        const pick = scope.canonSelection[trunk];
-        if (!pick) continue;
-        const entries = Array.isArray(world[trunk]) ? world[trunk] : [];
-        const withContent = entries.filter((e) => canonEntryHasContent(e, trunk));
-        if (pick === 'all') n += withContent.length;
-        else if (Array.isArray(pick)) {
-          const needles = new Set(pick.map((p) => p.toLowerCase()));
-          // Mirror server: slugline matching is places-only — name is the
-          // shared anchor for characters/objects.
-          n += withContent.filter((e) => {
-            const name = (e.name || '').toLowerCase();
-            if (needles.has(name)) return true;
-            if (trunk === 'places') {
-              const slug = (e.slugline || '').toLowerCase();
-              if (needles.has(slug)) return true;
-            }
-            return false;
-          }).length;
-        }
-      }
-    }
-  }
-  return n;
-}
-
-function CompositeSheetsEditor({ sheets, onChange, canRender = false, onRender = null }) {
-  const [adding, setAdding] = useState(false);
-  const [newKind, setNewKind] = useState('reference_sheet');
-  const [newLabel, setNewLabel] = useState('');
-  const [newPrompt, setNewPrompt] = useState('');
-  const [editIdx, setEditIdx] = useState(null);
-  const [editKind, setEditKind] = useState('reference_sheet');
-  const [editLabel, setEditLabel] = useState('');
-  const [editPrompt, setEditPrompt] = useState('');
-
-  const addSheet = () => {
-    const label = newLabel.trim();
-    const prompt = newPrompt.trim();
-    if (!label || !prompt) return;
-    // Stamp `locked: true` up front so the in-draft row matches the
-    // lock-by-default contract before the next save round-trips through
-    // sanitizeCompositeSheet — otherwise the bulk-toggle's locked-count
-    // gate would treat freshly-added boards as unlocked.
-    onChange([...sheets, { kind: newKind, label: label.slice(0, 120), prompt: prompt.slice(0, COMPOSITE_PROMPT_MAX), locked: true }]);
-    setNewKind('reference_sheet');
-    setNewLabel('');
-    setNewPrompt('');
-    setAdding(false);
-  };
-
-  const removeAt = (idx) => onChange(sheets.filter((_, i) => i !== idx));
-
-  // Sheets default to locked at the sanitizer (locked-by-default contract);
-  // persist an unlock as explicit `false` so it survives the next read.
-  const toggleLockAt = (idx) => onChange(sheets.map((s, i) => {
-    if (i !== idx) return s;
-    return { ...s, locked: !s.locked };
-  }));
-
-  const startEdit = (idx, sheet) => {
-    setEditIdx(idx);
-    setEditKind(sheet.kind || 'reference_sheet');
-    setEditLabel(sheet.label);
-    setEditPrompt(sheet.prompt);
-  };
-
-  const saveEdit = () => {
-    const label = editLabel.trim();
-    const prompt = editPrompt.trim();
-    if (!label || !prompt) return;
-    const next = [...sheets];
-    // Preserve `id`, `locked`, `imageRefs` — see VariationCard.saveEdit for
-    // the rationale. The editor only owns kind/label/prompt.
-    next[editIdx] = {
-      ...next[editIdx],
-      kind: editKind,
-      label: label.slice(0, 120),
-      prompt: prompt.slice(0, COMPOSITE_PROMPT_MAX),
-    };
-    onChange(next);
-    setEditIdx(null);
-  };
-
-  const setAllSheetsLocked = (nextLocked) =>
-    onChange(sheets.map((s) => (s?.locked === nextLocked ? s : { ...s, locked: nextLocked })));
-  const sheetsLockedCount = sheets.filter((s) => s?.locked === true).length;
-  const allSheetsLocked = sheets.length > 0 && sheetsLockedCount === sheets.length;
-
-  return (
-    <section className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
-      <div className="flex items-center justify-between gap-2">
-        <h2 className="text-sm font-semibold text-white">
-          Composite boards
-          <span className="ml-2 text-xs text-gray-500">{sheets.length}</span>
-        </h2>
-        <div className="flex items-center gap-1">
-          {sheets.length > 0 && (
-            <button
-              onClick={() => setAllSheetsLocked(!allSheetsLocked)}
-              title={allSheetsLocked
-                ? 'Unlock all composite boards — Expand may overwrite them'
-                : 'Lock all composite boards — Expand will preserve them'}
-              aria-label={allSheetsLocked ? 'Unlock all composite boards' : 'Lock all composite boards'}
-              aria-pressed={allSheetsLocked}
-              className={`p-1 rounded ${
-                allSheetsLocked
-                  ? 'text-port-accent hover:bg-port-accent/20'
-                  : 'text-gray-500 hover:text-gray-300'
-              }`}
-            >
-              {allSheetsLocked ? <Lock size={14} /> : <Unlock size={14} />}
-            </button>
-          )}
-          <button
-            onClick={() => setAdding((v) => !v)}
-            className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 text-port-accent rounded flex items-center gap-1 min-h-[40px] sm:min-h-0"
-          >
-            <Plus size={12} /> Add
-          </button>
-        </div>
-      </div>
-      {adding && (
-        <div className="bg-port-bg border border-port-border rounded p-2 flex flex-col gap-2">
-          <select
-            value={newKind}
-            onChange={(e) => setNewKind(e.target.value)}
-            className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm min-h-[40px]"
-          >
-            {COMPOSITE_BOARD_KINDS.map((kind) => (
-              <option key={kind.value} value={kind.value}>{kind.label}</option>
-            ))}
-          </select>
-          <input
-            value={newLabel}
-            onChange={(e) => setNewLabel(e.target.value)}
-            placeholder={newKind === 'world_pitch_poster' ? 'World summary concept pitch poster' : 'Gas-Giant Drifters costume sheet'}
-            className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
-            maxLength={120}
-          />
-          <textarea
-            value={newPrompt}
-            onChange={(e) => setNewPrompt(e.target.value)}
-            placeholder={newKind === 'world_pitch_poster'
-              ? 'Create a cinematic world summary concept pitch poster with a hero panorama, inset environments, cultures, creatures, visual language, palette, materials, and theme icons...'
-              : 'Create a clean illustrated costume reference sheet...'}
-            className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
-            rows={6}
-            maxLength={COMPOSITE_PROMPT_MAX}
-          />
-          <div className="flex items-center gap-2">
-            <button
-              onClick={addSheet}
-              disabled={!newLabel.trim() || !newPrompt.trim()}
-              className="text-xs px-2 py-1 bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white rounded min-h-[40px] sm:min-h-0"
-            >
-              Save
-            </button>
-            <button
-              onClick={() => {
-                setAdding(false);
-                setNewKind('reference_sheet');
-                setNewLabel('');
-                setNewPrompt('');
-              }}
-              className="text-xs px-2 py-1 bg-port-bg hover:bg-port-border text-gray-300 rounded min-h-[40px] sm:min-h-0"
-            >
-              Cancel
-            </button>
-          </div>
-        </div>
-      )}
-      {sheets.length === 0 ? (
-        <p className="text-xs text-gray-500">No composite boards yet.</p>
-      ) : (
-        <ul className="flex flex-col gap-1.5 max-h-96 overflow-y-auto">
-          {sheets.map((sheet, idx) => (
-            <li key={`${sheet.label}-${idx}`} className={`bg-port-bg border rounded p-2 text-sm ${sheet.locked ? 'border-port-accent/50' : 'border-port-border'}`}>
-              {editIdx === idx ? (
-                <div className="flex flex-col gap-1">
-                  <select
-                    value={editKind}
-                    onChange={(e) => setEditKind(e.target.value)}
-                    className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm min-h-[40px]"
-                  >
-                    {COMPOSITE_BOARD_KINDS.map((kind) => (
-                      <option key={kind.value} value={kind.value}>{kind.label}</option>
-                    ))}
-                  </select>
-                  <input
-                    value={editLabel}
-                    onChange={(e) => setEditLabel(e.target.value)}
-                    className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
-                    maxLength={120}
-                  />
-                  <textarea
-                    value={editPrompt}
-                    onChange={(e) => setEditPrompt(e.target.value)}
-                    rows={8}
-                    className="bg-port-card border border-port-border rounded px-2 py-1 text-white text-sm"
-                    maxLength={COMPOSITE_PROMPT_MAX}
-                  />
-                  <div className="flex gap-2">
-                    <button onClick={saveEdit} className="text-xs px-2 py-1 bg-port-accent text-white rounded min-h-[40px] sm:min-h-0">Save</button>
-                    <button onClick={() => setEditIdx(null)} className="text-xs px-2 py-1 bg-port-bg text-gray-300 rounded min-h-[40px] sm:min-h-0">Cancel</button>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <div className="text-white font-medium truncate">{sheet.label}</div>
-                      <span className="shrink-0 text-[10px] uppercase tracking-wide px-1.5 py-0.5 rounded bg-port-accent/10 text-port-accent border border-port-accent/20">
-                        {compositeKindLabel(sheet.kind)}
-                      </span>
-                    </div>
-                    <div className="text-xs text-gray-400 line-clamp-3">{sheet.prompt}</div>
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    {onRender && (
-                      <button
-                        onClick={() => onRender(sheet)}
-                        disabled={!canRender}
-                        className="p-1 text-gray-400 hover:text-port-accent disabled:opacity-30 disabled:cursor-not-allowed rounded"
-                        title={canRender ? 'Render this board' : 'Save the world and configure a render backend to enable'}
-                      >
-                        <Play size={14} />
-                      </button>
-                    )}
-                    <button
-                      onClick={() => toggleLockAt(idx)}
-                      className={`p-1 rounded ${sheet.locked ? 'text-port-accent hover:bg-port-accent/20' : 'text-gray-500 hover:text-gray-300'}`}
-                      title={sheet.locked ? 'Locked — AI expand will preserve this board' : 'Lock this board against AI expand'}
-                      aria-pressed={!!sheet.locked}
-                    >
-                      {sheet.locked ? <Lock size={14} /> : <Unlock size={14} />}
-                    </button>
-                    <button
-                      onClick={() => startEdit(idx, sheet)}
-                      className="p-1 text-gray-400 hover:text-port-accent rounded"
-                      title="Edit"
-                    >
-                      <Edit3 size={14} />
-                    </button>
-                    <button
-                      onClick={() => removeAt(idx)}
-                      className="p-1 text-gray-400 hover:text-port-error rounded"
-                      title="Remove"
-                    >
-                      <X size={14} />
-                    </button>
-                  </div>
-                </div>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
-  );
-}
 
 const GENERATE_PRESETS = [3, 5, 10];
 const GENERATE_CUSTOM_MIN = 1;
@@ -3121,58 +2644,6 @@ function BibleTab({
 // pseudo-bucket that clears `?bucket=`. Each real bucket key gets its own
 // chip; clicking toggles it on/off (toggle-off returns to All). Designed so
 // it works one-handed on mobile (38px tap targets, wraps to multiple lines).
-function BucketChipStrip({ buckets, activeBucket, setBucket, showAll = true, extraChips = [] }) {
-  if (buckets.length === 0 && extraChips.length === 0) return null;
-  return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      {showAll && (
-        <button
-          type="button"
-          onClick={() => setBucket('')}
-          className={`px-2.5 py-1.5 rounded-full text-xs min-h-[32px] transition-colors ${
-            !activeBucket
-              ? 'bg-port-accent/25 text-port-accent border border-port-accent/40'
-              : 'bg-port-bg text-gray-300 border border-port-border hover:border-gray-500'
-          }`}
-        >
-          All
-        </button>
-      )}
-      {extraChips.map((chip) => (
-        <button
-          key={chip.key}
-          type="button"
-          onClick={() => setBucket(chip.key)}
-          className={`px-2.5 py-1.5 rounded-full text-xs min-h-[32px] transition-colors ${
-            activeBucket === chip.key
-              ? 'bg-port-accent/25 text-port-accent border border-port-accent/40'
-              : 'bg-port-bg text-gray-300 border border-port-border hover:border-gray-500'
-          }`}
-        >
-          {chip.label}
-        </button>
-      ))}
-      {buckets.map((bucket) => {
-        const active = activeBucket === bucket;
-        return (
-          <button
-            key={bucket}
-            type="button"
-            onClick={() => setBucket(active ? '' : bucket)}
-            className={`px-2.5 py-1.5 rounded-full text-xs min-h-[32px] transition-colors ${
-              active
-                ? 'bg-port-accent/25 text-port-accent border border-port-accent/40'
-                : 'bg-port-bg text-gray-300 border border-port-border hover:border-gray-500'
-            }`}
-          >
-            {humanizeCategory(bucket)}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
-
 // Per-trunk view. Three modes driven by `?bucket=`:
 //   - blank (default "All"): renders canon + every variation under this trunk
 //   - BUCKET_CANON: renders only canon entries (via the existing UniverseCanonSection)
@@ -3418,285 +2889,6 @@ export function OtherTab({
           />
         ))}
       </section>
-    </>
-  );
-}
-
-function RenderTab({
-  draft, selectedId, bucketsByKind, renderOpts, setRenderOpts,
-  availableBackends, defaultMode, imageModels, availableLoras = [],
-  handleRender, rendering, runs,
-}) {
-  const currentModel = useMemo(
-    () => imageModels.find((m) => m.id === renderOpts.modelId),
-    [imageModels, renderOpts.modelId],
-  );
-  const currentRunnerFamily = currentModel?.runner || RUNNER_FAMILIES.MFLUX;
-  const currentCompatKey = loraCompatKey(currentModel);
-  // Memoize the counts that drive button labels + disable states. Drafts can
-  // be large (full canon + variations + sheets) and ImageGenSettingsForm
-  // re-renders RenderTab on every keystroke into the per-batch fields.
-  const counts = useMemo(() => {
-    // Mirror server-side compile skip rules — `renderPromptCount` already
-    // filters canon via `canonEntryHasContent`, so each trunk's counts and
-    // the "Render everything" total agree with what the server enqueues.
-    const totalSheets = draft.compositeSheets?.length || 0;
-    const totalVariations = totalVariationCount(draft);
-    const totalCanon = countCanonWithContent(draft, 'characters')
-      + countCanonWithContent(draft, 'places')
-      + countCanonWithContent(draft, 'objects');
-    const otherBuckets = bucketsByKind?.other || [];
-    const totalOtherVariations = otherBuckets.reduce(
-      (n, k) => n + (draft.categories?.[k]?.variations?.length || 0),
-      0,
-    );
-    return {
-      totalSheets,
-      totalVariations,
-      totalCanon,
-      otherBuckets,
-      totalOtherVariations,
-      totalEverything: totalSheets + totalVariations + totalCanon,
-    };
-  }, [draft, bucketsByKind]);
-  const { totalSheets, totalCanon, otherBuckets, totalOtherVariations, totalEverything } = counts;
-  const perPrompt = renderOpts.batchPerVariation || 1;
-
-  return (
-    <>
-      <section className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
-        <h2 className="text-sm font-semibold text-white flex items-center gap-2">
-          <FolderOpen size={16} className="text-port-accent" /> Batch render
-        </h2>
-        {availableBackends.length === 0 && (
-          <p className="text-xs text-port-warning">
-            Configure a local mflux Python path or enable Codex Imagegen in Settings → Image Gen
-            to enable batch render.
-          </p>
-        )}
-        <ImageGenSettingsForm
-          value={{ ...renderOpts, mode: renderOpts.mode || defaultMode || IMAGE_GEN_MODE.LOCAL }}
-          onChange={(next) => setRenderOpts(next)}
-          models={imageModels}
-          availableBackends={availableBackends}
-          showLoras
-          availableLoras={availableLoras}
-          currentRunnerFamily={currentRunnerFamily}
-          currentCompatKey={currentCompatKey}
-          showStylePreset
-        />
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-          <div>
-            <label htmlFor="world-render-batch" className="block text-xs font-medium text-gray-400 mb-1">Renders per prompt</label>
-            <input
-              id="world-render-batch"
-              type="number" min={1} max={20}
-              value={renderOpts.batchPerVariation ?? 1}
-              onChange={(e) => {
-                const n = Number(e.target.value);
-                setRenderOpts((r) => ({ ...r, batchPerVariation: Number.isFinite(n) && n > 0 ? n : 1 }));
-              }}
-              className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-            />
-          </div>
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <button
-            onClick={() => handleRender({
-              promptMode: 'all',
-              // Both `scopedPromptCount` (client) and `compilePrompts` (server)
-              // skip canon entirely when `canonSelection` is omitted. The button
-              // label promises "everything", so we must explicitly select every
-              // canon trunk — derived from TRUNK_TABS so the set stays in sync
-              // when a new trunk is added.
-              canonSelection: Object.fromEntries(TRUNK_TABS.map((t) => [t.kind, 'all'])),
-            })}
-            disabled={rendering || !selectedId || totalEverything === 0 || availableBackends.length === 0}
-            className="px-4 py-2 bg-port-accent hover:bg-port-accent/90 disabled:opacity-50 text-white rounded flex items-center gap-2 min-h-[40px]"
-            title="Render every canon entry + every variation + every composite board with these knobs"
-          >
-            {rendering ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
-            Render everything ({totalEverything * perPrompt} image{totalEverything * perPrompt === 1 ? '' : 's'})
-          </button>
-          <span className="text-[11px] text-gray-500">…or pick a narrower scope below.</span>
-        </div>
-        {!selectedId && <p className="text-xs text-gray-500">Save the world first to enable rendering.</p>}
-      </section>
-
-      <section className="bg-port-card border border-port-border rounded p-4 flex flex-col gap-3">
-        <h3 className="text-sm font-semibold text-white">Render targets</h3>
-        <p className="text-[11px] text-gray-500 -mt-1">
-          Click a target to queue that scope immediately with the knobs above.
-        </p>
-        <div className="flex flex-col gap-2">
-          {TRUNK_TABS.map((trunk) => {
-            const buckets = bucketsByKind[trunk.kind] || [];
-            // Use the synthesizable count for both the display label and the
-            // "Bulk-render all" total so the button advertises the number that
-            // will actually land on the server.
-            const canonCount = countCanonWithContent(draft, trunk.kind);
-            const variationCount = buckets.reduce((n, k) => n + (draft.categories?.[k]?.variations?.length || 0), 0);
-            const total = canonCount + variationCount;
-            if (total === 0) return null;
-            const Icon = trunk.icon;
-            return (
-              <div key={trunk.id} className="border border-port-border rounded p-2 bg-port-bg flex flex-col gap-1.5">
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <div className="flex items-center gap-2 text-sm text-gray-200">
-                    <Icon size={14} className="text-port-accent" />
-                    <span className="font-medium">{trunk.label}</span>
-                    <span className="text-[11px] text-gray-500">
-                      {canonCount} canon · {variationCount} variation{variationCount === 1 ? '' : 's'}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => handleRender({
-                      promptMode: 'all',
-                      selection: Object.fromEntries(buckets.map((b) => [b, 'all'])),
-                      canonSelection: canonCount > 0 ? { [trunk.kind]: 'all' } : undefined,
-                      // Trunk scope excludes composite sheets — see comment on
-                      // TrunkView's onBulkRenderTrunk for why this opt-out matters.
-                      sheetSelection: [],
-                    })}
-                    disabled={!selectedId || availableBackends.length === 0 || rendering}
-                    className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-30 disabled:cursor-not-allowed text-port-accent rounded min-h-[32px]"
-                    title={`Render every ${trunk.label.toLowerCase()} canon entry AND every variation under this trunk`}
-                  >
-                    Bulk-render all ({total})
-                  </button>
-                </div>
-                {buckets.length > 0 && (
-                  <div className="flex flex-wrap items-center gap-1 pl-5">
-                    {buckets.map((bucket) => {
-                      const count = draft.categories?.[bucket]?.variations?.length || 0;
-                      return (
-                        <button
-                          key={bucket}
-                          type="button"
-                          onClick={() => handleRender({ promptMode: 'variations', selection: { [bucket]: 'all' } })}
-                          disabled={count === 0 || !selectedId || availableBackends.length === 0 || rendering}
-                          className="text-[11px] px-1.5 py-0.5 bg-port-card border border-port-border hover:border-port-accent disabled:opacity-30 disabled:cursor-not-allowed text-gray-300 rounded"
-                          title={count === 0 ? 'No variations yet' : `Bulk-render ${humanizeCategory(bucket)} (${count})`}
-                        >
-                          {humanizeCategory(bucket)} ({count})
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-            );
-          })}
-          {otherBuckets.length > 0 && totalOtherVariations > 0 ? (
-            <div className="border border-port-border rounded p-2 bg-port-bg flex flex-col gap-1.5">
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <div className="flex items-center gap-2 text-sm text-gray-200">
-                  <FolderTree size={14} className="text-port-accent" />
-                  <span className="font-medium">Other</span>
-                  <span className="text-[11px] text-gray-500">
-                    {otherBuckets.length} bucket{otherBuckets.length === 1 ? '' : 's'}
-                    {' · '}{totalOtherVariations} variation{totalOtherVariations === 1 ? '' : 's'}
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => handleRender({
-                    promptMode: 'variations',
-                    selection: Object.fromEntries(otherBuckets.map((b) => [b, 'all'])),
-                  })}
-                  disabled={!selectedId || availableBackends.length === 0 || rendering}
-                  className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-30 disabled:cursor-not-allowed text-port-accent rounded min-h-[32px]"
-                  title="Render every variation in every Other bucket"
-                >
-                  Bulk-render all ({totalOtherVariations})
-                </button>
-              </div>
-              <div className="flex flex-wrap items-center gap-1 pl-5">
-                {otherBuckets.map((bucket) => {
-                  const count = draft.categories?.[bucket]?.variations?.length || 0;
-                  return (
-                    <button
-                      key={bucket}
-                      type="button"
-                      onClick={() => handleRender({ promptMode: 'variations', selection: { [bucket]: 'all' } })}
-                      disabled={count === 0 || !selectedId || availableBackends.length === 0 || rendering}
-                      className="text-[11px] px-1.5 py-0.5 bg-port-card border border-port-border hover:border-port-accent disabled:opacity-30 disabled:cursor-not-allowed text-gray-300 rounded"
-                      title={count === 0 ? 'No variations yet' : `Bulk-render ${humanizeCategory(bucket)} (${count})`}
-                    >
-                      {humanizeCategory(bucket)} ({count})
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ) : null}
-          {totalCanon > 0 ? (
-            <div className="border border-port-border rounded p-2 bg-port-bg flex items-center justify-between gap-2">
-              <span className="text-sm text-gray-200 flex items-center gap-2">
-                <Sparkles size={14} className="text-port-accent" />
-                All canon
-                <span className="text-[11px] text-gray-500">
-                  {totalCanon} entr{totalCanon === 1 ? 'y' : 'ies'}
-                </span>
-              </span>
-              <button
-                type="button"
-                onClick={() => handleRender({
-                  promptMode: 'canon',
-                  canonSelection: Object.fromEntries(TRUNK_TABS.map((t) => [t.kind, 'all'])),
-                })}
-                disabled={!selectedId || availableBackends.length === 0 || rendering}
-                className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-30 disabled:cursor-not-allowed text-port-accent rounded min-h-[32px]"
-              >
-                Bulk-render all canon
-              </button>
-            </div>
-          ) : null}
-          {totalSheets > 0 && (
-            <div className="border border-port-border rounded p-2 bg-port-bg flex items-center justify-between gap-2">
-              <span className="text-sm text-gray-200 flex items-center gap-2">
-                <Layers size={14} className="text-port-accent" />
-                Composite boards
-                <span className="text-[11px] text-gray-500">{totalSheets} board{totalSheets === 1 ? '' : 's'}</span>
-              </span>
-              <button
-                type="button"
-                onClick={() => handleRender({ promptMode: 'sheets', sheetSelection: 'all' })}
-                disabled={!selectedId || availableBackends.length === 0 || rendering}
-                className="text-xs px-2 py-1 bg-port-accent/15 hover:bg-port-accent/25 disabled:opacity-30 disabled:cursor-not-allowed text-port-accent rounded min-h-[32px]"
-              >
-                Bulk-render composites
-              </button>
-            </div>
-          )}
-        </div>
-      </section>
-
-      {selectedId && runs.length > 0 && (
-        <section className="bg-port-card border border-port-border rounded p-4">
-          <h2 className="text-sm font-semibold text-white mb-2">Recent runs</h2>
-          <ul className="flex flex-col gap-1">
-            {runs.map((r) => (
-              <li key={r.id} className="flex items-center justify-between text-sm text-gray-300 border-b border-port-border/40 py-1.5">
-                <span className="truncate">
-                  <span className="text-gray-500">{formatDateTime(r.createdAt)} —</span>{' '}
-                  {r.promptCount} prompt{r.promptCount === 1 ? '' : 's'}
-                </span>
-                {r.collectionId && (
-                  <Link
-                    to={`/media/collections/${r.collectionId}`}
-                    className="text-xs text-port-accent hover:underline whitespace-nowrap"
-                  >
-                    Open collection →
-                  </Link>
-                )}
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
-
     </>
   );
 }
