@@ -9,7 +9,7 @@
  * `mediaKey` image item if one exists, but the in-page add form uses URL/text.
  */
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { ArrowLeft, ImageIcon, FileText, Trash2, Plus, Save, Link2, Unlink, RefreshCw } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -51,9 +51,31 @@ export default function MoodBoardDetail() {
   const [syncing, setSyncing] = useState(false);
   const [confirmingUnlink, setConfirmingUnlink] = useState(false);
 
+  // Stale-response guards. `load` fires whenever the board `id` changes; because
+  // the fetch is async, an older request can resolve *after* a newer one (the
+  // user navigated to a different board) and clobber current state. We bump a
+  // sequence counter per call and only apply the result if it's still the latest
+  // — and only if the component is still mounted.
+  //
+  // `mountedRef` is set true on mount (not just left at its initial value) so
+  // that React 18 StrictMode's dev-only mount→cleanup→remount — which preserves
+  // this ref and would otherwise leave it stuck `false` after the simulated
+  // unmount — re-arms the guard for the real mount. The seq counter independently
+  // drops StrictMode's duplicate first fetch.
+  const mountedRef = useRef(true);
+  const loadSeqRef = useRef(0);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     setLoading(true);
     const data = await getMoodBoard(id, { silent: true }).catch(() => null);
+    // Drop stale (a newer load started) or unmounted resolutions before any
+    // setState / toast so an out-of-order response can't overwrite current state.
+    if (!mountedRef.current || seq !== loadSeqRef.current) return;
     if (data) {
       setBoard(data);
       setName(data.name || '');
