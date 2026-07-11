@@ -120,7 +120,11 @@ router.get('/install', asyncHandler(async (req, res) => {
       try { process.kill(-child.pid, 'SIGTERM'); }
       catch { child.kill('SIGTERM'); }
     }
-    installInFlight = null;
+    // Do NOT clear installInFlight here — the SIGTERM'd process group is only
+    // signalled, not yet reaped, and a mid-download pip child can take seconds
+    // to exit. Releasing the singleton now would let an immediate retry spawn a
+    // second install against the same half-torn-down venv. child.on('close')
+    // clears it once the child has actually exited (mirrors music.js).
     safeEnd();
   });
 }));
