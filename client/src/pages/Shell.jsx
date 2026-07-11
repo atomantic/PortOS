@@ -17,13 +17,8 @@ import { clickableProps } from '../lib/a11yKeyboard.js';
 const MAX_SESSIONS = 20;
 
 const QUICK_COMMANDS = [
-  // `--system-prompt .` replaces Claude's default system prompt with a single
-  // "." (a minimal/blank prompt) rather than appending to it — so interactive
-  // sessions launched here skip the heavyweight default harness prompt. The
-  // `claude (full)` entry keeps the default system prompt for when it's wanted.
-  { label: 'claude', command: 'claude --dangerously-skip-permissions --system-prompt .' },
-  { label: 'claude (full)', command: 'claude --dangerously-skip-permissions' },
-  { label: 'codex', command: 'codex' },
+  { label: 'claude', command: 'claude --dangerously-skip-permissions' },
+  { label: 'codex', command: 'codex --dangerously-bypass-approvals-and-sandbox' },
   { label: 'antigravity', command: 'agy' },
   { label: 'openclaw', command: 'openclaw tui' },
   { label: 'git status', command: 'git status' },
