@@ -98,10 +98,13 @@ export function Toaster({ position = 'bottom-right', toastOptions = {} }) {
   }[position] ?? 'bottom-4 right-4 items-end';
 
   return (
-    // Notification region. Each toast is its own live region (role="alert" for
-    // errors → assertive, role="status" otherwise → polite) so screen readers
-    // announce toasts as they arrive. Announcing per-toast rather than on the
-    // container avoids the whole stack being re-read when one entry changes.
+    // Notification region. Each toast is its own live region: role="alert"
+    // (implicitly assertive) for errors, role="status" (implicitly polite)
+    // otherwise, so screen readers announce toasts as they arrive. The role's
+    // implicit live semantics are relied on WITHOUT a redundant aria-live —
+    // pairing both on one node double-announces in iOS VoiceOver. Announcing
+    // per-toast rather than on the container avoids the whole stack being
+    // re-read when one entry changes.
     <div
       className={`fixed ${posClass} z-[9999] flex flex-col gap-2 pointer-events-none`}
       role="region"
@@ -116,7 +119,6 @@ export function Toaster({ position = 'bottom-right', toastOptions = {} }) {
             key={t.id}
             style={style}
             role={t.type === 'error' ? 'alert' : 'status'}
-            aria-live={t.type === 'error' ? 'assertive' : 'polite'}
             className="pointer-events-auto flex items-start gap-2 shadow-lg text-sm max-w-[calc(100vw-2rem)] sm:max-w-[520px] bg-port-card border border-port-border">
             {iconStr && <span className={`shrink-0 ${iconClass}`} aria-hidden="true">{iconStr}</span>}
             <div className="flex-1 min-w-0">
