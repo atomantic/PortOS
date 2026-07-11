@@ -212,20 +212,59 @@ export function filterBlockedTouchpointCandidates(candidates = [], blockedKeys) 
 // Browse / purge wrappers (source-scoped)
 // ---------------------------------------------------------------------------
 
+/**
+ * List iMessage conversations with identity enrichment (#2415): Tribe name
+ * wins, then macOS Contacts cache, then raw handle. When `q` is set, filter
+ * also matches resolved display names (not only stored titles).
+ */
 export async function listConversations({ q, limit } = {}) {
+  // When searching by resolved name, pull a wider raw set then filter after
+  // enrich — SQL only sees stored titles/handles.
+  const needle = q != null && String(q).trim() ? String(q).trim().toLowerCase() : '';
+  const rawLimit = needle ? Math.min(Math.max(Number(limit) || 500, 1) * 4, 2000) : limit;
   const [rows, blocklist] = await Promise.all([
-    humanActivity.listConversations({ source: SOURCE, q, limit }),
+    humanActivity.listConversations({
+      source: SOURCE,
+      // Skip SQL q when we will name-filter after resolve (SQL misses Contacts names).
+      q: needle ? undefined : q,
+      limit: rawLimit,
+    }),
     readBlocklist(),
   ]);
   const blocked = new Set(blocklist.handles);
-  return rows.map((row) => {
+  let enrichConversationRow = (row) => row;
+  try {
+    const identity = await import('./identityResolve.js');
+    const ctx = await identity.loadResolverContext();
+    enrichConversationRow = (row) => identity.enrichConversationRow(row, ctx);
+  } catch (err) {
+    console.error(`⚠️ Identity resolve unavailable: ${err?.message || err}`);
+  }
+
+  const cap = Math.min(Math.max(Number(limit) || 500, 1), 2000);
+  const enriched = [];
+  for (const row of rows) {
     const handleKey = blocklistKey(row.handle);
-    return {
+    const base = {
       ...row,
       chatKey: encodeChatKey(row.chatGuid),
       blocked: !!(handleKey && blocked.has(handleKey)),
     };
-  });
+    const withName = enrichConversationRow(base);
+    if (needle) {
+      const hay = [
+        withName.title,
+        withName.displayName,
+        withName.handle,
+        withName.organization,
+        withName.lastSummary,
+      ].filter(Boolean).join(' ').toLowerCase();
+      if (!hay.includes(needle)) continue;
+    }
+    enriched.push(withName);
+    if (enriched.length >= cap) break;
+  }
+  return enriched;
 }
 
 export async function listConversationEvents(chatKey, { limit, before } = {}) {
@@ -237,10 +276,38 @@ export async function listConversationEvents(chatKey, { limit, before } = {}) {
     to: before || undefined,
     limit,
   });
+  let enrichedEvents = events;
+  let conversationMeta = null;
+  try {
+    const identity = await import('./identityResolve.js');
+    const ctx = await identity.loadResolverContext();
+    enrichedEvents = events.map((ev) => identity.enrichActivityEvent(ev, ctx));
+    // Conversation header identity from the first event handle or chat title.
+    const sampleHandle = events.find((e) => e.metadata?.handle)?.metadata?.handle
+      || events[0]?.title
+      || '';
+    if (sampleHandle) {
+      conversationMeta = identity.enrichConversationRow({
+        handle: events.find((e) => e.metadata?.handle)?.metadata?.handle || null,
+        title: events[0]?.title || '',
+      }, ctx);
+    }
+  } catch (err) {
+    console.error(`⚠️ Identity resolve unavailable: ${err?.message || err}`);
+  }
   return {
     chatGuid,
     chatKey: encodeChatKey(chatGuid),
-    events,
+    events: enrichedEvents,
+    identity: conversationMeta
+      ? {
+        displayName: conversationMeta.displayName,
+        personId: conversationMeta.personId,
+        contactId: conversationMeta.contactId,
+        organization: conversationMeta.organization,
+        identitySource: conversationMeta.identitySource,
+      }
+      : null,
   };
 }
 
