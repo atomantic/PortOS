@@ -16,6 +16,13 @@ vi.mock('../../lib/fileUtils.js', () => ({
   tryReadFile: vi.fn().mockResolvedValue(null)
 }));
 
+// The provider-type guard in buildTaskInput looks the pinned provider up to
+// reject an api-only (harnessless) provider. Default to a CLI provider so the
+// happy path passes; the dedicated test overrides it to an api provider.
+vi.mock('../providers.js', () => ({
+  getProviderById: vi.fn(async (id) => ({ id, type: 'cli' }))
+}));
+
 vi.mock('../layeredIntelligence.js', () => ({
   getEffectiveConfig: vi.fn(() => ({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: {} })),
   buildPrompt: vi.fn(() => 'REASONING PROMPT'),
@@ -47,12 +54,14 @@ import { buildTaskInput, processTaskOutput } from './layeredIntelligenceHooks.js
 import * as li from '../layeredIntelligence.js';
 import * as apps from '../apps.js';
 import { resolveAppWorkTracker } from '../../lib/workTracker.js';
+import { getProviderById } from '../providers.js';
 
 const APP = { id: 'app-1', name: 'App One', repoPath: '/repo', taskTypeOverrides: {} };
 
 beforeEach(() => {
   vi.clearAllMocks();
   resolveAppWorkTracker.mockResolvedValue({ resolved: 'github', forge: 'gh' });
+  getProviderById.mockImplementation(async (id) => ({ id, type: 'cli' }));
   li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: {} });
   li.filerForTracker.mockImplementation((r) => (r === 'github' || r === 'gitlab') ? 'forge' : (r === 'jira' ? 'jira' : 'plan'));
   li.trackerSupportsPause.mockImplementation((r) => r !== 'plan');
@@ -77,6 +86,23 @@ describe('buildTaskInput', () => {
   it('skips when a failed blocking read could resume parked work', async () => {
     li.listBlockingIssues.mockResolvedValue({ ok: false, issues: [] });
     expect(await buildTaskInput({ app: APP })).toEqual({ skip: { reason: 'blocking-read-failed' } });
+  });
+
+  it('skips when the pinned provider is an api-only (harnessless) provider', async () => {
+    getProviderById.mockResolvedValue({ id: 'ollama', type: 'api' });
+    const res = await buildTaskInput({ app: APP });
+    expect(res).toEqual({ skip: { reason: 'provider-not-agent-capable' } });
+    // Short-circuits before any tracker/source I/O — nothing doomed is built.
+    expect(li.gatherSources).not.toHaveBeenCalled();
+    expect(li.listBlockingIssues).not.toHaveBeenCalled();
+  });
+
+  it('proceeds when no provider is pinned (inherits the default coding agent)', async () => {
+    li.getEffectiveConfig.mockReturnValue({ providerId: null, model: null, allowedScopes: ['app-improvement'], sources: {} });
+    const res = await buildTaskInput({ app: APP });
+    expect(res.skip).toBeUndefined();
+    expect(getProviderById).not.toHaveBeenCalled();
+    expect(res.prompt).toContain('REASONING PROMPT');
   });
 
   it('skips a jira-tracked app with no usable jira config', async () => {

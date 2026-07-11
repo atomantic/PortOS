@@ -163,6 +163,20 @@ export async function buildTaskInput({ app } = {}) {
     return { skip: { reason } }
   }
 
+  // The reasoning agent needs a file-writing CLI/TUI harness to emit its
+  // `.agent-done` sentinel — an HTTP `api` provider (ollama / lmstudio / kimi)
+  // has none, so an agent-backed run pinned to one fails provider resolution and
+  // the task sits pending forever (pre-#2322 LI called the API path directly, so
+  // installs routinely carried an api provider through migration 184). Skip with
+  // an actionable reason instead of generating a doomed task. `providerId` is the
+  // per-app override overlaid in resolveLiContext (the documented home for LI's
+  // provider); a null/absent one inherits the default coding agent and is fine.
+  if (config.providerId) {
+    const { getProviderById } = await import('../providers.js')
+    const provider = await getProviderById(config.providerId).catch(() => null)
+    if (provider?.type === 'api') return skip('skipped', 'provider-not-agent-capable')
+  }
+
   // A jira-tracked app with no usable instance/project can't file — skip before
   // burning an agent on a result we couldn't land.
   if (filer === 'jira' && !jira) return skip('skipped', 'jira-not-configured')

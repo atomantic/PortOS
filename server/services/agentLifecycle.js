@@ -294,6 +294,26 @@ export async function spawnAgentForTask(task) {
     const resolution = await resolveAgentProviderAndModel(task);
     if (!resolution.ok) {
       await cleanupOnError(resolution.error);
+      // A PERMANENT provider-config failure (e.g. an `api`-only provider pinned
+      // to an agent task, which has no file-writing harness) fails identically on
+      // every re-dispatch. Leaving the task pending makes it silently re-fail
+      // forever AND wedge its app's single improvement slot. Block it with an
+      // actionable reason so it stops re-dispatching and surfaces in the UI —
+      // `...buildRelease()` keeps the federation claim cleared (cleanupOnError
+      // released it in persistence; the in-memory metadata spread would otherwise
+      // re-introduce it). Transient failures stay non-permanent and still retry.
+      if (resolution.permanent) {
+        await updateTask(task.id, {
+          status: 'blocked',
+          metadata: {
+            ...task.metadata,
+            ...buildRelease(),
+            blockedReason: resolution.error,
+            blockedCategory: 'provider-config',
+            blockedAt: new Date().toISOString()
+          }
+        }, task.taskType || 'user').catch(() => {});
+      }
       cosEvents.emit('agent:error', {
         taskId: task.id,
         error: resolution.error,

@@ -100,6 +100,10 @@ export async function resolveAgentProviderAndModel(task) {
   if (provider.type === 'api') {
     return {
       ok: false,
+      // PERMANENT config error: this resolves the same way on every re-dispatch
+      // (an api provider is never gaining a harness), so the caller must retire
+      // the task rather than leave it pending to silently re-fail forever.
+      permanent: true,
       error: `Provider "${provider.id}" is an HTTP API provider with no file-writing harness — CoS agent tasks need a CLI/TUI coding provider (claude, codex, or the "Claude Ollama" Claude-on-Ollama sample).`,
       providerId: provider.id
     };

@@ -4,7 +4,8 @@
 // layeredIntelligenceHooks.js — `no-provider`, `unparseable-response`,
 // `no-proposal`, `scope-suppressed`, `file-failed`, `duplicate`,
 // `semantic-duplicate`, `tracker-read-failed`, `blocking-read-failed`,
-// `jira-not-configured`, `blocking-open`, plus the synthesized `llm-error:<msg>`
+// `jira-not-configured`, `provider-not-agent-capable`, `blocking-open`, plus the
+// synthesized `llm-error:<msg>`
 // prefix) and consumed by BOTH the on-demand toast (useOnDemandTaskToast) and the
 // durable "Last run" status line (LayeredIntelligenceTab). Keeping the token→prose
 // map here — not forked per component — means a new server reason has exactly ONE
@@ -27,7 +28,8 @@ const LI_REASON_LABELS = {
   'semantic-duplicate': 'the proposal closely matched an existing issue',
   'tracker-read-failed': "couldn't read the issue tracker — it'll retry next run",
   'blocking-read-failed': "couldn't read blocking issues — it'll retry next run",
-  'jira-not-configured': "Jira isn't fully configured for this app"
+  'jira-not-configured': "Jira isn't fully configured for this app",
+  'provider-not-agent-capable': 'the selected provider is an API-only model with no coding harness — pick a CLI/TUI provider (e.g. the Claude Ollama sample) for the reasoning agent'
 };
 
 const LLM_ERROR_PREFIX = 'llm-error:';

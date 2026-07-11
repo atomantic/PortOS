@@ -380,6 +380,24 @@ describe('agentLifecycle source — app-review marker release (issue #989)', () 
   });
 });
 
+// ─── spawnAgentForTask — permanent provider-config failure blocks the task ───
+//
+// A resolution failure marked `permanent` (an api-only provider pinned to an
+// agent task, which has no file-writing harness) fails identically on every
+// re-dispatch. Without a block, the task stays pending and silently re-fails
+// forever — the layered-intelligence "sits pending, never picked up" bug. Pin
+// that the permanent branch flips the task to blocked so it stops re-dispatching.
+describe('agentLifecycle source — permanent provider-config failure blocks the task', () => {
+  it('the resolution-failure path blocks a permanent failure with a provider-config reason', () => {
+    const idx = AGENT_LIFECYCLE_SRC.indexOf('const resolution = await resolveAgentProviderAndModel(task)');
+    expect(idx, 'resolution call must exist').toBeGreaterThan(-1);
+    const body = AGENT_LIFECYCLE_SRC.slice(idx, idx + 1200);
+    expect(body, 'gates the block on resolution.permanent').toMatch(/if\s*\(resolution\.permanent\)/);
+    expect(body, 'flips the task to blocked').toMatch(/status:\s*'blocked'/);
+    expect(body, 'tags the block category').toMatch(/blockedCategory:\s*'provider-config'/);
+  });
+});
+
 // ─── spawnAgentForTask — cleanupOnError ────────────────────────────────────
 //
 // `spawnAgentForTask` has ~400 LOC of async work between

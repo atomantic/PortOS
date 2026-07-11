@@ -161,6 +161,9 @@ describe('resolveAgentProviderAndModel', () => {
     expect(r.ok).toBe(false);
     expect(r.providerId).toBe('ollama');
     expect(r.error).toContain('no file-writing harness');
+    // Marked permanent so the spawn caller retires the task instead of leaving
+    // it pending to silently re-fail on every re-dispatch.
+    expect(r.permanent).toBe(true);
     // Guard fires before model selection — never spawns.
     expect(selectModelForTask).not.toHaveBeenCalled();
   });
@@ -178,6 +181,7 @@ describe('resolveAgentProviderAndModel', () => {
     expect(r.ok).toBe(false);
     expect(r.providerId).toBe('lmstudio');
     expect(r.error).toContain('no file-writing harness');
+    expect(r.permanent).toBe(true);
   });
 
   it('falls back to the provider tier default when the selected model is not in the provider model list', async () => {
