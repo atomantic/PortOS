@@ -167,18 +167,28 @@ export const visionLocalModelFilter = (id, provider) =>
   localBackendForProvider(provider) ? isVisionModel(id) : true;
 
 /**
- * Classify a provider as a local-LLM backend by its endpoint/name, so callers
+ * Classify a provider as a local-LLM backend by its id/endpoint/name, so callers
  * can fold in live-installed models (Ollama/LM Studio) that aren't in the
  * provider's stored `models` list. Ollama's native + OpenAI-compat ports are
- * 11434; LM Studio defaults to 1234.
- * @param {{endpoint?:string,name?:string}} provider
+ * 11434; LM Studio defaults to 1234. The stable provider ids (`ollama` /
+ * `lmstudio`) are checked too — AI Assignments' curated provider payload
+ * omits `endpoint`, and a renamed display name would otherwise miss detection.
+ * @param {{id?:string,endpoint?:string,name?:string}} provider
  * @returns {'ollama'|'lmstudio'|null}
  */
 export const localBackendForProvider = (provider) => {
-  const endpoint = String(provider?.endpoint || '');
-  const name = String(provider?.name || '').toLowerCase();
-  if (/:11434\b/.test(endpoint) || name.includes('ollama')) return 'ollama';
-  if (/:1234\b/.test(endpoint) || name.includes('lm studio') || name.includes('lmstudio')) return 'lmstudio';
+  if (!provider) return null;
+  const id = String(provider.id || '').toLowerCase();
+  const endpoint = String(provider.endpoint || '');
+  const name = String(provider.name || '').toLowerCase();
+  if (id === 'ollama' || /:11434\b/.test(endpoint) || name.includes('ollama')) return 'ollama';
+  if (
+    id === 'lmstudio' ||
+    /:1234\b/.test(endpoint) ||
+    name.includes('lm studio') ||
+    name.includes('lmstudio') ||
+    /lm[\s-]?studio/i.test(name)
+  ) return 'lmstudio';
   return null;
 };
 
@@ -366,8 +376,41 @@ export const assignmentProviderOptions = (entry, providers) => {
  * Model-id options for an assignment entry given the selected provider — the
  * entry's pre-baked `modelOptions` when present, else the provider's own model
  * list (empty when the provider is unknown or has none).
+ *
+ * When `entry.modelFilter === 'vision'`, LOCAL backends (Ollama / LM Studio)
+ * are reduced to vision-capable models via `visionLocalModelFilter` so the
+ * Scene Evaluation (and other vision) pickers can't offer text-only ids.
+ * Cloud/API providers are left intact by that filter.
  */
 export const assignmentModelOptions = (entry, providers, providerId) => {
-  if (Array.isArray(entry?.modelOptions)) return entry.modelOptions;
-  return providers.find((p) => p.id === providerId)?.models || [];
+  const provider = providers.find((p) => p.id === providerId);
+  const raw = Array.isArray(entry?.modelOptions)
+    ? entry.modelOptions
+    : (provider?.models || []);
+  // Normalize object-shaped entries (`{ id }`) so both baked and live lists
+  // yield plain string options for the <select>.
+  const models = raw
+    .map((m) => (typeof m === 'string' ? m : m?.id))
+    .filter(Boolean);
+  if (entry?.modelFilter === 'vision') {
+    return models.filter((id) => visionLocalModelFilter(id, provider));
+  }
+  return models;
+};
+
+/**
+ * Default model to seed when the user picks a provider for an assignment.
+ * For vision-filtered entries, only returns a model that still appears in the
+ * filtered options — a local backend's text-only `defaultModel` must not be
+ * seeded into the Scene Evaluation picker.
+ */
+export const assignmentDefaultModel = (entry, providers, providerId) => {
+  if (!providerId) return '';
+  const provider = providers.find((p) => p.id === providerId);
+  if (!provider) return '';
+  const def = provider.defaultModel || '';
+  if (entry?.modelFilter !== 'vision') return def;
+  const models = assignmentModelOptions(entry, providers, providerId);
+  if (def && models.includes(def)) return def;
+  return models[0] || '';
 };

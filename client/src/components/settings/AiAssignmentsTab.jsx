@@ -3,7 +3,12 @@ import { Link } from 'react-router-dom';
 import { ArrowRight, Bot, RefreshCw, Save, Search } from 'lucide-react';
 import toast from '../ui/Toast';
 import { getAiAssignments, updateAiAssignment } from '../../services/api';
-import { providerDisplayName, assignmentProviderOptions, assignmentModelOptions } from '../../utils/providers.js';
+import {
+  providerDisplayName,
+  assignmentProviderOptions,
+  assignmentModelOptions,
+  assignmentDefaultModel,
+} from '../../utils/providers.js';
 
 const getDraft = (entry) => ({
   providerId: entry.providerId || '',
@@ -124,8 +129,9 @@ export default function AiAssignmentsTab() {
     setBulkSaving(true);
     let latest = data;
     const savedIds = [];
-    const targetDefaultModel = data.providers.find((p) => p.id === toProvider)?.defaultModel || '';
     for (const entry of targets) {
+      // Vision-filtered rows seed the first eligible VLM, not a text-only default.
+      const targetDefaultModel = assignmentDefaultModel(entry, data.providers, toProvider);
       const nextModel = entry.modelEditable === false ? (drafts[entry.id]?.model || '') : targetDefaultModel;
       const next = await updateAiAssignment(entry.id, {
         providerId: toProvider,
@@ -266,7 +272,9 @@ export default function AiAssignmentsTab() {
                         value={draft.providerId}
                         onChange={(e) => {
                           const nextProviderId = e.target.value;
-                          const nextDefault = data.providers.find((p) => p.id === nextProviderId)?.defaultModel || '';
+                          // Vision-filtered rows (e.g. Scene evaluation) seed the
+                          // first eligible VLM when the provider default is text-only.
+                          const nextDefault = assignmentDefaultModel(entry, data.providers, nextProviderId);
                           setDraft(entry.id, { providerId: nextProviderId, model: entry.modelEditable === false ? draft.model : nextDefault });
                         }}
                         aria-label={`Provider for ${entry.label}`}

@@ -5,7 +5,12 @@ import Drawer from '../Drawer.jsx';
 import toast from '../ui/Toast';
 import { getAiAssignments } from '../../services/api';
 import { updateCreativeDirectorProject } from '../../services/apiCreativeDirector.js';
-import { providerDisplayName, assignmentProviderOptions, assignmentModelOptions } from '../../utils/providers.js';
+import {
+  providerDisplayName,
+  assignmentProviderOptions,
+  assignmentModelOptions,
+  assignmentDefaultModel,
+} from '../../utils/providers.js';
 
 // Per-project AI model override drawer (per-project CD provider/model pins).
 // Lets the user pin the treatment / plan / evaluation stage to a specific
@@ -151,10 +156,14 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
                       aria-label={`${stage.label} provider`}
                       onChange={(e) => {
                         const providerId = e.target.value;
-                        const nextDefault = providers.find((p) => p.id === providerId)?.defaultModel || '';
+                        // Vision-filtered stages (scene evaluation) seed the first
+                        // eligible VLM when the provider's default is text-only.
+                        const nextDefault = providerId
+                          ? assignmentDefaultModel(entry, providers, providerId)
+                          : '';
                         // Seed the provider's default model on switch; clearing the
                         // provider (Inherit) clears the model too.
-                        setStage(stage.key, { providerId, model: providerId ? nextDefault : '' });
+                        setStage(stage.key, { providerId, model: nextDefault });
                       }}
                       className="bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white"
                     >

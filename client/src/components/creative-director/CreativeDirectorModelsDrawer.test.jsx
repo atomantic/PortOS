@@ -14,11 +14,25 @@ const ASSIGNMENTS = {
   providers: [
     { id: 'agent-a', name: 'Agent A', type: 'cli', enabled: true, defaultModel: 'a-default', models: ['a-default', 'a-big'] },
     { id: 'vlm-x', name: 'VLM X', type: 'api', enabled: true, defaultModel: 'llava', models: ['llava', 'moondream'] },
+    {
+      id: 'ollama',
+      name: 'Ollama',
+      type: 'api',
+      enabled: true,
+      defaultModel: 'gemma4:26b',
+      models: ['qwen2.5vl:latest', 'llava:latest', 'gemma4:26b', 'llama3.2:latest'],
+    },
   ],
   assignments: [
     { id: 'settings.creativeDirector.treatment', providerTypes: ['cli', 'tui'], providerId: '', model: '' },
     { id: 'settings.creativeDirector.plan', providerTypes: ['cli', 'tui'], providerId: '', model: '' },
-    { id: 'settings.creativeDirector.evaluation', providerTypes: ['api'], providerId: '', model: '' },
+    {
+      id: 'settings.creativeDirector.evaluation',
+      providerTypes: ['api'],
+      providerId: '',
+      model: '',
+      modelFilter: 'vision',
+    },
   ],
 };
 
@@ -66,5 +80,23 @@ describe('CreativeDirectorModelsDrawer', () => {
     expect(screen.getByRole('button', { name: /Save/i }).disabled).toBe(true);
     fireEvent.change(screen.getByLabelText('Treatment provider'), { target: { value: 'agent-a' } });
     expect(screen.getByRole('button', { name: /Save/i }).disabled).toBe(false);
+  });
+
+  it('restricts Scene evaluation models to vision-capable ids for local Ollama', async () => {
+    renderDrawer({ id: 'cd-1', name: 'Demo', modelOverrides: {} });
+    await waitFor(() => expect(screen.getByLabelText('Scene evaluation provider')).toBeTruthy());
+
+    fireEvent.change(screen.getByLabelText('Scene evaluation provider'), { target: { value: 'ollama' } });
+
+    const modelSelect = screen.getByLabelText('Scene evaluation model');
+    const optionValues = Array.from(modelSelect.querySelectorAll('option')).map((o) => o.value);
+    // Empty "Provider default / auto" sentinel stays; text-only local models drop out.
+    expect(optionValues).toContain('');
+    expect(optionValues).toContain('qwen2.5vl:latest');
+    expect(optionValues).toContain('llava:latest');
+    expect(optionValues).not.toContain('gemma4:26b');
+    expect(optionValues).not.toContain('llama3.2:latest');
+    // Text-only default is replaced by the first eligible VLM.
+    expect(modelSelect.value).toBe('qwen2.5vl:latest');
   });
 });
