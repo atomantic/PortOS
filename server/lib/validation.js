@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ServerError } from './errorHandler.js';
-import { partialWithoutDefaults, emptyToUndefined } from './zodCompat.js';
+import { partialWithoutDefaults, emptyToUndefined, emptyToNull } from './zodCompat.js';
 import { WORK_TRACKERS } from './workTracker.js';
 
 // gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
@@ -497,6 +497,50 @@ export function validate(schema, data) {
     }))
   };
 }
+
+// =============================================================================
+// SCAFFOLD (app generator)
+// =============================================================================
+
+// Known scaffold templates — the single source of truth for the enum the
+// scaffold route accepts. An unknown template MUST be rejected before any
+// filesystem write or subprocess spawn (issue #2390), so the route can no
+// longer create a target directory for a template it can't actually build.
+export const SCAFFOLD_TEMPLATES = [
+  'portos-stack',
+  'vite-express',
+  'vite-react',
+  'express-api',
+  'ios-native',
+  'xcode-multiplatform'
+];
+
+// Ports may arrive absent (auto-allocated by the route) or as an explicit
+// number. Tolerate the UI '' sentinel as "not provided"; anything else must be
+// a valid TCP port so an out-of-range value is rejected deterministically.
+const scaffoldPortSchema = z.preprocess(
+  emptyToUndefined,
+  z.number().int().min(1).max(65535).nullable().optional()
+);
+
+// Full request schema for POST /api/scaffold. Validated before the route
+// touches the filesystem — template enum, port range, and a name that yields a
+// usable directory slug are all enforced up front.
+export const scaffoldSchema = z.object({
+  name: z.string().trim().min(1).max(100)
+    // The route sanitizes name → [a-z0-9-]; a name with no alphanumerics
+    // slugifies to an all-dash/empty dirName. Reject it here rather than
+    // creating a garbage directory.
+    .refine(v => /[a-z0-9]/i.test(v), {
+      message: 'name must contain at least one letter or number'
+    }),
+  template: z.enum(SCAFFOLD_TEMPLATES),
+  parentDir: z.string().trim().min(1),
+  uiPort: scaffoldPortSchema,
+  apiPort: scaffoldPortSchema,
+  createGitHubRepo: z.boolean().optional().default(false),
+  githubOrg: z.preprocess(emptyToNull, z.string().min(1).nullable().optional())
+});
 
 /**
  * Validate data against a Zod schema, throwing on failure.
