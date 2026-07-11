@@ -250,9 +250,21 @@ export async function probeBroker(broker, vectors, {
   const jsShell = result && !walled && status >= 200 && status < 400 && looksLikeJsShell(html);
   if (walled || jsShell) {
     const browsed = await browserFetch(url).catch(() => null);
-    if (browsed?.text && (jsShell || !looksLikeJsShell(browsed.text))) {
-      html = browsed.text;
-      status = 200;
+    if (browsed?.text) {
+      if (jsShell || !looksLikeJsShell(browsed.text)) {
+        html = browsed.text;
+        status = 200;
+      } else {
+        // Wall + shell-length browsed text: adopt only when it carries a
+        // positive name signal — a concise page naming the person is a real
+        // result, while a short page without it is indistinguishable from a
+        // challenge shell and must stay `blocked` (never become not_found).
+        const peek = classifyScanResult({ status: 200, html: browsed.text, vectors, broker });
+        if (peek.verdict === 'found' || peek.verdict === 'indirect_exposure') {
+          html = browsed.text;
+          status = 200;
+        }
+      }
     }
   }
 
