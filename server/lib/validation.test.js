@@ -26,6 +26,7 @@ import {
   subdirFilterSchema,
   isPaginationRequested,
   paginateArray,
+  seriesAutopilotSettingsSchema,
 } from './validation.js';
 
 describe('validation.js', () => {
@@ -1079,5 +1080,36 @@ describe('validation.js', () => {
       expect(restoreRequestSchema.safeParse({ snapshotId: 's1', subdirFilter: null }).success).toBe(true);
       expect(restoreRequestSchema.safeParse({ snapshotId: 's1', subdirFilter: '*' }).success).toBe(false);
     });
+  });
+});
+
+describe('seriesAutopilotSettingsSchema (#2174)', () => {
+  const rejects = (cron) => expect(seriesAutopilotSettingsSchema.safeParse({
+    schedules: [{ seriesId: 's1', cron }],
+  }).success).toBe(false);
+  const accepts = (cron) => expect(seriesAutopilotSettingsSchema.safeParse({
+    schedules: [{ seriesId: 's1', cron }],
+  }).success).toBe(true);
+
+  it('rejects out-of-range / malformed crons so an enabled schedule cannot silently never fire', () => {
+    rejects('99 99 * * *'); // minute/hour out of range
+    rejects('0 3 * *');     // only 4 fields
+    rejects('0 3 * * * *'); // 6 fields
+    rejects('not a cron');
+    rejects('60 * * * *');  // minute 60 (max 59)
+  });
+
+  it('accepts common valid crons (ranges, lists, steps)', () => {
+    accepts('0 3 * * *');
+    accepts('*/15 * * * *');
+    accepts('0 9 * * 1-5');
+    accepts('0 0,12 1 */2 *');
+  });
+
+  it('defaults enabled to false and coerces blank provider/model to undefined', () => {
+    const parsed = seriesAutopilotSettingsSchema.parse({
+      schedules: [{ seriesId: 's1', cron: '0 3 * * *', provider: '', model: '' }],
+    });
+    expect(parsed.schedules[0]).toEqual({ seriesId: 's1', cron: '0 3 * * *', enabled: false });
   });
 });

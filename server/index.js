@@ -173,6 +173,7 @@ import * as agentActionExecutor from './services/agentActionExecutor.js';
 import * as cos from './services/cos.js';
 import { startBackupScheduler } from './services/backupScheduler.js';
 import { startPrivacyRecheckScheduler } from './services/privacyRecheckScheduler.js';
+import { startSeriesAutopilotScheduler } from './services/seriesAutopilotScheduler.js';
 import { startCitySnapshotScheduler } from './services/citySnapshotScheduler.js';
 import { startImessageScheduler } from './services/imessageScheduler.js';
 import { startSignalScheduler } from './services/signalScheduler.js';
@@ -624,6 +625,11 @@ startBackupScheduler().catch(err => console.error(`❌ Backup scheduler init fai
 // re-runs the broker scan + opt-out pass when the user opts in via
 // Settings → Privacy (sanctioned scheduled-automation exception) (#2145).
 startPrivacyRecheckScheduler().catch(err => console.error(`❌ Privacy recheck scheduler init failed: ${err.message}`));
+// Initialize Series Autopilot scheduler — OFF by default; registers a cron per
+// series only when the user configured + enabled one via Settings → Series
+// Autopilot. Each scheduled run still passes through the cos autonomy gate +
+// daily budget (sanctioned scheduled-automation exception) (#2174).
+startSeriesAutopilotScheduler().catch(err => console.error(`❌ Series Autopilot scheduler init failed: ${err.message}`));
 // Initialize CyberCity snapshot scheduler — records periodic city-state frames
 // for the historical timeline scrubber (issue #877).
 startCitySnapshotScheduler().catch(err => console.error(`❌ City snapshot scheduler init failed: ${err.message}`));
