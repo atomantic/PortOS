@@ -16,11 +16,13 @@ import { useEffect, useRef } from 'react';
 // inner one. Modal owns the Esc stack separately (see ui/Modal.jsx); this hook
 // only concerns focus.
 
-// Visibility is intentionally NOT filtered by layout geometry
-// (offsetWidth/offsetParent) — those are always zero under jsdom, which would
-// make the trap untestable. The selector already drops disabled controls,
-// hidden inputs, and tabindex="-1"; that is sufficient for the modal surfaces
-// this hook guards.
+// The selector drops disabled controls, hidden inputs, and tabindex="-1". It
+// does NOT filter by layout geometry (offsetWidth/offsetParent) — those are
+// always zero under jsdom, which would make the trap untestable — but it MUST
+// still exclude CSS-hidden subtrees: a `display:none` panel (e.g. a retained
+// but inactive tab panel in a tabbed Drawer) still matches querySelectorAll,
+// so without this filter the trap's computed last element diverges from the
+// browser's real tab order and Tab fails to wrap, letting focus escape.
 const FOCUSABLE_SELECTOR = [
   'a[href]',
   'button:not([disabled])',
@@ -30,9 +32,27 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(',');
 
+// Walk from the element up to (but not including) the container, treating it as
+// untabbable if it or any ancestor along the way is removed from rendering via
+// `display:none`, `visibility:hidden/collapse`, or the `hidden` attribute. Uses
+// computed style (reflects inline styles under jsdom and stylesheet rules in the
+// browser) rather than offset geometry so it works in both. The container itself
+// is the open dialog and assumed visible, so the walk stops there.
+function isTabbable(el, container) {
+  for (let node = el; node && node !== container; node = node.parentElement) {
+    if (node.nodeType !== 1) return false;
+    if (node.hasAttribute('hidden')) return false;
+    const style = typeof getComputedStyle === 'function' ? getComputedStyle(node) : null;
+    if (style && (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse')) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function getFocusable(container) {
   if (!container) return [];
-  return Array.from(container.querySelectorAll(FOCUSABLE_SELECTOR));
+  return Array.from(container.querySelectorAll(FOCUSABLE_SELECTOR)).filter((el) => isTabbable(el, container));
 }
 
 export default function useFocusTrap(active, containerRef, { initialFocusRef } = {}) {

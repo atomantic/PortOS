@@ -15,20 +15,23 @@ describe('Toaster accessibility', () => {
     expect(region).toBeInTheDocument();
   });
 
-  it('announces a default toast politely (role="status")', () => {
+  it('announces a default toast politely (role="status") without a redundant aria-live', () => {
     render(<Toaster />);
     act(() => { toast('Saved'); });
     const status = screen.getByRole('status');
     expect(status).toHaveTextContent('Saved');
-    expect(status).toHaveAttribute('aria-live', 'polite');
+    // role="status" already implies aria-live="polite"; pairing both
+    // double-announces in iOS VoiceOver, so aria-live must be absent.
+    expect(status).not.toHaveAttribute('aria-live');
   });
 
-  it('announces an error toast assertively (role="alert")', () => {
+  it('announces an error toast assertively (role="alert") without a redundant aria-live', () => {
     render(<Toaster />);
     act(() => { toast.error('Boom'); });
     const alert = screen.getByRole('alert');
     expect(alert).toHaveTextContent('Boom');
-    expect(alert).toHaveAttribute('aria-live', 'assertive');
+    // role="alert" already implies aria-live="assertive".
+    expect(alert).not.toHaveAttribute('aria-live');
   });
 
   it('hides the decorative status glyph from assistive tech', () => {
