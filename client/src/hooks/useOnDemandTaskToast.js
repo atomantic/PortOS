@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 import { timeUntil } from '../utils/formatters';
+import { formatLiReason } from '../utils/layeredIntelligenceReasons';
 
 // Humanize a perpetual work-detector park reason for a user-facing toast. The
 // raw reason strings are the same ones surfaced in the CoS → Schedule tab; here
@@ -44,8 +45,18 @@ export function useOnDemandTaskToast() {
       }
 
       // A non-perpetual task produced no task ⇒ genuinely nothing to do right
-      // now (not a failure, not a park). Keep it calm and neutral.
+      // now (not a failure, not a park). Keep it calm and neutral — UNLESS the
+      // server surfaced an actionable reason (e.g. Layered Intelligence pinned to
+      // an api-only provider that can't drive the reasoning agent). Then say WHY
+      // and warn, so a misconfiguration isn't hidden behind "nothing to do".
       if (data?.outcome === 'idle') {
+        if (data?.taskType === 'layered-intelligence' && data?.reason) {
+          toast(`${task}${scope}: ${formatLiReason({ action: 'skipped', reason: data.reason })}.`, {
+            duration: 8000,
+            icon: '⚠️'
+          });
+          return;
+        }
         toast(`${task}${scope}: re-checked now — nothing to do right now.`, {
           duration: 6000,
           icon: '💤'

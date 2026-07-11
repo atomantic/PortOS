@@ -163,6 +163,32 @@ export async function buildTaskInput({ app } = {}) {
     return { skip: { reason } }
   }
 
+  // The reasoning agent needs a file-writing CLI/TUI harness to emit its
+  // `.agent-done` sentinel — an HTTP `api` provider (ollama / lmstudio / kimi)
+  // has none, so an agent-backed run pinned to one fails provider resolution and
+  // the task sits pending forever (pre-#2322 LI called the API path directly, so
+  // installs routinely carried an api provider through migration 184). Preflight
+  // the EFFECTIVE agent provider — the per-app override (config.providerId, the
+  // documented home for LI's provider) OR, when unset, the global schedule pin the
+  // generator applies (interval.providerId) — and skip with an actionable reason
+  // instead of generating a doomed task the lifecycle path would only block. A
+  // null/absent effective provider inherits the default coding agent and is fine;
+  // a spawn-time api resolution (e.g. an api ACTIVE provider) still falls to the
+  // lifecycle block. A pinned api provider is skipped even if it's momentarily
+  // unavailable with a CLI fallback — guiding the user to a real CLI/TUI provider
+  // beats silently running LI on a provider they didn't choose.
+  let effectiveProviderId = config.providerId || null
+  if (!effectiveProviderId) {
+    const { loadSchedule } = await import('../taskSchedule.js')
+    const schedule = await loadSchedule().catch(() => null)
+    effectiveProviderId = schedule?.tasks?.['layered-intelligence']?.providerId || null
+  }
+  if (effectiveProviderId) {
+    const { getProviderById } = await import('../providers.js')
+    const provider = await getProviderById(effectiveProviderId).catch(() => null)
+    if (provider?.type === 'api') return skip('skipped', 'provider-not-agent-capable')
+  }
+
   // A jira-tracked app with no usable instance/project can't file — skip before
   // burning an agent on a result we couldn't land.
   if (filer === 'jira' && !jira) return skip('skipped', 'jira-not-configured')

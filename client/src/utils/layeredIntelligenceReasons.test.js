@@ -7,6 +7,11 @@ describe('formatLiReason', () => {
     expect(formatLiReason({ action: 'no-op', reason: 'no-provider' })).toMatch(/no AI provider/i);
   });
 
+  it('glosses an api-only provider pinned to the reasoning agent', () => {
+    expect(formatLiReason({ action: 'skipped', reason: 'provider-not-agent-capable' }))
+      .toMatch(/API-only model with no coding harness — pick a CLI\/TUI provider/i);
+  });
+
   it('strips the llm-error prefix into a provider-error sentence', () => {
     expect(formatLiReason({ action: 'no-op', reason: 'llm-error: provider timeout' }))
       .toBe('the AI provider errored — provider timeout');

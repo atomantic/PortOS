@@ -68,6 +68,40 @@ describe('resolveAgentProviderAndModel', () => {
     expect(r.error).toContain('no fallback available');
     expect(r.providerId).toBe('p1');
     expect(r.providerStatus).toEqual({ message: 'usage-limit', reason: 'limit' });
+    // A provider that's merely down stays transient — it may recover.
+    expect(r.permanent).toBeFalsy();
+  });
+
+  it('keeps a down api provider with no fallback TRANSIENT (a null fallback may be a momentarily-down CLI fallback)', async () => {
+    // Permanence is decided by provider TYPE at the harness check (reached once the
+    // provider is available), NOT inferred from a transient unavailable + null
+    // fallback here — a null fallback can mean a configured CLI/TUI fallback is
+    // merely down, which must stay retryable. The down api provider retries cheaply
+    // and self-heals to a permanent block the moment it's reachable.
+    const provider = { id: 'ollama', type: 'api' };
+    getActiveProvider.mockResolvedValue(provider);
+    isProviderAvailable.mockReturnValue(false);
+    getProviderStatus.mockReturnValue({ message: 'daemon-down', reason: 'down' });
+    getAllProviders.mockResolvedValue({ providers: [provider] });
+    getFallbackProvider.mockResolvedValue(null);
+
+    const r = await resolveAgentProviderAndModel(TASK);
+    expect(r.ok).toBe(false);
+    expect(r.providerId).toBe('ollama');
+    expect(r.permanent).toBeFalsy();
+  });
+
+  it('marks an AVAILABLE api provider permanent (harness check, self-heal target for a once-down api)', async () => {
+    // The self-heal path for the transient case above: once the api provider is
+    // reachable, resolution reaches the harness check and blocks permanently.
+    const provider = { id: 'ollama', type: 'api' };
+    getActiveProvider.mockResolvedValue(provider);
+    isProviderAvailable.mockReturnValue(true);
+
+    const r = await resolveAgentProviderAndModel(TASK);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('no file-writing harness');
+    expect(r.permanent).toBe(true);
   });
 
   it('switches to the fallback provider and pins its model when one is available', async () => {
@@ -161,11 +195,14 @@ describe('resolveAgentProviderAndModel', () => {
     expect(r.ok).toBe(false);
     expect(r.providerId).toBe('ollama');
     expect(r.error).toContain('no file-writing harness');
+    // Marked permanent so the spawn caller retires the task instead of leaving
+    // it pending to silently re-fail on every re-dispatch.
+    expect(r.permanent).toBe(true);
     // Guard fires before model selection — never spawns.
     expect(selectModelForTask).not.toHaveBeenCalled();
   });
 
-  it('rejects an api-type provider even when reached via the fallback chain', async () => {
+  it('rejects an api fallback from a CLI primary but keeps it retryable (transient)', async () => {
     const primary = { id: 'p1', type: 'cli' };
     const apiFallback = { id: 'lmstudio', type: 'api', models: ['m'] };
     getActiveProvider.mockResolvedValue(primary);
@@ -178,6 +215,26 @@ describe('resolveAgentProviderAndModel', () => {
     expect(r.ok).toBe(false);
     expect(r.providerId).toBe('lmstudio');
     expect(r.error).toContain('no file-writing harness');
+    // NOT permanent: the directly-resolved primary was a CLI provider that was only
+    // momentarily unavailable and may recover, so the task must stay retryable.
+    expect(r.permanent).toBe(false);
+  });
+
+  it('marks an api fallback from an api primary PERMANENT (no CLI path can ever resolve)', async () => {
+    const apiPrimary = { id: 'ollama', type: 'api', models: ['q'] };
+    const apiFallback = { id: 'lmstudio', type: 'api', models: ['m'] };
+    getActiveProvider.mockResolvedValue(apiPrimary);
+    isProviderAvailable.mockReturnValue(false);
+    getProviderStatus.mockReturnValue({ message: 'down', reason: 'x' });
+    getAllProviders.mockResolvedValue({ providers: [apiPrimary, apiFallback] });
+    getFallbackProvider.mockResolvedValue({ provider: apiFallback, model: 'm', source: 'provider' });
+
+    const r = await resolveAgentProviderAndModel(TASK);
+    expect(r.ok).toBe(false);
+    expect(r.providerId).toBe('lmstudio');
+    // Both primary and fallback are api — no harness is reachable no matter how
+    // often it retries, so it must be retired, not left pending forever.
+    expect(r.permanent).toBe(true);
   });
 
   it('falls back to the provider tier default when the selected model is not in the provider model list', async () => {
