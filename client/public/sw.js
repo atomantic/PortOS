@@ -58,12 +58,19 @@ self.addEventListener('install', (event) => {
   // its in-memory JS, and its next navigation re-fetches the fresh shell.
   self.skipWaiting();
   event.waitUntil(
-    caches.open(SHELL_CACHE).then((cache) =>
-      // Pre-warm the shell so the very first offline navigation works even if
-      // the user never revisited "/" online. Best-effort — a failure here must
-      // not abort activation.
-      cache.add(new Request('/', { cache: 'reload' })).catch(() => {})
-    )
+    (async () => {
+      // Pre-warm the shell under the stable SHELL_KEY (NOT the request URL) so
+      // the very first offline navigation — including a deep-link reload —
+      // works even if the user never made an online navigation through the SW.
+      // navigationHandler reads the offline fallback from SHELL_KEY, so the
+      // pre-warm must write the same key (cache.add would key it by "/" and the
+      // fallback would miss). Best-effort — a failure must not abort install.
+      const response = await fetch(new Request('/', { cache: 'reload' })).catch(() => null);
+      if (response && response.ok) {
+        const cache = await caches.open(SHELL_CACHE);
+        await cache.put(SHELL_KEY, response);
+      }
+    })()
   );
 });
 
