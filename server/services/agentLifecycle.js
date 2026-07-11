@@ -22,7 +22,7 @@ import { determineLane, acquire, release } from './executionLanes.js';
 import { analyzeAgentFailure, resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
 import { createAgentRun, completeAgentRun, checkForTaskCommit } from './agentRunTracking.js';
 import { buildAgentPrompt, getAppWorkspace } from './agentPromptBuilder.js';
-import { isOllamaClaudeProvider, isClaudeCommand } from '../lib/providerModels.js';
+import { isOllamaClaudeProvider, isClaudeCommand, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { buildCliSpawnConfig, isClaudeCliProvider, isTuiProvider, getClaudeSettingsEnv, spawnDirectly } from './agentCliSpawning.js';
@@ -32,6 +32,7 @@ import { processAgentCompletion } from './agentCompletion.js';
 import { releaseAppReviewMarker } from './appActivity.js';
 import { ensureInstanceId } from './instances.js';
 import { isClaimableBy, buildClaim, buildRelease, getClaimOwner } from './cosTaskClaim.js';
+import { resolveForgeTokenEnv } from './git.js';
 import { runnerAgents, pausedAgents, spawningTasks, useRunner, isTruthyMeta } from './agentState.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 
@@ -628,10 +629,16 @@ export async function spawnViaRunner(agentId, task, opts) {
     }
   }, 3000);
 
-  // For Claude CLI providers, merge ~/.claude/settings.json env vars so Bedrock config is present
-  const claudeSettingsEnv = isClaudeCliProvider(provider)
-    ? await getClaudeSettingsEnv()
-    : {};
+  // Two independent async env lookups, resolved together: Claude's
+  // ~/.claude/settings.json Bedrock config, and the repo-owner-pinned GH_TOKEN
+  // (so the runner-spawned agent's own `gh pr create` auths as the right
+  // account — see resolveForgeTokenEnv; `{}` when there's no owner match). Skip
+  // the token probe when the provider supplies its own GH_TOKEN/GITHUB_TOKEN so
+  // its explicit credential wins.
+  const [claudeSettingsEnv, forgeTokenEnv] = await Promise.all([
+    isClaudeCliProvider(provider) ? getClaudeSettingsEnv() : Promise.resolve({}),
+    providerSuppliesGithubToken(provider) ? Promise.resolve({}) : resolveForgeTokenEnv(workspacePath),
+  ]);
 
   // For OpenCode Ollama providers, build dynamic OPENCODE_CONFIG_CONTENT with the
   // models map so the injected `--model ollama/<id>` is accepted (empty/no-op
@@ -647,7 +654,8 @@ export async function spawnViaRunner(agentId, task, opts) {
     prompt,
     workspacePath,
     model,
-    envVars: { ...claudeSettingsEnv, ...provider.envVars, ...opencodeEnv },
+    // forgeTokenEnv before provider.envVars so an explicit provider override wins.
+    envVars: { ...forgeTokenEnv, ...claudeSettingsEnv, ...provider.envVars, ...opencodeEnv },
     cliCommand: cliConfig.command,
     cliArgs: cliConfig.args
   });
@@ -738,6 +746,35 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
 }
 
 /**
+ * Evaluate a completed autonomous run against its DECLARED success criteria
+ * (issue #2344). Distinct from the runner's exit-code `success`: it answers
+ * "did the run actually produce the work it was supposed to?" using the one
+ * machine-checkable criterion the CoS already relies on — a `[task-<id>]` commit.
+ *
+ * Returns a null sentinel when NO criterion is declared (interactive/user tasks,
+ * user-terminated runs, or a run with no task id / workspace to validate
+ * against), so downstream telemetry never conflates "not declared" with
+ * "declared and failed". For autonomous tasks it verifies the commit on BOTH
+ * success and failure — a clean exit that committed nothing is an honest miss,
+ * and that is exactly the signal task-learning wants. `checkForTaskCommit` is
+ * git-repo-gated, off the event loop, and hard-timeout-bounded, so a non-repo
+ * workspace or a hung git degrades to "no commit" rather than stalling finalize.
+ */
+export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath }) {
+  if (terminatedByUser) return null;
+  const taskType = task?.taskType || 'user';
+  // Interactive/user tasks declare no machine-checkable criterion; neither does
+  // a run missing the task id or workspace needed to validate.
+  if (taskType === 'user' || !task?.id || !workspacePath) return null;
+  // Pipeline/media tasks deliver artifacts, not a `[task-<id>]` commit — the
+  // commit criterion doesn't apply, so don't mislabel a clean artifact run as a
+  // validation miss (which would also pollute the correlation window). null =
+  // no commit criterion declared for this task shape.
+  if (task?.metadata?.pipeline || task?.metadata?.mediaJob) return null;
+  return await checkForTaskCommit(task.id, workspacePath);
+}
+
+/**
  * Shared end-of-run state writes for all three spawn paths
  * (`handleAgentCompletion` runner-mode, TUI `finish`, direct-CLI `close`).
  * Path-specific cleanup (worktree, sentinel removal, pty kill, in-memory
@@ -759,6 +796,7 @@ export async function finalizeAgent({
   isTruthyMetaFn,
   error,
   completionReason,
+  workspacePath = null,
 }) {
   if (success && isTruthyMetaFn) {
     await persistSimplifySummaries(agentId, task, outputBuffer, isTruthyMetaFn);
@@ -779,6 +817,17 @@ export async function finalizeAgent({
       ? { status: 'completed' }
       : await resolveFailedTaskUpdate(task, errorAnalysis, agentId);
 
+  // Success-criteria validation (issue #2344): stamp an explicit pass/fail (or
+  // null-when-undeclared) verdict onto the completion result, distinct from the
+  // exit-code `success`, so task-learning telemetry can distinguish "ran clean
+  // but produced nothing" from a genuine success. Best-effort — a validation
+  // check failure must never block finalize (falls back to the null sentinel).
+  const validationPassed = await evaluateSuccessCriteria({ task, terminatedByUser, workspacePath })
+    .catch(err => {
+      emitLog('warn', `⚠️ Success-criteria validation failed for ${agentId}: ${err.message}`, { agentId });
+      return null;
+    });
+
   // Sequential by design: completeAgent + updateTask share the cosState
   // mutex (`withStateLock`) so parallelism gains nothing, AND ordering
   // matters — if completeAgent throws, we must not mark the task completed.
@@ -787,6 +836,7 @@ export async function finalizeAgent({
   // failure.
   await completeAgent(agentId, {
     success,
+    validationPassed,
     exitCode,
     duration,
     outputLength: outputBuffer?.length ?? 0,
@@ -824,7 +874,55 @@ export async function finalizeAgent({
     }
   }
 
+  // Programmatic-I/O task types (e.g. layered-intelligence) run a deterministic
+  // post-agent step on the agent's STRUCTURED output — the parsed `.agent-done`
+  // payload — rather than only handling the completion sentinel. Read + dispatch
+  // it mode-agnostically here (the single finalize chokepoint for TUI/CLI/runner
+  // agents), gated on the task type actually registering an output hook so a
+  // normal agent pays no extra I/O. Its side effects (filing an issue, etc.) are
+  // isolated from the agent's discarded worktree — the payload is the only
+  // durable channel out. Errors are caught: a hook failure must not strand the
+  // rest of finalize. See taskTypeHooks.js + the design plan.
+  await dispatchTaskOutputHook({ agentId, task, success, workspacePath }).catch(err => {
+    emitLog('error', `processTaskOutput hook threw for ${agentId} (${task?.taskType}): ${err.message}`, { agentId, error: err.message });
+  });
+
   await processAgentCompletion(agentId, task, success, outputBuffer);
+}
+
+/**
+ * Read the finished agent's `.agent-done` payload and run the task type's
+ * `processTaskOutput` hook, if it registers one. No-op for the vast majority of
+ * task types (no hook). The hook receives `{ appId, success, payload, ... }` and
+ * loads its own app/config — finalizeAgent stays domain-agnostic.
+ */
+async function dispatchTaskOutputHook({ agentId, task, success, workspacePath }) {
+  // The scheduled task type lives in metadata.analysisType (the top-level
+  // task.taskType is the CoS queue category, e.g. 'internal'). A programmatic-I/O
+  // hook is keyed on the scheduled type.
+  const taskType = task?.metadata?.analysisType || task?.taskType;
+  if (!taskType) return;
+  const { getTaskOutputHook } = await import('./taskTypeHooks.js');
+  const hook = await getTaskOutputHook(taskType);
+  if (!hook) return;
+
+  const cwd = workspacePath || task?.metadata?.repoPath || null;
+  let payload = null;
+  if (cwd) {
+    const { DONE_SENTINEL_NAME, parseSentinelPayload } = await import('../lib/agentSentinel.js');
+    const { tryReadFile } = await import('../lib/fileUtils.js');
+    const contents = await tryReadFile(join(cwd, DONE_SENTINEL_NAME));
+    payload = parseSentinelPayload(contents).payload;
+  }
+
+  await hook({
+    appId: task?.metadata?.app || null,
+    success,
+    payload,
+    workspacePath: cwd,
+    agentId,
+    task,
+  });
 }
 
 /**
@@ -1019,6 +1117,7 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
         outputBuffer,
         errorAnalysis,
         isTruthyMetaFn: isTruthyMeta,
+        workspacePath: agent.workspacePath || null,
       });
     } catch (err) {
       finalizeError = err;

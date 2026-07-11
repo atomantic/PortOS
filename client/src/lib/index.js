@@ -12,6 +12,8 @@ export * from './seasonStructure.js';
 export * from './sheetPointers.js';
 export * from './shotContinuity.js';
 export * from './shotGrammar.js';
+export * from './universeBuilderCounts.js';
+export * from './universeBuilderShared.js';
 export * from './universeRunTag.js';
 export * from './universeStylePreset.js';
 
@@ -41,6 +43,7 @@ export * from './brainGraphFocus.js';
 export * from './graphSimulation.js';
 
 // === Generic UI / collection utilities ===
+export * from './a11yKeyboard.js';
 export * from './applyManuscriptEdits.js';
 export * from './audioRecorder.js';
 export * from './boundedMap.js';
@@ -63,6 +66,7 @@ export * from './manuscriptFormat.js';
 export * from './mediaNavigation.js';
 export * from './mediaSearch.js';
 export * from './moodBoardItemSrc.js';
+export * from './safeStorage.js';
 export * from './sameJsonShape.js';
 export * from './sketchCanvas.js';
 export * from './unsorted.js';

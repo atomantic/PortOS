@@ -451,6 +451,23 @@ describe('rounds service', () => {
     expect(many.references[0].segments).toHaveLength(svc.REF_SEGMENTS_MAX);
   });
 
+  it('reference midiFilename persists only alongside an audioFilename', () => {
+    const song = svc.sanitizeRound({
+      id: 'x',
+      references: [
+        // Attached audio → the trimmed MIDI pointer round-trips.
+        { url: 'https://example.com/a', audioFilename: 'ref.wav', midiFilename: '  ref-transcription.mid  ' },
+        // No audio → the MIDI was transcribed from a removed recording; drop it.
+        { url: 'https://example.com/b', midiFilename: 'stale.mid' },
+        // Attached audio, no MIDI → the key stays absent (no empty husk).
+        { url: 'https://example.com/c', audioFilename: 'ref2.wav' },
+      ],
+    });
+    expect(song.references[0].midiFilename).toBe('ref-transcription.mid');
+    expect('midiFilename' in song.references[1]).toBe(false);
+    expect('midiFilename' in song.references[2]).toBe(false);
+  });
+
   it('drops reference segments when no audio is attached (#2106)', () => {
     // Segments are offsets into the attached audio — without an audioFilename
     // they are stale ranges from a removed recording and must not persist

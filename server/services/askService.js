@@ -33,6 +33,8 @@ import { tokenize as bm25Tokenize, STOP_WORDS } from '../lib/bm25.js';
 import { VALID_MODES as STORAGE_VALID_MODES } from './askConversations.js';
 import { resolveCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand } from '../lib/providerModels.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
+import { isGrokCommand, ensureGrokHeadlessArgs, prepareGrokPromptFile } from '../lib/grok.js';
+import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
 
 // Re-export so the route can keep importing modes via askService — but
@@ -555,7 +557,7 @@ async function* streamCompletion(provider, model, prompt, signal) {
   // sources + history are concatenated, which exceeds OS argv limits
   // (especially on Windows ~32k).
   const { spawn } = await import('child_process');
-  const args = isAntigravityCliProvider(provider)
+  let args = isAntigravityCliProvider(provider)
     ? ensureAntigravityPrintArgs(provider.args || [])
     : [...(provider.args || [])];
   // OpenCode runs headless via the `run` subcommand (reads the prompt from
@@ -574,13 +576,27 @@ async function* streamCompletion(provider, model, prompt, signal) {
     // OpenCode addresses its Ollama model as `ollama/<id>`; respect a user-baked
     // -m/--model pin (mirrors buildCliArgs) rather than duplicating the flag.
     if (cliModel && !hasModelFlag(args)) args.push('--model', prefixOpencodeModel(provider, cliModel));
+  } else if (isGrokCommand(provider?.command)) {
+    // Grok reads its prompt from --prompt-file /dev/stdin and needs plain output
+    // + permission bypass; ensureGrokHeadlessArgs adds them (gated on user pins).
+    args = ensureGrokHeadlessArgs(args, cliModel);
   } else if (cliModel) {
     args.push('--model', cliModel);
   }
+  // Grok's /dev/stdin sentinel is fed via stdin on POSIX; on Windows it's
+  // rewritten to a temp file (writePromptToStdin=false). No-op otherwise.
+  const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup: cleanupPromptFile } = prepareGrokPromptFile(args, prompt);
+  const childEnv = (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; return e; })();
+  // Resolve a bare npm-installed CLI (a .cmd/.bat shim on Windows) to its real
+  // path and wrap it as `cmd.exe /c <path>` so spawn() under shell:false can
+  // launch it — a bare shim name ENOENTs otherwise. No-op off Windows. Mirrors
+  // the runner / agent / vision spawn paths. Resolved against childEnv so a
+  // provider PATH override is honored.
+  const { command: spawnCommand, args: spawnArgs } = prepareCliSpawn(provider.command, deliveredArgs, childEnv);
   const out = await new Promise((resolve, reject) => {
     let buf = '';
-    const child = spawn(provider.command, args, {
-      env: (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; return e; })(),
+    const child = spawn(spawnCommand, spawnArgs, {
+      env: childEnv,
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
       windowsHide: true,
@@ -595,6 +611,7 @@ async function* streamCompletion(provider, model, prompt, signal) {
     const cleanup = () => {
       if (timer) { clearTimeout(timer); timer = null; }
       signal?.removeEventListener('abort', onAbort);
+      cleanupPromptFile();
     };
     const settle = (fn, value) => {
       if (settled) return;
@@ -629,7 +646,10 @@ async function* streamCompletion(provider, model, prompt, signal) {
     // Pipe the prompt in via stdin so we never blow the OS argv limit on
     // long retrieval-augmented prompts.
     child.stdin.on('error', () => { /* child may close stdin first; the close handler resolves */ });
-    child.stdin.end(prompt);
+    // When grok is delivered via a Windows temp file the prompt is already on
+    // disk — just close stdin instead of writing it.
+    if (writePromptToStdin) child.stdin.end(prompt);
+    else child.stdin.end();
   });
   yield out;
 }

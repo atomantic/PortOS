@@ -156,7 +156,9 @@ function ownPortsOf(app) {
 async function gatherTakenPorts(excludePorts = []) {
   const [reserved, listening] = await Promise.all([
     getReservedPorts().catch(() => []),
-    getListeningPorts().catch(() => []),
+    // Port discovery is safety-critical here: an unknown listener set must abort
+    // analysis instead of being rendered as "none detected" and reassigned over.
+    getListeningPorts(),
   ]);
   // Exempt the app's own ports ONLY from the reserved-app registry — so
   // re-standardizing keeps them. Do NOT exempt them from `listening`: if the

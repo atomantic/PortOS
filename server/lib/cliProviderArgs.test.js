@@ -64,6 +64,13 @@ describe('cliProviderArgs', () => {
       });
       expect(args).toEqual(['exec', '--model', 'gpt-5', '-']);
     });
+
+    it('passes the selected GPT-5.6 Codex tier to the CLI', () => {
+      const args = buildCliArgs({
+        id: 'codex', command: 'codex', defaultModel: 'gpt-5.6-sol',
+      });
+      expect(args).toEqual(['exec', '--model', 'gpt-5.6-sol', '-']);
+    });
   });
 
   describe('buildCliArgs — OpenCode Ollama', () => {
@@ -102,6 +109,55 @@ describe('cliProviderArgs', () => {
         defaultModel: 'qwen2.5:7b',
       });
       expect(args).toEqual(['run', '-m', 'ollama/qwen2.5:7b']);
+    });
+  });
+
+  describe('buildCliArgs — Grok Build CLI', () => {
+    it('builds a headless one-shot invocation without --model when using the configured-default sentinel', () => {
+      const args = buildCliArgs({ id: 'grok-cli', command: 'grok', defaultModel: 'grok-configured-default' });
+      expect(args).toEqual([
+        '--output-format', 'plain',
+        '--permission-mode', 'bypassPermissions',
+        '--prompt-file', '/dev/stdin',
+      ]);
+      expect(args).not.toContain('--model');
+      expect(args).not.toContain('grok-configured-default');
+    });
+
+    it('omits the model flag when no defaultModel is set (grok uses its own default)', () => {
+      const args = buildCliArgs({ id: 'grok-cli', command: 'grok', defaultModel: null });
+      expect(args).toEqual([
+        '--output-format', 'plain',
+        '--permission-mode', 'bypassPermissions',
+        '--prompt-file', '/dev/stdin',
+      ]);
+    });
+
+    it('injects --model when a concrete model id is set', () => {
+      const args = buildCliArgs({ id: 'my-grok', command: '/opt/homebrew/bin/grok', defaultModel: 'grok-code-fast-1' });
+      expect(args).toContain('--prompt-file');
+      expect(args).toContain('/dev/stdin');
+      expect(args).toEqual(expect.arrayContaining(['--model', 'grok-code-fast-1']));
+    });
+
+    it('respects a user-baked --output-format and does not inject plain', () => {
+      const args = buildCliArgs({ id: 'grok-cli', command: 'grok', args: ['--output-format', 'json'], defaultModel: 'grok-configured-default' });
+      expect(args.filter((a) => a === '--output-format')).toHaveLength(1);
+      expect(args).toContain('json');
+      expect(args).not.toContain('plain');
+    });
+
+    it('respects a user-baked --model and does not duplicate it', () => {
+      const args = buildCliArgs({ id: 'grok-cli', command: 'grok', args: ['--model', 'grok-code-fast-1'], defaultModel: 'grok-configured-default' });
+      expect(args.filter((a) => a === '--model')).toHaveLength(1);
+      expect(args).toContain('grok-code-fast-1');
+      expect(args).not.toContain('grok-configured-default');
+    });
+
+    it('respects a user-baked prompt source and does not append --prompt-file', () => {
+      const args = buildCliArgs({ id: 'grok-cli', command: 'grok', args: ['-p', 'hello'], defaultModel: 'grok-configured-default' });
+      expect(args).not.toContain('--prompt-file');
+      expect(args).not.toContain('/dev/stdin');
     });
   });
 

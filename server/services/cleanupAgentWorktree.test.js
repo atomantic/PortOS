@@ -601,7 +601,7 @@ describe('cleanupAgentWorktree - openPR path', () => {
 
     await cleanupAgentWorktree('agent-1', true, {
       openPR: true, requestCopilotReview: true, reviewers: ['copilot', 'codex', 'antigravity'],
-      reviewStopMode: 'on-findings', reviewerApplies: true, description: 'Build',
+      reviewStopMode: 'on-findings', reviewerApplies: true, codexModel: 'gpt-5.6-sol', description: 'Build',
       originalTask: { id: 'task-orig', priority: 'MEDIUM', metadata: { app: 'sparsetree' }, description: 'Build' }
     });
 
@@ -611,6 +611,24 @@ describe('cleanupAgentWorktree - openPR path', () => {
     expect(followUp.metadata.reviewLoopReviewers).toEqual(['copilot', 'codex', 'antigravity']);
     expect(followUp.metadata.reviewLoopStopMode).toBe('on-findings');
     expect(followUp.metadata.reviewLoopReviewerApplies).toBe(true);
+    // Codex model tier rides along only because `codex` is in the list.
+    expect(followUp.metadata.reviewLoopCodexModel).toBe('gpt-5.6-sol');
+  });
+
+  it('drops the Codex model tier when codex is not among the reviewers', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/59' });
+    git.requestCopilotReview.mockResolvedValue({ success: true });
+    addTask.mockResolvedValue({ id: 'sys-rl-nc' });
+
+    await cleanupAgentWorktree('agent-1', true, {
+      openPR: true, requestCopilotReview: true, reviewers: ['copilot', 'claude'],
+      codexModel: 'gpt-5.6-sol', description: 'Build',
+      originalTask: { id: 'task-orig', priority: 'MEDIUM', metadata: { app: 'sparsetree' }, description: 'Build' }
+    });
+
+    const [followUp] = addTask.mock.calls[0];
+    expect(followUp.metadata.reviewLoopCodexModel).toBeNull();
   });
 
   it('does NOT pre-request Copilot when it trails a CLI reviewer, but keeps it in the follow-up list', async () => {
@@ -834,5 +852,57 @@ describe('spawnMergeRecoveryTask', () => {
     expect(call.context).toContain('glab mr list --source-branch feature/x');
     expect(call.context).toContain('glab mr create --source-branch feature/x --target-branch main');
     expect(call.context).not.toContain('gh pr ');
+  });
+});
+
+// The throwaway-worktree posture (programmatic-I/O reasoning agents, e.g.
+// layered-intelligence) is the "reasoner can't land code" safety guarantee:
+// the worktree is discarded with NO merge and NO PR even when openPR is set, so
+// a reasoning agent that touched code can never push it. Derived inside the sink
+// from originalTask.metadata.discardWorktree. These lock the behavior, not just
+// the config default (taskSchedule.test.js pins the default).
+describe('cleanupAgentWorktree - discardWorktree (throwaway reasoning worktree)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getAgent.mockResolvedValue(mockWorktreeAgent());
+    git.getRepoBranches.mockResolvedValue({ baseBranch: 'main', devBranch: null });
+  });
+
+  it('removes the worktree with merge:false and never pushes/opens a PR — even with openPR:true', async () => {
+    await cleanupAgentWorktree('agent-1', true, {
+      openPR: true,
+      originalTask: { metadata: { discardWorktree: true } }
+    });
+
+    expect(removeWorktree).toHaveBeenCalledTimes(1);
+    expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123', { merge: false });
+    // Discard wins over openPR — no code is ever pushed or PR'd.
+    expect(git.push).not.toHaveBeenCalled();
+    expect(git.createPR).not.toHaveBeenCalled();
+  });
+
+  it('treats the re-parsed string "true" as discard (metadata round-trips through the task store)', async () => {
+    await cleanupAgentWorktree('agent-1', true, {
+      openPR: true,
+      originalTask: { metadata: { discardWorktree: 'true' } }
+    });
+
+    expect(removeWorktree).toHaveBeenCalledWith('agent-1', '/mock/workspace', 'cos/task-abc123', { merge: false });
+    expect(git.push).not.toHaveBeenCalled();
+    expect(git.createPR).not.toHaveBeenCalled();
+  });
+
+  it('does NOT discard when the flag is absent — the normal openPR path still runs', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/9' });
+
+    await cleanupAgentWorktree('agent-1', true, {
+      openPR: true,
+      originalTask: { metadata: {} }
+    });
+
+    // No discard → the standard openPR flow pushes + creates a PR.
+    expect(git.push).toHaveBeenCalled();
+    expect(git.createPR).toHaveBeenCalled();
   });
 });

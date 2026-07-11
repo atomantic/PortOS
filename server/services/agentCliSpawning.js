@@ -26,8 +26,10 @@ import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
-import { resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs } from '../lib/providerModels.js';
+import { isGrokCommand, ensureGrokHeadlessArgs, prepareGrokPromptFile } from '../lib/grok.js';
+import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
+import { resolveForgeTokenEnv } from './git.js';
 import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
 
@@ -245,7 +247,9 @@ export function createStreamJsonParser() {
  */
 export function buildCliSpawnConfig(provider, model, settingsEnv = {}, { systemPromptFile = null } = {}) {
   const providerId = provider?.id || 'claude-code';
-  const effectiveModel = providerId === 'codex' && model === 'codex-configured-default' ? null : model;
+  // Configured-default sentinels (Codex / Antigravity / Grok Build) → null so
+  // the CLI uses its own default without a --model flag.
+  const effectiveModel = resolveCliModel(model);
 
   // Codex CLI uses different invocation pattern.
   // `--dangerously-bypass-approvals-and-sandbox` is the Codex equivalent of
@@ -300,6 +304,21 @@ export function buildCliSpawnConfig(provider, model, settingsEnv = {}, { systemP
       command: provider.command,
       args: baseArgs,
       stdinMode: 'prompt'
+    };
+  }
+
+  // Grok Build CLI (`grok`): headless one-shot agent. Reads the combined
+  // contract+task prompt from `--prompt-file /dev/stdin` (rewritten to a temp
+  // file on Windows at the spawn site — prepareGrokPromptFile), bypasses approval
+  // prompts, and emits plain text (the live-output handler falls through to its
+  // default text path, like OpenCode). grok is a non-Claude command, so
+  // agentLifecycle keeps the operating contract in the stdin prompt (no
+  // system-prompt-file split) — matching codex/antigravity/opencode.
+  if (isGrokCommand(provider?.command)) {
+    return {
+      command: provider?.command || 'grok',
+      args: ensureGrokHeadlessArgs(provider?.args || [], effectiveModel),
+      stdinMode: 'prompt',
     };
   }
 
@@ -412,11 +431,18 @@ export async function spawnDirectly({
   // Ensure workspacePath is valid
   const cwd = workspacePath && typeof workspacePath === 'string' ? workspacePath : ROOT_DIR;
 
-  // For Claude CLI providers, inject ~/.claude/settings.json env vars so Bedrock config
-  // (CLAUDE_CODE_USE_BEDROCK, AWS_PROFILE, etc.) is present even if PM2 lacks them
-  const claudeSettingsEnv = isClaudeCliProvider(provider)
-    ? await getClaudeSettingsEnv()
-    : {};
+  // Two independent async env lookups, resolved together: Claude's
+  // ~/.claude/settings.json Bedrock config (CLAUDE_CODE_USE_BEDROCK, AWS_PROFILE,
+  // etc., present even if PM2 lacks them) and the repo-owner-pinned GH_TOKEN
+  // (so the agent's own `gh pr create` auths as the right account — see
+  // resolveForgeTokenEnv; `{}` when there's no owner match). Skip the token probe
+  // entirely when the provider supplies its own GH_TOKEN/GITHUB_TOKEN so its
+  // explicit credential wins (gh prefers GH_TOKEN, so injecting one would shadow a
+  // provider GITHUB_TOKEN).
+  const [claudeSettingsEnv, forgeTokenEnv] = await Promise.all([
+    isClaudeCliProvider(provider) ? getClaudeSettingsEnv() : Promise.resolve({}),
+    providerSuppliesGithubToken(provider) ? Promise.resolve({}) : resolveForgeTokenEnv(cwd),
+  ]);
 
   // For OpenCode Ollama providers, build dynamic OPENCODE_CONFIG_CONTENT with
   // the models map so --model is accepted (the static env var lacked this).
@@ -425,8 +451,9 @@ export async function spawnDirectly({
   // The pm2 shim must be prepended onto the FINAL PATH (after any
   // provider.envVars override) so a `--dangerously-skip-permissions` agent
   // can't `pm2 kill` the shared daemon. opencodeEnv comes LAST to override
-  // the static OPENCODE_CONFIG_CONTENT in provider.envVars.
-  const childEnv = (() => { const e = { ...process.env, ...claudeSettingsEnv, ...provider.envVars, ...opencodeEnv }; delete e.CLAUDECODE; Object.assign(e, agentGuardEnv(e)); return e; })();
+  // the static OPENCODE_CONFIG_CONTENT in provider.envVars; forgeTokenEnv sits
+  // before provider.envVars so an explicit provider GH_TOKEN override still wins.
+  const childEnv = (() => { const e = { ...process.env, ...forgeTokenEnv, ...claudeSettingsEnv, ...provider.envVars, ...opencodeEnv }; delete e.CLAUDECODE; Object.assign(e, agentGuardEnv(e)); return e; })();
 
   // Resolve a bare npm-installed CLI (a .cmd/.bat shim on Windows) to its real
   // path and wrap a shim as `cmd.exe /c <path>` so spawn() under shell:false
@@ -434,7 +461,10 @@ export async function spawnDirectly({
   // bare name → spawn ENOENT (errno -4058) → startup-failure. Mirrors the
   // working "Run Prompt" path (server/services/runner.js); resolved against
   // childEnv so a provider PATH override is honored. See issue #2243.
-  const { command: spawnCommand, args: spawnArgs } = prepareCliSpawn(cliConfig.command, cliConfig.args, childEnv);
+  // Grok's `--prompt-file /dev/stdin` is fed via stdin on POSIX; on Windows it's
+  // rewritten to a temp file (useStdin=false). No-op for every other provider.
+  const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup: cleanupPromptFile } = prepareGrokPromptFile(cliConfig.args, prompt);
+  const { command: spawnCommand, args: spawnArgs } = prepareCliSpawn(cliConfig.command, deliveredArgs, childEnv);
 
   const claudeProcess = spawn(spawnCommand, spawnArgs, {
     cwd,
@@ -453,7 +483,7 @@ export async function spawnDirectly({
     prompt: (task.description || '').substring(0, 500)
   });
 
-  claudeProcess.stdin.write(prompt);
+  if (writePromptToStdin) claudeProcess.stdin.write(prompt);
   claudeProcess.stdin.end();
 
   activeAgents.set(agentId, {
@@ -494,7 +524,33 @@ export async function spawnDirectly({
   // stdout/stderr could land after the terminal record. (The close handler
   // still drains too; flush() is idempotent.)
   const cliAgentEntry = activeAgents.get(agentId);
-  if (cliAgentEntry) cliAgentEntry.flushOutput = () => outputBatcher.flush();
+  // Drain the serialized write chain (defined just below) before flushing the
+  // batcher so any enqueued-but-unrun stdout/stderr push lands first.
+  if (cliAgentEntry) cliAgentEntry.flushOutput = async () => {
+    await drainTranscriptWrites();
+    await outputBatcher.flush();
+  };
+
+  // Serialize the transcript-mutating body of every stdout/stderr `data` event
+  // onto a single per-agent tail promise. Both handlers mutate the same shared
+  // `outputBuffer`/`rawStreamBuffer` and write the same `output.txt`, so their
+  // interleaved awaits (e.g. one chunk's `writeFile` yielding while the next
+  // chunk appends) would otherwise reorder the transcript (#2384). Fallback
+  // detection stays OUTSIDE this chain — it runs synchronously in the raw
+  // listener before the enqueue, so a blocked earlier write can never delay
+  // killing the provider on a usage-limit signal. The close/error handlers
+  // `await drainTranscriptWrites()` before finalize so the tail lands first.
+  // Mirrors shell.js `hookQueue` and pipeline/issues.js `issueWriteTail`.
+  let transcriptWriteTail = Promise.resolve();
+  const enqueueTranscriptWrite = (fn) => {
+    transcriptWriteTail = transcriptWriteTail.then(fn).catch((err) => {
+      // Runs in a child-process callback — a rejection here would escape as an
+      // unhandled rejection and crash Node. output.txt is best-effort; log+swallow.
+      console.error(`❌ agentCli transcript write failed for ${agentId}: ${err.message}`);
+    });
+    return transcriptWriteTail;
+  };
+  const drainTranscriptWrites = () => transcriptWriteTail;
 
   const stopForImmediateFallbackSignal = (text) => {
     if (immediateFallbackAnalysis || claudeProcess.killed) return;
@@ -524,53 +580,62 @@ export async function spawnDirectly({
     }
   }, 3000);
 
-  claudeProcess.stdout.on('data', async (data) => {
+  claudeProcess.stdout.on('data', (data) => {
     try {
       const text = data.toString();
+      // Detect fallback signals SYNCHRONOUSLY, before enqueuing any transcript
+      // mutation — a blocked earlier write must never delay killing the provider
+      // on a usage-limit signal (#2384).
       stopForImmediateFallbackSignal(text);
-
-      if (!hasStartedWorking) {
-        hasStartedWorking = true;
-        await updateAgent(agentId, { metadata: { phase: 'working' } });
-        emitLog('info', `Agent ${agentId} working...`, { agentId, phase: 'working' });
-      }
-
-      if (streamParser) {
-        // Parse stream-json and emit extracted text lines (cap buffer at 512KB for error analysis)
-        rawStreamBuffer += text;
-        if (rawStreamBuffer.length > 512 * 1024) {
-          rawStreamBuffer = rawStreamBuffer.slice(-512 * 1024);
+      // Serialize the transcript body so two `data` events can't interleave their
+      // awaits and reorder output.txt / the batched live tail.
+      enqueueTranscriptWrite(async () => {
+        if (!hasStartedWorking) {
+          hasStartedWorking = true;
+          await updateAgent(agentId, { metadata: { phase: 'working' } });
+          emitLog('info', `Agent ${agentId} working...`, { agentId, phase: 'working' });
         }
-        const lines = streamParser.processChunk(text);
-        for (const line of lines) outputBuffer += line + '\n';
-        outputBatcher.push(lines);
-        await writeFile(outputFile, outputBuffer).catch(() => {});
-      } else {
-        // Non-stream providers: emit raw stdout as before
-        outputBuffer += text;
-        await writeFile(outputFile, outputBuffer).catch(() => {});
-        outputBatcher.push(text);
-      }
+
+        if (streamParser) {
+          // Parse stream-json and emit extracted text lines (cap buffer at 512KB for error analysis)
+          rawStreamBuffer += text;
+          if (rawStreamBuffer.length > 512 * 1024) {
+            rawStreamBuffer = rawStreamBuffer.slice(-512 * 1024);
+          }
+          const lines = streamParser.processChunk(text);
+          for (const line of lines) outputBuffer += line + '\n';
+          outputBatcher.push(lines);
+          await writeFile(outputFile, outputBuffer).catch(() => {});
+        } else {
+          // Non-stream providers: emit raw stdout as before
+          outputBuffer += text;
+          await writeFile(outputFile, outputBuffer).catch(() => {});
+          outputBatcher.push(text);
+        }
+      });
     } catch (err) {
       console.error(`❌ agentCli stdout handler failed: ${err.message}`);
     }
   });
 
-  claudeProcess.stderr.on('data', async (data) => {
+  claudeProcess.stderr.on('data', (data) => {
     try {
       const text = data.toString();
+      // Synchronous fallback detection before the serialized write (see stdout).
       stopForImmediateFallbackSignal(`[stderr] ${text}`);
-      // Codex stderr: show thinking + tool names, skip config dump and command output
-      if (codexStderrFormatter) {
-        const lines = codexStderrFormatter.processChunk(text);
-        for (const line of lines) outputBuffer += line + '\n';
-        outputBatcher.push(lines);
+      enqueueTranscriptWrite(async () => {
+        // Codex stderr: show thinking + tool names, skip config dump and command output
+        if (codexStderrFormatter) {
+          const lines = codexStderrFormatter.processChunk(text);
+          for (const line of lines) outputBuffer += line + '\n';
+          outputBatcher.push(lines);
+          await writeFile(outputFile, outputBuffer).catch(() => {});
+          return;
+        }
+        outputBuffer += `[stderr] ${text}`;
         await writeFile(outputFile, outputBuffer).catch(() => {});
-        return;
-      }
-      outputBuffer += `[stderr] ${text}`;
-      await writeFile(outputFile, outputBuffer).catch(() => {});
-      outputBatcher.push(`[stderr] ${text}`);
+        outputBatcher.push(`[stderr] ${text}`);
+      });
     } catch (err) {
       console.error(`❌ agentCli stderr handler failed: ${err.message}`);
     }
@@ -581,6 +646,7 @@ export async function spawnDirectly({
     // completeAgent/completeAgentRun would crash the process, so wrap the body.
     try {
       clearTimeout(initializationTimeout);
+      cleanupPromptFile();
       console.error(`❌ Agent ${agentId} spawn error: ${err.message}`);
 
       // Release execution lane
@@ -601,6 +667,9 @@ export async function spawnDirectly({
       }
 
       cosEvents.emit('agent:error', { agentId, error: err.message });
+      // Drain queued transcript writes before flushing the batcher + recording
+      // the run so outputBuffer reflects everything that streamed (#2384).
+      await drainTranscriptWrites();
       await outputBatcher.flush();
       await completeAgent(agentId, { success: false, error: err.message });
       await completeAgentRun(runId, outputBuffer, 1, 0, { message: err.message, category: 'spawn-error' });
@@ -622,6 +691,7 @@ export async function spawnDirectly({
     let laneReleased = false;
     try {
     clearTimeout(initializationTimeout);
+    cleanupPromptFile();
     const success = code === 0;
     const agentData = activeAgents.get(agentId);
     const duration = Date.now() - (agentData?.startedAt || Date.now());
@@ -645,6 +715,12 @@ export async function spawnDirectly({
     // Mirrors the runner path (`runner.js`) and the TUI finish() handling.
     const finalSuccess = terminatedByUser ? false : (success && !immediateFallbackAnalysis);
     const finalError = terminatedByUser ? 'Agent terminated by user' : null;
+
+    // Drain any queued transcript writes before reading/appending outputBuffer
+    // for finalization — a still-pending stdout/stderr write would otherwise
+    // land after the terminal record or clobber the final output.txt (#2384).
+    // No new `data` events fire after 'close', so a single drain is sufficient.
+    await drainTranscriptWrites();
 
     // Flush remaining stream parser data (persists the tail of the transcript
     // before any early-return, so a paused agent's output.txt is complete for
@@ -723,6 +799,7 @@ export async function spawnDirectly({
         isTruthyMetaFn,
         error: finalError || undefined,
         completionReason: terminatedByUser ? 'user-terminated' : undefined,
+        workspacePath,
       });
     } finally {
       // Clean up worktree if agent was using one. Claude Code CLI agents run

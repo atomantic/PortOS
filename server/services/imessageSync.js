@@ -418,21 +418,31 @@ async function doRunSync() {
   const timezone = await getUserTimezone();
   const { recordEvents } = await import('./humanActivity.js');
   const tribe = await import('./tribe.js');
+  // Dynamic import avoids a circular static edge with imessageManage (which
+  // pulls getStatus from this module for the manager stats endpoint) (#2413).
+  const manage = await import('./imessageManage.js');
 
   const activityCandidates = imessageActivityCandidates(batch.messages);
   const touchpointCandidates = imessageTouchpointCandidates(batch.messages, timezone);
+
+  // PortOS-side blocklist: skip spam handles before they land in the activity
+  // store or Tribe touchpoint log. Apple's chat.db is never mutated.
+  const blocklist = await manage.readBlocklist().catch(() => ({ handles: [] }));
+  const blockedKeys = new Set(blocklist.handles || []);
+  const activityFiltered = manage.filterBlockedActivityCandidates(activityCandidates, blockedKeys);
+  const touchpointFiltered = manage.filterBlockedTouchpointCandidates(touchpointCandidates, blockedKeys);
 
   // Persistence failures must NOT advance the cursor: the dedupe keys make
   // re-processing the batch on the next pass a harmless no-op, but skipping
   // past unpersisted messages loses them permanently (the cursor never revisits
   // a ROWID). Track failure and hold the cursor so the batch gets retried.
   let persistFailed = false;
-  const activityResult = await recordEvents(activityCandidates).catch((err) => {
+  const activityResult = await recordEvents(activityFiltered.kept).catch((err) => {
     console.error(`❌ iMessage activity record failed: ${err?.message || err}`);
     persistFailed = true;
-    return { recorded: 0, skipped: activityCandidates.length };
+    return { recorded: 0, skipped: activityFiltered.kept.length };
   });
-  const touchpointResult = await tribe.autoLogTouchpoints(touchpointCandidates).catch((err) => {
+  const touchpointResult = await tribe.autoLogTouchpoints(touchpointFiltered.kept).catch((err) => {
     console.error(`❌ iMessage touchpoint log failed: ${err?.message || err}`);
     persistFailed = true;
     return { created: 0, matched: 0 };
@@ -444,6 +454,7 @@ async function doRunSync() {
     ...(persistFailed ? { error: 'Persistence failed — cursor held so the batch retries next sync' } : {}),
     scanned: batch.scanned,
     recorded: activityResult.recorded,
+    blockedSkipped: activityFiltered.skipped,
     touchpointsCreated: touchpointResult.created,
     touchpointsMatched: touchpointResult.matched,
     decodeFailures: batch.decodeFailures,
@@ -453,7 +464,7 @@ async function doRunSync() {
     hasMore: batch.scanned === SCAN_LIMIT,
   };
   await writeSyncState({ cursorRowid: nextCursor, lastRunAt: new Date().toISOString(), lastResult: result });
-  console.log(`💬 iMessage sync: scanned ${result.scanned}, recorded ${result.recorded} event(s), ${result.touchpointsCreated} touchpoint(s), ${result.decodeFailures} decode-skip(s), cursor→${result.cursorRowid}${result.hasMore ? ' (more remaining)' : ''}${persistFailed ? ' — PERSIST FAILED, cursor held' : ''}`);
+  console.log(`💬 iMessage sync: scanned ${result.scanned}, recorded ${result.recorded} event(s), blocked ${result.blockedSkipped}, ${result.touchpointsCreated} touchpoint(s), ${result.decodeFailures} decode-skip(s), cursor→${result.cursorRowid}${result.hasMore ? ' (more remaining)' : ''}${persistFailed ? ' — PERSIST FAILED, cursor held' : ''}`);
   return result;
 }
 

@@ -46,6 +46,7 @@ vi.mock('../services/autoFixer.js', () => ({
   noteFallbackStarted: vi.fn(),
   noteFallbackHandled: vi.fn(),
   noteFallbackFailed: vi.fn(),
+  escalateProviderFailure: vi.fn().mockResolvedValue(undefined),
 }));
 
 // aiToolkitState lookups gate the retry path on a real providerStatus
@@ -62,7 +63,7 @@ const providers = await import('../services/providers.js');
 const autoFixer = await import('../services/autoFixer.js');
 const toolkitState = await import('./aiToolkitState.js');
 const { ERROR_CATEGORIES } = await import('./aiToolkit/errorDetection.js');
-const { runPromptThroughProvider, resolveProviderAndModel, resolveEffectiveModel } = await import('./promptRunner.js');
+const { runPromptThroughProvider, resolveProviderAndModel, resolveEffectiveModel, pickConfigCorrectedModel, normalizeResponseSchema, coerceResponseToSchema, isSchemaTypeCategory } = await import('./promptRunner.js');
 
 const apiProvider = (extra = {}) => ({
   id: 'mock-api', type: 'api', defaultModel: 'm-default', ...extra,
@@ -1152,6 +1153,336 @@ describe('promptRunner — retry-with-fallback', () => {
   });
 });
 
+// =============================================================================
+// pickConfigCorrectedModel — pure Tier-1 (config/env) model corrector.
+// =============================================================================
+
+describe('pickConfigCorrectedModel', () => {
+  it('returns null when the provider carries no enumerable models list', () => {
+    expect(pickConfigCorrectedModel({ id: 'p', defaultModel: 'x' }, 'x')).toBeNull();
+    expect(pickConfigCorrectedModel({ id: 'p', models: null }, 'x')).toBeNull();
+  });
+
+  it('picks a different valid generation model, excluding the failed id', () => {
+    const p = { id: 'p', models: ['broken-model', 'good-model', 'other-model'] };
+    expect(pickConfigCorrectedModel(p, 'broken-model')).toBe('good-model');
+  });
+
+  it('skips embedding-only models so a generation call is never corrected onto one', () => {
+    const p = { id: 'p', models: ['broken-model', 'nomic-embed-text:latest', 'qwen3.6:35b'] };
+    expect(pickConfigCorrectedModel(p, 'broken-model')).toBe('qwen3.6:35b');
+  });
+
+  it('returns null when the only alternatives are the failed id and/or embedding models', () => {
+    expect(pickConfigCorrectedModel({ id: 'p', models: ['broken-model'] }, 'broken-model')).toBeNull();
+    expect(pickConfigCorrectedModel({ id: 'p', models: ['broken-model', 'nomic-embed-text'] }, 'broken-model')).toBeNull();
+  });
+});
+
+// =============================================================================
+// Tiered fallback cascade (issue #2342) — a model-not-found failure attempts a
+// deterministic Tier-1 config/env correction (retry the SAME provider with a
+// valid listed model) BEFORE escalating to a Tier-3 fallback provider, and only
+// an unrecovered failure escalates to a Tier-4 investigation task.
+// =============================================================================
+
+describe('promptRunner — Tier 1 config/env correction (issue #2342)', () => {
+  const fallbackApi = apiProvider({ id: 'fallback-api', name: 'Fallback API', defaultModel: 'fb-model' });
+
+  function mockToolkitWithFallback(fallback = fallbackApi) {
+    const isAvailable = vi.fn().mockReturnValue(true);
+    const markUnavailable = vi.fn().mockResolvedValue(undefined);
+    const markUsageLimit = vi.fn().mockResolvedValue(undefined);
+    const getFallbackProvider = vi.fn().mockReturnValue(fallback ? { provider: fallback, source: 'provider' } : null);
+    toolkitState.getAIToolkitInstance.mockReturnValue({
+      services: { providerStatus: { isAvailable, markUnavailable, markUsageLimit, getFallbackProvider } },
+    });
+    providers.getAllProviders.mockResolvedValue({ activeProvider: null, providers: fallback ? [fallback] : [] });
+    return { isAvailable, markUnavailable, markUsageLimit, getFallbackProvider };
+  }
+
+  it('recovers a model-not-found by retrying the SAME provider with a valid listed model (never reaching Tier 3)', async () => {
+    const status = mockToolkitWithFallback();
+    const primary = apiProvider({ id: 'primary-api', name: 'Primary API', defaultModel: 'primary-model', models: ['primary-model', 'good-model'] });
+
+    runner.executeApiRun.mockImplementation(async ({ model, onData, onComplete }) => {
+      if (model === 'primary-model') {
+        onComplete({ success: false, error: "model 'primary-model' not found", errorAnalysis: { category: ERROR_CATEGORIES.MODEL_NOT_FOUND } });
+      } else {
+        onData('corrected content');
+        onComplete({ success: true });
+      }
+    });
+
+    const out = await runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test' });
+
+    expect(out.text).toBe('corrected content');
+    expect(out.usedFallback).toBe(true);
+    expect(out.fixTier).toBe(1);
+    expect(out.fixStrategy).toBe('config/env');
+    // Recovered on the SAME provider with the corrected model — Tier 3 untouched.
+    expect(out.fallbackProvider).toMatchObject({ id: 'primary-api' });
+    expect(out.model).toBe('good-model');
+    expect(status.getFallbackProvider).not.toHaveBeenCalled();
+    expect(status.markUnavailable).not.toHaveBeenCalled();
+    // The primary's investigation task was suppressed up front and resolved.
+    expect(autoFixer.noteFallbackStarted).toHaveBeenCalledWith({ provider: 'Primary API', model: 'primary-model' });
+    expect(autoFixer.noteFallbackHandled).toHaveBeenCalledWith({ provider: 'Primary API', model: 'primary-model' });
+    expect(autoFixer.noteFallbackFailed).not.toHaveBeenCalled();
+  });
+
+  it('declines Tier 1 when no alternative model exists and falls through to the Tier-3 fallback provider', async () => {
+    const status = mockToolkitWithFallback();
+    // Only the failed model is listed → pickConfigCorrectedModel returns null.
+    const primary = apiProvider({ id: 'primary-api', name: 'Primary API', defaultModel: 'primary-model', models: ['primary-model'] });
+
+    runner.executeApiRun.mockImplementation(async ({ provider: p, onData, onComplete }) => {
+      if (p.id === 'primary-api') {
+        onComplete({ success: false, error: 'model missing', errorAnalysis: { category: ERROR_CATEGORIES.MODEL_NOT_FOUND } });
+      } else {
+        onData('fallback content');
+        onComplete({ success: true });
+      }
+    });
+
+    const out = await runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test' });
+
+    expect(out.text).toBe('fallback content');
+    expect(out.usedFallback).toBe(true);
+    expect(out.fixTier).toBe(3);
+    expect(out.fixStrategy).toBe('constrained-agent-retry');
+    expect(out.fallbackProvider).toMatchObject({ id: 'fallback-api' });
+    // Tier 3 engaged: the fallback was looked up (MODEL_NOT_FOUND stays unbenched).
+    expect(status.getFallbackProvider).toHaveBeenCalledWith('primary-api', expect.any(Object));
+    expect(status.markUnavailable).not.toHaveBeenCalled();
+  });
+
+  it('escalates to Tier 3 when the Tier-1 corrected retry ALSO fails, and cancels both queued tasks on recovery', async () => {
+    mockToolkitWithFallback();
+    const primary = apiProvider({ id: 'primary-api', name: 'Primary API', defaultModel: 'primary-model', models: ['primary-model', 'good-model'] });
+
+    runner.executeApiRun.mockImplementation(async ({ provider: p, model, onData, onComplete }) => {
+      if (p.id === 'primary-api') {
+        // Both the primary model AND the Tier-1 corrected model fail on this provider.
+        onComplete({ success: false, error: `still broken (${model})`, errorAnalysis: { category: ERROR_CATEGORIES.MODEL_NOT_FOUND } });
+      } else {
+        onData('fallback content');
+        onComplete({ success: true });
+      }
+    });
+
+    const out = await runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test' });
+
+    expect(out.text).toBe('fallback content');
+    expect(out.fixTier).toBe(3);
+    // Both the primary key and the Tier-1 corrected-model key are cancelled so a
+    // fully-recovered action leaves ZERO investigation tasks.
+    expect(autoFixer.noteFallbackHandled).toHaveBeenCalledWith({ provider: 'Primary API', model: 'primary-model' });
+    expect(autoFixer.noteFallbackHandled).toHaveBeenCalledWith({ provider: 'Primary API', model: 'good-model' });
+    expect(autoFixer.noteFallbackFailed).not.toHaveBeenCalled();
+  });
+
+  it('escalates once and releases both suppressed keys when the corrected retry fails and no fallback exists', async () => {
+    mockToolkitWithFallback(null); // no fallback available
+    const primary = apiProvider({ id: 'primary-api', name: 'Primary API', defaultModel: 'primary-model', models: ['primary-model', 'good-model'] });
+
+    runner.executeApiRun.mockImplementation(async ({ onComplete }) => {
+      onComplete({ success: false, error: 'model gone', errorAnalysis: { category: ERROR_CATEGORIES.MODEL_NOT_FOUND } });
+    });
+
+    await expect(runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test' }))
+      .rejects.toThrow(/model gone/);
+
+    // Both the primary AND the pre-suppressed corrected-retry key were
+    // suppressed, so nothing incidental would surface the failure — the cascade
+    // escalates exactly one investigation task explicitly, then releases both
+    // keys so the in-flight set doesn't leak.
+    expect(autoFixer.noteFallbackStarted).toHaveBeenCalledWith({ provider: 'Primary API', model: 'primary-model' });
+    expect(autoFixer.noteFallbackStarted).toHaveBeenCalledWith({ provider: 'Primary API', model: 'good-model' });
+    expect(autoFixer.escalateProviderFailure).toHaveBeenCalledWith(expect.objectContaining({
+      context: expect.objectContaining({ provider: 'Primary API', model: 'primary-model' }),
+    }));
+    expect(autoFixer.noteFallbackFailed).toHaveBeenCalledWith({ provider: 'Primary API', model: 'primary-model' });
+    expect(autoFixer.noteFallbackFailed).toHaveBeenCalledWith({ provider: 'Primary API', model: 'good-model' });
+    expect(autoFixer.noteFallbackHandled).not.toHaveBeenCalled();
+  });
+
+  it('skips Tier 1 for a CLI provider whose model flag is baked into args (override ignored)', async () => {
+    // providerHonorsModelOverride is false when the CLI has a baked --model, so
+    // the "corrected" model would silently be the same failed one. Tier 1 must
+    // decline and the cascade fall through to the fallback provider instead.
+    runner.hasModelFlag.mockReturnValue(true); // args carry a baked model flag
+    const status = mockToolkitWithFallback();
+    const primary = { id: 'primary-cli', name: 'Primary CLI', type: 'cli', defaultModel: 'baked-model', timeout: 5000, args: ['--model', 'baked-model'], models: ['baked-model', 'good-model'] };
+
+    let primaryCalls = 0;
+    runner.executeCliRun.mockImplementation(async ({ onComplete }) => {
+      primaryCalls += 1;
+      onComplete({ success: false, error: 'model not found', errorAnalysis: { category: ERROR_CATEGORIES.MODEL_NOT_FOUND } });
+    });
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
+      onData('fallback content');
+      onComplete({ success: true });
+    });
+
+    const out = await runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test' });
+
+    // No same-provider corrected retry (primary ran once), straight to Tier 3.
+    expect(primaryCalls).toBe(1);
+    expect(out.fixTier).toBe(3);
+    expect(status.getFallbackProvider).toHaveBeenCalledWith('primary-cli', expect.any(Object));
+  });
+
+  it('does NOT attempt a Tier-1 correction for non-model failure categories', async () => {
+    const status = mockToolkitWithFallback();
+    // A rate-limit (Tier 3) failure must skip the config/env correction even
+    // though the provider lists an alternative model.
+    const primary = apiProvider({ id: 'primary-api', name: 'Primary API', defaultModel: 'primary-model', models: ['primary-model', 'good-model'] });
+
+    let primaryCalls = 0;
+    runner.executeApiRun.mockImplementation(async ({ provider: p, onData, onComplete }) => {
+      if (p.id === 'primary-api') {
+        primaryCalls += 1;
+        onComplete({ success: false, error: 'rate limited', errorAnalysis: { category: ERROR_CATEGORIES.RATE_LIMIT } });
+      } else {
+        onData('fallback content');
+        onComplete({ success: true });
+      }
+    });
+
+    const out = await runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test' });
+
+    // The primary provider ran exactly once (no Tier-1 corrected retry) before
+    // going straight to the Tier-3 fallback.
+    expect(primaryCalls).toBe(1);
+    expect(out.fixTier).toBe(3);
+    expect(status.getFallbackProvider).toHaveBeenCalledWith('primary-api', expect.any(Object));
+  });
+
+  it('escalates explicitly when a Tier-1 pre-execution throw leaves no survivor and no fallback exists', async () => {
+    // The corrected retry throws BEFORE execution (createRun rejects), so its
+    // onRunFailed never queues a task. With no fallback either, the primary's
+    // pre-suppressed backstop task would be swallowed — so the cascade must
+    // escalate exactly one investigation task explicitly.
+    mockToolkitWithFallback(null); // no fallback
+    const primary = apiProvider({ id: 'primary-api', name: 'Primary API', defaultModel: 'primary-model', models: ['primary-model', 'good-model'] });
+
+    runner.createRun
+      .mockResolvedValueOnce({ runId: 'run-primary' })       // primary run
+      .mockRejectedValueOnce(new Error('provider disabled')); // corrected retry: pre-execution throw
+    runner.executeApiRun.mockImplementation(async ({ onComplete }) => {
+      onComplete({ success: false, error: 'model gone', errorAnalysis: { category: ERROR_CATEGORIES.MODEL_NOT_FOUND } });
+    });
+
+    await expect(runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test' }))
+      .rejects.toThrow(/model gone/);
+
+    expect(autoFixer.escalateProviderFailure).toHaveBeenCalledWith(expect.objectContaining({
+      code: 'AI_PROVIDER_EXECUTION_FAILED',
+      context: expect.objectContaining({ provider: 'Primary API', model: 'primary-model' }),
+    }));
+    expect(autoFixer.noteFallbackStarted).toHaveBeenCalledWith({ provider: 'Primary API', model: 'primary-model' });
+  });
+
+  it('escalates explicitly when the Tier-3 fallback throws before execution (no fallback task queued)', async () => {
+    // A fallback that rejects in createRun (pre-execution) fires no onRunFailed,
+    // so no fallback task is queued. With the primary suppressed, that would be
+    // zero investigation tasks — the cascade must escalate one explicitly.
+    mockToolkitWithFallback();
+    const primary = apiProvider({ id: 'primary-api', name: 'Primary API', defaultModel: 'primary-model' }); // no models → Tier 1 declines
+
+    runner.createRun
+      .mockResolvedValueOnce({ runId: 'run-primary' })        // primary
+      .mockRejectedValueOnce(new Error('fallback disabled')); // fallback: pre-execution throw
+    runner.executeApiRun.mockImplementation(async ({ onComplete }) => {
+      onComplete({ success: false, error: 'model gone', errorAnalysis: { category: ERROR_CATEGORIES.MODEL_NOT_FOUND } });
+    });
+
+    await expect(runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test' }))
+      .rejects.toThrow(/fallback disabled/);
+
+    expect(autoFixer.escalateProviderFailure).toHaveBeenCalledWith(expect.objectContaining({
+      context: expect.objectContaining({ provider: 'Primary API', model: 'primary-model' }),
+    }));
+  });
+
+  it('keys the Tier-1 corrected-retry task on the run that actually ran when createRun proactively swaps', async () => {
+    // The corrected retry's createRun proactively swaps to a different provider,
+    // which then fails — its queued task is keyed on the SWAPPED provider/model,
+    // so the recovery must cancel THAT key (not the pre-run guess).
+    const swapped = apiProvider({ id: 'swapped-api', name: 'Swapped API', defaultModel: 'swapped-model' });
+    mockToolkitWithFallback(); // fallback available for the Tier-3 recovery
+    const primary = apiProvider({ id: 'primary-api', name: 'Primary API', defaultModel: 'primary-model', models: ['primary-model', 'good-model'] });
+
+    runner.createRun
+      .mockResolvedValueOnce({ runId: 'run-primary' })                      // primary
+      .mockResolvedValueOnce({ runId: 'run-corrected', provider: swapped }) // corrected retry swaps
+      .mockResolvedValue({ runId: 'run-fb' });                             // fallback run
+    runner.executeApiRun.mockImplementation(async ({ provider: p, onData, onComplete }) => {
+      if (p.id === 'primary-api') {
+        onComplete({ success: false, error: 'model gone', errorAnalysis: { category: ERROR_CATEGORIES.MODEL_NOT_FOUND } });
+      } else if (p.id === 'swapped-api') {
+        onComplete({ success: false, error: 'swapped also failed', errorAnalysis: { category: ERROR_CATEGORIES.MODEL_NOT_FOUND } });
+      } else {
+        onData('fallback content');
+        onComplete({ success: true });
+      }
+    });
+
+    const out = await runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test' });
+
+    expect(out.text).toBe('fallback content');
+    expect(out.fixTier).toBe(3);
+    expect(autoFixer.noteFallbackHandled).toHaveBeenCalledWith({ provider: 'Swapped API', model: 'swapped-model' });
+    expect(autoFixer.noteFallbackHandled).toHaveBeenCalledWith({ provider: 'Primary API', model: 'primary-model' });
+  });
+
+  it('escalates when the fallback lookup itself throws after Tier 1 suppressed the keys', async () => {
+    // coalesceFallbackMarkAndPick throwing (e.g. getFallbackProvider blowing up)
+    // after Tier 1 cancelled the primary's backstop task would otherwise leave
+    // zero investigation tasks — the finally safety-net must escalate one.
+    const status = mockToolkitWithFallback();
+    status.getFallbackProvider.mockImplementation(() => { throw new Error('provider registry corrupt'); });
+    const primary = apiProvider({ id: 'primary-api', name: 'Primary API', defaultModel: 'primary-model', models: ['primary-model', 'good-model'] });
+
+    runner.executeApiRun.mockImplementation(async ({ onComplete }) => {
+      onComplete({ success: false, error: 'model gone', errorAnalysis: { category: ERROR_CATEGORIES.MODEL_NOT_FOUND } });
+    });
+
+    await expect(runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test' })).rejects.toThrow();
+
+    expect(autoFixer.escalateProviderFailure).toHaveBeenCalledWith(expect.objectContaining({
+      context: expect.objectContaining({ provider: 'Primary API', model: 'primary-model' }),
+    }));
+  });
+
+  it('does NOT engage Tier 1 for a category-less failure even when the provider lists alternatives', async () => {
+    // Regression: a failure with no errorAnalysis has category === undefined,
+    // which must NOT match the model-not-found guard (the `undefined ===
+    // ERROR_CATEGORIES.MODEL_NOT_SUPPORTED` footgun). The primary must run once,
+    // then go straight to Tier 3 — never a same-provider model swap.
+    const status = mockToolkitWithFallback();
+    const primary = apiProvider({ id: 'primary-api', name: 'Primary API', defaultModel: 'primary-model', models: ['primary-model', 'good-model'] });
+
+    let primaryCalls = 0;
+    runner.executeApiRun.mockImplementation(async ({ provider: p, onData, onComplete }) => {
+      if (p.id === 'primary-api') {
+        primaryCalls += 1;
+        onComplete({ success: false, error: 'exited with code 1' }); // no errorAnalysis
+      } else {
+        onData('fallback content');
+        onComplete({ success: true });
+      }
+    });
+
+    const out = await runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test' });
+
+    expect(primaryCalls).toBe(1);
+    expect(out.fixTier).toBe(3);
+    expect(status.getFallbackProvider).toHaveBeenCalledWith('primary-api', expect.any(Object));
+  });
+});
+
 describe('resolveEffectiveModel — embedding-model skip', () => {
   it('skips an embedding-first models list when defaultModel is null (the nomic-embed-text fallback bug)', () => {
     // Mirrors the real Ollama provider: defaultModel null, embedding model
@@ -1234,5 +1565,221 @@ describe('resolveProviderAndModel', () => {
     providers.getActiveProvider.mockResolvedValue(null);
     const out = await resolveProviderAndModel({});
     expect(out).toEqual({ provider: null, selectedModel: null });
+  });
+});
+
+// =============================================================================
+// Tier-2 (schema/type) request/response correction (issue #2350). At the runner
+// layer a schema/type failure surfaces as a run that SUCCEEDED at the transport
+// layer but whose response doesn't satisfy the caller's declared schema. The
+// runner validates + coerces in place, then re-requests the SAME provider with a
+// schema-corrected prompt, before falling through to a Tier-3 fallback.
+// =============================================================================
+
+describe('normalizeResponseSchema', () => {
+  it('returns null for a falsy schema (feature off)', () => {
+    expect(normalizeResponseSchema(null)).toBeNull();
+    expect(normalizeResponseSchema(undefined)).toBeNull();
+    expect(normalizeResponseSchema(0)).toBeNull();
+  });
+  it('wraps a bare predicate, swallowing predicate throws as false', () => {
+    const pred = normalizeResponseSchema((v) => v.ok === true);
+    expect(pred({ ok: true })).toBe(true);
+    expect(pred({ ok: false })).toBe(false);
+    expect(pred(null)).toBe(false); // predicate throws on null.ok → false, not a crash
+  });
+  it('adapts a Zod-style schema via safeParse', () => {
+    const schema = { safeParse: (v) => ({ success: typeof v === 'string' }) };
+    const pred = normalizeResponseSchema(schema);
+    expect(pred('hi')).toBe(true);
+    expect(pred(42)).toBe(false);
+  });
+  it('degrades an unrecognized truthy schema to always-true', () => {
+    const pred = normalizeResponseSchema({ description: 'a loose hint' });
+    expect(pred({ anything: 1 })).toBe(true);
+  });
+});
+
+describe('coerceResponseToSchema', () => {
+  const okShape = (v) => v && v.ok === true;
+  it('pulls a fenced JSON object matching the schema', () => {
+    const out = coerceResponseToSchema('```json\n{"ok":true,"n":1}\n```', okShape);
+    expect(out).toEqual({ ok: true, value: { ok: true, n: 1 }, text: '{"ok":true,"n":1}' });
+  });
+  it('strips leading prose and extracts the JSON block', () => {
+    const out = coerceResponseToSchema('Sure! Here you go:\n{"ok":true}', okShape);
+    expect(out.ok).toBe(true);
+    expect(out.value).toEqual({ ok: true });
+  });
+  it('coerces a top-level array when the schema expects one', () => {
+    const out = coerceResponseToSchema('```json\n[1,2,3]\n```', (v) => Array.isArray(v));
+    expect(out.ok).toBe(true);
+    expect(out.value).toEqual([1, 2, 3]);
+  });
+  it('returns { ok:false } when no block matches the schema', () => {
+    expect(coerceResponseToSchema('no json here', okShape)).toEqual({ ok: false });
+    expect(coerceResponseToSchema('{"ok":false}', okShape)).toEqual({ ok: false });
+    expect(coerceResponseToSchema('', okShape)).toEqual({ ok: false });
+  });
+});
+
+describe('isSchemaTypeCategory', () => {
+  it('recognizes the schema/type categories and rejects others', () => {
+    expect(isSchemaTypeCategory('parse-error')).toBe(true);
+    expect(isSchemaTypeCategory('bad-request')).toBe(true);
+    expect(isSchemaTypeCategory('output-length')).toBe(true);
+    expect(isSchemaTypeCategory('rate-limit')).toBe(false);
+    expect(isSchemaTypeCategory('model-not-found')).toBe(false);
+    expect(isSchemaTypeCategory(undefined)).toBe(false);
+  });
+});
+
+describe('promptRunner — Tier 2 schema/type correction (issue #2350)', () => {
+  const okShape = (v) => v && v.ok === true;
+  const fallbackApi = apiProvider({ id: 'fallback-api', name: 'Fallback API', defaultModel: 'fb-model' });
+
+  function mockToolkitWithFallback(fallback = fallbackApi) {
+    const isAvailable = vi.fn().mockReturnValue(true);
+    const markUnavailable = vi.fn().mockResolvedValue(undefined);
+    const markUsageLimit = vi.fn().mockResolvedValue(undefined);
+    const getFallbackProvider = vi.fn().mockReturnValue(fallback ? { provider: fallback, source: 'provider' } : null);
+    toolkitState.getAIToolkitInstance.mockReturnValue({
+      services: { providerStatus: { isAvailable, markUnavailable, markUsageLimit, getFallbackProvider } },
+    });
+    providers.getAllProviders.mockResolvedValue({ activeProvider: null, providers: fallback ? [fallback] : [] });
+    return { isAvailable, markUnavailable, markUsageLimit, getFallbackProvider };
+  }
+
+  it('returns a schema-valid response untouched (no coercion, no fixTier)', async () => {
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
+      onData('{"ok":true}');
+      onComplete({ success: true });
+    });
+    const out = await runPromptThroughProvider({
+      provider: apiProvider({ name: 'P' }), prompt: 'p', source: 'test', responseSchema: okShape,
+    });
+    expect(out.text).toBe('{"ok":true}');
+    expect(out.fixTier).toBeUndefined();
+    expect(out.coercedResponse).toBeUndefined();
+  });
+
+  it('coerces a fenced/prose-wrapped response IN PLACE (fixTier 2, no retry, no fallback lookup)', async () => {
+    const status = mockToolkitWithFallback();
+    let calls = 0;
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
+      calls += 1;
+      onData('Here is your answer:\n```json\n{"ok":true,"v":9}\n```');
+      onComplete({ success: true });
+    });
+    const out = await runPromptThroughProvider({
+      provider: apiProvider({ name: 'P' }), prompt: 'p', source: 'test', responseSchema: okShape,
+    });
+    expect(out.text).toBe('{"ok":true,"v":9}');
+    expect(out.fixTier).toBe(2);
+    expect(out.fixStrategy).toBe('schema/type');
+    expect(out.coercedResponse).toBe(true);
+    expect(out.usedFallback).toBeUndefined(); // in-place coercion, same provider succeeded
+    expect(calls).toBe(1); // no retry needed
+    expect(status.getFallbackProvider).not.toHaveBeenCalled();
+    expect(autoFixer.noteFallbackStarted).not.toHaveBeenCalled();
+  });
+
+  it('uses a caller repair({ phase:"response" }) before the built-in coercion', async () => {
+    const repair = vi.fn(({ phase }) => (phase === 'response' ? { text: '{"ok":true,"fixed":1}' } : null));
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
+      onData('total garbage, not even close');
+      onComplete({ success: true });
+    });
+    const out = await runPromptThroughProvider({
+      provider: apiProvider({ name: 'P' }), prompt: 'p', source: 'test', responseSchema: okShape, repair,
+    });
+    expect(out.text).toBe('{"ok":true,"fixed":1}');
+    expect(out.fixTier).toBe(2);
+    expect(repair).toHaveBeenCalledWith(expect.objectContaining({ phase: 'response' }));
+  });
+
+  it('re-requests the SAME provider with a schema-strengthened prompt when the response is uncoercible', async () => {
+    const status = mockToolkitWithFallback();
+    const primary = apiProvider({ id: 'primary-api', name: 'Primary API', defaultModel: 'm1' });
+    const prompts = [];
+    runner.executeApiRun.mockImplementation(async ({ prompt, onData, onComplete }) => {
+      prompts.push(prompt);
+      if (prompts.length === 1) { onData('not json'); onComplete({ success: true }); }
+      else { onData('{"ok":true}'); onComplete({ success: true }); }
+    });
+    const out = await runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test', responseSchema: okShape });
+
+    expect(out.text).toBe('{"ok":true}');
+    expect(out.fixTier).toBe(2);
+    expect(out.usedFallback).toBe(true);
+    expect(out.fallbackProvider).toMatchObject({ id: 'primary-api' });
+    // Re-request went to the SAME provider with a strengthened prompt.
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toContain('previous response could not be parsed');
+    // Tier-3 never engaged; the healthy provider was NOT benched for an off-shape response.
+    expect(status.getFallbackProvider).not.toHaveBeenCalled();
+    expect(status.markUnavailable).not.toHaveBeenCalled();
+    // The primary's incidental task was suppressed up front and resolved.
+    expect(autoFixer.noteFallbackStarted).toHaveBeenCalledWith({ provider: 'Primary API', model: 'm1' });
+    expect(autoFixer.noteFallbackHandled).toHaveBeenCalledWith({ provider: 'Primary API', model: 'm1' });
+    expect(autoFixer.noteFallbackFailed).not.toHaveBeenCalled();
+  });
+
+  it('prefers a caller repair({ phase:"request" }) prompt for the Tier-2 re-request', async () => {
+    mockToolkitWithFallback();
+    const repair = vi.fn(({ phase }) => (phase === 'request' ? { prompt: 'CORRECTED REQUEST' } : null));
+    const prompts = [];
+    runner.executeApiRun.mockImplementation(async ({ prompt, onData, onComplete }) => {
+      prompts.push(prompt);
+      if (prompts.length === 1) { onData('nope'); onComplete({ success: true }); }
+      else { onData('{"ok":true}'); onComplete({ success: true }); }
+    });
+    const out = await runPromptThroughProvider({
+      provider: apiProvider({ name: 'P' }), prompt: 'p', source: 'test', responseSchema: okShape, repair,
+    });
+    expect(out.fixTier).toBe(2);
+    expect(prompts[1]).toBe('CORRECTED REQUEST');
+  });
+
+  it('falls through to a Tier-3 fallback provider when the Tier-2 re-request is still off-schema', async () => {
+    const status = mockToolkitWithFallback();
+    const primary = apiProvider({ id: 'primary-api', name: 'Primary API', defaultModel: 'm1' });
+    runner.executeApiRun.mockImplementation(async ({ provider: p, onData, onComplete }) => {
+      if (p.id === 'primary-api') { onData('never valid'); onComplete({ success: true }); }
+      else { onData('{"ok":true}'); onComplete({ success: true }); }
+    });
+    const out = await runPromptThroughProvider({ provider: primary, prompt: 'p', source: 'test', responseSchema: okShape });
+
+    expect(out.text).toBe('{"ok":true}');
+    expect(out.fixTier).toBe(3);
+    expect(out.fallbackProvider).toMatchObject({ id: 'fallback-api' });
+    expect(status.getFallbackProvider).toHaveBeenCalledWith('primary-api', expect.any(Object));
+    // Schema/type failure never benches the primary (it's response-specific, not an outage).
+    expect(status.markUnavailable).not.toHaveBeenCalled();
+    expect(autoFixer.noteFallbackHandled).toHaveBeenCalledWith({ provider: 'Primary API', model: 'm1' });
+  });
+
+  it('escalates and throws when even the Tier-3 fallback returns an uncoercible response', async () => {
+    mockToolkitWithFallback();
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
+      onData('never ever valid json'); // every provider returns off-schema
+      onComplete({ success: true });
+    });
+    await expect(runPromptThroughProvider({
+      provider: apiProvider({ id: 'primary-api', name: 'Primary API' }), prompt: 'p', source: 'test', responseSchema: okShape,
+    })).rejects.toThrow(/did not match the declared schema/);
+
+    expect(autoFixer.escalateProviderFailure).toHaveBeenCalledTimes(1);
+    expect(autoFixer.noteFallbackHandled).not.toHaveBeenCalled();
+  });
+
+  it('leaves a messy response untouched when NO responseSchema is declared (regression)', async () => {
+    runner.executeApiRun.mockImplementation(async ({ onData, onComplete }) => {
+      onData('```json\n{"ok":true}\n```');
+      onComplete({ success: true });
+    });
+    const out = await runPromptThroughProvider({ provider: apiProvider(), prompt: 'p', source: 'test' });
+    expect(out.text).toBe('```json\n{"ok":true}\n```'); // no coercion without a schema
+    expect(out.fixTier).toBeUndefined();
   });
 });

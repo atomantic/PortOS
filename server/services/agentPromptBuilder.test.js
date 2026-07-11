@@ -174,7 +174,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/`jira\/proj-123`/);
     });
 
-    it('renders the Completion Workflow with /do:pr for TUI + openPR', () => {
+    it('disables external review when a TUI task opens a PR without a Review Loop', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { simplify: true, openPR: true } }),
         '/r',
@@ -183,19 +183,19 @@ describe('buildLightContextPrompt', () => {
         { isTui: true });
       expect(prompt).toMatch(/## Completion Workflow/);
       expect(prompt).toMatch(/`\/simplify`/);
-      expect(prompt).toMatch(/`\/do:pr`/);
+      expect(prompt).toMatch(/`\/do:pr --review-with none`/);
+      expect(prompt).toMatch(/external review is disabled/i);
+      expect(prompt).not.toMatch(/Copilot review loop/i);
       expect(prompt).toMatch(/\.agent-done/);
       // The sentinel is the done signal — the agent must NOT be told to RUN
       // /quit (it's a UI command it can't invoke; PortOS closes the session on
       // poll). The prompt only mentions /quit to tell the agent NOT to run it.
       expect(prompt).not.toMatch(/^\s*\d+\.\s*`\/quit`/m);
       expect(prompt).toMatch(/NOT run `\/quit`/);
-      // After /do:pr drives the Copilot review loop clean, the agent must
-      // merge and verify — otherwise the PR sits open after the agent exits.
-      expect(prompt).toMatch(/gh pr merge "<PR_URL>" --merge --delete-branch/);
-      expect(prompt).not.toMatch(/gh pr merge[^\n]*--auto/);
-      expect(prompt).toMatch(/gh pr view "<PR_URL>" --json state -q \.state/);
-      expect(prompt).toMatch(/MERGED/);
+      // Without a Review Loop the task opens the PR for human follow-up and
+      // must not be told to auto-merge based on a review outcome.
+      expect(prompt).not.toMatch(/gh pr merge/);
+      expect(prompt).not.toMatch(/gh pr view "<PR_URL>" --json state/);
     });
 
     it('TUI simplify step is provider-aware — non-Claude TUI (codex-tui) gets the inline equivalent, not /simplify', () => {
@@ -292,7 +292,8 @@ describe('buildLightContextPrompt', () => {
         { branchName: 'b', worktreePath: '/tmp/wt' },
         isTruthyMeta,
         { isTui: true, providerId: 'claude-code-tui', providerCommand: 'claude' });
-      expect(prompt).toMatch(/`\/do:pr`/);
+      expect(prompt).toMatch(/`\/do:pr --review-with none`/);
+      expect(prompt).toMatch(/external review is disabled/i);
       expect(prompt).not.toMatch(/gh pr create/);
     });
 
@@ -327,7 +328,7 @@ describe('buildLightContextPrompt', () => {
 
     it('emits a slashdo Completion block (/simplify + /do:pr) for Claude Code CLI + openPR', () => {
       const prompt = buildLightContextPrompt(
-        makeTask({ metadata: { openPR: true, simplify: true } }),
+        makeTask({ metadata: { openPR: true, reviewLoop: true, simplify: true } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
         isTruthyMeta,
@@ -346,9 +347,23 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/MERGED/);
     });
 
-    it('skips /simplify in the slashdo Completion block when simplify is disabled', () => {
+    it('disables external review and omits merge guidance for Claude Code CLI when Review Loop is off', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { openPR: true, simplify: false } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: false, providerId: 'claude-code' });
+      expect(prompt).toMatch(/`\/do:pr --review-with none`/);
+      expect(prompt).toMatch(/external review disabled/i);
+      expect(prompt).not.toMatch(/Copilot review loop/i);
+      expect(prompt).not.toMatch(/gh pr merge/);
+      expect(prompt).not.toMatch(/gh pr view "<PR_URL>" --json state/);
+    });
+
+    it('skips /simplify in the slashdo Completion block when simplify is disabled', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true, simplify: false } }),
         '/r',
         { branchName: 'b', worktreePath: '/tmp/wt' },
         isTruthyMeta,
@@ -372,12 +387,27 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/gh pr merge/);
     });
 
-    it('suppresses the completion block and warns when readOnly is set', () => {
+    it('suppresses the PR completion workflow but still writes a sentinel when readOnly + TUI', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { readOnly: true } }),
         '/r', null, isTruthyMeta, { isTui: true });
       expect(prompt).toMatch(/Read-Only Task/);
       expect(prompt).not.toMatch(/## Completion Workflow/);
+      // A read-only TUI agent must still be told to write .agent-done — the 2s
+      // sentinel poll is its only clean finalize/summary path (regression: the
+      // read-only branch used to emit the bare notice with no sentinel, so
+      // reference-watch runs never signaled completion).
+      expect(prompt).toMatch(/\.agent-done/);
+      expect(prompt).toMatch(/polls this sentinel/);
+    });
+
+    it('read-only on a non-TUI (CLI) provider gets the bare notice, no sentinel', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { readOnly: true } }),
+        '/r', null, isTruthyMeta, { isTui: false, providerId: 'claude-code' });
+      expect(prompt).toMatch(/Read-Only Task/);
+      // CLI/API agents complete on process exit and never poll a sentinel.
+      expect(prompt).not.toMatch(/\.agent-done/);
     });
 
     it('renders the review-loop follow-up block when reviewLoopFollowUp is set', () => {
@@ -451,6 +481,42 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/--reviewer-applies/);
       // Ordered run instruction.
       expect(prompt).toMatch(/For EACH reviewer in order/);
+    });
+
+    it('threads the configured Codex model tier into the CLI invocation when codex reviews', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          reviewLoopFollowUp: true,
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+          reviewLoopPRBranch: 'b',
+          reviewLoopPRNumber: 9,
+          reviewLoopReviewers: ['codex'],
+          reviewLoopCodexModel: 'gpt-5.6-sol',
+          sourceTaskId: 'task-src-cx',
+        }}),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta);
+      expect(prompt).toMatch(/codex --model gpt-5\.6-sol/);
+    });
+
+    it('omits the Codex model note when codex is not among the reviewers', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          reviewLoopFollowUp: true,
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+          reviewLoopPRBranch: 'b',
+          reviewLoopPRNumber: 9,
+          reviewLoopReviewers: ['claude'],
+          // Stale model tier from a prior codex config — must not leak into a
+          // claude-only review.
+          reviewLoopCodexModel: 'gpt-5.6-sol',
+          sourceTaskId: 'task-src-noncx',
+        }}),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta);
+      expect(prompt).not.toMatch(/--model gpt-5\.6-sol/);
     });
 
     it('emits the local-LLM POST instruction when a local-LLM reviewer is configured', () => {
@@ -748,5 +814,64 @@ describe('buildCompletionGuidelineBullet', () => {
       worktreeInfo: null, willOpenPR: false, willReviewLoop: false,
     });
     expect(none).toBeNull();
+  });
+
+  it('discardWorktree short-circuits to the reasoning-only bullet (wins over TUI/openPR)', () => {
+    const bullet = buildCompletionGuidelineBullet({
+      isReadOnly: false, isTui: true, tuiCompletionCommand: '/do:pr',
+      worktreeInfo: { worktreePath: '/wt' }, willOpenPR: true, willReviewLoop: true,
+      discardWorktree: true,
+    });
+    expect(bullet).toMatch(/reasoning-only task/i);
+    expect(bullet).toMatch(/discarded on exit/);
+    expect(bullet).not.toMatch(/`\/do:pr`/);
+  });
+});
+
+// A discardWorktree (reasoning-only) task — the layered-intelligence pattern —
+// runs a normal agent in a worktree that is thrown away on exit. The completion
+// contract is the `.agent-done` sentinel payload, NOT commit/push/PR. The prompt
+// MUST NOT tell the agent to run /do:push, /do:pr, or open a PR, because (a) the
+// worktree is discarded so any push is wasted, and (b) the generic markdown
+// sentinel workflow would clobber the hook's structured-JSON sentinel contract.
+// Regression for codex review of PR #2341.
+describe('discardWorktree (reasoning-only) completion contract', () => {
+  const wt = { branchName: 'cos/li-1', worktreePath: '/tmp/wt', baseBranch: 'origin/main' };
+  const liTask = () => makeTask({ metadata: { discardWorktree: true, useWorktree: true, openPR: false, simplify: true } });
+
+  const assertReasoningOnly = (prompt) => {
+    expect(prompt).toMatch(/## Completion \(Reasoning-Only Task\)/);
+    expect(prompt).toMatch(/discarded on exit/);
+    expect(prompt).toMatch(/\.agent-done/);
+    // The whole point: no push/PR/merge instructions anywhere.
+    expect(prompt).not.toMatch(/`\/do:push`\*\*/); // no "Use `/do:push`" hygiene bullet
+    expect(prompt).not.toMatch(/## Completion Workflow/); // TUI push+PR workflow suppressed
+    expect(prompt).not.toMatch(/gh pr merge/);
+    expect(prompt).not.toMatch(/will push your branch and open a pull request/);
+  };
+
+  it('light TUI path emits the sentinel-only completion, not the /do:push workflow', () => {
+    const prompt = buildLightContextPrompt(liTask(), '/r', wt, isTruthyMeta, { isTui: true });
+    assertReasoningOnly(prompt);
+    // Worktree section carries the discard note, not commit/merge guidance.
+    expect(prompt).toMatch(/discarded on exit/);
+    expect(prompt).not.toMatch(/merged back/);
+  });
+
+  it('light CLI (non-TUI) path emits the sentinel-only completion', () => {
+    const prompt = buildLightContextPrompt(liTask(), '/r', wt, isTruthyMeta, { isTui: false, providerId: 'codex' });
+    assertReasoningOnly(prompt);
+  });
+
+  it('full (api) path suppresses the commit/push instructions in Instructions + Git Hygiene', async () => {
+    const prompt = await buildAgentPrompt(liTask(), {}, '/r', wt, isTruthyMeta, { providerType: 'api' });
+    assertReasoningOnly(prompt);
+    // Fallback-template step 4 must not tell the agent to commit/push.
+    expect(prompt).toMatch(/Write your result to the completion sentinel/);
+    expect(prompt).not.toMatch(/Commit and push your changes/);
+    // Git Hygiene commit/push bullet replaced with the do-NOT variant.
+    expect(prompt).toMatch(/Do NOT commit, push, or open a PR/);
+    // Simplify-before-commit step is suppressed (nothing gets committed).
+    expect(prompt).not.toMatch(/## Simplify Step/);
   });
 });

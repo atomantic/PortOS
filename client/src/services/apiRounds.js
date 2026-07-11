@@ -60,3 +60,20 @@ export const referenceAudioImportEventsUrl = (jobId) =>
 
 export const cancelReferenceAudioImport = (jobId, options = {}) =>
   request(`/rounds/reference-audio/import/${enc(jobId)}/cancel`, { method: 'POST', ...options });
+
+// --- Reference-audio → MIDI transcription (MuScriptor) — transcribe an attached
+// reference audio file (an uploads basename) into a .mid via the local
+// MuScriptor sidecar. Kickoff returns { jobId, model } (503 with an install
+// hint when the runtime isn't provisioned); progress streams over SSE; the
+// terminal `complete` frame carries the { filename } the caller persists on the
+// reference (via the normal PUT on Save, same as the audio import above).
+export const transcribeReferenceMidi = (filename, model, options = {}) =>
+  request('/rounds/reference-audio/transcribe-midi', {
+    method: 'POST', body: JSON.stringify(model ? { filename, model } : { filename }), ...options,
+  });
+
+export const referenceMidiTranscriptionEventsUrl = (jobId) =>
+  `/api/rounds/reference-audio/transcribe-midi/${enc(jobId)}/events`;
+
+export const cancelReferenceMidiTranscription = (jobId, options = {}) =>
+  request(`/rounds/reference-audio/transcribe-midi/${enc(jobId)}/cancel`, { method: 'POST', ...options });

@@ -6,8 +6,9 @@ vi.mock('./taskLearning.js', () => ({
   suggestModelTier: vi.fn()
 }));
 
-import { selectModelForTask } from './agentModelSelection.js';
+import { selectModelForTask, extractTaskTypeKey } from './agentModelSelection.js';
 import { suggestModelTier } from './taskLearning.js';
+import { EXTERNAL_UNTYPED_TASK_TYPE } from './taskLearning/store.js';
 
 const PROVIDER = {
   defaultModel: 'default-model',
@@ -57,5 +58,24 @@ describe('selectModelForTask — learning-suggested tier resolution', () => {
     const result = await selectModelForTask(benignTask, PROVIDER);
     expect(result.tier).toBe('default');
     expect(result.reason).toBe('standard-task');
+  });
+});
+
+describe('extractTaskTypeKey — spawn-time key mirror (issue #2333)', () => {
+  it('keeps the existing explicit-branch keys', () => {
+    expect(extractTaskTypeKey({ metadata: { analysisType: 'ui-bugs' } })).toBe('self-improve:ui-bugs');
+    expect(extractTaskTypeKey({ metadata: { reviewType: 'idle' } })).toBe('idle-review');
+    expect(extractTaskTypeKey({ description: '[self-improvement] security audit' })).toBe('self-improve:security');
+    expect(extractTaskTypeKey({ taskType: 'user' })).toBe('user-task');
+  });
+
+  it('delegates the fallback to classifyUntypedTask instead of the old blind "unknown"', () => {
+    // A description with no explicit branch match but a classifier keyword →
+    // the concrete recorded domain, not 'unknown'.
+    expect(extractTaskTypeKey({ description: 'fix the crashing login flow' })).toBe('auto-fix');
+    // Nothing classifiable → the sandboxed fallback bucket the store records.
+    expect(extractTaskTypeKey({ description: 'organize the weekly digest' })).toBe(EXTERNAL_UNTYPED_TASK_TYPE);
+    // Never the legacy 'unknown' sink.
+    expect(extractTaskTypeKey({})).not.toBe('unknown');
   });
 });

@@ -109,6 +109,7 @@ export default function ProviderStatusCard() {
             <span className="text-sm text-port-warning">Unable to load status</span>
             <button
               onClick={loadData}
+              aria-label="Retry loading status"
               className="ml-2 text-gray-500 hover:text-white transition-colors"
             >
               <RefreshCw size={12} />
@@ -133,6 +134,7 @@ export default function ProviderStatusCard() {
             <span className="text-sm text-port-success">All Available</span>
             <button
               onClick={loadData}
+              aria-label="Refresh"
               className="ml-2 text-gray-500 hover:text-white transition-colors"
             >
               <RefreshCw size={12} />
@@ -155,6 +157,7 @@ export default function ProviderStatusCard() {
         </div>
         <button
           onClick={loadData}
+          aria-label="Refresh"
           className="text-gray-500 hover:text-white transition-colors"
         >
           <RefreshCw size={14} />

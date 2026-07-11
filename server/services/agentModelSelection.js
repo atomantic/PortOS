@@ -7,10 +7,19 @@
 
 import { resolveThinkingLevel, getModelForLevel, isLocalPreferred } from './thinkingLevels.js';
 import { suggestModelTier } from './taskLearning.js';
+// Imported from the store submodule (not the mocked barrel) so the spawn-time key
+// mirrors the exact same classification the completion records under.
+import { classifyUntypedTask } from './taskLearning/store.js';
 
 /**
  * Extract task type key for learning lookup.
- * Matches the format used in taskLearning.js for consistency.
+ *
+ * Mirrors the domain `extractTaskType`/`classifyUntypedTask` record in the
+ * learning store so the spawn-time routing lookup keys off the SAME bucket the
+ * completion will later be recorded under (issue #2333). The fallback delegates
+ * to `classifyUntypedTask` — inferring a concrete domain (or the sandboxed
+ * `external/untyped` bucket) instead of the old blind `'unknown'`, which would
+ * miss the recorded domain and defeat the learning lookup on every untyped task.
  */
 export function extractTaskTypeKey(task) {
   if (task?.metadata?.analysisType) {
@@ -25,7 +34,7 @@ export function extractTaskTypeKey(task) {
     if (typeMatch) return `self-improve:${typeMatch[1]}`;
   }
   if (task?.taskType === 'user') return 'user-task';
-  return 'unknown';
+  return classifyUntypedTask(task);
 }
 
 /**
@@ -112,7 +121,13 @@ export async function selectModelForTask(task, provider, agent = {}) {
   const learningSuggestion = await suggestModelTier(taskTypeKey).catch(() => null);
 
   if (learningSuggestion) {
-    const { suggested, avoidTiers = [], reason: learningReason } = learningSuggestion;
+    const { suggested, avoidTiers = [], reason: learningReason, failureSignal } = learningSuggestion;
+    // Provider/model attribution from the enriched failure signatures (#2329):
+    // names WHICH provider/model recently failed for this task type so the
+    // routing decision is legible, not just "avoid tier X".
+    const failureNote = failureSignal
+      ? ` [recent failures: ${failureSignal.failures}× ${failureSignal.tier}${failureSignal.provider ? ` via ${failureSignal.provider}${failureSignal.model ? `/${failureSignal.model}` : ''}` : ''}]`
+      : '';
 
     // Map tier names to provider model keys
     const tierToModel = {
@@ -144,7 +159,7 @@ export async function selectModelForTask(task, provider, agent = {}) {
     // If we have a specific tier suggestion, use it
     const suggestedModel = suggested ? resolveTierModel(suggested) : null;
     if (suggestedModel) {
-      console.log(`📊 Learning-based selection: ${taskTypeKey} → ${suggested} (${learningReason})`);
+      console.log(`📊 Learning-based selection: ${taskTypeKey} → ${suggested} (${learningReason})${failureNote}`);
       return {
         model: suggestedModel,
         tier: suggested,
@@ -161,7 +176,7 @@ export async function selectModelForTask(task, provider, agent = {}) {
       const tierPreference = ['heavy', 'medium', 'default', 'light'];
       for (const tier of tierPreference) {
         if (!avoidTiers.includes(tier) && tierToModel[tier]) {
-          console.log(`📊 Learning-based avoidance: ${taskTypeKey} → ${tier} (avoiding ${avoidTiers.join(', ')})`);
+          console.log(`📊 Learning-based avoidance: ${taskTypeKey} → ${tier} (avoiding ${avoidTiers.join(', ')})${failureNote}`);
           return {
             model: tierToModel[tier],
             tier,

@@ -204,12 +204,14 @@ export default function GraphTab({ vaultId }) {
         <span className="text-xs text-gray-500">{graphData.totalNodes} nodes, {graphData.totalEdges} edges</span>
         <button
           onClick={() => setZoom(z => Math.min(z + 0.2, 3))}
+          aria-label="Zoom in"
           className="p-1.5 rounded bg-port-card border border-port-border text-gray-400 hover:text-white"
         >
           <ZoomIn size={14} />
         </button>
         <button
           onClick={() => setZoom(z => Math.max(z - 0.2, 0.3))}
+          aria-label="Zoom out"
           className="p-1.5 rounded bg-port-card border border-port-border text-gray-400 hover:text-white"
         >
           <ZoomOut size={14} />
@@ -220,7 +222,7 @@ export default function GraphTab({ vaultId }) {
         >
           Reset
         </button>
-        <button onClick={loadGraph} className="p-1.5 rounded bg-port-card border border-port-border text-gray-400 hover:text-white">
+        <button onClick={loadGraph} aria-label="Refresh" className="p-1.5 rounded bg-port-card border border-port-border text-gray-400 hover:text-white">
           <RefreshCw size={14} />
         </button>
       </div>

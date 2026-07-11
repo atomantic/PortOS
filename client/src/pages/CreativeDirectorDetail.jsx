@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
-import { ArrowLeft, Play, Pause, RefreshCw } from 'lucide-react';
+import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
+import { ArrowLeft, Play, Pause, RefreshCw, SlidersHorizontal } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
   getCreativeDirectorProject,
@@ -14,6 +14,7 @@ import SegmentsTab from '../components/creative-director/SegmentsTab.jsx';
 import PlanTab from '../components/creative-director/PlanTab.jsx';
 import RunsTab from '../components/creative-director/RunsTab.jsx';
 import ActiveAgentsBanner from '../components/creative-director/ActiveAgentsBanner.jsx';
+import CreativeDirectorModelsDrawer from '../components/creative-director/CreativeDirectorModelsDrawer.jsx';
 import { getCosAgents } from '../services/apiAgents.js';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { useValidTab } from '../hooks/useValidTab';
@@ -32,7 +33,19 @@ const TABS = [
 export default function CreativeDirectorDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = useValidTab(TABS, 'overview');
+  // Deep-linkable open state for the per-project AI models drawer (URL is the
+  // source of truth for what's open, per the project convention).
+  const modelsOpen = searchParams.get('models') === '1';
+  const setModelsOpen = useCallback((next) => {
+    setSearchParams((prev) => {
+      const params = new URLSearchParams(prev);
+      if (next) params.set('models', '1');
+      else params.delete('models');
+      return params;
+    }, { replace: !next });
+  }, [setSearchParams]);
   const [project, setProject] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeAgents, setActiveAgents] = useState([]);
@@ -162,14 +175,14 @@ export default function CreativeDirectorDetail() {
   if (loading) return <div className="p-6 text-port-text-muted">Loading…</div>;
   if (!project) return <div className="p-6 text-port-error">Project not found.</div>;
 
-  const goTo = (tabId) => navigate(`/media/creative-director/${id}/${tabId}`);
+  const goTo = (tabId) => navigate(`/creative-director/${id}/${tabId}`);
 
   return (
     <div className="flex flex-col h-full">
       <div className="shrink-0 px-6 pt-6 pb-3 border-b border-port-border">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3 min-w-0">
-            <Link to="/media/creative-director" className="text-port-text-muted hover:text-port-text"><ArrowLeft className="w-4 h-4" /></Link>
+            <Link to="/creative-director" className="text-port-text-muted hover:text-port-text"><ArrowLeft className="w-4 h-4" /></Link>
             <div className="min-w-0">
               <h1 className="text-xl font-semibold truncate">{project.name}</h1>
               <div className="text-xs text-port-text-muted truncate">
@@ -180,6 +193,9 @@ export default function CreativeDirectorDetail() {
           <div className="flex gap-1">
             <button onClick={fetchProject} className="flex items-center gap-1 px-2 py-1 bg-port-card border border-port-border rounded text-xs">
               <RefreshCw className="w-3 h-3" /> Refresh
+            </button>
+            <button onClick={() => setModelsOpen(true)} title="AI provider + model for this project's treatment, plan, and scene evaluation" className="flex items-center gap-1 px-2 py-1 bg-port-card border border-port-border rounded text-xs">
+              <SlidersHorizontal className="w-3 h-3" /> Models
             </button>
             {(project.status === 'draft' || project.status === 'failed') && (
               <button onClick={() => handleAction('start')} className="flex items-center gap-1 px-2 py-1 bg-port-accent/30 text-port-accent rounded text-xs">
@@ -230,6 +246,13 @@ export default function CreativeDirectorDetail() {
         {activeTab === 'segments' && <SegmentsTab project={project} activeAgents={activeAgents} />}
         {activeTab === 'runs' && <RunsTab project={project} />}
       </div>
+
+      <CreativeDirectorModelsDrawer
+        open={modelsOpen}
+        onClose={() => setModelsOpen(false)}
+        project={project}
+        onSaved={(modelOverrides) => setProject((p) => (p ? { ...p, modelOverrides } : p))}
+      />
     </div>
   );
 }

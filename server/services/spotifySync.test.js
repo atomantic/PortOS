@@ -1,9 +1,44 @@
-import { describe, it, expect } from 'vitest';
+import { beforeEach, describe, it, expect, vi } from 'vitest';
+
+const mocks = vi.hoisted(() => ({
+  fetchWithTimeout: vi.fn(),
+  getAccessToken: vi.fn(),
+  getAuthStatus: vi.fn(),
+  getSettings: vi.fn(),
+  tryReadFile: vi.fn(),
+  atomicWrite: vi.fn(),
+  ensureDir: vi.fn(),
+}));
+
+vi.mock('../lib/fetchWithTimeout.js', () => ({ fetchWithTimeout: (...args) => mocks.fetchWithTimeout(...args) }));
+vi.mock('./spotifyAuth.js', () => ({
+  getAccessToken: (...args) => mocks.getAccessToken(...args),
+  getAuthStatus: (...args) => mocks.getAuthStatus(...args),
+}));
+vi.mock('./settings.js', () => ({ getSettings: (...args) => mocks.getSettings(...args) }));
+vi.mock('../lib/fileUtils.js', () => ({
+  dataPath: (...parts) => `/tmp/${parts.join('/')}`,
+  ensureDir: (...args) => mocks.ensureDir(...args),
+  atomicWrite: (...args) => mocks.atomicWrite(...args),
+  tryReadFile: (...args) => mocks.tryReadFile(...args),
+  safeJSONParse: (raw, fallback) => {
+    try { return JSON.parse(raw); } catch { return fallback; }
+  },
+}));
+
 import {
   spotifyListenCandidate,
   spotifyListenCandidates,
   maxPlayedAtMs,
+  runSync,
 } from './spotifySync.js';
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocks.getAccessToken.mockResolvedValue('access-token');
+  mocks.getSettings.mockResolvedValue({});
+  mocks.tryReadFile.mockResolvedValue(null);
+});
 
 // A minimal recently-played item, shaped like the Spotify Web API response.
 function makeItem(overrides = {}) {
@@ -134,5 +169,23 @@ describe('spotifySync pure helpers', () => {
       expect(maxPlayedAtMs([], 42)).toBe(42);
       expect(maxPlayedAtMs(null, 42)).toBe(42);
     });
+  });
+});
+
+describe('runSync network boundary', () => {
+  it('uses the bounded fetch helper and returns an error result when it times out', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.fetchWithTimeout.mockRejectedValue(new Error('request timed out'));
+
+    const result = await runSync();
+
+    expect(mocks.fetchWithTimeout).toHaveBeenCalledWith(
+      expect.any(URL),
+      { headers: { Authorization: 'Bearer access-token' } },
+      15_000,
+    );
+    expect(result).toEqual({ ok: false, error: 'Spotify API request failed: request timed out' });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('request timed out'));
+    log.mockRestore();
   });
 });

@@ -1,8 +1,17 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import AppIcon, { iconNames } from './AppIcon';
 
 export default function IconPicker({ value, onChange }) {
   const [isOpen, setIsOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e) => {
+      if (e.key === 'Escape') setIsOpen(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen]);
 
   return (
     <div className="relative">
@@ -25,6 +34,7 @@ export default function IconPicker({ value, onChange }) {
           <div
             className="fixed inset-0 z-40"
             onClick={() => setIsOpen(false)}
+            aria-hidden="true"
           />
           <div className="absolute top-full left-0 mt-1 w-full bg-port-card border border-port-border rounded-lg shadow-xl z-50 p-2 max-h-64 overflow-auto">
             <div className="grid grid-cols-5 gap-1">

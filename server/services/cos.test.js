@@ -846,6 +846,21 @@ describe('cos.js source — priority + capacity invariants', () => {
     }
   });
 
+  it('has NO handler-backed dispatch — every task type routes through the agent path', () => {
+    // #2322 follow-up: layered-intelligence migrated OFF the handler-backed path
+    // onto a normal agent task with programmatic-I/O hooks (taskTypeHooks.js). The
+    // queue path no longer special-cases any type: there is no in-process handler
+    // dispatch that bypasses the agent-spawn path, so a scheduled reasoning task is
+    // a visible, TUI-capable agent like everything else.
+    expect(GEN_SRC).not.toMatch(/dispatchHandlerBackedTask/);
+    expect(GEN_SRC).not.toMatch(/runHandlerBackedTaskForApp/);
+    expect(GEN_SRC).not.toMatch(/layeredIntelligenceHandler\.js/);
+
+    // The generator runs a task type's optional buildTaskInput hook before dispatch
+    // (the pre-agent programmatic slot LI's gather layer fills).
+    expect(GEN_SRC).toMatch(/getTaskInputHook/);
+  });
+
   it('queueEligibleImprovementTasks routes through generateManagedAppImprovementTaskForType', () => {
     // Regression guard: a 2026-05-21 incident saw two `plan-task` agents both
     // open PRs for the same PLAN.md slug because the queue path was writing
@@ -1065,6 +1080,35 @@ describe('cos.js source — priority + capacity invariants', () => {
 
     // tryImmediateSpawn is user-task-only, matching the pre-extraction guard.
     expect(handler).toMatch(/data\.type\s*===\s*'user'/);
+  });
+});
+
+describe('forceSpawnTask — pre-validate provider before task:ready', () => {
+  // The play button on a pending task calls forceSpawnTask, which emits
+  // `task:ready`; the actual spawn happens asynchronously in a listener. If
+  // provider/model resolution fails there (e.g. the task is pinned to an
+  // `api`-type provider with no file-writing harness), the spawn bails
+  // silently and the task stays `pending` — but the HTTP call had already
+  // returned `{ success: true }` and the UI toasted "Spawning". Pin that
+  // forceSpawnTask resolves the provider FIRST and returns the resolution
+  // error (so the route surfaces a truthful 400) instead of emitting
+  // `task:ready` on a doomed spawn.
+  const forceFn = extractFnBody(COS_SRC, COS_SRC.indexOf('export async function forceSpawnTask'));
+
+  it('calls resolveAgentProviderAndModel and returns its error', () => {
+    expect(forceFn, 'forceSpawnTask must pre-resolve the provider/model')
+      .toMatch(/resolveAgentProviderAndModel\(\s*task\s*\)/);
+    expect(forceFn, 'forceSpawnTask must return the resolution error on failure')
+      .toMatch(/if\s*\(\s*!\s*resolution\.ok\s*\)\s*\{\s*return\s*\{\s*error:\s*resolution\.error\s*\}/);
+  });
+
+  it('bails on a failed resolution BEFORE emitting task:ready', () => {
+    const resolveIdx = forceFn.indexOf('resolveAgentProviderAndModel');
+    const readyIdx = forceFn.indexOf("cosEvents.emit('task:ready'");
+    expect(resolveIdx, 'resolution must happen in forceSpawnTask').toBeGreaterThan(-1);
+    expect(readyIdx, 'forceSpawnTask must still emit task:ready on success').toBeGreaterThan(-1);
+    expect(resolveIdx, 'provider resolution must precede the task:ready emit')
+      .toBeLessThan(readyIdx);
   });
 });
 

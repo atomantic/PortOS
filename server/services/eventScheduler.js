@@ -65,9 +65,11 @@ const MAX_CRON_ITERATIONS = 1051920
  * @param {string} cronExpr - Cron expression
  * @param {Date} from - Starting point (default: now)
  * @param {string} timezone - IANA timezone for matching (default: 'UTC')
+ * @param {Date|null} until - Optional exclusive search bound; a sparse cron with
+ *   no match before it returns null quickly instead of scanning up to 2 years
  * @returns {Date|null} - Next execution time (UTC), or null if invalid/no match
  */
-function parseCronToNextRun(cronExpr, from = new Date(), timezone = 'UTC') {
+function parseCronToNextRun(cronExpr, from = new Date(), timezone = 'UTC', until = null) {
   const parts = cronExpr.trim().split(/\s+/)
   if (parts.length !== 5) {
     throw new Error(`Invalid cron expression: ${cronExpr}`)
@@ -95,9 +97,10 @@ function parseCronToNextRun(cronExpr, from = new Date(), timezone = 'UTC') {
   next.setSeconds(0, 0)
   next.setMinutes(next.getMinutes() + 1) // Start from next minute
 
-  // Maximum search: 2 years
-  const maxDate = new Date(from)
+  // Maximum search: 2 years, or the caller's tighter bound
+  let maxDate = new Date(from)
   maxDate.setFullYear(maxDate.getFullYear() + 2)
+  if (until instanceof Date && until < maxDate) maxDate = until
 
   const useLocal = timezone !== 'UTC'
 

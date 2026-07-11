@@ -127,6 +127,14 @@ describe('resolveVisionEvalTarget', () => {
     expect(mocks.listVisionModels).not.toHaveBeenCalled();
   });
 
+  it('prefers the per-project override over the global evaluation assignment', async () => {
+    mocks.getSettings.mockResolvedValue({ creativeDirector: { evaluation: { providerId: 'global-vlm', model: 'gm' } } });
+    mocks.getProviderById.mockImplementation(async (id) => (id === 'proj-vlm' ? { id: 'proj-vlm', type: 'api', enabled: true } : null));
+    const target = await resolveVisionEvalTarget({ modelOverrides: { evaluation: { providerId: 'proj-vlm', model: 'moondream' } } });
+    expect(target).toEqual({ provider: { id: 'proj-vlm', type: 'api', enabled: true }, model: 'moondream' });
+    expect(mocks.listVisionModels).not.toHaveBeenCalled();
+  });
+
   it('falls through to auto when the pinned provider is not an API provider', async () => {
     mocks.getSettings.mockResolvedValue({ creativeDirector: { evaluation: { providerId: 'claude' } } });
     mocks.getProviderById.mockImplementation(async (id) => {

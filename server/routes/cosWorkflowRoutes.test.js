@@ -43,6 +43,18 @@ describe('CoS Workflow Routes', () => {
       const response = await request(app).get('/api/cos/workflow');
       expect(response.status).toBe(500);
     });
+
+    it('accepts the supported seven-day projection horizon', async () => {
+      workflow.getWorkflowGraph.mockResolvedValue({ nodes: [], stages: [], edges: [] });
+      await request(app).get('/api/cos/workflow?hours=168');
+      expect(workflow.getWorkflowGraph).toHaveBeenCalledWith({ horizonHours: 168 });
+    });
+
+    it('falls back to 24 hours for unsupported horizons', async () => {
+      workflow.getWorkflowGraph.mockResolvedValue({ nodes: [], stages: [], edges: [] });
+      await request(app).get('/api/cos/workflow?hours=999');
+      expect(workflow.getWorkflowGraph).toHaveBeenCalledWith({ horizonHours: 24 });
+    });
   });
 
   describe('GET /api/cos/workflow/stages', () => {

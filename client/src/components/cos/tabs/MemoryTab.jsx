@@ -200,6 +200,7 @@ export default function MemoryTab({ apps = [] }) {
         {searchResults && (
           <button
             onClick={() => { setSearchResults(null); setSearchQuery(''); }}
+            aria-label="Close"
             className="px-2 py-1.5 flex items-center justify-center bg-port-border text-gray-400 hover:text-white rounded-lg transition-colors"
           >
             <X size={18} />

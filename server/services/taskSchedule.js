@@ -26,7 +26,7 @@ import { atomicWrite, DAY, ensureDir, HOUR, readJSONFile, PATHS, safeDate } from
 import { isPlainObject } from '../lib/objects.js';
 import { mapWithConcurrency } from '../lib/mapWithConcurrency.js';
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js';
-import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getActiveApps, getAppTaskTypeOverrides, clearAllPrWatcherState } from './apps.js';
+import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, getAppTaskTypeIntervalMs, getActiveApps, getAppTaskTypeOverrides, clearAllPrWatcherState } from './apps.js';
 import { loadState, isImprovementEnabled } from './cosState.js';
 import { getUserTimezone, getLocalParts } from '../lib/timezone.js';
 import { parseCronToNextRun, parseCronToPrevRun } from './eventScheduler.js';
@@ -167,7 +167,20 @@ export const SELF_IMPROVEMENT_TASK_TYPES = [
   // + the editorial family ranking (server/lib/localModelHeuristics.js), opening a
   // PR. No-ops on any repo lacking that catalog file, so enabling it on a
   // non-PortOS app does nothing. See DEFAULT_TASK_PROMPTS['refresh-local-llm-catalog'].
-  'refresh-local-llm-catalog'
+  'refresh-local-llm-catalog',
+  // layered-intelligence is a PROGRAMMATIC-I/O task: it spawns a NORMAL reasoning
+  // agent (visible in the CoS queue + Active Agents, TUI-attachable) with two
+  // deterministic hooks around it — buildTaskInput gathers the app's goals +
+  // telemetry + open issues and builds the reasoning prompt; processTaskOutput
+  // validates the agent's `.agent-done` payload, dedups, and files ONE tracker
+  // issue. The agent runs in a THROWAWAY worktree (discardWorktree) that is never
+  // committed/merged, so the reasoner still can't write code — the structured
+  // payload is its only channel out. Scheduling (enabled/interval/provider/model)
+  // lives in the per-app taskTypeOverrides; behavior (sources/scopes/rules/handoff)
+  // stays in app.layeredIntelligence. Has NO DEFAULT_TASK_PROMPTS entry — the
+  // buildTaskInput hook renders the prompt. See taskTypeHooks.js +
+  // autonomousJobs/layeredIntelligenceHooks.js.
+  'layered-intelligence'
 ];
 
 // Shared config for code-reviewer-a and code-reviewer-b (two instances for independent provider/model configuration)
@@ -290,7 +303,17 @@ export const DEFAULT_TASK_INTERVALS = {
   // agent only edits the catalog file. Weekly is generous; the prompt only opens
   // a PR when the catalog is actually stale, so most runs are no-ops. Off by
   // default; the user enables it on the PortOS app.
-  'refresh-local-llm-catalog': { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, simplify: true } }
+  'refresh-local-llm-catalog': { type: INTERVAL_TYPES.WEEKLY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: true, simplify: true } },
+  // layered-intelligence is a programmatic-I/O task (agent-backed, hooked). Daily
+  // by default; per-app scheduling (enabled/interval/provider/model) is set in the
+  // Intelligence tab and stored on the app's taskTypeOverrides['layered-intelligence'].
+  // No `prompt` field — the buildTaskInput hook renders the prompt (no
+  // DEFAULT_TASK_PROMPTS entry, so the prompt-version machinery in loadSchedule
+  // skips it). taskMetadata pins the throwaway-worktree posture: the reasoning
+  // agent runs in a worktree that is discarded without a commit/merge/PR
+  // (discardWorktree), so it can't land code — its `.agent-done` payload is the
+  // only sanctioned output (consumed by the processTaskOutput hook).
+  'layered-intelligence': { type: INTERVAL_TYPES.DAILY, enabled: false, providerId: null, model: null, prompt: null, taskMetadata: { useWorktree: true, openPR: false, discardWorktree: true } }
 };
 
 // Agent-options that a task manages internally — UI locks the toggle, and
@@ -527,6 +550,14 @@ export async function loadSchedule() {
   let needsSave = false;
   for (const [taskType, config] of Object.entries(schedule.tasks)) {
     if (enforceManagedAgentOptions(taskType, config)) needsSave = true;
+    // Stamp a creation timestamp the first time we see a task so the cron
+    // catch-up bound (shouldRunTask) never replays a slot that predates the
+    // task. Backfilling to "now" is conservative: it only suppresses catch-up
+    // for slots already in the past — future slots fire on their real cadence.
+    if (!config.createdAt) {
+      config.createdAt = new Date().toISOString();
+      needsSave = true;
+    }
     if (!config.prompt && DEFAULT_TASK_PROMPTS[taskType]) {
       // No prompt set — initialize with current default and version
       config.prompt = DEFAULT_TASK_PROMPTS[taskType];
@@ -605,7 +636,7 @@ export async function updateTaskInterval(taskType, settings) {
   const schedule = await loadSchedule();
 
   if (!schedule.tasks[taskType]) {
-    schedule.tasks[taskType] = { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null };
+    schedule.tasks[taskType] = { type: INTERVAL_TYPES.ROTATION, enabled: false, providerId: null, model: null, createdAt: new Date().toISOString() };
   }
 
   // Normalize empty/whitespace prompts to null (treated as "use default")
@@ -954,6 +985,12 @@ export async function shouldRunTask(taskType, appId = null) {
 
   // Determine effective interval type: per-app override takes precedence
   const perAppInterval = appId ? await getAppTaskTypeInterval(appId, taskType) : null;
+  // A per-app numeric intervalMs override (used by handler-backed tasks like
+  // layered-intelligence, whose Intelligence-tab UI offers sub-daily cadences the
+  // string enum can't express). When set alongside interval:'custom', the CUSTOM
+  // branch below uses THIS value as the base interval instead of the global one.
+  const perAppIntervalMs = appId ? await getAppTaskTypeIntervalMs(appId, taskType) : null;
+  const hasCustomIntervalMs = Number.isFinite(perAppIntervalMs) && perAppIntervalMs > 0;
   // Cron expressions (contain spaces) are stored directly as the interval value
   const isCronOverride = perAppInterval && perAppInterval.includes(' ');
   const effectiveType = isCronOverride ? INTERVAL_TYPES.CRON : (perAppInterval || interval.type);
@@ -1029,7 +1066,9 @@ export async function shouldRunTask(taskType, appId = null) {
       break;
 
     case INTERVAL_TYPES.CUSTOM: {
-      const baseInterval = interval.intervalMs || DAY;
+      // A per-app numeric intervalMs override wins over the global custom interval
+      // (handler-backed tasks store their per-app cadence there).
+      const baseInterval = (hasCustomIntervalMs ? perAppIntervalMs : interval.intervalMs) || DAY;
       const learningAdjustment = await getPerformanceAdjustedInterval(taskType, baseInterval);
       const adjustedInterval = learningAdjustment.adjustedIntervalMs;
       if (timeSinceLastRun >= adjustedInterval) {
@@ -1063,12 +1102,16 @@ export async function shouldRunTask(taskType, appId = null) {
         if (lastRun) {
           lookbackBound = lastRun;
         } else {
-          // Never-run: only catch up if the most-recent occurrence is within ONE cron
-          // period of now (e.g. daily cron catches up to ~24h, hourly to ~1h). The bound
-          // is "the occurrence before prevRun" — anything older has already been missed
-          // by more than one period and shouldn't be replayed.
-          const beforePrev = parseCronToPrevRun(cronExpr, new Date(prevRunMs - 60_000), timezone);
-          lookbackBound = beforePrev ? beforePrev.getTime() : 0;
+          // Never-run: only catch up to a slot that elapsed AFTER the task was
+          // configured. Without this bound a never-run task always fires its most
+          // recent past slot, so a weekly "Sunday 09:00" task enabled on a Friday
+          // immediately reads as "due now (catch-up)" for last Sunday — a slot that
+          // predates the task and was never actually missed. `createdAt` is stamped
+          // when the task is first seen (loadSchedule backfills it for existing
+          // installs), so catch-up only recovers slots the task was around for. An
+          // un-backfilled task (createdAt absent) yields bound 0 → the legacy
+          // always-catch-up behavior.
+          lookbackBound = safeDate(interval.createdAt);
         }
         if (prevRunMs > lookbackBound && prevRunMs <= now) {
           // Compute nextRun for telemetry/reporting
@@ -1595,7 +1638,8 @@ export const TASK_TYPE_DESCRIPTIONS = {
   'jira-sprint-manager': 'Triage and implement JIRA sprint tickets',
   'jira-status-report': 'Generate JIRA weekly status report',
   'reference-watch': 'Watch reference repos and append PLAN.md items for new upstream work',
-  'refresh-local-llm-catalog': "Refresh PortOS's bundled suggested local-model catalog + editorial ranking (PortOS repo only)"
+  'refresh-local-llm-catalog': "Refresh PortOS's bundled suggested local-model catalog + editorial ranking (PortOS repo only)",
+  'layered-intelligence': "Read this app's goals + telemetry, ask a reasoning model for one improvement, and file one deduplicated tracker issue — no code, no agent"
 };
 
 function getTaskTypeDescription(taskType) {

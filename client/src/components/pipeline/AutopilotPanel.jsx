@@ -17,6 +17,7 @@ import {
   getSettings,
   patchSettingsSlice,
 } from '../../services/api';
+import SeriesAutopilotSchedule from './SeriesAutopilotSchedule';
 
 // Convergence-round bounds — mirror the server (seriesAutopilot.js + the
 // pipelineEditorialChecks settings schema). 0 = skip that gate entirely.
@@ -784,6 +785,9 @@ export default function AutopilotPanel({ series, onSeriesUpdate, onIssuesUpdate 
         </div>
         );
       })() : null}
+
+      {/* Scheduled unattended runs (#2174) — hidden while a run is active. */}
+      {!active ? <SeriesAutopilotSchedule series={series} /> : null}
 
       {/* Production readiness (canon descriptive integrity) */}
       <div className="px-3 pb-3 border-t border-port-border pt-2">

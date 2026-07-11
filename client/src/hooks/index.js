@@ -19,6 +19,7 @@ export { default as useColorMatch } from './useColorMatch.js';
 export { default as useContainerWidth } from './useContainerWidth.js';
 export { default as useEscapeKey } from './useEscapeKey.js';
 export { default as useFieldDraft } from './useFieldDraft.js';
+export { default as useFocusTrap } from './useFocusTrap.js';
 export { default as useImageGenQueue } from './useImageGenQueue.js';
 export { default as useImageRenderSettings } from './useImageRenderSettings.js';
 export { default as useSingleImageRender } from './useSingleImageRender.js';
@@ -47,6 +48,7 @@ export { default as useUniverseAction } from './useUniverseAction.js';
 export { default as useVideoDownload } from './useVideoDownload.js';
 export { default as useYoutubeTrackImport } from './useYoutubeTrackImport.js';
 export { default as useReferenceAudioImport } from './useReferenceAudioImport.js';
+export { default as useMidiTranscription } from './useMidiTranscription.js';
 
 // === Mixed (both default and named) — surface both ===
 export { default as useAsyncAction } from './useAsyncAction.js';
@@ -125,6 +127,8 @@ export * from './useDeathClock.js';
 export * from './useGoalDetail.js';
 export * from './usePostSession.js';
 export * from './useRecordMerge.js';
+export * from './useRenderJobQueue.js';
 export * from './useSyncIntegrity.js';
+export * from './useTwinEvaluationSuite.js';
 export * from './useUniverseNav.js';
 export * from './useVoiceUiSync.js';

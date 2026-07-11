@@ -141,7 +141,7 @@ function ElementsSongMain({ item, mastery, setMode, onBack }) {
   return (
     <div className="space-y-6">
       <div className="flex items-center gap-3">
-        <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors shrink-0"><ChevronLeft size={20} /></button>
+        <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors shrink-0"><ChevronLeft size={20} /></button>
         <h2 className="text-lg sm:text-xl font-bold text-white leading-tight">The Elements Song</h2>
         <span className="text-gray-500 text-xs sm:text-sm ml-auto shrink-0">Tom Lehrer</span>
       </div>
@@ -416,7 +416,7 @@ function SelectedElementDetail({ sym, elementMap, mastery, inSong, category, ver
             {category && <div className="text-xs text-gray-500">{category.label}</div>}
           </div>
         </div>
-        <button onClick={onClear} className="text-gray-500 hover:text-white transition-colors"><X size={16} /></button>
+        <button aria-label="Close" onClick={onClear} className="text-gray-500 hover:text-white transition-colors"><X size={16} /></button>
       </div>
       {inSong ? (
         <>
@@ -459,7 +459,7 @@ function LearnMode({ item, onBack, onComplete }) {
   return (
     <div className="space-y-6 max-w-2xl">
       <div className="flex items-center gap-3">
-        <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+        <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
           <ChevronLeft size={20} />
         </button>
         <h2 className="text-lg font-bold text-white">Learn — {chunk?.label || 'Elements Song'}</h2>
@@ -569,7 +569,7 @@ function ElementFlashMode({ item, mastery, onBack, onComplete }) {
     return (
       <div className="space-y-6 max-w-2xl">
         <div className="flex items-center gap-3">
-          <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
             <ChevronLeft size={20} />
           </button>
           <h2 className="text-xl font-bold text-white">Element Flash Complete</h2>
@@ -625,7 +625,7 @@ function ElementFlashMode({ item, mastery, onBack, onComplete }) {
   return (
     <div className="space-y-6 max-w-2xl">
       <div className="flex items-center gap-3">
-        <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+        <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
           <ChevronLeft size={20} />
         </button>
         <h2 className="text-lg font-bold text-white">Element Flash</h2>
@@ -673,6 +673,7 @@ function ElementFlashMode({ item, mastery, onBack, onComplete }) {
               <Check size={16} /> Check
             </button>
             <button
+              aria-label="Skip"
               onClick={() => check(true)}
               className="px-4 py-2.5 bg-port-card border border-port-border rounded-lg text-gray-400 hover:text-white transition-colors"
             >
@@ -708,7 +709,7 @@ function FillBlankMode({ item, onBack, onComplete }) {
     return (
       <div className="space-y-6 max-w-2xl">
         <div className="flex items-center gap-3">
-          <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
             <ChevronLeft size={20} />
           </button>
           <h2 className="text-xl font-bold text-white">Fill the Lyrics Complete</h2>
@@ -771,7 +772,7 @@ function FillBlankMode({ item, onBack, onComplete }) {
   return (
     <div className="space-y-6 max-w-2xl">
       <div className="flex items-center gap-3">
-        <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+        <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
           <ChevronLeft size={20} />
         </button>
         <h2 className="text-lg font-bold text-white">Fill the Lyrics</h2>
@@ -826,6 +827,7 @@ function FillBlankMode({ item, onBack, onComplete }) {
               <Check size={16} /> Check
             </button>
             <button
+              aria-label="Skip"
               onClick={() => check(true)}
               className="px-4 py-2.5 bg-port-card border border-port-border rounded-lg text-gray-400 hover:text-white transition-colors"
             >

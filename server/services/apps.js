@@ -500,9 +500,22 @@ export async function getAppTaskTypeInterval(appId, taskType) {
 }
 
 /**
+ * Get a per-app numeric intervalMs override for a task type (null = none). Used
+ * by handler-backed tasks (e.g. layered-intelligence) whose per-app cadence can
+ * be sub-daily — the string `interval` enum ('daily'/'weekly'/…) can't express
+ * that, so those override entries also carry a numeric `intervalMs` that the
+ * scheduler's CUSTOM branch honors. Returns null for a missing/invalid value.
+ */
+export async function getAppTaskTypeIntervalMs(appId, taskType) {
+  const overrides = await getAppTaskTypeOverrides(appId);
+  const ms = overrides[taskType]?.intervalMs;
+  return typeof ms === 'number' && Number.isFinite(ms) && ms > 0 ? ms : null;
+}
+
+/**
  * Update a task type override for a specific app (enable/disable + optional interval)
  */
-export async function updateAppTaskTypeOverride(id, taskType, { enabled, interval, taskMetadata } = {}) {
+export async function updateAppTaskTypeOverride(id, taskType, { enabled, interval, intervalMs, providerId, model, taskMetadata } = {}) {
   const data = await loadApps();
   if (!data.apps[id]) return null;
 
@@ -515,6 +528,21 @@ export async function updateAppTaskTypeOverride(id, taskType, { enabled, interva
   const updated = { ...existing };
   if (typeof enabled === 'boolean') updated.enabled = enabled;
   if (interval !== undefined) updated.interval = interval;
+  // intervalMs / providerId / model are the per-app scheduling fields for
+  // handler-backed tasks (layered-intelligence, option A). `null` clears the
+  // stored value (back to "inherit / use default").
+  if (intervalMs !== undefined) {
+    if (intervalMs === null) delete updated.intervalMs;
+    else updated.intervalMs = intervalMs;
+  }
+  if (providerId !== undefined) {
+    if (providerId === null || providerId === '') delete updated.providerId;
+    else updated.providerId = providerId;
+  }
+  if (model !== undefined) {
+    if (model === null || model === '') delete updated.model;
+    else updated.model = model;
+  }
   if (taskMetadata !== undefined) {
     const sanitized = sanitizeTaskMetadata(taskMetadata);
     if (!sanitized) {
@@ -524,8 +552,10 @@ export async function updateAppTaskTypeOverride(id, taskType, { enabled, interva
     }
   }
 
-  // Remove entry when all fields are inherit (enabled undefined, no interval, no metadata)
-  if (updated.enabled === undefined && !updated.interval && !updated.taskMetadata) {
+  // Remove entry when every field is inherit (enabled undefined, no interval, no
+  // intervalMs/provider/model, no metadata) — an empty override is just noise.
+  if (updated.enabled === undefined && !updated.interval && updated.intervalMs === undefined &&
+      updated.providerId === undefined && updated.model === undefined && !updated.taskMetadata) {
     delete overrides[taskType];
   } else {
     overrides[taskType] = updated;
@@ -554,11 +584,22 @@ export async function updateAppTaskTypeOverride(id, taskType, { enabled, interva
  * baselines on the next tick instead of waiting out the prior 30-min custom
  * interval — otherwise PRs opened in that delayed window slip past the firstRun
  * baseline. Dynamic import avoids a static apps↔taskSchedule cycle (taskSchedule
- * already imports this module). Best-effort: a missing history is a no-op.
+ * already imports this module). Best-effort: a missing history is a no-op and a
+ * storage failure must not block the primary app-disable write, but it is logged
+ * with app context instead of disappearing.
  */
 async function resetPrWatcherCooldown(appId) {
-  const { resetExecutionHistory } = await import('./taskSchedule.js');
-  await resetExecutionHistory('pr-watcher', appId).catch(() => {});
+  try {
+    const { resetExecutionHistory } = await import('./taskSchedule.js');
+    const result = await resetExecutionHistory('pr-watcher', appId);
+    if (result?.error && result.error !== 'No execution history found') {
+      console.error(`❌ Failed to reset pr-watcher cooldown for app ${appId}: ${result.error}`);
+    }
+    return result;
+  } catch (err) {
+    console.error(`❌ Failed to reset pr-watcher cooldown for app ${appId}: ${err.message}`);
+    return { error: err.message };
+  }
 }
 
 /**

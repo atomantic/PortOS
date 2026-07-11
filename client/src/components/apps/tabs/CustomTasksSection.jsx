@@ -6,7 +6,8 @@ import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import * as api from '../../../services/api';
 import { timeAgo } from '../../../utils/formatters';
-import { CRON_PRESETS, describeCron } from '../../../utils/cronHelpers';
+import { CRON_PRESETS, DEFAULT_CRON, describeCron } from '../../../utils/cronHelpers';
+import WeekdayTimePicker from '../../WeekdayTimePicker';
 import { AGENT_OPTIONS, agentOptionButtonClass } from '../../cos/constants';
 
 const INTERVAL_OPTIONS = [
@@ -93,6 +94,11 @@ function scheduleSummary(job) {
 
 function TaskForm({ form, setForm, onSave, onCancel, saveLabel }) {
   const update = (key, val) => setForm(f => ({ ...f, [key]: val }));
+  // Switching to cron seeds the expression with the default the picker displays
+  // (07:00 daily) so an untouched picker is actually saveable — otherwise the
+  // form shows a schedule while cronExpression stays empty and Save is blocked.
+  const setScheduleMode = (mode) =>
+    setForm(f => ({ ...f, scheduleMode: mode, cronExpression: mode === 'cron' && !f.cronExpression ? DEFAULT_CRON : f.cronExpression }));
   // Toggle a git-workflow flag while preserving the system-wide invariant that
   // openPR implies useWorktree (matches toggleAppMetadataOverride used elsewhere):
   // turning openPR on forces useWorktree on; turning useWorktree off forces openPR off.
@@ -135,7 +141,7 @@ function TaskForm({ form, setForm, onSave, onCancel, saveLabel }) {
             <button
               key={mode}
               type="button"
-              onClick={() => update('scheduleMode', mode)}
+              onClick={() => setScheduleMode(mode)}
               className={`px-2 py-1 text-xs rounded transition-colors ${
                 form.scheduleMode === mode ? 'bg-port-accent/20 text-port-accent' : 'bg-port-bg text-gray-500 hover:text-gray-300'
               }`}
@@ -145,23 +151,27 @@ function TaskForm({ form, setForm, onSave, onCancel, saveLabel }) {
           ))}
         </div>
         {form.scheduleMode === 'cron' ? (
-          <div className="flex gap-2 items-center flex-wrap">
-            <input
-              type="text"
-              value={form.cronExpression || ''}
-              onChange={e => update('cronExpression', e.target.value)}
-              className="flex-1 min-w-[10rem] px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono"
-              placeholder="0 7 * * *"
-              title="Cron expression: minute hour dayOfMonth month dayOfWeek"
-            />
-            <select
-              value=""
-              onChange={e => { if (e.target.value) update('cronExpression', e.target.value); }}
-              className="px-2 py-2 bg-port-bg border border-port-border rounded-lg text-gray-400 text-xs"
-            >
-              <option value="">Presets</option>
-              {CRON_PRESETS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
-            </select>
+          <div className="space-y-2">
+            <WeekdayTimePicker value={form.cronExpression || DEFAULT_CRON} onChange={value => update('cronExpression', value)} />
+            <div className="flex gap-2 items-center flex-wrap">
+              <input
+                type="text"
+                value={form.cronExpression || ''}
+                onChange={e => update('cronExpression', e.target.value)}
+                className="flex-1 min-w-[10rem] px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm font-mono"
+                placeholder="0 7 * * *"
+                title="Cron expression: minute hour dayOfMonth month dayOfWeek"
+              />
+              <select
+                value=""
+                onChange={e => { if (e.target.value) update('cronExpression', e.target.value); }}
+                className="px-2 py-2 bg-port-bg border border-port-border rounded-lg text-gray-400 text-xs"
+                aria-label="Cron presets"
+              >
+                <option value="">Presets</option>
+                {CRON_PRESETS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+              </select>
+            </div>
             {form.cronExpression && <span className="text-xs text-gray-500">{describeCron(form.cronExpression)}</span>}
           </div>
         ) : (

@@ -109,8 +109,13 @@ describe('getAiAssignments', () => {
     expect(ids).toContain('provider.active');
     expect(ids).toContain('settings.embeddings');
     expect(ids).toContain('settings.voice.vision');
+    expect(ids).toContain('settings.creativeDirector.treatment');
+    expect(ids).toContain('settings.creativeDirector.plan');
     expect(ids).toContain('settings.creativeDirector.evaluation');
     expect(ids).toContain('cos.task.morning-brief');
+    // Scene evaluation is a vision call — clients filter local model lists to VLMs.
+    const evaluation = result.assignments.find((a) => a.id === 'settings.creativeDirector.evaluation');
+    expect(evaluation.modelFilter).toBe('vision');
   });
 });
 
@@ -133,6 +138,17 @@ describe('updateAiAssignment routing', () => {
   it('settings.creativeDirector.evaluation writes the vision provider/model under creativeDirector', async () => {
     await updateAiAssignment('settings.creativeDirector.evaluation', { providerId: 'ollama', model: 'qwen2.5-vl' });
     expect(mocks.updateSettings).toHaveBeenCalledWith({ creativeDirector: { evaluation: { providerId: 'ollama', model: 'qwen2.5-vl' } } });
+  });
+
+  it.each(['treatment', 'plan'])('settings.creativeDirector.%s writes that agent stage provider/model', async (stage) => {
+    await updateAiAssignment(`settings.creativeDirector.${stage}`, { providerId: 'claude', model: 'sonnet' });
+    expect(mocks.updateSettings).toHaveBeenCalledWith({ creativeDirector: { [stage]: { providerId: 'claude', model: 'sonnet' } } });
+  });
+
+  it('settings.creativeDirector.<unknown> rejects with a 400 instead of writing a bogus stage', async () => {
+    await expect(updateAiAssignment('settings.creativeDirector.bogus', { providerId: 'claude', model: 'sonnet' }))
+      .rejects.toMatchObject({ status: 400, code: 'VALIDATION_ERROR' });
+    expect(mocks.updateSettings).not.toHaveBeenCalled();
   });
 
   it('cos.task.<existing> updates the schedule interval', async () => {

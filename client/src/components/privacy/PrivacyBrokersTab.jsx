@@ -14,7 +14,8 @@ import toast from '../ui/Toast';
 import { timeAgo, formatDateShort } from '../../utils/formatters';
 import BrokerCaseDrawer from './BrokerCaseDrawer';
 import {
-  CASE_STATES, CASE_STATE_TONE, EXPOSURE_MAP_STATES, BROKER_SOURCES, BROKER_CONFIDENCE, labelFor,
+  CASE_STATES, CASE_STATE_TONE, EXPOSURE_MAP_STATES, BROKER_SOURCES, BROKER_CONFIDENCE,
+  MANUAL_DONE_ACTION, labelFor,
 } from './constants';
 
 // Stat chip for the exposure-map header.
@@ -269,14 +270,24 @@ export default function PrivacyBrokersTab() {
                   {item.reason && <div className="text-[11px] text-gray-500 mt-0.5">{item.reason}{item.channel ? ` · ${item.channel}` : ''}</div>}
                 </div>
                 <div className="flex items-center gap-1 shrink-0">
+                  {item.state === 'blocked' && item.searchUrl && (
+                    <a href={item.searchUrl} target="_blank" rel="noreferrer" title="Check manually in your browser" aria-label="Check manually in your browser" className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50">
+                      <Search size={15} />
+                    </a>
+                  )}
                   {item.optoutUrl && (
                     <a href={item.optoutUrl} target="_blank" rel="noreferrer" title="Open opt-out page" aria-label="Open opt-out page" className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50">
                       <ExternalLink size={15} />
                     </a>
                   )}
-                  <button onClick={() => doTransition({ id: item.caseId }, 'submitted')} disabled={caseBusy} title="Mark done" aria-label="Mark done" className="p-1.5 rounded text-port-success hover:bg-port-success/10 disabled:opacity-50">
-                    <CheckCircle2 size={15} />
-                  </button>
+                  {(() => {
+                    const done = MANUAL_DONE_ACTION[item.state] || MANUAL_DONE_ACTION.human_task_queued;
+                    return (
+                      <button onClick={() => doTransition({ id: item.caseId }, done.target)} disabled={caseBusy} title={done.label} aria-label={done.label} className={`p-1.5 rounded ${done.chipTone} disabled:opacity-50`}>
+                        <CheckCircle2 size={15} />
+                      </button>
+                    );
+                  })()}
                   <button onClick={() => doTransition({ id: item.caseId }, 'not_found')} disabled={caseBusy} title="Dismiss" aria-label="Dismiss" className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50 disabled:opacity-50">
                     <XCircle size={15} />
                   </button>

@@ -19,6 +19,7 @@ import { emitLog } from './cosEvents.js';
 import { addTask } from './cos.js';
 import * as git from './git.js';
 import { removeWorktree } from './worktreeManager.js';
+import { isTruthyMeta } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
 import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, normalizeReviewers } from '../lib/validation.js';
@@ -40,7 +41,7 @@ import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, normaliz
  * the worktree branch into the source workspace because `gh pr merge` already handled it.
  * Otherwise, merges the worktree branch back to the source branch on success.
  */
-export async function cleanupAgentWorktree(agentId, success, { openPR = false, requestCopilotReview: shouldRequestCopilot = false, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, skipMerge = false, description = null, agentOutput = null, originalTask = null } = {}) {
+export async function cleanupAgentWorktree(agentId, success, { openPR = false, requestCopilotReview: shouldRequestCopilot = false, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, codexModel = null, skipMerge = false, description = null, agentOutput = null, originalTask = null } = {}) {
   const { getAgent: getAgentState } = await import('./cos.js');
   const agentState = await getAgentState(agentId).catch(() => null);
   if (!agentState?.metadata?.isWorktree) return [];
@@ -50,6 +51,25 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
   if (!sourceWorkspace || !worktreeBranch) return [];
 
   const warnings = [];
+
+  // Throwaway-worktree posture (programmatic-I/O reasoning agents, e.g. layered-
+  // intelligence): the agent's edits are NEVER wanted — its only sanctioned output
+  // is its structured `.agent-done` payload, consumed by a processTaskOutput hook.
+  // Remove the worktree WITHOUT merging or opening a PR (delete the branch too), so
+  // a reasoning agent that touched code can't land it. This is the "reasoner never
+  // writes code" guarantee, enforced by isolation rather than by not spawning an
+  // agent. Overrides openPR/skipMerge — discard always wins. Derived once here from
+  // the task metadata (a pure read with no caller-specific logic, unlike openPR/
+  // skipMerge) so every spawn-completion path gets it without threading a flag.
+  const discardWorktree = isTruthyMeta(originalTask?.metadata?.discardWorktree);
+  if (discardWorktree) {
+    emitLog('info', `🌳 Discarding worktree for reasoning agent ${agentId} (no merge, no PR)`, { agentId, branchName: worktreeBranch });
+    const result = await removeWorktree(agentId, sourceWorkspace, worktreeBranch, { merge: false }).catch(err => {
+      emitLog('warn', `🌳 Worktree discard failed for ${agentId}: ${err.message}`, { agentId });
+      return { warnings: [`Worktree discard failed: ${err.message}`] };
+    });
+    return result?.warnings || [];
+  }
 
   // When openPR is set and task succeeded, push branch and create PR instead of auto-merging
   if (openPR && success) {
@@ -158,7 +178,8 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
           sourceWorkspace,
           reviewers: reviewerList,
           reviewStopMode,
-          reviewerApplies
+          reviewerApplies,
+          codexModel
         }).catch(err => {
           emitLog('warn', `🤖 Failed to spawn review-loop follow-up for ${prResult.url}: ${err.message}`, { agentId, prUrl: prResult.url });
           warnings.push(`Review-loop follow-up spawn failed for ${prResult.url}: ${err.message}`);
@@ -214,7 +235,7 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
  * branch (via createWorktree's `existingBranch` option) so it can fix-and-push
  * without trampling concurrent agents.
  */
-export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, sourceWorkspace, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
+export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, sourceWorkspace, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, codexModel = null }) {
   if (!prUrl || !prBranch) return null;
 
   const parsedPr = git.parsePullRequestUrl(prUrl);
@@ -260,6 +281,10 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
       reviewLoopReviewers: effectiveReviewers,
       reviewLoopStopMode: reviewStopMode,
       reviewLoopReviewerApplies: reviewerApplies,
+      // Codex CLI model tier (e.g. `gpt-5.6-sol`) — only meaningful when `codex`
+      // is in the reviewer list; the prompt threads it as `codex --model <id>`.
+      // `codexModel` is already coerced to string|null upstream (resolveReviewLoopOptions).
+      reviewLoopCodexModel: (effectiveReviewers.includes('codex') && codexModel) ? codexModel : null,
       sourceTaskId: originalTask?.id || null,
       sourceAgentId: originalAgentId || null,
       // This follow-up may legitimately exit with zero new commits when every

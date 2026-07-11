@@ -105,6 +105,7 @@ function ContextDetail({ appId }) {
             <button
               onClick={removeSaved}
               disabled={removing}
+              aria-label="Delete"
               className="flex items-center gap-1.5 px-2 py-1.5 rounded text-port-error hover:bg-port-error/10 text-sm disabled:opacity-50"
             >
               <Trash2 size={14} />

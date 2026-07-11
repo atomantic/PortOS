@@ -133,6 +133,23 @@ describe.skipIf(!dbReady)('privacy brokers DB round-trip', () => {
     expect(new Date(removed.nextRecheckAt).toISOString()).toBe('2026-08-07T00:00:00.000Z'); // +30d
   });
 
+  it('a manual transition onto a verdict state syncs the ledger found flag', async () => {
+    const now = new Date('2026-07-08T00:00:00.000Z');
+    // ca-test-beta-inc: its case is untouched by the lifecycle test above
+    // (test-auto-alpha's case ends at confirmed_removed, which blocked can't
+    // be recorded over).
+    const kase = await svc.recordScanVerdict('ca-test-beta-inc', 'blocked', {
+      evidence: { match_basis: 'antibot_wall', search_url: 'https://beta.example/jane' }, now,
+    });
+    expect(kase.found).toBe(null);
+    // The blocked-case "I'm listed" manual verdict implies found: true.
+    const confirmed = await svc.transitionCase(kase.id, 'found');
+    expect(confirmed.found).toBe(true);
+    // And a manual not_found implies found: false; explicit patch still wins.
+    const dismissed = await svc.transitionCase(kase.id, 'not_found');
+    expect(dismissed.found).toBe(false);
+  });
+
   it('runScanPass scans due brokers, records verdicts, and skips opt-out-owned cases', async () => {
     // A scan-eligible name so buildSearchVectors is non-empty.
     const nameRec = await vault.createVaultRecord({ type: 'legal_name', label: 'Legal name', value: 'Jane Q Publictest' });

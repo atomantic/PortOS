@@ -11,6 +11,7 @@ import { timeAgo } from '../components/feature-agents/constants';
 import { formatDurationMs } from '../utils/formatters';
 import BrailleSpinner from '../components/BrailleSpinner';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import { clickableProps } from '../lib/a11yKeyboard.js';
 
 const INTERVAL_PRESETS = [
   { label: '30s', value: '30s' },
@@ -227,6 +228,7 @@ function LoopCard({ loop, onAction, expandedId, onToggle }) {
       <div
         className="flex items-center gap-3 px-4 py-3 cursor-pointer hover:bg-port-bg/50"
         onClick={() => onToggle(loop.id)}
+        {...clickableProps(() => onToggle(loop.id))}
       >
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">

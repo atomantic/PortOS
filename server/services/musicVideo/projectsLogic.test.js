@@ -3,6 +3,7 @@ import {
   buildProjectRecord,
   applyProjectPatch,
   setAudioAnalysis,
+  setMidiTranscription,
   addScene,
   addScenes,
   applySceneUpdate,
@@ -21,7 +22,7 @@ describe('buildProjectRecord', () => {
     expect(p).toMatchObject({
       id: 'mv-x', name: 'Neon Nights', status: 'draft', mode: 'director',
       trackId: 'track-9', uploadedAudioFilename: null, concept: null,
-      audioAnalysis: null, scenes: [], renderHistoryId: null,
+      audioAnalysis: null, midiTranscription: null, scenes: [], renderHistoryId: null,
       deleted: false, deletedAt: null,
     });
     expect(p.createdAt).toBe(p.updatedAt);
@@ -58,6 +59,17 @@ describe('applyProjectPatch', () => {
     const next = applyProjectPatch(analyzed, { trackId: 't2' });
     expect(next.trackId).toBe('t2');
     expect(next.audioAnalysis).toBeNull();
+  });
+
+  it('clears the MIDI transcription when the audio source changes (it was transcribed from the OLD track)', () => {
+    const withMidi = setMidiTranscription({ ...baseProject(), trackId: 't1' },
+      { filename: 'song.mid', model: 'medium', createdAt: '2026-01-02T00:00:00.000Z' });
+    expect(withMidi.midiTranscription).not.toBeNull();
+    const next = applyProjectPatch(withMidi, { trackId: 't2' });
+    expect(next.midiTranscription).toBeNull();
+    // Non-audio patches leave it intact.
+    const renamed = applyProjectPatch(withMidi, { name: 'Renamed' });
+    expect(renamed.midiTranscription).toEqual(withMidi.midiTranscription);
   });
 
   it('leaves audioAnalysis intact when trackId is patched to the SAME value', () => {
@@ -144,6 +156,21 @@ describe('setAudioAnalysis', () => {
   it('does not regress a later lifecycle status', () => {
     const ready = { ...baseProject(), status: 'ready' };
     expect(setAudioAnalysis(ready, analysis).status).toBe('ready');
+  });
+});
+
+describe('setMidiTranscription', () => {
+  it('caches the validated pointer and leaves the lifecycle status alone', () => {
+    const midi = { filename: 'song.mid', model: 'medium', createdAt: '2026-01-02T00:00:00.000Z' };
+    const next = setMidiTranscription(baseProject(), midi);
+    expect(next.midiTranscription).toEqual(midi);
+    expect(next.status).toBe('draft');
+    expect(next.updatedAt).not.toBe('2026-01-01T00:00:00.000Z');
+  });
+
+  it('rejects a malformed pointer', () => {
+    expect(() => setMidiTranscription(baseProject(), { filename: '' })).toThrow();
+    expect(() => setMidiTranscription(baseProject(), { filename: 'a.mid', extra: true })).toThrow();
   });
 });
 

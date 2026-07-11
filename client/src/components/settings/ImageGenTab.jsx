@@ -473,8 +473,9 @@ export function ImageGenTab() {
 
       {mediaTab === 'external' && (
         <div className="bg-port-card border border-port-border rounded-xl p-6 space-y-4">
-          <h3 className="text-sm font-medium text-gray-300">External AUTOMATIC1111 / Forge URL</h3>
+          <label htmlFor="sdapi-url" className="text-sm font-medium text-gray-300">External AUTOMATIC1111 / Forge URL</label>
           <input
+            id="sdapi-url"
             type="text"
             value={sdapiUrl}
             onChange={(e) => setSdapiUrl(e.target.value)}
@@ -737,7 +738,9 @@ export function ImageGenTab() {
           Send a prompt through the active backend to verify end-to-end. For richer controls, visit the
           <a href="/media/image" className="text-port-accent hover:underline ml-1">Image Gen</a> page.
         </p>
+        <label htmlFor="test-render-prompt" className="sr-only">Test prompt</label>
         <textarea
+          id="test-render-prompt"
           value={testPrompt}
           onChange={(e) => setTestPrompt(e.target.value)}
           rows={2}

@@ -19,6 +19,186 @@ import {
   loadLearningData,
   saveLearningData
 } from './store.js';
+import { deriveFailureSignalAvoidance, isNonRoutableLearnedTier } from './routing.js';
+import { recordCorrelationSample } from './correlationQuality.js';
+
+// Cap on retained per-category signature samples — bounds file growth the same
+// way `recentUnknownErrors` does, while keeping enough recent context to spot
+// trends (provider/model/tier correlation) without a full agent-archive scan.
+const MAX_SIGNATURE_SAMPLES = 10;
+
+/**
+ * Milliseconds between two ISO timestamps. Pure. Returns null (not 0) when
+ * either bound is missing/unparseable so an absent timestamp never masquerades
+ * as a zero-latency measurement (repo "sentinel, don't conflate absent" rule).
+ */
+function msBetween(startIso, endIso) {
+  if (!startIso || !endIso) return null;
+  const start = Date.parse(startIso);
+  const end = Date.parse(endIso);
+  if (!Number.isFinite(start) || !Number.isFinite(end)) return null;
+  return Math.max(0, end - start);
+}
+
+/**
+ * Compute the queue/compute latency split for a completed run (issue #2329).
+ * Pure. Prefers measured values from source timestamps; where a source timestamp
+ * is missing, derives the missing leg from the wall/execution difference so a
+ * run without a `createdAt` (queue) or a runner `duration` (compute) still yields
+ * a usable split instead of a null.
+ *
+ * Sentinel discipline: every leg carries a `source` marker so a *derived* value
+ * is never confused with a *measured* one, and a legitimately-measured `0` is
+ * never confused with an *absent* leg (`null`). Derivation only fires when the
+ * other two legs are genuinely measured — an absent leg is never fabricated from
+ * two other absent/derived legs.
+ *
+ * @returns {{ wallMs:number|null, queueMs:number|null, executionMs:number|null,
+ *   source:{ wall:'measured'|null, queue:'measured'|'derived'|null,
+ *            execution:'measured'|'derived'|null } }}
+ */
+export function computeLatencySplit({ startedAt, completedAt, createdAt, durationMs }) {
+  const wallMs = msBetween(startedAt, completedAt);
+  let queueMs = msBetween(createdAt, startedAt);
+  let executionMs = Number.isFinite(durationMs) ? durationMs : null;
+
+  const source = {
+    wall: wallMs === null ? null : 'measured',
+    queue: queueMs === null ? null : 'measured',
+    execution: executionMs === null ? null : 'measured'
+  };
+
+  // Fallback: no createdAt but wall+compute measured → queue = wall − compute.
+  if (queueMs === null && wallMs !== null && executionMs !== null && executionMs <= wallMs) {
+    queueMs = wallMs - executionMs;
+    source.queue = 'derived';
+  } else if (executionMs === null && wallMs !== null && queueMs !== null && queueMs <= wallMs) {
+    // Fallback: no runner duration but wall+queue measured → compute = wall − queue.
+    executionMs = wallMs - queueMs;
+    source.execution = 'derived';
+  }
+
+  return { wallMs, queueMs, executionMs, source };
+}
+
+/**
+ * Build a structured TaskTelemetryContext for a completed agent run (issue
+ * #2329). Pure — no I/O. Derives what is cheaply available from the agent/task
+ * and their timestamps/metadata; uses explicit null sentinels for anything not
+ * derivable rather than fabricating a value.
+ *
+ *   failureSignature  — { category, messageSnippet, failurePosition } (null when the
+ *     run met its validation-authoritative outcome; see outcomeSuccess below)
+ *   executionContext  — { provider, model, modelTier, taskType, component, inputChars, routingReason }
+ *   latency           — { wallMs, queueMs, executionMs } (null members when not derivable)
+ *   validationPassed  — success-criteria validation boolean (issue #2344):
+ *     did the run meet its DECLARED success criteria, distinct from the runner's
+ *     exit-code `success`? null sentinel = no machine-checkable criterion was
+ *     declared for this task; true/false = declared criterion met / not met.
+ *     Stamped authoritatively at the completion chokepoint (finalizeAgent) onto
+ *     `result.validationPassed`; surfaced here with an explicit null default so
+ *     "absent" never masquerades as `false`.
+ */
+export function buildTaskTelemetryContext(agent, task) {
+  const meta = agent?.metadata || {};
+  const result = agent?.result || {};
+  const success = result.success || false;
+  // Sentinel discipline: only an explicit boolean counts as a validation verdict;
+  // anything else (undefined/null/non-bool) is "no criterion declared" → null.
+  const validationPassed = typeof result.validationPassed === 'boolean' ? result.validationPassed : null;
+  // Validation-authoritative outcome (issue #2344): a declared verdict overrides
+  // the runner's exit code. Failure telemetry keys off THIS, not raw `success`,
+  // so a commit-found run (success:false, validationPassed:true) is NOT harvested
+  // as a failure (which would poison the #2329 failure-signal window that routing
+  // consumes), and a criterion-missed clean exit is treated as the failure it is.
+  const outcomeSuccess = validationPassed === null ? success : validationPassed;
+  const taskType = extractTaskType(task);
+
+  const errorAnalysis = result.errorAnalysis || null;
+  const rawMessage = errorAnalysis?.message || errorAnalysis?.details || '';
+  const failureSignature = outcomeSuccess ? null : {
+    category: errorAnalysis?.category || null,
+    messageSnippet: rawMessage ? String(rawMessage).substring(0, 200) : null,
+    // Best-available proxy for "where in a multi-step workflow it failed": the
+    // phase the agent had reached at completion. null when no phase was stamped.
+    failurePosition: meta.phase ?? null
+  };
+
+  const taskDescription = task?.description ?? meta.taskDescription ?? null;
+  const executionContext = {
+    provider: meta.providerId ?? null,
+    model: meta.model ?? null,
+    modelTier: meta.modelTier ?? null,
+    taskType,
+    // Component/runner that executed the agent (tui | runner | direct).
+    component: meta.executionMode ?? null,
+    // Input dimension: prompt/description size in chars (null, not 0, when absent).
+    inputChars: typeof taskDescription === 'string' ? taskDescription.length : null,
+    // Routing decision rationale captured at spawn time (modelSelection.reason).
+    routingReason: meta.modelReason ?? null
+  };
+
+  // Queue/compute latency split with a wall-difference fallback when a source
+  // timestamp (task.createdAt or runner duration) is missing (issue #2329).
+  const latency = computeLatencySplit({
+    startedAt: agent?.startedAt,
+    completedAt: agent?.completedAt,
+    createdAt: task?.createdAt,
+    durationMs: result.duration
+  });
+
+  return {
+    taskType,
+    success,
+    validationPassed,
+    // Validation-authoritative learning outcome (#2344): the single source of
+    // truth every aggregate/window/telemetry gate keys off, so they can't drift.
+    outcomeSuccess,
+    failureSignature,
+    executionContext,
+    latency
+  };
+}
+
+/**
+ * Persist a failure signature aggregate onto the learning data (issue #2329).
+ * Pure — mutates and returns `data`. Additive + back-compat: tolerates an old
+ * learning.json that predates the `failureSignatures` key. No-op on success or
+ * when the failure carries no category.
+ */
+export function recordFailureSignature(data, context) {
+  const sig = context?.failureSignature;
+  if (!sig || !sig.category) return data;
+
+  if (!data.failureSignatures) data.failureSignatures = {};
+  if (!data.failureSignatures[sig.category]) {
+    data.failureSignatures[sig.category] = { count: 0, lastOccurred: null, recent: [] };
+  }
+
+  const bucket = data.failureSignatures[sig.category];
+  const recordedAt = new Date().toISOString();
+  bucket.count++;
+  bucket.lastOccurred = recordedAt;
+  bucket.recent.push({
+    messageSnippet: sig.messageSnippet,
+    failurePosition: sig.failurePosition,
+    provider: context.executionContext.provider,
+    model: context.executionContext.model,
+    modelTier: context.executionContext.modelTier,
+    taskType: context.executionContext.taskType,
+    wallMs: context.latency.wallMs,
+    executionMs: context.latency.executionMs,
+    // Success-criteria validation verdict at failure time (issue #2344): null
+    // when no machine-checkable criterion was declared, false when declared and
+    // missed. Explicit null default keeps "absent" distinct from "failed".
+    validationPassed: context.validationPassed ?? null,
+    recordedAt
+  });
+  if (bucket.recent.length > MAX_SIGNATURE_SAMPLES) {
+    bucket.recent = bucket.recent.slice(-MAX_SIGNATURE_SAMPLES);
+  }
+  return data;
+}
 
 /**
  * Record a completed task for learning
@@ -27,11 +207,36 @@ export async function recordTaskCompletion(agent, task) {
   return withLock(async () => {
   const data = await loadLearningData();
 
-  const taskType = extractTaskType(task);
+  // Structured telemetry context (failure signature + execution context +
+  // latency breakdown) derived once and reused for aggregate + log (issue #2329).
+  const telemetry = buildTaskTelemetryContext(agent, task);
+  const taskType = telemetry.taskType;
   const modelTier = agent.metadata?.modelTier || 'unknown';
-  const success = agent.result?.success || false;
+  const success = telemetry.success;
+  // Validation-authoritative learning outcome (issue #2344) — computed once in
+  // buildTaskTelemetryContext so aggregates, the correlation window, and failure
+  // telemetry all key off the same value. A clean exit that produced no committed
+  // work is NOT a tier success; a commit-found run is a success even on a non-zero
+  // exit; with no criterion declared it falls back to the runner's exit-code
+  // `success` (so legacy completions/tests are unchanged).
+  const outcomeSuccess = telemetry.outcomeSuccess;
   const duration = agent.result?.duration || 0;
-  const errorCategory = agent.result?.errorAnalysis?.category || null;
+  const errorCategory = telemetry.failureSignature?.category || null;
+
+  // Correlation-quality prediction snapshot (issue #2344) — captured HERE, before
+  // ANY of this run's aggregates (byModelTier, routingAccuracy, failureSignatures)
+  // are folded in below, so the prediction reflects history strictly BEFORE this
+  // completion. `deriveFailureSignalAvoidance` reads routingAccuracy for its
+  // proven cross-check, so computing it after those mutations would leak this
+  // run's own outcome into its own prediction and inflate the gauge. Uses the
+  // signal's BASE sensitivity (default aggressive bar) as a fixed predictor —
+  // measuring the gate against its own correlation-gated output would be circular.
+  // Skipped for the unknown tier AND non-routable learned tiers (minimal/low):
+  // routing can never flag those, so recording them as "predicted safe" would
+  // encode "no routable prediction" as a true-negative and skew the gauge.
+  const correlationPredictedRisk = (modelTier && modelTier !== 'unknown' && !isNonRoutableLearnedTier(modelTier))
+    ? deriveFailureSignalAvoidance(data, taskType).avoidTiers.includes(modelTier)
+    : null;
 
   // Initialize task type bucket if needed
   if (!data.byTaskType[taskType]) {
@@ -63,7 +268,7 @@ export async function recordTaskCompletion(agent, task) {
   // Update task type metrics
   const typeMetrics = data.byTaskType[taskType];
   typeMetrics.completed++;
-  if (success) {
+  if (outcomeSuccess) {
     typeMetrics.succeeded++;
     // Only include successful durations in ETA calculations — failed agents often
     // run long in error loops and skew estimates
@@ -80,7 +285,7 @@ export async function recordTaskCompletion(agent, task) {
   // Update model tier metrics
   const tierMetrics = data.byModelTier[modelTier];
   tierMetrics.completed++;
-  if (success) {
+  if (outcomeSuccess) {
     tierMetrics.succeeded++;
     tierMetrics.successDurationMs = (tierMetrics.successDurationMs || 0) + duration;
   } else {
@@ -96,15 +301,16 @@ export async function recordTaskCompletion(agent, task) {
     data.routingAccuracy[taskType][modelTier] = { succeeded: 0, failed: 0, lastAttempt: null };
   }
   const routing = data.routingAccuracy[taskType][modelTier];
-  if (success) {
+  if (outcomeSuccess) {
     routing.succeeded++;
   } else {
     routing.failed++;
   }
   routing.lastAttempt = new Date().toISOString();
 
-  // Track error patterns
-  if (!success && errorCategory) {
+  // Track error patterns — gated on the validation-authoritative outcome so a
+  // commit-found run isn't logged as an error and a criterion-miss is (#2344).
+  if (!outcomeSuccess && errorCategory) {
     if (!data.errorPatterns[errorCategory]) {
       data.errorPatterns[errorCategory] = {
         count: 0,
@@ -140,9 +346,22 @@ export async function recordTaskCompletion(agent, task) {
     }
   }
 
+  // Correlation-quality window (issue #2344): pair the pre-mutation prediction
+  // snapshot (captured above, before any of this run's aggregates were folded in)
+  // with the actual outcome. Reuses the same validation-authoritative
+  // `outcomeSuccess` the aggregates above learn from, so the correlation `bad`
+  // label and the routing counts can never disagree about a single run.
+  if (correlationPredictedRisk !== null) {
+    recordCorrelationSample(data, { taskType, tier: modelTier, predictedRisk: correlationPredictedRisk, bad: !outcomeSuccess });
+  }
+
+  // Aggregate the enriched failure signature (category + snippet + position +
+  // execution context + latency) — a no-op on success (issue #2329).
+  recordFailureSignature(data, telemetry);
+
   // Update totals
   data.totals.completed++;
-  if (success) {
+  if (outcomeSuccess) {
     data.totals.succeeded++;
     data.totals.successDurationMs = (data.totals.successDurationMs || 0) + duration;
     data.totals.successMaxDurationMs = Math.max(data.totals.successMaxDurationMs || 0, duration);
@@ -154,10 +373,30 @@ export async function recordTaskCompletion(agent, task) {
 
   await saveLearningData(data);
 
-  emitLog('debug', `Recorded task completion: ${taskType} (${success ? 'success' : 'failed'})`, {
+  const { provider, model, component, routingReason } = telemetry.executionContext;
+  const { wallMs, queueMs } = telemetry.latency;
+  const wallSecs = Math.round((wallMs ?? duration) / 1000);
+  // Label reflects the learning OUTCOME (validation-authoritative). A run that
+  // exited clean but missed its declared criterion reads as `failed:validation-miss`
+  // rather than the misleading `success` the raw exit code would show (#2344).
+  const outcomeLabel = outcomeSuccess
+    ? 'success'
+    : `failed:${errorCategory || (success ? 'validation-miss' : 'uncategorized')}`;
+  emitLog('debug', `Recorded task completion: ${taskType} (${outcomeLabel}) via ${provider || '?'}/${model || '?'}@${modelTier} [${component || '?'}] wall=${wallSecs}s`, {
     taskType,
     modelTier,
+    provider,
+    model,
+    component,
+    routingReason,
     success,
+    validationPassed: telemetry.validationPassed,
+    outcomeSuccess,
+    errorCategory,
+    failurePosition: telemetry.failureSignature?.failurePosition ?? null,
+    wallMs,
+    queueMs,
+    executionMs: telemetry.latency.executionMs,
     duration: Math.round(duration / 1000) + 's'
   }, '[TaskLearning]');
 
@@ -395,7 +634,14 @@ export async function recalculateDurationStats() {
       agentCount++;
 
       const duration = meta.result?.duration || 0;
-      if (!meta.result?.success || duration <= 0) continue;
+      // Validation-authoritative outcome (issue #2344), consistent with the live
+      // recordTaskCompletion path: an archived clean-exit run that missed its
+      // declared criterion is NOT a success (excluded from success-only ETAs),
+      // and a commit-found run is a success even on a non-zero exit. Falls back to
+      // the raw exit-code success for records that predate validationPassed.
+      const vp = meta.result?.validationPassed;
+      const outcomeSuccess = typeof vp === 'boolean' ? vp : !!meta.result?.success;
+      if (!outcomeSuccess || duration <= 0) continue;
 
       successCount++;
       const taskType = extractTaskType({

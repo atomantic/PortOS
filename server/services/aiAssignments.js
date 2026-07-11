@@ -48,6 +48,10 @@ const makeEntry = ({
   providerTypes = textProviderTypes,
   providerOptions = null,
   modelOptions = null,
+  // Optional client-side model-list filter key. `'vision'` tells the AI
+  // Assignments / Creative Director pickers to restrict LOCAL backends
+  // (Ollama / LM Studio) to vision-capable models only.
+  modelFilter = null,
   link = null,
   notes = '',
 }) => ({
@@ -64,6 +68,7 @@ const makeEntry = ({
   providerTypes,
   providerOptions,
   modelOptions,
+  modelFilter,
   link,
   notes,
 });
@@ -158,14 +163,41 @@ const addSettingsEntries = async (entries) => {
   }
 
   entries.push(makeEntry({
+    id: 'settings.creativeDirector.treatment',
+    area: 'Creative Director',
+    label: 'Treatment generation model',
+    source: 'settings.creativeDirector.treatment',
+    providerId: settings.creativeDirector?.treatment?.providerId || null,
+    model: settings.creativeDirector?.treatment?.model || null,
+    providerTypes: cliProviderTypes,
+    notes: 'Agent model that turns a project brief into a treatment and scene plan. Blank = system default provider and model. Each Creative Director project can override this from its Models drawer.',
+    link: '/creative-director',
+  }));
+
+  entries.push(makeEntry({
+    id: 'settings.creativeDirector.plan',
+    area: 'Creative Director',
+    label: 'Production planning model',
+    source: 'settings.creativeDirector.plan',
+    providerId: settings.creativeDirector?.plan?.providerId || null,
+    model: settings.creativeDirector?.plan?.model || null,
+    providerTypes: cliProviderTypes,
+    notes: 'Agent model that converts a production directive into an executable plan. Blank = system default provider and model. Each Creative Director project can override this from its Models drawer.',
+    link: '/creative-director',
+  }));
+
+  entries.push(makeEntry({
     id: 'settings.creativeDirector.evaluation',
     area: 'Creative Director',
-    label: 'Scene evaluation model',
+    label: 'Scene evaluation vision model',
     source: 'settings.creativeDirector.evaluation',
     providerId: settings.creativeDirector?.evaluation?.providerId || null,
     model: settings.creativeDirector?.evaluation?.model || null,
     providerTypes: apiProviderTypes,
-    notes: 'Vision model that judges each rendered scene. Blank = auto-pick an installed local (Ollama / LM Studio) vision model; if none is available it falls back to the coding agent (Opus).',
+    // Scene evaluation is a vision call — restrict local Ollama/LM Studio
+    // model pickers to VLMs so a text-only default can't be selected by mistake.
+    modelFilter: 'vision',
+    notes: 'Vision model that judges each rendered scene. Use a local Ollama or LM Studio VLM here. Blank = auto-pick an installed local vision model; if none is available it falls back to the coding agent. Each Creative Director project can override this from its Models drawer.',
     link: '/creative-director',
   }));
 
@@ -488,8 +520,12 @@ export async function updateAiAssignment(id, { providerId, model } = {}) {
     return getAiAssignments();
   }
 
-  if (id === 'settings.creativeDirector.evaluation') {
-    await patchSettingsPath('creativeDirector.evaluation', { providerId: nextProviderId, model: nextModel });
+  if (id.startsWith('settings.creativeDirector.')) {
+    const stage = id.slice('settings.creativeDirector.'.length);
+    if (!['treatment', 'plan', 'evaluation'].includes(stage)) {
+      throw new ServerError(`Unknown Creative Director assignment: ${id}`, { status: 400, code: 'VALIDATION_ERROR' });
+    }
+    await patchSettingsPath(`creativeDirector.${stage}`, { providerId: nextProviderId, model: nextModel });
     return getAiAssignments();
   }
 

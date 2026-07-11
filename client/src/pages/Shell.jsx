@@ -11,18 +11,14 @@ import * as api from '../services/api';
 import { readClipboard } from '../lib/clipboard';
 import { formatDurationMs } from '../utils/formatters';
 import { buildTerminalTheme, parseCssColorToHex } from '../lib/terminalTheme';
+import { clickableProps } from '../lib/a11yKeyboard.js';
 
 // Must match MAX_TOTAL_SESSIONS in server/services/shell.js
 const MAX_SESSIONS = 20;
 
 const QUICK_COMMANDS = [
-  // `--system-prompt .` replaces Claude's default system prompt with a single
-  // "." (a minimal/blank prompt) rather than appending to it — so interactive
-  // sessions launched here skip the heavyweight default harness prompt. The
-  // `claude (full)` entry keeps the default system prompt for when it's wanted.
-  { label: 'claude', command: 'claude --dangerously-skip-permissions --system-prompt .' },
-  { label: 'claude (full)', command: 'claude --dangerously-skip-permissions' },
-  { label: 'codex', command: 'codex' },
+  { label: 'claude', command: 'claude --dangerously-skip-permissions' },
+  { label: 'codex', command: 'codex --dangerously-bypass-approvals-and-sandbox' },
   { label: 'antigravity', command: 'agy' },
   { label: 'openclaw', command: 'openclaw tui' },
   { label: 'git status', command: 'git status' },
@@ -968,6 +964,7 @@ export default function Shell() {
                       : 'bg-port-card hover:bg-port-border text-gray-400 hover:text-white border border-port-border'
                 }`}
                 onClick={() => !isActive && switchToSession(s.sessionId)}
+                {...clickableProps(() => !isActive && switchToSession(s.sessionId))}
                 title={`${isRun ? 'Live TUI run — ' : ''}${s.label || s.cwd || shortId(s.sessionId)} — ${formatDurationMs(Date.now() - s.createdAt)} old`}
               >
                 <TabIcon size={12} className="shrink-0" />

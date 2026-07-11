@@ -24,6 +24,7 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '
 import { findFfmpeg, findFfprobe, safeUnder, generateThumbnail } from '../../lib/ffmpeg.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { attachFfmpegRenderGuard } from '../../lib/ffmpegRenderGuard.js';
 import { loadHistory, mutateVideoHistory } from '../videoGen/local.js';
 
 const PROJECTS_FILE = join(PATHS.data, 'video-projects.json');
@@ -400,76 +401,91 @@ export async function renderProject(projectId) {
     }
   });
 
-  proc.on('error', (err) => {
-    job.status = 'error';
-    const reason = `Failed to spawn ffmpeg: ${err.message}`;
-    job.lastError = reason;
-    console.log(`❌ Timeline render spawn error [${jobId.slice(0, 8)}]: ${reason}`);
-    broadcastSse(job, { type: 'error', error: reason });
-    projectRenders.delete(projectId);
-    closeJobAfterDelay(jobs, jobId);
-  });
-
-  proc.on('close', async (code, signal) => {
-    // Runs outside the request lifecycle — an uncaught throw from
-    // generateThumbnail/loadHistory/saveHistory would crash the process, so
-    // wrap the body and surface the failure over SSE instead.
-    try {
-    job.process = null;
-    if (code !== 0) {
-      const canceled = signal === 'SIGTERM' || signal === 'SIGKILL';
-      // 'canceled' (single l) matches every other SSE emitter in the app —
-      // useSseProgress treats it as terminal.
-      job.status = canceled ? 'canceled' : 'error';
-      const reason = canceled
-        ? 'Render cancelled'
-        : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`;
-      job.lastError = reason;
-      console.log(`${canceled ? '🛑' : '❌'} Timeline render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
-      await unlink(outputPath).catch(() => {});
-      broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
-      projectRenders.delete(projectId);
-      closeJobAfterDelay(jobs, jobId);
-      return;
-    }
-    job.status = 'complete';
-    // The encode args already include -movflags +faststart, so no separate
-    // remux pass is needed here.
-    const thumb = await generateThumbnail(outputPath, jobId);
-
-    // Push to existing video history with a timelineProjectId flag so the
-    // Media History page picks it up alongside generated clips.
-    const renderedNumFrames = Math.round(totalDuration * (fps || 24));
-    const meta = {
-      id: jobId,
-      prompt: `Timeline: ${project.name}`,
-      modelId: 'timeline',
-      seed: 0,
-      width: canonW,
-      height: canonH,
-      numFrames: renderedNumFrames,
-      fps: fps || 24,
-      filename,
-      thumbnail: thumb,
-      createdAt: new Date().toISOString(),
-      timelineProjectId: projectId,
-    };
-    // Serialized append through the single shared history tail so a concurrent
-    // download/render/timeline write can't clobber this entry.
-    await mutateVideoHistory((history) => { history.unshift(meta); return history; });
-    console.log(`✅ Timeline rendered [${jobId.slice(0, 8)}]: ${filename}`);
-    broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}` } });
-    projectRenders.delete(projectId);
-    closeJobAfterDelay(jobs, jobId);
-    } catch (err) {
-      const reason = `Post-render failed: ${err.message}`;
+  // Spawn-state tracking + exactly-once terminal guard + pre-vs-post-spawn
+  // dispatch live in the shared helper; only the finalize bodies below are
+  // service-specific (timeline does NOT mutate any project status).
+  attachFfmpegRenderGuard(proc, {
+    label: `Timeline render [${jobId.slice(0, 8)}]`,
+    onProcessError: (err) => {
+      // Post-spawn error (e.g. a failed kill during cancel). The ffmpeg is
+      // still live — do NOT release the project mutex or null job.process
+      // here, or a replacement render could spawn and overlap it. Record the
+      // reason; the pending 'close' runs the sole terminal finalization.
+      job.lastError = `ffmpeg process error: ${err.message}`;
+      console.log(`⚠️ Timeline render post-spawn error [${jobId.slice(0, 8)}]: ${err.message}`);
+    },
+    onSpawnError: (err) => {
+      // Pre-spawn failure: the child never started, so 'close' won't follow.
+      job.process = null;
       job.status = 'error';
+      const reason = `Failed to spawn ffmpeg: ${err.message}`;
       job.lastError = reason;
-      console.error(`❌ Timeline render post-processing error [${jobId.slice(0, 8)}]: ${reason}`);
+      console.log(`❌ Timeline render spawn error [${jobId.slice(0, 8)}]: ${reason}`);
       broadcastSse(job, { type: 'error', error: reason });
       projectRenders.delete(projectId);
       closeJobAfterDelay(jobs, jobId);
-    }
+    },
+    onClose: async (code, signal) => {
+      // Runs outside the request lifecycle — an uncaught throw from
+      // generateThumbnail/loadHistory/saveHistory would crash the process, so
+      // wrap the body and surface the failure over SSE instead.
+      try {
+        job.process = null;
+        if (code !== 0) {
+          const canceled = signal === 'SIGTERM' || signal === 'SIGKILL';
+          // 'canceled' (single l) matches every other SSE emitter in the app —
+          // useSseProgress treats it as terminal.
+          job.status = canceled ? 'canceled' : 'error';
+          const reason = canceled
+            ? 'Render cancelled'
+            : signal ? `Killed by signal ${signal}` : `ffmpeg exit ${code}`;
+          job.lastError = reason;
+          console.log(`${canceled ? '🛑' : '❌'} Timeline render ${canceled ? 'cancelled' : 'failed'} [${jobId.slice(0, 8)}]: ${reason}`);
+          await unlink(outputPath).catch(() => {});
+          broadcastSse(job, { type: canceled ? 'canceled' : 'error', error: reason });
+          projectRenders.delete(projectId);
+          closeJobAfterDelay(jobs, jobId);
+          return;
+        }
+        job.status = 'complete';
+        // The encode args already include -movflags +faststart, so no separate
+        // remux pass is needed here.
+        const thumb = await generateThumbnail(outputPath, jobId);
+
+        // Push to existing video history with a timelineProjectId flag so the
+        // Media History page picks it up alongside generated clips.
+        const renderedNumFrames = Math.round(totalDuration * (fps || 24));
+        const meta = {
+          id: jobId,
+          prompt: `Timeline: ${project.name}`,
+          modelId: 'timeline',
+          seed: 0,
+          width: canonW,
+          height: canonH,
+          numFrames: renderedNumFrames,
+          fps: fps || 24,
+          filename,
+          thumbnail: thumb,
+          createdAt: new Date().toISOString(),
+          timelineProjectId: projectId,
+        };
+        // Serialized append through the single shared history tail so a concurrent
+        // download/render/timeline write can't clobber this entry.
+        await mutateVideoHistory((history) => { history.unshift(meta); return history; });
+        console.log(`✅ Timeline rendered [${jobId.slice(0, 8)}]: ${filename}`);
+        broadcastSse(job, { type: 'complete', result: { id: jobId, filename, thumbnail: thumb, path: `/data/videos/${filename}` } });
+        projectRenders.delete(projectId);
+        closeJobAfterDelay(jobs, jobId);
+      } catch (err) {
+        const reason = `Post-render failed: ${err.message}`;
+        job.status = 'error';
+        job.lastError = reason;
+        console.error(`❌ Timeline render post-processing error [${jobId.slice(0, 8)}]: ${reason}`);
+        broadcastSse(job, { type: 'error', error: reason });
+        projectRenders.delete(projectId);
+        closeJobAfterDelay(jobs, jobId);
+      }
+    },
   });
 
   return { jobId };

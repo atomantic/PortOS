@@ -7,10 +7,21 @@ import { formatContextLength } from './formatters.js';
  */
 export const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
+export const GROK_CONFIGURED_DEFAULT = 'grok-configured-default';
+
+const CONFIGURED_DEFAULT_SENTINELS = new Set([
+  CODEX_CONFIGURED_DEFAULT,
+  ANTIGRAVITY_CONFIGURED_DEFAULT,
+  GROK_CONFIGURED_DEFAULT,
+]);
+
+/** True for any provider "use CLI's own default" sentinel. Mirror of server `isConfiguredDefaultModel`. */
+export const isConfiguredDefaultModel = (model) => CONFIGURED_DEFAULT_SENTINELS.has(model);
 
 export const DEFAULT_LARGE_CONTEXT_WINDOW = 128_000;
 export const CODEX_CONTEXT_WINDOW = 1_000_000;
 export const GEMINI_CONTEXT_WINDOW = 1_048_576;
+export const GROK_CONTEXT_WINDOW = 256_000;
 
 // Keep in sync with server/lib/stageRunner.js.
 const KNOWN_MODEL_CONTEXT_WINDOWS = Object.freeze([
@@ -33,12 +44,22 @@ export const knownModelContextWindow = (model) => {
   return found ? found[1] : null;
 };
 
+// Inline mirror of server/lib/providerModels.js#commandBasename — the client can't
+// import server-side modules. Strip the directory + a Windows `.exe` suffix so a
+// path-configured command (/opt/homebrew/bin/grok) matches the bare vendor name.
+// Keep in lockstep with the server helper (only `.exe` is stripped, not `.cmd`).
+const commandBasename = (command) =>
+  typeof command === 'string' && command !== ''
+    ? command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '')
+    : '';
+
 export const knownProviderContextWindow = (provider) => {
   if (!isProcessProvider(provider)) return null;
   const id = String(provider?.id || '').toLowerCase();
-  const command = String(provider?.command || '').toLowerCase();
+  const command = commandBasename(provider?.command);
   if (id === 'codex' || id === 'codex-tui' || command === 'codex') return CODEX_CONTEXT_WINDOW;
   if (id === 'antigravity-cli' || id === 'antigravity-tui' || command === 'agy') return GEMINI_CONTEXT_WINDOW;
+  if (id === 'grok-cli' || id === 'grok-tui' || command === 'grok') return GROK_CONTEXT_WINDOW;
   return null;
 };
 
@@ -63,7 +84,7 @@ export const PROVIDER_TYPES = Object.freeze({
  * @returns {string[]}
  */
 export const filterSelectableModels = (models) =>
-  (models || []).filter(m => m !== CODEX_CONFIGURED_DEFAULT && m !== ANTIGRAVITY_CONFIGURED_DEFAULT);
+  (models || []).filter(m => !isConfiguredDefaultModel(m));
 
 /**
  * Embedding-only model detector — mirror of `isEmbeddingModel` in
@@ -146,18 +167,28 @@ export const visionLocalModelFilter = (id, provider) =>
   localBackendForProvider(provider) ? isVisionModel(id) : true;
 
 /**
- * Classify a provider as a local-LLM backend by its endpoint/name, so callers
+ * Classify a provider as a local-LLM backend by its id/endpoint/name, so callers
  * can fold in live-installed models (Ollama/LM Studio) that aren't in the
  * provider's stored `models` list. Ollama's native + OpenAI-compat ports are
- * 11434; LM Studio defaults to 1234.
- * @param {{endpoint?:string,name?:string}} provider
+ * 11434; LM Studio defaults to 1234. The stable provider ids (`ollama` /
+ * `lmstudio`) are checked too — AI Assignments' curated provider payload
+ * omits `endpoint`, and a renamed display name would otherwise miss detection.
+ * @param {{id?:string,endpoint?:string,name?:string}} provider
  * @returns {'ollama'|'lmstudio'|null}
  */
 export const localBackendForProvider = (provider) => {
-  const endpoint = String(provider?.endpoint || '');
-  const name = String(provider?.name || '').toLowerCase();
-  if (/:11434\b/.test(endpoint) || name.includes('ollama')) return 'ollama';
-  if (/:1234\b/.test(endpoint) || name.includes('lm studio') || name.includes('lmstudio')) return 'lmstudio';
+  if (!provider) return null;
+  const id = String(provider.id || '').toLowerCase();
+  const endpoint = String(provider.endpoint || '');
+  const name = String(provider.name || '').toLowerCase();
+  if (id === 'ollama' || /:11434\b/.test(endpoint) || name.includes('ollama')) return 'ollama';
+  if (
+    id === 'lmstudio' ||
+    /:1234\b/.test(endpoint) ||
+    name.includes('lm studio') ||
+    name.includes('lmstudio') ||
+    /lm[\s-]?studio/i.test(name)
+  ) return 'lmstudio';
   return null;
 };
 
@@ -310,4 +341,76 @@ export const providerTypeClass = (type) => {
   if (type === PROVIDER_TYPES.CLI) return 'bg-blue-500/20 text-blue-400';
   if (type === PROVIDER_TYPES.TUI) return 'bg-emerald-500/20 text-emerald-400';
   return 'bg-purple-500/20 text-purple-400';
+};
+
+// ---------------------------------------------------------------------------
+// AI Assignments option helpers — shared by the global AI Assignments table
+// (settings/AiAssignmentsTab.jsx) and per-record override drawers (e.g. the
+// Creative Director Models drawer). All three consume the `getAiAssignments`
+// payload shape (`{ providers, assignments }`), where an assignment `entry` may
+// carry `providerTypes` (which provider kinds are eligible) and optional
+// pre-baked `providerOptions` / `modelOptions` overrides for runtime call sites.
+// ---------------------------------------------------------------------------
+
+/** Display name for a provider id, falling back to the id then `fallback`. */
+export const providerDisplayName = (providers, id, fallback = '') =>
+  providers.find((p) => p.id === id)?.name || id || fallback;
+
+/**
+ * Provider `{ id, name }` options eligible for an assignment entry — the entry's
+ * pre-baked `providerOptions` when present, else every provider whose `type` is
+ * in the entry's `providerTypes` (all providers when unfiltered), tagged with a
+ * "(disabled)" suffix on disabled providers.
+ */
+export const assignmentProviderOptions = (entry, providers) => {
+  if (Array.isArray(entry?.providerOptions)) return entry.providerOptions;
+  const types = Array.isArray(entry?.providerTypes) && entry.providerTypes.length
+    ? new Set(entry.providerTypes)
+    : null;
+  return providers
+    .filter((p) => !types || types.has(p.type))
+    .map((p) => ({ id: p.id, name: `${p.name}${p.enabled ? '' : ' (disabled)'}` }));
+};
+
+/**
+ * Model-id options for an assignment entry given the selected provider — the
+ * entry's pre-baked `modelOptions` when present, else the provider's own model
+ * list (empty when the provider is unknown or has none).
+ *
+ * When `entry.modelFilter === 'vision'`, LOCAL backends (Ollama / LM Studio)
+ * are reduced to vision-capable models via `visionLocalModelFilter` so the
+ * Scene Evaluation (and other vision) pickers can't offer text-only ids.
+ * Cloud/API providers are left intact by that filter.
+ */
+export const assignmentModelOptions = (entry, providers, providerId) => {
+  const provider = providers.find((p) => p.id === providerId);
+  const raw = Array.isArray(entry?.modelOptions)
+    ? entry.modelOptions
+    : (provider?.models || []);
+  // Normalize object-shaped entries (`{ id }`) so both baked and live lists
+  // yield plain string options for the <select>.
+  const models = raw
+    .map((m) => (typeof m === 'string' ? m : m?.id))
+    .filter(Boolean);
+  if (entry?.modelFilter === 'vision') {
+    return models.filter((id) => visionLocalModelFilter(id, provider));
+  }
+  return models;
+};
+
+/**
+ * Default model to seed when the user picks a provider for an assignment.
+ * For vision-filtered entries, only returns a model that still appears in the
+ * filtered options — a local backend's text-only `defaultModel` must not be
+ * seeded into the Scene Evaluation picker.
+ */
+export const assignmentDefaultModel = (entry, providers, providerId) => {
+  if (!providerId) return '';
+  const provider = providers.find((p) => p.id === providerId);
+  if (!provider) return '';
+  const def = provider.defaultModel || '';
+  if (entry?.modelFilter !== 'vision') return def;
+  const models = assignmentModelOptions(entry, providers, providerId);
+  if (def && models.includes(def)) return def;
+  return models[0] || '';
 };

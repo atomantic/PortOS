@@ -105,6 +105,12 @@ export async function setProjectAnalysis(id, analysis) {
   return next;
 }
 
+export async function setProjectMidiTranscription(id, midi) {
+  const next = await (await selectBackend()).setProjectMidiTranscription(id, midi);
+  emitRecordUpdated('musicVideoProject', id);
+  return next;
+}
+
 export async function addProjectScene(id, sceneInput) {
   const scene = await (await selectBackend()).addProjectScene(id, sceneInput);
   emitRecordUpdated('musicVideoProject', id);

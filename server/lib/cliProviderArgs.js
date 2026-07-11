@@ -13,11 +13,13 @@
  *   - Codex:       `codex exec -`        (+ `--model` when not the sentinel)
  *   - Antigravity: `agy --print` with prompt piped to stdin
  *   - Gemini CLI:  legacy prompt piped to stdin (+ `-m <model>`)
+ *   - Grok Build:  `grok --prompt-file /dev/stdin` (+ `--model <id>`, see grok.js)
  *   - Claude Code: `-p -`                (+ `--model <id>`)
  */
 
 import { resolveCliModel, hasModelFlag, resolveBedrockCliModel, prefixOpencodeModel, isOpencodeCommand } from './providerModels.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from './antigravity.js';
+import { isGrokCommand, ensureGrokHeadlessArgs } from './grok.js';
 
 /**
  * Build CLI args based on provider type. Each CLI provider has different
@@ -37,9 +39,9 @@ export function buildCliArgs(provider) {
   // injection path fires — but if we kept the bogus token in baseArgs the
   // CLI would still see two `--model` occurrences and reject the argv.
   const baseArgs = stripBrokenModelFlags(Array.isArray(provider?.args) ? provider.args : []);
-  const effectiveDefaultModel = providerId === 'codex'
-    ? resolveCliModel(provider.defaultModel)
-    : provider.defaultModel;
+  // Configured-default sentinels (Codex / Antigravity / Grok Build) resolve to
+  // null so the CLI uses its own latest/default model without a --model flag.
+  const effectiveDefaultModel = resolveCliModel(provider.defaultModel);
 
   // Codex CLI: `codex exec -` reads prompt from stdin, --model for model.
   // Detect an existing leading `exec` in user/legacy args so we don't end up
@@ -60,6 +62,15 @@ export function buildCliArgs(provider) {
   // travels over stdin so large PortOS prompts do not hit OS argv limits.
   if (isAntigravityCliProvider(provider)) {
     return ensureAntigravityPrintArgs(baseArgs);
+  }
+
+  // Grok Build CLI (`grok`): headless one-shot. The prompt is delivered through
+  // `--prompt-file /dev/stdin` (grok reads a single-turn prompt from a file, not
+  // raw stdin) so PortOS's existing stdin write feeds it unchanged — see grok.js.
+  // `--output-format plain` + `--permission-mode bypassPermissions` are injected
+  // there unless the user pinned their own. Model flag gated like the others.
+  if (isGrokCommand(provider?.command)) {
+    return ensureGrokHeadlessArgs(baseArgs, effectiveDefaultModel);
   }
 
   // OpenCode CLI (`opencode run`): the headless, non-interactive subcommand. It

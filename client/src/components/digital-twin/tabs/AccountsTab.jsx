@@ -285,6 +285,7 @@ export default function AccountsTab() {
             </h3>
             <button
               onClick={handleCancel}
+              aria-label="Close"
               className="p-1 text-gray-400 hover:text-white transition-colors"
             >
               <X className="w-4 h-4" />

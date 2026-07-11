@@ -18,6 +18,7 @@
 
 import { spawn } from 'child_process';
 import { buildCliArgs } from './cliProviderArgs.js';
+import { prepareGrokPromptFile } from './grok.js';
 import { buildOpencodeEnvVars } from './opencodeConfig.js';
 import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn } from './bufferedSpawn.js';
 
@@ -74,10 +75,11 @@ export function pickCliProvider(providers, config = {}) {
  * @param {string[]} [args.extraArgs] - extra argv appended after the built args (e.g. `--allowedTools …`)
  * @param {number} [args.timeoutMs] - SIGTERM after this many ms (default 300000)
  * @param {(chunk: string, stream: 'stdout'|'stderr') => void} [args.onData] - live output callback
+ * @param {NodeJS.ProcessEnv} [args.baseEnv] - base env for the child (default process.env). Callers that must NOT leak host credentials to an autonomous agent (e.g. the autofixer) pass a sanitized allowlist here; provider.envVars still overlays it.
  * @returns {Promise<{ text: string, exitCode: number, stderr: string } | { error: string, exitCode?: number, stderr?: string }>}
  */
 export function runCliProviderPrompt(args = {}) {
-  const { provider, model = null, prompt, cwd, extraArgs = [], timeoutMs = 300000, onData } = args;
+  const { provider, model = null, prompt, cwd, extraArgs = [], timeoutMs = 300000, onData, baseEnv = process.env } = args;
 
   if (!provider?.command) {
     return Promise.resolve({ error: 'Provider has no command configured' });
@@ -89,7 +91,10 @@ export function runCliProviderPrompt(args = {}) {
   // Clone with the per-call model as defaultModel so buildCliArgs injects the
   // right --model/-m flag for this provider's CLI convention.
   const effectiveProvider = { ...provider, defaultModel: model ?? provider.defaultModel };
-  const spawnArgs = [...buildCliArgs(effectiveProvider), ...(Array.isArray(extraArgs) ? extraArgs : [])];
+  const builtArgs = [...buildCliArgs(effectiveProvider), ...(Array.isArray(extraArgs) ? extraArgs : [])];
+  // Grok's `--prompt-file /dev/stdin` sentinel is fed via stdin on POSIX; on
+  // Windows it's rewritten to a temp file (useStdin=false). No-op otherwise.
+  const { args: spawnArgs, useStdin, cleanup: cleanupPromptFile } = prepareGrokPromptFile(builtArgs, prompt);
 
   return new Promise((resolve) => {
     let stdout = '';
@@ -102,7 +107,7 @@ export function runCliProviderPrompt(args = {}) {
     // models map for OpenCode Ollama providers (empty/no-op otherwise) so the
     // injected `--model ollama/<id>` isn't rejected as "not valid" — see
     // issue-2190. effectiveProvider carries the per-call model as defaultModel.
-    const childEnv = { ...process.env, ...provider.envVars, ...buildOpencodeEnvVars(effectiveProvider, effectiveProvider.defaultModel) };
+    const childEnv = { ...baseEnv, ...provider.envVars, ...buildOpencodeEnvVars(effectiveProvider, effectiveProvider.defaultModel) };
     delete childEnv.CLAUDECODE;
 
     // npm-installed CLI providers are .cmd/.bat shims on Windows; resolve+wrap
@@ -128,6 +133,7 @@ export function runCliProviderPrompt(args = {}) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      cleanupPromptFile();
       resolve(result);
     };
 
@@ -149,7 +155,9 @@ export function runCliProviderPrompt(args = {}) {
     // 'error' would crash the process.
     child.stdin?.on('error', () => {});
     try {
-      child.stdin.write(prompt);
+      // When grok is delivered via a Windows temp file, the prompt is already on
+      // disk — just close stdin instead of writing it.
+      if (useStdin) child.stdin.write(prompt);
       child.stdin.end();
     } catch {
       // Synchronous write failure (e.g. already-destroyed stdin) — let the

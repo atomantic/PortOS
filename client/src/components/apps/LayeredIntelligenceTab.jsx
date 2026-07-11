@@ -2,6 +2,8 @@ import { Plus, Trash2, Brain } from 'lucide-react';
 import Banner from '../ui/Banner';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { filterSelectableModels } from '../../utils/providers';
+import { timeAgo } from '../../utils/formatters';
+import { formatLiReason, liReasonTone } from '../../utils/layeredIntelligenceReasons';
 
 // The self-improvement loop's per-app config surface. Field set mirrors the
 // server schema (server/lib/validation.js `layeredIntelligenceConfigSchema`)
@@ -39,6 +41,40 @@ export const LI_INTERVAL_PRESETS = [
   { ms: 24 * 60 * 60 * 1000, label: 'Daily' },
   { ms: 7 * 24 * 60 * 60 * 1000, label: 'Weekly' }
 ];
+
+// Compact prose for a stored last-run outcome, keyed by the handler's action +
+// reason (persisted on the effective config as lastRunAction / lastRunReason).
+// The loop files a tracker issue and spawns no visible agent, so this durable
+// line — not the transient toast — is how a user (esp. on mobile) learns WHY a
+// run produced nothing. The reason→prose gloss + tone come from the shared
+// layeredIntelligenceReasons module so a filed run reads as success (with its
+// ref) while every non-filed reason renders identically here and in the toast.
+// Returns { tone, text, when } or null when it's never run.
+export function describeLastRun(li) {
+  if (!li?.lastRunAt) return null;
+  const when = timeAgo(li.lastRunAt);
+  const action = li.lastRunAction || null;
+  const reason = li.lastRunReason || null;
+
+  if (action === 'filed') {
+    return { tone: 'success', text: `filed an improvement issue${li.lastRunRef ? ` (${li.lastRunRef})` : ''}`, when };
+  }
+  // Legacy record: installs that ran the loop before this change persisted only
+  // `lastRunAt` (no action/reason). Do not fabricate an outcome — say the run
+  // happened but its detail predates the richer bookkeeping, until a new run
+  // records action + reason.
+  if (!action) {
+    return { tone: 'neutral', text: 'ran (outcome not recorded before this version)', when };
+  }
+  return { tone: liReasonTone(reason), text: formatLiReason({ action, reason }), when };
+}
+
+const LAST_RUN_TONE_CLASS = {
+  success: 'text-port-success',
+  error: 'text-port-error',
+  warn: 'text-port-warning',
+  neutral: 'text-gray-400'
+};
 
 // Deep-equal two allowedScopes arrays regardless of order.
 function sameScopes(a, b) {
@@ -90,23 +126,21 @@ function sameCustom(a, b) {
 }
 
 /**
- * Build the minimal Layered Intelligence PATCH: only the top-level keys whose
- * value differs from the effective baseline the drawer loaded. Sending the full
- * effective config would persist every default to disk and freeze this install
- * against future default changes — the server's merge-over-stored contract
+ * Build the minimal Layered Intelligence BEHAVIOR PATCH: only the top-level
+ * behavior keys (rules / sources / allowedScopes / handoff) whose value differs
+ * from the effective baseline the drawer loaded. Sending the full effective config
+ * would persist every default to disk and freeze this install against future
+ * default changes — the server's merge-over-stored contract
  * (updateAppLayeredIntelligence) depends on untouched fields staying absent.
  * Returns null when nothing changed (caller then omits `layeredIntelligence`).
- * providerId/model normalize '' → null (the "use default" sentinel).
+ *
+ * SCHEDULING fields (enabled / intervalMs / providerId / model) are NOT included
+ * here — they live in the per-app task override now (#2322) and are diffed by
+ * `buildLayeredIntelligenceScheduleUpdate` below.
  */
 export function buildLayeredIntelligenceUpdate(baseline, current) {
   if (!baseline || !current) return null;
   const update = {};
-  if (!!current.enabled !== !!baseline.enabled) update.enabled = !!current.enabled;
-  if (current.intervalMs !== baseline.intervalMs) update.intervalMs = current.intervalMs;
-  const curProvider = current.providerId || null;
-  if (curProvider !== (baseline.providerId || null)) update.providerId = curProvider;
-  const curModel = current.model || null;
-  if (curModel !== (baseline.model || null)) update.model = curModel;
   if ((current.rules || '') !== (baseline.rules || '')) update.rules = current.rules || '';
 
   const curSources = current.sources || {};
@@ -129,6 +163,44 @@ export function buildLayeredIntelligenceUpdate(baseline, current) {
     update.handoff = { enabled: !!current.handoff?.enabled };
   }
 
+  return Object.keys(update).length > 0 ? update : null;
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const WEEK_MS = 7 * DAY_MS;
+
+// Map a chosen intervalMs to the per-app override's { interval, intervalMs } pair
+// the scheduler understands: 'daily'/'weekly' for the standard cadences, else
+// 'custom' (the scheduler's CUSTOM branch reads the numeric intervalMs). Mirrors
+// the server migration's intervalFieldsFromMs.
+export function intervalFieldsFromMs(intervalMs) {
+  const ms = typeof intervalMs === 'number' && intervalMs > 0 ? intervalMs : DAY_MS;
+  if (ms === DAY_MS) return { interval: 'daily', intervalMs: ms };
+  if (ms === WEEK_MS) return { interval: 'weekly', intervalMs: ms };
+  return { interval: 'custom', intervalMs: ms };
+}
+
+/**
+ * Build the minimal per-app SCHEDULING override PATCH for the layered-intelligence
+ * task type (enabled / interval+intervalMs / providerId / model) — only the fields
+ * the user changed vs the baseline. Returns null when nothing changed (caller then
+ * skips the task-override PUT). providerId/model normalize '' → null (the "use
+ * default" sentinel). When the interval changes, both `interval` and `intervalMs`
+ * are sent so the scheduler resolves the cadence correctly.
+ */
+export function buildLayeredIntelligenceScheduleUpdate(baseline, current) {
+  if (!baseline || !current) return null;
+  const update = {};
+  if (!!current.enabled !== !!baseline.enabled) update.enabled = !!current.enabled;
+  if (current.intervalMs !== baseline.intervalMs) {
+    const { interval, intervalMs } = intervalFieldsFromMs(current.intervalMs);
+    update.interval = interval;
+    update.intervalMs = intervalMs;
+  }
+  const curProvider = current.providerId || null;
+  if (curProvider !== (baseline.providerId || null)) update.providerId = curProvider;
+  const curModel = current.model || null;
+  if (curModel !== (baseline.model || null)) update.model = curModel;
   return Object.keys(update).length > 0 ? update : null;
 }
 
@@ -179,15 +251,23 @@ export default function LayeredIntelligenceTab({ li, onChange, providers, isPort
   };
 
   const visibleScopes = LI_SCOPES.filter(s => !s.portosOnly || isPortos);
+  const lastRun = describeLastRun(li);
 
   return (
     <div className="space-y-4">
       <div className="flex items-start gap-2">
         <Brain size={16} className="text-port-accent mt-0.5 shrink-0" />
         <p className="text-xs text-gray-500">
-          The Layered Intelligence Loop perpetually reviews this app&apos;s telemetry and files improvement proposals via CoS. Off by default — it runs on the schedule below only when enabled.
+          The Layered Intelligence Loop perpetually reviews this app&apos;s telemetry and files improvement proposals via CoS. Off by default — it runs on the schedule below only when enabled. It files a tracker issue rather than spawning a visible agent, so a run that produces nothing reports why here.
         </p>
       </div>
+
+      {lastRun && (
+        <div className="text-xs bg-port-bg border border-port-border rounded-lg px-3 py-2">
+          <span className="text-gray-500">Last run {lastRun.when}: </span>
+          <span className={LAST_RUN_TONE_CLASS[lastRun.tone] || 'text-gray-400'}>{lastRun.text}.</span>
+        </div>
+      )}
 
       <label className="flex items-center gap-2 cursor-pointer">
         <input

@@ -230,6 +230,7 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
                     </button>
                     <button
                       onClick={() => { setEditing(false); setNoteContent(selectedNote.content); }}
+                      aria-label="Cancel"
                       className="p-1.5 rounded hover:bg-port-card text-gray-400 hover:text-white"
                     >
                       <X size={16} />

@@ -528,6 +528,9 @@ export async function getOptOutDigest() {
     channel: c.channel || null,
     disclosedFields: c.disclosedFields || [],
     optoutUrl: c.evidence?.optout_url || null,
+    // Filled broker-search URL for blocked cases — lets the digest offer
+    // "check manually in your browser" (the sanctioned path past a bot wall).
+    searchUrl: c.evidence?.search_url || null,
     playbook: c.evidence?.playbook || [],
     nextRecheckAt: c.nextRecheckAt,
   });

@@ -112,7 +112,9 @@ export const CASE_STATE_TONE = {
   found: 'bg-port-error/15 text-port-error border-port-error/30',
   not_found: 'bg-gray-700/40 text-gray-400 border-gray-600/40',
   indirect_exposure: 'bg-port-warning/15 text-port-warning border-port-warning/30',
-  blocked: 'bg-port-error/15 text-port-error border-port-error/30',
+  // Warning (not error) tone: blocked means "unknown — needs a manual check,"
+  // not "exposure confirmed."
+  blocked: 'bg-port-warning/15 text-port-warning border-port-warning/30',
   optout_in_progress: 'bg-port-accent/15 text-port-accent border-port-accent/30',
   submitted: 'bg-port-accent/15 text-port-accent border-port-accent/30',
   verification_pending: 'bg-port-accent/15 text-port-accent border-port-accent/30',
@@ -128,6 +130,27 @@ export const EXPOSURE_MAP_STATES = [
   'verification_pending', 'awaiting_processing', 'confirmed_removed',
   'blocked', 'human_task_queued', 'not_found',
 ];
+
+// Positive-resolution action for the case states a human resolves by hand
+// (drawer + digest action strips both render from this map, so the rule lives
+// in ONE place). Mirrors the server's STATE_TRANSITIONS legality
+// (privacyBrokers.js): blocked → submitted is NOT a legal transition — a
+// blocked case's positive outcome is a manual "I'm listed" (found), while a
+// queued human task's is "Mark done" (submitted).
+export const MANUAL_DONE_ACTION = {
+  blocked: {
+    target: 'found',
+    label: "I'm listed",
+    chipTone: 'text-port-error hover:bg-port-error/10',
+    buttonTone: 'border-port-error/40 text-port-error hover:bg-port-error/10',
+  },
+  human_task_queued: {
+    target: 'submitted',
+    label: 'Mark done',
+    chipTone: 'text-port-success hover:bg-port-success/10',
+    buttonTone: 'border-port-success/40 text-port-success hover:bg-port-success/10',
+  },
+};
 
 export const BROKER_SOURCES = [
   { id: 'curated', label: 'Curated' },

@@ -17,7 +17,7 @@ vi.mock('./jobGates.js', () => ({
 const { getScheduleStatus } = await import('./taskSchedule.js');
 const { getAllJobs } = await import('./autonomousJobs.js');
 const { checkJobGate, hasGate, getRegisteredGates } = await import('./jobGates.js');
-const { getWorkflowGraph, WORKFLOW_STAGES } = await import('./workflow.js');
+const { getWorkflowGraph, projectWorkflowTimeline, WORKFLOW_STAGES } = await import('./workflow.js');
 
 const STAGE_IDS = WORKFLOW_STAGES.map(s => s.id);
 
@@ -194,5 +194,181 @@ describe('getWorkflowGraph', () => {
     const buildStage = graph.stages.find(s => s.id === 'build');
     expect(planStage).toMatchObject({ nodeCount: 1, enabledCount: 1 });
     expect(buildStage).toMatchObject({ nodeCount: 1, enabledCount: 0 });
+  });
+});
+
+describe('projectWorkflowTimeline', () => {
+  const range = {
+    start: new Date('2026-07-09T00:00:00.000Z'),
+    end: new Date('2026-07-10T00:00:00.000Z'),
+    timezone: 'America/Los_Angeles'
+  };
+
+  it('projects pinned cron tasks onto the shared clock', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:morning', kind: 'task', enabled: true, schedule: { type: 'cron', cronExpression: '30 9 * * *' }
+    }], range);
+
+    expect(timeline.occurrences).toEqual([
+      expect.objectContaining({ nodeId: 'task:morning', at: '2026-07-09T16:30:00.000Z', kind: 'launch' })
+    ]);
+  });
+
+  it('renders an active perpetual task as an open-ended drain window and its reset', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:drain', kind: 'task', enabled: true, shouldRun: true,
+      schedule: { type: 'perpetual', recheckCron: '0 9 * * *' }
+    }], range);
+
+    expect(timeline.windows[0]).toMatchObject({ nodeId: 'task:drain', state: 'draining' });
+    expect(timeline.occurrences[0]).toMatchObject({ nodeId: 'task:drain', at: '2026-07-09T16:00:00.000Z', kind: 'recheck' });
+  });
+
+  it('does not show an app-scoped perpetual task draining when every tracked app is parked', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:drain', kind: 'task', enabled: true, shouldRun: true,
+      perpetual: { globalParked: false, trackedAppCount: 2, parkedAppCount: 2 },
+      schedule: { type: 'perpetual', recheckCron: '0 9 * * *' }
+    }], range);
+
+    expect(timeline.windows).toEqual([]);
+    expect(timeline.occurrences[0]).toMatchObject({ nodeId: 'task:drain', kind: 'recheck' });
+  });
+
+  it('places an already-due interval task at the start of the timeline', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:due', kind: 'task', enabled: true, shouldRun: true,
+      lastRun: '2026-07-07T00:00:00.000Z',
+      schedule: { type: 'daily', effectiveIntervalMs: 86_400_000 }
+    }], range);
+
+    expect(timeline.occurrences[0]).toMatchObject({ nodeId: 'task:due', at: range.start.toISOString(), kind: 'launch' });
+  });
+
+  it('tags an overdue interval task launch as due-now and carries its reason', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:weekly', kind: 'task', enabled: true, shouldRun: true,
+      runReason: 'weekly-due', lastRun: null,
+      schedule: { type: 'weekly', effectiveIntervalMs: 7 * 86_400_000 }
+    }], range);
+
+    // The NOW marker is flagged; subsequent cadence slots (out of the 24h
+    // window) are not, so only the tagged launch is present.
+    expect(timeline.occurrences).toEqual([
+      expect.objectContaining({ nodeId: 'task:weekly', at: range.start.toISOString(), dueNow: true, reason: 'weekly-due' })
+    ]);
+  });
+
+  it('does not tag a future on-cadence interval slot as due-now', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:soon', kind: 'task', enabled: true, shouldRun: false,
+      lastRun: '2026-07-08T18:00:00.000Z', nextRunAt: '2026-07-09T18:00:00.000Z',
+      schedule: { type: 'daily', effectiveIntervalMs: 86_400_000 }
+    }], range);
+
+    expect(timeline.occurrences).toHaveLength(1);
+    expect(timeline.occurrences[0]).toMatchObject({ nodeId: 'task:soon', at: '2026-07-09T18:00:00.000Z' });
+    expect(timeline.occurrences[0].dueNow).toBeUndefined();
+  });
+
+  it('tags a cron catch-up launch as due-now with the missed slot', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:sunday', kind: 'task', enabled: true, shouldRun: true,
+      runReason: 'cron-catch-up', missedSlot: '2026-07-05T14:00:00.000Z',
+      lastRun: '2026-07-05T00:57:50.000Z',
+      schedule: { type: 'cron', cronExpression: '0 7 * * 0' }
+    }], range);
+
+    expect(timeline.occurrences[0]).toMatchObject({
+      nodeId: 'task:sunday', at: range.start.toISOString(), dueNow: true,
+      reason: 'cron-catch-up', missedSlot: '2026-07-05T14:00:00.000Z'
+    });
+  });
+
+  it('omits weekend occurrences for weekday-only interval tasks', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:weekdays', kind: 'task', enabled: true, shouldRun: false,
+      lastRun: '2026-07-10T09:00:00.000Z',
+      nextRunAt: '2026-07-11T09:00:00.000Z',
+      schedule: { type: 'daily', effectiveIntervalMs: 86_400_000, weekdaysOnly: true }
+    }], {
+      start: new Date('2026-07-10T10:00:00.000Z'),
+      end: new Date('2026-07-13T10:00:00.000Z'),
+      timezone: 'Etc/UTC'
+    });
+
+    // Sat 7/11 and Sun 7/12 slots are skipped — shouldRunTask refuses
+    // weekday-only tasks on weekends regardless of schedule type.
+    expect(timeline.occurrences).toEqual([
+      expect.objectContaining({ nodeId: 'task:weekdays', at: '2026-07-13T09:00:00.000Z' })
+    ]);
+  });
+
+  it('omits weekend slots for weekday-only cron tasks', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:cron-weekdays', kind: 'task', enabled: true, shouldRun: false,
+      schedule: { type: 'cron', cronExpression: '0 9 * * *', weekdaysOnly: true }
+    }], {
+      start: new Date('2026-07-10T10:00:00.000Z'),
+      end: new Date('2026-07-13T10:00:00.000Z'),
+      timezone: 'Etc/UTC'
+    });
+
+    expect(timeline.occurrences).toEqual([
+      expect.objectContaining({ nodeId: 'task:cron-weekdays', at: '2026-07-13T09:00:00.000Z', kind: 'launch' })
+    ]);
+  });
+
+  it('does not duplicate the due-now marker when a cron slot lands exactly on the window start', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'task:now', kind: 'task', enabled: true, shouldRun: true,
+      schedule: { type: 'cron', cronExpression: '0 0 * * *' }
+    }], {
+      start: new Date('2026-07-09T00:00:00.000Z'),
+      end: new Date('2026-07-10T00:00:00.000Z'),
+      timezone: 'Etc/UTC'
+    });
+
+    expect(timeline.occurrences).toEqual([
+      expect.objectContaining({ nodeId: 'task:now', at: '2026-07-09T00:00:00.000Z', kind: 'launch' })
+    ]);
+    const ids = timeline.occurrences.map(item => item.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it('omits weekend occurrences for weekday-only interval jobs', () => {
+    const timeline = projectWorkflowTimeline([{
+      id: 'job:weekdays', kind: 'job', enabled: true,
+      lastRun: '2026-07-10T09:00:00.000Z',
+      schedule: { type: 'daily', intervalMs: 86_400_000, weekdaysOnly: true }
+    }], {
+      start: new Date('2026-07-10T10:00:00.000Z'),
+      end: new Date('2026-07-13T10:00:00.000Z'),
+      timezone: 'UTC'
+    });
+
+    expect(timeline.occurrences).toEqual([
+      expect.objectContaining({ nodeId: 'job:weekdays', at: '2026-07-13T09:00:00.000Z' })
+    ]);
+  });
+
+  it('flags launches from different nodes within fifteen minutes', () => {
+    const timeline = projectWorkflowTimeline([
+      { id: 'task:a', kind: 'task', enabled: true, schedule: { type: 'cron', cronExpression: '0 9 * * *' } },
+      { id: 'job:b', kind: 'job', enabled: true, schedule: { type: 'cron', cronExpression: '10 9 * * *' } }
+    ], range);
+
+    expect(timeline.occurrences).toHaveLength(2);
+    expect(timeline.occurrences.every(item => item.collision)).toBe(true);
+  });
+
+  it('leaves rotation and on-demand tasks unpinned', () => {
+    const timeline = projectWorkflowTimeline([
+      { id: 'task:rotation', kind: 'task', enabled: true, schedule: { type: 'rotation' } },
+      { id: 'task:demand', kind: 'task', enabled: true, schedule: { type: 'on-demand' } }
+    ], range);
+
+    expect(timeline.occurrences).toEqual([]);
+    expect(timeline.windows).toEqual([]);
   });
 });

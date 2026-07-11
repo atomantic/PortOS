@@ -266,14 +266,14 @@ export default function NicotineTab() {
                       placeholder="mg"
                       step="0.1"
                     />
-                    <button onClick={saveEditButton} className="p-1.5 text-port-success hover:text-white"><Check size={14} /></button>
-                    <button onClick={cancelEditButton} className="p-1.5 text-gray-500 hover:text-white"><X size={14} /></button>
+                    <button aria-label="Save" onClick={saveEditButton} className="p-1.5 text-port-success hover:text-white"><Check size={14} /></button>
+                    <button aria-label="Cancel" onClick={cancelEditButton} className="p-1.5 text-gray-500 hover:text-white"><X size={14} /></button>
                   </>
                 ) : (
                   <>
                     <span className="flex-1 text-xs text-gray-300">{btn.name}</span>
                     <span className="text-xs text-gray-500">{btn.mgPerUnit}mg</span>
-                    <button onClick={() => startEditButton(idx)} className="p-1.5 text-gray-600 hover:text-port-accent"><Pencil size={12} /></button>
+                    <button aria-label="Edit" onClick={() => startEditButton(idx)} className="p-1.5 text-gray-600 hover:text-port-accent"><Pencil size={12} /></button>
                     {isConfirming(`btn:${idx}`) ? (
                       <ConfirmButtonPair
                         prompt="Remove?"
@@ -284,7 +284,7 @@ export default function NicotineTab() {
                         onCancel={cancelDelete}
                       />
                     ) : (
-                      <button onClick={() => requestDelete(`btn:${idx}`)} className="p-1.5 text-gray-600 hover:text-port-error"><Trash2 size={12} /></button>
+                      <button aria-label="Delete" onClick={() => requestDelete(`btn:${idx}`)} className="p-1.5 text-gray-600 hover:text-port-error"><Trash2 size={12} /></button>
                     )}
                   </>
                 )}
@@ -307,7 +307,7 @@ export default function NicotineTab() {
                   placeholder="mg"
                   step="0.1"
                 />
-                <button type="submit" className="px-3 py-1.5 bg-port-accent/10 text-port-accent rounded text-xs hover:bg-port-accent/20">
+                <button type="submit" aria-label="Add product" className="px-3 py-1.5 bg-port-accent/10 text-port-accent rounded text-xs hover:bg-port-accent/20">
                   <Plus size={14} />
                 </button>
               </form>
@@ -483,8 +483,8 @@ export default function NicotineTab() {
                             </td>
                             <td className="px-3 py-1.5 text-right">
                               <div className="flex items-center justify-end gap-1">
-                                <button onClick={saveEdit} className="p-1 text-port-success hover:text-port-success/80"><Check size={14} /></button>
-                                <button onClick={cancelEdit} className="p-1 text-gray-500 hover:text-gray-300"><X size={14} /></button>
+                                <button aria-label="Save" onClick={saveEdit} className="p-1 text-port-success hover:text-port-success/80"><Check size={14} /></button>
+                                <button aria-label="Cancel" onClick={cancelEdit} className="p-1 text-gray-500 hover:text-gray-300"><X size={14} /></button>
                               </div>
                             </td>
                           </>
@@ -496,7 +496,7 @@ export default function NicotineTab() {
                             <td className="px-3 py-1.5 text-right text-white font-medium">{itemTotal}mg</td>
                             <td className="px-3 py-1.5 text-right">
                               <div className="flex items-center justify-end gap-1">
-                                <button onClick={() => startEdit(entry.date, idx, item)} className="p-1 text-gray-600 hover:text-port-accent"><Pencil size={12} /></button>
+                                <button aria-label="Edit" onClick={() => startEdit(entry.date, idx, item)} className="p-1 text-gray-600 hover:text-port-accent"><Pencil size={12} /></button>
                                 {isConfirming(key) ? (
                                   <ConfirmButtonPair
                                     prompt="Remove?"
@@ -507,7 +507,7 @@ export default function NicotineTab() {
                                     onCancel={cancelDelete}
                                   />
                                 ) : (
-                                  <button onClick={() => requestDelete(key)} className="p-1 text-gray-600 hover:text-port-error"><Trash2 size={12} /></button>
+                                  <button aria-label="Delete" onClick={() => requestDelete(key)} className="p-1 text-gray-600 hover:text-port-error"><Trash2 size={12} /></button>
                                 )}
                               </div>
                             </td>

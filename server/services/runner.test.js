@@ -39,7 +39,8 @@ vi.mock('fs/promises', () => ({
 }));
 
 const { spawn } = await import('child_process');
-const { writeFile } = await import('fs/promises');
+const { writeFile, readFile } = await import('fs/promises');
+const { atomicWrite } = await import('../lib/fileUtils.js');
 const runner = await import('./runner.js');
 const { analyzeError, ERROR_CATEGORIES } = await import('../lib/aiToolkit/errorDetection.js');
 const { setAIToolkit, executeCliRun, buildCliArgs, hasModelFlag, extractBakedModel, emitRunStarted } = runner;
@@ -353,6 +354,64 @@ describe('executeCliRun — close handler crash guard', () => {
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(onComplete.mock.calls[0][0]).toMatchObject({ success: true });
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('onRunCompleted hook threw during recovery'));
+    errorSpy.mockRestore();
+  });
+
+  it('finalizes a spawn error exactly once when error is followed by close', async () => {
+    const child = makeChild();
+    spawn.mockReturnValue(child);
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const onRunFailed = vi.fn();
+    const onComplete = vi.fn();
+    setAIToolkit(fakeToolkit(), {
+      dataDir: '/tmp/test-runner',
+      hooks: { onRunFailed },
+    });
+    readFile.mockResolvedValueOnce(JSON.stringify({
+      id: 'run-spawn-error',
+      providerId: 'configured-provider',
+      providerName: 'Configured Provider',
+      model: 'configured-model',
+      workspacePath: '/configured/workspace',
+      workspaceName: 'configured-workspace',
+      source: 'test-source',
+      startTime: '2026-07-10T00:00:00.000Z',
+    }));
+
+    const provider = {
+      id: 'codex', name: 'Codex', command: 'codex', args: [],
+      defaultModel: 'codex-configured-default', timeout: 5000,
+    };
+    await executeCliRun({
+      runId: 'run-spawn-error',
+      provider,
+      prompt: 'test prompt',
+      workspacePath: '/workspace',
+      onComplete,
+    });
+
+    child.emit('error', new Error('spawn ENOENT'));
+    child.emit('close', -1);
+
+    await vi.waitFor(() => expect(onComplete).toHaveBeenCalledTimes(1));
+    expect(onRunFailed).toHaveBeenCalledTimes(1);
+    expect(atomicWrite).toHaveBeenCalledTimes(1);
+
+    const persisted = atomicWrite.mock.calls[0][1];
+    expect(persisted).toMatchObject({
+      id: 'run-spawn-error',
+      providerId: 'configured-provider',
+      providerName: 'Configured Provider',
+      model: 'configured-model',
+      workspacePath: '/configured/workspace',
+      workspaceName: 'configured-workspace',
+      source: 'test-source',
+      exitCode: -1,
+      success: false,
+      error: 'Spawn failed: spawn ENOENT',
+      errorCategory: 'spawn_error',
+    });
+    expect(onComplete).toHaveBeenCalledWith(persisted);
     errorSpy.mockRestore();
   });
 });

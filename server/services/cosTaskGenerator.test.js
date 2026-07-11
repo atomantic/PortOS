@@ -16,6 +16,7 @@ import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { selectDryRunAutoApproved, exceedsMaxSpawns, resolveIssueAuthorFilterBlock, resolveSwarmBlock, isCooldownExemptTask } from './cosTaskGenerator.js';
+import { cosEvents } from './cosEvents.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -467,3 +468,10 @@ describe('selectDryRunAutoApproved', () => {
     expect(out.map(t => t.id)).toEqual(['2']);
   });
 });
+
+// Layered Intelligence's on-demand feedback bridge (emitHandlerBackedOnDemand) was
+// removed when LI migrated off the handler-backed path onto a normal agent task
+// (see taskTypeHooks.js + layeredIntelligenceHooks.js). A "Run now" now generates a
+// visible agent task (or the shared emitOnDemandEmpty no-dispatch feedback when the
+// buildTaskInput hook skips), and the filing outcome surfaces via the agent + the
+// app's lastRun bookkeeping — so the bespoke bridge is no longer needed.

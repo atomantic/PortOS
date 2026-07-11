@@ -49,10 +49,9 @@
  * CONSISTENTLY across re-imports (an unlabelled import and a labelled one of the same
  * chat are distinct identities); the label also becomes the display chat title.
  */
-import { createReadStream } from 'fs';
 import { readFile } from 'fs/promises';
 import { createHash } from 'crypto';
-import { parseZip, collectZipEntry } from '../lib/zipStream.js';
+import { collectZipEntries, isZipUpload } from '../lib/zipStream.js';
 import { shortSummary, recordEvents, resolveEventInstant } from './humanActivity.js';
 import { getUserTimezone } from '../lib/timezone.js';
 
@@ -315,11 +314,6 @@ export function deriveChatTitle(fileName) {
 // File ingestion (single `.txt` or an "Export chat" ZIP) → chat text.
 // ---------------------------------------------------------------------------
 
-const isZip = (file) =>
-  file?.mimetype === 'application/zip' ||
-  file?.mimetype === 'application/x-zip-compressed' ||
-  /\.zip$/i.test(file?.originalname || '');
-
 // The chat transcript inside an "Export chat" ZIP is `_chat.txt`; older/renamed
 // exports may name it `WhatsApp Chat with X.txt`. Prefer `_chat.txt`, else the
 // first `.txt` member.
@@ -328,36 +322,17 @@ const isAnyTxtEntry = (entryPath) => /\.txt$/i.test(String(entryPath || ''));
 
 // Extract the chat transcript text from an "Export chat" ZIP. Media entries are
 // drained and ignored. Resolves to the transcript string ('' if none found).
+// The `match` closes over `fallback` so only the preferred `_chat.txt` plus the
+// first other `.txt` are collected; `collectZipEntries` owns teardown/autodrain.
 async function readTextFromZip(filePath) {
   let preferred = null; // _chat.txt
   let fallback = null; // first other .txt
-  const reads = [];
-  await new Promise((resolve, reject) => {
-    let settled = false;
-    const src = createReadStream(filePath);
-    const parser = parseZip();
-    const settle = (fn) => (...args) => {
-      if (settled) return;
-      settled = true;
-      // On failure tear down the pipeline so a large upload with an early error
-      // doesn't keep reading to EOF.
-      if (fn === reject) { src.destroy(); parser.destroy?.(); }
-      fn(...args);
-    };
-    src.on('error', settle(reject));
-    src
-      .pipe(parser)
-      .on('entry', (entry) => {
-        if (isChatTxtEntry(entry.path)) {
-          reads.push(collectZipEntry(entry).then((buf) => { preferred = buf.toString('utf-8'); }).catch(settle(reject)));
-        } else if (isAnyTxtEntry(entry.path) && fallback === null) {
-          reads.push(collectZipEntry(entry).then((buf) => { if (fallback === null) fallback = buf.toString('utf-8'); }).catch(settle(reject)));
-        } else {
-          entry.autodrain();
-        }
-      })
-      .on('close', () => Promise.all(reads).then(settle(resolve)).catch(settle(reject)))
-      .on('error', settle(reject));
+  await collectZipEntries(filePath, {
+    match: (entryPath) => isChatTxtEntry(entryPath) || (isAnyTxtEntry(entryPath) && fallback === null),
+    onMatch: (buf, entryPath) => {
+      if (isChatTxtEntry(entryPath)) preferred = buf.toString('utf-8');
+      else if (fallback === null) fallback = buf.toString('utf-8');
+    },
   });
   return preferred ?? fallback ?? '';
 }
@@ -366,7 +341,7 @@ async function readTextFromZip(filePath) {
 // "Export chat" ZIP).
 export async function readWhatsappText(file) {
   if (!file?.path) return '';
-  if (isZip(file)) return readTextFromZip(file.path);
+  if (isZipUpload(file)) return readTextFromZip(file.path);
   return readFile(file.path, 'utf-8');
 }
 

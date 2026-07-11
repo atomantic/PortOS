@@ -26,6 +26,7 @@ import {
   subdirFilterSchema,
   isPaginationRequested,
   paginateArray,
+  seriesAutopilotSettingsSchema,
 } from './validation.js';
 
 describe('validation.js', () => {
@@ -103,8 +104,15 @@ describe('validation.js', () => {
         reviewerApplies: true,
         lmstudioModel: 'qwen2.5-coder:7b',
         ollamaModel: 'codellama',
+        codexModel: 'gpt-5.6-sol',
       })
       expect(r.success).toBe(true)
+    })
+
+    it('coerces an empty codexModel to undefined', () => {
+      const r = codeReviewSettingsSchema.safeParse({ reviewers: ['codex'], codexModel: '' })
+      expect(r.success).toBe(true)
+      expect(r.data.codexModel).toBeUndefined()
     })
 
     it('accepts an empty object (all fields optional)', () => {
@@ -315,6 +323,39 @@ describe('validation.js', () => {
       expect(result.data).not.toHaveProperty('archived');
       expect(result.data).not.toHaveProperty('defaultUseWorktree');
       expect(result.data).not.toHaveProperty('defaultOpenPR');
+    });
+
+    it('preserves per-app taskTypeOverrides scheduling fields (intervalMs/providerId/model/taskMetadata)', () => {
+      // These are persisted by updateAppTaskTypeOverride for handler-backed tasks
+      // (layered-intelligence). Zod strips unknown keys, so a generic PUT would
+      // silently drop them if the schema didn't declare them.
+      const update = {
+        taskTypeOverrides: {
+          'layered-intelligence': {
+            enabled: true,
+            interval: '6h',
+            intervalMs: 21600000,
+            providerId: 'ollama',
+            model: 'qwen2.5-coder:32b',
+            taskMetadata: { discardWorktree: true }
+          }
+        }
+      };
+      const result = appUpdateSchema.safeParse(update);
+      expect(result.success).toBe(true);
+      expect(result.data.taskTypeOverrides['layered-intelligence']).toEqual(
+        update.taskTypeOverrides['layered-intelligence']
+      );
+    });
+
+    it('accepts null taskTypeOverrides scheduling fields (clear-to-inherit)', () => {
+      const update = {
+        taskTypeOverrides: {
+          'layered-intelligence': { intervalMs: null, providerId: null, model: null }
+        }
+      };
+      const result = appUpdateSchema.safeParse(update);
+      expect(result.success).toBe(true);
     });
   });
 
@@ -1072,5 +1113,36 @@ describe('validation.js', () => {
       expect(restoreRequestSchema.safeParse({ snapshotId: 's1', subdirFilter: null }).success).toBe(true);
       expect(restoreRequestSchema.safeParse({ snapshotId: 's1', subdirFilter: '*' }).success).toBe(false);
     });
+  });
+});
+
+describe('seriesAutopilotSettingsSchema (#2174)', () => {
+  const rejects = (cron) => expect(seriesAutopilotSettingsSchema.safeParse({
+    schedules: [{ seriesId: 's1', cron }],
+  }).success).toBe(false);
+  const accepts = (cron) => expect(seriesAutopilotSettingsSchema.safeParse({
+    schedules: [{ seriesId: 's1', cron }],
+  }).success).toBe(true);
+
+  it('rejects out-of-range / malformed crons so an enabled schedule cannot silently never fire', () => {
+    rejects('99 99 * * *'); // minute/hour out of range
+    rejects('0 3 * *');     // only 4 fields
+    rejects('0 3 * * * *'); // 6 fields
+    rejects('not a cron');
+    rejects('60 * * * *');  // minute 60 (max 59)
+  });
+
+  it('accepts common valid crons (ranges, lists, steps)', () => {
+    accepts('0 3 * * *');
+    accepts('*/15 * * * *');
+    accepts('0 9 * * 1-5');
+    accepts('0 0,12 1 */2 *');
+  });
+
+  it('defaults enabled to false and coerces blank provider/model to undefined', () => {
+    const parsed = seriesAutopilotSettingsSchema.parse({
+      schedules: [{ seriesId: 's1', cron: '0 3 * * *', provider: '', model: '' }],
+    });
+    expect(parsed.schedules[0]).toEqual({ seriesId: 's1', cron: '0 3 * * *', enabled: false });
   });
 });

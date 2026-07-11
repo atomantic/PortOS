@@ -98,6 +98,18 @@ describe('classifyScanResult', () => {
     const r = classifyScanResult({ status: 200, html: 'Nobody here by that description', vectors });
     expect(r.verdict).toBe('not_found');
   });
+  it('a bare CDN mention of "cloudflare" on a real result page is NOT a wall', () => {
+    const r = classifyScanResult({
+      status: 200,
+      html: '<script src="https://cdnjs.cloudflare.com/x.js"></script> Results for Jane Q Doe of Portland OR',
+      vectors,
+    });
+    expect(r.verdict).toBe('found');
+  });
+  it('a Cloudflare interstitial ("Just a moment...") → blocked', () => {
+    const r = classifyScanResult({ status: 200, html: '<title>Just a moment...</title>', vectors });
+    expect(r.verdict).toBe('blocked');
+  });
 });
 
 describe('scanBroker — classify → record wiring', () => {
@@ -131,5 +143,57 @@ describe('scanBroker — classify → record wiring', () => {
   it('skips when the URL is unsafe (SSRF guard)', async () => {
     const res = await scanBroker(broker, vectors, { urlSafe: async () => false });
     expect(res).toEqual({ skipped: true, reason: 'unsafe_or_unfillable_url' });
+  });
+
+  it('escalates a 403 wall to the browser lane and records its verdict', async () => {
+    brokers.recordScanVerdict.mockClear();
+    const fetchImpl = vi.fn(async () => ({ status: 403, text: async () => 'Access denied' }));
+    // Substantive real-Chrome page (long enough to not look like a JS shell).
+    const page = `Results for Jane Q Doe in Portland, OR — full profile. ${'x'.repeat(700)}`;
+    const browserFetch = vi.fn(async () => ({ text: page }));
+    const res = await scanBroker(broker, vectors, { fetchImpl, browserFetch, urlSafe: async () => true });
+    expect(browserFetch).toHaveBeenCalledWith('https://b.example/Jane-Doe/OR');
+    expect(res.state).toBe('found');
+  });
+
+  it('records blocked (with the search URL as evidence) when the browser lane also walls', async () => {
+    brokers.recordScanVerdict.mockClear();
+    const fetchImpl = vi.fn(async () => ({ status: 403, text: async () => 'Access denied' }));
+    const browserFetch = vi.fn(async () => null);
+    const res = await scanBroker(broker, vectors, { fetchImpl, browserFetch, urlSafe: async () => true });
+    expect(res.state).toBe('blocked');
+    expect(brokers.recordScanVerdict).toHaveBeenCalledWith('spokeo', 'blocked', expect.objectContaining({
+      evidence: expect.objectContaining({ match_basis: 'antibot_wall', search_url: 'https://b.example/Jane-Doe/OR' }),
+    }));
+  });
+
+  it('does NOT adopt a shell-length browser page on a wall (stays blocked, not not_found)', async () => {
+    brokers.recordScanVerdict.mockClear();
+    const fetchImpl = vi.fn(async () => ({ status: 403, text: async () => 'Access denied' }));
+    // Marker-free short text: if the adoption guard were dropped, this would
+    // classify as not_found (status rewritten to 200, no antibot marker) —
+    // so the blocked assertion genuinely pins the guard.
+    const browserFetch = vi.fn(async () => ({ text: 'Loading' }));
+    const res = await scanBroker(broker, vectors, { fetchImpl, browserFetch, urlSafe: async () => true });
+    expect(res.state).toBe('blocked');
+  });
+
+  it('adopts a SHORT browser page after a wall when it carries a positive name signal', async () => {
+    brokers.recordScanVerdict.mockClear();
+    const fetchImpl = vi.fn(async () => ({ status: 403, text: async () => 'Access denied' }));
+    // Concise real result page (< JS-shell length) naming the person + city.
+    const browserFetch = vi.fn(async () => ({ text: 'Jane Q Doe — Portland, OR. 1 record.' }));
+    const res = await scanBroker(broker, vectors, { fetchImpl, browserFetch, urlSafe: async () => true });
+    expect(res.state).toBe('found');
+  });
+
+  it('a 404 carrying an incidental antibot token stays inconclusive (no wall escalation)', async () => {
+    brokers.recordScanVerdict.mockClear();
+    const fetchImpl = vi.fn(async () => ({ status: 404, text: async () => 'Not found — report a problem (reCAPTCHA)' }));
+    const browserFetch = vi.fn(async () => ({ text: `Nobody here. ${'x'.repeat(700)}` }));
+    const res = await scanBroker(broker, vectors, { fetchImpl, browserFetch, urlSafe: async () => true });
+    expect(res.skipped).toBe(true);
+    expect(browserFetch).not.toHaveBeenCalled();
+    expect(brokers.recordScanVerdict).not.toHaveBeenCalled();
   });
 });

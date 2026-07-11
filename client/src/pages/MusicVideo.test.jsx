@@ -3,7 +3,7 @@
  * gates on a scene having a generated clip, and clicking it kicks off the render.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route, useNavigate, useLocation } from 'react-router-dom';
 import toast from '../components/ui/Toast';
 
@@ -47,6 +47,9 @@ vi.mock('../services/apiMusicVideo.js', () => ({
   renderMusicVideoProject: vi.fn(async () => ({ jobId: 'job-1' })),
   musicVideoRenderEventsUrl: (jobId) => `/api/music-video/render/${jobId}/events`,
   cancelMusicVideoRender: vi.fn(async () => ({ ok: true })),
+  transcribeMusicVideoMidi: vi.fn(async () => ({ jobId: 'midi-job-1', model: 'medium' })),
+  musicVideoMidiEventsUrl: (jobId) => `/api/music-video/transcribe-midi/${jobId}/events`,
+  cancelMusicVideoMidiTranscription: vi.fn(async () => ({ ok: true })),
 }));
 vi.mock('../services/apiSystem.js', () => ({ generateImage: vi.fn() }));
 vi.mock('../services/apiImageVideo.js', () => ({ generateVideo: vi.fn() }));
@@ -74,7 +77,7 @@ vi.mock('../components/PageHeader', () => ({ default: ({ title }) => <div>{title
 import MusicVideo from './MusicVideo.jsx';
 import {
   listMusicVideoProjects, createMusicVideoProject, renderMusicVideoProject, planMusicVideoProject, updateMusicVideoProject,
-  deleteMusicVideoProject,
+  deleteMusicVideoProject, transcribeMusicVideoMidi,
 } from '../services/apiMusicVideo.js';
 import { importTrackFromYoutube, trackImportEventsUrl, listTracks } from '../services/apiTracks.js';
 
@@ -99,6 +102,10 @@ const renderMV = () => render(
     </Routes>
   </MemoryRouter>,
 );
+
+// Flush pending pre-resolved mock promises inside act so their .then setState
+// callbacks can't land outside it after the test body.
+const settle = () => act(async () => {});
 
 const openProject = async (project) => {
   listMusicVideoProjects.mockResolvedValue([project]);
@@ -184,6 +191,31 @@ describe('MusicVideo audio preview + download', () => {
     await screen.findByRole('button', { name: /^Render$/ });
     expect(screen.queryByLabelText('Preview track audio')).toBeNull();
     expect(screen.queryByRole('link', { name: /Download audio/i })).toBeNull();
+  });
+});
+
+describe('MusicVideo audio → MIDI transcription (MuScriptor)', () => {
+  it('disables the MIDI button when the project has no audio source', async () => {
+    await openProject({ ...PROJECT_WITH_CLIP, trackId: null, uploadedAudioFilename: null });
+    const btn = await screen.findByRole('button', { name: /^MIDI$/ });
+    expect(btn).toHaveProperty('disabled', true);
+  });
+
+  it('kicks off a transcription for the selected project', async () => {
+    await openProject(PROJECT_WITH_CLIP);
+    const btn = await screen.findByRole('button', { name: /^MIDI$/ });
+    expect(btn).toHaveProperty('disabled', false);
+    fireEvent.click(btn);
+    await waitFor(() => expect(transcribeMusicVideoMidi).toHaveBeenCalledWith('mv-1', {}, { silent: true }));
+  });
+
+  it('shows the MIDI download link once the project carries a transcription pointer', async () => {
+    listTracks.mockResolvedValue([{ id: 't1', title: 'Neon Song', audioFilename: 'neon.mp3' }]);
+    await openProject({ ...PROJECT_WITH_CLIP, midiTranscription: { filename: 'neon-midi.mid', model: 'medium' } });
+    const dl = await screen.findByRole('link', { name: /Download MIDI/i });
+    // Served from the music dir (same static route as the master audio) so the
+    // federated .mid resolves on peers too.
+    expect(dl.getAttribute('href')).toBe('/data/music/neon-midi.mid');
   });
 });
 
@@ -380,6 +412,9 @@ describe('MusicVideo YouTube audio import (#1945)', () => {
     expect(listBtnA).toHaveClass('border-port-accent');
 
     resolveKickoff({ jobId: 'yt-job-pending' });
+    // Settle the kickoff's .then (jobId + SSE-subscription state) inside act —
+    // the pending-window assertions above must stay pre-settle.
+    await settle();
   });
 
   it('blocks creating the project while the create-form YouTube import is in flight', async () => {

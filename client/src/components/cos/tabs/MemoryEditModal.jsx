@@ -216,6 +216,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
                   <button
                     type="button"
                     onClick={() => handleRemoveTag(tag)}
+                    aria-label="Delete"
                     className="p-1 min-w-[24px] min-h-[24px] flex items-center justify-center text-gray-500 hover:text-port-error transition-colors"
                   >
                     <Trash2 size={14} />
@@ -236,6 +237,7 @@ export default function MemoryEditModal({ memory, apps, onSave, onClose }) {
                 type="button"
                 onClick={handleAddTag}
                 disabled={!newTag.trim()}
+                aria-label="Add"
                 className="px-4 py-3 min-h-[44px] min-w-[44px] flex items-center justify-center bg-port-border hover:bg-port-border/70 text-gray-300 rounded-lg text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Plus size={20} />

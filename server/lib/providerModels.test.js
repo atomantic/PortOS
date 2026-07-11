@@ -2,7 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   ANTIGRAVITY_CONFIGURED_DEFAULT,
   CODEX_CONFIGURED_DEFAULT,
+  GROK_CONFIGURED_DEFAULT,
   isCodexConfiguredDefault,
+  isConfiguredDefaultModel,
   resolveCliModel,
   filterSelectableModels,
   hasModelFlag,
@@ -16,10 +18,45 @@ import {
   isClaudeCommand,
   isOllamaClaudeProvider,
   applyLeanClaudeArgs,
-  LEAN_CLAUDE_ARGS
+  LEAN_CLAUDE_ARGS,
+  commandBasename,
+  providerSuppliesGithubToken
 } from './providerModels.js';
 
 describe('providerModels', () => {
+  describe('providerSuppliesGithubToken', () => {
+    it('is true when envVars carries GH_TOKEN or GITHUB_TOKEN (even if empty-string)', () => {
+      expect(providerSuppliesGithubToken({ envVars: { GH_TOKEN: 'x' } })).toBe(true);
+      expect(providerSuppliesGithubToken({ envVars: { GITHUB_TOKEN: 'x' } })).toBe(true);
+      // `in` check, not truthiness: an intentionally-empty override still counts.
+      expect(providerSuppliesGithubToken({ envVars: { GH_TOKEN: '' } })).toBe(true);
+    });
+
+    it('is false when the provider has no github credential in envVars', () => {
+      expect(providerSuppliesGithubToken({ envVars: { OTHER: 'x' } })).toBe(false);
+      expect(providerSuppliesGithubToken({ envVars: {} })).toBe(false);
+      expect(providerSuppliesGithubToken({})).toBe(false);
+      expect(providerSuppliesGithubToken(null)).toBe(false);
+      expect(providerSuppliesGithubToken(undefined)).toBe(false);
+    });
+  });
+
+  describe('commandBasename', () => {
+    it('strips directory prefixes, lowercases, and drops a .exe suffix', () => {
+      expect(commandBasename('grok')).toBe('grok');
+      expect(commandBasename('/opt/homebrew/bin/Grok')).toBe('grok');
+      expect(commandBasename('C:\\tools\\GROK.exe')).toBe('grok');
+      expect(commandBasename('./bin/opencode')).toBe('opencode');
+    });
+
+    it('returns empty string for empty/non-string input', () => {
+      expect(commandBasename('')).toBe('');
+      expect(commandBasename(null)).toBe('');
+      expect(commandBasename(undefined)).toBe('');
+      expect(commandBasename(42)).toBe('');
+    });
+  });
+
   describe('isCodexConfiguredDefault', () => {
     it('matches the sentinel exactly', () => {
       expect(isCodexConfiguredDefault(CODEX_CONFIGURED_DEFAULT)).toBe(true);
@@ -94,8 +131,10 @@ describe('providerModels', () => {
   });
 
   describe('resolveCliModel', () => {
-    it('returns null for the codex sentinel so --model is omitted', () => {
+    it('returns null for configured-default sentinels so --model is omitted', () => {
       expect(resolveCliModel(CODEX_CONFIGURED_DEFAULT)).toBeNull();
+      expect(resolveCliModel(ANTIGRAVITY_CONFIGURED_DEFAULT)).toBeNull();
+      expect(resolveCliModel(GROK_CONFIGURED_DEFAULT)).toBeNull();
     });
 
     it('returns null for empty / nullish values', () => {
@@ -110,9 +149,24 @@ describe('providerModels', () => {
     });
   });
 
+  describe('isConfiguredDefaultModel', () => {
+    it('matches every configured-default sentinel', () => {
+      expect(isConfiguredDefaultModel(CODEX_CONFIGURED_DEFAULT)).toBe(true);
+      expect(isConfiguredDefaultModel(ANTIGRAVITY_CONFIGURED_DEFAULT)).toBe(true);
+      expect(isConfiguredDefaultModel(GROK_CONFIGURED_DEFAULT)).toBe(true);
+      expect(isConfiguredDefaultModel('gpt-5')).toBe(false);
+    });
+  });
+
   describe('filterSelectableModels', () => {
     it('strips configured-default sentinels from the list', () => {
-      expect(filterSelectableModels(['a', CODEX_CONFIGURED_DEFAULT, ANTIGRAVITY_CONFIGURED_DEFAULT, 'b'])).toEqual(['a', 'b']);
+      expect(filterSelectableModels([
+        'a',
+        CODEX_CONFIGURED_DEFAULT,
+        ANTIGRAVITY_CONFIGURED_DEFAULT,
+        GROK_CONFIGURED_DEFAULT,
+        'b',
+      ])).toEqual(['a', 'b']);
     });
 
     it('returns an empty list for nullish input', () => {

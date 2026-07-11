@@ -2,6 +2,7 @@ import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import { Text } from '@react-three/drei';
 import * as THREE from 'three';
+import { computeDistrictBounds } from '../../utils/cityMiniMap';
 import { PIXEL_FONT_URL } from './cityConstants';
 import { useCityPalette } from './CityPaletteContext';
 
@@ -110,20 +111,9 @@ export default function CityNeonSigns({ positions }) {
   const signs = useMemo(() => {
     if (!positions || positions.size < 2) return [];
 
-    const entries = [];
-    positions.forEach((pos) => {
-      if (pos.district === 'downtown') entries.push(pos);
-    });
-
-    if (entries.length < 2) return [];
-
-    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    entries.forEach(p => {
-      minX = Math.min(minX, p.x);
-      maxX = Math.max(maxX, p.x);
-      minZ = Math.min(minZ, p.z);
-      maxZ = Math.max(maxZ, p.z);
-    });
+    const bounds = computeDistrictBounds(positions, 'downtown', { minCount: 2 });
+    if (!bounds) return [];
+    const { minX, maxX, minZ, maxZ } = bounds;
 
     const colors = neonAccents;
     const pad = 3;
@@ -210,20 +200,9 @@ export default function CityNeonSigns({ positions }) {
   const bars = useMemo(() => {
     if (!positions || positions.size < 2) return [];
 
-    const entries = [];
-    positions.forEach((pos) => {
-      if (pos.district === 'downtown') entries.push(pos);
-    });
-
-    if (entries.length < 2) return [];
-
-    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
-    entries.forEach(p => {
-      minX = Math.min(minX, p.x);
-      maxX = Math.max(maxX, p.x);
-      minZ = Math.min(minZ, p.z);
-      maxZ = Math.max(maxZ, p.z);
-    });
+    const bounds = computeDistrictBounds(positions, 'downtown', { minCount: 2 });
+    if (!bounds) return [];
+    const { minX, maxX, minZ, maxZ } = bounds;
 
     const colors = neonAccents;
     const pad = 3;

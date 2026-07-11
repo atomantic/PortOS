@@ -38,13 +38,14 @@ export default function SearchTab({ vaultId }) {
         />
         <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
           {query && (
-            <button onClick={() => { setQuery(''); setResults(null); }} className="text-gray-500 hover:text-white">
+            <button onClick={() => { setQuery(''); setResults(null); }} aria-label="Clear search" className="text-gray-500 hover:text-white">
               <X size={16} />
             </button>
           )}
           <button
             onClick={handleSearch}
             disabled={searching || !query.trim()}
+            aria-label="Search"
             className="px-3 py-1 rounded bg-port-accent text-white text-sm disabled:opacity-50"
           >
             {searching ? <RefreshCw size={14} className="animate-spin" /> : 'Search'}

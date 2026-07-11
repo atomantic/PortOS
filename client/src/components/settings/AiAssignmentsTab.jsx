@@ -3,6 +3,12 @@ import { Link } from 'react-router-dom';
 import { ArrowRight, Bot, RefreshCw, Save, Search } from 'lucide-react';
 import toast from '../ui/Toast';
 import { getAiAssignments, updateAiAssignment } from '../../services/api';
+import {
+  providerDisplayName,
+  assignmentProviderOptions,
+  assignmentModelOptions,
+  assignmentDefaultModel,
+} from '../../utils/providers.js';
 
 const getDraft = (entry) => ({
   providerId: entry.providerId || '',
@@ -25,24 +31,8 @@ const reconcileDrafts = (prev, assignments, savedIds) => {
   return next;
 };
 
-const providerName = (providers, id) =>
-  providers.find((p) => p.id === id)?.name || id || 'Default';
-
-const modelOptionsFor = (entry, providers, draftProviderId) => {
-  if (Array.isArray(entry.modelOptions)) return entry.modelOptions;
-  const provider = providers.find((p) => p.id === draftProviderId);
-  return provider?.models || [];
-};
-
-const providerOptionsFor = (entry, providers) => {
-  if (Array.isArray(entry.providerOptions)) return entry.providerOptions;
-  const types = Array.isArray(entry.providerTypes) && entry.providerTypes.length
-    ? new Set(entry.providerTypes)
-    : null;
-  return providers
-    .filter((p) => !types || types.has(p.type))
-    .map((p) => ({ id: p.id, name: `${p.name}${p.enabled ? '' : ' (disabled)'}` }));
-};
+// Provider label with the settings-table's "Default" fallback for an unset id.
+const providerName = (providers, id) => providerDisplayName(providers, id, 'Default');
 
 export default function AiAssignmentsTab() {
   const [loading, setLoading] = useState(true);
@@ -130,7 +120,7 @@ export default function AiAssignmentsTab() {
       entry.editable !== false &&
       entry.providerEditable !== false &&
       (drafts[entry.id]?.providerId || entry.providerId || '') === fromProvider &&
-      providerOptionsFor(entry, data.providers).some((option) => option.id === toProvider)
+      assignmentProviderOptions(entry, data.providers).some((option) => option.id === toProvider)
     ));
     if (targets.length === 0) {
       toast.error('No editable assignments match that provider');
@@ -139,8 +129,9 @@ export default function AiAssignmentsTab() {
     setBulkSaving(true);
     let latest = data;
     const savedIds = [];
-    const targetDefaultModel = data.providers.find((p) => p.id === toProvider)?.defaultModel || '';
     for (const entry of targets) {
+      // Vision-filtered rows seed the first eligible VLM, not a text-only default.
+      const targetDefaultModel = assignmentDefaultModel(entry, data.providers, toProvider);
       const nextModel = entry.modelEditable === false ? (drafts[entry.id]?.model || '') : targetDefaultModel;
       const next = await updateAiAssignment(entry.id, {
         providerId: toProvider,
@@ -260,8 +251,8 @@ export default function AiAssignmentsTab() {
           <tbody className="divide-y divide-port-border bg-port-bg">
             {filtered.map((entry) => {
               const draft = drafts[entry.id] || getDraft(entry);
-              const providerOptions = providerOptionsFor(entry, data.providers);
-              const modelOptions = modelOptionsFor(entry, data.providers, draft.providerId);
+              const providerOptions = assignmentProviderOptions(entry, data.providers);
+              const modelOptions = assignmentModelOptions(entry, data.providers, draft.providerId);
               const dirty = !sameDraft(entry, draft);
               return (
                 <tr key={entry.id} className="align-top">
@@ -281,9 +272,12 @@ export default function AiAssignmentsTab() {
                         value={draft.providerId}
                         onChange={(e) => {
                           const nextProviderId = e.target.value;
-                          const nextDefault = data.providers.find((p) => p.id === nextProviderId)?.defaultModel || '';
+                          // Vision-filtered rows (e.g. Scene evaluation) seed the
+                          // first eligible VLM when the provider default is text-only.
+                          const nextDefault = assignmentDefaultModel(entry, data.providers, nextProviderId);
                           setDraft(entry.id, { providerId: nextProviderId, model: entry.modelEditable === false ? draft.model : nextDefault });
                         }}
+                        aria-label={`Provider for ${entry.label}`}
                         className="w-full bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white"
                       >
                         <option value="">Default / unset</option>
@@ -298,6 +292,7 @@ export default function AiAssignmentsTab() {
                       <select
                         value={draft.model}
                         onChange={(e) => setDraft(entry.id, { model: e.target.value })}
+                        aria-label={`Model for ${entry.label}`}
                         className="w-full bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white"
                       >
                         <option value="">Default / auto</option>
@@ -308,6 +303,7 @@ export default function AiAssignmentsTab() {
                         value={draft.model}
                         onChange={(e) => setDraft(entry.id, { model: e.target.value })}
                         placeholder="Default / auto"
+                        aria-label={`Model for ${entry.label}`}
                         className="w-full bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white placeholder-gray-600"
                       />
                     )}

@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { X } from 'lucide-react';
 import { useScrollLock } from '../hooks/useScrollLock';
+import useFocusTrap from '../hooks/useFocusTrap.js';
 import TabPills from './ui/TabPills';
 
 // Right-side slide-in panel for the "settings over a feature page" pattern.
@@ -54,6 +55,11 @@ export default function Drawer({
 }) {
   useScrollLock(open);
 
+  // Trap keyboard focus inside the panel while open and restore it to the
+  // trigger on close (WCAG 2.4.3 / 2.1.2).
+  const panelRef = useRef(null);
+  useFocusTrap(open, panelRef);
+
   const tabList = Array.isArray(tabs) ? tabs.filter(Boolean) : null;
   const hasTabs = !!(tabList && tabList.length);
 
@@ -83,6 +89,7 @@ export default function Drawer({
         aria-hidden="true"
       />
       <aside
+        ref={panelRef}
         role="dialog"
         aria-modal="true"
         aria-label={title}

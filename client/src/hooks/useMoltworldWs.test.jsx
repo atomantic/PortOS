@@ -22,18 +22,23 @@ vi.mock('../services/api', () => ({
 const useMoltworldWs = (await import('./useMoltworldWs.js')).default;
 
 const fire = (event, payload) => act(() => { handlers.get(event)?.(payload); });
+// Drain the mount-effect status fetch (a pre-resolved mock promise) inside act
+// so its setConnectionStatus can't land outside it after the test body.
+const settle = () => act(async () => {});
 
 describe('useMoltworldWs — presence empty-event transition (#2022)', () => {
   beforeEach(() => { handlers.clear(); });
   afterEach(cleanup);
 
-  it('starts null (not-yet-known) before any presence event', () => {
+  it('starts null (not-yet-known) before any presence event', async () => {
     const { result } = renderHook(() => useMoltworldWs());
     expect(result.current.presence).toBeNull();
+    await settle();
   });
 
-  it('clears the presence list when an empty presence event follows a populated one', () => {
+  it('clears the presence list when an empty presence event follows a populated one', async () => {
     const { result } = renderHook(() => useMoltworldWs());
+    await settle();
 
     fire('moltworld:presence', { agents: [{ id: 'a1', name: 'Alice' }, { id: 'a2', name: 'Bob' }] });
     expect(result.current.presence).toHaveLength(2);
@@ -42,8 +47,9 @@ describe('useMoltworldWs — presence empty-event transition (#2022)', () => {
     expect(result.current.presence).toEqual([]);
   });
 
-  it('clears the presence list on an empty nearby event too', () => {
+  it('clears the presence list on an empty nearby event too', async () => {
     const { result } = renderHook(() => useMoltworldWs());
+    await settle();
 
     fire('moltworld:nearby', { nearby: [{ id: 'a1', name: 'Alice' }] });
     expect(result.current.presence).toHaveLength(1);
@@ -52,8 +58,9 @@ describe('useMoltworldWs — presence empty-event transition (#2022)', () => {
     expect(result.current.presence).toEqual([]);
   });
 
-  it('ignores a malformed (non-array) presence payload, preserving prior state', () => {
+  it('ignores a malformed (non-array) presence payload, preserving prior state', async () => {
     const { result } = renderHook(() => useMoltworldWs());
+    await settle();
 
     fire('moltworld:presence', { agents: [{ id: 'a1', name: 'Alice' }] });
     expect(result.current.presence).toHaveLength(1);
@@ -63,8 +70,9 @@ describe('useMoltworldWs — presence empty-event transition (#2022)', () => {
     expect(result.current.presence).toHaveLength(1);
   });
 
-  it('ignores a payload missing both keys ({}), preserving prior state', () => {
+  it('ignores a payload missing both keys ({}), preserving prior state', async () => {
     const { result } = renderHook(() => useMoltworldWs());
+    await settle();
 
     fire('moltworld:presence', { agents: [{ id: 'a1', name: 'Alice' }] });
     expect(result.current.presence).toHaveLength(1);

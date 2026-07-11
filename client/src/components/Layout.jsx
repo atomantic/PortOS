@@ -89,7 +89,9 @@ import {
   PinOff,
   Navigation,
   Music,
-  Workflow as WorkflowIcon
+  Workflow as WorkflowIcon,
+  ChartGantt,
+  Clapperboard
 } from 'lucide-react';
 /* global __APP_VERSION__ */
 import Logo from './Logo';
@@ -122,7 +124,7 @@ function ThemeModeToggle({ className = '' }) {
       onClick={toggleMode}
       title={`${theme?.label ?? 'Theme'}${pairLabel}`}
       aria-label={`Toggle day/night mode${pairLabel}`}
-      className={`inline-flex items-center justify-center min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 sm:p-1.5 rounded-lg text-gray-500 hover:text-port-accent transition-colors ${className}`}
+      className={`inline-flex items-center justify-center min-w-[44px] min-h-[44px] lg:min-w-0 lg:min-h-0 lg:p-1.5 rounded-lg text-gray-500 hover:text-port-accent transition-colors ${className}`}
     >
       <Icon size={18} aria-hidden="true" />
     </button>
@@ -187,7 +189,6 @@ const navItems = [
       { to: '/feature-agents', label: 'Feature Agents', icon: Wand2 },
       { to: '/cos/gsd', label: 'GSD', icon: Compass },
       { to: '/cos/health', label: 'Health', icon: Activity },
-      { to: '/layered-intelligence', label: 'Layered Intelligence', icon: Layers },
       { to: '/cos/learning', label: 'Learning', icon: GraduationCap },
       { to: '/cos/memory', label: 'Memory', icon: Brain },
       { to: '/cos/schedule', label: 'Schedule', icon: Clock },
@@ -195,7 +196,7 @@ const navItems = [
       { to: '/cos/productivity', label: 'Streaks', icon: Flame },
       { to: '/cos/jobs', label: 'System Tasks', icon: Bot },
       { to: '/cos/tasks', label: 'Tasks', icon: FileText },
-      { to: '/cos/workflow', label: 'Workflow', icon: WorkflowIcon },
+      { to: '/cos/workflow', label: 'Timeline', icon: ChartGantt },
     ],
   },
   {
@@ -205,6 +206,7 @@ const navItems = [
     children: [
       { to: '/messages/config', label: 'Config', icon: Settings },
       { to: '/messages/drafts', label: 'Drafts', icon: FilePen },
+      { to: '/messages/imessage', label: 'iMessage', icon: MessageSquare },
       { to: '/messages/inbox', label: 'Inbox', icon: Inbox },
       { to: '/messages/sync', label: 'Sync', icon: RefreshCw },
     ],
@@ -216,6 +218,7 @@ const navItems = [
     children: [
       { to: '/authors', label: 'Authors', icon: FilePen },
       { to: '/catalog', label: 'Catalog', icon: Sparkles },
+      { to: '/creative-director', label: 'Creative Director', icon: Clapperboard },
       { to: '/pipeline/editorial-checks', label: 'Editorial Checks', icon: ListChecks },
       { to: '/importer', label: 'Importer', icon: FileInput },
       { to: '/media', label: 'Media Gen', icon: Layers },
@@ -364,22 +367,27 @@ function PinButton({ label, pinned, onTogglePin }) {
 // One row in the sidebar's Pinned/Recent sections: a nav link plus a pin/unpin
 // toggle that does not navigate (stops propagation). Pinned rows show a filled
 // pin; recent rows reveal the pin affordance on hover/focus.
+// Labels wrap (no truncate) so long app/series names stay readable in the
+// narrow rail; the pin is absolutely positioned so it doesn't steal label width.
 function WorkingSetRow({ entry, pinned, onTogglePin, onNavigate, isActive }) {
   const Icon = entry.icon;
   return (
-    <div className="group mx-2 flex items-stretch min-w-0">
+    <div className="group relative mx-2 min-w-0">
       <NavLink
         to={entry.path}
         end={entry.end}
         onClick={onNavigate}
-        className={`flex-1 flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors min-w-0 ${
+        title={entry.label}
+        className={`flex items-start gap-3 px-3 py-2 pr-9 rounded-lg text-sm transition-colors min-w-0 ${
           isActive ? 'bg-port-accent/10 text-port-accent' : 'text-gray-400 hover:text-white hover:bg-port-border/50'
         }`}
       >
-        {Icon && <Icon size={16} className="shrink-0" />}
-        <span className="min-w-0 truncate">{entry.label}</span>
+        {Icon && <Icon size={16} className="shrink-0 mt-0.5" />}
+        <span className="min-w-0 break-words leading-snug">{entry.label}</span>
       </NavLink>
-      <PinButton label={entry.label} pinned={pinned} onTogglePin={onTogglePin} />
+      <div className="absolute right-0 top-0 bottom-0 flex items-center">
+        <PinButton label={entry.label} pinned={pinned} onTogglePin={onTogglePin} />
+      </div>
     </div>
   );
 }
@@ -397,22 +405,22 @@ export function SingleNavRow({ item, collapsed, active, badgeCount, pinned, onTo
   const showBadge = item.showBadge && badgeCount > 0;
   const badgeText = badgeCount > 9 ? '9+' : badgeCount;
   return (
-    <div className={`group flex items-stretch min-w-0 mx-2 ${collapsed ? 'lg:justify-center' : ''}`}>
+    <div className={`group relative min-w-0 mx-2 ${collapsed ? 'lg:flex lg:justify-center' : ''}`}>
       <NavLink
         to={item.to}
         end={item.to === '/'}
         onClick={onNavigate}
-        className={`flex-1 flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors min-w-0 ${
-          collapsed ? 'lg:justify-center lg:px-2' : 'justify-between'
+        className={`flex items-start gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors min-w-0 ${
+          collapsed ? 'lg:justify-center lg:px-2' : 'pr-9'
         } ${
           active
             ? 'bg-port-accent/10 text-port-accent'
             : 'text-gray-400 hover:text-white hover:bg-port-border/50'
         }`}
-        title={collapsed ? item.label : undefined}
+        title={item.label}
       >
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="relative">
+        <div className="flex items-start gap-3 min-w-0 flex-1">
+          <div className="relative shrink-0">
             <Icon size={20} className="shrink-0" />
             {/* Badge for collapsed state */}
             {showBadge && collapsed && (
@@ -421,18 +429,22 @@ export function SingleNavRow({ item, collapsed, active, badgeCount, pinned, onTo
               </span>
             )}
           </div>
-          <span className={`whitespace-nowrap min-w-0 truncate ${collapsed ? 'lg:hidden' : ''}`}>
+          <span className={`min-w-0 break-words leading-snug ${collapsed ? 'lg:hidden' : ''}`}>
             {item.label}
           </span>
         </div>
-        {/* Badge for expanded state */}
+        {/* Badge for expanded state — sits left of the absolute pin */}
         {showBadge && !collapsed && (
-          <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1">
+          <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1 shrink-0 mt-0.5">
             {badgeText}
           </span>
         )}
       </NavLink>
-      {!collapsed && <PinButton label={item.label} pinned={pinned} onTogglePin={onTogglePin} />}
+      {!collapsed && (
+        <div className="absolute right-0 top-0 bottom-0 flex items-center">
+          <PinButton label={item.label} pinned={pinned} onTogglePin={onTogglePin} />
+        </div>
+      )}
     </div>
   );
 }
@@ -697,18 +709,18 @@ export default function Layout() {
           href={href}
           target="_blank"
           rel="noopener noreferrer"
-          className={`flex items-center gap-3 mx-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors min-w-0 ${
+          className={`flex items-start gap-3 mx-2 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors min-w-0 ${
             collapsed ? 'lg:justify-center lg:px-2' : 'justify-between'
           } text-gray-400 hover:text-white hover:bg-port-border/50`}
-          title={collapsed ? item.label : undefined}
+          title={item.label}
         >
-          <div className="flex items-center gap-3 min-w-0">
+          <div className="flex items-start gap-3 min-w-0">
             <Icon size={20} className="shrink-0" />
-            <span className={`whitespace-nowrap min-w-0 truncate ${collapsed ? 'lg:hidden' : ''}`}>
+            <span className={`min-w-0 break-words leading-snug ${collapsed ? 'lg:hidden' : ''}`}>
               {item.label}
             </span>
           </div>
-          {!collapsed && <ExternalLink size={14} className="text-gray-500" />}
+          {!collapsed && <ExternalLink size={14} className="text-gray-500 shrink-0 mt-0.5" />}
         </a>
       );
     }
@@ -781,12 +793,12 @@ export default function Layout() {
                   </span>
                 )}
               </div>
-              <span className={`whitespace-nowrap min-w-0 truncate ${collapsed ? 'lg:hidden' : ''}`}>
+              <span className={`min-w-0 break-words leading-snug ${collapsed ? 'lg:hidden' : ''}`}>
                 {item.label}
               </span>
             </div>
             {!collapsed && item.showBadge && unreadCount > 0 && (
-              <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1">
+              <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1 shrink-0">
                 {unreadCount > 9 ? '9+' : unreadCount}
               </span>
             )}
@@ -824,13 +836,14 @@ export default function Layout() {
                     href={childHref}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg text-sm transition-colors text-gray-500 hover:text-white hover:bg-port-border/50 min-w-0"
+                    title={child.label}
+                    className="flex items-start justify-between gap-3 px-3 py-2 rounded-lg text-sm transition-colors text-gray-500 hover:text-white hover:bg-port-border/50 min-w-0"
                   >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <ChildIcon size={16} />
-                      <span className="min-w-0 truncate">{child.label}</span>
+                    <div className="flex items-start gap-3 min-w-0">
+                      <ChildIcon size={16} className="shrink-0 mt-0.5" />
+                      <span className="min-w-0 break-words leading-snug">{child.label}</span>
                     </div>
-                    <ExternalLink size={12} className="text-gray-500" />
+                    <ExternalLink size={12} className="text-gray-500 shrink-0 mt-0.5" />
                   </a>
                 );
               }
@@ -864,7 +877,7 @@ export default function Layout() {
                             to={gc.to}
                             onClick={() => setMobileOpen(false)}
                             title={gc.title || gc.label}
-                            className={`block px-2 py-1 rounded text-xs transition-colors min-w-0 truncate ${
+                            className={`block px-2 py-1 rounded text-xs transition-colors min-w-0 break-words leading-snug ${
                               gcActive
                                 ? 'text-port-accent'
                                 : 'text-gray-600 hover:text-gray-300 hover:bg-port-border/30'
@@ -913,8 +926,8 @@ export default function Layout() {
           flex flex-col bg-port-card border-r border-port-border
           transition-all duration-300 ease-in-out
           ${mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
-          ${collapsed ? 'lg:w-16' : 'lg:w-56'}
-          w-56
+          ${collapsed ? 'lg:w-16' : 'lg:w-64'}
+          w-64
         `}
       >
         {/* Header with logo and collapse toggle */}
@@ -952,7 +965,7 @@ export default function Layout() {
           <button
             type="button"
             onClick={() => setMobileOpen(false)}
-            className="lg:hidden inline-flex items-center justify-center min-w-[40px] min-h-[40px] rounded-lg text-gray-500 hover:text-white"
+            className="lg:hidden inline-flex items-center justify-center min-w-[44px] min-h-[44px] rounded-lg text-gray-500 hover:text-white"
             aria-label="Close sidebar"
           >
             <span aria-hidden="true">✕</span>
@@ -994,7 +1007,7 @@ export default function Layout() {
             <div className={`flex items-center gap-1 ${collapsed ? 'lg:flex-col' : ''}`}>
               <NavLink
                 to="/ambient"
-                className={`inline-flex items-center justify-center min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 sm:p-1.5 rounded-lg transition-colors ${collapsed ? 'lg:hidden' : ''} ${
+                className={`inline-flex items-center justify-center min-w-[44px] min-h-[44px] lg:min-w-0 lg:min-h-0 lg:p-1.5 rounded-lg transition-colors ${collapsed ? 'lg:hidden' : ''} ${
                   isActive('/ambient')
                     ? 'text-port-accent'
                     : 'text-gray-500 hover:text-white'
@@ -1037,7 +1050,7 @@ export default function Layout() {
             onFocus={cancelCloseFlyout}
             onBlur={scheduleCloseFlyout}
             style={{ top: flyoutPos.top, left: flyoutPos.left, position: 'fixed', maxHeight: 'calc(100vh - 16px)' }}
-            className="hidden lg:block z-[60] min-w-[200px] overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-2xl py-1"
+            className="hidden lg:block z-[60] min-w-[220px] max-w-[min(320px,calc(100vw-5rem))] overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-2xl py-1"
           >
             <div className="px-3 py-1.5 text-[10px] uppercase text-gray-500 tracking-wider border-b border-port-border mb-1">
               {item.label}
@@ -1059,13 +1072,14 @@ export default function Layout() {
                     rel="noopener noreferrer"
                     role="menuitem"
                     onClick={() => setFlyoutSection(null)}
-                    className="flex items-center justify-between gap-3 px-3 py-2 text-sm text-gray-300 hover:text-white hover:bg-port-border/50 min-w-0"
+                    title={child.label}
+                    className="flex items-start justify-between gap-3 px-3 py-2 text-sm text-gray-300 hover:text-white hover:bg-port-border/50 min-w-0"
                   >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <ChildIcon size={16} aria-hidden="true" />
-                      <span className="min-w-0 truncate">{child.label}</span>
+                    <div className="flex items-start gap-3 min-w-0">
+                      <ChildIcon size={16} className="shrink-0 mt-0.5" aria-hidden="true" />
+                      <span className="min-w-0 break-words leading-snug">{child.label}</span>
                     </div>
-                    <ExternalLink size={12} className="text-gray-500" />
+                    <ExternalLink size={12} className="text-gray-500 shrink-0 mt-0.5" />
                   </a>
                 );
               }
@@ -1079,14 +1093,15 @@ export default function Layout() {
                   end={child.end}
                   role="menuitem"
                   onClick={() => setFlyoutSection(null)}
-                  className={`flex items-center gap-3 px-3 py-2 text-sm min-w-0 ${
+                  title={child.label}
+                  className={`flex items-start gap-3 px-3 py-2 text-sm min-w-0 ${
                     childActive
                       ? 'bg-port-accent/10 text-port-accent'
                       : 'text-gray-300 hover:text-white hover:bg-port-border/50'
                   }`}
                 >
-                  <ChildIcon size={16} className="shrink-0" aria-hidden="true" />
-                  <span className="min-w-0 truncate">{child.label}</span>
+                  <ChildIcon size={16} className="shrink-0 mt-0.5" aria-hidden="true" />
+                  <span className="min-w-0 break-words leading-snug">{child.label}</span>
                 </NavLink>
               );
             })}
@@ -1095,12 +1110,12 @@ export default function Layout() {
       })()}
 
       {/* Main area — print drops the sidebar offset so printed pages aren't shifted right */}
-      <div className={`flex-1 flex flex-col min-w-0 max-w-full transition-all duration-300 print:ml-0 ${collapsed ? 'lg:ml-16' : 'lg:ml-56'}`}>
+      <div className={`flex-1 flex flex-col min-w-0 max-w-full transition-all duration-300 print:ml-0 ${collapsed ? 'lg:ml-16' : 'lg:ml-64'}`}>
         {/* Mobile header */}
         <header className="lg:hidden flex items-center justify-between px-2 py-1.5 border-b border-port-border bg-port-card print:hidden">
           <button
             onClick={() => setMobileOpen(true)}
-            className="inline-flex items-center justify-center min-w-[40px] min-h-[40px] -ml-1 rounded-lg text-gray-400 hover:text-white"
+            className="inline-flex items-center justify-center min-w-[44px] min-h-[44px] -ml-1 rounded-lg text-gray-400 hover:text-white"
             aria-label="Open navigation menu"
             aria-expanded={mobileOpen}
           >
@@ -1113,7 +1128,7 @@ export default function Layout() {
           <div className="flex items-center gap-0.5">
             <NavLink
               to="/ambient"
-              className={`inline-flex items-center justify-center min-w-[40px] min-h-[40px] rounded-lg transition-colors ${
+              className={`inline-flex items-center justify-center min-w-[44px] min-h-[44px] rounded-lg transition-colors ${
                 isActive('/ambient')
                   ? 'text-port-accent'
                   : 'text-gray-500 hover:text-white'
@@ -1140,6 +1155,11 @@ export default function Layout() {
             // own scroll. The /catalog list/index page stays scrolling-default.
             location.pathname.startsWith('/catalog/') ||
             location.pathname.startsWith('/cos') ||
+            // Both the Creative Director index and its detail editor manage
+            // their own internal scroll (flex-col h-full + overflow-auto body),
+            // so they need the bare full-width main — same as when they lived
+            // under the /media tabs.
+            location.pathname.startsWith('/creative-director') ||
             location.pathname.startsWith('/brain') ||
             location.pathname.startsWith('/digital-twin') ||
             location.pathname.startsWith('/feature-agents') ||

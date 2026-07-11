@@ -68,6 +68,28 @@ export const creativeDirectorDirectiveSchema = z.object({
   }).default({}),
 });
 
+// Per-project AI model override (issue: per-project CD provider/model pins).
+// Each Creative Director cognitive stage (treatment / plan / evaluation) can be
+// pinned to a specific provider + model ON THIS PROJECT, overriding the global
+// `settings.creativeDirector.<stage>` AI Assignment. A stage is only overridden
+// when it names a `providerId`; a blank/absent stage inherits the global pin
+// (which itself falls back to the system default). `model` is optional — blank
+// uses the provider's default/auto model. Kept permissive on the string values;
+// the runtime resolver (agentBridge / sceneEvaluator) validates the provider is
+// usable and of the right harness type before honoring it. Additive on the
+// project record (round-trips through the JSONB `data` column verbatim), so it
+// needs no schema-version bump for federation.
+export const creativeDirectorStagePinSchema = z.object({
+  providerId: z.string().max(120).nullable().optional(),
+  model: z.string().max(200).nullable().optional(),
+}).strict();
+
+export const creativeDirectorModelOverridesSchema = z.object({
+  treatment: creativeDirectorStagePinSchema.optional(),
+  plan: creativeDirectorStagePinSchema.optional(),
+  evaluation: creativeDirectorStagePinSchema.optional(),
+}).strict();
+
 export const creativeDirectorProjectCreateSchema = z.object({
   name: z.string().min(1).max(200),
   aspectRatio: creativeDirectorAspectRatioSchema,
@@ -99,6 +121,9 @@ export const creativeDirectorProjectCreateSchema = z.object({
   // the generalized advance loop executes through the gated creative tool
   // registry. Absent → the legacy video treatment/scene flow (unchanged).
   directive: creativeDirectorDirectiveSchema.nullable().optional(),
+  // Optional per-project provider/model pins for the treatment/plan/evaluation
+  // stages. Absent → every stage inherits the global AI Assignment.
+  modelOverrides: creativeDirectorModelOverridesSchema.optional(),
 });
 
 // Autonomous auto-cast (#1810). `types` narrows the catalog search to a set of
@@ -155,6 +180,10 @@ export const creativeDirectorProjectUpdateSchema = z.object({
   failureReason: z.string().max(500).nullable().optional(),
   // Toggleable post-creation — only affects future scene renders.
   disableAudio: z.boolean().optional(),
+  // Per-project provider/model pins (editable from the CD project's Models
+  // drawer). A stage naming a providerId overrides the global AI Assignment;
+  // a blank stage inherits it. The whole object replaces the stored one.
+  modelOverrides: creativeDirectorModelOverridesSchema.optional(),
 }).strict();
 
 // One scene in the treatment, written by the agent on the treatment task.

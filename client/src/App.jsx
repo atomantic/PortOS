@@ -30,6 +30,7 @@ const FeatureAgents = lazyWithReload(() => import('./pages/FeatureAgents'));
 const FeatureAgentDetail = lazyWithReload(() => import('./pages/FeatureAgentDetail'));
 const CalendarPage = lazyWithReload(() => import('./pages/Calendar'));
 const Messages = lazyWithReload(() => import('./pages/Messages'));
+const IMessage = lazyWithReload(() => import('./pages/IMessage'));
 const Tribe = lazyWithReload(() => import('./pages/Tribe'));
 const Timeline = lazyWithReload(() => import('./pages/Timeline'));
 const Goals = lazyWithReload(() => import('./pages/Goals'));
@@ -38,7 +39,6 @@ const Submodules = lazyWithReload(() => import('./pages/Submodules'));
 const ImageClean = lazyWithReload(() => import('./pages/ImageClean'));
 const VideoDownloaderPage = lazyWithReload(() => import('./pages/VideoDownloaderPage'));
 const ChiefOfStaff = lazyWithReload(() => import('./pages/ChiefOfStaff'));
-const LayeredIntelligence = lazyWithReload(() => import('./pages/LayeredIntelligence'));
 const Ask = lazyWithReload(() => import('./pages/Ask'));
 const MediaGen = lazyWithReload(() => import('./pages/MediaGen'));
 const ImageGen = lazyWithReload(() => import('./pages/ImageGen'));
@@ -159,6 +159,25 @@ function UniverseRouteRedirect({ fromPrefix, canon = false }) {
   return <Navigate to={target} replace />;
 }
 
+// Redirect legacy /media/creative-director/* deep-links to the top-level
+// /creative-director/* route (Creative Director moved out of the Media Gen
+// tabs into its own Create page). Preserves the trailing path (id + tab),
+// query string, and hash.
+function CreativeDirectorLegacyRedirect() {
+  const { pathname, search, hash } = useLocation();
+  const rest = pathname.replace(/^\/media\/creative-director/, '');
+  return <Navigate to={`/creative-director${rest}${search}${hash}`} replace />;
+}
+
+// Normalize a tab-less /creative-director/:id URL to its overview tab while
+// preserving any query string + hash. A bare `<Navigate to="overview">` would
+// drop them; building the relative target from useLocation keeps deep-link
+// state intact (the relative pathname still resolves the :id segment).
+function CreativeDirectorOverviewRedirect() {
+  const { search, hash } = useLocation();
+  return <Navigate to={`overview${search}${hash}`} replace />;
+}
+
 // Force full reload on HMR — partial hot-replacement of the route tree
 // causes stale lazy imports and React Router errors on nested paths
 if (import.meta.hot) {
@@ -205,7 +224,6 @@ export default function App() {
         <Route path="/" element={<Layout />}>
           <Route index element={<Dashboard />} />
           <Route path="apps" element={<Apps />} />
-          <Route path="layered-intelligence" element={<LayeredIntelligence />} />
           <Route path="devtools" element={<Navigate to="/devtools/runs" replace />} />
           <Route path="devtools/datadog" element={<DataDog />} />
           <Route path="devtools/flows" element={<FlowsDoc />} />
@@ -264,7 +282,12 @@ export default function App() {
           <Route path="post/:tab/:subtab" element={<Post />} />
           <Route path="review" element={<Review />} />
           <Route path="messages" element={<Navigate to="/messages/inbox" replace />} />
+          {/* :chatKey is only used by the imessage tab; other tabs strip a stray second segment. */}
+          <Route path="messages/:tab/:chatKey" element={<Messages />} />
           <Route path="messages/:tab" element={<Messages />} />
+          {/* Legacy /imessage → Comms Messages → iMessage tab */}
+          <Route path="imessage" element={<Navigate to="/messages/imessage" replace />} />
+          <Route path="imessage/:chatKey" element={<IMessage />} />
           <Route path="tribe" element={<Tribe />} />
           <Route path="timeline" element={<Timeline />} />
           <Route path="timeline/:date" element={<Timeline />} />
@@ -289,9 +312,12 @@ export default function App() {
             <Route path="collections" element={<MediaCollections />} />
             <Route path="collections/:id" element={<MediaCollectionDetail />} />
             <Route path="collections/:id/sync" element={<MediaCollectionSyncView />} />
-            <Route path="creative-director" element={<CreativeDirector />} />
-            <Route path="creative-director/:id" element={<Navigate to="overview" replace />} />
-            <Route path="creative-director/:id/:tab" element={<CreativeDirectorDetail />} />
+            {/* Creative Director moved to the top-level /creative-director route
+                (Create sidebar link). These redirects keep legacy
+                /media/creative-director bookmarks + in-app deep-links working. */}
+            <Route path="creative-director" element={<RedirectWithSearch to="/creative-director" />} />
+            <Route path="creative-director/:id" element={<CreativeDirectorLegacyRedirect />} />
+            <Route path="creative-director/:id/:tab" element={<CreativeDirectorLegacyRedirect />} />
             <Route path="music-video" element={<MusicVideo />} />
             <Route path="music-video/:projectId" element={<MusicVideo />} />
             <Route path="timeline" element={<VideoTimeline />} />
@@ -307,6 +333,14 @@ export default function App() {
             <Route path="universe-builder/:universeId" element={<UniverseRouteRedirect fromPrefix={/^\/media\/universe-builder/} />} />
             <Route path="universe-builder/:universeId/canon" element={<UniverseRouteRedirect fromPrefix={/^\/media\/universe-builder/} canon />} />
           </Route>
+          {/* Creative Director — a top-level Create page (moved out of the
+              Media Gen tabs). :id with no tab redirects to the overview tab,
+              carrying any query string + hash (relative Navigate preserves the
+              :id in the path) so a deep-link like /creative-director/abc?x#y
+              lands on /creative-director/abc/overview?x#y intact. */}
+          <Route path="creative-director" element={<CreativeDirector />} />
+          <Route path="creative-director/:id" element={<CreativeDirectorOverviewRedirect />} />
+          <Route path="creative-director/:id/:tab" element={<CreativeDirectorDetail />} />
           <Route path="image-gen" element={<RedirectWithSearch to="/media/image" />} />
           <Route path="video-gen" element={<RedirectWithSearch to="/media/video" />} />
           <Route path="media-history" element={<RedirectWithSearch to="/media/history" />} />

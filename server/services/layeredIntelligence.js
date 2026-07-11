@@ -54,10 +54,11 @@ export const SEMANTIC_DEDUP_THRESHOLD = 0.9;
 // issues should be few (the loop files ≤1/run), so this is a generous ceiling.
 export const SEMANTIC_DEDUP_MAX_CANDIDATES = 50;
 
-// The autonomous-job id that drives the whole loop (the global sweep). Single
-// source of truth — the DEFAULT_JOBS catalog entry and the cross-app overview
-// route both key on this so per-app enablement and the global on/off stay in
-// sync in the UI (a per-app config does nothing while this job is disabled).
+// The id of the RETIRED global autonomous-job that used to drive the whole loop
+// (the cross-app sweep). Layered Intelligence is now a per-app handler-backed
+// scheduled task (#2322), so this constant is kept ONLY so migration 184 can find
+// and tombstone the legacy `data/cos/autonomous-jobs.json` record on installs that
+// still carry it. Nothing dispatches on it anymore.
 export const LI_JOB_ID = 'job-layered-intelligence';
 
 // Every proposal scope the reasoner may return. The handler enforces WHERE each
@@ -135,49 +136,6 @@ export function getEffectiveConfig(app) {
   if (!Array.isArray(merged.sources.custom)) merged.sources.custom = [];
   if (!Array.isArray(merged.allowedScopes)) merged.allowedScopes = base.allowedScopes;
   return merged;
-}
-
-/**
- * Summarize one app's loop status for the cross-app overview page. Pure and
- * side-effect-free (no LLM, no forge I/O): derives the display shape from the
- * app's stored config + scheduler bookkeeping only. `lastRunAt` rides along on
- * the effective config (a passthrough stored key, absent on a never-run app);
- * `nextDueAt` is `lastRunAt + intervalMs` (null when never run), and `due` is a
- * display flag (only meaningful when enabled) mirroring the sweep's cadence
- * check. `rules` is reduced to a boolean so the free-text guidance never leaks
- * into a list payload.
- */
-export function summarizeLoopStatus({ app, isPortos = false, now = Date.now() } = {}) {
-  const config = getEffectiveConfig({ ...app, isPortos });
-  const sources = config.sources || {};
-  const lastRunAt = typeof config.lastRunAt === 'string' ? config.lastRunAt : null;
-  const last = lastRunAt ? Date.parse(lastRunAt) : NaN;
-  const interval = config.intervalMs || 0;
-  const nextDueAt = Number.isFinite(last) ? new Date(last + interval).toISOString() : null;
-  const due = !Number.isFinite(last) || (now - last) >= interval;
-  return {
-    id: app.id,
-    name: app.name || app.id,
-    isPortos,
-    enabled: !!config.enabled,
-    intervalMs: config.intervalMs,
-    providerId: config.providerId || null,
-    model: config.model || null,
-    handoffEnabled: !!config.handoff?.enabled,
-    hasRules: !!(typeof config.rules === 'string' && config.rules.trim()),
-    lastRunAt,
-    nextDueAt,
-    due: !!config.enabled && due,
-    allowedScopes: Array.isArray(config.allowedScopes) ? config.allowedScopes : [],
-    sources: {
-      goals: !!sources.goals,
-      cosMetrics: !!sources.cosMetrics,
-      healthReport: !!sources.healthReport,
-      planMd: !!sources.planMd,
-      openIssues: !!sources.openIssues,
-      customCount: Array.isArray(sources.custom) ? sources.custom.length : 0
-    }
-  };
 }
 
 /**
@@ -943,91 +901,4 @@ export function extractPlanSlugs(planContent) {
   let m;
   while ((m = re.exec(planContent))) slugs.push(m[1].toLowerCase());
   return slugs;
-}
-
-// ---------------------------------------------------------------------------
-// Filed-proposal counts + links (issue #2293). The base overview endpoint stays
-// deterministic + I/O-free; THIS function does the per-app forge/Jira/PLAN read
-// behind an explicit "refresh counts" action so the count/link surface is opt-in.
-// ---------------------------------------------------------------------------
-
-// A ceiling on the number of proposal issues surfaced back to the UI per app so a
-// repo with a large layered-intelligence backlog can't return an unbounded list;
-// the count itself is still the full total, only the linked list is capped.
-export const PROPOSAL_LINKS_MAX = 25;
-
-/**
- * Normalize a forge/Jira lister's `{ ok, issues }` into the overview's
- * filed-proposal summary shape: `{ ok, tracker, open, closed, total, issues }`,
- * where each surfaced issue is `{ number, title, state, url }` (link-ready).
- * A FAILED read (`ok:false`) surfaces as `{ ok:false, reason:'read-failed' }`
- * rather than a misleading `total:0` — the CLAUDE.md sentinel rule (a failed
- * fetch must not collapse into "legitimately zero").
- */
-export function normalizeProposalSummary(listed, tracker) {
-  if (!listed?.ok) {
-    return { ok: false, tracker, reason: 'read-failed', open: 0, closed: 0, total: 0, issues: [] };
-  }
-  const all = Array.isArray(listed.issues) ? listed.issues : [];
-  const open = all.filter(i => i.state === 'open').length;
-  const issues = all.slice(0, PROPOSAL_LINKS_MAX).map(i => ({
-    number: i.number ?? null,
-    title: i.title || '',
-    state: i.state,
-    url: i.url || null
-  }));
-  return { ok: true, tracker, open, closed: all.length - open, total: all.length, issues };
-}
-
-/**
- * Summarize the filed layered-intelligence proposals for ONE app — count + links,
- * resolved through whatever tracker the app files to. I/O function (shells out to
- * gh/glab or hits the Jira REST service); the listers it delegates to are
- * catch-safe so this never throws — a failed read surfaces as `ok:false`.
- *
- * `tracker` is the app's resolved work tracker (`resolveAppWorkTracker(app)`),
- * passed in so the caller can resolve every app's tracker concurrently. Deps are
- * injectable so tests drive the dispatch without a live forge/Jira/filesystem.
- */
-export async function summarizeFiledProposals({ app, tracker, deps = {} } = {}) {
-  const {
-    listForge = listForgeIssues,
-    listJira = listJiraIssues,
-    readPlan = tryReadFile
-  } = deps;
-  const resolved = tracker?.resolved || 'plan';
-  const filer = filerForTracker(resolved);
-  const cwd = app?.repoPath;
-
-  if (filer === 'forge') {
-    if (!tracker?.forge || !cwd) {
-      return { ok: false, tracker: resolved, reason: 'no-repo', open: 0, closed: 0, total: 0, issues: [] };
-    }
-    const listed = await listForge({ cli: tracker.forge, cwd });
-    return normalizeProposalSummary(listed, resolved);
-  }
-
-  if (filer === 'jira') {
-    // Jira coordinates come from the app's explicit per-app config (never
-    // auto-detected), mirroring the sweep handler's gate.
-    const jira = (app?.jira?.enabled && app.jira?.instanceId && app.jira?.projectKey)
-      ? { instanceId: app.jira.instanceId, projectKey: app.jira.projectKey }
-      : null;
-    if (!jira) {
-      return { ok: false, tracker: 'jira', reason: 'jira-not-configured', open: 0, closed: 0, total: 0, issues: [] };
-    }
-    const listed = await listJira({ instanceId: jira.instanceId, projectKey: jira.projectKey });
-    // Jira issues carry a key (PROJ-123) but no browse URL from the lister, so
-    // they surface as counts without per-item links.
-    return normalizeProposalSummary(listed, 'jira');
-  }
-
-  // plan tracker — count slug-tagged checklist items in PLAN.md. All PLAN items
-  // are "open" (the plan filer has no closed-state), and have no per-item URL.
-  if (!cwd) {
-    return { ok: false, tracker: 'plan', reason: 'no-repo', open: 0, closed: 0, total: 0, issues: [] };
-  }
-  const planContent = await readPlan(join(cwd, 'PLAN.md'));
-  const slugs = extractPlanSlugs(planContent || '');
-  return { ok: true, tracker: 'plan', open: slugs.length, closed: 0, total: slugs.length, issues: [] };
 }

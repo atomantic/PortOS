@@ -171,8 +171,10 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
   return (
     <div className="space-y-4">
       {/* Python path + detect */}
+      <label htmlFor="python-path" className="sr-only">Python path</label>
       <div className="flex items-center gap-2">
         <input
+          id="python-path"
           type="text"
           value={draftPath}
           onChange={(e) => handleDraftChange(e.target.value)}

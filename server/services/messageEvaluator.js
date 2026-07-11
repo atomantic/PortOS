@@ -70,12 +70,19 @@ async function resolveProviderConfig(actionType) {
   return { provider, model: model || provider.defaultModel || '', msgConfig };
 }
 
-async function runPrompt(provider, model, prompt, source) {
+async function runPrompt(provider, model, prompt, source, responseSchema) {
   // promptRunner internally gates per-call model overrides for providers
   // that don't honor them (non-codex CLI). Surface the effective model
   // it actually used so callers can log it accurately instead of echoing
   // back the (possibly-dropped) input model.
-  const { text, model: effectiveModel } = await runPromptThroughProvider({ provider, model, prompt, source });
+  //
+  // `responseSchema` (issue #2350) opts this call into Tier-2 (schema/type)
+  // recovery: the runner validates + coerces the response to the declared shape
+  // and, when a response is uncoercible, re-requests the same provider with a
+  // schema-strengthened prompt before falling back — so a triage batch that
+  // returns fenced/prose-wrapped JSON is corrected in the runner instead of
+  // dropping to an empty `parseEvalResponse`. Omitted for free-text sources.
+  const { text, model: effectiveModel } = await runPromptThroughProvider({ provider, model, prompt, source, responseSchema });
   return { text, model: effectiveModel };
 }
 
@@ -118,7 +125,9 @@ export async function evaluateMessages(messages) {
   const prompt = EVAL_PROMPT + rulesSection + JSON.stringify(payload, null, 2) + '\n' + EVAL_PROMPT_SUFFIX;
 
   console.log(`📧 Evaluating ${messages.length} messages with ${provider.name}`);
-  const { text: response, model: effectiveModel } = await runPrompt(provider, model, prompt, 'messages-triage');
+  // Declare the triage response shape (a JSON array of per-message actions) so
+  // the runner can validate/coerce it and recover a malformed response (#2350).
+  const { text: response, model: effectiveModel } = await runPrompt(provider, model, prompt, 'messages-triage', (v) => Array.isArray(v));
   console.log(`📧 Triage ran on ${provider.name}/${effectiveModel || '(default)'}`);
 
   const messageIds = new Set(messages.map(m => m.id));

@@ -5,17 +5,46 @@
 
 export const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
+// Grok Build CLI/TUI: PortOS does not select a model — the local `grok` binary
+// uses its own latest default. Stored as a sentinel so pickers hide the model
+// dropdown (same UX as Codex / Antigravity).
+export const GROK_CONFIGURED_DEFAULT = 'grok-configured-default';
+
+const CONFIGURED_DEFAULT_SENTINELS = new Set([
+  CODEX_CONFIGURED_DEFAULT,
+  ANTIGRAVITY_CONFIGURED_DEFAULT,
+  GROK_CONFIGURED_DEFAULT,
+]);
 
 export const isCodexConfiguredDefault = (model) => model === CODEX_CONFIGURED_DEFAULT;
 
+/** True for any provider "use CLI's own default" sentinel (Codex / Antigravity / Grok Build). */
+export const isConfiguredDefaultModel = (model) => CONFIGURED_DEFAULT_SENTINELS.has(model);
+
+/**
+ * Normalize a provider `command` to its lowercase binary basename, stripping any
+ * directory prefix and a Windows `.exe` suffix — e.g. `/opt/homebrew/bin/Grok.exe`
+ * → `grok`. Returns `''` for empty/non-string input. The shared primitive behind
+ * `isClaudeCommand`/`isOpencodeCommand`/`isGrokCommand` so the split/pop/case/.exe
+ * rule lives in exactly one place. (Only `.exe` is stripped, matching the runner's
+ * `shell:false` spawn path — a `.cmd`/`.bat` shim isn't directly spawnable.)
+ * @param {string|null|undefined} command
+ * @returns {string}
+ */
+export function commandBasename(command) {
+  if (typeof command !== 'string' || command === '') return '';
+  return command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '');
+}
+
 /**
  * Returns the model string to pass to a CLI's --model flag, or null if the
- * caller should omit --model entirely (Codex sentinel case — the CLI will use
- * whatever model is configured in ~/.codex/config.toml).
+ * caller should omit --model entirely (configured-default sentinels — the CLI
+ * uses its own default: Codex via ~/.codex/config.toml, Antigravity/Grok Build
+ * via the binary's built-in latest model).
  * @param {string|null|undefined} model
  * @returns {string|null}
  */
-export const resolveCliModel = (model) => isCodexConfiguredDefault(model) ? null : (model || null);
+export const resolveCliModel = (model) => isConfiguredDefaultModel(model) ? null : (model || null);
 
 /**
  * True when a provider command points at the OpenCode binary — matching the bare
@@ -29,9 +58,7 @@ export const resolveCliModel = (model) => isCodexConfiguredDefault(model) ? null
  * @returns {boolean}
  */
 export function isOpencodeCommand(command) {
-  if (typeof command !== 'string' || command === '') return false;
-  const base = command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '');
-  return base === 'opencode';
+  return commandBasename(command) === 'opencode';
 }
 
 /**
@@ -168,12 +195,12 @@ export function resolveBedrockCliModel(id, { env = process.env, providerId } = {
 }
 
 /**
- * Strip the sentinel from a model list — the user-selectable view.
+ * Strip configured-default sentinels from a model list — the user-selectable view.
  * @param {string[]} models
  * @returns {string[]}
  */
 export const filterSelectableModels = (models) =>
-  (models || []).filter(m => m !== CODEX_CONFIGURED_DEFAULT && m !== ANTIGRAVITY_CONFIGURED_DEFAULT);
+  (models || []).filter(m => !isConfiguredDefaultModel(m));
 
 /**
  * Detects whether the provider's stored argv already pins a model with a
@@ -213,10 +240,11 @@ export function hasModelFlag(args) {
  * @returns {boolean}
  */
 export function isClaudeCommand(command) {
+  // An empty/blank command also counts as Claude: `buildCliSpawnConfig`'s default
+  // branch and the TUI `inferTuiCommand` fallback both resolve a blank command to
+  // `claude` — a policy that differs from the other predicates, so it stays here.
   if (command == null || command === '') return true;
-  if (typeof command !== 'string') return false;
-  const base = command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '');
-  return base === 'claude';
+  return commandBasename(command) === 'claude';
 }
 
 /**
@@ -234,6 +262,21 @@ export function isClaudeCommand(command) {
  */
 export function isOllamaClaudeProvider(provider, command = provider?.command) {
   return provider?.ollamaBacked === true && isClaudeCommand(command);
+}
+
+/**
+ * True when a provider explicitly configures its own GitHub credential
+ * (`GH_TOKEN` or `GITHUB_TOKEN`) in `envVars`. Agent-spawn paths that would
+ * otherwise inject a repo-owner-pinned `GH_TOKEN` skip that injection when this
+ * returns true, so the provider's explicit credential wins — `gh` prefers
+ * `GH_TOKEN` over `GITHUB_TOKEN`, so an injected `GH_TOKEN` would silently
+ * shadow a provider's configured `GITHUB_TOKEN` otherwise.
+ * @param {{envVars?: Record<string,unknown>}} provider
+ * @returns {boolean}
+ */
+export function providerSuppliesGithubToken(provider) {
+  const env = provider?.envVars;
+  return !!env && ('GH_TOKEN' in env || 'GITHUB_TOKEN' in env);
 }
 
 /**

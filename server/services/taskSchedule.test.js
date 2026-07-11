@@ -52,6 +52,7 @@ vi.mock('./taskLearning.js', () => ({
 vi.mock('./apps.js', () => ({
   isTaskTypeEnabledForApp: vi.fn().mockResolvedValue(true),
   getAppTaskTypeInterval: vi.fn().mockResolvedValue(null),
+  getAppTaskTypeIntervalMs: vi.fn().mockResolvedValue(null),
   getActiveApps: vi.fn().mockResolvedValue([]),
   getAppTaskTypeOverrides: vi.fn().mockResolvedValue({}),
   clearAllPrWatcherState: vi.fn().mockResolvedValue({ changed: false })
@@ -213,6 +214,42 @@ describe('taskSchedule', () => {
       }
     })
   })
+
+  describe('layered-intelligence (programmatic-I/O agent task)', () => {
+    it('is registered as a self-improvement task with a description and a daily default', () => {
+      expect(SELF_IMPROVEMENT_TASK_TYPES).toContain('layered-intelligence');
+      expect(TASK_TYPE_DESCRIPTIONS['layered-intelligence']).toBeTruthy();
+      expect(DEFAULT_TASK_INTERVALS['layered-intelligence']).toMatchObject({ type: 'daily', enabled: false });
+    });
+
+    it('has NO default prompt — the buildTaskInput hook renders it', () => {
+      // LI runs as a normal reasoning agent with buildTaskInput/processTaskOutput
+      // hooks (taskTypeHooks.js); the handler-backed dispatch was removed entirely.
+      // The buildTaskInput hook renders the prompt, so there is no
+      // DEFAULT_TASK_PROMPTS entry.
+      expect(DEFAULT_TASK_PROMPTS['layered-intelligence']).toBeUndefined();
+    });
+
+    it('pins the throwaway-worktree posture so the reasoning agent can not land code', () => {
+      expect(DEFAULT_TASK_INTERVALS['layered-intelligence'].taskMetadata).toMatchObject({
+        useWorktree: true, openPR: false, discardWorktree: true
+      });
+    });
+
+    it('honors a per-app numeric intervalMs override via the CUSTOM branch', async () => {
+      const { getAppTaskTypeInterval, getAppTaskTypeIntervalMs } = await import('./apps.js');
+      mockSchedule({
+        tasks: { 'layered-intelligence': { type: 'daily', enabled: true, providerId: null, model: null, prompt: null } },
+        executions: { 'task:layered-intelligence': { lastRun: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), count: 1, perApp: { 'app-1': { lastRun: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(), count: 1 } } } }
+      });
+      getAppTaskTypeInterval.mockResolvedValue('custom');
+      getAppTaskTypeIntervalMs.mockResolvedValue(60 * 60 * 1000); // hourly → 2h since last run ⇒ due
+      const res = await shouldRunTask('layered-intelligence', 'app-1');
+      expect(res.shouldRun).toBe(true);
+      getAppTaskTypeInterval.mockResolvedValue(null);
+      getAppTaskTypeIntervalMs.mockResolvedValue(null);
+    });
+  });
 
   describe('do-replan task type', () => {
     it('should default to weekly, disabled, with worktree+PR metadata', async () => {
@@ -725,21 +762,19 @@ describe('taskSchedule', () => {
     })
 
     describe('cron catch-up', () => {
-      it('catches up a never-run cron when the most-recent slot is within one period', async () => {
-        // Cron: 0 9 * * * (daily 9 AM). The most recent past 9 AM already elapsed.
-        // First call (from=now): most-recent past 9 AM.
-        // Second call (from=prev-60s): one occurrence earlier (the lookback bound).
+      it('catches up a never-run cron when the missed slot elapsed after the task was created', async () => {
+        // Cron: 0 9 * * * (daily 9 AM). The task was configured yesterday and the
+        // daemon missed today's 9 AM slot — so the elapsed slot is genuinely missed
+        // and should fire now. The catch-up bound is the task's createdAt.
         const todayNineAm = recentNineAm()
-        const yesterdayNineAm = new Date(todayNineAm.getTime() - 24 * 60 * 60 * 1000)
+        const twoDaysAgo = new Date(todayNineAm.getTime() - 2 * 24 * 60 * 60 * 1000)
 
-        parseCronToPrevRun
-          .mockReturnValueOnce(todayNineAm)      // most-recent past occurrence
-          .mockReturnValueOnce(yesterdayNineAm)  // one period earlier (the bound)
+        parseCronToPrevRun.mockReturnValueOnce(todayNineAm) // most-recent past occurrence
         parseCronToNextRun.mockReturnValueOnce(new Date(todayNineAm.getTime() + 24 * 60 * 60 * 1000))
 
         mockSchedule({
           tasks: {
-            'plan-task': { type: 'cron', enabled: true, cronExpression: '0 9 * * *', providerId: null, model: null, prompt: null }
+            'plan-task': { type: 'cron', enabled: true, cronExpression: '0 9 * * *', providerId: null, model: null, prompt: null, createdAt: twoDaysAgo.toISOString() }
           }
         })
 
@@ -747,6 +782,29 @@ describe('taskSchedule', () => {
         expect(result.shouldRun).toBe(true)
         expect(result.reason).toBe('cron-catch-up')
         expect(result.missedSlot).toBe(todayNineAm.toISOString())
+      })
+
+      it('does NOT catch up a never-run cron whose most-recent slot predates the task', async () => {
+        // The reported bug: a weekly "Sunday 09:00" task enabled mid-week must NOT
+        // immediately fire for last Sunday's slot — that slot elapsed before the
+        // task existed, so there was nothing to miss. It waits for the next Sunday.
+        const now = Date.now()
+        const lastSunday = new Date(now - 3 * 24 * 60 * 60 * 1000)      // slot before creation
+        const nextSunday = new Date(now + 4 * 24 * 60 * 60 * 1000)
+        const createdYesterday = new Date(now - 1 * 24 * 60 * 60 * 1000) // task created after last Sunday
+
+        parseCronToPrevRun.mockReturnValueOnce(lastSunday)
+        parseCronToNextRun.mockReturnValue(nextSunday)
+
+        mockSchedule({
+          tasks: {
+            'branch-cleanup': { type: 'cron', enabled: true, cronExpression: '0 9 * * 0', providerId: null, model: null, prompt: null, createdAt: createdYesterday.toISOString() }
+          }
+        })
+
+        const result = await shouldRunTask('branch-cleanup')
+        expect(result.shouldRun).toBe(false)
+        expect(result.reason).toBe('cron-cooldown')
       })
 
       it('catches up after the recorded lastRun even if the daemon missed the slot', async () => {
@@ -862,17 +920,15 @@ describe('taskSchedule', () => {
       const tomorrowNineAm = new Date(todayNineAm.getTime() + 24 * 60 * 60 * 1000)
       const yesterdayNineAm = new Date(todayNineAm.getTime() - 24 * 60 * 60 * 1000)
 
-      // shouldRunTask iterates both tasks. For plan-task it calls prev twice (catch-up
-      // path); for code-quality it doesn't call cron helpers at all.
-      parseCronToPrevRun
-        .mockReturnValueOnce(todayNineAm)      // plan-task prevRun
-        .mockReturnValueOnce(yesterdayNineAm)  // plan-task beforePrev (bound)
+      // shouldRunTask iterates both tasks. plan-task was created before its missed
+      // slot (createdAt bound), so its elapsed 9 AM counts as a genuine catch-up.
+      parseCronToPrevRun.mockReturnValueOnce(todayNineAm) // plan-task prevRun
       parseCronToNextRun.mockReturnValue(tomorrowNineAm)
 
       mockSchedule({
         tasks: {
           'code-quality': { type: 'weekly', enabled: true, providerId: null, model: null, prompt: null, runAfter: [] },
-          'plan-task':    { type: 'cron',   enabled: true, cronExpression: '0 9 * * *', providerId: null, model: null, prompt: null }
+          'plan-task':    { type: 'cron',   enabled: true, cronExpression: '0 9 * * *', providerId: null, model: null, prompt: null, createdAt: yesterdayNineAm.toISOString() }
         }
       })
 
@@ -890,14 +946,12 @@ describe('taskSchedule', () => {
       const todayNineAm = recentNineAm()
       const tomorrowNineAm = new Date(todayNineAm.getTime() + 24 * 60 * 60 * 1000)
       const yesterdayNineAm = new Date(todayNineAm.getTime() - 24 * 60 * 60 * 1000)
-      parseCronToPrevRun
-        .mockReturnValueOnce(todayNineAm)
-        .mockReturnValueOnce(yesterdayNineAm)
+      parseCronToPrevRun.mockReturnValueOnce(todayNineAm)
       parseCronToNextRun.mockReturnValue(tomorrowNineAm)
 
       mockSchedule({
         tasks: {
-          'pr-watcher':  { type: 'cron', enabled: true, cronExpression: '0 9 * * *', providerId: null, model: null, prompt: null },
+          'pr-watcher':  { type: 'cron', enabled: true, cronExpression: '0 9 * * *', providerId: null, model: null, prompt: null, createdAt: yesterdayNineAm.toISOString() },
           'claim-issue': { type: 'perpetual', enabled: true, providerId: null, model: null, prompt: null }
         }
       })

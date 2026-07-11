@@ -97,8 +97,24 @@ const cosTaskAttachmentSchema = z.object({
   mimeType: z.string().optional(),
 });
 
+// Structured auto-fix diagnostics (#2328) — the record autoFixer.buildFixDiagnostics
+// attaches to error-driven tasks so downstream telemetry can break auto-fix outcomes
+// out by fallback tier / category / failure reason. Server-internal today (autoFixer
+// calls addTask directly), but validated for schema parity now that addTask persists
+// it as first-class metadata.
+const cosTaskDiagnosticsSchema = z.object({
+  triggerEvent: z.string().optional(),
+  target: z.string().optional(),
+  errorType: z.string().optional(),
+  category: z.string().optional(),
+  tier: z.number().optional(),
+  fixStrategy: z.string().optional(),
+  failureReason: z.string().optional(),
+}).passthrough();
+
 export const createCosTaskSchema = z.object({
   description: z.string().min(1),
+  diagnostics: cosTaskDiagnosticsSchema.optional(),
   priority: z.string().optional(),
   context: z.string().optional(),
   model: z.string().optional(),
@@ -183,8 +199,11 @@ export const createCosJobSchema = z.object({
   type: z.enum(['agent', 'shell', 'script']).optional(),
   interval: z.string().optional(),
   intervalMs: z.number().positive().int().optional(),
-  scheduledTime: z.string().optional(),
-  cronExpression: z.string().optional(),
+  // Null actively clears a pinned time/cron mode on update. The jobs UI has
+  // always emitted null for the inactive mode; accepting it here lets updateJob
+  // distinguish "clear this field" from an omitted field it should preserve.
+  scheduledTime: z.string().nullable().optional(),
+  cronExpression: z.string().nullable().optional(),
   enabled: z.boolean().optional(),
   priority: z.string().optional(),
   autonomyLevel: z.enum(['standby', 'assistant', 'manager', 'yolo']).optional(),
@@ -244,6 +263,9 @@ export const generateWeeklyDigestSchema = z.object({
 // up spawner reads it as the fallback for `reviewers` when none are passed in.
 // `lmstudioModel` / `ollamaModel` are the installed model ids the local-LLM
 // reviewer should run with (empty/undefined = pick the active default model).
+// `codexModel` is the Codex CLI model tier (e.g. `gpt-5.6-sol`) threaded into
+// the review-loop follow-up prompt as `codex --model <id>` (empty/undefined =
+// let the Codex CLI pick its own default).
 export const codeReviewSettingsSchema = z.object({
   reviewers: z.preprocess(
     v => Array.isArray(v) ? v.map(r => (typeof r === 'string' ? (REVIEWER_ALIASES[r] ?? r) : r)) : v,
@@ -253,6 +275,7 @@ export const codeReviewSettingsSchema = z.object({
   reviewerApplies: z.boolean().optional(),
   lmstudioModel: z.preprocess(emptyToUndefined, z.string().optional()),
   ollamaModel: z.preprocess(emptyToUndefined, z.string().optional()),
+  codexModel: z.preprocess(emptyToUndefined, z.string().optional()),
 }).strict();
 
 // =============================================================================
@@ -275,7 +298,11 @@ export const MAX_TOTAL_SPAWNS = 5;
 // sanitizeTaskMetadata.
 const ALLOWED_TASK_METADATA_KEYS = [
   ...PIPELINE_BEHAVIOR_FLAGS, 'readOnly',
-  'cleanupMerged', 'openPr', 'resolveConflicts', 'autoMerge', 'autoClose'
+  'cleanupMerged', 'openPr', 'resolveConflicts', 'autoMerge', 'autoClose',
+  // Throwaway-worktree posture for programmatic-I/O reasoning tasks (layered-
+  // intelligence): the worktree is discarded without a merge or PR so a reasoning
+  // agent can't land code. See agentWorktreeCleanup.js.
+  'discardWorktree'
 ];
 
 // pr-watcher author-gate values. 'self' = PRs opened by the gh-authenticated

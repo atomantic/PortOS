@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { ServerError } from './errorHandler.js';
-import { partialWithoutDefaults, emptyToUndefined } from './zodCompat.js';
+import { partialWithoutDefaults, emptyToUndefined, emptyToNull } from './zodCompat.js';
 import { WORK_TRACKERS } from './workTracker.js';
 
 // gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
@@ -191,8 +191,16 @@ export const appSchema = z.object({
   disabledTaskTypes: z.array(z.string()).optional(), // Legacy: migrated to taskTypeOverrides
   taskTypeOverrides: z.record(z.object({
     enabled: z.boolean().optional(),
-    interval: z.string().nullable().optional()
-  })).optional(), // Per-task overrides: { [taskType]: { enabled, interval } }
+    interval: z.string().nullable().optional(),
+    // Per-app scheduling fields for handler-backed tasks (e.g. layered-intelligence);
+    // persisted by updateAppTaskTypeOverride. Nullable = "clear back to inherit/default".
+    // Declared here so a generic PUT /api/apps/:id can't silently strip them (Zod drops
+    // unknown keys and updateApp replaces taskTypeOverrides wholesale).
+    intervalMs: z.number().positive().nullable().optional(),
+    providerId: z.string().nullable().optional(),
+    model: z.string().nullable().optional(),
+    taskMetadata: z.record(z.any()).nullable().optional()
+  })).optional(), // Per-task overrides: { [taskType]: { enabled, interval, intervalMs, providerId, model, taskMetadata } }
   defaultUseWorktree: z.boolean().optional(),
   defaultOpenPR: z.boolean().optional(),
   jira: jiraConfigSchema.optional().nullable(),
@@ -400,6 +408,65 @@ export const backupConfigSchema = z.object({
   disabledDefaultExcludes: z.array(z.string()).optional().default([])
 });
 
+// Scheduled Series Autopilot (#2174). Machine-local per-series cron schedules
+// that fire `startSeriesAutopilot` unattended — the AI Provider Usage Policy's
+// sanctioned "scheduled automation" exception. Stored under the top-level
+// `seriesAutopilot` settings key (NOT on the federated series record — a
+// schedule that synced to a peer would double-run the same series). Each entry
+// is OFF by default (`enabled` defaults false); the run itself still passes
+// through the cos-domain autonomy gate + daily budget inside startSeriesAutopilot.
+// provider/model are OPTIONAL overrides — when absent the run uses the series'
+// own `series.llm` (or the active provider); the scheduler maps them to the
+// pipeline's providerOverride/modelOverride. A blank provider/model (UI sentinel
+// for "use the series default") is coerced to undefined so it doesn't pin an
+// empty string. Other autopilot run options are intentionally NOT accepted here:
+// there's no UI producing them, so a scheduled run uses the series' persisted
+// defaults for those (add a field only when a control exists to set it).
+// Structural cron validator, self-contained so validation.js stays a leaf lib
+// (importing the scheduler's isValidCron would pull the eventScheduler graph into
+// every suite that mocks validation's deps). Rejects a 5-token-but-out-of-range
+// cron like `99 99 * * *` at the PUT boundary (a 400 the UI surfaces) instead of
+// letting it be saved+enabled and then silently dropped by activeSchedules —
+// which would leave the user with an "enabled" schedule that never fires (#2174).
+// Deliberately no less permissive than the scheduler's parser (`*`, ranges,
+// lists, steps) so a cron it accepts is never rejected here.
+const CRON_FIELD_BOUNDS = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 7]];
+const isCronPartValid = (part, min, max) => {
+  const [range, step] = part.split('/');
+  if (step !== undefined && !(/^\d+$/.test(step) && Number(step) >= 1)) return false;
+  if (range === '*') return true;
+  const [a, b] = range.split('-');
+  if (!/^\d+$/.test(a)) return false;
+  const av = Number(a);
+  if (av < min || av > max) return false;
+  if (b !== undefined) {
+    if (!/^\d+$/.test(b)) return false;
+    const bv = Number(b);
+    if (bv < min || bv > max || bv < av) return false;
+  }
+  return true;
+};
+export const isValidCronExpression = (expr) => {
+  if (typeof expr !== 'string') return false;
+  const fields = expr.trim().split(/\s+/);
+  if (fields.length !== 5) return false;
+  return fields.every((field, i) =>
+    field.split(',').every((part) => isCronPartValid(part, CRON_FIELD_BOUNDS[i][0], CRON_FIELD_BOUNDS[i][1])));
+};
+
+export const seriesAutopilotScheduleSchema = z.object({
+  seriesId: z.string().min(1).max(64),
+  enabled: z.boolean().optional().default(false),
+  cron: z.string().min(1).max(120).refine(isValidCronExpression, 'invalid cron expression'),
+  timezone: z.string().min(1).max(64).optional(),
+  provider: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).max(120).optional()),
+  model: z.preprocess((v) => (v === '' ? undefined : v), z.string().min(1).max(200).optional()),
+}).strict();
+
+export const seriesAutopilotSettingsSchema = z.object({
+  schedules: z.array(seriesAutopilotScheduleSchema).optional().default([]),
+}).strict();
+
 // Per-API external-access flags (issue: public API surface). Stored under the
 // top-level `apiAccess` settings key (client-readable — NOT under `secrets`).
 // Drives `server/lib/apiRegistry.js`: an entry that is `exposed && !requireAuth`
@@ -457,11 +524,26 @@ export const featureProviderConfigSchema = z.object({
   model: z.preprocess(emptyToUndefined, z.string().optional()),
 });
 
-// Creative Director settings slice. `evaluation` pins the vision provider/model
-// used to judge each rendered scene server-side (blank = auto-pick a local
-// vision model, else fall back to the coding agent). Reuses the shared
-// feature-provider shape so an empty-string picker value normalizes to unset.
+// Autofixer settings extend the shared provider assignment with its isolation
+// controls. `autoPromote` (default off) is the explicit promotion gate: when
+// false the autonomous repair only STAGES a validated patch for review; when
+// true a validated (and, if set, verified) diff is applied to the live checkout
+// and the process restarted. `verifyCommand` runs in the isolated worktree
+// before any change reaches live. See autofixer/sandbox.js.
+export const autofixerSettingsSchema = featureProviderConfigSchema.extend({
+  autoPromote: z.boolean().optional(),
+  verifyCommand: z.preprocess(emptyToUndefined, z.string().max(500).optional()),
+});
+
+// Creative Director settings slice. Each LLM-backed stage can pin its own
+// provider/model instead of inheriting the system default. `evaluation` is a
+// direct vision API call (blank = auto-pick a local vision model, else fall
+// back to the coding agent); treatment and plan run as CoS agent tasks.
+// Reuses the shared feature-provider shape so an empty-string picker value
+// normalizes to unset.
 export const creativeDirectorSettingsSchema = z.object({
+  treatment: featureProviderConfigSchema.partial().optional(),
+  plan: featureProviderConfigSchema.partial().optional(),
   evaluation: featureProviderConfigSchema.partial().optional(),
 });
 
@@ -482,6 +564,50 @@ export function validate(schema, data) {
     }))
   };
 }
+
+// =============================================================================
+// SCAFFOLD (app generator)
+// =============================================================================
+
+// Known scaffold templates — the single source of truth for the enum the
+// scaffold route accepts. An unknown template MUST be rejected before any
+// filesystem write or subprocess spawn (issue #2390), so the route can no
+// longer create a target directory for a template it can't actually build.
+export const SCAFFOLD_TEMPLATES = [
+  'portos-stack',
+  'vite-express',
+  'vite-react',
+  'express-api',
+  'ios-native',
+  'xcode-multiplatform'
+];
+
+// Ports may arrive absent (auto-allocated by the route) or as an explicit
+// number. Tolerate the UI '' sentinel as "not provided"; anything else must be
+// a valid TCP port so an out-of-range value is rejected deterministically.
+const scaffoldPortSchema = z.preprocess(
+  emptyToUndefined,
+  z.number().int().min(1).max(65535).nullable().optional()
+);
+
+// Full request schema for POST /api/scaffold. Validated before the route
+// touches the filesystem — template enum, port range, and a name that yields a
+// usable directory slug are all enforced up front.
+export const scaffoldSchema = z.object({
+  name: z.string().trim().min(1).max(100)
+    // The route sanitizes name → [a-z0-9-]; a name with no alphanumerics
+    // slugifies to an all-dash/empty dirName. Reject it here rather than
+    // creating a garbage directory.
+    .refine(v => /[a-z0-9]/i.test(v), {
+      message: 'name must contain at least one letter or number'
+    }),
+  template: z.enum(SCAFFOLD_TEMPLATES),
+  parentDir: z.string().trim().min(1),
+  uiPort: scaffoldPortSchema,
+  apiPort: scaffoldPortSchema,
+  createGitHubRepo: z.boolean().optional().default(false),
+  githubOrg: z.preprocess(emptyToNull, z.string().min(1).nullable().optional())
+});
 
 /**
  * Validate data against a Zod schema, throwing on failure.

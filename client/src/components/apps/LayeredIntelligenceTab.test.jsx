@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import LayeredIntelligenceTab, { buildLayeredIntelligenceUpdate } from './LayeredIntelligenceTab';
+import LayeredIntelligenceTab, { buildLayeredIntelligenceUpdate, buildLayeredIntelligenceScheduleUpdate, intervalFieldsFromMs, describeLastRun } from './LayeredIntelligenceTab';
 
 const baseline = {
   enabled: false,
@@ -12,6 +12,68 @@ const baseline = {
   allowedScopes: ['app-improvement', 'app-data-gap']
 };
 
+describe('describeLastRun', () => {
+  const at = '2026-07-09T20:29:05.000Z';
+
+  it('returns null when the loop has never run', () => {
+    expect(describeLastRun({})).toBeNull();
+    expect(describeLastRun({ lastRunAction: 'no-op' })).toBeNull(); // no lastRunAt ⇒ never ran
+  });
+
+  it('reports a filed run with its ref as success', () => {
+    const r = describeLastRun({ lastRunAt: at, lastRunAction: 'filed', lastRunReason: null, lastRunRef: '#123' });
+    expect(r.tone).toBe('success');
+    expect(r.text).toContain('#123');
+  });
+
+  it('surfaces an unparseable reasoning response as a warning with actionable prose', () => {
+    const r = describeLastRun({ lastRunAt: at, lastRunAction: 'no-op', lastRunReason: 'unparseable-response' });
+    expect(r.tone).toBe('warn');
+    expect(r.text).toMatch(/no usable JSON/i);
+  });
+
+  it('treats a genuine no-proposal run as neutral (not an error)', () => {
+    const r = describeLastRun({ lastRunAt: at, lastRunAction: 'no-op', lastRunReason: 'no-proposal' });
+    expect(r.tone).toBe('neutral');
+  });
+
+  it('renders an llm-error reason as an error with the provider message', () => {
+    const r = describeLastRun({ lastRunAt: at, lastRunAction: 'no-op', lastRunReason: 'llm-error: provider timeout' });
+    expect(r.tone).toBe('error');
+    expect(r.text).toContain('provider timeout');
+  });
+
+  it('shows a duplicate suppression as neutral', () => {
+    const r = describeLastRun({ lastRunAt: at, lastRunAction: 'duplicate', lastRunReason: 'duplicate' });
+    expect(r.tone).toBe('neutral');
+    expect(r.text).toMatch(/existing/i);
+  });
+
+  it('does not fabricate an outcome for a legacy record (lastRunAt only, no action)', () => {
+    // Installs upgraded from before this change persisted only lastRunAt.
+    const r = describeLastRun({ lastRunAt: at });
+    expect(r.tone).toBe('neutral');
+    expect(r.text).toMatch(/not recorded/i);
+    expect(r.text).not.toMatch(/no proposal/i);
+  });
+});
+
+describe('LayeredIntelligenceTab last-run status', () => {
+  const li = (extra) => ({ ...baseline, ...extra });
+  const noop = () => {};
+
+  it('renders the durable last-run line when the config carries a run outcome', () => {
+    render(<LayeredIntelligenceTab li={li({ lastRunAt: '2026-07-09T20:29:05.000Z', lastRunAction: 'no-op', lastRunReason: 'unparseable-response' })} onChange={noop} providers={[]} isPortos loaded />);
+    expect(screen.getByText(/Last run/i)).toBeInTheDocument();
+    expect(screen.getByText(/no usable JSON/i)).toBeInTheDocument();
+  });
+
+  it('omits the last-run line before the loop has ever run', () => {
+    render(<LayeredIntelligenceTab li={li()} onChange={noop} providers={[]} isPortos loaded />);
+    expect(screen.queryByText(/Last run/i)).not.toBeInTheDocument();
+  });
+});
+
 describe('buildLayeredIntelligenceUpdate', () => {
   it('returns null when nothing changed (avoids persisting the effective config to disk)', () => {
     expect(buildLayeredIntelligenceUpdate(baseline, { ...baseline })).toBeNull();
@@ -22,14 +84,12 @@ describe('buildLayeredIntelligenceUpdate', () => {
     expect(buildLayeredIntelligenceUpdate(baseline, null)).toBeNull();
   });
 
-  it('emits only the changed enabled flag', () => {
-    const update = buildLayeredIntelligenceUpdate(baseline, { ...baseline, enabled: true });
-    expect(update).toEqual({ enabled: true });
-  });
-
-  it('emits intervalMs when it changes', () => {
-    const update = buildLayeredIntelligenceUpdate(baseline, { ...baseline, intervalMs: 3600000 });
-    expect(update).toEqual({ intervalMs: 3600000 });
+  it('does NOT emit scheduling fields (they go to the task override, #2322)', () => {
+    // enabled / intervalMs / providerId / model are handled by
+    // buildLayeredIntelligenceScheduleUpdate, so the behavior PATCH ignores them.
+    expect(buildLayeredIntelligenceUpdate(baseline, { ...baseline, enabled: true })).toBeNull();
+    expect(buildLayeredIntelligenceUpdate(baseline, { ...baseline, intervalMs: 3600000 })).toBeNull();
+    expect(buildLayeredIntelligenceUpdate(baseline, { ...baseline, providerId: 'claude-code', model: 'sonnet' })).toBeNull();
   });
 
   it('emits the hand-off toggle only when it changes', () => {
@@ -37,13 +97,6 @@ describe('buildLayeredIntelligenceUpdate', () => {
     expect(buildLayeredIntelligenceUpdate(withHandoff, { ...withHandoff })).toBeNull();
     const update = buildLayeredIntelligenceUpdate(withHandoff, { ...withHandoff, handoff: { enabled: true } });
     expect(update).toEqual({ handoff: { enabled: true } });
-  });
-
-  it('normalizes empty provider/model to null and only emits when changed', () => {
-    // '' provider equals the null baseline → no change
-    expect(buildLayeredIntelligenceUpdate(baseline, { ...baseline, providerId: '', model: '' })).toBeNull();
-    const update = buildLayeredIntelligenceUpdate(baseline, { ...baseline, providerId: 'claude-code', model: 'sonnet' });
-    expect(update).toEqual({ providerId: 'claude-code', model: 'sonnet' });
   });
 
   it('emits the full source object (toggles + sanitized custom) when a toggle flips', () => {
@@ -118,6 +171,37 @@ describe('buildLayeredIntelligenceUpdate', () => {
     const withRules = { ...baseline, rules: 'be careful' };
     const update = buildLayeredIntelligenceUpdate(withRules, { ...withRules, rules: '' });
     expect(update).toEqual({ rules: '' });
+  });
+});
+
+describe('buildLayeredIntelligenceScheduleUpdate (per-app task override, #2322)', () => {
+  it('returns null when no scheduling field changed', () => {
+    expect(buildLayeredIntelligenceScheduleUpdate(baseline, { ...baseline })).toBeNull();
+    expect(buildLayeredIntelligenceScheduleUpdate(null, baseline)).toBeNull();
+  });
+
+  it('emits the enabled flag when it changes', () => {
+    expect(buildLayeredIntelligenceScheduleUpdate(baseline, { ...baseline, enabled: true })).toEqual({ enabled: true });
+  });
+
+  it('emits interval + intervalMs together, mapping to daily/weekly/custom', () => {
+    expect(buildLayeredIntelligenceScheduleUpdate(baseline, { ...baseline, intervalMs: 3600000 }))
+      .toEqual({ interval: 'custom', intervalMs: 3600000 });
+    expect(buildLayeredIntelligenceScheduleUpdate({ ...baseline, intervalMs: 3600000 }, { ...baseline, intervalMs: 7 * 86400000 }))
+      .toEqual({ interval: 'weekly', intervalMs: 7 * 86400000 });
+  });
+
+  it('normalizes empty provider/model to null and only emits when changed', () => {
+    expect(buildLayeredIntelligenceScheduleUpdate(baseline, { ...baseline, providerId: '', model: '' })).toBeNull();
+    expect(buildLayeredIntelligenceScheduleUpdate(baseline, { ...baseline, providerId: 'claude-code', model: 'sonnet' }))
+      .toEqual({ providerId: 'claude-code', model: 'sonnet' });
+  });
+
+  it('intervalFieldsFromMs maps standard cadences + falls back to daily', () => {
+    expect(intervalFieldsFromMs(86400000)).toEqual({ interval: 'daily', intervalMs: 86400000 });
+    expect(intervalFieldsFromMs(7 * 86400000)).toEqual({ interval: 'weekly', intervalMs: 7 * 86400000 });
+    expect(intervalFieldsFromMs(6 * 3600000)).toEqual({ interval: 'custom', intervalMs: 6 * 3600000 });
+    expect(intervalFieldsFromMs(0)).toEqual({ interval: 'daily', intervalMs: 86400000 });
   });
 });
 

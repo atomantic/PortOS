@@ -15,6 +15,7 @@ import {
   buildProjectRecord,
   applyProjectPatch,
   setAudioAnalysis,
+  setMidiTranscription,
   addScene,
   addScenes,
   applySceneUpdate,
@@ -146,6 +147,13 @@ export async function pruneTombstonedProjects(olderThanMs) {
 export async function setProjectAnalysis(id, analysis) {
   const { all, idx } = await loadAllAndIndex(id);
   all[idx] = setAudioAnalysis(all[idx], analysis);
+  await saveAll(all);
+  return all[idx];
+}
+
+export async function setProjectMidiTranscription(id, midi) {
+  const { all, idx } = await loadAllAndIndex(id);
+  all[idx] = setMidiTranscription(all[idx], midi);
   await saveAll(all);
   return all[idx];
 }

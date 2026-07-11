@@ -33,10 +33,9 @@
  * newer overlapping one — is a no-op via `recordEvents`'s `ON CONFLICT DO
  * NOTHING`. No AI-provider calls; parsing is deterministic and LLM-free.
  */
-import { createReadStream } from 'fs';
 import { readFile } from 'fs/promises';
 import { createHash } from 'crypto';
-import { parseZip, collectZipEntry } from '../lib/zipStream.js';
+import { collectZipEntries, isZipUpload } from '../lib/zipStream.js';
 import { shortSummary, recordEvents } from './humanActivity.js';
 
 // ---------------------------------------------------------------------------
@@ -181,60 +180,27 @@ export function parseHistoryJsonText(text) {
 // File ingestion (ZIP or single JSON) → raw records.
 // ---------------------------------------------------------------------------
 
-const isZip = (file) =>
-  file?.mimetype === 'application/zip' ||
-  file?.mimetype === 'application/x-zip-compressed' ||
-  /\.zip$/i.test(file?.originalname || '');
-
 // A Chrome history JSON member inside the Takeout ZIP: `Chrome/History.json`
 // (2024+) or the older `BrowserHistory.json`. The distinctive filename lets us
 // skip every other product's JSON in a full Takeout archive.
 const isHistoryJsonEntry = (entryPath) =>
   /(?:^|\/)(?:Browser)?History\.json$/i.test(String(entryPath || ''));
 
-// Extract and concatenate the raw records from every history JSON member of the
-// Takeout ZIP. Non-matching entries are drained and ignored.
-async function readRecordsFromZip(filePath) {
-  const records = [];
-  const reads = [];
-  await new Promise((resolve, reject) => {
-    let settled = false;
-    const src = createReadStream(filePath);
-    const parser = parseZip();
-    const settle = (fn) => (...args) => {
-      if (settled) return;
-      settled = true;
-      // On failure, tear down the read + parse pipeline so a large upload with an
-      // early error (bad JSON member, corrupt ZIP) doesn't keep reading to EOF.
-      if (fn === reject) { src.destroy(); parser.destroy?.(); }
-      fn(...args);
-    };
-    src.on('error', settle(reject));
-    src
-      .pipe(parser)
-      .on('entry', (entry) => {
-        if (isHistoryJsonEntry(entry.path)) {
-          reads.push(
-            collectZipEntry(entry)
-              .then((buf) => {
-                for (const r of extractHistoryRecords(parseHistoryJsonText(buf.toString('utf-8')))) records.push(r);
-              })
-              .catch(settle(reject)),
-          );
-        } else {
-          entry.autodrain();
-        }
-      })
-      .on('close', () => Promise.all(reads).then(settle(resolve)).catch(settle(reject)))
-      .on('error', settle(reject));
-  });
-  return records;
-}
-
 // Read raw history records from an uploaded file (ZIP export or single JSON).
+// The ZIP path delegates the whole streaming lifecycle (teardown, autodrain,
+// per-entry await) to `collectZipEntries`, leaving only the match/parse callbacks.
 export async function readBrowserHistoryRecords(file) {
   if (!file?.path) return [];
-  if (isZip(file)) return readRecordsFromZip(file.path);
+  if (isZipUpload(file)) {
+    const records = [];
+    await collectZipEntries(file.path, {
+      match: isHistoryJsonEntry,
+      onMatch: (buf) => {
+        for (const r of extractHistoryRecords(parseHistoryJsonText(buf.toString('utf-8')))) records.push(r);
+      },
+    });
+    return records;
+  }
   const text = await readFile(file.path, 'utf-8');
   return extractHistoryRecords(parseHistoryJsonText(text));
 }

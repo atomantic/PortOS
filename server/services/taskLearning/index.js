@@ -9,6 +9,7 @@
  *   - store.js                — shared persistence, cache, mutex, pure helpers
  *   - metrics.js              — recording completions + rebuilding aggregates
  *   - routing.js              — heuristic routing, cooldown, skip, confidence
+ *   - correlationQuality.js   — enriched-signal ↔ outcome correlation window
  *   - durations.js            — duration estimates + queue completion
  *   - insights.js             — insights view, recommendations, dismissals
  *   - promptRecommendations.js — prompt-improvement suggestions
@@ -18,10 +19,20 @@
  * every existing importer is unaffected.
  */
 
-export { clearLearningCache } from './store.js';
+export {
+  clearLearningCache,
+  extractTaskType,
+  classifyUntypedTask,
+  isSandboxedTaskType,
+  summarizeFailureSignatures,
+  EXTERNAL_UNTYPED_TASK_TYPE
+} from './store.js';
 
 export {
   recordTaskCompletion,
+  buildTaskTelemetryContext,
+  computeLatencySplit,
+  recordFailureSignature,
   resetTaskTypeLearning,
   recalculateModelTierMetrics,
   recalculateDurationStats
@@ -30,6 +41,7 @@ export {
 export {
   getTaskTypePriorityMultiplier,
   suggestModelTier,
+  deriveFailureSignalAvoidance,
   getRoutingAccuracy,
   getPerformanceSummary,
   getAdaptiveCooldownMultiplier,
@@ -40,6 +52,15 @@ export {
   getTaskTypeConfidence,
   getConfidenceLevels
 } from './routing.js';
+
+export {
+  computeCorrelationQuality,
+  recordCorrelationSample,
+  isCorrelationProven,
+  getCorrelationQuality,
+  CORRELATION_QUALITY_THRESHOLD,
+  MIN_CORRELATION_SAMPLES
+} from './correlationQuality.js';
 
 export {
   getTaskDurationEstimate,

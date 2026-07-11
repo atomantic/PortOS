@@ -10,6 +10,8 @@ vi.mock('../../services/api', () => ({
   getJiraProjects: vi.fn(),
   getAppWorkTracker: vi.fn(),
   getAppLayeredIntelligence: vi.fn(),
+  getAppTaskTypes: vi.fn(),
+  updateAppTaskTypeOverride: vi.fn(),
   getProviders: vi.fn(),
   updateApp: vi.fn(),
   upgradeAppTls: vi.fn(),
@@ -66,6 +68,10 @@ beforeEach(() => {
     },
   });
   api.getProviders.mockResolvedValue({ providers: [] });
+  // Scheduling (enabled/interval/provider/model) is read from the per-app task
+  // override now (#2322); default to an empty override.
+  api.getAppTaskTypes.mockResolvedValue({ taskTypeOverrides: {} });
+  api.updateAppTaskTypeOverride.mockResolvedValue({ success: true });
   api.updateApp.mockResolvedValue({});
 });
 

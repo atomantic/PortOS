@@ -15,18 +15,6 @@ export const getAppWorkTracker = (id, options) =>
 // side). Caller owns its own .catch fallback, so default to silent.
 export const getAppLayeredIntelligence = (id, options) =>
   request(`/apps/${id}/layered-intelligence`, { silent: true, ...options });
-// Cross-app Layered Intelligence Loop overview for the dedicated status page:
-// { jobEnabled, jobExists, enabledCount, apps: [{ id, name, enabled, intervalMs,
-// lastRunAt, nextDueAt, due, allowedScopes, sources, ... }] }. Read-only.
-export const getLayeredIntelligenceOverview = (options) =>
-  request('/apps/layered-intelligence/overview', options);
-// Opt-in filed-proposal counts + links for the overview page: does per-app
-// forge/Jira/PLAN I/O (gh/glab shell-outs), so it's fired on demand rather than
-// baked into the base overview. Returns { apps: [{ id, name, ok, tracker, open,
-// closed, total, issues: [{ number, title, state, url }], reason? }] }. Caller
-// owns its own error UI, so default to silent.
-export const getLayeredIntelligenceProposals = (options) =>
-  request('/apps/layered-intelligence/proposals', { silent: true, ...options });
 export const createApp = (data) => request('/apps', {
   method: 'POST',
   body: JSON.stringify(data)
@@ -92,9 +80,12 @@ export const toggleAllAppTaskTypes = (id, enabled, options = {}) => request(`/ap
   body: JSON.stringify({ enabled }),
   ...options
 });
-export const updateAppTaskTypeOverride = (id, taskType, { enabled, interval, taskMetadata } = {}, options = {}) => request(`/apps/${id}/task-types/${taskType}`, {
+// `intervalMs` / `providerId` / `model` are the per-app scheduling fields for
+// handler-backed task types (layered-intelligence). Sent only when defined so
+// existing callers (enabled/interval-only toggles) are unaffected.
+export const updateAppTaskTypeOverride = (id, taskType, { enabled, interval, intervalMs, providerId, model, taskMetadata } = {}, options = {}) => request(`/apps/${id}/task-types/${taskType}`, {
   method: 'PUT',
-  body: JSON.stringify({ enabled, interval, taskMetadata }),
+  body: JSON.stringify({ enabled, interval, intervalMs, providerId, model, taskMetadata }),
   ...options
 });
 export const bulkUpdateAppTaskTypeOverride = (taskType, { enabled }, options = {}) => request(`/apps/bulk-task-type/${taskType}`, {

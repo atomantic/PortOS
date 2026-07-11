@@ -139,7 +139,7 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <button onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
             <ChevronLeft size={20} />
           </button>
           <Brain size={24} className="text-emerald-400" />
@@ -198,7 +198,7 @@ export default function MemoryBuilder({ onBack, onNavigateElements }) {
         <div className="bg-port-card border border-port-accent/30 rounded-lg p-5 space-y-4 max-w-2xl">
           <div className="flex items-center justify-between">
             <h3 className="text-white font-medium">Add Memory Item</h3>
-            <button onClick={resetCreateForm} className="text-gray-500 hover:text-white transition-colors">
+            <button aria-label="Close" onClick={resetCreateForm} className="text-gray-500 hover:text-white transition-colors">
               <X size={16} />
             </button>
           </div>

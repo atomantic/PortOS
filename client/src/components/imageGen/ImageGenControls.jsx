@@ -107,9 +107,10 @@ export default function ImageGenControls({
           is honored, so the rest of the knobs are hidden in that mode. */}
       {!isCodex && showSeed && (
         <div>
-          <label className="block text-xs font-medium text-gray-400 mb-1">Seed</label>
+          <label htmlFor="image-gen-seed" className="block text-xs font-medium text-gray-400 mb-1">Seed</label>
           <div className="flex items-center gap-1">
             <input
+              id="image-gen-seed"
               type="number"
               value={seed ?? ''}
               onChange={(e) => onSeedChange?.(e.target.value)}

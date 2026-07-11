@@ -80,7 +80,7 @@ export default function CdBridgePanel({ workId, liveMode, usage, onUsageChange, 
     if (!res?.project) return;
     onLinked?.(res.project.id);
     toast.success('Sent to Creative Director');
-    navigate(`/media/creative-director/${encodeURIComponent(res.project.id)}/overview`);
+    navigate(`/creative-director/${encodeURIComponent(res.project.id)}/overview`);
   }, [proposal, sending, onLinked, navigate, mountedRef]);
 
   // When live mode flips off, clear any stale proposal so the panel doesn't

@@ -1,7 +1,7 @@
 import { RotateCw, ExternalLink, CheckCircle2, XCircle, ListChecks } from 'lucide-react';
 import Drawer from '../Drawer';
 import { timeAgo, formatDateShort } from '../../utils/formatters';
-import { CASE_STATE_TONE, labelFor, CASE_STATES } from './constants';
+import { CASE_STATE_TONE, MANUAL_DONE_ACTION, labelFor, CASE_STATES } from './constants';
 
 // Read-only case inspector + manual controls (issue #2146). Deep-linked open
 // state is owned by the parent (a `?case=<id>` search param), so this component
@@ -18,10 +18,14 @@ export default function BrokerCaseDrawer({
   const listingUrls = Array.isArray(evidence.listing_urls) ? evidence.listing_urls : [];
   const playbook = Array.isArray(broker?.optout?.playbook) ? broker.optout.playbook : [];
   const optoutUrl = broker?.optout?.url || evidence.optout_url || null;
+  const searchUrl = evidence.search_url || null;
 
-  // Which manual transitions make sense from the current state.
+  // Which manual transitions make sense from the current state. The positive
+  // resolution per state (and its legality) lives in MANUAL_DONE_ACTION —
+  // shared with the digest strip so the two can't drift.
   const state = caseData?.state;
-  const canMarkDone = state === 'human_task_queued' || state === 'blocked';
+  const isBlocked = state === 'blocked';
+  const doneAction = MANUAL_DONE_ACTION[state];
   const canDismiss = state === 'human_task_queued' || state === 'blocked' || state === 'found' || state === 'indirect_exposure';
 
   const Row = ({ label, children }) => (
@@ -67,6 +71,26 @@ export default function BrokerCaseDrawer({
           </div>
 
           {caseData.reason && <Row label="Reason">{caseData.reason}</Row>}
+
+          {isBlocked && (
+            <div className="text-xs text-gray-300 bg-port-warning/5 border border-port-warning/30 rounded p-2.5 space-y-1.5">
+              <p>
+                This broker blocks automated checks, so your exposure here is <span className="text-white">unknown</span> —
+                not confirmed. Open the same search in your own browser (real browsers pass these walls),
+                then record what you find below.
+              </p>
+              {searchUrl && (
+                <a
+                  href={searchUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1 text-port-accent hover:underline"
+                >
+                  <ExternalLink size={12} /> Check manually in your browser
+                </a>
+              )}
+            </div>
+          )}
 
           <Row label="Disclosed fields">
             {(caseData.disclosedFields || []).length
@@ -119,13 +143,13 @@ export default function BrokerCaseDrawer({
             >
               <RotateCw size={14} /> Force re-check
             </button>
-            {canMarkDone && (
+            {doneAction && (
               <button
-                onClick={() => onTransition?.(caseData, 'submitted')}
+                onClick={() => onTransition?.(caseData, doneAction.target)}
                 disabled={busy}
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded border border-port-success/40 text-port-success hover:bg-port-success/10 disabled:opacity-50"
+                className={`inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded border ${doneAction.buttonTone} disabled:opacity-50`}
               >
-                <CheckCircle2 size={14} /> Mark submitted
+                <CheckCircle2 size={14} /> {doneAction.label}
               </button>
             )}
             {canDismiss && (

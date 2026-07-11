@@ -81,7 +81,7 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
         </div>
         <div className="flex items-center gap-1.5 shrink-0">
           {!s.editing && hasDerivedReading && <ProvenanceChip {...READING_PROVENANCE} align="end" />}
-          <button onClick={onClose} className="p-1 text-gray-500 hover:text-white shrink-0">
+          <button onClick={onClose} aria-label="Close panel" className="p-1 text-gray-500 hover:text-white shrink-0">
             <X className="w-4 h-4" />
           </button>
         </div>

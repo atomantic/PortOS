@@ -17,6 +17,7 @@ import InlineConfirmRow from '../components/ui/InlineConfirmRow';
 import { FormField } from '../components/ui/FormField';
 import { formatDateTime } from '../utils/formatters';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
+import useDrawerTab from '../hooks/useDrawerTab';
 import FolderPicker from '../components/FolderPicker';
 import DuplicatesTab from '../components/sharing/DuplicatesTab';
 import ConflictsTab from '../components/sharing/ConflictsTab';
@@ -50,6 +51,11 @@ export const SECTIONS = [
   { id: 'duplicates', label: 'Duplicates', icon: Copy, path: '/sharing/duplicates' },
   { id: 'conflicts', label: 'Conflicts', icon: GitMerge, path: '/sharing/conflicts' },
 ];
+
+// Per-bucket detail sub-tabs. Held in the `?tab=` URL search param (not local
+// state) so the open view is deep-linkable, reload-safe, and stays in sync with
+// browser back/forward — a stale/hand-edited value degrades to Inbox.
+export const BUCKET_TAB_IDS = ['inbox', 'activity', 'settings'];
 
 function SharingHeader({ active }) {
   return (
@@ -100,7 +106,9 @@ function SharingBuckets({ selectedId }) {
   const [showAdd, setShowAdd] = useState(false);
   const [form, setForm] = useState(emptyForm);
   const [creating, setCreating] = useState(false);
-  const [activeTab, setActiveTab] = useState('inbox'); // inbox | activity | settings
+  // Active detail sub-tab lives in the URL (`?tab=inbox|activity|settings`) so it's
+  // deep-linkable and history-safe; a stale/invalid value degrades to Inbox.
+  const [activeTab, setActiveTab] = useDrawerTab('tab', 'inbox', BUCKET_TAB_IDS);
 
   // Display name + bio settings — used as the source attribution on outgoing shares.
   const [sharingDisplayName, setSharingDisplayName] = useState('');

@@ -2,6 +2,11 @@ import { describe, it, expect } from 'vitest';
 import {
   ANTIGRAVITY_CONFIGURED_DEFAULT,
   CODEX_CONFIGURED_DEFAULT,
+  GROK_CONFIGURED_DEFAULT,
+  providerDisplayName,
+  assignmentProviderOptions,
+  assignmentModelOptions,
+  assignmentDefaultModel,
   PROVIDER_TYPES,
   filterSelectableModels,
   filterGenerationModels,
@@ -11,6 +16,10 @@ import {
   isToolUseModel,
   toolUseLocalModelFilter,
   localBackendForProvider,
+  knownProviderContextWindow,
+  CODEX_CONTEXT_WINDOW,
+  GEMINI_CONTEXT_WINDOW,
+  GROK_CONTEXT_WINDOW,
   effectiveModelContextWindow,
   mergeModelLists,
   modelOptionLabel,
@@ -46,7 +55,13 @@ describe('PROVIDER_TYPES', () => {
 
 describe('filterSelectableModels', () => {
   it('drops configured-default sentinels', () => {
-    expect(filterSelectableModels(['gpt-4', CODEX_CONFIGURED_DEFAULT, ANTIGRAVITY_CONFIGURED_DEFAULT, 'gpt-5'])).toEqual(['gpt-4', 'gpt-5']);
+    expect(filterSelectableModels([
+      'gpt-4',
+      CODEX_CONFIGURED_DEFAULT,
+      ANTIGRAVITY_CONFIGURED_DEFAULT,
+      GROK_CONFIGURED_DEFAULT,
+      'gpt-5',
+    ])).toEqual(['gpt-4', 'gpt-5']);
   });
 
   it('returns an empty array for null/undefined input', () => {
@@ -276,20 +291,45 @@ describe('toolUseLocalModelFilter', () => {
 });
 
 describe('localBackendForProvider', () => {
-  it('detects Ollama by endpoint or name', () => {
+  it('detects Ollama by id, endpoint, or name', () => {
+    expect(localBackendForProvider({ id: 'ollama' })).toBe('ollama');
     expect(localBackendForProvider({ endpoint: 'http://localhost:11434/v1' })).toBe('ollama');
     expect(localBackendForProvider({ name: 'Ollama' })).toBe('ollama');
   });
 
-  it('detects LM Studio by endpoint or name', () => {
+  it('detects LM Studio by id, endpoint, or name', () => {
+    expect(localBackendForProvider({ id: 'lmstudio' })).toBe('lmstudio');
     expect(localBackendForProvider({ endpoint: 'http://localhost:1234/v1' })).toBe('lmstudio');
     expect(localBackendForProvider({ name: 'LM Studio' })).toBe('lmstudio');
+    expect(localBackendForProvider({ name: 'lm-studio' })).toBe('lmstudio');
   });
 
   it('returns null for cloud providers', () => {
     expect(localBackendForProvider({ endpoint: 'https://api.openai.com/v1', name: 'OpenAI' })).toBeNull();
     expect(localBackendForProvider({})).toBeNull();
     expect(localBackendForProvider(null)).toBeNull();
+  });
+});
+
+describe('knownProviderContextWindow (mirror of server stageRunner)', () => {
+  it('resolves vendor windows for bare commands', () => {
+    expect(knownProviderContextWindow({ id: 'codex-tui', type: 'tui', command: 'codex' })).toBe(CODEX_CONTEXT_WINDOW);
+    expect(knownProviderContextWindow({ id: 'antigravity-cli', type: 'cli', command: 'agy' })).toBe(GEMINI_CONTEXT_WINDOW);
+    expect(knownProviderContextWindow({ id: 'grok-cli', type: 'cli', command: 'grok' })).toBe(GROK_CONTEXT_WINDOW);
+    expect(knownProviderContextWindow({ id: 'grok-tui', type: 'tui', command: 'grok' })).toBe(GROK_CONTEXT_WINDOW);
+  });
+
+  it('normalizes command paths to the basename for vendor windows (#2337)', () => {
+    expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: '/opt/homebrew/bin/grok' })).toBe(GROK_CONTEXT_WINDOW);
+    expect(knownProviderContextWindow({ id: 'custom', type: 'tui', command: '/usr/local/bin/codex' })).toBe(CODEX_CONTEXT_WINDOW);
+    expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: '/opt/homebrew/bin/agy' })).toBe(GEMINI_CONTEXT_WINDOW);
+    expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: './bin/codex' })).toBe(CODEX_CONTEXT_WINDOW);
+    expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: 'C:\\tools\\grok.exe' })).toBe(GROK_CONTEXT_WINDOW);
+    expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: '/opt/homebrew/bin/mycli' })).toBeNull();
+  });
+
+  it('returns null for non-process providers', () => {
+    expect(knownProviderContextWindow({ id: 'codex', type: 'api', command: 'codex' })).toBeNull();
   });
 });
 
@@ -310,6 +350,8 @@ describe('effectiveModelContextWindow', () => {
   it('uses canonical provider windows for configured-default process providers', () => {
     expect(effectiveModelContextWindow({ id: 'codex-tui', type: 'tui', command: 'codex' }, CODEX_CONFIGURED_DEFAULT)).toBe(1_000_000);
     expect(effectiveModelContextWindow({ id: 'antigravity-cli', type: 'cli', command: 'agy' }, ANTIGRAVITY_CONFIGURED_DEFAULT)).toBe(1_048_576);
+    expect(effectiveModelContextWindow({ id: 'grok-cli', type: 'cli', command: 'grok' }, GROK_CONFIGURED_DEFAULT)).toBe(256_000);
+    expect(effectiveModelContextWindow({ id: 'grok-tui', type: 'tui', command: 'grok' }, GROK_CONFIGURED_DEFAULT)).toBe(256_000);
   });
 
   it('matches the server planner for local and cloud api defaults', () => {
@@ -370,5 +412,82 @@ describe('visionLocalModelFilter', () => {
 
   it('treats an unknown/undefined provider as non-local (no filtering)', () => {
     expect(visionLocalModelFilter('some-text-model', undefined)).toBe(true);
+  });
+});
+
+describe('AI Assignments option helpers', () => {
+  const providers = [
+    { id: 'agent-a', name: 'Agent A', type: 'cli', enabled: true, models: ['a-1', 'a-2'] },
+    { id: 'vlm-x', name: 'VLM X', type: 'api', enabled: false, models: ['llava'] },
+    {
+      id: 'ollama',
+      name: 'Ollama',
+      type: 'api',
+      enabled: true,
+      defaultModel: 'gemma4:26b',
+      models: ['qwen2.5vl:latest', 'llava:latest', 'gemma4:26b', 'llama3.2:latest', 'nomic-embed-text'],
+    },
+    {
+      id: 'openai',
+      name: 'OpenAI',
+      type: 'api',
+      enabled: true,
+      defaultModel: 'gpt-4o',
+      models: ['gpt-4o', 'gpt-4.1', 'o3-mini'],
+    },
+  ];
+
+  it('providerDisplayName resolves name, then id, then fallback', () => {
+    expect(providerDisplayName(providers, 'agent-a')).toBe('Agent A');
+    expect(providerDisplayName(providers, 'ghost')).toBe('ghost');
+    expect(providerDisplayName(providers, '', 'Default')).toBe('Default');
+    expect(providerDisplayName(providers, '')).toBe('');
+  });
+
+  it('assignmentProviderOptions filters by providerTypes and flags disabled', () => {
+    expect(assignmentProviderOptions({ providerTypes: ['api'] }, providers))
+      .toEqual([
+        { id: 'vlm-x', name: 'VLM X (disabled)' },
+        { id: 'ollama', name: 'Ollama' },
+        { id: 'openai', name: 'OpenAI' },
+      ]);
+    // No providerTypes → all providers.
+    expect(assignmentProviderOptions({}, providers).map((p) => p.id))
+      .toEqual(['agent-a', 'vlm-x', 'ollama', 'openai']);
+  });
+
+  it('assignmentProviderOptions honors a pre-baked providerOptions override', () => {
+    const baked = [{ id: 'x', name: 'X' }];
+    expect(assignmentProviderOptions({ providerOptions: baked }, providers)).toBe(baked);
+  });
+
+  it('assignmentModelOptions returns the selected provider models, else empty', () => {
+    expect(assignmentModelOptions({}, providers, 'agent-a')).toEqual(['a-1', 'a-2']);
+    expect(assignmentModelOptions({}, providers, 'ghost')).toEqual([]);
+    const baked = ['m'];
+    expect(assignmentModelOptions({ modelOptions: baked }, providers, 'agent-a')).toEqual(baked);
+  });
+
+  it('assignmentModelOptions with modelFilter=vision keeps only VLMs on local backends', () => {
+    expect(assignmentModelOptions({ modelFilter: 'vision' }, providers, 'ollama'))
+      .toEqual(['qwen2.5vl:latest', 'llava:latest']);
+  });
+
+  it('assignmentModelOptions with modelFilter=vision leaves cloud model lists intact', () => {
+    // gpt-4o is multimodal but its id does not encode "vision" — the local
+    // heuristic must not hide cloud multimodal models.
+    expect(assignmentModelOptions({ modelFilter: 'vision' }, providers, 'openai'))
+      .toEqual(['gpt-4o', 'gpt-4.1', 'o3-mini']);
+  });
+
+  it('assignmentDefaultModel seeds the first VLM when the local default is text-only', () => {
+    expect(assignmentDefaultModel({ modelFilter: 'vision' }, providers, 'ollama'))
+      .toBe('qwen2.5vl:latest');
+    // Cloud: default stays (and is in the unfiltered list).
+    expect(assignmentDefaultModel({ modelFilter: 'vision' }, providers, 'openai'))
+      .toBe('gpt-4o');
+    // Non-vision rows still seed the provider default.
+    expect(assignmentDefaultModel({}, providers, 'ollama')).toBe('gemma4:26b');
+    expect(assignmentDefaultModel({}, providers, '')).toBe('');
   });
 });

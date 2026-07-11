@@ -20,6 +20,7 @@ import { resolveEffectiveModel, runPromptThroughProvider, DEFAULT_TIMEOUT_MS, is
 import { stripCodeFences } from './aiProvider.js';
 import { extractCodexAssistant } from './codexAssistantExtract.js';
 import { getActiveProvider, getProviderById } from '../services/providers.js';
+import { commandBasename } from './providerModels.js';
 import { buildPrompt, getStage } from '../services/promptService.js';
 import { createRun, patchRunMetadata } from '../services/runner.js';
 import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from './aiToolkit/constants.js';
@@ -119,6 +120,7 @@ function resolveModelHint(stage, options = {}) {
 export const DEFAULT_LARGE_CONTEXT_WINDOW = 128_000;
 export const CODEX_CONTEXT_WINDOW = 1_000_000;
 export const GEMINI_CONTEXT_WINDOW = 1_048_576;
+export const GROK_CONTEXT_WINDOW = 256_000;
 
 // Keep in sync with client/src/utils/providers.js.
 const KNOWN_MODEL_CONTEXT_WINDOWS = Object.freeze([
@@ -144,9 +146,13 @@ export function knownModelContextWindow(model) {
 export function knownProviderContextWindow(provider) {
   if (provider?.type !== 'cli' && provider?.type !== 'tui') return null;
   const id = String(provider?.id || '').toLowerCase();
-  const command = String(provider?.command || '').toLowerCase();
+  // Normalize to the basename so a path-configured command (/opt/homebrew/bin/grok)
+  // resolves the same vendor window as a bare `grok` on PATH — matching how the
+  // arg-builder predicates (isOpencodeCommand/isGrokCommand) key on commandBasename.
+  const command = commandBasename(provider?.command);
   if (id === 'codex' || id === 'codex-tui' || command === 'codex') return CODEX_CONTEXT_WINDOW;
   if (id === 'antigravity-cli' || id === 'antigravity-tui' || command === 'agy') return GEMINI_CONTEXT_WINDOW;
+  if (id === 'grok-cli' || id === 'grok-tui' || command === 'grok') return GROK_CONTEXT_WINDOW;
   return null;
 }
 

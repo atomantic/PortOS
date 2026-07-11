@@ -17,7 +17,7 @@ import appleHealthRoutes from './routes/appleHealth.js';
 import avatarRoutes from './routes/avatar.js';
 import systemHealthRoutes from './routes/systemHealth.js';
 import capabilitiesRoutes from './routes/capabilities.js';
-import appsRoutes from './routes/apps.js';
+import appsRoutes from './routes/apps/index.js';
 import workspaceContextsRoutes from './routes/workspaceContexts.js';
 import referenceReposRoutes from './routes/referenceRepos.js';
 import portsRoutes from './routes/ports.js';
@@ -32,6 +32,7 @@ import usageRoutes from './routes/usage.js';
 import screenshotsRoutes from './routes/screenshots.js';
 import attachmentsRoutes from './routes/attachments.js';
 import clientErrorsRoutes from './routes/clientErrors.js';
+import autoFixMetricsRoutes from './routes/autoFixMetrics.js';
 import uploadsRoutes from './routes/uploads.js';
 import imageCleanRoutes from './routes/imageClean.js';
 import agentsRoutes from './routes/agents.js';
@@ -49,6 +50,7 @@ import memoryRoutes from './routes/memory.js';
 import tribeRoutes from './routes/tribe.js';
 import timelineRoutes from './routes/timeline.js';
 import imessageRoutes from './routes/imessage.js';
+import contactsRoutes from './routes/contacts.js';
 import signalRoutes from './routes/signal.js';
 import spotifyRoutes from './routes/spotify.js';
 import youtubeRoutes from './routes/youtube.js';
@@ -172,6 +174,7 @@ import * as agentActionExecutor from './services/agentActionExecutor.js';
 import * as cos from './services/cos.js';
 import { startBackupScheduler } from './services/backupScheduler.js';
 import { startPrivacyRecheckScheduler } from './services/privacyRecheckScheduler.js';
+import { startSeriesAutopilotScheduler } from './services/seriesAutopilotScheduler.js';
 import { startCitySnapshotScheduler } from './services/citySnapshotScheduler.js';
 import { startImessageScheduler } from './services/imessageScheduler.js';
 import { startSignalScheduler } from './services/signalScheduler.js';
@@ -461,6 +464,7 @@ app.use('/api/media/annotations', mediaAnnotationsRoutes);
 app.use('/api/media/sketches', mediaSketchesRoutes);
 app.use('/api/attachments', attachmentsRoutes);
 app.use('/api/client-errors', clientErrorsRoutes);
+app.use('/api/autofix', autoFixMetricsRoutes);
 app.use('/api/backup', backupRoutes);
 app.use('/api/legacy-export', legacyExportRoutes);
 app.use('/api/city', cityRoutes);
@@ -486,6 +490,7 @@ app.use('/api/memory', memoryRoutes);
 app.use('/api/tribe', tribeRoutes);
 app.use('/api/timeline', timelineRoutes);
 app.use('/api/imessage', imessageRoutes);
+app.use('/api/contacts', contactsRoutes);
 app.use('/api/signal', signalRoutes);
 app.use('/api/spotify', spotifyRoutes);
 app.use('/api/youtube', youtubeRoutes);
@@ -622,6 +627,11 @@ startBackupScheduler().catch(err => console.error(`❌ Backup scheduler init fai
 // re-runs the broker scan + opt-out pass when the user opts in via
 // Settings → Privacy (sanctioned scheduled-automation exception) (#2145).
 startPrivacyRecheckScheduler().catch(err => console.error(`❌ Privacy recheck scheduler init failed: ${err.message}`));
+// Initialize Series Autopilot scheduler — OFF by default; registers a cron per
+// series only when the user configured + enabled one via Settings → Series
+// Autopilot. Each scheduled run still passes through the cos autonomy gate +
+// daily budget (sanctioned scheduled-automation exception) (#2174).
+startSeriesAutopilotScheduler().catch(err => console.error(`❌ Series Autopilot scheduler init failed: ${err.message}`));
 // Initialize CyberCity snapshot scheduler — records periodic city-state frames
 // for the historical timeline scrubber (issue #877).
 startCitySnapshotScheduler().catch(err => console.error(`❌ City snapshot scheduler init failed: ${err.message}`));

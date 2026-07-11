@@ -9,7 +9,8 @@ import Drawer from '../Drawer';
 import Banner from '../ui/Banner';
 import useDrawerTab from '../../hooks/useDrawerTab';
 import { copyToClipboard } from '../../lib/clipboard';
-import LayeredIntelligenceTab, { buildLayeredIntelligenceUpdate } from './LayeredIntelligenceTab';
+import LayeredIntelligenceTab, { buildLayeredIntelligenceUpdate, buildLayeredIntelligenceScheduleUpdate } from './LayeredIntelligenceTab';
+import { PROVIDER_TYPES } from '../../utils/providers';
 
 const WORK_TRACKER_OPTIONS = [
   { value: 'auto', label: 'Auto (detect from git origin)' },
@@ -165,14 +166,33 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
     setLiError(false);
     Promise.all([
       api.getAppLayeredIntelligence(app.id),
-      api.getProviders({ silent: true }).catch(() => ({ providers: [] }))
-    ]).then(([li, provData]) => {
+      api.getProviders({ silent: true }).catch(() => ({ providers: [] })),
+      // Scheduling (enabled/interval/provider/model) lives in the per-app task
+      // override now (#2322); behavior (sources/scopes/rules/handoff) stays in the
+      // layeredIntelligence config. Merge the override on top so the tab shows the
+      // scheduling source of truth.
+      api.getAppTaskTypes(app.id).catch(() => ({ taskTypeOverrides: {} }))
+    ]).then(([li, provData, taskTypes]) => {
       if (cancelled) return;
-      const cfg = li?.config || null;
+      const behavior = li?.config || null;
+      const ov = taskTypes?.taskTypeOverrides?.['layered-intelligence'] || {};
+      const cfg = behavior
+        ? {
+          ...behavior,
+          enabled: ov.enabled === true,
+          intervalMs: (typeof ov.intervalMs === 'number' && ov.intervalMs > 0) ? ov.intervalMs : behavior.intervalMs,
+          providerId: ov.providerId ?? null,
+          model: ov.model ?? null
+        }
+        : null;
       setLiConfig(cfg);
       setLiBaseline(cfg);
       setLiIsPortos(!!li?.isPortos);
-      setLiProviders((provData?.providers || []).filter(p => p.type === 'cli' && p.enabled !== false));
+      // The loop reasons through runPromptThroughProvider, which dispatches on
+      // provider.type — so any enabled provider of a known type is selectable
+      // (Claude Code, Codex, OpenCode, Ollama/LM Studio API, TUI variants…).
+      const runnableTypes = Object.values(PROVIDER_TYPES);
+      setLiProviders((provData?.providers || []).filter(p => runnableTypes.includes(p.type) && p.enabled !== false));
       setLiError(!cfg);
       setLiLoaded(true);
     }).catch(() => {
@@ -367,10 +387,10 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       } : { enabled: false }
     };
 
-    // Only send layeredIntelligence when the user actually changed something —
-    // the server merges the PATCH over the STORED config, so an unchanged config
-    // must stay absent (persisting the full effective config would freeze this
-    // install against future default changes).
+    // Only send layeredIntelligence when the user actually changed a BEHAVIOR
+    // field (sources/scopes/rules/handoff) — the server merges the PATCH over the
+    // STORED config, so an unchanged config must stay absent (persisting the full
+    // effective config would freeze this install against future default changes).
     const liUpdate = buildLayeredIntelligenceUpdate(liBaseline, liConfig);
     if (liUpdate) data.layeredIntelligence = liUpdate;
 
@@ -379,6 +399,18 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
       setSaving(false);
       throw err;
     });
+
+    // Scheduling (enabled/interval/provider/model) is stored on the per-app task
+    // override (#2322), NOT app.layeredIntelligence — PUT it separately when the
+    // user changed a scheduling field.
+    const schedUpdate = buildLayeredIntelligenceScheduleUpdate(liBaseline, liConfig);
+    if (schedUpdate) {
+      await api.updateAppTaskTypeOverride(app.id, 'layered-intelligence', schedUpdate, { silent: true }).catch(err => {
+        setError(err.message);
+        setSaving(false);
+        throw err;
+      });
+    }
 
     setSaving(false);
     onSave();

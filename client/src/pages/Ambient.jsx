@@ -112,6 +112,7 @@ export default function Ambient() {
           <span className="text-xs text-gray-600">ESC to exit &middot; F for fullscreen</span>
           <button
             onClick={toggleFullscreen}
+            aria-label={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'}
             className="p-2 rounded-lg bg-white/5 hover:bg-white/10 transition-colors text-gray-400 hover:text-white min-h-[40px] min-w-[40px] flex items-center justify-center"
           >
             {isFullscreen ? <Minimize size={16} /> : <Maximize size={16} />}

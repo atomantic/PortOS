@@ -18,6 +18,10 @@ import {
   REVIEW_LOOP_IDLE_TIMEOUT_MS,
   isReviewLoopSignal,
   createReviewLoopTracker,
+  MCP_BOOT_PASTE_DEADLINE_MS,
+  MCP_BOOT_PASTE_RETRY_DELAY_MS,
+  isMcpBootSignal,
+  createMcpBootTracker,
   rendersWorkCounter,
   PASTE_TO_ENTER_MIN_DELAY_MS,
   PASTE_TO_ENTER_FALLBACK_MS,
@@ -77,6 +81,11 @@ describe('tuiHandshake — paste timing constants', () => {
     expect(PASTE_MARKER_PATTERN.test('[Pasted text #42 +120 lines]')).toBe(true);
     // Embedded inside a banner of escape-stripped output.
     expect(PASTE_MARKER_PATTERN.test('banner stuff [Pasted text #7 +1 lines] trailer')).toBe(true);
+  });
+
+  it('PASTE_MARKER_PATTERN matches Codex paste-commit chips', () => {
+    expect(PASTE_MARKER_PATTERN.test('[Pasted Content 2431 chars]')).toBe(true);
+    expect(PASTE_MARKER_PATTERN.test('[PastedContent2431chars]')).toBe(true);
   });
 
   it('PASTE_MARKER_PATTERN matches the SPACE-COLLAPSED form left after ANSI strip', () => {
@@ -375,6 +384,59 @@ describe('tuiHandshake — review-loop idle suppression', () => {
   });
 });
 
+describe('tuiHandshake — codex MCP-boot paste patience (agent-c5a26b40)', () => {
+  it('deadline covers a node_repl startup_timeout_sec=120 plus margin, under the idle-reap window', () => {
+    // Long enough for the documented 120s node_repl startup + an npx cold
+    // download, short enough to resolve before the 180s default idle reaper.
+    expect(MCP_BOOT_PASTE_DEADLINE_MS).toBe(150000);
+    expect(MCP_BOOT_PASTE_DEADLINE_MS).toBeGreaterThan(120000);
+    expect(MCP_BOOT_PASTE_DEADLINE_MS).toBeLessThan(DEFAULT_TUI_IDLE_TIMEOUT_MS);
+    expect(MCP_BOOT_PASTE_RETRY_DELAY_MS).toBe(5000);
+  });
+
+  it('isMcpBootSignal matches codex MCP boot banners (case-insensitive)', () => {
+    expect(isMcpBootSignal('Booting MCP server: codex_apps(0s • esc to interrupt)')).toBe(true);
+    expect(isMcpBootSignal('Starting MCP servers (0/3): codex_apps, node_repl, playwright')).toBe(true);
+    expect(isMcpBootSignal('STARTING MCP SERVERS (3/3)')).toBe(true);
+  });
+
+  it('isMcpBootSignal ignores ordinary output that merely mentions MCP', () => {
+    // Conservative anchoring: a prompt/output that talks ABOUT mcp servers must
+    // not latch the extended budget (a false positive only slows a failure, but
+    // keep it tight anyway — mirrors the merge-queue/review-loop discipline).
+    expect(isMcpBootSignal('Configure the mcp server in server/services/voice/tools.js')).toBe(false);
+    expect(isMcpBootSignal('the playwright MCP server is slow')).toBe(false);
+    expect(isMcpBootSignal('')).toBe(false);
+    expect(isMcpBootSignal(null)).toBe(false);
+    expect(isMcpBootSignal(undefined)).toBe(false);
+  });
+
+  it('createMcpBootTracker latches on first banner and stays active through the silent boot', () => {
+    const tracker = createMcpBootTracker();
+    expect(tracker.active).toBe(false);
+    // Ordinary startup banner chrome — not a boot signal.
+    tracker.observe('>_ OpenAI Codex (v0.144.1)  permissions: YOLO mode');
+    expect(tracker.active).toBe(false);
+    // MCP boot begins — latches.
+    expect(tracker.observe('Starting MCP servers (0/3): codex_apps, node_repl, playwright')).toBe(true);
+    expect(tracker.active).toBe(true);
+    // Codex updates the line via cursor-positioned partial redraws that do NOT
+    // reprint the full phrase, and the boot subprocess can go silent (npx
+    // download) — neither must un-latch the extended patience.
+    tracker.observe('servers (3/4');
+    tracker.observe('');
+    expect(tracker.active).toBe(true);
+  });
+
+  it('createMcpBootTracker latches on a banner split across two chunks', () => {
+    const tracker = createMcpBootTracker();
+    tracker.observe('• You have 3 usage limit resets available. Booting MCP');
+    expect(tracker.active).toBe(false);
+    expect(tracker.observe(' server: codex_apps(0s • esc to interrupt)')).toBe(true);
+    expect(tracker.active).toBe(true);
+  });
+});
+
 describe('tuiHandshake.inferTuiCommand', () => {
   // Catch-all default also returns claude; the claude rows just confirm
   // an explicit match isn't accidentally tagged codex/antigravity/gemini.
@@ -439,6 +501,12 @@ describe('tuiHandshake.applyCommandDefaults', () => {
     expect(result).not.toBe(args);
     expect(args).toEqual(['exec', '-']);
   });
+
+  it('adds Grok TUI permission bypass and is idempotent when already pinned', () => {
+    expect(applyCommandDefaults('grok', [])).toEqual(['--permission-mode', 'bypassPermissions']);
+    const pinned = ['--permission-mode', 'auto'];
+    expect(applyCommandDefaults('grok', pinned)).toEqual(['--permission-mode', 'auto']);
+  });
 });
 
 describe('tuiHandshake.buildTuiInvocation', () => {
@@ -495,11 +563,31 @@ describe('tuiHandshake.buildTuiInvocation', () => {
     expect(out.args).toEqual(['--dangerously-bypass-approvals-and-sandbox', 'exec', '-']);
   });
 
+  it('passes a selected Codex model tier to the interactive CLI', () => {
+    const provider = { id: 'codex-tui', command: 'codex', args: [] };
+    const out = buildTuiInvocation(provider, 'gpt-5.6-sol');
+    expect(out.args).toEqual(['--dangerously-bypass-approvals-and-sandbox', '--model', 'gpt-5.6-sol']);
+  });
+
   it('skips --model injection when model is null/undefined/empty', () => {
     const provider = { id: 'claude', args: ['-p', '-'] };
     expect(buildTuiInvocation(provider, null).args).toEqual(['-p', '-']);
     expect(buildTuiInvocation(provider, undefined).args).toEqual(['-p', '-']);
     expect(buildTuiInvocation(provider, '').args).toEqual(['-p', '-']);
+  });
+
+  it('injects Grok TUI permission bypass and omits --model for the configured-default sentinel', () => {
+    const provider = { id: 'grok-tui', command: 'grok', args: [] };
+    const out = buildTuiInvocation(provider, 'grok-configured-default');
+    expect(out.command).toBe('grok');
+    expect(out.args).toEqual(['--permission-mode', 'bypassPermissions']);
+    expect(out.args).not.toContain('--model');
+  });
+
+  it('appends --model for Grok TUI when a concrete model is requested', () => {
+    const provider = { id: 'grok-tui', command: 'grok', args: [] };
+    const out = buildTuiInvocation(provider, 'grok-code-fast-1');
+    expect(out.args).toEqual(['--permission-mode', 'bypassPermissions', '--model', 'grok-code-fast-1']);
   });
 
   it('namespaces the Ollama model under ollama/ for an OpenCode TUI', () => {

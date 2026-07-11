@@ -29,13 +29,13 @@ export const runDigitalTwinMultiTests = (providers, testIds = null, personaId = 
 export const getDigitalTwinTestHistory = (limit = 10) => request(`/digital-twin/tests/history?limit=${limit}`);
 
 // Digital Twin - Values-Alignment Testing (M34 P6)
-export const getValuesAlignmentTests = () => request('/digital-twin/values-tests');
+export const getValuesAlignmentTests = (options = {}) => request('/digital-twin/values-tests', options);
 export const runValuesAlignmentTests = (providerId, model, testIds = null, personaId = null, options = {}) => request('/digital-twin/values-tests/run', {
   method: 'POST',
   body: JSON.stringify({ providerId, model, testIds, personaId }),
   ...options
 });
-export const getValuesAlignmentTestHistory = (limit = 10) => request(`/digital-twin/values-tests/history?limit=${limit}`);
+export const getValuesAlignmentTestHistory = (limit = 10, options = {}) => request(`/digital-twin/values-tests/history?limit=${limit}`, options);
 
 // Digital Twin - Adversarial Boundary Testing (M34 P6)
 export const getAdversarialTests = (options = {}) => request('/digital-twin/adversarial-tests', options);

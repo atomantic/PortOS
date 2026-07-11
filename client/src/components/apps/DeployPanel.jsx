@@ -92,6 +92,7 @@ export default function DeployPanel({ appId, appName }) {
         <button
           onClick={() => setShowOptions(prev => !prev)}
           disabled={isDeploying}
+          aria-label="Deploy options"
           className="px-1 py-1 bg-port-accent-2/20 text-port-accent-2 hover:bg-port-accent-2/30 transition-colors disabled:opacity-50 border-l border-port-border"
         >
           <ChevronDown size={12} />

@@ -10,7 +10,7 @@ import {
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { isPlainObject } from '../lib/objects.js';
-import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, privacySettingsSchema, validateRequest } from '../lib/validation.js';
+import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -125,7 +125,7 @@ router.put('/', asyncHandler(async (req, res) => {
   // Per-feature AI provider assignments — validate each slice when present so
   // a malformed picker save can't write a non-string providerId/model to disk.
   if (req.body?.autofixer !== undefined) {
-    validateRequest(featureProviderConfigSchema.partial(), req.body.autofixer);
+    validateRequest(autofixerSettingsSchema.partial(), req.body.autofixer);
   }
   if (req.body?.calendarSync !== undefined) {
     validateRequest(featureProviderConfigSchema.partial(), req.body.calendarSync);
@@ -133,8 +133,9 @@ router.put('/', asyncHandler(async (req, res) => {
   if (req.body?.codeReview !== undefined) {
     validateRequest(codeReviewSettingsSchema.partial(), req.body.codeReview);
   }
-  // Creative Director scene-evaluation provider/model pin — validate the slice
-  // when present so a malformed picker save can't write a bad provider config.
+  // Creative Director's treatment, plan, and scene-evaluation provider/model
+  // pins — validate the slice when present so a malformed picker save can't
+  // write a bad provider config.
   if (req.body?.creativeDirector !== undefined) {
     validateRequest(creativeDirectorSettingsSchema.partial(), req.body.creativeDirector);
   }
@@ -197,6 +198,13 @@ router.put('/', asyncHandler(async (req, res) => {
   if (req.body?.privacy !== undefined) {
     validateRequest(privacySettingsSchema.partial(), req.body.privacy);
   }
+  // Scheduled Series Autopilot config (#2174) — validate the slice when present
+  // so an invalid cron (rejected by the schema's isValidCronExpression refine) or
+  // bad seriesId can't reach disk and leave an "enabled" schedule that never fires.
+  // `.partial()` so a PUT that only carries { schedules } still validates.
+  if (req.body?.seriesAutopilot !== undefined) {
+    validateRequest(seriesAutopilotSettingsSchema.partial(), req.body.seriesAutopilot);
+  }
   // User-defined catalog types moved out of settings.json into PostgreSQL
   // (`catalog_user_types`, #1001). The `/api/catalog/types` routes are the only
   // write path; a `catalogUserTypes` key in a PUT /api/settings body (legacy
@@ -219,6 +227,11 @@ router.put('/', asyncHandler(async (req, res) => {
   // merged value so a save takes effect without a restart and without
   // re-reading the file.
   setCodexParallelLimit(merged.imageGen?.codex?.parallelLimit ?? CODEX_PARALLEL_DEFAULT);
+  // Series Autopilot crons re-register themselves off settings.js's
+  // `settings:updated` event (see seriesAutopilotScheduler.js) — the save above
+  // already emitted it — so an added/removed/edited schedule takes effect
+  // immediately without a restart, and this route stays decoupled from the
+  // autopilot pipeline graph.
   res.json(sanitizeSettingsForResponse(merged));
 }));
 

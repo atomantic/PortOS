@@ -1590,6 +1590,41 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   initializePipelineMetadata(metadata);
   if (!skipPreconditions && shouldSkipForPrecondition(metadata, app, taskType)) return null;
 
+  // Programmatic-I/O input hook. A task type may register a buildTaskInput hook
+  // (taskTypeHooks.js) that does deterministic pre-agent data collection — the
+  // same shape as the inline pre-steps reference-watch/pr-watcher/branch-reconcile
+  // run below (gather → maybe skip → contribute prompt), but as a reusable seam.
+  // The hook OWNS its full prompt (it replaces the template) and has one `skip`
+  // outcome; the inline steps that instead INJECT a token block into a template
+  // they still own, or need perpetual park/convergence semantics, stay inline for
+  // now (future candidates if the hook grows a block-injection return). When it
+  // skips we record execution so cadence advances (mirrors pr-watcher's no-
+  // dispatch recordPoll), then return null — no agent is spawned.
+  let hookPrompt = null;
+  // The hook may pin the app's chosen provider/model (LI option A: they live in
+  // the per-app taskTypeOverrides, not the global schedule interval). Captured
+  // here but APPLIED AFTER the global-interval provider/model block below, so the
+  // per-app choice wins over a global schedule provider rather than being clobbered
+  // by it.
+  let hookOverride = {};
+  {
+    const { getTaskInputHook } = await import('./taskTypeHooks.js');
+    const inputHook = await getTaskInputHook(taskType);
+    if (inputHook) {
+      const input = await inputHook({ app, taskType }).catch((err) => {
+        emitLog('warn', `buildTaskInput hook failed for ${taskType}/${app.name}: ${err.message}`, { appId: app.id, analysisType: taskType });
+        return { skip: { reason: 'input-hook-error' } };
+      });
+      if (input?.skip) {
+        emitLog('info', `Skipping ${taskType} for ${app.name}: ${input.skip.reason}`, { appId: app.id, analysisType: taskType });
+        await taskSchedule.recordExecution(taskType, app.id);
+        return null;
+      }
+      hookPrompt = input?.prompt || null;
+      hookOverride = { providerId: input?.providerId || null, model: input?.model || null };
+    }
+  }
+
   // claim-work is the single-source router: one toggle that ships the next
   // work item from whatever tracker the app is configured for. Resolve
   // the app's workTracker (default 'auto' → git origin host) and delegate to the
@@ -1819,9 +1854,14 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   // default.)
   const promptKeyForBody = (taskType === 'claim-work' && !interval.prompt) ? promptTaskType : taskType;
 
-  const promptTemplate = metadata.pipeline?.stages
-    ? await getStagePrompt(taskType, 0)
-    : await getTaskPrompt(promptKeyForBody);
+  // A buildTaskInput hook that returned a fully-rendered prompt wins over the
+  // template path — the hook owns its prompt (LI has no DEFAULT_TASK_PROMPTS
+  // entry). The token-replacement chain below is a no-op on it (no {tokens}).
+  const promptTemplate = hookPrompt
+    ? hookPrompt
+    : (metadata.pipeline?.stages
+      ? await getStagePrompt(taskType, 0)
+      : await getTaskPrompt(promptKeyForBody));
 
   // reference-watch: dynamically inject {referenceData} — a Markdown chunk
   // describing each ref configured on the app + commits since lastReviewedSha.
@@ -1992,6 +2032,12 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   if (interval.model) {
     metadata.model = interval.model;
   }
+
+  // A buildTaskInput hook's per-app provider/model wins over the global interval
+  // pin above (per-app is the more specific choice). Applied last so a global
+  // schedule provider can't clobber the app's selection.
+  if (hookOverride.providerId) { metadata.provider = hookOverride.providerId; metadata.providerId = hookOverride.providerId; }
+  if (hookOverride.model) { metadata.model = hookOverride.model; }
 
   const approval = await resolveConfidenceApproval(state, `app-improve:${taskType}`, `Task app-improve:${taskType} for ${app.name}`);
 

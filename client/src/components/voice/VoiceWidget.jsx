@@ -560,7 +560,7 @@ export default function VoiceWidget() {
             onClick={() => { setExpanded(true); toggleCapture(); }}
             className={`p-3 rounded-full border transition-colors ${fabSurface} ${
               capturing
-                ? 'bg-port-accent-2 text-white animate-pulse'
+                ? 'bg-port-accent-2 text-port-on-accent-2 animate-pulse'
                 : 'bg-port-card text-white'
             }`}
             title="Open voice controls"
@@ -692,7 +692,7 @@ export default function VoiceWidget() {
             onClick={toggleCapture}
             className={`p-3 rounded-full transition-colors ${
               capturing
-                ? 'bg-port-accent-2 text-white animate-pulse'
+                ? 'bg-port-accent-2 text-port-on-accent-2 animate-pulse'
                 : 'bg-port-accent-2/20 hover:bg-port-accent-2/40 text-port-accent-2'
             }`}
             title={(() => {

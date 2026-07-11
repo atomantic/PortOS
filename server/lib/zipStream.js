@@ -238,6 +238,78 @@ export function collectZipEntry(entry, maxBytes = MAX_ZIP_MEMBER_BYTES) {
 }
 
 /**
+ * Predicate for "this uploaded file is a ZIP archive." Every import service that
+ * accepts either a raw export ZIP or a single unpacked JSON/CSV/TXT member shared
+ * this exact three-way check (mimetype `application/zip`, the Windows-y
+ * `application/x-zip-compressed`, or a `.zip` filename). Nullish-safe: a missing
+ * `file`, `mimetype`, or `originalname` returns false rather than throwing.
+ */
+export function isZipUpload(file) {
+  return (
+    file?.mimetype === 'application/zip' ||
+    file?.mimetype === 'application/x-zip-compressed' ||
+    /\.zip$/i.test(file?.originalname || '')
+  );
+}
+
+/**
+ * Stream a ZIP from disk and hand every entry whose path satisfies `match` to
+ * `onMatch(buffer, entryPath)` as a fully-decompressed Buffer; non-matching
+ * entries are drained without inflation.
+ *
+ * This owns the whole multi-entry streaming lifecycle that each import service
+ * (browser-history, spotify, youtube, whatsapp, takeout-location, discord)
+ * otherwise re-implemented by hand: a single-settle guard, source + parser
+ * teardown on the FIRST failure (so an early error in a multi-GB upload doesn't
+ * keep reading to EOF), autodrain of skipped members, per-entry work collection,
+ * and awaiting every matching entry's `onMatch` before resolving on `close`.
+ * Resolves once every matching member has been read AND its `onMatch` settled;
+ * rejects on the first source / parser / inflate / oversize / `onMatch` error.
+ *
+ * `match` may be a predicate `(entryPath) => boolean` (evaluated at entry-emit
+ * time, so a closure over caller state — e.g. "the first non-preferred member" —
+ * is honored) or a substring shorthand. `onMatch` may be sync or async and
+ * accumulates into the caller's own closure (an array, a `Map`, a string). Each
+ * matching member is buffered under `maxBytes` (see `collectZipEntry`), so a
+ * pathological member can't exhaust RAM. Leaves the caller with ONLY its domain
+ * match/parse logic.
+ */
+export function collectZipEntries(zipPath, { match, onMatch, maxBytes = MAX_ZIP_MEMBER_BYTES } = {}) {
+  const test = typeof match === 'function' ? match : (name) => name.includes(match);
+  const reads = [];
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const src = createReadStream(zipPath);
+    const parser = parseZip();
+    const settle = (fn) => (...args) => {
+      if (settled) return;
+      settled = true;
+      // On failure, tear down the read + parse pipeline so a large upload with an
+      // early error (bad member, corrupt/truncated ZIP) doesn't keep reading to EOF.
+      if (fn === reject) { src.destroy(); parser.destroy?.(); }
+      fn(...args);
+    };
+    src.on('error', settle(reject));
+    src
+      .pipe(parser)
+      .on('entry', (entry) => {
+        if (test(entry.path)) {
+          const entryPath = entry.path;
+          reads.push(
+            collectZipEntry(entry, maxBytes)
+              .then((buf) => onMatch(buf, entryPath))
+              .catch(settle(reject)),
+          );
+        } else {
+          entry.autodrain();
+        }
+      })
+      .on('close', () => Promise.all(reads).then(settle(resolve)).catch(settle(reject)))
+      .on('error', settle(reject));
+  });
+}
+
+/**
  * Extract the first entry whose path satisfies `match` (a predicate or a
  * substring) from a zip on disk, resolving to its decompressed Buffer (or null
  * if nothing matched). Convenience over parseZip() for the random-single-member

@@ -468,6 +468,12 @@ describe('POST /api/privacy/broker-cases/:id/transition (#2146)', () => {
     expect(res.body).toMatchObject({ state: 'submitted' });
   });
 
+  it('accepts the blocked-case manual "I\'m listed" target (found)', async () => {
+    const res = await request(makeApp()).post(`/api/privacy/broker-cases/${VALID_UUID}/transition`).send({ toState: 'found' });
+    expect(res.status).toBe(200);
+    expect(brokerService.transitionCase).toHaveBeenCalledWith(VALID_UUID, 'found', {});
+  });
+
   it('rejects a verification-only / unknown target state', async () => {
     expect((await request(makeApp()).post(`/api/privacy/broker-cases/${VALID_UUID}/transition`).send({ toState: 'confirmed_removed' })).status).toBe(400);
     expect((await request(makeApp()).post(`/api/privacy/broker-cases/${VALID_UUID}/transition`).send({ toState: 'bogus' })).status).toBe(400);

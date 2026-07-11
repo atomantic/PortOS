@@ -12,6 +12,7 @@ import { LocalLlmTab } from '../components/settings/LocalLlmTab';
 import { TelegramTab } from '../components/settings/TelegramTab';
 import { GeneralTab } from '../components/settings/GeneralTab';
 import { IMessageTab } from '../components/settings/IMessageTab';
+import { ContactsTab } from '../components/settings/ContactsTab';
 import { MortalLoomTab } from '../components/settings/MortalLoomTab';
 import { SecurityTab } from '../components/settings/SecurityTab';
 import { SharingTab } from '../components/settings/SharingTab';
@@ -40,6 +41,7 @@ export default function Settings() {
     switch (activeTab) {
       case 'general': return <GeneralTab />;
       case 'imessage': return <IMessageTab />;
+      case 'contacts': return <ContactsTab />;
       case 'ai-assignments': return <AiAssignmentsTab />;
       case 'api-access': return <ApiAccessTab />;
       case 'autofixer': return <AutofixerTab />;

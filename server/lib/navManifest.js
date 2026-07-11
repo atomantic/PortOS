@@ -19,7 +19,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.media.history', path: '/media/history', label: 'Media History', section: 'Create', aliases: ['media-history', 'video-history'], keywords: ['videos', 'gallery', 'stitch'] },
   { id: 'nav.media.annotate', path: '/media/annotate', label: 'Annotate', section: 'Create', aliases: ['annotate', 'media-annotate', 'sketch', 'draw-over', 'markup'], keywords: ['annotation', 'sketch', 'draw', 'markup', 'scribble', 'label', 'canvas', 'overlay', 'stroke'] },
   { id: 'nav.media.collections', path: '/media/collections', label: 'Collections', section: 'Create', aliases: ['collections', 'media-collections', 'stacks', 'projects'], keywords: ['bucket', 'group', 'project', 'album', 'organize'] },
-  { id: 'nav.media.creative-director', path: '/media/creative-director', label: 'Creative Director', section: 'Create', aliases: ['creative-director', 'creative', 'director', 'producer', 'orchestrator', 'long-form', 'episode'], keywords: ['story', 'episode', 'narrative', 'agent', 'auto-video', 'long-form', 'directive', 'production plan', 'plan board', 'orchestrator', 'studio', 'producer'] },
+  { id: 'nav.create.creative-director', path: '/creative-director', label: 'Creative Director', section: 'Create', aliases: ['creative-director', 'creative', 'director', 'producer', 'orchestrator', 'long-form', 'episode'], keywords: ['story', 'episode', 'narrative', 'agent', 'auto-video', 'long-form', 'directive', 'production plan', 'plan board', 'orchestrator', 'studio', 'producer'] },
   { id: 'nav.media.music-video', path: '/media/music-video', label: 'Music Video', section: 'Create', aliases: ['music-video', 'musicvideo', 'music video', 'mv', 'sync-to-beat'], keywords: ['music', 'beat', 'sync', 'audio-reactive', 'director', 'scene board', 'tempo', 'choreography'] },
   { id: 'nav.create.mood-boards', path: '/mood-boards', label: 'Mood Boards', section: 'Create', aliases: ['mood-boards', 'mood-board', 'moodboard', 'mood', 'inspiration', 'references'], keywords: ['inspiration', 'reference', 'pin', 'visual', 'canvas', 'collect', 'pinboard', 'palette', 'ideas'] },
   { id: 'nav.media.timeline', path: '/media/timeline', label: 'Timeline', section: 'Create', aliases: ['timeline', 'video-timeline', 'editor'], keywords: ['edit', 'trim', 'composite', 'stitch', 'cut', 'compose'] },
@@ -86,19 +86,19 @@ export const NAV_COMMANDS = [
   { id: 'nav.feature-agents', path: '/feature-agents', label: 'Feature Agents', section: 'Chief of Staff', aliases: ['feature-agents'] },
   { id: 'nav.cos.gsd', path: '/cos/gsd', label: 'GSD', section: 'Chief of Staff', aliases: ['gsd', 'cos-gsd'] },
   { id: 'nav.cos.health', path: '/cos/health', label: 'Health', section: 'Chief of Staff', aliases: ['cos-health', 'health'] },
-  { id: 'nav.cos.layered-intelligence', path: '/layered-intelligence', label: 'Layered Intelligence', section: 'Chief of Staff', aliases: ['layered-intelligence', 'intelligence-loop', 'self-improvement', 'lil'], keywords: ['layered intelligence', 'self improvement loop', 'per-app improvement', 'proposals', 'autonomous improvement', 'loop status'] },
   { id: 'nav.cos.learning', path: '/cos/learning', label: 'Learning', section: 'Chief of Staff', aliases: ['cos-learning'] },
   { id: 'nav.cos.memory', path: '/cos/memory', label: 'Memory', section: 'Chief of Staff', aliases: ['cos-memory'] },
   { id: 'nav.cos.schedule', path: '/cos/schedule', label: 'Schedule', section: 'Chief of Staff', aliases: ['schedule', 'cos-schedule'] },
   { id: 'nav.social-agents', path: '/agents', label: 'Social Agents', section: 'Chief of Staff', aliases: ['social-agents'] },
-  // Note: `pipeline` is intentionally NOT an alias here — that token now
-  // resolves to the dedicated /pipeline page (nav.create.pipeline). CoS still
-  // surfaces "task pipeline" via the `pipeline` keyword in the palette.
-  { id: 'nav.cos.workflow', path: '/cos/workflow', label: 'Workflow', section: 'Chief of Staff', aliases: ['workflow', 'cos-workflow'], keywords: ['pipeline', 'dependencies', 'order', 'stages', 'task pipeline'] },
+  // The page at /cos/workflow is now the Schedule Timeline (launch-order
+  // visualization + inline schedule editor). The `workflow` aliases are kept
+  // for muscle memory; the bare `timeline` alias stays with /media/timeline.
+  { id: 'nav.cos.workflow', path: '/cos/workflow', label: 'Timeline', section: 'Chief of Staff', aliases: ['workflow', 'cos-workflow', 'cos-timeline', 'schedule-timeline'], keywords: ['timeline', 'schedule', 'launch order', 'run order', 'gantt', 'upcoming runs', 'overlap', 'dependencies'] },
   { id: 'nav.cos.productivity', path: '/cos/productivity', label: 'Streaks', section: 'Chief of Staff', aliases: ['streaks', 'cos-productivity'] },
 
   { id: 'nav.messages.inbox', path: '/messages/inbox', label: 'Inbox', section: 'Comms', aliases: ['messages', 'comms', 'comms-inbox'], keywords: ['comms', 'email', 'inbox'] },
   { id: 'nav.messages.drafts', path: '/messages/drafts', label: 'Drafts', section: 'Comms', aliases: ['drafts', 'comms-drafts'], keywords: ['comms'] },
+  { id: 'nav.messages.imessage', path: '/messages/imessage', label: 'iMessage', section: 'Comms', aliases: ['imessage', 'i-message', 'apple-messages', 'comms-imessage'], keywords: ['comms', 'imessage', 'sms', 'text messages', 'chat.db', 'blocklist', 'spam'] },
   { id: 'nav.messages.config', path: '/messages/config', label: 'Config', section: 'Comms', aliases: ['messages-config', 'comms-config'], keywords: ['comms'] },
   { id: 'nav.messages.sync', path: '/messages/sync', label: 'Sync', section: 'Comms', aliases: ['messages-sync', 'comms-sync'], keywords: ['comms'] },
   { id: 'nav.openclaw', path: '/openclaw', label: 'OpenClaw', section: 'Brain', aliases: ['openclaw'] },
@@ -180,10 +180,13 @@ export const NAV_COMMANDS = [
   { id: 'nav.settings.autofixer', path: '/settings/autofixer', label: 'Autofixer', section: 'Settings', aliases: ['autofixer', 'settings-autofixer', 'auto-fixer'], keywords: ['crash', 'fix', 'pm2', 'repair', 'ai provider', 'restart'] },
   { id: 'nav.settings.backup', path: '/settings/backup', label: 'Backup', section: 'Settings', aliases: ['backup', 'settings-backup'] },
   { id: 'nav.settings.catalog', path: '/settings/catalog', label: 'Catalog Types', section: 'Settings', aliases: ['settings-catalog', 'catalog-types'], keywords: ['catalog', 'types', 'character', 'place', 'object', 'taxonomy'] },
+  { id: 'nav.settings.contacts', path: '/settings/contacts', label: 'Contacts', section: 'Settings', aliases: ['settings-contacts', 'contacts', 'address-book', 'contacts-settings'], keywords: ['contacts', 'address book', 'phone', 'email', 'tribe', 'imessage', 'names', 'resolve'] },
   { id: 'nav.settings.database', path: '/settings/database', label: 'Database', section: 'Settings', aliases: ['settings-database', 'database'] },
   { id: 'nav.settings.embeddings', path: '/settings/embeddings', label: 'Embeddings', section: 'Settings', aliases: ['settings-embeddings', 'embeddings', 'embedding'], keywords: ['vector', 'pgvector', 'semantic search', 'nomic', 'ollama', 'lm studio'] },
   { id: 'nav.settings.general', path: '/settings/general', label: 'General', section: 'Settings', aliases: ['settings', 'settings-general', 'general'] },
-  { id: 'nav.settings.imessage', path: '/settings/imessage', label: 'iMessage', section: 'Settings', aliases: ['settings-imessage', 'imessage', 'imessage-settings'], keywords: ['imessage', 'sync', 'chat.db', 'sms', 'texts', 'tribe', 'timeline', 'full disk access'] },
+  // Alias `imessage` lives on Comms → iMessage (the manager page, #2413); settings
+  // keeps the explicit settings-* tokens so voice "open iMessage settings" still works.
+  { id: 'nav.settings.imessage', path: '/settings/imessage', label: 'iMessage', section: 'Settings', aliases: ['settings-imessage', 'imessage-settings'], keywords: ['imessage', 'sync', 'chat.db', 'sms', 'texts', 'tribe', 'timeline', 'full disk access'] },
   { id: 'nav.settings.local-llm', path: '/settings/local-llm', label: 'Local LLMs', section: 'Settings', aliases: ['local-llm', 'local-llms', 'ollama', 'lm-studio', 'lmstudio'], keywords: ['ollama', 'lm studio', 'local model', 'local llm', 'gguf', 'pull model', 'install model', 'migrate', 'switch backend'] },
   { id: 'nav.settings.local-llm-playground', path: '/local-llm/playground', label: 'Local LLM Playground', section: 'Settings', aliases: ['llm-playground', 'playground', 'model-playground', 'compare-models'], keywords: ['ollama', 'lm studio', 'compare', 'benchmark', 'chat', 'test model', 'ttft', 'tokens per second', 'local llm'] },
   { id: 'nav.settings.mortalloom', path: '/settings/mortalloom', label: 'MortalLoom', section: 'Settings', aliases: ['settings-mortalloom', 'mortalloom'] },

@@ -16,6 +16,25 @@ let watcher = null;
 let isWatching = false;
 let lastUserTasks = null;
 let lastCosTasks = null;
+const pendingFileEvents = new Map();
+
+// Chokidar does not await async listeners. Keep one promise tail per watched
+// file so a quick add/change/unlink burst cannot race the cached snapshot, and
+// keep each lane alive after a failed read.
+function queueFileEvent(path, event, operation) {
+  const previous = pendingFileEvents.get(path) || Promise.resolve();
+  const tail = previous
+    .then(operation)
+    .catch((error) => {
+      console.error(`❌ Task watcher ${event} failed for ${path}: ${error?.message || error}`);
+      cosEvents.emit('watcher:error', { error: error?.message || String(error), event, file: path });
+    })
+    .finally(() => {
+      if (pendingFileEvents.get(path) === tail) pendingFileEvents.delete(path);
+    });
+  pendingFileEvents.set(path, tail);
+  return tail;
+}
 
 /**
  * Start watching task files
@@ -42,32 +61,38 @@ export async function startWatching() {
     }
   });
 
-  watcher.on('change', async (path) => {
-    if (path.endsWith(config.userTasksFile)) {
-      await handleUserTasksChange();
-    } else if (path.endsWith(config.cosTasksFile)) {
-      await handleCosTasksChange();
-    }
+  watcher.on('change', (path) => {
+    queueFileEvent(path, 'change', async () => {
+      if (path.endsWith(config.userTasksFile)) {
+        await handleUserTasksChange();
+      } else if (path.endsWith(config.cosTasksFile)) {
+        await handleCosTasksChange();
+      }
+    });
   });
 
-  watcher.on('add', async (path) => {
-    if (path.endsWith(config.userTasksFile)) {
-      lastUserTasks = await getUserTasks();
-      cosEvents.emit('tasks:user:created', lastUserTasks);
-    } else if (path.endsWith(config.cosTasksFile)) {
-      lastCosTasks = await getCosTasks();
-      cosEvents.emit('tasks:cos:created', lastCosTasks);
-    }
+  watcher.on('add', (path) => {
+    queueFileEvent(path, 'add', async () => {
+      if (path.endsWith(config.userTasksFile)) {
+        lastUserTasks = await getUserTasks();
+        cosEvents.emit('tasks:user:created', lastUserTasks);
+      } else if (path.endsWith(config.cosTasksFile)) {
+        lastCosTasks = await getCosTasks();
+        cosEvents.emit('tasks:cos:created', lastCosTasks);
+      }
+    });
   });
 
-  watcher.on('unlink', async (path) => {
-    if (path.endsWith(config.userTasksFile)) {
-      cosEvents.emit('tasks:user:deleted', { file: path });
-      lastUserTasks = null;
-    } else if (path.endsWith(config.cosTasksFile)) {
-      cosEvents.emit('tasks:cos:deleted', { file: path });
-      lastCosTasks = null;
-    }
+  watcher.on('unlink', (path) => {
+    queueFileEvent(path, 'unlink', async () => {
+      if (path.endsWith(config.userTasksFile)) {
+        cosEvents.emit('tasks:user:deleted', { file: path });
+        lastUserTasks = null;
+      } else if (path.endsWith(config.cosTasksFile)) {
+        cosEvents.emit('tasks:cos:deleted', { file: path });
+        lastCosTasks = null;
+      }
+    });
   });
 
   watcher.on('error', (error) => {
@@ -91,6 +116,7 @@ export async function stopWatching() {
   }
 
   await watcher.close();
+  await Promise.all([...pendingFileEvents.values()]);
   watcher = null;
   isWatching = false;
 

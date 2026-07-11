@@ -8,6 +8,7 @@ import toast from '../components/ui/Toast';
 import { timeAgo } from '../utils/formatters';
 import api, { generateAvatar } from '../services/api';
 import socket from '../services/socket';
+import { clickableProps } from '../lib/a11yKeyboard.js';
 
 const charGet = () => api.get('/character');
 const charPost = (path, body) => api.post(`/character${path}`, body);
@@ -63,6 +64,10 @@ export default function CharacterSheet() {
   const [diffusionProgress, setDiffusionProgress] = useState(null);
   const generatingRef = useRef(false);
   const generationIdRef = useRef(null);
+  // Guards the name edit against a double-commit: Enter/Escape resolve the edit
+  // and also blur the input, so both the key handler and the blur handler fire.
+  // Whichever runs first flips this false; the other becomes a no-op.
+  const nameEditingRef = useRef(false);
 
   // Form states
   const [dmgDice, setDmgDice] = useState('1d6');
@@ -188,14 +193,40 @@ export default function CharacterSheet() {
     }
   };
 
-  const handleNameSave = async () => {
+  const startNameEdit = () => {
+    nameEditingRef.current = true;
+    setNameVal(char.name || '');
+    setEditingName(true);
+  };
+
+  // Resolve an in-progress name edit exactly once. `cancel` discards the edit
+  // and restores the persisted name; otherwise the trimmed value is saved.
+  const finishNameEdit = async (cancel) => {
+    if (!nameEditingRef.current) return;
+    nameEditingRef.current = false;
+    setEditingName(false);
+    if (cancel) {
+      setNameVal(char.name || '');
+      return;
+    }
     try {
-      if (nameVal.trim() && nameVal !== char.name) {
+      if (nameVal.trim() && nameVal.trim() !== char.name) {
         const data = await charPut({ name: nameVal.trim() });
         setChar(data);
       }
     } catch (err) { toast.error(err.message || 'Failed to save name'); }
-    setEditingName(false);
+  };
+
+  // Enter commits, Escape cancels. preventDefault keeps Enter from triggering
+  // any accidental form submission.
+  const handleNameKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      finishNameEdit(false);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      finishNameEdit(true);
+    }
   };
 
   const handleClassSave = async () => {
@@ -328,20 +359,22 @@ export default function CharacterSheet() {
                 {editingName ? (
                   <input
                     autoFocus
+                    aria-label="Character name"
                     value={nameVal}
                     onChange={e => setNameVal(e.target.value)}
-                    onBlur={handleNameSave}
-                    onKeyDown={e => e.key === 'Enter' && handleNameSave()}
+                    onBlur={() => finishNameEdit(false)}
+                    onKeyDown={handleNameKeyDown}
                     className="bg-port-bg border border-port-border rounded px-2 py-1 text-2xl font-bold text-white w-full max-w-xs"
                   />
                 ) : (
-                  <h2
-                    onClick={() => setEditingName(true)}
-                    className="text-2xl font-bold text-white cursor-pointer hover:text-port-accent transition-colors truncate"
-                    title="Click to edit name"
+                  <button
+                    type="button"
+                    onClick={startNameEdit}
+                    aria-label={`Edit character name (currently ${char.name || 'Unnamed Hero'})`}
+                    className="text-2xl font-bold text-white cursor-pointer hover:text-port-accent transition-colors truncate text-left bg-transparent border-0 p-0"
                   >
                     {char.name || 'Unnamed Hero'}
-                  </h2>
+                  </button>
                 )}
               </div>
               <div className="flex items-center gap-2">
@@ -357,6 +390,7 @@ export default function CharacterSheet() {
                 ) : (
                   <span
                     onClick={() => setEditingClass(true)}
+                    {...clickableProps(() => setEditingClass(true))}
                     className="text-sm text-gray-400 cursor-pointer hover:text-port-accent transition-colors"
                     title="Click to edit class"
                   >
@@ -491,7 +525,7 @@ export default function CharacterSheet() {
             <div className="mt-3 p-3 bg-port-bg rounded-lg border border-port-error/30 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-port-error">Roll Damage</span>
-                <button onClick={() => setActiveAction(null)} className="text-gray-500 hover:text-white">
+                <button onClick={() => setActiveAction(null)} aria-label="Close" className="text-gray-500 hover:text-white">
                   <X className="w-4 h-4" />
                 </button>
               </div>
@@ -525,7 +559,7 @@ export default function CharacterSheet() {
             <div className="mt-3 p-3 bg-port-bg rounded-lg border border-port-warning/30 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-port-warning">Add Experience</span>
-                <button onClick={() => setActiveAction(null)} className="text-gray-500 hover:text-white">
+                <button onClick={() => setActiveAction(null)} aria-label="Close" className="text-gray-500 hover:text-white">
                   <X className="w-4 h-4" />
                 </button>
               </div>
@@ -557,7 +591,7 @@ export default function CharacterSheet() {
             <div className="mt-3 p-3 bg-port-bg rounded-lg border border-port-accent-2/30 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-port-accent-2">Log Event</span>
-                <button onClick={() => setActiveAction(null)} className="text-gray-500 hover:text-white">
+                <button onClick={() => setActiveAction(null)} aria-label="Close" className="text-gray-500 hover:text-white">
                   <X className="w-4 h-4" />
                 </button>
               </div>
