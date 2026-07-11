@@ -68,14 +68,16 @@ describe('resolveAgentProviderAndModel', () => {
     expect(r.error).toContain('no fallback available');
     expect(r.providerId).toBe('p1');
     expect(r.providerStatus).toEqual({ message: 'usage-limit', reason: 'limit' });
-    // A CLI provider that's merely down stays transient — it may recover.
-    expect(r.permanent).toBe(false);
+    // A provider that's merely down stays transient — it may recover.
+    expect(r.permanent).toBeFalsy();
   });
 
-  it('marks a down api provider with no fallback PERMANENT (never gains a harness)', async () => {
-    // An api provider that is unavailable with no fallback returns from the
-    // availability branch before the harness check; without a permanent flag the
-    // task would retry forever even though an api provider can never run an agent.
+  it('keeps a down api provider with no fallback TRANSIENT (a null fallback may be a momentarily-down CLI fallback)', async () => {
+    // Permanence is decided by provider TYPE at the harness check (reached once the
+    // provider is available), NOT inferred from a transient unavailable + null
+    // fallback here — a null fallback can mean a configured CLI/TUI fallback is
+    // merely down, which must stay retryable. The down api provider retries cheaply
+    // and self-heals to a permanent block the moment it's reachable.
     const provider = { id: 'ollama', type: 'api' };
     getActiveProvider.mockResolvedValue(provider);
     isProviderAvailable.mockReturnValue(false);
@@ -86,6 +88,19 @@ describe('resolveAgentProviderAndModel', () => {
     const r = await resolveAgentProviderAndModel(TASK);
     expect(r.ok).toBe(false);
     expect(r.providerId).toBe('ollama');
+    expect(r.permanent).toBeFalsy();
+  });
+
+  it('marks an AVAILABLE api provider permanent (harness check, self-heal target for a once-down api)', async () => {
+    // The self-heal path for the transient case above: once the api provider is
+    // reachable, resolution reaches the harness check and blocks permanently.
+    const provider = { id: 'ollama', type: 'api' };
+    getActiveProvider.mockResolvedValue(provider);
+    isProviderAvailable.mockReturnValue(true);
+
+    const r = await resolveAgentProviderAndModel(TASK);
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain('no file-writing harness');
     expect(r.permanent).toBe(true);
   });
 
