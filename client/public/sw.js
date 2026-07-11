@@ -22,6 +22,18 @@
  * Bump CACHE_VERSION to invalidate every cache (e.g. when these strategies
  * change). Changing this file's bytes is itself what triggers the browser to
  * install the updated worker.
+ *
+ * Offline scope (known limitation): the install/navigation precache covers the
+ * app shell + its ENTRY assets (the boot chunk, its modulepreload deps, CSS).
+ * Lazy route chunks are cached on demand the first time they load through the
+ * controlling SW (cache-first), so a route the user has visited online works
+ * offline afterward — but a route visited ONLY during the very first,
+ * pre-registration page load (before window.load registered the SW) has an
+ * uncached chunk, so an offline reload of exactly that route boots the shell
+ * but can't render the route until it's visited online once more. Fully
+ * offline-ing every route from a cold first visit needs a build-time precache
+ * manifest (workbox / vite-plugin-pwa), deliberately out of scope for this
+ * dependency-free shell cache. See issue #2424.
  */
 
 const CACHE_VERSION = 'v1';
@@ -90,6 +102,10 @@ self.addEventListener('install', (event) => {
       if (cachedAll) {
         const shell = await caches.open(SHELL_CACHE);
         await shell.put(SHELL_KEY, response);
+        // Honor the cap: precacheBootAssets adds assets directly (bypassing
+        // cacheFirst's trim), so trim here — after the shell commit, so the new
+        // boot assets are pinned and only old builds' chunks are evicted.
+        await trimCache(await caches.open(ASSET_CACHE), ASSET_CACHE_MAX_ENTRIES);
       }
     })()
   );
@@ -208,7 +224,15 @@ async function navigationHandler(event, onCachingSettled) {
       const toCache = response.clone();
       (async () => {
         const { cachedAll } = await precacheBootAssets(await toCache.clone().text());
-        if (cachedAll) await shell.put(SHELL_KEY, toCache);
+        if (cachedAll) {
+          await shell.put(SHELL_KEY, toCache);
+          // Trim here too: on a new-build navigation, precacheBootAssets adds
+          // the boot assets directly (bypassing cacheFirst's trim), so the cap
+          // would otherwise be unenforced for a user who only visits the shell
+          // across upgrades. Trim AFTER the commit so the new boot assets are
+          // pinned and only stale chunks are evicted.
+          await trimCache(await caches.open(ASSET_CACHE), ASSET_CACHE_MAX_ENTRIES);
+        }
       })().catch(() => {}).finally(onCachingSettled);
     } else {
       onCachingSettled();
