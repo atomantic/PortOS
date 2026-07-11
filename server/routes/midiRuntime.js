@@ -24,6 +24,7 @@ import { safeChildProcessEnv } from '../lib/processEnv.js';
 import { openSseStream } from '../lib/sseDownload.js';
 import {
   resolveMuscriptorPython,
+  isMuscriptorRuntimeReady,
   invalidateMuscriptorPython,
   MUSCRIPTOR_VENV_DEFAULT,
 } from '../lib/pythonSetup.js';
@@ -49,12 +50,13 @@ router.get('/install', asyncHandler(async (req, res) => {
 
   // The venv may already exist (another surface installed it) — short-circuit
   // rather than re-running the multi-GB setup. Drop the cached resolve first so
-  // this reflects on-disk truth, not a stale null from before a prior install.
+  // this reflects on-disk truth, not a stale value from before a prior install.
+  // Gate on the import, not just the binary: a partial venv (cancelled mid-pip)
+  // must NOT short-circuit as "already installed" — it needs the repair run.
   invalidateMuscriptorPython();
-  const existing = resolveMuscriptorPython();
-  if (existing) {
+  if (await isMuscriptorRuntimeReady()) {
     installInFlight = null;
-    send({ type: 'log', message: `MuScriptor already installed at ${existing}` });
+    send({ type: 'log', message: `MuScriptor already installed at ${resolveMuscriptorPython()}` });
     send({ type: 'complete', message: 'Already installed — nothing to do.' });
     return safeEnd();
   }
@@ -92,19 +94,19 @@ router.get('/install', asyncHandler(async (req, res) => {
     send({ type: 'error', message: `Installer failed to spawn: ${err.message}` });
     safeEnd();
   });
-  child.on('close', (code) => {
+  child.on('close', async (code) => {
     finished = true;
     installInFlight = null;
-    // Drop the cached resolve so this probe (and the next transcription) sees
-    // the freshly-created venv, then re-probe rather than trusting the exit
-    // code alone — the setup script import-verifies MuScriptor and exits
-    // non-zero on failure, but a partial venv shouldn't be reported "ready".
+    // Drop the cached resolve/ready so this probe (and the next transcription)
+    // sees the freshly-created venv, then verify the import rather than trusting
+    // the exit code alone — the setup script import-verifies MuScriptor and
+    // exits non-zero on failure, but a partial venv shouldn't be reported "ready".
     invalidateMuscriptorPython();
-    const py = resolveMuscriptorPython();
-    if (code === 0 && py) {
-      send({ type: 'complete', message: `MuScriptor ready: ${py}` });
+    const ready = await isMuscriptorRuntimeReady();
+    if (code === 0 && ready) {
+      send({ type: 'complete', message: `MuScriptor ready: ${resolveMuscriptorPython()}` });
     } else if (code === 0) {
-      send({ type: 'error', message: `Installer exited 0 but ${MUSCRIPTOR_VENV_DEFAULT} is still missing. Re-run from a terminal to see what happened.` });
+      send({ type: 'error', message: `Installer exited 0 but MuScriptor can't be imported from ${MUSCRIPTOR_VENV_DEFAULT}. Re-run from a terminal to see what happened.` });
     } else {
       send({ type: 'error', message: `Installer exited with code ${code}.` });
     }

@@ -9,6 +9,9 @@ import { request } from '../lib/testHelper.js';
 const py = vi.hoisted(() => ({ installed: true }));
 vi.mock('../lib/pythonSetup.js', () => ({
   resolveMuscriptorPython: () => (py.installed ? '/home/x/.portos/venv-muscriptor/bin/python3' : null),
+  // Ready = binary present AND `muscriptor` importable. The route now gates the
+  // short-circuit on this (not bare binary presence) so a partial venv repairs.
+  isMuscriptorRuntimeReady: async () => py.installed,
   invalidateMuscriptorPython: vi.fn(),
   MUSCRIPTOR_VENV_DEFAULT: '/home/x/.portos/venv-muscriptor/bin/python3',
 }));
