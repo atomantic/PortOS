@@ -23,6 +23,12 @@ vi.mock('../providers.js', () => ({
   getProviderById: vi.fn(async (id) => ({ id, type: 'cli' }))
 }));
 
+// When no per-app provider is pinned, the guard falls back to the global LI
+// schedule provider. Default to no global pin so the no-provider path stays inert.
+vi.mock('../taskSchedule.js', () => ({
+  loadSchedule: vi.fn(async () => ({ tasks: { 'layered-intelligence': {} } }))
+}));
+
 vi.mock('../layeredIntelligence.js', () => ({
   getEffectiveConfig: vi.fn(() => ({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: {} })),
   buildPrompt: vi.fn(() => 'REASONING PROMPT'),
@@ -55,6 +61,7 @@ import * as li from '../layeredIntelligence.js';
 import * as apps from '../apps.js';
 import { resolveAppWorkTracker } from '../../lib/workTracker.js';
 import { getProviderById } from '../providers.js';
+import { loadSchedule } from '../taskSchedule.js';
 
 const APP = { id: 'app-1', name: 'App One', repoPath: '/repo', taskTypeOverrides: {} };
 
@@ -62,6 +69,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   resolveAppWorkTracker.mockResolvedValue({ resolved: 'github', forge: 'gh' });
   getProviderById.mockImplementation(async (id) => ({ id, type: 'cli' }));
+  loadSchedule.mockResolvedValue({ tasks: { 'layered-intelligence': {} } });
   li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: {} });
   li.filerForTracker.mockImplementation((r) => (r === 'github' || r === 'gitlab') ? 'forge' : (r === 'jira' ? 'jira' : 'plan'));
   li.trackerSupportsPause.mockImplementation((r) => r !== 'plan');
@@ -97,12 +105,22 @@ describe('buildTaskInput', () => {
     expect(li.listBlockingIssues).not.toHaveBeenCalled();
   });
 
-  it('proceeds when no provider is pinned (inherits the default coding agent)', async () => {
+  it('proceeds when neither a per-app nor a global provider is pinned (inherits the default coding agent)', async () => {
     li.getEffectiveConfig.mockReturnValue({ providerId: null, model: null, allowedScopes: ['app-improvement'], sources: {} });
     const res = await buildTaskInput({ app: APP });
     expect(res.skip).toBeUndefined();
+    // Falls back to the global schedule pin (none here), so no provider lookup.
     expect(getProviderById).not.toHaveBeenCalled();
     expect(res.prompt).toContain('REASONING PROMPT');
+  });
+
+  it('skips on an api-only GLOBAL schedule provider when no per-app provider is pinned', async () => {
+    li.getEffectiveConfig.mockReturnValue({ providerId: null, model: null, allowedScopes: ['app-improvement'], sources: {} });
+    loadSchedule.mockResolvedValue({ tasks: { 'layered-intelligence': { providerId: 'ollama' } } });
+    getProviderById.mockResolvedValue({ id: 'ollama', type: 'api' });
+    const res = await buildTaskInput({ app: APP });
+    expect(res).toEqual({ skip: { reason: 'provider-not-agent-capable' } });
+    expect(getProviderById).toHaveBeenCalledWith('ollama');
   });
 
   it('skips a jira-tracked app with no usable jira config', async () => {

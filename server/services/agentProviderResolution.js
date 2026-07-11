@@ -51,17 +51,21 @@ export async function resolveAgentProviderAndModel(task) {
     return { ok: false, error: 'No active AI provider configured' };
   }
 
+  // Type of the DIRECTLY-resolved (pinned/active) provider, captured before any
+  // fallback swap below. It gates the "permanent" flag on the api-type rejection:
+  // an api provider is permanent (a config error that re-fails identically
+  // forever) ONLY when the task was directly resolved onto an api provider — i.e.
+  // the pinned/active provider is itself api. A fallback that lands on an api
+  // provider is instead judged by THIS type: a CLI primary that's momentarily
+  // unavailable (directType 'cli') may recover, so its api fallback is transient
+  // and stays retryable; but an api primary whose fallback is also api (directType
+  // 'api') can never gain a harness, so it stays permanent (no infinite retry).
+  const directProviderType = provider.type;
   // Check provider availability (usage limits, rate limits, etc.)
   // Set when we fall back below to a provider with a configured "Fallback
   // Model" pin — it overrides the usual per-task model selection so the
   // user's chosen fallback provider+model pair is honored on agent runs.
   let fallbackModelPin = null;
-  // Whether `provider` below is a FALLBACK selection (the directly-resolved
-  // pinned/active provider was unavailable) rather than the provider the task
-  // actually asked for. It gates the "permanent" flag on the api-type rejection:
-  // a fallback-selected api provider is a TRANSIENT condition (the primary CLI
-  // provider may recover), so the task must stay retryable, not be blocked.
-  let usedFallback = false;
   const providerAvailable = isProviderAvailable(provider.id);
   if (!providerAvailable) {
     const status = getProviderStatus(provider.id);
@@ -89,7 +93,6 @@ export async function resolveAgentProviderAndModel(task) {
       });
       provider = fallbackResult.provider;
       fallbackModelPin = fallbackResult.model || null;
-      usedFallback = true;
     } else {
       const errorMsg = `Provider ${provider.id} unavailable (${status.message}) and no fallback available`;
       return { ok: false, error: errorMsg, providerId: provider.id, providerStatus: status };
@@ -107,14 +110,13 @@ export async function resolveAgentProviderAndModel(task) {
   if (provider.type === 'api') {
     return {
       ok: false,
-      // PERMANENT config error ONLY when this api provider was the directly-
-      // resolved (pinned or active) one — it resolves identically on every
-      // re-dispatch (an api provider never gains a harness), so the caller must
-      // retire the task rather than leave it silently re-failing forever. A
-      // fallback-selected api provider is instead TRANSIENT: the primary CLI
-      // provider that was momentarily unavailable may recover, so the task must
-      // stay retryable rather than be blocked (a blocked task is never retried).
-      permanent: !usedFallback,
+      // PERMANENT config error when the DIRECTLY-resolved (pinned/active) provider
+      // was itself api — no CLI/TUI harness is reachable for this task no matter
+      // how many times it re-dispatches, so the caller must retire it rather than
+      // leave it silently re-failing forever. An api provider reached by falling
+      // back from a CLI primary (directProviderType 'cli') is instead TRANSIENT:
+      // the primary may recover, so the task stays retryable.
+      permanent: directProviderType === 'api',
       error: `Provider "${provider.id}" is an HTTP API provider with no file-writing harness — CoS agent tasks need a CLI/TUI coding provider (claude, codex, or the "Claude Ollama" Claude-on-Ollama sample).`,
       providerId: provider.id
     };

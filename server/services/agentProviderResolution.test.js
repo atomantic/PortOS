@@ -168,7 +168,7 @@ describe('resolveAgentProviderAndModel', () => {
     expect(selectModelForTask).not.toHaveBeenCalled();
   });
 
-  it('rejects an api-type provider even when reached via the fallback chain', async () => {
+  it('rejects an api fallback from a CLI primary but keeps it retryable (transient)', async () => {
     const primary = { id: 'p1', type: 'cli' };
     const apiFallback = { id: 'lmstudio', type: 'api', models: ['m'] };
     getActiveProvider.mockResolvedValue(primary);
@@ -181,9 +181,26 @@ describe('resolveAgentProviderAndModel', () => {
     expect(r.ok).toBe(false);
     expect(r.providerId).toBe('lmstudio');
     expect(r.error).toContain('no file-writing harness');
-    // NOT permanent: the primary CLI provider was only momentarily unavailable
-    // and may recover, so the task must stay retryable rather than be blocked.
+    // NOT permanent: the directly-resolved primary was a CLI provider that was only
+    // momentarily unavailable and may recover, so the task must stay retryable.
     expect(r.permanent).toBe(false);
+  });
+
+  it('marks an api fallback from an api primary PERMANENT (no CLI path can ever resolve)', async () => {
+    const apiPrimary = { id: 'ollama', type: 'api', models: ['q'] };
+    const apiFallback = { id: 'lmstudio', type: 'api', models: ['m'] };
+    getActiveProvider.mockResolvedValue(apiPrimary);
+    isProviderAvailable.mockReturnValue(false);
+    getProviderStatus.mockReturnValue({ message: 'down', reason: 'x' });
+    getAllProviders.mockResolvedValue({ providers: [apiPrimary, apiFallback] });
+    getFallbackProvider.mockResolvedValue({ provider: apiFallback, model: 'm', source: 'provider' });
+
+    const r = await resolveAgentProviderAndModel(TASK);
+    expect(r.ok).toBe(false);
+    expect(r.providerId).toBe('lmstudio');
+    // Both primary and fallback are api — no harness is reachable no matter how
+    // often it retries, so it must be retired, not left pending forever.
+    expect(r.permanent).toBe(true);
   });
 
   it('falls back to the provider tier default when the selected model is not in the provider model list', async () => {
