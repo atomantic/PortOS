@@ -293,15 +293,21 @@ export async function spawnAgentForTask(task) {
     // spawn-local guard/lane/execution state lives.
     const resolution = await resolveAgentProviderAndModel(task);
     if (!resolution.ok) {
-      await cleanupOnError(resolution.error);
       // A PERMANENT provider-config failure (e.g. an `api`-only provider pinned
       // to an agent task, which has no file-writing harness) fails identically on
       // every re-dispatch. Leaving the task pending makes it silently re-fail
       // forever AND wedge its app's single improvement slot. Block it with an
       // actionable reason so it stops re-dispatching and surfaces in the UI.
-      // updateTask strips the federation claim on any non-`in_progress` status
-      // change, so the block also frees the lease. Transient (non-permanent)
-      // failures fall through and stay pending to retry.
+      //
+      // Do this BEFORE cleanupOnError releases the federation lease, and while we
+      // still hold it: the block write itself frees the lease (updateTask strips
+      // the claim on any non-`in_progress` status change), so the terminal
+      // transition + lease release are one atomic write. Blocking AFTER the
+      // release would open a window where a federated peer could claim + start the
+      // task (e.g. with a working CLI provider) and then have its live
+      // `in_progress` record clobbered to `blocked` — which outranks `in_progress`
+      // in the claim-aware merge. Transient failures fall through, skip the block,
+      // and stay pending to retry.
       if (resolution.permanent) {
         await updateTask(task.id, {
           status: 'blocked',
@@ -313,6 +319,7 @@ export async function spawnAgentForTask(task) {
           }
         }, task.taskType || 'user').catch(() => {});
       }
+      await cleanupOnError(resolution.error);
       cosEvents.emit('agent:error', {
         taskId: task.id,
         error: resolution.error,
