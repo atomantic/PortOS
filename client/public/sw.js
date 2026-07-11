@@ -206,7 +206,6 @@ self.addEventListener('fetch', (event) => {
 // --- strategies ---------------------------------------------------------
 
 async function navigationHandler(event, onCachingSettled) {
-  const shell = await caches.open(SHELL_CACHE);
   try {
     // Prefer the browser's navigation-preload response when available.
     const preload = await event.preloadResponse;
@@ -214,10 +213,13 @@ async function navigationHandler(event, onCachingSettled) {
     if (response && response.ok) {
       // Update the offline shell + boot assets in the BACKGROUND (kept alive by
       // the lifetime promise armed in the fetch listener) so the navigation
-      // response isn't delayed. Only REPLACE the known-good shell once this
-      // build's boot assets are all cached — so a half-downloaded deploy (new
-      // HTML fetched, its hashed assets not yet downloaded, e.g. a flaky link
-      // mid-rollout) can't strand the offline fallback on a shell whose assets
+      // response isn't delayed. Cache access lives INSIDE the background task,
+      // not on the online path — a Cache Storage failure (storage disabled /
+      // partitioned in some privacy modes) must not fail an otherwise-fine
+      // online navigation; it just skips caching. Only REPLACE the known-good
+      // shell once this build's boot assets are all cached — so a half-
+      // downloaded deploy (new HTML fetched, its hashed assets not yet
+      // downloaded) can't strand the offline fallback on a shell whose assets
       // are unavailable. trimCache re-derives the pinned set from whichever
       // shell is committed, so old assets stay pinned until the new shell
       // actually takes over.
@@ -225,6 +227,7 @@ async function navigationHandler(event, onCachingSettled) {
       (async () => {
         const { cachedAll } = await precacheBootAssets(await toCache.clone().text());
         if (cachedAll) {
+          const shell = await caches.open(SHELL_CACHE);
           await shell.put(SHELL_KEY, toCache);
           // Trim here too: on a new-build navigation, precacheBootAssets adds
           // the boot assets directly (bypassing cacheFirst's trim), so the cap
@@ -240,10 +243,13 @@ async function navigationHandler(event, onCachingSettled) {
     return response;
   } catch {
     onCachingSettled();
-    const cached = await shell.match(SHELL_KEY);
+    // Offline (or the network fetch failed): serve the cached shell. Guard the
+    // cache access so a Cache Storage failure degrades to a plain network error
+    // rather than throwing out of the handler.
+    const cached = await caches.open(SHELL_CACHE).then((c) => c.match(SHELL_KEY)).catch(() => null);
     if (cached) return cached;
     // Last resort: whatever we have for this exact navigation URL.
-    const exact = await caches.match(event.request);
+    const exact = await caches.match(event.request).catch(() => null);
     if (exact) return exact;
     return Response.error();
   }
@@ -255,7 +261,11 @@ async function navigationHandler(event, onCachingSettled) {
 // cached — which the caller uses to gate replacing a known-good offline shell.
 async function precacheBootAssets(html) {
   const urls = parseBootAssetPaths(html);
-  if (!urls.length) return { urls, cachedAll: true };
+  // Parsing NO boot assets from a real shell means we can't verify it's
+  // bootable offline (e.g. a future non-root Vite `base` the `/assets/` matcher
+  // wouldn't recognize) — fail the gate rather than commit a shell we can't
+  // confirm. A real Vite build always references at least the entry chunk.
+  if (!urls.length) return { urls, cachedAll: false };
   const cache = await caches.open(ASSET_CACHE);
   const results = await Promise.all(urls.map(async (url) => {
     if (await cache.match(url)) return true;
