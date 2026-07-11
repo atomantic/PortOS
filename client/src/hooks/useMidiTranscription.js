@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import { useSseProgress, isTerminalSseFrame } from './useSseProgress.js';
 
@@ -24,6 +24,17 @@ export default function useMidiTranscription({ startRequest, eventsUrl, cancelRe
   // resolving, when `job` is still null — without it a fast double-click could
   // fire a second request whose response silently orphans the first job.
   const [pending, setPending] = useState(false);
+  // First-use runtime install (MuScriptor). When the kickoff returns a 503
+  // MIDI_RUNTIME_MISSING, we open an in-app installer modal instead of dead-
+  // ending on a "run this shell command" toast (mirrors the image/video model
+  // runtime installers), then re-run the transcription once the install
+  // completes. `installContext` doubles as the open flag AND the captured
+  // target: non-null means the installer is open for that target, null closed.
+  const [installContext, setInstallContext] = useState(null);
+  // Guard against a reopen loop: if a transcription 503s again right after an
+  // install reported success, fall back to the hint toast instead of looping
+  // the modal open.
+  const installAttemptedRef = useRef(false);
   const sse = useSseProgress(job ? eventsUrl(job.jobId) : null);
   const latest = sse.latest;
   const stage = latest?.stage ?? null;
@@ -51,13 +62,36 @@ export default function useMidiTranscription({ startRequest, eventsUrl, cancelRe
     }
   }, [sse.closed]);
 
-  const start = (context) => {
+  // The actual kickoff, shared by the user click (`start`) and the post-install
+  // retry (`installGate.onComplete`). Kept free of the install-open gate so the
+  // retry — fired synchronously right after clearing installContext, before the
+  // re-render commits it — isn't swallowed by a stale closure value.
+  const kickoff = (context) => {
     if (job || pending) return;
     setPending(true);
     startRequest(context)
-      .then(({ jobId }) => setJob({ jobId, context }))
-      .catch((err) => toast.error(err?.message || 'Failed to start MIDI transcription'))
+      .then(({ jobId }) => {
+        installAttemptedRef.current = false; // runtime is present — reset the loop guard
+        setJob({ jobId, context });
+      })
+      .catch((err) => {
+        // The runtime isn't provisioned yet: install it in-app on first use,
+        // then re-run the transcription for the same target. Only auto-open
+        // once — a second miss after a "successful" install is a real fault, so
+        // surface the message instead of relooping the installer.
+        if (err?.code === 'MIDI_RUNTIME_MISSING' && !installAttemptedRef.current) {
+          installAttemptedRef.current = true;
+          setInstallContext(context);
+          return;
+        }
+        toast.error(err?.message || 'Failed to start MIDI transcription');
+      })
       .finally(() => setPending(false));
+  };
+
+  const start = (context) => {
+    if (job || pending || installContext !== null) return;
+    kickoff(context);
   };
 
   const cancel = () => {
@@ -65,8 +99,25 @@ export default function useMidiTranscription({ startRequest, eventsUrl, cancelRe
     cancelRequest(job.jobId, { silent: true }).catch(() => {});
   };
 
+  // Installer modal wiring — spread onto <MidiInstallModal>. Completing the
+  // install re-fires the captured transcription; closing it (user cancel)
+  // clears the pending target and resets the loop guard so a later click can
+  // retry the install cleanly.
+  const installGate = {
+    open: installContext !== null,
+    onComplete: () => {
+      const ctx = installContext;
+      setInstallContext(null);
+      if (ctx !== null) kickoff(ctx);
+    },
+    onClose: () => {
+      setInstallContext(null);
+      installAttemptedRef.current = false;
+    },
+  };
+
   // `context` exposes the in-flight job's captured target so a caller can
   // gate per-target UI ("is the active job for THIS record?") without
   // mirroring the value in its own state.
-  return { active: pending || !!job, stage, context: job?.context ?? null, start, cancel };
+  return { active: pending || !!job || installContext !== null, stage, context: job?.context ?? null, start, cancel, installGate };
 }

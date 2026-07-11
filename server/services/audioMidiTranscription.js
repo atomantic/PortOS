@@ -31,7 +31,7 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '
 import { killWithEscalation } from '../lib/killWithEscalation.js';
 import { safeChildProcessEnv } from '../lib/processEnv.js';
 import { hfTokenEnv } from '../lib/hfToken.js';
-import { resolveMuscriptorPython, MUSCRIPTOR_VENV_DEFAULT } from '../lib/pythonSetup.js';
+import { resolveMuscriptorPython, isMuscriptorRuntimeReady, MUSCRIPTOR_VENV_DEFAULT } from '../lib/pythonSetup.js';
 import { runSidecarProcess, parseSidecarResult } from '../lib/sidecarProcess.js';
 import { ServerError } from '../lib/errorHandler.js';
 
@@ -109,10 +109,13 @@ export function cancelMidiTranscription(jobId) {
  * audio (the peer-sync asset manifest only ships known directories).
  */
 export async function startMidiTranscription({ audioPath, outputName = 'transcription', model, onComplete, destDir = PATHS.uploads }) {
-  const pythonPath = resolveMuscriptorPython();
-  if (!pythonPath) {
+  // Gate on the actual import, not just the binary — a partial venv (binary
+  // present, `muscriptor` not importable) must still 503 so the in-app
+  // installer re-opens to repair it instead of failing later in the sidecar.
+  if (!(await isMuscriptorRuntimeReady())) {
     throw new ServerError(MUSCRIPTOR_INSTALL_HINT, { status: 503, code: 'MIDI_RUNTIME_MISSING' });
   }
+  const pythonPath = resolveMuscriptorPython();
   if (!existsSync(audioPath)) {
     throw new ServerError('Audio file not found', { status: 404, code: 'NOT_FOUND' });
   }

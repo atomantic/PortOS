@@ -332,8 +332,32 @@ export function resolveMuscriptorPython() {
   return null;
 }
 
+// A killed-mid-install run (e.g. the user cancels the in-app installer during
+// pip) leaves the venv's python binary but no `muscriptor` package.
+// resolveMuscriptorPython() only existsSync's the binary, so it would report
+// that broken state as ready — the transcription then fails deep in the sidecar
+// and, because the binary IS present, no 503 fires to re-open the installer.
+// Probe the actual import the sidecar needs (mirrors isByovRuntimeReady / the
+// Flux2 health check) so a partial venv is treated as not-ready: the 503 gate
+// re-opens the installer and the install short-circuit runs the repair instead
+// of claiming "already installed". Only the positive result is cached (the
+// probe spawns a process); a not-ready venv re-probes each call so an
+// out-of-band repair reflects without a restart. Bust via invalidateMuscriptorPython().
+let cachedMuscriptorReady = false;
+export async function isMuscriptorRuntimeReady() {
+  if (cachedMuscriptorReady) return true;
+  const py = resolveMuscriptorPython();
+  if (!py) return false;
+  const ok = await execFileAsync(py, ['-c', 'from muscriptor import TranscriptionModel'], { env: safeChildProcessEnv(), timeout: 30_000 })
+    .then(() => true)
+    .catch(() => false);
+  cachedMuscriptorReady = ok;
+  return ok;
+}
+
 export function invalidateMuscriptorPython() {
   cachedMuscriptorPython = null;
+  cachedMuscriptorReady = false;
 }
 
 // Used by /api/image-gen/setup/* routes to validate user-supplied pythonPath

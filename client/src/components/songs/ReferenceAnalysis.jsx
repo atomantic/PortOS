@@ -36,6 +36,7 @@ import {
 } from '../../services/apiRounds.js';
 import useReferenceAudioImport from '../../hooks/useReferenceAudioImport.js';
 import useMidiTranscription from '../../hooks/useMidiTranscription.js';
+import MidiInstallModal from '../install/MidiInstallModal.jsx';
 import { startMemoRecording, arrayBufferToBase64 } from '../../lib/audioRecorder';
 import { proposeSegmentScore, proposeStackedSegmentScore, diffScoreBars, PITCH_CLASS_NAMES } from '../../lib/referenceAnalysis';
 import { scoreHasMusic, parseScore } from '../../lib/scoreNotation';
@@ -179,6 +180,7 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
   if (reference.audioFilename) {
     return (
       <div className="flex flex-wrap items-center gap-2">
+        <MidiInstallModal {...midiJob.installGate} />
         <span className="flex items-center gap-1.5 text-xs text-port-success">
           <AudioLines size={14} /> Audio attached
         </span>
@@ -213,7 +215,7 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
           <button
             type="button"
             onClick={() => midiJob.start(reference.audioFilename)}
-            title="Transcribe this audio to MIDI with MuScriptor (local, needs INSTALL_MUSCRIPTOR=1)"
+            title="Transcribe this audio to MIDI with MuScriptor (local — installs automatically on first use)"
             className="flex items-center gap-1 px-2 py-1 text-xs rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50"
           >
             <Music size={13} /> Transcribe MIDI
