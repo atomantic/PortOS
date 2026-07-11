@@ -24,6 +24,8 @@
 
 ## AI Providers
 
+- **Creative Director Scene evaluation pickers now list only vision-capable models on local Ollama / LM Studio.** When you pin the scene-evaluation stage (global AI Assignment or a project's Models drawer) to a local backend, text-only models drop out of the model dropdown and a text-only provider default is replaced by the first installed VLM — so you can't accidentally assign a chat model to a vision job. Cloud/API providers keep their full model lists (multimodal ids like `gpt-4o` don't encode "vision" in the name).
+
 - **Creative Director LLM stages are now independently configurable.** AI Assignments has separate provider/model rows for treatment generation, production planning, and scene evaluation. Point **Scene evaluation vision model** at a local Ollama or LM Studio vision model to judge rendered scenes without using the system-default agent; treatment and planning can likewise be pinned to any agent-capable CLI/TUI provider.
 
 - **Creative Director provider/model can now be overridden per project.** Each Creative Director project has a **Models** button (header of the project page, deep-linkable via `?models=1`) that opens a drawer to pin the treatment, production-plan, and scene-evaluation stages to a specific provider + model *for that project* — overriding the global AI Assignment. A stage left on **Inherit global** falls back to the global assignment (and then the system default), so the override is purely additive. The pin travels with the project record and federates to sync peers verbatim.

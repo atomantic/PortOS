@@ -48,6 +48,10 @@ const makeEntry = ({
   providerTypes = textProviderTypes,
   providerOptions = null,
   modelOptions = null,
+  // Optional client-side model-list filter key. `'vision'` tells the AI
+  // Assignments / Creative Director pickers to restrict LOCAL backends
+  // (Ollama / LM Studio) to vision-capable models only.
+  modelFilter = null,
   link = null,
   notes = '',
 }) => ({
@@ -64,6 +68,7 @@ const makeEntry = ({
   providerTypes,
   providerOptions,
   modelOptions,
+  modelFilter,
   link,
   notes,
 });
@@ -189,6 +194,9 @@ const addSettingsEntries = async (entries) => {
     providerId: settings.creativeDirector?.evaluation?.providerId || null,
     model: settings.creativeDirector?.evaluation?.model || null,
     providerTypes: apiProviderTypes,
+    // Scene evaluation is a vision call — restrict local Ollama/LM Studio
+    // model pickers to VLMs so a text-only default can't be selected by mistake.
+    modelFilter: 'vision',
     notes: 'Vision model that judges each rendered scene. Use a local Ollama or LM Studio VLM here. Blank = auto-pick an installed local vision model; if none is available it falls back to the coding agent. Each Creative Director project can override this from its Models drawer.',
     link: '/creative-director',
   }));

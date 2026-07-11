@@ -113,6 +113,9 @@ describe('getAiAssignments', () => {
     expect(ids).toContain('settings.creativeDirector.plan');
     expect(ids).toContain('settings.creativeDirector.evaluation');
     expect(ids).toContain('cos.task.morning-brief');
+    // Scene evaluation is a vision call — clients filter local model lists to VLMs.
+    const evaluation = result.assignments.find((a) => a.id === 'settings.creativeDirector.evaluation');
+    expect(evaluation.modelFilter).toBe('vision');
   });
 });
 
