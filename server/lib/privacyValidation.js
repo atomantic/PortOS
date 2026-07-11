@@ -251,7 +251,9 @@ export const privacyCaseIdParamsSchema = z.object({
 // stay reachable ONLY from a verifying re-scan inside the engine. The service's
 // assertTransition still enforces the full state machine on top of this.
 export const PRIVACY_MANUAL_CASE_TARGETS = Object.freeze([
-  'submitted', 'not_found', 'human_task_queued', 'optout_in_progress', 'blocked',
+  // `found` backs the blocked-case "I'm listed" manual verdict (the user
+  // checked the broker in their own browser past the bot wall).
+  'submitted', 'not_found', 'found', 'human_task_queued', 'optout_in_progress', 'blocked',
 ]);
 export const privacyCaseTransitionSchema = z.object({
   toState: z.enum(PRIVACY_MANUAL_CASE_TARGETS),

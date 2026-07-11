@@ -137,13 +137,6 @@ function containsAntibot(html) {
   return ANTIBOT_MARKERS.some((m) => h.includes(m));
 }
 
-// The one definition of "this response is a bot wall" — shared by the blocked
-// verdict in classifyScanResult and the escalation gate in probeBroker so the
-// two can't drift.
-function isWall(status, html) {
-  return status === 403 || containsAntibot(html);
-}
-
 function looksLikeJsShell(html) {
   if (!html || html.length < JS_SHELL_MAX_LEN) return true;
   const h = html.toLowerCase();
@@ -163,7 +156,7 @@ function looksLikeJsShell(html) {
  */
 export function classifyScanResult({ status, html = '', vectors = {}, broker = {} }) {
   if (status === 404) return { verdict: null, inconclusive: true, evidence: { match_basis: 'http_404' } };
-  if (isWall(status, html)) {
+  if (status === 403 || containsAntibot(html)) {
     return { verdict: 'blocked', evidence: { match_basis: 'antibot_wall', http_status: status } };
   }
   if (status && status >= 500) return { verdict: null, inconclusive: true, evidence: { match_basis: `http_${status}` } };
@@ -249,7 +242,11 @@ export async function probeBroker(broker, vectors, {
   // challenge in the browsed page still classifies as `blocked` below (never
   // solved). On a wall, only adopt substantive browsed content: a shell-length
   // browsed page would otherwise flip a real wall into a false `not_found`.
-  const walled = result && isWall(status, html);
+  // 404/5xx stay out of the wall gate even when the error page carries an
+  // incidental antibot token — those statuses are inconclusive by contract
+  // (classifyScanResult), and escalating them could adopt a substantive error
+  // page as a definitive not_found.
+  const walled = result && (status === 403 || (status < 400 && containsAntibot(html)));
   const jsShell = result && !walled && status >= 200 && status < 400 && looksLikeJsShell(html);
   if (walled || jsShell) {
     const browsed = await browserFetch(url).catch(() => null);
