@@ -191,8 +191,16 @@ export const appSchema = z.object({
   disabledTaskTypes: z.array(z.string()).optional(), // Legacy: migrated to taskTypeOverrides
   taskTypeOverrides: z.record(z.object({
     enabled: z.boolean().optional(),
-    interval: z.string().nullable().optional()
-  })).optional(), // Per-task overrides: { [taskType]: { enabled, interval } }
+    interval: z.string().nullable().optional(),
+    // Per-app scheduling fields for handler-backed tasks (e.g. layered-intelligence);
+    // persisted by updateAppTaskTypeOverride. Nullable = "clear back to inherit/default".
+    // Declared here so a generic PUT /api/apps/:id can't silently strip them (Zod drops
+    // unknown keys and updateApp replaces taskTypeOverrides wholesale).
+    intervalMs: z.number().positive().nullable().optional(),
+    providerId: z.string().nullable().optional(),
+    model: z.string().nullable().optional(),
+    taskMetadata: z.record(z.any()).nullable().optional()
+  })).optional(), // Per-task overrides: { [taskType]: { enabled, interval, intervalMs, providerId, model, taskMetadata } }
   defaultUseWorktree: z.boolean().optional(),
   defaultOpenPR: z.boolean().optional(),
   jira: jiraConfigSchema.optional().nullable(),

@@ -324,6 +324,39 @@ describe('validation.js', () => {
       expect(result.data).not.toHaveProperty('defaultUseWorktree');
       expect(result.data).not.toHaveProperty('defaultOpenPR');
     });
+
+    it('preserves per-app taskTypeOverrides scheduling fields (intervalMs/providerId/model/taskMetadata)', () => {
+      // These are persisted by updateAppTaskTypeOverride for handler-backed tasks
+      // (layered-intelligence). Zod strips unknown keys, so a generic PUT would
+      // silently drop them if the schema didn't declare them.
+      const update = {
+        taskTypeOverrides: {
+          'layered-intelligence': {
+            enabled: true,
+            interval: '6h',
+            intervalMs: 21600000,
+            providerId: 'ollama',
+            model: 'qwen2.5-coder:32b',
+            taskMetadata: { discardWorktree: true }
+          }
+        }
+      };
+      const result = appUpdateSchema.safeParse(update);
+      expect(result.success).toBe(true);
+      expect(result.data.taskTypeOverrides['layered-intelligence']).toEqual(
+        update.taskTypeOverrides['layered-intelligence']
+      );
+    });
+
+    it('accepts null taskTypeOverrides scheduling fields (clear-to-inherit)', () => {
+      const update = {
+        taskTypeOverrides: {
+          'layered-intelligence': { intervalMs: null, providerId: null, model: null }
+        }
+      };
+      const result = appUpdateSchema.safeParse(update);
+      expect(result.success).toBe(true);
+    });
   });
 
   describe('providerSchema', () => {
