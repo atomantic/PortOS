@@ -349,8 +349,9 @@ async function insertActivityChunk(rows) {
 
 // Query events with optional filters. `from`/`to` are ISO timestamps (inclusive
 // lower, exclusive upper); `personId` matches a participant via the JSONB
-// containment operator. Newest first, capped by `limit` (default 500, max 2000).
-export async function listEvents({ from, to, source, kind, personId, limit } = {}) {
+// containment operator. `chatGuid` / `handle` match iMessage-style metadata
+// pointers. Newest first, capped by `limit` (default 500, max 2000).
+export async function listEvents({ from, to, source, kind, personId, chatGuid, handle, limit } = {}) {
   await ensureReady();
   const clauses = [];
   const params = [];
@@ -361,6 +362,14 @@ export async function listEvents({ from, to, source, kind, personId, limit } = {
   if (personId) {
     params.push(JSON.stringify([{ personId: String(personId) }]));
     clauses.push(`participants @> $${params.length}::jsonb`);
+  }
+  if (chatGuid != null && String(chatGuid).length > 0) {
+    params.push(String(chatGuid));
+    clauses.push(`metadata->>'chatGuid' = $${params.length}`);
+  }
+  if (handle != null && String(handle).length > 0) {
+    params.push(String(handle));
+    clauses.push(`metadata->>'handle' = $${params.length}`);
   }
   const cap = Math.min(Math.max(Number(limit) || 500, 1), 2000);
   params.push(cap);
@@ -373,6 +382,131 @@ export async function listEvents({ from, to, source, kind, personId, limit } = {
     params,
   );
   return result.rows.map(rowToEvent);
+}
+
+/**
+ * Delete activity events by explicit id list and/or filters. Returns `{ deleted }`.
+ *
+ * Safety: refuses unbounded wipes. Accepts either:
+ *   - `ids` (optionally scoped with `source`), or
+ *   - `source` + (`chatGuid` and/or `handle`)
+ *
+ * Used by PortOS-side managers (iMessage #2413, later Signal/etc.) — never
+ * mutates the external source (chat.db, Gmail, …).
+ */
+export async function deleteEvents({ ids, source, chatGuid, handle } = {}) {
+  await ensureReady();
+  const hasIds = Array.isArray(ids) && ids.length > 0;
+  const hasChat = chatGuid != null && String(chatGuid).length > 0;
+  const hasHandle = handle != null && String(handle).length > 0;
+  if (!hasIds && !(source && (hasChat || hasHandle))) return { deleted: 0 };
+
+  const clauses = [];
+  const params = [];
+  if (hasIds) {
+    params.push(ids.map(String));
+    clauses.push(`id = ANY($${params.length}::text[])`);
+  }
+  if (source) {
+    params.push(String(source));
+    clauses.push(`source = $${params.length}`);
+  }
+  if (hasChat) {
+    params.push(String(chatGuid));
+    clauses.push(`metadata->>'chatGuid' = $${params.length}`);
+  }
+  if (hasHandle) {
+    params.push(String(handle));
+    clauses.push(`metadata->>'handle' = $${params.length}`);
+  }
+
+  const result = await query(
+    `DELETE FROM human_activity_events WHERE ${clauses.join(' AND ')}`,
+    params,
+  );
+  const deleted = result.rowCount || 0;
+  if (deleted > 0) {
+    console.log(`🗓️  Deleted ${deleted} activity event(s)${source ? ` (source=${source})` : ''}`);
+  }
+  return { deleted };
+}
+
+/**
+ * Aggregate conversations for a single source (iMessage, Signal, …) grouped by
+ * `metadata.chatGuid`. Newest activity first. Optional free-text `q` filters
+ * title/handle/summary. Cap defaults to 500 conversations.
+ */
+export async function listConversations({ source, q, limit } = {}) {
+  if (!source) return [];
+  await ensureReady();
+  const params = [String(source)];
+  const clauses = [`source = $1`];
+  if (q != null && String(q).trim()) {
+    params.push(`%${String(q).trim().toLowerCase()}%`);
+    clauses.push(`(
+      LOWER(COALESCE(title, '')) LIKE $${params.length}
+      OR LOWER(COALESCE(summary, '')) LIKE $${params.length}
+      OR LOWER(COALESCE(metadata->>'handle', '')) LIKE $${params.length}
+      OR LOWER(COALESCE(metadata->>'chatGuid', '')) LIKE $${params.length}
+    )`);
+  }
+  const cap = Math.min(Math.max(Number(limit) || 500, 1), 2000);
+  params.push(cap);
+  const result = await query(
+    `SELECT
+       COALESCE(metadata->>'chatGuid', '') AS chat_guid,
+       MAX(title) AS title,
+       MAX(NULLIF(metadata->>'handle', '')) AS handle,
+       COUNT(*)::int AS event_count,
+       MIN(happened_at) AS first_at,
+       MAX(happened_at) AS last_at,
+       (array_agg(summary ORDER BY happened_at DESC)
+          FILTER (WHERE summary IS NOT NULL AND summary <> ''))[1] AS last_summary
+     FROM human_activity_events
+     WHERE ${clauses.join(' AND ')}
+     GROUP BY COALESCE(metadata->>'chatGuid', '')
+     ORDER BY MAX(happened_at) DESC
+     LIMIT $${params.length}`,
+    params,
+  );
+  return result.rows.map((row) => ({
+    chatGuid: row.chat_guid || '',
+    title: row.title || row.handle || row.chat_guid || '(unknown)',
+    handle: row.handle || null,
+    eventCount: Number(row.event_count) || 0,
+    firstAt: row.first_at instanceof Date ? row.first_at.toISOString() : row.first_at,
+    lastAt: row.last_at instanceof Date ? row.last_at.toISOString() : row.last_at,
+    lastSummary: row.last_summary || '',
+  }));
+}
+
+/**
+ * Source-level stats for a manager UI: total events, conversation count, date
+ * range. Cheap aggregates over the machine-local activity store.
+ */
+export async function sourceStats(source) {
+  if (!source) {
+    return { source: null, eventCount: 0, conversationCount: 0, earliestAt: null, latestAt: null };
+  }
+  await ensureReady();
+  const result = await query(
+    `SELECT
+       COUNT(*)::int AS event_count,
+       COUNT(DISTINCT COALESCE(metadata->>'chatGuid', ''))::int AS conversation_count,
+       MIN(happened_at) AS earliest_at,
+       MAX(happened_at) AS latest_at
+     FROM human_activity_events
+     WHERE source = $1`,
+    [String(source)],
+  );
+  const row = result.rows[0] || {};
+  return {
+    source: String(source),
+    eventCount: Number(row.event_count) || 0,
+    conversationCount: Number(row.conversation_count) || 0,
+    earliestAt: row.earliest_at instanceof Date ? row.earliest_at.toISOString() : (row.earliest_at || null),
+    latestAt: row.latest_at instanceof Date ? row.latest_at.toISOString() : (row.latest_at || null),
+  };
 }
 
 // Day view: all events on a local calendar day plus an hourly histogram and

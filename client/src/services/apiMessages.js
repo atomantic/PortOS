@@ -51,6 +51,38 @@ export const getImessageStatus = (options = {}) => request('/imessage/status', o
 export const checkImessageSetup = (options = {}) => request('/imessage/setup-check', options);
 export const syncImessage = (options = {}) => request('/imessage/sync', { method: 'POST', ...options });
 
+// iMessage manager (#2413) — PortOS-side browse / purge / blocklist (never writes chat.db).
+export const getImessageStats = (options = {}) => request('/imessage/stats', options);
+export const getImessageConversations = ({ q, limit, silent } = {}) => {
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (limit) params.set('limit', String(limit));
+  const qs = params.toString();
+  return request(`/imessage/conversations${qs ? `?${qs}` : ''}`, { silent });
+};
+export const getImessageConversationEvents = (chatKey, { limit, before, silent } = {}) => {
+  const params = new URLSearchParams();
+  if (limit) params.set('limit', String(limit));
+  if (before) params.set('before', before);
+  const qs = params.toString();
+  return request(`/imessage/conversations/${encodeURIComponent(chatKey)}/events${qs ? `?${qs}` : ''}`, { silent });
+};
+export const purgeImessageConversation = (chatKey, options = {}) =>
+  request(`/imessage/conversations/${encodeURIComponent(chatKey)}`, { method: 'DELETE', ...options });
+export const deleteImessageEvent = (id, options = {}) =>
+  request(`/imessage/events/${encodeURIComponent(id)}`, { method: 'DELETE', ...options });
+export const getImessageBlocklist = (options = {}) => request('/imessage/blocklist', options);
+export const setImessageBlocklist = (handles, options = {}) =>
+  request('/imessage/blocklist', { method: 'PUT', body: JSON.stringify({ handles }), ...options });
+export const addImessageBlocklist = (handles, { purgeExisting = false, ...options } = {}) =>
+  request('/imessage/blocklist', {
+    method: 'POST',
+    body: JSON.stringify({ handles, purgeExisting }),
+    ...options,
+  });
+export const removeImessageBlocklist = (handle, options = {}) =>
+  request(`/imessage/blocklist/${encodeURIComponent(handle)}`, { method: 'DELETE', ...options });
+
 // Feeds - RSS/Atom Feed Ingestion
 export const getFeeds = () => request('/feeds');
 export const getFeedStats = (options = {}) => request('/feeds/stats', options);
