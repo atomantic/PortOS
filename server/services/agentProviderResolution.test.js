@@ -181,7 +181,9 @@ describe('resolveAgentProviderAndModel', () => {
     expect(r.ok).toBe(false);
     expect(r.providerId).toBe('lmstudio');
     expect(r.error).toContain('no file-writing harness');
-    expect(r.permanent).toBe(true);
+    // NOT permanent: the primary CLI provider was only momentarily unavailable
+    // and may recover, so the task must stay retryable rather than be blocked.
+    expect(r.permanent).toBe(false);
   });
 
   it('falls back to the provider tier default when the selected model is not in the provider model list', async () => {

@@ -298,16 +298,15 @@ export async function spawnAgentForTask(task) {
       // to an agent task, which has no file-writing harness) fails identically on
       // every re-dispatch. Leaving the task pending makes it silently re-fail
       // forever AND wedge its app's single improvement slot. Block it with an
-      // actionable reason so it stops re-dispatching and surfaces in the UI —
-      // `...buildRelease()` keeps the federation claim cleared (cleanupOnError
-      // released it in persistence; the in-memory metadata spread would otherwise
-      // re-introduce it). Transient failures stay non-permanent and still retry.
+      // actionable reason so it stops re-dispatching and surfaces in the UI.
+      // updateTask strips the federation claim on any non-`in_progress` status
+      // change, so the block also frees the lease. Transient (non-permanent)
+      // failures fall through and stay pending to retry.
       if (resolution.permanent) {
         await updateTask(task.id, {
           status: 'blocked',
           metadata: {
             ...task.metadata,
-            ...buildRelease(),
             blockedReason: resolution.error,
             blockedCategory: 'provider-config',
             blockedAt: new Date().toISOString()

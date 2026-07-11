@@ -56,6 +56,12 @@ export async function resolveAgentProviderAndModel(task) {
   // Model" pin — it overrides the usual per-task model selection so the
   // user's chosen fallback provider+model pair is honored on agent runs.
   let fallbackModelPin = null;
+  // Whether `provider` below is a FALLBACK selection (the directly-resolved
+  // pinned/active provider was unavailable) rather than the provider the task
+  // actually asked for. It gates the "permanent" flag on the api-type rejection:
+  // a fallback-selected api provider is a TRANSIENT condition (the primary CLI
+  // provider may recover), so the task must stay retryable, not be blocked.
+  let usedFallback = false;
   const providerAvailable = isProviderAvailable(provider.id);
   if (!providerAvailable) {
     const status = getProviderStatus(provider.id);
@@ -83,6 +89,7 @@ export async function resolveAgentProviderAndModel(task) {
       });
       provider = fallbackResult.provider;
       fallbackModelPin = fallbackResult.model || null;
+      usedFallback = true;
     } else {
       const errorMsg = `Provider ${provider.id} unavailable (${status.message}) and no fallback available`;
       return { ok: false, error: errorMsg, providerId: provider.id, providerStatus: status };
@@ -100,10 +107,14 @@ export async function resolveAgentProviderAndModel(task) {
   if (provider.type === 'api') {
     return {
       ok: false,
-      // PERMANENT config error: this resolves the same way on every re-dispatch
-      // (an api provider is never gaining a harness), so the caller must retire
-      // the task rather than leave it pending to silently re-fail forever.
-      permanent: true,
+      // PERMANENT config error ONLY when this api provider was the directly-
+      // resolved (pinned or active) one — it resolves identically on every
+      // re-dispatch (an api provider never gains a harness), so the caller must
+      // retire the task rather than leave it silently re-failing forever. A
+      // fallback-selected api provider is instead TRANSIENT: the primary CLI
+      // provider that was momentarily unavailable may recover, so the task must
+      // stay retryable rather than be blocked (a blocked task is never retried).
+      permanent: !usedFallback,
       error: `Provider "${provider.id}" is an HTTP API provider with no file-writing harness — CoS agent tasks need a CLI/TUI coding provider (claude, codex, or the "Claude Ollama" Claude-on-Ollama sample).`,
       providerId: provider.id
     };
