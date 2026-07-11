@@ -1524,12 +1524,26 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
   const parkInfo = await taskScheduleMod.getPerpetualParkInfo(request.taskType, appId).catch(() => null);
   const isPerpetual = taskConfig?.type === taskScheduleMod.INTERVAL_TYPES.PERPETUAL;
   const outcome = parkInfo ? 'parked' : (isPerpetual ? 'transient' : 'idle');
+
+  // Layered Intelligence skips (e.g. a provider that can't drive an agent) record
+  // an actionable last-run reason. Surface it so a manual "Run" toasts WHY it
+  // produced nothing (e.g. "pick a CLI/TUI provider") instead of a misleading
+  // generic "nothing to do". Read the freshest record — the skip's recordRun
+  // landed after `targetApp` was loaded. Best-effort; a read failure just omits it.
+  let reason = null;
+  if (outcome === 'idle' && appId && request.taskType === 'layered-intelligence') {
+    const { getAppById } = await import('./apps.js');
+    const app = await getAppById(appId).catch(() => null);
+    reason = app?.layeredIntelligence?.lastRunReason || null;
+  }
+
   cosEvents.emit('schedule:on-demand-empty', {
     requestId: request.id,
     taskType: request.taskType,
     appId,
     appName: targetApp?.name || null,
     outcome,
+    reason,
     parkReason: parkInfo?.parkReason || null,
     parkedUntil: parkInfo?.parkedUntil || null,
     actionableCount: parkInfo?.parkActionableCount ?? null,
