@@ -6,7 +6,8 @@ import {
   Clock,
   ChevronDown,
   ChevronRight,
-  History
+  History,
+  RefreshCw
 } from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import PersonaBadge from '../PersonaBadge';
@@ -93,11 +94,13 @@ export default function TwinEvaluationSuitePanel({
     items,
     history,
     loading,
+    loadError,
     running,
     results,
     expanded,
     setExpanded,
-    run
+    run,
+    reload
   } = useTwinEvaluationSuite({
     selectedProviders,
     personaId,
@@ -154,7 +157,19 @@ export default function TwinEvaluationSuitePanel({
         </button>
       </div>
 
-      {items.length === 0 ? (
+      {loadError ? (
+        <div className="p-6 flex flex-col items-center gap-3 text-center">
+          <AlertCircle className="w-6 h-6 text-port-error" />
+          <p className="text-sm text-port-error">{loadError}</p>
+          <button
+            onClick={reload}
+            className="flex items-center justify-center gap-2 px-4 py-2 min-h-[44px] bg-port-card border border-port-border text-white rounded-lg font-medium hover:bg-port-border/40"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Retry
+          </button>
+        </div>
+      ) : items.length === 0 ? (
         <div className="p-6 text-center text-sm text-gray-400">{emptyState}</div>
       ) : (
         <>

@@ -38,6 +38,10 @@ export function useTwinEvaluationSuite({
   const [items, setItems] = useState([]);
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
+  // Sentinel: `null` = the suite loaded (empty or not); a string = the load
+  // failed. This keeps a server/network failure distinct from a genuinely
+  // empty install so the two never collapse to the same "No suite" state.
+  const [loadError, setLoadError] = useState(null);
   const [running, setRunning] = useState(false);
   const [results, setResults] = useState([]);
   const [expanded, setExpanded] = useState(null);
@@ -48,12 +52,22 @@ export function useTwinEvaluationSuite({
 
   const loadData = async () => {
     setLoading(true);
-    // These loads own their fallback ([]) so silence the helper's default toast.
+    setLoadError(null);
+    // The suite load owns its error UI (inline load-error state + Retry below)
+    // so silence the helper's default toast — the sentinel `null` on failure is
+    // distinct from `[]`, which is a real, successfully-loaded empty suite.
+    // History is secondary: a failed history load degrades to no history rather
+    // than blocking the whole panel.
     const [itemData, historyData] = await Promise.all([
-      getTests({ silent: true }).catch(() => []),
+      getTests({ silent: true }).catch(() => null),
       getHistory(5, { silent: true }).catch(() => [])
     ]);
-    setItems(itemData);
+    if (itemData === null) {
+      setLoadError('Could not load the suite — check provider/server availability and retry.');
+      setItems([]);
+    } else {
+      setItems(itemData);
+    }
     setHistory(historyData);
     setLoading(false);
   };
@@ -108,5 +122,5 @@ export function useTwinEvaluationSuite({
     onRefresh?.();
   };
 
-  return { items, history, loading, running, results, expanded, setExpanded, run, reload: loadData };
+  return { items, history, loading, loadError, running, results, expanded, setExpanded, run, reload: loadData };
 }
