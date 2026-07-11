@@ -76,15 +76,21 @@ self.addEventListener('install', (event) => {
       // fallback would miss). Best-effort — a failure must not abort install.
       const response = await fetch(new Request('/', { cache: 'reload' })).catch(() => null);
       if (!response || !response.ok) return;
-      const shell = await caches.open(SHELL_CACHE);
-      await shell.put(SHELL_KEY, response.clone());
       // Precache this build's boot assets (entry chunk + modulepreload deps +
       // CSS parsed from the shell) so a FIRST-VISIT offline reload can boot: on
       // a fresh install the SW only starts controlling the page after
       // window.load, so the initial page's /assets/* were network-served and
-      // never entered ASSET_CACHE. trimCache derives the pinned set from the
-      // committed shell, so no in-memory bookkeeping is needed here.
-      await precacheBootAssets(await response.text());
+      // never entered ASSET_CACHE. Only commit the shell once they're all
+      // cached (same gate as navigationHandler) — a shell whose boot JS/CSS
+      // failed to download (rolling deploy / flaky link) would load but never
+      // start, so it's better to have no cached shell than a broken one.
+      // trimCache derives the pinned set from the committed shell, so no
+      // in-memory bookkeeping is needed here.
+      const { cachedAll } = await precacheBootAssets(await response.clone().text());
+      if (cachedAll) {
+        const shell = await caches.open(SHELL_CACHE);
+        await shell.put(SHELL_KEY, response);
+      }
     })()
   );
 });
@@ -154,7 +160,14 @@ self.addEventListener('fetch', (event) => {
 
   // SPA navigations: network-first, fall back to the cached shell offline.
   if (request.mode === 'navigate') {
-    event.respondWith(navigationHandler(event));
+    // Arm the SW-lifetime promise SYNCHRONOUSLY, here in the fetch dispatch —
+    // the only point event.waitUntil() is guaranteed valid. navigationHandler
+    // resolves `signalCachingDone` once its background shell/asset caching
+    // settles, so the worker stays alive long enough to update the offline
+    // shell after a rebuild even though the response is returned first.
+    let signalCachingDone;
+    event.waitUntil(new Promise((resolve) => { signalCachingDone = resolve; }));
+    event.respondWith(navigationHandler(event, signalCachingDone));
     return;
   }
 
@@ -176,36 +189,33 @@ self.addEventListener('fetch', (event) => {
 
 // --- strategies ---------------------------------------------------------
 
-async function navigationHandler(event) {
+async function navigationHandler(event, onCachingSettled) {
   const shell = await caches.open(SHELL_CACHE);
   try {
     // Prefer the browser's navigation-preload response when available.
     const preload = await event.preloadResponse;
     const response = preload || (await fetch(event.request));
     if (response && response.ok) {
-      // Update the offline shell + boot assets in the BACKGROUND so the
-      // navigation response isn't delayed. Only REPLACE the known-good shell
-      // once this build's boot assets are all cached — so a half-downloaded
-      // deploy (new HTML fetched, its hashed assets not yet downloaded, e.g. a
-      // flaky link mid-rollout) can't strand the offline fallback on a shell
-      // whose assets are unavailable. trimCache re-derives the pinned set from
-      // whichever shell is committed, so old assets stay pinned until the new
-      // shell actually takes over.
+      // Update the offline shell + boot assets in the BACKGROUND (kept alive by
+      // the lifetime promise armed in the fetch listener) so the navigation
+      // response isn't delayed. Only REPLACE the known-good shell once this
+      // build's boot assets are all cached — so a half-downloaded deploy (new
+      // HTML fetched, its hashed assets not yet downloaded, e.g. a flaky link
+      // mid-rollout) can't strand the offline fallback on a shell whose assets
+      // are unavailable. trimCache re-derives the pinned set from whichever
+      // shell is committed, so old assets stay pinned until the new shell
+      // actually takes over.
       const toCache = response.clone();
-      const background = (async () => {
+      (async () => {
         const { cachedAll } = await precacheBootAssets(await toCache.clone().text());
         if (cachedAll) await shell.put(SHELL_KEY, toCache);
-      })().catch(() => {});
-      // Keep the SW alive until the caching finishes. waitUntil is only valid
-      // while the event is still extendable; guard it so that if the browser
-      // rejects a late call it can't fall through to the catch below and return
-      // a STALE shell — the fresh network response must always win online.
-      try {
-        event.waitUntil(background);
-      } catch { /* event no longer extendable — caching runs best-effort */ }
+      })().catch(() => {}).finally(onCachingSettled);
+    } else {
+      onCachingSettled();
     }
     return response;
   } catch {
+    onCachingSettled();
     const cached = await shell.match(SHELL_KEY);
     if (cached) return cached;
     // Last resort: whatever we have for this exact navigation URL.
