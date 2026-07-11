@@ -40,7 +40,7 @@ describe('useTwinEvaluationSuite', () => {
     expect(result.current.items).toHaveLength(1);
   });
 
-  it('falls back to empty arrays when a load rejects (no crash, no toast)', async () => {
+  it('surfaces loadError (not a silent empty) when the suite load rejects (no crash, no toast)', async () => {
     const cfg = baseCfg({
       getTests: vi.fn().mockRejectedValue(new Error('boom')),
       getHistory: vi.fn().mockRejectedValue(new Error('boom'))
@@ -48,9 +48,50 @@ describe('useTwinEvaluationSuite', () => {
     const { result } = renderHook(() => useTwinEvaluationSuite(cfg));
 
     await waitFor(() => expect(result.current.loading).toBe(false));
+    // A failed load surfaces a distinct error sentinel — NOT the same []/empty
+    // state a genuinely-empty install produces. Feedback stays inline (no toast).
+    expect(result.current.loadError).toBeTruthy();
     expect(result.current.items).toEqual([]);
     expect(result.current.history).toEqual([]);
     expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('leaves loadError null for a genuinely empty suite (empty is not a failure)', async () => {
+    const cfg = baseCfg({ getTests: vi.fn().mockResolvedValue([]) });
+    const { result } = renderHook(() => useTwinEvaluationSuite(cfg));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.loadError).toBeNull();
+    expect(result.current.items).toEqual([]);
+  });
+
+  it('degrades to no history when only the history load rejects, without a loadError', async () => {
+    const cfg = baseCfg({
+      getTests: vi.fn().mockResolvedValue([{ testId: 1, testName: 'T1' }]),
+      getHistory: vi.fn().mockRejectedValue(new Error('history down'))
+    });
+    const { result } = renderHook(() => useTwinEvaluationSuite(cfg));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.loadError).toBeNull();
+    expect(result.current.items).toHaveLength(1);
+    expect(result.current.history).toEqual([]);
+  });
+
+  it('reload clears a prior loadError once the suite load recovers', async () => {
+    const getTests = vi.fn()
+      .mockRejectedValueOnce(new Error('boom'))
+      .mockResolvedValueOnce([{ testId: 1, testName: 'T1' }]);
+    const cfg = baseCfg({ getTests });
+    const { result } = renderHook(() => useTwinEvaluationSuite(cfg));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.loadError).toBeTruthy();
+
+    await act(async () => { await result.current.reload(); });
+
+    expect(result.current.loadError).toBeNull();
+    expect(result.current.items).toHaveLength(1);
   });
 
   it('runs every selected provider in parallel and silences each call', async () => {
