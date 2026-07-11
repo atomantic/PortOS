@@ -282,8 +282,11 @@ export default function App() {
           <Route path="post/:tab/:subtab" element={<Post />} />
           <Route path="review" element={<Review />} />
           <Route path="messages" element={<Navigate to="/messages/inbox" replace />} />
+          {/* :chatKey is only used by the imessage tab; other tabs strip a stray second segment. */}
+          <Route path="messages/:tab/:chatKey" element={<Messages />} />
           <Route path="messages/:tab" element={<Messages />} />
-          <Route path="imessage" element={<IMessage />} />
+          {/* Legacy /imessage → Comms Messages → iMessage tab */}
+          <Route path="imessage" element={<Navigate to="/messages/imessage" replace />} />
           <Route path="imessage/:chatKey" element={<IMessage />} />
           <Route path="tribe" element={<Tribe />} />
           <Route path="timeline" element={<Timeline />} />
