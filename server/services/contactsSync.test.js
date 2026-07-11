@@ -7,6 +7,8 @@ import {
   resolveHandleAgainstContacts,
 } from './contactsSync.js';
 
+// Fixtures use reserved NANP 555 numbers only — never real contact data.
+
 describe('contactsSync pure helpers', () => {
   describe('contactDisplayName', () => {
     it('prefers first + last over organization', () => {
@@ -18,7 +20,7 @@ describe('contactsSync pure helpers', () => {
     });
 
     it('falls back to organization for company contacts', () => {
-      expect(contactDisplayName({ organization: 'LG Repair Guy' })).toBe('LG Repair Guy');
+      expect(contactDisplayName({ organization: 'Acme Repair Co' })).toBe('Acme Repair Co');
     });
 
     it('uses nickname when no first/last', () => {
@@ -31,14 +33,14 @@ describe('contactsSync pure helpers', () => {
       const c = normalizeContactRecord({
         id: '1',
         uniqueId: 'u1',
-        firstName: 'Aiden',
-        lastName: 'Eller',
-        phones: ['12062951558', '+1 (206) 295-1558'],
-        emails: ['Aiden@Example.COM'],
+        firstName: 'Alex',
+        lastName: 'Example',
+        phones: ['15551234567', '+1 (555) 123-4567'],
+        emails: ['Alex@Example.COM'],
       });
-      expect(c.phones).toEqual(['+12062951558']);
-      expect(c.emails).toEqual(['aiden@example.com']);
-      expect(c.displayName).toBe('Aiden Eller');
+      expect(c.phones).toEqual(['+15551234567']);
+      expect(c.emails).toEqual(['alex@example.com']);
+      expect(c.displayName).toBe('Alex Example');
     });
 
     it('returns null when empty', () => {
@@ -59,11 +61,11 @@ describe('contactsSync pure helpers', () => {
 
     it('resolves handle against contact index', () => {
       const contacts = mergeContacts([[
-        { uniqueId: '1', firstName: 'Jen', lastName: 'McD', phones: ['+1 (206) 293-8313'], emails: [] },
+        { uniqueId: '1', firstName: 'Pat', lastName: 'Lee', phones: ['+1 (555) 987-6543'], emails: [] },
       ]]);
       const index = buildContactIndex(contacts);
-      const hit = resolveHandleAgainstContacts('2062938313', index);
-      expect(hit.displayName).toBe('Jen McD');
+      const hit = resolveHandleAgainstContacts('5559876543', index);
+      expect(hit.displayName).toBe('Pat Lee');
       expect(hit.source).toBe('contacts');
       expect(resolveHandleAgainstContacts('+19999999999', index)).toBeNull();
     });
