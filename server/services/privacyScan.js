@@ -36,11 +36,14 @@ const HTTP_FETCH_TIMEOUT_MS = 15000;
 // likely saw an SPA shell — escalate to the browser lane.
 const JS_SHELL_MAX_LEN = 600;
 const JS_WALL_MARKERS = ['enable javascript', 'please enable js', 'noscript', '__next_data__'];
-// Antibot / hard-challenge markers — record `blocked`, never solve.
+// Antibot / hard-challenge markers — record `blocked`, never solve. Challenge-
+// specific tokens only: a bare vendor name like "cloudflare" appears in CDN
+// script URLs on legitimate 200 result pages and would false-positive.
 const ANTIBOT_MARKERS = [
   'captcha', 'recaptcha', 'hcaptcha', 'px-captcha', 'unusual traffic',
-  'are you a human', 'cf-browser-verification', 'access denied', 'request blocked',
-  'verify you are human', 'cloudflare', 'bot detection',
+  'are you a human', 'cf-browser-verification', 'cf-chl', 'challenge-platform',
+  'just a moment', 'access denied', 'request blocked',
+  'verify you are human', 'bot detection',
 ];
 
 // ─── Search vectors (pure) ──────────────────────────────────────────────────
@@ -134,6 +137,13 @@ function containsAntibot(html) {
   return ANTIBOT_MARKERS.some((m) => h.includes(m));
 }
 
+// The one definition of "this response is a bot wall" — shared by the blocked
+// verdict in classifyScanResult and the escalation gate in probeBroker so the
+// two can't drift.
+function isWall(status, html) {
+  return status === 403 || containsAntibot(html);
+}
+
 function looksLikeJsShell(html) {
   if (!html || html.length < JS_SHELL_MAX_LEN) return true;
   const h = html.toLowerCase();
@@ -153,7 +163,7 @@ function looksLikeJsShell(html) {
  */
 export function classifyScanResult({ status, html = '', vectors = {}, broker = {} }) {
   if (status === 404) return { verdict: null, inconclusive: true, evidence: { match_basis: 'http_404' } };
-  if (status === 403 || containsAntibot(html)) {
+  if (isWall(status, html)) {
     return { verdict: 'blocked', evidence: { match_basis: 'antibot_wall', http_status: status } };
   }
   if (status && status >= 500) return { verdict: null, inconclusive: true, evidence: { match_basis: `http_${status}` } };
@@ -233,10 +243,20 @@ export async function probeBroker(broker, vectors, {
   let html = result?.html ?? '';
   let status = result?.status ?? null;
 
-  // Escalate to the pinned browser lane when the static fetch saw a JS shell.
-  if (result && result.status >= 200 && result.status < 400 && looksLikeJsShell(html) && !containsAntibot(html)) {
+  // Escalate to the pinned browser lane when the static fetch saw a JS shell,
+  // OR hit a bot wall (403/antibot markers). A real-Chrome fetch is a
+  // legitimate client that passes many PASSIVE bot checks — an interactive
+  // challenge in the browsed page still classifies as `blocked` below (never
+  // solved). On a wall, only adopt substantive browsed content: a shell-length
+  // browsed page would otherwise flip a real wall into a false `not_found`.
+  const walled = result && isWall(status, html);
+  const jsShell = result && !walled && status >= 200 && status < 400 && looksLikeJsShell(html);
+  if (walled || jsShell) {
     const browsed = await browserFetch(url).catch(() => null);
-    if (browsed?.text) { html = browsed.text; status = 200; }
+    if (browsed?.text && (jsShell || !looksLikeJsShell(browsed.text))) {
+      html = browsed.text;
+      status = 200;
+    }
   }
 
   if (!result && !html) {
@@ -245,7 +265,9 @@ export async function probeBroker(broker, vectors, {
   }
 
   const classified = classifyScanResult({ status, html, vectors, broker });
-  const evidence = { ...classified.evidence, listing_urls: classified.verdict === 'found' ? [url] : [] };
+  // search_url lets the UI offer "check manually in your browser" on blocked
+  // cases — the human IS the sanctioned path past an antibot wall.
+  const evidence = { ...classified.evidence, search_url: url, listing_urls: classified.verdict === 'found' ? [url] : [] };
   if (classified.inconclusive || !classified.verdict) {
     return { skipped: true, reason: classified.evidence?.match_basis || 'inconclusive', verdict: null, evidence };
   }

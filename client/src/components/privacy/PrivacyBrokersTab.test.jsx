@@ -20,7 +20,15 @@ const api = vi.hoisted(() => ({
     { id: 'c2', brokerId: 'wp', brokerName: 'WhitePages', state: 'confirmed_removed', evidence: {}, updatedAt: '2026-07-02T00:00:00.000Z' },
   ],
   brokers: [{ id: 'spokeo', name: 'Spokeo', tier: 1, source: 'curated', confidence: 'documented', enabled: true, clusterParent: null, optout: {} }],
-  digest: { total: 1, humanTasks: 1, blocked: 0, items: [{ caseId: 'h1', brokerId: 'bv', brokerName: 'BeenVerified', state: 'human_task_queued', reason: 'human_only_channel' }] },
+  digest: {
+    total: 2,
+    humanTasks: 1,
+    blocked: 1,
+    items: [
+      { caseId: 'h1', brokerId: 'bv', brokerName: 'BeenVerified', state: 'human_task_queued', reason: 'human_only_channel' },
+      { caseId: 'b1', brokerId: 'rad', brokerName: 'Radaris', state: 'blocked', reason: 'antibot_wall', searchUrl: 'https://rad/p/Jane/Doe/' },
+    ],
+  },
   schedule: { enabled: false, cronExpression: '0 4 * * 0', autoApproveOptOutEmails: false, autoSubmitWebForms: false, nextRun: null },
   runScanDeferred: null,
 }));
@@ -70,6 +78,17 @@ describe('PrivacyBrokersTab', () => {
     await screen.findByText('BeenVerified');
     fireEvent.click(screen.getByLabelText('Mark done'));
     await waitFor(() => expect(apiMod.transitionPrivacyCase).toHaveBeenCalledWith('h1', 'submitted', undefined, expect.anything()));
+  });
+
+  it('a blocked digest item offers a manual-check link and transitions to found (not submitted)', async () => {
+    renderTab();
+    await screen.findByText('Radaris');
+    // Manual browser check opens the filled search URL.
+    const manualLink = screen.getByLabelText('Check manually in your browser');
+    expect(manualLink.getAttribute('href')).toBe('https://rad/p/Jane/Doe/');
+    // blocked → submitted is not a legal transition; the positive action is found.
+    fireEvent.click(screen.getByLabelText("I'm listed"));
+    await waitFor(() => expect(apiMod.transitionPrivacyCase).toHaveBeenCalledWith('b1', 'found', undefined, expect.anything()));
   });
 
   it('disables both run buttons while a pass is in flight', async () => {
