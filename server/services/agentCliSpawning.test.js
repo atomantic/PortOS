@@ -45,6 +45,10 @@ vi.mock('./toolStateMachine.js', () => ({
 }));
 vi.mock('./agentErrorAnalysis.js', () => ({ analyzeAgentFailure: vi.fn().mockResolvedValue(null) }));
 vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: vi.fn().mockResolvedValue(undefined) }));
+// Mock git.js directly so spawnDirectly's GH_TOKEN pinning is exercised without
+// pulling in the real worktreeManager → instances module graph. Default: no
+// owner-matched account → empty overlay (ambient gh auth untouched).
+vi.mock('./git.js', () => ({ resolveForgeTokenEnv: vi.fn().mockResolvedValue({}) }));
 vi.mock('./agentLifecycle.js', () => ({
   finalizeAgent: vi.fn().mockResolvedValue(undefined),
   releaseAgentLane: vi.fn(),
@@ -72,6 +76,7 @@ vi.mock('fs', () => ({ existsSync: vi.fn().mockReturnValue(false) }));
 // spawn wiring uses whatever prepareCliSpawn returns.
 vi.mock('../lib/bufferedSpawn.js', () => ({
   prepareCliSpawn: vi.fn((command, args) => ({ command, args })),
+  killProcessTree: vi.fn(),
 }));
 
 // Mock child_process.spawn to return a controllable fake process
@@ -86,7 +91,7 @@ vi.mock('child_process', () => ({
 
 import { buildCliSpawnConfig, createStreamJsonParser, spawnDirectly } from './agentCliSpawning.js';
 import { spawn } from 'child_process';
-import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
+import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
 
 // Helper: feed the parser a sequence of stream-json lines
 function runStream(parser, events) {
@@ -447,6 +452,58 @@ describe('stream error containment', () => {
     expect(logged).toBe(true);
   });
 
+  it('detects a fallback signal and terminates immediately even while an earlier transcript write is blocked, keeping output ordered (#2384)', async () => {
+    killProcessTree.mockClear();
+
+    // Block the FIRST chunk's serialized transcript body at its phase-working
+    // updateAgent await (the pid updateAgent at spawn time carries no
+    // metadata.phase, so it resolves normally and lets spawn finish).
+    let releaseFirstWrite;
+    const firstWriteGate = new Promise((r) => { releaseFirstWrite = r; });
+    cosAgentsMocks.updateAgent.mockImplementation((id, patch) => {
+      if (patch?.metadata?.phase === 'working') return firstWriteGate;
+      return Promise.resolve(undefined);
+    });
+
+    // Non-stream provider so outputBuffer is raw text and ordering is trivial to assert.
+    const args = {
+      ...minimalArgs,
+      cliConfig: { command: 'claude', args: [], stdinMode: 'prompt', streamFormat: 'text' },
+    };
+
+    const spawnPromise = spawnDirectly(args);
+    // Yield so spawnDirectly's awaits resolve and the stdout listener registers.
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Chunk 1: ordinary output → its serialized write body blocks on the gate.
+    fakeProcess.stdout.emit('data', Buffer.from('first output line\n'));
+    await new Promise((r) => setTimeout(r, 10));
+
+    // Chunk 2: a usage-limit fallback signal arrives WHILE chunk 1 is blocked.
+    // The synchronous detector must fire the kill without waiting for the gate.
+    fakeProcess.stdout.emit('data', Buffer.from('Now using extra usage\n'));
+
+    // Assert: termination was immediate — killProcessTree fired synchronously in
+    // the data listener, before the blocked first write could settle.
+    expect(killProcessTree).toHaveBeenCalledTimes(1);
+    expect(killProcessTree.mock.calls[0][1]).toBe('SIGTERM');
+    fakeProcess.killed = true;
+
+    // Release the gate, let the serialized chain drain, then close.
+    releaseFirstWrite();
+    await new Promise((r) => setTimeout(r, 20));
+    fakeProcess.emit('close', 143);
+    await spawnPromise.catch(() => {});
+
+    // Assert: the two chunks landed in emission order (serialized, not reordered
+    // by the blocked first write racing the second).
+    const allLines = cosAgentsMocks.appendAgentOutputLines.mock.calls.flatMap((c) => c[1]);
+    const firstIdx = allLines.findIndex((l) => l.includes('first output line'));
+    const usageIdx = allLines.findIndex((l) => l.includes('Now using extra usage'));
+    expect(firstIdx).toBeGreaterThanOrEqual(0);
+    expect(usageIdx).toBeGreaterThan(firstIdx);
+  });
+
   it('routes the CLI command through prepareCliSpawn and spawns its resolved+wrapped result (#2243)', async () => {
     // The reported bug: on Windows a bare `opencode`/`claude` .cmd shim can't be
     // spawned directly under shell:false → ENOENT (-4058) → startup-failure.
@@ -473,6 +530,64 @@ describe('stream error containment', () => {
       ['/c', 'C:\\npm\\claude.cmd', '--print'],
       expect.objectContaining({ shell: false }),
     );
+
+    fakeProcess.emit('close', 0);
+    await spawnPromise.catch(() => {});
+  });
+
+  it('injects the repo-owner-pinned GH_TOKEN into the spawn env so the agent\'s own `gh` uses the right account', async () => {
+    const { resolveForgeTokenEnv } = await import('./git.js');
+    vi.mocked(resolveForgeTokenEnv).mockResolvedValueOnce({ GH_TOKEN: 'ghp_pinned_owner_token' });
+
+    const spawnPromise = spawnDirectly(minimalArgs);
+    await new Promise((r) => setTimeout(r, 10)); // let the resolveForgeTokenEnv await settle
+
+    // Resolved against the workspace dir (the worktree the agent will PR from).
+    expect(resolveForgeTokenEnv).toHaveBeenCalledWith('/tmp');
+    expect(spawn).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ env: expect.objectContaining({ GH_TOKEN: 'ghp_pinned_owner_token' }) }),
+    );
+
+    fakeProcess.emit('close', 0);
+    await spawnPromise.catch(() => {});
+  });
+
+  it('leaves the spawn env\'s ambient GH_TOKEN untouched when there is no owner match', async () => {
+    const { resolveForgeTokenEnv } = await import('./git.js');
+    vi.mocked(resolveForgeTokenEnv).mockResolvedValueOnce({});
+    const prev = process.env.GH_TOKEN;
+    process.env.GH_TOKEN = 'ghp_ambient';
+
+    const spawnPromise = spawnDirectly(minimalArgs);
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(spawn).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ env: expect.objectContaining({ GH_TOKEN: 'ghp_ambient' }) }),
+    );
+
+    if (prev === undefined) delete process.env.GH_TOKEN; else process.env.GH_TOKEN = prev;
+    fakeProcess.emit('close', 0);
+    await spawnPromise.catch(() => {});
+  });
+
+  it('skips the owner-token probe when the provider supplies its own GITHUB_TOKEN', async () => {
+    const { resolveForgeTokenEnv } = await import('./git.js');
+    vi.mocked(resolveForgeTokenEnv).mockClear();
+    vi.mocked(spawn).mockClear();
+
+    const args = { ...minimalArgs, provider: { ...minimalArgs.provider, envVars: { GITHUB_TOKEN: 'ghp_provider_bot' } } };
+    const spawnPromise = spawnDirectly(args);
+    await new Promise((r) => setTimeout(r, 10));
+
+    // gh prefers GH_TOKEN over GITHUB_TOKEN — injecting the owner GH_TOKEN would
+    // shadow the provider's explicit bot credential, so the probe is skipped.
+    expect(resolveForgeTokenEnv).not.toHaveBeenCalled();
+    const env = vi.mocked(spawn).mock.calls.at(-1)[2].env;
+    expect(env.GITHUB_TOKEN).toBe('ghp_provider_bot');
 
     fakeProcess.emit('close', 0);
     await spawnPromise.catch(() => {});

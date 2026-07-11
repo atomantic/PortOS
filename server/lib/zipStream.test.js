@@ -4,7 +4,7 @@ import { deflateRawSync } from 'zlib';
 import { writeFile, rm, mkdtemp } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { parseZip, extractZipEntryToBuffer, collectZipEntry } from './zipStream.js';
+import { parseZip, extractZipEntryToBuffer, collectZipEntry, isZipUpload, collectZipEntries } from './zipStream.js';
 
 const LOCAL_SIG = 0x04034b50;
 const CENTRAL_SIG = 0x02014b50;
@@ -263,6 +263,164 @@ describe('collectZipEntry', () => {
       Readable.from([zip]).pipe(parser);
     });
     expect(jsons.sort()).toEqual(['{"id":1}', '{"id":2}']);
+  });
+});
+
+describe('isZipUpload', () => {
+  it('accepts application/zip mimetype', () => {
+    expect(isZipUpload({ mimetype: 'application/zip' })).toBe(true);
+  });
+
+  it('accepts the Windows x-zip-compressed mimetype', () => {
+    expect(isZipUpload({ mimetype: 'application/x-zip-compressed' })).toBe(true);
+  });
+
+  it('accepts a .zip filename regardless of mimetype (case-insensitive)', () => {
+    expect(isZipUpload({ mimetype: 'application/octet-stream', originalname: 'export.ZIP' })).toBe(true);
+    expect(isZipUpload({ originalname: 'takeout.zip' })).toBe(true);
+  });
+
+  it('rejects a non-zip upload', () => {
+    expect(isZipUpload({ mimetype: 'application/json', originalname: 'history.json' })).toBe(false);
+    expect(isZipUpload({ originalname: '_chat.txt' })).toBe(false);
+  });
+
+  it('is nullish-safe (missing file / fields do not throw)', () => {
+    expect(isZipUpload(null)).toBe(false);
+    expect(isZipUpload(undefined)).toBe(false);
+    expect(isZipUpload({})).toBe(false);
+  });
+});
+
+describe('collectZipEntries', () => {
+  let dir;
+  beforeAll(async () => { dir = await mkdtemp(join(tmpdir(), 'zipentries-')); });
+  afterAll(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  async function writeZip(name, buf) {
+    const p = join(dir, name);
+    await writeFile(p, buf);
+    return p;
+  }
+
+  it('hands each matching member to onMatch and drains the rest', async () => {
+    const zip = Buffer.concat([
+      buildEntry('data/keep-a.json', Buffer.from('{"a":1}')),
+      buildEntry('data/skip.bin', Buffer.alloc(32, 9)),
+      buildEntry('data/keep-b.json', deflateRawSync(Buffer.from('{"b":2}')), { method: 8 }),
+      buildEocd(),
+    ]);
+    const zipPath = await writeZip('mixed.zip', zip);
+    const collected = [];
+    await collectZipEntries(zipPath, {
+      match: (p) => p.endsWith('.json'),
+      onMatch: (buf, p) => { collected.push(`${p}:${buf.toString('utf-8')}`); },
+    });
+    expect(collected.sort()).toEqual(['data/keep-a.json:{"a":1}', 'data/keep-b.json:{"b":2}']);
+  });
+
+  it('awaits async onMatch work before resolving (close does not beat the reads)', async () => {
+    const zip = Buffer.concat([
+      buildEntry('a.json', Buffer.from('1')),
+      buildEntry('b.json', Buffer.from('2')),
+      buildEocd(),
+    ]);
+    const zipPath = await writeZip('async.zip', zip);
+    const seen = [];
+    await collectZipEntries(zipPath, {
+      match: '.json',
+      onMatch: async (buf) => {
+        await new Promise((r) => setTimeout(r, 5));
+        seen.push(buf.toString('utf-8'));
+      },
+    });
+    expect(seen.sort()).toEqual(['1', '2']);
+  });
+
+  it('supports a match closure over caller state (whatsapp first-fallback pattern)', async () => {
+    const zip = Buffer.concat([
+      buildEntry('WhatsApp Chat with Bob.txt', Buffer.from('fallback body')),
+      buildEntry('extra.txt', Buffer.from('second txt')),
+      buildEocd(),
+    ]);
+    const zipPath = await writeZip('whatsapp.zip', zip);
+    let preferred = null;
+    let fallback = null;
+    await collectZipEntries(zipPath, {
+      match: (p) => /_chat\.txt$/i.test(p) || (/\.txt$/i.test(p) && fallback === null),
+      onMatch: (buf, p) => {
+        if (/_chat\.txt$/i.test(p)) preferred = buf.toString('utf-8');
+        else if (fallback === null) fallback = buf.toString('utf-8');
+      },
+    });
+    expect(preferred).toBeNull();
+    expect(fallback).toBe('fallback body');
+  });
+
+  it('rejects (does not hang) when a matching member fails to parse in onMatch', async () => {
+    const zip = Buffer.concat([
+      buildEntry('good.json', Buffer.from('{"ok":true}')),
+      buildEntry('bad.json', Buffer.from('{not valid json')),
+      buildEocd(),
+    ]);
+    const zipPath = await writeZip('badmember.zip', zip);
+    await expect(
+      collectZipEntries(zipPath, {
+        match: '.json',
+        onMatch: (buf) => { JSON.parse(buf.toString('utf-8')); },
+      }),
+    ).rejects.toThrow();
+  });
+
+  it('rejects (does not hang) when a matching deflated member is corrupt', async () => {
+    // method:8 declares deflate but the payload is garbage — the inflate pipeline
+    // errors; the collector must reject rather than hang awaiting the entry.
+    const zip = Buffer.concat([
+      buildEntry('corrupt.json', Buffer.from('definitely not a deflate stream'), { method: 8 }),
+      buildEocd(),
+    ]);
+    const zipPath = await writeZip('corrupt.zip', zip);
+    await expect(
+      collectZipEntries(zipPath, { match: '.json', onMatch: () => {} }),
+    ).rejects.toThrow();
+  });
+
+  it('rejects (does not hang) when a matching member exceeds maxBytes', async () => {
+    const zip = Buffer.concat([
+      buildEntry('big.json', Buffer.alloc(64, 0x41)),
+      buildEocd(),
+    ]);
+    const zipPath = await writeZip('oversize.zip', zip);
+    await expect(
+      collectZipEntries(zipPath, { match: '.json', onMatch: () => {}, maxBytes: 16 }),
+    ).rejects.toThrow(/exceeds 16 byte limit/);
+  });
+
+  it('rejects when the source file is missing', async () => {
+    await expect(
+      collectZipEntries(join(dir, 'does-not-exist.zip'), { match: '.json', onMatch: () => {} }),
+    ).rejects.toThrow();
+  });
+
+  it('resolves with no matches on a truncated archive whose central directory is cut off', async () => {
+    // A truncated ZIP (upload interrupted): a complete stored entry followed by a
+    // sliced-off second header and no EOCD. The parser reads the whole first entry
+    // and simply reaches stream end — no hang, no throw, matches processed.
+    const full = Buffer.concat([
+      buildEntry('first.json', Buffer.from('{"n":1}')),
+      buildEntry('second.json', Buffer.from('{"n":2}')),
+    ]);
+    // Cut mid-way through the second entry's header so it never completes.
+    const truncated = full.subarray(0, full.length - 20);
+    const zipPath = await writeZip('truncated.zip', truncated);
+    const collected = [];
+    await collectZipEntries(zipPath, {
+      match: '.json',
+      onMatch: (buf, p) => { collected.push(p); },
+    });
+    // The first entry is intact and processed; the second is never fully emitted.
+    expect(collected).toContain('first.json');
+    expect(collected).not.toContain('second.json');
   });
 });
 

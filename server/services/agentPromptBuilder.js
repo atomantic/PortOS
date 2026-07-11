@@ -264,6 +264,15 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const hasCopilot = reviewers.includes(DEFAULT_REVIEWER);
   const hasLocalLlm = reviewers.some(r => LOCAL_LLM_REVIEWERS.includes(r));
   const hasCli = reviewers.some(r => r !== DEFAULT_REVIEWER && !LOCAL_LLM_REVIEWERS.includes(r));
+  // Optional Codex CLI model tier chosen on the Code Review Defaults panel.
+  // Only surfaced when `codex` is actually one of the reviewers; the CLI takes
+  // it as `codex --model <id>` (empty = let the Codex CLI use its own default).
+  const codexModel = (reviewers.includes('codex') && typeof metadata.reviewLoopCodexModel === 'string' && metadata.reviewLoopCodexModel)
+    ? metadata.reviewLoopCodexModel
+    : '';
+  const codexModelNote = codexModel
+    ? ` When invoking the \`codex\` reviewer, pass its model tier: \`codex --model ${codexModel} …\`.`
+    : '';
   const multi = reviewers.length > 1;
   // The system pre-requests the initial Copilot review only when copilot LEADS the
   // order; otherwise the agent must request it at copilot's turn (so Copilot reviews
@@ -285,10 +294,10 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
     hasCopilot ? `**copilot**: ${copilotIsFirst
       ? 'wait for the initial Copilot review the system already pre-requested (Copilot leads the list)'
       : 'request a Copilot review when you reach its turn'} (poll every 5–15s, max 5 min/round), then re-request on later rounds.` : null,
-    hasCli ? `**codex / antigravity / claude**: invoke that CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works).` : null,
+    hasCli ? `**codex / antigravity / claude**: invoke that CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works).${codexModelNote}` : null,
     hasLocalLlm ? `**lmstudio / ollama**: ${localLlmInvocation}` : null,
   ].filter(Boolean).join(' ');
-  const singleCliInvocation = `Invoke the ${reviewerLabel} CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works). Capture its findings as concrete issues to address.`;
+  const singleCliInvocation = `Invoke the ${reviewerLabel} CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works). Capture its findings as concrete issues to address.${codexModelNote}`;
   // Resolved sequentially so a future reviewer kind only adds one branch
   // instead of deepening the nested ternary.
   let waitOrInvokeStep;
@@ -454,6 +463,28 @@ export function buildProgrammaticOutputCompletionSection(sentinelPath) {
     'This is a reasoning task, not a code change. The worktree you are in is **discarded on exit** — any commits, pushes, or PRs are thrown away and have no effect. Do NOT run `/do:push`, `/do:pr`, `git commit`, `git push`, or open a pull request.',
     '',
     `When you have finished reasoning, write your result to \`${sentinelPath}\` in the exact payload format described in your task instructions, then stop. PortOS polls this sentinel every 2s, finalizes the run, and closes the session for you — do NOT run \`/quit\` and do NOT wait for anything after writing the sentinel.`
+  ].join('\n');
+}
+
+/**
+ * Completion block for a **read-only** task (e.g. reference-watch, pr-reviewer's
+ * scan stage). The agent must NOT commit/push/modify source; its real output is
+ * recorded elsewhere DURING the run (a tracker issue, PLAN.md, a report).
+ *
+ * A TUI agent still needs a `.agent-done` sentinel to signal completion — the 2s
+ * sentinel poll in `spawnTuiAgent` is the primary finalize path and the channel
+ * that ingests the run summary. Without it a read-only TUI run only finalizes via
+ * the idle reaper / shell-exit fallback, so the resolution summary is never
+ * captured cleanly (the bug this repairs). CLI/API read-only agents complete on
+ * process exit and never poll a sentinel, so they get the bare notice only.
+ */
+export function buildReadOnlyCompletionSection({ isTui = false, sentinelPath = null } = {}) {
+  const notice = '## Read-Only Task\nDo NOT commit, push, or modify any files. Read data and report findings only.';
+  if (!isTui || !sentinelPath) return notice;
+  return [
+    notice,
+    '',
+    `When you have finished, write a short markdown summary of what you found (and where you recorded it) to \`${sentinelPath}\`, then stop. PortOS polls this sentinel every 2s, finalizes the run, and closes the session for you — do NOT run \`/quit\` and do NOT wait for anything after writing the sentinel.`
   ].join('\n');
 }
 
@@ -930,7 +961,10 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
     // over the isTui / CLI push-and-PR completion workflows below.
     sections.push(buildProgrammaticOutputCompletionSection(`${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`));
   } else if (isReadOnly) {
-    sections.push('## Read-Only Task\nDo NOT commit, push, or modify any files. Read data and report findings only.');
+    sections.push(buildReadOnlyCompletionSection({
+      isTui,
+      sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`,
+    }));
   } else if (isReviewLoopFollowUp) {
     sections.push(buildReviewLoopFollowUpSection(task.metadata || {}, { verbose: false }));
   } else if (isTui) {

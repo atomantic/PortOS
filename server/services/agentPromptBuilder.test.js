@@ -387,12 +387,27 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/gh pr merge/);
     });
 
-    it('suppresses the completion block and warns when readOnly is set', () => {
+    it('suppresses the PR completion workflow but still writes a sentinel when readOnly + TUI', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { readOnly: true } }),
         '/r', null, isTruthyMeta, { isTui: true });
       expect(prompt).toMatch(/Read-Only Task/);
       expect(prompt).not.toMatch(/## Completion Workflow/);
+      // A read-only TUI agent must still be told to write .agent-done — the 2s
+      // sentinel poll is its only clean finalize/summary path (regression: the
+      // read-only branch used to emit the bare notice with no sentinel, so
+      // reference-watch runs never signaled completion).
+      expect(prompt).toMatch(/\.agent-done/);
+      expect(prompt).toMatch(/polls this sentinel/);
+    });
+
+    it('read-only on a non-TUI (CLI) provider gets the bare notice, no sentinel', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { readOnly: true } }),
+        '/r', null, isTruthyMeta, { isTui: false, providerId: 'claude-code' });
+      expect(prompt).toMatch(/Read-Only Task/);
+      // CLI/API agents complete on process exit and never poll a sentinel.
+      expect(prompt).not.toMatch(/\.agent-done/);
     });
 
     it('renders the review-loop follow-up block when reviewLoopFollowUp is set', () => {
@@ -466,6 +481,42 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/--reviewer-applies/);
       // Ordered run instruction.
       expect(prompt).toMatch(/For EACH reviewer in order/);
+    });
+
+    it('threads the configured Codex model tier into the CLI invocation when codex reviews', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          reviewLoopFollowUp: true,
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+          reviewLoopPRBranch: 'b',
+          reviewLoopPRNumber: 9,
+          reviewLoopReviewers: ['codex'],
+          reviewLoopCodexModel: 'gpt-5.6-sol',
+          sourceTaskId: 'task-src-cx',
+        }}),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta);
+      expect(prompt).toMatch(/codex --model gpt-5\.6-sol/);
+    });
+
+    it('omits the Codex model note when codex is not among the reviewers', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          reviewLoopFollowUp: true,
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+          reviewLoopPRBranch: 'b',
+          reviewLoopPRNumber: 9,
+          reviewLoopReviewers: ['claude'],
+          // Stale model tier from a prior codex config — must not leak into a
+          // claude-only review.
+          reviewLoopCodexModel: 'gpt-5.6-sol',
+          sourceTaskId: 'task-src-noncx',
+        }}),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta);
+      expect(prompt).not.toMatch(/--model gpt-5\.6-sol/);
     });
 
     it('emits the local-LLM POST instruction when a local-LLM reviewer is configured', () => {

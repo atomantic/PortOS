@@ -14,6 +14,7 @@ const browserGlobals = {
   EventSource: 'readonly',
   FormData: 'readonly', File: 'readonly', FileReader: 'readonly',
   Blob: 'readonly', Event: 'readonly', CustomEvent: 'readonly',
+  DOMException: 'readonly',
   EventTarget: 'readonly', AbortController: 'readonly', AbortSignal: 'readonly',
   ReadableStream: 'readonly', WritableStream: 'readonly', TransformStream: 'readonly',
   DecompressionStream: 'readonly',

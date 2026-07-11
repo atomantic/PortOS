@@ -51,6 +51,7 @@ describe('codeReview helpers', () => {
         reviewerApplies: false,
         lmstudioModel: null,
         ollamaModel: null,
+        codexModel: null,
       })
       expect(pickCodeReviewDefaults({})).toEqual({
         reviewers: ['copilot'],
@@ -58,6 +59,7 @@ describe('codeReview helpers', () => {
         reviewerApplies: false,
         lmstudioModel: null,
         ollamaModel: null,
+        codexModel: null,
       })
     })
 
@@ -83,12 +85,14 @@ describe('codeReview helpers', () => {
           reviewerApplies: 'truthy-string',
           lmstudioModel: '',
           ollamaModel: 42,
+          codexModel: '',
         },
       })
       expect(out.stopMode).toBe('all')
       expect(out.reviewerApplies).toBe(false)
       expect(out.lmstudioModel).toBeNull()
       expect(out.ollamaModel).toBeNull()
+      expect(out.codexModel).toBeNull()
     })
 
     it('passes through a valid full payload', () => {
@@ -99,6 +103,7 @@ describe('codeReview helpers', () => {
           reviewerApplies: true,
           lmstudioModel: 'qwen2.5-coder:7b',
           ollamaModel: 'codellama',
+          codexModel: 'gpt-5.6-sol',
         },
       })
       expect(out).toEqual({
@@ -107,6 +112,7 @@ describe('codeReview helpers', () => {
         reviewerApplies: true,
         lmstudioModel: 'qwen2.5-coder:7b',
         ollamaModel: 'codellama',
+        codexModel: 'gpt-5.6-sol',
       })
     })
   })

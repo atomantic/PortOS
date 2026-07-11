@@ -18,6 +18,7 @@ import {
   musicVideoSceneUpdateSchema,
   musicVideoSceneReorderSchema,
   musicVideoPlanRequestSchema,
+  musicVideoTranscribeMidiRequestSchema,
 } from '../lib/validation.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { safeUnder } from '../lib/ffmpeg.js';
@@ -32,7 +33,13 @@ import {
   updateScene,
   deleteScene,
   reorderProjectScenes,
+  setProjectMidiTranscription,
 } from '../services/musicVideo/projects.js';
+import {
+  startMidiTranscription,
+  attachMidiTranscriptionSseClient,
+  cancelMidiTranscription,
+} from '../services/audioMidiTranscription.js';
 import { analyzeAudioFile } from '../services/musicVideo/audioAnalysis.js';
 import { renderMusicVideo, attachRenderSseClient, cancelRender } from '../services/musicVideo/render.js';
 import { planProject } from '../services/musicVideo/planner.js';
@@ -115,6 +122,61 @@ router.post('/:id/plan', asyncHandler(async (req, res) => {
   const result = await planProject(req.params.id, { seedPrompts, providerId, model });
   res.json(result);
 }));
+
+// --- Audio → MIDI transcription (MuScriptor) ---
+// Transcribe the project's source audio into a .mid via the local MuScriptor
+// sidecar. Kickoff returns 202 + a jobId (503 with the install hint when the
+// venv isn't provisioned); progress streams over SSE. Unlike the rounds path
+// (where the client persists on Save), the terminal `complete` frame here
+// carries the server-persisted pointer — the project record isn't an editor
+// draft, so the server lands `midiTranscription` on completion and the frame
+// includes it for the client to merge.
+router.post('/:id/transcribe-midi', asyncHandler(async (req, res) => {
+  const { model } = validateRequest(musicVideoTranscribeMidiRequestSchema, req.body || {});
+  const project = await getProject(req.params.id);
+  if (!project) throw new ServerError('Project not found', { status: 404, code: 'NOT_FOUND' });
+  const audioPath = await resolveAudioPath(project);
+  const projectId = project.id;
+  // Audio-source identity at kickoff — the completion callback re-checks it so
+  // a transcription of the OLD track can't land on a project whose audio was
+  // swapped mid-run (another client / peer sync). applyProjectPatch clears
+  // midiTranscription on the swap; without this guard the in-flight job would
+  // reintroduce the stale pointer right after.
+  const sourceTrackId = project.trackId ?? null;
+  const sourceUpload = project.uploadedAudioFilename ?? null;
+  res.status(202).json(await startMidiTranscription({
+    audioPath,
+    outputName: `${project.name || 'music-video'}-midi`,
+    model,
+    // Land the .mid in the music dir (not uploads) so the peer-sync asset
+    // manifest federates it with the project's other audio — the manifest
+    // only ships known asset kinds/directories, and `music` is one.
+    destDir: PATHS.music,
+    onComplete: async ({ filename, model: usedModel }) => {
+      const current = await getProject(projectId);
+      if (!current) throw new Error('Project was deleted during transcription');
+      if ((current.trackId ?? null) !== sourceTrackId || (current.uploadedAudioFilename ?? null) !== sourceUpload) {
+        // The service deletes the orphaned .mid and reports a discarded (not
+        // "ready") completion to the client.
+        return { discarded: true, reason: `audio source of ${projectId} changed mid-transcription` };
+      }
+      const midiTranscription = { filename, model: usedModel, createdAt: new Date().toISOString() };
+      await setProjectMidiTranscription(projectId, midiTranscription);
+      return { midiTranscription };
+    },
+  }));
+}));
+
+// Two-segment paths — distinct from the one-segment GET /:id project read.
+router.get('/transcribe-midi/:jobId/events', (req, res) => {
+  if (!attachMidiTranscriptionSseClient(req.params.jobId, res)) {
+    throw new ServerError('Transcription job not found or expired', { status: 404, code: 'NOT_FOUND' });
+  }
+});
+
+router.post('/transcribe-midi/:jobId/cancel', (req, res) => {
+  res.json({ ok: cancelMidiTranscription(req.params.jobId) });
+});
 
 // --- Render (#1760, Phase 2) ---
 // Assemble the scenes' i2v clips into one MP4 over the track as the master audio

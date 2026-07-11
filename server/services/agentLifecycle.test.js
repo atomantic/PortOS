@@ -778,6 +778,20 @@ describe('agentLifecycle — runner OpenCode Ollama env (#2243 / #2190)', () => 
     expect(fnBody.indexOf('...opencodeEnv'), 'opencodeEnv must be spread AFTER provider.envVars so it overrides the static config')
       .toBeGreaterThan(fnBody.indexOf('...provider.envVars'));
   });
+
+  it('source: spawnViaRunner pins GH_TOKEN via resolveForgeTokenEnv so the runner-spawned agent\'s `gh` uses the repo-owner account', () => {
+    // The direct and TUI spawn paths inject the owner-matched GH_TOKEN; the
+    // runner path must too, or a codex/CLI agent under the runner opens its PR
+    // as gh's mutable active-user (the multi-account "must be a collaborator"
+    // failure). Assert the resolve+spread exists inside spawnViaRunner.
+    const fnStart = AGENT_LIFECYCLE_SRC.indexOf('export async function spawnViaRunner');
+    const fnBody = AGENT_LIFECYCLE_SRC.slice(fnStart, fnStart + 4000);
+    expect(fnBody).toContain('resolveForgeTokenEnv(workspacePath)');
+    expect(fnBody).toMatch(/envVars:\s*\{[^}]*\.\.\.forgeTokenEnv[^}]*\}/);
+    // forgeTokenEnv before provider.envVars so an explicit provider GH_TOKEN wins.
+    expect(fnBody.indexOf('...forgeTokenEnv'), 'forgeTokenEnv must be spread BEFORE provider.envVars')
+      .toBeLessThan(fnBody.indexOf('...provider.envVars'));
+  });
 });
 
 // ─── handleAgentCompletion error recovery ──────────────────────────────────

@@ -41,7 +41,7 @@
     { "id": "route.imageGen", "label": "routes/imageGen", "group": "server-routes", "file": "server/routes/imageGen.js", "desc": "Image generation endpoints: generate, cancel, gallery, job events." },
     { "id": "route.storyBuilder", "label": "routes/storyBuilder", "group": "server-routes", "file": "server/routes/storyBuilder.js", "desc": "Story Builder CRUD, step generation, SSE progress." },
     { "id": "route.cos", "label": "routes/cos*", "group": "server-routes", "file": "server/routes/cosAgentRoutes.js", "desc": "CoS task/agent/job/schedule endpoints (cos*Routes family)." },
-    { "id": "route.apps", "label": "routes/apps", "group": "server-routes", "file": "server/routes/apps.js", "desc": "Managed-app endpoints: start/stop/restart, config, status." },
+    { "id": "route.apps", "label": "routes/apps", "group": "server-routes", "file": "server/routes/apps/index.js", "desc": "Managed-app endpoints (composed sub-routers): start/stop/restart, config, status." },
     { "id": "route.backup", "label": "routes/backup", "group": "server-routes", "file": "server/routes/backup.js", "desc": "Backup endpoints: run, snapshots, restore, restore-db." },
     { "id": "route.peerSync", "label": "routes/peerSync", "group": "server-routes", "file": "server/routes/peerSync.js", "desc": "Local sync commands + peer-facing push/manifest/record endpoints." },
     { "id": "route.update", "label": "routes/update", "group": "server-routes", "file": "server/routes/update.js", "desc": "Self-update endpoints: check, sync-fork, execute." },

@@ -73,6 +73,7 @@ const RECENT_COMPLETION_GRACE_MS = 60_000;
 
 // Internal imports for functions used in this module
 import { pruneOldAgentArchives, archiveStaleAgents as _archiveStaleAgents, loadAgentIndex } from './cosAgents.js';
+import { resolveAgentProviderAndModel } from './agentProviderResolution.js';
 
 // Task generation + evaluation engine (extracted to cosTaskGenerator.js).
 // `evaluateTasks` and the generators emit `task:ready`; the spawn-side
@@ -471,6 +472,18 @@ export async function forceSpawnTask(taskId) {
   const runningAgents = Object.values(state.agents).filter(a => a.status === 'running').length;
   if (runningAgents >= state.config.maxConcurrentAgents) {
     return { error: `No available agent slots (${runningAgents}/${state.config.maxConcurrentAgents})` };
+  }
+
+  // Pre-validate provider/model resolution before emitting `task:ready`. The
+  // actual spawn runs asynchronously in a `task:ready` listener, so a
+  // resolution failure there (e.g. a task pinned to an `api`-type provider with
+  // no file-writing harness) would bail silently and leave the task `pending`
+  // — while this call had already returned `{ success: true }` and the UI
+  // toasted "Spawning". Resolving here surfaces the real, actionable error
+  // (which provider to use) synchronously instead of lying to the user.
+  const resolution = await resolveAgentProviderAndModel(task);
+  if (!resolution.ok) {
+    return { error: resolution.error };
   }
 
   cosEvents.emit('task:ready', { ...task, taskType: task.taskType || 'internal' });

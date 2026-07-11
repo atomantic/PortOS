@@ -415,6 +415,8 @@ async function videoHistoryFilenamesById() {
  *     `music:<filename>` ships it exactly once. The track is dynamic-resolved via
  *     `getTrack`; a deleted/missing track or a track with no `audioFilename` simply
  *     contributes nothing (a missing file is skipped, same as every other ref).
+ *     The project's MuScriptor MIDI transcription (`midiTranscription.filename`)
+ *     also lives under PATHS.music and ships through the same `music` entries.
  *   - per-scene rendered clips (`scene.videoHistoryId` → a video-history row →
  *     `<filename>` under PATHS.videos). The row METADATA union-merges via the
  *     `videoHistory` dataSync category; this adds the bytes. Falls back to the
@@ -441,6 +443,10 @@ export async function buildMusicVideoAssetManifest(project) {
     const track = await getTrack(project.trackId).catch(() => null);
     if (isStr(track?.audioFilename)) audioNames.push(track.audioFilename);
   }
+  // MuScriptor MIDI transcription of the master audio — lands under PATHS.music
+  // precisely so it rides this manifest; without it a subscribed peer receives
+  // a `midiTranscription.filename` pointer whose bytes never arrive.
+  if (isStr(project?.midiTranscription?.filename)) audioNames.push(project.midiTranscription.filename);
   for (const name of [...new Set(audioNames)]) {
     const audio = await hashSimpleAsset(name, 'music', PATHS.music);
     if (audio) dedup.set(`${audio.kind}:${audio.filename}`, audio);

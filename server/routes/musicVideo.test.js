@@ -14,6 +14,7 @@ vi.mock('../services/musicVideo/projects.js', () => ({
   updateScene: vi.fn(async (id, sceneId, p) => ({ sceneId, ...p })),
   deleteScene: vi.fn(async (id) => ({ id, scenes: [] })),
   reorderProjectScenes: vi.fn(async (id, ids) => ({ id, scenes: ids.map((sceneId, order) => ({ sceneId, order })) })),
+  setProjectMidiTranscription: vi.fn(async (id, midi) => ({ id, midiTranscription: midi })),
 }));
 
 vi.mock('../services/musicVideo/audioAnalysis.js', () => ({
@@ -32,6 +33,14 @@ vi.mock('../services/musicVideo/render.js', () => ({
   cancelRender: vi.fn(() => true),
 }));
 
+// Mock the MuScriptor transcription service so the route test doesn't depend
+// on a provisioned venv; the route's job is to validate + resolve + dispatch.
+vi.mock('../services/audioMidiTranscription.js', () => ({
+  startMidiTranscription: vi.fn(async () => ({ jobId: 'midi-job-1', model: 'medium' })),
+  attachMidiTranscriptionSseClient: vi.fn(() => true),
+  cancelMidiTranscription: vi.fn(() => true),
+}));
+
 vi.mock('../services/musicVideo/planner.js', () => ({
   planProject: vi.fn(async (id) => ({
     project: { id, scenes: [{ sceneId: 'mvs-1' }] },
@@ -45,6 +54,7 @@ import * as svc from '../services/musicVideo/projects.js';
 import { analyzeAudioFile } from '../services/musicVideo/audioAnalysis.js';
 import { getTrack } from '../services/tracks/index.js';
 import * as renderSvc from '../services/musicVideo/render.js';
+import * as midiSvc from '../services/audioMidiTranscription.js';
 import { planProject } from '../services/musicVideo/planner.js';
 import musicVideoRoutes from './musicVideo.js';
 
@@ -139,6 +149,82 @@ describe('musicVideo routes', () => {
       expect(r.status).toBe(200);
       expect(r.body.audioAnalysis).toEqual(analysis);
       expect(svc.setProjectAnalysis).toHaveBeenCalledWith('mv-1', analysis);
+    });
+  });
+
+  describe('POST /:id/transcribe-midi', () => {
+    it('202s with the jobId, resolving the project audio like analyze', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', name: 'Neon', trackId: 't1' });
+      getTrack.mockResolvedValue({ id: 't1', audioFilename: 'song.wav' });
+      const r = await request(app).post('/api/music-video/mv-1/transcribe-midi').send({ model: 'small' });
+      expect(r.status).toBe(202);
+      expect(r.body.jobId).toBe('midi-job-1');
+      const call = midiSvc.startMidiTranscription.mock.calls[0][0];
+      expect(call.audioPath).toMatch(/song\.wav$/);
+      expect(call.model).toBe('small');
+      expect(call.outputName).toBe('Neon-midi');
+      // Lands in the music dir (not uploads) so the peer-sync asset manifest
+      // federates the .mid with the project's other audio.
+      expect(call.destDir).toMatch(/music$/);
+      expect(typeof call.onComplete).toBe('function');
+    });
+
+    it('onComplete persists the pointer on the project and returns it for the SSE frame', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', name: 'Neon', trackId: 't1' });
+      getTrack.mockResolvedValue({ id: 't1', audioFilename: 'song.wav' });
+      await request(app).post('/api/music-video/mv-1/transcribe-midi').send({});
+      const { onComplete } = midiSvc.startMidiTranscription.mock.calls[0][0];
+      const extra = await onComplete({ filename: 'neon-midi.mid', model: 'medium' });
+      expect(svc.setProjectMidiTranscription).toHaveBeenCalledWith('mv-1', expect.objectContaining({
+        filename: 'neon-midi.mid', model: 'medium',
+      }));
+      expect(extra.midiTranscription.filename).toBe('neon-midi.mid');
+    });
+
+    it('onComplete drops a stale result when the audio source changed mid-transcription', async () => {
+      svc.getProject.mockResolvedValueOnce({ id: 'mv-1', name: 'Neon', trackId: 't1' }); // kickoff read
+      getTrack.mockResolvedValue({ id: 't1', audioFilename: 'song.wav' });
+      await request(app).post('/api/music-video/mv-1/transcribe-midi').send({});
+      const { onComplete } = midiSvc.startMidiTranscription.mock.calls[0][0];
+      // By completion time the project points at a different track — the old
+      // audio's MIDI must not be re-attached (applyProjectPatch cleared it).
+      svc.getProject.mockResolvedValueOnce({ id: 'mv-1', name: 'Neon', trackId: 't2' });
+      const extra = await onComplete({ filename: 'stale.mid', model: 'medium' });
+      expect(extra.discarded).toBe(true);
+      expect(svc.setProjectMidiTranscription).not.toHaveBeenCalled();
+    });
+
+    it('404s when the project is missing', async () => {
+      svc.getProject.mockResolvedValue(null);
+      const r = await request(app).post('/api/music-video/mv-x/transcribe-midi').send({});
+      expect(r.status).toBe(404);
+      expect(midiSvc.startMidiTranscription).not.toHaveBeenCalled();
+    });
+
+    it('400s when the project has no audio source', async () => {
+      svc.getProject.mockResolvedValue({ id: 'mv-1', trackId: null, uploadedAudioFilename: null });
+      const r = await request(app).post('/api/music-video/mv-1/transcribe-midi').send({});
+      expect(r.status).toBe(400);
+      expect(r.body.code).toBe('NO_AUDIO');
+    });
+
+    it('rejects an unknown model size', async () => {
+      const r = await request(app).post('/api/music-video/mv-1/transcribe-midi').send({ model: 'xl' });
+      expect(r.status).toBe(400);
+      expect(midiSvc.startMidiTranscription).not.toHaveBeenCalled();
+    });
+
+    it('GET /transcribe-midi/:jobId/events 404s for an unknown job', async () => {
+      midiSvc.attachMidiTranscriptionSseClient.mockReturnValueOnce(false);
+      const r = await request(app).get('/api/music-video/transcribe-midi/nope/events');
+      expect(r.status).toBe(404);
+    });
+
+    it('POST /transcribe-midi/:jobId/cancel forwards to the service', async () => {
+      const r = await request(app).post('/api/music-video/transcribe-midi/midi-job-1/cancel');
+      expect(r.status).toBe(200);
+      expect(r.body).toEqual({ ok: true });
+      expect(midiSvc.cancelMidiTranscription).toHaveBeenCalledWith('midi-job-1');
     });
   });
 

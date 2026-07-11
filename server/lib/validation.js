@@ -457,6 +457,17 @@ export const featureProviderConfigSchema = z.object({
   model: z.preprocess(emptyToUndefined, z.string().optional()),
 });
 
+// Autofixer settings extend the shared provider assignment with its isolation
+// controls. `autoPromote` (default off) is the explicit promotion gate: when
+// false the autonomous repair only STAGES a validated patch for review; when
+// true a validated (and, if set, verified) diff is applied to the live checkout
+// and the process restarted. `verifyCommand` runs in the isolated worktree
+// before any change reaches live. See autofixer/sandbox.js.
+export const autofixerSettingsSchema = featureProviderConfigSchema.extend({
+  autoPromote: z.boolean().optional(),
+  verifyCommand: z.preprocess(emptyToUndefined, z.string().max(500).optional()),
+});
+
 // Creative Director settings slice. Each LLM-backed stage can pin its own
 // provider/model instead of inheriting the system default. `evaluation` is a
 // direct vision API call (blank = auto-pick a local vision model, else fall

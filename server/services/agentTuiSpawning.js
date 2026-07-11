@@ -20,7 +20,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { DONE_SENTINEL_NAME, parseSentinelPayload } from '../lib/agentSentinel.js';
 import * as git from './git.js';
 import { shellQuote } from '../lib/shellQuote.js';
-import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, isClaudeCommand, applyLeanClaudeArgs } from '../lib/providerModels.js';
+import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, isClaudeCommand, applyLeanClaudeArgs, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../lib/ansiStrip.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { isAntigravityCommand } from '../lib/antigravity.js';
@@ -37,6 +37,9 @@ import {
   createWorkActivityTracker,
   createMergeQueueTracker,
   createReviewLoopTracker,
+  createMcpBootTracker,
+  MCP_BOOT_PASTE_DEADLINE_MS,
+  MCP_BOOT_PASTE_RETRY_DELAY_MS,
   createInputReadyTracker,
   rendersWorkCounter,
   PASTE_TO_ENTER_MIN_DELAY_MS,
@@ -180,7 +183,7 @@ const DONE_POLL_INTERVAL_MS = 2000;
  * to create the session, `sessionId` is null and the caller is expected
  * to bail out via its `finish` path.
  */
-export function createAgentTuiSession({ agentId, provider, model, tuiConfig, cwd, onData, onExit, onInitialCommandSent }) {
+export function createAgentTuiSession({ agentId, provider, model, tuiConfig, cwd, forgeTokenEnv = {}, onData, onExit, onInitialCommandSent }) {
   // For OpenCode Ollama providers, build dynamic OPENCODE_CONFIG_CONTENT with
   // the models map so --model is accepted (the static env var lacked this).
   const opencodeEnv = buildOpencodeEnvVars(provider, model);
@@ -204,7 +207,11 @@ export function createAgentTuiSession({ agentId, provider, model, tuiConfig, cwd
     // points it at the real pm2). Spread LAST so it wins over any provider PATH.
     // Only AI agent sessions get this — the user's own Shell page does not.
     // opencodeEnv comes after provider.envVars to override the static config.
-    env: { ...(provider.envVars || {}), ...opencodeEnv, ...agentGuardEnv() },
+    // forgeTokenEnv is threaded in explicitly because buildSafeEnv strips
+    // GH_TOKEN from the inherited env (see resolveForgeTokenEnv); it goes before
+    // provider.envVars so an explicit provider GH_TOKEN override still wins,
+    // matching the direct-CLI and runner spawn paths.
+    env: { ...forgeTokenEnv, ...(provider.envVars || {}), ...opencodeEnv, ...agentGuardEnv() },
     onData,
     onExit,
   });
@@ -361,6 +368,25 @@ export async function spawnTuiAgent({
   // isn't reaped as a false `idle-complete` success before it reaches the
   // merge gate (issue observed on agent-61508f36, PR #2084).
   const reviewLoop = createReviewLoopTracker();
+  // Latches once codex prints its MCP-server boot banner during startup. A user
+  // with heavyweight interactive MCP servers in ~/.codex/config.toml (playwright
+  // via npx, a node_repl with startup_timeout_sec=120) makes codex spend tens of
+  // seconds — up to ~2min — booting them before its input box accepts a paste,
+  // far longer than the default 3-attempt paste-retry window. While latched, the
+  // paste-retry loop below extends its budget to MCP_BOOT_PASTE_DEADLINE_MS so a
+  // slow boot completes and the paste finally lands, instead of being killed
+  // `paste-not-rendered` mid-boot (incident 2026-07-10, agent-c5a26b40).
+  //
+  // Gated to codex ONLY (isCodexSession below). The extended budget and the
+  // failure message ("check your ~/.codex config") are codex-specific, and the
+  // claude path never blind-pastes during its own MCP boot — it waits for
+  // claude's positive input-ready signal first (createInputReadyTracker) — so it
+  // can't hit this failure mode. Observing every provider would let an unrelated
+  // TUI whose startup text happened to contain "starting mcp servers" inherit
+  // codex's 150s budget and its misleading codex-config guidance, breaking the
+  // "non-codex TUIs are unchanged" contract (codex review [P2]).
+  const isCodexSession = commandName.toLowerCase().includes('codex');
+  const mcpBoot = createMcpBootTracker();
   // Tracks claude's interactive input-readiness (footer chrome) and its first-run
   // folder-trust gate. Gates the prompt paste for the claude TUI so we never
   // paste into a startup banner, a trust menu, or a returned shell prompt.
@@ -716,6 +742,13 @@ export async function spawnTuiAgent({
       // injected — earlier toggles belong to shell startup and the readiness
       // probe, not to claude.
       if (!promptSentAt && commandInjected) inputReady.observe(text, stripped);
+      // Latch codex's MCP-server boot banner during startup (codex sessions only;
+      // before the prompt is submitted, so codex's own boot chrome — not the
+      // echoed prompt — is what trips it). Gates the extended, boot-aware
+      // paste-retry budget below. Observing until promptSubmittedAt (set only on a
+      // CONFIRMED paste) means a banner that arrives AFTER an early swallowed paste
+      // still latches — the swallowed paste never sets promptSubmittedAt.
+      if (isCodexSession && !promptSubmittedAt && stripped && !mcpBoot.active) mcpBoot.observe(stripped);
       const now = Date.now();
       // Once the prompt is SUBMITTED (Enter sent — not merely pasted), watch for
       // proof the model is actually working. Keying on promptSubmittedAt (not
@@ -798,12 +831,21 @@ export async function spawnTuiAgent({
     });
   };
 
+  // Repo-owner-pinned GH_TOKEN for the agent's own `gh pr create` (see
+  // resolveForgeTokenEnv). Resolved here since createAgentTuiSession is sync.
+  // Skip when the provider supplies its own GH_TOKEN/GITHUB_TOKEN so its explicit
+  // credential wins.
+  const forgeTokenEnv = providerSuppliesGithubToken(provider)
+    ? {}
+    : await git.resolveForgeTokenEnv(cwd);
+
   const session = createAgentTuiSession({
     agentId,
     provider,
     model,
     tuiConfig,
     cwd,
+    forgeTokenEnv,
     onData: handleData,
     onExit: handleExit,
     onInitialCommandSent: () => { commandInjected = true; },
@@ -866,6 +908,10 @@ export async function spawnTuiAgent({
   // Computed once up front so retry attempts use the same verification target.
   const verifiablePrefix = extractVerifiablePromptPrefix(prompt);
   let pasteAttempt = 0;
+  // Wall-clock of the FIRST paste attempt — the anchor for the MCP-boot-aware
+  // retry deadline (retries are time-bounded, not attempt-count-bounded, while
+  // codex is still booting its MCP servers).
+  let firstPasteStartedAt = null;
 
   const sendPrompt = async (reason) => {
     if (finalized || promptSentAt) return;
@@ -894,6 +940,7 @@ export async function spawnTuiAgent({
   const attemptPaste = (reason) => {
     pasteAttempt += 1;
     const attemptNum = pasteAttempt;
+    if (firstPasteStartedAt === null) firstPasteStartedAt = Date.now();
     if (pasteEnterTimer) { clearInterval(pasteEnterTimer); pasteEnterTimer = null; }
     if (pasteVerifyTimer) { clearInterval(pasteVerifyTimer); pasteVerifyTimer = null; }
     // Start capturing post-paste output. Set BEFORE writing the paste so
@@ -965,24 +1012,49 @@ export async function spawnTuiAgent({
       isPasteConfirmed(buffer, { verifiablePrefix, promptMarkerCount });
 
     // Markerless AND the prompt text never rendered → the paste was swallowed by
-    // a still-initializing TUI (issue #2192). Retry with backoff, then fail.
+    // a still-initializing TUI (issue #2192). Retry, then fail.
+    //
+    // Budget is boot-aware: once codex's MCP-boot banner has been seen (mcpBoot
+    // active), the boot can legitimately run for tens of seconds — up to ~2min
+    // for a node_repl/npx server — during which EVERY paste is swallowed. Switch
+    // from the fixed 3-attempt/exponential-backoff budget to a TIME budget
+    // (MCP_BOOT_PASTE_DEADLINE_MS from the first paste) with a fixed cadence, so
+    // retries outlast the boot and the paste finally lands once the input box is
+    // live (incident 2026-07-10, agent-c5a26b40). No MCP boot → unchanged.
     const retryOrFailPaste = () => {
       if (finalized) return;
-      if (attemptNum < PASTE_RETRY_MAX_ATTEMPTS) {
-        const retryDelayMs = PASTE_RETRY_BASE_DELAY_MS * Math.pow(2, attemptNum - 1);
-        appendLine(`⚠️ Paste verification failed — prompt text not found in buffer, retrying in ${retryDelayMs}ms`);
+      const bootActive = mcpBoot.active;
+      const withinBudget = bootActive
+        ? (Date.now() - firstPasteStartedAt) < MCP_BOOT_PASTE_DEADLINE_MS
+        : attemptNum < PASTE_RETRY_MAX_ATTEMPTS;
+      if (withinBudget) {
+        const retryDelayMs = bootActive
+          ? MCP_BOOT_PASTE_RETRY_DELAY_MS
+          : PASTE_RETRY_BASE_DELAY_MS * Math.pow(2, attemptNum - 1);
+        const bootNote = bootActive
+          ? ` (waiting for ${tuiConfig.command} MCP servers to finish booting)`
+          : '';
+        appendLine(`⚠️ Paste verification failed — prompt text not found in buffer, retrying in ${retryDelayMs}ms${bootNote}`);
         setTimeout(() => {
           if (finalized) return;
           attemptPaste(reason);
         }, retryDelayMs);
         return;
       }
-      // Max retries exhausted — fail the agent
-      appendLine(`❌ Paste verification failed after ${PASTE_RETRY_MAX_ATTEMPTS} attempts — prompt never rendered`);
-      finishStartupFailure(
-        'paste-not-rendered',
-        `${tuiConfig.command} was still initializing and the paste was silently swallowed. The prompt never appeared in the TUI buffer after ${PASTE_RETRY_MAX_ATTEMPTS} attempts.`,
-      ).catch(err => emitLog('error', `TUI agent ${agentId} finishStartupFailure(paste-not-rendered) failed: ${err?.message || err}`, { agentId }));
+      // Budget exhausted — fail the agent, naming the MCP-boot cause when that's
+      // what kept the paste from landing so the operator knows to check their
+      // codex config rather than chasing a phantom paste-timing bug.
+      const bootSecs = Math.round(MCP_BOOT_PASTE_DEADLINE_MS / 1000);
+      const summary = bootActive
+        ? `${tuiConfig.command} did not finish booting its MCP servers within ${bootSecs}s, so the prompt was never delivered. A slow or hung MCP server in your ~/.codex config (e.g. playwright via npx, or a node_repl) blocks codex from accepting input — disable or fix it, or remove it for headless runs.`
+        : `${tuiConfig.command} was still initializing and the paste was silently swallowed. The prompt never appeared in the TUI buffer after ${PASTE_RETRY_MAX_ATTEMPTS} attempts.`;
+      appendLine(
+        bootActive
+          ? `❌ Paste never landed after ${bootSecs}s of waiting for MCP servers to boot — prompt never rendered`
+          : `❌ Paste verification failed after ${PASTE_RETRY_MAX_ATTEMPTS} attempts — prompt never rendered`,
+      );
+      finishStartupFailure('paste-not-rendered', summary)
+        .catch(err => emitLog('error', `TUI agent ${agentId} finishStartupFailure(paste-not-rendered) failed: ${err?.message || err}`, { agentId }));
     };
 
     const pasteSentAt = Date.now();

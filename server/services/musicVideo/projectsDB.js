@@ -18,6 +18,7 @@ import {
   buildProjectRecord,
   applyProjectPatch,
   setAudioAnalysis,
+  setMidiTranscription,
   addScene,
   addScenes,
   applySceneUpdate,
@@ -184,6 +185,11 @@ export async function pruneTombstonedProjects(olderThanMs) {
 
 export async function setProjectAnalysis(id, analysis) {
   const { project } = await withLockedProject(id, (p) => ({ project: setAudioAnalysis(p, analysis) }));
+  return project;
+}
+
+export async function setProjectMidiTranscription(id, midi) {
+  const { project } = await withLockedProject(id, (p) => ({ project: setMidiTranscription(p, midi) }));
   return project;
 }
 

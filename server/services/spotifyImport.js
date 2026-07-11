@@ -21,9 +21,8 @@
  * is a no-op via `recordEvents`'s `ON CONFLICT DO NOTHING`. No AI-provider calls;
  * parsing is deterministic and LLM-free.
  */
-import { createReadStream } from 'fs';
 import { readFile } from 'fs/promises';
-import { parseZip, collectZipEntry } from '../lib/zipStream.js';
+import { collectZipEntries, isZipUpload } from '../lib/zipStream.js';
 import { shortSummary, recordEvents } from './humanActivity.js';
 
 // ---------------------------------------------------------------------------
@@ -168,60 +167,27 @@ export function parseSpotifyJsonText(text) {
 // File ingestion (ZIP or single JSON) → records.
 // ---------------------------------------------------------------------------
 
-const isZip = (file) =>
-  file?.mimetype === 'application/zip' ||
-  file?.mimetype === 'application/x-zip-compressed' ||
-  /\.zip$/i.test(file?.originalname || '');
-
 // A streaming-history JSON member inside the export ZIP. Spotify names them
 // `Streaming_History_Audio_2023_1.json` (extended) or `StreamingHistory0.json`
 // (legacy), sometimes under a `Spotify Extended Streaming History/` folder.
 const isHistoryJsonEntry = (entryPath) =>
   /(?:^|\/)(?:Streaming_History_Audio|StreamingHistory)[^/]*\.json$/i.test(entryPath);
 
-// Extract and concatenate the play records from every streaming-history JSON
-// member of the export ZIP. Non-history entries are drained and ignored.
-async function readRecordsFromZip(filePath) {
-  const records = [];
-  const reads = [];
-  await new Promise((resolve, reject) => {
-    let settled = false;
-    const src = createReadStream(filePath);
-    const parser = parseZip();
-    const settle = (fn) => (...args) => {
-      if (settled) return;
-      settled = true;
-      // On failure, tear down the read + parse pipeline so a 200MB upload with an
-      // early error (bad JSON member, corrupt ZIP) doesn't keep reading to EOF.
-      if (fn === reject) { src.destroy(); parser.destroy?.(); }
-      fn(...args);
-    };
-    src.on('error', settle(reject));
-    src
-      .pipe(parser)
-      .on('entry', (entry) => {
-        if (isHistoryJsonEntry(entry.path)) {
-          reads.push(
-            collectZipEntry(entry)
-              .then((buf) => {
-                for (const r of parseSpotifyJsonText(buf.toString('utf-8'))) records.push(r);
-              })
-              .catch(settle(reject)),
-          );
-        } else {
-          entry.autodrain();
-        }
-      })
-      .on('close', () => Promise.all(reads).then(settle(resolve)).catch(settle(reject)))
-      .on('error', settle(reject));
-  });
-  return records;
-}
-
 // Read raw play records from an uploaded file (ZIP export or single JSON array).
+// The ZIP path delegates the whole streaming lifecycle (teardown, autodrain,
+// per-entry await) to `collectZipEntries`, leaving only the match/parse callbacks.
 export async function readSpotifyRecords(file) {
   if (!file?.path) return [];
-  if (isZip(file)) return readRecordsFromZip(file.path);
+  if (isZipUpload(file)) {
+    const records = [];
+    await collectZipEntries(file.path, {
+      match: isHistoryJsonEntry,
+      onMatch: (buf) => {
+        for (const r of parseSpotifyJsonText(buf.toString('utf-8'))) records.push(r);
+      },
+    });
+    return records;
+  }
   const text = await readFile(file.path, 'utf-8');
   return parseSpotifyJsonText(text);
 }
