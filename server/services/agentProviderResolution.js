@@ -95,7 +95,13 @@ export async function resolveAgentProviderAndModel(task) {
       fallbackModelPin = fallbackResult.model || null;
     } else {
       const errorMsg = `Provider ${provider.id} unavailable (${status.message}) and no fallback available`;
-      return { ok: false, error: errorMsg, providerId: provider.id, providerStatus: status };
+      // A directly-resolved api provider that is down with no fallback would
+      // return here — BEFORE the harness check below — as a transient
+      // "unavailable", so the task would retry forever even though an api provider
+      // can never supply a file-writing harness whether it's up or down. Mark it
+      // permanent so the caller retires it. A CLI provider that's merely down stays
+      // transient (it may recover).
+      return { ok: false, error: errorMsg, providerId: provider.id, providerStatus: status, permanent: directProviderType === 'api' };
     }
   }
 

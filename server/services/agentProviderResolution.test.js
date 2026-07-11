@@ -68,6 +68,25 @@ describe('resolveAgentProviderAndModel', () => {
     expect(r.error).toContain('no fallback available');
     expect(r.providerId).toBe('p1');
     expect(r.providerStatus).toEqual({ message: 'usage-limit', reason: 'limit' });
+    // A CLI provider that's merely down stays transient — it may recover.
+    expect(r.permanent).toBe(false);
+  });
+
+  it('marks a down api provider with no fallback PERMANENT (never gains a harness)', async () => {
+    // An api provider that is unavailable with no fallback returns from the
+    // availability branch before the harness check; without a permanent flag the
+    // task would retry forever even though an api provider can never run an agent.
+    const provider = { id: 'ollama', type: 'api' };
+    getActiveProvider.mockResolvedValue(provider);
+    isProviderAvailable.mockReturnValue(false);
+    getProviderStatus.mockReturnValue({ message: 'daemon-down', reason: 'down' });
+    getAllProviders.mockResolvedValue({ providers: [provider] });
+    getFallbackProvider.mockResolvedValue(null);
+
+    const r = await resolveAgentProviderAndModel(TASK);
+    expect(r.ok).toBe(false);
+    expect(r.providerId).toBe('ollama');
+    expect(r.permanent).toBe(true);
   });
 
   it('switches to the fallback provider and pins its model when one is available', async () => {
