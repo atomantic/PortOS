@@ -1,0 +1,455 @@
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { midiNoteName, isBlackKey } from '../../lib/pianoKeyboard';
+import { chordNoteNames } from '../../lib/midiChords';
+import { formatTimecode } from '../../utils/formatters';
+import { layerColor } from './PianoRoll.jsx';
+
+// DAW-style horizontal piano-roll for inspecting a transcribed `.mid` file
+// (time × pitch grid) — NOT the Synthesia falling-note <PianoRoll>, which is
+// score-playback pedagogy. Presentational: gets the parsed view-model from
+// midiNotes.js via props and only draws + handles pointer/keyboard input.
+//
+// The canvas is virtualized — it stays the container's width and pans by a
+// scroll offset (a full-duration canvas at high zoom would blow past browser
+// canvas size limits). Pan/scrub state lives in refs and redraws directly so
+// dragging never churns React renders; only the hover tooltip is state.
+
+const GUTTER_W = 44;   // left pitch gutter
+const RULER_H = 18;    // top time ruler
+const CHORD_H = 20;    // chord lane strip (when shown)
+const BG = '#0c0c0e';
+const GUTTER_BG = '#131316';
+const ACCENT = '#3b82f6';
+const GRID_LINE = 'rgba(255,255,255,0.05)';
+const C_LINE = 'rgba(255,255,255,0.14)';
+const TEXT_DIM = '#71717a';
+const NOTE_RADIUS = 2;
+
+// Zoom is a multiplier over fit-to-width (1 = whole file visible).
+export const MIN_ZOOM = 1;
+export const MAX_ZOOM = 64;
+export const clampZoom = (z) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
+
+const roundRect = (ctx, x, y, w, h, r) => {
+  const rr = Math.max(0, Math.min(r, w / 2, h / 2));
+  if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(x, y, w, h, rr); return; }
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+};
+
+// Ruler tick step that keeps labels ≥ ~70px apart at the current zoom.
+const tickStep = (pps) => {
+  const steps = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120];
+  return steps.find((s) => s * pps >= 70) || 300;
+};
+
+/**
+ * @param {object} props
+ * @param {object} props.data — view-model from parseMidiFile.
+ * @param {Array} props.chords — windows from detectChordWindows.
+ * @param {boolean} props.showChords
+ * @param {number} props.zoom — fit-relative multiplier (MIN_ZOOM..MAX_ZOOM).
+ * @param {(next:number)=>void} props.onZoomChange — wheel/pinch zoom.
+ * @param {number} props.height — total canvas height in px.
+ */
+export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomChange, height }) {
+  const wrapRef = useRef(null);
+  const canvasRef = useRef(null);
+  const widthRef = useRef(0);
+  const scrollSecRef = useRef(0);
+  const playheadSecRef = useRef(0);
+  const pointersRef = useRef(new Map()); // pointerId → { x, y, moved }
+  const pinchRef = useRef(null);         // { startDist, startZoom }
+  const [hover, setHover] = useState(null); // { kind:'note'|'chord', x, y, ... }
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+
+  const duration = Math.max(data?.durationSec || 0, 0.001);
+  const chordLaneH = showChords && chords?.length ? CHORD_H : 0;
+
+  // Pitch rows: pad one semitone each side, widen to at least an octave.
+  let lowMidi = Math.max(0, (data?.minMidi ?? 60) - 1);
+  let highMidi = Math.min(127, (data?.maxMidi ?? 71) + 1);
+  if (highMidi - lowMidi < 11) {
+    const pad = Math.ceil((11 - (highMidi - lowMidi)) / 2);
+    lowMidi = Math.max(0, lowMidi - pad);
+    highMidi = Math.min(127, highMidi + 11 - (highMidi - lowMidi));
+  }
+  const rowCount = highMidi - lowMidi + 1;
+
+  const geometry = useCallback(() => {
+    const width = widthRef.current;
+    const gridW = Math.max(1, width - GUTTER_W);
+    const fitPps = gridW / duration;
+    const pps = fitPps * zoomRef.current;
+    const gridTop = RULER_H + chordLaneH;
+    const gridH = Math.max(1, height - gridTop);
+    const rowH = gridH / rowCount;
+    const maxScroll = Math.max(0, duration - gridW / pps);
+    return { width, gridW, pps, gridTop, gridH, rowH, maxScroll };
+  }, [duration, chordLaneH, height, rowCount]);
+
+  const noteColor = useCallback((n) => {
+    const multiTrack = (data?.tracks?.length || 1) > 1;
+    return multiTrack ? layerColor(n.track) : ACCENT;
+  }, [data]);
+
+  const draw = useCallback(() => {
+    const canvas = canvasRef.current;
+    const { width, gridW, pps, gridTop, gridH, rowH, maxScroll } = geometry();
+    if (!canvas || !width) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    scrollSecRef.current = Math.min(Math.max(0, scrollSecRef.current), maxScroll);
+    const scroll = scrollSecRef.current;
+    const viewEnd = scroll + gridW / pps;
+    const timeToX = (sec) => GUTTER_W + (sec - scroll) * pps;
+    const midiToY = (m) => gridTop + (highMidi - m) * rowH;
+
+    ctx.clearRect(0, 0, width, height);
+    ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, width, height);
+
+    // Horizontal pitch rows — every semitone faint, every C stronger.
+    for (let m = lowMidi; m <= highMidi; m += 1) {
+      const y = midiToY(m);
+      if (m % 12 === 0) {
+        ctx.fillStyle = C_LINE;
+        ctx.fillRect(GUTTER_W, y + rowH, gridW, 1);
+      } else if (rowH >= 4) {
+        ctx.fillStyle = isBlackKey(m) ? 'rgba(255,255,255,0.02)' : 'transparent';
+        if (isBlackKey(m)) ctx.fillRect(GUTTER_W, y, gridW, rowH);
+        ctx.fillStyle = GRID_LINE;
+        ctx.fillRect(GUTTER_W, y + rowH, gridW, 1);
+      }
+    }
+
+    // Vertical time grid + ruler labels.
+    const step = tickStep(pps);
+    ctx.font = '9px ui-sans-serif, system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    for (let t = Math.floor(scroll / step) * step; t <= viewEnd; t += step) {
+      if (t < 0) continue;
+      const x = timeToX(t);
+      if (x < GUTTER_W) continue;
+      ctx.fillStyle = GRID_LINE;
+      ctx.fillRect(x, gridTop, 1, gridH);
+      ctx.fillStyle = TEXT_DIM;
+      ctx.fillText(formatTimecode(t).replace(/\.\d+$/, ''), x + 3, RULER_H - 6);
+    }
+
+    // Chord lane.
+    if (chordLaneH) {
+      ctx.fillStyle = 'rgba(255,255,255,0.03)';
+      ctx.fillRect(GUTTER_W, RULER_H, gridW, chordLaneH);
+      (chords || []).forEach((c) => {
+        if (c.endSec < scroll || c.startSec > viewEnd) return;
+        const x0 = Math.max(GUTTER_W, timeToX(c.startSec));
+        const x1 = Math.min(width, timeToX(c.endSec));
+        if (x1 - x0 < 2) return;
+        const isHover = hover?.kind === 'chord' && hover.chord === c;
+        ctx.fillStyle = isHover ? 'rgba(59,130,246,0.25)' : 'rgba(59,130,246,0.10)';
+        ctx.fillRect(x0, RULER_H + 1, x1 - x0 - 1, chordLaneH - 2);
+        // Sticky-left label, clipped to the window.
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(x0, RULER_H, x1 - x0, chordLaneH);
+        ctx.clip();
+        ctx.fillStyle = isHover ? '#dbeafe' : '#9ca3af';
+        ctx.font = '10px ui-sans-serif, system-ui, sans-serif';
+        ctx.fillText(c.label, x0 + 3, RULER_H + chordLaneH - 6);
+        ctx.restore();
+      });
+    }
+
+    // Notes — only those intersecting the visible window, clipped to the grid.
+    const hoverChordMidis = hover?.kind === 'chord' ? new Set(hover.chord.midis) : null;
+    const hoverChordSpan = hover?.kind === 'chord' ? hover.chord : null;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(GUTTER_W, gridTop, gridW, gridH);
+    ctx.clip();
+    ctx.textAlign = 'left';
+    (data?.notes || []).forEach((n) => {
+      const end = n.startSec + n.durationSec;
+      if (end < scroll || n.startSec > viewEnd) return;
+      if (n.midi < lowMidi || n.midi > highMidi) return;
+      const x = timeToX(n.startSec);
+      const w = Math.max(2, n.durationSec * pps);
+      const y = midiToY(n.midi);
+      const h = Math.max(2, rowH - 1);
+      roundRect(ctx, x, y + 0.5, w, h, NOTE_RADIUS);
+      ctx.fillStyle = noteColor(n);
+      ctx.globalAlpha = 0.35 + 0.6 * (n.velocity ?? 0.8);
+      ctx.fill();
+      const isHoverNote = hover?.kind === 'note' && hover.note.id === n.id;
+      const inHoverChord = hoverChordMidis?.has(n.midi)
+        && hoverChordSpan && n.startSec < hoverChordSpan.endSec && end > hoverChordSpan.startSec;
+      if (isHoverNote || inHoverChord) {
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1;
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      // In-bar note name when it fits.
+      if (w >= 28 && rowH >= 12) {
+        ctx.fillStyle = '#0c0c0e';
+        ctx.font = '9px ui-sans-serif, system-ui, sans-serif';
+        ctx.fillText(n.name || midiNoteName(n.midi), x + 3, y + h - Math.max(1, (h - 8) / 2));
+      }
+    });
+    ctx.restore();
+
+    // Playhead (static scrub position in v1 — click to move).
+    const px = timeToX(playheadSecRef.current);
+    if (px >= GUTTER_W && px <= width) {
+      ctx.fillStyle = ACCENT;
+      ctx.fillRect(px - 1, RULER_H, 2, height - RULER_H);
+    }
+
+    // Pitch gutter on top (opaque, so notes pan "under" it).
+    ctx.fillStyle = GUTTER_BG;
+    ctx.fillRect(0, gridTop, GUTTER_W, gridH);
+    ctx.textAlign = 'right';
+    for (let m = lowMidi; m <= highMidi; m += 1) {
+      const y = midiToY(m);
+      if (m % 12 === 0 && rowH >= 3) {
+        ctx.fillStyle = TEXT_DIM;
+        ctx.font = '9px ui-sans-serif, system-ui, sans-serif';
+        ctx.fillText(midiNoteName(m), GUTTER_W - 4, y + rowH - 1);
+        ctx.fillStyle = C_LINE;
+        ctx.fillRect(0, y + rowH, GUTTER_W, 1);
+      } else if (rowH >= 7) {
+        ctx.fillStyle = isBlackKey(m) ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.10)';
+        ctx.fillRect(GUTTER_W - 8, y + 1, 5, Math.max(1, rowH - 2));
+      }
+    }
+    // Scroll indicator along the bottom when zoomed in.
+    if (maxScroll > 0) {
+      const frac = gridW / (duration * pps);
+      const barW = Math.max(24, gridW * frac);
+      const barX = GUTTER_W + (scroll / maxScroll) * (gridW - barW);
+      ctx.fillStyle = 'rgba(255,255,255,0.15)';
+      ctx.fillRect(barX, height - 3, barW, 2);
+    }
+  }, [data, chords, chordLaneH, geometry, height, highMidi, lowMidi, hover, noteColor]);
+
+  const drawRef = useRef(draw);
+  drawRef.current = draw;
+
+  // DPR-aware canvas sizing + redraw on container resize (PianoRoll pattern).
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return undefined;
+    const resize = () => {
+      const w = Math.floor(el.clientWidth);
+      if (!w) return;
+      widthRef.current = w;
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+      canvas.width = Math.round(w * dpr);
+      canvas.height = Math.round(height * dpr);
+      canvas.style.width = `${w}px`;
+      canvas.style.height = `${height}px`;
+      const ctx = canvas.getContext('2d');
+      if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      drawRef.current();
+    };
+    resize();
+    const ro = new ResizeObserver(resize);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [height]);
+
+  useEffect(() => { draw(); }, [draw, zoom]);
+
+  const canvasPos = (e) => {
+    const rect = canvasRef.current.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  };
+
+  const hitTest = useCallback((x, y) => {
+    const { gridW, pps, gridTop, rowH } = geometry();
+    const scroll = scrollSecRef.current;
+    if (x < GUTTER_W || x > GUTTER_W + gridW) return null;
+    const sec = scroll + (x - GUTTER_W) / pps;
+    if (chordLaneH && y >= RULER_H && y < RULER_H + chordLaneH) {
+      const chord = (chords || []).find((c) => sec >= c.startSec && sec <= c.endSec);
+      return chord ? { kind: 'chord', chord, x, y } : null;
+    }
+    if (y < gridTop) return null;
+    const midi = highMidi - Math.floor((y - gridTop) / rowH);
+    // Iterate back-to-front so the top-drawn (later) note wins the hit.
+    const notes = data?.notes || [];
+    for (let i = notes.length - 1; i >= 0; i -= 1) {
+      const n = notes[i];
+      if (n.midi !== midi) continue;
+      const w = Math.max(2, n.durationSec * pps);
+      if (sec >= n.startSec && sec <= n.startSec + Math.max(n.durationSec, w / pps)) {
+        return { kind: 'note', note: n, x, y };
+      }
+    }
+    return null;
+  }, [chords, chordLaneH, data, geometry, highMidi]);
+
+  const applyZoomAnchored = useCallback((factor, anchorX) => {
+    const { pps } = geometry();
+    const next = clampZoom(zoomRef.current * factor);
+    if (next === zoomRef.current) return;
+    const anchorSec = scrollSecRef.current + (Math.max(anchorX, GUTTER_W) - GUTTER_W) / pps;
+    const nextPps = (pps / zoomRef.current) * next;
+    scrollSecRef.current = anchorSec - (Math.max(anchorX, GUTTER_W) - GUTTER_W) / nextPps;
+    onZoomChange(next);
+  }, [geometry, onZoomChange]);
+
+  const handleWheel = useCallback((e) => {
+    e.preventDefault();
+    if (e.ctrlKey || e.metaKey) {
+      applyZoomAnchored(e.deltaY < 0 ? 1.25 : 0.8, canvasPos(e).x);
+      return;
+    }
+    const { pps } = geometry();
+    const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+    scrollSecRef.current += delta / pps;
+    draw();
+  }, [applyZoomAnchored, draw, geometry]);
+
+  // React attaches wheel listeners passively — preventDefault needs a native
+  // non-passive listener or the page scrolls/zooms along with the roll.
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return undefined;
+    canvas.addEventListener('wheel', handleWheel, { passive: false });
+    return () => canvas.removeEventListener('wheel', handleWheel);
+  }, [handleWheel]);
+
+  const handlePointerDown = (e) => {
+    canvasRef.current.setPointerCapture?.(e.pointerId);
+    pointersRef.current.set(e.pointerId, { ...canvasPos(e), moved: false });
+    if (pointersRef.current.size === 2) {
+      const [a, b] = [...pointersRef.current.values()];
+      pinchRef.current = { startDist: Math.abs(a.x - b.x) || 1, startZoom: zoomRef.current };
+    }
+  };
+
+  const handlePointerMove = (e) => {
+    const pos = canvasPos(e);
+    const tracked = pointersRef.current.get(e.pointerId);
+    if (tracked) {
+      // Pinch zoom (two pointers) or drag pan (one pointer).
+      if (pointersRef.current.size === 2 && pinchRef.current) {
+        pointersRef.current.set(e.pointerId, { ...pos, moved: true });
+        const [a, b] = [...pointersRef.current.values()];
+        const dist = Math.abs(a.x - b.x) || 1;
+        const next = clampZoom(pinchRef.current.startZoom * (dist / pinchRef.current.startDist));
+        if (next !== zoomRef.current) onZoomChange(next);
+        return;
+      }
+      const { pps } = geometry();
+      const dx = pos.x - tracked.x;
+      if (Math.abs(dx) > 2 || tracked.moved) {
+        scrollSecRef.current -= dx / pps;
+        pointersRef.current.set(e.pointerId, { ...pos, moved: true });
+        setHover(null);
+        draw();
+        return;
+      }
+    }
+    // Plain hover (mouse) — tooltip hit-test.
+    const hit = hitTest(pos.x, pos.y);
+    setHover((prev) => {
+      if (!hit && !prev) return prev;
+      if (hit && prev && hit.kind === prev.kind
+        && (hit.kind === 'note' ? hit.note.id === prev.note.id : hit.chord === prev.chord)) {
+        return { ...prev, x: pos.x, y: pos.y };
+      }
+      return hit;
+    });
+  };
+
+  const handlePointerUp = (e) => {
+    const tracked = pointersRef.current.get(e.pointerId);
+    pointersRef.current.delete(e.pointerId);
+    if (pointersRef.current.size < 2) pinchRef.current = null;
+    if (!tracked || tracked.moved) return;
+    // A tap/click: on a note → tooltip (touch fallback); else → scrub playhead.
+    const pos = canvasPos(e);
+    const hit = hitTest(pos.x, pos.y);
+    if (hit) {
+      setHover(hit);
+      return;
+    }
+    const { pps, gridTop } = geometry();
+    if (pos.x >= GUTTER_W && pos.y >= gridTop) {
+      playheadSecRef.current = scrollSecRef.current + (pos.x - GUTTER_W) / pps;
+      setHover(null);
+      draw();
+    }
+  };
+
+  const handleKeyDown = (e) => {
+    const { pps, gridW } = geometry();
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      const dir = e.key === 'ArrowLeft' ? -1 : 1;
+      if (e.shiftKey) {
+        scrollSecRef.current += dir * (gridW / pps) * 0.5;
+      } else {
+        playheadSecRef.current = Math.min(duration, Math.max(0, playheadSecRef.current + dir * (10 / pps)));
+      }
+      draw();
+    } else if (e.key === '+' || e.key === '=') {
+      e.preventDefault();
+      onZoomChange(clampZoom(zoomRef.current * 1.5));
+    } else if (e.key === '-') {
+      e.preventDefault();
+      onZoomChange(clampZoom(zoomRef.current / 1.5));
+    } else if (e.key === '0') {
+      e.preventDefault();
+      scrollSecRef.current = 0;
+      onZoomChange(MIN_ZOOM);
+      draw(); // zoom may already be at MIN_ZOOM — the scroll reset still needs a repaint
+    } else if (e.key === 'Escape') {
+      setHover(null);
+    }
+  };
+
+  const tooltip = hover && (hover.kind === 'note'
+    ? `${hover.note.name} · ${formatTimecode(hover.note.startSec)} · ${Math.round(hover.note.durationSec * 1000)}ms · v=${Math.round((hover.note.velocity ?? 0) * 127)}${(data?.tracks?.length || 1) > 1 ? ` · track ${hover.note.track}` : ''}`
+    : `${hover.chord.label} · ${chordNoteNames(hover.chord.midis)}`);
+
+  return (
+    <div ref={wrapRef} className="relative w-full">
+      <canvas
+        ref={canvasRef}
+        className="block w-full rounded-lg bg-[#0c0c0e] touch-none cursor-crosshair focus:outline-none focus:ring-1 focus:ring-port-accent"
+        tabIndex={0}
+        role="img"
+        aria-label={`MIDI piano roll: ${data?.notes?.length || 0} notes, ${midiNoteName(data?.minMidi ?? 60)} to ${midiNoteName(data?.maxMidi ?? 71)}, ${formatTimecode(duration)} long. Use plus and minus to zoom, arrow keys to move the playhead, shift plus arrows to pan.`}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerLeave={() => { pointersRef.current.clear(); pinchRef.current = null; setHover(null); }}
+        onKeyDown={handleKeyDown}
+      />
+      {tooltip && (
+        <div
+          className="pointer-events-none absolute z-10 px-1.5 py-0.5 rounded bg-black/90 border border-port-border text-[10px] text-gray-200 whitespace-nowrap"
+          style={{
+            left: Math.min(hover.x + 10, Math.max(0, (widthRef.current || 0) - 170)),
+            top: Math.max(0, hover.y - 24),
+          }}
+        >
+          {tooltip}
+        </div>
+      )}
+    </div>
+  );
+}

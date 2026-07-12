@@ -38,6 +38,7 @@ import useReferenceAudioImport from '../../hooks/useReferenceAudioImport.js';
 import useMidiTranscription from '../../hooks/useMidiTranscription.js';
 import MidiInstallModal from '../install/MidiInstallModal.jsx';
 import MidiGatedModal from '../install/MidiGatedModal.jsx';
+import MidiVisualization from './MidiVisualization.jsx';
 import { startMemoRecording, arrayBufferToBase64 } from '../../lib/audioRecorder';
 import { proposeSegmentScore, proposeStackedSegmentScore, diffScoreBars, PITCH_CLASS_NAMES } from '../../lib/referenceAnalysis';
 import { scoreHasMusic, parseScore } from '../../lib/scoreNotation';
@@ -175,6 +176,7 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
 
   if (reference.audioFilename) {
     return (
+      <div className="flex flex-col gap-2">
       <div className="flex flex-wrap items-center gap-2">
         <MidiInstallModal {...midiJob.installGate} />
         <MidiGatedModal {...midiJob.gatedGate} />
@@ -245,6 +247,10 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
         >
           <X size={13} /> Remove audio
         </button>
+      </div>
+      {reference.midiFilename && (
+        <MidiVisualization url={getUploadUrl(reference.midiFilename)} filename={reference.midiFilename} />
+      )}
       </div>
     );
   }
