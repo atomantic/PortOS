@@ -16,34 +16,44 @@ import { createMidiPlayer } from '../lib/midiPlayback.js';
 export default function useMidiPlayer(data) {
   const [playing, setPlaying] = useState(false);
   const playerRef = useRef(null);
+  // Intent mirror of the `playing` state. Toggle branches on THIS, not
+  // player.isPlaying(): during a first play the player's flag only flips after
+  // its `await ctx.resume()`, so a rapid double-toggle would read false twice
+  // and start playback instead of netting out to a cancel.
+  const playingRef = useRef(false);
+  const setPlayingBoth = useCallback((v) => {
+    playingRef.current = v;
+    setPlaying(v);
+  }, []);
 
   useEffect(() => {
     if (!data) return undefined;
-    const player = createMidiPlayer(data, { onEnded: () => setPlaying(false) });
+    const player = createMidiPlayer(data, { onEnded: () => setPlayingBoth(false) });
     playerRef.current = player;
     return () => {
       player.stop();
       playerRef.current = null;
-      setPlaying(false);
+      setPlayingBoth(false);
     };
-  }, [data]);
+  }, [data, setPlayingBoth]);
 
   const toggle = useCallback(() => {
     const player = playerRef.current;
     if (!player) return;
-    if (player.isPlaying()) {
+    if (playingRef.current) {
+      // pause() also aborts a play() still awaiting ctx.resume() (playToken).
       player.pause();
-      setPlaying(false);
+      setPlayingBoth(false);
     } else {
-      setPlaying(true);
+      setPlayingBoth(true);
       // play() resolves once playback has STARTED; a resume failure (autoplay
       // policy edge) lands here — reset the button instead of lying "playing".
       player.play().catch((err) => {
         console.error(`🎹 MIDI preview failed to start: ${err.message}`);
-        setPlaying(false);
+        setPlayingBoth(false);
       });
     }
-  }, []);
+  }, [setPlayingBoth]);
 
   const seek = useCallback((sec) => { playerRef.current?.seek(sec); }, []);
   const getPosition = useCallback(() => playerRef.current?.position() ?? 0, []);

@@ -67,18 +67,22 @@ export const createMidiPlayer = (data, options = {}) => {
   // Position the scheduler cursor at the first note starting at/after `offset`,
   // and (with soundTails) immediately sound the tails of notes already
   // sustaining across it — seeking into a held chord should be audible, not
-  // silent until the next onset. Notes are start-sorted, so the tail scan
-  // can't early-break; it's a one-time O(n) pass per seek/play, not per tick.
+  // silent until the next onset. Tails anchor to the transport clock
+  // (startTime + offset — callers set startTime first), NOT bare currentTime:
+  // the play() path re-anchors with a LEAD of pre-roll, and a tail started at
+  // "now" would run LEAD early relative to every newly scheduled onset. Notes
+  // are start-sorted, so the tail scan can't early-break; it's a one-time
+  // O(n) pass per seek/play, not per tick.
   const seekCursors = (offset, soundTails = false) => {
     let idx = notes.findIndex((n) => n.startSec >= offset - 1e-6);
     if (idx < 0) idx = notes.length;
     nextIdx = idx;
     if (!soundTails) return;
-    const now = ctx().currentTime;
+    const at = Math.max(startTime + offset, ctx().currentTime);
     for (let i = 0; i < idx; i += 1) {
       const n = notes[i];
       const remaining = n.startSec + n.durationSec - offset;
-      if (remaining > 1e-3) playTone(n.midi, now, remaining, n.velocity);
+      if (remaining > 1e-3) playTone(n.midi, at, remaining, n.velocity);
     }
   };
 

@@ -102,6 +102,11 @@ export default function MidiPianoRoll({
   // Set of midis sounding this frame (null when idle) — written by the rAF
   // playback loop, painted onto the pitch gutter by draw().
   const soundingRef = useRef(null);
+  // Whether the view should follow the moving playhead. An explicit user pan
+  // (drag / wheel / shift+arrows) turns following off so the loop's page-snap
+  // doesn't fight the pan frame-by-frame; it turns back on when the playhead
+  // re-enters the view, on a seek, and on play.
+  const followRef = useRef(true);
 
   const duration = Math.max(data?.durationSec || 0, 0.001);
   // Longest note in the file — the lookback window for lowerBound() scans.
@@ -323,28 +328,35 @@ export default function MidiPianoRoll({
     }
     wasPlayingRef.current = true;
     lastFrameRef.current = '';
+    followRef.current = true; // pressing play re-follows the playhead
     let raf = 0;
     const loop = () => {
       const pos = getPositionRef.current?.() ?? 0;
       playheadSecRef.current = pos;
-      // Page-turn follow: when the playhead exits the visible window (or a
-      // seek lands outside it), snap the view so it re-enters near the left.
+      // Page-turn follow: when the playhead exits the visible window, snap the
+      // view so it re-enters near the left — but only while following (an
+      // explicit user pan turns following off until the playhead re-enters).
       const { gridW, pps, maxScroll } = geometry();
       const view = gridW / pps;
       let paged = false;
-      if (pos < scrollSecRef.current || pos > scrollSecRef.current + view) {
+      const visible = pos >= scrollSecRef.current && pos <= scrollSecRef.current + view;
+      if (visible) {
+        followRef.current = true;
+      } else if (followRef.current) {
         scrollSecRef.current = Math.min(Math.max(0, pos - view * 0.1), maxScroll);
         paged = true;
       }
       // Sounding set — scan only the slice that can overlap the playhead.
       const sounding = new Set();
-      let sum = 0;
       for (let i = lowerBound(notes, pos - maxDurSec); i < notes.length; i += 1) {
         const n = notes[i];
         if (n.startSec > pos) break;
-        if (pos < n.startSec + n.durationSec) { sounding.add(n.midi); sum += n.midi; }
+        if (pos < n.startSec + n.durationSec) sounding.add(n.midi);
       }
-      const frame = `${Math.round((pos - scrollSecRef.current) * pps)}:${sounding.size}:${sum}`;
+      // Signature = playhead pixel + exact sounding pitches (the set is
+      // polyphony-sized, so the sort/join is cheap) — a size+sum digest would
+      // miss contrary semitone motion at a sub-pixel playhead step.
+      const frame = `${Math.round((pos - scrollSecRef.current) * pps)}:${[...sounding].sort((a, b) => a - b).join(',')}`;
       if (paged || frame !== lastFrameRef.current) {
         lastFrameRef.current = frame;
         soundingRef.current = sounding;
@@ -439,6 +451,7 @@ export default function MidiPianoRoll({
     const { pps } = geometry();
     const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
     scrollSecRef.current += delta / pps;
+    followRef.current = false; // explicit pan — stop chasing the playhead
     scheduleDraw();
   }, [applyZoomAnchored, geometry, scheduleDraw]);
 
@@ -480,6 +493,7 @@ export default function MidiPianoRoll({
       const dx = pos.x - tracked.x;
       if (Math.abs(dx) > 2 || tracked.moved) {
         scrollSecRef.current -= dx / pps;
+        followRef.current = false; // explicit pan — stop chasing the playhead
         pointersRef.current.set(e.pointerId, { ...pos, moved: true });
         setHoverIdentity(null);
         scheduleDraw();
@@ -508,6 +522,7 @@ export default function MidiPianoRoll({
     const { pps, gridTop } = geometry();
     if (pos.x >= GUTTER_W && pos.y >= gridTop) {
       playheadSecRef.current = scrollSecRef.current + (pos.x - GUTTER_W) / pps;
+      followRef.current = true; // a seek re-follows
       onSeek?.(playheadSecRef.current);
       setHoverIdentity(null);
       draw();
@@ -521,8 +536,10 @@ export default function MidiPianoRoll({
       const dir = e.key === 'ArrowLeft' ? -1 : 1;
       if (e.shiftKey) {
         scrollSecRef.current += dir * (gridW / pps) * 0.5;
+        followRef.current = false; // explicit pan — stop chasing the playhead
       } else {
         playheadSecRef.current = Math.min(duration, Math.max(0, playheadSecRef.current + dir * (10 / pps)));
+        followRef.current = true; // a seek re-follows
         onSeek?.(playheadSecRef.current);
       }
       draw();
