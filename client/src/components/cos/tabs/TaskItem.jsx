@@ -17,7 +17,8 @@ import {
   TrendingUp,
   Play,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Scale
 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
@@ -31,7 +32,9 @@ const statusIcons = {
   pending: <Clock size={16} aria-hidden="true" className="text-yellow-500" />,
   in_progress: <Activity size={16} aria-hidden="true" className="text-port-accent animate-pulse" />,
   completed: <CheckCircle size={16} aria-hidden="true" className="text-port-success" />,
-  blocked: <Ban size={16} aria-hidden="true" className="text-port-error" />
+  blocked: <Ban size={16} aria-hidden="true" className="text-port-error" />,
+  // A sub-agent disputing a reviewer rejection (#2441) — awaiting resolution.
+  challenged: <Scale size={16} aria-hidden="true" className="text-port-warning" />
 };
 
 // Extract task type from description for duration lookup (matches AgentCard logic)
@@ -224,6 +227,21 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
     const result = await api.deleteCosTask(task.id, taskSource, { silent: true }).catch(err => { toast.error(err.message); return null; });
     if (!result) return;
     toast.success('Task deleted');
+    onRefresh();
+  };
+
+  // Resolve a parked challenge inline (#2471). `upheld` overturns the reviewer
+  // rejection and re-queues the work (→ pending); `escalated` surfaces the dispute
+  // for arbitration (→ blocked + an approval-required task). Gated while a resolve
+  // is in flight so a double-click can't fire two verdicts.
+  const [resolvingChallenge, setResolvingChallenge] = useState(false);
+  const handleResolveChallenge = async (outcome) => {
+    setResolvingChallenge(true);
+    const result = await api.resolveCosTaskChallenge(task.id, { outcome, resolvedBy: 'user' }, { silent: true })
+      .catch(err => { toast.error(err.message); return null; });
+    setResolvingChallenge(false);
+    if (!result) return;
+    toast.success(outcome === 'upheld' ? 'Challenge upheld — task re-queued' : 'Challenge escalated for arbitration');
     onRefresh();
   };
 
@@ -430,11 +448,58 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
                   ))}
                 </div>
               )}
-              {/* Blocker reason display */}
-              {task.status === 'blocked' && task.metadata?.blocker && (
+              {/* Blocker reason display. Prefer the user-set `blocker`, but fall
+                  back to `blockedReason` — the field every server-side block
+                  writes (max-spawns, retries, provider-config, terminated, …), so
+                  without this fallback an auto-blocked task shows no reason at all. */}
+              {task.status === 'blocked' && (task.metadata?.blocker || task.metadata?.blockedReason) && (
                 <div className="flex items-start gap-2 mt-2 px-2 py-1.5 bg-port-error/10 border border-port-error/20 rounded text-sm">
                   <AlertCircle size={14} className="text-port-error shrink-0 mt-0.5" aria-hidden="true" />
-                  <span className="text-port-error/90">{task.metadata.blocker}</span>
+                  <span className="text-port-error/90">{task.metadata.blocker || task.metadata.blockedReason}</span>
+                </div>
+              )}
+              {/* Challenge case + resolution (#2441). Both sides of a disputed
+                  rejection are logged on the task metadata so the outcome is
+                  auditable here: the worker's case while parked in `challenged`,
+                  and the resolver's verdict once it settles. */}
+              {task.metadata?.challenge?.reason && (
+                <div className="flex items-start gap-2 mt-2 px-2 py-1.5 bg-port-warning/10 border border-port-warning/20 rounded text-sm">
+                  <Scale size={14} className="text-port-warning shrink-0 mt-0.5" aria-hidden="true" />
+                  <div className="text-port-warning/90 min-w-0">
+                    <span className="font-medium">Challenge{task.metadata.challenge.reviewer ? ` (${task.metadata.challenge.reviewer})` : ''}:</span>{' '}
+                    <span className="break-words">{task.metadata.challenge.reason}</span>
+                    {task.metadata.challengeResolution?.outcome && (
+                      <div className="mt-1 text-gray-400">
+                        Resolved: {task.metadata.challengeResolution.outcome}
+                        {task.metadata.challengeResolution.note ? ` — ${task.metadata.challengeResolution.note}` : ''}
+                      </div>
+                    )}
+                    {/* Inline resolve controls while parked in `challenged` and not
+                        yet settled (#2471) — Uphold overturns the rejection and
+                        re-queues the work, Escalate surfaces it for arbitration. */}
+                    {task.status === 'challenged' && !task.metadata.challengeResolution?.outcome && (
+                      <div className="flex items-center gap-2 mt-2">
+                        <button
+                          type="button"
+                          onClick={() => handleResolveChallenge('upheld')}
+                          disabled={resolvingChallenge}
+                          className="flex items-center gap-1 px-2.5 py-1 min-h-[32px] text-xs text-port-success bg-port-success/10 hover:bg-port-success/20 rounded transition-colors disabled:opacity-50"
+                          title="Overturn the rejection and re-queue this task"
+                        >
+                          <CheckCircle size={12} aria-hidden="true" /> Uphold
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleResolveChallenge('escalated')}
+                          disabled={resolvingChallenge}
+                          className="flex items-center gap-1 px-2.5 py-1 min-h-[32px] text-xs text-port-error bg-port-error/10 hover:bg-port-error/20 rounded transition-colors disabled:opacity-50"
+                          title="Let the rejection stand and file an arbitration task"
+                        >
+                          <Ban size={12} aria-hidden="true" /> Escalate
+                        </button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </>

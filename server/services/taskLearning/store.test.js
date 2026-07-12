@@ -5,7 +5,16 @@ import {
   classifyUntypedTask,
   isSandboxedTaskType,
   summarizeFailureSignatures,
-  EXTERNAL_UNTYPED_TASK_TYPE
+  appendInsight,
+  buildRecurrenceInsight,
+  recurrenceMilestoneReached,
+  RECURRENCE_INSIGHT_MILESTONES,
+  INSIGHT_CAP,
+  EXTERNAL_UNTYPED_TASK_TYPE,
+  appendRecentOutcome,
+  computeWindowedStats,
+  RECENT_OUTCOMES_CAP,
+  DEFAULT_WINDOW_MAX_COUNT
 } from './store.js';
 
 // These two helpers are the pure foundation every other taskLearning submodule
@@ -261,5 +270,213 @@ describe('store.summarizeFailureSignatures (issue #2333)', () => {
       Array.from({ length: 8 }, (_, i) => [`c${i}`, { count: i + 1, recent: [sample()] }])
     );
     expect(summarizeFailureSignatures(map, { limit: 3 })).toHaveLength(3);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Human-readable insights (issue #2443) — pure helpers exercised without I/O.
+// -----------------------------------------------------------------------------
+
+describe('store.recurrenceMilestoneReached', () => {
+  it('fires exactly on the configured ascending milestones', () => {
+    for (const m of RECURRENCE_INSIGHT_MILESTONES) {
+      expect(recurrenceMilestoneReached(m)).toBe(true);
+    }
+  });
+
+  it('does not fire on off-milestone counts (idempotency: one insight per milestone)', () => {
+    expect(recurrenceMilestoneReached(1)).toBe(false);
+    expect(recurrenceMilestoneReached(2)).toBe(false);
+    expect(recurrenceMilestoneReached(4)).toBe(false);
+    expect(recurrenceMilestoneReached(11)).toBe(false);
+    expect(recurrenceMilestoneReached(0)).toBe(false);
+  });
+});
+
+describe('store.appendInsight', () => {
+  it('stamps recordedAt and defaults origin to user', () => {
+    const data = {};
+    appendInsight(data, { type: 'observation', message: 'hello' });
+    expect(data.insights).toHaveLength(1);
+    expect(data.insights[0].origin).toBe('user');
+    expect(data.insights[0].message).toBe('hello');
+    expect(typeof data.insights[0].recordedAt).toBe('string');
+  });
+
+  it('preserves an explicit origin (auto-incident) and overrides any passed recordedAt', () => {
+    const data = { insights: [] };
+    appendInsight(data, { origin: 'auto-incident', message: 'auto', recordedAt: 'stale' });
+    expect(data.insights[0].origin).toBe('auto-incident');
+    expect(data.insights[0].recordedAt).not.toBe('stale');
+  });
+
+  it('caps retained insights at INSIGHT_CAP (oldest pruned first)', () => {
+    const data = { insights: [] };
+    for (let i = 0; i < INSIGHT_CAP + 5; i++) {
+      appendInsight(data, { message: `m${i}` });
+    }
+    expect(data.insights).toHaveLength(INSIGHT_CAP);
+    // Oldest five pruned — newest retained.
+    expect(data.insights[0].message).toBe('m5');
+    expect(data.insights[INSIGHT_CAP - 1].message).toBe(`m${INSIGHT_CAP + 4}`);
+  });
+
+  it('initializes a missing/non-array insights field', () => {
+    const data = { insights: 'corrupt' };
+    appendInsight(data, { message: 'x' });
+    expect(Array.isArray(data.insights)).toBe(true);
+    expect(data.insights).toHaveLength(1);
+  });
+});
+
+describe('store.buildRecurrenceInsight', () => {
+  const failureSignatures = {
+    timeout: {
+      count: 3,
+      recent: [
+        { taskType: 'self-improve:ui', provider: 'claude', model: 'opus', modelTier: 'heavy', recordedAt: '2026-07-10T00:00:00.000Z' },
+        { taskType: 'self-improve:ui', provider: 'claude', model: 'opus', modelTier: 'heavy', recordedAt: '2026-07-10T00:01:00.000Z' },
+        { taskType: 'self-improve:ui', provider: 'codex', model: 'gpt', modelTier: 'heavy', recordedAt: '2026-07-10T00:02:00.000Z' }
+      ]
+    }
+  };
+
+  it('produces a provenance-stamped, auto-incident insight with provider attribution', () => {
+    const insight = buildRecurrenceInsight({
+      category: 'timeout',
+      count: 3,
+      taskType: 'self-improve:ui',
+      agentId: 'agent-xyz',
+      failureSignatures
+    });
+    expect(insight.origin).toBe('auto-incident');
+    expect(insight.type).toBe('recurring-failure');
+    expect(insight.category).toBe('timeout');
+    expect(insight.taskType).toBe('self-improve:ui');
+    expect(insight.recurrenceCount).toBe(3);
+    expect(insight.originatingAgentId).toBe('agent-xyz');
+    // Top provider by count (claude/opus appears twice).
+    expect(insight.provider).toBe('claude/opus');
+    expect(insight.message).toContain('"timeout"');
+    expect(insight.message).toContain('3 times');
+    expect(insight.message).toContain('claude/opus');
+  });
+
+  it('never echoes a raw error message (privacy) — message is built only from controlled fields', () => {
+    const withRawMessage = {
+      timeout: {
+        count: 3,
+        recent: [
+          { taskType: 't', provider: 'claude', model: 'opus', messageSnippet: '/Users/secret/path leaked ENOENT', recordedAt: '2026-07-10T00:00:00.000Z' }
+        ]
+      }
+    };
+    const insight = buildRecurrenceInsight({ category: 'timeout', count: 3, taskType: 't', failureSignatures: withRawMessage });
+    expect(insight.message).not.toContain('/Users/secret');
+    expect(insight.message).not.toContain('leaked');
+  });
+
+  it('degrades gracefully when no provider attribution is available', () => {
+    const insight = buildRecurrenceInsight({ category: 'unknown', count: 10, taskType: 't', failureSignatures: {} });
+    expect(insight.provider).toBeNull();
+    expect(insight.message).toContain('10 times');
+    expect(insight.message).not.toContain('via');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Recent-outcomes ring (issue #2460) — pure ring append/cap + windowed-rate math.
+// No I/O, so exercised directly without touching the real learning.json.
+// ---------------------------------------------------------------------------
+
+describe('store.appendRecentOutcome', () => {
+  it('initializes the ring and stores the compact { t, s } shape', () => {
+    const metrics = {};
+    appendRecentOutcome(metrics, { success: true, at: '2026-07-10T00:00:00.000Z' });
+    expect(metrics.recentOutcomes).toEqual([{ t: '2026-07-10T00:00:00.000Z', s: true }]);
+  });
+
+  it('coerces success to a boolean and defaults the timestamp when absent', () => {
+    const metrics = { recentOutcomes: [] };
+    appendRecentOutcome(metrics, { success: 0 });
+    expect(metrics.recentOutcomes[0].s).toBe(false);
+    expect(typeof metrics.recentOutcomes[0].t).toBe('string');
+  });
+
+  it('caps the ring at RECENT_OUTCOMES_CAP, dropping the oldest first', () => {
+    const metrics = {};
+    for (let i = 0; i < RECENT_OUTCOMES_CAP + 10; i++) {
+      appendRecentOutcome(metrics, { success: true, at: `run-${i}` });
+    }
+    expect(metrics.recentOutcomes).toHaveLength(RECENT_OUTCOMES_CAP);
+    // Oldest 10 dropped — first retained is run-10, last is the newest.
+    expect(metrics.recentOutcomes[0].t).toBe('run-10');
+    expect(metrics.recentOutcomes.at(-1).t).toBe(`run-${RECENT_OUTCOMES_CAP + 9}`);
+  });
+
+  it('is a no-op on a non-object metrics bucket', () => {
+    expect(appendRecentOutcome(null, { success: true })).toBeNull();
+  });
+});
+
+describe('store.computeWindowedStats', () => {
+  const iso = (msAgo, now) => new Date(now - msAgo).toISOString();
+
+  it('returns a null successRate sentinel (not 0) when the window is empty', () => {
+    const stats = computeWindowedStats([]);
+    expect(stats).toEqual({
+      windowedCompleted: 0,
+      windowedSucceeded: 0,
+      windowedFailed: 0,
+      windowedSuccessRate: null
+    });
+    // A missing/undefined ring behaves the same.
+    expect(computeWindowedStats(undefined).windowedSuccessRate).toBeNull();
+  });
+
+  it('computes the success rate over all in-window samples', () => {
+    const ring = [
+      { t: '2026-07-10T00:00:00.000Z', s: true },
+      { t: '2026-07-10T00:01:00.000Z', s: false },
+      { t: '2026-07-10T00:02:00.000Z', s: true },
+      { t: '2026-07-10T00:03:00.000Z', s: true }
+    ];
+    const stats = computeWindowedStats(ring, { maxAgeMs: Infinity });
+    expect(stats.windowedCompleted).toBe(4);
+    expect(stats.windowedSucceeded).toBe(3);
+    expect(stats.windowedFailed).toBe(1);
+    expect(stats.windowedSuccessRate).toBe(75);
+  });
+
+  it('keeps only the most-recent maxCount samples', () => {
+    // 10 failures (older) followed by 5 successes (newer); window last 5 → 100%.
+    const ring = [];
+    for (let i = 0; i < 10; i++) ring.push({ t: `old-${i}`, s: false });
+    for (let i = 0; i < 5; i++) ring.push({ t: `new-${i}`, s: true });
+    const stats = computeWindowedStats(ring, { maxCount: 5, maxAgeMs: Infinity });
+    expect(stats.windowedCompleted).toBe(5);
+    expect(stats.windowedSuccessRate).toBe(100);
+  });
+
+  it('ages out samples older than maxAgeMs — a resolved failure burst self-heals', () => {
+    const now = Date.parse('2026-07-12T00:00:00.000Z');
+    const DAY = 24 * 60 * 60 * 1000;
+    const ring = [
+      // Old failure burst (40 days ago) — should age out of a 30-day window.
+      { t: iso(40 * DAY, now), s: false },
+      { t: iso(40 * DAY, now), s: false },
+      // Recent successes (within 30 days).
+      { t: iso(2 * DAY, now), s: true },
+      { t: iso(1 * DAY, now), s: true }
+    ];
+    const stats = computeWindowedStats(ring, { maxAgeMs: 30 * DAY, now });
+    expect(stats.windowedCompleted).toBe(2);
+    expect(stats.windowedSuccessRate).toBe(100);
+  });
+
+  it('defaults to the exported count window when maxCount is unspecified', () => {
+    const ring = Array.from({ length: DEFAULT_WINDOW_MAX_COUNT + 20 }, (_, i) => ({ t: `r-${i}`, s: true }));
+    const stats = computeWindowedStats(ring, { maxAgeMs: Infinity });
+    expect(stats.windowedCompleted).toBe(DEFAULT_WINDOW_MAX_COUNT);
   });
 });

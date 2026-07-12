@@ -55,8 +55,9 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   createTicket: vi.fn().mockResolvedValue(null),
 }));
 
-import { buildLightContextPrompt, buildAgentPrompt, buildCompletionGuidelineBullet } from './agentPromptBuilder.js';
+import { buildLightContextPrompt, buildAgentPrompt, buildCompletionGuidelineBullet, reconcileSplitContext } from './agentPromptBuilder.js';
 import { isTruthyMeta } from './agentState.js';
+import { buildPrompt } from './promptService.js'; // mocked above — inspect call args
 
 function makeTask(overrides = {}) {
   return {
@@ -67,6 +68,37 @@ function makeTask(overrides = {}) {
     ...overrides,
   };
 }
+
+describe('reconcileSplitContext', () => {
+  it('folds context back into description when it is the queue-path split', () => {
+    const body = 'Line one is the title\n\nLine two is the body.';
+    const task = { description: 'Line one is the title', metadata: { context: body, app: 'comics' } };
+    const out = reconcileSplitContext(task);
+    expect(out.description).toBe(body);
+    expect(out.metadata.context).toBeUndefined();
+    expect(out.metadata.app).toBe('comics'); // other metadata preserved
+  });
+
+  it('leaves a genuinely-separate user context untouched', () => {
+    const task = { description: 'Add a button', metadata: { context: 'Unrelated context detail' } };
+    const out = reconcileSplitContext(task);
+    expect(out).toBe(task);
+    expect(out.metadata.context).toBe('Unrelated context detail');
+  });
+
+  it('does not mutate the caller task (stored one-line description survives)', () => {
+    const body = 'Title\n\nBody.';
+    const task = { description: 'Title', metadata: { context: body } };
+    reconcileSplitContext(task);
+    expect(task.description).toBe('Title');
+    expect(task.metadata.context).toBe(body);
+  });
+
+  it('is idempotent and a no-op when there is no context', () => {
+    const task = { description: 'Title', metadata: {} };
+    expect(reconcileSplitContext(task)).toBe(task);
+  });
+});
 
 describe('buildLightContextPrompt', () => {
   describe('what it omits', () => {
@@ -110,11 +142,18 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/\*\*Working Directory\*\*:/);
     });
 
-    it('shows Target App when set', () => {
+    it('shows Target App for a managed app', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { app: 'comics' } }),
         '/r', null, isTruthyMeta);
       expect(prompt).toMatch(/\*\*Target App\*\*: comics/);
+    });
+
+    it('omits Target App for the PortOS default app (cwd already scopes it)', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { app: 'portos-default' } }),
+        '/r', null, isTruthyMeta);
+      expect(prompt).not.toMatch(/\*\*Target App\*\*/);
     });
 
     it('renders attached context (multiline and single-line)', () => {
@@ -125,6 +164,21 @@ describe('buildLightContextPrompt', () => {
       const multi = buildLightContextPrompt(
         makeTask({ metadata: { context: 'line one\nline two' } }), '/r', null, isTruthyMeta);
       expect(multi).toMatch(/### Context\n\nline one\nline two/);
+    });
+
+    it('does NOT double-render a queue-path split prompt (description == firstLine(context))', () => {
+      // The queue path stores `description = firstLine(body)` + `context = body`
+      // so COS-TASKS.md stays one-line-per-task. Rendering both would print the
+      // first line twice (the reported double `# ⚡ SWARM MODE …` header).
+      const body = '# ⚡ SWARM MODE — claim and ship up to 3 independent issues in parallel\n\n**This run operates in slashdo mode.** Do the work.';
+      const prompt = buildLightContextPrompt(
+        makeTask({ description: '# ⚡ SWARM MODE — claim and ship up to 3 independent issues in parallel', metadata: { context: body } }),
+        '/r', null, isTruthyMeta);
+      // Header appears exactly once, and the redundant `### Context` wrapper is gone.
+      expect(prompt.match(/# ⚡ SWARM MODE/g)).toHaveLength(1);
+      expect(prompt).not.toMatch(/### Context/);
+      // The full body still renders (nothing dropped).
+      expect(prompt).toMatch(/\*\*This run operates in slashdo mode\.\*\* Do the work\./);
     });
 
     it('lists screenshot file paths so the agent can read them via its own tools', () => {
@@ -438,6 +492,11 @@ describe('buildLightContextPrompt', () => {
       // (the lone default needs no flag).
       expect(prompt).toMatch(/Reviewers \(in order\)\*\*: `copilot`/);
       expect(prompt).not.toMatch(/--review-with/);
+      // Challenge protocol (#2471): the auto-invoke instructions + the challenge
+      // endpoint for THIS source task must be present in the review-loop section.
+      expect(prompt).toMatch(/Challenge protocol/);
+      expect(prompt).toMatch(/api\/cos\/tasks\/task-src-1\/challenge/);
+      expect(prompt).toMatch(/challenge\/resolve/);
     });
 
     it('threads a non-default reviewer (claude) into the follow-up block via --review-with', () => {
@@ -483,7 +542,112 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/For EACH reviewer in order/);
     });
 
-    it('threads the configured Codex model tier into the CLI invocation when codex reviews', () => {
+    it('appends GitHub reviewer usernames as @user tokens and instructs requesting them', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          reviewLoopFollowUp: true,
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+          reviewLoopPRBranch: 'b',
+          reviewLoopPRNumber: 9,
+          reviewLoopReviewers: ['copilot'],
+          reviewLoopReviewerUsernames: ['CodeReviewbot'],
+          sourceTaskId: 'task-src-u',
+        }}),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta);
+      expect(prompt).toMatch(/--review-with copilot,@CodeReviewbot/);
+      // The agent is told to request the username as a PR reviewer that gates merge.
+      expect(prompt).toMatch(/--add-reviewer/);
+      expect(prompt).toMatch(/@CodeReviewbot/);
+    });
+
+    it('drives a username-only review loop (no keyed reviewer)', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          reviewLoopFollowUp: true,
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+          reviewLoopPRBranch: 'b',
+          reviewLoopPRNumber: 9,
+          // Empty keyed list (e.g. copilot stripped on a non-GitHub forge) + a username.
+          reviewLoopReviewers: [],
+          reviewLoopReviewerUsernames: ['CodeReviewbot'],
+          sourceTaskId: 'task-src-uonly',
+        }}),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta);
+      expect(prompt).toMatch(/--review-with @CodeReviewbot/);
+      // No copilot fallback re-introduced.
+      expect(prompt).not.toMatch(/--review-with copilot/);
+    });
+
+    it('threads a reviewer-keyed model map into each CLI invocation', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          reviewLoopFollowUp: true,
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+          reviewLoopPRBranch: 'b',
+          reviewLoopPRNumber: 9,
+          reviewLoopReviewers: ['codex', 'claude'],
+          reviewLoopReviewerModels: { codex: 'gpt-5.6-sol', claude: 'qwen2.5:7b' },
+          sourceTaskId: 'task-src-map',
+        }}),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta);
+      expect(prompt).toMatch(/codex --model gpt-5\.6-sol/);
+      expect(prompt).toMatch(/claude --model qwen2\.5:7b/);
+    });
+
+    it('threads a configured claude model (Ollama-backed reviewer) via the map', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          reviewLoopFollowUp: true,
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+          reviewLoopPRBranch: 'b',
+          reviewLoopPRNumber: 9,
+          reviewLoopReviewers: ['claude'],
+          reviewLoopReviewerModels: { claude: 'qwen2.5:7b' },
+          sourceTaskId: 'task-src-cl',
+        }}),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta);
+      expect(prompt).toMatch(/claude --model qwen2\.5:7b/);
+    });
+
+    it('threads each configured model id verbatim, without env-dependent mapping', () => {
+      // Even with Bedrock enabled in the process env, the prompt layer does NOT
+      // map a bare Claude tier to a Bedrock id — it has only a providerId, not the
+      // merged spawn env, and the reviewer CLI is spawned by the agent, not PortOS.
+      // The user configures the exact id their environment needs (free-text field).
+      const prev = process.env.CLAUDE_CODE_USE_BEDROCK;
+      process.env.CLAUDE_CODE_USE_BEDROCK = '1';
+      try {
+        const prompt = buildLightContextPrompt(
+          makeTask({ metadata: {
+            reviewLoopFollowUp: true,
+            reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+            reviewLoopPRBranch: 'b',
+            reviewLoopPRNumber: 9,
+            reviewLoopReviewers: ['claude', 'codex'],
+            reviewLoopReviewerModels: { claude: 'us.anthropic.claude-opus-4-8', codex: 'gpt-5.6-sol' },
+            sourceTaskId: 'task-src-verbatim',
+          }}),
+          '/r',
+          { branchName: 'b', worktreePath: '/tmp/wt' },
+          isTruthyMeta);
+        // Both ids appear exactly as configured — no Bedrock rewrite, no mangling.
+        expect(prompt).toMatch(/claude --model us\.anthropic\.claude-opus-4-8/);
+        expect(prompt).toMatch(/codex --model gpt-5\.6-sol/);
+      } finally {
+        if (prev === undefined) delete process.env.CLAUDE_CODE_USE_BEDROCK;
+        else process.env.CLAUDE_CODE_USE_BEDROCK = prev;
+      }
+    });
+
+    it('falls back to the legacy codex-scalar metadata key when the map is absent', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: {
           reviewLoopFollowUp: true,
@@ -491,6 +655,7 @@ describe('buildLightContextPrompt', () => {
           reviewLoopPRBranch: 'b',
           reviewLoopPRNumber: 9,
           reviewLoopReviewers: ['codex'],
+          // Written by an older install: only the codex scalar, no map.
           reviewLoopCodexModel: 'gpt-5.6-sol',
           sourceTaskId: 'task-src-cx',
         }}),
@@ -500,7 +665,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/codex --model gpt-5\.6-sol/);
     });
 
-    it('omits the Codex model note when codex is not among the reviewers', () => {
+    it('does not leak a stale legacy codex scalar into a claude-only review', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: {
           reviewLoopFollowUp: true,
@@ -508,8 +673,8 @@ describe('buildLightContextPrompt', () => {
           reviewLoopPRBranch: 'b',
           reviewLoopPRNumber: 9,
           reviewLoopReviewers: ['claude'],
-          // Stale model tier from a prior codex config — must not leak into a
-          // claude-only review.
+          // Stale model tier from a prior codex config — the legacy fallback maps
+          // it to codex, which is NOT among the reviewers, so it must not leak.
           reviewLoopCodexModel: 'gpt-5.6-sol',
           sourceTaskId: 'task-src-noncx',
         }}),
@@ -666,6 +831,29 @@ describe('buildAgentPrompt — provider type routing', () => {
     expect(prompt).not.toMatch(/You are an autonomous agent/);
     // Light + non-TUI uses the plain "## Completion" block.
     expect(prompt).toMatch(/^## Completion$/m);
+  });
+
+  it('passes the app id as targetAppLabel to the api-path briefing template for a managed app', async () => {
+    vi.mocked(buildPrompt).mockClear();
+    await buildAgentPrompt(
+      makeTask({ metadata: { app: 'comics' } }), {}, '/r', null, isTruthyMeta,
+      { providerType: 'api' });
+    const [name, context] = vi.mocked(buildPrompt).mock.calls.at(-1);
+    expect(name).toBe('cos-agent-briefing');
+    expect(context.targetAppLabel).toBe('comics');
+    // task.metadata.app stays available for any custom template references.
+    expect(context.task.metadata.app).toBe('comics');
+  });
+
+  it('passes an empty targetAppLabel to the api-path briefing template for the PortOS default app', async () => {
+    vi.mocked(buildPrompt).mockClear();
+    await buildAgentPrompt(
+      makeTask({ metadata: { app: 'portos-default' } }), {}, '/r', null, isTruthyMeta,
+      { providerType: 'api' });
+    const [, context] = vi.mocked(buildPrompt).mock.calls.at(-1);
+    expect(context.targetAppLabel).toBe('');
+    // The raw app id is NOT stripped from the context — only the label gates.
+    expect(context.task.metadata.app).toBe('portos-default');
   });
 
   describe('split system/user prompt (Claude providers)', () => {

@@ -92,6 +92,48 @@ describe('getWorkflowGraph', () => {
     expect(featureIdeas.pendingDeps).toEqual(['do-replan']);
   });
 
+  it('forwards per-app override config onto task nodes', async () => {
+    getScheduleStatus.mockResolvedValue({
+      tasks: {
+        'do-replan': {
+          type: 'weekly', enabled: true, runAfter: [], lastRun: null, runCount: 0,
+          status: { shouldRun: true },
+          appOverrides: { 'app-1': { enabled: true, interval: 'daily' } },
+          enabledAppCount: 1,
+          totalAppCount: 3,
+          taskMetadata: { worktree: true },
+          managedAgentOptions: ['worktree']
+        }
+      }
+    });
+    getAllJobs.mockResolvedValue([]);
+
+    const graph = await getWorkflowGraph();
+    const replan = graph.nodes.find(n => n.id === 'task:do-replan');
+    expect(replan.appOverrides).toEqual({ 'app-1': { enabled: true, interval: 'daily' } });
+    expect(replan.enabledAppCount).toBe(1);
+    expect(replan.totalAppCount).toBe(3);
+    expect(replan.taskMetadata).toEqual({ worktree: true });
+    expect(replan.managedAgentOptions).toEqual(['worktree']);
+  });
+
+  it('defaults per-app override fields when absent', async () => {
+    getScheduleStatus.mockResolvedValue({
+      tasks: {
+        'feature-ideas': { type: 'daily', enabled: true, runAfter: [], lastRun: null, runCount: 0, status: { shouldRun: true } }
+      }
+    });
+    getAllJobs.mockResolvedValue([]);
+
+    const graph = await getWorkflowGraph();
+    const node = graph.nodes.find(n => n.id === 'task:feature-ideas');
+    expect(node.appOverrides).toEqual({});
+    expect(node.enabledAppCount).toBe(0);
+    expect(node.totalAppCount).toBe(0);
+    expect(node.taskMetadata).toBeNull();
+    expect(node.managedAgentOptions).toBeNull();
+  });
+
   it('emits a depends-on edge for every runAfter entry', async () => {
     getScheduleStatus.mockResolvedValue({
       tasks: {

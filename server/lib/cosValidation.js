@@ -16,12 +16,12 @@ import { emptyToUndefined, emptyToNull } from './zodCompat.js';
 // =============================================================================
 
 // Reviewer choices for the Review Loop. `copilot` requests a native GitHub
-// Copilot review; `claude`/`antigravity`/`codex` instruct the review-loop follow-up
-// agent to invoke the named CLI to critique the PR diff; `lmstudio`/`ollama`
+// Copilot review; `claude`/`antigravity`/`codex`/`grok` instruct the review-loop
+// follow-up agent to invoke the named CLI to critique the PR diff; `lmstudio`/`ollama`
 // route the diff through PortOS's local code-review endpoint
 // (`POST /api/code-review/local`) which runs the configured local LLM model.
 // Mirrored in client/src/components/cos/constants.js → REVIEWER_OPTIONS.
-export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'lmstudio', 'ollama'];
+export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'grok', 'lmstudio', 'ollama'];
 export const REVIEWER_ALIASES = { gemini: 'antigravity' };
 export const DEFAULT_REVIEWER = 'copilot';
 export const DEFAULT_REVIEWERS = ['copilot'];
@@ -29,9 +29,138 @@ export const DEFAULT_REVIEWERS = ['copilot'];
 // bot). Used by the code-review endpoint, settings panel, and prompt builder
 // to gate model-id resolution.
 export const LOCAL_LLM_REVIEWERS = ['lmstudio', 'ollama'];
+// CLI reviewers whose binary accepts a `--model <id>` tier the user can pin on
+// the Code Review Defaults panel (stored as a `<reviewer>Model` settings scalar,
+// e.g. `codexModel` / `claudeModel`). The review-loop follow-up threads each as a
+// reviewer-keyed model map (`reviewLoopReviewerModels`) so the prompt emits
+// `<reviewer> --model <id>` per configured reviewer. `claude` covers both a
+// normal Claude tier and an Ollama-backed `claude` (see isOllamaClaudeProvider)
+// where `--model` selects the local Ollama model. Copilot/local-LLM reviewers are
+// excluded — the former has no CLI, the latter get their model injected
+// server-side by `POST /api/code-review/local`. Add a reviewer here (and a
+// matching `<reviewer>Model` schema field) when its CLI gains model selection.
+export const MODEL_CAPABLE_CLI_REVIEWERS = ['codex', 'claude'];
 // Stop-mode for the multi-reviewer loop (slashdo `--review-stop-on-*`).
 export const REVIEW_STOP_MODES = ['all', 'on-findings', 'on-clean'];
 export const DEFAULT_REVIEW_STOP_MODE = 'all';
+
+// Arbitrary GitHub reviewer usernames (e.g. `@CodeReviewbot`) requested as PR
+// reviewers to gate merging — a class distinct from the fixed REVIEWER_VALUES
+// enum (which either invoke a CLI, hit the local-LLM endpoint, or request the
+// native Copilot reviewer). Usernames are appended to slashdo's `--review-with`
+// as `@user` tokens after the keyed reviewers; the review-loop follow-up prompt
+// instructs the agent to request each as a PR reviewer and gate the merge on it.
+//
+// Stored WITHOUT the leading `@` (added back only in the flag string). The
+// charset is deliberately shell-safe — a GitHub username (1–39 chars,
+// alphanumeric + single hyphens, no leading/trailing hyphen) optionally followed
+// by a `/team-slug` for org-team mentions. No shell metacharacters, so the token
+// stays inert wherever it lands in a command string.
+export const MAX_REVIEW_USERNAMES = 20;
+const REVIEW_USERNAME_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\/[A-Za-z0-9._-]{1,100})?$/;
+
+/**
+ * Normalize a raw list of reviewer usernames: strip an optional leading `@`,
+ * trim, drop anything that isn't a shell-safe GitHub username/team slug,
+ * case-insensitively dedupe (GitHub logins are case-insensitive) while
+ * preserving first-occurrence order, and cap at MAX_REVIEW_USERNAMES. Returns
+ * a clean array of usernames WITHOUT the `@` prefix. Non-array input → [].
+ */
+export function normalizeReviewUsernames(list) {
+  if (!Array.isArray(list)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const raw of list) {
+    if (typeof raw !== 'string') continue;
+    const trimmed = raw.trim().replace(/^@+/, '');
+    if (!trimmed || !REVIEW_USERNAME_RE.test(trimmed)) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+    if (out.length >= MAX_REVIEW_USERNAMES) break;
+  }
+  return out;
+}
+
+/**
+ * Resolve reviewer usernames with task-over-default precedence: a task-level
+ * list (even explicitly empty) overrides the Code Review Defaults; only fall
+ * back to the defaults when the task didn't pin its own. Mirrors how
+ * `normalizeReviewers`'s fallback param works for the keyed reviewers.
+ */
+export function resolveReviewUsernames(metadataUsernames, defaultUsernames) {
+  return Array.isArray(metadataUsernames)
+    ? normalizeReviewUsernames(metadataUsernames)
+    : normalizeReviewUsernames(defaultUsernames);
+}
+
+/**
+ * Reviewer identities the user marked OPTIONAL (non-blocking). slashdo's `~opt`
+ * suffix is appended to each matching `--review-with` token, so an *inconclusive*
+ * verdict from that reviewer (timeout / no-verdict / partial) no longer gates the
+ * merge — a hard-error from it still does (slashdo `lib/multi-reviewer-loop.md`).
+ * This is the escape hatch for a valuable-but-flaky reviewer (a local Ollama
+ * model that often returns nothing) that would otherwise strand every PR on an
+ * `inconclusive` aggregate.
+ *
+ * Each entry mirrors an *emitted* `--review-with` token so the builder's
+ * membership test is a plain lookup: a keyed slug from `REVIEWER_VALUES`
+ * (`ollama`, `lmstudio`, …) or an `@<username>`. Normalizes like the sibling
+ * helpers — drop non-strings/unknown slugs/unsafe usernames, alias `gemini` →
+ * `antigravity`, dedupe case-insensitively preserving order. Non-array → undefined
+ * (an omitted field isn't persisted as an empty override).
+ */
+export function normalizeOptionalReviewers(list) {
+  if (!Array.isArray(list)) return undefined;
+  const seen = new Set();
+  const out = [];
+  for (const raw of list) {
+    if (typeof raw !== 'string') continue;
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    let token;
+    if (trimmed.startsWith('@')) {
+      const [user] = normalizeReviewUsernames([trimmed]);
+      if (!user) continue;
+      token = `@${user}`;
+    } else {
+      const slug = REVIEWER_ALIASES[trimmed] ?? trimmed;
+      if (!REVIEWER_VALUES.includes(slug)) continue;
+      token = slug;
+    }
+    const key = token.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(token);
+  }
+  return out;
+}
+
+/**
+ * Resolve optional (non-blocking) reviewers with task-over-default precedence:
+ * a task-level list (even explicitly empty) overrides the Code Review Defaults;
+ * only fall back to the defaults when the task didn't pin its own. Mirrors
+ * `resolveReviewUsernames`.
+ */
+export function resolveOptionalReviewers(metadataOptional, defaultOptional) {
+  return Array.isArray(metadataOptional)
+    ? (normalizeOptionalReviewers(metadataOptional) || [])
+    : (normalizeOptionalReviewers(defaultOptional) || []);
+}
+
+/**
+ * Build the set of lowercased optional-reviewer tokens for a fast membership
+ * test in the builders. Tolerates the raw (unnormalized) list.
+ */
+function optionalReviewerSet(optionalReviewers) {
+  return new Set((normalizeOptionalReviewers(optionalReviewers) || []).map(t => t.toLowerCase()));
+}
+
+/** Append slashdo's `~opt` marker to `token` when it's in the optional set. */
+function markOptional(token, optSet) {
+  return optSet.has(token.toLowerCase()) ? `${token}~opt` : token;
+}
 
 /**
  * Resolve task metadata to an ordered, deduped reviewer list. Prefers the new
@@ -67,18 +196,60 @@ export function normalizeReviewers(meta, fallback = DEFAULT_REVIEWERS) {
 }
 
 /**
- * Build the slashdo review flag string for an ordered reviewer list.
- * - `--review-with a,b,c` only when the list isn't the lone default copilot.
- * - `--review-stop-on-*` only when 2+ reviewers (stop-mode is meaningless for one).
- * - `--reviewer-applies` only when a non-copilot reviewer is present (no-op on copilot).
+ * Resolve the keyed (enum) reviewer list, honoring the "username-only" case: an
+ * EXPLICITLY empty keyed list with username reviewers present (e.g. copilot was
+ * stripped on a non-GitHub forge) stays empty rather than falling back to the
+ * copilot default normalizeReviewers would apply. Absent/legacy input still
+ * normalizes to the default. Single source for the guard shared by
+ * `buildReviewWithArgs` and the review-loop follow-up prompt builder.
  */
-export function buildReviewWithArgs(reviewers, stopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false) {
-  const list = normalizeReviewers({ reviewers });
-  const isDefaultOnly = list.length === 1 && list[0] === DEFAULT_REVIEWER;
-  const hasNonCopilot = list.some(r => r !== DEFAULT_REVIEWER);
+export function resolveKeyedReviewers(reviewers, hasUsernames) {
+  if (Array.isArray(reviewers) && reviewers.length === 0 && hasUsernames) return [];
+  return normalizeReviewers({ reviewers });
+}
+
+/**
+ * Build the comma-separated reviewer token list used to fill the `{reviewers}`
+ * placeholder in claim/plan prompts: keyed reviewers (falling back to the
+ * default when empty) followed by `@user` tokens for the reviewer usernames.
+ * Reviewers in `optionalReviewers` get slashdo's `~opt` non-blocking suffix.
+ * The flag-string variant is `buildReviewWithArgs`.
+ */
+export function buildReviewersCsv(reviewers, usernames = [], optionalReviewers = []) {
+  const keyed = Array.isArray(reviewers) && reviewers.length ? reviewers : [...DEFAULT_REVIEWERS];
+  const users = normalizeReviewUsernames(usernames);
+  const optSet = optionalReviewerSet(optionalReviewers);
+  const combined = [...keyed, ...users.map(u => `@${u}`)];
+  return combined.map(t => markOptional(t, optSet)).join(',');
+}
+
+/**
+ * Build the slashdo review flag string for an ordered reviewer list plus any
+ * arbitrary GitHub reviewer usernames.
+ * - `--review-with a,b,@user` only when the effective list isn't the lone default
+ *   copilot (any username, or any non-default keyed reviewer, forces it on).
+ *   Usernames are appended as `@user` tokens after the keyed reviewers.
+ * - `--review-stop-on-*` only when the effective list is 2+ (stop-mode is
+ *   meaningless for one).
+ * - `--reviewer-applies` only when a non-copilot KEYED reviewer is present (a
+ *   username reviewer is an external PR reviewer, not a CLI that applies fixes).
+ * - Reviewers in `optionalReviewers` get slashdo's `~opt` non-blocking suffix on
+ *   their emitted token, so an inconclusive verdict from them doesn't gate the
+ *   merge. A lone default `copilot` that is marked optional DOES force the flag
+ *   on (otherwise the `~opt` — the whole point — would be dropped with the flag).
+ */
+export function buildReviewWithArgs(reviewers, stopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, usernames = [], optionalReviewers = []) {
+  const users = normalizeReviewUsernames(usernames);
+  const keyed = resolveKeyedReviewers(reviewers, users.length > 0);
+  const combined = [...keyed, ...users.map(u => `@${u}`)];
+  const optSet = optionalReviewerSet(optionalReviewers);
+  // The lone-default-copilot suppression only applies when copilot is NOT marked
+  // optional — a `copilot~opt`-only list must still emit the flag to carry `~opt`.
+  const isDefaultOnly = combined.length === 1 && combined[0] === DEFAULT_REVIEWER && !optSet.has(DEFAULT_REVIEWER);
+  const hasNonCopilot = keyed.some(r => r !== DEFAULT_REVIEWER);
   const parts = [];
-  if (!isDefaultOnly) parts.push(`--review-with ${list.join(',')}`);
-  if (list.length >= 2) {
+  if (!isDefaultOnly) parts.push(`--review-with ${combined.map(t => markOptional(t, optSet)).join(',')}`);
+  if (combined.length >= 2) {
     if (stopMode === 'on-findings') parts.push('--review-stop-on-findings');
     else if (stopMode === 'on-clean') parts.push('--review-stop-on-clean');
   }
@@ -160,6 +331,21 @@ export const createCosTaskSchema = z.object({
     v => v === 'true' ? true : v === 'false' ? false : v,
     z.boolean().optional()
   ),
+  // Arbitrary GitHub reviewer usernames requested as PR reviewers to gate the
+  // merge. Normalized (strip `@`, drop unsafe/duplicate tokens) so the schema
+  // can't accept a shell-unsafe or oversized list. Absent → undefined (not `[]`)
+  // so an omitted field isn't persisted as an empty override.
+  usernames: z.preprocess(
+    v => Array.isArray(v) ? normalizeReviewUsernames(v) : undefined,
+    z.array(z.string()).optional()
+  ),
+  // Reviewer identities (keyed slugs and/or `@username`) marked non-blocking —
+  // emitted with slashdo's `~opt` suffix. Normalized so a hand-crafted request
+  // can't smuggle junk in. Absent → undefined (not `[]`).
+  optionalReviewers: z.preprocess(
+    v => Array.isArray(v) ? normalizeOptionalReviewers(v) : undefined,
+    z.array(z.string()).optional()
+  ),
 });
 
 export const updateCosTaskSchema = z.object({
@@ -173,6 +359,47 @@ export const updateCosTaskSchema = z.object({
   blockedReason: z.string().optional(),
   type: z.string().optional().default('user'),
 });
+
+// Worker's dispute of a reviewer rejection (#2441). `reason` is the required
+// case; `evidence` is optional supporting detail; `reviewer` names which reviewer
+// verdict is being disputed (constrained to the known reviewer vocab). Bounds are
+// generous but present so a hand-crafted request can't smuggle in an unbounded
+// blob that then round-trips the TASKS.md store.
+export const challengeTaskSchema = z.object({
+  reason: z.string().trim().min(1).max(5000),
+  evidence: z.string().trim().max(20_000).optional(),
+  reviewer: z.enum(REVIEWER_VALUES).optional(),
+});
+
+// Automatic re-check request (#2471). Instead of a human `outcome`, the resolver
+// re-runs a local-LLM reviewer against the current diff and derives the verdict
+// from its fresh findings (classifyRecheckOutcome in cosChallenge.js). `model` is
+// optional — falls back to the Code Review Defaults for the backend. Only the
+// in-process local reviewers are supported here; CLI reviewers (claude/codex) are
+// re-run by the follow-up agent itself, which then resolves with an explicit
+// `outcome`.
+export const challengeRecheckSchema = z.object({
+  backend: z.enum(LOCAL_LLM_REVIEWERS),
+  model: z.string().trim().min(1).optional(),
+  diff: z.string().min(1).max(500_000),
+});
+
+// Resolution of a parked challenge (#2441, #2471). Either the caller supplies an
+// explicit `outcome` (manual verdict) OR a `recheck` object (auto re-run a
+// reviewer and derive the verdict) — exactly one, never both. `outcome` mirrors
+// CHALLENGE_OUTCOMES in server/services/cosChallenge.js (source of truth; a parity
+// test keeps them in lockstep). `upheld` overturns the rejection (task → pending);
+// `escalated` surfaces the unresolved dispute to the user (task → blocked +
+// arbitration task).
+export const resolveChallengeSchema = z.object({
+  outcome: z.enum(['upheld', 'escalated']).optional(),
+  recheck: challengeRecheckSchema.optional(),
+  note: z.string().trim().max(5000).optional(),
+  resolvedBy: z.string().trim().max(200).optional(),
+}).refine(
+  (v) => (v.outcome != null) !== (v.recheck != null),
+  { message: 'Provide exactly one of `outcome` or `recheck`.', path: ['outcome'] },
+);
 
 // =============================================================================
 // LOOP SCHEMAS
@@ -263,19 +490,37 @@ export const generateWeeklyDigestSchema = z.object({
 // up spawner reads it as the fallback for `reviewers` when none are passed in.
 // `lmstudioModel` / `ollamaModel` are the installed model ids the local-LLM
 // reviewer should run with (empty/undefined = pick the active default model).
-// `codexModel` is the Codex CLI model tier (e.g. `gpt-5.6-sol`) threaded into
-// the review-loop follow-up prompt as `codex --model <id>` (empty/undefined =
-// let the Codex CLI pick its own default).
+// `codexModel` / `claudeModel` are per-CLI-reviewer model tiers (see
+// MODEL_CAPABLE_CLI_REVIEWERS) threaded into the review-loop follow-up prompt as
+// `<reviewer> --model <id>` (empty/undefined = let that CLI pick its own default).
+// `claudeModel` doubles as the Ollama model id when the user runs an
+// Ollama-backed `claude` (isOllamaClaudeProvider) as their reviewer.
 export const codeReviewSettingsSchema = z.object({
   reviewers: z.preprocess(
     v => Array.isArray(v) ? v.map(r => (typeof r === 'string' ? (REVIEWER_ALIASES[r] ?? r) : r)) : v,
     z.array(z.enum(REVIEWER_VALUES)).optional()
+  ),
+  // Arbitrary GitHub reviewer usernames (e.g. `@CodeReviewbot`) requested as PR
+  // reviewers to gate the merge, appended to `--review-with` after the keyed
+  // reviewers. Normalized so a hand-edited settings.json can't smuggle in a
+  // shell-unsafe or oversized token list. Absent → undefined (not `[]`).
+  usernames: z.preprocess(
+    v => Array.isArray(v) ? normalizeReviewUsernames(v) : undefined,
+    z.array(z.string()).optional()
+  ),
+  // Reviewer identities (keyed slugs and/or `@username`) marked non-blocking —
+  // emitted with slashdo's `~opt` suffix so an inconclusive verdict from them
+  // doesn't gate the merge (a hard-error still does). Absent → undefined.
+  optionalReviewers: z.preprocess(
+    v => Array.isArray(v) ? normalizeOptionalReviewers(v) : undefined,
+    z.array(z.string()).optional()
   ),
   stopMode: z.enum(REVIEW_STOP_MODES).optional(),
   reviewerApplies: z.boolean().optional(),
   lmstudioModel: z.preprocess(emptyToUndefined, z.string().optional()),
   ollamaModel: z.preprocess(emptyToUndefined, z.string().optional()),
   codexModel: z.preprocess(emptyToUndefined, z.string().optional()),
+  claudeModel: z.preprocess(emptyToUndefined, z.string().optional()),
 }).strict();
 
 // =============================================================================
@@ -335,8 +580,9 @@ export const SWARM_COUNT_MAX = 6;
  * (`useWorktree`/`openPR`/`simplify`/`reviewLoop`/`readOnly`/`reviewerApplies`)
  * are kept only when actually boolean; the review-loop keys are constrained by
  * value — `reviewer` to a known reviewer, `reviewers` to a filtered/deduped list
- * of known reviewers, `reviewStopMode` to a known stop-mode — plus a validated
- * `pipeline` object. Prevents prototype pollution and reserved-field overrides.
+ * of known reviewers, `usernames` to shell-safe GitHub reviewer usernames,
+ * `reviewStopMode` to a known stop-mode — plus a validated `pipeline` object.
+ * Prevents prototype pollution and reserved-field overrides.
  * Returns a clean plain object or null if input is empty/invalid.
  */
 export function sanitizeTaskMetadata(raw) {
@@ -364,6 +610,23 @@ export function sanitizeTaskMetadata(raw) {
       if (REVIEWER_VALUES.includes(normalized) && !seen.has(normalized)) { seen.add(normalized); list.push(normalized); }
     }
     if (list.length) { clean.reviewers = list; hasKeys = true; }
+  }
+  // `usernames` is the arbitrary GitHub reviewer-username list — normalize to
+  // shell-safe, deduped, capped tokens (strips `@`, drops bogus entries). Unlike
+  // `reviewers` above, an explicitly empty array is KEPT (not dropped): for
+  // usernames, `[]` is a meaningful "no external gate for this task/type" choice
+  // that must override the Code Review Defaults, matching resolveReviewUsernames'
+  // `Array.isArray` override contract and the task-form/global-panel surfaces.
+  if (Array.isArray(raw.usernames)) {
+    clean.usernames = normalizeReviewUsernames(raw.usernames);
+    hasKeys = true;
+  }
+  // `optionalReviewers` marks reviewers non-blocking (slashdo `~opt`). Like
+  // `usernames`, an explicitly empty array is KEPT so a task/type can override
+  // the Code Review Defaults' optional set back to "none optional."
+  if (Array.isArray(raw.optionalReviewers)) {
+    clean.optionalReviewers = normalizeOptionalReviewers(raw.optionalReviewers) || [];
+    hasKeys = true;
   }
   if (Object.prototype.hasOwnProperty.call(raw, 'reviewStopMode') && REVIEW_STOP_MODES.includes(raw.reviewStopMode)) {
     clean.reviewStopMode = raw.reviewStopMode;

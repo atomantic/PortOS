@@ -26,6 +26,7 @@ import { findFfmpeg, generateThumbnail, probeVideoDuration } from '../lib/ffmpeg
 import { findYtDlp } from '../lib/ytdlp.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
 import { safeChildProcessEnv } from '../lib/processEnv.js';
+import { createLineReader } from '../lib/streamLines.js';
 import { loadHistory, mutateVideoHistory } from './videoGen/history.js';
 import { deleteHistoryItem } from './videoGen/local.js';
 import { videoGenEvents } from './videoGen/events.js';
@@ -231,19 +232,12 @@ export async function startVideoDownload(url) {
           broadcastSse(job, { type: 'progress', percent: 100, stage: line.slice(STAGE_PREFIX.length) });
         }
       };
-      // Separate buffers per stream — a shared buffer can complete a partial
+      // Separate readers per stream — a shared buffer can complete a partial
       // line from one stream with a chunk from the other, corrupting a marker.
-      const makeLineReader = () => {
-        let buf = '';
-        return (chunk) => {
-          buf += chunk.toString();
-          const lines = buf.split(/\r?\n/);
-          buf = lines.pop();
-          lines.forEach(onLine);
-        };
-      };
-      proc.stdout.on('data', makeLineReader());
-      proc.stderr.on('data', makeLineReader()); // yt-dlp writes some progress/info lines to stderr too
+      const stdoutReader = createLineReader(onLine);
+      const stderrReader = createLineReader(onLine);
+      proc.stdout.on('data', stdoutReader.push);
+      proc.stderr.on('data', stderrReader.push); // yt-dlp writes some progress/info lines to stderr too
 
       const exit = await new Promise((resolve) => {
         proc.on('error', (err) => resolve({ code: null, reason: `spawn failed: ${err.message}` }));
@@ -252,11 +246,17 @@ export async function startVideoDownload(url) {
       job.process = null;
 
       if (exit.signal === 'SIGTERM' || exit.signal === 'SIGKILL') {
+        // Don't flush on cancel — a SIGKILL'd child leaves only a partial
+        // marker line in the carry, and emitting it would broadcast a stray
+        // progress/stage SSE frame right before the cancellation frame.
         console.log(`🛑 Video download ${shortId(jobId)} cancelled`);
         broadcastSse(job, { type: 'canceled' });
         await cleanupDownloadFiles(jobId);
         return;
       }
+      // Flush any final line the child wrote without a trailing newline.
+      stdoutReader.flush();
+      stderrReader.flush();
       const produced = await findDownloadedFile(jobId);
       if (exit.code !== 0 || !produced) {
         // A --match-filters/--max-filesize rejection exits 0 with no output

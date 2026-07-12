@@ -51,8 +51,20 @@ import {
   listJiraBlockingIssues,
   fileProposalToJira,
   resolveJiraBlockKey,
-  applyJiraBlockingLabel
+  applyJiraBlockingLabel,
+  computeOutcomesReport
 } from '../layeredIntelligence.js'
+import { recordFiledProposal, listOutcomes, reconcileOutcomes } from '../layeredIntelligenceOutcomes.js'
+
+// The outcome feedback loop (#2428) can only reconcile a proposal's fate on a
+// tracker that reports closed-state. All three now qualify: a forge (gh/glab
+// issues) and jira report a real closed state, and since #2435 the `plan`
+// tracker preserves each `[lil-*]` item's checkbox — a `- [x]` item reads
+// `closed` (deriveOutcome → 'merged'), so a completed PLAN proposal reconciles
+// like any other. (A `- [ ]` item stays open and unresolved, as before.)
+function outcomesTrackerSupported(filer) {
+  return filer === 'forge' || filer === 'jira' || filer === 'plan'
+}
 import { resolveAppWorkTracker } from '../../lib/workTracker.js'
 import { tryReadFile } from '../../lib/fileUtils.js'
 import { join } from 'path'
@@ -109,8 +121,10 @@ async function readIssues({ filer, forgeCli, cwd, jira, config }) {
     if (config.sources?.openIssues !== false) openIssues = existingIssues.filter(i => i.state === 'open')
   } else if (filer === 'plan' && cwd) {
     const planContent = await tryReadFile(join(cwd, 'PLAN.md'))
-    const planSlugs = extractPlanSlugs(planContent || '')
-    existingIssues = planSlugs.map(slug => ({ slug, state: 'open' }))
+    // extractPlanSlugs preserves each tag's checkbox state ({ slug, state }): a
+    // `- [x]` item reads 'closed' (with no closedAt) so the outcome loop can
+    // reconcile it and it falls out of the dedup window, while `- [ ]` stays open.
+    existingIssues = extractPlanSlugs(planContent || '')
   }
   return { openIssues, existingIssues, trackerReadFailed }
 }
@@ -163,6 +177,32 @@ export async function buildTaskInput({ app } = {}) {
     return { skip: { reason } }
   }
 
+  // The reasoning agent needs a file-writing CLI/TUI harness to emit its
+  // `.agent-done` sentinel — an HTTP `api` provider (ollama / lmstudio / kimi)
+  // has none, so an agent-backed run pinned to one fails provider resolution and
+  // the task sits pending forever (pre-#2322 LI called the API path directly, so
+  // installs routinely carried an api provider through migration 184). Preflight
+  // the EFFECTIVE agent provider — the per-app override (config.providerId, the
+  // documented home for LI's provider) OR, when unset, the global schedule pin the
+  // generator applies (interval.providerId) — and skip with an actionable reason
+  // instead of generating a doomed task the lifecycle path would only block. A
+  // null/absent effective provider inherits the default coding agent and is fine;
+  // a spawn-time api resolution (e.g. an api ACTIVE provider) still falls to the
+  // lifecycle block. A pinned api provider is skipped even if it's momentarily
+  // unavailable with a CLI fallback — guiding the user to a real CLI/TUI provider
+  // beats silently running LI on a provider they didn't choose.
+  let effectiveProviderId = config.providerId || null
+  if (!effectiveProviderId) {
+    const { loadSchedule } = await import('../taskSchedule.js')
+    const schedule = await loadSchedule().catch(() => null)
+    effectiveProviderId = schedule?.tasks?.['layered-intelligence']?.providerId || null
+  }
+  if (effectiveProviderId) {
+    const { getProviderById } = await import('../providers.js')
+    const provider = await getProviderById(effectiveProviderId).catch(() => null)
+    if (provider?.type === 'api') return skip('skipped', 'provider-not-agent-capable')
+  }
+
   // A jira-tracked app with no usable instance/project can't file — skip before
   // burning an agent on a result we couldn't land.
   if (filer === 'jira' && !jira) return skip('skipped', 'jira-not-configured')
@@ -179,11 +219,26 @@ export async function buildTaskInput({ app } = {}) {
 
   // Independent reads (app source set vs the tracker's open-issue list) — overlap
   // them so the non-parked path pays one round-trip, not two.
-  const [sources, { openIssues }] = await Promise.all([
+  const [sources, issuesRead] = await Promise.all([
     gatherSources(app, config),
     readIssues({ filer, forgeCli, cwd, jira, config })
   ])
-  const prompt = buildPrompt({ app, config, sources, openIssues, isPortos }) + buildCompletionContract()
+  const { openIssues, existingIssues, trackerReadFailed } = issuesRead
+
+  // Feedback loop (#2428): reconcile past proposals' outcomes against the fresh
+  // tracker read, then fold the merge-rate report into the prompt so the reasoner
+  // calibrates on its own history. Gated on the per-app `outcomes` source toggle
+  // AND an outcomes-capable tracker (forge / jira / plan — #2435 taught the plan
+  // parse to read a checked `- [x]` item as closed). A failed tracker read skips
+  // reconciliation (never mark closed on a blind read).
+  let outcomesReport = ''
+  if (config.sources?.outcomes && outcomesTrackerSupported(filer)) {
+    if (!trackerReadFailed) await reconcileOutcomes({ appId: app.id, existingIssues })
+    const outcomes = await listOutcomes({ appId: app.id })
+    outcomesReport = computeOutcomesReport({ outcomes })
+  }
+
+  const prompt = buildPrompt({ app, config, sources, openIssues, isPortos, outcomesReport }) + buildCompletionContract()
   // Option A: surface the per-app provider/model (resolved onto config in
   // resolveLiContext) so the generator pins the AGENT to the app's choice — LI
   // keeps provider/model in taskTypeOverrides, not the global schedule interval.
@@ -205,7 +260,11 @@ async function fileProposal({ filer, forgeCli, cwd, app, proposal, jira }) {
   }
   if (filer === 'plan' && cwd) {
     const res = await appendProposalToPlan({ repoPath: cwd, appName: app.name, slug: proposal.slug, title: proposal.title, body: proposal.body })
-    return { success: res.success, number: null }
+    // Propagate `duplicate`: appendProposalToPlan dedups on the raw `[lil-<slug>]`
+    // tag regardless of checkbox, so a CHECKED item the reasoner re-proposed (now
+    // out of the dedup window, #2435) writes nothing and returns duplicate. The
+    // caller must NOT treat that as a fresh file — see processTaskOutput.
+    return { success: res.success, number: null, duplicate: res.duplicate }
   }
   return { success: false, error: `filer "${filer}" not implemented` }
 }
@@ -273,7 +332,7 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
   if (success === false) return settle({ action: 'no-op', reason: 'agent-failed' })
 
   const ctx = await resolveLiContext(app)
-  const { isPortos, config, filer, forgeCli, cwd, jira } = ctx
+  const { isPortos, config, tracker, filer, forgeCli, cwd, jira } = ctx
 
   // The payload IS the reasoner's JSON object (parsed from the sentinel). A null/
   // malformed payload is the "returned nothing usable" case.
@@ -309,13 +368,32 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
       reason = 'semantic-duplicate'
     } else {
       const filed = await fileProposal({ filer, forgeCli, cwd, app, proposal, jira })
-      if (filed.success) {
+      if (filed.success && filed.duplicate) {
+        // The tracker already carries this slug's tag (a checked PLAN item the
+        // reasoner re-proposed): appendProposalToPlan wrote nothing. Report a
+        // duplicate and leave any recorded outcome untouched — reporting `filed`
+        // here would clear the merged outcome and let the still-checked item
+        // reconcile as a false fresh merge on the next run (#2435).
+        filedAction = 'duplicate'
+        reason = 'duplicate'
+        console.log(`♻️ Layered Intelligence: ${app.name} proposal "${proposal.slug}" already tracked in PLAN.md — suppressed`)
+      } else if (filed.success) {
         filedNumber = filed.number ?? null
         filedKey = filed.key ?? null
         filedAction = 'filed'
         reason = null
         const ref = filedRef(filedKey, filedNumber) ?? ''
         console.log(`📌 Layered Intelligence: ${app.name} filed "${proposal.title}" [${proposal.slug}]${ref ? ` (${ref})` : ''}`)
+        // Feedback loop (#2428): remember what we just filed so a later run can
+        // read back its outcome. Gated on the app's `outcomes` source toggle AND
+        // an outcomes-capable tracker (forge / jira / plan — a checked `- [x]`
+        // PLAN item now reconciles, #2435).
+        if (config.sources?.outcomes && outcomesTrackerSupported(filer)) {
+          await recordFiledProposal({
+            appId: app.id, slug: proposal.slug, tracker: tracker.resolved,
+            issueRef: filedRef(filedKey, filedNumber), scope: proposal.scope
+          })
+        }
         const issueRef = filedKey || filedNumber
         if (isHandoffEligible({ proposal, config, filed: issueRef })) {
           const task = await enqueueHandoff(buildHandoffTask({ app, proposal, issueRef }))

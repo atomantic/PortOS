@@ -122,10 +122,16 @@ export const layeredIntelligenceConfigSchema = z.object({
   model: z.string().nullable().optional(),
   sources: z.object({
     goals: z.boolean().optional(),
+    // The app's own success/performance metrics doc (METRICS.md in the app repo).
+    // Default on: the primary signal for judging a managed app against its goals.
+    appMetrics: z.boolean().optional(),
     cosMetrics: z.boolean().optional(),
     healthReport: z.boolean().optional(),
     planMd: z.boolean().optional(),
     openIssues: z.boolean().optional(),
+    // Feedback loop (#2428): feed past LI proposals + their tracker outcomes back
+    // into the reasoning prompt. Default on for PortOS, off for managed apps.
+    outcomes: z.boolean().optional(),
     // Custom Layer-1 sources. Discriminated on `type`: a repo-relative `file`,
     // an `http`(s) URL, or a shell `cmd`. All three carry an optional display
     // `label`. gatherSources also re-enforces the file confinement + the
@@ -607,6 +613,39 @@ export const scaffoldSchema = z.object({
   apiPort: scaffoldPortSchema,
   createGitHubRepo: z.boolean().optional().default(false),
   githubOrg: z.preprocess(emptyToNull, z.string().min(1).nullable().optional())
+});
+
+// =============================================================================
+// USAGE (devtools usage reports)
+// =============================================================================
+
+// Shape AND calendar validity — the regex alone accepts impossible dates like
+// 2026-02-30, which would silently return an empty report instead of a 400.
+const isoDay = z.string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD')
+  .refine((s) => {
+    const d = new Date(`${s}T00:00:00Z`);
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+  }, { message: 'Not a valid calendar date' });
+
+/**
+ * Query params for GET /api/usage — either a preset period or an explicit
+ * from/to date range (inclusive, YYYY-MM-DD). Explicit dates win over period.
+ */
+export const usageQuerySchema = z.object({
+  period: z.enum(['7d', '30d', '90d', 'all']).optional(),
+  from: isoDay.optional(),
+  to: isoDay.optional()
+}).refine((q) => !(q.from && q.to) || q.from <= q.to, { message: 'from must be on or before to' });
+
+/** Body for POST /api/usage/messages — token counts persist forever, so
+ * reject non-integer/negative garbage instead of coercing it into counters. */
+export const usageMessagesSchema = z.object({
+  providerId: z.string().min(1),
+  model: z.string().nullish(),
+  messageCount: z.number().int().nonnegative(),
+  tokenCount: z.number().int().nonnegative().optional().default(0),
+  inputTokenCount: z.number().int().nonnegative().optional().default(0)
 });
 
 /**

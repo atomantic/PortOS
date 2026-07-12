@@ -16,11 +16,14 @@ import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { parseTasksMarkdown, groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, generateTasksMarkdown, hasKnownPrefix } from '../lib/taskParser.js';
-import { REVIEW_STOP_MODES, normalizeReviewers } from '../lib/validation.js';
+import { REVIEW_STOP_MODES, normalizeReviewers, normalizeReviewUsernames } from '../lib/validation.js';
 import { loadState, withStateLock, ROOT_DIR } from './cosState.js';
 import { cosEvents } from './cosEvents.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 import { mergeTaskLists } from './cosTaskMerge.js';
+import { canChallenge, getChallengeCount, buildChallengePatch, buildChallengeResolutionPatch, classifyRecheckOutcome, MAX_CHALLENGES_PER_TASK } from './cosChallenge.js';
+import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
+import { runLocalCodeReview, getCodeReviewDefaults } from './codeReview.js';
 
 // First non-empty line of a string. Used by addTask dedup: stored descriptions
 // are flattened to a single line by generateTasksMarkdown, so the comparison
@@ -262,6 +265,13 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     // Ordered multi-reviewer list (normalizes legacy single `reviewer` too).
     if (Array.isArray(taskData.reviewers) || (typeof taskData.reviewer === 'string' && taskData.reviewer)) {
       metadata.reviewers = normalizeReviewers(taskData);
+    }
+    // Arbitrary GitHub reviewer usernames (gate-only PR reviewers). Persist the
+    // normalized list when present, or an explicit empty array so a per-task
+    // "no username reviewers" choice overrides the Code Review Defaults instead
+    // of silently inheriting them.
+    if (Array.isArray(taskData.usernames)) {
+      metadata.usernames = normalizeReviewUsernames(taskData.usernames);
     }
     if (REVIEW_STOP_MODES.includes(taskData.reviewStopMode)) metadata.reviewStopMode = taskData.reviewStopMode;
     if (taskData.reviewerApplies === true) metadata.reviewerApplies = true;
@@ -590,4 +600,159 @@ export async function approveTask(taskId, { now = Date.now() } = {}) {
 
   return tasks[taskIndex];
   });
+}
+
+/**
+ * Record a sub-agent's challenge of a reviewer rejection (#2441).
+ *
+ * Parks the task in the `challenged` status with the worker's case attached and
+ * consumes one of its bounded challenge slots (MAX_CHALLENGES_PER_TASK). A second
+ * dispute on the same task is refused — the acceptance contract is "exactly one
+ * per task." The read (getTaskById, lock-free) precedes the write (updateTask,
+ * lock-held): single-user trust model, no competing writer to race.
+ *
+ * @returns the updated task, or `{ error, code }` on not-found / budget-exhausted.
+ */
+export async function challengeTask(taskId, { reason, evidence, reviewer } = {}, taskType = 'user', { now = Date.now() } = {}) {
+  const task = await getTaskById(taskId);
+  if (!task) return { error: 'Task not found', code: 'NOT_FOUND' };
+  const resolvedType = task.taskType || taskType;
+  // A challenge disputes a REJECTION of in-flight work — never a finished task.
+  // Parking a `completed` task in `challenged` would also regress it out of a
+  // terminal state (a completed task never re-completes), so refuse it outright.
+  if (task.status === 'completed') {
+    return { error: 'Cannot challenge a completed task', code: 'CANNOT_CHALLENGE_COMPLETED' };
+  }
+  // Bounded by BOTH the one-shot dispute cap AND the shared retry budget (#2471) —
+  // a challenge that overturns re-queues the task, so refuse one that's already out
+  // of total spawns (it would only get re-blocked by agentLifecycle's spawn gate).
+  if (!canChallenge(task.metadata, { maxTotalSpawns: MAX_TOTAL_SPAWNS })) {
+    const spawns = Number(task.metadata?.totalSpawnCount) || 0;
+    const budgetExhausted = spawns >= MAX_TOTAL_SPAWNS;
+    return {
+      error: budgetExhausted
+        ? `Retry budget exhausted (${spawns}/${MAX_TOTAL_SPAWNS} spawns) — cannot challenge a task out of retries`
+        : `Challenge budget exhausted (${getChallengeCount(task.metadata)}/${MAX_CHALLENGES_PER_TASK} used)`,
+      code: budgetExhausted ? 'CHALLENGE_BUDGET_EXHAUSTED' : 'CHALLENGE_EXHAUSTED',
+    };
+  }
+  const patch = buildChallengePatch(task.metadata, { reason, evidence, reviewer, now });
+  const updated = await updateTask(taskId, { status: 'challenged', metadata: patch }, resolvedType, { now });
+  if (updated?.error) return updated;
+  console.log(`⚖️ Task ${taskId} challenged (${patch.challengeCount}/${MAX_CHALLENGES_PER_TASK})${patch.challenge.reviewer ? ` — disputing ${patch.challenge.reviewer}` : ''}`);
+  cosEvents.emit('task:challenged', { taskId, taskType: resolvedType, reviewer: patch.challenge.reviewer || null });
+  return updated;
+}
+
+/**
+ * Resolve a parked challenge (#2441). `upheld` overturns the rejection and
+ * re-queues the task (→ pending); `escalated` hands the unresolved dispute to
+ * the user — the task is blocked with a challenge-escalation reason AND an
+ * approval-required arbitration task is filed into COS-TASKS.md (reusing the same
+ * investigation/escalation surface `createInvestigationTask` writes to), so a
+ * sustained disagreement surfaces to the user rather than silently fixing or
+ * quietly blocking.
+ *
+ * @returns the updated task, or `{ error, code }` on not-found / not-challenged /
+ *          invalid-outcome.
+ */
+export async function resolveTaskChallenge(taskId, { outcome, note, resolvedBy } = {}, taskType = 'user', { now = Date.now() } = {}) {
+  const task = await getTaskById(taskId);
+  if (!task) return { error: 'Task not found', code: 'NOT_FOUND' };
+  if (task.status !== 'challenged') {
+    return { error: 'Task is not under challenge', code: 'NOT_CHALLENGED' };
+  }
+  const resolvedType = task.taskType || taskType;
+  const resolutionPatch = buildChallengeResolutionPatch({ outcome, note, resolvedBy, now });
+  if (!resolutionPatch) return { error: `Invalid challenge outcome: ${outcome}`, code: 'INVALID_OUTCOME' };
+
+  const nextStatus = outcome === 'upheld' ? 'pending' : 'blocked';
+  const metadataPatch = { ...resolutionPatch };
+  if (outcome === 'escalated') {
+    metadataPatch.blockedReason = 'Challenge unresolved — escalated to user for arbitration';
+    metadataPatch.blockedCategory = 'challenge-escalation';
+  }
+  const updated = await updateTask(taskId, { status: nextStatus, metadata: metadataPatch }, resolvedType, { now });
+  if (updated?.error) return updated;
+
+  if (outcome === 'escalated') {
+    // Surface the dispute to the single PortOS user as an approval-required
+    // arbitration task (mirrors createInvestigationTask's escalation surface).
+    // Best-effort: a failed escalation-task write must not fail the resolution
+    // itself (the original task is already blocked with the reason attached).
+    const caseReason = task.metadata?.challenge?.reason || '(no reason recorded)';
+    const disputedReviewer = task.metadata?.challenge?.reviewer;
+    const escalationDescription = `[Challenge] Arbitrate disputed rejection on ${taskId}`;
+    const escalationContext = [
+      `A sub-agent challenged a reviewer rejection on task ${taskId} and the dispute is unresolved.`,
+      disputedReviewer ? `Disputed reviewer: ${disputedReviewer}` : null,
+      `Worker's case: ${caseReason}`,
+      note ? `Resolver note: ${note}` : null,
+      'Decide: approve to overturn the rejection, or delete to let the rejection stand.',
+    ].filter(Boolean).join('\n');
+    await addTask({
+      description: escalationDescription,
+      priority: 'HIGH',
+      context: escalationContext,
+      approvalRequired: true,
+    }, 'internal', { now }).catch((err) => {
+      console.error(`❌ Failed to file challenge-escalation task for ${taskId}: ${err.message}`);
+    });
+  }
+
+  console.log(`⚖️ Task ${taskId} challenge resolved: ${outcome} → ${nextStatus}`);
+  cosEvents.emit('task:challenge-resolved', { taskId, taskType: resolvedType, outcome });
+  return updated;
+}
+
+/**
+ * Resolve a parked challenge by AUTOMATIC reviewer re-check (#2471). Instead of a
+ * human verdict, re-run the disputed (or a second) local-LLM reviewer against the
+ * current diff and derive the outcome from its fresh findings — a blocking finding
+ * that survives sustains the rejection (→ escalated); nothing blocking overturns it
+ * (→ upheld). This is the cheap confirm/overturn pass that runs BEFORE falling back
+ * to user escalation, closing the gap #2470 left ("this slice resolves manually").
+ *
+ * Only the in-process local reviewers (`lmstudio`/`ollama`) are re-run here; CLI
+ * reviewers are re-run by the follow-up agent itself, which then calls the manual
+ * `resolveTaskChallenge` path with an explicit outcome.
+ *
+ * @returns the updated task, or `{ error, code }` on not-found / not-challenged /
+ *          RECHECK_FAILED (reviewer unreachable or no usable findings).
+ */
+export async function resolveTaskChallengeWithRecheck(taskId, { recheck, resolvedBy } = {}, taskType = 'user', { now = Date.now() } = {}) {
+  const task = await getTaskById(taskId);
+  if (!task) return { error: 'Task not found', code: 'NOT_FOUND' };
+  if (task.status !== 'challenged') {
+    return { error: 'Task is not under challenge', code: 'NOT_CHALLENGED' };
+  }
+  const backend = recheck?.backend;
+  // Model: explicit override wins, else the Code Review Defaults for this backend.
+  let model = recheck?.model;
+  if (!model) {
+    const defaults = await getCodeReviewDefaults().catch(() => null);
+    model = backend === 'ollama' ? defaults?.ollamaModel : defaults?.lmstudioModel;
+  }
+  // A missing model is a config problem (no Code Review Defaults set), not an
+  // upstream-reviewer failure — surface it as a 4xx (RECHECK_NO_MODEL → 400), not
+  // the 502 bucket reserved for a reviewer that's actually unreachable.
+  if (!model) {
+    return { error: `No model configured for the ${backend} reviewer — set one on the AI Providers → Code Review Defaults panel.`, code: 'RECHECK_NO_MODEL' };
+  }
+  console.log(`⚖️ Re-checking challenge on ${taskId} via ${backend} (${model})`);
+  const review = await runLocalCodeReview({ backend, model, diff: recheck?.diff });
+  if (!review?.ok) {
+    return { error: `Re-check failed: ${review?.error || 'unknown reviewer error'}`, code: 'RECHECK_FAILED' };
+  }
+  const outcome = classifyRecheckOutcome(review.findings);
+  if (!outcome) {
+    return { error: 'Re-check returned no usable findings', code: 'RECHECK_FAILED' };
+  }
+  const verdict = outcome === 'upheld'
+    ? `no blocking findings survived (${backend})`
+    : `a blocking finding still stands (${backend})`;
+  // The resolution note is auto-generated from the re-check verdict (any caller
+  // `note` is intentionally not threaded here — the machine verdict is the record).
+  const note = `Auto re-check by ${backend} (${model}): ${verdict}.`;
+  return resolveTaskChallenge(taskId, { outcome, note, resolvedBy: resolvedBy || `recheck:${backend}` }, taskType, { now });
 }

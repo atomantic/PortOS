@@ -5,7 +5,7 @@ import { dirname, join } from 'path';
 import { PATHS } from './lib/fileUtils.js';
 import { resolveInstallRoot } from './lib/dataRoot.js';
 import { PORTS } from './lib/ports.js';
-import { estimateTokens } from './lib/contextBudget.js';
+import { estimateTokens, estimateTokensFromChars } from './lib/contextBudget.js';
 import { existsSync } from 'fs';
 import { createTailscaleServers } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
@@ -152,6 +152,7 @@ import sdapiRoutes from './routes/sdapi.js';
 import openclawRoutes from './routes/openclaw.js';
 import sharingRoutes from './routes/sharing.js';
 import roundsRoutes from './routes/rounds.js';
+import midiRuntimeRoutes from './routes/midiRuntime.js';
 import peerSyncRoutes from './routes/peerSync.js';
 import { initSharing } from './services/sharing/index.js';
 import askRoutes from './routes/ask.js';
@@ -212,6 +213,7 @@ import { storyBuilderStore } from './services/storyBuilder.js';
 import { writersRoomStore } from './services/writersRoom/store.js';
 import { wrWorksDir } from './services/writersRoom/_shared.js';
 import { mediaCollectionStore } from './services/mediaCollections.js';
+import { outcomesStore as liOutcomesStore } from './services/layeredIntelligenceOutcomes.js';
 import { createPortOSProviderRoutes } from './routes/providers.js';
 import { createPortOSRunsRoutes } from './routes/runs.js';
 import { createPortOSPromptsRoutes } from './routes/prompts.js';
@@ -276,7 +278,7 @@ await runMigrations({ rootDir: resolveInstallRoot(join(__dirname, '..')) }).catc
 // but DO NOT crash the server. PortOS is single-user (CLAUDE.md "Security
 // Model"); a hard exit on startup is worse than a noisy log the user can act
 // on. Returns per-store statuses for downstream telemetry; we discard them.
-await verifyCollectionVersions([universeStore(), seriesStore(), issueStore(), conflictJournalStore(), storyBuilderStore(), mediaCollectionStore(), loraDatasetStore]).catch(err => {
+await verifyCollectionVersions([universeStore(), seriesStore(), issueStore(), conflictJournalStore(), storyBuilderStore(), mediaCollectionStore(), loraDatasetStore, liOutcomesStore()]).catch(err => {
   console.error(`❌ Collection version check failed at startup: ${err?.stack ?? err}`);
 });
 
@@ -290,7 +292,8 @@ const aiToolkitHooks = {
   },
   onRunCompleted: (metadata, output) => {
     const estimatedTokens = estimateTokens(output);
-    recordMessages(metadata.providerId, metadata.model, 1, estimatedTokens).catch(err => {
+    const inputTokens = estimateTokensFromChars(metadata.promptLength);
+    recordMessages(metadata.providerId, metadata.model, 1, estimatedTokens, inputTokens).catch(err => {
       console.error(`❌ Failed to record usage: ${err.message}`);
     });
   },
@@ -566,6 +569,7 @@ app.use('/sdapi/v1', sdapiRoutes);
 app.use('/api/openclaw', openclawRoutes);
 app.use('/api/sharing', sharingRoutes);
 app.use('/api/rounds', roundsRoutes);
+app.use('/api/midi-runtime', midiRuntimeRoutes);
 app.use('/api/peer-sync', peerSyncRoutes);
 app.use('/api/ask', askRoutes);
 

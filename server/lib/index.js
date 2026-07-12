@@ -66,6 +66,7 @@ export * from './storyArc.js';
 export * from './styleGuide.js';
 export * from './storyBuilderIntegrity.js';
 export * from './storyBuilderSteps.js';
+export * from './streamLines.js';
 // `storyBible.js` re-exports `normalizeSlugline` from `scenePrompt.js` for
 // back-compat — namespace it so the canonical scenePrompt export wins flat.
 export * as storyBible from './storyBible.js';
@@ -93,6 +94,7 @@ export * from './hfCache.js';
 export * from './hfDownload.js';
 export * from './sseDownload.js';
 export * from './sseHeaders.js';
+export * from './installLogger.js';
 export * from './mediaModels.js';
 export * from './promptPartials.js';
 export * from './promptRunner.js';
@@ -192,7 +194,9 @@ export * from './localModelHeuristics.js';
 export * from './loraDataset.js';
 export * from './issueLength.js';
 export * from './mediaItemKey.js';
+export * from './modelPricing.js';
 export * from './navManifest.js';
+export * from './usageRange.js';
 export * from './personaTraitBlend.js';
 export * from './pipelineIssueOrder.js';
 export * from './postAdaptive.js';

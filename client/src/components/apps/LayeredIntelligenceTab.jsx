@@ -14,10 +14,12 @@ import { formatLiReason, liReasonTone } from '../../utils/layeredIntelligenceRea
 // server `sources` object (custom[] file sources are handled separately below).
 export const LI_SOURCE_FIELDS = [
   { key: 'goals', label: 'Goals (GOALS.md)', hint: 'The app\'s inferred/authored product goals' },
-  { key: 'cosMetrics', label: 'CoS metrics', hint: 'Recent autonomous-agent run stats for this app' },
+  { key: 'appMetrics', label: 'App metrics (METRICS.md)', hint: 'The app\'s own success metrics — user-success / KPIs / production telemetry it tracks about itself' },
+  { key: 'cosMetrics', label: 'CoS metrics', hint: 'This install\'s autonomous coding-agent run stats (how PortOS\'s agents perform) — not the app\'s own product performance' },
   { key: 'healthReport', label: 'Health report', hint: 'Latest health / lint / test summary' },
   { key: 'planMd', label: 'PLAN.md', hint: 'The app\'s open work-plan items' },
-  { key: 'openIssues', label: 'Open issues', hint: 'Currently open tracker issues' }
+  { key: 'openIssues', label: 'Open issues', hint: 'Currently open tracker issues' },
+  { key: 'outcomes', label: 'Proposal outcomes', hint: 'Past LI proposals + how they fared (merge rate), fed back so the loop calibrates on its own results' }
 ];
 
 // The proposal scopes the loop may file. loop-meta / portos-self extend the loop

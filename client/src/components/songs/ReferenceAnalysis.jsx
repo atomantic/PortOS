@@ -36,10 +36,13 @@ import {
 } from '../../services/apiRounds.js';
 import useReferenceAudioImport from '../../hooks/useReferenceAudioImport.js';
 import useMidiTranscription from '../../hooks/useMidiTranscription.js';
+import MidiInstallModal from '../install/MidiInstallModal.jsx';
+import MidiGatedModal from '../install/MidiGatedModal.jsx';
 import { startMemoRecording, arrayBufferToBase64 } from '../../lib/audioRecorder';
 import { proposeSegmentScore, proposeStackedSegmentScore, diffScoreBars, PITCH_CLASS_NAMES } from '../../lib/referenceAnalysis';
 import { scoreHasMusic, parseScore } from '../../lib/scoreNotation';
 import { harmonyPartLabel } from '../../lib/songCraft';
+import { MUSCRIPTOR_MODELS, DEFAULT_MUSCRIPTOR_MODEL } from '../../lib/muscriptorModels.js';
 
 // Client-side guard for the base64-JSON upload path: the server body limit is
 // 55 MB and base64 inflates ~4/3, so cap the raw file well under that.
@@ -48,16 +51,6 @@ const MAX_AUDIO_BYTES = 35 * 1024 * 1024;
 // Mirror services/rounds.js REF_SEGMENTS_MAX / SCORE_PARTS_MAX — used only to
 // disable adding more client-side; the server enforces the real bounds.
 const REF_SEGMENTS_MAX = 24;
-
-// Human labels for the MuScriptor sidecar's STAGE names (SSE progress frames).
-const MIDI_STAGE_LABELS = {
-  starting: 'Starting…',
-  'import-runtime': 'Loading runtime…',
-  'load-model': 'Loading model…',
-  transcribe: 'Transcribing…',
-  'write-midi': 'Writing MIDI…',
-  importing: 'Saving…',
-};
 
 const msToSec = (ms) => (Math.max(0, ms) / 1000).toFixed(1);
 const secToMs = (raw) => {
@@ -97,6 +90,10 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
   const [url, setUrl] = useState('');
+  // MuScriptor model size for the next transcription (default balances
+  // quality/speed). Read fresh inside startRequest — useSseJobSlot invokes the
+  // latest closure each kickoff, so a change here applies to the next run.
+  const [midiModel, setMidiModel] = useState(DEFAULT_MUSCRIPTOR_MODEL);
   const fileRef = useRef(null);
   const handleRef = useRef(null);
 
@@ -112,7 +109,7 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
   // .mid. Same explicit-save model as the other reference fields: the returned
   // uploads filename lands on the draft; the user Saves to keep it.
   const midiJob = useMidiTranscription({
-    startRequest: (filename) => transcribeReferenceMidi(filename, undefined, { silent: true }),
+    startRequest: (filename) => transcribeReferenceMidi(filename, midiModel, { silent: true }),
     eventsUrl: referenceMidiTranscriptionEventsUrl,
     cancelRequest: cancelReferenceMidiTranscription,
     onComplete: ({ filename }, sourceAudio) => {
@@ -179,6 +176,8 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
   if (reference.audioFilename) {
     return (
       <div className="flex flex-wrap items-center gap-2">
+        <MidiInstallModal {...midiJob.installGate} />
+        <MidiGatedModal {...midiJob.gatedGate} />
         <span className="flex items-center gap-1.5 text-xs text-port-success">
           <AudioLines size={14} /> Audio attached
         </span>
@@ -204,20 +203,31 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
           </>
         ) : midiJob.active ? (
           <span className="flex items-center gap-1.5 px-2 py-1 text-xs rounded-lg border border-port-border text-gray-300">
-            <Loader2 size={13} className="animate-spin" /> {MIDI_STAGE_LABELS[midiJob.stage] || 'Transcribing…'}
+            <Loader2 size={13} className="animate-spin" /> {midiJob.stageLabel}
             <button type="button" onClick={midiJob.cancel} title="Cancel MIDI transcription" className="ml-1 text-gray-400 hover:text-port-error">
               <X size={13} />
             </button>
           </span>
         ) : (
-          <button
-            type="button"
-            onClick={() => midiJob.start(reference.audioFilename)}
-            title="Transcribe this audio to MIDI with MuScriptor (local, needs INSTALL_MUSCRIPTOR=1)"
-            className="flex items-center gap-1 px-2 py-1 text-xs rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50"
-          >
-            <Music size={13} /> Transcribe MIDI
-          </button>
+          <>
+            <select
+              value={midiModel}
+              onChange={(e) => setMidiModel(e.target.value)}
+              aria-label="MuScriptor model size"
+              title="MuScriptor model size — larger is higher quality but slower and a bigger first-use download"
+              className="bg-port-bg border border-port-border rounded-lg px-1.5 py-1 text-xs text-white capitalize focus:border-port-accent focus:outline-none"
+            >
+              {MUSCRIPTOR_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <button
+              type="button"
+              onClick={() => midiJob.start(reference.audioFilename)}
+              title={`Transcribe this audio to MIDI with MuScriptor (${midiModel} model, local — installs automatically on first use)`}
+              className="flex items-center gap-1 px-2 py-1 text-xs rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50"
+            >
+              <Music size={13} /> Transcribe MIDI
+            </button>
+          </>
         )}
         <button
           type="button"

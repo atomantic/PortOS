@@ -28,6 +28,15 @@ import { LLM_DRILL_TYPES, COGNITIVE_DRILL_TYPES } from '../post/constants';
 const RUN_SUBROUTE = 'run';
 const isRunSubroute = (subtab) => subtab === RUN_SUBROUTE;
 
+// Routed memory sub-pages (`/post/memory/:subtab`). The Elements Song study
+// surface is the only one today; kept as a const so the guard below and the
+// nav-manifest contract test (server/lib/navManifest.test.js) share one source
+// of truth for which `/post/memory/*` deep links resolve to a real page.
+export const MEMORY_SUBROUTES = [
+  { id: 'elements', label: 'Elements' },
+];
+const MEMORY_SUBROUTE_IDS = MEMORY_SUBROUTES.map((s) => s.id);
+
 export default function PostTab({ tab = 'launcher', subtab }) {
   const navigate = useNavigate();
   const location = useLocation();
@@ -222,7 +231,7 @@ export default function PostTab({ tab = 'launcher', subtab }) {
       );
     }
     case 'memory':
-      if (subtab === 'elements') {
+      if (MEMORY_SUBROUTE_IDS.includes(subtab)) {
         return (
           <ElementsSong
             item={elementsItem}

@@ -4,7 +4,8 @@ import { arch, homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { PATHS } from './fileUtils.js';
-import { safeChildProcessEnv } from './processEnv.js';
+import { safeChildProcessEnv, whichFirst } from './processEnv.js';
+import { createLineReader } from './streamLines.js';
 
 const execFileAsync = promisify(execFile);
 const IS_WIN = platform() === 'win32';
@@ -123,10 +124,7 @@ export async function detectPython() {
     if (match) return match;
   }
   if (present.length) return present[0];
-  const which = IS_WIN ? 'where' : 'which';
-  const name = IS_WIN ? 'python' : 'python3';
-  const { stdout } = await execFileAsync(which, [name], { timeout: 5000 }).catch(() => ({ stdout: '' }));
-  return stdout.trim().split(/\r?\n/)[0] || null;
+  return whichFirst(IS_WIN ? 'python' : 'python3');
 }
 
 export async function detectArm64Python() {
@@ -332,8 +330,32 @@ export function resolveMuscriptorPython() {
   return null;
 }
 
+// A killed-mid-install run (e.g. the user cancels the in-app installer during
+// pip) leaves the venv's python binary but no `muscriptor` package.
+// resolveMuscriptorPython() only existsSync's the binary, so it would report
+// that broken state as ready — the transcription then fails deep in the sidecar
+// and, because the binary IS present, no 503 fires to re-open the installer.
+// Probe the actual import the sidecar needs (mirrors isByovRuntimeReady / the
+// Flux2 health check) so a partial venv is treated as not-ready: the 503 gate
+// re-opens the installer and the install short-circuit runs the repair instead
+// of claiming "already installed". Only the positive result is cached (the
+// probe spawns a process); a not-ready venv re-probes each call so an
+// out-of-band repair reflects without a restart. Bust via invalidateMuscriptorPython().
+let cachedMuscriptorReady = false;
+export async function isMuscriptorRuntimeReady() {
+  if (cachedMuscriptorReady) return true;
+  const py = resolveMuscriptorPython();
+  if (!py) return false;
+  const ok = await execFileAsync(py, ['-c', 'from muscriptor import TranscriptionModel'], { env: safeChildProcessEnv(), timeout: 30_000 })
+    .then(() => true)
+    .catch(() => false);
+  cachedMuscriptorReady = ok;
+  return ok;
+}
+
 export function invalidateMuscriptorPython() {
   cachedMuscriptorPython = null;
+  cachedMuscriptorReady = false;
 }
 
 // Used by /api/image-gen/setup/* routes to validate user-supplied pythonPath
@@ -424,15 +446,18 @@ function streamSpawn(bin, args, onLog, onProc) {
   return new Promise((resolve) => {
     const proc = spawn(bin, args, { env: safeChildProcessEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
     onProc(proc);
-    const onChunk = (chunk) => {
-      for (const line of chunk.toString().split(/[\r\n]+/)) {
-        const t = line.trim();
-        if (t) onLog({ type: 'log', message: t });
-      }
+    // `splitRe: /[\r\n]+/` so a torch/tqdm progress bar that redraws with a
+    // bare `\r` surfaces each redraw as its own log line; the carry buffer
+    // stitches a line split across chunk boundaries.
+    const onLine = (line) => {
+      const t = line.trim();
+      if (t) onLog({ type: 'log', message: t });
     };
-    proc.stdout.on('data', onChunk);
-    proc.stderr.on('data', onChunk);
-    proc.on('close', (code) => { onProc(null); resolve(code ?? -1); });
+    const stdoutReader = createLineReader(onLine, { splitRe: /[\r\n]+/ });
+    const stderrReader = createLineReader(onLine, { splitRe: /[\r\n]+/ });
+    proc.stdout.on('data', stdoutReader.push);
+    proc.stderr.on('data', stderrReader.push);
+    proc.on('close', (code) => { stdoutReader.flush(); stderrReader.flush(); onProc(null); resolve(code ?? -1); });
     proc.on('error', (err) => { onLog({ type: 'error', message: err.message }); onProc(null); resolve(-1); });
   });
 }

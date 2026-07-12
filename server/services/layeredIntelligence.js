@@ -26,6 +26,7 @@ import { existsSync } from 'fs';
 import { DAY, tryReadFile, readJSONFile, safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { bufferedSpawn } from '../lib/bufferedSpawn.js';
 import { createTicket, searchIssues, addLabels, escapeJql } from './jira.js';
+import { computeWindowedStats } from './taskLearning/store.js';
 
 // Tracker labels + slug marker. The slug is the stable dedup key the reasoner
 // chooses; it is embedded in each filed issue body so a later run (or the
@@ -78,6 +79,12 @@ export const PROPOSAL_COMPLEXITIES = ['trivial', 'moderate', 'complex'];
 // lets the loop enqueue a coding agent instead of only filing the issue.
 export const HANDOFF_COMPLEXITY = 'trivial';
 
+// The resolved outcomes a filed proposal can reach (the feedback loop, #2428).
+// A record with a null outcome is still open/unresolved. `abandoned` is reserved
+// for a superseded proposal — auto-derivation only distinguishes merged/rejected
+// from the tracker's closed state; `abandoned` is set by a user/future path.
+export const PROPOSAL_OUTCOMES = ['merged', 'rejected', 'abandoned'];
+
 /**
  * The default per-app config. PortOS (isPortos) additionally gets the meta/self
  * scopes so the loop can extend itself; every other app is capped at its own
@@ -92,10 +99,27 @@ export function defaultLayeredIntelligenceConfig(isPortos = false) {
     model: null,
     sources: {
       goals: true,
-      cosMetrics: true,
+      // The app's OWN performance metrics (a METRICS.md doc in the app repo): the
+      // user-success / KPI / production-telemetry signals the app tracks about
+      // itself. This is the PRIMARY signal for evaluating a managed app against
+      // its own goals and purpose, so it's on by default for every app. See the
+      // METRICS.md convention in docs/METRICS.md.
+      appMetrics: true,
+      // The autonomous coding-agent run stats this install records (learning.json).
+      // For the PortOS install these ARE its own-performance metrics; for a MANAGED
+      // app they describe how reliably PortOS's agents change the app (a tooling /
+      // interaction signal), NOT the app's own product performance — so default it
+      // on only for PortOS. A managed app measures itself through appMetrics/custom
+      // sources instead; the user can still opt this on per-app.
+      cosMetrics: isPortos,
       healthReport: true,
       planMd: true,
       openIssues: true,
+      // The self-feedback signal (#2428): past LI proposals + their tracker
+      // outcomes, fed back so the reasoner calibrates on its own merge rate.
+      // Default ON for the PortOS install (it improves itself), OFF for managed
+      // apps — the user opts in per-app via the LI config UI.
+      outcomes: isPortos,
       custom: []
     },
     rules: '',
@@ -395,11 +419,81 @@ export function trackerSupportsPause(resolved) {
 }
 
 /**
+ * Derive a resolved outcome for a filed proposal from its live tracker issue.
+ * Pure — the reconciler feeds it a `{ state, stateReason, closedAt }` issue:
+ *   - still open (or unknown state)     → null   (unresolved)
+ *   - closed as "not planned"           → 'rejected'
+ *   - closed for any other reason        → 'merged' (the common auto-close-on-merge
+ *                                          path; glab/jira report no stateReason)
+ * GitHub reports `stateReason` ('completed' | 'not_planned' | 'reopened'); other
+ * forges omit it, so a bare closed issue reads as merged.
+ */
+export function deriveOutcome(issue) {
+  if ((issue?.state || '').toLowerCase() !== 'closed') return null;
+  const reason = (issue?.stateReason || '').toLowerCase().replace(/[\s-]+/g, '_');
+  if (reason === 'not_planned') return 'rejected';
+  return 'merged';
+}
+
+/**
+ * Format the LI outcome-feedback report (#2428) from this app's recorded
+ * proposals + their reconciled outcomes. Pure + side-effect-free: the LI hook
+ * loads the outcomes and passes them here, then feeds the string into buildPrompt.
+ * Returns '' when there's nothing to report (no filed history) so the caller omits
+ * the block entirely rather than injecting an empty section.
+ */
+export function computeOutcomesReport({ outcomes = [] } = {}) {
+  const filed = (Array.isArray(outcomes) ? outcomes : []).filter(o => o && typeof o === 'object');
+  if (filed.length === 0) return '';
+  const total = filed.length;
+  const pct = (n) => Math.round((n / total) * 100);
+  const count = (name) => filed.filter(o => o.outcome === name).length;
+  const merged = count('merged');
+  const rejected = count('rejected');
+  const abandoned = count('abandoned');
+  const pending = total - merged - rejected - abandoned;
+
+  // Per-scope merge rate — the calibration signal the reasoner acts on.
+  const scopes = new Map();
+  for (const o of filed) {
+    const s = o.scope || 'unknown';
+    const agg = scopes.get(s) || { filed: 0, merged: 0 };
+    agg.filed += 1;
+    if (o.outcome === 'merged') agg.merged += 1;
+    scopes.set(s, agg);
+  }
+  const scopeLines = [...scopes.entries()]
+    .sort((a, b) => b[1].filed - a[1].filed)
+    .map(([s, v]) => `- ${s}: ${v.filed} filed, ${v.merged} merged (${v.filed ? Math.round((v.merged / v.filed) * 100) : 0}%)`)
+    .join('\n');
+
+  const reasons = [...new Set(filed
+    .filter(o => o.outcome === 'rejected' && o.outcomeReason)
+    .map(o => o.outcomeReason))].slice(0, 5);
+
+  return [
+    'Recent LI proposals (all still-open, plus outcomes resolved within ~30 days):',
+    `- Total filed: ${total}`,
+    `- Merged/implemented: ${merged} (${pct(merged)}%)`,
+    `- Rejected: ${rejected} (${pct(rejected)}%)`,
+    `- Abandoned: ${abandoned} (${pct(abandoned)}%)`,
+    `- Still open: ${pending} (${pct(pending)}%)`,
+    '',
+    'By scope:',
+    scopeLines || '- (none)',
+    '',
+    `Common rejection reasons: ${reasons.length ? reasons.join('; ') : 'none'}`
+  ].join('\n');
+}
+
+/**
  * Build the JSON-only reasoning prompt for one app. Deterministic: given the
  * gathered sources, open issues, and config, produces the exact string sent to
  * the model. Meta/self scopes are only offered when the app is PortOS.
+ * `outcomesReport` (from computeOutcomesReport) is injected as a `liOutcomes`
+ * block with calibration guidance when non-empty (#2428).
  */
-export function buildPrompt({ app, config, sources = {}, openIssues = [], isPortos = false }) {
+export function buildPrompt({ app, config, sources = {}, openIssues = [], isPortos = false, outcomesReport = '' }) {
   const allowed = (config.allowedScopes || []).filter(s =>
     isScopeAllowed({ scope: s, allowedScopes: config.allowedScopes, isPortos })
   );
@@ -412,12 +506,29 @@ export function buildPrompt({ app, config, sources = {}, openIssues = [], isPort
     ? openIssues.map(i => `- #${i.number ?? '?'} [${i.slug || extractSlugFromBody(i.body) || 'no-slug'}] ${i.title || ''}`).join('\n')
     : '(none)';
 
+  // Nudge a managed app with no own-performance signal (no METRICS.md gathered)
+  // toward adding one, so future runs can judge real performance. PortOS is exempt
+  // — it measures itself through cosMetrics. Also gate on the source being ENABLED:
+  // if the user deliberately turned appMetrics off, a METRICS.md may well exist, so
+  // "add a METRICS.md" would be a misleading (and possibly redundant) proposal.
+  const hasAppMetrics = Boolean(typeof sources.appMetrics === 'string' && sources.appMetrics.trim());
+  const appMetricsEnabled = config.sources?.appMetrics !== false;
+  const metricsGuidance = (!isPortos && appMetricsEnabled && !hasAppMetrics)
+    ? '\nThis app exposes no own-performance metrics yet (no METRICS.md). If you lack the data to judge how it is doing against its goals, a high-value app-data-gap proposal is to add a METRICS.md documenting how the app measures success — its user-success/KPI signals and where its production telemetry or data lives — so future runs can reason about real performance.\n'
+    : '';
+
   const handoffNote = config.handoff?.enabled
     ? '\nHand-off: a proposal you mark BOTH "complexity":"trivial" AND "safe":true may be handed directly to a coding agent to implement now (not just filed). Only mark a proposal trivial+safe when it is small, self-contained, and carries no regression or data-loss risk — when in doubt, use a higher complexity or "safe":false so a human triages it first.\n'
     : '';
 
-  return `You are the Layered Intelligence reasoner for the app "${app.name}". Analyze the app's goals and telemetry and decide the SINGLE highest-value improvement to propose this run — signal, not noise. You never write code; you return structured JSON that a deterministic system files as ONE tracker issue.
-${handoffNote}
+  // Feedback loop (#2428): show the reasoner how its own past proposals fared so
+  // it can calibrate scope/merge-rate instead of proposing in a vacuum.
+  const outcomesBlock = (typeof outcomesReport === 'string' && outcomesReport.trim())
+    ? `\n### liOutcomes\n${outcomesReport.trim()}\n\nUse this data to calibrate your proposal: prefer scopes with higher merge rates, avoid patterns that were repeatedly rejected, and consider that lower-merge scopes may need more justification.\n`
+    : '';
+
+  return `You are the Layered Intelligence reasoner for the app "${app.name}". Your job is to evaluate how THIS app is performing against its OWN goals and purpose${isPortos ? '' : ', not how well PortOS\'s tooling manages it'}. Decide the SINGLE highest-value improvement to propose this run (signal, not noise), grounded in the app's own goals and its own performance metrics (user success, KPIs, production telemetry). You never write code; you return structured JSON that a deterministic system files as ONE tracker issue.
+${handoffNote}${metricsGuidance}
 Rules & guidance from the operator:
 ${config.rules?.trim() || '(none)'}
 
@@ -429,7 +540,7 @@ ${openList}
 
 Gathered sources:
 ${sourceBlocks || '(no sources available — you may propose an app-data-gap to add telemetry)'}
-
+${outcomesBlock}
 Respond with JSON only (no markdown fences):
 {
   "analysis": "brief reasoning summary",
@@ -480,6 +591,13 @@ export async function gatherSources(app, config, { cosPath = PATHS.cos } = {}) {
     const goals = await tryReadFile(join(repo, 'GOALS.md'));
     if (goals) out.goals = goals.slice(0, 8000);
   }
+  if (src.appMetrics && repo) {
+    // The app's own success/performance metrics doc (the METRICS.md convention,
+    // see docs/METRICS.md) — where a managed app records what "performing well"
+    // means. Absent → omitted (the reasoner may then propose adding one).
+    const metrics = await tryReadFile(join(repo, 'METRICS.md'));
+    if (metrics) out.appMetrics = metrics.slice(0, 8000);
+  }
   if (src.planMd && repo) {
     const plan = await tryReadFile(join(repo, 'PLAN.md'));
     if (plan) out.planMd = plan.slice(0, 8000);
@@ -489,9 +607,32 @@ export async function gatherSources(app, config, { cosPath = PATHS.cos } = {}) {
     if (health) out.healthReport = health.slice(0, 8000);
   }
   if (src.cosMetrics) {
+    // This install's own autonomous-agent run stats (per task type), NOT scoped to
+    // the app being analyzed — see the default-config note for the PortOS-vs-managed
+    // rationale (default-off for managed apps).
     const learning = await readJSONFile(join(cosPath, 'learning.json'), null);
     if (learning?.byTaskType) {
-      out.cosMetrics = JSON.stringify(learning.byTaskType).slice(0, 4000);
+      // Surface BOTH the lifetime rate (the cumulative dashboard/telemetry truth)
+      // AND a recency-windowed rate (issue #2460) per task type, labeled distinctly
+      // so the reasoner doesn't conflate them. The windowed rate lets a
+      // since-resolved failure burst age out of the "is work needed" signal instead
+      // of permanently depressing it; `recentSuccessRate` is null when there are no
+      // in-window runs, in which case the reasoner leans on the lifetime rate.
+      // Note the intentional rename: computeWindowedStats' internal `windowed*`
+      // fields are surfaced to the reasoner as `recent*` (reads more naturally in
+      // the prompt context) — same concept, deliberately different label here.
+      const summary = {};
+      for (const [type, m] of Object.entries(learning.byTaskType)) {
+        const windowed = computeWindowedStats(m?.recentOutcomes);
+        summary[type] = {
+          lifetimeSuccessRate: typeof m?.successRate === 'number' ? m.successRate : null,
+          lifetimeCompleted: m?.completed || 0,
+          recentSuccessRate: windowed.windowedSuccessRate,
+          recentCompleted: windowed.windowedCompleted,
+          avgDurationMs: m?.avgDurationMs || 0
+        };
+      }
+      out.cosMetrics = JSON.stringify(summary).slice(0, 4000);
     }
   }
   for (const custom of src.custom || []) {
@@ -667,7 +808,7 @@ export function normalizeIssueState(state) {
 export async function listForgeIssues({ cli, cwd, env, exec = runCli } = {}) {
   const args = cli === 'glab'
     ? ['issue', 'list', '--label', LI_LABEL, '--all', '-P', '100', '-F', 'json']
-    : ['issue', 'list', '--label', LI_LABEL, '--state', 'all', '--limit', '100', '--json', 'number,title,body,state,closedAt,url'];
+    : ['issue', 'list', '--label', LI_LABEL, '--state', 'all', '--limit', '100', '--json', 'number,title,body,state,stateReason,closedAt,url'];
   const { code, stdout } = await exec(cli, args, { cwd, env });
   if (code !== 0) return { ok: false, issues: [] };
   if (!stdout.trim()) return { ok: true, issues: [] };
@@ -680,6 +821,9 @@ export async function listForgeIssues({ cli, cwd, env, exec = runCli } = {}) {
       title: i.title || '',
       body: i.body || i.description || '',
       state: normalizeIssueState(i.state),
+      // GitHub-only: 'completed' | 'not_planned' | 'reopened'. glab omits it, so
+      // deriveOutcome falls back to treating any closed issue as merged.
+      stateReason: i.stateReason || i.state_reason || null,
       closedAt: i.closedAt || i.closed_at || null,
       // gh reports `url`; glab reports `web_url`. Null when neither is present so
       // the overview's proposal links degrade to a plain count rather than a
@@ -893,12 +1037,32 @@ export async function appendProposalToPlan({ repoPath, appName, slug, title, bod
   return { success: true, duplicate: false };
 }
 
-/** Scan a PLAN.md string for existing `[lil-<slug>]` tags → array of slugs. */
+/**
+ * Scan a PLAN.md string for `[lil-<slug>]` tags → array of `{ slug, state }`.
+ * Preserves each tag's list-item checkbox so the outcome loop (#2435) can
+ * reconcile a completed PLAN proposal: `- [x] [lil-foo]` reads as `closed`,
+ * `- [ ] [lil-foo]` as `open`.
+ *
+ * Absent ≠ done (the CLAUDE.md sentinel rule): a bare tag with NO preceding
+ * checkbox stays `open` (still tracked/suppressed) rather than collapsing to
+ * `closed` — a missing checkbox must not silently make an item re-proposable.
+ * A `closed` item carries no `closedAt` (PLAN.md checkboxes have no timestamp),
+ * which `isIssueWithinDedupWindow` already treats as out-of-window → the item
+ * becomes re-proposable, exactly the desired behavior for a completed proposal.
+ */
 export function extractPlanSlugs(planContent) {
   if (typeof planContent !== 'string') return [];
-  const slugs = [];
-  const re = /\[lil-([a-z0-9][a-z0-9-]*)\]/gi;
+  const items = [];
+  // Alt 1: a list item `- [ ]`/`- [x]` whose line also carries the tag (state
+  // from the checkbox char). Alt 2: a bare tag with no checkbox (state 'open').
+  const re = /^[ \t]*[-*][ \t]*\[([ xX])\][^\n]*?\[lil-([a-z0-9][a-z0-9-]*)\]|\[lil-([a-z0-9][a-z0-9-]*)\]/gim;
   let m;
-  while ((m = re.exec(planContent))) slugs.push(m[1].toLowerCase());
-  return slugs;
+  while ((m = re.exec(planContent))) {
+    if (m[2]) {
+      items.push({ slug: m[2].toLowerCase(), state: m[1].toLowerCase() === 'x' ? 'closed' : 'open' });
+    } else {
+      items.push({ slug: m[3].toLowerCase(), state: 'open' });
+    }
+  }
+  return items;
 }

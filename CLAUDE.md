@@ -207,6 +207,27 @@ The worked example for "barrel + documented exports" is `server/lib/aiToolkit/in
 
 When CoS agents or AI tools work on managed apps outside PortOS, all research, plans, docs, and code for those apps must be written to the target app's own repository/directory -- never to this repo. PortOS stores only its own features, plans, and documentation. If an agent generates a PLAN.md, research doc, or feature spec for another app, it goes in that app's directory.
 
+## Sensitive Data & Privacy (developing on a live instance)
+
+**This code is written and reviewed on a live install holding one real user's data.** Machine identity, network topology, personal records, and app-specific names read out of the running instance are the user's private data — they must never leak into anything that gets committed, pushed, or published. Treat every artifact an agent produces (source, comments, test fixtures, docs, changelog, commit messages, PR titles/descriptions/review comments, issue text) as world-readable the moment it lands on a branch.
+
+**Never commit, log to a shared file, or write into a PR/issue/commit any of:**
+
+- **Machine identity** — hostnames, machine names, Tailscale node names / MagicDNS names, device IDs, OS usernames, home-directory paths that embed a username (`/Users/<name>/…`, `/home/<name>/…`), user email addresses, account IDs, license keys, serial numbers.
+- **Network info** — LAN/Tailscale/public IP addresses, MAC addresses, subnet layouts, port-forwarding maps, router/gateway addresses, VPN keys, `.env` secrets, DB passwords other than the documented `portos` dev fallback, API tokens, session cookies, auth headers.
+- **PII** — real names, physical addresses, phone numbers, birthdays, government IDs, payment details, GPS coordinates, biometric data — the user's or anyone in their data.
+- **Personal app data** — the actual contents of the running instance: real universe/series/writers-room/catalog records, brain/journal entries, MeatSpace/POST data, media project names, scheduled-task payloads, chat/voice transcripts, or any record pulled from `data/`, the live DB, or a running screen. Do not paste a real record into a test fixture, an example in docs, or a bug report.
+
+**Rules for agents:**
+
+- **Placeholders, not observations.** When code, a test, a comment, or a doc needs an example value, invent an obviously-fake one (`example.com`, `alice@example.com`, `192.0.2.10` (TEST-NET-1), `Acme Corp`, `Example Universe`, `host-XXXX`). Never transcribe a value you observed in the live instance or environment.
+- **Reproduce with redaction.** When a bug repro, log excerpt, or stack trace legitimately needs real state to be understood, redact the sensitive fields (`<hostname>`, `<user-email>`, `<tailscale-ip>`, `<record-id>`) before it goes into a commit, PR, issue, or review comment. The point is the shape of the data, not its contents.
+- **No environment scraping into artifacts.** Do not run `hostname`, `whoami`, `ifconfig`/`ip addr`, `tailscale status`, `env`, `git config user.*`, or similar and then paste the output into anything committed or published. Read them only for transient in-session logic, never persist them.
+- **Scrub before you ship.** Before `git add`/commit and before opening or commenting on a PR/issue, scan your own diff and prose for the categories above. If real data slipped in, replace it with a placeholder; if it was already committed, amend/rewrite the branch before pushing rather than layering a "redaction" commit on top (the history still leaks).
+- **Absolute paths.** Prefer repo-relative paths in committed text; when an absolute path is unavoidable in a comment or doc, strip the user segment (`~/…` or `<repo-root>/…`, not `/Users/<name>/…`).
+
+This complements the Security Model (which governs the deployed product) — this section governs what agents are allowed to *write down* while working against real data.
+
 ## Code Conventions
 
 - **No try/catch** - errors bubble to centralized middleware. **Exception:** PTY/child-process/`setTimeout`/`setInterval` callbacks and any code that runs *outside* the Express request lifecycle. An uncaught throw there crashes the Node process (there is no `next(err)` to bubble to). At those boundaries, wrap hook invocation in try/catch and log via the emoji-prefixed `console.error` style. Async event handlers that mutate shared module-level state (e.g. the TUI spawner's `handleData`) must also be serialized — chain them onto a per-session/per-actor `Promise.resolve()` queue rather than firing concurrently, otherwise interleaved awaits race on shared buffers.
@@ -276,6 +297,8 @@ port-error: #ef4444
 - **Versioning**: Version in `package.json` reflects the last release. Do not bump during development — `/do:release` handles version bumps
 - After each feature or bug fix, run `/simplify` and then commit and push code
 - **Capture deferred work before finishing.** If during a task you identify a refactor, cleanup, abstraction, or enhancement that you decide *not* to do (out of scope, risk, time), append it to `PLAN.md` as a `- [ ]` item under the most relevant section (or a new sub-heading) with enough specificity that it can be picked up cold — file paths, line numbers, why it was skipped. Examples: code-review findings rated "skip for this PR," `/simplify` items deferred for scope, "we should also do X but later." Don't end a session with these living only in chat — they evaporate.
+- **Label GitHub issues by readiness.** When filing a GitHub issue or follow-up, only apply the `future` label if the item is **not ready for work** — an idea, a rough direction, or something blocked on a decision/dependency that a picking agent shouldn't start yet (`/do:next --issues` auto-pick skips `future`-labeled issues). If the item **is ready for work**, do NOT use `future`: label it appropriately for its kind (bug, enhancement, etc.) and write enough of a plan in the issue body — the problem, the intended approach, affected files/paths, and acceptance criteria — that another agent can pick it up cold and ship it without further clarification.
+- **Never link to AI conversation sessions in PR descriptions.** Do not paste `claude.ai`, `chatgpt.com`/`chat.openai.com`, or any other AI chat/session share URL (or a "generated by / view this conversation" link) into a PR description, commit message, issue, or review comment. These links leak session context, aren't durable references, and read as AI attribution — the PR must stand on its own with a Summary and Test plan. Reference durable artifacts instead: issue/PR numbers, commit SHAs, and file paths.
 - If we have created enough commits to wrap up a feature or issue to warrant a production release, pull the latest main and release branches and then run `/do:release` from main
 - **Archive approved design plans.** When a plan is approved out of plan mode, copy the finalized plan from `~/.claude/plans/` to `./docs/plans/YYYY-MM-DD-<slug>.md` (date of approval) as a design record before implementing. See `docs/plans/README.md`.
 

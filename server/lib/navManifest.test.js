@@ -34,11 +34,15 @@ const TABBED_PAGES = [
   { prefix: '/wiki', file: 'client/src/pages/Wiki.jsx', kind: 'ids', constName: 'TABS' },
   { prefix: '/settings', file: 'client/src/components/settings/SettingsTabsHeader.jsx', kind: 'links', constName: 'TABS' },
   { prefix: '/sharing', file: 'client/src/pages/Sharing.jsx', kind: 'links', constName: 'SECTIONS' },
-  // POST's morse tab has routed `:mode` sub-pages (/post/morse/copy|send) that
-  // aren't top-level switch cases — declare their source so the guard covers
-  // them in both directions (nav ↔ real mode). Adding a MODE flows automatically.
+  // POST's morse tab has routed `:mode` sub-pages (/post/morse/copy|send) and the
+  // memory tab has the Elements study sub-page (/post/memory/elements) — none are
+  // top-level switch cases, so declare their sources so the guard covers them in
+  // both directions (nav ↔ real sub-page). Adding an entry flows automatically.
   { prefix: '/post', file: 'client/src/components/meatspace/tabs/PostTab.jsx', kind: 'switch', switchVar: 'tab',
-    nestedIdSources: [{ parent: 'morse', file: 'client/src/components/meatspace/post/MorseTrainer.jsx', constName: 'MODES' }] },
+    nestedIdSources: [
+      { parent: 'morse', file: 'client/src/components/meatspace/post/MorseTrainer.jsx', constName: 'MODES' },
+      { parent: 'memory', file: 'client/src/components/meatspace/tabs/PostTab.jsx', constName: 'MEMORY_SUBROUTES' },
+    ] },
 ];
 
 // Pull the inner text of `export const <constName> = [ … ];` (requiring `export`

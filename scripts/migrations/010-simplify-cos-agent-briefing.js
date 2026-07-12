@@ -13,6 +13,7 @@ import { makePromptReplaceMigration } from './_lib.js';
 
 export const ACCEPTED_OLD_MD5 = {
   'cos-agent-briefing.md': [
+    'dccb392a43cbd3dac900fee12c31619a', // the hash this migration originally produced (post-010 / pre-187 — target-app label gating)
     '699d053875472df455258724a0162bd5', // e827e066 — abort standardization on dirty worktree
     '181b26838e526427173e4dccfc884d01', // d086bdfc — remove git stash + enforce /do:push
     '3e1ca7f7b14b799f89a193c568003624', // f4589187 — don't update PortOS changelog
@@ -22,8 +23,12 @@ export const ACCEPTED_OLD_MD5 = {
   ],
 };
 
+// Kept in sync with the LATEST shipped hash (migration 187 supersedes 010 for
+// this file). Every migration touching cos-agent-briefing.md carries the same
+// current hash so each one's drift-catch test asserts the live sample body and
+// a fresh chronological run lands directly on the newest template.
 export const NEW_SHIPPED_MD5 = {
-  'cos-agent-briefing.md': 'dccb392a43cbd3dac900fee12c31619a',
+  'cos-agent-briefing.md': 'a01c81d3a7f4ac0ca9e8d5137735c0e3',
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

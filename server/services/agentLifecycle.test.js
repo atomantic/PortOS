@@ -380,6 +380,39 @@ describe('agentLifecycle source — app-review marker release (issue #989)', () 
   });
 });
 
+// ─── spawnAgentForTask — permanent provider-config failure blocks the task ───
+//
+// A resolution failure marked `permanent` (an api-only provider pinned to an
+// agent task, which has no file-writing harness) fails identically on every
+// re-dispatch. Without a block, the task stays pending and silently re-fails
+// forever — the layered-intelligence "sits pending, never picked up" bug. Pin
+// that the permanent branch flips the task to blocked so it stops re-dispatching.
+describe('agentLifecycle source — permanent provider-config failure blocks the task', () => {
+  it('the resolution-failure path blocks a permanent failure with a provider-config reason', () => {
+    const idx = AGENT_LIFECYCLE_SRC.indexOf('const resolution = await resolveAgentProviderAndModel(task)');
+    expect(idx, 'resolution call must exist').toBeGreaterThan(-1);
+    const body = AGENT_LIFECYCLE_SRC.slice(idx, idx + 2000);
+    expect(body, 'gates the block on resolution.permanent').toMatch(/if\s*\(resolution\.permanent\)/);
+    expect(body, 'flips the task to blocked').toMatch(/status:\s*'blocked'/);
+    expect(body, 'tags the block category').toMatch(/blockedCategory:\s*'provider-config'/);
+  });
+
+  it('blocks BEFORE releasing the lease so a federated peer cannot be clobbered', () => {
+    // The block write must run while the instance still holds the federation
+    // lease and land BEFORE cleanupOnError releases it — otherwise a peer could
+    // claim + start the task in the gap and have its live in_progress clobbered
+    // to blocked. Pin the ordering: `if (resolution.permanent)` precedes the
+    // `await cleanupOnError` inside the resolution-failure branch.
+    const idx = AGENT_LIFECYCLE_SRC.indexOf('const resolution = await resolveAgentProviderAndModel(task)');
+    const body = AGENT_LIFECYCLE_SRC.slice(idx, idx + 2000);
+    const permanentIdx = body.indexOf('if (resolution.permanent)');
+    const cleanupIdx = body.indexOf('await cleanupOnError(resolution.error)');
+    expect(permanentIdx, 'permanent block must exist').toBeGreaterThan(-1);
+    expect(cleanupIdx, 'cleanupOnError must exist').toBeGreaterThan(-1);
+    expect(permanentIdx, 'block must precede the lease release').toBeLessThan(cleanupIdx);
+  });
+});
+
 // ─── spawnAgentForTask — cleanupOnError ────────────────────────────────────
 //
 // `spawnAgentForTask` has ~400 LOC of async work between

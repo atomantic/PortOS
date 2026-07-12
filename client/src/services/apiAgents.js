@@ -85,6 +85,14 @@ export const reorderCosTasks = (taskIds, options = {}) => request('/cos/tasks/re
   ...options
 });
 export const approveCosTask = (id, options = {}) => request(`/cos/tasks/${id}/approve`, { method: 'POST', ...options });
+// Resolve a parked challenge (#2441, #2471). `body` carries the manual verdict
+// (`{ outcome: 'upheld' | 'escalated', note?, resolvedBy? }`) — `upheld` overturns
+// the rejection (task → pending), `escalated` surfaces it for arbitration (→ blocked).
+export const resolveCosTaskChallenge = (id, body, options = {}) => request(`/cos/tasks/${id}/challenge/resolve`, {
+  method: 'POST',
+  body: JSON.stringify(body),
+  ...options
+});
 export const forceCosEvaluate = (options = {}) => request('/cos/evaluate', { method: 'POST', ...options });
 export const forceSpawnTask = (taskId, options = {}) => request(`/cos/tasks/${taskId}/spawn`, { method: 'POST', ...options });
 export const getCosHealth = () => request('/cos/health');

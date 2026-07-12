@@ -601,7 +601,8 @@ describe('cleanupAgentWorktree - openPR path', () => {
 
     await cleanupAgentWorktree('agent-1', true, {
       openPR: true, requestCopilotReview: true, reviewers: ['copilot', 'codex', 'antigravity'],
-      reviewStopMode: 'on-findings', reviewerApplies: true, codexModel: 'gpt-5.6-sol', description: 'Build',
+      reviewStopMode: 'on-findings', reviewerApplies: true,
+      reviewerModels: { codex: 'gpt-5.6-sol', claude: 'qwen2.5:7b' }, description: 'Build',
       originalTask: { id: 'task-orig', priority: 'MEDIUM', metadata: { app: 'sparsetree' }, description: 'Build' }
     });
 
@@ -611,23 +612,46 @@ describe('cleanupAgentWorktree - openPR path', () => {
     expect(followUp.metadata.reviewLoopReviewers).toEqual(['copilot', 'codex', 'antigravity']);
     expect(followUp.metadata.reviewLoopStopMode).toBe('on-findings');
     expect(followUp.metadata.reviewLoopReviewerApplies).toBe(true);
-    // Codex model tier rides along only because `codex` is in the list.
+    // Only the codex entry rides along — codex is in the list, claude is not, so
+    // the map is narrowed to the reviewers actually running.
+    expect(followUp.metadata.reviewLoopReviewerModels).toEqual({ codex: 'gpt-5.6-sol' });
+    // Back-compat mirror of the codex entry for an older prompt builder.
     expect(followUp.metadata.reviewLoopCodexModel).toBe('gpt-5.6-sol');
   });
 
-  it('drops the Codex model tier when codex is not among the reviewers', async () => {
+  it('threads the claude model when claude is among the reviewers (Ollama-backed reviewer)', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/60' });
+    git.requestCopilotReview.mockResolvedValue({ success: true });
+    addTask.mockResolvedValue({ id: 'sys-rl-cl' });
+
+    await cleanupAgentWorktree('agent-1', true, {
+      openPR: true, requestCopilotReview: true, reviewers: ['copilot', 'claude'],
+      reviewerModels: { codex: 'gpt-5.6-sol', claude: 'qwen2.5:7b' }, description: 'Build',
+      originalTask: { id: 'task-orig', priority: 'MEDIUM', metadata: { app: 'sparsetree' }, description: 'Build' }
+    });
+
+    const [followUp] = addTask.mock.calls[0];
+    // claude is in the list, codex is not — map narrows to claude only.
+    expect(followUp.metadata.reviewLoopReviewerModels).toEqual({ claude: 'qwen2.5:7b' });
+    // No codex reviewer → no legacy codex mirror.
+    expect(followUp.metadata.reviewLoopCodexModel).toBeNull();
+  });
+
+  it('drops the model map entirely when no model-capable reviewer is in the list', async () => {
     git.push.mockResolvedValue(undefined);
     git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/59' });
     git.requestCopilotReview.mockResolvedValue({ success: true });
     addTask.mockResolvedValue({ id: 'sys-rl-nc' });
 
     await cleanupAgentWorktree('agent-1', true, {
-      openPR: true, requestCopilotReview: true, reviewers: ['copilot', 'claude'],
-      codexModel: 'gpt-5.6-sol', description: 'Build',
+      openPR: true, requestCopilotReview: true, reviewers: ['copilot', 'antigravity'],
+      reviewerModels: { codex: 'gpt-5.6-sol', claude: 'qwen2.5:7b' }, description: 'Build',
       originalTask: { id: 'task-orig', priority: 'MEDIUM', metadata: { app: 'sparsetree' }, description: 'Build' }
     });
 
     const [followUp] = addTask.mock.calls[0];
+    expect(followUp.metadata.reviewLoopReviewerModels).toBeNull();
     expect(followUp.metadata.reviewLoopCodexModel).toBeNull();
   });
 
@@ -646,6 +670,46 @@ describe('cleanupAgentWorktree - openPR path', () => {
     expect(addTask).toHaveBeenCalledTimes(1);
     const [followUp] = addTask.mock.calls[0];
     expect(followUp.metadata.reviewLoopReviewers).toEqual(['codex', 'antigravity', 'copilot']);
+  });
+
+  // --- arbitrary GitHub reviewer usernames (gate-merge) ---
+
+  it('stamps reviewLoopReviewerUsernames onto the follow-up (normalized, @-stripped)', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/60' });
+    git.requestCopilotReview.mockResolvedValue({ success: true });
+    addTask.mockResolvedValue({ id: 'sys-rl-u' });
+
+    await cleanupAgentWorktree('agent-1', true, {
+      openPR: true, requestCopilotReview: true, reviewers: ['copilot'],
+      usernames: ['@CodeReviewbot', 'bad token', 'codereviewbot'], description: 'Build',
+      originalTask: { id: 'task-orig', priority: 'MEDIUM', metadata: { app: 'sparsetree' }, description: 'Build' }
+    });
+
+    expect(addTask).toHaveBeenCalledTimes(1);
+    const [followUp] = addTask.mock.calls[0];
+    expect(followUp.metadata.reviewLoopReviewers).toEqual(['copilot']);
+    expect(followUp.metadata.reviewLoopReviewerUsernames).toEqual(['CodeReviewbot']);
+  });
+
+  it('spawns a username-only follow-up on a non-GitHub forge (copilot stripped, username drives the loop)', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://gitlab.com/group/proj/-/merge_requests/13' });
+    git.requestCopilotReview.mockResolvedValue({ success: true, skipped: true });
+    addTask.mockResolvedValue({ id: 'sys-rl-uonly' });
+
+    await cleanupAgentWorktree('agent-1', true, {
+      openPR: true, requestCopilotReview: true, reviewers: ['copilot'],
+      usernames: ['CodeReviewbot'], description: 'Build',
+      originalTask: { id: 'task-orig', metadata: {}, description: 'Build' }
+    });
+
+    // Copilot is GitHub-only and stripped on GitLab, but the username reviewer is
+    // forge-agnostic and keeps the follow-up alive with an empty keyed list.
+    expect(addTask).toHaveBeenCalledTimes(1);
+    const [followUp] = addTask.mock.calls[0];
+    expect(followUp.metadata.reviewLoopReviewers).toEqual([]);
+    expect(followUp.metadata.reviewLoopReviewerUsernames).toEqual(['CodeReviewbot']);
   });
 
   // --- skipMerge tests for review-loop follow-up cleanup ---

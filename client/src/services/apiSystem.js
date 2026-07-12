@@ -89,16 +89,21 @@ export const patchSettingsSlice = async (slicePath, partial, options = {}) => {
   return updateSettings({ [segments[0]]: updated }, options);
 };
 
-// Usage
-export const getUsage = () => request('/usage');
+// Usage. `params` selects the cost-report window: { period } (7d|30d|90d|all)
+// or { from, to } (YYYY-MM-DD).
+export const getUsage = (params = {}) => {
+  const qs = new URLSearchParams(
+    Object.entries(params).filter(([, v]) => v != null && v !== '')
+  ).toString();
+  return request(`/usage${qs ? `?${qs}` : ''}`);
+};
 export const getUsageRaw = () => request('/usage/raw');
 export const resetUsage = () => request('/usage', { method: 'DELETE' });
 
-// Claude Code subscription rate-limit usage (parsed from the CLI `/usage` output).
-// Callers own their own inline error UI, so default to silent to avoid a toast
-// on machines without the `claude` CLI.
-export const getClaudeCodeUsage = ({ refresh = false, ...options } = {}) =>
-  request(`/usage/claude-code${refresh ? '?refresh=1' : ''}`, { silent: true, ...options });
+// Subscription-quota status for every enabled provider family (claude, codex,
+// agy, grok). Callers own their inline error UI — silent by default.
+export const getProviderUsage = ({ refresh = false, ...options } = {}) =>
+  request(`/usage/providers${refresh ? '?refresh=1' : ''}`, { silent: true, ...options });
 
 // Backup
 export const getBackupStatus = (options) => request('/backup/status', options);

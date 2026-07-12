@@ -125,6 +125,28 @@ export function assertTransition(from, to, { viaRescan = false } = {}) {
   }
 }
 
+/**
+ * The manual (non-rescan, human-initiable) target states legally reachable from
+ * `state`, derived from the SAME rules `assertTransition` enforces so the two
+ * can't drift. Folds in the special cases: `human_task_queued` is reachable from
+ * ANY state (queue-a-human), while `confirmed_removed` and `reappeared` are
+ * rescan-only and therefore intentionally EXCLUDED — a person can't initiate
+ * them from the UI (only a verifying re-scan can). Drops the idempotent
+ * self-transition. Returned in canonical `CASE_STATES` order.
+ *
+ * This is the authoritative list the client action strips filter against, so the
+ * UI structurally cannot offer an illegal transition (the original blocked →
+ * submitted bug) and cannot drift from the server's state machine.
+ */
+export function allowedTransitionsFor(state) {
+  const reachable = new Set(STATE_TRANSITIONS[state] || []);
+  reachable.add('human_task_queued'); // any state → human-task digest
+  reachable.delete(state);            // no idempotent self-transition
+  reachable.delete('confirmed_removed'); // rescan-only, not human-initiable
+  reachable.delete('reappeared');        // rescan-only, not human-initiable
+  return CASE_STATES.filter((s) => reachable.has(s));
+}
+
 /** ISO timestamp for the next recheck given the state (state-dependent backoff). */
 export function computeNextRecheckAt(state, now = new Date()) {
   const days = RECHECK_BACKOFF_DAYS[state] ?? 14;
@@ -380,6 +402,9 @@ function rowToCase(row) {
     id: row.id,
     brokerId: row.broker_id,
     state: row.state,
+    // Server-derived legal manual moves for this state — the client action
+    // strips render only actions whose target is in this list (issue #2417).
+    allowedTransitions: allowedTransitionsFor(row.state),
     found: row.found ?? null,
     evidence: row.evidence ?? {},
     disclosedFields: row.disclosed_fields ?? [],

@@ -39,7 +39,10 @@ const STATUS_MAP = {
   '[ ]': 'pending',
   '[~]': 'in_progress',
   '[x]': 'completed',
-  '[!]': 'blocked'
+  '[!]': 'blocked',
+  // A sub-agent disputing a reviewer rejection parks the task here (#2441): work
+  // is neither in-flight nor terminally blocked while the challenge is resolved.
+  '[?]': 'challenged'
 };
 
 export const PRIORITY_VALUES = {
@@ -56,7 +59,7 @@ export const PRIORITY_VALUES = {
  */
 function parseTaskLine(line) {
   // First try: - [status] #id | PRIORITY | APPROVAL_FLAG | description
-  let match = line.match(/^-\s*\[([ x~!])\]\s*#([\w-]+)\s*\|\s*(CRITICAL|HIGH|MEDIUM|LOW)\s*\|\s*(AUTO|APPROVAL)\s*\|\s*(.+)$/i);
+  let match = line.match(/^-\s*\[([ x~!?])\]\s*#([\w-]+)\s*\|\s*(CRITICAL|HIGH|MEDIUM|LOW)\s*\|\s*(AUTO|APPROVAL)\s*\|\s*(.+)$/i);
 
   if (match) {
     const [, statusChar, id, priority, approvalFlag, description] = match;
@@ -75,7 +78,7 @@ function parseTaskLine(line) {
   }
 
   // Fallback: - [status] #id | PRIORITY | description (no approval flag)
-  match = line.match(/^-\s*\[([ x~!])\]\s*#([\w-]+)\s*\|\s*(CRITICAL|HIGH|MEDIUM|LOW)\s*\|\s*(.+)$/i);
+  match = line.match(/^-\s*\[([ x~!?])\]\s*#([\w-]+)\s*\|\s*(CRITICAL|HIGH|MEDIUM|LOW)\s*\|\s*(.+)$/i);
 
   if (!match) return null;
 
@@ -254,6 +257,7 @@ export function groupTasksByStatus(tasks) {
   return {
     pending: tasks.filter(t => t.status === 'pending'),
     in_progress: tasks.filter(t => t.status === 'in_progress'),
+    challenged: tasks.filter(t => t.status === 'challenged'),
     blocked: tasks.filter(t => t.status === 'blocked'),
     completed: tasks.filter(t => t.status === 'completed')
   };
@@ -277,6 +281,7 @@ export function generateTasksMarkdown(tasks, includeApprovalFlags = false) {
   const statusToCheckbox = {
     'pending': '[ ]',
     'in_progress': '[~]',
+    'challenged': '[?]',
     'blocked': '[!]',
     'completed': '[x]'
   };
@@ -284,6 +289,7 @@ export function generateTasksMarkdown(tasks, includeApprovalFlags = false) {
   const sections = [
     { key: 'pending', title: 'Pending' },
     { key: 'in_progress', title: 'In Progress' },
+    { key: 'challenged', title: 'Challenged' },
     { key: 'blocked', title: 'Blocked' },
     { key: 'completed', title: 'Completed' }
   ];
@@ -418,7 +424,7 @@ export function validateTask(task) {
     errors.push('Task must have a description');
   }
 
-  if (!['pending', 'in_progress', 'blocked', 'completed'].includes(task.status)) {
+  if (!['pending', 'in_progress', 'challenged', 'blocked', 'completed'].includes(task.status)) {
     errors.push('Invalid task status');
   }
 

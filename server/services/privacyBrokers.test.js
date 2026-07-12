@@ -9,6 +9,7 @@ import {
   CASE_STATES,
   SCAN_VERDICTS,
   assertTransition,
+  allowedTransitionsFor,
   computeNextRecheckAt,
   parseCaRegistryCsv,
   parseBadboolList,
@@ -90,6 +91,51 @@ describe('assertTransition — invalid transitions rejected', () => {
   });
   it('rejects an unknown source state', () => {
     expect(() => assertTransition('bogus', 'found')).toThrowError(/unknown case state/i);
+  });
+});
+
+describe('allowedTransitionsFor — client action gating (issue #2417)', () => {
+  it('never returns a target assertTransition would reject as a manual move', () => {
+    // The list is the authority the UI filters against, so every entry MUST be a
+    // legal non-rescan transition from that state.
+    for (const from of CASE_STATES) {
+      for (const to of allowedTransitionsFor(from)) {
+        expect(() => assertTransition(from, to)).not.toThrow();
+      }
+    }
+  });
+
+  it('excludes the rescan-only targets (confirmed_removed, reappeared)', () => {
+    for (const from of CASE_STATES) {
+      const allowed = allowedTransitionsFor(from);
+      expect(allowed).not.toContain('confirmed_removed');
+      expect(allowed).not.toContain('reappeared');
+    }
+  });
+
+  it('offers human_task_queued from every OTHER state, never itself', () => {
+    for (const from of CASE_STATES) {
+      const allowed = allowedTransitionsFor(from);
+      expect(allowed).not.toContain(from); // no idempotent self
+      if (from !== 'human_task_queued') expect(allowed).toContain('human_task_queued');
+    }
+  });
+
+  it('gives blocked its legal positive move (found) but NOT submitted (the classic hole)', () => {
+    const allowed = allowedTransitionsFor('blocked');
+    expect(allowed).toContain('found');
+    expect(allowed).toContain('not_found');
+    expect(allowed).not.toContain('submitted');
+  });
+
+  it('lets a queued human task be marked submitted or dismissed to not_found', () => {
+    const allowed = allowedTransitionsFor('human_task_queued');
+    expect(allowed).toContain('submitted');
+    expect(allowed).toContain('not_found');
+  });
+
+  it('returns only the any-state target for an unknown state', () => {
+    expect(allowedTransitionsFor('bogus')).toEqual(['human_task_queued']);
   });
 });
 

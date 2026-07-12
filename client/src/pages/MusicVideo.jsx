@@ -22,6 +22,8 @@ import {
   cancelMusicVideoMidiTranscription,
 } from '../services/apiMusicVideo.js';
 import useMidiTranscription from '../hooks/useMidiTranscription.js';
+import MidiInstallModal from '../components/install/MidiInstallModal.jsx';
+import MidiGatedModal from '../components/install/MidiGatedModal.jsx';
 import { generateImage } from '../services/apiSystem.js';
 import { generateVideo } from '../services/apiImageVideo.js';
 import { listTracks, trackAudioUrl } from '../services/apiTracks.js';
@@ -31,6 +33,7 @@ import useSceneRenderLifecycle from '../hooks/useSceneRenderLifecycle.js';
 import useYoutubeTrackImport from '../hooks/useYoutubeTrackImport.js';
 import { useSseProgress, isTerminalSseFrame } from '../hooks/useSseProgress.js';
 import { formatDurationSec } from '../utils/formatters.js';
+import { MUSCRIPTOR_MODELS, DEFAULT_MUSCRIPTOR_MODEL } from '../lib/muscriptorModels.js';
 
 const MODES = ['director', 'autonomous'];
 
@@ -265,8 +268,12 @@ export default function MusicVideo() {
   // misattribute the result. `midiTargetsSelected` gates the track-change
   // controls, since the .mid being produced is of the CURRENT audio (mirrors
   // renderTargetsSelected).
+  // MuScriptor model size for the next transcription (default balances
+  // quality/speed). Read fresh inside startRequest — useSseJobSlot invokes the
+  // latest closure each kickoff, so a change here applies to the next run.
+  const [midiModel, setMidiModel] = useState(DEFAULT_MUSCRIPTOR_MODEL);
   const midiJob = useMidiTranscription({
-    startRequest: (projectId) => transcribeMusicVideoMidi(projectId, {}, { silent: true }),
+    startRequest: (projectId) => transcribeMusicVideoMidi(projectId, { model: midiModel }, { silent: true }),
     eventsUrl: musicVideoMidiEventsUrl,
     cancelRequest: cancelMusicVideoMidiTranscription,
     onComplete: (frame, projectId) => {
@@ -561,6 +568,8 @@ export default function MusicVideo() {
 
   return (
     <div className="space-y-4">
+      <MidiInstallModal {...midiJob.installGate} />
+      <MidiGatedModal {...midiJob.gatedGate} />
       <PageHeader icon={Film} title="Music Video" subtitle="Director-controlled, beat-aware music videos" />
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -641,17 +650,26 @@ export default function MusicVideo() {
                     {midiTargetsSelected ? (
                       <button onClick={midiJob.cancel} title="Cancel MIDI transcription"
                         className="flex items-center gap-1 bg-port-warning/20 text-port-warning border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0">
-                        <Activity size={15} className="animate-spin" /> MIDI · Cancel
+                        <Activity size={15} className="animate-spin" /> {midiJob.stageLabel} · Cancel
                       </button>
                     ) : (
-                      <button onClick={() => midiJob.start(selected.id)}
-                        disabled={midiJob.active || (!selected.trackId && !selected.uploadedAudioFilename)}
-                        title={!selected.trackId && !selected.uploadedAudioFilename
-                          ? 'Link a track first'
-                          : 'Transcribe the track to MIDI with MuScriptor (local, needs INSTALL_MUSCRIPTOR=1)'}
-                        className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0 disabled:opacity-50">
-                        <Music size={15} /> MIDI
-                      </button>
+                      <>
+                        <select value={midiModel} onChange={(e) => setMidiModel(e.target.value)}
+                          disabled={midiJob.active}
+                          aria-label="MuScriptor model size"
+                          title="MuScriptor model size — larger is higher quality but slower and a bigger first-use download"
+                          className="bg-port-bg border border-port-border rounded px-1.5 py-1.5 text-sm capitalize disabled:opacity-50">
+                          {MUSCRIPTOR_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                        <button onClick={() => midiJob.start(selected.id)}
+                          disabled={midiJob.active || (!selected.trackId && !selected.uploadedAudioFilename)}
+                          title={!selected.trackId && !selected.uploadedAudioFilename
+                            ? 'Link a track first'
+                            : `Transcribe the track to MIDI with MuScriptor (${midiModel} model, local — installs automatically on first use)`}
+                          className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0 disabled:opacity-50">
+                          <Music size={15} /> MIDI
+                        </button>
+                      </>
                     )}
                     <button onClick={handlePlan} disabled={planning || !selected.audioAnalysis}
                       title={!selected.audioAnalysis ? 'Analyze the track first' : 'AI-propose a scene per song section'}

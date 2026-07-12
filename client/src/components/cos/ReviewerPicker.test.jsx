@@ -76,4 +76,71 @@ describe('ReviewerPicker', () => {
     rerender(<ReviewerPicker reviewers={['codex']} onChange={() => {}} />);
     expect(screen.getByText(/Reviewer applies fixes/)).toBeInTheDocument();
   });
+
+  it('adds a GitHub reviewer username (strips @) via the Add button', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<ReviewerPicker reviewers={['copilot']} onChange={onChange} />);
+    await user.type(screen.getByLabelText('Add a GitHub reviewer username'), '@CodeReviewbot');
+    await user.click(screen.getByRole('button', { name: /^Add$/ }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ usernames: ['CodeReviewbot'] }));
+  });
+
+  it('adds a username on Enter', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<ReviewerPicker reviewers={['copilot']} onChange={onChange} />);
+    await user.type(screen.getByLabelText('Add a GitHub reviewer username'), 'reviewer-bot{Enter}');
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ usernames: ['reviewer-bot'] }));
+  });
+
+  it('rejects an invalid username and surfaces an error without emitting', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<ReviewerPicker reviewers={['copilot']} onChange={onChange} />);
+    await user.type(screen.getByLabelText('Add a GitHub reviewer username'), 'bad token!{Enter}');
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByText(/valid GitHub username/)).toBeInTheDocument();
+  });
+
+  it('renders existing username pills and removes one', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<ReviewerPicker reviewers={['copilot']} usernames={['CodeReviewbot', 'other-bot']} onChange={onChange} />);
+    expect(screen.getByText('CodeReviewbot')).toBeInTheDocument();
+    await user.click(screen.getByLabelText('Remove @CodeReviewbot'));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ usernames: ['other-bot'] }));
+  });
+
+  it('toggles a keyed reviewer non-blocking (adds its slug to optionalReviewers)', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<ReviewerPicker reviewers={['codex', 'ollama']} onChange={onChange} />);
+    await user.click(screen.getByLabelText('Make Ollama non-blocking'));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ optionalReviewers: ['ollama'] }));
+  });
+
+  it('toggles a non-blocking reviewer back to blocking (removes it)', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<ReviewerPicker reviewers={['codex', 'ollama']} optionalReviewers={['ollama']} onChange={onChange} />);
+    await user.click(screen.getByLabelText('Make Ollama blocking'));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ optionalReviewers: [] }));
+  });
+
+  it('marks a GitHub reviewer username non-blocking with the @-form token', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<ReviewerPicker reviewers={['copilot']} usernames={['flaky-bot']} onChange={onChange} />);
+    await user.click(screen.getByLabelText('Make @flaky-bot non-blocking'));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ optionalReviewers: ['@flaky-bot'] }));
+  });
+
+  it('prunes the optional token when its reviewer is removed', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<ReviewerPicker reviewers={['codex', 'ollama']} optionalReviewers={['ollama']} onChange={onChange} />);
+    await user.click(screen.getByLabelText('Remove Ollama'));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reviewers: ['codex'], optionalReviewers: [] }));
+  });
 });

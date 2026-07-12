@@ -15,7 +15,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { selectDryRunAutoApproved, exceedsMaxSpawns, resolveIssueAuthorFilterBlock, resolveSwarmBlock, isCooldownExemptTask } from './cosTaskGenerator.js';
+import { selectDryRunAutoApproved, exceedsMaxSpawns, resolveIssueAuthorFilterBlock, resolveSwarmBlock, isCooldownExemptTask, emitOnDemandEmpty } from './cosTaskGenerator.js';
 import { cosEvents } from './cosEvents.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 
@@ -149,10 +149,11 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
 
   it('filters local-LLM reviewers out of the prompt token (no invocation instructions in claim/plan prompts)', () => {
     // lmstudio/ollama defaults must not reach {reviewers}: the claim/plan
-    // prompts can't drive them, so the loop would stall. The filter falls
-    // through to the hardcoded copilot default when it empties the list.
+    // prompts can't drive them, so the loop would stall. The filtered list flows
+    // into buildReviewersCsv, which owns the fallback to the hardcoded copilot
+    // default when the filter empties the list (unit-tested in validation.test.js).
     expect(GEN_SRC).toContain('.filter((r) => !LOCAL_LLM_REVIEWERS.includes(r))');
-    expect(GEN_SRC).toContain('promptReviewers.length ? promptReviewers : [...DEFAULT_REVIEWERS]');
+    expect(GEN_SRC).toContain('buildReviewersCsv(promptReviewers, promptUsernames, promptOptionalReviewers)');
   });
 });
 
@@ -475,3 +476,41 @@ describe('selectDryRunAutoApproved', () => {
 // visible agent task (or the shared emitOnDemandEmpty no-dispatch feedback when the
 // buildTaskInput hook skips), and the filing outcome surfaces via the agent + the
 // app's lastRun bookkeeping — so the bespoke bridge is no longer needed.
+
+describe('emitOnDemandEmpty', () => {
+  // Minimal taskScheduleMod stub: no park (→ 'idle' for a non-perpetual type),
+  // and the INTERVAL_TYPES enum the perpetual check reads.
+  const stubMod = {
+    getPerpetualParkInfo: async () => null,
+    INTERVAL_TYPES: { PERPETUAL: 'perpetual' }
+  };
+
+  it("emits an 'idle' event with reason null for a non-LI task type", async () => {
+    const events = [];
+    const handler = (d) => events.push(d);
+    cosEvents.on('schedule:on-demand-empty', handler);
+    try {
+      await emitOnDemandEmpty({
+        taskScheduleMod: stubMod,
+        request: { id: 'req-1', taskType: 'pr-watcher' },
+        targetApp: { id: 'app-1', name: 'App One' },
+        taskConfig: { type: 'custom' }
+      });
+    } finally {
+      cosEvents.off('schedule:on-demand-empty', handler);
+    }
+    expect(events).toHaveLength(1);
+    // A non-LI task type never reads a last-run reason (that read is LI-only).
+    expect(events[0]).toMatchObject({ taskType: 'pr-watcher', outcome: 'idle', reason: null });
+  });
+
+  it('reads the LI last-run reason only for the layered-intelligence task type', () => {
+    // Source-pinned (the behavioral read dynamic-imports the live app store):
+    // the reason surfacing is gated on the LI task type + the 'idle' outcome and
+    // reads the app's recorded lastRunReason.
+    const idx = GEN_SRC.indexOf('export async function emitOnDemandEmpty');
+    const body = GEN_SRC.slice(idx, idx + 1600);
+    expect(body).toMatch(/request\.taskType === 'layered-intelligence'/);
+    expect(body).toMatch(/layeredIntelligence\?\.lastRunReason/);
+  });
+});

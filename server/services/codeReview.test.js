@@ -21,9 +21,18 @@ import {
   isLocalLlmReviewer,
   pickCodeReviewDefaults,
   getCodeReviewDefaults,
+  resolveReviewLoopOptions,
   runLocalCodeReview,
   __resetCodeReviewDefaultsCache,
 } from './codeReview.js'
+
+// Minimal stand-ins for the deps resolveReviewLoopOptions is handed by its
+// callers (agentCliSpawning / agentCompletionCleanup) — kept trivial so the
+// test exercises the resolver's own model-map assembly, not validation.js.
+const testDeps = {
+  normalize: (meta, fallback) => (Array.isArray(meta?.reviewers) && meta.reviewers.length ? meta.reviewers : (fallback || ['copilot'])),
+  isTruthyMeta: (v) => v === true,
+}
 
 describe('codeReview helpers', () => {
   afterEach(() => {
@@ -47,19 +56,25 @@ describe('codeReview helpers', () => {
     it('returns the hardcoded fallback when settings has no codeReview slice', () => {
       expect(pickCodeReviewDefaults(null)).toEqual({
         reviewers: ['copilot'],
+        usernames: [],
+        optionalReviewers: [],
         stopMode: 'all',
         reviewerApplies: false,
         lmstudioModel: null,
         ollamaModel: null,
         codexModel: null,
+        claudeModel: null,
       })
       expect(pickCodeReviewDefaults({})).toEqual({
         reviewers: ['copilot'],
+        usernames: [],
+        optionalReviewers: [],
         stopMode: 'all',
         reviewerApplies: false,
         lmstudioModel: null,
         ollamaModel: null,
         codexModel: null,
+        claudeModel: null,
       })
     })
 
@@ -86,6 +101,7 @@ describe('codeReview helpers', () => {
           lmstudioModel: '',
           ollamaModel: 42,
           codexModel: '',
+          claudeModel: '',
         },
       })
       expect(out.stopMode).toBe('all')
@@ -93,27 +109,47 @@ describe('codeReview helpers', () => {
       expect(out.lmstudioModel).toBeNull()
       expect(out.ollamaModel).toBeNull()
       expect(out.codexModel).toBeNull()
+      expect(out.claudeModel).toBeNull()
     })
 
     it('passes through a valid full payload', () => {
       const out = pickCodeReviewDefaults({
         codeReview: {
           reviewers: ['codex', 'lmstudio'],
+          optionalReviewers: ['lmstudio', 'bogus'],
           stopMode: 'on-clean',
           reviewerApplies: true,
           lmstudioModel: 'qwen2.5-coder:7b',
           ollamaModel: 'codellama',
           codexModel: 'gpt-5.6-sol',
+          claudeModel: 'qwen2.5:7b',
         },
       })
       expect(out).toEqual({
         reviewers: ['codex', 'lmstudio'],
+        usernames: [],
+        // 'bogus' is dropped (not a known reviewer); 'lmstudio' survives.
+        optionalReviewers: ['lmstudio'],
         stopMode: 'on-clean',
         reviewerApplies: true,
         lmstudioModel: 'qwen2.5-coder:7b',
         ollamaModel: 'codellama',
         codexModel: 'gpt-5.6-sol',
+        claudeModel: 'qwen2.5:7b',
       })
+    })
+
+    it('normalizes arbitrary reviewer usernames (strips @, dedupes, drops unsafe)', () => {
+      const out = pickCodeReviewDefaults({
+        codeReview: {
+          usernames: ['@CodeReviewbot', 'codereviewbot', 'bad token!', 'my-org/reviewers'],
+        },
+      })
+      expect(out.usernames).toEqual(['CodeReviewbot', 'my-org/reviewers'])
+    })
+
+    it('defaults usernames to an empty array when absent', () => {
+      expect(pickCodeReviewDefaults({ codeReview: { reviewers: ['copilot'] } }).usernames).toEqual([])
     })
   })
 
@@ -126,6 +162,35 @@ describe('codeReview helpers', () => {
       expect(out.reviewers).toEqual(['ollama'])
       expect(out.ollamaModel).toBe('codellama')
       expect(out.stopMode).toBe('all')
+    })
+  })
+
+  describe('resolveReviewLoopOptions', () => {
+    it('assembles a reviewer-keyed model map from the per-CLI-reviewer scalars', async () => {
+      mockedSettings.current = {
+        codeReview: {
+          reviewers: ['codex', 'claude'],
+          codexModel: 'gpt-5.6-sol',
+          claudeModel: 'qwen2.5:7b',
+        },
+      }
+      const out = await resolveReviewLoopOptions({}, testDeps)
+      expect(out.reviewerModels).toEqual({ codex: 'gpt-5.6-sol', claude: 'qwen2.5:7b' })
+      // The codex-scalar option is gone — callers thread the map now.
+      expect(out.codexModel).toBeUndefined()
+    })
+
+    it('omits reviewers with no configured model (absent = CLI default)', async () => {
+      mockedSettings.current = { codeReview: { reviewers: ['codex', 'claude'], codexModel: 'gpt-5.6-sol' } }
+      const out = await resolveReviewLoopOptions({}, testDeps)
+      expect(out.reviewerModels).toEqual({ codex: 'gpt-5.6-sol' })
+    })
+
+    it('returns an empty map when no CLI-reviewer model is configured', async () => {
+      mockedSettings.current = { codeReview: { reviewers: ['copilot', 'ollama'], ollamaModel: 'codellama' } }
+      const out = await resolveReviewLoopOptions({}, testDeps)
+      // ollama's model is injected server-side by /api/code-review/local, never threaded here.
+      expect(out.reviewerModels).toEqual({})
     })
   })
 

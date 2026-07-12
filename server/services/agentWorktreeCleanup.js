@@ -22,7 +22,7 @@ import { removeWorktree } from './worktreeManager.js';
 import { isTruthyMeta } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, normalizeReviewers } from '../lib/validation.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers } from '../lib/validation.js';
 
 /**
  * Clean up a worktree for a completed agent.
@@ -35,13 +35,13 @@ import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, normaliz
  * GitHub Copilot review is pre-requested here only when copilot LEADS the list (otherwise
  * the follow-up requests it at its turn so Copilot sees the post-fix diff). `reviewStopMode`
  * (`all`/`on-findings`/`on-clean`) and `reviewerApplies` are threaded into the follow-up's
- * metadata. CLI reviewers (claude/antigravity/codex) are always driven by the follow-up agent,
+ * metadata. CLI reviewers (claude/antigravity/codex/grok) are always driven by the follow-up agent,
  * which works on any forge; copilot is GitHub-only and dropped on non-GitHub remotes.
  * When skipMerge is true (review-loop follow-up agents), the cleanup never auto-merges
  * the worktree branch into the source workspace because `gh pr merge` already handled it.
  * Otherwise, merges the worktree branch back to the source branch on success.
  */
-export async function cleanupAgentWorktree(agentId, success, { openPR = false, requestCopilotReview: shouldRequestCopilot = false, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, codexModel = null, skipMerge = false, description = null, agentOutput = null, originalTask = null } = {}) {
+export async function cleanupAgentWorktree(agentId, success, { openPR = false, requestCopilotReview: shouldRequestCopilot = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, skipMerge = false, description = null, agentOutput = null, originalTask = null } = {}) {
   const { getAgent: getAgentState } = await import('./cos.js');
   const agentState = await getAgentState(agentId).catch(() => null);
   if (!agentState?.metadata?.isWorktree) return [];
@@ -177,9 +177,11 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
           prBranch: worktreeBranch,
           sourceWorkspace,
           reviewers: reviewerList,
+          usernames,
+          optionalReviewers,
           reviewStopMode,
           reviewerApplies,
-          codexModel
+          reviewerModels
         }).catch(err => {
           emitLog('warn', `🤖 Failed to spawn review-loop follow-up for ${prResult.url}: ${err.message}`, { agentId, prUrl: prResult.url });
           warnings.push(`Review-loop follow-up spawn failed for ${prResult.url}: ${err.message}`);
@@ -229,23 +231,42 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
  * runs each in order — invoking the CLI reviewers itself and requesting Copilot at
  * its turn — honoring `reviewStopMode` (`all`/`on-findings`/`on-clean`) and
  * `reviewerApplies`. Copilot is GitHub-only, so it is stripped here on non-GitHub
- * forges; if that empties the list, no follow-up is spawned.
+ * forges; if that empties the list AND no `usernames` are configured, no follow-up
+ * is spawned. `usernames` are arbitrary GitHub reviewer usernames the follow-up
+ * requests as PR reviewers to gate the merge — forge-agnostic, so never stripped.
  *
  * The follow-up task uses an isolated worktree attached to the existing PR
  * branch (via createWorktree's `existingBranch` option) so it can fix-and-push
  * without trampling concurrent agents.
  */
-export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, sourceWorkspace, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, codexModel = null }) {
+export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, sourceWorkspace, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null }) {
   if (!prUrl || !prBranch) return null;
 
   const parsedPr = git.parsePullRequestUrl(prUrl);
-  // Copilot is GitHub-only; CLI-based reviewers (claude/antigravity/codex) work on any
+  // Copilot is GitHub-only; CLI-based reviewers (claude/antigravity/codex/grok) work on any
   // forge because the agent invokes the CLI directly. On a non-GitHub forge, drop
-  // copilot from the list — if nothing's left, there's no review to run.
+  // copilot from the list — if nothing's left (and no username reviewers), there's
+  // no review to run.
   const isNonGithubForge = parsedPr && parsedPr.host && parsedPr.host !== 'github.com';
   const reviewerList = normalizeReviewers({ reviewers });
   const effectiveReviewers = isNonGithubForge ? reviewerList.filter(r => r !== DEFAULT_REVIEWER) : reviewerList;
-  if (effectiveReviewers.length === 0) return null;
+  // GitHub reviewer usernames are forge-agnostic requested reviewers, so they are
+  // NOT stripped on a non-GitHub forge — a username reviewer alone can drive the
+  // loop even when copilot was dropped.
+  const effectiveUsernames = normalizeReviewUsernames(usernames);
+  // Non-blocking (`~opt`) marker set — forge-agnostic, threaded verbatim so the
+  // follow-up's `--review-with` marks the same reviewers optional.
+  const effectiveOptionalReviewers = normalizeOptionalReviewers(optionalReviewers) || [];
+  if (effectiveReviewers.length === 0 && effectiveUsernames.length === 0) return null;
+
+  // Reviewer-keyed CLI model map, narrowed to the model-capable reviewers actually
+  // in this loop's list (e.g. `{ codex: 'gpt-5.6-sol', claude: 'qwen2.5:7b' }`); the
+  // prompt threads each as `<reviewer> --model <id>`. `reviewerModels` is already
+  // coerced to string values upstream (resolveReviewLoopOptions).
+  const narrowedReviewerModels = {};
+  for (const r of effectiveReviewers) {
+    if (MODEL_CAPABLE_CLI_REVIEWERS.includes(r) && reviewerModels?.[r]) narrowedReviewerModels[r] = reviewerModels[r];
+  }
 
   const appId = originalTask?.metadata?.app || null;
   const sourceTaskDesc = originalTask?.description || 'CoS automated task';
@@ -279,12 +300,19 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
       reviewLoopPROwner: parsedPr?.owner ?? null,
       reviewLoopPRRepo: parsedPr?.repo ?? null,
       reviewLoopReviewers: effectiveReviewers,
+      // Arbitrary GitHub reviewer usernames the follow-up requests as PR reviewers
+      // and gates the merge on (appended to `--review-with` as `@user`).
+      reviewLoopReviewerUsernames: effectiveUsernames,
+      reviewLoopOptionalReviewers: effectiveOptionalReviewers,
       reviewLoopStopMode: reviewStopMode,
       reviewLoopReviewerApplies: reviewerApplies,
-      // Codex CLI model tier (e.g. `gpt-5.6-sol`) — only meaningful when `codex`
-      // is in the reviewer list; the prompt threads it as `codex --model <id>`.
-      // `codexModel` is already coerced to string|null upstream (resolveReviewLoopOptions).
-      reviewLoopCodexModel: (effectiveReviewers.includes('codex') && codexModel) ? codexModel : null,
+      // Empty → null so the prompt builder's "no models configured" path is unambiguous.
+      reviewLoopReviewerModels: Object.keys(narrowedReviewerModels).length ? narrowedReviewerModels : null,
+      // Back-compat: older installs' prompt builder reads only the codex-scalar key.
+      // Mirror the (already-narrowed) codex entry so a follow-up task persisted by this
+      // version still threads a codex model after a downgrade. Remove once no supported
+      // peer reads it.
+      reviewLoopCodexModel: narrowedReviewerModels.codex || null,
       sourceTaskId: originalTask?.id || null,
       sourceAgentId: originalAgentId || null,
       // This follow-up may legitimately exit with zero new commits when every
@@ -297,7 +325,8 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   };
 
   await addTask(followUpTask, 'internal', { raw: true });
-  emitLog('info', `🔁 Spawned review-loop follow-up task ${followUpTaskId} (${effectiveReviewers.join(', ')}) for PR ${prUrl}`, {
+  const reviewLoopLabel = [...effectiveReviewers, ...effectiveUsernames.map(u => `@${u}`)].join(', ');
+  emitLog('info', `🔁 Spawned review-loop follow-up task ${followUpTaskId} (${reviewLoopLabel}) for PR ${prUrl}`, {
     taskId: followUpTaskId, prUrl, prBranch, sourceAgentId: originalAgentId, sourceTaskId: originalTask?.id
   });
   return followUpTask;

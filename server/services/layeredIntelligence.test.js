@@ -28,6 +28,9 @@ import {
   filerForTracker,
   trackerSupportsPause,
   buildPrompt,
+  deriveOutcome,
+  computeOutcomesReport,
+  PROPOSAL_OUTCOMES,
   extractPlanSlugs,
   appendProposalToPlan,
   gatherSources,
@@ -54,11 +57,11 @@ import {
 } from './layeredIntelligence.js';
 
 describe('defaultLayeredIntelligenceConfig', () => {
-  it('is off by default with all sources on', () => {
+  it('is off by default with the app-owned sources on', () => {
     const c = defaultLayeredIntelligenceConfig(false);
     expect(c.enabled).toBe(false);
     expect(c.sources.goals).toBe(true);
-    expect(c.sources.cosMetrics).toBe(true);
+    expect(c.sources.appMetrics).toBe(true); // the app's own performance metrics
     expect(c.sources.custom).toEqual([]);
   });
 
@@ -79,6 +82,21 @@ describe('defaultLayeredIntelligenceConfig', () => {
     expect(defaultLayeredIntelligenceConfig(false).handoff).toEqual({ enabled: false });
     expect(defaultLayeredIntelligenceConfig(true).handoff).toEqual({ enabled: false });
   });
+
+  it('defaults the outcomes feedback source on for PortOS, off for managed apps', () => {
+    expect(defaultLayeredIntelligenceConfig(false).sources.outcomes).toBe(false);
+    expect(defaultLayeredIntelligenceConfig(true).sources.outcomes).toBe(true);
+  });
+
+  it('defaults cosMetrics on for PortOS, off for managed apps (it is a PortOS-side agent-perf metric)', () => {
+    expect(defaultLayeredIntelligenceConfig(false).sources.cosMetrics).toBe(false);
+    expect(defaultLayeredIntelligenceConfig(true).sources.cosMetrics).toBe(true);
+  });
+
+  it('defaults the appMetrics (own-performance) source on for every app', () => {
+    expect(defaultLayeredIntelligenceConfig(false).sources.appMetrics).toBe(true);
+    expect(defaultLayeredIntelligenceConfig(true).sources.appMetrics).toBe(true);
+  });
 });
 
 describe('getEffectiveConfig', () => {
@@ -89,7 +107,7 @@ describe('getEffectiveConfig', () => {
   it('merges sources one level deep (partial toggle does not wipe others)', () => {
     const c = getEffectiveConfig({ layeredIntelligence: { sources: { goals: false } } });
     expect(c.sources.goals).toBe(false);
-    expect(c.sources.cosMetrics).toBe(true); // untouched default preserved
+    expect(c.sources.appMetrics).toBe(true); // untouched default preserved
     expect(c.sources.planMd).toBe(true);
   });
 
@@ -193,6 +211,16 @@ describe('isProposalDuplicate (dedup)', () => {
     const closedAt = new Date(now - (CLOSED_SUPPRESSION_MS + 24 * 60 * 60 * 1000)).toISOString();
     const existing = [{ slug: 'add-metrics', state: 'closed', closedAt }];
     expect(isProposalDuplicate({ slug: 'add-metrics', existingIssues: existing, now })).toBe(false);
+  });
+
+  it('ALLOWS re-file for a checked PLAN item (closed with no closedAt — #2435)', () => {
+    // A `- [x]` PLAN item reads as closed with no timestamp; it must fall OUT of
+    // the dedup window so a completed proposal can be re-proposed, while an
+    // unchecked `- [ ]` item (state: 'open') stays suppressed.
+    const closed = [{ slug: 'add-metrics', state: 'closed' }];
+    const open = [{ slug: 'add-metrics', state: 'open' }];
+    expect(isProposalDuplicate({ slug: 'add-metrics', existingIssues: closed, now })).toBe(false);
+    expect(isProposalDuplicate({ slug: 'add-metrics', existingIssues: open, now })).toBe(true);
   });
 
   it('matches slug embedded in a body marker (no parsed slug field)', () => {
@@ -432,12 +460,125 @@ describe('buildPrompt', () => {
     expect(on).toContain('Hand-off:');
     expect(on).toContain('"complexity":"trivial"');
   });
+
+  it('injects the outcomes report + calibration guidance only when non-empty', () => {
+    const base = { app, isPortos: false, config: { allowedScopes: ['app-improvement'], rules: '' } };
+    const without = buildPrompt(base);
+    expect(without).not.toContain('liOutcomes');
+    const withReport = buildPrompt({ ...base, outcomesReport: 'Past LI proposals (last 30 days):\n- Total filed: 3' });
+    expect(withReport).toContain('### liOutcomes');
+    expect(withReport).toContain('Total filed: 3');
+    expect(withReport).toContain('calibrate your proposal');
+  });
+
+  it('frames the mission around the app\'s own goals and performance', () => {
+    const out = buildPrompt({ app, isPortos: false, config: { allowedScopes: ['app-improvement'], rules: '' } });
+    expect(out).toContain('its OWN goals and purpose');
+  });
+
+  it('nudges a managed app with no own-performance metrics toward a METRICS.md data gap', () => {
+    // No appMetrics source gathered → guidance to add a METRICS.md.
+    const missing = buildPrompt({ app, isPortos: false, config: { allowedScopes: ['app-data-gap'], rules: '' } });
+    expect(missing).toContain('METRICS.md');
+    // Present appMetrics → no add-a-METRICS.md nudge.
+    const present = buildPrompt({
+      app, isPortos: false, config: { allowedScopes: ['app-data-gap'], rules: '' },
+      sources: { appMetrics: 'Weekly active users: up' }
+    });
+    expect(present).not.toContain('no METRICS.md');
+  });
+
+  it('does not nudge to add a METRICS.md when the appMetrics source is deliberately off', () => {
+    // Source disabled → the file may exist but wasn't gathered; nudging to "add"
+    // one would be misleading. No nudge despite empty gathered sources.
+    const out = buildPrompt({
+      app, isPortos: false,
+      config: { allowedScopes: ['app-data-gap'], rules: '', sources: { appMetrics: false } }
+    });
+    expect(out).not.toContain('no METRICS.md');
+  });
+
+  it('does not nudge PortOS toward a METRICS.md (it measures itself via cosMetrics)', () => {
+    const out = buildPrompt({ app, isPortos: true, config: { allowedScopes: ['portos-self'], rules: '' } });
+    expect(out).not.toContain('no METRICS.md');
+  });
+});
+
+describe('deriveOutcome', () => {
+  it('leaves an open issue unresolved', () => {
+    expect(deriveOutcome({ state: 'open' })).toBeNull();
+    expect(deriveOutcome({ state: 'OPEN', stateReason: 'reopened' })).toBeNull();
+    expect(deriveOutcome({})).toBeNull();
+  });
+
+  it('maps closed-not-planned to rejected', () => {
+    expect(deriveOutcome({ state: 'closed', stateReason: 'not_planned' })).toBe('rejected');
+    expect(deriveOutcome({ state: 'closed', stateReason: 'not planned' })).toBe('rejected');
+  });
+
+  it('maps any other closed reason (incl. glab/jira with no reason) to merged', () => {
+    expect(deriveOutcome({ state: 'closed', stateReason: 'completed' })).toBe('merged');
+    expect(deriveOutcome({ state: 'closed' })).toBe('merged');
+  });
+});
+
+describe('computeOutcomesReport', () => {
+  it('returns empty string when there is no filed history', () => {
+    expect(computeOutcomesReport({ outcomes: [] })).toBe('');
+    expect(computeOutcomesReport({})).toBe('');
+  });
+
+  it('summarizes totals, per-scope merge rates, and rejection reasons', () => {
+    const outcomes = [
+      { scope: 'app-data-gap', outcome: 'merged' },
+      { scope: 'app-data-gap', outcome: 'merged' },
+      { scope: 'app-improvement', outcome: 'rejected', outcomeReason: 'too complex' },
+      { scope: 'app-improvement', outcome: null }
+    ];
+    const report = computeOutcomesReport({ outcomes });
+    expect(report).toContain('Total filed: 4');
+    expect(report).toContain('Merged/implemented: 2 (50%)');
+    expect(report).toContain('Rejected: 1 (25%)');
+    expect(report).toContain('Still open: 1 (25%)');
+    expect(report).toContain('app-data-gap: 2 filed, 2 merged (100%)');
+    expect(report).toContain('app-improvement: 2 filed, 0 merged (0%)');
+    expect(report).toContain('Common rejection reasons: too complex');
+  });
+
+  it('exposes the recognized outcome set', () => {
+    expect(PROPOSAL_OUTCOMES).toEqual(['merged', 'rejected', 'abandoned']);
+  });
 });
 
 describe('extractPlanSlugs', () => {
-  it('collects lil-tagged slugs from PLAN.md content', () => {
+  it('collects lil-tagged slugs with their checkbox state from PLAN.md content', () => {
     const plan = `## Next Up\n- [ ] [lil-add-metrics] Add metrics\n- [ ] [lil-fix-thing] Fix\n- [ ] [ref-watch-other] not ours`;
-    expect(extractPlanSlugs(plan)).toEqual(['add-metrics', 'fix-thing']);
+    expect(extractPlanSlugs(plan)).toEqual([
+      { slug: 'add-metrics', state: 'open' },
+      { slug: 'fix-thing', state: 'open' }
+    ]);
+  });
+
+  it('reads a checked `- [x]` item as closed and an unchecked one as open (#2435)', () => {
+    const plan = `## Done\n- [x] [lil-add-metrics] Add metrics\n## Next Up\n- [ ] [lil-fix-thing] Fix`;
+    expect(extractPlanSlugs(plan)).toEqual([
+      { slug: 'add-metrics', state: 'closed' },
+      { slug: 'fix-thing', state: 'open' }
+    ]);
+  });
+
+  it('treats an uppercase `- [X]` checkbox as closed', () => {
+    expect(extractPlanSlugs('- [X] [lil-shipped] done')).toEqual([
+      { slug: 'shipped', state: 'closed' }
+    ]);
+  });
+
+  it('treats a bare tag with no checkbox as open (absent ≠ done)', () => {
+    // A tag mentioned inline, with no list checkbox, must NOT collapse to closed
+    // (which would make it re-proposable) — it stays open/suppressed.
+    expect(extractPlanSlugs('see [lil-inline-ref] elsewhere')).toEqual([
+      { slug: 'inline-ref', state: 'open' }
+    ]);
   });
 
   it('returns [] for non-string / empty', () => {
@@ -558,6 +699,29 @@ describe('gatherSources custom file confinement', () => {
       { sources: { custom: [{ type: 'file', ref: 'link.md' }] } }
     );
     expect(out['custom:link.md']).toBe('INSIDE');
+  });
+});
+
+describe('gatherSources appMetrics (METRICS.md)', () => {
+  let dir;
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'lil-metrics-')); });
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  it('reads the app repo METRICS.md as the appMetrics source', async () => {
+    await writeFile(join(dir, 'METRICS.md'), '# Metrics\nWeekly active users: up');
+    const out = await gatherSources({ repoPath: dir }, { sources: { appMetrics: true } });
+    expect(out.appMetrics).toContain('Weekly active users');
+  });
+
+  it('omits appMetrics when no METRICS.md exists (reasoner may then propose adding one)', async () => {
+    const out = await gatherSources({ repoPath: dir }, { sources: { appMetrics: true } });
+    expect(out.appMetrics).toBeUndefined();
+  });
+
+  it('does not read METRICS.md when the source is off', async () => {
+    await writeFile(join(dir, 'METRICS.md'), 'present');
+    const out = await gatherSources({ repoPath: dir }, { sources: { appMetrics: false } });
+    expect(out.appMetrics).toBeUndefined();
   });
 });
 
@@ -982,5 +1146,66 @@ describe('listForgeIssues url surfacing (issue #2293)', () => {
     const exec = vi.fn().mockResolvedValue({ code: 0, stdout: JSON.stringify([{ number: 1, title: 'A', body: 'x', state: 'OPEN' }]) });
     const { issues } = await listForgeIssues({ cli: 'gh', cwd: '/x', exec });
     expect(issues[0].url).toBeNull();
+  });
+});
+
+describe('gatherSources cosMetrics windowed rate (issue #2460)', () => {
+  let dir;
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'lil-cosmetrics-')); });
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  const writeLearning = (learning) => writeFile(join(dir, 'learning.json'), JSON.stringify(learning));
+
+  it('surfaces a recency-windowed rate distinct from the lifetime rate', async () => {
+    const now = Date.now();
+    const DAY = 24 * 60 * 60 * 1000;
+    // Lifetime rate is dragged down by an old failure burst; the recent ring is
+    // all successes → windowed rate should read high while lifetime reads low.
+    await writeLearning({
+      byTaskType: {
+        'self-improve:ui': {
+          completed: 12, succeeded: 2, failed: 10, successRate: 17, avgDurationMs: 1000,
+          recentOutcomes: [
+            { t: new Date(now - 40 * DAY).toISOString(), s: false }, // aged out of the 30d window
+            { t: new Date(now - 2 * DAY).toISOString(), s: true },
+            { t: new Date(now - 1 * DAY).toISOString(), s: true }
+          ]
+        }
+      }
+    });
+    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: true } }, { cosPath: dir });
+    const parsed = JSON.parse(out.cosMetrics);
+    expect(parsed['self-improve:ui'].lifetimeSuccessRate).toBe(17);
+    expect(parsed['self-improve:ui'].lifetimeCompleted).toBe(12);
+    expect(parsed['self-improve:ui'].recentSuccessRate).toBe(100);
+    expect(parsed['self-improve:ui'].recentCompleted).toBe(2);
+  });
+
+  it('reports a null recentSuccessRate (not 0) when the ring is empty so LI leans on lifetime', async () => {
+    await writeLearning({
+      byTaskType: {
+        'idle-review': { completed: 5, succeeded: 5, failed: 0, successRate: 100, recentOutcomes: [] }
+      }
+    });
+    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: true } }, { cosPath: dir });
+    const parsed = JSON.parse(out.cosMetrics);
+    expect(parsed['idle-review'].recentSuccessRate).toBeNull();
+    expect(parsed['idle-review'].lifetimeSuccessRate).toBe(100);
+  });
+
+  it('tolerates a pre-migration bucket with no recentOutcomes key', async () => {
+    await writeLearning({
+      byTaskType: { 'auto-fix': { completed: 3, succeeded: 1, failed: 2, successRate: 33 } }
+    });
+    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: true } }, { cosPath: dir });
+    const parsed = JSON.parse(out.cosMetrics);
+    expect(parsed['auto-fix'].recentSuccessRate).toBeNull();
+    expect(parsed['auto-fix'].lifetimeSuccessRate).toBe(33);
+  });
+
+  it('does not read learning.json when cosMetrics is off', async () => {
+    await writeLearning({ byTaskType: { x: { successRate: 50, recentOutcomes: [] } } });
+    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: false } }, { cosPath: dir });
+    expect(out.cosMetrics).toBeUndefined();
   });
 });

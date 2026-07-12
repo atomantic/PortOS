@@ -39,11 +39,103 @@ export function calculateDurationETA(metrics) {
   return { avgDurationMs: avg, maxDurationMs: max, p80DurationMs: p80 };
 }
 
+// ---------------------------------------------------------------------------
+// Recent-outcomes ring (issue #2460)
+//
+// Lifetime `byTaskType` counters (completed/succeeded/failed/successRate) are
+// cumulative and never decay, so a burst of since-resolved failures (a provider
+// misconfig, PTY-capture artifacts on a now-retired task type) permanently
+// depresses the success rate the Layered Intelligence reasoner reads via its
+// `cosMetrics` source and keeps signaling "work needed" long after the root cause
+// is fixed. To let that signal self-heal WITHOUT destroying the lifetime stats the
+// dashboards display, each task-type bucket also carries a bounded ring of recent
+// outcomes (`{ t: ISO timestamp, s: success bool }`). `computeWindowedStats`
+// derives a recency-windowed success rate from it (bounded by BOTH count and age)
+// that LI consumes instead of the lifetime rate. Mirrors the existing
+// `failureSignatures.recent` / `recentUnknownErrors` rolling-buffer precedent.
+// ---------------------------------------------------------------------------
+
+// Cap on retained recent-outcome samples per task type (oldest pruned first).
+export const RECENT_OUTCOMES_CAP = 50;
+
+// Default recency window applied when reading the ring: at most this many
+// most-recent runs AND no older than this age. Either bound alone can shrink the
+// window; both are overridable per call.
+export const DEFAULT_WINDOW_MAX_COUNT = 30;
+export const DEFAULT_WINDOW_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+/**
+ * Append a recent outcome to a task-type metrics bucket's bounded ring (issue
+ * #2460). Mutates `metrics` in place and returns it for chaining. Stores the compact `{ t, s }`
+ * shape (ISO timestamp + success bool). Tolerates a bucket that predates the ring
+ * (older learning.json before migration 188) by initializing it. Enforces
+ * `RECENT_OUTCOMES_CAP`, dropping the oldest sample first.
+ */
+export function appendRecentOutcome(metrics, { success, at } = {}) {
+  if (!metrics || typeof metrics !== 'object') return metrics;
+  if (!Array.isArray(metrics.recentOutcomes)) metrics.recentOutcomes = [];
+  metrics.recentOutcomes.push({ t: at || new Date().toISOString(), s: !!success });
+  if (metrics.recentOutcomes.length > RECENT_OUTCOMES_CAP) {
+    metrics.recentOutcomes = metrics.recentOutcomes.slice(-RECENT_OUTCOMES_CAP);
+  }
+  return metrics;
+}
+
+/**
+ * Compute recency-windowed success stats from a task-type recent-outcomes ring
+ * (issue #2460). Pure / no I/O. Windows the ring by BOTH a max sample count and a
+ * max age, then computes the success rate over just that window.
+ *
+ * Sentinel discipline (repo "absent vs empty" rule): `windowedSuccessRate` is
+ * `null` when the window contains NO samples — never 0 — so a task type with no
+ * recent runs is distinguishable from one that recently failed everything. LI
+ * falls back to the lifetime rate on null rather than reading a fabricated 0%.
+ *
+ * @param {Array<{t:string,s:boolean}>} recentOutcomes - the bucket's ring
+ * @param {{ maxCount?:number, maxAgeMs?:number, now?:number }} [opts]
+ * @returns {{ windowedCompleted:number, windowedSucceeded:number,
+ *   windowedFailed:number, windowedSuccessRate:number|null }}
+ */
+export function computeWindowedStats(recentOutcomes, {
+  maxCount = DEFAULT_WINDOW_MAX_COUNT,
+  maxAgeMs = DEFAULT_WINDOW_MAX_AGE_MS,
+  now = Date.now()
+} = {}) {
+  const ring = Array.isArray(recentOutcomes) ? recentOutcomes : [];
+  const ageCutoff = Number.isFinite(maxAgeMs) && maxAgeMs > 0 ? now - maxAgeMs : null;
+
+  // Age-filter first (drop stale outcomes), then keep only the most-recent
+  // `maxCount`. An undated sample (unparseable `t`) is kept — the count bound
+  // still applies, so a hand-edited ring can't grow the window unbounded.
+  const withinAge = ageCutoff === null
+    ? ring
+    : ring.filter((o) => {
+        const t = Date.parse(o?.t);
+        return Number.isFinite(t) ? t >= ageCutoff : true;
+      });
+  const windowed = Number.isFinite(maxCount) && maxCount > 0
+    ? withinAge.slice(-maxCount)
+    : withinAge;
+
+  const windowedCompleted = windowed.length;
+  const windowedSucceeded = windowed.reduce((n, o) => n + (o?.s ? 1 : 0), 0);
+  const windowedFailed = windowedCompleted - windowedSucceeded;
+  const windowedSuccessRate = windowedCompleted > 0
+    ? Math.round((windowedSucceeded / windowedCompleted) * 100)
+    : null;
+
+  return { windowedCompleted, windowedSucceeded, windowedFailed, windowedSuccessRate };
+}
+
 /**
  * Default learning data structure
  */
 const DEFAULT_LEARNING_DATA = {
-  version: 1,
+  // v2 (issue #2460): each byTaskType bucket carries a bounded `recentOutcomes`
+  // ring so the signal LI reads can be recency-windowed (see appendRecentOutcome
+  // / computeWindowedStats below). Migration 188 initializes the ring on existing
+  // installs; fresh installs seed at v2.
+  version: 2,
   lastUpdated: null,
 
   // Metrics by self-improvement task type
@@ -215,6 +307,76 @@ export function summarizeFailureSignatures(failureSignatures, { taskType = null,
   }
 
   return summaries.sort((a, b) => b.count - a.count).slice(0, Math.max(0, limit));
+}
+
+// ---------------------------------------------------------------------------
+// Human-readable insights (issue #2443)
+//
+// The insights array is the ONE prose channel in the learning store: standing
+// "operating notes" the user reads in the CoS UI. It is runtime data in
+// `data/cos/learning.json` — never committed to git and never federated — so
+// auto-recorded insight text must stay free of hostnames/paths/PII (build it
+// only from controlled labels: error category, counts, task type, provider/model
+// ids, agent id — never the raw error message, which can embed a path).
+// ---------------------------------------------------------------------------
+
+// Cap on retained insights (oldest pruned first). Matches the pre-existing cap
+// that `recordLearningInsight` enforced before it was factored out here.
+export const INSIGHT_CAP = 50;
+
+// Recurrence counts (of a single error category) at which the failure path
+// auto-records a standing insight. Exact-equality matching over these ascending
+// milestones makes recording idempotent — the per-category count only increments
+// by one per categorized failure, so each milestone fires exactly once and then
+// escalates, rather than spamming an insight on every subsequent failure.
+export const RECURRENCE_INSIGHT_MILESTONES = [3, 10, 25, 50, 100];
+
+/** True when a category's post-increment recurrence count lands on a milestone. */
+export function recurrenceMilestoneReached(count) {
+  return RECURRENCE_INSIGHT_MILESTONES.includes(count);
+}
+
+/**
+ * Append an insight to `data.insights`, stamping `recordedAt` and defaulting
+ * `origin` to `'user'` (a manual API insight) unless the caller marks it
+ * `'auto-incident'`. Pure over `data` (mutates + returns it); enforces the
+ * `INSIGHT_CAP` (oldest pruned). Shared by the manual route (`recordLearningInsight`)
+ * and the failure-path auto-recorder so both stay in one shape.
+ */
+export function appendInsight(data, insight) {
+  if (!Array.isArray(data.insights)) data.insights = [];
+  data.insights.push({ origin: 'user', ...insight, recordedAt: new Date().toISOString() });
+  if (data.insights.length > INSIGHT_CAP) {
+    data.insights = data.insights.slice(-INSIGHT_CAP);
+  }
+  return data;
+}
+
+/**
+ * Build a provenance-stamped, privacy-safe insight for a recurring failure
+ * category (issue #2443). Pure — no I/O. Uses only controlled fields (category
+ * label, recurrence count, task type, provider/model ids, agent id); it reads
+ * the enriched `failureSignatures` map for provider/model attribution but never
+ * echoes the raw error message (which can embed a path/PII). `origin` is
+ * `'auto-incident'` so the UI can distinguish it from user-authored notes.
+ */
+export function buildRecurrenceInsight({ category, count, taskType, agentId = null, failureSignatures = {} } = {}) {
+  const summary = summarizeFailureSignatures(failureSignatures, { taskType })
+    .find((s) => s.category === category);
+  const topProvider = summary?.providers?.[0]?.key || null;
+  const via = topProvider ? `, most recently via ${topProvider}` : '';
+  const message = `Recurring failure: "${category}" errors have occurred ${count} times for ${taskType} tasks${via}. Auto-flagged at ${count} occurrences — investigate the root cause or route this task type away from the failing path.`;
+
+  return {
+    type: 'recurring-failure',
+    origin: 'auto-incident',
+    category,
+    taskType,
+    recurrenceCount: count,
+    provider: topProvider,
+    originatingAgentId: agentId,
+    message
+  };
 }
 
 /**

@@ -24,6 +24,7 @@ export { default as useImageGenQueue } from './useImageGenQueue.js';
 export { default as useImageRenderSettings } from './useImageRenderSettings.js';
 export { default as useSingleImageRender } from './useSingleImageRender.js';
 export { default as useSlotInFlight } from './useSlotInFlight.js';
+export { default as useSseJobSlot } from './useSseJobSlot.js';
 export { default as useSingToScore } from './useSingToScore.js';
 export * from './useSingToScore.js';
 export { default as useSongTraining } from './useSongTraining.js';
@@ -120,6 +121,7 @@ export * from './useSidebarUniverses.js';
 // === Domain: City / Voice / Mortality / Universe / Apps / Sessions ===
 export * from './useAppDeploy.js';
 export * from './useAppOperation.js';
+export * from './useAppOverrideActions.js';
 export * from './useCanonPatch.js';
 export * from './useCityData.js';
 export * from './useCityPlayback.js';

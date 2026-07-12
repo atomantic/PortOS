@@ -9,6 +9,7 @@
  *   - store.js                — shared persistence, cache, mutex, pure helpers
  *   - metrics.js              — recording completions + rebuilding aggregates
  *   - routing.js              — heuristic routing, cooldown, skip, confidence
+ *   - safetyKind.js           — outward-facing/irreversible safety-kind classifier
  *   - correlationQuality.js   — enriched-signal ↔ outcome correlation window
  *   - durations.js            — duration estimates + queue completion
  *   - insights.js             — insights view, recommendations, dismissals
@@ -25,7 +26,17 @@ export {
   classifyUntypedTask,
   isSandboxedTaskType,
   summarizeFailureSignatures,
-  EXTERNAL_UNTYPED_TASK_TYPE
+  appendInsight,
+  buildRecurrenceInsight,
+  recurrenceMilestoneReached,
+  INSIGHT_CAP,
+  RECURRENCE_INSIGHT_MILESTONES,
+  EXTERNAL_UNTYPED_TASK_TYPE,
+  appendRecentOutcome,
+  computeWindowedStats,
+  RECENT_OUTCOMES_CAP,
+  DEFAULT_WINDOW_MAX_COUNT,
+  DEFAULT_WINDOW_MAX_AGE_MS
 } from './store.js';
 
 export {
@@ -35,7 +46,8 @@ export {
   recordFailureSignature,
   resetTaskTypeLearning,
   recalculateModelTierMetrics,
-  recalculateDurationStats
+  recalculateDurationStats,
+  getWindowedStats
 } from './metrics.js';
 
 export {
@@ -83,6 +95,14 @@ export {
   getPromptImprovementRecommendations,
   getAllPromptRecommendations
 } from './promptRecommendations.js';
+
+export {
+  classifySafetyKind,
+  requiresSafetyApproval,
+  REVERSIBLE_SAFETY_KIND,
+  OUTWARD_SAFETY_KINDS,
+  DEFAULT_ALWAYS_APPROVE_KINDS
+} from './safetyKind.js';
 
 export {
   initTaskLearning,

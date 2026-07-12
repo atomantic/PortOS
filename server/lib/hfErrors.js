@@ -22,3 +22,19 @@ export function extractGatedRepo(text = '') {
   const match = String(text).match(GATED_REPO_RE);
   return match ? match[1].replace(/\.git$/, '') : null;
 }
+
+// Classifies a huggingface_hub failure as a *gated-access* error (a 403 on a
+// restricted repo the user hasn't been granted) — distinct from a benign
+// download hiccup. Shared by the image runner's prose fallback
+// (server/services/imageGen/local.js) and the MIDI transcription classifier
+// (server/services/audioMidiTranscription.js). Deliberately narrow (no bare
+// "403 Client Error", which also fires on unrelated auth failures) so
+// extractGatedRepo is only invoked once the error is genuinely gated. The LoRA
+// trainer (server/services/loraTraining/failure.js) keeps its own HF_AUTH_RE
+// because it also matches bare "401 Client Error", which this regex omits to
+// stay false-positive-free for the download paths.
+export const GATED_ERROR_RE = /GatedRepoError|Access to (?:model )?[\w.@/-]+ is restricted|Cannot access gated repo|Repo.*is gated/i;
+
+export function isGatedRepoError(text = '') {
+  return GATED_ERROR_RE.test(String(text));
+}

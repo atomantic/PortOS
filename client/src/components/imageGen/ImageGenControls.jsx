@@ -9,11 +9,12 @@
 // resolution; external swaps guidance for cfgScale; local shows guidance + quantize.
 
 import { Dice5 } from 'lucide-react';
-import { filterResolutions, resolveResolutionLabel } from '../../lib/imageGenResolutions';
+import { filterResolutions, MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from '../../lib/imageGenResolutions';
 import { randomSeed } from '../../lib/genUtils';
 import { RUNNER_FAMILIES } from '../../lib/runnerFamilies';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 import ModelDownloadBadge, { deriveSizeEstimate } from '../media/ModelDownloadBadge';
+import ResolutionField from '../media/ResolutionField';
 import { FormField } from '../ui/FormField';
 
 const QUANTIZE_OPTIONS = [
@@ -57,14 +58,9 @@ export default function ImageGenControls({
   const isFlux2 = currentModel?.runner === RUNNER_FAMILIES.FLUX2;
 
   // Filter by backend; a stale w/h (e.g. Flux 2 → Flux 1 with 1536 still set)
-  // falls through to the (custom) <option> below so the value stays visible
-  // until the user picks a supported one.
+  // falls through to the custom inputs (rendered by ResolutionField) so the
+  // value stays visible and editable until the user picks a supported preset.
   const availableResolutions = filterResolutions(mode, currentModel?.runner);
-  const { matched, label: resolutionLabel } = resolveResolutionLabel(availableResolutions, width, height);
-  const handleResolution = (e) => {
-    const r = availableResolutions.find((opt) => opt.label === e.target.value);
-    if (r) onResolutionChange?.(r.w, r.h);
-  };
 
   const inputCls = 'w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50';
 
@@ -91,17 +87,26 @@ export default function ImageGenControls({
         </FormField>
       )}
 
-      <FormField label="Resolution" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-        <select
-          value={resolutionLabel}
-          onChange={handleResolution}
-          disabled={disabled}
-          className={inputCls}
-        >
-          {availableResolutions.map((r) => <option key={r.label} value={r.label}>{r.label}</option>)}
-          {!matched && resolutionLabel && <option value={resolutionLabel}>{resolutionLabel} (custom)</option>}
-        </select>
-      </FormField>
+      {/* Preset dropdown + arbitrary width/height. The image route accepts ANY
+          integer edge in [64, 3840] with total pixels ≤ 8.29M (imageEdgeSchema
+          is `z.number().int().min(64).max(3840)` + refineImagePixelCap), so
+          custom sizes like 704×1280 (9:16 portrait) work without a new preset.
+          step=1 (not 8) so a hand-typed non-multiple-of-8 edge isn't blocked by
+          the form's native stepMismatch validation before submit — the note
+          keeps "multiples of 8 render best" as advice, not a hard constraint. */}
+      <ResolutionField
+        presets={availableResolutions}
+        width={width}
+        height={height}
+        onChange={onResolutionChange}
+        min={64}
+        max={MAX_IMAGE_EDGE}
+        step={1}
+        maxPixels={MAX_IMAGE_PIXELS}
+        disabled={disabled}
+        inputClassName={inputCls}
+        note={`Each edge 64–${MAX_IMAGE_EDGE}px, total ≤ ${MAX_IMAGE_PIXELS.toLocaleString()} px. Multiples of 8 render best on local models.`}
+      />
 
       {/* Codex's image_gen tool ignores seed/steps/guidance — only resolution
           is honored, so the rest of the knobs are hidden in that mode. */}

@@ -17,7 +17,14 @@ import {
   calculateDurationETA,
   extractTaskType,
   loadLearningData,
-  saveLearningData
+  saveLearningData,
+  appendInsight,
+  buildRecurrenceInsight,
+  recurrenceMilestoneReached,
+  appendRecentOutcome,
+  computeWindowedStats,
+  DEFAULT_WINDOW_MAX_COUNT,
+  DEFAULT_WINDOW_MAX_AGE_MS
 } from './store.js';
 import { deriveFailureSignalAvoidance, isNonRoutableLearnedTier } from './routing.js';
 import { recordCorrelationSample } from './correlationQuality.js';
@@ -249,7 +256,9 @@ export async function recordTaskCompletion(agent, task) {
       maxDurationMs: 0,
       p80DurationMs: 0,
       lastCompleted: null,
-      successRate: 0
+      successRate: 0,
+      // Bounded recency ring (issue #2460) — feeds the windowed rate LI reads.
+      recentOutcomes: []
     };
   }
 
@@ -281,6 +290,11 @@ export async function recordTaskCompletion(agent, task) {
   Object.assign(typeMetrics, calculateDurationETA(typeMetrics));
   typeMetrics.lastCompleted = new Date().toISOString();
   typeMetrics.successRate = Math.round((typeMetrics.succeeded / typeMetrics.completed) * 100);
+  // Append this run to the bounded recency ring (issue #2460). The lifetime
+  // counters above never decay; the ring lets LI read a recency-windowed rate so
+  // a since-resolved failure burst ages out of the "is work needed" signal
+  // instead of depressing it forever. Stamped with the same `lastCompleted` time.
+  appendRecentOutcome(typeMetrics, { success: outcomeSuccess, at: typeMetrics.lastCompleted });
 
   // Update model tier metrics
   const tierMetrics = data.byModelTier[modelTier];
@@ -359,6 +373,32 @@ export async function recordTaskCompletion(agent, task) {
   // execution context + latency) — a no-op on success (issue #2329).
   recordFailureSignature(data, telemetry);
 
+  // Fold a recurring failure category into a standing, provenance-stamped
+  // human-readable insight (issue #2443) — turns a machine aggregate into an
+  // operating note the user can read in the CoS UI, without a manual API call.
+  // Fires only when the per-category recurrence count lands on a milestone so it
+  // escalates instead of spamming. Appended inline (not via recordLearningInsight)
+  // because we already hold the non-reentrant store lock and `data` is about to
+  // be persisted below. Privacy: buildRecurrenceInsight uses only controlled
+  // fields — no raw error message (which could embed a path/PII).
+  if (!outcomeSuccess && errorCategory) {
+    const recurrenceCount = data.errorPatterns[errorCategory]?.count || 0;
+    if (recurrenceMilestoneReached(recurrenceCount)) {
+      appendInsight(data, buildRecurrenceInsight({
+        category: errorCategory,
+        count: recurrenceCount,
+        taskType,
+        agentId: agent.agentId || agent.id || null,
+        failureSignatures: data.failureSignatures
+      }));
+      emitLog('info', `📚 Auto-recorded recurring-failure insight: "${errorCategory}" ×${recurrenceCount} (${taskType})`, {
+        category: errorCategory,
+        recurrenceCount,
+        taskType
+      }, '[TaskLearning]');
+    }
+  }
+
   // Update totals
   data.totals.completed++;
   if (outcomeSuccess) {
@@ -402,6 +442,26 @@ export async function recordTaskCompletion(agent, task) {
 
   return data;
   });
+}
+
+/**
+ * Recency-windowed success stats for a task type (issue #2460). Loads the
+ * learning store, reads the task type's `recentOutcomes` ring, and windows it by
+ * count and/or age via the pure `computeWindowedStats`. Read-only. Returns the
+ * `null`-successRate sentinel when the task type is absent or has no in-window
+ * samples, so callers (Layered Intelligence) can fall back to the lifetime rate
+ * rather than treat "no recent runs" as a fabricated 0%.
+ *
+ * @param {string} taskType
+ * @param {{ maxCount?:number, maxAgeMs?:number }} [opts]
+ */
+export async function getWindowedStats(taskType, {
+  maxCount = DEFAULT_WINDOW_MAX_COUNT,
+  maxAgeMs = DEFAULT_WINDOW_MAX_AGE_MS
+} = {}) {
+  const data = await loadLearningData();
+  const metrics = data.byTaskType?.[taskType];
+  return computeWindowedStats(metrics?.recentOutcomes, { maxCount, maxAgeMs });
 }
 
 /**

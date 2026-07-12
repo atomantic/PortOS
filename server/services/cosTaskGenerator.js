@@ -22,7 +22,7 @@
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, normalizeReviewers, LOCAL_LLM_REVIEWERS, DEFAULT_REVIEWERS, SWARM_COUNT_MIN } from '../lib/validation.js';
+import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, normalizeReviewers, resolveReviewUsernames, resolveOptionalReviewers, buildReviewersCsv, LOCAL_LLM_REVIEWERS, SWARM_COUNT_MIN } from '../lib/validation.js';
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, diagnoseUnpickablePlan } from '../lib/planIds.js';
 import { loadState, saveState, withStateLock, isImprovementEnabled, isDaemonRunning } from './cosState.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
@@ -34,6 +34,7 @@ import { recordDecision, DECISION_TYPES } from './decisionLog.js';
 import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, markIdleReviewStarted, getNextAppForReview, loadAppActivity, isAppActivityOnCooldown } from './appActivity.js';
 import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
 import { getTaskTypeConfidence } from './taskLearning.js';
+import { classifySafetyKind, requiresSafetyApproval } from './taskLearning/safetyKind.js';
 import { generateProactiveTasks as generateMissionTasks } from './missions.js';
 import { isRecoveryTask } from './recoveryTasks.js';
 import { getCodeReviewDefaults } from './codeReview.js';
@@ -323,15 +324,20 @@ export async function buildClaimWorkTask(app, { issueAuthorFilter, reviewers } =
   // local-LLM reviewers the claim prompts can't drive, falling back to the
   // hardcoded default when filtering empties the list. A settings read error
   // degrades to the default inside normalizeReviewers, so it never blocks.
+  const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
   let reviewersList;
   if (reviewers !== undefined) {
     reviewersList = (Array.isArray(reviewers) ? reviewers : [reviewers]).filter(Boolean);
   } else {
-    const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
     reviewersList = normalizeReviewers(metadata, codeReviewDefaults?.reviewers)
       .filter((r) => !LOCAL_LLM_REVIEWERS.includes(r));
   }
-  const reviewersCsv = (reviewersList.length ? reviewersList : [...DEFAULT_REVIEWERS]).join(',');
+  // Arbitrary GitHub reviewer usernames appended as `@user` tokens so the
+  // claim prompt's `/do:next --review-with` gates the merge on them too. A
+  // task-level list overrides the Code Review Defaults.
+  const promptUsernames = resolveReviewUsernames(metadata.usernames, codeReviewDefaults?.usernames);
+  const promptOptionalReviewers = resolveOptionalReviewers(metadata.optionalReviewers, codeReviewDefaults?.optionalReviewers);
+  const reviewersCsv = buildReviewersCsv(reviewersList, promptUsernames, promptOptionalReviewers);
   const issueAuthorFilterBlock = resolveIssueAuthorFilterBlock(promptTaskType, resolvedAuthorFilter);
   // Swarm mode (`/do:next --swarm`) is prepended (not an in-template
   // placeholder) so it stays an opt-in orchestration wrapper that needs no
@@ -1256,18 +1262,51 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, { ignore
 }
 
 /**
- * Resolve auto-approval for a task based on confidence scoring.
- * Returns { autoApproved, approvalRequired } ready to spread into task objects.
+ * Resolve auto-approval for a task based on confidence scoring, with a
+ * safety-kind override (#2440) that is orthogonal to confidence.
+ *
+ * Outward-facing / irreversible work (publishing content, federating records to
+ * sync peers, external/upstream PRs, releases) always requires the user's
+ * sign-off no matter how high the task type's success rate is — a high score
+ * can't undo work that has already left the install. Reversible internal work
+ * (analysis, refactor, same-repo improvement PRs) keeps the pure success-rate
+ * gate, so existing behavior is unchanged unless the task carries an outward
+ * signal.
+ *
+ * Returns { autoApproved, approvalRequired, safetyKind, approvalReason? } ready
+ * to spread into task objects — `safetyKind` + `approvalReason` surface WHY a
+ * high-confidence task still needs approval on the task record and in the UI.
  */
-async function resolveConfidenceApproval(state, taskTypeKey, logLabel) {
+async function resolveConfidenceApproval(state, taskTypeKey, logLabel, metadata = {}) {
+  const safety = classifySafetyKind({ taskTypeKey, metadata });
+  const safetyConfig = state?.config?.safetyKindApproval ?? {};
+
+  // Safety-kind override runs BEFORE (and independent of) the confidence gate.
+  if (safety.outwardFacing && requiresSafetyApproval(safety.kind, safetyConfig)) {
+    emitLog('info', `🔒 ${logLabel} requires approval (safety-kind: ${safety.kind} — ${safety.reason})`, {}, '[Safety]');
+    return {
+      autoApproved: false,
+      approvalRequired: true,
+      safetyKind: safety.kind,
+      approvalReason: `safety-kind:${safety.kind}`
+    };
+  }
+
   const config = state?.config?.confidenceAutoApproval ?? {};
-  if (config.enabled === false) return { autoApproved: true, approvalRequired: false };
+  if (config.enabled === false) {
+    return { autoApproved: true, approvalRequired: false, safetyKind: safety.kind };
+  }
 
   const confidence = await getTaskTypeConfidence(taskTypeKey, config);
   if (!confidence.autoApprove) {
     emitLog('info', `🔒 ${logLabel} requires approval (${confidence.reason})`, {}, '[Confidence]');
   }
-  return { autoApproved: confidence.autoApprove, approvalRequired: !confidence.autoApprove };
+  return {
+    autoApproved: confidence.autoApprove,
+    approvalRequired: !confidence.autoApprove,
+    safetyKind: safety.kind,
+    ...(confidence.autoApprove ? {} : { approvalReason: `confidence:${confidence.tier}` })
+  };
 }
 
 /**
@@ -1309,7 +1348,7 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
     metadata.model = interval.model;
   }
 
-  const approval = await resolveConfidenceApproval(state, `self-improve:${taskType}`, `Task self-improve:${taskType}`);
+  const approval = await resolveConfidenceApproval(state, `self-improve:${taskType}`, `Task self-improve:${taskType}`, metadata);
 
   const task = {
     id: `self-improve-${taskType}-${Date.now().toString(36)}`,
@@ -1524,12 +1563,26 @@ export async function emitOnDemandEmpty({ taskScheduleMod, request, targetApp, t
   const parkInfo = await taskScheduleMod.getPerpetualParkInfo(request.taskType, appId).catch(() => null);
   const isPerpetual = taskConfig?.type === taskScheduleMod.INTERVAL_TYPES.PERPETUAL;
   const outcome = parkInfo ? 'parked' : (isPerpetual ? 'transient' : 'idle');
+
+  // Layered Intelligence skips (e.g. a provider that can't drive an agent) record
+  // an actionable last-run reason. Surface it so a manual "Run" toasts WHY it
+  // produced nothing (e.g. "pick a CLI/TUI provider") instead of a misleading
+  // generic "nothing to do". Read the freshest record — the skip's recordRun
+  // landed after `targetApp` was loaded. Best-effort; a read failure just omits it.
+  let reason = null;
+  if (outcome === 'idle' && appId && request.taskType === 'layered-intelligence') {
+    const { getAppById } = await import('./apps.js');
+    const app = await getAppById(appId).catch(() => null);
+    reason = app?.layeredIntelligence?.lastRunReason || null;
+  }
+
   cosEvents.emit('schedule:on-demand-empty', {
     requestId: request.id,
     taskType: request.taskType,
     appId,
     appName: targetApp?.name || null,
     outcome,
+    reason,
     parkReason: parkInfo?.parkReason || null,
     parkedUntil: parkInfo?.parkedUntil || null,
     actionableCount: parkInfo?.parkActionableCount ?? null,
@@ -1982,14 +2035,21 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
   // Drop local-LLM reviewers (lmstudio/ollama) from the prompt's {reviewers}
   // token: the claim/plan prompt templates only document how to drive copilot
-  // and the CLI reviewers (claude/codex/antigravity). Unlike the system
+  // and the CLI reviewers (claude/codex/antigravity; grok flows through the same
+  // generic CLI path but isn't yet named in the per-kind bullet — see #2453).
+  // Unlike the system
   // review-loop follow-up prompt (agentPromptBuilder.js), they carry no
   // local-endpoint invocation instructions, so naming a local-LLM reviewer
   // here would stall the agent's review step. Fall through to the hardcoded
   // copilot default when filtering empties the list.
   const promptReviewers = normalizeReviewers(metadata, codeReviewDefaults?.reviewers)
     .filter((r) => !LOCAL_LLM_REVIEWERS.includes(r));
-  const reviewersCsv = (promptReviewers.length ? promptReviewers : [...DEFAULT_REVIEWERS]).join(',');
+  // Arbitrary GitHub reviewer usernames appended as `@user` tokens so the claim
+  // prompt's `/do:next --review-with` gates the merge on them too. A task-level
+  // list overrides the Code Review Defaults; forge-agnostic, so not filtered.
+  const promptUsernames = resolveReviewUsernames(metadata.usernames, codeReviewDefaults?.usernames);
+  const promptOptionalReviewers = resolveOptionalReviewers(metadata.optionalReviewers, codeReviewDefaults?.optionalReviewers);
+  const reviewersCsv = buildReviewersCsv(promptReviewers, promptUsernames, promptOptionalReviewers);
   // {issueAuthorFilter} directive — the filter was already merged (global →
   // per-app override) and value-constrained by sanitizeTaskMetadata, so read it
   // from `metadata` (default 'self', the slashdo `/do:next --self` security
@@ -2039,7 +2099,7 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   if (hookOverride.providerId) { metadata.provider = hookOverride.providerId; metadata.providerId = hookOverride.providerId; }
   if (hookOverride.model) { metadata.model = hookOverride.model; }
 
-  const approval = await resolveConfidenceApproval(state, `app-improve:${taskType}`, `Task app-improve:${taskType} for ${app.name}`);
+  const approval = await resolveConfidenceApproval(state, `app-improve:${taskType}`, `Task app-improve:${taskType} for ${app.name}`, metadata);
 
   // All gates passed — record the rotation-pointer advance + emit the
   // generation log. Deferred from the top of the function (see note there);

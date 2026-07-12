@@ -16,12 +16,13 @@ import { getToolsSummaryForPrompt } from './tools.js';
 import { getActiveProvider } from './providers.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { readJSONFile, loadSlashdoFile, PATHS, tryReadFile } from '../lib/fileUtils.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, normalizeReviewers, buildReviewWithArgs } from '../lib/validation.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, resolveKeyedReviewers, buildReviewWithArgs } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { isOpencodeCommand } from '../lib/providerModels.js';
 import { shellQuote } from '../lib/shellQuote.js';
 import * as jiraService from './jira.js';
 import { emitLog } from './cosEvents.js';
+import { PORTOS_APP_ID } from './apps.js';
 
 const ROOT_DIR = PATHS.root;
 const AGENTS_DIR = PATHS.cosAgents;
@@ -213,7 +214,11 @@ function renderFileListField(header, items, formatItem, formatInline, asList) {
  */
 export function buildTaskBlock(task, { screenshotsAsList = false } = {}) {
   const description = task.description;
-  const targetApp = task.metadata?.app ? `**Target App**: ${task.metadata.app}` : '';
+  // Only surface **Target App** for MANAGED apps — it scopes cross-repo work the
+  // agent's cwd wouldn't otherwise reveal. For the PortOS default app the agent
+  // already runs in the PortOS directory, so the line is redundant noise.
+  const app = task.metadata?.app;
+  const targetApp = app && app !== PORTOS_APP_ID ? `**Target App**: ${app}` : '';
   const screenshots = renderFileListField(
     'Screenshots', task.metadata?.screenshots,
     (s) => `\`${s}\``, (s) => s, screenshotsAsList
@@ -225,6 +230,37 @@ export function buildTaskBlock(task, { screenshotsAsList = false } = {}) {
     (f) => `\`${path(f)}\` (${label(f)})`, (f) => `${label(f)} (${path(f)})`, screenshotsAsList
   );
   return { description, targetApp, screenshots, attachments };
+}
+
+/**
+ * Undo the COS-TASKS.md round-trip split before rendering. The queue path in
+ * `cosTaskGenerator.js` persists a generated multi-line prompt by moving the
+ * full body into `metadata.context` and keeping only its first line as
+ * `description`, so the markdown stays one-line-per-task. Coming back out,
+ * `context` therefore *leads with a verbatim copy* of `description` — and every
+ * render path emits both (the task block, then the full body again under a
+ * `### Context` header). For a swarm task that surfaces as the reported
+ * double `# ⚡ SWARM MODE …` header; the same duplication hits any other
+ * generated/scheduled/system task that round-trips through the queue.
+ *
+ * When the split signature is present (`context` is a string whose first
+ * non-empty line equals `description`), fold `context` back into `description`
+ * and drop the redundant `metadata.context` so the prompt renders once, as one
+ * clean body with no spurious header. A genuinely-separate user-supplied
+ * `context` (first line differs from `description`) is left untouched.
+ *
+ * Pure and idempotent: returns the same task when nothing matched, otherwise a
+ * shallow clone (never mutates the caller's task, so the stored task keeps its
+ * one-line `description` for the task-list UI).
+ */
+export function reconcileSplitContext(task) {
+  const context = task?.metadata?.context;
+  if (typeof context !== 'string' || typeof task.description !== 'string') return task;
+  // Mirror firstLine() in cosTaskStore.js: first non-empty, trimmed line.
+  const firstNonEmpty = context.split('\n').map(l => l.trim()).find(Boolean) || '';
+  if (firstNonEmpty !== task.description.trim()) return task;
+  const { context: _dropped, ...restMeta } = task.metadata;
+  return { ...task, description: context, metadata: restMeta };
 }
 
 /**
@@ -253,33 +289,63 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const prOwner = metadata.reviewLoopPROwner ?? '';
   const prRepo = metadata.reviewLoopPRRepo ?? '';
   const sourceTaskId = metadata.sourceTaskId || 'unknown';
-  // Ordered reviewer list (back-compat: legacy single `reviewLoopReviewer`).
-  const reviewers = normalizeReviewers({
-    reviewers: Array.isArray(metadata.reviewLoopReviewers)
-      ? metadata.reviewLoopReviewers
-      : (metadata.reviewLoopReviewer ? [metadata.reviewLoopReviewer] : undefined)
-  });
+  // Arbitrary GitHub reviewer usernames (gate-only PR reviewers), appended to
+  // the review flow after the keyed reviewers.
+  const usernames = normalizeReviewUsernames(metadata.reviewLoopReviewerUsernames);
+  // Ordered keyed reviewer list (back-compat: legacy single `reviewLoopReviewer`).
+  // `reviewLoopReviewers` from spawnReviewLoopFollowUp is authoritative (copilot
+  // already stripped on non-GitHub forges); resolveKeyedReviewers keeps an
+  // explicit empty list empty when usernames carry the review (username-only).
+  const reviewerSource = Array.isArray(metadata.reviewLoopReviewers)
+    ? metadata.reviewLoopReviewers
+    : (metadata.reviewLoopReviewer ? [metadata.reviewLoopReviewer] : undefined);
+  const reviewers = resolveKeyedReviewers(reviewerSource, usernames.length > 0);
+  // Reviewer identities marked non-blocking — emitted with slashdo's `~opt`.
+  const optionalReviewers = normalizeOptionalReviewers(metadata.reviewLoopOptionalReviewers) || [];
   const stopMode = metadata.reviewLoopStopMode || DEFAULT_REVIEW_STOP_MODE;
   const reviewerApplies = metadata.reviewLoopReviewerApplies === true;
   const hasCopilot = reviewers.includes(DEFAULT_REVIEWER);
   const hasLocalLlm = reviewers.some(r => LOCAL_LLM_REVIEWERS.includes(r));
   const hasCli = reviewers.some(r => r !== DEFAULT_REVIEWER && !LOCAL_LLM_REVIEWERS.includes(r));
-  // Optional Codex CLI model tier chosen on the Code Review Defaults panel.
-  // Only surfaced when `codex` is actually one of the reviewers; the CLI takes
-  // it as `codex --model <id>` (empty = let the Codex CLI use its own default).
-  const codexModel = (reviewers.includes('codex') && typeof metadata.reviewLoopCodexModel === 'string' && metadata.reviewLoopCodexModel)
-    ? metadata.reviewLoopCodexModel
+  const hasGithubUser = usernames.length > 0;
+  // Optional per-CLI-reviewer model tiers chosen on the Code Review Defaults panel,
+  // threaded as a reviewer-keyed map. Each configured, model-capable reviewer that
+  // is actually in this loop's list gets a `<reviewer> --model <id>` note (empty =
+  // let that CLI use its own default). For an Ollama-backed `claude` reviewer the id
+  // is the local Ollama model. Falls back to the legacy codex-scalar metadata key so
+  // a follow-up task persisted by an older install still threads its codex model.
+  const reviewerModelMap = (metadata.reviewLoopReviewerModels && typeof metadata.reviewLoopReviewerModels === 'object')
+    ? metadata.reviewLoopReviewerModels
+    : (typeof metadata.reviewLoopCodexModel === 'string' && metadata.reviewLoopCodexModel
+        ? { codex: metadata.reviewLoopCodexModel }
+        : {});
+  const reviewerModelEntries = MODEL_CAPABLE_CLI_REVIEWERS
+    .filter(r => reviewers.includes(r) && typeof reviewerModelMap[r] === 'string' && reviewerModelMap[r])
+    // Thread each configured model id VERBATIM. We deliberately don't env-map it
+    // here (e.g. bare Claude tier → Bedrock form): this is a text-template layer
+    // with only a providerId, not the merged spawn env (process.env + settings.json
+    // + provider.envVars) the CLI argv builder normalizes against — and the nested
+    // reviewer CLI is spawned by the agent, not PortOS, so the argv chokepoint never
+    // runs. The Code Review Defaults model field is free-text for exactly this
+    // reason: the user configures the id their environment needs (a Bedrock-form id
+    // on a Bedrock box, an installed Ollama model for an Ollama-backed `claude`).
+    .map(r => `\`${r} --model ${reviewerModelMap[r]} …\``);
+  const reviewerModelNote = reviewerModelEntries.length
+    ? ` When invoking a reviewer with a pinned model, pass it: ${reviewerModelEntries.join(', ')}.`
     : '';
-  const codexModelNote = codexModel
-    ? ` When invoking the \`codex\` reviewer, pass its model tier: \`codex --model ${codexModel} …\`.`
-    : '';
-  const multi = reviewers.length > 1;
+  // "multi" reflects the TOTAL number of review sources (keyed reviewers +
+  // username reviewers) so the ordered per-reviewer loop wording kicks in as
+  // soon as there's more than one thing to satisfy.
+  const multi = (reviewers.length + usernames.length) > 1;
   // The system pre-requests the initial Copilot review only when copilot LEADS the
   // order; otherwise the agent must request it at copilot's turn (so Copilot reviews
   // the post-CLI-fix state, not a stale diff).
   const copilotIsFirst = reviewers[0] === DEFAULT_REVIEWER;
-  const reviewerLabel = reviewers.map(r => `\`${r}\``).join(' → ');
-  const equivArgs = buildReviewWithArgs(reviewers, stopMode, reviewerApplies);
+  const reviewerLabel = [
+    ...reviewers.map(r => `\`${r}\``),
+    ...usernames.map(u => `\`@${u}\``),
+  ].join(' → ');
+  const equivArgs = buildReviewWithArgs(reviewers, stopMode, reviewerApplies, usernames, optionalReviewers);
   const equiv = equivArgs ? ` (equivalent to \`/do:pr ${equivArgs}\`)` : '';
 
   // First step: how to obtain a review. For a single copilot/CLI reviewer keep the
@@ -290,21 +356,27 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   // the diff and returns findings text. The agent always reaches it via
   // `http://localhost:5555` (the canonical loopback API port).
   const localLlmInvocation = `POST the diff to PortOS's local reviewer endpoint: \`gh pr diff ${prNumber || '<PR_NUMBER>'} | jq -Rs '{ backend: "<lmstudio|ollama>", diff: . }' | curl -sS -X POST http://localhost:5555/api/code-review/local -H 'Content-Type: application/json' -d @-\`. Substitute the active reviewer name for \`<lmstudio|ollama>\`. The response \`.findings\` field is the review text — treat it like any other reviewer's findings.`;
+  // Instruct the agent to request each username reviewer as a PR reviewer and
+  // gate the merge on their approval. `gh pr edit --add-reviewer` takes the bare
+  // login, so strip the `@`.
+  const githubUsersInvocation = `request ${usernames.map(u => `\`@${u}\``).join(', ')} as PR reviewer${usernames.length > 1 ? 's' : ''} (\`gh pr edit ${prNumber || '<PR_NUMBER>'} --add-reviewer <user>\`, drop the \`@\`), then wait for their review (poll every 5–15s) and address any findings; their approval gates the merge.`;
   const multiBullets = [
     hasCopilot ? `**copilot**: ${copilotIsFirst
       ? 'wait for the initial Copilot review the system already pre-requested (Copilot leads the list)'
       : 'request a Copilot review when you reach its turn'} (poll every 5–15s, max 5 min/round), then re-request on later rounds.` : null,
-    hasCli ? `**codex / antigravity / claude**: invoke that CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works).${codexModelNote}` : null,
+    hasCli ? `**codex / antigravity / claude / grok**: invoke that CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works).${reviewerModelNote}` : null,
     hasLocalLlm ? `**lmstudio / ollama**: ${localLlmInvocation}` : null,
+    hasGithubUser ? `**@github reviewers**: ${githubUsersInvocation}` : null,
   ].filter(Boolean).join(' ');
-  const singleCliInvocation = `Invoke the ${reviewerLabel} CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works). Capture its findings as concrete issues to address.${codexModelNote}`;
+  const singleCliInvocation = `Invoke the ${reviewerLabel} CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works). Capture its findings as concrete issues to address.${reviewerModelNote}`;
   // Resolved sequentially so a future reviewer kind only adds one branch
   // instead of deepening the nested ternary.
   let waitOrInvokeStep;
   if (multi) waitOrInvokeStep = `For EACH reviewer in order — ${reviewerLabel} — run a full review-and-fix sub-loop before advancing to the next. ${multiBullets}`;
   else if (hasCopilot) waitOrInvokeStep = 'Wait for the latest Copilot review to complete (poll every 5–15s, max 5 minutes per round); the system already requested the initial review.';
   else if (hasLocalLlm) waitOrInvokeStep = localLlmInvocation;
-  else waitOrInvokeStep = singleCliInvocation;
+  else if (hasCli) waitOrInvokeStep = singleCliInvocation;
+  else waitOrInvokeStep = `To obtain a review, ${githubUsersInvocation}`;
 
   const stopModeNote = stopMode === 'on-findings'
     ? '**Stop mode (on-findings):** stop after the FIRST reviewer whose findings you actually fixed and committed; skip the remaining reviewers.'
@@ -322,8 +394,21 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
     ? 'The system has already requested the initial Copilot code review (Copilot leads the order).'
     : hasCopilot
       ? 'Copilot is configured after another reviewer, so the system did NOT pre-request it — request the Copilot review yourself when you reach its turn (after the earlier reviewers’ fixes are pushed), and invoke the other reviewers yourself.'
-      : 'The system did NOT pre-request a reviewer because no Copilot review leads the order — you must invoke each configured reviewer yourself against the PR diff.';
+      : 'The system did NOT pre-request a reviewer because no Copilot review leads the order — you must request/invoke each configured reviewer yourself against the PR diff.';
   const repeatedCommentsNote = '**Repeated comments:** If a fresh review round only re-raises feedback you intentionally rejected (with a reply explaining why), treat that round as clean and move on.';
+  // Challenge protocol (#2471): auto-invoke the bounded worker↔reviewer dispute
+  // from the review loop. When a reviewer's BLOCKING finding is a false positive,
+  // the agent disputes it once via POST /challenge instead of silently complying
+  // or accepting a false block, then RE-CHECKS (re-run reviewer) to overturn or
+  // escalate. One challenge per task, also bounded by the task's retry budget —
+  // a second dispute or an out-of-retries task returns 409.
+  const challengeProtocolNote = [
+    '**Challenge protocol (dispute a wrong rejection — use sparingly):** If a reviewer raises a BLOCKING finding you have strong, specific evidence is a false positive (it misread the diff, flagged intended behavior, or contradicts a documented repo convention), do NOT silently "fix" it or accept a false block — dispute it **exactly once** for this task:',
+    '```bash',
+    `curl -sS -X POST http://localhost:5555/api/cos/tasks/${sourceTaskId}/challenge -H 'Content-Type: application/json' -d '{"reason":"<why the finding is wrong>","evidence":"<file:line or diff quote>","reviewer":"<disputed reviewer>"}'`,
+    '```',
+    'A `409` (`CHALLENGE_EXHAUSTED` = the one challenge is spent, or `CHALLENGE_BUDGET_EXHAUSTED` = the task is out of retry budget) means you can\'t dispute — then fix the finding or, if genuinely blocked, post a PR comment and stop. After filing, RE-CHECK: re-run the disputed reviewer (or another configured reviewer) against the current diff, then resolve — overturned → `POST .../challenge/resolve` with `{"outcome":"upheld"}` and continue to merge; confirmed → fix it, or send `{"outcome":"escalated"}` to hand the dispute to the user.' + (hasLocalLlm ? ' For a local reviewer you may instead POST `{"recheck":{"backend":"<lmstudio|ollama>","diff":"<unified diff>"}}` and let the server re-run it and auto-derive the outcome.' : ''),
+  ].join('\n');
   const extraNotes = [stopModeNote, applyNote].filter(Boolean);
 
   if (verbose) {
@@ -350,6 +435,8 @@ ${extraNotes.length ? '\n' + extraNotes.join('\n') + '\n' : ''}
 **Hard stop:** if a reviewer's loop hasn't converged after 10 iterations, post a PR comment summarising the unresolved blockers and exit. Do not loop indefinitely.
 
 ${repeatedCommentsNote}
+
+${challengeProtocolNote}
 
 PR Details:
 - **URL**: ${prUrl}
@@ -382,7 +469,9 @@ ${rprBody ? `\n### /do:rpr Reference (full procedure)\n\nWhen following the proc
     '6. Exit — do NOT run `/do:push` or open a new PR.',
     '',
     '**Hard stop:** if a reviewer is not converged after 10 rounds, post a PR comment summarising blockers and exit.',
-    repeatedCommentsNote
+    repeatedCommentsNote,
+    '',
+    challengeProtocolNote
   ].filter(Boolean).join('\n');
 }
 
@@ -526,6 +615,12 @@ export function buildReadOnlyCompletionSection({ isTui = false, sentinelPath = n
  *   Ignored on the full/api path, which always returns a string.
  */
 export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo = null, isTruthyMetaFn = (v) => v === true || v === 'true', options = {}) {
+  // Undo the queue-path description/context split so a round-tripped generated
+  // prompt (swarm, scheduled claim-work, other system tasks) renders once
+  // instead of double-printing its first line under a `### Context` header.
+  // Feeds both the briefing template (via the reconciled `task` object) and the
+  // full-path fallback below.
+  task = reconcileSplitContext(task);
   const providerType = options.providerType || PROVIDER_TYPES.API;
   const providerId = options.providerId || null;
   const providerCommand = options.providerCommand || null;
@@ -614,6 +709,8 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
   // Resolve the user's ordered reviewer list + flags (default `[copilot]`). Declared
   // up here so the TUI completion block can thread `--review-with …` into `/do:pr`.
   const taskReviewers = normalizeReviewers(task.metadata);
+  const taskReviewerUsernames = normalizeReviewUsernames(task.metadata?.usernames);
+  const taskOptionalReviewers = normalizeOptionalReviewers(task.metadata?.optionalReviewers) || [];
   const taskReviewStopMode = task.metadata?.reviewStopMode || DEFAULT_REVIEW_STOP_MODE;
   const taskReviewerApplies = isTruthyMetaFn(task.metadata?.reviewerApplies);
 
@@ -636,6 +733,8 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
           willOpenPR, willReviewLoop, simplifyEnabled, providerId,
           sentinelPath,
           reviewers: taskReviewers,
+          usernames: taskReviewerUsernames,
+          optionalReviewers: taskOptionalReviewers,
           reviewStopMode: taskReviewStopMode,
           reviewerApplies: taskReviewerApplies
         })
@@ -723,8 +822,17 @@ ${task.metadata.jiraBranch ? 'Commit your changes to this branch. Do NOT switch 
   // predates the {{reviewLoopFollowUpSection}} placeholder; the built-in
   // fallback is the source of truth for that section, and silently dropping
   // it would leave the agent with no instructions and the loop would not run.
+  // Precomputed display label for the stock "Target Application" heading in the
+  // cos-agent-briefing template. Mirrors buildTaskBlock's predicate: suppress
+  // the redundant heading for the PortOS default app (empty string → the
+  // template section is falsy and renders nothing), surface the app id for
+  // managed apps. `task.metadata.app` stays in the context for any custom
+  // template references — only the stock heading gates on this.
+  const briefingApp = task.metadata?.app;
+  const targetAppLabel = briefingApp && briefingApp !== PORTOS_APP_ID ? briefingApp : '';
   const promptData = isReviewLoopFollowUp ? null : await buildPrompt('cos-agent-briefing', {
     task,
+    targetAppLabel,
     config,
     memorySection,
     claudeMdSection,
@@ -861,6 +969,9 @@ export function buildLightContextPromptParts(task, workspaceDir, worktreeInfo, i
 const BEGIN_WORKING_LINE = 'Begin working on the task now.';
 
 function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMetaFn, { isTui = true, providerId = null, providerCommand = null, leanMode = false } = {}) {
+  // Idempotent with the reconcile in buildAgentPrompt; also protects the
+  // directly-exported buildLightContextPrompt/Parts entry points.
+  task = reconcileSplitContext(task);
   const willOpenPR = isTruthyMetaFn(task.metadata?.openPR);
   const willReviewLoop = isTruthyMetaFn(task.metadata?.reviewLoop);
   const simplifyEnabled = isTruthyMetaFn(task.metadata?.simplify);
@@ -871,6 +982,8 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // Ordered reviewer list + flags for the Review Loop (default `[copilot]`).
   // Flows as `/do:pr --review-with a,b,c [--review-stop-on-*] [--reviewer-applies]`.
   const lightReviewers = normalizeReviewers(task.metadata);
+  const lightReviewerUsernames = normalizeReviewUsernames(task.metadata?.usernames);
+  const lightOptionalReviewers = normalizeOptionalReviewers(task.metadata?.optionalReviewers) || [];
   const lightReviewStopMode = task.metadata?.reviewStopMode || DEFAULT_REVIEW_STOP_MODE;
   const lightReviewerApplies = isTruthyMetaFn(task.metadata?.reviewerApplies);
   // Claude Code CLI providers can drive `/simplify` + `/do:pr` themselves
@@ -896,8 +1009,10 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
 
   // --- Task block --------------------------------------------------------
   // cwd is set by the spawner and the agent knows its own id from the
-  // runner, so the prompt skips that metadata. Target app is kept because
-  // it scopes managed-app work. Shared with the full path via buildTaskBlock.
+  // runner, so the prompt skips that metadata. Target app is kept only for
+  // MANAGED apps because it scopes cross-repo work; the PortOS default app is
+  // suppressed in buildTaskBlock since cwd already reveals it. Shared with the
+  // full path via buildTaskBlock.
   const taskBlock = buildTaskBlock(task, { screenshotsAsList: true });
   sections.push(taskBlock.description);
   if (taskBlock.targetApp) sections.push(taskBlock.targetApp);
@@ -973,10 +1088,10 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
       sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`,
       branchName: worktreeInfo?.branchName || null,
       baseBranch: worktreeInfo?.baseBranch || null,
-      reviewers: lightReviewers, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies
+      reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies
     }));
   } else {
-    sections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, willReviewLoop, hasSlashdo, simplifyEnabled, reviewers: lightReviewers, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies }));
+    sections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, willReviewLoop, hasSlashdo, simplifyEnabled, reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies }));
   }
 
   return { taskSections, contractSections };
@@ -1018,10 +1133,11 @@ function worktreeCommitGuidance({ isTui, hasSlashdo, isWorktreeOnExistingBranch,
  * both agent flows converge on the same final state. `reviewers` only colors
  * the wording — the merge step itself is reviewer-agnostic.
  */
-function buildPostPRMergeSteps(startStep, { reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE } = {}) {
+function buildPostPRMergeSteps(startStep, { reviewers = DEFAULT_REVIEWERS, usernames = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE } = {}) {
   // Trailing space when present so the sentence reads "the Copilot review loop"
-  // (lone copilot) or "the review loop" (multi/CLI) — never "the the review loop".
-  const reviewerLabel = (reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER) ? 'Copilot ' : '';
+  // (lone copilot, no usernames) or "the review loop" (multi/CLI/username) —
+  // never "the the review loop".
+  const reviewerLabel = (reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER && usernames.length === 0) ? 'Copilot ' : '';
   // Under an explicit stop-mode, the multi-reviewer loop can exit `partial` (later
   // reviewers intentionally skipped after the short-circuit) — that's a successful
   // outcome the user opted into, so merge on it too. Match the known stop-modes
@@ -1049,25 +1165,27 @@ function buildPostPRMergeSteps(startStep, { reviewers = DEFAULT_REVIEWERS, revie
  * slash commands), the agent can't run `/do:pr` / `/do:push`, so it delegates to
  * the plain-git/`gh` variant below — same sentinel handshake, no slashdo.
  */
-function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath, providerId = null, slashdoFree = false, branchName = null, baseBranch = null, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
+function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath, providerId = null, slashdoFree = false, branchName = null, baseBranch = null, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
   if (slashdoFree) {
     // The manual path never auto-merges (it opens the PR for review), so it
     // doesn't need willReviewLoop — the review gate holds unconditionally.
     return buildManualTuiCompletionSection({ willOpenPR, simplifyEnabled, sentinelPath, branchName, baseBranch });
   }
   const cmd = willOpenPR ? '/do:pr' : '/do:push';
+  const reviewUsernames = normalizeReviewUsernames(usernames);
   // `/do:pr` may inherit a saved `review-with` default. Explicitly opt out
   // when the task's Review Loop control is off so that default cannot start a
   // Copilot (or other external) review unexpectedly.
   const reviewArgs = willOpenPR
-    ? (willReviewLoop ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies) : '--review-with none')
+    ? (willReviewLoop ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies, reviewUsernames, optionalReviewers) : '--review-with none')
     : '';
   const reviewerArg = reviewArgs ? ` ${reviewArgs}` : '';
-  const copilotOnly = reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER;
+  const copilotOnly = reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER && reviewUsernames.length === 0;
+  const reviewerListLabel = [...reviewers, ...reviewUsernames.map(u => `@${u}`)].join(', ');
   const reviewSuffix = willOpenPR && willReviewLoop
     ? (copilotOnly
         ? ' — `/do:pr` runs the Copilot review loop after the PR opens.'
-        : ` — \`/do:pr\` runs the review loop for ${reviewers.join(', ')} in order after the PR opens.`)
+        : ` — \`/do:pr\` runs the review loop for ${reviewerListLabel} in order after the PR opens.`)
     : (willOpenPR ? ' — external review is disabled for this task.' : '');
   // `/simplify` is a Claude Code TUI built-in. Non-Claude TUI providers
   // (codex-tui, antigravity-tui) can't run it, so give them the inline equivalent.
@@ -1078,7 +1196,7 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
     : '1. (simplify disabled — skip)';
   const sentinelTail = willOpenPR ? '   ## PR\n   <PR URL>' : '   ## Branch\n   <branch name>';
   const merge = willOpenPR && willReviewLoop
-    ? buildPostPRMergeSteps(3, { reviewers, reviewStopMode })
+    ? buildPostPRMergeSteps(3, { reviewers, usernames: reviewUsernames, reviewStopMode })
     : { lines: [], nextStep: 3 };
   const sentinelStep = merge.nextStep;
 
@@ -1191,7 +1309,8 @@ function buildManualTuiCompletionSection({ willOpenPR, simplifyEnabled, sentinel
  * CLI providers fall through to the legacy commit-only block where PortOS
  * handles push+PR on exit.
  */
-function buildCliCompletionSection({ worktreeInfo, willOpenPR, willReviewLoop = false, hasSlashdo = false, simplifyEnabled = false, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
+function buildCliCompletionSection({ worktreeInfo, willOpenPR, willReviewLoop = false, hasSlashdo = false, simplifyEnabled = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
+  const reviewUsernames = normalizeReviewUsernames(usernames);
   if (hasSlashdo && worktreeInfo && willOpenPR) {
     const lines = ['## Completion', 'When finished, run these in order:'];
     let step = 1;
@@ -1199,17 +1318,17 @@ function buildCliCompletionSection({ worktreeInfo, willOpenPR, willReviewLoop = 
       lines.push(`${step++}. \`/simplify\` — review the changed code for reuse, quality, and efficiency, and fix any findings.`);
     }
     const reviewArgs = willReviewLoop
-      ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies)
+      ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies, reviewUsernames, optionalReviewers)
       : '--review-with none';
     const reviewerArg = reviewArgs ? ` ${reviewArgs}` : '';
     const completionNote = willReviewLoop
-      ? ((reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER)
+      ? ((reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER && reviewUsernames.length === 0)
           ? 'and drives the Copilot review loop until clean.'
-          : `and drives the review loop for ${reviewers.join(', ')} in order until clean.`)
+          : `and drives the review loop for ${[...reviewers, ...reviewUsernames.map(u => `@${u}`)].join(', ')} in order until clean.`)
       : 'with external review disabled.';
     lines.push(`${step++}. \`/do:pr${reviewerArg}\` — commits your changes, pushes the branch, and opens a pull request against the default branch ${completionNote}`);
     const merge = willReviewLoop
-      ? buildPostPRMergeSteps(step, { reviewers, reviewStopMode })
+      ? buildPostPRMergeSteps(step, { reviewers, usernames: reviewUsernames, reviewStopMode })
       : { lines: [], nextStep: step };
     lines.push(...merge.lines);
     step = merge.nextStep;

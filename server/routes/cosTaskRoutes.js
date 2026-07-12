@@ -17,10 +17,12 @@ import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.j
 import {
   createCosTaskSchema,
   updateCosTaskSchema,
+  challengeTaskSchema,
+  resolveChallengeSchema,
   validateRequest,
   normalizeReviewers,
+  buildReviewersCsv,
   LOCAL_LLM_REVIEWERS,
-  DEFAULT_REVIEWERS,
   isPaginationRequested,
   parsePagination,
 } from '../lib/validation.js';
@@ -45,7 +47,10 @@ async function resolveClaimReviewersCsv() {
   const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
   const list = normalizeReviewers({}, codeReviewDefaults?.reviewers)
     .filter((r) => !LOCAL_LLM_REVIEWERS.includes(r));
-  return (list.length ? list : [...DEFAULT_REVIEWERS]).join(',');
+  // Arbitrary GitHub reviewer usernames from the Code Review Defaults, appended
+  // as `@user` tokens so the play button's claim gates the merge on them too.
+  // Optional-reviewer set rides along so a `~opt` reviewer stays non-blocking.
+  return buildReviewersCsv(list, codeReviewDefaults?.usernames, codeReviewDefaults?.optionalReviewers);
 }
 
 // Append a "claim exactly this ticket" constraint to the claim-issue-jira body
@@ -312,6 +317,41 @@ router.post('/tasks/:id/approve', asyncHandler(async (req, res) => {
   const result = await cos.approveTask(id);
   if (result?.error) {
     throw new ServerError(result.error, { status: 400, code: 'BAD_REQUEST' });
+  }
+  res.json(result);
+}));
+
+// POST /api/cos/tasks/:id/challenge - A sub-agent disputes a reviewer rejection
+// (#2441). Parks the task in `challenged` and consumes one bounded challenge slot;
+// a second dispute on the same task is refused (409 CHALLENGE_EXHAUSTED).
+router.post('/tasks/:id/challenge', asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { reason, evidence, reviewer } = validateRequest(challengeTaskSchema, req.body);
+  const result = await cos.challengeTask(id, { reason, evidence, reviewer });
+  if (result?.error) {
+    const status = (result.code === 'CHALLENGE_EXHAUSTED' || result.code === 'CHALLENGE_BUDGET_EXHAUSTED' || result.code === 'CANNOT_CHALLENGE_COMPLETED') ? 409
+      : result.code === 'NOT_FOUND' ? 404 : 400;
+    throw new ServerError(result.error, { status, code: result.code || 'CHALLENGE_FAILED' });
+  }
+  res.json(result);
+}));
+
+// POST /api/cos/tasks/:id/challenge/resolve - Resolve a parked challenge (#2441,
+// #2471). Provide EITHER an explicit `outcome` (manual verdict) OR a `recheck`
+// object (auto re-run a local reviewer against the current diff and derive the
+// verdict). `upheld` overturns the rejection (→ pending); `escalated` surfaces the
+// unresolved dispute to the user (→ blocked + arbitration task).
+router.post('/tasks/:id/challenge/resolve', asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { outcome, recheck, note, resolvedBy } = validateRequest(resolveChallengeSchema, req.body);
+  const result = recheck
+    ? await cos.resolveTaskChallengeWithRecheck(id, { recheck, resolvedBy })
+    : await cos.resolveTaskChallenge(id, { outcome, note, resolvedBy });
+  if (result?.error) {
+    const status = result.code === 'NOT_FOUND' ? 404
+      : result.code === 'NOT_CHALLENGED' ? 409
+      : result.code === 'RECHECK_FAILED' ? 502 : 400;
+    throw new ServerError(result.error, { status, code: result.code || 'RESOLVE_FAILED' });
   }
   res.json(result);
 }));

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractGatedRepo } from './hfErrors.js';
+import { extractGatedRepo, isGatedRepoError } from './hfErrors.js';
 
 describe('extractGatedRepo', () => {
   it('pulls the repo from the GatedRepoError prose', () => {
@@ -24,5 +24,21 @@ describe('extractGatedRepo', () => {
     expect(extractGatedRepo('some unrelated traceback line')).toBeNull();
     expect(extractGatedRepo()).toBeNull();
     expect(extractGatedRepo(null)).toBeNull();
+  });
+});
+
+describe('isGatedRepoError', () => {
+  it('matches the huggingface_hub gated-access shapes', () => {
+    expect(isGatedRepoError('huggingface_hub.errors.GatedRepoError: 403 Client Error.')).toBe(true);
+    expect(isGatedRepoError('Cannot access gated repo for url https://huggingface.co/MuScriptor/muscriptor-medium/resolve/main/model.safetensors')).toBe(true);
+    expect(isGatedRepoError('Access to model MuScriptor/muscriptor-medium is restricted and you are not in the authorized list.')).toBe(true);
+    expect(isGatedRepoError('Repo model foo/bar is gated. You must be authenticated to access it.')).toBe(true);
+  });
+
+  it('does not fire on unrelated failures or non-strings', () => {
+    expect(isGatedRepoError('ConnectionError: failed to reach huggingface.co')).toBe(false);
+    expect(isGatedRepoError('exit 1')).toBe(false);
+    expect(isGatedRepoError()).toBe(false);
+    expect(isGatedRepoError(null)).toBe(false);
   });
 });

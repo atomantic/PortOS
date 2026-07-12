@@ -3,7 +3,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import { Sparkles, Pencil, ChevronDown, ChevronRight } from 'lucide-react';
 import { generateImage } from '../services/api';
 import { DEFAULT_NEGATIVE_PROMPT } from '../lib/imageGenDefaults';
-import { RESOLUTIONS, resolveResolutionLabel } from '../lib/imageGenResolutions';
+import { RESOLUTIONS, MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from '../lib/imageGenResolutions';
+import ResolutionField from './media/ResolutionField';
 import MediaJobThumb from './pipeline/MediaJobThumb';
 import toast from './ui/Toast';
 
@@ -28,11 +29,7 @@ export default function QuickImagePrompt() {
   const submittingRef = useRef(false);
   const navigate = useNavigate();
 
-  const { label: resolutionLabel } = resolveResolutionLabel(QUICK_RESOLUTIONS, width, height);
-  const handleResolution = (e) => {
-    const r = QUICK_RESOLUTIONS.find((opt) => opt.label === e.target.value);
-    if (r) { setWidth(r.w); setHeight(r.h); }
-  };
+  const handleResolution = (w, h) => { setWidth(w); setHeight(h); };
 
   const handleGenerate = async (e) => {
     e?.preventDefault();
@@ -114,17 +111,27 @@ export default function QuickImagePrompt() {
           className="flex-1 min-h-[60px] px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm resize-none"
         />
 
-        <div className="shrink-0">
-          <label htmlFor="quick-image-resolution" className="block text-xs font-medium text-gray-400 mb-1">Resolution</label>
-          <select
-            id="quick-image-resolution"
-            value={resolutionLabel}
+        {/* Shared preset dropdown + "Custom…" width/height inputs. Reuses the
+            same control as the full Image Gen page so the quick widget offers
+            custom sizes and (unlike the old inline <select>) never shows a
+            blank dropdown for an off-preset/remix size — ResolutionField
+            auto-opens the custom inputs and displays the W×H instead. The
+            image route accepts any integer edge in [64, 3840] with total
+            pixels ≤ 8.29M, so step=1 keeps hand-typed non-multiple-of-8 edges
+            from tripping native form validation. */}
+        <div className="shrink-0 flex flex-col gap-2">
+          <ResolutionField
+            presets={QUICK_RESOLUTIONS}
+            width={width}
+            height={height}
             onChange={handleResolution}
+            min={64}
+            max={MAX_IMAGE_EDGE}
+            step={1}
+            maxPixels={MAX_IMAGE_PIXELS}
             disabled={isSubmitting}
-            className={`${inputCls} disabled:opacity-50`}
-          >
-            {QUICK_RESOLUTIONS.map((r) => <option key={r.label} value={r.label}>{r.label}</option>)}
-          </select>
+            inputClassName={`${inputCls} disabled:opacity-50`}
+          />
         </div>
 
         <div className="shrink-0">

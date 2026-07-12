@@ -11,10 +11,10 @@
     "ui-bugs": "def9ad96bd74ab397233f234d79a1974",
     "mobile-responsive": "16d8e7f63a673a2de48994c0ac08ef3d",
     "feature-ideas": "0741418bd275b8953131155f8bc89460",
-    "plan-task": "5425306bf082b15b6a17f972557d4dd9",
-    "claim-issue": "8fbe8036e753a3ef5411b94be0aefbd1",
-    "claim-issue-gitlab": "f85cef7bd97bd675c504655b673589d1",
-    "claim-issue-jira": "4094d2a07cdc33179eedfaaecc2a6104",
+    "plan-task": "2189019880ee12a8ba4d7975e7afc646",
+    "claim-issue": "935e47c14b4f5eef1d030dedce5338fc",
+    "claim-issue-gitlab": "9a4f517a0af3200dcd54f71aa2b8d924",
+    "claim-issue-jira": "18de42dd948a14866df8acbc9668e368",
     "code-reviewer-review": "1cd13ee5142d130f95cc390098d0f278",
     "code-reviewer-implement": "ab2c3e16d54e195bdf856574b7702042",
     "error-handling": "9afba2e99b90a8d5771c75e7f0615d96",
@@ -35,10 +35,10 @@
   },
   "PROMPT_VERSIONS": {
     "feature-ideas": 9,
-    "plan-task": 8,
-    "claim-issue": 4,
-    "claim-issue-gitlab": 3,
-    "claim-issue-jira": 2,
+    "plan-task": 9,
+    "claim-issue": 5,
+    "claim-issue-gitlab": 4,
+    "claim-issue-jira": 3,
     "pr-reviewer": 3,
     "code-reviewer-a": 1,
     "code-reviewer-b": 1,
@@ -74,7 +74,8 @@
       "602b259b4d1a565a84219b3e244f0a7f",
       "6bf6de4ca34035fcfbc09e8d98c66001",
       "1197ece173b4fddb90f38710ee04661c",
-      "5d55c4255b557a495f79762a1deab8ba"
+      "5d55c4255b557a495f79762a1deab8ba",
+      "5425306bf082b15b6a17f972557d4dd9"
     ],
     "pr-reviewer": [
       "9ceeed08f238b3787fc1201a0ce8e023",
@@ -86,16 +87,19 @@
     ],
     "pr-watcher": [],
     "claim-issue-jira": [
-      "157cfc80c3d00bcbf3e97aae3998c372"
+      "157cfc80c3d00bcbf3e97aae3998c372",
+      "4094d2a07cdc33179eedfaaecc2a6104"
     ],
     "claim-issue-gitlab": [
       "271ad9c6efa9dce424103711292fd055",
-      "880dd7820ac90c689065e28cdca032fb"
+      "880dd7820ac90c689065e28cdca032fb",
+      "f85cef7bd97bd675c504655b673589d1"
     ],
     "claim-issue": [
       "89308f712f99ad8134224639cd99f135",
       "06190b8089adf1cb2c84bddeb6596af7",
-      "28f09436566c281a6915d6ad4c1b80f8"
+      "28f09436566c281a6915d6ad4c1b80f8",
+      "8fbe8036e753a3ef5411b94be0aefbd1"
     ],
     "security": [
       "d0f54c1fbe62d067b1a23ee0a9f3528c"

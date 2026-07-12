@@ -113,6 +113,10 @@ describe.skipIf(!dbReady)('privacy brokers DB round-trip', () => {
     expect(kase.state).toBe('found');
     // found → +1 day recheck.
     expect(new Date(kase.nextRecheckAt).toISOString()).toBe('2026-07-09T00:00:00.000Z');
+    // rowToCase serializes the server-derived legal manual moves (issue #2417);
+    // a found case can always be queued as a human task, never re-stamped itself.
+    expect(kase.allowedTransitions).toContain('human_task_queued');
+    expect(kase.allowedTransitions).not.toContain('found');
 
     // Lifecycle forward via transitionCase.
     const submitted = await svc.transitionCase(kase.id, 'optout_in_progress');

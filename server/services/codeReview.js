@@ -16,11 +16,16 @@ import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import { readResponseJson } from '../lib/readResponseJson.js'
 import {
   LOCAL_LLM_REVIEWERS,
+  MODEL_CAPABLE_CLI_REVIEWERS,
   DEFAULT_REVIEWERS,
   DEFAULT_REVIEW_STOP_MODE,
   REVIEWER_ALIASES,
   REVIEWER_VALUES,
   REVIEW_STOP_MODES,
+  normalizeReviewUsernames,
+  normalizeOptionalReviewers,
+  resolveReviewUsernames,
+  resolveOptionalReviewers,
 } from '../lib/validation.js'
 import { getSettings, settingsEvents } from './settings.js'
 import { getBaseUrl as getLmStudioBaseUrl } from './lmStudioManager.js'
@@ -55,11 +60,20 @@ export function pickCodeReviewDefaults(settings) {
     : []
   return {
     reviewers: reviewers.length ? reviewers : [...DEFAULT_REVIEWERS],
+    // Arbitrary GitHub reviewer usernames appended to `--review-with` to gate the
+    // merge. Normalized so a hand-edited settings.json can't smuggle in unsafe
+    // tokens. Empty array = none configured (distinct from the copilot fallback
+    // reviewers get).
+    usernames: normalizeReviewUsernames(raw?.usernames),
+    // Reviewer identities marked non-blocking (`~opt`). Normalized so a
+    // hand-edited settings.json can't smuggle in junk. Empty = none optional.
+    optionalReviewers: normalizeOptionalReviewers(raw?.optionalReviewers) || [],
     stopMode: REVIEW_STOP_MODES.includes(raw?.stopMode) ? raw.stopMode : DEFAULT_REVIEW_STOP_MODE,
     reviewerApplies: raw?.reviewerApplies === true,
     lmstudioModel: typeof raw?.lmstudioModel === 'string' && raw.lmstudioModel ? raw.lmstudioModel : null,
     ollamaModel: typeof raw?.ollamaModel === 'string' && raw.ollamaModel ? raw.ollamaModel : null,
     codexModel: typeof raw?.codexModel === 'string' && raw.codexModel ? raw.codexModel : null,
+    claudeModel: typeof raw?.claudeModel === 'string' && raw.claudeModel ? raw.claudeModel : null,
   }
 }
 
@@ -95,11 +109,14 @@ export async function getCodeReviewDefaults() {
  * module doesn't have to import it directly — keeps validation.js as the
  * single source of truth for the reviewer enum & fallback rules.
  *
- * `codexModel` (the Codex CLI model tier for a `codex` reviewer) comes from the
- * Code Review Defaults panel. Unlike the local-LLM models — which the
- * `/api/code-review/local` endpoint injects server-side — the Codex CLI is
- * invoked directly by the follow-up agent, so this value has to ride along into
- * the follow-up's prompt.
+ * `reviewerModels` is a reviewer-keyed model map (e.g. `{ codex: 'gpt-5.6-sol',
+ * claude: 'qwen2.5:7b' }`) built from the per-CLI-reviewer model scalars on the
+ * Code Review Defaults panel (see MODEL_CAPABLE_CLI_REVIEWERS). Unlike the
+ * local-LLM models — which the `/api/code-review/local` endpoint injects
+ * server-side — these CLIs are invoked directly by the follow-up agent, so each
+ * configured model has to ride along into the follow-up's prompt as
+ * `<reviewer> --model <id>`. Only reviewers with a non-empty configured model
+ * appear in the map (absent = let that CLI pick its own default).
  *
  * Errors in settings I/O fall back to the hardcoded defaults — settings read
  * failures shouldn't block agent completion.
@@ -107,12 +124,25 @@ export async function getCodeReviewDefaults() {
 export async function resolveReviewLoopOptions(metadata, { normalize, isTruthyMeta }) {
   const defaults = await getCodeReviewDefaults().catch(() => null)
   const reviewers = normalize(metadata, defaults?.reviewers)
+  // GitHub reviewer usernames: a task-level list (even empty) overrides the
+  // global default; only fall back to the Code Review Defaults when the task
+  // didn't pin its own. Mirrors the reviewers precedence.
+  const usernames = resolveReviewUsernames(metadata?.usernames, defaults?.usernames)
+  // Optional (non-blocking, `~opt`) reviewers: same task-over-default precedence.
+  const optionalReviewers = resolveOptionalReviewers(metadata?.optionalReviewers, defaults?.optionalReviewers)
   const reviewStopMode = metadata?.reviewStopMode || defaults?.stopMode || DEFAULT_REVIEW_STOP_MODE
   const reviewerApplies = metadata?.reviewerApplies !== undefined
     ? isTruthyMeta(metadata?.reviewerApplies)
     : (defaults?.reviewerApplies === true)
-  const codexModel = defaults?.codexModel || null
-  return { reviewers, reviewStopMode, reviewerApplies, codexModel }
+  // Reviewer-keyed model map from the `<reviewer>Model` scalars. spawnReviewLoopFollowUp
+  // further narrows it to the reviewers actually in the list; here we surface every
+  // configured one so the caller doesn't need to know the list yet.
+  const reviewerModels = {}
+  for (const r of MODEL_CAPABLE_CLI_REVIEWERS) {
+    const model = defaults?.[`${r}Model`]
+    if (model) reviewerModels[r] = model
+  }
+  return { reviewers, usernames, optionalReviewers, reviewStopMode, reviewerApplies, reviewerModels }
 }
 
 const CODE_REVIEW_SYSTEM_PROMPT = `You are a careful senior code reviewer. The user will paste a unified PR diff. Review only what the diff changes (not the whole repo). Produce findings as a markdown list grouped by severity:

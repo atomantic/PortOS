@@ -17,7 +17,11 @@ import { dirname, join } from 'path';
 const mock = vi.hoisted(() => ({
   files: new Map(),
   state: null,
-  events: []
+  events: [],
+  // Controls the mocked codeReview.js for resolveTaskChallengeWithRecheck (#2471).
+  review: { ok: true, findings: 'No findings.' },
+  reviewDefaults: { lmstudioModel: 'default-lmstudio', ollamaModel: 'default-ollama' },
+  reviewCalls: []
 }));
 
 // existsSync is driven by the in-memory file map; readFileSync stays real so
@@ -48,6 +52,11 @@ vi.mock('./cosEvents.js', () => ({
   cosEvents: { emit: (name, payload) => mock.events.push({ name, payload }) }
 }));
 
+vi.mock('./codeReview.js', () => ({
+  runLocalCodeReview: vi.fn(async (opts) => { mock.reviewCalls.push(opts); return mock.review; }),
+  getCodeReviewDefaults: vi.fn(async () => mock.reviewDefaults)
+}));
+
 import {
   firstLine,
   PRIORITY_VALUES,
@@ -61,8 +70,12 @@ import {
   deleteTask,
   reorderTasks,
   approveTask,
-  mergePeerTasks
+  mergePeerTasks,
+  challengeTask,
+  resolveTaskChallenge,
+  resolveTaskChallengeWithRecheck
 } from './cosTaskStore.js';
+import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
 
 const USER_FILE = '/root/TASKS.md';
 const COS_FILE = '/root/COS-TASKS.md';
@@ -75,6 +88,9 @@ beforeEach(() => {
   mock.files = new Map();
   mock.state = baseState();
   mock.events = [];
+  mock.review = { ok: true, findings: 'No findings.' };
+  mock.reviewDefaults = { lmstudioModel: 'default-lmstudio', ollamaModel: 'default-ollama' };
+  mock.reviewCalls = [];
 });
 
 describe('cosTaskStore.firstLine', () => {
@@ -575,5 +591,139 @@ describe('cosTaskStore.mergePeerTasks', () => {
     const adopted = after.tasks.find(t => t.id === 'task-nometa');
     expect(adopted).toBeTruthy();
     expect(adopted.description).toBe('no metadata here');
+  });
+});
+
+describe('cosTaskStore.challengeTask / resolveTaskChallenge (#2441)', () => {
+  async function seedTask(desc = 'work under dispute') {
+    const created = await addTask({ description: desc, priority: 'HIGH' }, 'user');
+    return created.id;
+  }
+
+  it('parks a task in challenged and records the worker case', async () => {
+    const id = await seedTask();
+    const result = await challengeTask(id, { reason: 'reviewer misread the diff', reviewer: 'ollama' });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe('challenged');
+    expect(String(result.metadata.challengeCount)).toBe('1');
+    expect(result.metadata.challenge.reason).toBe('reviewer misread the diff');
+    expect(result.metadata.challenge.reviewer).toBe('ollama');
+    expect(mock.events.some(e => e.name === 'task:challenged')).toBe(true);
+  });
+
+  it('refuses a second dispute on the same task (bounded to one)', async () => {
+    const id = await seedTask();
+    await challengeTask(id, { reason: 'first' });
+    const second = await challengeTask(id, { reason: 'second' });
+    expect(second.code).toBe('CHALLENGE_EXHAUSTED');
+  });
+
+  it('refuses a challenge once the shared retry budget is spent (#2471)', async () => {
+    const id = await seedTask('out of retries');
+    // Burn the total-spawn budget — a fresh challenge would only re-queue into a
+    // task agentLifecycle will immediately re-block, so it is refused up front.
+    await updateTask(id, { metadata: { totalSpawnCount: MAX_TOTAL_SPAWNS } }, 'user');
+    const result = await challengeTask(id, { reason: 'let me back in' });
+    expect(result.code).toBe('CHALLENGE_BUDGET_EXHAUSTED');
+    expect(result.error).toMatch(/Retry budget exhausted/);
+  });
+
+  it('returns NOT_FOUND for an unknown task', async () => {
+    const result = await challengeTask('task-nope', { reason: 'x' });
+    expect(result.code).toBe('NOT_FOUND');
+  });
+
+  it('refuses to challenge a completed task', async () => {
+    const id = await seedTask('already done');
+    await updateTask(id, { status: 'completed' }, 'user');
+    const result = await challengeTask(id, { reason: 'too late' });
+    expect(result.code).toBe('CANNOT_CHALLENGE_COMPLETED');
+  });
+
+  it('upheld resolution overturns the rejection → pending', async () => {
+    const id = await seedTask();
+    await challengeTask(id, { reason: 'wrong verdict' });
+    const resolved = await resolveTaskChallenge(id, { outcome: 'upheld', resolvedBy: 'user' });
+    expect(resolved.status).toBe('pending');
+    expect(resolved.metadata.challengeResolution.outcome).toBe('upheld');
+  });
+
+  it('escalated resolution blocks the task AND files an approval-required arbitration task', async () => {
+    const id = await seedTask('escalate me');
+    await challengeTask(id, { reason: 'still disputed', reviewer: 'codex' });
+    const resolved = await resolveTaskChallenge(id, { outcome: 'escalated', note: 'need a human' });
+    expect(resolved.status).toBe('blocked');
+    expect(resolved.metadata.blockedCategory).toBe('challenge-escalation');
+    expect(resolved.metadata.challengeResolution.outcome).toBe('escalated');
+    // The escalation surfaces to the user as an internal approval-required task.
+    const internal = await getCosTasks();
+    const arbitration = internal.tasks.find(t => t.description.includes(`Arbitrate disputed rejection on ${id}`));
+    expect(arbitration).toBeTruthy();
+    expect(arbitration.approvalRequired).toBe(true);
+  });
+
+  it('refuses to resolve a task that is not under challenge', async () => {
+    const id = await seedTask();
+    const result = await resolveTaskChallenge(id, { outcome: 'upheld' });
+    expect(result.code).toBe('NOT_CHALLENGED');
+  });
+
+  it('rejects an invalid outcome', async () => {
+    const id = await seedTask();
+    await challengeTask(id, { reason: 'x' });
+    const result = await resolveTaskChallenge(id, { outcome: 'bogus' });
+    expect(result.code).toBe('INVALID_OUTCOME');
+  });
+});
+
+describe('cosTaskStore.resolveTaskChallengeWithRecheck (#2471)', () => {
+  async function seedChallenged(reviewer = 'ollama') {
+    const created = await addTask({ description: 'work under dispute' }, 'user');
+    await challengeTask(created.id, { reason: 'reviewer misread the diff', reviewer });
+    return created.id;
+  }
+
+  it('overturns (→ pending) when the re-check finds nothing blocking', async () => {
+    const id = await seedChallenged();
+    mock.review = { ok: true, findings: 'No findings.' };
+    const resolved = await resolveTaskChallengeWithRecheck(id, { recheck: { backend: 'ollama', diff: 'diff --git a b' } });
+    expect(resolved.status).toBe('pending');
+    expect(resolved.metadata.challengeResolution.outcome).toBe('upheld');
+    expect(resolved.metadata.challengeResolution.note).toContain('ollama');
+    // The recheck used the Code Review Defaults model when none was passed.
+    expect(mock.reviewCalls[0].model).toBe('default-ollama');
+  });
+
+  it('escalates (→ blocked) when the re-check still reports a blocking finding', async () => {
+    const id = await seedChallenged('lmstudio');
+    mock.review = { ok: true, findings: '## Blocking\n- foo.js:10 still broken' };
+    const resolved = await resolveTaskChallengeWithRecheck(id, { recheck: { backend: 'lmstudio', model: 'coder-7b', diff: 'diff' } });
+    expect(resolved.status).toBe('blocked');
+    expect(resolved.metadata.challengeResolution.outcome).toBe('escalated');
+    expect(mock.reviewCalls[0].model).toBe('coder-7b');
+  });
+
+  it('returns RECHECK_NO_MODEL (config problem, not 502) when no model is configured', async () => {
+    const id = await seedChallenged();
+    mock.reviewDefaults = { lmstudioModel: null, ollamaModel: null };
+    const result = await resolveTaskChallengeWithRecheck(id, { recheck: { backend: 'ollama', diff: 'diff' } });
+    expect(result.code).toBe('RECHECK_NO_MODEL');
+    // No reviewer call attempted without a model.
+    expect(mock.reviewCalls.length).toBe(0);
+  });
+
+  it('returns RECHECK_FAILED when the reviewer is unreachable', async () => {
+    const id = await seedChallenged();
+    mock.review = { ok: false, error: 'ollama request failed: ECONNREFUSED' };
+    const result = await resolveTaskChallengeWithRecheck(id, { recheck: { backend: 'ollama', diff: 'diff' } });
+    expect(result.code).toBe('RECHECK_FAILED');
+  });
+
+  it('refuses to re-check a task that is not under challenge', async () => {
+    const created = await addTask({ description: 'not disputed' }, 'user');
+    const result = await resolveTaskChallengeWithRecheck(created.id, { recheck: { backend: 'ollama', diff: 'diff' } });
+    expect(result.code).toBe('NOT_CHALLENGED');
+    // No wasted reviewer call for a non-challenged task.
+    expect(mock.reviewCalls.length).toBe(0);
   });
 });

@@ -1,19 +1,36 @@
 import { Router } from 'express';
 import * as usage from '../services/usage.js';
 import { getClaudeCodeUsage } from '../services/claudeCodeUsage.js';
+import { getProviderQuotas } from '../services/providerUsage.js';
+import { getAllProviders } from '../services/providers.js';
 import { asyncHandler } from '../lib/errorHandler.js';
+import { validateRequest, usageQuerySchema, usageMessagesSchema } from '../lib/validation.js';
+import { resolveUsageRange } from '../lib/usageRange.js';
 
 const router = Router();
 
-// GET /api/usage - Get usage summary
+// GET /api/usage - Usage summary + cost report. Accepts ?period=7d|30d|90d|all
+// or an explicit ?from/?to (YYYY-MM-DD, inclusive) for the report window.
 router.get('/', asyncHandler(async (req, res) => {
-  const summary = usage.getUsageSummary();
+  const query = validateRequest(usageQuerySchema, req.query);
+  const { from, to } = resolveUsageRange(query);
+  const providers = await getAllProviders();
+  const summary = usage.getUsageSummary({ from, to, providers });
   res.json(summary);
 }));
 
+// GET /api/usage/providers - Subscription-quota status for every enabled
+// provider family (claude, codex, agy, grok). Providers without a queryable
+// usage surface report `supported: false`. `?refresh=1` bypasses the cache.
+router.get('/providers', asyncHandler(async (req, res) => {
+  const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
+  const providers = await getProviderQuotas({ refresh });
+  res.json({ providers });
+}));
+
 // GET /api/usage/claude-code - Claude Code SUBSCRIPTION rate-limit usage,
-// parsed from the CLI's `/usage` output. Distinct from the PortOS-internal
-// token accounting above. `?refresh=1` bypasses the 60s cache.
+// parsed from the CLI's `/usage` output. Kept for back-compat — the usage page
+// now reads the generalized /providers endpoint. `?refresh=1` bypasses cache.
 router.get('/claude-code', asyncHandler(async (req, res) => {
   const refresh = req.query.refresh === '1' || req.query.refresh === 'true';
   const data = await getClaudeCodeUsage({ refresh });
@@ -35,8 +52,8 @@ router.post('/session', asyncHandler(async (req, res) => {
 
 // POST /api/usage/messages - Record messages
 router.post('/messages', asyncHandler(async (req, res) => {
-  const { providerId, model, messageCount, tokenCount } = req.body;
-  await usage.recordMessages(providerId, model, messageCount, tokenCount);
+  const { providerId, model, messageCount, tokenCount, inputTokenCount } = validateRequest(usageMessagesSchema, req.body);
+  await usage.recordMessages(providerId, model, messageCount, tokenCount, inputTokenCount);
   res.json({ success: true });
 }));
 
