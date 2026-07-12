@@ -82,6 +82,8 @@ export * from './editorialChecks.js';
 export * from './editorialHealth.js';
 export * from './lossSparkline.js';
 export * from './metronome.js';
+export * from './midiChords.js';
+export * from './midiNotes.js';
 export * from './pianoKeyboard.js';
 export * from './pitchDetect.js';
 export * from './referenceAnalysis.js';

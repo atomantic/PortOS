@@ -24,6 +24,7 @@ import {
 import useMidiTranscription from '../hooks/useMidiTranscription.js';
 import MidiInstallModal from '../components/install/MidiInstallModal.jsx';
 import MidiGatedModal from '../components/install/MidiGatedModal.jsx';
+import MidiVisualization from '../components/songs/MidiVisualization.jsx';
 import { generateImage } from '../services/apiSystem.js';
 import { generateVideo } from '../services/apiImageVideo.js';
 import { listTracks, trackAudioUrl } from '../services/apiTracks.js';
@@ -745,19 +746,28 @@ export default function MusicVideo() {
                   if (!audioFile) return null;
                   const audioUrl = trackAudioUrl(audioFile);
                   return (
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      <audio src={audioUrl} controls preload="metadata" className="h-8 max-w-full" aria-label="Preview track audio" />
-                      <a href={audioUrl} download={audioFile}
-                        title="Download the audio track"
-                        className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs hover:bg-port-border/40">
-                        <Download size={13} /> Download audio
-                      </a>
-                      {selected.midiTranscription?.filename && (
-                        <a href={trackAudioUrl(selected.midiTranscription.filename)} download
-                          title={`Download the MIDI transcription (MuScriptor ${selected.midiTranscription.model || ''})`}
-                          className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-port-accent hover:bg-port-border/40">
-                          <Music size={13} /> Download MIDI
+                    <div className="mt-2 flex flex-col gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <audio src={audioUrl} controls preload="metadata" className="h-8 max-w-full" aria-label="Preview track audio" />
+                        <a href={audioUrl} download={audioFile}
+                          title="Download the audio track"
+                          className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs hover:bg-port-border/40">
+                          <Download size={13} /> Download audio
                         </a>
+                        {selected.midiTranscription?.filename && (
+                          <a href={trackAudioUrl(selected.midiTranscription.filename)} download
+                            title={`Download the MIDI transcription (MuScriptor ${selected.midiTranscription.model || ''})`}
+                            className="flex items-center gap-1 bg-port-bg border border-port-border rounded px-2 py-1 text-xs text-port-accent hover:bg-port-border/40">
+                            <Music size={13} /> Download MIDI
+                          </a>
+                        )}
+                      </div>
+                      {selected.midiTranscription?.filename && (
+                        <MidiVisualization
+                          url={trackAudioUrl(selected.midiTranscription.filename)}
+                          filename={selected.midiTranscription.filename}
+                          model={selected.midiTranscription.model}
+                        />
                       )}
                     </div>
                   );
