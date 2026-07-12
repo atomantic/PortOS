@@ -16,7 +16,7 @@ import { getToolsSummaryForPrompt } from './tools.js';
 import { getActiveProvider } from './providers.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { readJSONFile, loadSlashdoFile, PATHS, tryReadFile } from '../lib/fileUtils.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, resolveKeyedReviewers, buildReviewWithArgs } from '../lib/validation.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, resolveKeyedReviewers, buildReviewWithArgs } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { isOpencodeCommand } from '../lib/providerModels.js';
 import { shellQuote } from '../lib/shellQuote.js';
@@ -306,14 +306,22 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const hasLocalLlm = reviewers.some(r => LOCAL_LLM_REVIEWERS.includes(r));
   const hasCli = reviewers.some(r => r !== DEFAULT_REVIEWER && !LOCAL_LLM_REVIEWERS.includes(r));
   const hasGithubUser = usernames.length > 0;
-  // Optional Codex CLI model tier chosen on the Code Review Defaults panel.
-  // Only surfaced when `codex` is actually one of the reviewers; the CLI takes
-  // it as `codex --model <id>` (empty = let the Codex CLI use its own default).
-  const codexModel = (reviewers.includes('codex') && typeof metadata.reviewLoopCodexModel === 'string' && metadata.reviewLoopCodexModel)
-    ? metadata.reviewLoopCodexModel
-    : '';
-  const codexModelNote = codexModel
-    ? ` When invoking the \`codex\` reviewer, pass its model tier: \`codex --model ${codexModel} …\`.`
+  // Optional per-CLI-reviewer model tiers chosen on the Code Review Defaults panel,
+  // threaded as a reviewer-keyed map. Each configured, model-capable reviewer that
+  // is actually in this loop's list gets a `<reviewer> --model <id>` note (empty =
+  // let that CLI use its own default). For an Ollama-backed `claude` reviewer the id
+  // is the local Ollama model. Falls back to the legacy codex-scalar metadata key so
+  // a follow-up task persisted by an older install still threads its codex model.
+  const reviewerModelMap = (metadata.reviewLoopReviewerModels && typeof metadata.reviewLoopReviewerModels === 'object')
+    ? metadata.reviewLoopReviewerModels
+    : (typeof metadata.reviewLoopCodexModel === 'string' && metadata.reviewLoopCodexModel
+        ? { codex: metadata.reviewLoopCodexModel }
+        : {});
+  const reviewerModelEntries = MODEL_CAPABLE_CLI_REVIEWERS
+    .filter(r => reviewers.includes(r) && typeof reviewerModelMap[r] === 'string' && reviewerModelMap[r])
+    .map(r => `\`${r} --model ${reviewerModelMap[r]} …\``);
+  const reviewerModelNote = reviewerModelEntries.length
+    ? ` When invoking a reviewer with a pinned model, pass it: ${reviewerModelEntries.join(', ')}.`
     : '';
   // "multi" reflects the TOTAL number of review sources (keyed reviewers +
   // username reviewers) so the ordered per-reviewer loop wording kicks in as
@@ -346,11 +354,11 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
     hasCopilot ? `**copilot**: ${copilotIsFirst
       ? 'wait for the initial Copilot review the system already pre-requested (Copilot leads the list)'
       : 'request a Copilot review when you reach its turn'} (poll every 5–15s, max 5 min/round), then re-request on later rounds.` : null,
-    hasCli ? `**codex / antigravity / claude / grok**: invoke that CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works).${codexModelNote}` : null,
+    hasCli ? `**codex / antigravity / claude / grok**: invoke that CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works).${reviewerModelNote}` : null,
     hasLocalLlm ? `**lmstudio / ollama**: ${localLlmInvocation}` : null,
     hasGithubUser ? `**@github reviewers**: ${githubUsersInvocation}` : null,
   ].filter(Boolean).join(' ');
-  const singleCliInvocation = `Invoke the ${reviewerLabel} CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works). Capture its findings as concrete issues to address.${codexModelNote}`;
+  const singleCliInvocation = `Invoke the ${reviewerLabel} CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works). Capture its findings as concrete issues to address.${reviewerModelNote}`;
   // Resolved sequentially so a future reviewer kind only adds one branch
   // instead of deepening the nested ternary.
   let waitOrInvokeStep;

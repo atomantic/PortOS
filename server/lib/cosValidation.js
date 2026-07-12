@@ -29,6 +29,17 @@ export const DEFAULT_REVIEWERS = ['copilot'];
 // bot). Used by the code-review endpoint, settings panel, and prompt builder
 // to gate model-id resolution.
 export const LOCAL_LLM_REVIEWERS = ['lmstudio', 'ollama'];
+// CLI reviewers whose binary accepts a `--model <id>` tier the user can pin on
+// the Code Review Defaults panel (stored as a `<reviewer>Model` settings scalar,
+// e.g. `codexModel` / `claudeModel`). The review-loop follow-up threads each as a
+// reviewer-keyed model map (`reviewLoopReviewerModels`) so the prompt emits
+// `<reviewer> --model <id>` per configured reviewer. `claude` covers both a
+// normal Claude tier and an Ollama-backed `claude` (see isOllamaClaudeProvider)
+// where `--model` selects the local Ollama model. Copilot/local-LLM reviewers are
+// excluded — the former has no CLI, the latter get their model injected
+// server-side by `POST /api/code-review/local`. Add a reviewer here (and a
+// matching `<reviewer>Model` schema field) when its CLI gains model selection.
+export const MODEL_CAPABLE_CLI_REVIEWERS = ['codex', 'claude'];
 // Stop-mode for the multi-reviewer loop (slashdo `--review-stop-on-*`).
 export const REVIEW_STOP_MODES = ['all', 'on-findings', 'on-clean'];
 export const DEFAULT_REVIEW_STOP_MODE = 'all';
@@ -395,9 +406,11 @@ export const generateWeeklyDigestSchema = z.object({
 // up spawner reads it as the fallback for `reviewers` when none are passed in.
 // `lmstudioModel` / `ollamaModel` are the installed model ids the local-LLM
 // reviewer should run with (empty/undefined = pick the active default model).
-// `codexModel` is the Codex CLI model tier (e.g. `gpt-5.6-sol`) threaded into
-// the review-loop follow-up prompt as `codex --model <id>` (empty/undefined =
-// let the Codex CLI pick its own default).
+// `codexModel` / `claudeModel` are per-CLI-reviewer model tiers (see
+// MODEL_CAPABLE_CLI_REVIEWERS) threaded into the review-loop follow-up prompt as
+// `<reviewer> --model <id>` (empty/undefined = let that CLI pick its own default).
+// `claudeModel` doubles as the Ollama model id when the user runs an
+// Ollama-backed `claude` (isOllamaClaudeProvider) as their reviewer.
 export const codeReviewSettingsSchema = z.object({
   reviewers: z.preprocess(
     v => Array.isArray(v) ? v.map(r => (typeof r === 'string' ? (REVIEWER_ALIASES[r] ?? r) : r)) : v,
@@ -416,6 +429,7 @@ export const codeReviewSettingsSchema = z.object({
   lmstudioModel: z.preprocess(emptyToUndefined, z.string().optional()),
   ollamaModel: z.preprocess(emptyToUndefined, z.string().optional()),
   codexModel: z.preprocess(emptyToUndefined, z.string().optional()),
+  claudeModel: z.preprocess(emptyToUndefined, z.string().optional()),
 }).strict();
 
 // =============================================================================

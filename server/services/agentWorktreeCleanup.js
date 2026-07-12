@@ -22,7 +22,7 @@ import { removeWorktree } from './worktreeManager.js';
 import { isTruthyMeta } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, normalizeReviewers, normalizeReviewUsernames } from '../lib/validation.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames } from '../lib/validation.js';
 
 /**
  * Clean up a worktree for a completed agent.
@@ -41,7 +41,7 @@ import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, normaliz
  * the worktree branch into the source workspace because `gh pr merge` already handled it.
  * Otherwise, merges the worktree branch back to the source branch on success.
  */
-export async function cleanupAgentWorktree(agentId, success, { openPR = false, requestCopilotReview: shouldRequestCopilot = false, reviewers = DEFAULT_REVIEWERS, usernames = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, codexModel = null, skipMerge = false, description = null, agentOutput = null, originalTask = null } = {}) {
+export async function cleanupAgentWorktree(agentId, success, { openPR = false, requestCopilotReview: shouldRequestCopilot = false, reviewers = DEFAULT_REVIEWERS, usernames = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, skipMerge = false, description = null, agentOutput = null, originalTask = null } = {}) {
   const { getAgent: getAgentState } = await import('./cos.js');
   const agentState = await getAgentState(agentId).catch(() => null);
   if (!agentState?.metadata?.isWorktree) return [];
@@ -180,7 +180,7 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
           usernames,
           reviewStopMode,
           reviewerApplies,
-          codexModel
+          reviewerModels
         }).catch(err => {
           emitLog('warn', `🤖 Failed to spawn review-loop follow-up for ${prResult.url}: ${err.message}`, { agentId, prUrl: prResult.url });
           warnings.push(`Review-loop follow-up spawn failed for ${prResult.url}: ${err.message}`);
@@ -238,7 +238,7 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
  * branch (via createWorktree's `existingBranch` option) so it can fix-and-push
  * without trampling concurrent agents.
  */
-export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, sourceWorkspace, reviewers = DEFAULT_REVIEWERS, usernames = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, codexModel = null }) {
+export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, sourceWorkspace, reviewers = DEFAULT_REVIEWERS, usernames = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null }) {
   if (!prUrl || !prBranch) return null;
 
   const parsedPr = git.parsePullRequestUrl(prUrl);
@@ -254,6 +254,15 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   // loop even when copilot was dropped.
   const effectiveUsernames = normalizeReviewUsernames(usernames);
   if (effectiveReviewers.length === 0 && effectiveUsernames.length === 0) return null;
+
+  // Reviewer-keyed CLI model map, narrowed to the model-capable reviewers actually
+  // in this loop's list (e.g. `{ codex: 'gpt-5.6-sol', claude: 'qwen2.5:7b' }`); the
+  // prompt threads each as `<reviewer> --model <id>`. `reviewerModels` is already
+  // coerced to string values upstream (resolveReviewLoopOptions).
+  const narrowedReviewerModels = {};
+  for (const r of effectiveReviewers) {
+    if (MODEL_CAPABLE_CLI_REVIEWERS.includes(r) && reviewerModels?.[r]) narrowedReviewerModels[r] = reviewerModels[r];
+  }
 
   const appId = originalTask?.metadata?.app || null;
   const sourceTaskDesc = originalTask?.description || 'CoS automated task';
@@ -292,10 +301,13 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
       reviewLoopReviewerUsernames: effectiveUsernames,
       reviewLoopStopMode: reviewStopMode,
       reviewLoopReviewerApplies: reviewerApplies,
-      // Codex CLI model tier (e.g. `gpt-5.6-sol`) — only meaningful when `codex`
-      // is in the reviewer list; the prompt threads it as `codex --model <id>`.
-      // `codexModel` is already coerced to string|null upstream (resolveReviewLoopOptions).
-      reviewLoopCodexModel: (effectiveReviewers.includes('codex') && codexModel) ? codexModel : null,
+      // Empty → null so the prompt builder's "no models configured" path is unambiguous.
+      reviewLoopReviewerModels: Object.keys(narrowedReviewerModels).length ? narrowedReviewerModels : null,
+      // Back-compat: older installs' prompt builder reads only the codex-scalar key.
+      // Mirror the (already-narrowed) codex entry so a follow-up task persisted by this
+      // version still threads a codex model after a downgrade. Remove once no supported
+      // peer reads it.
+      reviewLoopCodexModel: narrowedReviewerModels.codex || null,
       sourceTaskId: originalTask?.id || null,
       sourceAgentId: originalAgentId || null,
       // This follow-up may legitimately exit with zero new commits when every
