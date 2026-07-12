@@ -100,3 +100,33 @@ export function buildChallengeResolutionPatch({ outcome, note, resolvedBy, now =
   if (typeof resolvedBy === 'string' && resolvedBy.trim()) resolution.resolvedBy = resolvedBy.trim();
   return { challengeResolution: resolution };
 }
+
+/**
+ * Classify a re-check reviewer's fresh findings into a resolution outcome (#2471).
+ *
+ * When a challenge is resolved by re-running a reviewer against the current diff
+ * (rather than a human verdict), the merge-gating signal is the reviewer's
+ * `## Blocking` section — nits/recommended never block a merge, so only a
+ * surviving blocking finding sustains the original rejection. The local-LLM
+ * reviewer emits the exact `No findings.` sentinel for a fully clean diff
+ * (see codeReview.js CODE_REVIEW_SYSTEM_PROMPT) and a `## Blocking` header only
+ * when it still has a blocking objection.
+ *
+ * - `upheld`   → the rejection is overturned (no blocking finding survives) → work re-queues.
+ * - `escalated` → a blocking finding still stands → surface the dispute to the user.
+ *
+ * Returns `null` for unusable input (non-string / empty) so the caller can treat
+ * a failed re-check as an error rather than silently escalating (or overturning)
+ * on no signal — the sentinel-vs-empty rule, not `.length` truthiness.
+ */
+export function classifyRecheckOutcome(findings) {
+  if (typeof findings !== 'string') return null;
+  const trimmed = findings.trim();
+  if (!trimmed) return null;
+  // Exact clean sentinel — the diff is clean across all severities.
+  if (/^no findings\.?$/i.test(trimmed)) return 'upheld';
+  // A surviving `## Blocking` section is the only thing that gates a merge.
+  if (/^\s*#{1,6}\s*blocking\b/im.test(trimmed)) return 'escalated';
+  // Findings present, but nothing under Blocking — nothing gates the merge.
+  return 'upheld';
+}

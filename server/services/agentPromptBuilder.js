@@ -378,6 +378,18 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
       ? 'Copilot is configured after another reviewer, so the system did NOT pre-request it — request the Copilot review yourself when you reach its turn (after the earlier reviewers’ fixes are pushed), and invoke the other reviewers yourself.'
       : 'The system did NOT pre-request a reviewer because no Copilot review leads the order — you must request/invoke each configured reviewer yourself against the PR diff.';
   const repeatedCommentsNote = '**Repeated comments:** If a fresh review round only re-raises feedback you intentionally rejected (with a reply explaining why), treat that round as clean and move on.';
+  // Challenge protocol (#2471): auto-invoke the bounded worker↔reviewer dispute
+  // from the review loop. When a reviewer's BLOCKING finding is a false positive,
+  // the agent disputes it once via POST /challenge instead of silently complying
+  // or accepting a false block, then RE-CHECKS (re-run reviewer) to overturn or
+  // escalate. One challenge per task (409 CHALLENGE_EXHAUSTED on a second).
+  const challengeProtocolNote = [
+    '**Challenge protocol (dispute a wrong rejection — use sparingly):** If a reviewer raises a BLOCKING finding you have strong, specific evidence is a false positive (it misread the diff, flagged intended behavior, or contradicts a documented repo convention), do NOT silently "fix" it or accept a false block — dispute it **exactly once** for this task:',
+    '```bash',
+    `curl -sS -X POST http://localhost:5555/api/cos/tasks/${sourceTaskId}/challenge -H 'Content-Type: application/json' -d '{"reason":"<why the finding is wrong>","evidence":"<file:line or diff quote>","reviewer":"<disputed reviewer>"}'`,
+    '```',
+    'A `409 CHALLENGE_EXHAUSTED` means the one challenge is spent — then fix the finding or, if genuinely blocked, post a PR comment and stop. After filing, RE-CHECK: re-run the disputed reviewer (or another configured reviewer) against the current diff, then resolve — overturned → `POST .../challenge/resolve` with `{"outcome":"upheld"}` and continue to merge; confirmed → fix it, or send `{"outcome":"escalated"}` to hand the dispute to the user.' + (hasLocalLlm ? ' For a local reviewer you may instead POST `{"recheck":{"backend":"<lmstudio|ollama>","diff":"<unified diff>"}}` and let the server re-run it and auto-derive the outcome.' : ''),
+  ].join('\n');
   const extraNotes = [stopModeNote, applyNote].filter(Boolean);
 
   if (verbose) {
@@ -404,6 +416,8 @@ ${extraNotes.length ? '\n' + extraNotes.join('\n') + '\n' : ''}
 **Hard stop:** if a reviewer's loop hasn't converged after 10 iterations, post a PR comment summarising the unresolved blockers and exit. Do not loop indefinitely.
 
 ${repeatedCommentsNote}
+
+${challengeProtocolNote}
 
 PR Details:
 - **URL**: ${prUrl}
@@ -436,7 +450,9 @@ ${rprBody ? `\n### /do:rpr Reference (full procedure)\n\nWhen following the proc
     '6. Exit — do NOT run `/do:push` or open a new PR.',
     '',
     '**Hard stop:** if a reviewer is not converged after 10 rounds, post a PR comment summarising blockers and exit.',
-    repeatedCommentsNote
+    repeatedCommentsNote,
+    '',
+    challengeProtocolNote
   ].filter(Boolean).join('\n');
 }
 

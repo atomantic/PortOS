@@ -492,6 +492,11 @@ describe('buildLightContextPrompt', () => {
       // (the lone default needs no flag).
       expect(prompt).toMatch(/Reviewers \(in order\)\*\*: `copilot`/);
       expect(prompt).not.toMatch(/--review-with/);
+      // Challenge protocol (#2471): the auto-invoke instructions + the challenge
+      // endpoint for THIS source task must be present in the review-loop section.
+      expect(prompt).toMatch(/Challenge protocol/);
+      expect(prompt).toMatch(/api\/cos\/tasks\/task-src-1\/challenge/);
+      expect(prompt).toMatch(/challenge\/resolve/);
     });
 
     it('threads a non-default reviewer (claude) into the follow-up block via --review-with', () => {
