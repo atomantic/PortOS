@@ -9,7 +9,11 @@ import { rollPalette } from '../lib/canvasRoll.js';
 // (set by `useTheme` on <html>), but hands back a ref — not React state — so a
 // theme switch repaints the canvas without forcing a component re-render.
 export default function useCanvasRollPalette(drawRef) {
-  const paletteRef = useRef(rollPalette());
+  // Lazy one-time init — `useRef(rollPalette())` would re-run the getComputedStyle
+  // read on every render (hover repaints re-render this component), defeating the
+  // point of caching the palette.
+  const paletteRef = useRef(null);
+  if (paletteRef.current === null) paletteRef.current = rollPalette();
   useEffect(() => {
     const apply = () => { paletteRef.current = rollPalette(); drawRef.current?.(); };
     apply();

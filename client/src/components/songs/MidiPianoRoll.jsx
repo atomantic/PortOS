@@ -55,7 +55,8 @@ const sceneSigEqual = (a, b) => !!a && !!b
   && a.width === b.width && a.height === b.height && a.zoom === b.zoom
   && a.scroll === b.scroll && a.chordLaneH === b.chordLaneH
   && a.lowMidi === b.lowMidi && a.highMidi === b.highMidi
-  && a.multiTrack === b.multiTrack && a.dpr === b.dpr
+  && a.multiTrack === b.multiTrack
+  && a.backingW === b.backingW && a.backingH === b.backingH
   && a.data === b.data && a.chords === b.chords
   && a.bg === b.bg && a.accent === b.accent && a.accentRgb === b.accentRgb;
 
@@ -336,11 +337,18 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
     };
 
     // Rebuild the offscreen scene only when its signature changed; otherwise
-    // reuse the cached bitmap.
-    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+    // reuse the cached bitmap. DPR is derived from the visible canvas's actual
+    // backing store (set by useCanvasDprSize) rather than reading
+    // window.devicePixelRatio directly — so the offscreen always matches the
+    // visible canvas's resolution even if the DPR changes before the sizing hook
+    // re-runs (a fresh-DPR scene composited into a stale-DPR canvas would blur).
+    const fallbackDpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+    const backingW = canvas.width || Math.round(width * fallbackDpr);
+    const backingH = canvas.height || Math.round(height * fallbackDpr);
+    const dpr = backingW / width;
     const sig = {
       width, height, zoom: zoomRef.current, scroll, chordLaneH,
-      lowMidi, highMidi, multiTrack, dpr,
+      lowMidi, highMidi, multiTrack, backingW, backingH,
       data, chords: chordLaneH ? chords : null, bg, accent, accentRgb,
     };
     const cached = sceneRef.current;
@@ -351,9 +359,7 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
         // Only re-allocate (which clears + resets the transform) when the pixel
         // size actually changes; a pan/theme rebuild keeps the same buffer and
         // repaints over it (paintScene clears its own frame first).
-        const pxW = Math.round(width * dpr);
-        const pxH = Math.round(height * dpr);
-        if (off.width !== pxW || off.height !== pxH) { off.width = pxW; off.height = pxH; }
+        if (off.width !== backingW || off.height !== backingH) { off.width = backingW; off.height = backingH; }
         const octx = off.getContext('2d');
         if (octx) {
           octx.setTransform(dpr, 0, 0, dpr, 0, 0);
