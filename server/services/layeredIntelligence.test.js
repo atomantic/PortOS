@@ -213,6 +213,16 @@ describe('isProposalDuplicate (dedup)', () => {
     expect(isProposalDuplicate({ slug: 'add-metrics', existingIssues: existing, now })).toBe(false);
   });
 
+  it('ALLOWS re-file for a checked PLAN item (closed with no closedAt — #2435)', () => {
+    // A `- [x]` PLAN item reads as closed with no timestamp; it must fall OUT of
+    // the dedup window so a completed proposal can be re-proposed, while an
+    // unchecked `- [ ]` item (state: 'open') stays suppressed.
+    const closed = [{ slug: 'add-metrics', state: 'closed' }];
+    const open = [{ slug: 'add-metrics', state: 'open' }];
+    expect(isProposalDuplicate({ slug: 'add-metrics', existingIssues: closed, now })).toBe(false);
+    expect(isProposalDuplicate({ slug: 'add-metrics', existingIssues: open, now })).toBe(true);
+  });
+
   it('matches slug embedded in a body marker (no parsed slug field)', () => {
     const existing = [{ body: `stuff ${slugMarker('add-metrics')}`, state: 'open' }];
     expect(isProposalDuplicate({ slug: 'add-metrics', existingIssues: existing, now })).toBe(true);
@@ -541,9 +551,34 @@ describe('computeOutcomesReport', () => {
 });
 
 describe('extractPlanSlugs', () => {
-  it('collects lil-tagged slugs from PLAN.md content', () => {
+  it('collects lil-tagged slugs with their checkbox state from PLAN.md content', () => {
     const plan = `## Next Up\n- [ ] [lil-add-metrics] Add metrics\n- [ ] [lil-fix-thing] Fix\n- [ ] [ref-watch-other] not ours`;
-    expect(extractPlanSlugs(plan)).toEqual(['add-metrics', 'fix-thing']);
+    expect(extractPlanSlugs(plan)).toEqual([
+      { slug: 'add-metrics', state: 'open' },
+      { slug: 'fix-thing', state: 'open' }
+    ]);
+  });
+
+  it('reads a checked `- [x]` item as closed and an unchecked one as open (#2435)', () => {
+    const plan = `## Done\n- [x] [lil-add-metrics] Add metrics\n## Next Up\n- [ ] [lil-fix-thing] Fix`;
+    expect(extractPlanSlugs(plan)).toEqual([
+      { slug: 'add-metrics', state: 'closed' },
+      { slug: 'fix-thing', state: 'open' }
+    ]);
+  });
+
+  it('treats an uppercase `- [X]` checkbox as closed', () => {
+    expect(extractPlanSlugs('- [X] [lil-shipped] done')).toEqual([
+      { slug: 'shipped', state: 'closed' }
+    ]);
+  });
+
+  it('treats a bare tag with no checkbox as open (absent ≠ done)', () => {
+    // A tag mentioned inline, with no list checkbox, must NOT collapse to closed
+    // (which would make it re-proposable) — it stays open/suppressed.
+    expect(extractPlanSlugs('see [lil-inline-ref] elsewhere')).toEqual([
+      { slug: 'inline-ref', state: 'open' }
+    ]);
   });
 
   it('returns [] for non-string / empty', () => {
