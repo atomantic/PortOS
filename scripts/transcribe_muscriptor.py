@@ -82,8 +82,17 @@ def _load_model(TranscriptionModel, size):
         return TranscriptionModel.load_model()
 
 
+# A materialized model snapshot is hundreds of MB; the config/tokenizer/vocab
+# files HF downloads *alongside* the weights are collectively well under this.
+# Requiring the snapshot's total materialized size to clear this floor is what
+# distinguishes a fully-downloaded repo from an interrupted download that only
+# got the small files in before dying — the latter must still read as
+# not-cached so the weights finish under the "Downloading model…" toast.
+_WEIGHTS_MIN_BYTES = 50 * 1024 * 1024
+
+
 def _weights_cached(size):
-    """True when this size's weights are already in the HuggingFace hub cache.
+    """True when this size's weights appear fully downloaded in the HF hub cache.
 
     `TranscriptionModel.load_model()` auto-downloads the weights from the gated
     `MuScriptor/muscriptor-<size>` repo on first use, then loads a cached copy on
@@ -93,30 +102,49 @@ def _weights_cached(size):
     "Downloading model weights…" phase (with a toast) only when a download is
     actually about to happen, instead of an unexplained multi-minute spinner.
 
-    A repo counts as cached only when its `snapshots/` tree holds at least one
-    non-empty file — HF materializes snapshot symlinks only after a blob finishes
-    downloading, so a half-finished download (blob still `.incomplete`) correctly
-    reads as not-cached. Heuristic and best-effort: the worst case of a wrong
-    guess is a mislabeled stage, never a failed transcription. If the muscriptor
-    repo id ever diverges from the assumed `MuScriptor/muscriptor-<size>`, this
-    quietly returns False and we fall back to the generic load-model label.
+    "Cached" requires a repo cache dir mentioning `muscriptor-<size>` whose
+    `snapshots/` tree holds at least `_WEIGHTS_MIN_BYTES` of materialized data —
+    not merely one non-empty file. HF creates each snapshot symlink as its blob
+    finishes, so a download interrupted after the small config files but before
+    the weights blob would otherwise false-positive as cached and hide the very
+    download this feature exists to surface; the size floor requires the weights
+    blob itself to be present. The repo-dir match is fuzzy (case-insensitive,
+    substring) so a minor org/name-casing drift from the assumed
+    `models--MuScriptor--muscriptor-<size>` still resolves.
+
+    Heuristic and best-effort: the only cost of a wrong guess is a mislabeled
+    stage, never a failed transcription. When the cache genuinely can't be
+    located — a true first run, or a cache layout this can't recognize — it
+    returns False and the caller emits `download-model`: exactly right for the
+    first-run case (the common one), and at worst a spurious "Downloading…"
+    label + toast on a cached load in the unlikely event the layout diverged.
     """
     hub_cache = (
         os.environ.get("HF_HUB_CACHE")
+        or os.environ.get("HUGGINGFACE_HUB_CACHE")  # legacy var huggingface_hub still honors
         or (os.path.join(os.environ["HF_HOME"], "hub") if os.environ.get("HF_HOME") else None)
         or os.path.expanduser("~/.cache/huggingface/hub")
     )
-    snapshots = os.path.join(hub_cache, f"models--MuScriptor--muscriptor-{size}", "snapshots")
-    if not os.path.isdir(snapshots):
+    if not os.path.isdir(hub_cache):
         return False
-    for root, _dirs, files in os.walk(snapshots):
-        for name in files:
-            try:
-                # getsize follows the snapshot symlink to the real blob.
-                if os.path.getsize(os.path.join(root, name)) > 0:
+    needle = f"muscriptor-{size}".lower()
+    for entry in os.listdir(hub_cache):
+        low = entry.lower()
+        if not low.startswith("models--") or needle not in low:
+            continue
+        snapshots = os.path.join(hub_cache, entry, "snapshots")
+        if not os.path.isdir(snapshots):
+            continue
+        total = 0
+        for root, _dirs, files in os.walk(snapshots):
+            for name in files:
+                try:
+                    # getsize follows the snapshot symlink to the real blob.
+                    total += os.path.getsize(os.path.join(root, name))
+                except OSError:
+                    continue
+                if total >= _WEIGHTS_MIN_BYTES:
                     return True
-            except OSError:
-                continue
     return False
 
 
