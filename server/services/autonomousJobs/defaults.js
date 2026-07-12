@@ -255,6 +255,23 @@ Phase 4 — Report:
     createdAt: null,
     updatedAt: null
   },
+  {
+    id: 'job-self-diagnostics',
+    name: 'Self-Diagnostics',
+    description: 'Daily scan of CoS task-learning metrics. Surfaces any self-healing category with recorded failures (claim-work, layered-intelligence, etc.) into a single reusable GitHub summary issue marked `monitoring`, ordered by impact. Deterministic — no AI calls.',
+    category: 'self-diagnostics',
+    interval: 'daily',
+    intervalMs: DAY,
+    scheduledTime: '05:00',
+    enabled: false,
+    priority: 'LOW',
+    type: 'script',
+    scriptHandler: 'self-diagnostics',
+    lastRun: null,
+    runCount: 0,
+    createdAt: null,
+    updatedAt: null
+  },
   // 'job-layered-intelligence' removed (#2322): Layered Intelligence is now a
   // per-app HANDLER-BACKED scheduled task (CoS → Schedule) rather than a global
   // autonomous-job sweep. Migration 184 tombstones the persisted job record and
