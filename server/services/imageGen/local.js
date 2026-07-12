@@ -26,7 +26,7 @@ import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
 import { resolveFlux2Python, FLUX2_VENV_DEFAULT } from '../../lib/pythonSetup.js';
 import { hfTokenEnv } from '../../lib/hfToken.js';
-import { extractGatedRepo } from '../../lib/hfErrors.js';
+import { extractGatedRepo, isGatedRepoError } from '../../lib/hfErrors.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { IMAGE_GEN_MODE } from './modes.js';
@@ -774,7 +774,7 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
         // (404, network error) that merely prints a HF URL must NOT be turned
         // into a misleading license-request flow. Extract the repo for the link
         // only after the gated signal is confirmed.
-        const hasGatedError = /GatedRepoError|Access to model .* is restricted|Cannot access gated repo/i.test(gatedText);
+        const hasGatedError = isGatedRepoError(gatedText);
         if (hasGatedError) {
           userKind = 'gated_repo';
           userRepo = extractGatedRepo(gatedText);

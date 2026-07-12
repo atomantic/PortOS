@@ -5,8 +5,11 @@ import { renderHook, act } from '@testing-library/react';
 // in jsdom and we can assert which toast (if any) fired.
 const toast = vi.hoisted(() => ({ error: vi.fn(), info: vi.fn(), success: vi.fn() }));
 vi.mock('../components/ui/Toast', () => ({ default: toast }));
+// Controllable SSE seam — tests mutate `sseState.latest` then rerender to feed
+// the hook a frame. Defaults to no frame so the install-gate tests are unaffected.
+const sseState = vi.hoisted(() => ({ latest: null, closed: false }));
 vi.mock('./useSseProgress.js', () => ({
-  useSseProgress: () => ({ latest: null, closed: false }),
+  useSseProgress: () => sseState,
   isTerminalSseFrame: () => false,
 }));
 
@@ -26,6 +29,8 @@ describe('useMidiTranscription — first-use install gate', () => {
   beforeEach(() => {
     toast.error.mockClear();
     toast.info.mockClear();
+    sseState.latest = null;
+    sseState.closed = false;
     startRequest = vi.fn();
   });
 
@@ -84,5 +89,76 @@ describe('useMidiTranscription — first-use install gate', () => {
     await act(async () => { result.current.installGate.onComplete(); });
     expect(result.current.installGate.open).toBe(false);
     expect(toast.error).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('useMidiTranscription — gated-repo gate', () => {
+  let startRequest;
+  const makeHook = () => renderHook(() => useMidiTranscription({
+    startRequest,
+    eventsUrl: (id) => `/e/${id}`,
+    cancelRequest: vi.fn().mockResolvedValue({}),
+    onComplete: vi.fn(),
+  }));
+
+  beforeEach(() => {
+    toast.error.mockClear();
+    sseState.latest = null;
+    sseState.closed = false;
+    startRequest = vi.fn().mockResolvedValue({ jobId: 'job-1' });
+  });
+
+  const gatedFrame = { type: 'error', code: 'gated_repo', repo: 'MuScriptor/muscriptor-medium', error: 'gated' };
+
+  it('opens the token prompt (no error toast) on a gated_repo error frame', async () => {
+    const { result, rerender } = makeHook();
+    await act(async () => { result.current.start('song.wav'); });
+
+    sseState.latest = gatedFrame;
+    await act(async () => { rerender(); });
+
+    expect(result.current.gatedGate.open).toBe(true);
+    expect(result.current.gatedGate.repo).toBe('MuScriptor/muscriptor-medium');
+    expect(toast.error).not.toHaveBeenCalled();
+  });
+
+  it('re-runs the captured transcription once a token is saved', async () => {
+    const { result, rerender } = makeHook();
+    await act(async () => { result.current.start('song.wav'); });
+
+    sseState.latest = gatedFrame;
+    await act(async () => { rerender(); });
+    expect(result.current.gatedGate.open).toBe(true);
+
+    // A fresh kickoff must see no in-flight frame, else it would re-trip the gate.
+    sseState.latest = null;
+    await act(async () => { result.current.gatedGate.onSaved(); });
+    expect(result.current.gatedGate.open).toBe(false);
+    expect(startRequest).toHaveBeenNthCalledWith(2, 'song.wav');
+    expect(result.current.active).toBe(true);
+  });
+
+  it('closing the prompt clears the target without retrying', async () => {
+    const { result, rerender } = makeHook();
+    await act(async () => { result.current.start('song.wav'); });
+
+    sseState.latest = gatedFrame;
+    await act(async () => { rerender(); });
+    expect(result.current.gatedGate.open).toBe(true);
+
+    await act(async () => { result.current.gatedGate.onClose(); });
+    expect(result.current.gatedGate.open).toBe(false);
+    expect(startRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it('a non-gated error frame still toasts', async () => {
+    const { result, rerender } = makeHook();
+    await act(async () => { result.current.start('song.wav'); });
+
+    sseState.latest = { type: 'error', error: 'boom' };
+    await act(async () => { rerender(); });
+
+    expect(result.current.gatedGate.open).toBe(false);
+    expect(toast.error).toHaveBeenCalledWith('boom');
   });
 });
