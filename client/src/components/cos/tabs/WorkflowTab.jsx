@@ -101,6 +101,26 @@ function TrackGrid({ divisions }) {
   ));
 }
 
+// Reshapes a task node into the `config` shape PerAppOverrideList expects and
+// renders it. Shared by the pinned TimelineRow and the flexible-queue rows so
+// the config reconstruction lives in exactly one place.
+function AppOverridePanel({ node, apps, onUpdateOverride, onBulkToggleOverride }) {
+  return (
+    <PerAppOverrideList
+      taskType={node.label}
+      config={{
+        appOverrides: node.appOverrides,
+        type: node.schedule?.type,
+        taskMetadata: node.taskMetadata,
+        managedAgentOptions: node.managedAgentOptions
+      }}
+      apps={apps}
+      onUpdateOverride={onUpdateOverride}
+      onBulkToggleOverride={onBulkToggleOverride}
+    />
+  );
+}
+
 function TimelineRow({ node, occurrences, windows, timeline, hours, timezone, selected, apps, expanded, onSelect, onToggleExpand, onUpdateOverride, onBulkToggleOverride }) {
   const palette = trackPalette(node);
   const Icon = node.kind === 'job' ? Bot : GitBranch;
@@ -139,8 +159,8 @@ function TimelineRow({ node, occurrences, windows, timeline, hours, timezone, se
               <span className="mt-0.5 block truncate text-[10px] text-gray-500">{describeSchedule(node)}</span>
             </span>
           </button>
-          {canExpand && enabledAppCount > 0 && (
-            <span className="shrink-0 rounded-sm bg-port-accent/15 px-1 py-px text-[9px] font-medium text-port-accent" title={countTitle}>
+          {canExpand && (
+            <span className={`shrink-0 rounded-sm px-1 py-px text-[9px] font-medium ${enabledAppCount > 0 ? 'bg-port-accent/15 text-port-accent' : 'bg-white/5 text-gray-500'}`} title={countTitle}>
               {enabledAppCount}/{totalAppCount}
             </span>
           )}
@@ -180,18 +200,7 @@ function TimelineRow({ node, occurrences, windows, timeline, hours, timezone, se
       </div>
       {canExpand && expanded && (
         <div className="border-t border-port-border/40 bg-port-bg/20 px-3 py-3">
-          <PerAppOverrideList
-            taskType={node.label}
-            config={{
-              appOverrides: node.appOverrides,
-              type: node.schedule?.type,
-              taskMetadata: node.taskMetadata,
-              managedAgentOptions: node.managedAgentOptions
-            }}
-            apps={apps}
-            onUpdateOverride={onUpdateOverride}
-            onBulkToggleOverride={onBulkToggleOverride}
-          />
+          <AppOverridePanel node={node} apps={apps} onUpdateOverride={onUpdateOverride} onBulkToggleOverride={onBulkToggleOverride} />
         </div>
       )}
     </div>
@@ -413,12 +422,37 @@ export default function WorkflowTab({ apps }) {
                   <div className="flex items-center gap-2 text-xs font-medium text-gray-400"><RotateCcw className="h-3.5 w-3.5" /> Unpinned runner queue</div>
                   <p className="mt-1 text-[11px] text-gray-600">These are active, but rotation and on-demand schedules do not promise a clock time.</p>
                   <div className="mt-2 flex flex-wrap gap-2">
-                    {model.flexible.map(node => (
-                      <button key={node.id} type="button" onClick={() => setSelectedId(node.id)} className={`rounded border px-2.5 py-1.5 text-xs ${selectedId === node.id ? 'border-port-accent bg-port-accent/10 text-port-accent' : 'border-port-border bg-port-bg/40 text-gray-400 hover:text-white'}`}>
-                        {node.label} <span className="text-gray-600">· {node.schedule?.type}</span>
-                      </button>
-                    ))}
+                    {model.flexible.map(node => {
+                      const canExpand = node.kind === 'task' && (node.totalAppCount || 0) > 0;
+                      const isSelected = selectedId === node.id;
+                      return (
+                        <span key={node.id} className={`inline-flex items-center rounded border text-xs ${isSelected ? 'border-port-accent bg-port-accent/10' : 'border-port-border bg-port-bg/40'}`}>
+                          <button type="button" onClick={() => setSelectedId(node.id)} className={`px-2.5 py-1.5 ${isSelected ? 'text-port-accent' : 'text-gray-400 hover:text-white'}`}>
+                            {node.label} <span className="text-gray-600">· {node.schedule?.type}</span>
+                            {canExpand && node.enabledAppCount > 0 && <span className="ml-1 text-port-accent">{node.enabledAppCount}/{node.totalAppCount}</span>}
+                          </button>
+                          {canExpand && (
+                            <button
+                              type="button"
+                              onClick={() => toggleExpand(node.id)}
+                              aria-expanded={expandedIds.has(node.id)}
+                              aria-label={`${expandedIds.has(node.id) ? 'Hide' : 'Show'} app overrides for ${node.label}`}
+                              title={`${node.enabledAppCount || 0} of ${node.totalAppCount} apps enabled`}
+                              className="flex h-full items-center border-l border-port-border/60 px-1.5 text-gray-500 hover:bg-white/10 hover:text-gray-300"
+                            >
+                              <ChevronRight className={`h-3.5 w-3.5 transition-transform ${expandedIds.has(node.id) ? 'rotate-90' : ''}`} />
+                            </button>
+                          )}
+                        </span>
+                      );
+                    })}
                   </div>
+                  {model.flexible.filter(node => expandedIds.has(node.id) && node.kind === 'task' && (node.totalAppCount || 0) > 0).map(node => (
+                    <div key={node.id} className="mt-2 rounded border border-port-border/60 bg-port-bg/20 px-3 py-3">
+                      <div className="mb-2 text-xs font-medium text-gray-300">{node.label} <span className="text-gray-600">· app overrides</span></div>
+                      <AppOverridePanel node={node} apps={apps} onUpdateOverride={handleUpdateOverride} onBulkToggleOverride={handleBulkToggleOverride} />
+                    </div>
+                  ))}
                 </section>
               )}
 
