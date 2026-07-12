@@ -31,7 +31,12 @@ export {
   recurrenceMilestoneReached,
   INSIGHT_CAP,
   RECURRENCE_INSIGHT_MILESTONES,
-  EXTERNAL_UNTYPED_TASK_TYPE
+  EXTERNAL_UNTYPED_TASK_TYPE,
+  appendRecentOutcome,
+  computeWindowedStats,
+  RECENT_OUTCOMES_CAP,
+  DEFAULT_WINDOW_MAX_COUNT,
+  DEFAULT_WINDOW_MAX_AGE_MS
 } from './store.js';
 
 export {
@@ -41,7 +46,8 @@ export {
   recordFailureSignature,
   resetTaskTypeLearning,
   recalculateModelTierMetrics,
-  recalculateDurationStats
+  recalculateDurationStats,
+  getWindowedStats
 } from './metrics.js';
 
 export {

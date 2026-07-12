@@ -39,11 +39,103 @@ export function calculateDurationETA(metrics) {
   return { avgDurationMs: avg, maxDurationMs: max, p80DurationMs: p80 };
 }
 
+// ---------------------------------------------------------------------------
+// Recent-outcomes ring (issue #2460)
+//
+// Lifetime `byTaskType` counters (completed/succeeded/failed/successRate) are
+// cumulative and never decay, so a burst of since-resolved failures (a provider
+// misconfig, PTY-capture artifacts on a now-retired task type) permanently
+// depresses the success rate the Layered Intelligence reasoner reads via its
+// `cosMetrics` source and keeps signaling "work needed" long after the root cause
+// is fixed. To let that signal self-heal WITHOUT destroying the lifetime stats the
+// dashboards display, each task-type bucket also carries a bounded ring of recent
+// outcomes (`{ t: ISO timestamp, s: success bool }`). `computeWindowedStats`
+// derives a recency-windowed success rate from it (bounded by BOTH count and age)
+// that LI consumes instead of the lifetime rate. Mirrors the existing
+// `failureSignatures.recent` / `recentUnknownErrors` rolling-buffer precedent.
+// ---------------------------------------------------------------------------
+
+// Cap on retained recent-outcome samples per task type (oldest pruned first).
+export const RECENT_OUTCOMES_CAP = 50;
+
+// Default recency window applied when reading the ring: at most this many
+// most-recent runs AND no older than this age. Either bound alone can shrink the
+// window; both are overridable per call.
+export const DEFAULT_WINDOW_MAX_COUNT = 30;
+export const DEFAULT_WINDOW_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+
+/**
+ * Append a recent outcome to a task-type metrics bucket's bounded ring (issue
+ * #2460). Pure — mutates and returns `metrics`. Stores the compact `{ t, s }`
+ * shape (ISO timestamp + success bool). Tolerates a bucket that predates the ring
+ * (older learning.json before migration 188) by initializing it. Enforces
+ * `RECENT_OUTCOMES_CAP`, dropping the oldest sample first.
+ */
+export function appendRecentOutcome(metrics, { success, at } = {}) {
+  if (!metrics || typeof metrics !== 'object') return metrics;
+  if (!Array.isArray(metrics.recentOutcomes)) metrics.recentOutcomes = [];
+  metrics.recentOutcomes.push({ t: at || new Date().toISOString(), s: !!success });
+  if (metrics.recentOutcomes.length > RECENT_OUTCOMES_CAP) {
+    metrics.recentOutcomes = metrics.recentOutcomes.slice(-RECENT_OUTCOMES_CAP);
+  }
+  return metrics;
+}
+
+/**
+ * Compute recency-windowed success stats from a task-type recent-outcomes ring
+ * (issue #2460). Pure / no I/O. Windows the ring by BOTH a max sample count and a
+ * max age, then computes the success rate over just that window.
+ *
+ * Sentinel discipline (repo "absent vs empty" rule): `windowedSuccessRate` is
+ * `null` when the window contains NO samples — never 0 — so a task type with no
+ * recent runs is distinguishable from one that recently failed everything. LI
+ * falls back to the lifetime rate on null rather than reading a fabricated 0%.
+ *
+ * @param {Array<{t:string,s:boolean}>} recentOutcomes - the bucket's ring
+ * @param {{ maxCount?:number, maxAgeMs?:number, now?:number }} [opts]
+ * @returns {{ windowedCompleted:number, windowedSucceeded:number,
+ *   windowedFailed:number, windowedSuccessRate:number|null }}
+ */
+export function computeWindowedStats(recentOutcomes, {
+  maxCount = DEFAULT_WINDOW_MAX_COUNT,
+  maxAgeMs = DEFAULT_WINDOW_MAX_AGE_MS,
+  now = Date.now()
+} = {}) {
+  const ring = Array.isArray(recentOutcomes) ? recentOutcomes : [];
+  const ageCutoff = Number.isFinite(maxAgeMs) && maxAgeMs > 0 ? now - maxAgeMs : null;
+
+  // Age-filter first (drop stale outcomes), then keep only the most-recent
+  // `maxCount`. An undated sample (unparseable `t`) is kept — the count bound
+  // still applies, so a hand-edited ring can't grow the window unbounded.
+  const withinAge = ageCutoff === null
+    ? ring
+    : ring.filter((o) => {
+        const t = Date.parse(o?.t);
+        return Number.isFinite(t) ? t >= ageCutoff : true;
+      });
+  const windowed = Number.isFinite(maxCount) && maxCount > 0
+    ? withinAge.slice(-maxCount)
+    : withinAge;
+
+  const windowedCompleted = windowed.length;
+  const windowedSucceeded = windowed.reduce((n, o) => n + (o?.s ? 1 : 0), 0);
+  const windowedFailed = windowedCompleted - windowedSucceeded;
+  const windowedSuccessRate = windowedCompleted > 0
+    ? Math.round((windowedSucceeded / windowedCompleted) * 100)
+    : null;
+
+  return { windowedCompleted, windowedSucceeded, windowedFailed, windowedSuccessRate };
+}
+
 /**
  * Default learning data structure
  */
 const DEFAULT_LEARNING_DATA = {
-  version: 1,
+  // v2 (issue #2460): each byTaskType bucket carries a bounded `recentOutcomes`
+  // ring so the signal LI reads can be recency-windowed (see appendRecentOutcome
+  // / computeWindowedStats below). Migration 188 initializes the ring on existing
+  // installs; fresh installs seed at v2.
+  version: 2,
   lastUpdated: null,
 
   // Metrics by self-improvement task type

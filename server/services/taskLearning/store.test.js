@@ -10,7 +10,11 @@ import {
   recurrenceMilestoneReached,
   RECURRENCE_INSIGHT_MILESTONES,
   INSIGHT_CAP,
-  EXTERNAL_UNTYPED_TASK_TYPE
+  EXTERNAL_UNTYPED_TASK_TYPE,
+  appendRecentOutcome,
+  computeWindowedStats,
+  RECENT_OUTCOMES_CAP,
+  DEFAULT_WINDOW_MAX_COUNT
 } from './store.js';
 
 // These two helpers are the pure foundation every other taskLearning submodule
@@ -377,5 +381,102 @@ describe('store.buildRecurrenceInsight', () => {
     expect(insight.provider).toBeNull();
     expect(insight.message).toContain('10 times');
     expect(insight.message).not.toContain('via');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Recent-outcomes ring (issue #2460) — pure ring append/cap + windowed-rate math.
+// No I/O, so exercised directly without touching the real learning.json.
+// ---------------------------------------------------------------------------
+
+describe('store.appendRecentOutcome', () => {
+  it('initializes the ring and stores the compact { t, s } shape', () => {
+    const metrics = {};
+    appendRecentOutcome(metrics, { success: true, at: '2026-07-10T00:00:00.000Z' });
+    expect(metrics.recentOutcomes).toEqual([{ t: '2026-07-10T00:00:00.000Z', s: true }]);
+  });
+
+  it('coerces success to a boolean and defaults the timestamp when absent', () => {
+    const metrics = { recentOutcomes: [] };
+    appendRecentOutcome(metrics, { success: 0 });
+    expect(metrics.recentOutcomes[0].s).toBe(false);
+    expect(typeof metrics.recentOutcomes[0].t).toBe('string');
+  });
+
+  it('caps the ring at RECENT_OUTCOMES_CAP, dropping the oldest first', () => {
+    const metrics = {};
+    for (let i = 0; i < RECENT_OUTCOMES_CAP + 10; i++) {
+      appendRecentOutcome(metrics, { success: true, at: `run-${i}` });
+    }
+    expect(metrics.recentOutcomes).toHaveLength(RECENT_OUTCOMES_CAP);
+    // Oldest 10 dropped — first retained is run-10, last is the newest.
+    expect(metrics.recentOutcomes[0].t).toBe('run-10');
+    expect(metrics.recentOutcomes.at(-1).t).toBe(`run-${RECENT_OUTCOMES_CAP + 9}`);
+  });
+
+  it('is a no-op on a non-object metrics bucket', () => {
+    expect(appendRecentOutcome(null, { success: true })).toBeNull();
+  });
+});
+
+describe('store.computeWindowedStats', () => {
+  const iso = (msAgo, now) => new Date(now - msAgo).toISOString();
+
+  it('returns a null successRate sentinel (not 0) when the window is empty', () => {
+    const stats = computeWindowedStats([]);
+    expect(stats).toEqual({
+      windowedCompleted: 0,
+      windowedSucceeded: 0,
+      windowedFailed: 0,
+      windowedSuccessRate: null
+    });
+    // A missing/undefined ring behaves the same.
+    expect(computeWindowedStats(undefined).windowedSuccessRate).toBeNull();
+  });
+
+  it('computes the success rate over all in-window samples', () => {
+    const ring = [
+      { t: '2026-07-10T00:00:00.000Z', s: true },
+      { t: '2026-07-10T00:01:00.000Z', s: false },
+      { t: '2026-07-10T00:02:00.000Z', s: true },
+      { t: '2026-07-10T00:03:00.000Z', s: true }
+    ];
+    const stats = computeWindowedStats(ring, { maxAgeMs: Infinity });
+    expect(stats.windowedCompleted).toBe(4);
+    expect(stats.windowedSucceeded).toBe(3);
+    expect(stats.windowedFailed).toBe(1);
+    expect(stats.windowedSuccessRate).toBe(75);
+  });
+
+  it('keeps only the most-recent maxCount samples', () => {
+    // 10 failures (older) followed by 5 successes (newer); window last 5 → 100%.
+    const ring = [];
+    for (let i = 0; i < 10; i++) ring.push({ t: `old-${i}`, s: false });
+    for (let i = 0; i < 5; i++) ring.push({ t: `new-${i}`, s: true });
+    const stats = computeWindowedStats(ring, { maxCount: 5, maxAgeMs: Infinity });
+    expect(stats.windowedCompleted).toBe(5);
+    expect(stats.windowedSuccessRate).toBe(100);
+  });
+
+  it('ages out samples older than maxAgeMs — a resolved failure burst self-heals', () => {
+    const now = Date.parse('2026-07-12T00:00:00.000Z');
+    const DAY = 24 * 60 * 60 * 1000;
+    const ring = [
+      // Old failure burst (40 days ago) — should age out of a 30-day window.
+      { t: iso(40 * DAY, now), s: false },
+      { t: iso(40 * DAY, now), s: false },
+      // Recent successes (within 30 days).
+      { t: iso(2 * DAY, now), s: true },
+      { t: iso(1 * DAY, now), s: true }
+    ];
+    const stats = computeWindowedStats(ring, { maxAgeMs: 30 * DAY, now });
+    expect(stats.windowedCompleted).toBe(2);
+    expect(stats.windowedSuccessRate).toBe(100);
+  });
+
+  it('defaults to the exported count window when maxCount is unspecified', () => {
+    const ring = Array.from({ length: DEFAULT_WINDOW_MAX_COUNT + 20 }, (_, i) => ({ t: `r-${i}`, s: true }));
+    const stats = computeWindowedStats(ring, { maxAgeMs: Infinity });
+    expect(stats.windowedCompleted).toBe(DEFAULT_WINDOW_MAX_COUNT);
   });
 });

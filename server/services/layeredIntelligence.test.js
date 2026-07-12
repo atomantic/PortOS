@@ -1148,3 +1148,64 @@ describe('listForgeIssues url surfacing (issue #2293)', () => {
     expect(issues[0].url).toBeNull();
   });
 });
+
+describe('gatherSources cosMetrics windowed rate (issue #2460)', () => {
+  let dir;
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'lil-cosmetrics-')); });
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  const writeLearning = (learning) => writeFile(join(dir, 'learning.json'), JSON.stringify(learning));
+
+  it('surfaces a recency-windowed rate distinct from the lifetime rate', async () => {
+    const now = Date.now();
+    const DAY = 24 * 60 * 60 * 1000;
+    // Lifetime rate is dragged down by an old failure burst; the recent ring is
+    // all successes → windowed rate should read high while lifetime reads low.
+    await writeLearning({
+      byTaskType: {
+        'self-improve:ui': {
+          completed: 12, succeeded: 2, failed: 10, successRate: 17, avgDurationMs: 1000,
+          recentOutcomes: [
+            { t: new Date(now - 40 * DAY).toISOString(), s: false }, // aged out of the 30d window
+            { t: new Date(now - 2 * DAY).toISOString(), s: true },
+            { t: new Date(now - 1 * DAY).toISOString(), s: true }
+          ]
+        }
+      }
+    });
+    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: true } }, { cosPath: dir });
+    const parsed = JSON.parse(out.cosMetrics);
+    expect(parsed['self-improve:ui'].lifetimeSuccessRate).toBe(17);
+    expect(parsed['self-improve:ui'].lifetimeCompleted).toBe(12);
+    expect(parsed['self-improve:ui'].recentSuccessRate).toBe(100);
+    expect(parsed['self-improve:ui'].recentCompleted).toBe(2);
+  });
+
+  it('reports a null recentSuccessRate (not 0) when the ring is empty so LI leans on lifetime', async () => {
+    await writeLearning({
+      byTaskType: {
+        'idle-review': { completed: 5, succeeded: 5, failed: 0, successRate: 100, recentOutcomes: [] }
+      }
+    });
+    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: true } }, { cosPath: dir });
+    const parsed = JSON.parse(out.cosMetrics);
+    expect(parsed['idle-review'].recentSuccessRate).toBeNull();
+    expect(parsed['idle-review'].lifetimeSuccessRate).toBe(100);
+  });
+
+  it('tolerates a pre-migration bucket with no recentOutcomes key', async () => {
+    await writeLearning({
+      byTaskType: { 'auto-fix': { completed: 3, succeeded: 1, failed: 2, successRate: 33 } }
+    });
+    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: true } }, { cosPath: dir });
+    const parsed = JSON.parse(out.cosMetrics);
+    expect(parsed['auto-fix'].recentSuccessRate).toBeNull();
+    expect(parsed['auto-fix'].lifetimeSuccessRate).toBe(33);
+  });
+
+  it('does not read learning.json when cosMetrics is off', async () => {
+    await writeLearning({ byTaskType: { x: { successRate: 50, recentOutcomes: [] } } });
+    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: false } }, { cosPath: dir });
+    expect(out.cosMetrics).toBeUndefined();
+  });
+});
