@@ -2000,7 +2000,9 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
   // Drop local-LLM reviewers (lmstudio/ollama) from the prompt's {reviewers}
   // token: the claim/plan prompt templates only document how to drive copilot
-  // and the CLI reviewers (claude/codex/antigravity). Unlike the system
+  // and the CLI reviewers (claude/codex/antigravity; grok flows through the same
+  // generic CLI path but isn't yet named in the per-kind bullet — see #2453).
+  // Unlike the system
   // review-loop follow-up prompt (agentPromptBuilder.js), they carry no
   // local-endpoint invocation instructions, so naming a local-LLM reviewer
   // here would stall the agent's review step. Fall through to the hardcoded

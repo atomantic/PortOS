@@ -16,12 +16,12 @@ import { emptyToUndefined, emptyToNull } from './zodCompat.js';
 // =============================================================================
 
 // Reviewer choices for the Review Loop. `copilot` requests a native GitHub
-// Copilot review; `claude`/`antigravity`/`codex` instruct the review-loop follow-up
-// agent to invoke the named CLI to critique the PR diff; `lmstudio`/`ollama`
+// Copilot review; `claude`/`antigravity`/`codex`/`grok` instruct the review-loop
+// follow-up agent to invoke the named CLI to critique the PR diff; `lmstudio`/`ollama`
 // route the diff through PortOS's local code-review endpoint
 // (`POST /api/code-review/local`) which runs the configured local LLM model.
 // Mirrored in client/src/components/cos/constants.js → REVIEWER_OPTIONS.
-export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'lmstudio', 'ollama'];
+export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'grok', 'lmstudio', 'ollama'];
 export const REVIEWER_ALIASES = { gemini: 'antigravity' };
 export const DEFAULT_REVIEWER = 'copilot';
 export const DEFAULT_REVIEWERS = ['copilot'];

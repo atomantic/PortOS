@@ -81,7 +81,7 @@ export const AGENT_OPTIONS = [
 ];
 
 // Reviewer choices for the Review Loop. `copilot` requests a GitHub Copilot
-// review via the native reviewer API; CLI reviewers (claude/antigravity/codex)
+// review via the native reviewer API; CLI reviewers (claude/antigravity/codex/grok)
 // instruct the follow-up agent to invoke the named CLI; local-LLM reviewers
 // (lmstudio/ollama) route the diff through PortOS's `POST /api/code-review/local`
 // endpoint, which runs the model configured on the AI Providers → Code Review
@@ -92,6 +92,7 @@ export const REVIEWER_OPTIONS = [
   { value: 'claude', label: 'Claude', description: 'Claude CLI reviews the PR diff' },
   { value: 'antigravity', label: 'Antigravity', description: 'Antigravity CLI (agy) reviews the PR diff' },
   { value: 'codex', label: 'Codex', description: 'Codex CLI reviews the PR diff (optional model tier on AI Providers → Code Review Defaults)' },
+  { value: 'grok', label: 'Grok', description: 'Grok Build CLI (grok) reviews the PR diff' },
   { value: 'lmstudio', label: 'LM Studio', description: 'Local LM Studio model reviews the diff (set model on AI Providers)' },
   { value: 'ollama', label: 'Ollama', description: 'Local Ollama model reviews the diff (set model on AI Providers)' }
 ];
