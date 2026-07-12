@@ -13,7 +13,7 @@ const VIDEO_PRESETS = [
 ];
 
 const imageBounds = { min: 64, max: 3840, step: 8, maxPixels: 8_294_400 };
-const videoBounds = { min: 64, max: 2048, step: 64 };
+const videoBounds = { min: 64, max: 2048, step: 64, snapOnBlur: true };
 
 describe('ResolutionField — preset dropdown', () => {
   it('renders every preset plus a Custom… sentinel option', () => {
@@ -64,12 +64,20 @@ describe('ResolutionField — custom W×H', () => {
     expect(onChange).toHaveBeenLastCalledWith(64, 1280);
   });
 
-  it('snaps a video edge down to the step multiple on blur', () => {
+  it('snaps a video edge down to the step multiple on blur (snapOnBlur)', () => {
     const onChange = vi.fn();
     render(<ResolutionField presets={VIDEO_PRESETS} width={700} height={512} onChange={onChange} {...videoBounds} />);
     fireEvent.blur(screen.getByLabelText('Width'));
     // 700 → floor to nearest multiple of 64 → 640
     expect(onChange).toHaveBeenLastCalledWith(640, 512);
+  });
+
+  it('does NOT snap an image edge to the step multiple on blur (clamp only)', () => {
+    const onChange = vi.fn();
+    // 705 is in-bounds and not a multiple of 8; image must preserve it exactly.
+    render(<ResolutionField presets={IMAGE_PRESETS} width={705} height={1024} onChange={onChange} {...imageBounds} />);
+    fireEvent.blur(screen.getByLabelText('Width'));
+    expect(onChange).toHaveBeenLastCalledWith(705, 1024);
   });
 
   it('warns when total pixels exceed the cap (image only)', () => {

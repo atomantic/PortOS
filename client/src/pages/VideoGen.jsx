@@ -69,6 +69,7 @@ import LoraPicker from '../components/imageGen/LoraPicker';
 import { videoLoraFamily, VIDEO_LORA_FAMILIES } from '../lib/runnerFamilies';
 import { randomSeed } from '../lib/genUtils';
 import { VIDEO_RESOLUTIONS, snapAspectToImage } from '../lib/videoGenResolutions';
+import { clampImageEdge } from '../lib/imageGenResolutions';
 import ResolutionField from '../components/media/ResolutionField';
 import { VIDEO_TILING_OPTIONS, VIDEO_TILING_ENUM_SET } from '../lib/videoTilingOptions';
 
@@ -100,6 +101,12 @@ const videoModelMemoryGb = (model) => {
   const match = String(model?.name || '').match(/~\s*(\d+(?:\.\d+)?)\s*GB/i);
   return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
 };
+
+// Per-edge bounds for video: mirrors the videoGen route (64..2048) and the
+// server's floor-to-multiple-of-64 (generateVideo in local.js). Shared by the
+// ResolutionField control and the submit-time clamp so a hand-typed / mid-edit
+// value can never POST an out-of-range or 0 dimension.
+const VIDEO_EDGE_BOUNDS = { min: 64, max: 2048, step: 64 };
 
 // Mirror of server computeFflfSafeFrames (server/services/videoGen/local.js):
 // the largest numFrames that fits the FFLF/ltx2 stage-2 pixel-frame budget at
@@ -1092,7 +1099,11 @@ export default function VideoGen() {
       prompt: promptOut,
       negativePrompt: composed.negativePrompt,
       modelId,
-      width, height,
+      // Clamp/floor to the runner's edge bounds so a transient 0 (field cleared
+      // mid-edit) or off-grid value can't 400 the server — mirrors ImageGen's
+      // submit-time clampImageEdge guard.
+      width: clampImageEdge(width, VIDEO_EDGE_BOUNDS),
+      height: clampImageEdge(height, VIDEO_EDGE_BOUNDS),
       numFrames,
       fps,
       steps: steps || '',
@@ -1715,9 +1726,8 @@ export default function VideoGen() {
               width={width}
               height={height}
               onChange={handleResolutionChange}
-              min={64}
-              max={2048}
-              step={64}
+              {...VIDEO_EDGE_BOUNDS}
+              snapOnBlur
               note="Each edge 64–2048px; the server rounds each down to the nearest multiple of 64."
             />
 

@@ -25,9 +25,13 @@ export default function ResolutionField({
   presets = [],
   width, height, onChange,
   // Per-edge bounds mirroring the server: image = [64, 3840] step 8, video =
-  // [64, 2048] step 64. `step` drives both the number-input spinner and the
-  // blur-snap.
+  // [64, 2048] step 64. `step` sets the number-input spinner increment.
   min = 64, max = MAX_IMAGE_EDGE, step = 8,
+  // Whether the blur handler snaps each edge DOWN to a multiple of `step`.
+  // Video opts in because the server floors both dims to 64 — showing the
+  // floored value up front is honest. Image leaves it off: its route accepts
+  // any integer edge (imageEdgeSchema), so a hand-typed 705 must stay 705.
+  snapOnBlur = false,
   // When set, shows a total-pixel-cap warning + note (image only). Omit for
   // video, whose per-tier budget is enforced elsewhere.
   maxPixels = null,
@@ -53,7 +57,8 @@ export default function ResolutionField({
     if (!matched && width && height) setCustomOpen(true);
   }, [matched, width, height]);
 
-  const bounds = { min, max, step };
+  // Clamp always enforces [min, max]; step-snapping is opt-in per snapOnBlur.
+  const bounds = snapOnBlur ? { min, max, step } : { min, max };
   const handleResolution = (e) => {
     if (e.target.value === CUSTOM_RESOLUTION_VALUE) { setCustomOpen(true); return; }
     const r = presets.find((opt) => opt.label === e.target.value);
