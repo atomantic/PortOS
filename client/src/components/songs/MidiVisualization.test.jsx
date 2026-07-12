@@ -32,6 +32,23 @@ const makeCtx = () => ({
   fillStyle: '', strokeStyle: '', lineWidth: 1, font: '', textAlign: '', globalAlpha: 1,
 });
 
+// jsdom has no Web Audio — minimal fake for the synth-preview player (same
+// shape as midiPlayback.test.js, static clock is enough for UI wiring tests).
+const fakeParam = () => ({ setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() });
+function FakeAudioContext() {
+  return {
+    state: 'running',
+    resume: () => Promise.resolve(),
+    currentTime: 0,
+    destination: {},
+    createOscillator: () => ({
+      type: '', frequency: fakeParam(), onended: null,
+      connect: (t) => t, start: vi.fn(), stop: vi.fn(),
+    }),
+    createGain: () => ({ gain: fakeParam(), connect: (t) => t }),
+  };
+}
+
 describe('<MidiVisualization>', () => {
   let ctx;
   beforeEach(() => {
@@ -39,6 +56,7 @@ describe('<MidiVisualization>', () => {
     ctx = makeCtx();
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx);
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    vi.stubGlobal('AudioContext', FakeAudioContext);
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get() { return 800; } });
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
       ok: true,
@@ -102,5 +120,43 @@ describe('<MidiVisualization>', () => {
     fireEvent.click(screen.getByLabelText('Zoom out'));
     fireEvent.click(screen.getByLabelText('Fit to width'));
     expect(ctx.clearRect).toHaveBeenCalled();
+  });
+
+  it('play button starts the synth preview and toggles to pause (#2490)', async () => {
+    render(<MidiVisualization url="/uploads/test.mid" />);
+    // Disabled until the parse is ready.
+    expect(screen.getByLabelText('Play synth preview').disabled).toBe(true);
+    await screen.findByText(/3 notes · /);
+    const play = screen.getByLabelText('Play synth preview');
+    expect(play.disabled).toBe(false);
+    fireEvent.click(play);
+    const pause = await screen.findByLabelText('Pause playback');
+    fireEvent.click(pause);
+    expect(await screen.findByLabelText('Play synth preview')).toBeTruthy();
+  });
+
+  it('Space on the focused roll toggles playback', async () => {
+    render(<MidiVisualization url="/uploads/test.mid" />);
+    await screen.findByText(/3 notes · /);
+    const canvas = screen.getByRole('img');
+    expect(canvas.getAttribute('aria-label')).toMatch(/space to play or pause/);
+    fireEvent.keyDown(canvas, { key: ' ' });
+    const pause = await screen.findByLabelText('Pause playback');
+    fireEvent.keyDown(canvas, { key: ' ' });
+    expect(await screen.findByLabelText('Play synth preview')).toBeTruthy();
+    expect(pause).toBeTruthy();
+  });
+
+  it('collapsing the panel tears playback down with it', async () => {
+    render(<MidiVisualization url="/uploads/test.mid" />);
+    await screen.findByText(/3 notes · /);
+    fireEvent.click(screen.getByLabelText('Play synth preview'));
+    await screen.findByLabelText('Pause playback');
+    fireEvent.click(screen.getByLabelText('Collapse MIDI visualization'));
+    // Roll + transport gone; re-expanding comes back idle (not still "playing").
+    expect(screen.queryByLabelText('Pause playback')).toBeNull();
+    fireEvent.click(screen.getByLabelText('Expand MIDI visualization'));
+    await screen.findByText(/3 notes · /);
+    expect(screen.getByLabelText('Play synth preview')).toBeTruthy();
   });
 });

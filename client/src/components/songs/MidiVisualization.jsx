@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
-import { ChevronDown, ChevronRight, Download, Loader2, Maximize2, Minimize2, ZoomIn, ZoomOut } from 'lucide-react';
+import { ChevronDown, ChevronRight, Download, Loader2, Maximize2, Minimize2, Pause, Play, ZoomIn, ZoomOut } from 'lucide-react';
 import useMidiNotes from '../../hooks/useMidiNotes';
+import useMidiPlayer from '../../hooks/useMidiPlayer';
 import { detectChordWindows } from '../../lib/midiChords';
 import { midiNoteName } from '../../lib/pianoKeyboard';
 import { layerColor } from '../../lib/canvasRoll.js';
@@ -42,6 +43,9 @@ export default function MidiVisualization({ url, filename, model }) {
   const [zoom, setZoom] = useState(MIN_ZOOM);
   const [showChords, setShowChords] = useState(true);
   const { status, data, error, reload } = useMidiNotes(open ? url : null);
+  // Synth preview (#2490) — collapsing the panel nulls `data`, which tears the
+  // player down, so audio never outlives the visible roll.
+  const { playing, toggle, seek, getPosition } = useMidiPlayer(data);
 
   const chords = useMemo(() => chordsFor(data), [data]);
 
@@ -67,6 +71,16 @@ export default function MidiVisualization({ url, filename, model }) {
         {open && (
           <>
             <span className="mx-1 h-4 w-px bg-port-border" aria-hidden="true" />
+            <button
+              type="button"
+              onClick={toggle}
+              disabled={status !== 'ready'}
+              aria-label={playing ? 'Pause playback' : 'Play synth preview'}
+              className="p-1 rounded text-port-accent hover:bg-port-border/50 disabled:opacity-40"
+              title={playing ? 'Pause (space)' : 'Play a synth preview (space)'}
+            >
+              {playing ? <Pause size={13} /> : <Play size={13} />}
+            </button>
             <button type="button" onClick={() => setZoom((z) => clampZoom(z / ZOOM_STEP))} aria-label="Zoom out"
               className="p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50" title="Zoom out (-)">
               <ZoomOut size={13} />
@@ -132,6 +146,10 @@ export default function MidiVisualization({ url, filename, model }) {
                 zoom={zoom}
                 onZoomChange={setZoom}
                 height={expanded ? EXPANDED_H : COMPACT_H}
+                playing={playing}
+                getPosition={getPosition}
+                onSeek={seek}
+                onTogglePlay={toggle}
               />
               <p className="sr-only">
                 MIDI transcription: {data.notes.length} notes across {data.tracks.length} track{data.tracks.length === 1 ? '' : 's'},

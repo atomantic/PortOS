@@ -11,6 +11,8 @@
 // schedule onto the audio clock and emits a per-note "now sounding" callback so
 // the UI can move a playhead. Pure (no React) — ScoreSheet wraps it in a hook.
 
+import { getAudioContext as ctx } from './audioContext.js';
+
 // --- Pitch → frequency ------------------------------------------------------
 // Equal-tempered, A4 = 440 Hz. MIDI 69 == A4, so f = 440 · 2^((midi−69)/12).
 const PITCH_CLASS = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
@@ -79,18 +81,9 @@ export const buildSchedule = (score, bpmOverride) => {
 };
 
 // --- Audio context ----------------------------------------------------------
-// Lazily create + reuse one AudioContext (browsers cap the count). Resumed on
-// demand because autoplay policy starts it suspended until a user gesture.
-let sharedCtx = null;
-const ctx = () => {
-  if (!sharedCtx) {
-    const Ctor = typeof window !== 'undefined'
-      ? (window.AudioContext || window.webkitAudioContext)
-      : (globalThis.AudioContext || globalThis.webkitAudioContext);
-    sharedCtx = new Ctor();
-  }
-  return sharedCtx;
-};
+// The app-wide shared AudioContext (imported at top from audioContext.js).
+// Resumed on demand because autoplay policy starts it suspended until a user
+// gesture.
 
 // Guard a UI callback that fires from a setInterval tick — an uncaught throw
 // there has no request boundary to bubble to and would leave the scheduler
@@ -110,8 +103,9 @@ const TONE_PEAK = 0.18;     // per-voice gain peak for a single sounding tone
 // click. Triangle wave reads as a soft reference tone. Routed into `destination`
 // (the context output for the solo player; a per-part gain → master bus for the
 // multi-part player). Returns the live { osc, gain } so the caller can track it
-// for teardown. Pure of any module state — both players share it.
-const scheduleTone = (c, freq, startAt, durSec, destination, peak = TONE_PEAK) => {
+// for teardown. Pure of any module state — both players here share it, and
+// midiPlayback.js imports it so the MIDI preview sounds like the score synth.
+export const scheduleTone = (c, freq, startAt, durSec, destination, peak = TONE_PEAK) => {
   const osc = c.createOscillator();
   const gain = c.createGain();
   osc.type = 'triangle';

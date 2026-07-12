@@ -57,8 +57,16 @@ const tooltipStyle = (x, y, width) => ({
  * @param {number} props.zoom — fit-relative multiplier (MIN_ZOOM..MAX_ZOOM).
  * @param {(next:number)=>void} props.onZoomChange — wheel/pinch zoom.
  * @param {number} props.height — total canvas height in px.
+ * @param {boolean} [props.playing] — drives the rAF playhead loop (synth preview).
+ * @param {()=>number} [props.getPosition] — live playback position in seconds
+ *   (stable reference; reads the MIDI player's position()).
+ * @param {(sec:number)=>void} [props.onSeek] — playhead moved by tap/arrow keys.
+ * @param {()=>void} [props.onTogglePlay] — Space pressed (play/pause).
  */
-export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomChange, height }) {
+export default function MidiPianoRoll({
+  data, chords, showChords, zoom, onZoomChange, height,
+  playing = false, getPosition, onSeek, onTogglePlay,
+}) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
   const scrollSecRef = useRef(0);
@@ -72,6 +80,12 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
   const [hover, setHover] = useState(null);
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
+  // Latest playback props without making them draw()/effect dependencies —
+  // the parent hands fresh closures each render; the rAF loop reads refs.
+  const getPositionRef = useRef(getPosition);
+  getPositionRef.current = getPosition;
+  const playingRef = useRef(playing);
+  playingRef.current = playing;
 
   const duration = Math.max(data?.durationSec || 0, 0.001);
   const chordLaneH = showChords && chords?.length ? CHORD_H : 0;
@@ -215,11 +229,25 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
     }
     ctx.restore();
 
-    // Playhead (static scrub position in v1 — click to move).
+    // Playhead — scrub position when idle, live audio position while playing
+    // (the rAF loop mutates playheadSecRef from getPosition() each frame).
     const px = timeToX(playheadSecRef.current);
     if (px >= GUTTER_W && px <= width) {
       ctx.fillStyle = ACCENT;
       ctx.fillRect(px - 1, RULER_H, 2, height - RULER_H);
+    }
+
+    // Sounding pitches (playing only) — light their gutter rows below. Notes
+    // are start-sorted, so the scan early-breaks at the playhead.
+    let soundingMidis = null;
+    if (playingRef.current) {
+      soundingMidis = new Set();
+      const pos = playheadSecRef.current;
+      for (let i = 0; i < notes.length; i += 1) {
+        const n = notes[i];
+        if (n.startSec > pos) break;
+        if (pos < n.startSec + n.durationSec) soundingMidis.add(n.midi);
+      }
     }
 
     // Pitch gutter on top (opaque, so notes pan "under" it).
@@ -228,6 +256,10 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
     ctx.textAlign = 'right';
     for (let m = lowMidi; m <= highMidi; m += 1) {
       const y = midiToY(m);
+      if (soundingMidis?.has(m)) {
+        ctx.fillStyle = 'rgba(59,130,246,0.45)';
+        ctx.fillRect(0, y, GUTTER_W, Math.max(1, rowH));
+      }
       if (m % 12 === 0 && rowH >= 3) {
         ctx.fillStyle = TEXT_DIM;
         ctx.font = '9px ui-sans-serif, system-ui, sans-serif';
@@ -256,6 +288,36 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
   const widthRef = useCanvasDprSize(wrapRef, canvasRef, height, drawRef);
 
   useEffect(() => { draw(); }, [draw, zoom]);
+
+  // Playback rAF loop: while playing, read the live audio position into the
+  // playhead ref, page the view to keep it visible, and repaint each frame.
+  // On pause/stop the loop tears down and one static frame pins the playhead
+  // where the audio stopped (position() reports the resume offset).
+  useEffect(() => {
+    if (!playing) {
+      if (getPositionRef.current) {
+        playheadSecRef.current = getPositionRef.current() ?? 0;
+        drawRef.current();
+      }
+      return undefined;
+    }
+    let raf = 0;
+    const loop = () => {
+      playheadSecRef.current = getPositionRef.current?.() ?? 0;
+      // Page-turn follow: when the playhead exits the visible window (or a
+      // seek lands outside it), snap the view so it re-enters near the left.
+      const { gridW, pps, maxScroll } = geometry();
+      const view = gridW / pps;
+      const pos = playheadSecRef.current;
+      if (pos < scrollSecRef.current || pos > scrollSecRef.current + view) {
+        scrollSecRef.current = Math.min(Math.max(0, pos - view * 0.1), maxScroll);
+      }
+      drawRef.current();
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(raf);
+  }, [playing, geometry]);
 
   // Coalesce pan-driven repaints to one per animation frame — wheel/pointer
   // events can fire faster than the display presents.
@@ -409,6 +471,7 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
     const { pps, gridTop } = geometry();
     if (pos.x >= GUTTER_W && pos.y >= gridTop) {
       playheadSecRef.current = scrollSecRef.current + (pos.x - GUTTER_W) / pps;
+      onSeek?.(playheadSecRef.current);
       setHoverIdentity(null);
       draw();
     }
@@ -423,8 +486,12 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
         scrollSecRef.current += dir * (gridW / pps) * 0.5;
       } else {
         playheadSecRef.current = Math.min(duration, Math.max(0, playheadSecRef.current + dir * (10 / pps)));
+        onSeek?.(playheadSecRef.current);
       }
       draw();
+    } else if (e.key === ' ' && onTogglePlay) {
+      e.preventDefault(); // keep Space from scrolling the page
+      onTogglePlay();
     } else if (e.key === '+' || e.key === '=') {
       e.preventDefault();
       onZoomChange(clampZoom(zoomRef.current * ZOOM_STEP));
@@ -452,7 +519,7 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
         className="block w-full rounded-lg bg-[#0c0c0e] touch-none cursor-crosshair focus:outline-none focus:ring-1 focus:ring-port-accent"
         tabIndex={0}
         role="img"
-        aria-label={`MIDI piano roll: ${data?.notes?.length || 0} notes, ${midiNoteName(data?.minMidi ?? 60)} to ${midiNoteName(data?.maxMidi ?? 71)}, ${formatTimecode(duration)} long. Use plus and minus to zoom, arrow keys to move the playhead, shift plus arrows to pan.`}
+        aria-label={`MIDI piano roll: ${data?.notes?.length || 0} notes, ${midiNoteName(data?.minMidi ?? 60)} to ${midiNoteName(data?.maxMidi ?? 71)}, ${formatTimecode(duration)} long. Use plus and minus to zoom, arrow keys to move the playhead, shift plus arrows to pan${onTogglePlay ? ', space to play or pause' : ''}.`}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
