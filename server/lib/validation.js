@@ -619,7 +619,14 @@ export const scaffoldSchema = z.object({
 // USAGE (devtools usage reports)
 // =============================================================================
 
-const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD');
+// Shape AND calendar validity — the regex alone accepts impossible dates like
+// 2026-02-30, which would silently return an empty report instead of a 400.
+const isoDay = z.string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD')
+  .refine((s) => {
+    const d = new Date(`${s}T00:00:00Z`);
+    return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s;
+  }, { message: 'Not a valid calendar date' });
 
 /**
  * Query params for GET /api/usage — either a preset period or an explicit
