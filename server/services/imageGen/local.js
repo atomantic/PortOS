@@ -29,6 +29,7 @@ import { hfTokenEnv } from '../../lib/hfToken.js';
 import { extractGatedRepo, isGatedRepoError } from '../../lib/hfErrors.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { createLineReader } from '../../lib/streamLines.js';
 import { IMAGE_GEN_MODE } from './modes.js';
 import { computePixelDelta } from './regen.js';
 import { parseByteProgress, formatDownloadMessage } from '../videoGen/generateVideoHelpers.js';
@@ -699,22 +700,30 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
   };
 
   const shortId = jobId.slice(0, 8);
+  // Route marker parsing through per-stream line readers so a STAGE:/STATUS:/
+  // DOWNLOAD: marker (or a multibyte char) split across a pipe chunk boundary
+  // can't tear a progress event. Each reader carries the partial trailing line
+  // across chunks and is flushed on 'close'.
+  const stderrReader = createLineReader((line) => {
+    const trimmed = line.trim();
+    if (!handleLine(line) && trimmed) console.log(`🐍 [${shortId}] ${trimmed}`);
+  }, { splitRe: /[\n\r]+/ });
+  const stdoutReader = createLineReader((line) => {
+    const trimmed = line.trim();
+    if (!handleLine(line) && trimmed) console.log(`🐍-out [${shortId}] ${trimmed}`);
+  }, { splitRe: /[\n\r]+/ });
   proc.stderr.on('data', (chunk) => {
+    // The bounded error-tail stays on the raw chunk text — the failure path
+    // slices its last N bytes for context independently of line parsing.
     const text = chunk.toString();
     stderrBuffer += text;
     if (stderrBuffer.length > STDERR_TAIL_BYTES) {
       stderrBuffer = stderrBuffer.slice(-STDERR_TAIL_BYTES);
     }
-    for (const line of text.split(/[\n\r]+/)) {
-      const trimmed = line.trim();
-      if (!handleLine(line) && trimmed) console.log(`🐍 [${shortId}] ${trimmed}`);
-    }
+    stderrReader.push(chunk);
   });
   proc.stdout.on('data', (chunk) => {
-    for (const line of chunk.toString().split(/[\n\r]+/)) {
-      const trimmed = line.trim();
-      if (!handleLine(line) && trimmed) console.log(`🐍-out [${shortId}] ${trimmed}`);
-    }
+    stdoutReader.push(chunk);
   });
 
   proc.on('close', async (code, signal) => {
@@ -724,6 +733,13 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     // emit a second 'failed' event + second SSE error frame.
     if (finalized) return;
     finalized = true;
+    // Emit any final unterminated marker line each stream wrote without a
+    // trailing newline (a SIGKILL mid-write, or a progress bar whose last
+    // redraw never terminated) BEFORE nulling activeJob — handleLine's
+    // inference-progress branch mutates activeJob, so flushing first keeps a
+    // final progress line able to update it (mirrors videoGen's ordering).
+    stderrReader.flush();
+    stdoutReader.flush();
     activeProcess = null;
     activeJob = null;
     if (watcher) { try { watcher.close(); } catch { /* ignore */ } }

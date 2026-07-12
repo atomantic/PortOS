@@ -1,7 +1,10 @@
 import { RotateCw, ExternalLink, CheckCircle2, XCircle, ListChecks } from 'lucide-react';
 import Drawer from '../Drawer';
 import { timeAgo, formatDateShort } from '../../utils/formatters';
-import { CASE_STATE_TONE, MANUAL_DONE_ACTION, labelFor, CASE_STATES } from './constants';
+import { CASE_STATE_TONE, ACTION_TONES, manualCaseActions, labelFor, CASE_STATES } from './constants';
+
+// Action icon by descriptor `icon` token (positive resolution vs dismiss).
+const ACTION_ICONS = { check: CheckCircle2, x: XCircle };
 
 // Read-only case inspector + manual controls (issue #2146). Deep-linked open
 // state is owned by the parent (a `?case=<id>` search param), so this component
@@ -20,13 +23,13 @@ export default function BrokerCaseDrawer({
   const optoutUrl = broker?.optout?.url || evidence.optout_url || null;
   const searchUrl = evidence.search_url || null;
 
-  // Which manual transitions make sense from the current state. The positive
-  // resolution per state (and its legality) lives in MANUAL_DONE_ACTION —
-  // shared with the digest strip so the two can't drift.
+  // Which manual transitions make sense from the current state. The action
+  // descriptors (label/tone/icon) live in the shared CASE_ACTIONS presentation
+  // table; legality is gated by the server-supplied `allowedTransitions`, so the
+  // drawer and digest strip can't drift from the server's state machine.
   const state = caseData?.state;
   const isBlocked = state === 'blocked';
-  const doneAction = MANUAL_DONE_ACTION[state];
-  const canDismiss = state === 'human_task_queued' || state === 'blocked' || state === 'found' || state === 'indirect_exposure';
+  const actions = manualCaseActions(state, caseData?.allowedTransitions);
 
   const Row = ({ label, children }) => (
     <div className="flex flex-col gap-0.5">
@@ -143,24 +146,19 @@ export default function BrokerCaseDrawer({
             >
               <RotateCw size={14} /> Force re-check
             </button>
-            {doneAction && (
-              <button
-                onClick={() => onTransition?.(caseData, doneAction.target)}
-                disabled={busy}
-                className={`inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded border ${doneAction.buttonTone} disabled:opacity-50`}
-              >
-                <CheckCircle2 size={14} /> {doneAction.label}
-              </button>
-            )}
-            {canDismiss && (
-              <button
-                onClick={() => onTransition?.(caseData, 'not_found')}
-                disabled={busy}
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded border border-port-border text-gray-400 hover:text-white hover:bg-port-card disabled:opacity-50"
-              >
-                <XCircle size={14} /> Dismiss (not found)
-              </button>
-            )}
+            {actions.map((action) => {
+              const Icon = ACTION_ICONS[action.icon] || CheckCircle2;
+              return (
+                <button
+                  key={action.target}
+                  onClick={() => onTransition?.(caseData, action.target)}
+                  disabled={busy}
+                  className={`inline-flex items-center gap-1.5 px-3 py-2 text-sm rounded border ${ACTION_TONES[action.tone]?.button || ''} disabled:opacity-50`}
+                >
+                  <Icon size={14} /> {action.label}
+                </button>
+              );
+            })}
             {optoutUrl && (
               <a
                 href={optoutUrl}

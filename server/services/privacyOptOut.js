@@ -524,6 +524,9 @@ export async function getOptOutDigest() {
     brokerId: c.brokerId,
     brokerName: c.brokerName,
     state: c.state,
+    // Passed through from listBrokerCases' rowToCase (server-derived legal
+    // manual moves) so the digest action strip filters the same as the drawer.
+    allowedTransitions: c.allowedTransitions,
     reason: c.reason || null,
     channel: c.channel || null,
     disclosedFields: c.disclosedFields || [],

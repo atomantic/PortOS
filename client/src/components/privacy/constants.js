@@ -131,26 +131,59 @@ export const EXPOSURE_MAP_STATES = [
   'blocked', 'human_task_queued', 'not_found',
 ];
 
-// Positive-resolution action for the case states a human resolves by hand
-// (drawer + digest action strips both render from this map, so the rule lives
-// in ONE place). Mirrors the server's STATE_TRANSITIONS legality
-// (privacyBrokers.js): blocked → submitted is NOT a legal transition — a
-// blocked case's positive outcome is a manual "I'm listed" (found), while a
-// queued human task's is "Mark done" (submitted).
-export const MANUAL_DONE_ACTION = {
-  blocked: {
-    target: 'found',
-    label: "I'm listed",
-    chipTone: 'text-port-error hover:bg-port-error/10',
-    buttonTone: 'border-port-error/40 text-port-error hover:bg-port-error/10',
+// Manual case actions a human can take per state, as a PRESENTATION table
+// (labels/tones/icons are UI concerns). The drawer + digest action strips both
+// render from this table, so the rule lives in ONE place. Legality is NOT
+// hardcoded here: `manualCaseActions()` filters each entry against the case's
+// server-supplied `allowedTransitions` (derived from STATE_TRANSITIONS in
+// server/services/privacyBrokers.js), so the UI structurally cannot offer an
+// illegal transition or drift from the server. e.g. a blocked case's positive
+// outcome is "I'm listed" (→ found); blocked → submitted is not legal and the
+// server list simply never contains `submitted`, so it can never render.
+export const CASE_ACTIONS = {
+  blocked: [
+    { target: 'found', label: "I'm listed", tone: 'error', icon: 'check' },
+    { target: 'not_found', label: 'Dismiss (not found)', tone: 'muted', icon: 'x' },
+  ],
+  found: [
+    { target: 'not_found', label: 'Dismiss (not found)', tone: 'muted', icon: 'x' },
+  ],
+  indirect_exposure: [
+    { target: 'not_found', label: 'Dismiss (not found)', tone: 'muted', icon: 'x' },
+  ],
+  human_task_queued: [
+    { target: 'submitted', label: 'Mark done', tone: 'success', icon: 'check' },
+    { target: 'not_found', label: 'Dismiss (not found)', tone: 'muted', icon: 'x' },
+  ],
+};
+
+// Pre-composed Tailwind tone tokens per action tone (JIT needs whole classes).
+// `chip` = digest icon button, `button` = drawer labeled button.
+export const ACTION_TONES = {
+  error: {
+    chip: 'text-port-error hover:bg-port-error/10',
+    button: 'border-port-error/40 text-port-error hover:bg-port-error/10',
   },
-  human_task_queued: {
-    target: 'submitted',
-    label: 'Mark done',
-    chipTone: 'text-port-success hover:bg-port-success/10',
-    buttonTone: 'border-port-success/40 text-port-success hover:bg-port-success/10',
+  success: {
+    chip: 'text-port-success hover:bg-port-success/10',
+    button: 'border-port-success/40 text-port-success hover:bg-port-success/10',
+  },
+  muted: {
+    chip: 'text-gray-400 hover:text-white hover:bg-port-border/50',
+    button: 'border-port-border text-gray-400 hover:text-white hover:bg-port-card',
   },
 };
+
+// The manual action descriptors the UI may render for a case, gated by the
+// server-supplied `allowedTransitions` so an illegal/absent transition is never
+// offered. If `allowedTransitions` is absent (older payload / stale cached
+// client), fall back to the curated table as-is — every curated entry is legal
+// by construction, so this is a safe best-effort, not a legality bypass.
+export function manualCaseActions(state, allowedTransitions) {
+  const actions = CASE_ACTIONS[state] || [];
+  if (!Array.isArray(allowedTransitions)) return actions;
+  return actions.filter((a) => allowedTransitions.includes(a.target));
+}
 
 export const BROKER_SOURCES = [
   { id: 'curated', label: 'Curated' },

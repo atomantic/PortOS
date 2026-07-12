@@ -306,8 +306,8 @@ describe('runVerificationPass', () => {
 describe('getOptOutDigest', () => {
   it('aggregates human-task + blocked cases with playbook + reason', async () => {
     listBrokerCases.mockImplementation(async ({ state } = {}) => {
-      if (state === 'human_task_queued') return [{ id: 'h1', brokerId: 'wp', brokerName: 'Whitepages', state, reason: 'auto_submit_disabled', evidence: { optout_url: 'https://wp/o', playbook: ['call back'] } }];
-      if (state === 'blocked') return [{ id: 'b1', brokerId: 'rad', brokerName: 'Radaris', state, reason: 'antibot_wall', evidence: { search_url: 'https://rad/p/Jane/Doe/' } }];
+      if (state === 'human_task_queued') return [{ id: 'h1', brokerId: 'wp', brokerName: 'Whitepages', state, allowedTransitions: ['submitted', 'not_found', 'human_task_queued'], reason: 'auto_submit_disabled', evidence: { optout_url: 'https://wp/o', playbook: ['call back'] } }];
+      if (state === 'blocked') return [{ id: 'b1', brokerId: 'rad', brokerName: 'Radaris', state, allowedTransitions: ['found', 'not_found', 'human_task_queued'], reason: 'antibot_wall', evidence: { search_url: 'https://rad/p/Jane/Doe/' } }];
       return [];
     });
     const digest = await getOptOutDigest();
@@ -315,6 +315,10 @@ describe('getOptOutDigest', () => {
     expect(digest.humanTasks).toBe(1);
     expect(digest.blocked).toBe(1);
     expect(digest.items[0].playbook).toEqual(['call back']);
+    // Server-derived legal moves pass through so the digest strip filters the
+    // same as the drawer (issue #2417).
+    expect(digest.items[0].allowedTransitions).toEqual(['submitted', 'not_found', 'human_task_queued']);
+    expect(digest.items[1].allowedTransitions).toEqual(['found', 'not_found', 'human_task_queued']);
     // Blocked items surface the filled search URL for a manual browser check.
     expect(digest.items[1].searchUrl).toBe('https://rad/p/Jane/Doe/');
   });

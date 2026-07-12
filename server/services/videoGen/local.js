@@ -20,6 +20,7 @@ import { promisify } from 'util';
 import { ensureDir, PATHS, UUID_RE } from '../../lib/fileUtils.js';
 import { spawnDetached } from '../../lib/detachedSpawn.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { createLineReader } from '../../lib/streamLines.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { videoGenEvents } from './events.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay, PYTHON_NOISE_RE } from '../../lib/sseUtils.js';
@@ -1001,7 +1002,6 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
     closeJobAfterDelay(jobs, jobId);
   });
 
-  let outputBuf = '';
   let missingPyModule = null;
 
   // The python child's STATUS:/STAGE:/DOWNLOAD:/tqdm → SSE-frame parser lives
@@ -1010,51 +1010,62 @@ export async function generateVideo({ pythonPath, prompt, negativePrompt = '', m
   // logging), false for an unhandled line worth raw-logging.
   const handleLine = makeVideoGenLineHandler({ job, jobId, pythonNoiseRe: PYTHON_NOISE_RE });
 
+  // Per-stream line readers carry the partial trailing line across chunk
+  // boundaries and decode through a StringDecoder, so a marker (or multibyte
+  // char) split across a pipe chunk can't tear an event — and the final
+  // unterminated line is emitted on 'close' via flush().
+  const stdoutReader = createLineReader((raw) => {
+    const line = raw.trim();
+    if (!line) return;
+    // mlx_video emits one JSON line on stdout when finished — capture it
+    // for the result metadata; otherwise raw-log so we can debug failures.
+    try {
+      const parsed = JSON.parse(line);
+      if (parsed.video_path) {
+        job.resultJson = parsed;
+        // The result JSON is the strongest "work is done" signal — arm the
+        // watchdog so a post-completion teardown hang can't wedge the job.
+        armCompletionWatchdog();
+      }
+      return;
+    } catch { /* not JSON */ }
+    // Some runtimes don't print the result JSON but do log the final
+    // decode+mux line right before they should exit — treat it the same way.
+    if (MUXING_DONE_RE.test(line)) armCompletionWatchdog();
+    console.log(`🐍-out [${jobId.slice(0, 8)}] ${line}`);
+  });
+  const stderrReader = createLineReader((raw) => {
+    // Record the root-cause module only — downstream imports in the same
+    // traceback raise the same error against later names.
+    if (!missingPyModule) {
+      const m = raw.match(MODULE_NOT_FOUND_RE);
+      if (m) missingPyModule = m[1];
+    }
+    if (!handleLine(raw)) console.log(`🐍 [${jobId.slice(0, 8)}] ${raw.trim()}`);
+  }, { splitRe: /[\n\r]+/ });
+
   proc.stdout.on('data', (chunk) => {
     // Any output proves the render is progressing — restart the idle-stall
     // countdown before parsing so a slow-but-alive render is never killed.
     resetIdleStallTimer();
-    outputBuf += chunk.toString();
-    const lines = outputBuf.split('\n');
-    outputBuf = lines.pop();
-    for (const raw of lines) {
-      const line = raw.trim();
-      if (!line) continue;
-      // mlx_video emits one JSON line on stdout when finished — capture it
-      // for the result metadata; otherwise raw-log so we can debug failures.
-      try {
-        const parsed = JSON.parse(line);
-        if (parsed.video_path) {
-          job.resultJson = parsed;
-          // The result JSON is the strongest "work is done" signal — arm the
-          // watchdog so a post-completion teardown hang can't wedge the job.
-          armCompletionWatchdog();
-        }
-        continue;
-      } catch { /* not JSON */ }
-      // Some runtimes don't print the result JSON but do log the final
-      // decode+mux line right before they should exit — treat it the same way.
-      if (MUXING_DONE_RE.test(line)) armCompletionWatchdog();
-      console.log(`🐍-out [${jobId.slice(0, 8)}] ${line}`);
-    }
+    stdoutReader.push(chunk);
   });
 
   proc.stderr.on('data', (chunk) => {
     // Weight-load / kernel-compile progress often streams to stderr (loguru,
     // tqdm) long before the first stdout line — count it as liveness too.
     resetIdleStallTimer();
-    for (const raw of chunk.toString().split(/[\n\r]+/)) {
-      // Record the root-cause module only — downstream imports in the same
-      // traceback raise the same error against later names.
-      if (!missingPyModule) {
-        const m = raw.match(MODULE_NOT_FOUND_RE);
-        if (m) missingPyModule = m[1];
-      }
-      if (!handleLine(raw)) console.log(`🐍 [${jobId.slice(0, 8)}] ${raw.trim()}`);
-    }
+    stderrReader.push(chunk);
   });
 
   proc.on('close', async (code, signal) => {
+    // Flush any final unterminated line each stream buffered (the JSON result,
+    // a missing-module trace) BEFORE clearing the watchdogs, so a flush that
+    // captures the result JSON and re-arms the completion watchdog is then
+    // immediately cancelled by clearCompletionWatchdog() rather than firing a
+    // stray SIGKILL during teardown.
+    stdoutReader.flush();
+    stderrReader.flush();
     clearCompletionWatchdog();
     clearIdleStallTimer();
     activeProcess = null;
