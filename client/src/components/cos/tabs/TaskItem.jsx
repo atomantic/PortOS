@@ -17,7 +17,8 @@ import {
   TrendingUp,
   Play,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Scale
 } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
@@ -31,7 +32,9 @@ const statusIcons = {
   pending: <Clock size={16} aria-hidden="true" className="text-yellow-500" />,
   in_progress: <Activity size={16} aria-hidden="true" className="text-port-accent animate-pulse" />,
   completed: <CheckCircle size={16} aria-hidden="true" className="text-port-success" />,
-  blocked: <Ban size={16} aria-hidden="true" className="text-port-error" />
+  blocked: <Ban size={16} aria-hidden="true" className="text-port-error" />,
+  // A sub-agent disputing a reviewer rejection (#2441) — awaiting resolution.
+  challenged: <Scale size={16} aria-hidden="true" className="text-port-warning" />
 };
 
 // Extract task type from description for duration lookup (matches AgentCard logic)
@@ -438,6 +441,25 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
                 <div className="flex items-start gap-2 mt-2 px-2 py-1.5 bg-port-error/10 border border-port-error/20 rounded text-sm">
                   <AlertCircle size={14} className="text-port-error shrink-0 mt-0.5" aria-hidden="true" />
                   <span className="text-port-error/90">{task.metadata.blocker || task.metadata.blockedReason}</span>
+                </div>
+              )}
+              {/* Challenge case + resolution (#2441). Both sides of a disputed
+                  rejection are logged on the task metadata so the outcome is
+                  auditable here: the worker's case while parked in `challenged`,
+                  and the resolver's verdict once it settles. */}
+              {task.metadata?.challenge?.reason && (
+                <div className="flex items-start gap-2 mt-2 px-2 py-1.5 bg-port-warning/10 border border-port-warning/20 rounded text-sm">
+                  <Scale size={14} className="text-port-warning shrink-0 mt-0.5" aria-hidden="true" />
+                  <div className="text-port-warning/90 min-w-0">
+                    <span className="font-medium">Challenge{task.metadata.challenge.reviewer ? ` (${task.metadata.challenge.reviewer})` : ''}:</span>{' '}
+                    <span className="break-words">{task.metadata.challenge.reason}</span>
+                    {task.metadata.challengeResolution?.outcome && (
+                      <div className="mt-1 text-gray-400">
+                        Resolved: {task.metadata.challengeResolution.outcome}
+                        {task.metadata.challengeResolution.note ? ` — ${task.metadata.challengeResolution.note}` : ''}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </>

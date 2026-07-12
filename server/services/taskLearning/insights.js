@@ -12,7 +12,8 @@ import {
   saveLearningData,
   loadDismissedRecommendations,
   saveDismissedRecommendations,
-  summarizeFailureSignatures
+  summarizeFailureSignatures,
+  appendInsight
 } from './store.js';
 import { computeCorrelationQuality, isCorrelationProven, CORRELATION_QUALITY_THRESHOLD } from './correlationQuality.js';
 
@@ -103,6 +104,10 @@ export async function getLearningInsights() {
       modelEffectiveness,
       recentUnknownErrors: data.recentUnknownErrors || []
     },
+    // Standing learnings / operating notes (issue #2443): human-readable insights
+    // — auto-recorded recurring-failure incidents plus any user-authored notes —
+    // newest first. Runtime-only (data/cos/), surfaced in the CoS UI.
+    standingLearnings: (data.insights || []).slice(-20).reverse(),
     recommendations: generateRecommendations(data, bestPerforming, worstPerforming, commonErrors, dismissed, failureSignatures)
   };
 }
@@ -265,34 +270,23 @@ export async function getDismissedRecommendations() {
 }
 
 /**
- * Record a learning insight for future reference
- * Stores observations about what works and what doesn't
+ * Record a learning insight for future reference. Stores observations about what
+ * works and what doesn't. Manual insights (from the API route) default to
+ * `origin: 'user'` — the failure path records `origin: 'auto-incident'` inline
+ * (see `recordTaskCompletion`) to avoid re-entering the non-reentrant store lock.
  */
 export async function recordLearningInsight(insight) {
   return withLock(async () => {
     const data = await loadLearningData();
-
-    if (!data.insights) {
-      data.insights = [];
-    }
-
-    data.insights.push({
-      ...insight,
-      recordedAt: new Date().toISOString()
-    });
-
-    // Keep only last 50 insights
-    if (data.insights.length > 50) {
-      data.insights = data.insights.slice(-50);
-    }
-
+    appendInsight(data, insight);
     await saveLearningData(data);
-    return insight;
+    // Return the stamped record (with recordedAt + resolved origin), not the bare input.
+    return data.insights[data.insights.length - 1];
   });
 }
 
 /**
- * Get recent learning insights
+ * Get recent learning insights (newest last, matching insertion order).
  */
 export async function getRecentInsights(limit = 10) {
   const data = await loadLearningData();
