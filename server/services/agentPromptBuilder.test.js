@@ -56,6 +56,7 @@ tryReadFile: vi.fn().mockResolvedValue(null),
 }));
 
 import { buildLightContextPrompt, buildAgentPrompt, buildCompletionGuidelineBullet } from './agentPromptBuilder.js';
+import { buildPrompt } from './promptService.js';
 import { isTruthyMeta } from './agentState.js';
 
 function makeTask(overrides = {}) {
@@ -673,6 +674,31 @@ describe('buildAgentPrompt — provider type routing', () => {
     expect(prompt).not.toMatch(/You are an autonomous agent/);
     // Light + non-TUI uses the plain "## Completion" block.
     expect(prompt).toMatch(/^## Completion$/m);
+  });
+
+  // The api/full path renders "### Target Application" from the cos-agent-briefing
+  // template's {{#task.metadata.app}} section, so the app is suppressed by stripping
+  // it from the task handed to buildPrompt (rather than by buildTaskBlock). Assert on
+  // the mocked buildPrompt's call args since the template render itself is mocked out.
+  describe('api-path Target Application suppression', () => {
+    const apiOpts = { providerType: 'api' };
+    const wt = { branchName: 'b', worktreePath: '/tmp/wt' };
+
+    it('strips the PortOS default app from the template task so its section stays empty', async () => {
+      buildPrompt.mockClear();
+      await buildAgentPrompt(
+        makeTask({ metadata: { app: 'portos-default' } }), {}, '/r', wt, isTruthyMeta, apiOpts);
+      const briefing = buildPrompt.mock.calls.find(([name]) => name === 'cos-agent-briefing');
+      expect(briefing?.[1]?.task?.metadata?.app).toBeUndefined();
+    });
+
+    it('keeps a managed app on the template task so it scopes the work', async () => {
+      buildPrompt.mockClear();
+      await buildAgentPrompt(
+        makeTask({ metadata: { app: 'comics' } }), {}, '/r', wt, isTruthyMeta, apiOpts);
+      const briefing = buildPrompt.mock.calls.find(([name]) => name === 'cos-agent-briefing');
+      expect(briefing?.[1]?.task?.metadata?.app).toBe('comics');
+    });
   });
 
   describe('split system/user prompt (Claude providers)', () => {
