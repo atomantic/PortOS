@@ -260,7 +260,11 @@ async function fileProposal({ filer, forgeCli, cwd, app, proposal, jira }) {
   }
   if (filer === 'plan' && cwd) {
     const res = await appendProposalToPlan({ repoPath: cwd, appName: app.name, slug: proposal.slug, title: proposal.title, body: proposal.body })
-    return { success: res.success, number: null }
+    // Propagate `duplicate`: appendProposalToPlan dedups on the raw `[lil-<slug>]`
+    // tag regardless of checkbox, so a CHECKED item the reasoner re-proposed (now
+    // out of the dedup window, #2435) writes nothing and returns duplicate. The
+    // caller must NOT treat that as a fresh file — see processTaskOutput.
+    return { success: res.success, number: null, duplicate: res.duplicate }
   }
   return { success: false, error: `filer "${filer}" not implemented` }
 }
@@ -364,7 +368,16 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
       reason = 'semantic-duplicate'
     } else {
       const filed = await fileProposal({ filer, forgeCli, cwd, app, proposal, jira })
-      if (filed.success) {
+      if (filed.success && filed.duplicate) {
+        // The tracker already carries this slug's tag (a checked PLAN item the
+        // reasoner re-proposed): appendProposalToPlan wrote nothing. Report a
+        // duplicate and leave any recorded outcome untouched — reporting `filed`
+        // here would clear the merged outcome and let the still-checked item
+        // reconcile as a false fresh merge on the next run (#2435).
+        filedAction = 'duplicate'
+        reason = 'duplicate'
+        console.log(`♻️ Layered Intelligence: ${app.name} proposal "${proposal.slug}" already tracked in PLAN.md — suppressed`)
+      } else if (filed.success) {
         filedNumber = filed.number ?? null
         filedKey = filed.key ?? null
         filedAction = 'filed'
