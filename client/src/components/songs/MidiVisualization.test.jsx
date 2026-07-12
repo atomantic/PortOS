@@ -28,7 +28,7 @@ const makeCtx = () => ({
   clearRect: vi.fn(), fillRect: vi.fn(), strokeRect: vi.fn(), fillText: vi.fn(),
   save: vi.fn(), restore: vi.fn(), beginPath: vi.fn(), closePath: vi.fn(),
   rect: vi.fn(), clip: vi.fn(), roundRect: vi.fn(), fill: vi.fn(), stroke: vi.fn(),
-  moveTo: vi.fn(), arcTo: vi.fn(), setTransform: vi.fn(),
+  moveTo: vi.fn(), arcTo: vi.fn(), setTransform: vi.fn(), drawImage: vi.fn(),
   fillStyle: '', strokeStyle: '', lineWidth: 1, font: '', textAlign: '', globalAlpha: 1,
 });
 

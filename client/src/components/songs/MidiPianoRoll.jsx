@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { midiNoteName, isBlackKey } from '../../lib/pianoKeyboard';
 import { chordNoteNames } from '../../lib/midiChords';
 import { roundRect, layerColor } from '../../lib/canvasRoll.js';
-import { formatTimecode } from '../../utils/formatters';
+import { formatTimecode, formatDurationSec } from '../../utils/formatters';
 import useCanvasDprSize from '../../hooks/useCanvasDprSize.js';
+import useCanvasRollPalette from '../../hooks/useCanvasRollPalette.js';
 
 // DAW-style horizontal piano-roll for inspecting a transcribed `.mid` file
 // (time × pitch grid) — NOT the Synthesia falling-note <PianoRoll>, which is
@@ -21,9 +22,7 @@ import useCanvasDprSize from '../../hooks/useCanvasDprSize.js';
 const GUTTER_W = 44;   // left pitch gutter
 const RULER_H = 18;    // top time ruler
 const CHORD_H = 20;    // chord lane strip (when shown)
-const BG = '#0c0c0e';
 const GUTTER_BG = '#131316';
-const ACCENT = '#3b82f6';
 const GRID_LINE = 'rgba(255,255,255,0.05)';
 const C_LINE = 'rgba(255,255,255,0.14)';
 const TEXT_DIM = '#71717a';
@@ -49,6 +48,17 @@ const tooltipStyle = (x, y, width) => ({
   top: `${Math.max(0, y - 24)}px`,
 });
 
+// Shallow-compare two offscreen-scene signatures. `data`/`chords` compare by
+// reference (a new parse is a new object); everything else by value. Any
+// mismatch means the cached bitmap is stale and the scene must be repainted.
+const sceneSigEqual = (a, b) => !!a && !!b
+  && a.width === b.width && a.height === b.height && a.zoom === b.zoom
+  && a.scroll === b.scroll && a.chordLaneH === b.chordLaneH
+  && a.lowMidi === b.lowMidi && a.highMidi === b.highMidi
+  && a.multiTrack === b.multiTrack && a.dpr === b.dpr
+  && a.data === b.data && a.chords === b.chords
+  && a.bg === b.bg && a.accent === b.accent && a.accentRgb === b.accentRgb;
+
 /**
  * @param {object} props
  * @param {object} props.data — view-model from parseMidiFile.
@@ -67,6 +77,12 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
   const pinchRef = useRef(null);         // { startDist, startZoom }
   const tooltipRef = useRef(null);
   const tooltipPosRef = useRef({ x: 0, y: 0 });
+  // Cached offscreen "scene" (grid + notes + gutter, no playhead/hover) keyed
+  // on everything that changes it — reused across hover/playhead repaints so a
+  // mouse move over a 10k-note file drawImage()s the bitmap instead of redrawing
+  // every note bar. Rebuilt only when the sig actually changes (pan/zoom/resize/
+  // data/theme).
+  const sceneRef = useRef({ canvas: null, sig: null });
   // Identity only ({ kind, note } | { kind, chord }) — drives the highlight
   // repaint; position updates never touch state.
   const [hover, setHover] = useState(null);
@@ -87,6 +103,18 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
   }
   const rowCount = highMidi - lowMidi + 1;
 
+  // Notes bucketed by pitch (sorted-by-startSec preserved from parseMidiFile),
+  // so hit-testing scans one row instead of every note (~88× fewer) and chord
+  // hover strokes look up members by midi.
+  const notesByMidi = useMemo(() => {
+    const map = new Map();
+    (data?.notes || []).forEach((n) => {
+      const arr = map.get(n.midi);
+      if (arr) arr.push(n); else map.set(n.midi, [n]);
+    });
+    return map;
+  }, [data]);
+
   const geometry = useCallback(() => {
     const width = widthRef.current;
     const gridW = Math.max(1, width - GUTTER_W);
@@ -101,156 +129,253 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
-    const { width, gridW, pps, gridTop, gridH, rowH, maxScroll } = geometry();
+    const geo = geometry();
+    const { width, gridW, pps, gridTop, gridH, rowH, maxScroll } = geo;
     if (!canvas || !width) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     scrollSecRef.current = Math.min(Math.max(0, scrollSecRef.current), maxScroll);
     const scroll = scrollSecRef.current;
     const viewEnd = scroll + gridW / pps;
+    const { bg, accent, accentRgb } = paletteRef.current;
     const timeToX = (sec) => GUTTER_W + (sec - scroll) * pps;
     const midiToY = (m) => gridTop + (highMidi - m) * rowH;
 
-    ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = BG;
-    ctx.fillRect(0, 0, width, height);
+    // The full grid + notes + gutter is invariant under hover and playhead
+    // moves, so paint it to an offscreen bitmap keyed on the values that DO
+    // change it and reuse that bitmap for every other repaint. On a dense file
+    // this turns a hover/scrub repaint from "redraw every note bar" into a
+    // single drawImage() + a couple of overlay strokes.
+    const paintScene = (octx) => {
+      octx.clearRect(0, 0, width, height);
+      octx.fillStyle = bg;
+      octx.fillRect(0, 0, width, height);
 
-    // Horizontal pitch rows — black-key rows tinted, every C stronger.
-    for (let m = lowMidi; m <= highMidi; m += 1) {
-      const y = midiToY(m);
-      if (m % 12 === 0) {
-        ctx.fillStyle = C_LINE;
-        ctx.fillRect(GUTTER_W, y + rowH, gridW, 1);
-      } else if (rowH >= 4) {
-        if (isBlackKey(m)) {
-          ctx.fillStyle = 'rgba(255,255,255,0.02)';
-          ctx.fillRect(GUTTER_W, y, gridW, rowH);
+      // Horizontal pitch rows — black-key rows tinted, every C stronger.
+      for (let m = lowMidi; m <= highMidi; m += 1) {
+        const y = midiToY(m);
+        if (m % 12 === 0) {
+          octx.fillStyle = C_LINE;
+          octx.fillRect(GUTTER_W, y + rowH, gridW, 1);
+        } else if (rowH >= 4) {
+          if (isBlackKey(m)) {
+            octx.fillStyle = 'rgba(255,255,255,0.02)';
+            octx.fillRect(GUTTER_W, y, gridW, rowH);
+          }
+          octx.fillStyle = GRID_LINE;
+          octx.fillRect(GUTTER_W, y + rowH, gridW, 1);
         }
-        ctx.fillStyle = GRID_LINE;
-        ctx.fillRect(GUTTER_W, y + rowH, gridW, 1);
+      }
+
+      // Vertical time grid + ruler labels.
+      const step = tickStep(pps);
+      octx.font = '9px ui-sans-serif, system-ui, sans-serif';
+      octx.textAlign = 'left';
+      for (let t = Math.floor(scroll / step) * step; t <= viewEnd; t += step) {
+        if (t < 0) continue;
+        const x = timeToX(t);
+        if (x < GUTTER_W) continue;
+        octx.fillStyle = GRID_LINE;
+        octx.fillRect(x, gridTop, 1, gridH);
+        octx.fillStyle = TEXT_DIM;
+        // Sub-second tick steps keep the fractional timecode (adjacent labels
+        // would otherwise read "0:03 0:03 0:03"); whole-second steps use the
+        // plain M:SS formatter.
+        octx.fillText(step < 1 ? formatTimecode(t) : formatDurationSec(t), x + 3, RULER_H - 6);
+      }
+
+      // Chord lane (dim — the hovered chord is brightened in the overlay pass).
+      if (chordLaneH) {
+        octx.fillStyle = 'rgba(255,255,255,0.03)';
+        octx.fillRect(GUTTER_W, RULER_H, gridW, chordLaneH);
+        (chords || []).forEach((c) => {
+          if (c.endSec < scroll || c.startSec > viewEnd) return;
+          const x0 = Math.max(GUTTER_W, timeToX(c.startSec));
+          const x1 = Math.min(width, timeToX(c.endSec));
+          if (x1 - x0 < 2) return;
+          octx.fillStyle = `rgb(${accentRgb} / 0.10)`;
+          octx.fillRect(x0, RULER_H + 1, x1 - x0 - 1, chordLaneH - 2);
+          // Sticky-left label, clipped to the window.
+          octx.save();
+          octx.beginPath();
+          octx.rect(x0, RULER_H, x1 - x0, chordLaneH);
+          octx.clip();
+          octx.fillStyle = '#9ca3af';
+          octx.font = '10px ui-sans-serif, system-ui, sans-serif';
+          octx.fillText(c.label, x0 + 3, RULER_H + chordLaneH - 6);
+          octx.restore();
+        });
+      }
+
+      // Notes — only those intersecting the visible window, clipped to the grid.
+      // The list is sorted by startSec (parseMidiFile), so bail out of the loop
+      // at the first note past the right edge.
+      octx.save();
+      octx.beginPath();
+      octx.rect(GUTTER_W, gridTop, gridW, gridH);
+      octx.clip();
+      octx.textAlign = 'left';
+      const notes = data?.notes || [];
+      for (let i = 0; i < notes.length; i += 1) {
+        const n = notes[i];
+        if (n.startSec > viewEnd) break;
+        const end = n.startSec + n.durationSec;
+        if (end < scroll) continue;
+        if (n.midi < lowMidi || n.midi > highMidi) continue;
+        const x = timeToX(n.startSec);
+        const w = Math.max(2, n.durationSec * pps);
+        const y = midiToY(n.midi);
+        const h = Math.max(2, rowH - 1);
+        roundRect(octx, x, y + 0.5, w, h, NOTE_RADIUS);
+        octx.fillStyle = multiTrack ? layerColor(n.track) : accent;
+        octx.globalAlpha = 0.35 + 0.6 * (n.velocity ?? 0.8);
+        octx.fill();
+        octx.globalAlpha = 1;
+        // In-bar note name when it fits.
+        if (w >= 28 && rowH >= 12) {
+          octx.fillStyle = bg;
+          octx.font = '9px ui-sans-serif, system-ui, sans-serif';
+          octx.fillText(n.name || midiNoteName(n.midi), x + 3, y + h - Math.max(1, (h - 8) / 2));
+        }
+      }
+      octx.restore();
+
+      // Pitch gutter on top (opaque, so notes pan "under" it).
+      octx.fillStyle = GUTTER_BG;
+      octx.fillRect(0, gridTop, GUTTER_W, gridH);
+      octx.textAlign = 'right';
+      for (let m = lowMidi; m <= highMidi; m += 1) {
+        const y = midiToY(m);
+        if (m % 12 === 0 && rowH >= 3) {
+          octx.fillStyle = TEXT_DIM;
+          octx.font = '9px ui-sans-serif, system-ui, sans-serif';
+          octx.fillText(midiNoteName(m), GUTTER_W - 4, y + rowH - 1);
+          octx.fillStyle = C_LINE;
+          octx.fillRect(0, y + rowH, GUTTER_W, 1);
+        } else if (rowH >= 7) {
+          octx.fillStyle = isBlackKey(m) ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.10)';
+          octx.fillRect(GUTTER_W - 8, y + 1, 5, Math.max(1, rowH - 2));
+        }
+      }
+      // Scroll indicator along the bottom when zoomed in.
+      if (maxScroll > 0) {
+        const frac = gridW / (duration * pps);
+        const barW = Math.max(24, gridW * frac);
+        const barX = GUTTER_W + (scroll / maxScroll) * (gridW - barW);
+        octx.fillStyle = 'rgba(255,255,255,0.15)';
+        octx.fillRect(barX, height - 3, barW, 2);
+      }
+    };
+
+    // Live overlay: the hovered chord's bright box + label, hovered-note white
+    // strokes, and the playhead — everything that moves without invalidating
+    // the cached scene.
+    const paintOverlay = (octx) => {
+      if (hover?.kind === 'chord' && chordLaneH) {
+        const c = hover.chord;
+        if (!(c.endSec < scroll || c.startSec > viewEnd)) {
+          const x0 = Math.max(GUTTER_W, timeToX(c.startSec));
+          const x1 = Math.min(width, timeToX(c.endSec));
+          if (x1 - x0 >= 2) {
+            // Repaint the strip under the box so the brighter fill doesn't
+            // composite on top of the baked dim box.
+            octx.fillStyle = bg;
+            octx.fillRect(x0, RULER_H, x1 - x0, chordLaneH);
+            octx.fillStyle = 'rgba(255,255,255,0.03)';
+            octx.fillRect(x0, RULER_H, x1 - x0, chordLaneH);
+            octx.fillStyle = `rgb(${accentRgb} / 0.25)`;
+            octx.fillRect(x0, RULER_H + 1, x1 - x0 - 1, chordLaneH - 2);
+            octx.save();
+            octx.beginPath();
+            octx.rect(x0, RULER_H, x1 - x0, chordLaneH);
+            octx.clip();
+            octx.fillStyle = '#dbeafe';
+            octx.font = '10px ui-sans-serif, system-ui, sans-serif';
+            octx.fillText(c.label, x0 + 3, RULER_H + chordLaneH - 6);
+            octx.restore();
+          }
+        }
+      }
+
+      // White outline on the hovered note (or every note in the hovered chord),
+      // clipped to the grid so a stroke can't bleed over the gutter/ruler.
+      if (hover) {
+        octx.save();
+        octx.beginPath();
+        octx.rect(GUTTER_W, gridTop, gridW, gridH);
+        octx.clip();
+        octx.strokeStyle = '#ffffff';
+        octx.lineWidth = 1;
+        const strokeNote = (n) => {
+          if (n.midi < lowMidi || n.midi > highMidi) return;
+          const w = Math.max(2, n.durationSec * pps);
+          const h = Math.max(2, rowH - 1);
+          roundRect(octx, timeToX(n.startSec), midiToY(n.midi) + 0.5, w, h, NOTE_RADIUS);
+          octx.stroke();
+        };
+        if (hover.kind === 'note') {
+          strokeNote(hover.note);
+        } else if (hover.kind === 'chord') {
+          const span = hover.chord;
+          span.midis.forEach((m) => {
+            (notesByMidi.get(m) || []).forEach((n) => {
+              const end = n.startSec + n.durationSec;
+              if (n.startSec < span.endSec && end > span.startSec) strokeNote(n);
+            });
+          });
+        }
+        octx.restore();
+      }
+
+      // Playhead (static scrub position in v1 — click to move).
+      const px = timeToX(playheadSecRef.current);
+      if (px >= GUTTER_W && px <= width) {
+        octx.fillStyle = accent;
+        octx.fillRect(px - 1, RULER_H, 2, height - RULER_H);
+      }
+    };
+
+    // Rebuild the offscreen scene only when its signature changed; otherwise
+    // reuse the cached bitmap.
+    const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
+    const sig = {
+      width, height, zoom: zoomRef.current, scroll, chordLaneH,
+      lowMidi, highMidi, multiTrack, dpr,
+      data, chords: chordLaneH ? chords : null, bg, accent, accentRgb,
+    };
+    const cached = sceneRef.current;
+    if (!cached.canvas || !sceneSigEqual(cached.sig, sig)) {
+      const off = cached.canvas
+        || (typeof document !== 'undefined' ? document.createElement('canvas') : null);
+      if (off) {
+        // Only re-allocate (which clears + resets the transform) when the pixel
+        // size actually changes; a pan/theme rebuild keeps the same buffer and
+        // repaints over it (paintScene clears its own frame first).
+        const pxW = Math.round(width * dpr);
+        const pxH = Math.round(height * dpr);
+        if (off.width !== pxW || off.height !== pxH) { off.width = pxW; off.height = pxH; }
+        const octx = off.getContext('2d');
+        if (octx) {
+          octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          paintScene(octx);
+        }
+        sceneRef.current = { canvas: off, sig };
       }
     }
 
-    // Vertical time grid + ruler labels.
-    const step = tickStep(pps);
-    ctx.font = '9px ui-sans-serif, system-ui, sans-serif';
-    ctx.textAlign = 'left';
-    for (let t = Math.floor(scroll / step) * step; t <= viewEnd; t += step) {
-      if (t < 0) continue;
-      const x = timeToX(t);
-      if (x < GUTTER_W) continue;
-      ctx.fillStyle = GRID_LINE;
-      ctx.fillRect(x, gridTop, 1, gridH);
-      ctx.fillStyle = TEXT_DIM;
-      // Sub-second tick steps need the fractional digits or adjacent labels
-      // render identically ("0:03 0:03 0:03") right when fine timing matters.
-      ctx.fillText(step < 1 ? formatTimecode(t) : formatTimecode(t).replace(/\.\d+$/, ''), x + 3, RULER_H - 6);
-    }
-
-    // Chord lane.
-    if (chordLaneH) {
-      ctx.fillStyle = 'rgba(255,255,255,0.03)';
-      ctx.fillRect(GUTTER_W, RULER_H, gridW, chordLaneH);
-      (chords || []).forEach((c) => {
-        if (c.endSec < scroll || c.startSec > viewEnd) return;
-        const x0 = Math.max(GUTTER_W, timeToX(c.startSec));
-        const x1 = Math.min(width, timeToX(c.endSec));
-        if (x1 - x0 < 2) return;
-        const isHover = hover?.kind === 'chord' && hover.chord === c;
-        ctx.fillStyle = isHover ? 'rgba(59,130,246,0.25)' : 'rgba(59,130,246,0.10)';
-        ctx.fillRect(x0, RULER_H + 1, x1 - x0 - 1, chordLaneH - 2);
-        // Sticky-left label, clipped to the window.
-        ctx.save();
-        ctx.beginPath();
-        ctx.rect(x0, RULER_H, x1 - x0, chordLaneH);
-        ctx.clip();
-        ctx.fillStyle = isHover ? '#dbeafe' : '#9ca3af';
-        ctx.font = '10px ui-sans-serif, system-ui, sans-serif';
-        ctx.fillText(c.label, x0 + 3, RULER_H + chordLaneH - 6);
-        ctx.restore();
-      });
-    }
-
-    // Notes — only those intersecting the visible window, clipped to the grid.
-    // The list is sorted by startSec (parseMidiFile), so bail out of the loop
-    // at the first note past the right edge.
-    const hoverChordMidis = hover?.kind === 'chord' ? new Set(hover.chord.midis) : null;
-    const hoverChordSpan = hover?.kind === 'chord' ? hover.chord : null;
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(GUTTER_W, gridTop, gridW, gridH);
-    ctx.clip();
-    ctx.textAlign = 'left';
-    const notes = data?.notes || [];
-    for (let i = 0; i < notes.length; i += 1) {
-      const n = notes[i];
-      if (n.startSec > viewEnd) break;
-      const end = n.startSec + n.durationSec;
-      if (end < scroll) continue;
-      if (n.midi < lowMidi || n.midi > highMidi) continue;
-      const x = timeToX(n.startSec);
-      const w = Math.max(2, n.durationSec * pps);
-      const y = midiToY(n.midi);
-      const h = Math.max(2, rowH - 1);
-      roundRect(ctx, x, y + 0.5, w, h, NOTE_RADIUS);
-      ctx.fillStyle = multiTrack ? layerColor(n.track) : ACCENT;
-      ctx.globalAlpha = 0.35 + 0.6 * (n.velocity ?? 0.8);
-      ctx.fill();
-      const isHoverNote = hover?.kind === 'note' && hover.note.id === n.id;
-      const inHoverChord = hoverChordMidis?.has(n.midi)
-        && hoverChordSpan && n.startSec < hoverChordSpan.endSec && end > hoverChordSpan.startSec;
-      if (isHoverNote || inHoverChord) {
-        ctx.globalAlpha = 1;
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1;
-        ctx.stroke();
-      }
-      ctx.globalAlpha = 1;
-      // In-bar note name when it fits.
-      if (w >= 28 && rowH >= 12) {
-        ctx.fillStyle = '#0c0c0e';
-        ctx.font = '9px ui-sans-serif, system-ui, sans-serif';
-        ctx.fillText(n.name || midiNoteName(n.midi), x + 3, y + h - Math.max(1, (h - 8) / 2));
-      }
-    }
-    ctx.restore();
-
-    // Playhead (static scrub position in v1 — click to move).
-    const px = timeToX(playheadSecRef.current);
-    if (px >= GUTTER_W && px <= width) {
-      ctx.fillStyle = ACCENT;
-      ctx.fillRect(px - 1, RULER_H, 2, height - RULER_H);
-    }
-
-    // Pitch gutter on top (opaque, so notes pan "under" it).
-    ctx.fillStyle = GUTTER_BG;
-    ctx.fillRect(0, gridTop, GUTTER_W, gridH);
-    ctx.textAlign = 'right';
-    for (let m = lowMidi; m <= highMidi; m += 1) {
-      const y = midiToY(m);
-      if (m % 12 === 0 && rowH >= 3) {
-        ctx.fillStyle = TEXT_DIM;
-        ctx.font = '9px ui-sans-serif, system-ui, sans-serif';
-        ctx.fillText(midiNoteName(m), GUTTER_W - 4, y + rowH - 1);
-        ctx.fillStyle = C_LINE;
-        ctx.fillRect(0, y + rowH, GUTTER_W, 1);
-      } else if (rowH >= 7) {
-        ctx.fillStyle = isBlackKey(m) ? 'rgba(255,255,255,0.05)' : 'rgba(255,255,255,0.10)';
-        ctx.fillRect(GUTTER_W - 8, y + 1, 5, Math.max(1, rowH - 2));
-      }
-    }
-    // Scroll indicator along the bottom when zoomed in.
-    if (maxScroll > 0) {
-      const frac = gridW / (duration * pps);
-      const barW = Math.max(24, gridW * frac);
-      const barX = GUTTER_W + (scroll / maxScroll) * (gridW - barW);
-      ctx.fillStyle = 'rgba(255,255,255,0.15)';
-      ctx.fillRect(barX, height - 3, barW, 2);
-    }
-  }, [data, chords, chordLaneH, geometry, height, highMidi, lowMidi, hover, multiTrack, duration]);
+    ctx.clearRect(0, 0, width, height);
+    const scene = sceneRef.current.canvas;
+    if (scene) ctx.drawImage(scene, 0, 0, width, height);
+    else paintScene(ctx); // no offscreen available (SSR) — paint direct
+    paintOverlay(ctx);
+  }, [data, chords, chordLaneH, geometry, height, highMidi, lowMidi, hover, multiTrack, duration, notesByMidi]);
 
   const drawRef = useRef(draw);
   drawRef.current = draw;
+
+  // Theme-following canvas palette (accent + bg) read inside draw() via the
+  // ref; re-resolves and repaints on theme switch.
+  const paletteRef = useCanvasRollPalette(drawRef);
 
   // DPR-aware canvas sizing + redraw on container resize (shared hook).
   const widthRef = useCanvasDprSize(wrapRef, canvasRef, height, drawRef);
@@ -285,18 +410,19 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
     }
     if (y < gridTop) return null;
     const midi = highMidi - Math.floor((y - gridTop) / rowH);
-    // Iterate back-to-front so the top-drawn (later) note wins the hit; the
+    // Only the notes on this pitch row (index by midi) instead of every note;
+    // iterate back-to-front so the top-drawn (later) note wins the hit. The
     // 2/pps term keeps min-width (2px) bars hittable.
-    const notes = data?.notes || [];
-    for (let i = notes.length - 1; i >= 0; i -= 1) {
-      const n = notes[i];
-      if (n.midi !== midi) continue;
+    const row = notesByMidi.get(midi);
+    if (!row) return null;
+    for (let i = row.length - 1; i >= 0; i -= 1) {
+      const n = row[i];
       if (sec >= n.startSec && sec <= n.startSec + Math.max(n.durationSec, 2 / pps)) {
         return { kind: 'note', note: n };
       }
     }
     return null;
-  }, [chords, chordLaneH, data, geometry, highMidi]);
+  }, [chords, chordLaneH, geometry, highMidi, notesByMidi]);
 
   // Update tooltip position without re-rendering: stash in a ref and mutate
   // the DOM node directly when it's mounted.

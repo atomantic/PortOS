@@ -1,8 +1,29 @@
 import { describe, it, expect } from 'vitest';
 import {
   formatContextLength, formatDurationMin, formatDurationMs, formatEventDateTime, timeAgo,
-  formatCooldown, parseSizeGb, recommendedRamGb, parseTimeoutMs,
+  formatCooldown, parseSizeGb, recommendedRamGb, parseTimeoutMs, formatDurationSec,
 } from './formatters.js';
+
+describe('formatDurationSec', () => {
+  it('formats seconds as M:SS with a zero-padded seconds field', () => {
+    expect(formatDurationSec(75)).toBe('1:15');
+    expect(formatDurationSec(5)).toBe('0:05');
+    expect(formatDurationSec(600)).toBe('10:00');
+  });
+
+  it('renders a genuine zero as "0:00" (not the unknown dash)', () => {
+    // Distinguishes "zero seconds" from "unknown" — the ruler and totals rely
+    // on 0 → "0:00" rather than the old truthiness collapse to "—".
+    expect(formatDurationSec(0)).toBe('0:00');
+  });
+
+  it('returns the unknown dash for missing/invalid/negative input', () => {
+    expect(formatDurationSec(null)).toBe('—');
+    expect(formatDurationSec(undefined)).toBe('—');
+    expect(formatDurationSec(NaN)).toBe('—');
+    expect(formatDurationSec(-3)).toBe('—');
+  });
+});
 
 describe('formatContextLength', () => {
   it('formats common context windows compactly', () => {
