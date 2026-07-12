@@ -26,6 +26,7 @@ import { existsSync } from 'fs';
 import { DAY, tryReadFile, readJSONFile, safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { bufferedSpawn } from '../lib/bufferedSpawn.js';
 import { createTicket, searchIssues, addLabels, escapeJql } from './jira.js';
+import { computeWindowedStats } from './taskLearning/store.js';
 
 // Tracker labels + slug marker. The slug is the stable dedup key the reasoner
 // chooses; it is embedded in each filed issue body so a later run (or the
@@ -611,7 +612,27 @@ export async function gatherSources(app, config, { cosPath = PATHS.cos } = {}) {
     // rationale (default-off for managed apps).
     const learning = await readJSONFile(join(cosPath, 'learning.json'), null);
     if (learning?.byTaskType) {
-      out.cosMetrics = JSON.stringify(learning.byTaskType).slice(0, 4000);
+      // Surface BOTH the lifetime rate (the cumulative dashboard/telemetry truth)
+      // AND a recency-windowed rate (issue #2460) per task type, labeled distinctly
+      // so the reasoner doesn't conflate them. The windowed rate lets a
+      // since-resolved failure burst age out of the "is work needed" signal instead
+      // of permanently depressing it; `recentSuccessRate` is null when there are no
+      // in-window runs, in which case the reasoner leans on the lifetime rate.
+      // Note the intentional rename: computeWindowedStats' internal `windowed*`
+      // fields are surfaced to the reasoner as `recent*` (reads more naturally in
+      // the prompt context) — same concept, deliberately different label here.
+      const summary = {};
+      for (const [type, m] of Object.entries(learning.byTaskType)) {
+        const windowed = computeWindowedStats(m?.recentOutcomes);
+        summary[type] = {
+          lifetimeSuccessRate: typeof m?.successRate === 'number' ? m.successRate : null,
+          lifetimeCompleted: m?.completed || 0,
+          recentSuccessRate: windowed.windowedSuccessRate,
+          recentCompleted: windowed.windowedCompleted,
+          avgDurationMs: m?.avgDurationMs || 0
+        };
+      }
+      out.cosMetrics = JSON.stringify(summary).slice(0, 4000);
     }
   }
   for (const custom of src.custom || []) {

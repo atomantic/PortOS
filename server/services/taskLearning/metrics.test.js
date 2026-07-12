@@ -1,5 +1,17 @@
-import { describe, it, expect } from 'vitest';
-import { buildTaskTelemetryContext, computeLatencySplit, recordFailureSignature } from './metrics.js';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// Override ONLY loadLearningData so the getWindowedStats wrapper can be exercised
+// without touching the real learning.json (repo rule: DB/file-backed tests must
+// never mutate real data). Everything else in store.js stays the real
+// implementation via importActual, so the pure telemetry tests below are
+// unaffected.
+vi.mock('./store.js', async (importActual) => {
+  const actual = await importActual();
+  return { ...actual, loadLearningData: vi.fn() };
+});
+
+import { buildTaskTelemetryContext, computeLatencySplit, recordFailureSignature, getWindowedStats } from './metrics.js';
+import { loadLearningData } from './store.js';
 
 // buildTaskTelemetryContext + recordFailureSignature are the pure telemetry
 // enrichment core added for issue #2329. They take no I/O, so every branch is
@@ -345,5 +357,44 @@ describe('computeLatencySplit (#2329)', () => {
     const out = computeLatencySplit({ startedAt: S, completedAt: C, createdAt: S, durationMs: 250000 });
     expect(out.queueMs).toBe(0);
     expect(out.source.queue).toBe('measured');
+  });
+});
+
+describe('getWindowedStats (issue #2460)', () => {
+  beforeEach(() => { loadLearningData.mockReset(); });
+
+  it('windows the task type ring and returns computeWindowedStats output', async () => {
+    loadLearningData.mockResolvedValue({
+      byTaskType: {
+        'self-improve:ui': {
+          recentOutcomes: [
+            { t: '2026-07-10T00:00:00.000Z', s: false },
+            { t: '2026-07-10T00:01:00.000Z', s: true },
+            { t: '2026-07-10T00:02:00.000Z', s: true }
+          ]
+        }
+      }
+    });
+    const stats = await getWindowedStats('self-improve:ui', { maxAgeMs: Infinity });
+    expect(stats.windowedCompleted).toBe(3);
+    expect(stats.windowedSucceeded).toBe(2);
+    expect(stats.windowedSuccessRate).toBe(67);
+  });
+
+  it('returns the null-successRate sentinel for an absent task type', async () => {
+    loadLearningData.mockResolvedValue({ byTaskType: {} });
+    const stats = await getWindowedStats('does-not-exist');
+    expect(stats.windowedCompleted).toBe(0);
+    expect(stats.windowedSuccessRate).toBeNull();
+  });
+
+  it('honors an explicit maxCount window', async () => {
+    const recentOutcomes = [];
+    for (let i = 0; i < 10; i++) recentOutcomes.push({ t: `old-${i}`, s: false });
+    for (let i = 0; i < 3; i++) recentOutcomes.push({ t: `new-${i}`, s: true });
+    loadLearningData.mockResolvedValue({ byTaskType: { 'auto-fix': { recentOutcomes } } });
+    const stats = await getWindowedStats('auto-fix', { maxCount: 3, maxAgeMs: Infinity });
+    expect(stats.windowedCompleted).toBe(3);
+    expect(stats.windowedSuccessRate).toBe(100);
   });
 });
