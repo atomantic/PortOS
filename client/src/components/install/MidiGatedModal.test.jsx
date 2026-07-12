@@ -61,4 +61,24 @@ describe('MidiGatedModal token-aware branching', () => {
     await waitFor(() => expect(screen.getByText('HuggingFace access required')).toBeTruthy());
     expect(screen.getByPlaceholderText('hf_…')).toBeTruthy();
   });
+
+  it('re-checks token status on each reopen so a token saved on a prior pass flips the view', async () => {
+    // First open: no token → token-entry banner.
+    getHfTokenStatus.mockResolvedValueOnce({ hfTokenPresent: false, source: 'none' });
+    const { rerender } = render(
+      <MidiGatedModal open repo={REPO} onSaved={vi.fn()} onClose={vi.fn()} />,
+    );
+    await waitFor(() => expect(screen.getByPlaceholderText('hf_…')).toBeTruthy());
+
+    // Modal closes (e.g. token saved, transcription re-fires), then the license
+    // 403 reopens it — the status must be re-fetched, not reused from pass one.
+    rerender(<MidiGatedModal open={false} repo={REPO} onSaved={vi.fn()} onClose={vi.fn()} />);
+    getHfTokenStatus.mockResolvedValueOnce({ hfTokenPresent: true, source: 'stored' });
+    rerender(<MidiGatedModal open repo={REPO} onSaved={vi.fn()} onClose={vi.fn()} />);
+
+    // View flips to the license-accept branch — no stale "token missing" nag.
+    await waitFor(() => expect(screen.getByText('Accept the model license')).toBeTruthy());
+    expect(screen.queryByPlaceholderText('hf_…')).toBeNull();
+    expect(getHfTokenStatus).toHaveBeenCalledTimes(2);
+  });
 });
