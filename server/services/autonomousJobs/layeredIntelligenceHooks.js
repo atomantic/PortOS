@@ -51,8 +51,10 @@ import {
   listJiraBlockingIssues,
   fileProposalToJira,
   resolveJiraBlockKey,
-  applyJiraBlockingLabel
+  applyJiraBlockingLabel,
+  computeOutcomesReport
 } from '../layeredIntelligence.js'
+import { recordFiledProposal, listOutcomes, reconcileOutcomes } from '../layeredIntelligenceOutcomes.js'
 import { resolveAppWorkTracker } from '../../lib/workTracker.js'
 import { tryReadFile } from '../../lib/fileUtils.js'
 import { join } from 'path'
@@ -205,11 +207,24 @@ export async function buildTaskInput({ app } = {}) {
 
   // Independent reads (app source set vs the tracker's open-issue list) — overlap
   // them so the non-parked path pays one round-trip, not two.
-  const [sources, { openIssues }] = await Promise.all([
+  const [sources, issuesRead] = await Promise.all([
     gatherSources(app, config),
     readIssues({ filer, forgeCli, cwd, jira, config })
   ])
-  const prompt = buildPrompt({ app, config, sources, openIssues, isPortos }) + buildCompletionContract()
+  const { openIssues, existingIssues, trackerReadFailed } = issuesRead
+
+  // Feedback loop (#2428): reconcile past proposals' outcomes against the fresh
+  // tracker read, then fold the merge-rate report into the prompt so the reasoner
+  // calibrates on its own history. Gated on the per-app `outcomes` source toggle;
+  // a failed tracker read skips reconciliation (never mark closed on a blind read).
+  let outcomesReport = ''
+  if (config.sources?.outcomes) {
+    if (!trackerReadFailed) await reconcileOutcomes({ appId: app.id, existingIssues })
+    const outcomes = await listOutcomes({ appId: app.id })
+    outcomesReport = computeOutcomesReport({ outcomes })
+  }
+
+  const prompt = buildPrompt({ app, config, sources, openIssues, isPortos, outcomesReport }) + buildCompletionContract()
   // Option A: surface the per-app provider/model (resolved onto config in
   // resolveLiContext) so the generator pins the AGENT to the app's choice — LI
   // keeps provider/model in taskTypeOverrides, not the global schedule interval.
@@ -299,7 +314,7 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
   if (success === false) return settle({ action: 'no-op', reason: 'agent-failed' })
 
   const ctx = await resolveLiContext(app)
-  const { isPortos, config, filer, forgeCli, cwd, jira } = ctx
+  const { isPortos, config, tracker, filer, forgeCli, cwd, jira } = ctx
 
   // The payload IS the reasoner's JSON object (parsed from the sentinel). A null/
   // malformed payload is the "returned nothing usable" case.
@@ -342,6 +357,14 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
         reason = null
         const ref = filedRef(filedKey, filedNumber) ?? ''
         console.log(`📌 Layered Intelligence: ${app.name} filed "${proposal.title}" [${proposal.slug}]${ref ? ` (${ref})` : ''}`)
+        // Feedback loop (#2428): remember what we just filed so a later run can
+        // read back its outcome. Gated on the app's `outcomes` source toggle.
+        if (config.sources?.outcomes) {
+          await recordFiledProposal({
+            appId: app.id, slug: proposal.slug, tracker: tracker.resolved,
+            issueRef: filedRef(filedKey, filedNumber), scope: proposal.scope
+          })
+        }
         const issueRef = filedKey || filedNumber
         if (isHandoffEligible({ proposal, config, filed: issueRef })) {
           const task = await enqueueHandoff(buildHandoffTask({ app, proposal, issueRef }))

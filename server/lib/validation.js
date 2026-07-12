@@ -126,6 +126,9 @@ export const layeredIntelligenceConfigSchema = z.object({
     healthReport: z.boolean().optional(),
     planMd: z.boolean().optional(),
     openIssues: z.boolean().optional(),
+    // Feedback loop (#2428): feed past LI proposals + their tracker outcomes back
+    // into the reasoning prompt. Default on for PortOS, off for managed apps.
+    outcomes: z.boolean().optional(),
     // Custom Layer-1 sources. Discriminated on `type`: a repo-relative `file`,
     // an `http`(s) URL, or a shell `cmd`. All three carry an optional display
     // `label`. gatherSources also re-enforces the file confinement + the
