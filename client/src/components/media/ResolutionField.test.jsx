@@ -12,7 +12,9 @@ const VIDEO_PRESETS = [
   { label: '1024×576 (16:9)', w: 1024, h: 576 },
 ];
 
-const imageBounds = { min: 64, max: 3840, step: 8, maxPixels: 8_294_400 };
+// Image route accepts any integer edge → step 1, no blur snap. Video route
+// floors to 64 → step 64 + snapOnBlur.
+const imageBounds = { min: 64, max: 3840, step: 1, maxPixels: 8_294_400 };
 const videoBounds = { min: 64, max: 2048, step: 64, snapOnBlur: true };
 
 describe('ResolutionField — preset dropdown', () => {
@@ -72,12 +74,18 @@ describe('ResolutionField — custom W×H', () => {
     expect(onChange).toHaveBeenLastCalledWith(640, 512);
   });
 
-  it('does NOT snap an image edge to the step multiple on blur (clamp only)', () => {
+  it('preserves an exact odd image edge on blur (no snap, clamp only)', () => {
     const onChange = vi.fn();
-    // 705 is in-bounds and not a multiple of 8; image must preserve it exactly.
+    // 705 is in-bounds and not a multiple of 8; the image route accepts any
+    // integer, so it must survive blur unchanged.
     render(<ResolutionField presets={IMAGE_PRESETS} width={705} height={1024} onChange={onChange} {...imageBounds} />);
     fireEvent.blur(screen.getByLabelText('Width'));
     expect(onChange).toHaveBeenLastCalledWith(705, 1024);
+  });
+
+  it('renders the image number inputs with step=1 so odd edges pass native validation', () => {
+    render(<ResolutionField presets={IMAGE_PRESETS} width={705} height={1024} onChange={vi.fn()} {...imageBounds} />);
+    expect(screen.getByLabelText('Width').getAttribute('step')).toBe('1');
   });
 
   it('warns when total pixels exceed the cap (image only)', () => {

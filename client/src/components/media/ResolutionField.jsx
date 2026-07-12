@@ -78,7 +78,8 @@ export default function ResolutionField({
   };
   const pixelCount = (width || 0) * (height || 0);
   const overPixelCap = maxPixels != null && pixelCount > maxPixels;
-  const defaultNote = `Each edge ${min}–${max}px${maxPixels != null ? `, total ≤ ${maxPixels.toLocaleString()} px` : ''}. Multiples of ${step} render best on local models.`;
+  const stepClause = step > 1 ? ` Multiples of ${step} render best on local models.` : '';
+  const defaultNote = `Each edge ${min}–${max}px${maxPixels != null ? `, total ≤ ${maxPixels.toLocaleString()} px` : ''}.${stepClause}`;
 
   return (
     <>

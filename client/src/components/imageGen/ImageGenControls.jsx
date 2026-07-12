@@ -87,11 +87,13 @@ export default function ImageGenControls({
         </FormField>
       )}
 
-      {/* Preset dropdown + arbitrary width/height. The server accepts any edge
-          in [64, 3840] with total pixels ≤ 8.29M (imageEdgeSchema +
-          refineImagePixelCap), so custom sizes like 704×1280 (9:16 portrait)
-          work without a new preset. Step 8 keeps values latent-friendly for
-          the local diffusion runners. */}
+      {/* Preset dropdown + arbitrary width/height. The image route accepts ANY
+          integer edge in [64, 3840] with total pixels ≤ 8.29M (imageEdgeSchema
+          is `z.number().int().min(64).max(3840)` + refineImagePixelCap), so
+          custom sizes like 704×1280 (9:16 portrait) work without a new preset.
+          step=1 (not 8) so a hand-typed non-multiple-of-8 edge isn't blocked by
+          the form's native stepMismatch validation before submit — the note
+          keeps "multiples of 8 render best" as advice, not a hard constraint. */}
       <ResolutionField
         presets={availableResolutions}
         width={width}
@@ -99,10 +101,11 @@ export default function ImageGenControls({
         onChange={onResolutionChange}
         min={64}
         max={MAX_IMAGE_EDGE}
-        step={8}
+        step={1}
         maxPixels={MAX_IMAGE_PIXELS}
         disabled={disabled}
         inputClassName={inputCls}
+        note={`Each edge 64–${MAX_IMAGE_EDGE}px, total ≤ ${MAX_IMAGE_PIXELS.toLocaleString()} px. Multiples of 8 render best on local models.`}
       />
 
       {/* Codex's image_gen tool ignores seed/steps/guidance — only resolution
