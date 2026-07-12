@@ -128,6 +128,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 |---|---|---|
 | `useAppDeploy` | Stream `deploy.sh` output via Socket.IO. | App deployment surfaces only. |
 | `useAppOperation` | Socket-based app ops (update, standardize) with step tracking. | App operations UI. |
+| `useAppOverrideActions` | Per-app scheduled-task override mutations (`{ handleUpdateOverride, handleBulkToggleOverride }`) with shared toast copy + silent flag; pass the tab's `refetch`. | Any surface hosting `PerAppOverrideList` (Schedule tab, Timeline tab) — don't re-copy the write-plus-toast-plus-refetch handlers. |
 | `useCanonPatch` | Optimistic canon-entry patch: rebuild the kind list with one entry mutated, apply locally, PATCH the universe, re-apply the server copy. Targets + staleness-guards on the loaded record's `universe.id` so a mid-flight universe swap can't cross-PATCH or resurrect stale state. `apply` is `setUniverse` or `onUniverseChange`. | Inline canon-field edits on a universe (UniverseCanonSection, NounsStage). Don't re-roll the optimistic-then-confirm dance. |
 | `useCityAudio` | CyberCity ambient audio. | CyberCity only. |
 | `useCityData` | CyberCity environment data + physics. | CyberCity only. |
