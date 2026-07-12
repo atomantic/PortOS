@@ -201,12 +201,19 @@ describe('MusicVideo audio → MIDI transcription (MuScriptor)', () => {
     expect(btn).toHaveProperty('disabled', true);
   });
 
-  it('kicks off a transcription for the selected project', async () => {
+  it('kicks off a transcription for the selected project with the default model', async () => {
     await openProject(PROJECT_WITH_CLIP);
     const btn = await screen.findByRole('button', { name: /^MIDI$/ });
     expect(btn).toHaveProperty('disabled', false);
     fireEvent.click(btn);
-    await waitFor(() => expect(transcribeMusicVideoMidi).toHaveBeenCalledWith('mv-1', {}, { silent: true }));
+    await waitFor(() => expect(transcribeMusicVideoMidi).toHaveBeenCalledWith('mv-1', { model: 'medium' }, { silent: true }));
+  });
+
+  it('kicks off a transcription with the chosen model size', async () => {
+    await openProject(PROJECT_WITH_CLIP);
+    fireEvent.change(await screen.findByLabelText('MuScriptor model size'), { target: { value: 'large' } });
+    fireEvent.click(await screen.findByRole('button', { name: /^MIDI$/ }));
+    await waitFor(() => expect(transcribeMusicVideoMidi).toHaveBeenCalledWith('mv-1', { model: 'large' }, { silent: true }));
   });
 
   it('shows the MIDI download link once the project carries a transcription pointer', async () => {
