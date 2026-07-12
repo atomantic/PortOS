@@ -149,10 +149,11 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
 
   it('filters local-LLM reviewers out of the prompt token (no invocation instructions in claim/plan prompts)', () => {
     // lmstudio/ollama defaults must not reach {reviewers}: the claim/plan
-    // prompts can't drive them, so the loop would stall. The filter falls
-    // through to the hardcoded copilot default when it empties the list.
+    // prompts can't drive them, so the loop would stall. The filtered list flows
+    // into buildReviewersCsv, which owns the fallback to the hardcoded copilot
+    // default when the filter empties the list (unit-tested in validation.test.js).
     expect(GEN_SRC).toContain('.filter((r) => !LOCAL_LLM_REVIEWERS.includes(r))');
-    expect(GEN_SRC).toContain('promptReviewers.length ? promptReviewers : [...DEFAULT_REVIEWERS]');
+    expect(GEN_SRC).toContain('buildReviewersCsv(promptReviewers, promptUsernames)');
   });
 });
 

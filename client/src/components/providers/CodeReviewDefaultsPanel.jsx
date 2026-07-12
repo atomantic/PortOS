@@ -24,6 +24,7 @@ export default function CodeReviewDefaultsPanel() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [reviewers, setReviewers] = useState(DEFAULT_REVIEWERS);
+  const [usernames, setUsernames] = useState([]);
   const [stopMode, setStopMode] = useState(DEFAULT_REVIEW_STOP_MODE);
   const [reviewerApplies, setReviewerApplies] = useState(false);
   const [lmstudioModel, setLmstudioModel] = useState('');
@@ -42,6 +43,7 @@ export default function CodeReviewDefaultsPanel() {
       if (cancelled) return;
       if (defaults) {
         setReviewers(Array.isArray(defaults.reviewers) && defaults.reviewers.length ? defaults.reviewers : DEFAULT_REVIEWERS);
+        setUsernames(Array.isArray(defaults.usernames) ? defaults.usernames : []);
         setStopMode(defaults.stopMode || DEFAULT_REVIEW_STOP_MODE);
         setReviewerApplies(defaults.reviewerApplies === true);
         setLmstudioModel(defaults.lmstudioModel || '');
@@ -81,6 +83,7 @@ export default function CodeReviewDefaultsPanel() {
     // than writing the literal "" the <select> renders.
     const payload = {
       reviewers,
+      usernames,
       stopMode,
       reviewerApplies,
       lmstudioModel: lmstudioModel || undefined,
@@ -139,11 +142,13 @@ export default function CodeReviewDefaultsPanel() {
         <>
           <ReviewerPicker
             reviewers={reviewers}
+            usernames={usernames}
             stopMode={stopMode}
             reviewerApplies={reviewerApplies}
             disabled={saving}
-            onChange={({ reviewers: r, stopMode: s, reviewerApplies: a }) => {
+            onChange={({ reviewers: r, usernames: u, stopMode: s, reviewerApplies: a }) => {
               setReviewers(r);
+              setUsernames(u);
               setStopMode(s);
               setReviewerApplies(a);
             }}

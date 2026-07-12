@@ -11,6 +11,10 @@ import {
   sanitizeTaskMetadata,
   stageConfigUpdateSchema,
   normalizeReviewers,
+  normalizeReviewUsernames,
+  resolveReviewUsernames,
+  resolveKeyedReviewers,
+  buildReviewersCsv,
   buildReviewWithArgs,
   createCosTaskSchema,
   featureProviderConfigSchema,
@@ -133,6 +137,20 @@ describe('validation.js', () => {
 
     it('rejects an unknown stopMode', () => {
       expect(codeReviewSettingsSchema.safeParse({ stopMode: 'nope' }).success).toBe(false)
+    })
+
+    it('normalizes reviewer usernames (strips @, drops unsafe, dedupes)', () => {
+      const r = codeReviewSettingsSchema.safeParse({
+        usernames: ['@CodeReviewbot', 'codereviewbot', 'bad token', 'my-org/reviewers'],
+      })
+      expect(r.success).toBe(true)
+      expect(r.data.usernames).toEqual(['CodeReviewbot', 'my-org/reviewers'])
+    })
+
+    it('leaves usernames undefined when absent', () => {
+      const r = codeReviewSettingsSchema.safeParse({ reviewers: ['copilot'] })
+      expect(r.success).toBe(true)
+      expect(r.data.usernames).toBeUndefined()
     })
   })
 
@@ -706,6 +724,19 @@ describe('validation.js', () => {
       expect(sanitizeTaskMetadata({ reviewers: ['nope'] })).toBeNull();
     });
 
+    it('should normalize reviewer usernames and keep an explicit empty override', () => {
+      expect(sanitizeTaskMetadata({ usernames: ['@CodeReviewbot', 'codereviewbot', 'bad token'] }))
+        .toEqual({ usernames: ['CodeReviewbot'] });
+      // An explicit array is KEPT even when it normalizes to empty — `[]` is a
+      // meaningful "no external gate" override of the Code Review Defaults.
+      expect(sanitizeTaskMetadata({ usernames: ['bad token', '$(x)'] })).toEqual({ usernames: [] });
+      expect(sanitizeTaskMetadata({ usernames: [] })).toEqual({ usernames: [] });
+      // A non-array usernames value contributes no keys (→ null with no siblings).
+      expect(sanitizeTaskMetadata({ usernames: 'nope' })).toBeNull();
+      expect(sanitizeTaskMetadata({ reviewLoop: true, usernames: ['@Bot'] }))
+        .toEqual({ reviewLoop: true, usernames: ['Bot'] });
+    });
+
     it('should accept reviewStopMode and reviewerApplies', () => {
       expect(sanitizeTaskMetadata({ reviewStopMode: 'on-clean' })).toEqual({ reviewStopMode: 'on-clean' });
       expect(sanitizeTaskMetadata({ reviewStopMode: 'bogus' })).toBeNull();
@@ -746,6 +777,75 @@ describe('validation.js', () => {
     });
   });
 
+  describe('normalizeReviewUsernames', () => {
+    it('strips a leading @, trims, and preserves order', () => {
+      expect(normalizeReviewUsernames(['@CodeReviewbot', ' reviewer-two '])).toEqual(['CodeReviewbot', 'reviewer-two']);
+    });
+
+    it('case-insensitively dedupes while keeping first occurrence', () => {
+      expect(normalizeReviewUsernames(['@Bot', 'bot', 'BOT', 'other'])).toEqual(['Bot', 'other']);
+    });
+
+    it('drops shell-unsafe / non-username tokens', () => {
+      expect(normalizeReviewUsernames(['ok', 'bad token', 'semi;rm', '$(x)', 'a`b', 42, null, '', '   ']))
+        .toEqual(['ok']);
+    });
+
+    it('accepts org/team slugs', () => {
+      expect(normalizeReviewUsernames(['my-org/reviewers'])).toEqual(['my-org/reviewers']);
+    });
+
+    it('caps the list at MAX_REVIEW_USERNAMES (20)', () => {
+      const many = Array.from({ length: 30 }, (_, i) => `user${i}`);
+      expect(normalizeReviewUsernames(many)).toHaveLength(20);
+    });
+
+    it('returns [] for non-array input', () => {
+      expect(normalizeReviewUsernames(undefined)).toEqual([]);
+      expect(normalizeReviewUsernames('nope')).toEqual([]);
+    });
+  });
+
+  describe('resolveKeyedReviewers', () => {
+    it('keeps an explicitly empty list empty only when usernames carry the review', () => {
+      expect(resolveKeyedReviewers([], true)).toEqual([]);
+      // No usernames → falls back to the copilot default (can never be empty).
+      expect(resolveKeyedReviewers([], false)).toEqual(['copilot']);
+    });
+
+    it('normalizes a populated list and defaults absent/legacy input to copilot', () => {
+      expect(resolveKeyedReviewers(['codex', 'gemini'], true)).toEqual(['codex', 'antigravity']);
+      expect(resolveKeyedReviewers(undefined, true)).toEqual(['copilot']);
+    });
+  });
+
+  describe('resolveReviewUsernames', () => {
+    it('lets a task-level list (even empty) override the defaults', () => {
+      expect(resolveReviewUsernames(['@Bot'], ['Default'])).toEqual(['Bot']);
+      // Explicit empty task list wins over the defaults (username-only override).
+      expect(resolveReviewUsernames([], ['Default'])).toEqual([]);
+    });
+
+    it('falls back to the defaults when the task did not pin its own', () => {
+      expect(resolveReviewUsernames(undefined, ['@Default', 'bad token'])).toEqual(['Default']);
+    });
+  });
+
+  describe('buildReviewersCsv', () => {
+    it('joins keyed reviewers then @user tokens', () => {
+      expect(buildReviewersCsv(['copilot', 'codex'], ['@Bot'])).toBe('copilot,codex,@Bot');
+    });
+
+    it('falls back to the copilot default when the keyed list is empty', () => {
+      expect(buildReviewersCsv([], [])).toBe('copilot');
+      expect(buildReviewersCsv([], ['Bot'])).toBe('copilot,@Bot');
+    });
+
+    it('normalizes/strips bogus usernames', () => {
+      expect(buildReviewersCsv(['codex'], ['@Bot', 'bad token', 'bot'])).toBe('codex,@Bot');
+    });
+  });
+
   describe('buildReviewWithArgs', () => {
     it('emits nothing for the lone default copilot', () => {
       expect(buildReviewWithArgs(['copilot'])).toBe('');
@@ -766,6 +866,31 @@ describe('validation.js', () => {
       // copilot-only → reviewer-applies suppressed (no-op on copilot)
       expect(buildReviewWithArgs(['copilot'], 'all', true)).toBe('');
     });
+
+    it('appends username reviewers as @user tokens after the keyed reviewers', () => {
+      // copilot + a username is no longer "lone default" → the flag is emitted.
+      expect(buildReviewWithArgs(['copilot'], 'all', false, ['CodeReviewbot']))
+        .toBe('--review-with copilot,@CodeReviewbot');
+      expect(buildReviewWithArgs(['codex', 'copilot'], 'all', false, ['@Bot']))
+        .toBe('--review-with codex,copilot,@Bot');
+    });
+
+    it('counts usernames toward the 2+ stop-mode gate', () => {
+      // one keyed reviewer + one username = two review sources → stop-mode applies.
+      expect(buildReviewWithArgs(['copilot'], 'on-clean', false, ['Bot']))
+        .toBe('--review-with copilot,@Bot --review-stop-on-clean');
+    });
+
+    it('does not enable reviewer-applies for username-only additions', () => {
+      // usernames are external PR reviewers, not CLIs that apply fixes.
+      expect(buildReviewWithArgs(['copilot'], 'all', true, ['Bot']))
+        .toBe('--review-with copilot,@Bot');
+    });
+
+    it('normalizes/strips bogus usernames before emitting', () => {
+      expect(buildReviewWithArgs(['copilot'], 'all', false, ['@Bot', 'bad token', 'bot']))
+        .toBe('--review-with copilot,@Bot');
+    });
   });
 
   describe('createCosTaskSchema reviewers fields', () => {
@@ -785,6 +910,19 @@ describe('validation.js', () => {
     it('rejects an unknown reviewer or stop-mode', () => {
       expect(createCosTaskSchema.safeParse({ description: 'x', reviewers: ['bogus'] }).success).toBe(false);
       expect(createCosTaskSchema.safeParse({ description: 'x', reviewStopMode: 'nope' }).success).toBe(false);
+    });
+
+    it('normalizes reviewer usernames and leaves the field undefined when absent', () => {
+      const withUsers = createCosTaskSchema.safeParse({
+        description: 'x',
+        usernames: ['@CodeReviewbot', 'bad token', 'codereviewbot'],
+      });
+      expect(withUsers.success).toBe(true);
+      expect(withUsers.data.usernames).toEqual(['CodeReviewbot']);
+      // Absent → undefined (not coerced to []), so it isn't persisted as an override.
+      const withoutUsers = createCosTaskSchema.safeParse({ description: 'x' });
+      expect(withoutUsers.success).toBe(true);
+      expect(withoutUsers.data.usernames).toBeUndefined();
     });
 
     it('accepts multiple image screenshots and attachment objects', () => {

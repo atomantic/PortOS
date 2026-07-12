@@ -21,6 +21,8 @@ import {
   REVIEWER_ALIASES,
   REVIEWER_VALUES,
   REVIEW_STOP_MODES,
+  normalizeReviewUsernames,
+  resolveReviewUsernames,
 } from '../lib/validation.js'
 import { getSettings, settingsEvents } from './settings.js'
 import { getBaseUrl as getLmStudioBaseUrl } from './lmStudioManager.js'
@@ -55,6 +57,11 @@ export function pickCodeReviewDefaults(settings) {
     : []
   return {
     reviewers: reviewers.length ? reviewers : [...DEFAULT_REVIEWERS],
+    // Arbitrary GitHub reviewer usernames appended to `--review-with` to gate the
+    // merge. Normalized so a hand-edited settings.json can't smuggle in unsafe
+    // tokens. Empty array = none configured (distinct from the copilot fallback
+    // reviewers get).
+    usernames: normalizeReviewUsernames(raw?.usernames),
     stopMode: REVIEW_STOP_MODES.includes(raw?.stopMode) ? raw.stopMode : DEFAULT_REVIEW_STOP_MODE,
     reviewerApplies: raw?.reviewerApplies === true,
     lmstudioModel: typeof raw?.lmstudioModel === 'string' && raw.lmstudioModel ? raw.lmstudioModel : null,
@@ -107,12 +114,16 @@ export async function getCodeReviewDefaults() {
 export async function resolveReviewLoopOptions(metadata, { normalize, isTruthyMeta }) {
   const defaults = await getCodeReviewDefaults().catch(() => null)
   const reviewers = normalize(metadata, defaults?.reviewers)
+  // GitHub reviewer usernames: a task-level list (even empty) overrides the
+  // global default; only fall back to the Code Review Defaults when the task
+  // didn't pin its own. Mirrors the reviewers precedence.
+  const usernames = resolveReviewUsernames(metadata?.usernames, defaults?.usernames)
   const reviewStopMode = metadata?.reviewStopMode || defaults?.stopMode || DEFAULT_REVIEW_STOP_MODE
   const reviewerApplies = metadata?.reviewerApplies !== undefined
     ? isTruthyMeta(metadata?.reviewerApplies)
     : (defaults?.reviewerApplies === true)
   const codexModel = defaults?.codexModel || null
-  return { reviewers, reviewStopMode, reviewerApplies, codexModel }
+  return { reviewers, usernames, reviewStopMode, reviewerApplies, codexModel }
 }
 
 const CODE_REVIEW_SYSTEM_PROMPT = `You are a careful senior code reviewer. The user will paste a unified PR diff. Review only what the diff changes (not the whole repo). Produce findings as a markdown list grouped by severity:

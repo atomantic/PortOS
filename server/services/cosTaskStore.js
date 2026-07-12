@@ -16,7 +16,7 @@ import { readFile, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { parseTasksMarkdown, groupTasksByStatus, getAutoApprovedTasks, getAwaitingApprovalTasks, generateTasksMarkdown, hasKnownPrefix } from '../lib/taskParser.js';
-import { REVIEW_STOP_MODES, normalizeReviewers } from '../lib/validation.js';
+import { REVIEW_STOP_MODES, normalizeReviewers, normalizeReviewUsernames } from '../lib/validation.js';
 import { loadState, withStateLock, ROOT_DIR } from './cosState.js';
 import { cosEvents } from './cosEvents.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
@@ -262,6 +262,13 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     // Ordered multi-reviewer list (normalizes legacy single `reviewer` too).
     if (Array.isArray(taskData.reviewers) || (typeof taskData.reviewer === 'string' && taskData.reviewer)) {
       metadata.reviewers = normalizeReviewers(taskData);
+    }
+    // Arbitrary GitHub reviewer usernames (gate-only PR reviewers). Persist the
+    // normalized list when present, or an explicit empty array so a per-task
+    // "no username reviewers" choice overrides the Code Review Defaults instead
+    // of silently inheriting them.
+    if (Array.isArray(taskData.usernames)) {
+      metadata.usernames = normalizeReviewUsernames(taskData.usernames);
     }
     if (REVIEW_STOP_MODES.includes(taskData.reviewStopMode)) metadata.reviewStopMode = taskData.reviewStopMode;
     if (taskData.reviewerApplies === true) metadata.reviewerApplies = true;

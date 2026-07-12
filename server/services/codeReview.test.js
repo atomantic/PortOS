@@ -47,6 +47,7 @@ describe('codeReview helpers', () => {
     it('returns the hardcoded fallback when settings has no codeReview slice', () => {
       expect(pickCodeReviewDefaults(null)).toEqual({
         reviewers: ['copilot'],
+        usernames: [],
         stopMode: 'all',
         reviewerApplies: false,
         lmstudioModel: null,
@@ -55,6 +56,7 @@ describe('codeReview helpers', () => {
       })
       expect(pickCodeReviewDefaults({})).toEqual({
         reviewers: ['copilot'],
+        usernames: [],
         stopMode: 'all',
         reviewerApplies: false,
         lmstudioModel: null,
@@ -108,12 +110,26 @@ describe('codeReview helpers', () => {
       })
       expect(out).toEqual({
         reviewers: ['codex', 'lmstudio'],
+        usernames: [],
         stopMode: 'on-clean',
         reviewerApplies: true,
         lmstudioModel: 'qwen2.5-coder:7b',
         ollamaModel: 'codellama',
         codexModel: 'gpt-5.6-sol',
       })
+    })
+
+    it('normalizes arbitrary reviewer usernames (strips @, dedupes, drops unsafe)', () => {
+      const out = pickCodeReviewDefaults({
+        codeReview: {
+          usernames: ['@CodeReviewbot', 'codereviewbot', 'bad token!', 'my-org/reviewers'],
+        },
+      })
+      expect(out.usernames).toEqual(['CodeReviewbot', 'my-org/reviewers'])
+    })
+
+    it('defaults usernames to an empty array when absent', () => {
+      expect(pickCodeReviewDefaults({ codeReview: { reviewers: ['copilot'] } }).usernames).toEqual([])
     })
   })
 

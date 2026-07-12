@@ -22,7 +22,7 @@
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, normalizeReviewers, LOCAL_LLM_REVIEWERS, DEFAULT_REVIEWERS, SWARM_COUNT_MIN } from '../lib/validation.js';
+import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, normalizeReviewers, resolveReviewUsernames, buildReviewersCsv, LOCAL_LLM_REVIEWERS, SWARM_COUNT_MIN } from '../lib/validation.js';
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, diagnoseUnpickablePlan } from '../lib/planIds.js';
 import { loadState, saveState, withStateLock, isImprovementEnabled, isDaemonRunning } from './cosState.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
@@ -323,15 +323,19 @@ export async function buildClaimWorkTask(app, { issueAuthorFilter, reviewers } =
   // local-LLM reviewers the claim prompts can't drive, falling back to the
   // hardcoded default when filtering empties the list. A settings read error
   // degrades to the default inside normalizeReviewers, so it never blocks.
+  const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
   let reviewersList;
   if (reviewers !== undefined) {
     reviewersList = (Array.isArray(reviewers) ? reviewers : [reviewers]).filter(Boolean);
   } else {
-    const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
     reviewersList = normalizeReviewers(metadata, codeReviewDefaults?.reviewers)
       .filter((r) => !LOCAL_LLM_REVIEWERS.includes(r));
   }
-  const reviewersCsv = (reviewersList.length ? reviewersList : [...DEFAULT_REVIEWERS]).join(',');
+  // Arbitrary GitHub reviewer usernames appended as `@user` tokens so the
+  // claim prompt's `/do:next --review-with` gates the merge on them too. A
+  // task-level list overrides the Code Review Defaults.
+  const promptUsernames = resolveReviewUsernames(metadata.usernames, codeReviewDefaults?.usernames);
+  const reviewersCsv = buildReviewersCsv(reviewersList, promptUsernames);
   const issueAuthorFilterBlock = resolveIssueAuthorFilterBlock(promptTaskType, resolvedAuthorFilter);
   // Swarm mode (`/do:next --swarm`) is prepended (not an in-template
   // placeholder) so it stays an opt-in orchestration wrapper that needs no
@@ -2003,7 +2007,11 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   // copilot default when filtering empties the list.
   const promptReviewers = normalizeReviewers(metadata, codeReviewDefaults?.reviewers)
     .filter((r) => !LOCAL_LLM_REVIEWERS.includes(r));
-  const reviewersCsv = (promptReviewers.length ? promptReviewers : [...DEFAULT_REVIEWERS]).join(',');
+  // Arbitrary GitHub reviewer usernames appended as `@user` tokens so the claim
+  // prompt's `/do:next --review-with` gates the merge on them too. A task-level
+  // list overrides the Code Review Defaults; forge-agnostic, so not filtered.
+  const promptUsernames = resolveReviewUsernames(metadata.usernames, codeReviewDefaults?.usernames);
+  const reviewersCsv = buildReviewersCsv(promptReviewers, promptUsernames);
   // {issueAuthorFilter} directive — the filter was already merged (global →
   // per-app override) and value-constrained by sanitizeTaskMetadata, so read it
   // from `metadata` (default 'self', the slashdo `/do:next --self` security

@@ -76,4 +76,39 @@ describe('ReviewerPicker', () => {
     rerender(<ReviewerPicker reviewers={['codex']} onChange={() => {}} />);
     expect(screen.getByText(/Reviewer applies fixes/)).toBeInTheDocument();
   });
+
+  it('adds a GitHub reviewer username (strips @) via the Add button', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<ReviewerPicker reviewers={['copilot']} onChange={onChange} />);
+    await user.type(screen.getByLabelText('Add a GitHub reviewer username'), '@CodeReviewbot');
+    await user.click(screen.getByRole('button', { name: /^Add$/ }));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ usernames: ['CodeReviewbot'] }));
+  });
+
+  it('adds a username on Enter', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<ReviewerPicker reviewers={['copilot']} onChange={onChange} />);
+    await user.type(screen.getByLabelText('Add a GitHub reviewer username'), 'reviewer-bot{Enter}');
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ usernames: ['reviewer-bot'] }));
+  });
+
+  it('rejects an invalid username and surfaces an error without emitting', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<ReviewerPicker reviewers={['copilot']} onChange={onChange} />);
+    await user.type(screen.getByLabelText('Add a GitHub reviewer username'), 'bad token!{Enter}');
+    expect(onChange).not.toHaveBeenCalled();
+    expect(screen.getByText(/valid GitHub username/)).toBeInTheDocument();
+  });
+
+  it('renders existing username pills and removes one', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<ReviewerPicker reviewers={['copilot']} usernames={['CodeReviewbot', 'other-bot']} onChange={onChange} />);
+    expect(screen.getByText('CodeReviewbot')).toBeInTheDocument();
+    await user.click(screen.getByLabelText('Remove @CodeReviewbot'));
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ usernames: ['other-bot'] }));
+  });
 });
