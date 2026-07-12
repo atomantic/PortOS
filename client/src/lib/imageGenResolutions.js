@@ -70,6 +70,20 @@ export function clampImageDimensions(width, height) {
   return { width: snap(w), height: snap(h) };
 }
 
+// Clamp a single hand-typed edge (width or height) to the server's per-edge
+// bounds [64, MAX_IMAGE_EDGE] — mirrors imageEdgeSchema so the custom-dimension
+// inputs can't submit a value that 400s. Non-finite / ≤0 input snaps to the 64
+// floor. Fractional input floors (diffusion runners want integer pixels).
+export function clampImageEdge(value) {
+  const n = Math.floor(Number(value));
+  if (!Number.isFinite(n) || n < 64) return 64;
+  return Math.min(MAX_IMAGE_EDGE, n);
+}
+
+// Sentinel dropdown value for "enter arbitrary width/height" — distinct from
+// any preset label so the resolution <select> can toggle the custom inputs.
+export const CUSTOM_RESOLUTION_VALUE = '__custom__';
+
 // Flux 1 (mflux/diffusers, `dev` / `schnell`) has no `runner` field — it's
 // the fallback for local mode when nothing more specific matches.
 const NATIVE_RUNNER_KEYS = new Set([
