@@ -1,5 +1,9 @@
 # Unreleased
 
+## Changes
+
+- **Shell page quick-command buttons trimmed to the interactive tools.** Dropped the four shell one-liner shortcuts (`git status`, `git pull`, `npm test`, `npm run dev`) that duplicated things you'd just type, renamed the `antigravity` button to its actual command `agy`, and added a `grok` button alongside the other coding-agent launchers.
+
 ## Fixes
 
 - **HuggingFace model downloads (Flux and every other image/video/music pull) now log to the server console.** Triggering a base-model download showed a progress bar in the UI but left no trace in the server log — the entire download path emitted progress *only* over the SSE stream to the browser, and PortOS has no HTTP access logger, so a headless/PM2 log had no record the multi-GB fetch ever ran. The shared SSE driver (`server/lib/sseDownload.js#startHfDownloadStream`, the single chokepoint behind the image, video, and music download endpoints) now writes single-line, emoji-prefixed log lines for the start of each repo pull (`⬇️`, with a forced-re-fetch marker), each file as it streams, a cache hit that skips the download (`📦`), the outcome (`✅` complete with byte count / `❌` failed with the error message), and client-disconnect cancellation (`🛑`) — while cancelled results are deliberately not logged as failures.
