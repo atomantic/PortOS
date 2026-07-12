@@ -22,6 +22,7 @@ import { isOpencodeCommand } from '../lib/providerModels.js';
 import { shellQuote } from '../lib/shellQuote.js';
 import * as jiraService from './jira.js';
 import { emitLog } from './cosEvents.js';
+import { PORTOS_APP_ID } from './apps.js';
 
 const ROOT_DIR = PATHS.root;
 const AGENTS_DIR = PATHS.cosAgents;
@@ -213,7 +214,11 @@ function renderFileListField(header, items, formatItem, formatInline, asList) {
  */
 export function buildTaskBlock(task, { screenshotsAsList = false } = {}) {
   const description = task.description;
-  const targetApp = task.metadata?.app ? `**Target App**: ${task.metadata.app}` : '';
+  // Only surface **Target App** for MANAGED apps — it scopes cross-repo work the
+  // agent's cwd wouldn't otherwise reveal. For the PortOS default app the agent
+  // already runs in the PortOS directory, so the line is redundant noise.
+  const app = task.metadata?.app;
+  const targetApp = app && app !== PORTOS_APP_ID ? `**Target App**: ${app}` : '';
   const screenshots = renderFileListField(
     'Screenshots', task.metadata?.screenshots,
     (s) => `\`${s}\``, (s) => s, screenshotsAsList
@@ -896,8 +901,10 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
 
   // --- Task block --------------------------------------------------------
   // cwd is set by the spawner and the agent knows its own id from the
-  // runner, so the prompt skips that metadata. Target app is kept because
-  // it scopes managed-app work. Shared with the full path via buildTaskBlock.
+  // runner, so the prompt skips that metadata. Target app is kept only for
+  // MANAGED apps because it scopes cross-repo work; the PortOS default app is
+  // suppressed in buildTaskBlock since cwd already reveals it. Shared with the
+  // full path via buildTaskBlock.
   const taskBlock = buildTaskBlock(task, { screenshotsAsList: true });
   sections.push(taskBlock.description);
   if (taskBlock.targetApp) sections.push(taskBlock.targetApp);
