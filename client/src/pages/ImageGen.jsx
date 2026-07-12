@@ -800,7 +800,10 @@ export default function ImageGen() {
           ...msg.result,
           prompt: payload.prompt,
           negativePrompt: payload.negativePrompt,
-          width, height,
+          // Report the clamped dims the server actually rendered (payload.width/
+          // height are already clamped in submitGenerationPayload) — not the raw
+          // render-closure width/height, which lag on a sub-64/Enter submit.
+          width: payload.width, height: payload.height,
           ...localOnlyMeta,
         });
         return msg.result;
