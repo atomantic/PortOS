@@ -733,13 +733,15 @@ export async function generateImage({ pythonPath, prompt = '', negativePrompt = 
     // emit a second 'failed' event + second SSE error frame.
     if (finalized) return;
     finalized = true;
-    activeProcess = null;
-    activeJob = null;
     // Emit any final unterminated marker line each stream wrote without a
     // trailing newline (a SIGKILL mid-write, or a progress bar whose last
-    // redraw never terminated) before finalizing the job.
+    // redraw never terminated) BEFORE nulling activeJob — handleLine's
+    // inference-progress branch mutates activeJob, so flushing first keeps a
+    // final progress line able to update it (mirrors videoGen's ordering).
     stderrReader.flush();
     stdoutReader.flush();
+    activeProcess = null;
+    activeJob = null;
     if (watcher) { try { watcher.close(); } catch { /* ignore */ } }
     rm(stepwiseDir, { recursive: true, force: true }).catch(() => {});
     if (code !== 0) {
