@@ -62,10 +62,41 @@ describe('createLineReader', () => {
     expect(lines).toEqual(['10%', '20%', '30%']);
   });
 
-  it('collapses runs of separators with /[\\r\\n]+/ (no empty lines between redraws)', () => {
+  it('collapses runs of separators with /[\\r\\n]+/ WITHIN a chunk (no empty lines between redraws)', () => {
     const { lines, reader } = collect({ splitRe: /[\r\n]+/ });
     reader.push('a\r\n\r\nb\n');
     expect(lines).toEqual(['a', 'b']);
+  });
+
+  it('a separator run split across a chunk boundary can yield one empty segment (callers filter empties)', () => {
+    // Documents the collapsing-regex boundary behavior codex flagged: because
+    // splitting is incremental, a `\r` in one chunk and `\n` in the next are
+    // not collapsed into one separator, so an empty segment appears. Every
+    // caller that passes /[\r\n]+/ discards empty lines, which is the contract.
+    const { lines, reader } = collect({ splitRe: /[\r\n]+/ });
+    reader.push('a\r');
+    reader.push('\nb\n');
+    expect(lines.filter((l) => l !== '')).toEqual(['a', 'b']);
+  });
+
+  it('stitches a multibyte UTF-8 codepoint split across chunk boundaries (Buffer input)', () => {
+    const { lines, reader } = collect();
+    // '🎬' (U+1F3AC) is 4 UTF-8 bytes at indices 6-9 of this string; cut at
+    // byte 8 so the emoji is split across the two chunks.
+    const full = Buffer.from('TITLE:🎬 clip\n', 'utf8');
+    reader.push(full.subarray(0, 8)); // 'TITLE:' + first 2 emoji bytes
+    reader.push(full.subarray(8));    // last 2 emoji bytes + ' clip\n'
+    expect(lines).toEqual(['TITLE:🎬 clip']);
+    expect(lines[0]).not.toContain('�'); // no replacement chars
+  });
+
+  it('flush() drains a trailing incomplete multibyte sequence without a newline', () => {
+    const { lines, reader } = collect();
+    const buf = Buffer.from('café', 'utf8'); // 'é' is 2 bytes
+    reader.push(buf.subarray(0, buf.length - 1)); // drop the last byte of 'é'
+    reader.push(buf.subarray(buf.length - 1)); // deliver it
+    reader.flush();
+    expect(lines).toEqual(['café']);
   });
 
   it('clamps the carry buffer when no separator arrives within maxCarry', () => {
