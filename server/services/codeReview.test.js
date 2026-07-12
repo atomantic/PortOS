@@ -57,6 +57,7 @@ describe('codeReview helpers', () => {
       expect(pickCodeReviewDefaults(null)).toEqual({
         reviewers: ['copilot'],
         usernames: [],
+        optionalReviewers: [],
         stopMode: 'all',
         reviewerApplies: false,
         lmstudioModel: null,
@@ -67,6 +68,7 @@ describe('codeReview helpers', () => {
       expect(pickCodeReviewDefaults({})).toEqual({
         reviewers: ['copilot'],
         usernames: [],
+        optionalReviewers: [],
         stopMode: 'all',
         reviewerApplies: false,
         lmstudioModel: null,
@@ -114,6 +116,7 @@ describe('codeReview helpers', () => {
       const out = pickCodeReviewDefaults({
         codeReview: {
           reviewers: ['codex', 'lmstudio'],
+          optionalReviewers: ['lmstudio', 'bogus'],
           stopMode: 'on-clean',
           reviewerApplies: true,
           lmstudioModel: 'qwen2.5-coder:7b',
@@ -125,6 +128,8 @@ describe('codeReview helpers', () => {
       expect(out).toEqual({
         reviewers: ['codex', 'lmstudio'],
         usernames: [],
+        // 'bogus' is dropped (not a known reviewer); 'lmstudio' survives.
+        optionalReviewers: ['lmstudio'],
         stopMode: 'on-clean',
         reviewerApplies: true,
         lmstudioModel: 'qwen2.5-coder:7b',

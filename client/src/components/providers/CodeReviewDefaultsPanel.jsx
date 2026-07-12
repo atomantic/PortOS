@@ -27,6 +27,7 @@ export default function CodeReviewDefaultsPanel() {
   const [saving, setSaving] = useState(false);
   const [reviewers, setReviewers] = useState(DEFAULT_REVIEWERS);
   const [usernames, setUsernames] = useState([]);
+  const [optionalReviewers, setOptionalReviewers] = useState([]);
   const [stopMode, setStopMode] = useState(DEFAULT_REVIEW_STOP_MODE);
   const [reviewerApplies, setReviewerApplies] = useState(false);
   const [lmstudioModel, setLmstudioModel] = useState('');
@@ -48,6 +49,7 @@ export default function CodeReviewDefaultsPanel() {
       if (defaults) {
         setReviewers(Array.isArray(defaults.reviewers) && defaults.reviewers.length ? defaults.reviewers : DEFAULT_REVIEWERS);
         setUsernames(Array.isArray(defaults.usernames) ? defaults.usernames : []);
+        setOptionalReviewers(Array.isArray(defaults.optionalReviewers) ? defaults.optionalReviewers : []);
         setStopMode(defaults.stopMode || DEFAULT_REVIEW_STOP_MODE);
         setReviewerApplies(defaults.reviewerApplies === true);
         setLmstudioModel(defaults.lmstudioModel || '');
@@ -101,6 +103,7 @@ export default function CodeReviewDefaultsPanel() {
     const payload = {
       reviewers,
       usernames,
+      optionalReviewers,
       stopMode,
       reviewerApplies,
       lmstudioModel: lmstudioModel || undefined,
@@ -161,12 +164,14 @@ export default function CodeReviewDefaultsPanel() {
           <ReviewerPicker
             reviewers={reviewers}
             usernames={usernames}
+            optionalReviewers={optionalReviewers}
             stopMode={stopMode}
             reviewerApplies={reviewerApplies}
             disabled={saving}
-            onChange={({ reviewers: r, usernames: u, stopMode: s, reviewerApplies: a }) => {
+            onChange={({ reviewers: r, usernames: u, optionalReviewers: o, stopMode: s, reviewerApplies: a }) => {
               setReviewers(r);
               setUsernames(u);
+              setOptionalReviewers(o);
               setStopMode(s);
               setReviewerApplies(a);
             }}

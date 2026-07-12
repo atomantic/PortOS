@@ -28,6 +28,7 @@ const normalizeReviewerValue = (value) => value === 'gemini' ? 'antigravity' : v
 export default function ReviewerPicker({
   reviewers = [],
   usernames = [],
+  optionalReviewers = [],
   stopMode = DEFAULT_REVIEW_STOP_MODE,
   reviewerApplies = false,
   onChange,
@@ -46,14 +47,46 @@ export default function ReviewerPicker({
   const hasNonCopilot = selected.some(r => r !== 'copilot');
   const selectedUsernames = normalizeReviewUsernames(usernames);
   const atMaxUsernames = selectedUsernames.length >= MAX_REVIEW_USERNAMES;
+  // Optional (non-blocking) reviewers — emitted with slashdo's `~opt` suffix.
+  // Each token mirrors an emitted `--review-with` token: a keyed slug or `@user`,
+  // so membership is a plain lookup (server `normalizeOptionalReviewers` owns the
+  // authoritative shape; this is the display mirror).
+  const optionalTokens = Array.isArray(optionalReviewers) ? [...new Set(optionalReviewers.map(String))] : [];
+  const optionalSet = new Set(optionalTokens.map(t => t.toLowerCase()));
+  const isOptional = (token) => optionalSet.has(token.toLowerCase());
+  const withoutToken = (token) => optionalTokens.filter(t => t.toLowerCase() !== token.toLowerCase());
 
   const emit = (next) => onChange?.({
     reviewers: selected,
     usernames: selectedUsernames,
+    optionalReviewers: optionalTokens,
     stopMode,
     reviewerApplies,
     ...next
   });
+
+  const toggleOptional = (token) => emit({
+    optionalReviewers: isOptional(token) ? withoutToken(token) : [...optionalTokens, token]
+  });
+
+  // The `~opt` non-blocking toggle rendered on every reviewer/username chip.
+  // `subject` is the human name used in the aria-label; `title` is the (chip-
+  // kind-specific) hover copy the caller resolves.
+  const renderOptToggle = (token, subject, title) => (
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={() => toggleOptional(token)}
+      title={title}
+      className={`text-[10px] font-mono leading-none px-1 py-0.5 rounded border ${isOptional(token)
+        ? 'text-port-warning border-port-warning/50 bg-port-warning/10'
+        : 'text-gray-600 border-transparent hover:text-gray-300 hover:border-port-border'} disabled:opacity-40`}
+      aria-pressed={isOptional(token)}
+      aria-label={isOptional(token) ? `Make ${subject} blocking` : `Make ${subject} non-blocking`}
+    >
+      ~opt
+    </button>
+  );
 
   const addUsername = () => {
     const clean = cleanReviewUsername(usernameInput);
@@ -74,10 +107,16 @@ export default function ReviewerPicker({
     setUsernameInput('');
     setUsernameError('');
   };
-  const removeUsername = (value) => emit({ usernames: selectedUsernames.filter(u => u !== value) });
+  const removeUsername = (value) => emit({
+    usernames: selectedUsernames.filter(u => u !== value),
+    optionalReviewers: withoutToken(`@${value}`)
+  });
 
   const add = (value) => emit({ reviewers: [...selected, value] });
-  const remove = (value) => emit({ reviewers: selected.filter(r => r !== value) });
+  const remove = (value) => emit({
+    reviewers: selected.filter(r => r !== value),
+    optionalReviewers: withoutToken(value)
+  });
   const move = (index, delta) => {
     const target = index + delta;
     if (target < 0 || target >= selected.length) return;
@@ -116,6 +155,9 @@ export default function ReviewerPicker({
             >
               <ChevronDown size={12} />
             </button>
+            {renderOptToggle(value, labelFor(value), isOptional(value)
+              ? `${labelFor(value)} is non-blocking (~opt): an inconclusive verdict from it won't block the merge. Click to make it blocking.`
+              : `${labelFor(value)} gates the merge. Click to make it non-blocking (~opt) — its inconclusive verdicts won't block the merge (a hard failure still does).`)}
             <button
               type="button"
               disabled={disabled}
@@ -131,6 +173,12 @@ export default function ReviewerPicker({
           <span className="text-xs text-gray-600 italic">none — defaults to Copilot</span>
         )}
       </div>
+
+      {(selected.length > 0 || selectedUsernames.length > 0) && (
+        <span className="text-[11px] text-gray-600 -mt-1">
+          Tip: the <span className="font-mono text-port-warning">~opt</span> badge marks a reviewer <em>non-blocking</em> — it still runs and its findings are still fixed, but an inconclusive verdict (timeout / no result) won't block the merge. A hard failure still does.
+        </span>
+      )}
 
       {available.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
@@ -164,6 +212,9 @@ export default function ReviewerPicker({
             >
               <span className="text-port-accent font-mono">@</span>
               {value}
+              {renderOptToggle(`@${value}`, `@${value}`, isOptional(`@${value}`)
+                ? `@${value} is non-blocking (~opt): if it never submits a review, the merge isn't blocked. Click to make it blocking.`
+                : `@${value} gates the merge. Click to make it non-blocking (~opt) — a missing/timed-out review from it won't block the merge.`)}
               <button
                 type="button"
                 disabled={disabled}

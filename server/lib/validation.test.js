@@ -13,6 +13,8 @@ import {
   normalizeReviewers,
   normalizeReviewUsernames,
   resolveReviewUsernames,
+  normalizeOptionalReviewers,
+  resolveOptionalReviewers,
   resolveKeyedReviewers,
   buildReviewersCsv,
   buildReviewWithArgs,
@@ -901,6 +903,65 @@ describe('validation.js', () => {
     it('normalizes/strips bogus usernames before emitting', () => {
       expect(buildReviewWithArgs(['copilot'], 'all', false, ['@Bot', 'bad token', 'bot']))
         .toBe('--review-with copilot,@Bot');
+    });
+
+    it('appends ~opt to the tokens named in optionalReviewers (keyed + @user)', () => {
+      // ollama marked optional → its token carries ~opt; codex stays blocking.
+      expect(buildReviewWithArgs(['claude', 'ollama', 'codex'], 'all', false, [], ['ollama']))
+        .toBe('--review-with claude,ollama~opt,codex');
+      // a username can be optional too — matched by its @-form.
+      expect(buildReviewWithArgs(['codex'], 'all', false, ['Bot'], ['@Bot']))
+        .toBe('--review-with codex,@Bot~opt');
+      // aliases resolve before matching: gemini→antigravity.
+      expect(buildReviewWithArgs(['antigravity', 'codex'], 'all', false, [], ['gemini']))
+        .toBe('--review-with antigravity~opt,codex');
+    });
+
+    it('forces the flag on for a lone default copilot marked optional (so ~opt is not lost)', () => {
+      // Without the marker this is the suppressed lone-default case ('').
+      expect(buildReviewWithArgs(['copilot'], 'all', false, [], ['copilot']))
+        .toBe('--review-with copilot~opt');
+    });
+
+    it('ignores optionalReviewers entries not present in the emitted list', () => {
+      expect(buildReviewWithArgs(['codex', 'copilot'], 'all', false, [], ['ollama', 'bad token']))
+        .toBe('--review-with codex,copilot');
+    });
+  });
+
+  describe('normalizeOptionalReviewers', () => {
+    it('keeps known keyed slugs and @usernames, aliases gemini→antigravity', () => {
+      expect(normalizeOptionalReviewers(['ollama', '@Bot', 'gemini', 'lmstudio']))
+        .toEqual(['ollama', '@Bot', 'antigravity', 'lmstudio']);
+    });
+
+    it('drops unknown slugs, unsafe usernames, non-strings, and dedupes case-insensitively', () => {
+      expect(normalizeOptionalReviewers(['ollama', 'OLLAMA', 'nope', '@bad token', 42, null, '@Bot', '@bot']))
+        .toEqual(['ollama', '@Bot']);
+    });
+
+    it('returns undefined for non-array input (an omitted field is not an empty override)', () => {
+      expect(normalizeOptionalReviewers(undefined)).toBeUndefined();
+      expect(normalizeOptionalReviewers('ollama')).toBeUndefined();
+    });
+  });
+
+  describe('resolveOptionalReviewers', () => {
+    it('lets a task-level list (even empty) override the defaults', () => {
+      expect(resolveOptionalReviewers(['ollama'], ['codex'])).toEqual(['ollama']);
+      expect(resolveOptionalReviewers([], ['codex'])).toEqual([]);
+    });
+
+    it('falls back to the defaults when the task did not pin its own', () => {
+      expect(resolveOptionalReviewers(undefined, ['ollama', 'nope'])).toEqual(['ollama']);
+      expect(resolveOptionalReviewers(undefined, undefined)).toEqual([]);
+    });
+  });
+
+  describe('buildReviewersCsv — optional markers', () => {
+    it('appends ~opt to the CSV tokens named optional', () => {
+      expect(buildReviewersCsv(['claude', 'ollama'], ['@Bot'], ['ollama', '@Bot']))
+        .toBe('claude,ollama~opt,@Bot~opt');
     });
   });
 

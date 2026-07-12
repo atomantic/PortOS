@@ -153,7 +153,7 @@ describe('{reviewers} interpolation honors Code Review Defaults', () => {
     // into buildReviewersCsv, which owns the fallback to the hardcoded copilot
     // default when the filter empties the list (unit-tested in validation.test.js).
     expect(GEN_SRC).toContain('.filter((r) => !LOCAL_LLM_REVIEWERS.includes(r))');
-    expect(GEN_SRC).toContain('buildReviewersCsv(promptReviewers, promptUsernames)');
+    expect(GEN_SRC).toContain('buildReviewersCsv(promptReviewers, promptUsernames, promptOptionalReviewers)');
   });
 });
 
