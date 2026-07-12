@@ -226,7 +226,7 @@ const FAMILIES = [
   {
     id: 'claude',
     label: 'Claude Code',
-    matches: (p) => (p.type === 'cli' || p.type === 'tui') && !p.ollamaBacked && isClaudeCommand(p.command),
+    matches: (p) => (p.type === 'cli' || p.type === 'tui') && isClaudeCommand(p.command),
     fetch: fetchClaudeQuota
   },
   {
@@ -249,9 +249,15 @@ const FAMILIES = [
   }
 ];
 
-/** Distinct quota families among the enabled providers, in registry order. */
+/**
+ * Distinct quota families among the enabled providers, in registry order.
+ * Ollama-backed wrappers are excluded up front regardless of which CLI binary
+ * they launch — a local model has no subscription quota, so e.g. an enabled
+ * `claude-ollama` must not surface a Claude Code card (nor a codex/agy/grok
+ * wrapper its family's card).
+ */
 export function resolveEnabledFamilies(providers) {
-  const enabled = (providers || []).filter((p) => p?.enabled);
+  const enabled = (providers || []).filter((p) => p?.enabled && p.ollamaBacked !== true);
   return FAMILIES.filter((family) => enabled.some((p) => family.matches(p)));
 }
 

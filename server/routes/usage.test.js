@@ -78,6 +78,12 @@ describe('usage routes', () => {
     expect(usage.getUsageSummary).not.toHaveBeenCalled();
   });
 
+  it('GET /api/usage rejects an impossible calendar date', async () => {
+    const res = await request(buildApp()).get('/api/usage?from=2026-02-30');
+    expect(res.status).toBe(400);
+    expect(usage.getUsageSummary).not.toHaveBeenCalled();
+  });
+
   it('GET /api/usage rejects from after to', async () => {
     const res = await request(buildApp()).get('/api/usage?from=2026-03-01&to=2026-01-01');
     expect(res.status).toBe(400);

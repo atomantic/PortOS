@@ -80,9 +80,11 @@ describe('resolveEnabledFamilies', () => {
     expect(families).toEqual(['claude', 'codex', 'grok']); // agy disabled; ollama maps to no family
   });
 
-  it('does not map ollama-backed claude wrappers to the claude family', () => {
+  it('does not map ollama-backed wrappers to ANY family (local models have no subscription quota)', () => {
     const families = resolveEnabledFamilies([
-      { id: 'claude-ollama', enabled: true, type: 'cli', command: 'claude', ollamaBacked: true }
+      { id: 'claude-ollama', enabled: true, type: 'cli', command: 'claude', ollamaBacked: true },
+      { id: 'codex-ollama', enabled: true, type: 'cli', command: 'codex', ollamaBacked: true },
+      { id: 'grok-ollama', enabled: true, type: 'cli', command: 'grok', ollamaBacked: true }
     ]);
     expect(families).toEqual([]);
   });
