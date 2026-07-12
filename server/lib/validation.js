@@ -122,6 +122,9 @@ export const layeredIntelligenceConfigSchema = z.object({
   model: z.string().nullable().optional(),
   sources: z.object({
     goals: z.boolean().optional(),
+    // The app's own success/performance metrics doc (METRICS.md in the app repo).
+    // Default on: the primary signal for judging a managed app against its goals.
+    appMetrics: z.boolean().optional(),
     cosMetrics: z.boolean().optional(),
     healthReport: z.boolean().optional(),
     planMd: z.boolean().optional(),

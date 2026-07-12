@@ -57,6 +57,7 @@ tryReadFile: vi.fn().mockResolvedValue(null),
 
 import { buildLightContextPrompt, buildAgentPrompt, buildCompletionGuidelineBullet } from './agentPromptBuilder.js';
 import { isTruthyMeta } from './agentState.js';
+import { buildPrompt } from './promptService.js'; // mocked above — inspect call args
 
 function makeTask(overrides = {}) {
   return {
@@ -713,6 +714,29 @@ describe('buildAgentPrompt — provider type routing', () => {
     expect(prompt).not.toMatch(/You are an autonomous agent/);
     // Light + non-TUI uses the plain "## Completion" block.
     expect(prompt).toMatch(/^## Completion$/m);
+  });
+
+  it('passes the app id as targetAppLabel to the api-path briefing template for a managed app', async () => {
+    vi.mocked(buildPrompt).mockClear();
+    await buildAgentPrompt(
+      makeTask({ metadata: { app: 'comics' } }), {}, '/r', null, isTruthyMeta,
+      { providerType: 'api' });
+    const [name, context] = vi.mocked(buildPrompt).mock.calls.at(-1);
+    expect(name).toBe('cos-agent-briefing');
+    expect(context.targetAppLabel).toBe('comics');
+    // task.metadata.app stays available for any custom template references.
+    expect(context.task.metadata.app).toBe('comics');
+  });
+
+  it('passes an empty targetAppLabel to the api-path briefing template for the PortOS default app', async () => {
+    vi.mocked(buildPrompt).mockClear();
+    await buildAgentPrompt(
+      makeTask({ metadata: { app: 'portos-default' } }), {}, '/r', null, isTruthyMeta,
+      { providerType: 'api' });
+    const [, context] = vi.mocked(buildPrompt).mock.calls.at(-1);
+    expect(context.targetAppLabel).toBe('');
+    // The raw app id is NOT stripped from the context — only the label gates.
+    expect(context.task.metadata.app).toBe('portos-default');
   });
 
   describe('split system/user prompt (Claude providers)', () => {

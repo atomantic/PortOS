@@ -748,8 +748,17 @@ ${task.metadata.jiraBranch ? 'Commit your changes to this branch. Do NOT switch 
   // predates the {{reviewLoopFollowUpSection}} placeholder; the built-in
   // fallback is the source of truth for that section, and silently dropping
   // it would leave the agent with no instructions and the loop would not run.
+  // Precomputed display label for the stock "Target Application" heading in the
+  // cos-agent-briefing template. Mirrors buildTaskBlock's predicate: suppress
+  // the redundant heading for the PortOS default app (empty string → the
+  // template section is falsy and renders nothing), surface the app id for
+  // managed apps. `task.metadata.app` stays in the context for any custom
+  // template references — only the stock heading gates on this.
+  const briefingApp = task.metadata?.app;
+  const targetAppLabel = briefingApp && briefingApp !== PORTOS_APP_ID ? briefingApp : '';
   const promptData = isReviewLoopFollowUp ? null : await buildPrompt('cos-agent-briefing', {
     task,
+    targetAppLabel,
     config,
     memorySection,
     claudeMdSection,
