@@ -38,7 +38,7 @@ import {
 } from 'lucide-react';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
 import { deriveAvailableBackends, IMAGE_GEN_MODE, isI2iCapableMode, pickI2iMode } from '../lib/imageGenBackends';
-import { clampImageDimensions } from '../lib/imageGenResolutions';
+import { clampImageDimensions, clampImageEdge } from '../lib/imageGenResolutions';
 import { DEFAULT_NEGATIVE_PROMPT } from '../lib/imageGenDefaults';
 import { resolveCleanersFromConfig } from '../lib/imageCleaners';
 import toast from '../components/ui/Toast';
@@ -717,17 +717,23 @@ export default function ImageGen() {
   // sits in the server queue until the active one finishes.
   const submitGenerationPayload = async () => {
     const composed = composeStyledPrompt(prompt, negativePrompt, stylePreset);
+    // Custom-dimension inputs emit raw values for smooth typing and snap on blur;
+    // an Enter-submit (or a field cleared to 0) can bypass that blur, so clamp to
+    // the server's per-edge bounds here too — the last line of defense before the
+    // payload hits imageEdgeSchema.
+    const w = clampImageEdge(width);
+    const h = clampImageEdge(height);
     const payload = isCodexMode ? {
       prompt: composed.prompt,
       negativePrompt: composed.negativePrompt || undefined,
-      width, height,
+      width: w, height: h,
       mode: IMAGE_GEN_MODE.CODEX,
       cleanC2PA, denoise,
     } : {
       prompt: composed.prompt,
       negativePrompt: composed.negativePrompt || undefined,
       modelId: modelId || undefined,
-      width, height,
+      width: w, height: h,
       steps: steps ? Number(steps) : undefined,
       guidance: guidance ? Number(guidance) : undefined,
       seed: seed && Number(seed) >= 0 ? Number(seed) : undefined,
@@ -794,7 +800,10 @@ export default function ImageGen() {
           ...msg.result,
           prompt: payload.prompt,
           negativePrompt: payload.negativePrompt,
-          width, height,
+          // Report the clamped dims the server actually rendered (payload.width/
+          // height are already clamped in submitGenerationPayload) — not the raw
+          // render-closure width/height, which lag on a sub-64/Enter submit.
+          width: payload.width, height: payload.height,
           ...localOnlyMeta,
         });
         return msg.result;
@@ -839,6 +848,13 @@ export default function ImageGen() {
     if (editImageMissing || codexNeedsPrompt) return;
     const batchN = isAsyncMode ? Math.max(1, batchCount) : 1;
     if (generating) return queueAdditional(batchN);
+    // Snap the custom-dimension state to the server's per-edge bounds up front
+    // (an Enter-submit can beat the input's blur-snap), and reflect the clamp in
+    // the form so the displayed size matches what gets rendered.
+    const clampedW = clampImageEdge(width);
+    const clampedH = clampImageEdge(height);
+    if (clampedW !== width) setWidth(clampedW);
+    if (clampedH !== height) setHeight(clampedH);
     setGenerating(true);
     setStatusMsg('Starting...');
     setError(null);
@@ -863,7 +879,7 @@ export default function ImageGen() {
         const payload = {
           prompt: composed.prompt,
           negativePrompt: composed.negativePrompt || undefined,
-          width, height,
+          width: clampedW, height: clampedH,
           steps: steps ? Number(steps) : 25,
           cfgScale,
           mode: IMAGE_GEN_MODE.EXTERNAL,
@@ -871,7 +887,7 @@ export default function ImageGen() {
         };
         if (seed && Number(seed) >= 0) payload.seed = Number(seed);
         const data = await generateImage(payload);
-        setResult({ ...data, prompt: payload.prompt, negativePrompt: payload.negativePrompt, width, height, steps: payload.steps, cfgScale });
+        setResult({ ...data, prompt: payload.prompt, negativePrompt: payload.negativePrompt, width: clampedW, height: clampedH, steps: payload.steps, cfgScale });
       }
       toast.success('Image generated');
       refreshGallery();
