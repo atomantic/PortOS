@@ -338,4 +338,18 @@ describe('createInvestigationTask body', () => {
     expect(body).not.toContain('node-alpha.ts.net');
     expect(body).not.toContain('192.0.2.10');
   });
+
+  it('redacts the message headline for unmatched output whose raw line carries host/path/IP data', async () => {
+    // `unknown` category derives `message` from a raw agent output line, so the
+    // headline + classification interpolations must be scrubbed too.
+    const dirtyLine = 'Error syncing project to build-box.tailnet.ts.net at 192.0.2.10 under /Users/alice/project';
+    const analysis = analyzeAgentFailure(withLead(dirtyLine), { id: 't' }, 'x');
+    expect(analysis.category).toBe('unknown');
+    expect(analysis.message).toContain('build-box'); // raw line survives into message pre-redaction
+    await createInvestigationTask('agent-4', { id: 'task-12', description: 'do y' }, analysis);
+    const body = bodyOf();
+    expect(body).not.toContain('192.0.2.10');
+    expect(body).not.toContain('build-box');
+    expect(body).not.toContain('/Users/alice');
+  });
 });

@@ -526,13 +526,16 @@ export function analyzeAgentFailure(output, task, model) {
 export async function createInvestigationTask(agentId, originalTask, errorAnalysis) {
   const analysis = errorAnalysis || {};
   const category = analysis.category || 'unknown';
-  const message = analysis.message || 'Agent failed with an unrecognized error';
+  const rawMessage = analysis.message || 'Agent failed with an unrecognized error';
   const modelAttribution = analysis.affectedModel || analysis.configuredModel || null;
 
   // Every interpolated free-text field is redacted before it lands in the body —
   // this task is human-facing and may sync across federated peers, so no
-  // hostnames/paths/IPs/PII/secrets from the live instance may leak in.
-  const snippet = redactFailureSnippet(analysis.snippet || analysis.details || message);
+  // hostnames/paths/IPs/PII/secrets from the live instance may leak in. `message`
+  // for the `unknown` category is a raw agent output line, so it needs the same
+  // scrub as the snippet — not just the snippet/description fields.
+  const message = redactFailureSnippet(rawMessage) || rawMessage;
+  const snippet = redactFailureSnippet(analysis.snippet || analysis.details || rawMessage);
   const originalDesc = redactFailureSnippet((originalTask.description || '').substring(0, 160)) || '(no description)';
 
   // Prefer the pattern's category-specific escalation prose; fall back to the
