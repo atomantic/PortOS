@@ -25,8 +25,8 @@ const api = vi.hoisted(() => ({
     humanTasks: 1,
     blocked: 1,
     items: [
-      { caseId: 'h1', brokerId: 'bv', brokerName: 'BeenVerified', state: 'human_task_queued', reason: 'human_only_channel' },
-      { caseId: 'b1', brokerId: 'rad', brokerName: 'Radaris', state: 'blocked', reason: 'antibot_wall', searchUrl: 'https://rad/p/Jane/Doe/' },
+      { caseId: 'h1', brokerId: 'bv', brokerName: 'BeenVerified', state: 'human_task_queued', allowedTransitions: ['submitted', 'not_found', 'human_task_queued'], reason: 'human_only_channel' },
+      { caseId: 'b1', brokerId: 'rad', brokerName: 'Radaris', state: 'blocked', allowedTransitions: ['found', 'not_found', 'human_task_queued'], reason: 'antibot_wall', searchUrl: 'https://rad/p/Jane/Doe/' },
     ],
   },
   schedule: { enabled: false, cronExpression: '0 4 * * 0', autoApproveOptOutEmails: false, autoSubmitWebForms: false, nextRun: null },

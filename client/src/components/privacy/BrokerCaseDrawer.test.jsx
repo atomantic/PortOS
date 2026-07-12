@@ -52,3 +52,28 @@ describe('BrokerCaseDrawer — human task case', () => {
     expect(onTransition).toHaveBeenCalledWith(kase, 'submitted');
   });
 });
+
+describe('BrokerCaseDrawer — server allowedTransitions gating (issue #2417)', () => {
+  it('renders only actions whose target is in the server-supplied allowedTransitions', () => {
+    // A blocked case whose server list omits `found` must NOT render "I'm listed"
+    // even though the curated presentation table lists it — the UI can only offer
+    // what the server says is legal.
+    renderDrawer({
+      id: 'b1', brokerId: 'rad', brokerName: 'Radaris', state: 'blocked',
+      allowedTransitions: ['not_found', 'human_task_queued'],
+      evidence: { match_basis: 'antibot_wall' },
+    });
+    expect(screen.queryByRole('button', { name: /i'm listed/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /dismiss/i })).toBeTruthy();
+  });
+
+  it('renders both curated actions when the server list allows them', () => {
+    renderDrawer({
+      id: 'b1', brokerId: 'rad', brokerName: 'Radaris', state: 'blocked',
+      allowedTransitions: ['found', 'not_found', 'human_task_queued'],
+      evidence: { match_basis: 'antibot_wall' },
+    });
+    expect(screen.getByRole('button', { name: /i'm listed/i })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /dismiss/i })).toBeTruthy();
+  });
+});
