@@ -239,14 +239,20 @@ describe('redactFailureSnippet', () => {
   it('strips OS usernames, emails, IPs, hostnames, and secrets, collapsing to one line', () => {
     const raw = [
       'error at /Users/alice/github.com/app/index.js:42',
+      'and windows path C:\\Users\\bob\\app\\index.js',
       'contact ops@example.com or reach host node-alpha.tailnet.ts.net',
+      'also short-host printer.local timed out',
       'connect ECONNREFUSED 192.0.2.10:5555',
       'Authorization: Bearer abcdef0123456789abcdef',
     ].join('\n');
     const out = redactFailureSnippet(raw);
     expect(out).not.toContain('alice');
     expect(out).not.toContain('ops@example.com');
-    expect(out).not.toContain('node-alpha.tailnet.ts.net');
+    // Assert the leading node-name label is gone, not just the full hostname —
+    // a single-label regex would leave `node-alpha.<host>` behind.
+    expect(out).not.toContain('node-alpha');
+    expect(out).not.toContain('printer'); // multi-label + short .local host label stripped
+    expect(out).not.toContain('bob'); // windows username stripped
     expect(out).not.toContain('192.0.2.10');
     expect(out).not.toContain('abcdef0123456789abcdef');
     expect(out).toContain('/Users/<user>/github.com/app/index.js');

@@ -24,11 +24,13 @@ const SNIPPET_MAX_CHARS = 240;
 // hostnames, paths, addresses, or secrets pulled off the running instance.
 const SNIPPET_REDACTIONS = [
   // Home-dir paths that embed an OS username → strip the user segment only.
-  [/\/(Users|home)\/[^/\s"']+/gi, '/$1/<user>'],
+  // Handles both POSIX (`/Users/alice`) and Windows (`C:\Users\alice`) checkouts.
+  [/[\\/](Users|home)[\\/][^\\/\s"']+/gi, '/$1/<user>'],
   // Email addresses.
   [/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, '<email>'],
-  // Tailscale MagicDNS / mDNS hostnames.
-  [/\b[A-Za-z0-9-]+\.(?:ts\.net|local)\b/gi, '<host>'],
+  // Tailscale MagicDNS / mDNS hostnames — consume ALL leading labels so a
+  // multi-label name like `machine.tailnet.ts.net` doesn't leak `machine`.
+  [/\b[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.(?:ts\.net|local)\b/gi, '<host>'],
   // IPv4 addresses (LAN / Tailscale / public alike).
   [/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g, '<ip>'],
   // Bearer tokens and common secret-key formats.
