@@ -98,7 +98,19 @@ export function defaultLayeredIntelligenceConfig(isPortos = false) {
     model: null,
     sources: {
       goals: true,
-      cosMetrics: true,
+      // The app's OWN performance metrics (a METRICS.md doc in the app repo): the
+      // user-success / KPI / production-telemetry signals the app tracks about
+      // itself. This is the PRIMARY signal for evaluating a managed app against
+      // its own goals and purpose, so it's on by default for every app. See the
+      // METRICS.md convention in docs/METRICS.md.
+      appMetrics: true,
+      // The autonomous coding-agent run stats this install records (learning.json).
+      // For the PortOS install these ARE its own-performance metrics; for a MANAGED
+      // app they describe how reliably PortOS's agents change the app (a tooling /
+      // interaction signal), NOT the app's own product performance — so default it
+      // on only for PortOS. A managed app measures itself through appMetrics/custom
+      // sources instead; the user can still opt this on per-app.
+      cosMetrics: isPortos,
       healthReport: true,
       planMd: true,
       openIssues: true,
@@ -493,6 +505,14 @@ export function buildPrompt({ app, config, sources = {}, openIssues = [], isPort
     ? openIssues.map(i => `- #${i.number ?? '?'} [${i.slug || extractSlugFromBody(i.body) || 'no-slug'}] ${i.title || ''}`).join('\n')
     : '(none)';
 
+  // Nudge a managed app with no own-performance signal (no METRICS.md gathered)
+  // toward adding one, so future runs can judge real performance. PortOS is exempt
+  // — it measures itself through cosMetrics.
+  const hasAppMetrics = Boolean(typeof sources.appMetrics === 'string' && sources.appMetrics.trim());
+  const metricsGuidance = (!isPortos && !hasAppMetrics)
+    ? '\nThis app exposes no own-performance metrics yet (no METRICS.md). If you lack the data to judge how it is doing against its goals, a high-value app-data-gap proposal is to add a METRICS.md documenting how the app measures success — its user-success/KPI signals and where its production telemetry or data lives — so future runs can reason about real performance.\n'
+    : '';
+
   const handoffNote = config.handoff?.enabled
     ? '\nHand-off: a proposal you mark BOTH "complexity":"trivial" AND "safe":true may be handed directly to a coding agent to implement now (not just filed). Only mark a proposal trivial+safe when it is small, self-contained, and carries no regression or data-loss risk — when in doubt, use a higher complexity or "safe":false so a human triages it first.\n'
     : '';
@@ -503,8 +523,8 @@ export function buildPrompt({ app, config, sources = {}, openIssues = [], isPort
     ? `\n### liOutcomes\n${outcomesReport.trim()}\n\nUse this data to calibrate your proposal: prefer scopes with higher merge rates, avoid patterns that were repeatedly rejected, and consider that lower-merge scopes may need more justification.\n`
     : '';
 
-  return `You are the Layered Intelligence reasoner for the app "${app.name}". Analyze the app's goals and telemetry and decide the SINGLE highest-value improvement to propose this run — signal, not noise. You never write code; you return structured JSON that a deterministic system files as ONE tracker issue.
-${handoffNote}
+  return `You are the Layered Intelligence reasoner for the app "${app.name}". Your job is to evaluate how THIS app is performing against its OWN goals and purpose${isPortos ? '' : ', not how well PortOS\'s tooling manages it'}. Decide the SINGLE highest-value improvement to propose this run (signal, not noise), grounded in the app's own goals and its own performance metrics (user success, KPIs, production telemetry). You never write code; you return structured JSON that a deterministic system files as ONE tracker issue.
+${handoffNote}${metricsGuidance}
 Rules & guidance from the operator:
 ${config.rules?.trim() || '(none)'}
 
@@ -567,6 +587,13 @@ export async function gatherSources(app, config, { cosPath = PATHS.cos } = {}) {
     const goals = await tryReadFile(join(repo, 'GOALS.md'));
     if (goals) out.goals = goals.slice(0, 8000);
   }
+  if (src.appMetrics && repo) {
+    // The app's own success/performance metrics doc (the METRICS.md convention,
+    // see docs/METRICS.md) — where a managed app records what "performing well"
+    // means. Absent → omitted (the reasoner may then propose adding one).
+    const metrics = await tryReadFile(join(repo, 'METRICS.md'));
+    if (metrics) out.appMetrics = metrics.slice(0, 8000);
+  }
   if (src.planMd && repo) {
     const plan = await tryReadFile(join(repo, 'PLAN.md'));
     if (plan) out.planMd = plan.slice(0, 8000);
@@ -576,6 +603,9 @@ export async function gatherSources(app, config, { cosPath = PATHS.cos } = {}) {
     if (health) out.healthReport = health.slice(0, 8000);
   }
   if (src.cosMetrics) {
+    // This install's own autonomous-agent run stats (per task type), NOT scoped to
+    // the app being analyzed — see the default-config note for the PortOS-vs-managed
+    // rationale (default-off for managed apps).
     const learning = await readJSONFile(join(cosPath, 'learning.json'), null);
     if (learning?.byTaskType) {
       out.cosMetrics = JSON.stringify(learning.byTaskType).slice(0, 4000);
