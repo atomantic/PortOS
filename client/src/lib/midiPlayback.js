@@ -15,9 +15,28 @@ const MIN_TONE_SEC = 0.05;   // floor so zero/near-zero-length notes still tick
 const TONE_PEAK = 0.16;      // per-voice peak at full velocity (polyphonic sum)
 
 // Velocity → per-tone gain peak. A floor keeps ppp notes audible; the master
-// bus (fixed, below) keeps a dense chord from clipping the sum.
+// bus (scaled to the file's peak polyphony, below) keeps a dense chord from
+// clipping the sum.
 const peakFor = (velocity) => TONE_PEAK * (0.35 + 0.65 * (Number.isFinite(velocity) ? velocity : 0.8));
-const MASTER_GAIN = 0.9;
+const MASTER_CEIL = 0.9;
+
+// Peak simultaneous-note count — the worst-case amplitude sum the master bus
+// must keep under clipping. One O(n log n) sweep per player; at a time tie,
+// ends sort before starts so back-to-back notes don't double-count.
+const peakPolyphony = (list) => {
+  const events = [];
+  for (const n of list) events.push([n.startSec, 1], [n.startSec + n.durationSec, -1]);
+  events.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  let live = 0;
+  let peak = 0;
+  for (const [, delta] of events) { live += delta; if (live > peak) peak = live; }
+  return peak;
+};
+
+// Master level: at low polyphony the ceiling applies as-is; past ~6 voices it
+// backs off so peak-polyphony × full-velocity tone peaks sum below clipping
+// (mirrors createMultiScorePlayer's masterGainFor, sized to this TONE_PEAK).
+const masterLevelFor = (peak) => Math.min(MASTER_CEIL, MASTER_CEIL / Math.max(1e-6, peak * TONE_PEAK));
 
 /**
  * Build a synth player over a parsed MIDI view-model.
@@ -32,6 +51,7 @@ export const createMidiPlayer = (data, options = {}) => {
   const { onEnded } = options;
   const notes = (data?.notes || []).filter((n) => Number.isFinite(n?.midi) && Number.isFinite(n?.startSec));
   const totalSec = Math.max(data?.durationSec || 0, 0);
+  const masterLevel = masterLevelFor(peakPolyphony(notes));
 
   let playing = false;
   let interval = null;
@@ -119,7 +139,7 @@ export const createMidiPlayer = (data, options = {}) => {
     if (!notes.length || totalSec <= 0) { safeCall(onEnded); return; }
 
     master = c.createGain();
-    master.gain.setValueAtTime(MASTER_GAIN, c.currentTime);
+    master.gain.setValueAtTime(masterLevel, c.currentTime);
     master.connect(c.destination);
 
     playing = true;

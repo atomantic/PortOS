@@ -123,6 +123,30 @@ describe('createMidiPlayer', () => {
     expect(player.position()).toBe(0);
   });
 
+  it('backs the master bus off for dense polyphony so the sum cannot clip', async () => {
+    const chord = {
+      durationSec: 1,
+      notes: Array.from({ length: 8 }, (_, i) => (
+        { id: String(i), midi: 60 + i, startSec: 0, durationSec: 1, velocity: 1, track: 0 }
+      )),
+    };
+    const player = createMidiPlayer(chord);
+    await player.play();
+    const masterLevel = audio.gains[0].gain.values[0];
+    // 8 simultaneous full-velocity tones at TONE_PEAK 0.16 each: the summed
+    // peak must stay under the 0.9 headroom ceiling (a fixed master gain
+    // would put it at 8 × 0.16 × 0.9 ≈ 1.15 — audible clipping).
+    expect(masterLevel * 8 * 0.16).toBeLessThanOrEqual(0.91);
+    player.stop();
+
+    // A sparse file keeps the full level — no needless quieting.
+    audio.reset();
+    const sparse = createMidiPlayer(DATA); // peak polyphony 2
+    await sparse.play();
+    expect(audio.gains[0].gain.values[0]).toBe(0.9);
+    sparse.stop();
+  });
+
   it('reports ended immediately for an empty view-model', async () => {
     const ended = vi.fn();
     const player = createMidiPlayer({ durationSec: 0, notes: [] }, { onEnded: ended });
