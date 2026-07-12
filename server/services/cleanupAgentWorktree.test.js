@@ -648,6 +648,46 @@ describe('cleanupAgentWorktree - openPR path', () => {
     expect(followUp.metadata.reviewLoopReviewers).toEqual(['codex', 'antigravity', 'copilot']);
   });
 
+  // --- arbitrary GitHub reviewer usernames (gate-merge) ---
+
+  it('stamps reviewLoopReviewerUsernames onto the follow-up (normalized, @-stripped)', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://github.com/test/repo/pull/60' });
+    git.requestCopilotReview.mockResolvedValue({ success: true });
+    addTask.mockResolvedValue({ id: 'sys-rl-u' });
+
+    await cleanupAgentWorktree('agent-1', true, {
+      openPR: true, requestCopilotReview: true, reviewers: ['copilot'],
+      usernames: ['@CodeReviewbot', 'bad token', 'codereviewbot'], description: 'Build',
+      originalTask: { id: 'task-orig', priority: 'MEDIUM', metadata: { app: 'sparsetree' }, description: 'Build' }
+    });
+
+    expect(addTask).toHaveBeenCalledTimes(1);
+    const [followUp] = addTask.mock.calls[0];
+    expect(followUp.metadata.reviewLoopReviewers).toEqual(['copilot']);
+    expect(followUp.metadata.reviewLoopReviewerUsernames).toEqual(['CodeReviewbot']);
+  });
+
+  it('spawns a username-only follow-up on a non-GitHub forge (copilot stripped, username drives the loop)', async () => {
+    git.push.mockResolvedValue(undefined);
+    git.createPR.mockResolvedValue({ success: true, url: 'https://gitlab.com/group/proj/-/merge_requests/13' });
+    git.requestCopilotReview.mockResolvedValue({ success: true, skipped: true });
+    addTask.mockResolvedValue({ id: 'sys-rl-uonly' });
+
+    await cleanupAgentWorktree('agent-1', true, {
+      openPR: true, requestCopilotReview: true, reviewers: ['copilot'],
+      usernames: ['CodeReviewbot'], description: 'Build',
+      originalTask: { id: 'task-orig', metadata: {}, description: 'Build' }
+    });
+
+    // Copilot is GitHub-only and stripped on GitLab, but the username reviewer is
+    // forge-agnostic and keeps the follow-up alive with an empty keyed list.
+    expect(addTask).toHaveBeenCalledTimes(1);
+    const [followUp] = addTask.mock.calls[0];
+    expect(followUp.metadata.reviewLoopReviewers).toEqual([]);
+    expect(followUp.metadata.reviewLoopReviewerUsernames).toEqual(['CodeReviewbot']);
+  });
+
   // --- skipMerge tests for review-loop follow-up cleanup ---
 
   it('should pass merge: false in the auto-merge fallback when skipMerge is true (review-loop follow-up cleanup)', async () => {

@@ -466,10 +466,14 @@ export function sanitizeTaskMetadata(raw) {
     if (list.length) { clean.reviewers = list; hasKeys = true; }
   }
   // `usernames` is the arbitrary GitHub reviewer-username list — normalize to
-  // shell-safe, deduped, capped tokens (strips `@`, drops bogus entries).
+  // shell-safe, deduped, capped tokens (strips `@`, drops bogus entries). Unlike
+  // `reviewers` above, an explicitly empty array is KEPT (not dropped): for
+  // usernames, `[]` is a meaningful "no external gate for this task/type" choice
+  // that must override the Code Review Defaults, matching resolveReviewUsernames'
+  // `Array.isArray` override contract and the task-form/global-panel surfaces.
   if (Array.isArray(raw.usernames)) {
-    const usernames = normalizeReviewUsernames(raw.usernames);
-    if (usernames.length) { clean.usernames = usernames; hasKeys = true; }
+    clean.usernames = normalizeReviewUsernames(raw.usernames);
+    hasKeys = true;
   }
   if (Object.prototype.hasOwnProperty.call(raw, 'reviewStopMode') && REVIEW_STOP_MODES.includes(raw.reviewStopMode)) {
     clean.reviewStopMode = raw.reviewStopMode;

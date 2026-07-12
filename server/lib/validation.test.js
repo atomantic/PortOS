@@ -724,13 +724,15 @@ describe('validation.js', () => {
       expect(sanitizeTaskMetadata({ reviewers: ['nope'] })).toBeNull();
     });
 
-    it('should normalize reviewer usernames and drop an all-invalid/empty list', () => {
+    it('should normalize reviewer usernames and keep an explicit empty override', () => {
       expect(sanitizeTaskMetadata({ usernames: ['@CodeReviewbot', 'codereviewbot', 'bad token'] }))
         .toEqual({ usernames: ['CodeReviewbot'] });
-      // An all-invalid or empty usernames list contributes no keys → null.
-      expect(sanitizeTaskMetadata({ usernames: ['bad token', '$(x)'] })).toBeNull();
-      expect(sanitizeTaskMetadata({ usernames: [] })).toBeNull();
-      // Keeps a valid sibling key when the usernames are dropped.
+      // An explicit array is KEPT even when it normalizes to empty — `[]` is a
+      // meaningful "no external gate" override of the Code Review Defaults.
+      expect(sanitizeTaskMetadata({ usernames: ['bad token', '$(x)'] })).toEqual({ usernames: [] });
+      expect(sanitizeTaskMetadata({ usernames: [] })).toEqual({ usernames: [] });
+      // A non-array usernames value contributes no keys (→ null with no siblings).
+      expect(sanitizeTaskMetadata({ usernames: 'nope' })).toBeNull();
       expect(sanitizeTaskMetadata({ reviewLoop: true, usernames: ['@Bot'] }))
         .toEqual({ reviewLoop: true, usernames: ['Bot'] });
     });
