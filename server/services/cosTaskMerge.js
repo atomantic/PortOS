@@ -52,12 +52,15 @@ import { PRIORITY_VALUES } from '../lib/taskParser.js';
 // distinct rank so two DIFFERENT statuses never tie (full convergence); the only
 // genuine tie is same-status-both-sides, where the content is already equivalent.
 //
-// `challenged` (#2441) sits ABOVE in_progress (a fresh dispute is newer truth than
-// a stale in_progress snapshot on the other peer) but BELOW the terminal states:
-// a `completed` or `blocked`/escalated resolution supersedes an unresolved
-// challenge, so those still win the merge. It is NOT terminal (the dispute
-// resolves back to pending or forward to blocked), so it keeps a live claim the
-// same way in_progress does.
+// `challenged` (#2441) is placed above in_progress and below the terminal states,
+// but NOTE its rank is only a fallback: the challenge lifecycle is non-monotonic
+// (upheld regresses challenged→pending; blocked↔challenged both directions are
+// legal), so `pickContentBase` resolves any pairing where exactly one side is
+// `challenged` by newest `updatedAt` — NOT by this rank — with `completed` held
+// immune there. This rank still governs challenged-vs-challenged-adjacent cases
+// that never actually arise (both-challenged goes to the same-status path). It is
+// NOT terminal (the dispute resolves back to pending or forward to blocked), so it
+// keeps a live claim the same way in_progress does.
 const STATUS_RANK = Object.freeze({ completed: 5, blocked: 4, challenged: 3, in_progress: 2, pending: 1 });
 const statusRank = (status) => STATUS_RANK[status] || 0;
 const isTerminalStatus = (status) => status === 'completed' || status === 'blocked';
@@ -142,6 +145,14 @@ function pickContentBase(local, remote) {
   const lChallenged = local.status === 'challenged';
   const rChallenged = remote.status === 'challenged';
   if (lChallenged !== rChallenged) {
+    // `completed` is truly terminal and must NEVER regress — once either peer
+    // marks a task done, the other adopts it (rule 2 monotonic completion). So a
+    // `completed` counterpart wins outright, even against a newer `challenged`
+    // snapshot the other peer raised before completion propagated. `blocked` stays
+    // on the timestamp path below: blocked→challenged (re-dispute) and
+    // challenged→blocked (escalation) are both legal, so recency decides.
+    if (local.status === 'completed') return local;
+    if (remote.status === 'completed') return remote;
     const luc = updatedAtMs(local);
     const ruc = updatedAtMs(remote);
     if (luc !== ruc) return ruc > luc ? remote : local;

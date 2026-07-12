@@ -273,6 +273,15 @@ describe('mergeTaskLists', () => {
       expect(mergeTaskLists(stale, resolved, { now: NOW })[0].status).toBe('blocked');
     });
 
+    it('a completed task is NEVER un-completed by a newer challenge (monotonic completion)', () => {
+      // Cross-peer: B completes at t=100, A challenges at t=200 before B's
+      // completion propagates. `completed` must win despite the newer challenge.
+      const completed = [stamped('task-c', 'completed', past(1000))];
+      const newerChallenge = [stamped('task-c', 'challenged', future(1000))];
+      expect(mergeTaskLists(completed, newerChallenge, { now: NOW })[0].status).toBe('completed');
+      expect(mergeTaskLists(newerChallenge, completed, { now: NOW })[0].status).toBe('completed');
+    });
+
     it('on equal/absent stamps, prefers the resolved (non-challenged) side deterministically', () => {
       const challenged = [task('task-c', 'challenged')];
       const blocked = [task('task-c', 'blocked')];
