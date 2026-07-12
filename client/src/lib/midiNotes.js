@@ -95,13 +95,14 @@ const parseTrackEvents = (view, start, end) => {
 
     runningStatus = status;
     const kind = status & 0xf0;
+    const channel = status & 0x0f;
     const dataLen = kind === 0xc0 || kind === 0xd0 ? 1 : 2;
     if (pos + dataLen > end) break;
     if (kind === 0x90 || kind === 0x80) {
       const midi = view.getUint8(pos);
       const velocity = view.getUint8(pos + 1);
-      if (kind === 0x90 && velocity > 0) events.push({ tick, type: 'on', midi, velocity });
-      else events.push({ tick, type: 'off', midi });
+      if (kind === 0x90 && velocity > 0) events.push({ tick, type: 'on', midi, velocity, channel });
+      else events.push({ tick, type: 'off', midi, channel });
     }
     pos += dataLen;
   }
@@ -182,19 +183,23 @@ export const parseMidiFile = (buffer) => {
   const notes = [];
   const tracks = [];
   rawTracks.forEach((events, trackIndex) => {
-    const open = new Map(); // midi → { startTick, velocity } (last-on wins per pitch)
+    // Keyed per channel+pitch so a multi-channel format-0 file can't have one
+    // channel's note-off truncate a same-pitch note held on another channel.
+    const open = new Map(); // (channel<<8)|midi → { startTick, velocity } (last-on wins)
     let name = null;
     let noteCount = 0;
     events.forEach((ev) => {
       if (ev.type === 'name' && !name) name = ev.name;
+      if (ev.type !== 'on' && ev.type !== 'off') return;
+      const key = ((ev.channel || 0) << 8) | ev.midi;
       if (ev.type === 'on') {
         // Retrigger of an already-open pitch closes the previous note first.
-        const prev = open.get(ev.midi);
+        const prev = open.get(key);
         if (prev) pushNote(prev, ev.tick);
-        open.set(ev.midi, { midi: ev.midi, startTick: ev.tick, velocity: ev.velocity });
-      } else if (ev.type === 'off') {
-        const prev = open.get(ev.midi);
-        if (prev) { pushNote(prev, ev.tick); open.delete(ev.midi); }
+        open.set(key, { midi: ev.midi, startTick: ev.tick, velocity: ev.velocity });
+      } else {
+        const prev = open.get(key);
+        if (prev) { pushNote(prev, ev.tick); open.delete(key); }
       }
     });
     // Notes left open at end-of-track get a minimal duration instead of vanishing.

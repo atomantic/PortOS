@@ -108,6 +108,22 @@ describe('parseMidiFile', () => {
     expect(new Set(vm.notes.map((n) => n.track)).size).toBe(2);
   });
 
+  it('pairs note-off per channel — one channel cannot truncate another channel\'s same pitch', () => {
+    // C4 held on ch0 for two beats; C4 on ch1 starts and ends within it.
+    const bytes = smf([track([
+      noteOn(0, 60, 100, 0),
+      noteOn(0, 60, 80, 1),
+      noteOff(PPQ, 60, 1),      // ch1 off at one beat — must NOT close ch0's note
+      noteOff(PPQ, 60, 0),      // ch0 off at two beats
+      endOfTrack(),
+    ])]);
+    const vm = parseMidiFile(bytes);
+    expect(vm.notes).toHaveLength(2);
+    const durations = vm.notes.map((n) => n.durationSec).sort((a, b) => a - b);
+    expect(durations[0]).toBeCloseTo(0.5, 5);
+    expect(durations[1]).toBeCloseTo(1.0, 5);
+  });
+
   it('closes notes left open at end-of-track instead of dropping them', () => {
     const bytes = smf([track([noteOn(0, 72), endOfTrack(PPQ)])]);
     const vm = parseMidiFile(bytes);
