@@ -19,12 +19,9 @@ const MAX_SESSIONS = 20;
 const QUICK_COMMANDS = [
   { label: 'claude', command: 'claude --dangerously-skip-permissions' },
   { label: 'codex', command: 'codex --dangerously-bypass-approvals-and-sandbox' },
-  { label: 'antigravity', command: 'agy' },
+  { label: 'agy', command: 'agy' },
+  { label: 'grok', command: 'grok' },
   { label: 'openclaw', command: 'openclaw tui' },
-  { label: 'git status', command: 'git status' },
-  { label: 'git pull', command: 'git pull --rebase --autostash' },
-  { label: 'npm test', command: 'npm test' },
-  { label: 'npm run dev', command: 'npm run dev' },
   // Claude Code slash-command shortcuts — typed + submitted into an interactive
   // `claude` session. The flags are double-dash (`--`); keep them verbatim.
   { label: '/do:next', command: '/do:next --issues --self --review-with=claude,codex --merge' },
