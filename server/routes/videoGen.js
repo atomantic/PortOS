@@ -45,6 +45,7 @@ import { repoForModel, getTextEncoderRepo, isHfRepoId } from '../lib/mediaModels
 import { videoLoraFamily } from '../lib/runners.js';
 import { inspectModelCache, verifyModelCache, repairModelCache, summarizeVerify } from '../lib/hfCache.js';
 import { startHfDownloadStream, openSseStream } from '../lib/sseDownload.js';
+import { createInstallLogger } from '../lib/installLogger.js';
 
 const router = Router();
 
@@ -325,6 +326,11 @@ router.get('/setup/runtime-install', asyncHandler(async (req, res) => {
   }
 
   send({ type: 'log', message: `▸ Starting ${info.label} install via ${info.installEnvVar}=1 bash scripts/setup-image-video.sh` });
+  // Server-console visibility for the multi-GB install (start / heartbeat /
+  // outcome) — the SSE stream otherwise surfaces progress only in the browser.
+  const installLog = createInstallLogger({ installer: info.label, target: info.venvPython });
+  const emit = (ev) => { installLog.onEvent(ev); send(ev); };
+  installLog.start();
   // `detached: true` puts bash in its own process group so a cancel from the
   // client can take down uv / pip / git children too. Without it, SIGTERM on
   // bash leaves a multi-GB `git clone` (and any subsequent pip downloads)
@@ -340,14 +346,14 @@ router.get('/setup/runtime-install', asyncHandler(async (req, res) => {
   const onChunk = (chunk) => {
     for (const line of chunk.toString().split(/[\r\n]+/)) {
       const t = line.trimEnd();
-      if (t) send({ type: 'log', message: t });
+      if (t) emit({ type: 'log', message: t });
     }
   };
   child.stdout.on('data', onChunk);
   child.stderr.on('data', onChunk);
   child.on('error', (err) => {
     runtimeInstallInFlight.delete(info.id);
-    send({ type: 'error', message: `Installer failed to spawn: ${err.message}` });
+    emit({ type: 'error', message: `Installer failed to spawn: ${err.message}` });
     safeEnd();
   });
   child.on('close', async (code) => {
@@ -360,18 +366,19 @@ router.get('/setup/runtime-install', asyncHandler(async (req, res) => {
     const binaryPresent = isByovRuntimeInstalled(info.id);
     const packagesReady = binaryPresent && await isByovRuntimeReady(info.id);
     if (code === 0 && binaryPresent && packagesReady) {
-      send({ type: 'complete', message: `${info.label} ready: ${info.venvPython}` });
+      emit({ type: 'complete', message: `${info.label} ready: ${info.venvPython}` });
     } else if (code === 0 && !binaryPresent) {
-      send({ type: 'error', message: `Installer exited 0 but ${info.venvPython} is still missing. Re-run from a terminal to see what happened.` });
+      emit({ type: 'error', message: `Installer exited 0 but ${info.venvPython} is still missing. Re-run from a terminal to see what happened.` });
     } else if (code === 0) {
-      send({ type: 'error', message: `Installer exited 0 but the venv can't import its core packages. Check the log above for pip errors; re-run from a terminal if needed.` });
+      emit({ type: 'error', message: `Installer exited 0 but the venv can't import its core packages. Check the log above for pip errors; re-run from a terminal if needed.` });
     } else {
-      send({ type: 'error', message: `Installer exited with code ${code}.` });
+      emit({ type: 'error', message: `Installer exited with code ${code}.` });
     }
     safeEnd();
   });
 
   req.on('close', () => {
+    installLog.cancel();
     if (!child.killed && child.pid) {
       // Negative pid signals the whole process group — required because
       // `setup-image-video.sh` shells out to `uv pip install` / `git clone`,

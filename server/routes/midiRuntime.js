@@ -22,6 +22,7 @@ import { asyncHandler } from '../lib/errorHandler.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { safeChildProcessEnv } from '../lib/processEnv.js';
 import { openSseStream } from '../lib/sseDownload.js';
+import { createInstallLogger } from '../lib/installLogger.js';
 import {
   resolveMuscriptorPython,
   isMuscriptorRuntimeReady,
@@ -41,6 +42,12 @@ let installInFlight = null;
 
 router.get('/install', asyncHandler(async (req, res) => {
   const { send, safeEnd } = openSseStream(res);
+  // Server-console visibility for the multi-GB install (start / heartbeat /
+  // outcome) — the SSE stream otherwise surfaces progress only in the browser.
+  // `start()` isn't called until spawn, so events before then (already-installed
+  // short-circuit) and a pre-spawn disconnect no-op through the logger.
+  const installLog = createInstallLogger({ installer: MUSCRIPTOR_LABEL, target: MUSCRIPTOR_VENV_DEFAULT });
+  const emit = (ev) => { installLog.onEvent(ev); send(ev); };
 
   if (installInFlight) {
     send({ type: 'error', message: 'A MuScriptor install is already running. Wait for it to finish or restart PortOS.' });
@@ -59,6 +66,7 @@ router.get('/install', asyncHandler(async (req, res) => {
   // outer var so this handler kills the process group once it exists.
   req.on('close', () => {
     clientGone = true;
+    installLog.cancel();
     if (finished) return;
     if (child) {
       if (!child.killed && child.pid) {
@@ -109,6 +117,7 @@ router.get('/install', asyncHandler(async (req, res) => {
   }
 
   send({ type: 'log', message: `Starting MuScriptor install via ${MUSCRIPTOR_INSTALL_ENV}=1 bash scripts/setup-image-video.sh` });
+  installLog.start();
   // `detached: true` puts bash in its own process group so a cancel (client
   // closing the SSE stream) can SIGTERM uv / pip / git children too — otherwise
   // a multi-GB download keeps burning bandwidth after the modal closes.
@@ -122,7 +131,7 @@ router.get('/install', asyncHandler(async (req, res) => {
   const onChunk = (chunk) => {
     for (const line of chunk.toString().split(/[\r\n]+/)) {
       const t = line.trimEnd();
-      if (t) send({ type: 'log', message: t });
+      if (t) emit({ type: 'log', message: t });
     }
   };
   child.stdout.on('data', onChunk);
@@ -130,7 +139,7 @@ router.get('/install', asyncHandler(async (req, res) => {
   child.on('error', (err) => {
     finished = true;
     installInFlight = null;
-    send({ type: 'error', message: `Installer failed to spawn: ${err.message}` });
+    emit({ type: 'error', message: `Installer failed to spawn: ${err.message}` });
     safeEnd();
   });
   child.on('close', async (code) => {
@@ -143,11 +152,11 @@ router.get('/install', asyncHandler(async (req, res) => {
     invalidateMuscriptorPython();
     const ready = await isMuscriptorRuntimeReady();
     if (code === 0 && ready) {
-      send({ type: 'complete', message: `MuScriptor ready: ${resolveMuscriptorPython()}` });
+      emit({ type: 'complete', message: `MuScriptor ready: ${resolveMuscriptorPython()}` });
     } else if (code === 0) {
-      send({ type: 'error', message: `Installer exited 0 but MuScriptor can't be imported from ${MUSCRIPTOR_VENV_DEFAULT}. Re-run from a terminal to see what happened.` });
+      emit({ type: 'error', message: `Installer exited 0 but MuScriptor can't be imported from ${MUSCRIPTOR_VENV_DEFAULT}. Re-run from a terminal to see what happened.` });
     } else {
-      send({ type: 'error', message: `Installer exited with code ${code}.` });
+      emit({ type: 'error', message: `Installer exited with code ${code}.` });
     }
     safeEnd();
   });
