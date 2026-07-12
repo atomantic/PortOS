@@ -20,7 +20,7 @@ tryReadFile: vi.fn().mockResolvedValue(null),
 }));
 
 import { readJSONFile } from '../lib/fileUtils.js';
-import { loadUsage, getUsageSummary, getUsage, recordSession, recordMessages, buildUsageReport } from './usage.js';
+import { loadUsage, getUsageSummary, getUsage, recordSession, recordMessages, buildUsageReport, rollupOldDailyActivity } from './usage.js';
 
 // Helper: produce a date string N days ago (relative to today)
 function daysAgo(n) {
@@ -363,5 +363,205 @@ describe('usage.js — streak calculations', () => {
       expect(report.totals).toMatchObject({ sessions: 0, estimatedCost: 0 });
       expect(report.breakdownSince).toBeNull();
     });
+
+    it('folds rolled-up monthly buckets into an all-time report', () => {
+      // Old cost lives in a monthly bucket (same nested shape as a day bucket);
+      // recent cost lives in daily. An unbounded report must sum both.
+      const monthlyActivity = {
+        '2024-01': nestedDay('codex', 'Codex', 'gpt-5.3-codex', { tokensOut: 1000 })
+      };
+      const daily = {
+        [daysAgo(0)]: nestedDay('codex', 'Codex', 'gpt-5.3-codex', { tokensOut: 500 })
+      };
+      const report = buildUsageReport(daily, { monthlyActivity });
+      expect(report.providers).toHaveLength(1);
+      expect(report.providers[0].tokensOut).toBe(1500); // 1000 monthly + 500 daily
+      // breakdown now reaches back to the earliest rolled-up month
+      expect(report.breakdownSince).toBe('2024-01-01');
+    });
+
+    it('includes a monthly bucket only when its month overlaps the from/to range', () => {
+      const monthlyActivity = {
+        '2024-01': nestedDay('codex', 'Codex', 'gpt-5.3-codex', { tokensOut: 100 }),
+        '2024-06': nestedDay('codex', 'Codex', 'gpt-5.3-codex', { tokensOut: 200 })
+      };
+      const report = buildUsageReport({}, { from: '2024-05-01', to: '2024-07-31', monthlyActivity });
+      // Only 2024-06 overlaps the window; 2024-01 is excluded.
+      expect(report.providers[0].tokensOut).toBe(200);
+    });
+
+    it('preserves grand totals whether old data sits in daily or monthly buckets', () => {
+      // Same underlying activity, split across the rollup boundary two ways —
+      // the all-time report totals must be identical.
+      const allDaily = buildUsageReport({
+        '2024-01-05': nestedDay('codex', 'Codex', 'gpt-5.3-codex', { tokensOut: 300 }),
+        '2024-01-06': nestedDay('codex', 'Codex', 'gpt-5.3-codex', { tokensOut: 400 })
+      }, {});
+      const rolledUp = buildUsageReport({}, {
+        monthlyActivity: { '2024-01': nestedDay('codex', 'Codex', 'gpt-5.3-codex', { sessions: 2, messages: 2, tokensOut: 700 }) }
+      });
+      expect(rolledUp.totals.tokensOut).toBe(allDaily.totals.tokensOut);
+      expect(rolledUp.totals.estimatedCost).toBeCloseTo(allDaily.totals.estimatedCost);
+    });
+  });
+});
+
+describe('usage.js — rollupOldDailyActivity (bounded growth)', () => {
+  const NOW = new Date('2026-07-12T12:00:00.000Z');
+
+  // A day key exactly `n` days before NOW.
+  function dayKey(n) {
+    const d = new Date(NOW);
+    d.setDate(d.getDate() - n);
+    return d.toISOString().split('T')[0];
+  }
+
+  it('moves day buckets older than retention into monthly buckets', () => {
+    const oldKey = dayKey(500); // > 400 days old
+    const daily = { [oldKey]: { sessions: 2, messages: 5, tokens: 100 } };
+    const monthly = {};
+
+    const changed = rollupOldDailyActivity(daily, monthly, { now: NOW });
+
+    expect(changed).toBe(true);
+    expect(daily[oldKey]).toBeUndefined();
+    const monthKey = oldKey.slice(0, 7);
+    expect(monthly[monthKey]).toEqual({ sessions: 2, messages: 5, tokens: 100 });
+  });
+
+  it('leaves recent day buckets (within retention) untouched', () => {
+    const recent = dayKey(30);
+    const daily = { [recent]: { sessions: 1, messages: 1, tokens: 10 } };
+    const monthly = {};
+
+    const changed = rollupOldDailyActivity(daily, monthly, { now: NOW });
+
+    expect(changed).toBe(false);
+    expect(daily[recent]).toEqual({ sessions: 1, messages: 1, tokens: 10 });
+    expect(monthly).toEqual({});
+  });
+
+  it('sums multiple old days in the same month into one monthly bucket', () => {
+    // Two days in the same old month.
+    const daily = {
+      '2024-01-05': { sessions: 1, messages: 2, tokens: 30 },
+      '2024-01-20': { sessions: 3, messages: 4, tokens: 70 }
+    };
+    const monthly = {};
+
+    rollupOldDailyActivity(daily, monthly, { now: NOW });
+
+    expect(monthly['2024-01']).toEqual({ sessions: 4, messages: 6, tokens: 100 });
+    expect(Object.keys(daily)).toHaveLength(0);
+  });
+
+  it('deep-sums nested per-provider/per-model splits (shape tolerance)', () => {
+    // Forward-compatible with the #2484 nested day-bucket shape.
+    const daily = {
+      '2024-01-05': {
+        sessions: 1,
+        tokens: 100,
+        byProvider: { claude: { tokens: 60, byModel: { opus: { tokens: 60 } } } }
+      },
+      '2024-01-06': {
+        sessions: 2,
+        tokens: 40,
+        byProvider: { claude: { tokens: 40, byModel: { opus: { tokens: 40 } } } }
+      }
+    };
+    const monthly = {};
+
+    rollupOldDailyActivity(daily, monthly, { now: NOW });
+
+    expect(monthly['2024-01']).toEqual({
+      sessions: 3,
+      tokens: 140,
+      byProvider: { claude: { tokens: 100, byModel: { opus: { tokens: 100 } } } }
+    });
+  });
+
+  it('drops non-numeric labels while summing counts', () => {
+    const daily = {
+      '2024-01-05': { sessions: 1, tokens: 10, name: 'Claude Code CLI' }
+    };
+    const monthly = {};
+
+    rollupOldDailyActivity(daily, monthly, { now: NOW });
+
+    expect(monthly['2024-01']).toEqual({ sessions: 1, tokens: 10 });
+  });
+
+  it('is idempotent — a second pass is a no-op and never re-processes monthly keys', () => {
+    const oldKey = dayKey(500);
+    const daily = { [oldKey]: { sessions: 2, tokens: 100 } };
+    const monthly = {};
+
+    rollupOldDailyActivity(daily, monthly, { now: NOW });
+    const afterFirst = JSON.parse(JSON.stringify(monthly));
+
+    const changedAgain = rollupOldDailyActivity(daily, monthly, { now: NOW });
+
+    expect(changedAgain).toBe(false);
+    expect(monthly).toEqual(afterFirst); // no double-counting
+  });
+
+  it('preserves grand totals across the rollup boundary', () => {
+    const daily = {
+      '2024-01-05': { sessions: 5, messages: 10, tokens: 500 }, // old → monthly
+      [dayKey(10)]: { sessions: 2, messages: 4, tokens: 200 }   // recent → daily
+    };
+    const monthly = {};
+
+    rollupOldDailyActivity(daily, monthly, { now: NOW });
+
+    const sumField = (field) =>
+      Object.values(daily).reduce((a, v) => a + (v[field] || 0), 0) +
+      Object.values(monthly).reduce((a, v) => a + (v[field] || 0), 0);
+
+    expect(sumField('sessions')).toBe(7);
+    expect(sumField('messages')).toBe(14);
+    expect(sumField('tokens')).toBe(700);
+  });
+});
+
+describe('usage.js — loadUsage rollup integration', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('backfills monthlyActivity for pre-rollup files and rolls up old days', async () => {
+    const old = new Date();
+    old.setDate(old.getDate() - 500);
+    const oldKey = old.toISOString().split('T')[0];
+    const recent = new Date();
+    recent.setDate(recent.getDate() - 5);
+    const recentKey = recent.toISOString().split('T')[0];
+
+    // Legacy file with no monthlyActivity key at all.
+    const legacy = {
+      totalSessions: 7,
+      totalMessages: 0,
+      totalToolCalls: 0,
+      totalTokens: { input: 0, output: 0 },
+      byProvider: {},
+      byModel: {},
+      dailyActivity: {
+        [oldKey]: { sessions: 5, messages: 0, tokens: 500 },
+        [recentKey]: { sessions: 2, messages: 0, tokens: 200 }
+      },
+      hourlyActivity: Array(24).fill(0),
+      lastUpdated: null
+    };
+    readJSONFile.mockResolvedValueOnce(legacy);
+
+    await loadUsage();
+    const data = getUsage();
+
+    expect(data.monthlyActivity).toBeDefined();
+    expect(data.dailyActivity[oldKey]).toBeUndefined(); // rolled up
+    expect(data.dailyActivity[recentKey]).toBeDefined(); // retained
+    expect(data.monthlyActivity[oldKey.slice(0, 7)].tokens).toBe(500);
+    // Top-level totals are independent of bucket rollup — unchanged.
+    expect(data.totalSessions).toBe(7);
   });
 });
