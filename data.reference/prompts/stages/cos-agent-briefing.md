@@ -10,10 +10,10 @@
 {{task.metadata.context}}
 {{/task.metadata.context}}
 
-{{#task.metadata.app}}
+{{#targetAppLabel}}
 ### Target Application
-{{task.metadata.app}}
-{{/task.metadata.app}}
+{{targetAppLabel}}
+{{/targetAppLabel}}
 
 {{#compactionSection}}
 {{{compactionSection}}}
