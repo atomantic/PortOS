@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { AlertTriangle, ArrowRight, Bot, CalendarDays, Clock3, GitBranch, Infinity as InfinityIcon, RefreshCw, RotateCcw, TimerReset, Workflow } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Bot, CalendarDays, ChevronRight, Clock3, GitBranch, Infinity as InfinityIcon, RefreshCw, RotateCcw, TimerReset, Workflow } from 'lucide-react';
 import * as api from '../../../services/api';
+import { useAppOverrideActions } from '../../../hooks/useAppOverrideActions';
 import { describeCron } from '../../../utils/cronHelpers';
 import ScheduleEditor from './workflow/ScheduleEditor';
+import PerAppOverrideList from './schedule/PerAppOverrideList';
 
 const TRACK_COLORS = {
   cron: { marker: 'bg-purple-400', text: 'text-purple-300', wash: 'bg-purple-500/10' },
@@ -99,54 +101,100 @@ function TrackGrid({ divisions }) {
   ));
 }
 
-function TimelineRow({ node, occurrences, windows, timeline, hours, timezone, selected, onSelect }) {
+function TimelineRow({ node, occurrences, windows, timeline, hours, timezone, selected, apps, expanded, onSelect, onToggleExpand, onUpdateOverride, onBulkToggleOverride }) {
   const palette = trackPalette(node);
   const Icon = node.kind === 'job' ? Bot : GitBranch;
   const divisions = hours === 168 ? 7 : 8;
   const dependencyWarning = node.pendingDeps?.length > 0;
 
+  // App overrides only apply to task types (system jobs are not per-app). The
+  // server's active-app counts drive the toggle + badge (single source of
+  // truth); PerAppOverrideList does its own `apps` filtering when expanded.
+  const { enabledAppCount = 0, totalAppCount = 0 } = node;
+  const canExpand = node.kind === 'task' && totalAppCount > 0;
+  const countTitle = `${enabledAppCount} of ${totalAppCount} apps enabled`;
+
   return (
-    <button type="button" onClick={() => onSelect(node.id)} className={`grid w-full grid-cols-[14rem_minmax(42rem,1fr)] border-b border-port-border/40 text-left transition-colors last:border-b-0 ${selected ? 'bg-port-accent/8' : 'hover:bg-white/[0.025]'}`}>
-      <div className="flex min-w-0 items-center gap-2 border-r border-port-border/50 px-3 py-2.5">
-        <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded ${palette.wash} ${palette.text}`}><Icon className="h-3.5 w-3.5" /></span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-xs font-medium text-gray-200" title={node.label}>{node.label}</span>
-          <span className="mt-0.5 block truncate text-[10px] text-gray-500">{describeSchedule(node)}</span>
-        </span>
-        {dependencyWarning && <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-port-warning" />}
-      </div>
-      <div className="relative min-h-12 overflow-hidden">
-        <TrackGrid divisions={divisions} />
-        <span className="absolute inset-y-0 left-0 z-10 border-l border-port-accent/70" />
-        {windows.map(window => (
-          <span
-            key={window.id}
-            className="absolute inset-y-2 rounded border border-amber-400/40 bg-gradient-to-r from-amber-500/30 via-amber-400/15 to-amber-500/5"
-            style={{ left: `${timelinePercent(window.startAt, timeline)}%`, right: `${100 - timelinePercent(window.endAt, timeline)}%` }}
-            title="Actively draining work; duration depends on the backlog"
-          >
-            <span className="absolute left-2 top-1/2 -translate-y-1/2 whitespace-nowrap text-[10px] font-medium text-amber-200"><InfinityIcon className="mr-1 inline h-3 w-3" />draining</span>
-          </span>
-        ))}
-        {occurrences.map(occurrence => {
-          const meta = dueNowMeta(occurrence, node, timezone);
-          // Due-now is an amber FILL, collision a warning RING — kept on separate
-          // channels so a launch that is BOTH (the common catch-up scenario, where
-          // several tasks are due at Now and therefore also collide) shows both
-          // states at once. A shared ring channel would let collision mask due-now.
-          const fill = occurrence.kind === 'recheck' ? 'rotate-45 bg-amber-300' : meta ? 'bg-amber-400' : palette.marker;
-          const ring = occurrence.collision ? 'ring-2 ring-port-warning ring-offset-1 ring-offset-port-bg' : '';
-          return (
+    <div className={`border-b border-port-border/40 transition-colors last:border-b-0 ${selected ? 'bg-port-accent/8' : ''}`}>
+      <div className={`grid w-full grid-cols-[14rem_minmax(42rem,1fr)] ${selected ? '' : 'hover:bg-white/[0.025]'}`}>
+        <div className="flex min-w-0 items-center gap-1.5 border-r border-port-border/50 px-3 py-2.5">
+          {canExpand ? (
+            <button
+              type="button"
+              onClick={() => onToggleExpand(node.id)}
+              aria-expanded={expanded}
+              aria-label={`${expanded ? 'Hide' : 'Show'} app overrides for ${node.label}`}
+              title={countTitle}
+              className="flex h-5 w-5 shrink-0 items-center justify-center rounded text-gray-500 hover:bg-white/10 hover:text-gray-300"
+            >
+              <ChevronRight className={`h-3.5 w-3.5 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+            </button>
+          ) : (
+            <span className="h-5 w-5 shrink-0" aria-hidden="true" />
+          )}
+          <button type="button" onClick={() => onSelect(node.id)} className="flex min-w-0 flex-1 items-center gap-2 text-left">
+            <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded ${palette.wash} ${palette.text}`}><Icon className="h-3.5 w-3.5" /></span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-xs font-medium text-gray-200" title={node.label}>{node.label}</span>
+              <span className="mt-0.5 block truncate text-[10px] text-gray-500">{describeSchedule(node)}</span>
+            </span>
+          </button>
+          {canExpand && enabledAppCount > 0 && (
+            <span className="shrink-0 rounded-sm bg-port-accent/15 px-1 py-px text-[9px] font-medium text-port-accent" title={countTitle}>
+              {enabledAppCount}/{totalAppCount}
+            </span>
+          )}
+          {dependencyWarning && <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-port-warning" />}
+        </div>
+        <button type="button" onClick={() => onSelect(node.id)} className="relative block min-h-12 overflow-hidden text-left">
+          <TrackGrid divisions={divisions} />
+          <span className="absolute inset-y-0 left-0 z-10 border-l border-port-accent/70" />
+          {windows.map(window => (
             <span
-              key={occurrence.id}
-              className={`absolute top-1/2 z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-sm border-2 border-port-bg shadow ${fill} ${ring}`}
-              style={{ left: `${timelinePercent(occurrence.at, timeline)}%` }}
-              title={`${occurrence.kind === 'recheck' ? 'Reset/recheck' : 'Launch'} ${formatPoint(occurrence.at, hours, timezone)}${meta ? ` · ${meta.detail}` : ''}${occurrence.collision ? ' · another task launches within 15 minutes' : ''}`}
-            />
-          );
-        })}
+              key={window.id}
+              className="absolute inset-y-2 rounded border border-amber-400/40 bg-gradient-to-r from-amber-500/30 via-amber-400/15 to-amber-500/5"
+              style={{ left: `${timelinePercent(window.startAt, timeline)}%`, right: `${100 - timelinePercent(window.endAt, timeline)}%` }}
+              title="Actively draining work; duration depends on the backlog"
+            >
+              <span className="absolute left-2 top-1/2 -translate-y-1/2 whitespace-nowrap text-[10px] font-medium text-amber-200"><InfinityIcon className="mr-1 inline h-3 w-3" />draining</span>
+            </span>
+          ))}
+          {occurrences.map(occurrence => {
+            const meta = dueNowMeta(occurrence, node, timezone);
+            // Due-now is an amber FILL, collision a warning RING — kept on separate
+            // channels so a launch that is BOTH (the common catch-up scenario, where
+            // several tasks are due at Now and therefore also collide) shows both
+            // states at once. A shared ring channel would let collision mask due-now.
+            const fill = occurrence.kind === 'recheck' ? 'rotate-45 bg-amber-300' : meta ? 'bg-amber-400' : palette.marker;
+            const ring = occurrence.collision ? 'ring-2 ring-port-warning ring-offset-1 ring-offset-port-bg' : '';
+            return (
+              <span
+                key={occurrence.id}
+                className={`absolute top-1/2 z-20 h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-sm border-2 border-port-bg shadow ${fill} ${ring}`}
+                style={{ left: `${timelinePercent(occurrence.at, timeline)}%` }}
+                title={`${occurrence.kind === 'recheck' ? 'Reset/recheck' : 'Launch'} ${formatPoint(occurrence.at, hours, timezone)}${meta ? ` · ${meta.detail}` : ''}${occurrence.collision ? ' · another task launches within 15 minutes' : ''}`}
+              />
+            );
+          })}
+        </button>
       </div>
-    </button>
+      {canExpand && expanded && (
+        <div className="border-t border-port-border/40 bg-port-bg/20 px-3 py-3">
+          <PerAppOverrideList
+            taskType={node.label}
+            config={{
+              appOverrides: node.appOverrides,
+              type: node.schedule?.type,
+              taskMetadata: node.taskMetadata,
+              managedAgentOptions: node.managedAgentOptions
+            }}
+            apps={apps}
+            onUpdateOverride={onUpdateOverride}
+            onBulkToggleOverride={onBulkToggleOverride}
+          />
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -181,7 +229,7 @@ function NextUp({ occurrences, nodeMap, hours, timezone, onSelect }) {
   );
 }
 
-export default function WorkflowTab() {
+export default function WorkflowTab({ apps }) {
   // Zoom window + selected track live in the URL so the open editor and view
   // are shareable/bookmarkable and survive reload — the same "URL is the
   // source of truth for what's open" convention as ScheduleTab's ?task=.
@@ -206,7 +254,20 @@ export default function WorkflowTab() {
   const [graph, setGraph] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  // Which task rows have their per-app override panel expanded. Kept as local
+  // view state (a lightweight detail, not a selected record) rather than in the
+  // URL — the ?track= param already owns the selected editor panel.
+  const [expandedIds, setExpandedIds] = useState(() => new Set());
   const fetchGeneration = useRef(0);
+
+  const toggleExpand = useCallback((id) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
 
   const fetchGraph = useCallback(async () => {
     const generation = ++fetchGeneration.current;
@@ -226,6 +287,10 @@ export default function WorkflowTab() {
     fetchGraph();
     return () => { fetchGeneration.current += 1; };
   }, [fetchGraph]);
+
+  // Per-app override mutations are shared with ScheduleTab; refetch the graph so
+  // the enabled-app counts and inherited defaults stay in sync after each change.
+  const { handleUpdateOverride, handleBulkToggleOverride } = useAppOverrideActions(apps, fetchGraph);
 
   const model = useMemo(() => {
     if (!graph?.timeline) return null;
@@ -330,7 +395,12 @@ export default function WorkflowTab() {
                         hours={hours}
                         timezone={graph.timezone}
                         selected={selectedId === node.id}
+                        apps={apps}
+                        expanded={expandedIds.has(node.id)}
                         onSelect={setSelectedId}
+                        onToggleExpand={toggleExpand}
+                        onUpdateOverride={handleUpdateOverride}
+                        onBulkToggleOverride={handleBulkToggleOverride}
                       />
                     ))}
                     {model.scheduled.length === 0 && <div className="py-10 text-center text-sm text-gray-500">No active timed schedules in this range.</div>}

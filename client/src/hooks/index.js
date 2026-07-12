@@ -121,6 +121,7 @@ export * from './useSidebarUniverses.js';
 // === Domain: City / Voice / Mortality / Universe / Apps / Sessions ===
 export * from './useAppDeploy.js';
 export * from './useAppOperation.js';
+export * from './useAppOverrideActions.js';
 export * from './useCanonPatch.js';
 export * from './useCityData.js';
 export * from './useCityPlayback.js';
