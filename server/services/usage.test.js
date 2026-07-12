@@ -14,12 +14,13 @@ vi.mock('fs/promises', () => ({
 vi.mock('../lib/fileUtils.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
   ensureDir: vi.fn().mockResolvedValue(undefined),
+  atomicWrite: vi.fn().mockResolvedValue(undefined),
   PATHS: { data: '/fake/data' },
   readJSONFile: vi.fn()
 }));
 
 import { readJSONFile } from '../lib/fileUtils.js';
-import { loadUsage, getUsageSummary, getUsage } from './usage.js';
+import { loadUsage, getUsageSummary, getUsage, recordSession, recordMessages, buildUsageReport } from './usage.js';
 
 // Helper: produce a date string N days ago (relative to today)
 function daysAgo(n) {
@@ -224,6 +225,139 @@ describe('usage.js — streak calculations', () => {
       await loadUsage();
       const usage = getUsage();
       expect(usage.totalSessions).toBe(99);
+    });
+  });
+
+  describe('time-dimensioned capture', () => {
+    it('recordSession creates per-provider/per-model day buckets', async () => {
+      readJSONFile.mockResolvedValueOnce(makeUsage({}));
+      await loadUsage();
+      await recordSession('claude-code', 'Claude Code', 'opus');
+
+      const day = getUsage().dailyActivity[daysAgo(0)];
+      expect(day.sessions).toBe(1);
+      expect(day.byProvider['claude-code']).toMatchObject({ name: 'Claude Code', sessions: 1 });
+      expect(day.byProvider['claude-code'].byModel.opus.sessions).toBe(1);
+    });
+
+    it('recordMessages attributes input and output tokens to provider, model, and day', async () => {
+      readJSONFile.mockResolvedValueOnce(makeUsage({}));
+      await loadUsage();
+      await recordSession('claude-code', 'Claude Code', 'opus');
+      await recordMessages('claude-code', 'opus', 1, 400, 1200);
+
+      const usage = getUsage();
+      expect(usage.totalTokens).toEqual({ input: 1200, output: 400 });
+      expect(usage.byProvider['claude-code']).toMatchObject({ tokensIn: 1200, tokensOut: 400, tokens: 400 });
+      expect(usage.byModel.opus).toMatchObject({ tokensIn: 1200, tokensOut: 400 });
+      const modelDay = usage.dailyActivity[daysAgo(0)].byProvider['claude-code'].byModel.opus;
+      expect(modelDay).toMatchObject({ messages: 1, tokensIn: 1200, tokensOut: 400 });
+    });
+
+    it('recordMessages tolerates legacy all-time entries without tokensIn/tokensOut', async () => {
+      readJSONFile.mockResolvedValueOnce(makeUsage({}, {
+        byProvider: { codex: { name: 'Codex', sessions: 5, messages: 5, tokens: 100 } },
+        byModel: { 'gpt-5.3-codex': { sessions: 5, messages: 5, tokens: 100 } }
+      }));
+      await loadUsage();
+      await recordMessages('codex', 'gpt-5.3-codex', 1, 50, 200);
+
+      const usage = getUsage();
+      expect(usage.byProvider.codex).toMatchObject({ tokens: 150, tokensIn: 200, tokensOut: 50 });
+      expect(usage.byModel['gpt-5.3-codex']).toMatchObject({ tokens: 150, tokensIn: 200, tokensOut: 50 });
+    });
+  });
+
+  describe('buildUsageReport', () => {
+    const nestedDay = (pid, name, model, { sessions = 1, messages = 1, tokensIn = 0, tokensOut = 0 } = {}) => ({
+      sessions,
+      messages,
+      tokens: tokensOut,
+      byProvider: {
+        [pid]: {
+          name, sessions, messages, tokensIn, tokensOut,
+          byModel: { [model]: { sessions, messages, tokensIn, tokensOut } }
+        }
+      }
+    });
+
+    it('aggregates per-provider and per-model over the range with per-model costs', () => {
+      const daily = {
+        [daysAgo(1)]: nestedDay('claude-code', 'Claude Code', 'claude-opus-4-8', { tokensIn: 1_000_000, tokensOut: 1_000_000 }),
+        [daysAgo(0)]: nestedDay('claude-code', 'Claude Code', 'claude-opus-4-8', { tokensIn: 1_000_000, tokensOut: 0 })
+      };
+      const report = buildUsageReport(daily, {});
+      expect(report.providers).toHaveLength(1);
+      const row = report.providers[0];
+      expect(row).toMatchObject({ id: 'claude-code', free: false, tokensIn: 2_000_000, tokensOut: 1_000_000 });
+      // opus 4.8: $5/1M in, $25/1M out → 2*5 + 1*25 = $35
+      expect(row.estimatedCost).toBeCloseTo(35);
+      expect(row.models[0]).toMatchObject({ model: 'claude-opus-4-8', rateMatch: 'exact', estimatedCost: 35 });
+      expect(report.totals.estimatedCost).toBeCloseTo(35);
+    });
+
+    it('filters by from/to (inclusive)', () => {
+      const daily = {
+        '2025-06-01': nestedDay('codex', 'Codex', 'gpt-5.3-codex', { tokensOut: 100 }),
+        '2025-06-05': nestedDay('codex', 'Codex', 'gpt-5.3-codex', { tokensOut: 200 }),
+        '2025-06-10': nestedDay('codex', 'Codex', 'gpt-5.3-codex', { tokensOut: 400 })
+      };
+      const report = buildUsageReport(daily, { from: '2025-06-02', to: '2025-06-09' });
+      expect(report.providers[0].tokensOut).toBe(200);
+      expect(report.range).toEqual({ from: '2025-06-02', to: '2025-06-09' });
+    });
+
+    it('marks free providers with zero cost (config and id-heuristic paths)', () => {
+      const daily = {
+        [daysAgo(0)]: {
+          sessions: 2, messages: 2, tokens: 500,
+          byProvider: {
+            ollama: { name: 'Ollama', sessions: 1, messages: 1, tokensIn: 1_000_000, tokensOut: 1_000_000, byModel: { 'qwen3:32b': { sessions: 1, messages: 1, tokensIn: 1_000_000, tokensOut: 1_000_000 } } },
+            'my-local': { name: 'My Local', sessions: 1, messages: 1, tokensIn: 1_000_000, tokensOut: 1_000_000, byModel: { llm: { sessions: 1, messages: 1, tokensIn: 1_000_000, tokensOut: 1_000_000 } } }
+          }
+        }
+      };
+      const providers = [{ id: 'my-local', type: 'api', endpoint: 'http://localhost:1234/v1' }];
+      const report = buildUsageReport(daily, { providers });
+      const ollama = report.providers.find(p => p.id === 'ollama');
+      const local = report.providers.find(p => p.id === 'my-local');
+      expect(ollama).toMatchObject({ free: true, estimatedCost: 0 });
+      expect(ollama.models[0].rateMatch).toBe('free');
+      expect(local).toMatchObject({ free: true, estimatedCost: 0 });
+      expect(report.totals.estimatedCost).toBe(0);
+    });
+
+    it('reports breakdownSince as the earliest day with a provider split, ignoring legacy days', () => {
+      const daily = {
+        '2025-05-01': { sessions: 3, messages: 3, tokens: 100 }, // legacy — no byProvider
+        '2025-06-03': nestedDay('codex', 'Codex', 'gpt-5.3-codex', { tokensOut: 10 }),
+        '2025-06-01': nestedDay('codex', 'Codex', 'gpt-5.3-codex', { tokensOut: 10 })
+      };
+      const report = buildUsageReport(daily, {});
+      expect(report.breakdownSince).toBe('2025-06-01');
+      // legacy day contributes nothing to the breakdown
+      expect(report.totals.sessions).toBe(2);
+    });
+
+    it('prices provider-level tokens missing a model split at the provider default', () => {
+      const daily = {
+        [daysAgo(0)]: {
+          sessions: 1, messages: 1, tokens: 0,
+          byProvider: {
+            'claude-code': { name: 'Claude Code', sessions: 1, messages: 1, tokensIn: 1_000_000, tokensOut: 0, byModel: {} }
+          }
+        }
+      };
+      const report = buildUsageReport(daily, {});
+      // provider default for claude-* is sonnet-4.5 ($3/1M in)
+      expect(report.providers[0].estimatedCost).toBeCloseTo(3);
+    });
+
+    it('returns an empty report for empty activity', () => {
+      const report = buildUsageReport({}, { from: null, to: null });
+      expect(report.providers).toEqual([]);
+      expect(report.totals).toMatchObject({ sessions: 0, estimatedCost: 0 });
+      expect(report.breakdownSince).toBeNull();
     });
   });
 });
