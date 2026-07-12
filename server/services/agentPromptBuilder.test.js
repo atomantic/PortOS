@@ -110,11 +110,18 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/\*\*Working Directory\*\*:/);
     });
 
-    it('shows Target App when set', () => {
+    it('shows Target App for a managed app', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: { app: 'comics' } }),
         '/r', null, isTruthyMeta);
       expect(prompt).toMatch(/\*\*Target App\*\*: comics/);
+    });
+
+    it('omits Target App for the PortOS default app (cwd already scopes it)', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { app: 'portos-default' } }),
+        '/r', null, isTruthyMeta);
+      expect(prompt).not.toMatch(/\*\*Target App\*\*/);
     });
 
     it('renders attached context (multiline and single-line)', () => {
