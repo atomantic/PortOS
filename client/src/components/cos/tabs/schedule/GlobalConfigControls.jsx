@@ -413,16 +413,17 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
             <ReviewerPicker
               reviewers={config.taskMetadata?.reviewers ?? (config.taskMetadata?.reviewer ? [config.taskMetadata.reviewer] : reviewDefaults.reviewers)}
               usernames={config.taskMetadata?.usernames ?? reviewDefaults.usernames}
+              optionalReviewers={config.taskMetadata?.optionalReviewers ?? reviewDefaults.optionalReviewers}
               stopMode={config.taskMetadata?.reviewStopMode || reviewDefaults.stopMode || DEFAULT_REVIEW_STOP_MODE}
               reviewerApplies={config.taskMetadata?.reviewerApplies !== undefined
                 ? (config.taskMetadata?.reviewerApplies === true || config.taskMetadata?.reviewerApplies === 'true')
                 : reviewDefaults.reviewerApplies}
               disabled={updating}
-              onChange={({ reviewers, usernames, stopMode, reviewerApplies }) => {
+              onChange={({ reviewers, usernames, optionalReviewers, stopMode, reviewerApplies }) => {
                 // Drop the legacy single `reviewer` key so storage converges on `reviewers`.
                 const { reviewer: _reviewer, ...rest } = config.taskMetadata || {};
                 onUpdate(taskType, {
-                  taskMetadata: { ...rest, reviewers, usernames, reviewStopMode: stopMode, reviewerApplies }
+                  taskMetadata: { ...rest, reviewers, usernames, optionalReviewers, reviewStopMode: stopMode, reviewerApplies }
                 });
               }}
             />

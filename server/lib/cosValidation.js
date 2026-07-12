@@ -96,6 +96,73 @@ export function resolveReviewUsernames(metadataUsernames, defaultUsernames) {
 }
 
 /**
+ * Reviewer identities the user marked OPTIONAL (non-blocking). slashdo's `~opt`
+ * suffix is appended to each matching `--review-with` token, so an *inconclusive*
+ * verdict from that reviewer (timeout / no-verdict / partial) no longer gates the
+ * merge — a hard-error from it still does (slashdo `lib/multi-reviewer-loop.md`).
+ * This is the escape hatch for a valuable-but-flaky reviewer (a local Ollama
+ * model that often returns nothing) that would otherwise strand every PR on an
+ * `inconclusive` aggregate.
+ *
+ * Each entry mirrors an *emitted* `--review-with` token so the builder's
+ * membership test is a plain lookup: a keyed slug from `REVIEWER_VALUES`
+ * (`ollama`, `lmstudio`, …) or an `@<username>`. Normalizes like the sibling
+ * helpers — drop non-strings/unknown slugs/unsafe usernames, alias `gemini` →
+ * `antigravity`, dedupe case-insensitively preserving order. Non-array → undefined
+ * (an omitted field isn't persisted as an empty override).
+ */
+export function normalizeOptionalReviewers(list) {
+  if (!Array.isArray(list)) return undefined;
+  const seen = new Set();
+  const out = [];
+  for (const raw of list) {
+    if (typeof raw !== 'string') continue;
+    const trimmed = raw.trim();
+    if (!trimmed) continue;
+    let token;
+    if (trimmed.startsWith('@')) {
+      const [user] = normalizeReviewUsernames([trimmed]);
+      if (!user) continue;
+      token = `@${user}`;
+    } else {
+      const slug = REVIEWER_ALIASES[trimmed] ?? trimmed;
+      if (!REVIEWER_VALUES.includes(slug)) continue;
+      token = slug;
+    }
+    const key = token.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(token);
+  }
+  return out;
+}
+
+/**
+ * Resolve optional (non-blocking) reviewers with task-over-default precedence:
+ * a task-level list (even explicitly empty) overrides the Code Review Defaults;
+ * only fall back to the defaults when the task didn't pin its own. Mirrors
+ * `resolveReviewUsernames`.
+ */
+export function resolveOptionalReviewers(metadataOptional, defaultOptional) {
+  return Array.isArray(metadataOptional)
+    ? (normalizeOptionalReviewers(metadataOptional) || [])
+    : (normalizeOptionalReviewers(defaultOptional) || []);
+}
+
+/**
+ * Build the set of lowercased optional-reviewer tokens for a fast membership
+ * test in the builders. Tolerates the raw (unnormalized) list.
+ */
+function optionalReviewerSet(optionalReviewers) {
+  return new Set((normalizeOptionalReviewers(optionalReviewers) || []).map(t => t.toLowerCase()));
+}
+
+/** Append slashdo's `~opt` marker to `token` when it's in the optional set. */
+function markOptional(token, optSet) {
+  return optSet.has(token.toLowerCase()) ? `${token}~opt` : token;
+}
+
+/**
  * Resolve task metadata to an ordered, deduped reviewer list. Prefers the new
  * `reviewers` array; falls back to the legacy single `reviewer` string. When
  * the metadata yields nothing, returns `fallback` (default `['copilot']`) —
@@ -145,12 +212,15 @@ export function resolveKeyedReviewers(reviewers, hasUsernames) {
  * Build the comma-separated reviewer token list used to fill the `{reviewers}`
  * placeholder in claim/plan prompts: keyed reviewers (falling back to the
  * default when empty) followed by `@user` tokens for the reviewer usernames.
+ * Reviewers in `optionalReviewers` get slashdo's `~opt` non-blocking suffix.
  * The flag-string variant is `buildReviewWithArgs`.
  */
-export function buildReviewersCsv(reviewers, usernames = []) {
+export function buildReviewersCsv(reviewers, usernames = [], optionalReviewers = []) {
   const keyed = Array.isArray(reviewers) && reviewers.length ? reviewers : [...DEFAULT_REVIEWERS];
   const users = normalizeReviewUsernames(usernames);
-  return [...keyed, ...users.map(u => `@${u}`)].join(',');
+  const optSet = optionalReviewerSet(optionalReviewers);
+  const combined = [...keyed, ...users.map(u => `@${u}`)];
+  return combined.map(t => markOptional(t, optSet)).join(',');
 }
 
 /**
@@ -163,15 +233,22 @@ export function buildReviewersCsv(reviewers, usernames = []) {
  *   meaningless for one).
  * - `--reviewer-applies` only when a non-copilot KEYED reviewer is present (a
  *   username reviewer is an external PR reviewer, not a CLI that applies fixes).
+ * - Reviewers in `optionalReviewers` get slashdo's `~opt` non-blocking suffix on
+ *   their emitted token, so an inconclusive verdict from them doesn't gate the
+ *   merge. A lone default `copilot` that is marked optional DOES force the flag
+ *   on (otherwise the `~opt` — the whole point — would be dropped with the flag).
  */
-export function buildReviewWithArgs(reviewers, stopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, usernames = []) {
+export function buildReviewWithArgs(reviewers, stopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, usernames = [], optionalReviewers = []) {
   const users = normalizeReviewUsernames(usernames);
   const keyed = resolveKeyedReviewers(reviewers, users.length > 0);
   const combined = [...keyed, ...users.map(u => `@${u}`)];
-  const isDefaultOnly = combined.length === 1 && combined[0] === DEFAULT_REVIEWER;
+  const optSet = optionalReviewerSet(optionalReviewers);
+  // The lone-default-copilot suppression only applies when copilot is NOT marked
+  // optional — a `copilot~opt`-only list must still emit the flag to carry `~opt`.
+  const isDefaultOnly = combined.length === 1 && combined[0] === DEFAULT_REVIEWER && !optSet.has(DEFAULT_REVIEWER);
   const hasNonCopilot = keyed.some(r => r !== DEFAULT_REVIEWER);
   const parts = [];
-  if (!isDefaultOnly) parts.push(`--review-with ${combined.join(',')}`);
+  if (!isDefaultOnly) parts.push(`--review-with ${combined.map(t => markOptional(t, optSet)).join(',')}`);
   if (combined.length >= 2) {
     if (stopMode === 'on-findings') parts.push('--review-stop-on-findings');
     else if (stopMode === 'on-clean') parts.push('--review-stop-on-clean');
@@ -260,6 +337,13 @@ export const createCosTaskSchema = z.object({
   // so an omitted field isn't persisted as an empty override.
   usernames: z.preprocess(
     v => Array.isArray(v) ? normalizeReviewUsernames(v) : undefined,
+    z.array(z.string()).optional()
+  ),
+  // Reviewer identities (keyed slugs and/or `@username`) marked non-blocking —
+  // emitted with slashdo's `~opt` suffix. Normalized so a hand-crafted request
+  // can't smuggle junk in. Absent → undefined (not `[]`).
+  optionalReviewers: z.preprocess(
+    v => Array.isArray(v) ? normalizeOptionalReviewers(v) : undefined,
     z.array(z.string()).optional()
   ),
 });
@@ -424,6 +508,13 @@ export const codeReviewSettingsSchema = z.object({
     v => Array.isArray(v) ? normalizeReviewUsernames(v) : undefined,
     z.array(z.string()).optional()
   ),
+  // Reviewer identities (keyed slugs and/or `@username`) marked non-blocking —
+  // emitted with slashdo's `~opt` suffix so an inconclusive verdict from them
+  // doesn't gate the merge (a hard-error still does). Absent → undefined.
+  optionalReviewers: z.preprocess(
+    v => Array.isArray(v) ? normalizeOptionalReviewers(v) : undefined,
+    z.array(z.string()).optional()
+  ),
   stopMode: z.enum(REVIEW_STOP_MODES).optional(),
   reviewerApplies: z.boolean().optional(),
   lmstudioModel: z.preprocess(emptyToUndefined, z.string().optional()),
@@ -528,6 +619,13 @@ export function sanitizeTaskMetadata(raw) {
   // `Array.isArray` override contract and the task-form/global-panel surfaces.
   if (Array.isArray(raw.usernames)) {
     clean.usernames = normalizeReviewUsernames(raw.usernames);
+    hasKeys = true;
+  }
+  // `optionalReviewers` marks reviewers non-blocking (slashdo `~opt`). Like
+  // `usernames`, an explicitly empty array is KEPT so a task/type can override
+  // the Code Review Defaults' optional set back to "none optional."
+  if (Array.isArray(raw.optionalReviewers)) {
+    clean.optionalReviewers = normalizeOptionalReviewers(raw.optionalReviewers) || [];
     hasKeys = true;
   }
   if (Object.prototype.hasOwnProperty.call(raw, 'reviewStopMode') && REVIEW_STOP_MODES.includes(raw.reviewStopMode)) {

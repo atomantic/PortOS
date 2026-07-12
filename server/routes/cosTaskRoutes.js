@@ -49,7 +49,8 @@ async function resolveClaimReviewersCsv() {
     .filter((r) => !LOCAL_LLM_REVIEWERS.includes(r));
   // Arbitrary GitHub reviewer usernames from the Code Review Defaults, appended
   // as `@user` tokens so the play button's claim gates the merge on them too.
-  return buildReviewersCsv(list, codeReviewDefaults?.usernames);
+  // Optional-reviewer set rides along so a `~opt` reviewer stays non-blocking.
+  return buildReviewersCsv(list, codeReviewDefaults?.usernames, codeReviewDefaults?.optionalReviewers);
 }
 
 // Append a "claim exactly this ticket" constraint to the claim-issue-jira body

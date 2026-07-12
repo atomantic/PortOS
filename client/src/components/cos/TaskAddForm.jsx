@@ -27,6 +27,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   const [reviewLoop, setReviewLoop] = useState(false);
   const [reviewers, setReviewers] = useState(DEFAULT_REVIEWERS);
   const [reviewUsernames, setReviewUsernames] = useState([]);
+  const [optionalReviewers, setOptionalReviewers] = useState([]);
   const [reviewStopMode, setReviewStopMode] = useState(DEFAULT_REVIEW_STOP_MODE);
   const [reviewerApplies, setReviewerApplies] = useState(false);
   const [createJiraTicket, setCreateJiraTicket] = useState(false);
@@ -63,6 +64,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
         if (cancelled || !d) return;
         if (Array.isArray(d.reviewers) && d.reviewers.length) setReviewers(d.reviewers);
         if (Array.isArray(d.usernames)) setReviewUsernames(d.usernames);
+        if (Array.isArray(d.optionalReviewers)) setOptionalReviewers(d.optionalReviewers);
         if (d.stopMode) setReviewStopMode(d.stopMode);
         if (d.reviewerApplies === true) setReviewerApplies(true);
       })
@@ -266,6 +268,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       reviewLoop,
       reviewers: reviewLoop ? reviewers : undefined,
       usernames: reviewLoop ? reviewUsernames : undefined,
+      optionalReviewers: reviewLoop ? optionalReviewers : undefined,
       reviewStopMode: reviewLoop ? reviewStopMode : undefined,
       reviewerApplies: reviewLoop ? reviewerApplies : undefined,
       screenshots: screenshots.length > 0 ? screenshots.map(s => s.path) : undefined,
@@ -508,11 +511,13 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               <ReviewerPicker
                 reviewers={reviewers}
                 usernames={reviewUsernames}
+                optionalReviewers={optionalReviewers}
                 stopMode={reviewStopMode}
                 reviewerApplies={reviewerApplies}
-                onChange={({ reviewers: r, usernames: u, stopMode, reviewerApplies: ra }) => {
+                onChange={({ reviewers: r, usernames: u, optionalReviewers: o, stopMode, reviewerApplies: ra }) => {
                   setReviewers(r);
                   setReviewUsernames(u);
+                  setOptionalReviewers(o);
                   setReviewStopMode(stopMode);
                   setReviewerApplies(ra);
                 }}

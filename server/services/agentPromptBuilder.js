@@ -16,7 +16,7 @@ import { getToolsSummaryForPrompt } from './tools.js';
 import { getActiveProvider } from './providers.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { readJSONFile, loadSlashdoFile, PATHS, tryReadFile } from '../lib/fileUtils.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, resolveKeyedReviewers, buildReviewWithArgs } from '../lib/validation.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, resolveKeyedReviewers, buildReviewWithArgs } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { isOpencodeCommand } from '../lib/providerModels.js';
 import { shellQuote } from '../lib/shellQuote.js';
@@ -300,6 +300,8 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
     ? metadata.reviewLoopReviewers
     : (metadata.reviewLoopReviewer ? [metadata.reviewLoopReviewer] : undefined);
   const reviewers = resolveKeyedReviewers(reviewerSource, usernames.length > 0);
+  // Reviewer identities marked non-blocking — emitted with slashdo's `~opt`.
+  const optionalReviewers = normalizeOptionalReviewers(metadata.reviewLoopOptionalReviewers) || [];
   const stopMode = metadata.reviewLoopStopMode || DEFAULT_REVIEW_STOP_MODE;
   const reviewerApplies = metadata.reviewLoopReviewerApplies === true;
   const hasCopilot = reviewers.includes(DEFAULT_REVIEWER);
@@ -343,7 +345,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
     ...reviewers.map(r => `\`${r}\``),
     ...usernames.map(u => `\`@${u}\``),
   ].join(' → ');
-  const equivArgs = buildReviewWithArgs(reviewers, stopMode, reviewerApplies, usernames);
+  const equivArgs = buildReviewWithArgs(reviewers, stopMode, reviewerApplies, usernames, optionalReviewers);
   const equiv = equivArgs ? ` (equivalent to \`/do:pr ${equivArgs}\`)` : '';
 
   // First step: how to obtain a review. For a single copilot/CLI reviewer keep the
@@ -708,6 +710,7 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
   // up here so the TUI completion block can thread `--review-with …` into `/do:pr`.
   const taskReviewers = normalizeReviewers(task.metadata);
   const taskReviewerUsernames = normalizeReviewUsernames(task.metadata?.usernames);
+  const taskOptionalReviewers = normalizeOptionalReviewers(task.metadata?.optionalReviewers) || [];
   const taskReviewStopMode = task.metadata?.reviewStopMode || DEFAULT_REVIEW_STOP_MODE;
   const taskReviewerApplies = isTruthyMetaFn(task.metadata?.reviewerApplies);
 
@@ -731,6 +734,7 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
           sentinelPath,
           reviewers: taskReviewers,
           usernames: taskReviewerUsernames,
+          optionalReviewers: taskOptionalReviewers,
           reviewStopMode: taskReviewStopMode,
           reviewerApplies: taskReviewerApplies
         })
@@ -979,6 +983,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // Flows as `/do:pr --review-with a,b,c [--review-stop-on-*] [--reviewer-applies]`.
   const lightReviewers = normalizeReviewers(task.metadata);
   const lightReviewerUsernames = normalizeReviewUsernames(task.metadata?.usernames);
+  const lightOptionalReviewers = normalizeOptionalReviewers(task.metadata?.optionalReviewers) || [];
   const lightReviewStopMode = task.metadata?.reviewStopMode || DEFAULT_REVIEW_STOP_MODE;
   const lightReviewerApplies = isTruthyMetaFn(task.metadata?.reviewerApplies);
   // Claude Code CLI providers can drive `/simplify` + `/do:pr` themselves
@@ -1083,10 +1088,10 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
       sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`,
       branchName: worktreeInfo?.branchName || null,
       baseBranch: worktreeInfo?.baseBranch || null,
-      reviewers: lightReviewers, usernames: lightReviewerUsernames, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies
+      reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies
     }));
   } else {
-    sections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, willReviewLoop, hasSlashdo, simplifyEnabled, reviewers: lightReviewers, usernames: lightReviewerUsernames, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies }));
+    sections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, willReviewLoop, hasSlashdo, simplifyEnabled, reviewers: lightReviewers, usernames: lightReviewerUsernames, optionalReviewers: lightOptionalReviewers, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies }));
   }
 
   return { taskSections, contractSections };
@@ -1160,7 +1165,7 @@ function buildPostPRMergeSteps(startStep, { reviewers = DEFAULT_REVIEWERS, usern
  * slash commands), the agent can't run `/do:pr` / `/do:push`, so it delegates to
  * the plain-git/`gh` variant below — same sentinel handshake, no slashdo.
  */
-function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath, providerId = null, slashdoFree = false, branchName = null, baseBranch = null, reviewers = DEFAULT_REVIEWERS, usernames = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
+function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath, providerId = null, slashdoFree = false, branchName = null, baseBranch = null, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
   if (slashdoFree) {
     // The manual path never auto-merges (it opens the PR for review), so it
     // doesn't need willReviewLoop — the review gate holds unconditionally.
@@ -1172,7 +1177,7 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
   // when the task's Review Loop control is off so that default cannot start a
   // Copilot (or other external) review unexpectedly.
   const reviewArgs = willOpenPR
-    ? (willReviewLoop ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies, reviewUsernames) : '--review-with none')
+    ? (willReviewLoop ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies, reviewUsernames, optionalReviewers) : '--review-with none')
     : '';
   const reviewerArg = reviewArgs ? ` ${reviewArgs}` : '';
   const copilotOnly = reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER && reviewUsernames.length === 0;
@@ -1304,7 +1309,7 @@ function buildManualTuiCompletionSection({ willOpenPR, simplifyEnabled, sentinel
  * CLI providers fall through to the legacy commit-only block where PortOS
  * handles push+PR on exit.
  */
-function buildCliCompletionSection({ worktreeInfo, willOpenPR, willReviewLoop = false, hasSlashdo = false, simplifyEnabled = false, reviewers = DEFAULT_REVIEWERS, usernames = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
+function buildCliCompletionSection({ worktreeInfo, willOpenPR, willReviewLoop = false, hasSlashdo = false, simplifyEnabled = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
   const reviewUsernames = normalizeReviewUsernames(usernames);
   if (hasSlashdo && worktreeInfo && willOpenPR) {
     const lines = ['## Completion', 'When finished, run these in order:'];
@@ -1313,7 +1318,7 @@ function buildCliCompletionSection({ worktreeInfo, willOpenPR, willReviewLoop = 
       lines.push(`${step++}. \`/simplify\` — review the changed code for reuse, quality, and efficiency, and fix any findings.`);
     }
     const reviewArgs = willReviewLoop
-      ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies, reviewUsernames)
+      ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies, reviewUsernames, optionalReviewers)
       : '--review-with none';
     const reviewerArg = reviewArgs ? ` ${reviewArgs}` : '';
     const completionNote = willReviewLoop

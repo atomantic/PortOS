@@ -22,7 +22,7 @@
 import { readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, normalizeReviewers, resolveReviewUsernames, buildReviewersCsv, LOCAL_LLM_REVIEWERS, SWARM_COUNT_MIN } from '../lib/validation.js';
+import { sanitizeTaskMetadata, PIPELINE_BEHAVIOR_FLAGS, MAX_TOTAL_SPAWNS, normalizeReviewers, resolveReviewUsernames, resolveOptionalReviewers, buildReviewersCsv, LOCAL_LLM_REVIEWERS, SWARM_COUNT_MIN } from '../lib/validation.js';
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, diagnoseUnpickablePlan } from '../lib/planIds.js';
 import { loadState, saveState, withStateLock, isImprovementEnabled, isDaemonRunning } from './cosState.js';
 import { getDomainMode } from '../lib/domainAutonomy.js';
@@ -336,7 +336,8 @@ export async function buildClaimWorkTask(app, { issueAuthorFilter, reviewers } =
   // claim prompt's `/do:next --review-with` gates the merge on them too. A
   // task-level list overrides the Code Review Defaults.
   const promptUsernames = resolveReviewUsernames(metadata.usernames, codeReviewDefaults?.usernames);
-  const reviewersCsv = buildReviewersCsv(reviewersList, promptUsernames);
+  const promptOptionalReviewers = resolveOptionalReviewers(metadata.optionalReviewers, codeReviewDefaults?.optionalReviewers);
+  const reviewersCsv = buildReviewersCsv(reviewersList, promptUsernames, promptOptionalReviewers);
   const issueAuthorFilterBlock = resolveIssueAuthorFilterBlock(promptTaskType, resolvedAuthorFilter);
   // Swarm mode (`/do:next --swarm`) is prepended (not an in-template
   // placeholder) so it stays an opt-in orchestration wrapper that needs no
@@ -2047,7 +2048,8 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   // prompt's `/do:next --review-with` gates the merge on them too. A task-level
   // list overrides the Code Review Defaults; forge-agnostic, so not filtered.
   const promptUsernames = resolveReviewUsernames(metadata.usernames, codeReviewDefaults?.usernames);
-  const reviewersCsv = buildReviewersCsv(promptReviewers, promptUsernames);
+  const promptOptionalReviewers = resolveOptionalReviewers(metadata.optionalReviewers, codeReviewDefaults?.optionalReviewers);
+  const reviewersCsv = buildReviewersCsv(promptReviewers, promptUsernames, promptOptionalReviewers);
   // {issueAuthorFilter} directive — the filter was already merged (global →
   // per-app override) and value-constrained by sanitizeTaskMetadata, so read it
   // from `metadata` (default 'self', the slashdo `/do:next --self` security

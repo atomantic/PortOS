@@ -22,7 +22,7 @@ import { removeWorktree } from './worktreeManager.js';
 import { isTruthyMeta } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { RECOVERY_TASK_PREFIX } from './recoveryTasks.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames } from '../lib/validation.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers } from '../lib/validation.js';
 
 /**
  * Clean up a worktree for a completed agent.
@@ -41,7 +41,7 @@ import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, MODEL_CA
  * the worktree branch into the source workspace because `gh pr merge` already handled it.
  * Otherwise, merges the worktree branch back to the source branch on success.
  */
-export async function cleanupAgentWorktree(agentId, success, { openPR = false, requestCopilotReview: shouldRequestCopilot = false, reviewers = DEFAULT_REVIEWERS, usernames = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, skipMerge = false, description = null, agentOutput = null, originalTask = null } = {}) {
+export async function cleanupAgentWorktree(agentId, success, { openPR = false, requestCopilotReview: shouldRequestCopilot = false, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null, skipMerge = false, description = null, agentOutput = null, originalTask = null } = {}) {
   const { getAgent: getAgentState } = await import('./cos.js');
   const agentState = await getAgentState(agentId).catch(() => null);
   if (!agentState?.metadata?.isWorktree) return [];
@@ -178,6 +178,7 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
           sourceWorkspace,
           reviewers: reviewerList,
           usernames,
+          optionalReviewers,
           reviewStopMode,
           reviewerApplies,
           reviewerModels
@@ -238,7 +239,7 @@ export async function cleanupAgentWorktree(agentId, success, { openPR = false, r
  * branch (via createWorktree's `existingBranch` option) so it can fix-and-push
  * without trampling concurrent agents.
  */
-export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, sourceWorkspace, reviewers = DEFAULT_REVIEWERS, usernames = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null }) {
+export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, prUrl, prBranch, sourceWorkspace, reviewers = DEFAULT_REVIEWERS, usernames = [], optionalReviewers = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false, reviewerModels = null }) {
   if (!prUrl || !prBranch) return null;
 
   const parsedPr = git.parsePullRequestUrl(prUrl);
@@ -253,6 +254,9 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   // NOT stripped on a non-GitHub forge — a username reviewer alone can drive the
   // loop even when copilot was dropped.
   const effectiveUsernames = normalizeReviewUsernames(usernames);
+  // Non-blocking (`~opt`) marker set — forge-agnostic, threaded verbatim so the
+  // follow-up's `--review-with` marks the same reviewers optional.
+  const effectiveOptionalReviewers = normalizeOptionalReviewers(optionalReviewers) || [];
   if (effectiveReviewers.length === 0 && effectiveUsernames.length === 0) return null;
 
   // Reviewer-keyed CLI model map, narrowed to the model-capable reviewers actually
@@ -299,6 +303,7 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
       // Arbitrary GitHub reviewer usernames the follow-up requests as PR reviewers
       // and gates the merge on (appended to `--review-with` as `@user`).
       reviewLoopReviewerUsernames: effectiveUsernames,
+      reviewLoopOptionalReviewers: effectiveOptionalReviewers,
       reviewLoopStopMode: reviewStopMode,
       reviewLoopReviewerApplies: reviewerApplies,
       // Empty → null so the prompt builder's "no models configured" path is unambiguous.

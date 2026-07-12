@@ -10,6 +10,7 @@ import { DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE } from '../components/cos/c
 const FALLBACK = Object.freeze({
   reviewers: DEFAULT_REVIEWERS,
   usernames: [],
+  optionalReviewers: [],
   stopMode: DEFAULT_REVIEW_STOP_MODE,
   reviewerApplies: false,
   lmstudioModel: null,
@@ -33,6 +34,7 @@ export function CodeReviewDefaultsProvider({ children }) {
         setValue({
           reviewers: Array.isArray(d.reviewers) && d.reviewers.length ? d.reviewers : DEFAULT_REVIEWERS,
           usernames: Array.isArray(d.usernames) ? d.usernames : [],
+          optionalReviewers: Array.isArray(d.optionalReviewers) ? d.optionalReviewers : [],
           stopMode: d.stopMode || DEFAULT_REVIEW_STOP_MODE,
           reviewerApplies: d.reviewerApplies === true,
           lmstudioModel: d.lmstudioModel || null,
