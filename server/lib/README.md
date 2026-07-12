@@ -110,6 +110,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `hfDownload.js` | `downloadHfRepo({repo,onEvent})` returning `{promise,kill}` — spawns `scripts/hf_download_repo.py` in the FLUX.2 venv (fallback: mflux pythonPath) and emits SSE-friendly stage/progress/complete events. Powers the inline "Download" button next to the model picker. |
 | `sseHeaders.js` | `SSE_HEADERS` — the canonical SSE response headers (incl. `X-Accel-Buffering:no`) in a dependency-free module so any producer (`sseDownload.js`, `sseUtils.js`) can share them without pulling in a heavier module's transitive imports. |
 | `sseDownload.js` | `startHfDownloadStream({req,res,repo,alreadyDownloadedMessage})`, `openSseStream(res)` (`{send,safeEnd}` SSE boilerplate; uses `SSE_HEADERS` from `sseHeaders.js`) — shared SSE driver used by both image and video gen `/models/:id/download` routes. Owns the cross-route in-flight Map so a double-click (or both pages running) can't spawn two python children against the same repo. |
+| `installLogger.js` | `createInstallLogger({installer,target})` → `{start,onEvent,success,failure,cancel}` — server-console chokepoint for install/venv-setup SSE flows (the install-side analogue of `sseDownload.js`). Logs a START line, throttled heartbeats + `stage` milestones (not every raw pip/bash line), and the OUTCOME (success/fail/cancel) with elapsed time. `onEvent(ev)` auto-detects terminal `complete`/`error` SSE events. Used by the music/video runtime installers and the FLUX.2 venv bootstrap. |
 
 ## File & I/O
 
