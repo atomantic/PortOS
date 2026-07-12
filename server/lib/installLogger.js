@@ -76,7 +76,9 @@ export function createInstallLogger({ installer, target } = {}) {
   const success = (message) => safe(() => finish(true, message));
   const failure = (message) => safe(() => finish(false, message));
   const cancel = () => safe(() => {
-    if (finished) return;
+    // A disconnect before start() (e.g. the client closes during a readiness
+    // probe that runs before spawn) never began an install — nothing to cancel.
+    if (!started || finished) return;
     finished = true;
     console.log(`🛑 Install cancelled: ${name}${suffix} after ${elapsed()}`);
   });

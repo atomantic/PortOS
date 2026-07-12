@@ -1076,7 +1076,12 @@ router.get('/setup/install', (req, res) => {
   // so a late pip-output line (or the promise.then below) doesn't trigger
   // ERR_STREAM_WRITE_AFTER_END or double-end the response.
   const { send, safeEnd } = openSseStream(res);
-  const { promise, kill } = installPackages(parsed.data.pythonPath, parsed.data.packages, send);
+  // Server-console visibility for the (multi-GB) local pip install — the SSE
+  // stream otherwise surfaces progress only in the browser.
+  const installLog = createInstallLogger({ installer: 'Image Gen packages', target: parsed.data.pythonPath });
+  const emit = (ev) => { installLog.onEvent(ev); send(ev); };
+  installLog.start();
+  const { promise, kill } = installPackages(parsed.data.pythonPath, parsed.data.packages, emit);
   promise.then(() => {
     // Drop the now-stale setup-check snapshot before the client re-runs the
     // probe on `complete` — without this it would read the pre-install
@@ -1087,7 +1092,7 @@ router.get('/setup/install', (req, res) => {
 
   // Client navigation away should kill pip — a torch upgrade can run for
   // 10+ minutes and would otherwise keep going invisibly.
-  req.on('close', () => { kill(); safeEnd(); });
+  req.on('close', () => { installLog.cancel(); kill(); safeEnd(); });
 });
 
 export default router;

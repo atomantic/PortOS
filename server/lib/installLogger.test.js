@@ -31,17 +31,26 @@ describe('createInstallLogger', () => {
     expect(errored()).toHaveLength(0);
   });
 
-  it('logs stage milestones but throttles raw log lines', () => {
-    const log = createInstallLogger({ installer: 'Example' });
-    log.start();
-    log.onEvent({ type: 'stage', stage: 'install', message: 'Installing torch' });
-    // A burst of raw log lines within the heartbeat window emits at most one
-    // heartbeat (the first line, since lastHeartbeat was set at start()).
-    for (let i = 0; i < 50; i += 1) log.onEvent({ type: 'log', message: `line ${i}` });
-    const stageLines = logged().filter((l) => /Example: install/.test(l));
-    const heartbeats = logged().filter((l) => /installing…/.test(l));
-    expect(stageLines).toHaveLength(1);
-    expect(heartbeats.length).toBeLessThanOrEqual(1);
+  it('logs stage milestones but throttles raw log lines to a timed heartbeat', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    try {
+      const log = createInstallLogger({ installer: 'Example' });
+      log.start();
+      log.onEvent({ type: 'stage', stage: 'install', message: 'Installing torch' });
+      // A burst of raw log lines inside the heartbeat window emits ZERO
+      // heartbeats (lastHeartbeat was set at start(), same instant).
+      for (let i = 0; i < 50; i += 1) log.onEvent({ type: 'log', message: `line ${i}` });
+      expect(logged().filter((l) => /Example: install/.test(l))).toHaveLength(1);
+      expect(logged().filter((l) => /installing…/.test(l))).toHaveLength(0);
+
+      // Cross the heartbeat threshold → the next line emits exactly one heartbeat.
+      vi.advanceTimersByTime(16000);
+      for (let i = 0; i < 50; i += 1) log.onEvent({ type: 'log', message: `more ${i}` });
+      expect(logged().filter((l) => /installing…/.test(l))).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('logs SUCCESS outcome on a complete event', () => {
@@ -73,6 +82,13 @@ describe('createInstallLogger', () => {
     log.cancel();
     log.onEvent({ type: 'error', message: 'exit code 143' });
     expect(logged().some((l) => /Install cancelled: Example/.test(l))).toBe(true);
+    expect(errored()).toHaveLength(0);
+  });
+
+  it('cancel() before start() is a no-op (nothing was installing)', () => {
+    const log = createInstallLogger({ installer: 'Example' });
+    log.cancel();
+    expect(logged()).toHaveLength(0);
     expect(errored()).toHaveLength(0);
   });
 
