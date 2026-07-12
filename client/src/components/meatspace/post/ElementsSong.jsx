@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { ChevronLeft, ChevronRight, BookOpen, Zap, Target, Check, X, SkipForward, Loader, Search, Eye, BarChart3, Gauge } from 'lucide-react';
+import { ChevronLeft, ChevronRight, BookOpen, Zap, Target, Check, X, SkipForward, Loader, Search, Eye, BarChart3, Gauge, Layers, RotateCw } from 'lucide-react';
 import { submitMemoryPractice, getMemoryMastery, getMemoryItem } from '../../../services/api';
 import { RapidReaderModal } from '../../RapidReader';
 
@@ -42,6 +42,9 @@ const ROW_LABELS = [null, null, null, null, null, null, null, 'Lanthanides', 'Ac
 
 const PRACTICE_MODES = [
   { id: 'learn', label: 'Learn Lyrics', icon: BookOpen, desc: 'Read through the song verse by verse' },
+  // Study (flip-to-reveal) before the recall test, mirroring the study→test
+  // split of Morse (copy vs head-copy) and MemoryPractice (learn vs recall).
+  { id: 'element-study', label: 'Flash Cards', icon: Layers, desc: 'Study element name ↔ symbol pairings' },
   { id: 'element-flash', label: 'Element Flash', icon: Zap, desc: 'Name elements from symbols or vice versa' },
   { id: 'fill-blank', label: 'Fill the Lyrics', icon: Target, desc: 'Fill in missing element names from the lyrics' },
 ];
@@ -80,6 +83,7 @@ export default function ElementsSong({ item: itemProp, onBack, loadItemOnMount }
   }
 
   if (mode === 'learn') return <LearnMode item={item} onBack={() => setMode(null)} onComplete={handlePracticeComplete} />;
+  if (mode === 'element-study') return <ElementStudyMode item={item} mastery={mastery} onBack={() => setMode(null)} onComplete={handlePracticeComplete} />;
   if (mode === 'element-flash') return <ElementFlashMode item={item} mastery={mastery} onBack={() => setMode(null)} onComplete={handlePracticeComplete} />;
   if (mode === 'fill-blank') return <FillBlankMode item={item} onBack={() => setMode(null)} onComplete={handlePracticeComplete} />;
 
@@ -524,6 +528,183 @@ function LearnMode({ item, onBack, onComplete }) {
   );
 }
 
+// Element [symbol, info] entries ordered weakest-mastery-first, so both the
+// study deck and the flash quiz surface the least-known elements first.
+function weakestFirstElements(elementMap, mastery) {
+  return Object.entries(elementMap).sort((a, b) => {
+    const mA = mastery.elements?.[a[0]];
+    const mB = mastery.elements?.[b[0]];
+    const pctA = mA?.attempts > 0 ? mA.correct / mA.attempts : 0;
+    const pctB = mB?.attempts > 0 ? mB.correct / mB.attempts : 0;
+    return pctA - pctB;
+  });
+}
+
+// =============================================================================
+// ELEMENT STUDY MODE (flash cards — flip to reveal, self-rate)
+// =============================================================================
+
+function ElementStudyMode({ item, mastery, onBack, onComplete }) {
+  const elementMap = item.content?.elementMap || {};
+
+  // Build the study deck once per item/mastery. Without memoization the
+  // Math.random() front-side pick below re-runs on every render (e.g. each flip),
+  // flipping which face shows mid-card — same footgun ElementFlashMode guards.
+  const cards = useMemo(() => {
+    return weakestFirstElements(elementMap, mastery).slice(0, 20).map(([symbol, info]) => ({
+      symbol,
+      info,
+      // Fixed per-card front face so a flip doesn't swap which side is hidden.
+      showSymbolFront: Math.random() > 0.5,
+    }));
+  }, [elementMap, mastery]);
+
+  const [idx, setIdx] = useState(0);
+  const [flipped, setFlipped] = useState(false);
+  const [results, setResults] = useState([]);
+  const [startTime] = useState(Date.now());
+
+  if (!cards.length) {
+    return (
+      <div className="space-y-6 max-w-2xl">
+        <div className="flex items-center gap-3">
+          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+            <ChevronLeft size={20} />
+          </button>
+          <h2 className="text-lg font-bold text-white">Flash Cards</h2>
+        </div>
+        <div className="bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500 text-sm">
+          No elements available to study yet.
+        </div>
+      </div>
+    );
+  }
+
+  if (idx >= cards.length) {
+    const known = results.filter(r => r.correct).length;
+    const pct = Math.round((known / results.length) * 100);
+    const scoreColor = pct >= 80 ? 'text-port-success' : pct >= 50 ? 'text-port-warning' : 'text-port-error';
+
+    return (
+      <div className="space-y-6 max-w-2xl">
+        <div className="flex items-center gap-3">
+          <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+            <ChevronLeft size={20} />
+          </button>
+          <h2 className="text-xl font-bold text-white">Flash Cards Complete</h2>
+        </div>
+        <div className="bg-port-card border border-port-border rounded-lg p-6 text-center">
+          <div className={`text-5xl font-bold font-mono ${scoreColor} mb-2`}>{pct}%</div>
+          <div className="text-gray-400 text-sm">{known} of {results.length} marked known</div>
+        </div>
+        {results.filter(r => !r.correct).length > 0 && (
+          <div className="bg-port-card border border-port-border rounded-lg p-4">
+            <h3 className="text-sm font-medium text-gray-400 mb-3">Keep studying</h3>
+            <div className="grid grid-cols-2 gap-2">
+              {results.filter(r => !r.correct).map((r, i) => (
+                <div key={i} className="text-xs bg-port-bg rounded p-2">
+                  <span className="text-port-warning font-mono">{r.symbol}</span>
+                  <span className="text-gray-500 mx-1">&rarr;</span>
+                  <span className="text-gray-300">{r.name}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+        <button
+          onClick={() => {
+            submitMemoryPractice(item.id, {
+              mode: 'element-study', chunkId: null,
+              results: results.map(r => ({ correct: r.correct, element: r.element })),
+              totalMs: Date.now() - startTime,
+            }).then(r => onComplete(r?.mastery)).catch(err => { console.warn('⚠️ Failed to record practice: ' + err.message); onComplete(null); });
+          }}
+          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
+        >
+          Save & Return
+        </button>
+      </div>
+    );
+  }
+
+  const card = cards[idx];
+  const info = card.info;
+  const frontLabel = card.showSymbolFront ? 'What element?' : 'What symbol?';
+
+  function rate(known) {
+    setResults(prev => [...prev, { correct: known, element: card.symbol, symbol: card.symbol, name: info.name }]);
+    setIdx(prev => prev + 1);
+    setFlipped(false);
+  }
+
+  return (
+    <div className="space-y-6 max-w-2xl">
+      <div className="flex items-center gap-3">
+        <button aria-label="Back" onClick={onBack} className="text-gray-400 hover:text-white transition-colors">
+          <ChevronLeft size={20} />
+        </button>
+        <h2 className="text-lg font-bold text-white">Flash Cards</h2>
+        <span className="text-gray-500 text-sm ml-auto">{idx + 1} / {cards.length}</span>
+      </div>
+
+      <div className="w-full h-1.5 bg-port-border rounded-full overflow-hidden">
+        <div className="h-full bg-emerald-500 rounded-full transition-all" style={{ width: `${((idx + 1) / cards.length) * 100}%` }} />
+      </div>
+
+      {/* The card: tap the front to flip; the back shows the full pairing. */}
+      {flipped ? (
+        <div className="bg-port-card border border-emerald-500/40 rounded-lg p-8 text-center">
+          <div className="text-[11px] text-gray-600 mb-1">{info.atomicNumber}</div>
+          <div className="text-5xl font-bold font-mono text-white mb-2">{card.symbol}</div>
+          <div className="text-xl text-emerald-400">{info.name}</div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => setFlipped(true)}
+          className="w-full bg-port-card border border-port-border rounded-lg p-8 text-center hover:border-port-accent/50 transition-colors"
+        >
+          {card.showSymbolFront ? (
+            <>
+              <div className="text-[11px] text-gray-600 mb-1">{info.atomicNumber}</div>
+              <div className="text-5xl font-bold font-mono text-white">{card.symbol}</div>
+            </>
+          ) : (
+            <div className="text-4xl font-bold text-white">{info.name}</div>
+          )}
+          <div className="mt-4 flex items-center justify-center gap-1.5 text-gray-500 text-sm">
+            <RotateCw size={14} /> Tap to reveal — {frontLabel}
+          </div>
+        </button>
+      )}
+
+      {flipped ? (
+        <div className="flex gap-3">
+          <button
+            onClick={() => rate(false)}
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-port-card border border-port-border rounded-lg text-gray-300 hover:border-port-warning/50 hover:text-port-warning transition-colors"
+          >
+            <RotateCw size={16} /> Study Again
+          </button>
+          <button
+            onClick={() => rate(true)}
+            className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-port-success hover:bg-port-success/80 text-white rounded-lg transition-colors"
+          >
+            <Check size={16} /> Got It
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => setFlipped(true)}
+          className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-port-accent hover:bg-port-accent/80 text-white rounded-lg transition-colors"
+        >
+          Reveal
+        </button>
+      )}
+    </div>
+  );
+}
+
 // =============================================================================
 // ELEMENT FLASH MODE
 // =============================================================================
@@ -535,16 +716,8 @@ function ElementFlashMode({ item, mastery, onBack, onComplete }) {
   // shuffle below re-runs on every render (e.g. each keystroke), reshuffling the
   // deck and swapping the current question mid-answer.
   const questions = useMemo(() => {
-    const allElements = Object.entries(elementMap);
-    // Prioritize weak elements
-    const sorted = [...allElements].sort((a, b) => {
-      const mA = mastery.elements?.[a[0]];
-      const mB = mastery.elements?.[b[0]];
-      const pctA = mA?.attempts > 0 ? mA.correct / mA.attempts : 0;
-      const pctB = mB?.attempts > 0 ? mB.correct / mB.attempts : 0;
-      return pctA - pctB;
-    });
-    return sorted.slice(0, 15).sort(() => Math.random() - 0.5).map(([symbol, info]) => {
+    // Prioritize weak elements, then shuffle the weakest slice for quiz variety.
+    return weakestFirstElements(elementMap, mastery).slice(0, 15).sort(() => Math.random() - 0.5).map(([symbol, info]) => {
       const askSymbol = Math.random() > 0.5;
       return askSymbol
         ? { prompt: info.name, expected: symbol, element: symbol, label: 'What symbol?' }

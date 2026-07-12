@@ -112,6 +112,10 @@ export const DRILL_LABELS = {
   'memory-fill-blank': 'Memory Fill Blank',
   'memory-sequence': 'Memory Sequence',
   'memory-element-flash': 'Element Flash',
+  // Standalone flash-card study mode (ElementsSong.jsx). Label only — NOT added
+  // to MEMORY_DRILL_TYPES / DOMAINS.memory.drillTypes because it isn't a POST
+  // session drill (the server has no memory-element-study generator).
+  'memory-element-study': 'Element Study',
   'what-if': 'What If?',
   'alternative-uses': 'Alternative Uses',
   'story-prompt': 'Story Prompt',
