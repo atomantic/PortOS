@@ -152,10 +152,13 @@ async function readFileTail(file, bytes) {
   const info = await stat(file);
   if (info.size <= bytes) return readFile(file, 'utf-8');
   const handle = await open(file, 'r');
-  const buffer = Buffer.alloc(bytes);
-  await handle.read(buffer, 0, bytes, info.size - bytes);
-  await handle.close();
-  return buffer.toString('utf-8');
+  try {
+    const buffer = Buffer.alloc(bytes);
+    await handle.read(buffer, 0, bytes, info.size - bytes);
+    return buffer.toString('utf-8');
+  } finally {
+    await handle.close();
+  }
 }
 
 async function fetchCodexQuota({ codexHome = codexHomeDir() } = {}) {
