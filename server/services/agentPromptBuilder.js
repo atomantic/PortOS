@@ -315,7 +315,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
     hasCopilot ? `**copilot**: ${copilotIsFirst
       ? 'wait for the initial Copilot review the system already pre-requested (Copilot leads the list)'
       : 'request a Copilot review when you reach its turn'} (poll every 5–15s, max 5 min/round), then re-request on later rounds.` : null,
-    hasCli ? `**codex / antigravity / claude**: invoke that CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works).${codexModelNote}` : null,
+    hasCli ? `**codex / antigravity / claude / grok**: invoke that CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works).${codexModelNote}` : null,
     hasLocalLlm ? `**lmstudio / ollama**: ${localLlmInvocation}` : null,
     hasGithubUser ? `**@github reviewers**: ${githubUsersInvocation}` : null,
   ].filter(Boolean).join(' ');
@@ -748,8 +748,17 @@ ${task.metadata.jiraBranch ? 'Commit your changes to this branch. Do NOT switch 
   // predates the {{reviewLoopFollowUpSection}} placeholder; the built-in
   // fallback is the source of truth for that section, and silently dropping
   // it would leave the agent with no instructions and the loop would not run.
+  // Precomputed display label for the stock "Target Application" heading in the
+  // cos-agent-briefing template. Mirrors buildTaskBlock's predicate: suppress
+  // the redundant heading for the PortOS default app (empty string → the
+  // template section is falsy and renders nothing), surface the app id for
+  // managed apps. `task.metadata.app` stays in the context for any custom
+  // template references — only the stock heading gates on this.
+  const briefingApp = task.metadata?.app;
+  const targetAppLabel = briefingApp && briefingApp !== PORTOS_APP_ID ? briefingApp : '';
   const promptData = isReviewLoopFollowUp ? null : await buildPrompt('cos-agent-briefing', {
     task,
+    targetAppLabel,
     config,
     memorySection,
     claudeMdSection,

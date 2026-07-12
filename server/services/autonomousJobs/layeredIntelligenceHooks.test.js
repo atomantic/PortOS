@@ -70,6 +70,7 @@ import * as li from '../layeredIntelligence.js';
 import { recordFiledProposal, listOutcomes, reconcileOutcomes } from '../layeredIntelligenceOutcomes.js';
 import * as apps from '../apps.js';
 import { resolveAppWorkTracker } from '../../lib/workTracker.js';
+import { tryReadFile } from '../../lib/fileUtils.js';
 import { getProviderById } from '../providers.js';
 import { loadSchedule } from '../taskSchedule.js';
 
@@ -167,13 +168,21 @@ describe('buildTaskInput', () => {
     expect(li.buildPrompt).toHaveBeenCalledWith(expect.objectContaining({ outcomesReport: expect.stringContaining('Total filed: 1') }));
   });
 
-  it('skips the feedback loop on a plan tracker even when outcomes is enabled', async () => {
+  it('runs the feedback loop on a plan tracker when outcomes is enabled (#2435)', async () => {
     resolveAppWorkTracker.mockResolvedValue({ resolved: 'plan', forge: null });
     li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { outcomes: true } });
+    // The plan branch reads PLAN.md → a checked item reconciles like a forge issue.
+    tryReadFile.mockResolvedValue('- [x] [lil-add-metrics] done');
+    li.extractPlanSlugs.mockReturnValue([{ slug: 'add-metrics', state: 'closed' }]);
+    listOutcomes.mockResolvedValue([{ slug: 'add-metrics', outcome: 'merged', scope: 'app-improvement' }]);
+    li.computeOutcomesReport.mockReturnValue('Recent LI proposals:\n- Total filed: 1');
     await buildTaskInput({ app: APP });
-    expect(reconcileOutcomes).not.toHaveBeenCalled();
-    expect(listOutcomes).not.toHaveBeenCalled();
-    expect(li.buildPrompt).toHaveBeenCalledWith(expect.objectContaining({ outcomesReport: '' }));
+    expect(reconcileOutcomes).toHaveBeenCalledWith(expect.objectContaining({
+      appId: 'app-1',
+      existingIssues: [{ slug: 'add-metrics', state: 'closed' }]
+    }));
+    expect(listOutcomes).toHaveBeenCalledWith(expect.objectContaining({ appId: 'app-1' }));
+    expect(li.buildPrompt).toHaveBeenCalledWith(expect.objectContaining({ outcomesReport: expect.stringContaining('Total filed: 1') }));
   });
 });
 
@@ -225,6 +234,41 @@ describe('processTaskOutput', () => {
     expect(recordFiledProposal).toHaveBeenCalledWith(expect.objectContaining({
       appId: 'app-1', slug: 'add-telemetry', issueRef: '#77', scope: 'app-improvement', tracker: 'github'
     }));
+  });
+
+  it('records a plan-filed proposal for the feedback loop (#2435)', async () => {
+    // A `plan` tracker now reconciles outcomes too — a proposal appended to
+    // PLAN.md is recorded so a later run can read back its checked/unchecked fate.
+    resolveAppWorkTracker.mockResolvedValue({ resolved: 'plan', forge: null });
+    li.validateReasonerResponse.mockReturnValue({
+      proposal: { scope: 'app-improvement', slug: 'add-metrics', title: 'Add metrics', body: 'do it' },
+      pause: null
+    });
+    li.appendProposalToPlan.mockResolvedValue({ success: true });
+    li.getEffectiveConfig.mockReturnValue({ allowedScopes: ['app-improvement'], sources: { outcomes: true } });
+    const out = await processTaskOutput({ appId: 'app-1', success: true, payload: { proposal: {} } });
+    expect(li.appendProposalToPlan).toHaveBeenCalled();
+    expect(out).toMatchObject({ action: 'filed', reason: null });
+    expect(recordFiledProposal).toHaveBeenCalledWith(expect.objectContaining({
+      appId: 'app-1', slug: 'add-metrics', scope: 'app-improvement', tracker: 'plan'
+    }));
+  });
+
+  it('reports a re-proposed already-tracked PLAN slug as duplicate without resetting its outcome (#2435)', async () => {
+    // A checked `- [x]` item passes the dedup guard (re-proposable), but
+    // appendProposalToPlan writes nothing (tag already present) and returns
+    // duplicate — the hook must NOT report `filed` or record a fresh outcome.
+    resolveAppWorkTracker.mockResolvedValue({ resolved: 'plan', forge: null });
+    li.validateReasonerResponse.mockReturnValue({
+      proposal: { scope: 'app-improvement', slug: 'add-metrics', title: 'Add metrics', body: 'do it' },
+      pause: null
+    });
+    li.isProposalDuplicate.mockReturnValue(false); // out of dedup window (checked, no closedAt)
+    li.appendProposalToPlan.mockResolvedValue({ success: true, duplicate: true });
+    li.getEffectiveConfig.mockReturnValue({ allowedScopes: ['app-improvement'], sources: { outcomes: true } });
+    const out = await processTaskOutput({ appId: 'app-1', success: true, payload: { proposal: {} } });
+    expect(out).toMatchObject({ action: 'duplicate', reason: 'duplicate' });
+    expect(recordFiledProposal).not.toHaveBeenCalled();
   });
 
   it('suppresses an exact-duplicate proposal without filing', async () => {

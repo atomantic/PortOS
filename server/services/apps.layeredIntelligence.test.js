@@ -56,7 +56,7 @@ describe('updateAppLayeredIntelligence', () => {
     const c = await getAppLayeredIntelligenceConfig('app-1');
     expect(c.enabled).toBe(true);
     expect(c.sources.goals).toBe(false);
-    expect(c.sources.cosMetrics).toBe(true); // untouched default preserved
+    expect(c.sources.appMetrics).toBe(true); // untouched default preserved
   });
 
   it('preserves lastRunAt bookkeeping across a config PATCH', async () => {

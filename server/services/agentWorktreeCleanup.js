@@ -35,7 +35,7 @@ import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, normaliz
  * GitHub Copilot review is pre-requested here only when copilot LEADS the list (otherwise
  * the follow-up requests it at its turn so Copilot sees the post-fix diff). `reviewStopMode`
  * (`all`/`on-findings`/`on-clean`) and `reviewerApplies` are threaded into the follow-up's
- * metadata. CLI reviewers (claude/antigravity/codex) are always driven by the follow-up agent,
+ * metadata. CLI reviewers (claude/antigravity/codex/grok) are always driven by the follow-up agent,
  * which works on any forge; copilot is GitHub-only and dropped on non-GitHub remotes.
  * When skipMerge is true (review-loop follow-up agents), the cleanup never auto-merges
  * the worktree branch into the source workspace because `gh pr merge` already handled it.
@@ -242,7 +242,7 @@ export async function spawnReviewLoopFollowUp({ originalAgentId, originalTask, p
   if (!prUrl || !prBranch) return null;
 
   const parsedPr = git.parsePullRequestUrl(prUrl);
-  // Copilot is GitHub-only; CLI-based reviewers (claude/antigravity/codex) work on any
+  // Copilot is GitHub-only; CLI-based reviewers (claude/antigravity/codex/grok) work on any
   // forge because the agent invokes the CLI directly. On a non-GitHub forge, drop
   // copilot from the list — if nothing's left (and no username reviewers), there's
   // no review to run.
