@@ -2,6 +2,8 @@
 
 ## Changes
 
+- **The four SSE job-slot hooks now share one implementation.** `useReferenceAudioImport`, `useYoutubeTrackImport`, `useVideoDownload`, and `useMidiTranscription` each hand-rolled the same "kick off a job → stream SSE progress → settle on the terminal frame, with double-click and lost-connection recovery" machinery. That logic now lives in exactly one place — a new generic `useSseJobSlot` hook — and the four feature hooks are thin wrappers that pass their own kickoff/SSE/cancel calls plus per-feature toast copy (and, for MuScriptor, its runtime-install and gated-repo modals). Behavior-preserving refactor deferred from the MuScriptor /simplify pass (#2368); ~150 fewer lines.
+
 - **Shell page quick-command buttons trimmed to the interactive tools.** Dropped the four shell one-liner shortcuts (`git status`, `git pull`, `npm test`, `npm run dev`) that duplicated things you'd just type, renamed the `antigravity` button to its actual command `agy`, and added a `grok` button alongside the other coding-agent launchers.
 
 ## Fixes
