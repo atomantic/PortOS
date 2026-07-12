@@ -22,6 +22,7 @@ import { cosEvents } from './cosEvents.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 import { mergeTaskLists } from './cosTaskMerge.js';
 import { canChallenge, getChallengeCount, buildChallengePatch, buildChallengeResolutionPatch, classifyRecheckOutcome, MAX_CHALLENGES_PER_TASK } from './cosChallenge.js';
+import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { runLocalCodeReview, getCodeReviewDefaults } from './codeReview.js';
 
 // First non-empty line of a string. Used by addTask dedup: stored descriptions
@@ -622,10 +623,17 @@ export async function challengeTask(taskId, { reason, evidence, reviewer } = {},
   if (task.status === 'completed') {
     return { error: 'Cannot challenge a completed task', code: 'CANNOT_CHALLENGE_COMPLETED' };
   }
-  if (!canChallenge(task.metadata)) {
+  // Bounded by BOTH the one-shot dispute cap AND the shared retry budget (#2471) —
+  // a challenge that overturns re-queues the task, so refuse one that's already out
+  // of total spawns (it would only get re-blocked by agentLifecycle's spawn gate).
+  if (!canChallenge(task.metadata, { maxTotalSpawns: MAX_TOTAL_SPAWNS })) {
+    const spawns = Number(task.metadata?.totalSpawnCount) || 0;
+    const budgetExhausted = spawns >= MAX_TOTAL_SPAWNS;
     return {
-      error: `Challenge budget exhausted (${getChallengeCount(task.metadata)}/${MAX_CHALLENGES_PER_TASK} used)`,
-      code: 'CHALLENGE_EXHAUSTED',
+      error: budgetExhausted
+        ? `Retry budget exhausted (${spawns}/${MAX_TOTAL_SPAWNS} spawns) — cannot challenge a task out of retries`
+        : `Challenge budget exhausted (${getChallengeCount(task.metadata)}/${MAX_CHALLENGES_PER_TASK} used)`,
+      code: budgetExhausted ? 'CHALLENGE_BUDGET_EXHAUSTED' : 'CHALLENGE_EXHAUSTED',
     };
   }
   const patch = buildChallengePatch(task.metadata, { reason, evidence, reviewer, now });
