@@ -5,6 +5,11 @@ import {
   classifyUntypedTask,
   isSandboxedTaskType,
   summarizeFailureSignatures,
+  appendInsight,
+  buildRecurrenceInsight,
+  recurrenceMilestoneReached,
+  RECURRENCE_INSIGHT_MILESTONES,
+  INSIGHT_CAP,
   EXTERNAL_UNTYPED_TASK_TYPE
 } from './store.js';
 
@@ -261,5 +266,116 @@ describe('store.summarizeFailureSignatures (issue #2333)', () => {
       Array.from({ length: 8 }, (_, i) => [`c${i}`, { count: i + 1, recent: [sample()] }])
     );
     expect(summarizeFailureSignatures(map, { limit: 3 })).toHaveLength(3);
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Human-readable insights (issue #2443) — pure helpers exercised without I/O.
+// -----------------------------------------------------------------------------
+
+describe('store.recurrenceMilestoneReached', () => {
+  it('fires exactly on the configured ascending milestones', () => {
+    for (const m of RECURRENCE_INSIGHT_MILESTONES) {
+      expect(recurrenceMilestoneReached(m)).toBe(true);
+    }
+  });
+
+  it('does not fire on off-milestone counts (idempotency: one insight per milestone)', () => {
+    expect(recurrenceMilestoneReached(1)).toBe(false);
+    expect(recurrenceMilestoneReached(2)).toBe(false);
+    expect(recurrenceMilestoneReached(4)).toBe(false);
+    expect(recurrenceMilestoneReached(11)).toBe(false);
+    expect(recurrenceMilestoneReached(0)).toBe(false);
+  });
+});
+
+describe('store.appendInsight', () => {
+  it('stamps recordedAt and defaults origin to user', () => {
+    const data = {};
+    appendInsight(data, { type: 'observation', message: 'hello' });
+    expect(data.insights).toHaveLength(1);
+    expect(data.insights[0].origin).toBe('user');
+    expect(data.insights[0].message).toBe('hello');
+    expect(typeof data.insights[0].recordedAt).toBe('string');
+  });
+
+  it('preserves an explicit origin (auto-incident) and overrides any passed recordedAt', () => {
+    const data = { insights: [] };
+    appendInsight(data, { origin: 'auto-incident', message: 'auto', recordedAt: 'stale' });
+    expect(data.insights[0].origin).toBe('auto-incident');
+    expect(data.insights[0].recordedAt).not.toBe('stale');
+  });
+
+  it('caps retained insights at INSIGHT_CAP (oldest pruned first)', () => {
+    const data = { insights: [] };
+    for (let i = 0; i < INSIGHT_CAP + 5; i++) {
+      appendInsight(data, { message: `m${i}` });
+    }
+    expect(data.insights).toHaveLength(INSIGHT_CAP);
+    // Oldest five pruned — newest retained.
+    expect(data.insights[0].message).toBe('m5');
+    expect(data.insights[INSIGHT_CAP - 1].message).toBe(`m${INSIGHT_CAP + 4}`);
+  });
+
+  it('initializes a missing/non-array insights field', () => {
+    const data = { insights: 'corrupt' };
+    appendInsight(data, { message: 'x' });
+    expect(Array.isArray(data.insights)).toBe(true);
+    expect(data.insights).toHaveLength(1);
+  });
+});
+
+describe('store.buildRecurrenceInsight', () => {
+  const failureSignatures = {
+    timeout: {
+      count: 3,
+      recent: [
+        { taskType: 'self-improve:ui', provider: 'claude', model: 'opus', modelTier: 'heavy', recordedAt: '2026-07-10T00:00:00.000Z' },
+        { taskType: 'self-improve:ui', provider: 'claude', model: 'opus', modelTier: 'heavy', recordedAt: '2026-07-10T00:01:00.000Z' },
+        { taskType: 'self-improve:ui', provider: 'codex', model: 'gpt', modelTier: 'heavy', recordedAt: '2026-07-10T00:02:00.000Z' }
+      ]
+    }
+  };
+
+  it('produces a provenance-stamped, auto-incident insight with provider attribution', () => {
+    const insight = buildRecurrenceInsight({
+      category: 'timeout',
+      count: 3,
+      taskType: 'self-improve:ui',
+      agentId: 'agent-xyz',
+      failureSignatures
+    });
+    expect(insight.origin).toBe('auto-incident');
+    expect(insight.type).toBe('recurring-failure');
+    expect(insight.category).toBe('timeout');
+    expect(insight.taskType).toBe('self-improve:ui');
+    expect(insight.recurrenceCount).toBe(3);
+    expect(insight.originatingAgentId).toBe('agent-xyz');
+    // Top provider by count (claude/opus appears twice).
+    expect(insight.provider).toBe('claude/opus');
+    expect(insight.message).toContain('"timeout"');
+    expect(insight.message).toContain('3 times');
+    expect(insight.message).toContain('claude/opus');
+  });
+
+  it('never echoes a raw error message (privacy) — message is built only from controlled fields', () => {
+    const withRawMessage = {
+      timeout: {
+        count: 3,
+        recent: [
+          { taskType: 't', provider: 'claude', model: 'opus', messageSnippet: '/Users/secret/path leaked ENOENT', recordedAt: '2026-07-10T00:00:00.000Z' }
+        ]
+      }
+    };
+    const insight = buildRecurrenceInsight({ category: 'timeout', count: 3, taskType: 't', failureSignatures: withRawMessage });
+    expect(insight.message).not.toContain('/Users/secret');
+    expect(insight.message).not.toContain('leaked');
+  });
+
+  it('degrades gracefully when no provider attribution is available', () => {
+    const insight = buildRecurrenceInsight({ category: 'unknown', count: 10, taskType: 't', failureSignatures: {} });
+    expect(insight.provider).toBeNull();
+    expect(insight.message).toContain('10 times');
+    expect(insight.message).not.toContain('via');
   });
 });

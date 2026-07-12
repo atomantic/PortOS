@@ -78,3 +78,26 @@ describe('insights.getLearningInsights — failureSignatures consumption (issue 
     expect(view.recommendations.some(r => r.id?.startsWith('failure-signature:'))).toBe(false);
   });
 });
+
+describe('insights.getLearningInsights — standing learnings surfacing (issue #2443)', () => {
+  it('surfaces recorded insights (newest first) with their origin preserved', async () => {
+    loadLearningData.mockResolvedValue(learningData({
+      insights: [
+        { origin: 'user', message: 'older manual note', recordedAt: '2026-07-08T00:00:00Z' },
+        { origin: 'auto-incident', category: 'timeout', taskType: 'auto-fix', recurrenceCount: 3, message: 'recurring failure', recordedAt: '2026-07-09T00:00:00Z' }
+      ]
+    }));
+    const view = await getLearningInsights();
+    expect(view.standingLearnings).toHaveLength(2);
+    // Newest first.
+    expect(view.standingLearnings[0].origin).toBe('auto-incident');
+    expect(view.standingLearnings[0].recurrenceCount).toBe(3);
+    expect(view.standingLearnings[1].origin).toBe('user');
+  });
+
+  it('returns an empty array when no insights have been recorded', async () => {
+    loadLearningData.mockResolvedValue(learningData());
+    const view = await getLearningInsights();
+    expect(view.standingLearnings).toEqual([]);
+  });
+});
