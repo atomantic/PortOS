@@ -210,10 +210,12 @@ export function formatDateTime(value) {
 
 /**
  * Format a number of seconds as M:SS (e.g. 75 → "1:15"). For coarse durations
- * like a stitched video's runtime. Returns `'—'` for missing/invalid input.
+ * like a stitched video's runtime or a piano-roll ruler tick. Returns `'—'`
+ * for missing/invalid/negative input; a genuine zero renders as `"0:00"` (not
+ * `'—'`) so callers can distinguish "unknown" from "zero seconds".
  */
 export function formatDurationSec(seconds) {
-  if (!seconds || !Number.isFinite(seconds)) return '—';
+  if (!Number.isFinite(seconds) || seconds < 0) return '—';
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}:${String(s).padStart(2, '0')}`;

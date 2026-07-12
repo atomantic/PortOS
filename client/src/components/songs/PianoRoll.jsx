@@ -9,6 +9,7 @@ import {
 } from '../../lib/pianoKeyboard';
 import { roundRect } from '../../lib/canvasRoll.js';
 import useCanvasDprSize from '../../hooks/useCanvasDprSize.js';
+import useCanvasRollPalette from '../../hooks/useCanvasRollPalette.js';
 
 // Synthesia-style piano-roll visualizer for the song system's layered MIDI
 // player. Renders every selected lead-sheet part as colored notes falling onto
@@ -33,9 +34,7 @@ const WHITE_KEY_FILL = '#e7e7ea';
 const WHITE_KEY_EDGE = '#9a9aa2';
 const BLACK_KEY_FILL = '#1b1b20';
 const BLACK_KEY_EDGE = '#000000';
-const HIT_LINE = '#3b82f6';
 const GRID_LINE = 'rgba(255,255,255,0.05)';
-const BG = '#0c0c0e';
 
 /**
  * @param {object} props
@@ -79,6 +78,7 @@ export default function PianoRoll({ parts, tempo, getPosition, playing, height =
     if (!canvas || !width) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+    const { bg, accent } = paletteRef.current;
 
     // Keep the negative LEAD-in pre-roll intact (only guard non-finite) so a
     // falling note reaches the hit line exactly when its audio starts.
@@ -94,7 +94,7 @@ export default function PianoRoll({ parts, tempo, getPosition, playing, height =
     const keyByMidi = new Map(layout.keys.map((k) => [k.midi, k]));
 
     ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = BG;
+    ctx.fillStyle = bg;
     ctx.fillRect(0, 0, width, hitLineY);
 
     // Faint vertical octave gridlines (on every C) to anchor the eye.
@@ -128,7 +128,7 @@ export default function PianoRoll({ parts, tempo, getPosition, playing, height =
     ctx.restore();
 
     // Hit line.
-    ctx.fillStyle = HIT_LINE;
+    ctx.fillStyle = accent;
     ctx.fillRect(0, hitLineY - 1, width, 2);
 
     // Keyboard — white keys first, then black overlaid. Active keys glow in the
@@ -143,7 +143,7 @@ export default function PianoRoll({ parts, tempo, getPosition, playing, height =
       ctx.strokeRect(k.x + 0.5, hitLineY + 0.5, k.w - 1, kbH - 1);
       // Octave label on each C.
       if (k.midi % 12 === 0 && k.w > 14) {
-        ctx.fillStyle = lit ? '#0c0c0e' : '#71717a';
+        ctx.fillStyle = lit ? bg : '#71717a';
         ctx.font = '9px ui-sans-serif, system-ui, sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText(midiNoteName(k.midi), k.x + k.w / 2, hitLineY + kbH - 5);
@@ -165,6 +165,10 @@ export default function PianoRoll({ parts, tempo, getPosition, playing, height =
   // change, which only needs a redraw, not a re-observe).
   const drawRef = useRef(draw);
   drawRef.current = draw;
+
+  // Theme-following canvas palette (bg + accent hit line), read inside draw()
+  // via the ref; re-resolves and repaints on theme switch.
+  const paletteRef = useCanvasRollPalette(drawRef);
 
   // Size the canvas to the container (devicePixelRatio-aware) and redraw.
   const widthRef = useCanvasDprSize(wrapRef, canvasRef, height, drawRef);
