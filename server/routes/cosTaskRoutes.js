@@ -17,6 +17,8 @@ import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.j
 import {
   createCosTaskSchema,
   updateCosTaskSchema,
+  challengeTaskSchema,
+  resolveChallengeSchema,
   validateRequest,
   normalizeReviewers,
   buildReviewersCsv,
@@ -314,6 +316,36 @@ router.post('/tasks/:id/approve', asyncHandler(async (req, res) => {
   const result = await cos.approveTask(id);
   if (result?.error) {
     throw new ServerError(result.error, { status: 400, code: 'BAD_REQUEST' });
+  }
+  res.json(result);
+}));
+
+// POST /api/cos/tasks/:id/challenge - A sub-agent disputes a reviewer rejection
+// (#2441). Parks the task in `challenged` and consumes one bounded challenge slot;
+// a second dispute on the same task is refused (409 CHALLENGE_EXHAUSTED).
+router.post('/tasks/:id/challenge', asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { reason, evidence, reviewer } = validateRequest(challengeTaskSchema, req.body);
+  const result = await cos.challengeTask(id, { reason, evidence, reviewer });
+  if (result?.error) {
+    const status = result.code === 'CHALLENGE_EXHAUSTED' ? 409
+      : result.code === 'NOT_FOUND' ? 404 : 400;
+    throw new ServerError(result.error, { status, code: result.code || 'CHALLENGE_FAILED' });
+  }
+  res.json(result);
+}));
+
+// POST /api/cos/tasks/:id/challenge/resolve - Resolve a parked challenge (#2441).
+// `upheld` overturns the rejection (→ pending); `escalated` surfaces the
+// unresolved dispute to the user (→ blocked + arbitration task).
+router.post('/tasks/:id/challenge/resolve', asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { outcome, note, resolvedBy } = validateRequest(resolveChallengeSchema, req.body);
+  const result = await cos.resolveTaskChallenge(id, { outcome, note, resolvedBy });
+  if (result?.error) {
+    const status = result.code === 'NOT_FOUND' ? 404
+      : result.code === 'NOT_CHALLENGED' ? 409 : 400;
+    throw new ServerError(result.error, { status, code: result.code || 'RESOLVE_FAILED' });
   }
   res.json(result);
 }));

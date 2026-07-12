@@ -240,4 +240,30 @@ describe('mergeTaskLists', () => {
     // Entries missing an id are skipped, not adopted.
     expect(mergeTaskLists([{ status: 'pending' }], [], { now: NOW })).toEqual([]);
   });
+
+  describe('challenged status rank (#2441)', () => {
+    it('a fresh challenged status wins over a stale in_progress on the other peer', () => {
+      const local = [task('task-c', 'challenged')];
+      const remote = [task('task-c', 'in_progress')];
+      // Symmetric: whichever side initiates, the challenged content wins.
+      expect(mergeTaskLists(local, remote, { now: NOW })[0].status).toBe('challenged');
+      expect(mergeTaskLists(remote, local, { now: NOW })[0].status).toBe('challenged');
+    });
+
+    it('a terminal resolution (blocked / completed) supersedes an unresolved challenge', () => {
+      const challenged = [task('task-c', 'challenged')];
+      const blocked = [task('task-c', 'blocked')];
+      const completed = [task('task-c', 'completed')];
+      expect(mergeTaskLists(challenged, blocked, { now: NOW })[0].status).toBe('blocked');
+      expect(mergeTaskLists(blocked, challenged, { now: NOW })[0].status).toBe('blocked');
+      expect(mergeTaskLists(challenged, completed, { now: NOW })[0].status).toBe('completed');
+    });
+
+    it('keeps a live claim on a challenged (non-terminal) task, mirroring in_progress', () => {
+      const local = [task('task-c', 'challenged', { metadata: { ...liveClaim('peer-A') } })];
+      const remote = [task('task-c', 'challenged')];
+      const merged = mergeTaskLists(local, remote, { now: NOW })[0];
+      expect(merged.metadata.claimedBy).toBe('peer-A');
+    });
+  });
 });

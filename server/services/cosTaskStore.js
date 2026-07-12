@@ -21,6 +21,7 @@ import { loadState, withStateLock, ROOT_DIR } from './cosState.js';
 import { cosEvents } from './cosEvents.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 import { mergeTaskLists } from './cosTaskMerge.js';
+import { canChallenge, getChallengeCount, buildChallengePatch, buildChallengeResolutionPatch, MAX_CHALLENGES_PER_TASK } from './cosChallenge.js';
 
 // First non-empty line of a string. Used by addTask dedup: stored descriptions
 // are flattened to a single line by generateTasksMarkdown, so the comparison
@@ -597,4 +598,94 @@ export async function approveTask(taskId, { now = Date.now() } = {}) {
 
   return tasks[taskIndex];
   });
+}
+
+/**
+ * Record a sub-agent's challenge of a reviewer rejection (#2441).
+ *
+ * Parks the task in the `challenged` status with the worker's case attached and
+ * consumes one of its bounded challenge slots (MAX_CHALLENGES_PER_TASK). A second
+ * dispute on the same task is refused — the acceptance contract is "exactly one
+ * per task." The read (getTaskById, lock-free) precedes the write (updateTask,
+ * lock-held): single-user trust model, no competing writer to race.
+ *
+ * @returns the updated task, or `{ error, code }` on not-found / budget-exhausted.
+ */
+export async function challengeTask(taskId, { reason, evidence, reviewer } = {}, taskType = 'user', { now = Date.now() } = {}) {
+  const task = await getTaskById(taskId);
+  if (!task) return { error: 'Task not found', code: 'NOT_FOUND' };
+  const resolvedType = task.taskType || taskType;
+  if (!canChallenge(task.metadata)) {
+    return {
+      error: `Challenge budget exhausted (${getChallengeCount(task.metadata)}/${MAX_CHALLENGES_PER_TASK} used)`,
+      code: 'CHALLENGE_EXHAUSTED',
+    };
+  }
+  const patch = buildChallengePatch(task.metadata, { reason, evidence, reviewer, now });
+  const updated = await updateTask(taskId, { status: 'challenged', metadata: patch }, resolvedType, { now });
+  if (updated?.error) return updated;
+  console.log(`⚖️ Task ${taskId} challenged (${patch.challengeCount}/${MAX_CHALLENGES_PER_TASK})${patch.challenge.reviewer ? ` — disputing ${patch.challenge.reviewer}` : ''}`);
+  cosEvents.emit('task:challenged', { taskId, taskType: resolvedType, reviewer: patch.challenge.reviewer || null });
+  return updated;
+}
+
+/**
+ * Resolve a parked challenge (#2441). `upheld` overturns the rejection and
+ * re-queues the task (→ pending); `escalated` hands the unresolved dispute to
+ * the user — the task is blocked with a challenge-escalation reason AND an
+ * approval-required arbitration task is filed into COS-TASKS.md (reusing the same
+ * investigation/escalation surface `createInvestigationTask` writes to), so a
+ * sustained disagreement surfaces to the user rather than silently fixing or
+ * quietly blocking.
+ *
+ * @returns the updated task, or `{ error, code }` on not-found / not-challenged /
+ *          invalid-outcome.
+ */
+export async function resolveTaskChallenge(taskId, { outcome, note, resolvedBy } = {}, taskType = 'user', { now = Date.now() } = {}) {
+  const task = await getTaskById(taskId);
+  if (!task) return { error: 'Task not found', code: 'NOT_FOUND' };
+  if (task.status !== 'challenged') {
+    return { error: 'Task is not under challenge', code: 'NOT_CHALLENGED' };
+  }
+  const resolvedType = task.taskType || taskType;
+  const resolutionPatch = buildChallengeResolutionPatch({ outcome, note, resolvedBy, now });
+  if (!resolutionPatch) return { error: `Invalid challenge outcome: ${outcome}`, code: 'INVALID_OUTCOME' };
+
+  const nextStatus = outcome === 'upheld' ? 'pending' : 'blocked';
+  const metadataPatch = { ...resolutionPatch };
+  if (outcome === 'escalated') {
+    metadataPatch.blockedReason = 'Challenge unresolved — escalated to user for arbitration';
+    metadataPatch.blockedCategory = 'challenge-escalation';
+  }
+  const updated = await updateTask(taskId, { status: nextStatus, metadata: metadataPatch }, resolvedType, { now });
+  if (updated?.error) return updated;
+
+  if (outcome === 'escalated') {
+    // Surface the dispute to the single PortOS user as an approval-required
+    // arbitration task (mirrors createInvestigationTask's escalation surface).
+    // Best-effort: a failed escalation-task write must not fail the resolution
+    // itself (the original task is already blocked with the reason attached).
+    const caseReason = task.metadata?.challenge?.reason || '(no reason recorded)';
+    const disputedReviewer = task.metadata?.challenge?.reviewer;
+    const escalationDescription = `[Challenge] Arbitrate disputed rejection on ${taskId}`;
+    const escalationContext = [
+      `A sub-agent challenged a reviewer rejection on task ${taskId} and the dispute is unresolved.`,
+      disputedReviewer ? `Disputed reviewer: ${disputedReviewer}` : null,
+      `Worker's case: ${caseReason}`,
+      note ? `Resolver note: ${note}` : null,
+      'Decide: approve to overturn the rejection, or delete to let the rejection stand.',
+    ].filter(Boolean).join('\n');
+    await addTask({
+      description: escalationDescription,
+      priority: 'HIGH',
+      context: escalationContext,
+      approvalRequired: true,
+    }, 'internal', { now }).catch((err) => {
+      console.error(`❌ Failed to file challenge-escalation task for ${taskId}: ${err.message}`);
+    });
+  }
+
+  console.log(`⚖️ Task ${taskId} challenge resolved: ${outcome} → ${nextStatus}`);
+  cosEvents.emit('task:challenge-resolved', { taskId, taskType: resolvedType, outcome });
+  return updated;
 }
