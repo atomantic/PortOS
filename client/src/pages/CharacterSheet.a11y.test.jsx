@@ -85,6 +85,34 @@ describe('CharacterSheet name editing accessibility', () => {
     );
   });
 
+  it('blocks reopening the editor while a prior name-save PUT is in flight (#2409)', async () => {
+    // Hold the first save open so we can attempt a stale reopen mid-flight.
+    let resolvePut;
+    put.mockImplementationOnce((_path, body) =>
+      new Promise((resolve) => { resolvePut = () => resolve({ ...CHAR, ...body }); }),
+    );
+
+    renderSheet();
+    fireEvent.click(await findNameTrigger());
+    const input = screen.getByLabelText('Character name');
+    fireEvent.change(input, { target: { value: 'Strider' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    // First PUT is now pending; the trigger is back but disabled, so a click
+    // (which would seed a stale 'Aragorn' input) is a no-op.
+    const trigger = await screen.findByRole('button', { name: /edit character name/i });
+    expect(trigger).toBeDisabled();
+    fireEvent.click(trigger);
+    expect(screen.queryByLabelText('Character name')).toBeNull();
+
+    // Resolve the save: exactly one PUT fired (no stale revert), editor reopenable.
+    resolvePut();
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /edit character name/i })).not.toBeDisabled(),
+    );
+  });
+
   it('cancels the edit on Escape and restores the original name', async () => {
     renderSheet();
     fireEvent.click(await findNameTrigger());

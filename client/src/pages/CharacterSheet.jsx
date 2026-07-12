@@ -59,6 +59,10 @@ export default function CharacterSheet() {
   const [editingClass, setEditingClass] = useState(false);
   const [nameVal, setNameVal] = useState('');
   const [classVal, setClassVal] = useState('');
+  // True while a name-save PUT is in flight. Gates re-opening the editor so a
+  // reopened input (still showing the pre-save name) can't blur-save a stale
+  // value back over the name the in-flight PUT is about to persist (#2409).
+  const [nameSaving, setNameSaving] = useState(false);
   const [syncing, setSyncing] = useState(null);
   const [generatingAvatar, setGeneratingAvatar] = useState(false);
   const [diffusionProgress, setDiffusionProgress] = useState(null);
@@ -194,6 +198,10 @@ export default function CharacterSheet() {
   };
 
   const startNameEdit = () => {
+    // Refuse to reopen while a prior save is still in flight — the reopened
+    // input would seed from the pre-save `char.name` and a subsequent blur
+    // could persist that stale value over the pending save (#2409).
+    if (nameSaving) return;
     nameEditingRef.current = true;
     setNameVal(char.name || '');
     setEditingName(true);
@@ -209,12 +217,16 @@ export default function CharacterSheet() {
       setNameVal(char.name || '');
       return;
     }
+    if (!(nameVal.trim() && nameVal.trim() !== char.name)) return;
+    setNameSaving(true);
     try {
-      if (nameVal.trim() && nameVal.trim() !== char.name) {
-        const data = await charPut({ name: nameVal.trim() });
-        setChar(data);
-      }
-    } catch (err) { toast.error(err.message || 'Failed to save name'); }
+      const data = await charPut({ name: nameVal.trim() });
+      setChar(data);
+    } catch (err) {
+      toast.error(err.message || 'Failed to save name');
+    } finally {
+      setNameSaving(false);
+    }
   };
 
   // Enter commits, Escape cancels. preventDefault keeps Enter from triggering
@@ -370,8 +382,9 @@ export default function CharacterSheet() {
                   <button
                     type="button"
                     onClick={startNameEdit}
+                    disabled={nameSaving}
                     aria-label={`Edit character name (currently ${char.name || 'Unnamed Hero'})`}
-                    className="text-2xl font-bold text-white cursor-pointer hover:text-port-accent transition-colors truncate text-left bg-transparent border-0 p-0"
+                    className="text-2xl font-bold text-white cursor-pointer hover:text-port-accent transition-colors truncate text-left bg-transparent border-0 p-0 disabled:opacity-60 disabled:cursor-wait"
                   >
                     {char.name || 'Unnamed Hero'}
                   </button>

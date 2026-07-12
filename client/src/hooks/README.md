@@ -37,6 +37,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | Hook | Purpose | Use when |
 |---|---|---|
 | `useSseProgress` | Generic JSON-frame EventSource subscriber. | New SSE progress stream — start here, build on top. |
+| `useSseJobSlot` | Generic single-slot SSE job: `pending`/`job` state, terminal-frame handling (`complete`/`error`/`canceled`), and `sse.closed`-without-terminal-frame recovery in one place. Returns `{ active, percent, stage, context, start, cancel }`; pass `startRequest`/`eventsUrl`/`cancelRequest` + per-feature toast copy. | Any "kick off a job → stream SSE → settle on terminal frame" hook. The reference-audio/YouTube/video-download/MIDI hooks all wrap this — don't re-roll the terminal-frame + lost-connection dance. |
 | `useInstallStream` | BYO-runtime install-log EventSource lifecycle: `stage`/`log`/`complete`/`error` frame dispatch, capped + optionally-debounced log accumulation, "connection lost" handling, ref-stashed `onComplete`, auto-scroll. | A streamed install/setup modal that shows live SSE log lines (FLUX.2, video runtimes). Don't re-roll the EventSource teardown/onComplete-ref dance. |
 | `useModelDownloadStatus` | Image/video model cache-status + SSE pre-download. | Surfacing "Available" vs "Download" badge inline in the gen form. |
 | `useImageGenProgress` | Live diffusion progress for an image-gen call. | Showing per-call image-gen progress. |
