@@ -8,8 +8,10 @@
  * (`INSTALL_MUSCRIPTOR=1 bash scripts/setup-image-video.sh`) through the
  * sidecar `scripts/transcribe_muscriptor.py`, which mirrors the generate_*
  * audio sidecars' STAGE:/RESULT: wire protocol. Model weights auto-download
- * from HuggingFace on first use, so the first transcription can sit in
- * `load-model` for a while — the STAGE lines keep that visible.
+ * from HuggingFace on first use; the sidecar emits a distinct `download-model`
+ * stage (vs `load-model` for a cached load) so the client can show an honest
+ * "Downloading model weights…" phase + toast instead of an opaque multi-minute
+ * spinner — the STAGE lines keep the whole run visible.
  *
  * Job shape mirrors roundReferenceAudioImport.js (the lightweight SSE-job
  * pattern): kickoff returns `{ jobId }` immediately, the transcription runs
