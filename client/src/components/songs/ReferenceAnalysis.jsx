@@ -52,16 +52,6 @@ const MAX_AUDIO_BYTES = 35 * 1024 * 1024;
 // disable adding more client-side; the server enforces the real bounds.
 const REF_SEGMENTS_MAX = 24;
 
-// Human labels for the MuScriptor sidecar's STAGE names (SSE progress frames).
-const MIDI_STAGE_LABELS = {
-  starting: 'Starting…',
-  'import-runtime': 'Loading runtime…',
-  'load-model': 'Loading model…',
-  transcribe: 'Transcribing…',
-  'write-midi': 'Writing MIDI…',
-  importing: 'Saving…',
-};
-
 const msToSec = (ms) => (Math.max(0, ms) / 1000).toFixed(1);
 const secToMs = (raw) => {
   const n = Number(raw);
@@ -213,7 +203,7 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
           </>
         ) : midiJob.active ? (
           <span className="flex items-center gap-1.5 px-2 py-1 text-xs rounded-lg border border-port-border text-gray-300">
-            <Loader2 size={13} className="animate-spin" /> {MIDI_STAGE_LABELS[midiJob.stage] || 'Transcribing…'}
+            <Loader2 size={13} className="animate-spin" /> {midiJob.stageLabel}
             <button type="button" onClick={midiJob.cancel} title="Cancel MIDI transcription" className="ml-1 text-gray-400 hover:text-port-error">
               <X size={13} />
             </button>
