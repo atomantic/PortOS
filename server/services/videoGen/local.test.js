@@ -1516,3 +1516,106 @@ describe('resolveVideoModel — live registry lookup (#2124 no-restart add)', ()
     expect(resolveVideoModel('hf-newly-added')?.id).toBe('hf-newly-added');
   });
 });
+
+describe('generateVideo — chunk-boundary marker parsing (#2463)', () => {
+  // Controllable child that never exits on its own, exposing its stdout/stderr
+  // 'data' listeners and 'close' handler so the test can feed pipe chunks on
+  // arbitrary byte boundaries and assert markers are stitched into one event.
+  function makeControllableProc() {
+    const listeners = {};
+    let stdoutData = null;
+    let stderrData = null;
+    const proc = {
+      pid: 5150,
+      exitCode: null,
+      signalCode: null,
+      killed: false,
+      stdout: { on: vi.fn((event, fn) => { if (event === 'data') stdoutData = fn; }) },
+      stderr: { on: vi.fn((event, fn) => { if (event === 'data') stderrData = fn; }) },
+      on(event, fn) { listeners[event] = fn; return proc; },
+      kill: vi.fn((signal) => { proc.killed = true; proc.signalCode = signal; }),
+    };
+    return {
+      proc,
+      // Pass raw Buffers so the reader's StringDecoder path is exercised.
+      emitStdout: (buf) => stdoutData?.(Buffer.isBuffer(buf) ? buf : Buffer.from(buf)),
+      emitStderr: (buf) => stderrData?.(Buffer.isBuffer(buf) ? buf : Buffer.from(buf)),
+      fireClose: (code, signal) => listeners.close?.(code, signal),
+    };
+  }
+
+  const statusFrames = (broadcastSse, message) =>
+    broadcastSse.mock.calls.filter((c) => c[1]?.type === 'status' && c[1]?.message === message);
+
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  async function startRender(jobId, ctrl) {
+    const { spawnDetached } = await import('../../lib/detachedSpawn.js');
+    vi.mocked(spawnDetached).mockImplementationOnce(async () => ctrl.proc);
+    generateVideo({
+      jobId,
+      pythonPath: '/usr/bin/python3',
+      modelId: 'ltx2_unified',
+      prompt: 'boundary test',
+      width: 512, height: 512, numFrames: 25, fps: 24,
+      mode: 'text',
+    });
+    // Let generateVideo await spawnDetached and register the stream handlers.
+    await vi.advanceTimersByTimeAsync(0);
+  }
+
+  it('stitches a STATUS marker split across two stderr chunks into one event', async () => {
+    const { broadcastSse } = await import('../../lib/sseUtils.js');
+    const ctrl = makeControllableProc();
+    await startRender('boundary-stderr-split', ctrl);
+
+    // The `STATUS:Loading model` marker arrives torn across a pipe boundary.
+    ctrl.emitStderr('STATUS:Loading ');
+    // First half has no line terminator → carried, nothing emitted yet.
+    expect(statusFrames(vi.mocked(broadcastSse), 'Loading model')).toHaveLength(0);
+    expect(statusFrames(vi.mocked(broadcastSse), 'Loading')).toHaveLength(0);
+
+    ctrl.emitStderr('model\n');
+    // The completed line is parsed exactly once as the full marker.
+    expect(statusFrames(vi.mocked(broadcastSse), 'Loading model')).toHaveLength(1);
+  });
+
+  it('stitches a multibyte codepoint split across two stdout chunks (result JSON captured)', async () => {
+    const { videoGenEvents } = await import('./events.js');
+    const ctrl = makeControllableProc();
+    const completed = [];
+    const onCompleted = (e) => completed.push(e);
+    videoGenEvents.on('completed', onCompleted);
+    await startRender('boundary-stdout-multibyte', ctrl);
+
+    // "café" (é = 0xC3 0xA9) — split the 2-byte codepoint across the boundary.
+    const json = Buffer.from('{"video_path": "/data/videos/café.mp4"}\n', 'utf8');
+    const cut = json.indexOf(0xa9); // byte AFTER the 0xC3 lead byte
+    ctrl.emitStdout(json.subarray(0, cut));   // ends mid-codepoint
+    ctrl.emitStdout(json.subarray(cut));      // completes it + the newline
+    ctrl.fireClose(0, null);
+    await vi.advanceTimersByTimeAsync(0);
+
+    videoGenEvents.off('completed', onCompleted);
+    // A torn decode would have yielded replacement chars and failed JSON.parse,
+    // so no result would be captured and the job would not complete cleanly.
+    expect(completed).toHaveLength(1);
+  });
+
+  it('flushes a final unterminated STATUS marker on close', async () => {
+    const { broadcastSse } = await import('../../lib/sseUtils.js');
+    const ctrl = makeControllableProc();
+    await startRender('boundary-flush-on-close', ctrl);
+
+    // Marker written without a trailing newline (a killed child mid-write).
+    ctrl.emitStderr('STATUS:Finalizing');
+    // Nothing emitted while it sits in the carry buffer…
+    expect(statusFrames(vi.mocked(broadcastSse), 'Finalizing')).toHaveLength(0);
+
+    ctrl.fireClose(0, null);
+    await vi.advanceTimersByTimeAsync(0);
+    // …the reader's flush() on 'close' emits the final line exactly once.
+    expect(statusFrames(vi.mocked(broadcastSse), 'Finalizing')).toHaveLength(1);
+  });
+});
