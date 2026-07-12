@@ -650,7 +650,7 @@ export default function MusicVideo() {
                     {midiTargetsSelected ? (
                       <button onClick={midiJob.cancel} title="Cancel MIDI transcription"
                         className="flex items-center gap-1 bg-port-warning/20 text-port-warning border border-port-border rounded px-2 py-1.5 text-sm min-h-[40px] sm:min-h-0">
-                        <Activity size={15} className="animate-spin" /> MIDI · Cancel
+                        <Activity size={15} className="animate-spin" /> {midiJob.stageLabel} · Cancel
                       </button>
                     ) : (
                       <>

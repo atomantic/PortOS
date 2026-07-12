@@ -1,5 +1,24 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import toast from '../components/ui/Toast';
 import useSseJobSlot from './useSseJobSlot.js';
+
+// Human labels for the MuScriptor sidecar's STAGE names (SSE progress frames).
+// Shared by every surface that shows a transcription's progress (Rounds +
+// Music Video) so the phrasing stays in one place. `download-model` is the
+// first-use weight download the sidecar reports distinctly from a cached
+// `load-model` load — the difference between a multi-minute wait and a quick
+// one, so it gets its own label + a one-time toast (below).
+export const MIDI_STAGE_LABELS = Object.freeze({
+  starting: 'Starting…',
+  'import-runtime': 'Loading runtime…',
+  'download-model': 'Downloading model…',
+  'load-model': 'Loading model…',
+  transcribe: 'Transcribing…',
+  'write-midi': 'Writing MIDI…',
+  importing: 'Saving…',
+});
+
+export const midiStageLabel = (stage) => MIDI_STAGE_LABELS[stage] || 'Transcribing…';
 
 /**
  * One audio → MIDI transcription job slot (MuScriptor) — generic over the
@@ -72,6 +91,20 @@ export default function useMidiTranscription({ startRequest, eventsUrl, cancelRe
     },
   });
 
+  // First-use weight download is the slow part — the sidecar reports it as a
+  // distinct `download-model` stage. Fire a one-time toast when it begins so
+  // the user is told "we're downloading the model" instead of watching an
+  // unexplained multi-minute spinner (the button label alone is easy to miss).
+  // Re-arm once the job settles so a later cold-cache size re-toasts.
+  const downloadToastedRef = useRef(false);
+  useEffect(() => {
+    if (!slot.active) { downloadToastedRef.current = false; return; }
+    if (slot.stage === 'download-model' && !downloadToastedRef.current) {
+      downloadToastedRef.current = true;
+      toast.info('Downloading the MuScriptor model — first use only, this can take a few minutes.');
+    }
+  }, [slot.active, slot.stage]);
+
   const start = (context) => {
     if (installContext !== null || gatedContext !== null) return;
     slot.start(context);
@@ -116,6 +149,9 @@ export default function useMidiTranscription({ startRequest, eventsUrl, cancelRe
   return {
     active: slot.active || installContext !== null || gatedContext !== null,
     stage: slot.stage,
+    // Ready-to-render human label for the current stage (defaults to
+    // "Transcribing…") so surfaces don't each re-map the STAGE names.
+    stageLabel: midiStageLabel(slot.stage),
     context: slot.context,
     start,
     cancel: slot.cancel,

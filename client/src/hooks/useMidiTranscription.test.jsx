@@ -162,3 +162,56 @@ describe('useMidiTranscription — gated-repo gate', () => {
     expect(toast.error).toHaveBeenCalledWith('boom');
   });
 });
+
+describe('useMidiTranscription — progress stage labels + download toast', () => {
+  const makeHook = () => renderHook(() => useMidiTranscription({
+    startRequest: vi.fn().mockResolvedValue({ jobId: 'job-1' }),
+    eventsUrl: (id) => `/e/${id}`,
+    cancelRequest: vi.fn().mockResolvedValue({}),
+    onComplete: vi.fn(),
+  }));
+
+  beforeEach(() => {
+    toast.info.mockClear();
+    sseState.latest = null;
+    sseState.closed = false;
+  });
+
+  it('exposes a human stageLabel for the current STAGE, defaulting to Transcribing…', async () => {
+    const { result, rerender } = makeHook();
+    await act(async () => { result.current.start('song.wav'); });
+
+    sseState.latest = { type: 'progress', stage: 'download-model' };
+    await act(async () => { rerender(); });
+    expect(result.current.stageLabel).toBe('Downloading model…');
+
+    sseState.latest = { type: 'progress', stage: 'write-midi' };
+    await act(async () => { rerender(); });
+    expect(result.current.stageLabel).toBe('Writing MIDI…');
+
+    sseState.latest = { type: 'progress', stage: 'some-future-stage' };
+    await act(async () => { rerender(); });
+    expect(result.current.stageLabel).toBe('Transcribing…');
+  });
+
+  it('fires a one-time toast when the first-use model download begins', async () => {
+    const { result, rerender } = makeHook();
+    await act(async () => { result.current.start('song.wav'); });
+
+    sseState.latest = { type: 'progress', stage: 'download-model' };
+    await act(async () => { rerender(); });
+    // Re-render still on the download stage must not re-toast.
+    await act(async () => { rerender(); });
+    expect(toast.info).toHaveBeenCalledTimes(1);
+    expect(toast.info.mock.calls[0][0]).toMatch(/downloading the muscriptor model/i);
+  });
+
+  it('does not toast when the model loads from cache (load-model, no download)', async () => {
+    const { result, rerender } = makeHook();
+    await act(async () => { result.current.start('song.wav'); });
+
+    sseState.latest = { type: 'progress', stage: 'load-model' };
+    await act(async () => { rerender(); });
+    expect(toast.info).not.toHaveBeenCalled();
+  });
+});

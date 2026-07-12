@@ -82,6 +82,44 @@ def _load_model(TranscriptionModel, size):
         return TranscriptionModel.load_model()
 
 
+def _weights_cached(size):
+    """True when this size's weights are already in the HuggingFace hub cache.
+
+    `TranscriptionModel.load_model()` auto-downloads the weights from the gated
+    `MuScriptor/muscriptor-<size>` repo on first use, then loads a cached copy on
+    every run after — but from the caller's side both look like the same opaque
+    `load-model` stage that can sit for minutes on the first (download) call. We
+    peek at the hub cache first so the JS side can show a distinct, honest
+    "Downloading model weights…" phase (with a toast) only when a download is
+    actually about to happen, instead of an unexplained multi-minute spinner.
+
+    A repo counts as cached only when its `snapshots/` tree holds at least one
+    non-empty file — HF materializes snapshot symlinks only after a blob finishes
+    downloading, so a half-finished download (blob still `.incomplete`) correctly
+    reads as not-cached. Heuristic and best-effort: the worst case of a wrong
+    guess is a mislabeled stage, never a failed transcription. If the muscriptor
+    repo id ever diverges from the assumed `MuScriptor/muscriptor-<size>`, this
+    quietly returns False and we fall back to the generic load-model label.
+    """
+    hub_cache = (
+        os.environ.get("HF_HUB_CACHE")
+        or (os.path.join(os.environ["HF_HOME"], "hub") if os.environ.get("HF_HOME") else None)
+        or os.path.expanduser("~/.cache/huggingface/hub")
+    )
+    snapshots = os.path.join(hub_cache, f"models--MuScriptor--muscriptor-{size}", "snapshots")
+    if not os.path.isdir(snapshots):
+        return False
+    for root, _dirs, files in os.walk(snapshots):
+        for name in files:
+            try:
+                # getsize follows the snapshot symlink to the real blob.
+                if os.path.getsize(os.path.join(root, name)) > 0:
+                    return True
+            except OSError:
+                continue
+    return False
+
+
 @install_hf_error_handler
 def main():
     parser = argparse.ArgumentParser(description="PortOS MuScriptor runner (audio → MIDI)")
@@ -101,7 +139,11 @@ def main():
     log_stage("import-runtime")
     TranscriptionModel = _import_model_class(args.runtime_dir)
 
-    log_stage("load-model", args.model)
+    # First use downloads the weights (minutes); every run after loads the
+    # cached copy (seconds). Emit a distinct `download-model` stage for the
+    # former so the UI can say "Downloading…" + toast, rather than an opaque
+    # multi-minute "Loading model…".
+    log_stage("download-model" if not _weights_cached(args.model) else "load-model", args.model)
     model = _load_model(TranscriptionModel, args.model)
 
     log_stage("transcribe", os.path.basename(args.audio))
