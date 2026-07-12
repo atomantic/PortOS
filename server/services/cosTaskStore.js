@@ -725,7 +725,13 @@ export async function resolveTaskChallengeWithRecheck(taskId, { recheck, resolve
     const defaults = await getCodeReviewDefaults().catch(() => null);
     model = backend === 'ollama' ? defaults?.ollamaModel : defaults?.lmstudioModel;
   }
-  console.log(`⚖️ Re-checking challenge on ${taskId} via ${backend}${model ? ` (${model})` : ''}`);
+  // A missing model is a config problem (no Code Review Defaults set), not an
+  // upstream-reviewer failure — surface it as a 4xx (RECHECK_NO_MODEL → 400), not
+  // the 502 bucket reserved for a reviewer that's actually unreachable.
+  if (!model) {
+    return { error: `No model configured for the ${backend} reviewer — set one on the AI Providers → Code Review Defaults panel.`, code: 'RECHECK_NO_MODEL' };
+  }
+  console.log(`⚖️ Re-checking challenge on ${taskId} via ${backend} (${model})`);
   const review = await runLocalCodeReview({ backend, model, diff: recheck?.diff });
   if (!review?.ok) {
     return { error: `Re-check failed: ${review?.error || 'unknown reviewer error'}`, code: 'RECHECK_FAILED' };
@@ -737,6 +743,8 @@ export async function resolveTaskChallengeWithRecheck(taskId, { recheck, resolve
   const verdict = outcome === 'upheld'
     ? `no blocking findings survived (${backend})`
     : `a blocking finding still stands (${backend})`;
-  const note = `Auto re-check by ${backend}${model ? ` (${model})` : ''}: ${verdict}.`;
+  // The resolution note is auto-generated from the re-check verdict (any caller
+  // `note` is intentionally not threaded here — the machine verdict is the record).
+  const note = `Auto re-check by ${backend} (${model}): ${verdict}.`;
   return resolveTaskChallenge(taskId, { outcome, note, resolvedBy: resolvedBy || `recheck:${backend}` }, taskType, { now });
 }

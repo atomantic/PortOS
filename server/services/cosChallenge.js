@@ -125,8 +125,16 @@ export function classifyRecheckOutcome(findings) {
   if (!trimmed) return null;
   // Exact clean sentinel — the diff is clean across all severities.
   if (/^no findings\.?$/i.test(trimmed)) return 'upheld';
-  // A surviving `## Blocking` section is the only thing that gates a merge.
-  if (/^\s*#{1,6}\s*blocking\b/im.test(trimmed)) return 'escalated';
-  // Findings present, but nothing under Blocking — nothing gates the merge.
+  // A `## Blocking` section only sustains the rejection when it actually carries a
+  // finding. A noisy reviewer (the very case this protocol guards against) that
+  // emits a bare/empty Blocking header must NOT trigger the expensive user
+  // escalation on the header alone — require non-empty body text under it.
+  const blockingMatch = trimmed.match(/^\s*#{1,6}\s*blocking\b[^\n]*\n?([\s\S]*)$/im);
+  if (blockingMatch) {
+    // Body = text after the Blocking header up to the next heading (or EOF).
+    const body = blockingMatch[1].split(/^\s*#{1,6}\s/m)[0];
+    if (body.trim()) return 'escalated';
+  }
+  // Findings present, but nothing blocking — nothing gates the merge.
   return 'upheld';
 }

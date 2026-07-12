@@ -102,6 +102,11 @@ describe('cosChallenge', () => {
       expect(classifyRecheckOutcome('## Recommended\n- rename x\n\n## Nits\n- spacing')).toBe('upheld');
     });
 
+    it('does NOT escalate on a bare/empty Blocking header (noisy-reviewer guard)', () => {
+      expect(classifyRecheckOutcome('## Blocking\n\n## Recommended\n- x')).toBe('upheld');
+      expect(classifyRecheckOutcome('## Blocking')).toBe('upheld');
+    });
+
     it('returns null for unusable input so the caller treats it as a failed re-check', () => {
       expect(classifyRecheckOutcome('')).toBeNull();
       expect(classifyRecheckOutcome('   ')).toBeNull();

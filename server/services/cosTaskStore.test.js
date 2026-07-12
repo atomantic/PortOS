@@ -692,6 +692,15 @@ describe('cosTaskStore.resolveTaskChallengeWithRecheck (#2471)', () => {
     expect(mock.reviewCalls[0].model).toBe('coder-7b');
   });
 
+  it('returns RECHECK_NO_MODEL (config problem, not 502) when no model is configured', async () => {
+    const id = await seedChallenged();
+    mock.reviewDefaults = { lmstudioModel: null, ollamaModel: null };
+    const result = await resolveTaskChallengeWithRecheck(id, { recheck: { backend: 'ollama', diff: 'diff' } });
+    expect(result.code).toBe('RECHECK_NO_MODEL');
+    // No reviewer call attempted without a model.
+    expect(mock.reviewCalls.length).toBe(0);
+  });
+
   it('returns RECHECK_FAILED when the reviewer is unreachable', async () => {
     const id = await seedChallenged();
     mock.review = { ok: false, error: 'ollama request failed: ECONNREFUSED' };
