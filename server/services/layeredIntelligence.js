@@ -78,6 +78,12 @@ export const PROPOSAL_COMPLEXITIES = ['trivial', 'moderate', 'complex'];
 // lets the loop enqueue a coding agent instead of only filing the issue.
 export const HANDOFF_COMPLEXITY = 'trivial';
 
+// The resolved outcomes a filed proposal can reach (the feedback loop, #2428).
+// A record with a null outcome is still open/unresolved. `abandoned` is reserved
+// for a superseded proposal — auto-derivation only distinguishes merged/rejected
+// from the tracker's closed state; `abandoned` is set by a user/future path.
+export const PROPOSAL_OUTCOMES = ['merged', 'rejected', 'abandoned'];
+
 /**
  * The default per-app config. PortOS (isPortos) additionally gets the meta/self
  * scopes so the loop can extend itself; every other app is capped at its own
@@ -96,6 +102,11 @@ export function defaultLayeredIntelligenceConfig(isPortos = false) {
       healthReport: true,
       planMd: true,
       openIssues: true,
+      // The self-feedback signal (#2428): past LI proposals + their tracker
+      // outcomes, fed back so the reasoner calibrates on its own merge rate.
+      // Default ON for the PortOS install (it improves itself), OFF for managed
+      // apps — the user opts in per-app via the LI config UI.
+      outcomes: isPortos,
       custom: []
     },
     rules: '',
@@ -395,11 +406,81 @@ export function trackerSupportsPause(resolved) {
 }
 
 /**
+ * Derive a resolved outcome for a filed proposal from its live tracker issue.
+ * Pure — the reconciler feeds it a `{ state, stateReason, closedAt }` issue:
+ *   - still open (or unknown state)     → null   (unresolved)
+ *   - closed as "not planned"           → 'rejected'
+ *   - closed for any other reason        → 'merged' (the common auto-close-on-merge
+ *                                          path; glab/jira report no stateReason)
+ * GitHub reports `stateReason` ('completed' | 'not_planned' | 'reopened'); other
+ * forges omit it, so a bare closed issue reads as merged.
+ */
+export function deriveOutcome(issue) {
+  if ((issue?.state || '').toLowerCase() !== 'closed') return null;
+  const reason = (issue?.stateReason || '').toLowerCase().replace(/[\s-]+/g, '_');
+  if (reason === 'not_planned') return 'rejected';
+  return 'merged';
+}
+
+/**
+ * Format the LI outcome-feedback report (#2428) from this app's recorded
+ * proposals + their reconciled outcomes. Pure + side-effect-free: the LI hook
+ * loads the outcomes and passes them here, then feeds the string into buildPrompt.
+ * Returns '' when there's nothing to report (no filed history) so the caller omits
+ * the block entirely rather than injecting an empty section.
+ */
+export function computeOutcomesReport({ outcomes = [] } = {}) {
+  const filed = (Array.isArray(outcomes) ? outcomes : []).filter(o => o && typeof o === 'object');
+  if (filed.length === 0) return '';
+  const total = filed.length;
+  const pct = (n) => Math.round((n / total) * 100);
+  const count = (name) => filed.filter(o => o.outcome === name).length;
+  const merged = count('merged');
+  const rejected = count('rejected');
+  const abandoned = count('abandoned');
+  const pending = total - merged - rejected - abandoned;
+
+  // Per-scope merge rate — the calibration signal the reasoner acts on.
+  const scopes = new Map();
+  for (const o of filed) {
+    const s = o.scope || 'unknown';
+    const agg = scopes.get(s) || { filed: 0, merged: 0 };
+    agg.filed += 1;
+    if (o.outcome === 'merged') agg.merged += 1;
+    scopes.set(s, agg);
+  }
+  const scopeLines = [...scopes.entries()]
+    .sort((a, b) => b[1].filed - a[1].filed)
+    .map(([s, v]) => `- ${s}: ${v.filed} filed, ${v.merged} merged (${v.filed ? Math.round((v.merged / v.filed) * 100) : 0}%)`)
+    .join('\n');
+
+  const reasons = [...new Set(filed
+    .filter(o => o.outcome === 'rejected' && o.outcomeReason)
+    .map(o => o.outcomeReason))].slice(0, 5);
+
+  return [
+    'Recent LI proposals (all still-open, plus outcomes resolved within ~30 days):',
+    `- Total filed: ${total}`,
+    `- Merged/implemented: ${merged} (${pct(merged)}%)`,
+    `- Rejected: ${rejected} (${pct(rejected)}%)`,
+    `- Abandoned: ${abandoned} (${pct(abandoned)}%)`,
+    `- Still open: ${pending} (${pct(pending)}%)`,
+    '',
+    'By scope:',
+    scopeLines || '- (none)',
+    '',
+    `Common rejection reasons: ${reasons.length ? reasons.join('; ') : 'none'}`
+  ].join('\n');
+}
+
+/**
  * Build the JSON-only reasoning prompt for one app. Deterministic: given the
  * gathered sources, open issues, and config, produces the exact string sent to
  * the model. Meta/self scopes are only offered when the app is PortOS.
+ * `outcomesReport` (from computeOutcomesReport) is injected as a `liOutcomes`
+ * block with calibration guidance when non-empty (#2428).
  */
-export function buildPrompt({ app, config, sources = {}, openIssues = [], isPortos = false }) {
+export function buildPrompt({ app, config, sources = {}, openIssues = [], isPortos = false, outcomesReport = '' }) {
   const allowed = (config.allowedScopes || []).filter(s =>
     isScopeAllowed({ scope: s, allowedScopes: config.allowedScopes, isPortos })
   );
@@ -416,6 +497,12 @@ export function buildPrompt({ app, config, sources = {}, openIssues = [], isPort
     ? '\nHand-off: a proposal you mark BOTH "complexity":"trivial" AND "safe":true may be handed directly to a coding agent to implement now (not just filed). Only mark a proposal trivial+safe when it is small, self-contained, and carries no regression or data-loss risk — when in doubt, use a higher complexity or "safe":false so a human triages it first.\n'
     : '';
 
+  // Feedback loop (#2428): show the reasoner how its own past proposals fared so
+  // it can calibrate scope/merge-rate instead of proposing in a vacuum.
+  const outcomesBlock = (typeof outcomesReport === 'string' && outcomesReport.trim())
+    ? `\n### liOutcomes\n${outcomesReport.trim()}\n\nUse this data to calibrate your proposal: prefer scopes with higher merge rates, avoid patterns that were repeatedly rejected, and consider that lower-merge scopes may need more justification.\n`
+    : '';
+
   return `You are the Layered Intelligence reasoner for the app "${app.name}". Analyze the app's goals and telemetry and decide the SINGLE highest-value improvement to propose this run — signal, not noise. You never write code; you return structured JSON that a deterministic system files as ONE tracker issue.
 ${handoffNote}
 Rules & guidance from the operator:
@@ -429,7 +516,7 @@ ${openList}
 
 Gathered sources:
 ${sourceBlocks || '(no sources available — you may propose an app-data-gap to add telemetry)'}
-
+${outcomesBlock}
 Respond with JSON only (no markdown fences):
 {
   "analysis": "brief reasoning summary",
@@ -667,7 +754,7 @@ export function normalizeIssueState(state) {
 export async function listForgeIssues({ cli, cwd, env, exec = runCli } = {}) {
   const args = cli === 'glab'
     ? ['issue', 'list', '--label', LI_LABEL, '--all', '-P', '100', '-F', 'json']
-    : ['issue', 'list', '--label', LI_LABEL, '--state', 'all', '--limit', '100', '--json', 'number,title,body,state,closedAt,url'];
+    : ['issue', 'list', '--label', LI_LABEL, '--state', 'all', '--limit', '100', '--json', 'number,title,body,state,stateReason,closedAt,url'];
   const { code, stdout } = await exec(cli, args, { cwd, env });
   if (code !== 0) return { ok: false, issues: [] };
   if (!stdout.trim()) return { ok: true, issues: [] };
@@ -680,6 +767,9 @@ export async function listForgeIssues({ cli, cwd, env, exec = runCli } = {}) {
       title: i.title || '',
       body: i.body || i.description || '',
       state: normalizeIssueState(i.state),
+      // GitHub-only: 'completed' | 'not_planned' | 'reopened'. glab omits it, so
+      // deriveOutcome falls back to treating any closed issue as merged.
+      stateReason: i.stateReason || i.state_reason || null,
       closedAt: i.closedAt || i.closed_at || null,
       // gh reports `url`; glab reports `web_url`. Null when neither is present so
       // the overview's proposal links degrade to a plain count rather than a

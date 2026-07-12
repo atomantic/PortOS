@@ -17,7 +17,8 @@ export const LI_SOURCE_FIELDS = [
   { key: 'cosMetrics', label: 'CoS metrics', hint: 'Recent autonomous-agent run stats for this app' },
   { key: 'healthReport', label: 'Health report', hint: 'Latest health / lint / test summary' },
   { key: 'planMd', label: 'PLAN.md', hint: 'The app\'s open work-plan items' },
-  { key: 'openIssues', label: 'Open issues', hint: 'Currently open tracker issues' }
+  { key: 'openIssues', label: 'Open issues', hint: 'Currently open tracker issues' },
+  { key: 'outcomes', label: 'Proposal outcomes', hint: 'Past LI proposals + how they fared (merge rate), fed back so the loop calibrates on its own results' }
 ];
 
 // The proposal scopes the loop may file. loop-meta / portos-self extend the loop

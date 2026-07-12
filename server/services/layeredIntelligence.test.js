@@ -28,6 +28,9 @@ import {
   filerForTracker,
   trackerSupportsPause,
   buildPrompt,
+  deriveOutcome,
+  computeOutcomesReport,
+  PROPOSAL_OUTCOMES,
   extractPlanSlugs,
   appendProposalToPlan,
   gatherSources,
@@ -78,6 +81,11 @@ describe('defaultLayeredIntelligenceConfig', () => {
   it('ships the Engine-A hand-off off by default', () => {
     expect(defaultLayeredIntelligenceConfig(false).handoff).toEqual({ enabled: false });
     expect(defaultLayeredIntelligenceConfig(true).handoff).toEqual({ enabled: false });
+  });
+
+  it('defaults the outcomes feedback source on for PortOS, off for managed apps', () => {
+    expect(defaultLayeredIntelligenceConfig(false).sources.outcomes).toBe(false);
+    expect(defaultLayeredIntelligenceConfig(true).sources.outcomes).toBe(true);
   });
 });
 
@@ -431,6 +439,62 @@ describe('buildPrompt', () => {
     const on = buildPrompt({ app, isPortos: false, config: { allowedScopes: ['app-improvement'], rules: '', handoff: { enabled: true } } });
     expect(on).toContain('Hand-off:');
     expect(on).toContain('"complexity":"trivial"');
+  });
+
+  it('injects the outcomes report + calibration guidance only when non-empty', () => {
+    const base = { app, isPortos: false, config: { allowedScopes: ['app-improvement'], rules: '' } };
+    const without = buildPrompt(base);
+    expect(without).not.toContain('liOutcomes');
+    const withReport = buildPrompt({ ...base, outcomesReport: 'Past LI proposals (last 30 days):\n- Total filed: 3' });
+    expect(withReport).toContain('### liOutcomes');
+    expect(withReport).toContain('Total filed: 3');
+    expect(withReport).toContain('calibrate your proposal');
+  });
+});
+
+describe('deriveOutcome', () => {
+  it('leaves an open issue unresolved', () => {
+    expect(deriveOutcome({ state: 'open' })).toBeNull();
+    expect(deriveOutcome({ state: 'OPEN', stateReason: 'reopened' })).toBeNull();
+    expect(deriveOutcome({})).toBeNull();
+  });
+
+  it('maps closed-not-planned to rejected', () => {
+    expect(deriveOutcome({ state: 'closed', stateReason: 'not_planned' })).toBe('rejected');
+    expect(deriveOutcome({ state: 'closed', stateReason: 'not planned' })).toBe('rejected');
+  });
+
+  it('maps any other closed reason (incl. glab/jira with no reason) to merged', () => {
+    expect(deriveOutcome({ state: 'closed', stateReason: 'completed' })).toBe('merged');
+    expect(deriveOutcome({ state: 'closed' })).toBe('merged');
+  });
+});
+
+describe('computeOutcomesReport', () => {
+  it('returns empty string when there is no filed history', () => {
+    expect(computeOutcomesReport({ outcomes: [] })).toBe('');
+    expect(computeOutcomesReport({})).toBe('');
+  });
+
+  it('summarizes totals, per-scope merge rates, and rejection reasons', () => {
+    const outcomes = [
+      { scope: 'app-data-gap', outcome: 'merged' },
+      { scope: 'app-data-gap', outcome: 'merged' },
+      { scope: 'app-improvement', outcome: 'rejected', outcomeReason: 'too complex' },
+      { scope: 'app-improvement', outcome: null }
+    ];
+    const report = computeOutcomesReport({ outcomes });
+    expect(report).toContain('Total filed: 4');
+    expect(report).toContain('Merged/implemented: 2 (50%)');
+    expect(report).toContain('Rejected: 1 (25%)');
+    expect(report).toContain('Still open: 1 (25%)');
+    expect(report).toContain('app-data-gap: 2 filed, 2 merged (100%)');
+    expect(report).toContain('app-improvement: 2 filed, 0 merged (0%)');
+    expect(report).toContain('Common rejection reasons: too complex');
+  });
+
+  it('exposes the recognized outcome set', () => {
+    expect(PROPOSAL_OUTCOMES).toEqual(['merged', 'rejected', 'abandoned']);
   });
 });
 

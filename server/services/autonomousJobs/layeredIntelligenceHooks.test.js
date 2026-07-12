@@ -53,11 +53,21 @@ vi.mock('../layeredIntelligence.js', () => ({
   listJiraBlockingIssues: vi.fn().mockResolvedValue({ ok: true, issues: [] }),
   fileProposalToJira: vi.fn().mockResolvedValue({ success: true, key: 'PROJ-1' }),
   resolveJiraBlockKey: vi.fn(() => null),
-  applyJiraBlockingLabel: vi.fn().mockResolvedValue({ success: true })
+  applyJiraBlockingLabel: vi.fn().mockResolvedValue({ success: true }),
+  computeOutcomesReport: vi.fn(() => '')
+}));
+
+// Outcome-store I/O (#2428) — spies so the hook's feedback-loop wiring can be
+// asserted without touching the real collection store on disk.
+vi.mock('../layeredIntelligenceOutcomes.js', () => ({
+  recordFiledProposal: vi.fn().mockResolvedValue(true),
+  listOutcomes: vi.fn().mockResolvedValue([]),
+  reconcileOutcomes: vi.fn().mockResolvedValue(0)
 }));
 
 import { buildTaskInput, processTaskOutput } from './layeredIntelligenceHooks.js';
 import * as li from '../layeredIntelligence.js';
+import { recordFiledProposal, listOutcomes, reconcileOutcomes } from '../layeredIntelligenceOutcomes.js';
 import * as apps from '../apps.js';
 import { resolveAppWorkTracker } from '../../lib/workTracker.js';
 import { getProviderById } from '../providers.js';
@@ -138,6 +148,33 @@ describe('buildTaskInput', () => {
     expect(res.providerId).toBe('ollama');
     expect(res.model).toBe('qwen');
   });
+
+  it('skips the outcomes feedback loop when the source toggle is off', async () => {
+    li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: {} });
+    await buildTaskInput({ app: APP });
+    expect(reconcileOutcomes).not.toHaveBeenCalled();
+    expect(listOutcomes).not.toHaveBeenCalled();
+    expect(li.buildPrompt).toHaveBeenCalledWith(expect.objectContaining({ outcomesReport: '' }));
+  });
+
+  it('reconciles + folds the outcomes report into the prompt when enabled', async () => {
+    li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { outcomes: true } });
+    listOutcomes.mockResolvedValue([{ slug: 's', outcome: 'merged', scope: 'app-improvement' }]);
+    li.computeOutcomesReport.mockReturnValue('Recent LI proposals:\n- Total filed: 1');
+    await buildTaskInput({ app: APP });
+    expect(reconcileOutcomes).toHaveBeenCalledWith(expect.objectContaining({ appId: 'app-1' }));
+    expect(listOutcomes).toHaveBeenCalledWith(expect.objectContaining({ appId: 'app-1' }));
+    expect(li.buildPrompt).toHaveBeenCalledWith(expect.objectContaining({ outcomesReport: expect.stringContaining('Total filed: 1') }));
+  });
+
+  it('skips the feedback loop on a plan tracker even when outcomes is enabled', async () => {
+    resolveAppWorkTracker.mockResolvedValue({ resolved: 'plan', forge: null });
+    li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { outcomes: true } });
+    await buildTaskInput({ app: APP });
+    expect(reconcileOutcomes).not.toHaveBeenCalled();
+    expect(listOutcomes).not.toHaveBeenCalled();
+    expect(li.buildPrompt).toHaveBeenCalledWith(expect.objectContaining({ outcomesReport: '' }));
+  });
 });
 
 describe('processTaskOutput', () => {
@@ -168,6 +205,26 @@ describe('processTaskOutput', () => {
     expect(li.fileProposalToForge).toHaveBeenCalled();
     expect(out).toMatchObject({ action: 'filed', filedNumber: 77, reason: null });
     expect(apps.updateAppLayeredIntelligence).toHaveBeenCalledWith('app-1', expect.objectContaining({ lastRunAction: 'filed', lastRunRef: '#77' }));
+  });
+
+  it('records the filed proposal for the feedback loop only when outcomes is enabled', async () => {
+    li.validateReasonerResponse.mockReturnValue({
+      proposal: { scope: 'app-improvement', slug: 'add-telemetry', title: 'Add telemetry', body: 'do it' },
+      pause: null
+    });
+    li.fileProposalToForge.mockResolvedValue({ success: true, number: 77 });
+
+    // Off: no outcome record written.
+    li.getEffectiveConfig.mockReturnValue({ allowedScopes: ['app-improvement'], sources: {} });
+    await processTaskOutput({ appId: 'app-1', success: true, payload: { proposal: {} } });
+    expect(recordFiledProposal).not.toHaveBeenCalled();
+
+    // On: the filed proposal is recorded with its ref, scope, and tracker.
+    li.getEffectiveConfig.mockReturnValue({ allowedScopes: ['app-improvement'], sources: { outcomes: true } });
+    await processTaskOutput({ appId: 'app-1', success: true, payload: { proposal: {} } });
+    expect(recordFiledProposal).toHaveBeenCalledWith(expect.objectContaining({
+      appId: 'app-1', slug: 'add-telemetry', issueRef: '#77', scope: 'app-improvement', tracker: 'github'
+    }));
   });
 
   it('suppresses an exact-duplicate proposal without filing', async () => {
