@@ -609,6 +609,13 @@ describe('cosTaskStore.challengeTask / resolveTaskChallenge (#2441)', () => {
     expect(result.code).toBe('NOT_FOUND');
   });
 
+  it('refuses to challenge a completed task', async () => {
+    const id = await seedTask('already done');
+    await updateTask(id, { status: 'completed' }, 'user');
+    const result = await challengeTask(id, { reason: 'too late' });
+    expect(result.code).toBe('CANNOT_CHALLENGE_COMPLETED');
+  });
+
   it('upheld resolution overturns the rejection → pending', async () => {
     const id = await seedTask();
     await challengeTask(id, { reason: 'wrong verdict' });

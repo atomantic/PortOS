@@ -130,6 +130,25 @@ function claimTriple(task) {
  * whenever a real stamp is present.
  */
 function pickContentBase(local, remote) {
+  // Challenge lifecycle is NOT monotonic (#2441): an `upheld` resolution regresses
+  // `challenged` → `pending`, and a challenge can be raised on a `blocked` task —
+  // both BACKWARD in status rank. A pure status-rank comparison would let a stale
+  // `challenged` snapshot on the other peer permanently revert a newer resolution
+  // (rank 3 beats pending rank 1) and never converge. So when EXACTLY one side is
+  // `challenged`, decide by newest edit instead — every challenge write goes
+  // through updateTask and bumps `updatedAt`, so both the dispute and its
+  // resolution propagate by recency. This is symmetric (depends only on the pair),
+  // so both peers converge on the same record.
+  const lChallenged = local.status === 'challenged';
+  const rChallenged = remote.status === 'challenged';
+  if (lChallenged !== rChallenged) {
+    const luc = updatedAtMs(local);
+    const ruc = updatedAtMs(remote);
+    if (luc !== ruc) return ruc > luc ? remote : local;
+    // Equal/absent stamps (legacy un-stamped peer): prefer the RESOLVED
+    // (non-challenged) side so an overturn still converges deterministically.
+    return lChallenged ? remote : local;
+  }
   const lr = statusRank(local.status);
   const rr = statusRank(remote.status);
   if (rr !== lr) return rr > lr ? remote : local;

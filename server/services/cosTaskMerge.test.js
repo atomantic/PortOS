@@ -241,22 +241,43 @@ describe('mergeTaskLists', () => {
     expect(mergeTaskLists([{ status: 'pending' }], [], { now: NOW })).toEqual([]);
   });
 
-  describe('challenged status rank (#2441)', () => {
-    it('a fresh challenged status wins over a stale in_progress on the other peer', () => {
-      const local = [task('task-c', 'challenged')];
-      const remote = [task('task-c', 'in_progress')];
-      // Symmetric: whichever side initiates, the challenged content wins.
+  describe('challenged status merge (#2441)', () => {
+    // Challenge lifecycle is timestamp-driven, not rank-driven: every challenge
+    // write bumps `updatedAt`, so the merge resolves a challenged-vs-other pairing
+    // by recency (see pickContentBase). `stamped` builds a task with a set stamp.
+    const stamped = (id, status, updatedAt, extra = {}) =>
+      task(id, status, { metadata: { updatedAt, ...extra } });
+
+    it('a fresh challenge propagates over an older in_progress on the peer', () => {
+      const local = [stamped('task-c', 'challenged', future(1000))];
+      const remote = [stamped('task-c', 'in_progress', past(1000))];
+      // Symmetric: whichever side initiates the sweep, the newer challenge wins.
       expect(mergeTaskLists(local, remote, { now: NOW })[0].status).toBe('challenged');
       expect(mergeTaskLists(remote, local, { now: NOW })[0].status).toBe('challenged');
     });
 
-    it('a terminal resolution (blocked / completed) supersedes an unresolved challenge', () => {
+    it('an UPHELD resolution (challenged→pending) converges — the newer pending beats a stale challenged', () => {
+      // The overturn happens AFTER the challenge, so the resolved pending record's
+      // updatedAt is newer. A pure status-rank merge would let rank-3 `challenged`
+      // permanently revert rank-1 `pending`; the timestamp path fixes that.
+      const resolved = [stamped('task-c', 'pending', future(1000), { challengeResolution: { outcome: 'upheld' } })];
+      const stale = [stamped('task-c', 'challenged', past(1000))];
+      expect(mergeTaskLists(resolved, stale, { now: NOW })[0].status).toBe('pending');
+      expect(mergeTaskLists(stale, resolved, { now: NOW })[0].status).toBe('pending');
+    });
+
+    it('an ESCALATED resolution (challenged→blocked) converges', () => {
+      const resolved = [stamped('task-c', 'blocked', future(1000), { challengeResolution: { outcome: 'escalated' } })];
+      const stale = [stamped('task-c', 'challenged', past(1000))];
+      expect(mergeTaskLists(resolved, stale, { now: NOW })[0].status).toBe('blocked');
+      expect(mergeTaskLists(stale, resolved, { now: NOW })[0].status).toBe('blocked');
+    });
+
+    it('on equal/absent stamps, prefers the resolved (non-challenged) side deterministically', () => {
       const challenged = [task('task-c', 'challenged')];
       const blocked = [task('task-c', 'blocked')];
-      const completed = [task('task-c', 'completed')];
       expect(mergeTaskLists(challenged, blocked, { now: NOW })[0].status).toBe('blocked');
       expect(mergeTaskLists(blocked, challenged, { now: NOW })[0].status).toBe('blocked');
-      expect(mergeTaskLists(challenged, completed, { now: NOW })[0].status).toBe('completed');
     });
 
     it('keeps a live claim on a challenged (non-terminal) task, mirroring in_progress', () => {

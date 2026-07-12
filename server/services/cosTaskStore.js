@@ -615,6 +615,12 @@ export async function challengeTask(taskId, { reason, evidence, reviewer } = {},
   const task = await getTaskById(taskId);
   if (!task) return { error: 'Task not found', code: 'NOT_FOUND' };
   const resolvedType = task.taskType || taskType;
+  // A challenge disputes a REJECTION of in-flight work — never a finished task.
+  // Parking a `completed` task in `challenged` would also regress it out of a
+  // terminal state (a completed task never re-completes), so refuse it outright.
+  if (task.status === 'completed') {
+    return { error: 'Cannot challenge a completed task', code: 'CANNOT_CHALLENGE_COMPLETED' };
+  }
   if (!canChallenge(task.metadata)) {
     return {
       error: `Challenge budget exhausted (${getChallengeCount(task.metadata)}/${MAX_CHALLENGES_PER_TASK} used)`,
