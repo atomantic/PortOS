@@ -507,9 +507,12 @@ export function buildPrompt({ app, config, sources = {}, openIssues = [], isPort
 
   // Nudge a managed app with no own-performance signal (no METRICS.md gathered)
   // toward adding one, so future runs can judge real performance. PortOS is exempt
-  // — it measures itself through cosMetrics.
+  // — it measures itself through cosMetrics. Also gate on the source being ENABLED:
+  // if the user deliberately turned appMetrics off, a METRICS.md may well exist, so
+  // "add a METRICS.md" would be a misleading (and possibly redundant) proposal.
   const hasAppMetrics = Boolean(typeof sources.appMetrics === 'string' && sources.appMetrics.trim());
-  const metricsGuidance = (!isPortos && !hasAppMetrics)
+  const appMetricsEnabled = config.sources?.appMetrics !== false;
+  const metricsGuidance = (!isPortos && appMetricsEnabled && !hasAppMetrics)
     ? '\nThis app exposes no own-performance metrics yet (no METRICS.md). If you lack the data to judge how it is doing against its goals, a high-value app-data-gap proposal is to add a METRICS.md documenting how the app measures success — its user-success/KPI signals and where its production telemetry or data lives — so future runs can reason about real performance.\n'
     : '';
 

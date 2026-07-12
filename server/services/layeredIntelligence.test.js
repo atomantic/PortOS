@@ -478,6 +478,16 @@ describe('buildPrompt', () => {
     expect(present).not.toContain('no METRICS.md');
   });
 
+  it('does not nudge to add a METRICS.md when the appMetrics source is deliberately off', () => {
+    // Source disabled → the file may exist but wasn't gathered; nudging to "add"
+    // one would be misleading. No nudge despite empty gathered sources.
+    const out = buildPrompt({
+      app, isPortos: false,
+      config: { allowedScopes: ['app-data-gap'], rules: '', sources: { appMetrics: false } }
+    });
+    expect(out).not.toContain('no METRICS.md');
+  });
+
   it('does not nudge PortOS toward a METRICS.md (it measures itself via cosMetrics)', () => {
     const out = buildPrompt({ app, isPortos: true, config: { allowedScopes: ['portos-self'], rules: '' } });
     expect(out).not.toContain('no METRICS.md');
