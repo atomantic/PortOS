@@ -311,7 +311,10 @@ function InternalUsageMetrics() {
       .catch(() => null)
       .then((data) => {
         if (cancelled) return;
-        setUsage(data);
+        // Keep the previously-loaded metrics on a failed fetch (e.g. an
+        // in-progress custom range where from > to briefly 400s) so the
+        // filter controls stay on screen for the user to correct the range.
+        if (data) setUsage(data);
         setLoading(false);
       });
     return () => { cancelled = true; };
