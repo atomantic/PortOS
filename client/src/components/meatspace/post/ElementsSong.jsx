@@ -603,7 +603,7 @@ function ElementStudyMode({ item, mastery, onBack, onComplete }) {
             <div className="grid grid-cols-2 gap-2">
               {results.filter(r => !r.correct).map((r, i) => (
                 <div key={i} className="text-xs bg-port-bg rounded p-2">
-                  <span className="text-port-warning font-mono">{r.symbol}</span>
+                  <span className="text-port-warning font-mono">{r.element}</span>
                   <span className="text-gray-500 mx-1">&rarr;</span>
                   <span className="text-gray-300">{r.name}</span>
                 </div>
@@ -632,7 +632,7 @@ function ElementStudyMode({ item, mastery, onBack, onComplete }) {
   const frontLabel = card.showSymbolFront ? 'What element?' : 'What symbol?';
 
   function rate(known) {
-    setResults(prev => [...prev, { correct: known, element: card.symbol, symbol: card.symbol, name: info.name }]);
+    setResults(prev => [...prev, { correct: known, element: card.symbol, name: info.name }]);
     setIdx(prev => prev + 1);
     setFlipped(false);
   }
