@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { PATHS } from './fileUtils.js';
 import { safeChildProcessEnv, whichFirst } from './processEnv.js';
+import { createLineReader } from './streamLines.js';
 
 const execFileAsync = promisify(execFile);
 const IS_WIN = platform() === 'win32';
@@ -445,15 +446,18 @@ function streamSpawn(bin, args, onLog, onProc) {
   return new Promise((resolve) => {
     const proc = spawn(bin, args, { env: safeChildProcessEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
     onProc(proc);
-    const onChunk = (chunk) => {
-      for (const line of chunk.toString().split(/[\r\n]+/)) {
-        const t = line.trim();
-        if (t) onLog({ type: 'log', message: t });
-      }
+    // `splitRe: /[\r\n]+/` so a torch/tqdm progress bar that redraws with a
+    // bare `\r` surfaces each redraw as its own log line; the carry buffer
+    // stitches a line split across chunk boundaries.
+    const onLine = (line) => {
+      const t = line.trim();
+      if (t) onLog({ type: 'log', message: t });
     };
-    proc.stdout.on('data', onChunk);
-    proc.stderr.on('data', onChunk);
-    proc.on('close', (code) => { onProc(null); resolve(code ?? -1); });
+    const stdoutReader = createLineReader(onLine, { splitRe: /[\r\n]+/ });
+    const stderrReader = createLineReader(onLine, { splitRe: /[\r\n]+/ });
+    proc.stdout.on('data', stdoutReader.push);
+    proc.stderr.on('data', stderrReader.push);
+    proc.on('close', (code) => { stdoutReader.flush(); stderrReader.flush(); onProc(null); resolve(code ?? -1); });
     proc.on('error', (err) => { onLog({ type: 'error', message: err.message }); onProc(null); resolve(-1); });
   });
 }

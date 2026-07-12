@@ -243,17 +243,20 @@ export async function startVideoDownload(url) {
         proc.on('error', (err) => resolve({ code: null, reason: `spawn failed: ${err.message}` }));
         proc.on('close', (code, signal) => resolve({ code, signal }));
       });
-      // Flush any final line written without a trailing newline before exit.
-      stdoutReader.flush();
-      stderrReader.flush();
       job.process = null;
 
       if (exit.signal === 'SIGTERM' || exit.signal === 'SIGKILL') {
+        // Don't flush on cancel — a SIGKILL'd child leaves only a partial
+        // marker line in the carry, and emitting it would broadcast a stray
+        // progress/stage SSE frame right before the cancellation frame.
         console.log(`🛑 Video download ${shortId(jobId)} cancelled`);
         broadcastSse(job, { type: 'canceled' });
         await cleanupDownloadFiles(jobId);
         return;
       }
+      // Flush any final line the child wrote without a trailing newline.
+      stdoutReader.flush();
+      stderrReader.flush();
       const produced = await findDownloadedFile(jobId);
       if (exit.code !== 0 || !produced) {
         // A --match-filters/--max-filesize rejection exits 0 with no output

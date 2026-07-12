@@ -150,15 +150,18 @@ export async function downloadAudioToTempMp3({
     proc.on('error', (err) => resolve({ code: null, reason: `spawn failed: ${err.message}` }));
     proc.on('close', (code, signal) => resolve({ code, signal }));
   });
-  // Flush any final line written without a trailing newline before exit.
-  stdoutReader.flush();
-  stderrReader.flush();
   registerProcess(null);
 
   if (exit.signal === 'SIGTERM' || exit.signal === 'SIGKILL') {
+    // Don't flush on cancel — a SIGKILL'd child leaves only a partial marker
+    // line in the carry, and emitting it would fire a stray progress/stage
+    // callback right before the caller reports the cancellation.
     await cleanupYtDlpTemp(tempPrefix);
     return { outcome: 'canceled' };
   }
+  // Flush any final line the child wrote without a trailing newline before exit.
+  stdoutReader.flush();
+  stderrReader.flush();
   if (exit.code !== 0 || !existsSync(outPath)) {
     // A --match-filters/--max-filesize rejection exits 0 with no output file
     // (yt-dlp treats a filtered-out video as "nothing to do", not an error) —
