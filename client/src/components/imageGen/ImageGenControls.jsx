@@ -8,16 +8,13 @@
 // reshaping. `mode` drives which knobs are visible: codex hides everything except
 // resolution; external swaps guidance for cfgScale; local shows guidance + quantize.
 
-import { useState, useEffect } from 'react';
 import { Dice5 } from 'lucide-react';
-import {
-  filterResolutions, resolveResolutionLabel, clampImageEdge,
-  CUSTOM_RESOLUTION_VALUE, MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS,
-} from '../../lib/imageGenResolutions';
+import { filterResolutions, MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from '../../lib/imageGenResolutions';
 import { randomSeed } from '../../lib/genUtils';
 import { RUNNER_FAMILIES } from '../../lib/runnerFamilies';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 import ModelDownloadBadge, { deriveSizeEstimate } from '../media/ModelDownloadBadge';
+import ResolutionField from '../media/ResolutionField';
 import { FormField } from '../ui/FormField';
 
 const QUANTIZE_OPTIONS = [
@@ -61,46 +58,9 @@ export default function ImageGenControls({
   const isFlux2 = currentModel?.runner === RUNNER_FAMILIES.FLUX2;
 
   // Filter by backend; a stale w/h (e.g. Flux 2 → Flux 1 with 1536 still set)
-  // falls through to the custom inputs below so the value stays visible and
-  // editable until the user picks a supported preset.
+  // falls through to the custom inputs (rendered by ResolutionField) so the
+  // value stays visible and editable until the user picks a supported preset.
   const availableResolutions = filterResolutions(mode, currentModel?.runner);
-  const { matched } = resolveResolutionLabel(availableResolutions, width, height);
-  // Custom mode is sticky once opened (so a preset-matching size the user is
-  // mid-edit doesn't snap the dropdown back to a preset) but also auto-engages
-  // whenever the current dimensions match no preset (remix, uploaded photo, a
-  // stale off-backend size) so the inputs appear without an extra click.
-  const [customOpen, setCustomOpen] = useState(false);
-  const isCustom = customOpen || (!matched && !!width && !!height);
-  const selectValue = isCustom ? CUSTOM_RESOLUTION_VALUE : (matched?.label ?? '');
-  // Latch custom mode stickily once a non-preset size appears (remix, uploaded
-  // photo, stale off-backend size). Without this, clearing a Width/Height field
-  // to a transient 0 mid-edit would flip `!matched && width && height` false and
-  // unmount the inputs the user is typing into — which also skips the blur-snap.
-  // `handleResolution` still clears the latch when a preset is explicitly picked.
-  useEffect(() => {
-    if (!matched && width && height) setCustomOpen(true);
-  }, [matched, width, height]);
-  const handleResolution = (e) => {
-    if (e.target.value === CUSTOM_RESOLUTION_VALUE) { setCustomOpen(true); return; }
-    const r = availableResolutions.find((opt) => opt.label === e.target.value);
-    if (r) { setCustomOpen(false); onResolutionChange?.(r.w, r.h); }
-  };
-  // Live edits pass through raw so typing feels natural (0 = mid-edit/empty);
-  // the blur handler clamps to the server's [64, MAX_IMAGE_EDGE] per-edge bounds.
-  const handleCustomDim = (axis, raw) => {
-    const n = Math.floor(Number(raw));
-    // n > 0 already excludes NaN; Infinity can't come from a number input and
-    // would clamp to MAX_IMAGE_EDGE anyway. 0 = mid-edit/empty.
-    const v = n > 0 ? Math.min(MAX_IMAGE_EDGE, n) : 0;
-    if (axis === 'w') onResolutionChange?.(v, height || 0);
-    else onResolutionChange?.(width || 0, v);
-  };
-  const snapCustomDim = (axis) => {
-    if (axis === 'w') onResolutionChange?.(clampImageEdge(width), height || 0);
-    else onResolutionChange?.(width || 0, clampImageEdge(height));
-  };
-  const pixelCount = (width || 0) * (height || 0);
-  const overPixelCap = pixelCount > MAX_IMAGE_PIXELS;
 
   const inputCls = 'w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50';
 
@@ -127,51 +87,26 @@ export default function ImageGenControls({
         </FormField>
       )}
 
-      <FormField label="Resolution" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-        <select
-          value={selectValue}
-          onChange={handleResolution}
-          disabled={disabled}
-          className={inputCls}
-        >
-          {availableResolutions.map((r) => <option key={r.label} value={r.label}>{r.label}</option>)}
-          <option value={CUSTOM_RESOLUTION_VALUE}>Custom…</option>
-        </select>
-      </FormField>
-
-      {/* Arbitrary width/height. The server accepts any edge in [64, 3840] with
-          total pixels ≤ 8.29M (imageEdgeSchema + refineImagePixelCap), so custom
-          sizes like 704×1280 (9:16 portrait) work without a new preset. Step 8
-          keeps values latent-friendly for the local diffusion runners. */}
-      {isCustom && (
-        <>
-          <FormField label="Width" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-            <input
-              type="number" min={64} max={MAX_IMAGE_EDGE} step={8}
-              value={width || ''}
-              onChange={(e) => handleCustomDim('w', e.target.value)}
-              onBlur={() => snapCustomDim('w')}
-              disabled={disabled}
-              className={inputCls}
-            />
-          </FormField>
-          <FormField label="Height" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-            <input
-              type="number" min={64} max={MAX_IMAGE_EDGE} step={8}
-              value={height || ''}
-              onChange={(e) => handleCustomDim('h', e.target.value)}
-              onBlur={() => snapCustomDim('h')}
-              disabled={disabled}
-              className={inputCls}
-            />
-          </FormField>
-          <p className={`col-span-full text-[10px] -mt-1 ${overPixelCap ? 'text-port-error' : 'text-gray-500'}`}>
-            {overPixelCap
-              ? `Too large — ${pixelCount.toLocaleString()} px exceeds the ${MAX_IMAGE_PIXELS.toLocaleString()} px cap. Reduce width or height.`
-              : `Each edge 64–${MAX_IMAGE_EDGE}px, total ≤ ${MAX_IMAGE_PIXELS.toLocaleString()} px. Multiples of 8 render best on local models.`}
-          </p>
-        </>
-      )}
+      {/* Preset dropdown + arbitrary width/height. The image route accepts ANY
+          integer edge in [64, 3840] with total pixels ≤ 8.29M (imageEdgeSchema
+          is `z.number().int().min(64).max(3840)` + refineImagePixelCap), so
+          custom sizes like 704×1280 (9:16 portrait) work without a new preset.
+          step=1 (not 8) so a hand-typed non-multiple-of-8 edge isn't blocked by
+          the form's native stepMismatch validation before submit — the note
+          keeps "multiples of 8 render best" as advice, not a hard constraint. */}
+      <ResolutionField
+        presets={availableResolutions}
+        width={width}
+        height={height}
+        onChange={onResolutionChange}
+        min={64}
+        max={MAX_IMAGE_EDGE}
+        step={1}
+        maxPixels={MAX_IMAGE_PIXELS}
+        disabled={disabled}
+        inputClassName={inputCls}
+        note={`Each edge 64–${MAX_IMAGE_EDGE}px, total ≤ ${MAX_IMAGE_PIXELS.toLocaleString()} px. Multiples of 8 render best on local models.`}
+      />
 
       {/* Codex's image_gen tool ignores seed/steps/guidance — only resolution
           is honored, so the rest of the knobs are hidden in that mode. */}
