@@ -319,6 +319,14 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
         : {});
   const reviewerModelEntries = MODEL_CAPABLE_CLI_REVIEWERS
     .filter(r => reviewers.includes(r) && typeof reviewerModelMap[r] === 'string' && reviewerModelMap[r])
+    // Thread each configured model id VERBATIM. We deliberately don't env-map it
+    // here (e.g. bare Claude tier → Bedrock form): this is a text-template layer
+    // with only a providerId, not the merged spawn env (process.env + settings.json
+    // + provider.envVars) the CLI argv builder normalizes against — and the nested
+    // reviewer CLI is spawned by the agent, not PortOS, so the argv chokepoint never
+    // runs. The Code Review Defaults model field is free-text for exactly this
+    // reason: the user configures the id their environment needs (a Bedrock-form id
+    // on a Bedrock box, an installed Ollama model for an Ollama-backed `claude`).
     .map(r => `\`${r} --model ${reviewerModelMap[r]} …\``);
   const reviewerModelNote = reviewerModelEntries.length
     ? ` When invoking a reviewer with a pinned model, pass it: ${reviewerModelEntries.join(', ')}.`

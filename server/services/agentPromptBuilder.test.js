@@ -617,6 +617,36 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/claude --model qwen2\.5:7b/);
     });
 
+    it('threads each configured model id verbatim, without env-dependent mapping', () => {
+      // Even with Bedrock enabled in the process env, the prompt layer does NOT
+      // map a bare Claude tier to a Bedrock id — it has only a providerId, not the
+      // merged spawn env, and the reviewer CLI is spawned by the agent, not PortOS.
+      // The user configures the exact id their environment needs (free-text field).
+      const prev = process.env.CLAUDE_CODE_USE_BEDROCK;
+      process.env.CLAUDE_CODE_USE_BEDROCK = '1';
+      try {
+        const prompt = buildLightContextPrompt(
+          makeTask({ metadata: {
+            reviewLoopFollowUp: true,
+            reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+            reviewLoopPRBranch: 'b',
+            reviewLoopPRNumber: 9,
+            reviewLoopReviewers: ['claude', 'codex'],
+            reviewLoopReviewerModels: { claude: 'us.anthropic.claude-opus-4-8', codex: 'gpt-5.6-sol' },
+            sourceTaskId: 'task-src-verbatim',
+          }}),
+          '/r',
+          { branchName: 'b', worktreePath: '/tmp/wt' },
+          isTruthyMeta);
+        // Both ids appear exactly as configured — no Bedrock rewrite, no mangling.
+        expect(prompt).toMatch(/claude --model us\.anthropic\.claude-opus-4-8/);
+        expect(prompt).toMatch(/codex --model gpt-5\.6-sol/);
+      } finally {
+        if (prev === undefined) delete process.env.CLAUDE_CODE_USE_BEDROCK;
+        else process.env.CLAUDE_CODE_USE_BEDROCK = prev;
+      }
+    });
+
     it('falls back to the legacy codex-scalar metadata key when the map is absent', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: {
