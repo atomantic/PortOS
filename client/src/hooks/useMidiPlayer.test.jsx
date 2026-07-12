@@ -14,7 +14,6 @@ const makeFakePlayer = () => {
     stop: vi.fn(() => { playing = false; }),
     seek: vi.fn(),
     position: vi.fn(() => 1.25),
-    duration: vi.fn(() => 10),
     isPlaying: () => playing,
   };
 };

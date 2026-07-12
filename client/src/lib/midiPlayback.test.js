@@ -1,39 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMidiPlayer } from './midiPlayback.js';
+import { createFakeAudio } from '../test/fakeAudioContext.js';
 
-// jsdom/node has no Web Audio. Same fake as scorePlayback.test.js: records
-// created oscillators + gain envelopes and exposes a controllable clock so the
-// lookahead scheduler can be driven deterministically with fake timers.
-const audio = { now: 0, oscillators: [], gains: [] };
-const fakeParam = () => {
-  const values = [];
-  return {
-    values,
-    setValueAtTime: (v) => values.push(v),
-    exponentialRampToValueAtTime: (v) => values.push(v),
-  };
-};
-function FakeAudioContext() {
-  return {
-    state: 'running',
-    resume: () => Promise.resolve(),
-    get currentTime() { return audio.now; },
-    destination: { id: 'destination' },
-    createOscillator() {
-      const osc = {
-        type: '', frequency: fakeParam(), onended: null, started: null, stopped: null,
-        connect: (t) => t, start(t) { this.started = t; }, stop(t) { this.stopped = t; },
-      };
-      audio.oscillators.push(osc);
-      return osc;
-    },
-    createGain() {
-      const gain = { gain: fakeParam(), connect: (t) => t };
-      audio.gains.push(gain);
-      return gain;
-    },
-  };
-}
+// Shared Web Audio fake (controllable clock + recorded oscillators/gains) so
+// the lookahead scheduler can be driven deterministically with fake timers.
+// One pair for the whole file — lib/audioContext.js caches the context.
+const { FakeAudioContext, audio } = createFakeAudio();
 
 // Advance the audio clock RELATIVELY (unlike scorePlayback.test.js's absolute
 // drive) — several cases here pause/seek and drive again, and an absolute
@@ -59,9 +31,7 @@ const DATA = {
 
 describe('createMidiPlayer', () => {
   beforeEach(() => {
-    audio.now = 0;
-    audio.oscillators = [];
-    audio.gains = [];
+    audio.reset();
     vi.stubGlobal('AudioContext', FakeAudioContext);
     vi.useFakeTimers();
   });

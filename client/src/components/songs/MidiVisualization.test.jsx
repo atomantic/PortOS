@@ -2,6 +2,10 @@ import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import MidiVisualization from './MidiVisualization.jsx';
 import { __clearMidiNotesCache } from '../../hooks/useMidiNotes.js';
+import { createFakeAudio } from '../../test/fakeAudioContext.js';
+
+// One fake pair for the file — lib/audioContext.js caches the context.
+const { FakeAudioContext } = createFakeAudio();
 
 // Tiny hand-built SMF fixture: a sustained C-major triad (C4 E4 G4) for one
 // quarter at the default 120 BPM. Same builder approach as midiNotes.test.js.
@@ -32,22 +36,6 @@ const makeCtx = () => ({
   fillStyle: '', strokeStyle: '', lineWidth: 1, font: '', textAlign: '', globalAlpha: 1,
 });
 
-// jsdom has no Web Audio — minimal fake for the synth-preview player (same
-// shape as midiPlayback.test.js, static clock is enough for UI wiring tests).
-const fakeParam = () => ({ setValueAtTime: vi.fn(), exponentialRampToValueAtTime: vi.fn() });
-function FakeAudioContext() {
-  return {
-    state: 'running',
-    resume: () => Promise.resolve(),
-    currentTime: 0,
-    destination: {},
-    createOscillator: () => ({
-      type: '', frequency: fakeParam(), onended: null,
-      connect: (t) => t, start: vi.fn(), stop: vi.fn(),
-    }),
-    createGain: () => ({ gain: fakeParam(), connect: (t) => t }),
-  };
-}
 
 describe('<MidiVisualization>', () => {
   let ctx;
@@ -56,6 +44,8 @@ describe('<MidiVisualization>', () => {
     ctx = makeCtx();
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx);
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
+    // jsdom has no Web Audio — shared fake for the synth-preview player (the
+    // static clock is enough for these UI-wiring tests).
     vi.stubGlobal('AudioContext', FakeAudioContext);
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get() { return 800; } });
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({

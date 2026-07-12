@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { midiNoteName, isBlackKey } from '../../lib/pianoKeyboard';
 import { chordNoteNames } from '../../lib/midiChords';
 import { roundRect, layerColor } from '../../lib/canvasRoll.js';
@@ -44,6 +44,21 @@ const tickStep = (pps) => {
   return steps.find((s) => s * pps >= 70) || 300;
 };
 
+// First index in the start-sorted note list with startSec >= t. Subtracting
+// the file's longest note duration from a window edge before searching gives
+// the earliest index that can still overlap that edge — O(log n) instead of
+// skip-scanning from note 0, which matters once the rAF playback loop makes
+// drawing a 60fps hot path.
+const lowerBound = (notes, t) => {
+  let lo = 0;
+  let hi = notes.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (notes[mid].startSec < t) lo = mid + 1; else hi = mid;
+  }
+  return lo;
+};
+
 const tooltipStyle = (x, y, width) => ({
   left: `${Math.min(x + 10, Math.max(0, width - TOOLTIP_W))}px`,
   top: `${Math.max(0, y - 24)}px`,
@@ -84,10 +99,16 @@ export default function MidiPianoRoll({
   // the parent hands fresh closures each render; the rAF loop reads refs.
   const getPositionRef = useRef(getPosition);
   getPositionRef.current = getPosition;
-  const playingRef = useRef(playing);
-  playingRef.current = playing;
+  // Set of midis sounding this frame (null when idle) — written by the rAF
+  // playback loop, painted onto the pitch gutter by draw().
+  const soundingRef = useRef(null);
 
   const duration = Math.max(data?.durationSec || 0, 0.001);
+  // Longest note in the file — the lookback window for lowerBound() scans.
+  const maxDurSec = useMemo(
+    () => (data?.notes || []).reduce((m, n) => Math.max(m, n.durationSec || 0), 0),
+    [data],
+  );
   const chordLaneH = showChords && chords?.length ? CHORD_H : 0;
   const multiTrack = (data?.tracks?.length || 1) > 1;
 
@@ -196,7 +217,7 @@ export default function MidiPianoRoll({
     ctx.clip();
     ctx.textAlign = 'left';
     const notes = data?.notes || [];
-    for (let i = 0; i < notes.length; i += 1) {
+    for (let i = lowerBound(notes, scroll - maxDurSec); i < notes.length; i += 1) {
       const n = notes[i];
       if (n.startSec > viewEnd) break;
       const end = n.startSec + n.durationSec;
@@ -237,18 +258,9 @@ export default function MidiPianoRoll({
       ctx.fillRect(px - 1, RULER_H, 2, height - RULER_H);
     }
 
-    // Sounding pitches (playing only) — light their gutter rows below. Notes
-    // are start-sorted, so the scan early-breaks at the playhead.
-    let soundingMidis = null;
-    if (playingRef.current) {
-      soundingMidis = new Set();
-      const pos = playheadSecRef.current;
-      for (let i = 0; i < notes.length; i += 1) {
-        const n = notes[i];
-        if (n.startSec > pos) break;
-        if (pos < n.startSec + n.durationSec) soundingMidis.add(n.midi);
-      }
-    }
+    // Sounding pitches (playing only) — computed once per frame by the rAF
+    // playback loop (null when idle); draw just paints the gutter rows.
+    const soundingMidis = soundingRef.current;
 
     // Pitch gutter on top (opaque, so notes pan "under" it).
     ctx.fillStyle = GUTTER_BG;
@@ -279,7 +291,7 @@ export default function MidiPianoRoll({
       ctx.fillStyle = 'rgba(255,255,255,0.15)';
       ctx.fillRect(barX, height - 3, barW, 2);
     }
-  }, [data, chords, chordLaneH, geometry, height, highMidi, lowMidi, hover, multiTrack, duration]);
+  }, [data, chords, chordLaneH, geometry, height, highMidi, lowMidi, hover, multiTrack, duration, maxDurSec]);
 
   const drawRef = useRef(draw);
   drawRef.current = draw;
@@ -290,34 +302,59 @@ export default function MidiPianoRoll({
   useEffect(() => { draw(); }, [draw, zoom]);
 
   // Playback rAF loop: while playing, read the live audio position into the
-  // playhead ref, page the view to keep it visible, and repaint each frame.
-  // On pause/stop the loop tears down and one static frame pins the playhead
-  // where the audio stopped (position() reports the resume offset).
+  // playhead ref, page the view to keep it visible, compute the sounding
+  // pitch set for the gutter, and repaint — but only when a frame is visually
+  // different (playhead pixel, sounding set, or a page turn). At fit zoom the
+  // playhead moves well under a pixel per frame, so most frames skip the full
+  // canvas repaint. On pause/stop the loop tears down and one static frame
+  // pins the playhead where the audio stopped.
+  const wasPlayingRef = useRef(false);
+  const lastFrameRef = useRef('');
   useEffect(() => {
+    const notes = data?.notes || [];
     if (!playing) {
-      if (getPositionRef.current) {
-        playheadSecRef.current = getPositionRef.current() ?? 0;
+      soundingRef.current = null;
+      if (wasPlayingRef.current) {
+        wasPlayingRef.current = false;
+        playheadSecRef.current = getPositionRef.current?.() ?? 0;
         drawRef.current();
       }
       return undefined;
     }
+    wasPlayingRef.current = true;
+    lastFrameRef.current = '';
     let raf = 0;
     const loop = () => {
-      playheadSecRef.current = getPositionRef.current?.() ?? 0;
+      const pos = getPositionRef.current?.() ?? 0;
+      playheadSecRef.current = pos;
       // Page-turn follow: when the playhead exits the visible window (or a
       // seek lands outside it), snap the view so it re-enters near the left.
       const { gridW, pps, maxScroll } = geometry();
       const view = gridW / pps;
-      const pos = playheadSecRef.current;
+      let paged = false;
       if (pos < scrollSecRef.current || pos > scrollSecRef.current + view) {
         scrollSecRef.current = Math.min(Math.max(0, pos - view * 0.1), maxScroll);
+        paged = true;
       }
-      drawRef.current();
+      // Sounding set — scan only the slice that can overlap the playhead.
+      const sounding = new Set();
+      let sum = 0;
+      for (let i = lowerBound(notes, pos - maxDurSec); i < notes.length; i += 1) {
+        const n = notes[i];
+        if (n.startSec > pos) break;
+        if (pos < n.startSec + n.durationSec) { sounding.add(n.midi); sum += n.midi; }
+      }
+      const frame = `${Math.round((pos - scrollSecRef.current) * pps)}:${sounding.size}:${sum}`;
+      if (paged || frame !== lastFrameRef.current) {
+        lastFrameRef.current = frame;
+        soundingRef.current = sounding;
+        drawRef.current();
+      }
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(raf);
-  }, [playing, geometry]);
+  }, [playing, geometry, data, maxDurSec]);
 
   // Coalesce pan-driven repaints to one per animation frame — wheel/pointer
   // events can fire faster than the display presents.

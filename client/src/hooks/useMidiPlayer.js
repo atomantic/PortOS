@@ -23,7 +23,7 @@ export default function useMidiPlayer(data) {
     playerRef.current = player;
     return () => {
       player.stop();
-      if (playerRef.current === player) playerRef.current = null;
+      playerRef.current = null;
       setPlaying(false);
     };
   }, [data]);

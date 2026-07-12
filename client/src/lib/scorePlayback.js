@@ -88,15 +88,23 @@ export const buildSchedule = (score, bpmOverride) => {
 // Guard a UI callback that fires from a setInterval tick — an uncaught throw
 // there has no request boundary to bubble to and would leave the scheduler
 // interval orphaned. (CLAUDE.md: wrap non-request-lifecycle callbacks.)
-const safeCall = (cb, ...args) => {
+// Exported as a factory so midiPlayback.js shares the guard with its own
+// log prefix instead of duplicating the body.
+export const makeSafeCall = (label) => (cb, ...args) => {
   if (typeof cb !== 'function') return;
   try { cb(...args); }
-  catch (err) { console.error(`🎹 score playback callback failed: ${err.message}`); }
+  catch (err) { console.error(`🎹 ${label} callback failed: ${err.message}`); }
 };
+const safeCall = makeSafeCall('score playback');
 
-const LEAD = 0.08;          // seconds of lead-in before beat 0 sounds
-const LOOKAHEAD_MS = 25;    // how often the scheduler wakes
-const SCHEDULE_AHEAD = 0.12; // seconds of audio scheduled past "now"
+// Shared lookahead-scheduler timing — one export so the score synth and the
+// MIDI preview (midiPlayback.js) can't drift apart on feel.
+export const SYNTH_TIMING = {
+  LEAD: 0.08,          // seconds of lead-in before beat 0 sounds
+  LOOKAHEAD_MS: 25,    // how often the scheduler wakes
+  SCHEDULE_AHEAD: 0.12, // seconds of audio scheduled past "now"
+};
+const { LEAD, LOOKAHEAD_MS, SCHEDULE_AHEAD } = SYNTH_TIMING;
 const TONE_PEAK = 0.18;     // per-voice gain peak for a single sounding tone
 
 // Schedule one tone with a short attack/release gain envelope so it doesn't

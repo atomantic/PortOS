@@ -1,16 +1,20 @@
-// The ONE app-wide Web Audio AudioContext, created lazily on first use.
-// Browsers cap the number of live contexts (~6), and every playback feature
-// sharing a single context also shares a single sample clock — so features
-// that sound together (metronome + score synth, MIDI preview over a round)
-// stay aligned for free. Consumed by songPlayback.js, scorePlayback.js,
-// metronome.js, and midiPlayback.js — new audio features should import this
-// instead of growing another module-level singleton.
+// The shared lazy Web Audio AudioContext for the song-system playback stack
+// (songPlayback, scorePlayback, metronome, midiPlayback). Browsers cap the
+// number of live contexts (~6), and modules sharing one context also share
+// one sample clock — so features that sound together (metronome + score
+// synth, MIDI preview) stay aligned for free. New audio features should
+// import this instead of growing another module-level singleton.
 //
-// The constructor is resolved lazily and never touches a bare `window` at
-// module load — the server's vitest run globs lib tests in the node
-// environment (no jsdom), where `window` is undefined. Tests inject a fake
-// via vi.stubGlobal('AudioContext', …) before the first call; the singleton
-// then caches that fake for the life of the test file's module registry.
+// Known holdouts, on purpose: components/city/audio/cityAudioEngine.js keeps
+// its own context (it owns a persistent gain graph and its own — differently
+// contracted — getAudioContext export), and MorseTrainer creates a per-mount
+// context it close()s on unmount, which would kill a shared one for everyone
+// else. Migrate those only with their graphs/lifecycles in mind.
+//
+// The constructor is resolved lazily so importing this module never touches
+// audio APIs at load time (node-env test runs import it cleanly). Tests
+// inject a fake via vi.stubGlobal('AudioContext', …) before the first call;
+// the singleton then caches that fake for the test file's module registry.
 
 let sharedCtx = null;
 
@@ -20,10 +24,7 @@ let sharedCtx = null;
  */
 export function getAudioContext() {
   if (!sharedCtx) {
-    const Ctor =
-      (typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext)) ||
-      globalThis.AudioContext ||
-      globalThis.webkitAudioContext;
+    const Ctor = globalThis.AudioContext || globalThis.webkitAudioContext;
     sharedCtx = new Ctor();
   }
   return sharedCtx;
