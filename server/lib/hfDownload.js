@@ -27,6 +27,7 @@ import {
 import { PATHS } from './fileUtils.js';
 import { getHfTokenInfo } from './hfToken.js';
 import { safeChildProcessEnv } from './processEnv.js';
+import { createLineReader } from './streamLines.js';
 import { getSettings } from '../services/settings.js';
 
 const HELPER_SCRIPT = join(PATHS.root, 'scripts', 'hf_download_repo.py');
@@ -150,19 +151,12 @@ export function downloadHfRepo({ repo, revision = null, onEvent }) {
 
       // Line-buffer across chunks so a STAGE:/USER_ERROR: marker split across
       // pipe boundaries isn't truncated and routed to the generic log path
-      // (which loses the typed-error / progress wire shape).
-      let stdoutBuf = '';
-      let stderrBuf = '';
-      const flushChunk = (chunk, key) => {
-        const buf = (key === 'stdout' ? stdoutBuf : stderrBuf) + chunk.toString();
-        const lines = buf.split(/\r?\n/);
-        const trailing = lines.pop();
-        if (key === 'stdout') stdoutBuf = trailing;
-        else stderrBuf = trailing;
-        for (const l of lines) handleLine(l);
-      };
-      proc.stderr.on('data', (chunk) => flushChunk(chunk, 'stderr'));
-      proc.stdout.on('data', (chunk) => flushChunk(chunk, 'stdout'));
+      // (which loses the typed-error / progress wire shape). Separate reader
+      // per stream — a shared carry buffer would splice stdout onto stderr.
+      const stdoutReader = createLineReader(handleLine);
+      const stderrReader = createLineReader(handleLine);
+      proc.stderr.on('data', stderrReader.push);
+      proc.stdout.on('data', stdoutReader.push);
       proc.on('error', (err) => {
         const msg = `Failed to spawn python: ${err.message}`;
         onEvent({ type: 'error', message: msg, kind: 'spawn_failed' });
@@ -172,8 +166,8 @@ export function downloadHfRepo({ repo, revision = null, onEvent }) {
         // Flush any trailing partial line the python helper emitted without a
         // newline before exit (rare with line-buffered stderr but possible
         // when the process is SIGKILL'd mid-write).
-        if (stdoutBuf) { handleLine(stdoutBuf); stdoutBuf = ''; }
-        if (stderrBuf) { handleLine(stderrBuf); stderrBuf = ''; }
+        stdoutReader.flush();
+        stderrReader.flush();
         if (killed) {
           onEvent({ type: 'error', message: 'Cancelled', kind: 'cancelled' });
           return resolve({ ok: false, errorKind: 'cancelled', errorMessage: 'Cancelled' });

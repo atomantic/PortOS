@@ -21,6 +21,7 @@ import { safeUnder } from '../lib/ffmpeg.js';
 import { getSettings } from '../services/settings.js';
 import { checkPackages, isAllowedPython } from '../lib/pythonSetup.js';
 import { safeChildProcessEnv } from '../lib/processEnv.js';
+import { createLineReader } from '../lib/streamLines.js';
 import {
   listVideoModels,
   defaultVideoModelId,
@@ -343,20 +344,25 @@ router.get('/setup/runtime-install', asyncHandler(async (req, res) => {
   });
   runtimeInstallInFlight.set(info.id, child);
 
-  const onChunk = (chunk) => {
-    for (const line of chunk.toString().split(/[\r\n]+/)) {
-      const t = line.trimEnd();
-      if (t) emit({ type: 'log', message: t });
-    }
+  // `splitRe: /[\r\n]+/` so a bash/pip/tqdm progress bar that redraws with a
+  // bare `\r` surfaces each redraw as its own log line; the carry buffer
+  // stitches a line split across chunk boundaries (flushed on close).
+  const onLine = (line) => {
+    const t = line.trimEnd();
+    if (t) emit({ type: 'log', message: t });
   };
-  child.stdout.on('data', onChunk);
-  child.stderr.on('data', onChunk);
+  const stdoutReader = createLineReader(onLine, { splitRe: /[\r\n]+/ });
+  const stderrReader = createLineReader(onLine, { splitRe: /[\r\n]+/ });
+  child.stdout.on('data', stdoutReader.push);
+  child.stderr.on('data', stderrReader.push);
   child.on('error', (err) => {
     runtimeInstallInFlight.delete(info.id);
     emit({ type: 'error', message: `Installer failed to spawn: ${err.message}` });
     safeEnd();
   });
   child.on('close', async (code) => {
+    stdoutReader.flush();
+    stderrReader.flush();
     runtimeInstallInFlight.delete(info.id);
     // Re-probe rather than trusting exit code alone — partial installs
     // (network drop mid-clone, missing requirements file, ctrl-c via
