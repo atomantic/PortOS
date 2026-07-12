@@ -69,8 +69,8 @@ import LoraPicker from '../components/imageGen/LoraPicker';
 import { videoLoraFamily, VIDEO_LORA_FAMILIES } from '../lib/runnerFamilies';
 import { randomSeed } from '../lib/genUtils';
 import { VIDEO_RESOLUTIONS, snapAspectToImage } from '../lib/videoGenResolutions';
+import ResolutionField from '../components/media/ResolutionField';
 import { VIDEO_TILING_OPTIONS, VIDEO_TILING_ENUM_SET } from '../lib/videoTilingOptions';
-import { resolveResolutionLabel } from '../lib/imageGenResolutions';
 
 // Values follow LTX-2's 8k+1 latent boundary so the model doesn't silently
 // snap. 241 = 10s @ 24fps is the comfortable single-pass ceiling on 48 GB
@@ -900,7 +900,6 @@ export default function VideoGen() {
   const [dismissedEncoderIntegrityKey, setDismissedEncoderIntegrityKey] = useState(null);
   const showEncoderIntegrityBanner = encoderIntegrityBad && dismissedEncoderIntegrityKey !== encoderIntegrityKey && !modelDownload.downloading;
 
-  const { matched: matchedResolution, label: resolutionLabel } = resolveResolutionLabel(VIDEO_RESOLUTIONS, width, height);
   const progressPct = progress?.progress != null ? Math.round(progress.progress * 100) : null;
 
   // Explicit px sizing — maxWidth + maxHeight + aspectRatio together resolves
@@ -910,21 +909,14 @@ export default function VideoGen() {
   const previewWidth = previewRatio >= 1 ? previewBudget : Math.round(previewBudget * previewRatio);
   const previewHeight = previewRatio >= 1 ? Math.round(previewBudget / previewRatio) : previewBudget;
 
-  const handleResolutionChange = (e) => {
-    const r = VIDEO_RESOLUTIONS.find((r) => r.label === e.target.value);
-    if (r) { setWidth(r.w); setHeight(r.h); sizeManuallySetRef.current = true; }
-  };
-  // Free-form custom W×H entry for power users who want an exact I2V size the
-  // preset list doesn't cover. Marks the size as manually set so aspect-snap on
-  // image upload stops overriding it (same flag the preset/remix paths set).
-  // Empty/invalid input is left untouched — width/height are numeric state the
-  // preview + FFLF-budget math read, so we never let them go 0/NaN. The server
-  // validates 64..2048 (videoGen route) and floors both dims to a multiple of
-  // 64 (generateVideo in local.js) before enforcing the per-tier pixel budget,
-  // so free entry stays safe; the inputs mirror that 64..2048 bound below.
-  const handleDimensionChange = (setter) => (e) => {
-    const v = Number(e.target.value);
-    if (Number.isFinite(v) && v > 0) { setter(v); sizeManuallySetRef.current = true; }
+  // Preset pick or custom W×H edit — mark the size as manually set so aspect-snap
+  // on image upload stops overriding it (same flag the remix/deep-link paths set).
+  // ResolutionField passes a transient 0 mid-edit and blur-snaps each edge to the
+  // 64..2048 bound; the preview + FFLF-budget math guard against a transient 0,
+  // and the server floors both dims to a multiple of 64 (generateVideo in
+  // local.js) before enforcing the per-tier pixel budget.
+  const handleResolutionChange = (w, h) => {
+    setWidth(w); setHeight(h); sizeManuallySetRef.current = true;
   };
   const handleRandomSeed = () => setSeed(randomSeed());
 
@@ -1714,78 +1706,20 @@ export default function VideoGen() {
               </div>
             )}
 
-            <FormField label="Resolution" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-              <select
-                value={resolutionLabel}
-                onChange={handleResolutionChange}
-                className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-              >
-                {!matchedResolution && (
-                  <option value={resolutionLabel}>{`${width}×${height} (custom)`}</option>
-                )}
-                {VIDEO_RESOLUTIONS.map((r) => <option key={r.label} value={r.label}>{r.label}</option>)}
-              </select>
-              <div className="flex items-center gap-1 mt-1">
-                <input
-                  type="number"
-                  min={64}
-                  max={2048}
-                  step={64}
-                  value={width}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    if (Number.isFinite(v) && v > 0) {
-                      setWidth(v);
-                      sizeManuallySetRef.current = true;
-                    }
-                  }}
-                  className="flex-1 min-w-0 bg-port-bg border border-port-border rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-                  title="Width in pixels (will be floored to a multiple of 64)"
-                />
-                <span className="text-gray-500 text-xs">x</span>
-                <input
-                  type="number"
-                  min={64}
-                  max={2048}
-                  step={64}
-                  value={height}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    if (Number.isFinite(v) && v > 0) {
-                      setHeight(v);
-                      sizeManuallySetRef.current = true;
-                    }
-                  }}
-                  className="flex-1 min-w-0 bg-port-bg border border-port-border rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-                  title="Height in pixels (will be floored to a multiple of 64)"
-                />
-              </div>
-            </FormField>
-
-            {/* Free-form W×H for exact I2V sizing beyond the preset list. Drives
-                the same width/height state as the preset select; the "(custom)"
-                option above reflects any off-preset value. The server accepts
-                64..2048 and rounds each dim DOWN to the 64-grid, so an off-grid
-                size here renders at the next-lower multiple of 64. */}
-            <FormField label="Width" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-              <input
-                type="number" min={64} max={2048} step={64}
-                value={width}
-                onChange={handleDimensionChange(setWidth)}
-                title="Custom width in px (64–2048) — the server rounds down to the nearest multiple of 64."
-                className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-              />
-            </FormField>
-
-            <FormField label="Height" labelClassName="block text-xs font-medium text-gray-400 mb-1">
-              <input
-                type="number" min={64} max={2048} step={64}
-                value={height}
-                onChange={handleDimensionChange(setHeight)}
-                title="Custom height in px (64–2048) — the server rounds down to the nearest multiple of 64."
-                className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
-              />
-            </FormField>
+            {/* Preset dropdown + free-form custom W×H for exact I2V sizing beyond
+                the preset list. The server accepts 64..2048 and rounds each dim
+                DOWN to the 64-grid, so an off-grid size renders at the next-lower
+                multiple of 64 — ResolutionField's blur-snap reflects that. */}
+            <ResolutionField
+              presets={VIDEO_RESOLUTIONS}
+              width={width}
+              height={height}
+              onChange={handleResolutionChange}
+              min={64}
+              max={2048}
+              step={64}
+              note="Each edge 64–2048px; the server rounds each down to the nearest multiple of 64."
+            />
 
             <FormField label="Frames" labelClassName="block text-xs font-medium text-gray-400 mb-1">
               <select
