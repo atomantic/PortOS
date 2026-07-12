@@ -22,7 +22,10 @@ const HEARTBEAT_MS = 15000;
 export function createInstallLogger({ installer, target } = {}) {
   const name = installer || 'install';
   const suffix = target ? ` (${target})` : '';
-  const startedAt = Date.now();
+  // Stamped in start(), NOT at construction — a caller may build the logger
+  // before a pre-spawn readiness probe (up to 30s in midiRuntime.js), and
+  // elapsed time should measure the install, not that probe.
+  let startedAt = 0;
   let started = false;
   let finished = false;
   let lastHeartbeat = 0;
@@ -51,7 +54,8 @@ export function createInstallLogger({ installer, target } = {}) {
   const start = () => safe(() => {
     if (started) return;
     started = true;
-    lastHeartbeat = Date.now();
+    startedAt = Date.now();
+    lastHeartbeat = startedAt;
     console.log(`🔧 Install starting: ${name}${target ? ` → ${target}` : ''}`);
   });
 
