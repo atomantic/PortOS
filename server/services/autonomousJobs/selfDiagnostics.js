@@ -227,17 +227,20 @@ export async function runSelfDiagnostics({
   }
 
   const hasFailures = failing.length > 0
-  await ensureDiagnosticsLabels({ cwd, exec })
 
   if (found.issue) {
     // Reuse the existing monitoring issue: refresh the body, and toggle the
     // attention label to match the current state (add on failures, clear on all-green).
     const editArgs = ['issue', 'edit', String(found.issue.number), '--body', body]
-    if (hasFailures && !found.issue.labels.includes(NEEDS_ATTENTION_LABEL)) {
+    const addingLabel = hasFailures && !found.issue.labels.includes(NEEDS_ATTENTION_LABEL)
+    if (addingLabel) {
       editArgs.push('--add-label', NEEDS_ATTENTION_LABEL)
     } else if (!hasFailures && found.issue.labels.includes(NEEDS_ATTENTION_LABEL)) {
       editArgs.push('--remove-label', NEEDS_ATTENTION_LABEL)
     }
+    // Only pre-create labels when we're about to attach one (gh needs it to exist);
+    // a body-only or remove-label edit doesn't (the label already exists then).
+    if (addingLabel) await ensureDiagnosticsLabels({ cwd, exec })
     const { code, stderr } = await exec('gh', editArgs, { cwd })
     if (code !== 0) {
       console.warn(`⚠️ Self-diagnostics: failed to update issue #${found.issue.number}: ${stderr.trim()}`)
@@ -253,6 +256,7 @@ export async function runSelfDiagnostics({
     return { failingCount: 0, categories: [], issue: null }
   }
 
+  await ensureDiagnosticsLabels({ cwd, exec })
   const createArgs = ['issue', 'create', '--title', title, '--body', body, '--label', MONITORING_LABEL, '--label', NEEDS_ATTENTION_LABEL]
   const { code, stdout, stderr } = await exec('gh', createArgs, { cwd })
   if (code !== 0) {
