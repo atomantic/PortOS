@@ -5,7 +5,7 @@ import { dirname, join } from 'path';
 import { PATHS } from './lib/fileUtils.js';
 import { resolveInstallRoot } from './lib/dataRoot.js';
 import { PORTS } from './lib/ports.js';
-import { estimateTokens, CHARS_PER_TOKEN } from './lib/contextBudget.js';
+import { estimateTokens, estimateTokensFromChars } from './lib/contextBudget.js';
 import { existsSync } from 'fs';
 import { createTailscaleServers } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
@@ -292,7 +292,7 @@ const aiToolkitHooks = {
   },
   onRunCompleted: (metadata, output) => {
     const estimatedTokens = estimateTokens(output);
-    const inputTokens = Math.ceil((metadata.promptLength || 0) / CHARS_PER_TOKEN);
+    const inputTokens = estimateTokensFromChars(metadata.promptLength);
     recordMessages(metadata.providerId, metadata.model, 1, estimatedTokens, inputTokens).catch(err => {
       console.error(`❌ Failed to record usage: ${err.message}`);
     });

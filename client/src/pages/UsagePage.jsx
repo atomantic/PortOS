@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { RefreshCw, Clock, AlertTriangle } from 'lucide-react';
 import * as api from '../services/api';
 import BrailleSpinner from '../components/BrailleSpinner';
+import Pill from '../components/ui/Pill';
 import { formatCompactCount } from '../utils/formatters';
 
 const PERIOD_OPTIONS = [
@@ -71,9 +72,7 @@ function ProviderQuotaCard({ quota }) {
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-base font-semibold text-white">{quota.label}</h3>
         {quota.plan && quota.plan !== 'unknown' && (
-          <span className="text-[10px] sm:text-xs uppercase tracking-wide text-gray-400 border border-port-border rounded-full px-2 py-0.5">
-            {quota.plan}
-          </span>
+          <Pill tone="context" size="xs">{quota.plan}</Pill>
         )}
       </div>
 
@@ -231,15 +230,13 @@ function ProviderCostRows({ provider }) {
         <td className="py-2 pr-2">
           <span className="font-medium">{provider.name}</span>
           {provider.free && (
-            <span className="ml-2 text-[10px] uppercase tracking-wide text-port-success border border-port-success/40 rounded-full px-1.5 py-0.5">
-              Local — free
-            </span>
+            <Pill tone="success" size="xs" className="ml-2 uppercase tracking-wide">Local — free</Pill>
           )}
         </td>
         <td className="py-2 px-2 text-right">{formatNumber(provider.sessions)}</td>
         <td className="py-2 px-2 text-right">{formatNumber(provider.tokensIn)}</td>
         <td className="py-2 px-2 text-right">{formatNumber(provider.tokensOut)}</td>
-        <td className="py-2 pl-2 text-right">{provider.free ? formatCost(0) : formatCost(provider.estimatedCost)}</td>
+        <td className="py-2 pl-2 text-right">{formatCost(provider.estimatedCost)}</td>
       </tr>
       {provider.models.map((m) => (
         <tr key={m.model} className="text-gray-400">
@@ -250,7 +247,7 @@ function ProviderCostRows({ provider }) {
           <td className="py-1.5 px-2 text-right text-xs">{formatNumber(m.tokensIn)}</td>
           <td className="py-1.5 px-2 text-right text-xs">{formatNumber(m.tokensOut)}</td>
           <td className="py-1.5 pl-2 text-right text-xs" title={approxMark(m.rateMatch) ? 'Approximate — no exact published rate for this model id' : undefined}>
-            {approxMark(m.rateMatch)}{m.rateMatch === 'free' ? formatCost(0) : formatCost(m.estimatedCost)}
+            {approxMark(m.rateMatch)}{formatCost(m.estimatedCost)}
           </td>
         </tr>
       ))}

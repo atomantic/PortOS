@@ -631,6 +631,16 @@ export const usageQuerySchema = z.object({
   to: isoDay.optional()
 }).refine((q) => !(q.from && q.to) || q.from <= q.to, { message: 'from must be on or before to' });
 
+/** Body for POST /api/usage/messages — token counts persist forever, so
+ * reject non-integer/negative garbage instead of coercing it into counters. */
+export const usageMessagesSchema = z.object({
+  providerId: z.string().min(1),
+  model: z.string().nullish(),
+  messageCount: z.number().int().nonnegative(),
+  tokenCount: z.number().int().nonnegative().optional().default(0),
+  inputTokenCount: z.number().int().nonnegative().optional().default(0)
+});
+
 /**
  * Validate data against a Zod schema, throwing on failure.
  * Returns parsed data on success, throws ServerError on failure.

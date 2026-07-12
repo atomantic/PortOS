@@ -4,25 +4,10 @@ import { getClaudeCodeUsage } from '../services/claudeCodeUsage.js';
 import { getProviderQuotas } from '../services/providerUsage.js';
 import { getAllProviders } from '../services/providers.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest, usageQuerySchema } from '../lib/validation.js';
+import { validateRequest, usageQuerySchema, usageMessagesSchema } from '../lib/validation.js';
+import { resolveUsageRange } from '../lib/usageRange.js';
 
 const router = Router();
-
-const PERIOD_DAYS = { '7d': 7, '30d': 30, '90d': 90 };
-
-/**
- * Resolve validated query params to an inclusive { from, to } date range
- * (YYYY-MM-DD, null = unbounded). Explicit from/to win; otherwise a preset
- * period counting back from today (default 7d, matching the page's charts).
- */
-export function resolveUsageRange({ period, from, to } = {}) {
-  if (from || to) return { from: from || null, to: to || null };
-  if (period === 'all') return { from: null, to: null };
-  const days = PERIOD_DAYS[period] || PERIOD_DAYS['7d'];
-  const start = new Date();
-  start.setDate(start.getDate() - (days - 1));
-  return { from: start.toISOString().split('T')[0], to: null };
-}
 
 // GET /api/usage - Usage summary + cost report. Accepts ?period=7d|30d|90d|all
 // or an explicit ?from/?to (YYYY-MM-DD, inclusive) for the report window.
@@ -67,8 +52,8 @@ router.post('/session', asyncHandler(async (req, res) => {
 
 // POST /api/usage/messages - Record messages
 router.post('/messages', asyncHandler(async (req, res) => {
-  const { providerId, model, messageCount, tokenCount, inputTokenCount } = req.body;
-  await usage.recordMessages(providerId, model, messageCount, tokenCount, inputTokenCount || 0);
+  const { providerId, model, messageCount, tokenCount, inputTokenCount } = validateRequest(usageMessagesSchema, req.body);
+  await usage.recordMessages(providerId, model, messageCount, tokenCount, inputTokenCount);
   res.json({ success: true });
 }));
 

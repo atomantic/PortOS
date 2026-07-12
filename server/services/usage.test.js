@@ -208,14 +208,13 @@ describe('usage.js — streak calculations', () => {
       expect(typeof today.label).toBe('string');
     });
 
-    it('estimatedCost is a number >= 0', async () => {
+    it('estimatedCost keeps its all-time legacy-blended semantics ($3/$15 per 1M)', async () => {
       readJSONFile.mockResolvedValueOnce(makeUsage({}, {
         totalTokens: { input: 1_000_000, output: 500_000 }
       }));
       await loadUsage();
       const summary = getUsageSummary();
-      expect(typeof summary.estimatedCost).toBe('number');
-      expect(summary.estimatedCost).toBeGreaterThanOrEqual(0);
+      expect(summary.estimatedCost).toBeCloseTo(10.5); // 1M×$3 + 0.5M×$15
     });
   });
 
@@ -248,13 +247,15 @@ describe('usage.js — streak calculations', () => {
 
       const usage = getUsage();
       expect(usage.totalTokens).toEqual({ input: 1200, output: 400 });
-      expect(usage.byProvider['claude-code']).toMatchObject({ tokensIn: 1200, tokensOut: 400, tokens: 400 });
-      expect(usage.byModel.opus).toMatchObject({ tokensIn: 1200, tokensOut: 400 });
+      // Legacy all-time entries keep their output-only `tokens` shape — the
+      // in/out split lives only in the day buckets the report aggregates.
+      expect(usage.byProvider['claude-code']).toMatchObject({ tokens: 400 });
+      expect(usage.byModel.opus).toMatchObject({ tokens: 400 });
       const modelDay = usage.dailyActivity[daysAgo(0)].byProvider['claude-code'].byModel.opus;
       expect(modelDay).toMatchObject({ messages: 1, tokensIn: 1200, tokensOut: 400 });
     });
 
-    it('recordMessages tolerates legacy all-time entries without tokensIn/tokensOut', async () => {
+    it('recordMessages accumulates onto legacy all-time entries without reshaping them', async () => {
       readJSONFile.mockResolvedValueOnce(makeUsage({}, {
         byProvider: { codex: { name: 'Codex', sessions: 5, messages: 5, tokens: 100 } },
         byModel: { 'gpt-5.3-codex': { sessions: 5, messages: 5, tokens: 100 } }
@@ -263,8 +264,11 @@ describe('usage.js — streak calculations', () => {
       await recordMessages('codex', 'gpt-5.3-codex', 1, 50, 200);
 
       const usage = getUsage();
-      expect(usage.byProvider.codex).toMatchObject({ tokens: 150, tokensIn: 200, tokensOut: 50 });
-      expect(usage.byModel['gpt-5.3-codex']).toMatchObject({ tokens: 150, tokensIn: 200, tokensOut: 50 });
+      expect(usage.byProvider.codex).toMatchObject({ messages: 6, tokens: 150 });
+      expect(usage.byModel['gpt-5.3-codex']).toMatchObject({ messages: 6, tokens: 150 });
+      // ...while the day bucket carries the full in/out split
+      const modelDay = usage.dailyActivity[daysAgo(0)].byProvider.codex.byModel['gpt-5.3-codex'];
+      expect(modelDay).toMatchObject({ tokensIn: 200, tokensOut: 50 });
     });
   });
 

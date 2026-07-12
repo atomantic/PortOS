@@ -58,11 +58,19 @@ const EXACT_RATES = {
   'gemini-2.5-flash-lite': [0.1, 0.4],
 };
 
+// Exact keys sorted longest-first for the substring pass in
+// resolveModelRates — a suffixed/prefixed variant of a known id
+// (`gpt-5.6-terra-2026-06-01`, `global.anthropic.claude-opus-4-8`) resolves to
+// its base rates without needing a hand-written regex per model, and
+// longest-first makes `gpt-5.5-pro` win over `gpt-5.5`. (Keys are all
+// lowercase, so matching against a lowercased id needs no re-mapping.)
+const EXACT_KEYS_BY_LENGTH = Object.keys(EXACT_RATES).sort((a, b) => b.length - a.length);
+
 /**
  * Ordered family rules — first regex that matches the model id wins. Covers
- * CLI shorthand (`opus`, `sonnet`), versioned ids the exact table doesn't
- * list, Bedrock-prefixed ids, and the `*-configured-default` sentinels (the
- * sentinel strings contain their provider family name).
+ * CLI shorthand (`opus`, `sonnet`), family names the exact table doesn't
+ * list, and the `*-configured-default` sentinels (the sentinel strings
+ * contain their provider family name).
  */
 const FAMILY_RULES = [
   { test: /fable|mythos/i, rateModel: 'claude-fable-5' },
@@ -70,21 +78,11 @@ const FAMILY_RULES = [
   { test: /sonnet[-.]?5/i, rateModel: 'claude-sonnet-5' },
   { test: /sonnet/i, rateModel: 'claude-sonnet-4-5' },
   { test: /haiku/i, rateModel: 'claude-haiku-4-5' },
-  { test: /gpt-5\.6-sol/i, rateModel: 'gpt-5.6-sol' },
-  { test: /gpt-5\.6-terra/i, rateModel: 'gpt-5.6-terra' },
-  { test: /gpt-5\.6-luna/i, rateModel: 'gpt-5.6-luna' },
   { test: /codex/i, rateModel: 'gpt-5.3-codex' },
-  { test: /gpt-5\.5-pro/i, rateModel: 'gpt-5.5-pro' },
-  { test: /gpt-5\.4-mini/i, rateModel: 'gpt-5.4-mini' },
-  { test: /gpt-5\.4-nano/i, rateModel: 'gpt-5.4-nano' },
   { test: /gpt/i, rateModel: 'gpt-5.4' },
   { test: /grok-build/i, rateModel: 'grok-build-0.1' },
-  { test: /grok-4\.(3|20)/i, rateModel: 'grok-4.3' },
+  { test: /grok-4\.20/i, rateModel: 'grok-4.3' },
   { test: /grok/i, rateModel: 'grok-4.5' },
-  { test: /gemini-3\.5-flash/i, rateModel: 'gemini-3.5-flash' },
-  { test: /gemini-2\.5-pro/i, rateModel: 'gemini-2.5-pro' },
-  { test: /gemini-2\.5-flash-lite/i, rateModel: 'gemini-2.5-flash-lite' },
-  { test: /gemini-2\.5-flash/i, rateModel: 'gemini-2.5-flash' },
   { test: /gemini|antigravity/i, rateModel: 'gemini-3.1-pro-preview' },
 ];
 
@@ -119,6 +117,11 @@ export function resolveModelRates(providerId, model) {
     return { ...toRates(id), matched: 'exact' };
   }
   if (id) {
+    const lower = id.toLowerCase();
+    const embedded = EXACT_KEYS_BY_LENGTH.find((key) => lower.includes(key));
+    if (embedded) {
+      return { ...toRates(embedded), matched: 'family' };
+    }
     for (const rule of FAMILY_RULES) {
       if (rule.test.test(id)) {
         return { ...toRates(rule.rateModel), matched: 'family' };
@@ -134,7 +137,11 @@ export function resolveModelRates(providerId, model) {
   return { ...FALLBACK_RATES, matched: 'fallback' };
 }
 
-const LOCALHOST_ENDPOINT = /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:|\/|$)/i;
+// Mirrors promptRunner.js's LOCAL_ENDPOINT_RE (scheme optional, unbracketed
+// ::1 accepted) so the concurrency gate and the cost report agree on what
+// "local" means. Duplicated rather than imported because modelPricing must
+// stay a leaf module — promptRunner pulls in the whole runner/provider graph.
+const LOCALHOST_ENDPOINT = /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[?::1\]?)(:|\/|$)/i;
 const FREE_ID = /ollama|lmstudio|lm-studio/i;
 
 /**
@@ -151,7 +158,7 @@ export function isFreeProvider(providerOrId) {
   const p = providerOrId;
   if (p.ollamaBacked === true) return true;
   if (FREE_ID.test(p.id || '') || FREE_ID.test(p.command || '')) return true;
-  if (typeof p.endpoint === 'string' && LOCALHOST_ENDPOINT.test(p.endpoint)) return true;
+  if (typeof p.endpoint === 'string' && LOCALHOST_ENDPOINT.test(p.endpoint.trim())) return true;
   return false;
 }
 

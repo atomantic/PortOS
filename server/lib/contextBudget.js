@@ -37,6 +37,10 @@ export const FALLBACK_CONTEXT_WINDOW = 8_192;
 /** chars/4 token estimate. Conservative (real tokenizers pack denser). */
 export const estimateTokens = (text) => Math.ceil(String(text ?? '').length / CHARS_PER_TOKEN);
 
+/** Same heuristic for a char *count* (e.g. a run's stored `promptLength`) —
+ * keeps every token-estimation site on one formula. */
+export const estimateTokensFromChars = (chars) => Math.ceil((chars || 0) / CHARS_PER_TOKEN);
+
 // Token cost of the separator `sectionsCorpus` inserts between packed sections
 // (mirrors its `\n\n---\n\n` join). The packer budgets for it so a chunk packed
 // to the token limit doesn't overflow `usableChars` by the separators and get
