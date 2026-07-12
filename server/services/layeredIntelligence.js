@@ -618,6 +618,9 @@ export async function gatherSources(app, config, { cosPath = PATHS.cos } = {}) {
       // since-resolved failure burst age out of the "is work needed" signal instead
       // of permanently depressing it; `recentSuccessRate` is null when there are no
       // in-window runs, in which case the reasoner leans on the lifetime rate.
+      // Note the intentional rename: computeWindowedStats' internal `windowed*`
+      // fields are surfaced to the reasoner as `recent*` (reads more naturally in
+      // the prompt context) — same concept, deliberately different label here.
       const summary = {};
       for (const [type, m] of Object.entries(learning.byTaskType)) {
         const windowed = computeWindowedStats(m?.recentOutcomes);

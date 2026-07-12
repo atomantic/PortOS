@@ -66,7 +66,7 @@ export const DEFAULT_WINDOW_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
 /**
  * Append a recent outcome to a task-type metrics bucket's bounded ring (issue
- * #2460). Pure — mutates and returns `metrics`. Stores the compact `{ t, s }`
+ * #2460). Mutates `metrics` in place and returns it for chaining. Stores the compact `{ t, s }`
  * shape (ISO timestamp + success bool). Tolerates a bucket that predates the ring
  * (older learning.json before migration 188) by initializing it. Enforces
  * `RECENT_OUTCOMES_CAP`, dropping the oldest sample first.

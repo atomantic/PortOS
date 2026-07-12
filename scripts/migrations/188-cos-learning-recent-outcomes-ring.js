@@ -56,7 +56,9 @@ export async function up({ rootDir }) {
     }
   }
 
-  const bumpedVersion = data.version !== 2;
+  // Forward-only: only bump an absent/older version up to 2. Never downgrade a
+  // store that is already at 2+ (a future v3, or a re-run against edited data).
+  const bumpedVersion = !(typeof data.version === 'number' && data.version >= 2);
   if (bumpedVersion) data.version = 2;
 
   if (initialized > 0 || bumpedVersion) {
