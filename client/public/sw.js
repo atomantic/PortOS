@@ -23,17 +23,26 @@
  * change). Changing this file's bytes is itself what triggers the browser to
  * install the updated worker.
  *
- * Offline scope (known limitation): the install/navigation precache covers the
- * app shell + its ENTRY assets (the boot chunk, its modulepreload deps, CSS).
- * Lazy route chunks are cached on demand the first time they load through the
- * controlling SW (cache-first), so a route the user has visited online works
- * offline afterward — but a route visited ONLY during the very first,
- * pre-registration page load (before window.load registered the SW) has an
- * uncached chunk, so an offline reload of exactly that route boots the shell
- * but can't render the route until it's visited online once more. Fully
- * offline-ing every route from a cold first visit needs a build-time precache
- * manifest (workbox / vite-plugin-pwa), deliberately out of scope for this
- * dependency-free shell cache. See issue #2424.
+ * Offline scope (accepted limitation, by design): the install/navigation
+ * precache covers the app shell + its ENTRY assets (the boot chunk, its
+ * modulepreload deps, CSS). Lazy route chunks are cached on demand the first
+ * time they load through the controlling SW (cache-first), so a route the user
+ * has visited online works offline afterward — but a route visited ONLY during
+ * the very first, pre-registration page load (before window.load registered the
+ * SW) has an uncached chunk, so an offline reload of exactly that route boots
+ * the shell but can't render the route until it's visited online once more.
+ *
+ * Closing this fully would need a build-time precache manifest (workbox /
+ * vite-plugin-pwa) that enumerates every dist chunk and precaches them at
+ * install. That is deliberately NOT done, because:
+ *   - Precaching all chunks upfront spends first-visit bandwidth on routes the
+ *     user may never open — directly contrary to this SW's low-bandwidth goal.
+ *   - PortOS is single-user; the mitigation ("visit each route online once")
+ *     costs the one user a single online load, not a support burden.
+ *   - It would replace the dependency-free hand-rolled shell cache with a build
+ *     plugin, or add a build step to emit an asset-manifest — cost the payoff
+ *     doesn't justify for a one-online-load-per-route gap.
+ * If the gap ever bites in practice, revisit the asset-manifest option then.
  */
 
 const CACHE_VERSION = 'v1';
