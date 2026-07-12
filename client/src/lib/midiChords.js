@@ -4,9 +4,7 @@
 // chord symbol (Cmaj7, Am, G/B, …) — or, when no dictionary shape matches,
 // the sorted pitch-class names (never a wrong guess). No canvas/React.
 
-import { midiNoteName } from './pianoKeyboard.js';
-
-const PITCH_CLASS_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+import { midiNoteName, pitchClass as pc, PITCH_CLASS_NAMES } from './pianoKeyboard.js';
 
 // Minimum overlap for a window to count as an intentional chord rather than a
 // passing-note smear (see issue #2477 — 40–80ms band; midpoint chosen).
@@ -29,7 +27,6 @@ const CHORD_SHAPES = [
   { intervals: [0, 5, 7], suffix: 'sus4' },
 ];
 
-const pc = (midi) => ((midi % 12) + 12) % 12;
 const sameSet = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
 
 /**
@@ -62,14 +59,12 @@ export const nameChord = (pcs, bassPc) => {
  * simultaneously-sounding pitch classes stays constant and has ≥2 members.
  *
  * @param {Array<{midi:number,startSec:number,durationSec:number}>} notes —
- *   normalized notes from parseMidiFile (any order).
- * @param {object} [opts]
- * @param {number} [opts.minWindowSec=MIN_CHORD_WINDOW_SEC] — windows shorter
- *   than this are dropped as passing-note noise.
+ *   normalized notes from parseMidiFile (any order). Windows shorter than
+ *   MIN_CHORD_WINDOW_SEC are dropped as passing-note noise.
  * @returns {Array<{startSec:number,endSec:number,label:string,midis:number[]}>}
  *   consecutive windows with the same label are merged.
  */
-export const detectChordWindows = (notes, { minWindowSec = MIN_CHORD_WINDOW_SEC } = {}) => {
+export const detectChordWindows = (notes) => {
   const edges = [];
   (notes || []).forEach((n) => {
     if (!Number.isFinite(n.midi) || !Number.isFinite(n.startSec)) return;
@@ -82,17 +77,16 @@ export const detectChordWindows = (notes, { minWindowSec = MIN_CHORD_WINDOW_SEC 
 
   const sounding = new Map(); // midi → active count (handles overlapping same-pitch notes)
   const windows = [];
-  let spanStart = null;
-  let spanMidis = null;
+  // Open span: the sounding-set is immutable while a span is open, so the
+  // sorted midis and their comparison key are computed once at open time.
+  let span = null; // { startSec, key, midis: number[] (sorted) }
   const closeSpan = (t) => {
-    if (spanStart == null) return;
-    if (t - spanStart >= minWindowSec) {
-      const midis = [...spanMidis].sort((a, b) => a - b);
-      const label = nameChord(midis.map(pc), pc(midis[0]));
-      if (label) windows.push({ startSec: spanStart, endSec: t, label, midis });
+    if (!span) return;
+    if (t - span.startSec >= MIN_CHORD_WINDOW_SEC) {
+      const label = nameChord(span.midis.map(pc), pc(span.midis[0]));
+      if (label) windows.push({ startSec: span.startSec, endSec: t, label, midis: span.midis });
     }
-    spanStart = null;
-    spanMidis = null;
+    span = null;
   };
 
   let i = 0;
@@ -106,15 +100,12 @@ export const detectChordWindows = (notes, { minWindowSec = MIN_CHORD_WINDOW_SEC 
       else sounding.delete(e.midi);
       i += 1;
     }
-    const midis = [...sounding.keys()];
-    const pcs = new Set(midis.map(pc));
-    if (pcs.size >= 2) {
-      const key = midis.sort((a, b) => a - b).join(',');
-      const prevKey = spanMidis ? [...spanMidis].sort((a, b) => a - b).join(',') : null;
-      if (key !== prevKey) {
+    const midis = [...sounding.keys()].sort((a, b) => a - b);
+    if (new Set(midis.map(pc)).size >= 2) {
+      const key = midis.join(',');
+      if (key !== span?.key) {
         closeSpan(t);
-        spanStart = t;
-        spanMidis = new Set(midis);
+        span = { startSec: t, key, midis };
       }
     } else {
       closeSpan(t);

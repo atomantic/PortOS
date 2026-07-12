@@ -7,6 +7,8 @@ import {
   midiNoteName,
   BLACK_KEY_HEIGHT_RATIO,
 } from '../../lib/pianoKeyboard';
+import { roundRect } from '../../lib/canvasRoll.js';
+import useCanvasDprSize from '../../hooks/useCanvasDprSize.js';
 
 // Synthesia-style piano-roll visualizer for the song system's layered MIDI
 // player. Renders every selected lead-sheet part as colored notes falling onto
@@ -20,10 +22,9 @@ import {
 // sample-aligned with the audio rather than running its own timer.
 
 // Per-layer colors, assigned by part index in the parent so the keyboard, the
-// falling notes and the layer checkboxes all agree. Bright, distinct hues that
-// read on the near-black canvas.
-const LAYER_COLORS = ['#3b82f6', '#22c55e', '#f59e0b', '#ec4899', '#a855f7', '#06b6d4', '#ef4444', '#14b8a6'];
-export const layerColor = (index) => LAYER_COLORS[((index % LAYER_COLORS.length) + LAYER_COLORS.length) % LAYER_COLORS.length];
+// falling notes and the layer checkboxes all agree. Re-exported from the
+// shared canvas-roll palette so <MidiPianoRoll> and legends use the same hues.
+export { layerColor } from '../../lib/canvasRoll.js';
 
 const VISIBLE_SECONDS = 3.4; // how far ahead the falling notes are shown (fall speed)
 const KEYBOARD_HEIGHT = 64;  // px of keyboard at the bottom
@@ -35,18 +36,6 @@ const BLACK_KEY_EDGE = '#000000';
 const HIT_LINE = '#3b82f6';
 const GRID_LINE = 'rgba(255,255,255,0.05)';
 const BG = '#0c0c0e';
-
-const roundRect = (ctx, x, y, w, h, r) => {
-  const rr = Math.max(0, Math.min(r, w / 2, h / 2));
-  if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(x, y, w, h, rr); return; }
-  ctx.beginPath();
-  ctx.moveTo(x + rr, y);
-  ctx.arcTo(x + w, y, x + w, y + h, rr);
-  ctx.arcTo(x + w, y + h, x, y + h, rr);
-  ctx.arcTo(x, y + h, x, y, rr);
-  ctx.arcTo(x, y, x + w, y, rr);
-  ctx.closePath();
-};
 
 /**
  * @param {object} props
@@ -62,7 +51,6 @@ const roundRect = (ctx, x, y, w, h, r) => {
 export default function PianoRoll({ parts, tempo, getPosition, playing, height = 300 }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
-  const widthRef = useRef(0);
   // Keep the latest getPosition without making it a draw() dependency (the parent
   // hands a fresh closure each render; the rAF loop should not restart for that).
   const getPositionRef = useRef(getPosition);
@@ -179,29 +167,7 @@ export default function PianoRoll({ parts, tempo, getPosition, playing, height =
   drawRef.current = draw;
 
   // Size the canvas to the container (devicePixelRatio-aware) and redraw.
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return undefined;
-    const resize = () => {
-      const w = Math.floor(el.clientWidth);
-      if (!w) return;
-      widthRef.current = w;
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
-      canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(height * dpr);
-      canvas.style.width = `${w}px`;
-      canvas.style.height = `${height}px`;
-      const ctx = canvas.getContext('2d');
-      if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      drawRef.current();
-    };
-    resize();
-    const ro = new ResizeObserver(resize);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [height]);
+  const widthRef = useCanvasDprSize(wrapRef, canvasRef, height, drawRef);
 
   // rAF clock: animate the fall while playing, otherwise draw a single frame.
   useEffect(() => {

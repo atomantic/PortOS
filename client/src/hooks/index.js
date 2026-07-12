@@ -51,6 +51,7 @@ export { default as useYoutubeTrackImport } from './useYoutubeTrackImport.js';
 export { default as useReferenceAudioImport } from './useReferenceAudioImport.js';
 export { default as useMidiTranscription } from './useMidiTranscription.js';
 export { default as useMidiNotes } from './useMidiNotes.js';
+export { default as useCanvasDprSize } from './useCanvasDprSize.js';
 
 // === Mixed (both default and named) — surface both ===
 export { default as useAsyncAction } from './useAsyncAction.js';

@@ -444,8 +444,10 @@ const LETTER_PC = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
 const ACCIDENTAL_SHIFT = { '': 0, n: 0, '#': 1, '##': 2, b: -1, bb: -2 };
 
 // Display names for pitch classes (sharp spelling — labels only; the score
-// text itself is already spelled from the key signature).
-export const PITCH_CLASS_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+// text itself is already spelled from the key signature). Re-export of the
+// canonical table in pianoKeyboard.js so note and chord labels can't drift
+// apart (#2477 promoted the shared constant).
+export { PITCH_CLASS_NAMES } from './pianoKeyboard.js';
 
 // Pitch class (0–11) of a parsed note's pitch, or null when unmappable.
 const notePitchClass = (pitch) => {

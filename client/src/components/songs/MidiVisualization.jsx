@@ -3,9 +3,9 @@ import { ChevronDown, ChevronRight, Download, Loader2, Maximize2, Minimize2, Zoo
 import useMidiNotes from '../../hooks/useMidiNotes';
 import { detectChordWindows } from '../../lib/midiChords';
 import { midiNoteName } from '../../lib/pianoKeyboard';
+import { layerColor } from '../../lib/canvasRoll.js';
 import { formatTimecode } from '../../utils/formatters';
-import MidiPianoRoll, { MIN_ZOOM, clampZoom } from './MidiPianoRoll.jsx';
-import { layerColor } from './PianoRoll.jsx';
+import MidiPianoRoll, { MIN_ZOOM, ZOOM_STEP, clampZoom } from './MidiPianoRoll.jsx';
 
 // Chrome around <MidiPianoRoll>: loads + parses the .mid (useMidiNotes),
 // detects chords, and wraps the roll in a collapsible panel with a toolbar
@@ -15,6 +15,20 @@ import { layerColor } from './PianoRoll.jsx';
 
 const COMPACT_H = 200;
 const EXPANDED_H = 380;
+
+// Chord windows keyed by the parsed view-model's identity: useMidiNotes caches
+// view-models per URL, so a collapse/expand remount reuses the same object and
+// skips the re-sweep — the chord cache rides the parse cache's lifetime.
+const chordCache = new WeakMap();
+const chordsFor = (data) => {
+  if (!data) return [];
+  let chords = chordCache.get(data);
+  if (!chords) {
+    chords = detectChordWindows(data.notes);
+    chordCache.set(data, chords);
+  }
+  return chords;
+};
 
 /**
  * @param {object} props
@@ -29,7 +43,7 @@ export default function MidiVisualization({ url, filename, model }) {
   const [showChords, setShowChords] = useState(true);
   const { status, data, error, reload } = useMidiNotes(open ? url : null);
 
-  const chords = useMemo(() => (data ? detectChordWindows(data.notes) : []), [data]);
+  const chords = useMemo(() => chordsFor(data), [data]);
 
   if (!url) return null;
 
@@ -53,11 +67,11 @@ export default function MidiVisualization({ url, filename, model }) {
         {open && (
           <>
             <span className="mx-1 h-4 w-px bg-port-border" aria-hidden="true" />
-            <button type="button" onClick={() => setZoom((z) => clampZoom(z / 1.5))} aria-label="Zoom out"
+            <button type="button" onClick={() => setZoom((z) => clampZoom(z / ZOOM_STEP))} aria-label="Zoom out"
               className="p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50" title="Zoom out (-)">
               <ZoomOut size={13} />
             </button>
-            <button type="button" onClick={() => setZoom((z) => clampZoom(z * 1.5))} aria-label="Zoom in"
+            <button type="button" onClick={() => setZoom((z) => clampZoom(z * ZOOM_STEP))} aria-label="Zoom in"
               className="p-1 rounded text-gray-400 hover:text-white hover:bg-port-border/50" title="Zoom in (+)">
               <ZoomIn size={13} />
             </button>
@@ -92,17 +106,21 @@ export default function MidiVisualization({ url, filename, model }) {
       </div>
       {open && (
         <div className="px-2 pb-2">
-          {status === 'loading' && (
-            <div className="flex items-center justify-center gap-2 rounded-lg bg-[#0c0c0e] text-xs text-gray-400" style={{ height: COMPACT_H }}>
-              <Loader2 size={14} className="animate-spin" /> Parsing MIDI…
-            </div>
-          )}
-          {status === 'error' && (
-            <div className="flex items-center justify-center gap-2 rounded-lg bg-[#0c0c0e] text-xs text-port-error" style={{ height: COMPACT_H }}>
-              <span>{error}</span>
-              <button type="button" onClick={reload} className="px-1.5 py-0.5 rounded border border-port-border text-gray-300 hover:text-white">
-                Retry
-              </button>
+          {(status === 'loading' || status === 'error') && (
+            <div
+              className={`flex items-center justify-center gap-2 rounded-lg bg-[#0c0c0e] text-xs ${status === 'error' ? 'text-port-error' : 'text-gray-400'}`}
+              style={{ height: COMPACT_H }}
+            >
+              {status === 'loading' ? (
+                <><Loader2 size={14} className="animate-spin" /> Parsing MIDI…</>
+              ) : (
+                <>
+                  <span>{error}</span>
+                  <button type="button" onClick={reload} className="px-1.5 py-0.5 rounded border border-port-border text-gray-300 hover:text-white">
+                    Retry
+                  </button>
+                </>
+              )}
             </div>
           )}
           {status === 'ready' && data && (

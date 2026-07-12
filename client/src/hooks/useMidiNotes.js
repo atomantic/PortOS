@@ -9,7 +9,20 @@ import { parseMidiFile } from '../lib/midiNotes.js';
 
 // url → parsed view-model. Parsed models are small (notes only, no raw bytes);
 // null is never cached ("not fetched" and "cached-empty" must stay distinct).
+// LRU-capped so a long session browsing many transcriptions doesn't
+// accumulate unbounded parsed note lists on the heap.
+const CACHE_MAX = 16;
 const cache = new Map();
+const cachePut = (url, data) => {
+  cache.delete(url); // re-insert so Map iteration order is least-recent first
+  cache.set(url, data);
+  if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value);
+};
+const cacheGet = (url) => {
+  const data = cache.get(url);
+  if (data !== undefined) cachePut(url, data); // refresh recency
+  return data;
+};
 
 /** Test-only: clear the module-level parse cache between cases. */
 export const __clearMidiNotesCache = () => cache.clear();
@@ -30,8 +43,9 @@ export default function useMidiNotes(url) {
       setState({ status: 'idle', data: null, error: null });
       return;
     }
-    if (!force && cache.has(targetUrl)) {
-      setState({ status: 'ready', data: cache.get(targetUrl), error: null });
+    const cached = force ? undefined : cacheGet(targetUrl);
+    if (cached !== undefined) {
+      setState({ status: 'ready', data: cached, error: null });
       return;
     }
     setState({ status: 'loading', data: null, error: null });
@@ -42,7 +56,7 @@ export default function useMidiNotes(url) {
       })
       .then((buf) => {
         const data = parseMidiFile(buf);
-        cache.set(targetUrl, data);
+        cachePut(targetUrl, data);
         if (generationRef.current === generation) setState({ status: 'ready', data, error: null });
       })
       .catch((err) => {

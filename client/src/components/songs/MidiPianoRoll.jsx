@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { midiNoteName, isBlackKey } from '../../lib/pianoKeyboard';
 import { chordNoteNames } from '../../lib/midiChords';
+import { roundRect, layerColor } from '../../lib/canvasRoll.js';
 import { formatTimecode } from '../../utils/formatters';
-import { layerColor } from './PianoRoll.jsx';
+import useCanvasDprSize from '../../hooks/useCanvasDprSize.js';
 
 // DAW-style horizontal piano-roll for inspecting a transcribed `.mid` file
 // (time × pitch grid) — NOT the Synthesia falling-note <PianoRoll>, which is
@@ -12,7 +13,10 @@ import { layerColor } from './PianoRoll.jsx';
 // The canvas is virtualized — it stays the container's width and pans by a
 // scroll offset (a full-duration canvas at high zoom would blow past browser
 // canvas size limits). Pan/scrub state lives in refs and redraws directly so
-// dragging never churns React renders; only the hover tooltip is state.
+// dragging never churns React renders; hover state holds only the hovered
+// note/chord IDENTITY (it drives the highlight repaint) while the tooltip's
+// x/y position is mutated straight onto the DOM node — a mousemove within one
+// note repaints nothing.
 
 const GUTTER_W = 44;   // left pitch gutter
 const RULER_H = 18;    // top time ruler
@@ -24,29 +28,26 @@ const GRID_LINE = 'rgba(255,255,255,0.05)';
 const C_LINE = 'rgba(255,255,255,0.14)';
 const TEXT_DIM = '#71717a';
 const NOTE_RADIUS = 2;
+const TOOLTIP_W = 170; // clamp so the tooltip never overflows the right edge
 
-// Zoom is a multiplier over fit-to-width (1 = whole file visible).
+// Zoom is a multiplier over fit-to-width (1 = whole file visible). ZOOM_STEP
+// is the shared discrete step for toolbar buttons and +/- keys — wheel/pinch
+// use finer continuous factors.
 export const MIN_ZOOM = 1;
 export const MAX_ZOOM = 64;
+export const ZOOM_STEP = 1.5;
 export const clampZoom = (z) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, z));
-
-const roundRect = (ctx, x, y, w, h, r) => {
-  const rr = Math.max(0, Math.min(r, w / 2, h / 2));
-  if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(x, y, w, h, rr); return; }
-  ctx.beginPath();
-  ctx.moveTo(x + rr, y);
-  ctx.arcTo(x + w, y, x + w, y + h, rr);
-  ctx.arcTo(x + w, y + h, x, y + h, rr);
-  ctx.arcTo(x, y + h, x, y, rr);
-  ctx.arcTo(x, y, x + w, y, rr);
-  ctx.closePath();
-};
 
 // Ruler tick step that keeps labels ≥ ~70px apart at the current zoom.
 const tickStep = (pps) => {
   const steps = [0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120];
   return steps.find((s) => s * pps >= 70) || 300;
 };
+
+const tooltipStyle = (x, y, width) => ({
+  left: `${Math.min(x + 10, Math.max(0, width - TOOLTIP_W))}px`,
+  top: `${Math.max(0, y - 24)}px`,
+});
 
 /**
  * @param {object} props
@@ -60,17 +61,21 @@ const tickStep = (pps) => {
 export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomChange, height }) {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
-  const widthRef = useRef(0);
   const scrollSecRef = useRef(0);
   const playheadSecRef = useRef(0);
   const pointersRef = useRef(new Map()); // pointerId → { x, y, moved }
   const pinchRef = useRef(null);         // { startDist, startZoom }
-  const [hover, setHover] = useState(null); // { kind:'note'|'chord', x, y, ... }
+  const tooltipRef = useRef(null);
+  const tooltipPosRef = useRef({ x: 0, y: 0 });
+  // Identity only ({ kind, note } | { kind, chord }) — drives the highlight
+  // repaint; position updates never touch state.
+  const [hover, setHover] = useState(null);
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
 
   const duration = Math.max(data?.durationSec || 0, 0.001);
   const chordLaneH = showChords && chords?.length ? CHORD_H : 0;
+  const multiTrack = (data?.tracks?.length || 1) > 1;
 
   // Pitch rows: pad one semitone each side, widen to at least an octave.
   let lowMidi = Math.max(0, (data?.minMidi ?? 60) - 1);
@@ -78,7 +83,7 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
   if (highMidi - lowMidi < 11) {
     const pad = Math.ceil((11 - (highMidi - lowMidi)) / 2);
     lowMidi = Math.max(0, lowMidi - pad);
-    highMidi = Math.min(127, highMidi + 11 - (highMidi - lowMidi));
+    highMidi = Math.min(127, lowMidi + 11);
   }
   const rowCount = highMidi - lowMidi + 1;
 
@@ -93,11 +98,6 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
     const maxScroll = Math.max(0, duration - gridW / pps);
     return { width, gridW, pps, gridTop, gridH, rowH, maxScroll };
   }, [duration, chordLaneH, height, rowCount]);
-
-  const noteColor = useCallback((n) => {
-    const multiTrack = (data?.tracks?.length || 1) > 1;
-    return multiTrack ? layerColor(n.track) : ACCENT;
-  }, [data]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -115,15 +115,17 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
     ctx.fillStyle = BG;
     ctx.fillRect(0, 0, width, height);
 
-    // Horizontal pitch rows — every semitone faint, every C stronger.
+    // Horizontal pitch rows — black-key rows tinted, every C stronger.
     for (let m = lowMidi; m <= highMidi; m += 1) {
       const y = midiToY(m);
       if (m % 12 === 0) {
         ctx.fillStyle = C_LINE;
         ctx.fillRect(GUTTER_W, y + rowH, gridW, 1);
       } else if (rowH >= 4) {
-        ctx.fillStyle = isBlackKey(m) ? 'rgba(255,255,255,0.02)' : 'transparent';
-        if (isBlackKey(m)) ctx.fillRect(GUTTER_W, y, gridW, rowH);
+        if (isBlackKey(m)) {
+          ctx.fillStyle = 'rgba(255,255,255,0.02)';
+          ctx.fillRect(GUTTER_W, y, gridW, rowH);
+        }
         ctx.fillStyle = GRID_LINE;
         ctx.fillRect(GUTTER_W, y + rowH, gridW, 1);
       }
@@ -168,6 +170,8 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
     }
 
     // Notes — only those intersecting the visible window, clipped to the grid.
+    // The list is sorted by startSec (parseMidiFile), so bail out of the loop
+    // at the first note past the right edge.
     const hoverChordMidis = hover?.kind === 'chord' ? new Set(hover.chord.midis) : null;
     const hoverChordSpan = hover?.kind === 'chord' ? hover.chord : null;
     ctx.save();
@@ -175,16 +179,19 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
     ctx.rect(GUTTER_W, gridTop, gridW, gridH);
     ctx.clip();
     ctx.textAlign = 'left';
-    (data?.notes || []).forEach((n) => {
+    const notes = data?.notes || [];
+    for (let i = 0; i < notes.length; i += 1) {
+      const n = notes[i];
+      if (n.startSec > viewEnd) break;
       const end = n.startSec + n.durationSec;
-      if (end < scroll || n.startSec > viewEnd) return;
-      if (n.midi < lowMidi || n.midi > highMidi) return;
+      if (end < scroll) continue;
+      if (n.midi < lowMidi || n.midi > highMidi) continue;
       const x = timeToX(n.startSec);
       const w = Math.max(2, n.durationSec * pps);
       const y = midiToY(n.midi);
       const h = Math.max(2, rowH - 1);
       roundRect(ctx, x, y + 0.5, w, h, NOTE_RADIUS);
-      ctx.fillStyle = noteColor(n);
+      ctx.fillStyle = multiTrack ? layerColor(n.track) : ACCENT;
       ctx.globalAlpha = 0.35 + 0.6 * (n.velocity ?? 0.8);
       ctx.fill();
       const isHoverNote = hover?.kind === 'note' && hover.note.id === n.id;
@@ -203,7 +210,7 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
         ctx.font = '9px ui-sans-serif, system-ui, sans-serif';
         ctx.fillText(n.name || midiNoteName(n.midi), x + 3, y + h - Math.max(1, (h - 8) / 2));
       }
-    });
+    }
     ctx.restore();
 
     // Playhead (static scrub position in v1 — click to move).
@@ -238,37 +245,27 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
       ctx.fillStyle = 'rgba(255,255,255,0.15)';
       ctx.fillRect(barX, height - 3, barW, 2);
     }
-  }, [data, chords, chordLaneH, geometry, height, highMidi, lowMidi, hover, noteColor]);
+  }, [data, chords, chordLaneH, geometry, height, highMidi, lowMidi, hover, multiTrack, duration]);
 
   const drawRef = useRef(draw);
   drawRef.current = draw;
 
-  // DPR-aware canvas sizing + redraw on container resize (PianoRoll pattern).
-  useEffect(() => {
-    const el = wrapRef.current;
-    if (!el) return undefined;
-    const resize = () => {
-      const w = Math.floor(el.clientWidth);
-      if (!w) return;
-      widthRef.current = w;
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
-      canvas.width = Math.round(w * dpr);
-      canvas.height = Math.round(height * dpr);
-      canvas.style.width = `${w}px`;
-      canvas.style.height = `${height}px`;
-      const ctx = canvas.getContext('2d');
-      if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      drawRef.current();
-    };
-    resize();
-    const ro = new ResizeObserver(resize);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [height]);
+  // DPR-aware canvas sizing + redraw on container resize (shared hook).
+  const widthRef = useCanvasDprSize(wrapRef, canvasRef, height, drawRef);
 
   useEffect(() => { draw(); }, [draw, zoom]);
+
+  // Coalesce pan-driven repaints to one per animation frame — wheel/pointer
+  // events can fire faster than the display presents.
+  const rafRef = useRef(0);
+  const scheduleDraw = useCallback(() => {
+    if (rafRef.current) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = 0;
+      drawRef.current();
+    });
+  }, []);
+  useEffect(() => () => cancelAnimationFrame(rafRef.current), []);
 
   const canvasPos = (e) => {
     const rect = canvasRef.current.getBoundingClientRect();
@@ -282,22 +279,43 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
     const sec = scroll + (x - GUTTER_W) / pps;
     if (chordLaneH && y >= RULER_H && y < RULER_H + chordLaneH) {
       const chord = (chords || []).find((c) => sec >= c.startSec && sec <= c.endSec);
-      return chord ? { kind: 'chord', chord, x, y } : null;
+      return chord ? { kind: 'chord', chord } : null;
     }
     if (y < gridTop) return null;
     const midi = highMidi - Math.floor((y - gridTop) / rowH);
-    // Iterate back-to-front so the top-drawn (later) note wins the hit.
+    // Iterate back-to-front so the top-drawn (later) note wins the hit; the
+    // 2/pps term keeps min-width (2px) bars hittable.
     const notes = data?.notes || [];
     for (let i = notes.length - 1; i >= 0; i -= 1) {
       const n = notes[i];
       if (n.midi !== midi) continue;
-      const w = Math.max(2, n.durationSec * pps);
-      if (sec >= n.startSec && sec <= n.startSec + Math.max(n.durationSec, w / pps)) {
-        return { kind: 'note', note: n, x, y };
+      if (sec >= n.startSec && sec <= n.startSec + Math.max(n.durationSec, 2 / pps)) {
+        return { kind: 'note', note: n };
       }
     }
     return null;
   }, [chords, chordLaneH, data, geometry, highMidi]);
+
+  // Update tooltip position without re-rendering: stash in a ref and mutate
+  // the DOM node directly when it's mounted.
+  const moveTooltip = useCallback((x, y) => {
+    tooltipPosRef.current = { x, y };
+    const el = tooltipRef.current;
+    if (el) Object.assign(el.style, tooltipStyle(x, y, widthRef.current || 0));
+  }, [widthRef]);
+
+  // Set hover identity only when it actually changed — same note/chord under
+  // the cursor returns prev, so React bails out and the canvas doesn't repaint.
+  const setHoverIdentity = useCallback((hit) => {
+    setHover((prev) => {
+      if (!hit && !prev) return prev;
+      if (hit && prev && hit.kind === prev.kind
+        && (hit.kind === 'note' ? hit.note.id === prev.note.id : hit.chord === prev.chord)) {
+        return prev;
+      }
+      return hit;
+    });
+  }, []);
 
   const applyZoomAnchored = useCallback((factor, anchorX) => {
     const { pps } = geometry();
@@ -305,6 +323,8 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
     if (next === zoomRef.current) return;
     const anchorSec = scrollSecRef.current + (Math.max(anchorX, GUTTER_W) - GUTTER_W) / pps;
     const nextPps = (pps / zoomRef.current) * next;
+    // Mutate scroll BEFORE notifying the parent: the zoom prop change triggers
+    // the redraw effect, which clamps and paints with the adjusted scroll.
     scrollSecRef.current = anchorSec - (Math.max(anchorX, GUTTER_W) - GUTTER_W) / nextPps;
     onZoomChange(next);
   }, [geometry, onZoomChange]);
@@ -318,8 +338,8 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
     const { pps } = geometry();
     const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
     scrollSecRef.current += delta / pps;
-    draw();
-  }, [applyZoomAnchored, draw, geometry]);
+    scheduleDraw();
+  }, [applyZoomAnchored, geometry, scheduleDraw]);
 
   // React attaches wheel listeners passively — preventDefault needs a native
   // non-passive listener or the page scrolls/zooms along with the roll.
@@ -357,21 +377,15 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
       if (Math.abs(dx) > 2 || tracked.moved) {
         scrollSecRef.current -= dx / pps;
         pointersRef.current.set(e.pointerId, { ...pos, moved: true });
-        setHover(null);
-        draw();
+        setHoverIdentity(null);
+        scheduleDraw();
         return;
       }
     }
-    // Plain hover (mouse) — tooltip hit-test.
-    const hit = hitTest(pos.x, pos.y);
-    setHover((prev) => {
-      if (!hit && !prev) return prev;
-      if (hit && prev && hit.kind === prev.kind
-        && (hit.kind === 'note' ? hit.note.id === prev.note.id : hit.chord === prev.chord)) {
-        return { ...prev, x: pos.x, y: pos.y };
-      }
-      return hit;
-    });
+    // Plain hover (mouse) — tooltip hit-test. Position always tracks the
+    // cursor; identity state only changes when a different note/chord is hit.
+    moveTooltip(pos.x, pos.y);
+    setHoverIdentity(hitTest(pos.x, pos.y));
   };
 
   const handlePointerUp = (e) => {
@@ -383,13 +397,14 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
     const pos = canvasPos(e);
     const hit = hitTest(pos.x, pos.y);
     if (hit) {
-      setHover(hit);
+      moveTooltip(pos.x, pos.y);
+      setHoverIdentity(hit);
       return;
     }
     const { pps, gridTop } = geometry();
     if (pos.x >= GUTTER_W && pos.y >= gridTop) {
       playheadSecRef.current = scrollSecRef.current + (pos.x - GUTTER_W) / pps;
-      setHover(null);
+      setHoverIdentity(null);
       draw();
     }
   };
@@ -407,22 +422,22 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
       draw();
     } else if (e.key === '+' || e.key === '=') {
       e.preventDefault();
-      onZoomChange(clampZoom(zoomRef.current * 1.5));
+      onZoomChange(clampZoom(zoomRef.current * ZOOM_STEP));
     } else if (e.key === '-') {
       e.preventDefault();
-      onZoomChange(clampZoom(zoomRef.current / 1.5));
+      onZoomChange(clampZoom(zoomRef.current / ZOOM_STEP));
     } else if (e.key === '0') {
       e.preventDefault();
       scrollSecRef.current = 0;
       onZoomChange(MIN_ZOOM);
       draw(); // zoom may already be at MIN_ZOOM — the scroll reset still needs a repaint
     } else if (e.key === 'Escape') {
-      setHover(null);
+      setHoverIdentity(null);
     }
   };
 
   const tooltip = hover && (hover.kind === 'note'
-    ? `${hover.note.name} · ${formatTimecode(hover.note.startSec)} · ${Math.round(hover.note.durationSec * 1000)}ms · v=${Math.round((hover.note.velocity ?? 0) * 127)}${(data?.tracks?.length || 1) > 1 ? ` · track ${hover.note.track}` : ''}`
+    ? `${hover.note.name} · ${formatTimecode(hover.note.startSec)} · ${Math.round(hover.note.durationSec * 1000)}ms · v=${Math.round((hover.note.velocity ?? 0) * 127)}${multiTrack ? ` · track ${hover.note.track}` : ''}`
     : `${hover.chord.label} · ${chordNoteNames(hover.chord.midis)}`);
 
   return (
@@ -436,16 +451,14 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        onPointerLeave={() => { pointersRef.current.clear(); pinchRef.current = null; setHover(null); }}
+        onPointerLeave={() => { pointersRef.current.clear(); pinchRef.current = null; setHoverIdentity(null); }}
         onKeyDown={handleKeyDown}
       />
       {tooltip && (
         <div
+          ref={tooltipRef}
           className="pointer-events-none absolute z-10 px-1.5 py-0.5 rounded bg-black/90 border border-port-border text-[10px] text-gray-200 whitespace-nowrap"
-          style={{
-            left: Math.min(hover.x + 10, Math.max(0, (widthRef.current || 0) - 170)),
-            top: Math.max(0, hover.y - 24),
-          }}
+          style={tooltipStyle(tooltipPosRef.current.x, tooltipPosRef.current.y, widthRef.current || 0)}
         >
           {tooltip}
         </div>
