@@ -5,6 +5,13 @@ import { resolveModelRates, isFreeProvider, estimateCostUsd, PRICING_AS_OF } fro
 const DATA_DIR = PATHS.data;
 const USAGE_FILE = join(DATA_DIR, 'usage.json');
 
+// Day buckets older than this are rolled up into monthly buckets at load time so
+// dailyActivity (and therefore the whole-file rewrite on every AI run) stops growing
+// linearly forever. 400 days keeps a full year-plus of per-day granularity — beyond
+// any useful streak/report window — while collapsing everything older to per-month.
+const ROLLUP_RETENTION_DAYS = 400;
+const DAY_KEY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 let usageData = null;
 
 /**
@@ -22,9 +29,62 @@ function getEmptyUsage() {
     byProvider: {},
     byModel: {},
     dailyActivity: {},
+    monthlyActivity: {},
     hourlyActivity: Array(24).fill(0),
     lastUpdated: null
   };
+}
+
+/**
+ * Deep-sum a source bucket into a target bucket, in place. Numbers add; nested
+ * objects recurse. Shape-tolerant on purpose: a day bucket may be the flat
+ * `{ sessions, messages, tokens }` shape, or carry nested per-provider/per-model
+ * token splits — either way its per-provider/per-model detail is preserved when
+ * rolled up to monthly granularity.
+ */
+function deepSumInto(target, source) {
+  for (const [key, value] of Object.entries(source)) {
+    if (typeof value === 'number') {
+      target[key] = (typeof target[key] === 'number' ? target[key] : 0) + value;
+    } else if (value && typeof value === 'object' && !Array.isArray(value)) {
+      if (!target[key] || typeof target[key] !== 'object' || Array.isArray(target[key])) {
+        target[key] = {};
+      }
+      deepSumInto(target[key], value);
+    }
+    // Non-numeric scalars (strings like provider `name`) are intentionally dropped:
+    // a monthly rollup aggregates counts, not labels.
+  }
+  return target;
+}
+
+/**
+ * Pure, idempotent load-time transform: move day buckets older than `retentionDays`
+ * out of `dailyActivity` and into `monthlyActivity['YYYY-MM']`, deep-summing their
+ * (possibly nested) numeric fields so long-range totals stay accurate at monthly
+ * granularity. Mutates the passed maps in place and returns whether anything moved.
+ * Only well-formed YYYY-MM-DD keys are considered, so an already-rolled monthly key
+ * is never re-processed (guaranteeing idempotency).
+ */
+export function rollupOldDailyActivity(dailyActivity, monthlyActivity, { retentionDays = ROLLUP_RETENTION_DAYS, now = new Date() } = {}) {
+  if (!dailyActivity || !monthlyActivity) return false;
+
+  const cutoff = new Date(now);
+  cutoff.setDate(cutoff.getDate() - retentionDays);
+  const cutoffKey = cutoff.toISOString().split('T')[0];
+
+  let changed = false;
+  for (const dayKey of Object.keys(dailyActivity)) {
+    if (!DAY_KEY_RE.test(dayKey)) continue;
+    if (dayKey >= cutoffKey) continue; // lexical compare is date-correct for YYYY-MM-DD
+
+    const monthKey = dayKey.slice(0, 7); // 'YYYY-MM'
+    if (!monthlyActivity[monthKey]) monthlyActivity[monthKey] = {};
+    deepSumInto(monthlyActivity[monthKey], dailyActivity[dayKey]);
+    delete dailyActivity[dayKey];
+    changed = true;
+  }
+  return changed;
 }
 
 /**
@@ -36,6 +96,20 @@ export async function loadUsage() {
   usageData = await readJSONFile(USAGE_FILE, null);
   if (!usageData) {
     usageData = getEmptyUsage();
+    await saveUsage();
+  }
+
+  // Backfill maps for installs whose usage.json predates the rollup, then collapse
+  // old day buckets so the hot-path file stops growing per-day.
+  if (!usageData.dailyActivity || typeof usageData.dailyActivity !== 'object') {
+    usageData.dailyActivity = {};
+  }
+  if (!usageData.monthlyActivity || typeof usageData.monthlyActivity !== 'object') {
+    usageData.monthlyActivity = {};
+  }
+  const rolledUp = rollupOldDailyActivity(usageData.dailyActivity, usageData.monthlyActivity);
+  if (rolledUp) {
+    console.log(`📊 Rolled up old daily usage into ${Object.keys(usageData.monthlyActivity).length} monthly buckets`);
     await saveUsage();
   }
 
@@ -280,19 +354,22 @@ const LEGACY_BLENDED_RATES = { inputPer1M: 3.0, outputPer1M: 15.0 };
  * `services/providers.getAllProviders()`), used for free-classification and
  * display names — records whose provider config no longer exists fall back to
  * an id-based heuristic.
+ *
+ * `monthlyActivity` (optional) is the rollup of day buckets older than the daily
+ * retention window (see `rollupOldDailyActivity`). Its buckets carry the same
+ * nested `byProvider`/`byModel` shape at month granularity, so folding them in
+ * keeps long-range totals accurate across the rollup boundary. A month bucket
+ * is whole-month-granular: it is included whenever its month overlaps
+ * `[from, to]` (rolled-up months are far older than any day-precise range).
  */
-export function buildUsageReport(dailyActivity, { from = null, to = null, providers = [] } = {}) {
+export function buildUsageReport(dailyActivity, { from = null, to = null, providers = [], monthlyActivity = null } = {}) {
   const configById = new Map((providers || []).map((p) => [p.id, p]));
   const agg = new Map(); // providerId -> { name, sessions, messages, tokensIn, tokensOut, byModel: Map }
   let breakdownSince = null;
 
-  for (const [date, day] of Object.entries(dailyActivity || {})) {
-    if (!day?.byProvider) continue;
-    if (!breakdownSince || date < breakdownSince) breakdownSince = date;
-    if (from && date < from) continue;
-    if (to && date > to) continue;
-
-    for (const [pid, pDay] of Object.entries(day.byProvider)) {
+  // Fold one bucket's per-provider/per-model splits into the running aggregate.
+  const foldBucket = (bucket) => {
+    for (const [pid, pDay] of Object.entries(bucket.byProvider)) {
       if (!agg.has(pid)) {
         agg.set(pid, { name: pDay.name || pid, sessions: 0, messages: 0, tokensIn: 0, tokensOut: 0, byModel: new Map() });
       }
@@ -312,6 +389,28 @@ export function buildUsageReport(dailyActivity, { from = null, to = null, provid
         m.tokensOut += mDay.tokensOut || 0;
       }
     }
+  };
+
+  // Rolled-up monthly buckets first, so `breakdownSince` reflects the earliest
+  // month once old days have been collapsed. A `YYYY-MM` key overlaps the range
+  // whenever its month is within the from/to months (compared at month prefix).
+  const fromMonth = from ? from.slice(0, 7) : null;
+  const toMonth = to ? to.slice(0, 7) : null;
+  for (const [month, bucket] of Object.entries(monthlyActivity || {})) {
+    if (!bucket?.byProvider) continue;
+    const monthStart = `${month}-01`;
+    if (!breakdownSince || monthStart < breakdownSince) breakdownSince = monthStart;
+    if (fromMonth && month < fromMonth) continue;
+    if (toMonth && month > toMonth) continue;
+    foldBucket(bucket);
+  }
+
+  for (const [date, day] of Object.entries(dailyActivity || {})) {
+    if (!day?.byProvider) continue;
+    if (!breakdownSince || date < breakdownSince) breakdownSince = date;
+    if (from && date < from) continue;
+    if (to && date > to) continue;
+    foldBucket(day);
   }
 
   const totals = { sessions: 0, messages: 0, tokensIn: 0, tokensOut: 0, estimatedCost: 0 };
@@ -412,7 +511,7 @@ export function getUsageSummary({ from = null, to = null, providers = [] } = {})
       estimatedCost: 0,
       topProviders: [],
       topModels: [],
-      report: buildUsageReport({}, { from, to, providers })
+      report: buildUsageReport({}, { from, to, providers, monthlyActivity: {} })
     };
   }
 
@@ -430,7 +529,7 @@ export function getUsageSummary({ from = null, to = null, providers = [] } = {})
   const currentStreak = calculateStreak(usageData.dailyActivity);
   const longestStreak = findLongestStreak(usageData.dailyActivity);
 
-  const report = buildUsageReport(usageData.dailyActivity, { from, to, providers });
+  const report = buildUsageReport(usageData.dailyActivity, { from, to, providers, monthlyActivity: usageData.monthlyActivity });
 
   return {
     totalSessions: usageData.totalSessions,
