@@ -13,7 +13,7 @@ import { join, resolve as resolvePath, sep as PATH_SEP, dirname } from 'path';
 import { randomUUID } from 'crypto';
 import { promisify } from 'util';
 import { ensureDir, PATHS } from './fileUtils.js';
-import { safeChildProcessEnv } from './processEnv.js';
+import { safeChildProcessEnv, whichFirst } from './processEnv.js';
 
 const execFileAsync = promisify(execFile);
 const IS_WIN = process.platform === 'win32';
@@ -40,9 +40,7 @@ export const findFfmpeg = async () => {
   for (const p of candidates) {
     if (existsSync(p)) { cachedFfmpegPath = p; return p; }
   }
-  const cmd = IS_WIN ? 'where' : 'which';
-  const { stdout } = await execFileAsync(cmd, ['ffmpeg'], { env: safeChildProcessEnv(), timeout: 5000 }).catch(() => ({ stdout: '' }));
-  cachedFfmpegPath = stdout.trim().split(/\r?\n/)[0] || null;
+  cachedFfmpegPath = await whichFirst('ffmpeg');
   return cachedFfmpegPath;
 };
 
@@ -135,9 +133,7 @@ export const findFfprobe = async () => {
   // the casing question entirely.
   const probe = join(dirname(ffmpeg), IS_WIN ? 'ffprobe.exe' : 'ffprobe');
   if (existsSync(probe)) { cachedFfprobePath = probe; return probe; }
-  const cmd = IS_WIN ? 'where' : 'which';
-  const { stdout } = await execFileAsync(cmd, ['ffprobe'], { env: safeChildProcessEnv(), timeout: 5000 }).catch(() => ({ stdout: '' }));
-  cachedFfprobePath = stdout.trim().split(/\r?\n/)[0] || null;
+  cachedFfprobePath = await whichFirst('ffprobe');
   return cachedFfprobePath;
 };
 

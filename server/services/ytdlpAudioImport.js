@@ -29,6 +29,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { findFfmpeg } from '../lib/ffmpeg.js';
 import { findYtDlp } from '../lib/ytdlp.js';
 import { safeChildProcessEnv } from '../lib/processEnv.js';
+import { createLineReader } from '../lib/streamLines.js';
 
 const TITLE_PREFIX = 'PORTOS_TITLE:';
 // Custom progress markers via yt-dlp's `--progress-template`, rather than
@@ -137,25 +138,21 @@ export async function downloadAudioToTempMp3({
       onProgress({ percent: 100, stage: line.slice(STAGE_PREFIX.length) });
     }
   };
-  // Separate buffers per stream — stdout and stderr chunks arrive
+  // Separate readers per stream — stdout and stderr chunks arrive
   // independently, so a shared buffer can complete a partial line from one
   // stream with a chunk from the other, corrupting a marker line.
-  const makeLineReader = () => {
-    let buf = '';
-    return (chunk) => {
-      buf += chunk.toString();
-      const lines = buf.split(/\r?\n/);
-      buf = lines.pop();
-      lines.forEach(onLine);
-    };
-  };
-  proc.stdout.on('data', makeLineReader());
-  proc.stderr.on('data', makeLineReader()); // yt-dlp writes some progress/info lines to stderr too
+  const stdoutReader = createLineReader(onLine);
+  const stderrReader = createLineReader(onLine);
+  proc.stdout.on('data', stdoutReader.push);
+  proc.stderr.on('data', stderrReader.push); // yt-dlp writes some progress/info lines to stderr too
 
   const exit = await new Promise((resolve) => {
     proc.on('error', (err) => resolve({ code: null, reason: `spawn failed: ${err.message}` }));
     proc.on('close', (code, signal) => resolve({ code, signal }));
   });
+  // Flush any final line written without a trailing newline before exit.
+  stdoutReader.flush();
+  stderrReader.flush();
   registerProcess(null);
 
   if (exit.signal === 'SIGTERM' || exit.signal === 'SIGKILL') {

@@ -26,6 +26,7 @@ import { findFfmpeg, generateThumbnail, probeVideoDuration } from '../lib/ffmpeg
 import { findYtDlp } from '../lib/ytdlp.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../lib/sseUtils.js';
 import { safeChildProcessEnv } from '../lib/processEnv.js';
+import { createLineReader } from '../lib/streamLines.js';
 import { loadHistory, mutateVideoHistory } from './videoGen/history.js';
 import { deleteHistoryItem } from './videoGen/local.js';
 import { videoGenEvents } from './videoGen/events.js';
@@ -231,24 +232,20 @@ export async function startVideoDownload(url) {
           broadcastSse(job, { type: 'progress', percent: 100, stage: line.slice(STAGE_PREFIX.length) });
         }
       };
-      // Separate buffers per stream — a shared buffer can complete a partial
+      // Separate readers per stream — a shared buffer can complete a partial
       // line from one stream with a chunk from the other, corrupting a marker.
-      const makeLineReader = () => {
-        let buf = '';
-        return (chunk) => {
-          buf += chunk.toString();
-          const lines = buf.split(/\r?\n/);
-          buf = lines.pop();
-          lines.forEach(onLine);
-        };
-      };
-      proc.stdout.on('data', makeLineReader());
-      proc.stderr.on('data', makeLineReader()); // yt-dlp writes some progress/info lines to stderr too
+      const stdoutReader = createLineReader(onLine);
+      const stderrReader = createLineReader(onLine);
+      proc.stdout.on('data', stdoutReader.push);
+      proc.stderr.on('data', stderrReader.push); // yt-dlp writes some progress/info lines to stderr too
 
       const exit = await new Promise((resolve) => {
         proc.on('error', (err) => resolve({ code: null, reason: `spawn failed: ${err.message}` }));
         proc.on('close', (code, signal) => resolve({ code, signal }));
       });
+      // Flush any final line written without a trailing newline before exit.
+      stdoutReader.flush();
+      stderrReader.flush();
       job.process = null;
 
       if (exit.signal === 'SIGTERM' || exit.signal === 'SIGKILL') {

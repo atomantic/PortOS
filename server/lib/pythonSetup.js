@@ -4,7 +4,7 @@ import { arch, homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { PATHS } from './fileUtils.js';
-import { safeChildProcessEnv } from './processEnv.js';
+import { safeChildProcessEnv, whichFirst } from './processEnv.js';
 
 const execFileAsync = promisify(execFile);
 const IS_WIN = platform() === 'win32';
@@ -123,10 +123,7 @@ export async function detectPython() {
     if (match) return match;
   }
   if (present.length) return present[0];
-  const which = IS_WIN ? 'where' : 'which';
-  const name = IS_WIN ? 'python' : 'python3';
-  const { stdout } = await execFileAsync(which, [name], { timeout: 5000 }).catch(() => ({ stdout: '' }));
-  return stdout.trim().split(/\r?\n/)[0] || null;
+  return whichFirst(IS_WIN ? 'python' : 'python3');
 }
 
 export async function detectArm64Python() {

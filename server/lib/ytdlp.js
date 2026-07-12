@@ -5,12 +5,9 @@
  * or auto-install.
  */
 
-import { execFile } from 'child_process';
 import { existsSync } from 'fs';
-import { promisify } from 'util';
-import { safeChildProcessEnv } from './processEnv.js';
+import { whichFirst } from './processEnv.js';
 
-const execFileAsync = promisify(execFile);
 const IS_WIN = process.platform === 'win32';
 
 let cachedYtDlpPath;
@@ -22,8 +19,6 @@ export const findYtDlp = async () => {
   for (const p of candidates) {
     if (existsSync(p)) { cachedYtDlpPath = p; return p; }
   }
-  const cmd = IS_WIN ? 'where' : 'which';
-  const { stdout } = await execFileAsync(cmd, ['yt-dlp'], { env: safeChildProcessEnv(), timeout: 5000 }).catch(() => ({ stdout: '' }));
-  cachedYtDlpPath = stdout.trim().split(/\r?\n/)[0] || null;
+  cachedYtDlpPath = await whichFirst('yt-dlp');
   return cachedYtDlpPath;
 };
