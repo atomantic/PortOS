@@ -345,7 +345,10 @@ export const peerCosHistoryManifestSchema = z.object({
 // receiver's next file read, so we only bound the key length + entry count here.
 // `.strict()` on the entry rejects a smuggled extra top-level field; the metadata
 // record stays open.
-const TASK_STATUSES = ['pending', 'in_progress', 'blocked', 'completed'];
+// `challenged` (#2441) rides the wire like any other status — the challenge
+// case + resolution live in `metadata` (permissive record below), so they
+// federate verbatim with no extra top-level fields.
+const TASK_STATUSES = ['pending', 'in_progress', 'challenged', 'blocked', 'completed'];
 const TASK_PRIORITIES = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW'];
 const peerCosTaskEntrySchema = z.object({
   id: z.string().trim().min(1).max(200),

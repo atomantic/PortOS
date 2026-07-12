@@ -265,6 +265,27 @@ export const updateCosTaskSchema = z.object({
   type: z.string().optional().default('user'),
 });
 
+// Worker's dispute of a reviewer rejection (#2441). `reason` is the required
+// case; `evidence` is optional supporting detail; `reviewer` names which reviewer
+// verdict is being disputed (constrained to the known reviewer vocab). Bounds are
+// generous but present so a hand-crafted request can't smuggle in an unbounded
+// blob that then round-trips the TASKS.md store.
+export const challengeTaskSchema = z.object({
+  reason: z.string().trim().min(1).max(5000),
+  evidence: z.string().trim().max(20_000).optional(),
+  reviewer: z.enum(REVIEWER_VALUES).optional(),
+});
+
+// Resolution of a parked challenge (#2441). `outcome` mirrors CHALLENGE_OUTCOMES
+// in server/services/cosChallenge.js (source of truth; a parity test keeps them
+// in lockstep). `upheld` overturns the rejection (task → pending); `escalated`
+// surfaces the unresolved dispute to the user (task → blocked + arbitration task).
+export const resolveChallengeSchema = z.object({
+  outcome: z.enum(['upheld', 'escalated']),
+  note: z.string().trim().max(5000).optional(),
+  resolvedBy: z.string().trim().max(200).optional(),
+});
+
 // =============================================================================
 // LOOP SCHEMAS
 // =============================================================================

@@ -676,3 +676,50 @@ describe('Task Parser', () => {
     });
   });
 });
+
+describe('Task Parser — challenged status (#2441)', () => {
+  it('parses a [?] challenged task line', () => {
+    const tasks = parseTasksMarkdown(`# Tasks
+
+## Challenged
+- [?] #task-900 | HIGH | Disputed rejection task`);
+    expect(tasks).toHaveLength(1);
+    expect(tasks[0].status).toBe('challenged');
+    expect(tasks[0].id).toBe('task-900');
+  });
+
+  it('round-trips a challenged task (parse → generate → parse) with its metadata', () => {
+    const tasks = [{
+      id: 'task-901',
+      status: 'challenged',
+      priority: 'HIGH',
+      priorityValue: 3,
+      description: 'Dispute',
+      metadata: {
+        challengeCount: 1,
+        challenge: { reason: 'reviewer misread the diff', reviewer: 'ollama' },
+      },
+    }];
+    const md = generateTasksMarkdown(tasks);
+    expect(md).toContain('## Challenged');
+    expect(md).toContain('- [?] #task-901');
+    const reparsed = parseTasksMarkdown(md);
+    expect(reparsed[0].status).toBe('challenged');
+    // challengeCount survives as a string after the markdown round-trip.
+    expect(String(reparsed[0].metadata.challengeCount)).toBe('1');
+    expect(reparsed[0].metadata.challenge.reason).toBe('reviewer misread the diff');
+  });
+
+  it('groups challenged tasks into their own bucket', () => {
+    const grouped = groupTasksByStatus([
+      { id: 'a', status: 'challenged' },
+      { id: 'b', status: 'pending' },
+    ]);
+    expect(grouped.challenged.map((t) => t.id)).toEqual(['a']);
+  });
+
+  it('validates challenged as a legal status', () => {
+    const result = validateTask({ id: 'task-902', description: 'x', status: 'challenged', priority: 'HIGH' });
+    expect(result.valid).toBe(true);
+  });
+});

@@ -441,7 +441,17 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // an authoritative record transfer. Only the payload envelope + task-entry
   // shape is gated; the FIRST incompatible change (new required entry field, new
   // claim semantics) MUST bump this to 2.
-  cosTasks: 1,
+  // v2 = the `challenged` task status + its challenge case/resolution metadata
+  // (#2441). A ≤v1 receiver's `TASK_STATUSES` enum lacks `challenged`, so its
+  // wire validation would REJECT the whole payload (peerCosTasksSchema.safeParse
+  // fails → the sweep skips, never mis-merges). Bumping makes the receiver's
+  // GENTLE schema-ahead skip fire FIRST with a clear "schema v2 > local v1"
+  // log, instead of a confusing blanket "failed validation" skip. The challenge
+  // record itself (`challenge`/`challengeResolution`/`challengeCount`) rides the
+  // permissive `metadata` map and round-trips the markdown store like any other
+  // metadata, so no new top-level wire field is added — only the status vocab
+  // widened. Per-category gate → only cos-tasks sync pauses with old peers.
+  cosTasks: 2,
   // NOTE: `videoHistory` is intentionally NOT listed here. The version gate
   // rejects the ENTIRE snapshot/push payload on ANY ahead-mismatch (the
   // comparator walks the union of keys), so declaring a brand-new key would

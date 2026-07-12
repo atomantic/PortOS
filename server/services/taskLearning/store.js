@@ -217,6 +217,76 @@ export function summarizeFailureSignatures(failureSignatures, { taskType = null,
   return summaries.sort((a, b) => b.count - a.count).slice(0, Math.max(0, limit));
 }
 
+// ---------------------------------------------------------------------------
+// Human-readable insights (issue #2443)
+//
+// The insights array is the ONE prose channel in the learning store: standing
+// "operating notes" the user reads in the CoS UI. It is runtime data in
+// `data/cos/learning.json` — never committed to git and never federated — so
+// auto-recorded insight text must stay free of hostnames/paths/PII (build it
+// only from controlled labels: error category, counts, task type, provider/model
+// ids, agent id — never the raw error message, which can embed a path).
+// ---------------------------------------------------------------------------
+
+// Cap on retained insights (oldest pruned first). Matches the pre-existing cap
+// that `recordLearningInsight` enforced before it was factored out here.
+export const INSIGHT_CAP = 50;
+
+// Recurrence counts (of a single error category) at which the failure path
+// auto-records a standing insight. Exact-equality matching over these ascending
+// milestones makes recording idempotent — the per-category count only increments
+// by one per categorized failure, so each milestone fires exactly once and then
+// escalates, rather than spamming an insight on every subsequent failure.
+export const RECURRENCE_INSIGHT_MILESTONES = [3, 10, 25, 50, 100];
+
+/** True when a category's post-increment recurrence count lands on a milestone. */
+export function recurrenceMilestoneReached(count) {
+  return RECURRENCE_INSIGHT_MILESTONES.includes(count);
+}
+
+/**
+ * Append an insight to `data.insights`, stamping `recordedAt` and defaulting
+ * `origin` to `'user'` (a manual API insight) unless the caller marks it
+ * `'auto-incident'`. Pure over `data` (mutates + returns it); enforces the
+ * `INSIGHT_CAP` (oldest pruned). Shared by the manual route (`recordLearningInsight`)
+ * and the failure-path auto-recorder so both stay in one shape.
+ */
+export function appendInsight(data, insight) {
+  if (!Array.isArray(data.insights)) data.insights = [];
+  data.insights.push({ origin: 'user', ...insight, recordedAt: new Date().toISOString() });
+  if (data.insights.length > INSIGHT_CAP) {
+    data.insights = data.insights.slice(-INSIGHT_CAP);
+  }
+  return data;
+}
+
+/**
+ * Build a provenance-stamped, privacy-safe insight for a recurring failure
+ * category (issue #2443). Pure — no I/O. Uses only controlled fields (category
+ * label, recurrence count, task type, provider/model ids, agent id); it reads
+ * the enriched `failureSignatures` map for provider/model attribution but never
+ * echoes the raw error message (which can embed a path/PII). `origin` is
+ * `'auto-incident'` so the UI can distinguish it from user-authored notes.
+ */
+export function buildRecurrenceInsight({ category, count, taskType, agentId = null, failureSignatures = {} } = {}) {
+  const summary = summarizeFailureSignatures(failureSignatures, { taskType })
+    .find((s) => s.category === category);
+  const topProvider = summary?.providers?.[0]?.key || null;
+  const via = topProvider ? `, most recently via ${topProvider}` : '';
+  const message = `Recurring failure: "${category}" errors have occurred ${count} times for ${taskType} tasks${via}. Auto-flagged at ${count} occurrences — investigate the root cause or route this task type away from the failing path.`;
+
+  return {
+    type: 'recurring-failure',
+    origin: 'auto-incident',
+    category,
+    taskType,
+    recurrenceCount: count,
+    provider: topProvider,
+    originatingAgentId: agentId,
+    message
+  };
+}
+
 /**
  * Ordered description-keyword → concrete-type rules, tried only as a last resort
  * before the sandboxed fallback. First match wins. Patterns are whole-word/stem

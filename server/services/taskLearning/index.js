@@ -26,6 +26,11 @@ export {
   classifyUntypedTask,
   isSandboxedTaskType,
   summarizeFailureSignatures,
+  appendInsight,
+  buildRecurrenceInsight,
+  recurrenceMilestoneReached,
+  INSIGHT_CAP,
+  RECURRENCE_INSIGHT_MILESTONES,
   EXTERNAL_UNTYPED_TASK_TYPE
 } from './store.js';
 
