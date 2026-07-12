@@ -674,6 +674,7 @@ describe('validation.js', () => {
       expect(sanitizeTaskMetadata({ reviewer: 'antigravity' })).toEqual({ reviewer: 'antigravity' });
       expect(sanitizeTaskMetadata({ reviewer: 'gemini' })).toEqual({ reviewer: 'antigravity' });
       expect(sanitizeTaskMetadata({ reviewer: 'codex' })).toEqual({ reviewer: 'codex' });
+      expect(sanitizeTaskMetadata({ reviewer: 'grok' })).toEqual({ reviewer: 'grok' });
       expect(sanitizeTaskMetadata({ reviewLoop: true, reviewer: 'claude' }))
         .toEqual({ reviewLoop: true, reviewer: 'claude' });
     });
