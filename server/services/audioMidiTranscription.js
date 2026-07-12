@@ -169,7 +169,7 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
       // MuScriptor's weights live in a gated HF repo (MuScriptor/muscriptor-*),
       // so pass the user's HF token through for the first download to
       // authenticate. Without an accepted license the sidecar 403s and we
-      // classify that into a typed HF_GATED frame below.
+      // classify that into a typed gated_repo frame below.
       const env = safeChildProcessEnv(await hfTokenEnv());
       // A cancel can land while the env was resolving (no child to SIGTERM yet)
       // — honor the flag before spawning anything.

@@ -2,7 +2,7 @@
  * Gated-repo gate for MuScriptor (audio → MIDI) transcription. MuScriptor's
  * model weights live in a gated HuggingFace repo (MuScriptor/muscriptor-*), so
  * a first transcribe with no accepted license / token 403s. useMidiTranscription
- * opens this when the job streams an `HF_GATED` error frame — the user accepts
+ * opens this when the job streams a `gated_repo` error frame — the user accepts
  * the license and pastes a read token (reusing HfTokenBanner, the same
  * paste-and-save flow the gated image models use), then `onSaved` re-runs the
  * captured transcription.
