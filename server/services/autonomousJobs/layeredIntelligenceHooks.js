@@ -57,11 +57,13 @@ import {
 import { recordFiledProposal, listOutcomes, reconcileOutcomes } from '../layeredIntelligenceOutcomes.js'
 
 // The outcome feedback loop (#2428) can only reconcile a proposal's fate on a
-// tracker that reports closed-state: a forge (gh/glab issues) or jira. A `plan`
-// tracker maps every PLAN.md item to `state: 'open'`, so there's nothing to learn
-// from — skip recording/reconciling there rather than accrete unresolvable rows.
+// tracker that reports closed-state. All three now qualify: a forge (gh/glab
+// issues) and jira report a real closed state, and since #2435 the `plan`
+// tracker preserves each `[lil-*]` item's checkbox — a `- [x]` item reads
+// `closed` (deriveOutcome → 'merged'), so a completed PLAN proposal reconciles
+// like any other. (A `- [ ]` item stays open and unresolved, as before.)
 function outcomesTrackerSupported(filer) {
-  return filer === 'forge' || filer === 'jira'
+  return filer === 'forge' || filer === 'jira' || filer === 'plan'
 }
 import { resolveAppWorkTracker } from '../../lib/workTracker.js'
 import { tryReadFile } from '../../lib/fileUtils.js'
@@ -119,8 +121,10 @@ async function readIssues({ filer, forgeCli, cwd, jira, config }) {
     if (config.sources?.openIssues !== false) openIssues = existingIssues.filter(i => i.state === 'open')
   } else if (filer === 'plan' && cwd) {
     const planContent = await tryReadFile(join(cwd, 'PLAN.md'))
-    const planSlugs = extractPlanSlugs(planContent || '')
-    existingIssues = planSlugs.map(slug => ({ slug, state: 'open' }))
+    // extractPlanSlugs preserves each tag's checkbox state ({ slug, state }): a
+    // `- [x]` item reads 'closed' (with no closedAt) so the outcome loop can
+    // reconcile it and it falls out of the dedup window, while `- [ ]` stays open.
+    existingIssues = extractPlanSlugs(planContent || '')
   }
   return { openIssues, existingIssues, trackerReadFailed }
 }
@@ -224,10 +228,9 @@ export async function buildTaskInput({ app } = {}) {
   // Feedback loop (#2428): reconcile past proposals' outcomes against the fresh
   // tracker read, then fold the merge-rate report into the prompt so the reasoner
   // calibrates on its own history. Gated on the per-app `outcomes` source toggle
-  // AND a forge/jira tracker — a `plan` tracker reports every item as open (no
-  // closed-state to reconcile), so tracking there would only accrete permanently-
-  // unresolved records. A failed tracker read skips reconciliation (never mark
-  // closed on a blind read).
+  // AND an outcomes-capable tracker (forge / jira / plan — #2435 taught the plan
+  // parse to read a checked `- [x]` item as closed). A failed tracker read skips
+  // reconciliation (never mark closed on a blind read).
   let outcomesReport = ''
   if (config.sources?.outcomes && outcomesTrackerSupported(filer)) {
     if (!trackerReadFailed) await reconcileOutcomes({ appId: app.id, existingIssues })
@@ -257,7 +260,11 @@ async function fileProposal({ filer, forgeCli, cwd, app, proposal, jira }) {
   }
   if (filer === 'plan' && cwd) {
     const res = await appendProposalToPlan({ repoPath: cwd, appName: app.name, slug: proposal.slug, title: proposal.title, body: proposal.body })
-    return { success: res.success, number: null }
+    // Propagate `duplicate`: appendProposalToPlan dedups on the raw `[lil-<slug>]`
+    // tag regardless of checkbox, so a CHECKED item the reasoner re-proposed (now
+    // out of the dedup window, #2435) writes nothing and returns duplicate. The
+    // caller must NOT treat that as a fresh file — see processTaskOutput.
+    return { success: res.success, number: null, duplicate: res.duplicate }
   }
   return { success: false, error: `filer "${filer}" not implemented` }
 }
@@ -361,7 +368,16 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
       reason = 'semantic-duplicate'
     } else {
       const filed = await fileProposal({ filer, forgeCli, cwd, app, proposal, jira })
-      if (filed.success) {
+      if (filed.success && filed.duplicate) {
+        // The tracker already carries this slug's tag (a checked PLAN item the
+        // reasoner re-proposed): appendProposalToPlan wrote nothing. Report a
+        // duplicate and leave any recorded outcome untouched — reporting `filed`
+        // here would clear the merged outcome and let the still-checked item
+        // reconcile as a false fresh merge on the next run (#2435).
+        filedAction = 'duplicate'
+        reason = 'duplicate'
+        console.log(`♻️ Layered Intelligence: ${app.name} proposal "${proposal.slug}" already tracked in PLAN.md — suppressed`)
+      } else if (filed.success) {
         filedNumber = filed.number ?? null
         filedKey = filed.key ?? null
         filedAction = 'filed'
@@ -369,8 +385,9 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
         const ref = filedRef(filedKey, filedNumber) ?? ''
         console.log(`📌 Layered Intelligence: ${app.name} filed "${proposal.title}" [${proposal.slug}]${ref ? ` (${ref})` : ''}`)
         // Feedback loop (#2428): remember what we just filed so a later run can
-        // read back its outcome. Gated on the app's `outcomes` source toggle AND a
-        // forge/jira tracker (a `plan` item has no readable closed-state).
+        // read back its outcome. Gated on the app's `outcomes` source toggle AND
+        // an outcomes-capable tracker (forge / jira / plan — a checked `- [x]`
+        // PLAN item now reconciles, #2435).
         if (config.sources?.outcomes && outcomesTrackerSupported(filer)) {
           await recordFiledProposal({
             appId: app.id, slug: proposal.slug, tracker: tracker.resolved,

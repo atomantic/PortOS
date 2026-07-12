@@ -16,12 +16,12 @@ import { emptyToUndefined, emptyToNull } from './zodCompat.js';
 // =============================================================================
 
 // Reviewer choices for the Review Loop. `copilot` requests a native GitHub
-// Copilot review; `claude`/`antigravity`/`codex` instruct the review-loop follow-up
-// agent to invoke the named CLI to critique the PR diff; `lmstudio`/`ollama`
+// Copilot review; `claude`/`antigravity`/`codex`/`grok` instruct the review-loop
+// follow-up agent to invoke the named CLI to critique the PR diff; `lmstudio`/`ollama`
 // route the diff through PortOS's local code-review endpoint
 // (`POST /api/code-review/local`) which runs the configured local LLM model.
 // Mirrored in client/src/components/cos/constants.js → REVIEWER_OPTIONS.
-export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'lmstudio', 'ollama'];
+export const REVIEWER_VALUES = ['copilot', 'claude', 'antigravity', 'codex', 'grok', 'lmstudio', 'ollama'];
 export const REVIEWER_ALIASES = { gemini: 'antigravity' };
 export const DEFAULT_REVIEWER = 'copilot';
 export const DEFAULT_REVIEWERS = ['copilot'];
@@ -263,6 +263,27 @@ export const updateCosTaskSchema = z.object({
   app: z.string().optional(),
   blockedReason: z.string().optional(),
   type: z.string().optional().default('user'),
+});
+
+// Worker's dispute of a reviewer rejection (#2441). `reason` is the required
+// case; `evidence` is optional supporting detail; `reviewer` names which reviewer
+// verdict is being disputed (constrained to the known reviewer vocab). Bounds are
+// generous but present so a hand-crafted request can't smuggle in an unbounded
+// blob that then round-trips the TASKS.md store.
+export const challengeTaskSchema = z.object({
+  reason: z.string().trim().min(1).max(5000),
+  evidence: z.string().trim().max(20_000).optional(),
+  reviewer: z.enum(REVIEWER_VALUES).optional(),
+});
+
+// Resolution of a parked challenge (#2441). `outcome` mirrors CHALLENGE_OUTCOMES
+// in server/services/cosChallenge.js (source of truth; a parity test keeps them
+// in lockstep). `upheld` overturns the rejection (task → pending); `escalated`
+// surfaces the unresolved dispute to the user (task → blocked + arbitration task).
+export const resolveChallengeSchema = z.object({
+  outcome: z.enum(['upheld', 'escalated']),
+  note: z.string().trim().max(5000).optional(),
+  resolvedBy: z.string().trim().max(200).optional(),
 });
 
 // =============================================================================

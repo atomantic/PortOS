@@ -12,15 +12,14 @@ import { expandPath, piperVoiceTildePath, voiceHome, IS_WIN, PIPER_BIN_NAME } fr
 import { isToolCapable, isReasoningModel } from './llm.js';
 import { getProviderById } from '../providers.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
+import { whichFirst } from '../../lib/processEnv.js';
 
 export const pexec = promisify(execFile);
 
 export const WHISPER_APP = 'portos-whisper';
 
-export const which = async (bin) => {
-  const res = await pexec(IS_WIN ? 'where' : 'which', [bin]).catch(() => null);
-  return res?.stdout?.split(/\r?\n/)[0]?.trim() || null;
-};
+// Thin re-export of the shared PATH probe so voice callers keep the local name.
+export const which = (bin) => whichFirst(bin);
 
 export const verifyBinaries = async (cfg) => {
   const piperLocal = join(voiceHome(), 'piper', PIPER_BIN_NAME);

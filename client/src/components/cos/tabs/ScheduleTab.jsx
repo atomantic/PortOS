@@ -6,6 +6,7 @@ import * as api from '../../../services/api';
 import { formatDateTime } from '../../../utils/formatters';
 import Banner from '../../ui/Banner';
 import { CodeReviewDefaultsProvider } from '../../../hooks/useCodeReviewDefaults';
+import { useAppOverrideActions } from '../../../hooks/useAppOverrideActions';
 import AppTaskTypeSection from './schedule/AppTaskTypeSection';
 import TaskConfigDrawer from './schedule/TaskConfigDrawer';
 import { TASK_FILTERS, DEFAULT_FILTER_ID } from './schedule/scheduleConstants';
@@ -85,28 +86,7 @@ export default function ScheduleTab({ apps }) {
 
   const handleTriggerAppImprovement = (taskType, appId) => handleTriggerTask(taskType, appId);
 
-  const handleUpdateAppOverride = async (appId, taskType, { enabled, interval, taskMetadata }) => {
-    const result = await api.updateAppTaskTypeOverride(appId, taskType, { enabled, interval, taskMetadata }, { silent: true }).catch(err => {
-      toast.error(err.message);
-      return null;
-    });
-    if (result?.success) {
-      const appName = apps?.find(a => a.id === appId)?.name || appId;
-      toast.success(`Updated ${taskType} override for ${appName}`);
-      fetchSchedule();
-    }
-  };
-
-  const handleBulkToggleOverride = async (taskType, enabled) => {
-    const result = await api.bulkUpdateAppTaskTypeOverride(taskType, { enabled }, { silent: true }).catch(err => {
-      toast.error(err.message);
-      return null;
-    });
-    if (result?.success) {
-      toast.success(`${enabled ? 'Enabled' : 'Disabled'} ${taskType} for all apps`);
-      fetchSchedule();
-    }
-  };
+  const { handleUpdateOverride, handleBulkToggleOverride } = useAppOverrideActions(apps, fetchSchedule);
 
   if (loading) {
     return (
@@ -197,7 +177,7 @@ export default function ScheduleTab({ apps }) {
         onReset={handleResetTask}
         providers={providers}
         apps={apps}
-        onUpdateOverride={handleUpdateAppOverride}
+        onUpdateOverride={handleUpdateOverride}
         onBulkToggleOverride={handleBulkToggleOverride}
         allTaskTypes={allTaskTypes}
         improvementDisabled={improvementDisabled}

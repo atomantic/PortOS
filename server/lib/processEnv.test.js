@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { safeChildProcessEnv, stripDebugMallocEnv } from './processEnv.js';
+import { basename } from 'path';
+import { safeChildProcessEnv, stripDebugMallocEnv, whichFirst } from './processEnv.js';
 
 describe('stripDebugMallocEnv', () => {
   it('drops every key that starts with "Malloc"', () => {
@@ -60,5 +61,27 @@ describe('safeChildProcessEnv', () => {
       if (oldPortosTest === undefined) delete process.env.PORTOS_PROCESS_ENV_TEST;
       else process.env.PORTOS_PROCESS_ENV_TEST = oldPortosTest;
     }
+  });
+});
+
+describe('whichFirst', () => {
+  // `node` (both `which node` and `where node`) is on PATH wherever this runs.
+  it('resolves an on-PATH binary to an absolute path', async () => {
+    const resolved = await whichFirst('node');
+    expect(resolved).toBeTruthy();
+    expect(basename(resolved).toLowerCase()).toContain('node');
+  });
+
+  it('returns the FIRST line when the probe reports several matches', async () => {
+    // The contract is single-line: `where` on Windows can print several paths;
+    // whichFirst must return exactly one, never a multi-line blob.
+    const resolved = await whichFirst('node');
+    expect(resolved).not.toContain('\n');
+    expect(resolved).not.toContain('\r');
+  });
+
+  it('returns null for a binary that is not on PATH', async () => {
+    const resolved = await whichFirst('portos-nonexistent-binary-xyz-2392');
+    expect(resolved).toBeNull();
   });
 });

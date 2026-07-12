@@ -17,7 +17,10 @@ import {
   calculateDurationETA,
   extractTaskType,
   loadLearningData,
-  saveLearningData
+  saveLearningData,
+  appendInsight,
+  buildRecurrenceInsight,
+  recurrenceMilestoneReached
 } from './store.js';
 import { deriveFailureSignalAvoidance, isNonRoutableLearnedTier } from './routing.js';
 import { recordCorrelationSample } from './correlationQuality.js';
@@ -358,6 +361,32 @@ export async function recordTaskCompletion(agent, task) {
   // Aggregate the enriched failure signature (category + snippet + position +
   // execution context + latency) — a no-op on success (issue #2329).
   recordFailureSignature(data, telemetry);
+
+  // Fold a recurring failure category into a standing, provenance-stamped
+  // human-readable insight (issue #2443) — turns a machine aggregate into an
+  // operating note the user can read in the CoS UI, without a manual API call.
+  // Fires only when the per-category recurrence count lands on a milestone so it
+  // escalates instead of spamming. Appended inline (not via recordLearningInsight)
+  // because we already hold the non-reentrant store lock and `data` is about to
+  // be persisted below. Privacy: buildRecurrenceInsight uses only controlled
+  // fields — no raw error message (which could embed a path/PII).
+  if (!outcomeSuccess && errorCategory) {
+    const recurrenceCount = data.errorPatterns[errorCategory]?.count || 0;
+    if (recurrenceMilestoneReached(recurrenceCount)) {
+      appendInsight(data, buildRecurrenceInsight({
+        category: errorCategory,
+        count: recurrenceCount,
+        taskType,
+        agentId: agent.agentId || agent.id || null,
+        failureSignatures: data.failureSignatures
+      }));
+      emitLog('info', `📚 Auto-recorded recurring-failure insight: "${errorCategory}" ×${recurrenceCount} (${taskType})`, {
+        category: errorCategory,
+        recurrenceCount,
+        taskType
+      }, '[TaskLearning]');
+    }
+  }
 
   // Update totals
   data.totals.completed++;

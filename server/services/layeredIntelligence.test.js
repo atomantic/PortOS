@@ -57,11 +57,11 @@ import {
 } from './layeredIntelligence.js';
 
 describe('defaultLayeredIntelligenceConfig', () => {
-  it('is off by default with all sources on', () => {
+  it('is off by default with the app-owned sources on', () => {
     const c = defaultLayeredIntelligenceConfig(false);
     expect(c.enabled).toBe(false);
     expect(c.sources.goals).toBe(true);
-    expect(c.sources.cosMetrics).toBe(true);
+    expect(c.sources.appMetrics).toBe(true); // the app's own performance metrics
     expect(c.sources.custom).toEqual([]);
   });
 
@@ -87,6 +87,16 @@ describe('defaultLayeredIntelligenceConfig', () => {
     expect(defaultLayeredIntelligenceConfig(false).sources.outcomes).toBe(false);
     expect(defaultLayeredIntelligenceConfig(true).sources.outcomes).toBe(true);
   });
+
+  it('defaults cosMetrics on for PortOS, off for managed apps (it is a PortOS-side agent-perf metric)', () => {
+    expect(defaultLayeredIntelligenceConfig(false).sources.cosMetrics).toBe(false);
+    expect(defaultLayeredIntelligenceConfig(true).sources.cosMetrics).toBe(true);
+  });
+
+  it('defaults the appMetrics (own-performance) source on for every app', () => {
+    expect(defaultLayeredIntelligenceConfig(false).sources.appMetrics).toBe(true);
+    expect(defaultLayeredIntelligenceConfig(true).sources.appMetrics).toBe(true);
+  });
 });
 
 describe('getEffectiveConfig', () => {
@@ -97,7 +107,7 @@ describe('getEffectiveConfig', () => {
   it('merges sources one level deep (partial toggle does not wipe others)', () => {
     const c = getEffectiveConfig({ layeredIntelligence: { sources: { goals: false } } });
     expect(c.sources.goals).toBe(false);
-    expect(c.sources.cosMetrics).toBe(true); // untouched default preserved
+    expect(c.sources.appMetrics).toBe(true); // untouched default preserved
     expect(c.sources.planMd).toBe(true);
   });
 
@@ -201,6 +211,16 @@ describe('isProposalDuplicate (dedup)', () => {
     const closedAt = new Date(now - (CLOSED_SUPPRESSION_MS + 24 * 60 * 60 * 1000)).toISOString();
     const existing = [{ slug: 'add-metrics', state: 'closed', closedAt }];
     expect(isProposalDuplicate({ slug: 'add-metrics', existingIssues: existing, now })).toBe(false);
+  });
+
+  it('ALLOWS re-file for a checked PLAN item (closed with no closedAt — #2435)', () => {
+    // A `- [x]` PLAN item reads as closed with no timestamp; it must fall OUT of
+    // the dedup window so a completed proposal can be re-proposed, while an
+    // unchecked `- [ ]` item (state: 'open') stays suppressed.
+    const closed = [{ slug: 'add-metrics', state: 'closed' }];
+    const open = [{ slug: 'add-metrics', state: 'open' }];
+    expect(isProposalDuplicate({ slug: 'add-metrics', existingIssues: closed, now })).toBe(false);
+    expect(isProposalDuplicate({ slug: 'add-metrics', existingIssues: open, now })).toBe(true);
   });
 
   it('matches slug embedded in a body marker (no parsed slug field)', () => {
@@ -450,6 +470,38 @@ describe('buildPrompt', () => {
     expect(withReport).toContain('Total filed: 3');
     expect(withReport).toContain('calibrate your proposal');
   });
+
+  it('frames the mission around the app\'s own goals and performance', () => {
+    const out = buildPrompt({ app, isPortos: false, config: { allowedScopes: ['app-improvement'], rules: '' } });
+    expect(out).toContain('its OWN goals and purpose');
+  });
+
+  it('nudges a managed app with no own-performance metrics toward a METRICS.md data gap', () => {
+    // No appMetrics source gathered → guidance to add a METRICS.md.
+    const missing = buildPrompt({ app, isPortos: false, config: { allowedScopes: ['app-data-gap'], rules: '' } });
+    expect(missing).toContain('METRICS.md');
+    // Present appMetrics → no add-a-METRICS.md nudge.
+    const present = buildPrompt({
+      app, isPortos: false, config: { allowedScopes: ['app-data-gap'], rules: '' },
+      sources: { appMetrics: 'Weekly active users: up' }
+    });
+    expect(present).not.toContain('no METRICS.md');
+  });
+
+  it('does not nudge to add a METRICS.md when the appMetrics source is deliberately off', () => {
+    // Source disabled → the file may exist but wasn't gathered; nudging to "add"
+    // one would be misleading. No nudge despite empty gathered sources.
+    const out = buildPrompt({
+      app, isPortos: false,
+      config: { allowedScopes: ['app-data-gap'], rules: '', sources: { appMetrics: false } }
+    });
+    expect(out).not.toContain('no METRICS.md');
+  });
+
+  it('does not nudge PortOS toward a METRICS.md (it measures itself via cosMetrics)', () => {
+    const out = buildPrompt({ app, isPortos: true, config: { allowedScopes: ['portos-self'], rules: '' } });
+    expect(out).not.toContain('no METRICS.md');
+  });
 });
 
 describe('deriveOutcome', () => {
@@ -499,9 +551,34 @@ describe('computeOutcomesReport', () => {
 });
 
 describe('extractPlanSlugs', () => {
-  it('collects lil-tagged slugs from PLAN.md content', () => {
+  it('collects lil-tagged slugs with their checkbox state from PLAN.md content', () => {
     const plan = `## Next Up\n- [ ] [lil-add-metrics] Add metrics\n- [ ] [lil-fix-thing] Fix\n- [ ] [ref-watch-other] not ours`;
-    expect(extractPlanSlugs(plan)).toEqual(['add-metrics', 'fix-thing']);
+    expect(extractPlanSlugs(plan)).toEqual([
+      { slug: 'add-metrics', state: 'open' },
+      { slug: 'fix-thing', state: 'open' }
+    ]);
+  });
+
+  it('reads a checked `- [x]` item as closed and an unchecked one as open (#2435)', () => {
+    const plan = `## Done\n- [x] [lil-add-metrics] Add metrics\n## Next Up\n- [ ] [lil-fix-thing] Fix`;
+    expect(extractPlanSlugs(plan)).toEqual([
+      { slug: 'add-metrics', state: 'closed' },
+      { slug: 'fix-thing', state: 'open' }
+    ]);
+  });
+
+  it('treats an uppercase `- [X]` checkbox as closed', () => {
+    expect(extractPlanSlugs('- [X] [lil-shipped] done')).toEqual([
+      { slug: 'shipped', state: 'closed' }
+    ]);
+  });
+
+  it('treats a bare tag with no checkbox as open (absent ≠ done)', () => {
+    // A tag mentioned inline, with no list checkbox, must NOT collapse to closed
+    // (which would make it re-proposable) — it stays open/suppressed.
+    expect(extractPlanSlugs('see [lil-inline-ref] elsewhere')).toEqual([
+      { slug: 'inline-ref', state: 'open' }
+    ]);
   });
 
   it('returns [] for non-string / empty', () => {
@@ -622,6 +699,29 @@ describe('gatherSources custom file confinement', () => {
       { sources: { custom: [{ type: 'file', ref: 'link.md' }] } }
     );
     expect(out['custom:link.md']).toBe('INSIDE');
+  });
+});
+
+describe('gatherSources appMetrics (METRICS.md)', () => {
+  let dir;
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'lil-metrics-')); });
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  it('reads the app repo METRICS.md as the appMetrics source', async () => {
+    await writeFile(join(dir, 'METRICS.md'), '# Metrics\nWeekly active users: up');
+    const out = await gatherSources({ repoPath: dir }, { sources: { appMetrics: true } });
+    expect(out.appMetrics).toContain('Weekly active users');
+  });
+
+  it('omits appMetrics when no METRICS.md exists (reasoner may then propose adding one)', async () => {
+    const out = await gatherSources({ repoPath: dir }, { sources: { appMetrics: true } });
+    expect(out.appMetrics).toBeUndefined();
+  });
+
+  it('does not read METRICS.md when the source is off', async () => {
+    await writeFile(join(dir, 'METRICS.md'), 'present');
+    const out = await gatherSources({ repoPath: dir }, { sources: { appMetrics: false } });
+    expect(out.appMetrics).toBeUndefined();
   });
 });
 

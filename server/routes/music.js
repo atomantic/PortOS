@@ -25,9 +25,11 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { safeChildProcessEnv } from '../lib/processEnv.js';
+import { createLineReader } from '../lib/streamLines.js';
 import { ENGINES, DEFAULT_ENGINE_ID, getEngine, isEngineReady, generateMusic } from '../services/pipeline/musicGen.js';
 import { listEngineModels, addAudioModel, removeAudioModel, isValidRepoId } from '../services/audioModels.js';
 import { startHfDownloadStream, openSseStream } from '../lib/sseDownload.js';
+import { createInstallLogger } from '../lib/installLogger.js';
 import { inspectModelCache } from '../lib/hfCache.js';
 import * as tracks from '../services/tracks/index.js';
 import * as albums from '../services/albums/index.js';
@@ -116,6 +118,11 @@ router.get('/setup/runtime-install', asyncHandler(async (req, res) => {
   }
 
   send({ type: 'log', message: `Starting ${engine.name} install.` });
+  // Server-console visibility for the multi-GB install (start / heartbeat /
+  // outcome) — the SSE stream otherwise surfaces progress only in the browser.
+  const installLog = createInstallLogger({ installer: engine.name, target: engine.venvDefault });
+  const emit = (ev) => { installLog.onEvent(ev); send(ev); };
+  installLog.start();
   const child = spawn('bash', [scriptPath], {
     env: safeChildProcessEnv({ [engine.installEnv]: '1' }),
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -124,35 +131,41 @@ router.get('/setup/runtime-install', asyncHandler(async (req, res) => {
   runtimeInstallInFlight.set(engine.id, child);
   let finished = false;
 
-  const onChunk = (chunk) => {
-    for (const line of chunk.toString().split(/[\r\n]+/)) {
-      const t = line.trimEnd();
-      if (t) send({ type: 'log', message: t });
-    }
+  // `splitRe: /[\r\n]+/` so a bash/pip/tqdm progress bar that redraws with a
+  // bare `\r` surfaces each redraw as its own log line; the carry buffer
+  // stitches a line split across chunk boundaries (flushed on close).
+  const onLine = (line) => {
+    const t = line.trimEnd();
+    if (t) emit({ type: 'log', message: t });
   };
-  child.stdout.on('data', onChunk);
-  child.stderr.on('data', onChunk);
+  const stdoutReader = createLineReader(onLine, { splitRe: /[\r\n]+/ });
+  const stderrReader = createLineReader(onLine, { splitRe: /[\r\n]+/ });
+  child.stdout.on('data', stdoutReader.push);
+  child.stderr.on('data', stderrReader.push);
   child.on('error', (err) => {
     finished = true;
     runtimeInstallInFlight.delete(engine.id);
-    send({ type: 'error', message: `Installer failed to spawn: ${err.message}` });
+    emit({ type: 'error', message: `Installer failed to spawn: ${err.message}` });
     safeEnd();
   });
   child.on('close', (code) => {
+    stdoutReader.flush();
+    stderrReader.flush();
     finished = true;
     runtimeInstallInFlight.delete(engine.id);
     if (code === 0 && isEngineReady(engine.id)) {
-      send({ type: 'complete', message: `${engine.name} ready: ${engine.resolvePython() || engine.venvDefault}` });
+      emit({ type: 'complete', message: `${engine.name} ready: ${engine.resolvePython() || engine.venvDefault}` });
     } else if (code === 0) {
-      send({ type: 'error', message: `Installer exited 0 but ${engine.name} is still not available. Check the log above for setup errors.` });
+      emit({ type: 'error', message: `Installer exited 0 but ${engine.name} is still not available. Check the log above for setup errors.` });
     } else {
-      send({ type: 'error', message: `Installer exited with code ${code}.` });
+      emit({ type: 'error', message: `Installer exited with code ${code}.` });
     }
     safeEnd();
   });
 
   req.on('close', () => {
     if (finished) return;
+    installLog.cancel();
     if (!child.killed && child.pid) {
       try { process.kill(-child.pid, 'SIGTERM'); }
       catch { child.kill('SIGTERM'); }

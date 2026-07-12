@@ -26,6 +26,7 @@ import { getImageModels, isFlux2, isEditOnly, repoForModel, requiredReposForMode
 import { usesDiffusersRunner } from '../lib/runners.js';
 import { inspectModelCache, verifyModelCache, repairModelCache, aggregateVerifies } from '../lib/hfCache.js';
 import { startHfDownloadStream, openSseStream } from '../lib/sseDownload.js';
+import { createInstallLogger } from '../lib/installLogger.js';
 import {
   REQUIRED_PACKAGES, detectPython, installPackages,
   createVenv, isAllowedPython, pipNameFor,
@@ -834,10 +835,23 @@ router.get('/setup/flux2-install', asyncHandler(async (req, res) => {
     return safeEnd();
   }
 
-  const { promise, kill } = installFlux2Venv(send);
+  // Server-console visibility for the multi-GB torch install (start / stage
+  // milestones / outcome) — installFlux2Venv streams progress only to `send`.
+  const installLog = createInstallLogger({ installer: 'FLUX.2 venv', target: FLUX2_VENV_DEFAULT });
+  const emit = (ev) => { installLog.onEvent(ev); send(ev); };
+  installLog.start();
+
+  const { promise, kill } = installFlux2Venv(emit);
   flux2InstallInFlight = promise;
   promise
-    .catch((err) => send({ type: 'error', message: err?.message || 'Unknown installer failure' }))
+    // installFlux2Venv resolves { ok:false } on some pip failures without
+    // emitting a terminal SSE event, so reconcile the outcome from the result
+    // (a no-op if `onEvent` already logged a complete/error frame).
+    .then((result) => {
+      if (result?.ok) installLog.success(result?.pythonPath ? `ready: ${result.pythonPath}` : undefined);
+      else installLog.failure(`failed at stage ${result?.stage || 'unknown'}`);
+    })
+    .catch((err) => emit({ type: 'error', message: err?.message || 'Unknown installer failure' }))
     .finally(() => {
       flux2InstallInFlight = null;
       safeEnd();
@@ -845,7 +859,7 @@ router.get('/setup/flux2-install', asyncHandler(async (req, res) => {
 
   // Cancel the install if the client navigates away mid-bootstrap. A torch
   // install is a multi-GB download and would otherwise keep running invisibly.
-  req.on('close', () => { kill(); safeEnd(); });
+  req.on('close', () => { installLog.cancel(); kill(); safeEnd(); });
 }));
 
 // Used by the FLUX.2 model picker: surface a banner when the gated repo's
@@ -1062,7 +1076,12 @@ router.get('/setup/install', (req, res) => {
   // so a late pip-output line (or the promise.then below) doesn't trigger
   // ERR_STREAM_WRITE_AFTER_END or double-end the response.
   const { send, safeEnd } = openSseStream(res);
-  const { promise, kill } = installPackages(parsed.data.pythonPath, parsed.data.packages, send);
+  // Server-console visibility for the (multi-GB) local pip install — the SSE
+  // stream otherwise surfaces progress only in the browser.
+  const installLog = createInstallLogger({ installer: 'Image Gen packages', target: parsed.data.pythonPath });
+  const emit = (ev) => { installLog.onEvent(ev); send(ev); };
+  installLog.start();
+  const { promise, kill } = installPackages(parsed.data.pythonPath, parsed.data.packages, emit);
   promise.then(() => {
     // Drop the now-stale setup-check snapshot before the client re-runs the
     // probe on `complete` — without this it would read the pre-install
@@ -1073,7 +1092,7 @@ router.get('/setup/install', (req, res) => {
 
   // Client navigation away should kill pip — a torch upgrade can run for
   // 10+ minutes and would otherwise keep going invisibly.
-  req.on('close', () => { kill(); safeEnd(); });
+  req.on('close', () => { installLog.cancel(); kill(); safeEnd(); });
 });
 
 export default router;

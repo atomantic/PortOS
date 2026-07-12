@@ -9,6 +9,7 @@
  *   - store.js                — shared persistence, cache, mutex, pure helpers
  *   - metrics.js              — recording completions + rebuilding aggregates
  *   - routing.js              — heuristic routing, cooldown, skip, confidence
+ *   - safetyKind.js           — outward-facing/irreversible safety-kind classifier
  *   - correlationQuality.js   — enriched-signal ↔ outcome correlation window
  *   - durations.js            — duration estimates + queue completion
  *   - insights.js             — insights view, recommendations, dismissals
@@ -25,6 +26,11 @@ export {
   classifyUntypedTask,
   isSandboxedTaskType,
   summarizeFailureSignatures,
+  appendInsight,
+  buildRecurrenceInsight,
+  recurrenceMilestoneReached,
+  INSIGHT_CAP,
+  RECURRENCE_INSIGHT_MILESTONES,
   EXTERNAL_UNTYPED_TASK_TYPE
 } from './store.js';
 
@@ -83,6 +89,14 @@ export {
   getPromptImprovementRecommendations,
   getAllPromptRecommendations
 } from './promptRecommendations.js';
+
+export {
+  classifySafetyKind,
+  requiresSafetyApproval,
+  REVERSIBLE_SAFETY_KIND,
+  OUTWARD_SAFETY_KINDS,
+  DEFAULT_ALWAYS_APPROVE_KINDS
+} from './safetyKind.js';
 
 export {
   initTaskLearning,

@@ -11,6 +11,7 @@ import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { ensureDirs, safeJSONParse, PATHS, atomicWrite } from '../lib/fileUtils.js';
 import { normalizeDomainAutonomy, getDomainMode } from '../lib/domainAutonomy.js';
 import { normalizeDomainBudgets } from '../lib/domainBudgets.js';
+import { DEFAULT_ALWAYS_APPROVE_KINDS } from './taskLearning/safetyKind.js';
 
 export const STATE_FILE = join(PATHS.cos, 'state.json');
 export const AGENTS_DIR = join(PATHS.cos, 'agents');
@@ -84,6 +85,14 @@ export const DEFAULT_CONFIG = {
     highThreshold: 80,
     lowThreshold: 50,
     minSamples: 5
+  },
+  // Safety axis orthogonal to confidence (#2440): outward-facing / irreversible
+  // work always needs human sign-off regardless of success rate. Reversible
+  // internal work keeps the confidence success-rate gate. Tune which kinds are
+  // forced to approval via `alwaysApproveKinds`.
+  safetyKindApproval: {
+    enabled: true,
+    alwaysApproveKinds: [...DEFAULT_ALWAYS_APPROVE_KINDS]
   }
 };
 

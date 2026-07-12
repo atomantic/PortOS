@@ -71,7 +71,14 @@ export const cosConfigSchema = z.object({
   autoFixThresholds: z.object({
     maxLinesChanged: z.number().int().min(1).optional(),
     allowedCategories: z.array(z.string()).optional()
-  }).optional()
+  }).optional(),
+  // Safety-kind override (#2440): which outward-facing/irreversible kinds always
+  // require human approval, orthogonal to confidence. updateConfig() replaces the
+  // whole object, so the client sends the full slice.
+  safetyKindApproval: z.object({
+    enabled: z.boolean().optional(),
+    alwaysApproveKinds: z.array(z.string()).optional()
+  }).strict().optional()
 }).strict();
 
 // GET /api/cos - Get CoS status

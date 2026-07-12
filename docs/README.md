@@ -18,6 +18,7 @@ Index of everything under `docs/`. Start with the [root README](../README.md) fo
 | [DEPS.md](./DEPS.md) | Dependency audit — every third-party package and its verdict |
 | [TROUBLESHOOTING.md](./TROUBLESHOOTING.md) | Common runtime issues, known issues |
 | [GOALS_OPERATIONAL.md](./GOALS_OPERATIONAL.md) | Runtime operating principles the CoS agent reads (parsed by `goalProgress.js`) |
+| [METRICS.md](./METRICS.md) | The `METRICS.md` convention — how a managed app exposes its own success metrics so agents (incl. Layered Intelligence) can evaluate it against its goals |
 | [SECURITY_AUDIT.md](./SECURITY_AUDIT.md) | Historical hardening audit (2026-02, all items resolved) |
 
 ## Feature deep dives (`features/`)

@@ -55,8 +55,9 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   createTicket: vi.fn().mockResolvedValue(null),
 }));
 
-import { buildLightContextPrompt, buildAgentPrompt, buildCompletionGuidelineBullet } from './agentPromptBuilder.js';
+import { buildLightContextPrompt, buildAgentPrompt, buildCompletionGuidelineBullet, reconcileSplitContext } from './agentPromptBuilder.js';
 import { isTruthyMeta } from './agentState.js';
+import { buildPrompt } from './promptService.js'; // mocked above — inspect call args
 
 function makeTask(overrides = {}) {
   return {
@@ -67,6 +68,37 @@ function makeTask(overrides = {}) {
     ...overrides,
   };
 }
+
+describe('reconcileSplitContext', () => {
+  it('folds context back into description when it is the queue-path split', () => {
+    const body = 'Line one is the title\n\nLine two is the body.';
+    const task = { description: 'Line one is the title', metadata: { context: body, app: 'comics' } };
+    const out = reconcileSplitContext(task);
+    expect(out.description).toBe(body);
+    expect(out.metadata.context).toBeUndefined();
+    expect(out.metadata.app).toBe('comics'); // other metadata preserved
+  });
+
+  it('leaves a genuinely-separate user context untouched', () => {
+    const task = { description: 'Add a button', metadata: { context: 'Unrelated context detail' } };
+    const out = reconcileSplitContext(task);
+    expect(out).toBe(task);
+    expect(out.metadata.context).toBe('Unrelated context detail');
+  });
+
+  it('does not mutate the caller task (stored one-line description survives)', () => {
+    const body = 'Title\n\nBody.';
+    const task = { description: 'Title', metadata: { context: body } };
+    reconcileSplitContext(task);
+    expect(task.description).toBe('Title');
+    expect(task.metadata.context).toBe(body);
+  });
+
+  it('is idempotent and a no-op when there is no context', () => {
+    const task = { description: 'Title', metadata: {} };
+    expect(reconcileSplitContext(task)).toBe(task);
+  });
+});
 
 describe('buildLightContextPrompt', () => {
   describe('what it omits', () => {
@@ -132,6 +164,21 @@ describe('buildLightContextPrompt', () => {
       const multi = buildLightContextPrompt(
         makeTask({ metadata: { context: 'line one\nline two' } }), '/r', null, isTruthyMeta);
       expect(multi).toMatch(/### Context\n\nline one\nline two/);
+    });
+
+    it('does NOT double-render a queue-path split prompt (description == firstLine(context))', () => {
+      // The queue path stores `description = firstLine(body)` + `context = body`
+      // so COS-TASKS.md stays one-line-per-task. Rendering both would print the
+      // first line twice (the reported double `# ⚡ SWARM MODE …` header).
+      const body = '# ⚡ SWARM MODE — claim and ship up to 3 independent issues in parallel\n\n**This run operates in slashdo mode.** Do the work.';
+      const prompt = buildLightContextPrompt(
+        makeTask({ description: '# ⚡ SWARM MODE — claim and ship up to 3 independent issues in parallel', metadata: { context: body } }),
+        '/r', null, isTruthyMeta);
+      // Header appears exactly once, and the redundant `### Context` wrapper is gone.
+      expect(prompt.match(/# ⚡ SWARM MODE/g)).toHaveLength(1);
+      expect(prompt).not.toMatch(/### Context/);
+      // The full body still renders (nothing dropped).
+      expect(prompt).toMatch(/\*\*This run operates in slashdo mode\.\*\* Do the work\./);
     });
 
     it('lists screenshot file paths so the agent can read them via its own tools', () => {
@@ -713,6 +760,29 @@ describe('buildAgentPrompt — provider type routing', () => {
     expect(prompt).not.toMatch(/You are an autonomous agent/);
     // Light + non-TUI uses the plain "## Completion" block.
     expect(prompt).toMatch(/^## Completion$/m);
+  });
+
+  it('passes the app id as targetAppLabel to the api-path briefing template for a managed app', async () => {
+    vi.mocked(buildPrompt).mockClear();
+    await buildAgentPrompt(
+      makeTask({ metadata: { app: 'comics' } }), {}, '/r', null, isTruthyMeta,
+      { providerType: 'api' });
+    const [name, context] = vi.mocked(buildPrompt).mock.calls.at(-1);
+    expect(name).toBe('cos-agent-briefing');
+    expect(context.targetAppLabel).toBe('comics');
+    // task.metadata.app stays available for any custom template references.
+    expect(context.task.metadata.app).toBe('comics');
+  });
+
+  it('passes an empty targetAppLabel to the api-path briefing template for the PortOS default app', async () => {
+    vi.mocked(buildPrompt).mockClear();
+    await buildAgentPrompt(
+      makeTask({ metadata: { app: 'portos-default' } }), {}, '/r', null, isTruthyMeta,
+      { providerType: 'api' });
+    const [, context] = vi.mocked(buildPrompt).mock.calls.at(-1);
+    expect(context.targetAppLabel).toBe('');
+    // The raw app id is NOT stripped from the context — only the label gates.
+    expect(context.task.metadata.app).toBe('portos-default');
   });
 
   describe('split system/user prompt (Claude providers)', () => {

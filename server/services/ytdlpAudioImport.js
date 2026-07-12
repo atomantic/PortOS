@@ -29,6 +29,7 @@ import { ServerError } from '../lib/errorHandler.js';
 import { findFfmpeg } from '../lib/ffmpeg.js';
 import { findYtDlp } from '../lib/ytdlp.js';
 import { safeChildProcessEnv } from '../lib/processEnv.js';
+import { createLineReader } from '../lib/streamLines.js';
 
 const TITLE_PREFIX = 'PORTOS_TITLE:';
 // Custom progress markers via yt-dlp's `--progress-template`, rather than
@@ -137,20 +138,13 @@ export async function downloadAudioToTempMp3({
       onProgress({ percent: 100, stage: line.slice(STAGE_PREFIX.length) });
     }
   };
-  // Separate buffers per stream — stdout and stderr chunks arrive
+  // Separate readers per stream — stdout and stderr chunks arrive
   // independently, so a shared buffer can complete a partial line from one
   // stream with a chunk from the other, corrupting a marker line.
-  const makeLineReader = () => {
-    let buf = '';
-    return (chunk) => {
-      buf += chunk.toString();
-      const lines = buf.split(/\r?\n/);
-      buf = lines.pop();
-      lines.forEach(onLine);
-    };
-  };
-  proc.stdout.on('data', makeLineReader());
-  proc.stderr.on('data', makeLineReader()); // yt-dlp writes some progress/info lines to stderr too
+  const stdoutReader = createLineReader(onLine);
+  const stderrReader = createLineReader(onLine);
+  proc.stdout.on('data', stdoutReader.push);
+  proc.stderr.on('data', stderrReader.push); // yt-dlp writes some progress/info lines to stderr too
 
   const exit = await new Promise((resolve) => {
     proc.on('error', (err) => resolve({ code: null, reason: `spawn failed: ${err.message}` }));
@@ -159,9 +153,15 @@ export async function downloadAudioToTempMp3({
   registerProcess(null);
 
   if (exit.signal === 'SIGTERM' || exit.signal === 'SIGKILL') {
+    // Don't flush on cancel — a SIGKILL'd child leaves only a partial marker
+    // line in the carry, and emitting it would fire a stray progress/stage
+    // callback right before the caller reports the cancellation.
     await cleanupYtDlpTemp(tempPrefix);
     return { outcome: 'canceled' };
   }
+  // Flush any final line the child wrote without a trailing newline before exit.
+  stdoutReader.flush();
+  stderrReader.flush();
   if (exit.code !== 0 || !existsSync(outPath)) {
     // A --match-filters/--max-filesize rejection exits 0 with no output file
     // (yt-dlp treats a filtered-out video as "nothing to do", not an error) —

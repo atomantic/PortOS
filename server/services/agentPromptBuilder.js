@@ -233,6 +233,37 @@ export function buildTaskBlock(task, { screenshotsAsList = false } = {}) {
 }
 
 /**
+ * Undo the COS-TASKS.md round-trip split before rendering. The queue path in
+ * `cosTaskGenerator.js` persists a generated multi-line prompt by moving the
+ * full body into `metadata.context` and keeping only its first line as
+ * `description`, so the markdown stays one-line-per-task. Coming back out,
+ * `context` therefore *leads with a verbatim copy* of `description` — and every
+ * render path emits both (the task block, then the full body again under a
+ * `### Context` header). For a swarm task that surfaces as the reported
+ * double `# ⚡ SWARM MODE …` header; the same duplication hits any other
+ * generated/scheduled/system task that round-trips through the queue.
+ *
+ * When the split signature is present (`context` is a string whose first
+ * non-empty line equals `description`), fold `context` back into `description`
+ * and drop the redundant `metadata.context` so the prompt renders once, as one
+ * clean body with no spurious header. A genuinely-separate user-supplied
+ * `context` (first line differs from `description`) is left untouched.
+ *
+ * Pure and idempotent: returns the same task when nothing matched, otherwise a
+ * shallow clone (never mutates the caller's task, so the stored task keeps its
+ * one-line `description` for the task-list UI).
+ */
+export function reconcileSplitContext(task) {
+  const context = task?.metadata?.context;
+  if (typeof context !== 'string' || typeof task.description !== 'string') return task;
+  // Mirror firstLine() in cosTaskStore.js: first non-empty, trimmed line.
+  const firstNonEmpty = context.split('\n').map(l => l.trim()).find(Boolean) || '';
+  if (firstNonEmpty !== task.description.trim()) return task;
+  const { context: _dropped, ...restMeta } = task.metadata;
+  return { ...task, description: context, metadata: restMeta };
+}
+
+/**
  * Build the **review-loop follow-up** section — the instructions for the
  * agent spawned by `spawnReviewLoopFollowUp` to drive Copilot's review-and-fix
  * loop until the PR merges. Same 7-step procedure, same merge command, same
@@ -315,7 +346,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
     hasCopilot ? `**copilot**: ${copilotIsFirst
       ? 'wait for the initial Copilot review the system already pre-requested (Copilot leads the list)'
       : 'request a Copilot review when you reach its turn'} (poll every 5–15s, max 5 min/round), then re-request on later rounds.` : null,
-    hasCli ? `**codex / antigravity / claude**: invoke that CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works).${codexModelNote}` : null,
+    hasCli ? `**codex / antigravity / claude / grok**: invoke that CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works).${codexModelNote}` : null,
     hasLocalLlm ? `**lmstudio / ollama**: ${localLlmInvocation}` : null,
     hasGithubUser ? `**@github reviewers**: ${githubUsersInvocation}` : null,
   ].filter(Boolean).join(' ');
@@ -549,6 +580,12 @@ export function buildReadOnlyCompletionSection({ isTui = false, sentinelPath = n
  *   Ignored on the full/api path, which always returns a string.
  */
 export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo = null, isTruthyMetaFn = (v) => v === true || v === 'true', options = {}) {
+  // Undo the queue-path description/context split so a round-tripped generated
+  // prompt (swarm, scheduled claim-work, other system tasks) renders once
+  // instead of double-printing its first line under a `### Context` header.
+  // Feeds both the briefing template (via the reconciled `task` object) and the
+  // full-path fallback below.
+  task = reconcileSplitContext(task);
   const providerType = options.providerType || PROVIDER_TYPES.API;
   const providerId = options.providerId || null;
   const providerCommand = options.providerCommand || null;
@@ -748,8 +785,17 @@ ${task.metadata.jiraBranch ? 'Commit your changes to this branch. Do NOT switch 
   // predates the {{reviewLoopFollowUpSection}} placeholder; the built-in
   // fallback is the source of truth for that section, and silently dropping
   // it would leave the agent with no instructions and the loop would not run.
+  // Precomputed display label for the stock "Target Application" heading in the
+  // cos-agent-briefing template. Mirrors buildTaskBlock's predicate: suppress
+  // the redundant heading for the PortOS default app (empty string → the
+  // template section is falsy and renders nothing), surface the app id for
+  // managed apps. `task.metadata.app` stays in the context for any custom
+  // template references — only the stock heading gates on this.
+  const briefingApp = task.metadata?.app;
+  const targetAppLabel = briefingApp && briefingApp !== PORTOS_APP_ID ? briefingApp : '';
   const promptData = isReviewLoopFollowUp ? null : await buildPrompt('cos-agent-briefing', {
     task,
+    targetAppLabel,
     config,
     memorySection,
     claudeMdSection,
@@ -886,6 +932,9 @@ export function buildLightContextPromptParts(task, workspaceDir, worktreeInfo, i
 const BEGIN_WORKING_LINE = 'Begin working on the task now.';
 
 function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMetaFn, { isTui = true, providerId = null, providerCommand = null, leanMode = false } = {}) {
+  // Idempotent with the reconcile in buildAgentPrompt; also protects the
+  // directly-exported buildLightContextPrompt/Parts entry points.
+  task = reconcileSplitContext(task);
   const willOpenPR = isTruthyMetaFn(task.metadata?.openPR);
   const willReviewLoop = isTruthyMetaFn(task.metadata?.reviewLoop);
   const simplifyEnabled = isTruthyMetaFn(task.metadata?.simplify);
