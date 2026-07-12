@@ -42,6 +42,7 @@ import { startMemoRecording, arrayBufferToBase64 } from '../../lib/audioRecorder
 import { proposeSegmentScore, proposeStackedSegmentScore, diffScoreBars, PITCH_CLASS_NAMES } from '../../lib/referenceAnalysis';
 import { scoreHasMusic, parseScore } from '../../lib/scoreNotation';
 import { harmonyPartLabel } from '../../lib/songCraft';
+import { MUSCRIPTOR_MODELS, DEFAULT_MUSCRIPTOR_MODEL } from '../../lib/muscriptorModels.js';
 
 // Client-side guard for the base64-JSON upload path: the server body limit is
 // 55 MB and base64 inflates ~4/3, so cap the raw file well under that.
@@ -99,6 +100,10 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
   const [url, setUrl] = useState('');
+  // MuScriptor model size for the next transcription (default balances
+  // quality/speed). Read fresh inside startRequest — useSseJobSlot invokes the
+  // latest closure each kickoff, so a change here applies to the next run.
+  const [midiModel, setMidiModel] = useState(DEFAULT_MUSCRIPTOR_MODEL);
   const fileRef = useRef(null);
   const handleRef = useRef(null);
 
@@ -114,7 +119,7 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
   // .mid. Same explicit-save model as the other reference fields: the returned
   // uploads filename lands on the draft; the user Saves to keep it.
   const midiJob = useMidiTranscription({
-    startRequest: (filename) => transcribeReferenceMidi(filename, undefined, { silent: true }),
+    startRequest: (filename) => transcribeReferenceMidi(filename, midiModel, { silent: true }),
     eventsUrl: referenceMidiTranscriptionEventsUrl,
     cancelRequest: cancelReferenceMidiTranscription,
     onComplete: ({ filename }, sourceAudio) => {
@@ -214,14 +219,25 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
             </button>
           </span>
         ) : (
-          <button
-            type="button"
-            onClick={() => midiJob.start(reference.audioFilename)}
-            title="Transcribe this audio to MIDI with MuScriptor (local — installs automatically on first use)"
-            className="flex items-center gap-1 px-2 py-1 text-xs rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50"
-          >
-            <Music size={13} /> Transcribe MIDI
-          </button>
+          <>
+            <select
+              value={midiModel}
+              onChange={(e) => setMidiModel(e.target.value)}
+              aria-label="MuScriptor model size"
+              title="MuScriptor model size — larger is higher quality but slower and a bigger first-use download"
+              className="bg-port-bg border border-port-border rounded-lg px-1.5 py-1 text-xs text-white capitalize focus:border-port-accent focus:outline-none"
+            >
+              {MUSCRIPTOR_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <button
+              type="button"
+              onClick={() => midiJob.start(reference.audioFilename)}
+              title={`Transcribe this audio to MIDI with MuScriptor (${midiModel} model, local — installs automatically on first use)`}
+              className="flex items-center gap-1 px-2 py-1 text-xs rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50"
+            >
+              <Music size={13} /> Transcribe MIDI
+            </button>
+          </>
         )}
         <button
           type="button"

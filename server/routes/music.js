@@ -25,6 +25,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { safeChildProcessEnv } from '../lib/processEnv.js';
+import { createLineReader } from '../lib/streamLines.js';
 import { ENGINES, DEFAULT_ENGINE_ID, getEngine, isEngineReady, generateMusic } from '../services/pipeline/musicGen.js';
 import { listEngineModels, addAudioModel, removeAudioModel, isValidRepoId } from '../services/audioModels.js';
 import { startHfDownloadStream, openSseStream } from '../lib/sseDownload.js';
@@ -130,14 +131,17 @@ router.get('/setup/runtime-install', asyncHandler(async (req, res) => {
   runtimeInstallInFlight.set(engine.id, child);
   let finished = false;
 
-  const onChunk = (chunk) => {
-    for (const line of chunk.toString().split(/[\r\n]+/)) {
-      const t = line.trimEnd();
-      if (t) emit({ type: 'log', message: t });
-    }
+  // `splitRe: /[\r\n]+/` so a bash/pip/tqdm progress bar that redraws with a
+  // bare `\r` surfaces each redraw as its own log line; the carry buffer
+  // stitches a line split across chunk boundaries (flushed on close).
+  const onLine = (line) => {
+    const t = line.trimEnd();
+    if (t) emit({ type: 'log', message: t });
   };
-  child.stdout.on('data', onChunk);
-  child.stderr.on('data', onChunk);
+  const stdoutReader = createLineReader(onLine, { splitRe: /[\r\n]+/ });
+  const stderrReader = createLineReader(onLine, { splitRe: /[\r\n]+/ });
+  child.stdout.on('data', stdoutReader.push);
+  child.stderr.on('data', stderrReader.push);
   child.on('error', (err) => {
     finished = true;
     runtimeInstallInFlight.delete(engine.id);
@@ -145,6 +149,8 @@ router.get('/setup/runtime-install', asyncHandler(async (req, res) => {
     safeEnd();
   });
   child.on('close', (code) => {
+    stdoutReader.flush();
+    stderrReader.flush();
     finished = true;
     runtimeInstallInFlight.delete(engine.id);
     if (code === 0 && isEngineReady(engine.id)) {

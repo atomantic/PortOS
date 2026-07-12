@@ -190,7 +190,16 @@ export async function getWorkflowGraph({ horizonHours = 24, from = new Date() } 
       missedSlot: info.status?.missedSlot || null,
       pendingDeps: info.status?.pendingDeps || [],
       nextRunAt: info.status?.nextRunAt || info.perpetual?.nextRecheckAt || null,
-      perpetual: info.perpetual || null
+      perpetual: info.perpetual || null,
+      // Per-app overrides so the timeline can expand a task row to show/edit
+      // which apps run it (mirrors the Schedule tab's PerAppOverrideList).
+      // `taskMetadata`/`managedAgentOptions` are the global defaults the
+      // per-app rows inherit from and render "(inherited)" against.
+      appOverrides: info.appOverrides || {},
+      enabledAppCount: info.enabledAppCount || 0,
+      totalAppCount: info.totalAppCount || 0,
+      taskMetadata: info.taskMetadata || null,
+      managedAgentOptions: info.managedAgentOptions || null
     });
 
     for (const dep of runAfter) {
