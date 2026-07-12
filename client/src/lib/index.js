@@ -77,6 +77,7 @@ export * from './voiceLabel.js';
 
 // === Page-scoped pure helpers ===
 export * from './cityPlaybackFrame.js';
+export * from './canvasRoll.js';
 export * from './colorMatch.js';
 export * from './editorialChecks.js';
 export * from './editorialHealth.js';
