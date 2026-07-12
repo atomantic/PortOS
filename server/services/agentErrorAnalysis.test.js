@@ -8,6 +8,8 @@ import {
   analyzeAgentFailure,
   resolveFailedTaskDecision,
   maybeCreateInvestigationTask,
+  createInvestigationTask,
+  redactFailureSnippet,
   MAX_TASK_RETRIES
 } from './agentErrorAnalysis.js';
 import { addTask } from './cos.js';
@@ -230,5 +232,104 @@ describe('maybeCreateInvestigationTask', () => {
   it('creates an investigation task for a non-API-access category', async () => {
     await maybeCreateInvestigationTask('agent-1', task, { category: 'model-not-found', message: 'Model not found' });
     expect(addTask).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('redactFailureSnippet', () => {
+  it('strips OS usernames, emails, IPs, hostnames, and secrets, collapsing to one line', () => {
+    const raw = [
+      'error at /Users/alice/github.com/app/index.js:42',
+      'contact ops@example.com or reach host node-alpha.tailnet.ts.net',
+      'connect ECONNREFUSED 192.0.2.10:5555',
+      'Authorization: Bearer abcdef0123456789abcdef',
+    ].join('\n');
+    const out = redactFailureSnippet(raw);
+    expect(out).not.toContain('alice');
+    expect(out).not.toContain('ops@example.com');
+    expect(out).not.toContain('node-alpha.tailnet.ts.net');
+    expect(out).not.toContain('192.0.2.10');
+    expect(out).not.toContain('abcdef0123456789abcdef');
+    expect(out).toContain('/Users/<user>/github.com/app/index.js');
+    expect(out).toContain('<email>');
+    expect(out).toContain('<host>');
+    expect(out).toContain('<ip>');
+    expect(out).not.toContain('\n'); // collapsed to a single line
+  });
+
+  it('returns an empty string for non-string / blank input', () => {
+    expect(redactFailureSnippet(null)).toBe('');
+    expect(redactFailureSnippet('   ')).toBe('');
+  });
+
+  it('caps overly long snippets with an ellipsis', () => {
+    const out = redactFailureSnippet('x'.repeat(500));
+    expect(out.length).toBeLessThanOrEqual(241);
+    expect(out.endsWith('…')).toBe(true);
+  });
+});
+
+describe('analyzeAgentFailure — snippet & escalation enrichment', () => {
+  it('captures the matched failure line as a snippet and category-specific escalation prose', () => {
+    const analysis = analyzeAgentFailure(withLead('API Error: 404 - model: claude-4-ultra not found'), { id: 't' }, 'claude-4-ultra');
+    expect(analysis.snippet).toContain('claude-4-ultra');
+    expect(analysis.escalation).toMatch(/approve the retry/i);
+  });
+
+  it('leaves escalation null for categories without custom prose', () => {
+    const analysis = analyzeAgentFailure(withLead('API Error: 429 Too Many Requests, please slow down'), { id: 't' }, 'x');
+    expect(analysis.escalation).toBeNull();
+  });
+});
+
+describe('createInvestigationTask body', () => {
+  beforeEach(() => {
+    addTask.mockReset();
+    addTask.mockResolvedValue({ id: 'investigation-1' });
+  });
+
+  const bodyOf = () => addTask.mock.calls[0][0].description;
+
+  it('renders the What happened / What to approve / What unblocks template with category-specific prose', async () => {
+    await createInvestigationTask('agent-1', { id: 'task-9', description: 'ship the thing' }, {
+      category: 'model-not-found',
+      message: 'Model "claude-4-ultra" not found',
+      configuredModel: 'claude-4-ultra',
+      snippet: 'API Error: 404 - model: claude-4-ultra not found',
+      escalation: 'Set a valid model id for this task, then approve the retry.',
+    });
+    const body = bodyOf();
+    expect(body).toContain('## What happened');
+    expect(body).toContain('## What to approve');
+    expect(body).toContain('## What unblocks');
+    expect(body).toContain('model-not-found');
+    expect(body).toContain('claude-4-ultra'); // provider/model attribution
+    expect(body).toContain('Set a valid model id'); // category-specific escalation prose
+    expect(body).toContain('task-9'); // which task unblocks
+  });
+
+  it('falls back to suggestedFix when a category supplies no escalation prose', async () => {
+    await createInvestigationTask('agent-2', { id: 'task-10', description: 'do x' }, {
+      category: 'unknown',
+      message: 'boom',
+      suggestedFix: 'Review the details or agent output logs.',
+      escalation: null,
+    });
+    expect(bodyOf()).toContain('Review the details or agent output logs.');
+  });
+
+  it('never leaks host/path/PII data from the snippet or task description into the body', async () => {
+    await createInvestigationTask('agent-3', {
+      id: 'task-11',
+      description: 'fix bug for user alice at /Users/alice/app',
+    }, {
+      category: 'file-not-found',
+      message: 'File not found',
+      snippet: 'ENOENT: /Users/alice/secret.json — see ops@example.com or node-alpha.ts.net at 192.0.2.10',
+    });
+    const body = bodyOf();
+    expect(body).not.toContain('/Users/alice');
+    expect(body).not.toContain('ops@example.com');
+    expect(body).not.toContain('node-alpha.ts.net');
+    expect(body).not.toContain('192.0.2.10');
   });
 });

@@ -9,9 +9,55 @@ import { emitLog } from './cosEvents.js';
 import { addTask, updateTask } from './cos.js';
 import { cosEvents } from './cosEvents.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
+import { redactOutput } from '../lib/commandSecurity.js';
 
 // Max retries before blocking a task
 export const MAX_TASK_RETRIES = 3;
+
+// Longest redacted failure snippet folded into a human-facing investigation body.
+const SNIPPET_MAX_CHARS = 240;
+
+// Machine-identity / network / PII fragments stripped before a captured failure
+// snippet (or any interpolated free text) lands in a human-facing — and possibly
+// federated — investigation task body. See the "Sensitive Data & Privacy" section
+// in CLAUDE.md: the *shape* of the failure is what a human needs, never the live
+// hostnames, paths, addresses, or secrets pulled off the running instance.
+const SNIPPET_REDACTIONS = [
+  // Home-dir paths that embed an OS username → strip the user segment only.
+  [/\/(Users|home)\/[^/\s"']+/gi, '/$1/<user>'],
+  // Email addresses.
+  [/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/g, '<email>'],
+  // Tailscale MagicDNS / mDNS hostnames.
+  [/\b[A-Za-z0-9-]+\.(?:ts\.net|local)\b/gi, '<host>'],
+  // IPv4 addresses (LAN / Tailscale / public alike).
+  [/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g, '<ip>'],
+  // Bearer tokens and common secret-key formats.
+  [/\bbearer\s+[\w.\-/+=]{12,}/gi, 'bearer <token>'],
+  [/\bsk-[A-Za-z0-9\-_]{16,}/g, '<token>'],
+];
+
+/**
+ * Redact machine identity, network info, PII, and secrets from free text before
+ * it is embedded in an investigation-task body. Also normalizes whitespace and
+ * caps length so a captured multi-line snippet stays a single readable line.
+ * Pure — safe to unit-test directly.
+ */
+export function redactFailureSnippet(text) {
+  if (typeof text !== 'string' || !text.trim()) return '';
+  let out = redactOutput(text); // JSON secret key/value pairs
+  for (const [re, replacement] of SNIPPET_REDACTIONS) out = out.replace(re, replacement);
+  out = out.replace(/\s+/g, ' ').trim();
+  return out.length > SNIPPET_MAX_CHARS ? `${out.slice(0, SNIPPET_MAX_CHARS)}…` : out;
+}
+
+// Extract the single output line containing `index` — the matched failure line
+// makes the most useful snippet without dragging in surrounding noise.
+function snippetAround(text, index) {
+  const start = text.lastIndexOf('\n', index) + 1; // -1 → 0 (first line)
+  const nl = text.indexOf('\n', index);
+  const end = nl === -1 ? text.length : nl;
+  return text.slice(start, end).trim();
+}
 
 /**
  * Error patterns that warrant investigation tasks.
@@ -24,6 +70,7 @@ export const ERROR_PATTERNS = [
     pattern: /API Error: 404.*model:\s*(\S+)/i,
     category: 'model-not-found',
     actionable: true,
+    escalation: 'Set a valid model id for this task (or clear its model override so the CLI falls back to its own configured default), then approve the retry.',
     extract: (match, output, task, model) => ({
       message: `Model "${match[1]}" not found`,
       suggestedFix: `Update model configuration - "${match[1]}" doesn't exist. Check provider settings or task metadata.`,
@@ -35,6 +82,7 @@ export const ERROR_PATTERNS = [
     pattern: /(?:model:\s*)?["']?([A-Za-z0-9._:-]+)["']?\s+model is not supported|model\s+["']?([A-Za-z0-9._:-]+)["']?.*not supported/i,
     category: 'model-not-supported',
     actionable: true,
+    escalation: 'Pick a model the provider account supports (or clear the override to use the CLI default), then approve the retry.',
     extract: (match, output, task, model) => ({
       message: `Model "${match[1] || match[2] || model || 'configured model'}" is not supported`,
       suggestedFix: 'Update the provider model configuration or leave the model blank so the CLI can use its own configured default.',
@@ -122,6 +170,7 @@ export const ERROR_PATTERNS = [
     pattern: /context.?length|max.?tokens|token.?limit|context.?window/i,
     category: 'context-length',
     actionable: true,
+    escalation: 'Approve splitting the original task into smaller subtasks (or route it to a larger-context model), then retry — the retry already carries compaction hints.',
     extract: (match, output) => ({
       message: 'Context length exceeded',
       suggestedFix: 'Task is too large for the context window. Break into smaller subtasks or use a model with larger context.',
@@ -316,6 +365,7 @@ export const ERROR_PATTERNS = [
     pattern: /spawn.?(?:error|failed)|EACCES|command.?not.?found/i,
     category: 'spawn-error',
     actionable: true,
+    escalation: 'Confirm the required CLI/tool is installed and on PATH for the agent user (or fix the command), then approve the retry.',
     extract: () => ({
       message: 'Command spawn failed',
       suggestedFix: 'Failed to start subprocess. Check that required CLI tools are installed and accessible.'
@@ -365,6 +415,7 @@ export const ERROR_PATTERNS = [
     pattern: /task.?(?:rejected|declined|refused)|cannot.?(?:complete|perform)/i,
     category: 'task-rejected',
     actionable: true,
+    escalation: 'Rephrase or narrow the original task description so it is actionable, then approve the retry — the agent declined it as written.',
     extract: () => ({
       message: 'Agent rejected task',
       suggestedFix: 'Agent could not or would not complete the task. Rephrase or simplify the request.'
@@ -396,6 +447,7 @@ export const ERROR_PATTERNS = [
     pattern: /content.?(?:filter|policy)|safety.?(?:filter|block)|harmful.?content/i,
     category: 'content-filtered',
     actionable: true,
+    escalation: 'Reword the task description to avoid the content that tripped the safety filter, then approve the retry.',
     extract: () => ({
       message: 'Content filtered',
       suggestedFix: 'Request was blocked by content safety filter. Rephrase the task description.'
@@ -421,7 +473,9 @@ export function analyzeAgentFailure(output, task, model) {
       category: 'startup-failure',
       actionable: false,
       message: 'Agent failed to start or produced no output',
-      suggestedFix: 'Agent process exited immediately. Check system resources and provider availability.'
+      suggestedFix: 'Agent process exited immediately. Check system resources and provider availability.',
+      snippet: (output || '').trim(),
+      escalation: null
     };
   }
 
@@ -434,6 +488,10 @@ export function analyzeAgentFailure(output, task, model) {
       return {
         category: errorDef.category,
         actionable: errorDef.actionable,
+        // Captured for the human-facing investigation body; redacted at embed time.
+        snippet: snippetAround(analysisOutput, match.index ?? 0),
+        // Optional category-specific "what to approve" prose (may be undefined).
+        escalation: errorDef.escalation || null,
         ...extracted
       };
     }
@@ -454,6 +512,8 @@ export function analyzeAgentFailure(output, task, model) {
     actionable: false,
     message: summary,
     details: contextLines.map(l => l.trim()).join('\n'),
+    snippet: contextLines.map(l => l.trim()).join(' '),
+    escalation: null,
     suggestedFix: 'Error did not match known patterns. Review the details or agent output logs.'
   };
 }
@@ -462,16 +522,36 @@ export function analyzeAgentFailure(output, task, model) {
  * Create an investigation task in COS-TASKS.md for a failed agent.
  */
 export async function createInvestigationTask(agentId, originalTask, errorAnalysis) {
-  const description = `[Auto] Investigate agent failure: ${errorAnalysis.message}
+  const analysis = errorAnalysis || {};
+  const category = analysis.category || 'unknown';
+  const message = analysis.message || 'Agent failed with an unrecognized error';
+  const modelAttribution = analysis.affectedModel || analysis.configuredModel || null;
 
-**Failed Agent**: ${agentId}
-**Original Task**: ${originalTask.id} - ${(originalTask.description || '').substring(0, 100)}
-**Error Category**: ${errorAnalysis.category}
-**Suggested Fix**: ${errorAnalysis.suggestedFix}
-${errorAnalysis.configuredModel ? `**Configured Model**: ${errorAnalysis.configuredModel}` : ''}
-${errorAnalysis.affectedModel ? `**Affected Model**: ${errorAnalysis.affectedModel}` : ''}
+  // Every interpolated free-text field is redacted before it lands in the body —
+  // this task is human-facing and may sync across federated peers, so no
+  // hostnames/paths/IPs/PII/secrets from the live instance may leak in.
+  const snippet = redactFailureSnippet(analysis.snippet || analysis.details || message);
+  const originalDesc = redactFailureSnippet((originalTask.description || '').substring(0, 160)) || '(no description)';
 
-Review the error, fix the configuration or code issue, and retry the original task.`;
+  // Prefer the pattern's category-specific escalation prose; fall back to the
+  // generic suggestedFix so uncustomized categories still read as an action.
+  const whatToApprove = analysis.escalation
+    || analysis.suggestedFix
+    || 'Review the agent output, decide whether to fix the underlying config/code and retry, or close the task.';
+
+  const description = `[Auto] Investigate agent failure: ${message}
+
+## What happened
+Agent \`${agentId}\` failed while working on task \`${originalTask.id}\` (${originalDesc}).
+- **Classification**: ${category} — ${message}
+- **Provider/model**: ${modelAttribution || 'not attributed'}
+${snippet ? `- **Failure snippet (redacted)**:\n  > ${snippet}` : '- **Failure snippet**: (none captured)'}
+
+## What to approve
+${whatToApprove}
+
+## What unblocks
+Approving and applying the fix lets the original task \`${originalTask.id}\` be retried; it will resume: ${originalDesc}.`;
 
   const investigationTask = await addTask({
     description,
