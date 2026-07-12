@@ -230,6 +230,21 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
     onRefresh();
   };
 
+  // Resolve a parked challenge inline (#2471). `upheld` overturns the reviewer
+  // rejection and re-queues the work (→ pending); `escalated` surfaces the dispute
+  // for arbitration (→ blocked + an approval-required task). Gated while a resolve
+  // is in flight so a double-click can't fire two verdicts.
+  const [resolvingChallenge, setResolvingChallenge] = useState(false);
+  const handleResolveChallenge = async (outcome) => {
+    setResolvingChallenge(true);
+    const result = await api.resolveCosTaskChallenge(task.id, { outcome, resolvedBy: 'user' }, { silent: true })
+      .catch(err => { toast.error(err.message); return null; });
+    setResolvingChallenge(false);
+    if (!result) return;
+    toast.success(outcome === 'upheld' ? 'Challenge upheld — task re-queued' : 'Challenge escalated for arbitration');
+    onRefresh();
+  };
+
   const handleApprove = async () => {
     const result = await api.approveCosTask(task.id, { silent: true }).catch(err => {
       toast.error(err.message);
@@ -457,6 +472,31 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
                       <div className="mt-1 text-gray-400">
                         Resolved: {task.metadata.challengeResolution.outcome}
                         {task.metadata.challengeResolution.note ? ` — ${task.metadata.challengeResolution.note}` : ''}
+                      </div>
+                    )}
+                    {/* Inline resolve controls while parked in `challenged` and not
+                        yet settled (#2471) — Uphold overturns the rejection and
+                        re-queues the work, Escalate surfaces it for arbitration. */}
+                    {task.status === 'challenged' && !task.metadata.challengeResolution?.outcome && (
+                      <div className="flex items-center gap-2 mt-2">
+                        <button
+                          type="button"
+                          onClick={() => handleResolveChallenge('upheld')}
+                          disabled={resolvingChallenge}
+                          className="flex items-center gap-1 px-2.5 py-1 min-h-[32px] text-xs text-port-success bg-port-success/10 hover:bg-port-success/20 rounded transition-colors disabled:opacity-50"
+                          title="Overturn the rejection and re-queue this task"
+                        >
+                          <CheckCircle size={12} aria-hidden="true" /> Uphold
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleResolveChallenge('escalated')}
+                          disabled={resolvingChallenge}
+                          className="flex items-center gap-1 px-2.5 py-1 min-h-[32px] text-xs text-port-error bg-port-error/10 hover:bg-port-error/20 rounded transition-colors disabled:opacity-50"
+                          title="Let the rejection stand and file an arbitration task"
+                        >
+                          <Ban size={12} aria-hidden="true" /> Escalate
+                        </button>
                       </div>
                     )}
                   </div>

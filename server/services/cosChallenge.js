@@ -53,10 +53,25 @@ export function getChallengeCount(metadata) {
 }
 
 /**
- * May this task still be challenged? True until the per-task cap is reached.
+ * May this task still be challenged? Bounded by BOTH the one-shot per-task cap
+ * AND — when `maxTotalSpawns` is supplied — the task's shared retry budget (#2471).
+ *
+ * The one-shot cap (`max`) is the acceptance contract: exactly one dispute per task.
+ * The retry-budget bound makes the module's "shares the retry budget so an agent
+ * can't loop forever disputing" promise real: a challenge that succeeds re-queues
+ * the task, so once it has burned its total-spawn budget (`totalSpawnCount` ≥
+ * `maxTotalSpawns`) a further dispute is pointless — the re-queued task would only
+ * be re-blocked by agentLifecycle's spawn-cap gate. Callers pass `maxTotalSpawns`
+ * (the shared `MAX_TOTAL_SPAWNS` from validation.js) to opt into that bound; when
+ * omitted only the one-shot cap applies, so this stays a pure, import-free module.
  */
-export function canChallenge(metadata, { max = MAX_CHALLENGES_PER_TASK } = {}) {
-  return getChallengeCount(metadata) < max;
+export function canChallenge(metadata, { max = MAX_CHALLENGES_PER_TASK, maxTotalSpawns } = {}) {
+  if (getChallengeCount(metadata) >= max) return false;
+  if (maxTotalSpawns != null) {
+    const spawns = Number(metadata?.totalSpawnCount) || 0;
+    if (spawns >= maxTotalSpawns) return false;
+  }
+  return true;
 }
 
 /**

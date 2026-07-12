@@ -75,6 +75,7 @@ import {
   resolveTaskChallenge,
   resolveTaskChallengeWithRecheck
 } from './cosTaskStore.js';
+import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
 
 const USER_FILE = '/root/TASKS.md';
 const COS_FILE = '/root/COS-TASKS.md';
@@ -615,6 +616,16 @@ describe('cosTaskStore.challengeTask / resolveTaskChallenge (#2441)', () => {
     await challengeTask(id, { reason: 'first' });
     const second = await challengeTask(id, { reason: 'second' });
     expect(second.code).toBe('CHALLENGE_EXHAUSTED');
+  });
+
+  it('refuses a challenge once the shared retry budget is spent (#2471)', async () => {
+    const id = await seedTask('out of retries');
+    // Burn the total-spawn budget — a fresh challenge would only re-queue into a
+    // task agentLifecycle will immediately re-block, so it is refused up front.
+    await updateTask(id, { metadata: { totalSpawnCount: MAX_TOTAL_SPAWNS } }, 'user');
+    const result = await challengeTask(id, { reason: 'let me back in' });
+    expect(result.code).toBe('CHALLENGE_BUDGET_EXHAUSTED');
+    expect(result.error).toMatch(/Retry budget exhausted/);
   });
 
   it('returns NOT_FOUND for an unknown task', async () => {

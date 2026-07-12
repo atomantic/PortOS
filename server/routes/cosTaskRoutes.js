@@ -328,7 +328,7 @@ router.post('/tasks/:id/challenge', asyncHandler(async (req, res) => {
   const { reason, evidence, reviewer } = validateRequest(challengeTaskSchema, req.body);
   const result = await cos.challengeTask(id, { reason, evidence, reviewer });
   if (result?.error) {
-    const status = (result.code === 'CHALLENGE_EXHAUSTED' || result.code === 'CANNOT_CHALLENGE_COMPLETED') ? 409
+    const status = (result.code === 'CHALLENGE_EXHAUSTED' || result.code === 'CHALLENGE_BUDGET_EXHAUSTED' || result.code === 'CANNOT_CHALLENGE_COMPLETED') ? 409
       : result.code === 'NOT_FOUND' ? 404 : 400;
     throw new ServerError(result.error, { status, code: result.code || 'CHALLENGE_FAILED' });
   }

@@ -6,6 +6,7 @@ const api = vi.hoisted(() => ({
   deleteCosTask: vi.fn(),
   approveCosTask: vi.fn(),
   forceSpawnTask: vi.fn(),
+  resolveCosTaskChallenge: vi.fn(),
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 
@@ -82,5 +83,53 @@ describe('TaskItem blocked reason', () => {
     render(<TaskItem task={blocked} isSystem onRefresh={vi.fn()} providers={providers} />);
     expect(screen.getByText('Paused by user')).toBeInTheDocument();
     expect(screen.queryByText(/Max total spawns/)).not.toBeInTheDocument();
+  });
+});
+
+describe('TaskItem challenge resolve controls (#2471)', () => {
+  const challenged = {
+    id: 'sys-challenged',
+    description: 'Disputed work',
+    status: 'challenged',
+    metadata: { challenge: { reason: 'reviewer misread the diff', reviewer: 'ollama' } },
+  };
+
+  it('upholds a parked challenge via the inline control', async () => {
+    api.resolveCosTaskChallenge.mockResolvedValue({ status: 'pending' });
+    const onRefresh = vi.fn();
+    render(<TaskItem task={challenged} isSystem onRefresh={onRefresh} providers={providers} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Uphold' }));
+
+    await waitFor(() => expect(api.resolveCosTaskChallenge).toHaveBeenCalledWith(
+      'sys-challenged',
+      { outcome: 'upheld', resolvedBy: 'user' },
+      { silent: true },
+    ));
+    await waitFor(() => expect(onRefresh).toHaveBeenCalled());
+  });
+
+  it('escalates a parked challenge via the inline control', async () => {
+    api.resolveCosTaskChallenge.mockResolvedValue({ status: 'blocked' });
+    render(<TaskItem task={challenged} isSystem onRefresh={vi.fn()} providers={providers} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Escalate' }));
+
+    await waitFor(() => expect(api.resolveCosTaskChallenge).toHaveBeenCalledWith(
+      'sys-challenged',
+      { outcome: 'escalated', resolvedBy: 'user' },
+      { silent: true },
+    ));
+  });
+
+  it('hides the resolve controls once the challenge is already settled', () => {
+    const settled = {
+      ...challenged,
+      id: 'sys-challenged-done',
+      metadata: { ...challenged.metadata, challengeResolution: { outcome: 'upheld' } },
+    };
+    render(<TaskItem task={settled} isSystem onRefresh={vi.fn()} providers={providers} />);
+    expect(screen.queryByRole('button', { name: 'Uphold' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Escalate' })).not.toBeInTheDocument();
   });
 });

@@ -36,6 +36,19 @@ describe('cosChallenge', () => {
       // string form (post-round-trip) is refused too
       expect(canChallenge({ challengeCount: String(MAX_CHALLENGES_PER_TASK) })).toBe(false);
     });
+
+    it('also refuses once the shared retry budget is spent when maxTotalSpawns is supplied (#2471)', () => {
+      // Under the one-shot cap but out of total spawns → refused only when the
+      // budget bound is opted into; omitting maxTotalSpawns keeps the old behavior.
+      expect(canChallenge({ totalSpawnCount: 5 })).toBe(true);
+      expect(canChallenge({ totalSpawnCount: 5 }, { maxTotalSpawns: 5 })).toBe(false);
+      expect(canChallenge({ totalSpawnCount: '5' }, { maxTotalSpawns: 5 })).toBe(false);
+      expect(canChallenge({ totalSpawnCount: 4 }, { maxTotalSpawns: 5 })).toBe(true);
+      // absent spawn count coerces to 0 → still allowed under budget
+      expect(canChallenge({}, { maxTotalSpawns: 5 })).toBe(true);
+      // the one-shot cap still wins even with budget remaining
+      expect(canChallenge({ challengeCount: 1, totalSpawnCount: 0 }, { maxTotalSpawns: 5 })).toBe(false);
+    });
   });
 
   describe('buildChallengePatch', () => {
