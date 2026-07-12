@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Plus, Loader2, Trash2, Save, Upload, Music2, Library } from 'lucide-react';
 import toast from '../ui/Toast';
 import { formatTimecode } from '../../utils/formatters';
@@ -21,6 +21,9 @@ import ArtistPicker from './ArtistPicker';
 import MusicGenPanel from './MusicGenPanel';
 import TrackRenderCard from './TrackRenderCard';
 import TrackRenderModal from './TrackRenderModal';
+import MidiVisualization from '../songs/MidiVisualization.jsx';
+import { listMusicVideoProjects } from '../../services/apiMusicVideo.js';
+import { trackAudioUrl } from '../../services/apiTracks.js';
 import {
   listTracks, createTrack, updateTrack, deleteTrack,
   uploadTrackAudio, attachTrackAudio, listMusicLibrary, listAlbums,
@@ -74,6 +77,9 @@ export default function TracksManager() {
   // re-applies). See remixRender below.
   const [modalRender, setModalRender] = useState(null);
   const [remix, setRemix] = useState(null);
+  // Music Video projects, for the MIDI read-through: MuScriptor transcriptions
+  // are stored on the MV project that links a track, not on the track itself.
+  const [mvProjects, setMvProjects] = useState([]);
   const remixNonceRef = useRef(0);
   const fileInputRef = useRef(null);
   // Mirrors `selectedId` so async audio handlers can detect a selection change
@@ -86,10 +92,12 @@ export default function TracksManager() {
     Promise.all([
       listTracks().catch((err) => { toast.error(err.message || 'Failed to load tracks'); return []; }),
       listAlbums({ silent: true }).catch(() => []),
+      listMusicVideoProjects({ silent: true }).catch(() => []),
     ])
-      .then(([trackList, albumList]) => {
+      .then(([trackList, albumList, mvList]) => {
         setTracks(Array.isArray(trackList) ? trackList : []);
         setAlbums(Array.isArray(albumList) ? albumList : []);
+        setMvProjects(Array.isArray(mvList) ? mvList : []);
       })
       .finally(() => setLoading(false));
   }, []);
@@ -233,6 +241,16 @@ export default function TracksManager() {
       toast.success('Audio attached');
     }
   };
+
+  // MIDI read-through: the newest transcription among Music Video projects
+  // linked to this track. Transcriptions are made (and stored) on the MV
+  // project, but the piano-roll is just as useful when inspecting the track.
+  const midiSource = useMemo(() => {
+    if (!persisted?.id) return null;
+    const linked = mvProjects.filter((p) => p.trackId === persisted.id && p.midiTranscription?.filename);
+    if (!linked.length) return null;
+    return linked.sort((a, b) => (b.midiTranscription.createdAt || '').localeCompare(a.midiTranscription.createdAt || ''))[0];
+  }, [mvProjects, persisted]);
 
   // Render history — newest first. The active take (the top-level audioFilename
   // pointer) is highlighted in the grid.
@@ -490,6 +508,27 @@ export default function TracksManager() {
               ) : (
                 <p className="text-xs text-gray-500">Save the track first to generate, upload, or attach audio.</p>
               )}
+
+              {/* MIDI piano-roll (#2477) — read through from the linked Music
+                  Video project that ran the MuScriptor transcription. */}
+              {midiSource ? (
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="block text-xs uppercase tracking-wider text-gray-500">MIDI transcription</span>
+                    <Link
+                      to={`/music-video/${encodeURIComponent(midiSource.id)}`}
+                      className="text-[11px] text-port-accent hover:underline"
+                    >
+                      from Music Video “{midiSource.name}” →
+                    </Link>
+                  </div>
+                  <MidiVisualization
+                    url={trackAudioUrl(midiSource.midiTranscription.filename)}
+                    filename={midiSource.midiTranscription.filename}
+                    model={midiSource.midiTranscription.model}
+                  />
+                </div>
+              ) : null}
 
               <div className="flex items-center gap-2 pt-1 flex-wrap">
                 <button
