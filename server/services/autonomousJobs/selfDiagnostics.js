@@ -161,8 +161,12 @@ function runCli(cmd, args, options = {}) {
  * blip would file a duplicate; sentinel rule).
  */
 export async function findMonitoringIssue({ cwd = PATHS.root, exec = runCli } = {}) {
+  // High limit so our long-lived summary (kept at its original creation date)
+  // can't fall out of a small recency window on an install that accumulates many
+  // open `monitoring`-labeled issues — which would defeat dedup and file a fresh
+  // duplicate. gh sorts newest-first; the summary sinks over time.
   const { code, stdout } = await exec('gh',
-    ['issue', 'list', '--label', MONITORING_LABEL, '--state', 'open', '--limit', '20', '--json', 'number,title,body,labels,url'],
+    ['issue', 'list', '--label', MONITORING_LABEL, '--state', 'open', '--limit', '200', '--json', 'number,title,body,labels,url'],
     { cwd })
   if (code !== 0) return { ok: false, issue: null }
   if (!stdout.trim()) return { ok: true, issue: null }
