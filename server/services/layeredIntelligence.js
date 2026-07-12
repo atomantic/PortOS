@@ -459,7 +459,7 @@ export function computeOutcomesReport({ outcomes = [] } = {}) {
     .map(o => o.outcomeReason))].slice(0, 5);
 
   return [
-    'Past LI proposals (last 30 days):',
+    'Recent LI proposals (all still-open, plus outcomes resolved within ~30 days):',
     `- Total filed: ${total}`,
     `- Merged/implemented: ${merged} (${pct(merged)}%)`,
     `- Rejected: ${rejected} (${pct(rejected)}%)`,

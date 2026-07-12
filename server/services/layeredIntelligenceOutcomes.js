@@ -83,6 +83,18 @@ export function outcomesStore() {
   return _store;
 }
 
+// `saveOne` writes the per-record file but never the type-level index.json (the
+// slot that stamps schemaVersion). Since this store ships with no migration to
+// create it, stamp it on the first write so the boot verifier reports the real
+// version and a future schemaVersion bump can detect existing v1 data. Guarded
+// per store instance (WeakSet) so it runs once per process, not on every record.
+const _stamped = new WeakSet();
+async function ensureTypeIndex(store) {
+  if (_stamped.has(store)) return;
+  _stamped.add(store);
+  await store.saveTypeIndex({}).catch(() => { _stamped.delete(store); });
+}
+
 /**
  * Record a freshly-filed proposal (outcome unknown). Idempotent per (app, slug):
  * a re-file overwrites the row with a fresh `filedAt` and clears the outcome, so
@@ -103,6 +115,7 @@ export async function recordFiledProposal({ appId, slug, tracker = null, issueRe
     outcomeAt: null,
     outcomeReason: null
   };
+  await ensureTypeIndex(store);
   const ok = await store.saveOne(outcomeId(appId, normSlug), record).then(() => true, (err) => {
     console.error(`❌ Layered Intelligence: failed to record outcome for ${appId}/${normSlug}: ${err.message}`);
     return false;
@@ -111,9 +124,13 @@ export async function recordFiledProposal({ appId, slug, tracker = null, issueRe
 }
 
 /**
- * Load this app's outcome records, dropping (and GC-ing from disk) any filed
- * more than OUTCOME_RETENTION_MS ago so the store stays bounded. Returns the
- * surviving records sorted newest-filed-first. Never throws.
+ * Load this app's outcome records, GC-ing stale ones from disk so the store stays
+ * bounded. GC mirrors the dedup window (isIssueWithinDedupWindow): an UNRESOLVED
+ * record (outcome still null) is kept indefinitely — like an open issue — so a
+ * proposal that stays open past the window can still be learned once it finally
+ * closes. A RESOLVED record expires OUTCOME_RETENTION_MS after its resolution
+ * (outcomeAt), not its filing, so a long-open-then-merged proposal isn't dropped
+ * the moment it resolves. Returns survivors sorted newest-filed-first. Never throws.
  */
 export async function listOutcomes({ appId, now = Date.now() } = {}, store = outcomesStore()) {
   if (!appId) return [];
@@ -121,11 +138,12 @@ export async function listOutcomes({ appId, now = Date.now() } = {}, store = out
   const mine = all.filter(r => r && r.appId === appId);
   const kept = [];
   for (const r of mine) {
-    const filedMs = r.filedAt ? Date.parse(r.filedAt) : NaN;
-    const expired = Number.isFinite(filedMs) && (now - filedMs) > OUTCOME_RETENTION_MS;
-    if (expired) {
-      await store.deleteOne(outcomeId(r.appId, r.slug)).catch(() => {});
-      continue;
+    if (r.outcome) {
+      const resolvedMs = Date.parse(r.outcomeAt) || Date.parse(r.filedAt) || NaN;
+      if (Number.isFinite(resolvedMs) && (now - resolvedMs) > OUTCOME_RETENTION_MS) {
+        await store.deleteOne(outcomeId(r.appId, r.slug)).catch(() => {});
+        continue;
+      }
     }
     kept.push(r);
   }

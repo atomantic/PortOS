@@ -55,6 +55,14 @@ import {
   computeOutcomesReport
 } from '../layeredIntelligence.js'
 import { recordFiledProposal, listOutcomes, reconcileOutcomes } from '../layeredIntelligenceOutcomes.js'
+
+// The outcome feedback loop (#2428) can only reconcile a proposal's fate on a
+// tracker that reports closed-state: a forge (gh/glab issues) or jira. A `plan`
+// tracker maps every PLAN.md item to `state: 'open'`, so there's nothing to learn
+// from — skip recording/reconciling there rather than accrete unresolvable rows.
+function outcomesTrackerSupported(filer) {
+  return filer === 'forge' || filer === 'jira'
+}
 import { resolveAppWorkTracker } from '../../lib/workTracker.js'
 import { tryReadFile } from '../../lib/fileUtils.js'
 import { join } from 'path'
@@ -215,10 +223,13 @@ export async function buildTaskInput({ app } = {}) {
 
   // Feedback loop (#2428): reconcile past proposals' outcomes against the fresh
   // tracker read, then fold the merge-rate report into the prompt so the reasoner
-  // calibrates on its own history. Gated on the per-app `outcomes` source toggle;
-  // a failed tracker read skips reconciliation (never mark closed on a blind read).
+  // calibrates on its own history. Gated on the per-app `outcomes` source toggle
+  // AND a forge/jira tracker — a `plan` tracker reports every item as open (no
+  // closed-state to reconcile), so tracking there would only accrete permanently-
+  // unresolved records. A failed tracker read skips reconciliation (never mark
+  // closed on a blind read).
   let outcomesReport = ''
-  if (config.sources?.outcomes) {
+  if (config.sources?.outcomes && outcomesTrackerSupported(filer)) {
     if (!trackerReadFailed) await reconcileOutcomes({ appId: app.id, existingIssues })
     const outcomes = await listOutcomes({ appId: app.id })
     outcomesReport = computeOutcomesReport({ outcomes })
@@ -358,8 +369,9 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
         const ref = filedRef(filedKey, filedNumber) ?? ''
         console.log(`📌 Layered Intelligence: ${app.name} filed "${proposal.title}" [${proposal.slug}]${ref ? ` (${ref})` : ''}`)
         // Feedback loop (#2428): remember what we just filed so a later run can
-        // read back its outcome. Gated on the app's `outcomes` source toggle.
-        if (config.sources?.outcomes) {
+        // read back its outcome. Gated on the app's `outcomes` source toggle AND a
+        // forge/jira tracker (a `plan` item has no readable closed-state).
+        if (config.sources?.outcomes && outcomesTrackerSupported(filer)) {
           await recordFiledProposal({
             appId: app.id, slug: proposal.slug, tracker: tracker.resolved,
             issueRef: filedRef(filedKey, filedNumber), scope: proposal.scope

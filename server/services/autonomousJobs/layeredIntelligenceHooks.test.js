@@ -160,11 +160,20 @@ describe('buildTaskInput', () => {
   it('reconciles + folds the outcomes report into the prompt when enabled', async () => {
     li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { outcomes: true } });
     listOutcomes.mockResolvedValue([{ slug: 's', outcome: 'merged', scope: 'app-improvement' }]);
-    li.computeOutcomesReport.mockReturnValue('Past LI proposals (last 30 days):\n- Total filed: 1');
+    li.computeOutcomesReport.mockReturnValue('Recent LI proposals:\n- Total filed: 1');
     await buildTaskInput({ app: APP });
     expect(reconcileOutcomes).toHaveBeenCalledWith(expect.objectContaining({ appId: 'app-1' }));
     expect(listOutcomes).toHaveBeenCalledWith(expect.objectContaining({ appId: 'app-1' }));
     expect(li.buildPrompt).toHaveBeenCalledWith(expect.objectContaining({ outcomesReport: expect.stringContaining('Total filed: 1') }));
+  });
+
+  it('skips the feedback loop on a plan tracker even when outcomes is enabled', async () => {
+    resolveAppWorkTracker.mockResolvedValue({ resolved: 'plan', forge: null });
+    li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { outcomes: true } });
+    await buildTaskInput({ app: APP });
+    expect(reconcileOutcomes).not.toHaveBeenCalled();
+    expect(listOutcomes).not.toHaveBeenCalled();
+    expect(li.buildPrompt).toHaveBeenCalledWith(expect.objectContaining({ outcomesReport: '' }));
   });
 });
 

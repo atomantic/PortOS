@@ -75,12 +75,33 @@ describe('recordFiledProposal + listOutcomes', () => {
     expect(await listOutcomes({ appId: 'app-2' }, store)).toHaveLength(1);
   });
 
-  it('gc-drops records filed beyond the retention window on read', async () => {
+  it('retains an unresolved record past the window (like an open issue)', async () => {
     const now = Date.now();
-    await recordFiledProposal({ appId: 'app-1', slug: 'old', scope: 'app-improvement', now: now - OUTCOME_RETENTION_MS - 1000 }, store);
-    await recordFiledProposal({ appId: 'app-1', slug: 'fresh', scope: 'app-improvement', now }, store);
+    await recordFiledProposal({ appId: 'app-1', slug: 'still-open', scope: 'app-improvement', now: now - OUTCOME_RETENTION_MS - 10000 }, store);
     const rows = await listOutcomes({ appId: 'app-1', now }, store);
-    expect(rows.map(r => r.slug)).toEqual(['fresh']);
+    expect(rows.map(r => r.slug)).toEqual(['still-open']);
+  });
+
+  it('GC-drops a resolved record once the window elapses from its outcomeAt (not filedAt)', async () => {
+    const now = Date.now();
+    // Filed recently, but resolved with an old closedAt → measured from outcomeAt, it's stale.
+    await recordFiledProposal({ appId: 'app-1', slug: 'old-merged', scope: 'app-improvement', now: now - 1000 }, store);
+    const oldClosed = new Date(now - OUTCOME_RETENTION_MS - 1000).toISOString();
+    await reconcileOutcomes({ appId: 'app-1', existingIssues: [{ slug: 'old-merged', state: 'closed', stateReason: 'completed', closedAt: oldClosed }], now }, store);
+    expect(await listOutcomes({ appId: 'app-1', now }, store)).toEqual([]);
+
+    // A record resolved within the window survives.
+    await recordFiledProposal({ appId: 'app-1', slug: 'fresh-merged', scope: 'app-improvement', now }, store);
+    await reconcileOutcomes({ appId: 'app-1', existingIssues: [{ slug: 'fresh-merged', state: 'closed', stateReason: 'completed', closedAt: new Date(now).toISOString() }], now }, store);
+    const kept = await listOutcomes({ appId: 'app-1', now }, store);
+    expect(kept.map(r => r.slug)).toEqual(['fresh-merged']);
+  });
+
+  it('stamps the type-level schemaVersion on the first record (so a future bump is detectable)', async () => {
+    // Fresh store: the boot verifier sees no index.json.
+    expect((await store.verifySchemaVersion()).onDisk).toBeNull();
+    await recordFiledProposal({ appId: 'app-1', slug: 's', scope: 'app-improvement' }, store);
+    expect((await store.verifySchemaVersion()).onDisk).toBe(LI_OUTCOMES_SCHEMA_VERSION);
   });
 });
 
