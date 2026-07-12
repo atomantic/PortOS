@@ -615,6 +615,22 @@ export const scaffoldSchema = z.object({
   githubOrg: z.preprocess(emptyToNull, z.string().min(1).nullable().optional())
 });
 
+// =============================================================================
+// USAGE (devtools usage reports)
+// =============================================================================
+
+const isoDay = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD');
+
+/**
+ * Query params for GET /api/usage — either a preset period or an explicit
+ * from/to date range (inclusive, YYYY-MM-DD). Explicit dates win over period.
+ */
+export const usageQuerySchema = z.object({
+  period: z.enum(['7d', '30d', '90d', 'all']).optional(),
+  from: isoDay.optional(),
+  to: isoDay.optional()
+}).refine((q) => !(q.from && q.to) || q.from <= q.to, { message: 'from must be on or before to' });
+
 /**
  * Validate data against a Zod schema, throwing on failure.
  * Returns parsed data on success, throws ServerError on failure.

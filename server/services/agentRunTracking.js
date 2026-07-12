@@ -10,7 +10,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { recordSession, recordMessages } from './usage.js';
 import { bufferedSpawn } from '../lib/bufferedSpawn.js';
 import { atomicWrite, ensureDir, pathExists, readJSONFile, PATHS } from '../lib/fileUtils.js';
-import { estimateTokens } from '../lib/contextBudget.js';
+import { estimateTokens, CHARS_PER_TOKEN } from '../lib/contextBudget.js';
 
 const RUNS_DIR = PATHS.runs;
 
@@ -37,6 +37,9 @@ export async function createAgentRun(agentId, task, model, provider, workspacePa
     workspacePath,
     workspaceName: appName || 'portos',
     prompt: (task.description || '').substring(0, 500),
+    // Full prompt size (chars) for input-token estimation on completion —
+    // `prompt` above is truncated for display.
+    promptLength: (task.description || '').length,
     startTime: new Date().toISOString(),
     endTime: null,
     duration: null,
@@ -131,10 +134,11 @@ export async function completeAgentRun(runId, output, exitCode, duration, errorA
   await atomicWrite(metaPath, metadata);
   await writeFile(join(runDir, 'output.txt'), output || '');
 
-  // Record usage for successful CoS agent runs (token count is estimated)
+  // Record usage for successful CoS agent runs (token counts are estimated)
   if (exitCode === 0 && metadata.providerId && metadata.model) {
     const estimatedTokens = estimateTokens(output);
-    recordMessages(metadata.providerId, metadata.model, 1, estimatedTokens).catch(err => {
+    const inputTokens = Math.ceil((metadata.promptLength || 0) / CHARS_PER_TOKEN);
+    recordMessages(metadata.providerId, metadata.model, 1, estimatedTokens, inputTokens).catch(err => {
       console.error(`❌ Failed to record usage: ${err.message}`);
     });
   }

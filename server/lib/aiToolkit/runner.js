@@ -350,6 +350,9 @@ export function createRunnerService(config = {}) {
         workspaceName,
         source,
         prompt: prompt.substring(0, 500),
+        // Full prompt size (chars) — `prompt` above is truncated for display.
+        // Hosts use this to estimate input-token usage on completion.
+        promptLength: prompt.length,
         startTime: new Date().toISOString(),
         endTime: null,
         duration: null,
