@@ -25,7 +25,7 @@
  *     resurrect from the peer on the next sweep. See cosTaskStore.deleteTask.)
  *
  *  2. For a task on BOTH sides, choose the CONTENT by lifecycle rank: a task
- *     only ever advances pending → in_progress → (completed|blocked), so the
+ *     advances pending → in_progress → (challenged) → (completed|blocked), so the
  *     higher-ranked status is the newer truth and wins. This makes completion
  *     converge: once either peer marks a task done, the other adopts it instead
  *     of holding it `in_progress` forever (a live claim alone can't carry that
@@ -51,7 +51,17 @@ import { PRIORITY_VALUES } from '../lib/taskParser.js';
 // Lifecycle rank — higher wins the content tiebreak (rule 2). Each status has a
 // distinct rank so two DIFFERENT statuses never tie (full convergence); the only
 // genuine tie is same-status-both-sides, where the content is already equivalent.
-const STATUS_RANK = Object.freeze({ completed: 4, blocked: 3, in_progress: 2, pending: 1 });
+//
+// `challenged` (#2441) is placed above in_progress and below the terminal states,
+// but NOTE its rank is only a fallback: the challenge lifecycle is non-monotonic
+// (upheld regresses challenged→pending; blocked↔challenged both directions are
+// legal), so `pickContentBase` resolves any pairing where exactly one side is
+// `challenged` by newest `updatedAt` — NOT by this rank — with `completed` held
+// immune there. This rank still governs challenged-vs-challenged-adjacent cases
+// that never actually arise (both-challenged goes to the same-status path). It is
+// NOT terminal (the dispute resolves back to pending or forward to blocked), so it
+// keeps a live claim the same way in_progress does.
+const STATUS_RANK = Object.freeze({ completed: 5, blocked: 4, challenged: 3, in_progress: 2, pending: 1 });
 const statusRank = (status) => STATUS_RANK[status] || 0;
 const isTerminalStatus = (status) => status === 'completed' || status === 'blocked';
 
@@ -123,6 +133,33 @@ function claimTriple(task) {
  * whenever a real stamp is present.
  */
 function pickContentBase(local, remote) {
+  // Challenge lifecycle is NOT monotonic (#2441): an `upheld` resolution regresses
+  // `challenged` → `pending`, and a challenge can be raised on a `blocked` task —
+  // both BACKWARD in status rank. A pure status-rank comparison would let a stale
+  // `challenged` snapshot on the other peer permanently revert a newer resolution
+  // (rank 3 beats pending rank 1) and never converge. So when EXACTLY one side is
+  // `challenged`, decide by newest edit instead — every challenge write goes
+  // through updateTask and bumps `updatedAt`, so both the dispute and its
+  // resolution propagate by recency. This is symmetric (depends only on the pair),
+  // so both peers converge on the same record.
+  const lChallenged = local.status === 'challenged';
+  const rChallenged = remote.status === 'challenged';
+  if (lChallenged !== rChallenged) {
+    // `completed` is truly terminal and must NEVER regress — once either peer
+    // marks a task done, the other adopts it (rule 2 monotonic completion). So a
+    // `completed` counterpart wins outright, even against a newer `challenged`
+    // snapshot the other peer raised before completion propagated. `blocked` stays
+    // on the timestamp path below: blocked→challenged (re-dispute) and
+    // challenged→blocked (escalation) are both legal, so recency decides.
+    if (local.status === 'completed') return local;
+    if (remote.status === 'completed') return remote;
+    const luc = updatedAtMs(local);
+    const ruc = updatedAtMs(remote);
+    if (luc !== ruc) return ruc > luc ? remote : local;
+    // Equal/absent stamps (legacy un-stamped peer): prefer the RESOLVED
+    // (non-challenged) side so an overturn still converges deterministically.
+    return lChallenged ? remote : local;
+  }
   const lr = statusRank(local.status);
   const rr = statusRank(remote.status);
   if (rr !== lr) return rr > lr ? remote : local;

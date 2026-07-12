@@ -61,7 +61,9 @@ import {
   deleteTask,
   reorderTasks,
   approveTask,
-  mergePeerTasks
+  mergePeerTasks,
+  challengeTask,
+  resolveTaskChallenge
 } from './cosTaskStore.js';
 
 const USER_FILE = '/root/TASKS.md';
@@ -575,5 +577,77 @@ describe('cosTaskStore.mergePeerTasks', () => {
     const adopted = after.tasks.find(t => t.id === 'task-nometa');
     expect(adopted).toBeTruthy();
     expect(adopted.description).toBe('no metadata here');
+  });
+});
+
+describe('cosTaskStore.challengeTask / resolveTaskChallenge (#2441)', () => {
+  async function seedTask(desc = 'work under dispute') {
+    const created = await addTask({ description: desc, priority: 'HIGH' }, 'user');
+    return created.id;
+  }
+
+  it('parks a task in challenged and records the worker case', async () => {
+    const id = await seedTask();
+    const result = await challengeTask(id, { reason: 'reviewer misread the diff', reviewer: 'ollama' });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe('challenged');
+    expect(String(result.metadata.challengeCount)).toBe('1');
+    expect(result.metadata.challenge.reason).toBe('reviewer misread the diff');
+    expect(result.metadata.challenge.reviewer).toBe('ollama');
+    expect(mock.events.some(e => e.name === 'task:challenged')).toBe(true);
+  });
+
+  it('refuses a second dispute on the same task (bounded to one)', async () => {
+    const id = await seedTask();
+    await challengeTask(id, { reason: 'first' });
+    const second = await challengeTask(id, { reason: 'second' });
+    expect(second.code).toBe('CHALLENGE_EXHAUSTED');
+  });
+
+  it('returns NOT_FOUND for an unknown task', async () => {
+    const result = await challengeTask('task-nope', { reason: 'x' });
+    expect(result.code).toBe('NOT_FOUND');
+  });
+
+  it('refuses to challenge a completed task', async () => {
+    const id = await seedTask('already done');
+    await updateTask(id, { status: 'completed' }, 'user');
+    const result = await challengeTask(id, { reason: 'too late' });
+    expect(result.code).toBe('CANNOT_CHALLENGE_COMPLETED');
+  });
+
+  it('upheld resolution overturns the rejection → pending', async () => {
+    const id = await seedTask();
+    await challengeTask(id, { reason: 'wrong verdict' });
+    const resolved = await resolveTaskChallenge(id, { outcome: 'upheld', resolvedBy: 'user' });
+    expect(resolved.status).toBe('pending');
+    expect(resolved.metadata.challengeResolution.outcome).toBe('upheld');
+  });
+
+  it('escalated resolution blocks the task AND files an approval-required arbitration task', async () => {
+    const id = await seedTask('escalate me');
+    await challengeTask(id, { reason: 'still disputed', reviewer: 'codex' });
+    const resolved = await resolveTaskChallenge(id, { outcome: 'escalated', note: 'need a human' });
+    expect(resolved.status).toBe('blocked');
+    expect(resolved.metadata.blockedCategory).toBe('challenge-escalation');
+    expect(resolved.metadata.challengeResolution.outcome).toBe('escalated');
+    // The escalation surfaces to the user as an internal approval-required task.
+    const internal = await getCosTasks();
+    const arbitration = internal.tasks.find(t => t.description.includes(`Arbitrate disputed rejection on ${id}`));
+    expect(arbitration).toBeTruthy();
+    expect(arbitration.approvalRequired).toBe(true);
+  });
+
+  it('refuses to resolve a task that is not under challenge', async () => {
+    const id = await seedTask();
+    const result = await resolveTaskChallenge(id, { outcome: 'upheld' });
+    expect(result.code).toBe('NOT_CHALLENGED');
+  });
+
+  it('rejects an invalid outcome', async () => {
+    const id = await seedTask();
+    await challengeTask(id, { reason: 'x' });
+    const result = await resolveTaskChallenge(id, { outcome: 'bogus' });
+    expect(result.code).toBe('INVALID_OUTCOME');
   });
 });
