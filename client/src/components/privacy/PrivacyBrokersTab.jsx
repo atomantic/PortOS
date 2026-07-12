@@ -15,8 +15,11 @@ import { timeAgo, formatDateShort } from '../../utils/formatters';
 import BrokerCaseDrawer from './BrokerCaseDrawer';
 import {
   CASE_STATES, CASE_STATE_TONE, EXPOSURE_MAP_STATES, BROKER_SOURCES, BROKER_CONFIDENCE,
-  MANUAL_DONE_ACTION, labelFor,
+  ACTION_TONES, manualCaseActions, labelFor,
 } from './constants';
+
+// Digest action icon by descriptor `icon` token (positive resolution vs dismiss).
+const ACTION_ICONS = { check: CheckCircle2, x: XCircle };
 
 // Stat chip for the exposure-map header.
 function StatChip({ label, count, tone }) {
@@ -280,17 +283,14 @@ export default function PrivacyBrokersTab() {
                       <ExternalLink size={15} />
                     </a>
                   )}
-                  {(() => {
-                    const done = MANUAL_DONE_ACTION[item.state] || MANUAL_DONE_ACTION.human_task_queued;
+                  {manualCaseActions(item.state, item.allowedTransitions).map((action) => {
+                    const Icon = ACTION_ICONS[action.icon] || CheckCircle2;
                     return (
-                      <button onClick={() => doTransition({ id: item.caseId }, done.target)} disabled={caseBusy} title={done.label} aria-label={done.label} className={`p-1.5 rounded ${done.chipTone} disabled:opacity-50`}>
-                        <CheckCircle2 size={15} />
+                      <button key={action.target} onClick={() => doTransition({ id: item.caseId }, action.target)} disabled={caseBusy} title={action.label} aria-label={action.label} className={`p-1.5 rounded ${ACTION_TONES[action.tone]?.chip || ''} disabled:opacity-50`}>
+                        <Icon size={15} />
                       </button>
                     );
-                  })()}
-                  <button onClick={() => doTransition({ id: item.caseId }, 'not_found')} disabled={caseBusy} title="Dismiss" aria-label="Dismiss" className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50 disabled:opacity-50">
-                    <XCircle size={15} />
-                  </button>
+                  })}
                 </div>
               </div>
             ))}
