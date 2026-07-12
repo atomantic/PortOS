@@ -133,6 +133,35 @@ describe('findMonitoringIssue', () => {
     expect(issue.labels).toContain('needs attention')
   })
 
+  it('does NOT hijack an unrelated monitoring issue with no marker and a different title', async () => {
+    const exec = makeExec([{
+      match: argsHave('issue', 'list'),
+      result: {
+        code: 0,
+        stdout: JSON.stringify([
+          { number: 10, title: 'My infra dashboard', body: 'hand-maintained notes', labels: [{ name: 'monitoring' }] }
+        ])
+      }
+    }])
+    const { ok, issue } = await findMonitoringIssue({ exec })
+    expect(ok).toBe(true)
+    expect(issue).toBeNull()
+  })
+
+  it('reuses a pre-marker summary by its exact stable title', async () => {
+    const exec = makeExec([{
+      match: argsHave('issue', 'list'),
+      result: {
+        code: 0,
+        stdout: JSON.stringify([
+          { number: 5, title: 'CoS self-diagnostics: self-healing failures', body: 'old body, no marker', labels: [{ name: 'monitoring' }] }
+        ])
+      }
+    }])
+    const { issue } = await findMonitoringIssue({ exec })
+    expect(issue.number).toBe(5)
+  })
+
   it('distinguishes a failed read (ok:false) from an empty list (ok:true)', async () => {
     const fail = makeExec([{ match: argsHave('issue', 'list'), result: { code: 1, stdout: '', stderr: 'gh boom' } }])
     expect(await findMonitoringIssue({ exec: fail })).toEqual({ ok: false, issue: null })

@@ -150,10 +150,15 @@ function runCli(cmd, args, options = {}) {
 }
 
 /**
- * Locate the persistent summary issue to reuse. Prefers an open `monitoring`
- * issue carrying our slug marker; falls back to the first open `monitoring`
- * issue. Returns `{ ok, issue }` — `ok:false` means the read FAILED (do NOT then
- * create a new one, or a transient `gh` blip files a duplicate; sentinel rule).
+ * Locate OUR persistent summary issue to reuse. Matches only an open `monitoring`
+ * issue that is identifiably ours — by the embedded slug marker, or (forward-compat
+ * for a summary filed before the marker existed) by our exact stable title. It
+ * deliberately does NOT fall back to "the first arbitrary `monitoring` issue": the
+ * handler edit-overwrites the body it returns, so reusing an unrelated issue the
+ * user labeled `monitoring` for their own tracking would clobber it. When none is
+ * ours, returns `{ ok:true, issue:null }` so the handler files its own dedicated
+ * summary. `ok:false` means the read FAILED (do NOT then create — a transient `gh`
+ * blip would file a duplicate; sentinel rule).
  */
 export async function findMonitoringIssue({ cwd = PATHS.root, exec = runCli } = {}) {
   const { code, stdout } = await exec('gh',
@@ -170,8 +175,8 @@ export async function findMonitoringIssue({ cwd = PATHS.root, exec = runCli } = 
     url: i.url || null,
     labels: (i.labels || []).map(l => (typeof l === 'string' ? l : l?.name)).filter(Boolean)
   }))
-  const bySlug = norm.find(i => i.body.includes(SLUG_MARKER))
-  return { ok: true, issue: bySlug || norm[0] || null }
+  const ours = norm.find(i => i.body.includes(SLUG_MARKER)) || norm.find(i => i.title === STABLE_TITLE)
+  return { ok: true, issue: ours || null }
 }
 
 /**
