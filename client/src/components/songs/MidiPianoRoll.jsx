@@ -142,7 +142,9 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
       ctx.fillStyle = GRID_LINE;
       ctx.fillRect(x, gridTop, 1, gridH);
       ctx.fillStyle = TEXT_DIM;
-      ctx.fillText(formatTimecode(t).replace(/\.\d+$/, ''), x + 3, RULER_H - 6);
+      // Sub-second tick steps need the fractional digits or adjacent labels
+      // render identically ("0:03 0:03 0:03") right when fine timing matters.
+      ctx.fillText(step < 1 ? formatTimecode(t) : formatTimecode(t).replace(/\.\d+$/, ''), x + 3, RULER_H - 6);
     }
 
     // Chord lane.
@@ -356,6 +358,9 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
     if (pointersRef.current.size === 2) {
       const [a, b] = [...pointersRef.current.values()];
       pinchRef.current = { startDist: Math.abs(a.x - b.x) || 1, startZoom: zoomRef.current };
+      // A pinch is never a tap — mark both pointers moved so the anchored
+      // finger's release doesn't scrub the playhead as a side effect of zooming.
+      pointersRef.current.forEach((p, id) => pointersRef.current.set(id, { ...p, moved: true }));
     }
   };
 
@@ -451,7 +456,14 @@ export default function MidiPianoRoll({ data, chords, showChords, zoom, onZoomCh
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
-        onPointerLeave={() => { pointersRef.current.clear(); pinchRef.current = null; setHoverIdentity(null); }}
+        onPointerLeave={(e) => {
+          pointersRef.current.clear();
+          pinchRef.current = null;
+          // Touch pointerup is immediately followed by pointerleave — clearing
+          // hover here would erase the tap-tooltip before it ever paints. A tap
+          // on empty grid or Escape clears a touch tooltip instead.
+          if (e.pointerType !== 'touch') setHoverIdentity(null);
+        }}
         onKeyDown={handleKeyDown}
       />
       {tooltip && (
