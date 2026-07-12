@@ -728,15 +728,8 @@ ${task.metadata.jiraBranch ? 'Commit your changes to this branch. Do NOT switch 
   // predates the {{reviewLoopFollowUpSection}} placeholder; the built-in
   // fallback is the source of truth for that section, and silently dropping
   // it would leave the agent with no instructions and the loop would not run.
-  // The template renders `### Target Application` from `task.metadata.app`. Drop
-  // the app for the PortOS default so that section stays empty — the api agent
-  // already runs in the PortOS directory, matching buildTaskBlock's behavior for
-  // the light/fallback paths. Managed-app tasks keep the scoping line.
-  const templateTask = task.metadata?.app === PORTOS_APP_ID
-    ? { ...task, metadata: { ...task.metadata, app: undefined } }
-    : task;
   const promptData = isReviewLoopFollowUp ? null : await buildPrompt('cos-agent-briefing', {
-    task: templateTask,
+    task,
     config,
     memorySection,
     claudeMdSection,
