@@ -8,7 +8,7 @@
 // reshaping. `mode` drives which knobs are visible: codex hides everything except
 // resolution; external swaps guidance for cfgScale; local shows guidance + quantize.
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Dice5 } from 'lucide-react';
 import {
   filterResolutions, resolveResolutionLabel, clampImageEdge,
@@ -72,6 +72,14 @@ export default function ImageGenControls({
   const [customOpen, setCustomOpen] = useState(false);
   const isCustom = customOpen || (!matched && !!width && !!height);
   const selectValue = isCustom ? CUSTOM_RESOLUTION_VALUE : (matched?.label ?? '');
+  // Latch custom mode stickily once a non-preset size appears (remix, uploaded
+  // photo, stale off-backend size). Without this, clearing a Width/Height field
+  // to a transient 0 mid-edit would flip `!matched && width && height` false and
+  // unmount the inputs the user is typing into — which also skips the blur-snap.
+  // `handleResolution` still clears the latch when a preset is explicitly picked.
+  useEffect(() => {
+    if (!matched && width && height) setCustomOpen(true);
+  }, [matched, width, height]);
   const handleResolution = (e) => {
     if (e.target.value === CUSTOM_RESOLUTION_VALUE) { setCustomOpen(true); return; }
     const r = availableResolutions.find((opt) => opt.label === e.target.value);

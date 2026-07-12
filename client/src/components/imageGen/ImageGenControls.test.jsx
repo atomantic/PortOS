@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import ImageGenControls from './ImageGenControls';
@@ -51,5 +52,32 @@ describe('ImageGenControls — custom dimensions', () => {
   it('warns when the total pixel count exceeds the cap', () => {
     render(<ImageGenControls {...baseProps({ width: 3840, height: 3840 })} />);
     expect(screen.getByText(/exceeds the .* px cap/i)).toBeTruthy();
+  });
+
+  // Regression: an auto-engaged (non-preset) size must stay in custom mode when a
+  // field is cleared to a transient 0 mid-edit — otherwise the inputs unmount
+  // mid-keystroke and the blur-snap never fires. Uses a stateful harness so the
+  // cleared value actually re-renders the component.
+  it('keeps the custom inputs mounted when a dimension is cleared mid-edit', () => {
+    function Harness() {
+      const [dims, setDims] = useState({ width: 704, height: 1280 });
+      return (
+        <ImageGenControls
+          {...baseProps({
+            width: dims.width,
+            height: dims.height,
+            onResolutionChange: (w, h) => setDims({ width: w, height: h }),
+          })}
+        />
+      );
+    }
+    render(<Harness />);
+    // Auto-engaged (704×1280 matches no preset) → inputs visible.
+    expect(screen.getByLabelText('Height')).toBeTruthy();
+    // Clear Height → emits 0 → re-render with height=0.
+    fireEvent.change(screen.getByLabelText('Height'), { target: { value: '' } });
+    // Sticky latch keeps both inputs mounted despite height=0.
+    expect(screen.getByLabelText('Width')).toBeTruthy();
+    expect(screen.getByLabelText('Height')).toBeTruthy();
   });
 });
