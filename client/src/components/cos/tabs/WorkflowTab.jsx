@@ -429,7 +429,7 @@ export default function WorkflowTab({ apps }) {
                         <span key={node.id} className={`inline-flex items-center rounded border text-xs ${isSelected ? 'border-port-accent bg-port-accent/10' : 'border-port-border bg-port-bg/40'}`}>
                           <button type="button" onClick={() => setSelectedId(node.id)} className={`px-2.5 py-1.5 ${isSelected ? 'text-port-accent' : 'text-gray-400 hover:text-white'}`}>
                             {node.label} <span className="text-gray-600">· {node.schedule?.type}</span>
-                            {canExpand && node.enabledAppCount > 0 && <span className="ml-1 text-port-accent">{node.enabledAppCount}/{node.totalAppCount}</span>}
+                            {canExpand && <span className={`ml-1 ${node.enabledAppCount > 0 ? 'text-port-accent' : 'text-gray-500'}`}>{node.enabledAppCount || 0}/{node.totalAppCount}</span>}
                           </button>
                           {canExpand && (
                             <button
