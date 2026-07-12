@@ -44,7 +44,7 @@ const KIND_SIGNATURES = [
   { kind: 'federation', re: /federat|peer[-\s]?sync|sync[-\s]?peer|fan[-\s]?out[-\s]?record/ },
   { kind: 'external-pr', re: /external[-\s]?pr|upstream[-\s]?pr|fork[-\s]?pr/ },
   { kind: 'publish', re: /\bpublish\b|\bdeploy\b|\brelease\b|go[-\s]?live|auto[-\s]?send|outbound[-\s]?message/ },
-  { kind: 'content', re: /social[-\s]?media|newsletter|\bblog\b|generate[-\s]?content|publish[-\s]?content/ }
+  { kind: 'content', re: /social[-\s]?media|newsletter|\bblog\b|generate[-\s]?content/ }
 ];
 
 const normalizeKind = (k) => (typeof k === 'string' ? k.trim().toLowerCase() : '');
@@ -108,6 +108,12 @@ export function classifySafetyKind({ taskTypeKey = '', metadata = {} } = {}) {
 /**
  * Should a task of this safety kind be forced to human approval, regardless of
  * confidence tier? Reads the `config.safetyKindApproval` slice.
+ *
+ * The `alwaysApproveKinds` list is the final authority: a kind that is
+ * outward-facing per `classifySafetyKind` but absent from the list (or with the
+ * gate disabled) is NOT forced here and falls through to the confidence gate —
+ * so tuning the list also tempers explicit `metadata.safetyKind` / `outwardFacing`
+ * classifications, by design.
  *
  * @param {string} kind - a safety kind from classifySafetyKind()
  * @param {{ enabled?: boolean, alwaysApproveKinds?: string[] }} [config]
