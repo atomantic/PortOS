@@ -104,14 +104,14 @@ export async function recordSession(providerId, providerName, model) {
 
   // Track by provider
   if (!usageData.byProvider[providerId]) {
-    usageData.byProvider[providerId] = { name: providerName, sessions: 0, messages: 0, tokens: 0, tokensIn: 0, tokensOut: 0 };
+    usageData.byProvider[providerId] = { name: providerName, sessions: 0, messages: 0, tokens: 0 };
   }
   usageData.byProvider[providerId].sessions++;
 
   // Track by model
   if (model) {
     if (!usageData.byModel[model]) {
-      usageData.byModel[model] = { sessions: 0, messages: 0, tokens: 0, tokensIn: 0, tokensOut: 0 };
+      usageData.byModel[model] = { sessions: 0, messages: 0, tokens: 0 };
     }
     usageData.byModel[model].sessions++;
   }
@@ -148,40 +148,32 @@ export async function recordMessages(providerId, model, messageCount, outputToke
     usageData.totalTokens.input += inputTokens;
   }
 
-  // Track by provider (legacy `tokens` stays output-only for old readers)
+  // Track by provider / by model (the legacy all-time entries keep their
+  // output-only `tokens` field for old readers — the in/out split lives only
+  // in the day buckets, which is what the cost report aggregates)
   if (usageData.byProvider[providerId]) {
-    const p = usageData.byProvider[providerId];
-    p.messages += messageCount;
-    p.tokens = (p.tokens || 0) + outputTokens;
-    p.tokensIn = (p.tokensIn || 0) + inputTokens;
-    p.tokensOut = (p.tokensOut || 0) + outputTokens;
+    usageData.byProvider[providerId].messages += messageCount;
+    usageData.byProvider[providerId].tokens = (usageData.byProvider[providerId].tokens || 0) + outputTokens;
   }
-
-  // Track by model
   if (model && usageData.byModel[model]) {
-    const m = usageData.byModel[model];
-    m.messages += messageCount;
-    m.tokens = (m.tokens || 0) + outputTokens;
-    m.tokensIn = (m.tokensIn || 0) + inputTokens;
-    m.tokensOut = (m.tokensOut || 0) + outputTokens;
+    usageData.byModel[model].messages += messageCount;
+    usageData.byModel[model].tokens = (usageData.byModel[model].tokens || 0) + outputTokens;
   }
 
   // Track daily (a run can finish on a different day than it started — create
   // the day/provider buckets if missing rather than gating on existence)
+  const bumpDayBucket = (bucket) => {
+    bucket.messages += messageCount;
+    bucket.tokensIn += inputTokens;
+    bucket.tokensOut += outputTokens;
+  };
   const day = todayBucket();
   day.messages = (day.messages || 0) + messageCount;
   day.tokens = (day.tokens || 0) + outputTokens;
   const providerName = usageData.byProvider[providerId]?.name;
   const providerDay = providerDayBucket(day, providerId, providerName);
-  providerDay.messages += messageCount;
-  providerDay.tokensIn += inputTokens;
-  providerDay.tokensOut += outputTokens;
-  if (model) {
-    const modelDay = modelDayBucket(providerDay, model);
-    modelDay.messages += messageCount;
-    modelDay.tokensIn += inputTokens;
-    modelDay.tokensOut += outputTokens;
-  }
+  bumpDayBucket(providerDay);
+  if (model) bumpDayBucket(modelDayBucket(providerDay, model));
 
   await saveUsage();
 }
@@ -275,6 +267,11 @@ function findLongestStreak(dailyActivity) {
 }
 
 const roundCents = (n) => Math.round(n * 100) / 100;
+
+// The historical flat blended rate the all-time `estimatedCost` field has
+// always used — kept so that field's meaning doesn't silently change for
+// existing consumers. The accurate per-model number is `report.totals`.
+const LEGACY_BLENDED_RATES = { inputPer1M: 3.0, outputPer1M: 15.0 };
 
 /**
  * Aggregate the per-day per-provider per-model buckets over a date range into
@@ -440,7 +437,7 @@ export function getUsageSummary({ from = null, to = null, providers = [] } = {})
     totalMessages: usageData.totalMessages,
     totalToolCalls: usageData.totalToolCalls,
     totalTokens: usageData.totalTokens,
-    estimatedCost: report.totals.estimatedCost,
+    estimatedCost: roundCents(estimateCostUsd(usageData.totalTokens.input, usageData.totalTokens.output, LEGACY_BLENDED_RATES)),
     currentStreak,
     longestStreak,
     last7Days,

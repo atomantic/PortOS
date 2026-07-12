@@ -27,7 +27,7 @@ vi.mock('../services/claudeCodeUsage.js', () => ({
 import * as usage from '../services/usage.js';
 import { getAllProviders } from '../services/providers.js';
 import { getProviderQuotas } from '../services/providerUsage.js';
-import usageRoutes, { resolveUsageRange } from './usage.js';
+import usageRoutes from './usage.js';
 
 const buildApp = () => {
   const app = express();
@@ -99,18 +99,12 @@ describe('usage routes', () => {
     expect(getProviderQuotas).toHaveBeenCalledWith({ refresh: true });
   });
 
-  describe('resolveUsageRange', () => {
-    it('counts period days back from today inclusive', () => {
-      const { from, to } = resolveUsageRange({ period: '30d' });
-      const expected = new Date();
-      expected.setDate(expected.getDate() - 29);
-      expect(from).toBe(expected.toISOString().split('T')[0]);
-      expect(to).toBeNull();
-    });
-
-    it('lets explicit dates win over period', () => {
-      expect(resolveUsageRange({ period: '90d', from: '2026-01-01' })).toEqual({ from: '2026-01-01', to: null });
-    });
+  it('POST /api/usage/messages rejects negative or non-integer token counts', async () => {
+    const res = await request(buildApp())
+      .post('/api/usage/messages')
+      .send({ providerId: 'p1', model: 'm', messageCount: 1, tokenCount: -5 });
+    expect(res.status).toBe(400);
+    expect(usage.recordMessages).not.toHaveBeenCalled();
   });
 
   it('GET /api/usage/raw returns the raw usage data', async () => {

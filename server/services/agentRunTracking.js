@@ -10,7 +10,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { recordSession, recordMessages } from './usage.js';
 import { bufferedSpawn } from '../lib/bufferedSpawn.js';
 import { atomicWrite, ensureDir, pathExists, readJSONFile, PATHS } from '../lib/fileUtils.js';
-import { estimateTokens, CHARS_PER_TOKEN } from '../lib/contextBudget.js';
+import { estimateTokens, estimateTokensFromChars } from '../lib/contextBudget.js';
 
 const RUNS_DIR = PATHS.runs;
 
@@ -137,7 +137,7 @@ export async function completeAgentRun(runId, output, exitCode, duration, errorA
   // Record usage for successful CoS agent runs (token counts are estimated)
   if (exitCode === 0 && metadata.providerId && metadata.model) {
     const estimatedTokens = estimateTokens(output);
-    const inputTokens = Math.ceil((metadata.promptLength || 0) / CHARS_PER_TOKEN);
+    const inputTokens = estimateTokensFromChars(metadata.promptLength);
     recordMessages(metadata.providerId, metadata.model, 1, estimatedTokens, inputTokens).catch(err => {
       console.error(`❌ Failed to record usage: ${err.message}`);
     });

@@ -4,6 +4,7 @@ import { join } from 'path';
 import { getAllProviders } from './providers.js';
 import { getClaudeCodeUsage } from './claudeCodeUsage.js';
 import { commandBasename, isClaudeCommand } from '../lib/providerModels.js';
+import { isGrokCommand } from '../lib/grok.js';
 
 /**
  * Provider subscription-quota adapters for /devtools/usage — one card per
@@ -22,14 +23,11 @@ import { commandBasename, isClaudeCommand } from '../lib/providerModels.js';
  * usage page — never at server boot — and none of them consume tokens (the
  * Claude `/usage` print-mode call is 0-token; the Codex adapter only reads
  * local session logs).
+ *
+ * No registry-level cache: the claude adapter already carries its own 60s
+ * cache + single-flight inside claudeCodeUsage.js, and the codex adapter is a
+ * bounded local-file tail read (1-2 leaf dirs on a typical layout).
  */
-
-const CACHE_TTL_MS = 60_000;
-
-// family -> { data, at }
-const cache = new Map();
-// family -> Promise (single-flight)
-const inflight = new Map();
 
 // --- Codex: parse rate-limit telemetry out of local session logs -----------
 //
@@ -115,23 +113,39 @@ export function mapCodexQuota(rateLimits, timestamp) {
   };
 }
 
-/** Newest-first rollout log paths under <codexHome>/sessions (bounded scan). */
+/**
+ * Newest-first rollout log paths under <codexHome>/sessions. Codex lays
+ * sessions out as `sessions/YYYY/MM/DD/rollout-<ISO-timestamp>-<uuid>.jsonl`,
+ * so directory and file names both sort chronologically — walk them in
+ * descending lexicographic order and stop as soon as the scan limit is hit
+ * (typically 1-2 leaf dirs touched, zero stat calls).
+ */
 async function listCodexRolloutFiles(codexHome) {
   const sessionsDir = join(codexHome, 'sessions');
+  const newestFirstDirs = async (dir) =>
+    (await readdir(dir, { withFileTypes: true }).catch(() => []))
+      .filter((e) => e.isDirectory())
+      .map((e) => e.name)
+      .sort()
+      .reverse();
+
   const files = [];
-  const walk = async (dir) => {
-    const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
-    for (const entry of entries) {
-      const p = join(dir, entry.name);
-      if (entry.isDirectory()) await walk(p);
-      else if (entry.name.startsWith('rollout-') && entry.name.endsWith('.jsonl')) files.push(p);
+  for (const year of await newestFirstDirs(sessionsDir)) {
+    for (const month of await newestFirstDirs(join(sessionsDir, year))) {
+      for (const day of await newestFirstDirs(join(sessionsDir, year, month))) {
+        const dayDir = join(sessionsDir, year, month, day);
+        const names = (await readdir(dayDir).catch(() => []))
+          .filter((n) => n.startsWith('rollout-') && n.endsWith('.jsonl'))
+          .sort()
+          .reverse();
+        for (const name of names) {
+          files.push(join(dayDir, name));
+          if (files.length >= CODEX_SCAN_FILE_LIMIT) return files;
+        }
+      }
     }
-  };
-  await walk(sessionsDir);
-  const withTimes = await Promise.all(
-    files.map(async (f) => ({ f, mtime: (await stat(f).catch(() => null))?.mtimeMs || 0 }))
-  );
-  return withTimes.sort((a, b) => b.mtime - a.mtime).slice(0, CODEX_SCAN_FILE_LIMIT).map((e) => e.f);
+  }
+  return files;
 }
 
 async function readFileTail(file, bytes) {
@@ -227,7 +241,7 @@ const FAMILIES = [
   {
     id: 'grok',
     label: 'Grok',
-    matches: (p) => commandBasename(p.command) === 'grok' || /grok/i.test(p.id || ''),
+    matches: (p) => isGrokCommand(p.command) || /grok/i.test(p.id || ''),
     fetch: unsupported('grok', 'Grok', 'The Grok CLI and xAI API do not expose remaining-quota telemetry.')
   }
 ];
@@ -238,37 +252,22 @@ export function resolveEnabledFamilies(providers) {
   return FAMILIES.filter((family) => enabled.some((p) => family.matches(p)));
 }
 
-async function fetchFamilyQuota(family, { refresh }) {
-  if (!refresh && cache.has(family.id) && Date.now() - cache.get(family.id).at < CACHE_TTL_MS) {
-    return cache.get(family.id).data;
-  }
-  if (inflight.has(family.id)) return inflight.get(family.id);
-
-  const run = Promise.resolve(family.fetch({ refresh }))
-    .then((data) => {
-      cache.set(family.id, { data, at: Date.now() });
-      return data;
-    })
-    .catch((err) => ({
-      family: family.id,
-      label: family.label,
-      supported: true,
-      limits: [],
-      activity: [],
-      approximate: false,
-      fetchedAt: new Date().toISOString(),
-      error: err?.message || String(err)
-    }))
-    .finally(() => inflight.delete(family.id));
-
-  inflight.set(family.id, run);
-  return run;
-}
+const fetchFamilyQuota = (family, { refresh }) =>
+  Promise.resolve(family.fetch({ refresh })).catch((err) => ({
+    family: family.id,
+    label: family.label,
+    supported: true,
+    limits: [],
+    activity: [],
+    approximate: false,
+    fetchedAt: new Date().toISOString(),
+    error: err?.message || String(err)
+  }));
 
 /**
  * Quota status for every enabled provider family. `refresh: true` bypasses
- * the per-family 60s cache. Never rejects — per-family failures surface as
- * `error` entries.
+ * the claude adapter's 60s cache. Never rejects — per-family failures surface
+ * as `error` entries.
  */
 export async function getProviderQuotas({ refresh = false } = {}) {
   const providers = await getAllProviders();
