@@ -81,6 +81,27 @@ describe('parseMidiFile', () => {
     expect(vm.tempos.map((t) => t.bpm)).toEqual([120, 240]);
   });
 
+  it('resolves tick→seconds across several tempo segments (binary-search picks the right one)', () => {
+    const bytes = smf([track([
+      tempoEv(0, 500000),                 // tick 0   → 120 BPM (0.5s/beat)
+      noteOn(0, 60), noteOff(PPQ, 60),    // tick 0..480   → 0.00s
+      tempoEv(0, 250000),                 // tick 480 → 240 BPM (0.25s/beat)
+      noteOn(0, 62), noteOff(PPQ, 62),    // tick 480..960 → 0.50s
+      tempoEv(0, 1000000),                // tick 960 → 60 BPM (1.0s/beat)
+      noteOn(0, 64), noteOff(PPQ, 64),    // tick 960..1440 → 0.75s, lasts 1.0s
+      noteOn(0, 65), noteOff(PPQ, 65),    // tick 1440..1920 → 1.75s
+      endOfTrack(),
+    ])]);
+    const vm = parseMidiFile(bytes);
+    const at = (midi) => vm.notes.find((n) => n.midi === midi);
+    expect(at(60).startSec).toBeCloseTo(0.0, 5);
+    expect(at(62).startSec).toBeCloseTo(0.5, 5);
+    expect(at(64).startSec).toBeCloseTo(0.75, 5);
+    expect(at(64).durationSec).toBeCloseTo(1.0, 5);
+    expect(at(65).startSec).toBeCloseTo(1.75, 5); // last segment (60 BPM) applied
+    expect(vm.tempos.map((t) => t.bpm)).toEqual([120, 240, 60]);
+  });
+
   it('treats note-on velocity 0 as note-off and supports running status', () => {
     // After the first 0x90, subsequent events omit the status byte entirely.
     const bytes = smf([track([

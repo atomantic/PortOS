@@ -137,9 +137,19 @@ const buildTickToSec = (division, tempoEvents) => {
     curUs = c.usPerQuarter;
     segments.push({ tick: curTick, sec: curSec, usPerQuarter: curUs });
   });
+  const DEFAULT_BASE = { tick: 0, sec: 0, usPerQuarter: DEFAULT_TEMPO_US };
   return (tick) => {
-    let base = { tick: 0, sec: 0, usPerQuarter: DEFAULT_TEMPO_US };
-    for (let i = 0; i < segments.length && segments[i].tick <= tick; i += 1) base = segments[i];
+    // Binary-search the last segment whose tick ≤ the query tick (segments are
+    // sorted ascending). Falls back to the SMF default tempo for ticks before
+    // the first tempo change. O(log segments) instead of a per-note linear scan
+    // — only material for tempo-automation-dense files, but free to get right.
+    let lo = 0;
+    let hi = segments.length - 1;
+    let base = DEFAULT_BASE;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (segments[mid].tick <= tick) { base = segments[mid]; lo = mid + 1; } else { hi = mid - 1; }
+    }
     return base.sec + ((tick - base.tick) * base.usPerQuarter) / (ppq * 1e6);
   };
 };
