@@ -63,7 +63,7 @@ beforeEach(() => {
       providerId: null,
       model: null,
       rules: '',
-      sources: { goals: true, cosMetrics: true, healthReport: true, planMd: true, openIssues: true, custom: [] },
+      sources: { goals: true, appMetrics: true, cosMetrics: true, healthReport: true, planMd: true, openIssues: true, custom: [] },
       allowedScopes: ['app-improvement', 'app-data-gap'],
     },
   });
