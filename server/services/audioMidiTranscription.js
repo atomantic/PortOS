@@ -31,6 +31,7 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '
 import { killWithEscalation } from '../lib/killWithEscalation.js';
 import { safeChildProcessEnv } from '../lib/processEnv.js';
 import { hfTokenEnv } from '../lib/hfToken.js';
+import { isGatedRepoError, extractGatedRepo } from '../lib/hfErrors.js';
 import { resolveMuscriptorPython, isMuscriptorRuntimeReady, MUSCRIPTOR_VENV_DEFAULT } from '../lib/pythonSetup.js';
 import { runSidecarProcess, parseSidecarResult } from '../lib/sidecarProcess.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -48,6 +49,41 @@ export const DEFAULT_MUSCRIPTOR_MODEL = 'medium';
 /** Clamp a requested model size onto the known set (route validates shape; this guards the value). */
 export const resolveMuscriptorModel = (model) =>
   (MUSCRIPTOR_MODELS.includes(model) ? model : DEFAULT_MUSCRIPTOR_MODEL);
+
+// The sidecar's `@install_hf_error_handler` (scripts/_runner_common.py) emits a
+// structured `USER_ERROR:gated_repo:<repo>` line on a gated download — prefer it
+// over prose-matching a stderr tail that sidecarProcess has already truncated to
+// the last few lines. The repo group is optional (older/marker-less output).
+const GATED_MARKER_RE = /USER_ERROR:gated_repo(?::(\S+))?/;
+
+/**
+ * Map a failed sidecar reason onto the SSE error frame's typed fields. Pure —
+ * unit-tested without spawning Python.
+ *
+ * MuScriptor's weights live in a *gated* HuggingFace repo
+ * (`MuScriptor/muscriptor-*`), so the first download with no accepted license
+ * (or no token) 403s. Surface that as a typed `gated_repo` frame carrying the
+ * repo so the client can deep-link the license page + token entry (reusing the
+ * same `gated_repo` code the image runner emits) instead of dead-ending on a
+ * raw traceback toast. Detection prefers the sidecar's structured marker and
+ * falls back to the gated-error prose so a marker-less sidecar still classifies.
+ * Any other failure passes through as a plain error string.
+ */
+export function classifyMidiFailure(reason, model) {
+  const text = String(reason || '');
+  const marker = text.match(GATED_MARKER_RE);
+  if (marker || isGatedRepoError(text)) {
+    const repo = (marker && marker[1]) || extractGatedRepo(text) || `MuScriptor/muscriptor-${resolveMuscriptorModel(model)}`;
+    return {
+      code: 'gated_repo',
+      repo,
+      error:
+        `Access to ${repo} is gated on HuggingFace. Accept the license at `
+        + `https://huggingface.co/${repo} and add your HuggingFace token in Image Gen settings, then retry.`,
+    };
+  }
+  return { error: text || 'MIDI transcription failed' };
+}
 
 const MUSCRIPTOR_INSTALL_HINT =
   `MuScriptor runtime not found. Run \`INSTALL_MUSCRIPTOR=1 bash scripts/setup-image-video.sh\` `
@@ -130,8 +166,10 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
     try {
       const { bin, args } = buildMuscriptorArgs({ pythonPath, audioPath, outputPath: tempOut, model: resolvedModel });
       broadcastSse(job, { type: 'progress', stage: 'starting' });
-      // Weights are ungated, but pass the HF token through when the user has
-      // one so the first download doesn't hit anonymous rate limits.
+      // MuScriptor's weights live in a gated HF repo (MuScriptor/muscriptor-*),
+      // so pass the user's HF token through for the first download to
+      // authenticate. Without an accepted license the sidecar 403s and we
+      // classify that into a typed HF_GATED frame below.
       const env = safeChildProcessEnv(await hfTokenEnv());
       // A cancel can land while the env was resolving (no child to SIGTERM yet)
       // — honor the flag before spawning anything.
@@ -165,7 +203,12 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
       const parsed = result.ok ? parseSidecarResult(result.stdout) : null;
       const wroteFile = (statSync(tempOut, { throwIfNoEntry: false })?.size ?? 0) > 0;
       if (!result.ok || !parsed || !wroteFile) {
-        throw new Error(!result.ok ? result.reason : (!wroteFile ? 'sidecar wrote no MIDI' : 'sidecar returned no result'));
+        const reason = !result.ok ? result.reason : (!wroteFile ? 'sidecar wrote no MIDI' : 'sidecar returned no result');
+        const failure = classifyMidiFailure(reason, resolvedModel);
+        const err = new Error(failure.error);
+        if (failure.code) err.code = failure.code;
+        if (failure.repo) err.repo = failure.repo;
+        throw err;
       }
 
       broadcastSse(job, { type: 'progress', stage: 'importing' });
@@ -187,7 +230,12 @@ export async function startMidiTranscription({ audioPath, outputName = 'transcri
       broadcastSse(job, { type: 'complete', filename, model: resolvedModel, ...extra });
     } catch (err) {
       console.error(`❌ MIDI transcription ${shortId(jobId)} failed: ${err?.message || err}`);
-      broadcastSse(job, { type: 'error', error: err?.message || String(err) });
+      // Carry the typed gated-repo fields (code/repo) through to the client so
+      // it can open the license + token prompt; a plain failure ships as-is.
+      const frame = { type: 'error', error: err?.message || String(err) };
+      if (err?.code) frame.code = err.code;
+      if (err?.repo) frame.repo = err.repo;
+      broadcastSse(job, frame);
     } finally {
       job.settled = true;
       await unlink(tempOut).catch(() => {});

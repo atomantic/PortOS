@@ -25,6 +25,18 @@ import argparse
 import json
 import os
 import sys
+from pathlib import Path
+
+# Share the canonical HuggingFace error → USER_ERROR: translation with the
+# image/video runners. MuScriptor's weights live in a *gated* HF repo, so a
+# first download without an accepted license raises GatedRepoError; the
+# decorator walks the cause chain and emits a structured
+# `USER_ERROR:gated_repo:<repo>` line (which the server classifies deep-linkably)
+# instead of a raw traceback the JS side has to prose-match. `_runner_common`
+# imports only stdlib at module load (torch/huggingface_hub are lazy), so this
+# is safe from the muscriptor venv.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _runner_common import install_hf_error_handler  # noqa: E402
 
 
 def log_stage(name, detail=""):
@@ -70,6 +82,7 @@ def _load_model(TranscriptionModel, size):
         return TranscriptionModel.load_model()
 
 
+@install_hf_error_handler
 def main():
     parser = argparse.ArgumentParser(description="PortOS MuScriptor runner (audio → MIDI)")
     parser.add_argument("--audio", required=True, help="Input audio path")

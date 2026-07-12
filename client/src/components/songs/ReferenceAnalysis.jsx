@@ -37,6 +37,7 @@ import {
 import useReferenceAudioImport from '../../hooks/useReferenceAudioImport.js';
 import useMidiTranscription from '../../hooks/useMidiTranscription.js';
 import MidiInstallModal from '../install/MidiInstallModal.jsx';
+import MidiGatedModal from '../install/MidiGatedModal.jsx';
 import { startMemoRecording, arrayBufferToBase64 } from '../../lib/audioRecorder';
 import { proposeSegmentScore, proposeStackedSegmentScore, diffScoreBars, PITCH_CLASS_NAMES } from '../../lib/referenceAnalysis';
 import { scoreHasMusic, parseScore } from '../../lib/scoreNotation';
@@ -181,6 +182,7 @@ export function ReferenceAudioAttach({ reference, onUpdate }) {
     return (
       <div className="flex flex-wrap items-center gap-2">
         <MidiInstallModal {...midiJob.installGate} />
+        <MidiGatedModal {...midiJob.gatedGate} />
         <span className="flex items-center gap-1.5 text-xs text-port-success">
           <AudioLines size={14} /> Audio attached
         </span>

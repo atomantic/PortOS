@@ -23,6 +23,7 @@ import {
 } from '../services/apiMusicVideo.js';
 import useMidiTranscription from '../hooks/useMidiTranscription.js';
 import MidiInstallModal from '../components/install/MidiInstallModal.jsx';
+import MidiGatedModal from '../components/install/MidiGatedModal.jsx';
 import { generateImage } from '../services/apiSystem.js';
 import { generateVideo } from '../services/apiImageVideo.js';
 import { listTracks, trackAudioUrl } from '../services/apiTracks.js';
@@ -563,6 +564,7 @@ export default function MusicVideo() {
   return (
     <div className="space-y-4">
       <MidiInstallModal {...midiJob.installGate} />
+      <MidiGatedModal {...midiJob.gatedGate} />
       <PageHeader icon={Film} title="Music Video" subtitle="Director-controlled, beat-aware music videos" />
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

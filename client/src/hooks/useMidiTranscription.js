@@ -35,6 +35,13 @@ export default function useMidiTranscription({ startRequest, eventsUrl, cancelRe
   // install reported success, fall back to the hint toast instead of looping
   // the modal open.
   const installAttemptedRef = useRef(false);
+  // Gated-repo gate (MuScriptor's weights live in a gated HuggingFace repo). A
+  // transcribe with no accepted license / token streams a `gated_repo` error
+  // frame; we open a license + token-entry modal (mirroring the image-model
+  // gated flow) instead of dead-ending on a raw-traceback toast, then re-run
+  // the captured transcription once a token is saved. Non-null = open for that
+  // target; `{ context, repo }`.
+  const [gatedContext, setGatedContext] = useState(null);
   const sse = useSseProgress(job ? eventsUrl(job.jobId) : null);
   const latest = sse.latest;
   const stage = latest?.stage ?? null;
@@ -45,7 +52,13 @@ export default function useMidiTranscription({ startRequest, eventsUrl, cancelRe
       onComplete?.(latest, job.context);
       setJob(null);
     } else if (latest.type === 'error') {
-      toast.error(latest.error || 'MIDI transcription failed');
+      // Gated-repo download failure — open the license + token prompt instead
+      // of toasting a raw HuggingFace traceback the user can't act on.
+      if (latest.code === 'gated_repo') {
+        setGatedContext({ context: job.context, repo: latest.repo || null });
+      } else {
+        toast.error(latest.error || 'MIDI transcription failed');
+      }
       setJob(null);
     } else if (latest.type === 'canceled' || latest.type === 'cancelled') {
       toast.info('MIDI transcription cancelled');
@@ -90,7 +103,7 @@ export default function useMidiTranscription({ startRequest, eventsUrl, cancelRe
   };
 
   const start = (context) => {
-    if (job || pending || installContext !== null) return;
+    if (job || pending || installContext !== null || gatedContext !== null) return;
     kickoff(context);
   };
 
@@ -116,8 +129,31 @@ export default function useMidiTranscription({ startRequest, eventsUrl, cancelRe
     },
   };
 
+  // Gated-repo modal wiring — spread onto <MidiGatedModal>. Saving a token
+  // re-fires the captured transcription (the license may still be unaccepted,
+  // in which case it 403s and the modal reopens — each reopen needs a fresh
+  // Save click, so there's no runaway loop). Closing clears the target.
+  const gatedGate = {
+    open: gatedContext !== null,
+    repo: gatedContext?.repo ?? null,
+    onSaved: () => {
+      const ctx = gatedContext?.context ?? null;
+      setGatedContext(null);
+      if (ctx !== null) kickoff(ctx);
+    },
+    onClose: () => setGatedContext(null),
+  };
+
   // `context` exposes the in-flight job's captured target so a caller can
   // gate per-target UI ("is the active job for THIS record?") without
   // mirroring the value in its own state.
-  return { active: pending || !!job || installContext !== null, stage, context: job?.context ?? null, start, cancel, installGate };
+  return {
+    active: pending || !!job || installContext !== null || gatedContext !== null,
+    stage,
+    context: job?.context ?? null,
+    start,
+    cancel,
+    installGate,
+    gatedGate,
+  };
 }
