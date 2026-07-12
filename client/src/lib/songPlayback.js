@@ -9,17 +9,10 @@
 // Pure-ish: no React. The Song editor wraps this in a small hook for UI state.
 // decodeAudioData is the only async dependency; callers handle rejection.
 
-// Lazily create + reuse one AudioContext. Browsers cap the number of contexts,
-// and reusing one keeps every layer on the same clock. Resumed on demand
-// because autoplay policies start it suspended until a user gesture.
-let sharedCtx = null;
-function ctx() {
-  if (!sharedCtx) {
-    const Ctor = window.AudioContext || window.webkitAudioContext;
-    sharedCtx = new Ctor();
-  }
-  return sharedCtx;
-}
+// The app-wide shared AudioContext (see audioContext.js) — reusing one keeps
+// every layer on the same clock. Resumed on demand because autoplay policies
+// start it suspended until a user gesture.
+import { getAudioContext as ctx } from './audioContext.js';
 
 // Decode one recording URL into an AudioBuffer. Cached per-URL on the returned
 // mixer (not globally) so a re-open re-fetches at most once per session.
