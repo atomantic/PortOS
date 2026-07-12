@@ -16,7 +16,7 @@ import { getToolsSummaryForPrompt } from './tools.js';
 import { getActiveProvider } from './providers.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { readJSONFile, loadSlashdoFile, PATHS, tryReadFile } from '../lib/fileUtils.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, normalizeReviewers, buildReviewWithArgs } from '../lib/validation.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, resolveKeyedReviewers, buildReviewWithArgs } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { isOpencodeCommand } from '../lib/providerModels.js';
 import { shellQuote } from '../lib/shellQuote.js';
@@ -258,17 +258,23 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const prOwner = metadata.reviewLoopPROwner ?? '';
   const prRepo = metadata.reviewLoopPRRepo ?? '';
   const sourceTaskId = metadata.sourceTaskId || 'unknown';
-  // Ordered reviewer list (back-compat: legacy single `reviewLoopReviewer`).
-  const reviewers = normalizeReviewers({
-    reviewers: Array.isArray(metadata.reviewLoopReviewers)
-      ? metadata.reviewLoopReviewers
-      : (metadata.reviewLoopReviewer ? [metadata.reviewLoopReviewer] : undefined)
-  });
+  // Arbitrary GitHub reviewer usernames (gate-only PR reviewers), appended to
+  // the review flow after the keyed reviewers.
+  const usernames = normalizeReviewUsernames(metadata.reviewLoopReviewerUsernames);
+  // Ordered keyed reviewer list (back-compat: legacy single `reviewLoopReviewer`).
+  // `reviewLoopReviewers` from spawnReviewLoopFollowUp is authoritative (copilot
+  // already stripped on non-GitHub forges); resolveKeyedReviewers keeps an
+  // explicit empty list empty when usernames carry the review (username-only).
+  const reviewerSource = Array.isArray(metadata.reviewLoopReviewers)
+    ? metadata.reviewLoopReviewers
+    : (metadata.reviewLoopReviewer ? [metadata.reviewLoopReviewer] : undefined);
+  const reviewers = resolveKeyedReviewers(reviewerSource, usernames.length > 0);
   const stopMode = metadata.reviewLoopStopMode || DEFAULT_REVIEW_STOP_MODE;
   const reviewerApplies = metadata.reviewLoopReviewerApplies === true;
   const hasCopilot = reviewers.includes(DEFAULT_REVIEWER);
   const hasLocalLlm = reviewers.some(r => LOCAL_LLM_REVIEWERS.includes(r));
   const hasCli = reviewers.some(r => r !== DEFAULT_REVIEWER && !LOCAL_LLM_REVIEWERS.includes(r));
+  const hasGithubUser = usernames.length > 0;
   // Optional Codex CLI model tier chosen on the Code Review Defaults panel.
   // Only surfaced when `codex` is actually one of the reviewers; the CLI takes
   // it as `codex --model <id>` (empty = let the Codex CLI use its own default).
@@ -278,13 +284,19 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const codexModelNote = codexModel
     ? ` When invoking the \`codex\` reviewer, pass its model tier: \`codex --model ${codexModel} …\`.`
     : '';
-  const multi = reviewers.length > 1;
+  // "multi" reflects the TOTAL number of review sources (keyed reviewers +
+  // username reviewers) so the ordered per-reviewer loop wording kicks in as
+  // soon as there's more than one thing to satisfy.
+  const multi = (reviewers.length + usernames.length) > 1;
   // The system pre-requests the initial Copilot review only when copilot LEADS the
   // order; otherwise the agent must request it at copilot's turn (so Copilot reviews
   // the post-CLI-fix state, not a stale diff).
   const copilotIsFirst = reviewers[0] === DEFAULT_REVIEWER;
-  const reviewerLabel = reviewers.map(r => `\`${r}\``).join(' → ');
-  const equivArgs = buildReviewWithArgs(reviewers, stopMode, reviewerApplies);
+  const reviewerLabel = [
+    ...reviewers.map(r => `\`${r}\``),
+    ...usernames.map(u => `\`@${u}\``),
+  ].join(' → ');
+  const equivArgs = buildReviewWithArgs(reviewers, stopMode, reviewerApplies, usernames);
   const equiv = equivArgs ? ` (equivalent to \`/do:pr ${equivArgs}\`)` : '';
 
   // First step: how to obtain a review. For a single copilot/CLI reviewer keep the
@@ -295,12 +307,17 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   // the diff and returns findings text. The agent always reaches it via
   // `http://localhost:5555` (the canonical loopback API port).
   const localLlmInvocation = `POST the diff to PortOS's local reviewer endpoint: \`gh pr diff ${prNumber || '<PR_NUMBER>'} | jq -Rs '{ backend: "<lmstudio|ollama>", diff: . }' | curl -sS -X POST http://localhost:5555/api/code-review/local -H 'Content-Type: application/json' -d @-\`. Substitute the active reviewer name for \`<lmstudio|ollama>\`. The response \`.findings\` field is the review text — treat it like any other reviewer's findings.`;
+  // Instruct the agent to request each username reviewer as a PR reviewer and
+  // gate the merge on their approval. `gh pr edit --add-reviewer` takes the bare
+  // login, so strip the `@`.
+  const githubUsersInvocation = `request ${usernames.map(u => `\`@${u}\``).join(', ')} as PR reviewer${usernames.length > 1 ? 's' : ''} (\`gh pr edit ${prNumber || '<PR_NUMBER>'} --add-reviewer <user>\`, drop the \`@\`), then wait for their review (poll every 5–15s) and address any findings; their approval gates the merge.`;
   const multiBullets = [
     hasCopilot ? `**copilot**: ${copilotIsFirst
       ? 'wait for the initial Copilot review the system already pre-requested (Copilot leads the list)'
       : 'request a Copilot review when you reach its turn'} (poll every 5–15s, max 5 min/round), then re-request on later rounds.` : null,
     hasCli ? `**codex / antigravity / claude**: invoke that CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works).${codexModelNote}` : null,
     hasLocalLlm ? `**lmstudio / ollama**: ${localLlmInvocation}` : null,
+    hasGithubUser ? `**@github reviewers**: ${githubUsersInvocation}` : null,
   ].filter(Boolean).join(' ');
   const singleCliInvocation = `Invoke the ${reviewerLabel} CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works). Capture its findings as concrete issues to address.${codexModelNote}`;
   // Resolved sequentially so a future reviewer kind only adds one branch
@@ -309,7 +326,8 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   if (multi) waitOrInvokeStep = `For EACH reviewer in order — ${reviewerLabel} — run a full review-and-fix sub-loop before advancing to the next. ${multiBullets}`;
   else if (hasCopilot) waitOrInvokeStep = 'Wait for the latest Copilot review to complete (poll every 5–15s, max 5 minutes per round); the system already requested the initial review.';
   else if (hasLocalLlm) waitOrInvokeStep = localLlmInvocation;
-  else waitOrInvokeStep = singleCliInvocation;
+  else if (hasCli) waitOrInvokeStep = singleCliInvocation;
+  else waitOrInvokeStep = `To obtain a review, ${githubUsersInvocation}`;
 
   const stopModeNote = stopMode === 'on-findings'
     ? '**Stop mode (on-findings):** stop after the FIRST reviewer whose findings you actually fixed and committed; skip the remaining reviewers.'
@@ -327,7 +345,7 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
     ? 'The system has already requested the initial Copilot code review (Copilot leads the order).'
     : hasCopilot
       ? 'Copilot is configured after another reviewer, so the system did NOT pre-request it — request the Copilot review yourself when you reach its turn (after the earlier reviewers’ fixes are pushed), and invoke the other reviewers yourself.'
-      : 'The system did NOT pre-request a reviewer because no Copilot review leads the order — you must invoke each configured reviewer yourself against the PR diff.';
+      : 'The system did NOT pre-request a reviewer because no Copilot review leads the order — you must request/invoke each configured reviewer yourself against the PR diff.';
   const repeatedCommentsNote = '**Repeated comments:** If a fresh review round only re-raises feedback you intentionally rejected (with a reply explaining why), treat that round as clean and move on.';
   const extraNotes = [stopModeNote, applyNote].filter(Boolean);
 
@@ -619,6 +637,7 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
   // Resolve the user's ordered reviewer list + flags (default `[copilot]`). Declared
   // up here so the TUI completion block can thread `--review-with …` into `/do:pr`.
   const taskReviewers = normalizeReviewers(task.metadata);
+  const taskReviewerUsernames = normalizeReviewUsernames(task.metadata?.usernames);
   const taskReviewStopMode = task.metadata?.reviewStopMode || DEFAULT_REVIEW_STOP_MODE;
   const taskReviewerApplies = isTruthyMetaFn(task.metadata?.reviewerApplies);
 
@@ -641,6 +660,7 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
           willOpenPR, willReviewLoop, simplifyEnabled, providerId,
           sentinelPath,
           reviewers: taskReviewers,
+          usernames: taskReviewerUsernames,
           reviewStopMode: taskReviewStopMode,
           reviewerApplies: taskReviewerApplies
         })
@@ -876,6 +896,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // Ordered reviewer list + flags for the Review Loop (default `[copilot]`).
   // Flows as `/do:pr --review-with a,b,c [--review-stop-on-*] [--reviewer-applies]`.
   const lightReviewers = normalizeReviewers(task.metadata);
+  const lightReviewerUsernames = normalizeReviewUsernames(task.metadata?.usernames);
   const lightReviewStopMode = task.metadata?.reviewStopMode || DEFAULT_REVIEW_STOP_MODE;
   const lightReviewerApplies = isTruthyMetaFn(task.metadata?.reviewerApplies);
   // Claude Code CLI providers can drive `/simplify` + `/do:pr` themselves
@@ -980,10 +1001,10 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
       sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`,
       branchName: worktreeInfo?.branchName || null,
       baseBranch: worktreeInfo?.baseBranch || null,
-      reviewers: lightReviewers, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies
+      reviewers: lightReviewers, usernames: lightReviewerUsernames, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies
     }));
   } else {
-    sections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, willReviewLoop, hasSlashdo, simplifyEnabled, reviewers: lightReviewers, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies }));
+    sections.push(buildCliCompletionSection({ worktreeInfo, willOpenPR, willReviewLoop, hasSlashdo, simplifyEnabled, reviewers: lightReviewers, usernames: lightReviewerUsernames, reviewStopMode: lightReviewStopMode, reviewerApplies: lightReviewerApplies }));
   }
 
   return { taskSections, contractSections };
@@ -1025,10 +1046,11 @@ function worktreeCommitGuidance({ isTui, hasSlashdo, isWorktreeOnExistingBranch,
  * both agent flows converge on the same final state. `reviewers` only colors
  * the wording — the merge step itself is reviewer-agnostic.
  */
-function buildPostPRMergeSteps(startStep, { reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE } = {}) {
+function buildPostPRMergeSteps(startStep, { reviewers = DEFAULT_REVIEWERS, usernames = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE } = {}) {
   // Trailing space when present so the sentence reads "the Copilot review loop"
-  // (lone copilot) or "the review loop" (multi/CLI) — never "the the review loop".
-  const reviewerLabel = (reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER) ? 'Copilot ' : '';
+  // (lone copilot, no usernames) or "the review loop" (multi/CLI/username) —
+  // never "the the review loop".
+  const reviewerLabel = (reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER && usernames.length === 0) ? 'Copilot ' : '';
   // Under an explicit stop-mode, the multi-reviewer loop can exit `partial` (later
   // reviewers intentionally skipped after the short-circuit) — that's a successful
   // outcome the user opted into, so merge on it too. Match the known stop-modes
@@ -1056,25 +1078,27 @@ function buildPostPRMergeSteps(startStep, { reviewers = DEFAULT_REVIEWERS, revie
  * slash commands), the agent can't run `/do:pr` / `/do:push`, so it delegates to
  * the plain-git/`gh` variant below — same sentinel handshake, no slashdo.
  */
-function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath, providerId = null, slashdoFree = false, branchName = null, baseBranch = null, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
+function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled, sentinelPath, providerId = null, slashdoFree = false, branchName = null, baseBranch = null, reviewers = DEFAULT_REVIEWERS, usernames = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
   if (slashdoFree) {
     // The manual path never auto-merges (it opens the PR for review), so it
     // doesn't need willReviewLoop — the review gate holds unconditionally.
     return buildManualTuiCompletionSection({ willOpenPR, simplifyEnabled, sentinelPath, branchName, baseBranch });
   }
   const cmd = willOpenPR ? '/do:pr' : '/do:push';
+  const reviewUsernames = normalizeReviewUsernames(usernames);
   // `/do:pr` may inherit a saved `review-with` default. Explicitly opt out
   // when the task's Review Loop control is off so that default cannot start a
   // Copilot (or other external) review unexpectedly.
   const reviewArgs = willOpenPR
-    ? (willReviewLoop ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies) : '--review-with none')
+    ? (willReviewLoop ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies, reviewUsernames) : '--review-with none')
     : '';
   const reviewerArg = reviewArgs ? ` ${reviewArgs}` : '';
-  const copilotOnly = reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER;
+  const copilotOnly = reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER && reviewUsernames.length === 0;
+  const reviewerListLabel = [...reviewers, ...reviewUsernames.map(u => `@${u}`)].join(', ');
   const reviewSuffix = willOpenPR && willReviewLoop
     ? (copilotOnly
         ? ' — `/do:pr` runs the Copilot review loop after the PR opens.'
-        : ` — \`/do:pr\` runs the review loop for ${reviewers.join(', ')} in order after the PR opens.`)
+        : ` — \`/do:pr\` runs the review loop for ${reviewerListLabel} in order after the PR opens.`)
     : (willOpenPR ? ' — external review is disabled for this task.' : '');
   // `/simplify` is a Claude Code TUI built-in. Non-Claude TUI providers
   // (codex-tui, antigravity-tui) can't run it, so give them the inline equivalent.
@@ -1085,7 +1109,7 @@ function buildTuiCompletionSection({ willOpenPR, willReviewLoop, simplifyEnabled
     : '1. (simplify disabled — skip)';
   const sentinelTail = willOpenPR ? '   ## PR\n   <PR URL>' : '   ## Branch\n   <branch name>';
   const merge = willOpenPR && willReviewLoop
-    ? buildPostPRMergeSteps(3, { reviewers, reviewStopMode })
+    ? buildPostPRMergeSteps(3, { reviewers, usernames: reviewUsernames, reviewStopMode })
     : { lines: [], nextStep: 3 };
   const sentinelStep = merge.nextStep;
 
@@ -1198,7 +1222,8 @@ function buildManualTuiCompletionSection({ willOpenPR, simplifyEnabled, sentinel
  * CLI providers fall through to the legacy commit-only block where PortOS
  * handles push+PR on exit.
  */
-function buildCliCompletionSection({ worktreeInfo, willOpenPR, willReviewLoop = false, hasSlashdo = false, simplifyEnabled = false, reviewers = DEFAULT_REVIEWERS, reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
+function buildCliCompletionSection({ worktreeInfo, willOpenPR, willReviewLoop = false, hasSlashdo = false, simplifyEnabled = false, reviewers = DEFAULT_REVIEWERS, usernames = [], reviewStopMode = DEFAULT_REVIEW_STOP_MODE, reviewerApplies = false }) {
+  const reviewUsernames = normalizeReviewUsernames(usernames);
   if (hasSlashdo && worktreeInfo && willOpenPR) {
     const lines = ['## Completion', 'When finished, run these in order:'];
     let step = 1;
@@ -1206,17 +1231,17 @@ function buildCliCompletionSection({ worktreeInfo, willOpenPR, willReviewLoop = 
       lines.push(`${step++}. \`/simplify\` — review the changed code for reuse, quality, and efficiency, and fix any findings.`);
     }
     const reviewArgs = willReviewLoop
-      ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies)
+      ? buildReviewWithArgs(reviewers, reviewStopMode, reviewerApplies, reviewUsernames)
       : '--review-with none';
     const reviewerArg = reviewArgs ? ` ${reviewArgs}` : '';
     const completionNote = willReviewLoop
-      ? ((reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER)
+      ? ((reviewers.length === 1 && reviewers[0] === DEFAULT_REVIEWER && reviewUsernames.length === 0)
           ? 'and drives the Copilot review loop until clean.'
-          : `and drives the review loop for ${reviewers.join(', ')} in order until clean.`)
+          : `and drives the review loop for ${[...reviewers, ...reviewUsernames.map(u => `@${u}`)].join(', ')} in order until clean.`)
       : 'with external review disabled.';
     lines.push(`${step++}. \`/do:pr${reviewerArg}\` — commits your changes, pushes the branch, and opens a pull request against the default branch ${completionNote}`);
     const merge = willReviewLoop
-      ? buildPostPRMergeSteps(step, { reviewers, reviewStopMode })
+      ? buildPostPRMergeSteps(step, { reviewers, usernames: reviewUsernames, reviewStopMode })
       : { lines: [], nextStep: step };
     lines.push(...merge.lines);
     step = merge.nextStep;

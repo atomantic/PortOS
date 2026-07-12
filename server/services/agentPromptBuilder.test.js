@@ -490,6 +490,46 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/For EACH reviewer in order/);
     });
 
+    it('appends GitHub reviewer usernames as @user tokens and instructs requesting them', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          reviewLoopFollowUp: true,
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+          reviewLoopPRBranch: 'b',
+          reviewLoopPRNumber: 9,
+          reviewLoopReviewers: ['copilot'],
+          reviewLoopReviewerUsernames: ['CodeReviewbot'],
+          sourceTaskId: 'task-src-u',
+        }}),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta);
+      expect(prompt).toMatch(/--review-with copilot,@CodeReviewbot/);
+      // The agent is told to request the username as a PR reviewer that gates merge.
+      expect(prompt).toMatch(/--add-reviewer/);
+      expect(prompt).toMatch(/@CodeReviewbot/);
+    });
+
+    it('drives a username-only review loop (no keyed reviewer)', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          reviewLoopFollowUp: true,
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+          reviewLoopPRBranch: 'b',
+          reviewLoopPRNumber: 9,
+          // Empty keyed list (e.g. copilot stripped on a non-GitHub forge) + a username.
+          reviewLoopReviewers: [],
+          reviewLoopReviewerUsernames: ['CodeReviewbot'],
+          sourceTaskId: 'task-src-uonly',
+        }}),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta);
+      expect(prompt).toMatch(/--review-with @CodeReviewbot/);
+      // No copilot fallback re-introduced.
+      expect(prompt).not.toMatch(/--review-with copilot/);
+    });
+
     it('threads the configured Codex model tier into the CLI invocation when codex reviews', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: {

@@ -19,8 +19,8 @@ import {
   updateCosTaskSchema,
   validateRequest,
   normalizeReviewers,
+  buildReviewersCsv,
   LOCAL_LLM_REVIEWERS,
-  DEFAULT_REVIEWERS,
   isPaginationRequested,
   parsePagination,
 } from '../lib/validation.js';
@@ -45,7 +45,9 @@ async function resolveClaimReviewersCsv() {
   const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
   const list = normalizeReviewers({}, codeReviewDefaults?.reviewers)
     .filter((r) => !LOCAL_LLM_REVIEWERS.includes(r));
-  return (list.length ? list : [...DEFAULT_REVIEWERS]).join(',');
+  // Arbitrary GitHub reviewer usernames from the Code Review Defaults, appended
+  // as `@user` tokens so the play button's claim gates the merge on them too.
+  return buildReviewersCsv(list, codeReviewDefaults?.usernames);
 }
 
 // Append a "claim exactly this ticket" constraint to the claim-issue-jira body

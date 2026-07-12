@@ -26,6 +26,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   const [simplify, setSimplify] = useState(true);
   const [reviewLoop, setReviewLoop] = useState(false);
   const [reviewers, setReviewers] = useState(DEFAULT_REVIEWERS);
+  const [reviewUsernames, setReviewUsernames] = useState([]);
   const [reviewStopMode, setReviewStopMode] = useState(DEFAULT_REVIEW_STOP_MODE);
   const [reviewerApplies, setReviewerApplies] = useState(false);
   const [createJiraTicket, setCreateJiraTicket] = useState(false);
@@ -61,6 +62,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       .then((d) => {
         if (cancelled || !d) return;
         if (Array.isArray(d.reviewers) && d.reviewers.length) setReviewers(d.reviewers);
+        if (Array.isArray(d.usernames)) setReviewUsernames(d.usernames);
         if (d.stopMode) setReviewStopMode(d.stopMode);
         if (d.reviewerApplies === true) setReviewerApplies(true);
       })
@@ -263,6 +265,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       simplify,
       reviewLoop,
       reviewers: reviewLoop ? reviewers : undefined,
+      usernames: reviewLoop ? reviewUsernames : undefined,
       reviewStopMode: reviewLoop ? reviewStopMode : undefined,
       reviewerApplies: reviewLoop ? reviewerApplies : undefined,
       screenshots: screenshots.length > 0 ? screenshots.map(s => s.path) : undefined,
@@ -504,10 +507,12 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
             <div className="basis-full mt-1">
               <ReviewerPicker
                 reviewers={reviewers}
+                usernames={reviewUsernames}
                 stopMode={reviewStopMode}
                 reviewerApplies={reviewerApplies}
-                onChange={({ reviewers: r, stopMode, reviewerApplies: ra }) => {
+                onChange={({ reviewers: r, usernames: u, stopMode, reviewerApplies: ra }) => {
                   setReviewers(r);
+                  setReviewUsernames(u);
                   setReviewStopMode(stopMode);
                   setReviewerApplies(ra);
                 }}

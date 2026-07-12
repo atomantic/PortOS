@@ -141,6 +141,41 @@ export const SWARM_COUNT_OPTIONS = [
 export const DEFAULT_REVIEWER = 'copilot';
 export const DEFAULT_REVIEWERS = ['copilot'];
 
+// Arbitrary GitHub reviewer usernames (e.g. `@CodeReviewbot`) requested as PR
+// reviewers to gate merging, appended to slashdo's `--review-with` after the
+// keyed reviewers. Client mirror of server/lib/cosValidation.js
+// `normalizeReviewUsernames` + MAX_REVIEW_USERNAMES — keep the pattern/cap in
+// sync so the picker rejects the same tokens the server would drop. Stored
+// WITHOUT the leading `@` (added back only for display / the flag string).
+export const MAX_REVIEW_USERNAMES = 20;
+const REVIEW_USERNAME_RE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\/[A-Za-z0-9._-]{1,100})?$/;
+
+// Validate a single raw username entry (strip `@`, trim). Returns the clean
+// token or null if it isn't a shell-safe GitHub username/team slug.
+export function cleanReviewUsername(raw) {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim().replace(/^@+/, '');
+  return trimmed && REVIEW_USERNAME_RE.test(trimmed) ? trimmed : null;
+}
+
+// Normalize a raw list: drop invalid tokens, case-insensitively dedupe while
+// preserving order, cap at MAX_REVIEW_USERNAMES. Returns clean usernames sans `@`.
+export function normalizeReviewUsernames(list) {
+  if (!Array.isArray(list)) return [];
+  const seen = new Set();
+  const out = [];
+  for (const raw of list) {
+    const clean = cleanReviewUsername(raw);
+    if (!clean) continue;
+    const key = clean.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(clean);
+    if (out.length >= MAX_REVIEW_USERNAMES) break;
+  }
+  return out;
+}
+
 // Stop-mode for the multi-reviewer loop (slashdo `--review-stop-on-*`).
 // Keep in sync with REVIEW_STOP_MODES in `server/lib/validation.js`.
 export const REVIEW_STOP_MODES = [
