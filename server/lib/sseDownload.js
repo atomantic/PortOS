@@ -52,7 +52,13 @@ export async function startHfDownloadStream({ req, res, repo, repos, alreadyDown
   let aborted = false;
   req.on('close', () => {
     aborted = true;
-    if (currentHandle) currentHandle.kill();
+    // Only a live handle means a download was mid-flight — `close` also fires
+    // on normal completion (currentHandle is nulled after each repo), so this
+    // guard keeps the cancel line out of the log on a clean finish.
+    if (currentHandle) {
+      console.log(`🛑 HuggingFace download cancelled (client disconnect)`);
+      currentHandle.kill();
+    }
     safeEnd();
   });
 
@@ -71,19 +77,38 @@ export async function startHfDownloadStream({ req, res, repo, repos, alreadyDown
     // (etag match) and pulls only what's gone.
     if (existing.cached && !force) {
       totalSize += existing.sizeBytes || 0;
+      console.log(`📦 HuggingFace repo already cached: ${r} (${existing.sizeBytes} bytes)`);
       send({ type: 'log', message: `${r} already cached (${existing.sizeBytes} bytes).`, repo: r, sizeBytes: existing.sizeBytes });
       continue;
     }
     if (inFlight.has(r)) {
+      console.log(`⏭️  HuggingFace download already running for ${r} — refusing duplicate`);
       send({ type: 'error', message: `Another download for ${r} is already running.`, kind: 'already_running', repo: r });
       return safeEnd();
     }
-    const handle = downloadHfRepo({ repo: r, onEvent: (ev) => send({ ...ev, repo: r }) });
+    // Server-side visibility for a pull that used to surface only on the SSE
+    // stream (the browser) — a headless/PM2 log had no record the multi-GB
+    // fetch ever ran. Log the start, each file as it streams, and the outcome.
+    console.log(`⬇️  Downloading HuggingFace repo: ${r}${force ? ' (forced re-fetch)' : ''}`);
+    const handle = downloadHfRepo({
+      repo: r,
+      onEvent: (ev) => {
+        if (ev.type === 'progress' && ev.file) {
+          console.log(`⬇️  ${r}: ${ev.file} (${ev.step}/${ev.total})`);
+        }
+        send({ ...ev, repo: r });
+      },
+    });
     currentHandle = handle;
     inFlight.set(r, handle);
     try {
-      await handle.promise;
+      const result = await handle.promise;
       downloadedAny = true;
+      if (result?.ok) {
+        console.log(`✅ HuggingFace download complete: ${r} (${result.sizeBytes || 0} bytes)`);
+      } else if (result?.errorKind !== 'cancelled') {
+        console.error(`❌ HuggingFace download failed: ${r} — ${result?.errorMessage || 'unknown error'}`);
+      }
     } finally {
       inFlight.delete(r);
       currentHandle = null;
