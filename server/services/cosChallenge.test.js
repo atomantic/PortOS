@@ -7,6 +7,7 @@ import {
   canChallenge,
   buildChallengePatch,
   buildChallengeResolutionPatch,
+  classifyRecheckOutcome,
 } from './cosChallenge.js';
 import { resolveChallengeSchema } from '../lib/cosValidation.js';
 
@@ -83,6 +84,52 @@ describe('cosChallenge', () => {
       for (const outcome of CHALLENGE_OUTCOMES) {
         expect(buildChallengeResolutionPatch({ outcome, now: NOW })).not.toBeNull();
       }
+    });
+  });
+
+  describe('classifyRecheckOutcome', () => {
+    it('overturns (upheld) on the clean sentinel', () => {
+      expect(classifyRecheckOutcome('No findings.')).toBe('upheld');
+      expect(classifyRecheckOutcome('  no findings  ')).toBe('upheld');
+    });
+
+    it('escalates when a blocking section survives', () => {
+      expect(classifyRecheckOutcome('## Blocking\n- foo.js:1 leaks a handle')).toBe('escalated');
+      expect(classifyRecheckOutcome('Some preamble\n### Blocking\n- bar')).toBe('escalated');
+    });
+
+    it('overturns when only non-blocking (recommended/nits) findings remain', () => {
+      expect(classifyRecheckOutcome('## Recommended\n- rename x\n\n## Nits\n- spacing')).toBe('upheld');
+    });
+
+    it('does NOT escalate on a bare/empty Blocking header (noisy-reviewer guard)', () => {
+      expect(classifyRecheckOutcome('## Blocking\n\n## Recommended\n- x')).toBe('upheld');
+      expect(classifyRecheckOutcome('## Blocking')).toBe('upheld');
+    });
+
+    it('returns null for unusable input so the caller treats it as a failed re-check', () => {
+      expect(classifyRecheckOutcome('')).toBeNull();
+      expect(classifyRecheckOutcome('   ')).toBeNull();
+      expect(classifyRecheckOutcome(null)).toBeNull();
+      expect(classifyRecheckOutcome(undefined)).toBeNull();
+    });
+  });
+
+  describe('resolveChallengeSchema recheck branch (#2471)', () => {
+    it('accepts a recheck object without an explicit outcome', () => {
+      expect(resolveChallengeSchema.safeParse({ recheck: { backend: 'ollama', diff: 'd' } }).success).toBe(true);
+    });
+
+    it('rejects supplying both outcome and recheck', () => {
+      expect(resolveChallengeSchema.safeParse({ outcome: 'upheld', recheck: { backend: 'ollama', diff: 'd' } }).success).toBe(false);
+    });
+
+    it('rejects supplying neither outcome nor recheck', () => {
+      expect(resolveChallengeSchema.safeParse({ note: 'nothing' }).success).toBe(false);
+    });
+
+    it('rejects a non-local reviewer backend in recheck', () => {
+      expect(resolveChallengeSchema.safeParse({ recheck: { backend: 'codex', diff: 'd' } }).success).toBe(false);
     });
   });
 

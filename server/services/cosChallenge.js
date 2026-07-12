@@ -100,3 +100,41 @@ export function buildChallengeResolutionPatch({ outcome, note, resolvedBy, now =
   if (typeof resolvedBy === 'string' && resolvedBy.trim()) resolution.resolvedBy = resolvedBy.trim();
   return { challengeResolution: resolution };
 }
+
+/**
+ * Classify a re-check reviewer's fresh findings into a resolution outcome (#2471).
+ *
+ * When a challenge is resolved by re-running a reviewer against the current diff
+ * (rather than a human verdict), the merge-gating signal is the reviewer's
+ * `## Blocking` section — nits/recommended never block a merge, so only a
+ * surviving blocking finding sustains the original rejection. The local-LLM
+ * reviewer emits the exact `No findings.` sentinel for a fully clean diff
+ * (see codeReview.js CODE_REVIEW_SYSTEM_PROMPT) and a `## Blocking` header only
+ * when it still has a blocking objection.
+ *
+ * - `upheld`   → the rejection is overturned (no blocking finding survives) → work re-queues.
+ * - `escalated` → a blocking finding still stands → surface the dispute to the user.
+ *
+ * Returns `null` for unusable input (non-string / empty) so the caller can treat
+ * a failed re-check as an error rather than silently escalating (or overturning)
+ * on no signal — the sentinel-vs-empty rule, not `.length` truthiness.
+ */
+export function classifyRecheckOutcome(findings) {
+  if (typeof findings !== 'string') return null;
+  const trimmed = findings.trim();
+  if (!trimmed) return null;
+  // Exact clean sentinel — the diff is clean across all severities.
+  if (/^no findings\.?$/i.test(trimmed)) return 'upheld';
+  // A `## Blocking` section only sustains the rejection when it actually carries a
+  // finding. A noisy reviewer (the very case this protocol guards against) that
+  // emits a bare/empty Blocking header must NOT trigger the expensive user
+  // escalation on the header alone — require non-empty body text under it.
+  const blockingMatch = trimmed.match(/^\s*#{1,6}\s*blocking\b[^\n]*\n?([\s\S]*)$/im);
+  if (blockingMatch) {
+    // Body = text after the Blocking header up to the next heading (or EOF).
+    const body = blockingMatch[1].split(/^\s*#{1,6}\s/m)[0];
+    if (body.trim()) return 'escalated';
+  }
+  // Findings present, but nothing blocking — nothing gates the merge.
+  return 'upheld';
+}

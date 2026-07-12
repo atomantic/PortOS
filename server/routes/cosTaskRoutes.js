@@ -335,16 +335,21 @@ router.post('/tasks/:id/challenge', asyncHandler(async (req, res) => {
   res.json(result);
 }));
 
-// POST /api/cos/tasks/:id/challenge/resolve - Resolve a parked challenge (#2441).
-// `upheld` overturns the rejection (→ pending); `escalated` surfaces the
+// POST /api/cos/tasks/:id/challenge/resolve - Resolve a parked challenge (#2441,
+// #2471). Provide EITHER an explicit `outcome` (manual verdict) OR a `recheck`
+// object (auto re-run a local reviewer against the current diff and derive the
+// verdict). `upheld` overturns the rejection (→ pending); `escalated` surfaces the
 // unresolved dispute to the user (→ blocked + arbitration task).
 router.post('/tasks/:id/challenge/resolve', asyncHandler(async (req, res) => {
   const { id } = req.params;
-  const { outcome, note, resolvedBy } = validateRequest(resolveChallengeSchema, req.body);
-  const result = await cos.resolveTaskChallenge(id, { outcome, note, resolvedBy });
+  const { outcome, recheck, note, resolvedBy } = validateRequest(resolveChallengeSchema, req.body);
+  const result = recheck
+    ? await cos.resolveTaskChallengeWithRecheck(id, { recheck, resolvedBy })
+    : await cos.resolveTaskChallenge(id, { outcome, note, resolvedBy });
   if (result?.error) {
     const status = result.code === 'NOT_FOUND' ? 404
-      : result.code === 'NOT_CHALLENGED' ? 409 : 400;
+      : result.code === 'NOT_CHALLENGED' ? 409
+      : result.code === 'RECHECK_FAILED' ? 502 : 400;
     throw new ServerError(result.error, { status, code: result.code || 'RESOLVE_FAILED' });
   }
   res.json(result);

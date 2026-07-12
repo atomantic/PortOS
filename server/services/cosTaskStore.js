@@ -21,7 +21,8 @@ import { loadState, withStateLock, ROOT_DIR } from './cosState.js';
 import { cosEvents } from './cosEvents.js';
 import { CLAIM_METADATA_KEYS } from './cosTaskClaim.js';
 import { mergeTaskLists } from './cosTaskMerge.js';
-import { canChallenge, getChallengeCount, buildChallengePatch, buildChallengeResolutionPatch, MAX_CHALLENGES_PER_TASK } from './cosChallenge.js';
+import { canChallenge, getChallengeCount, buildChallengePatch, buildChallengeResolutionPatch, classifyRecheckOutcome, MAX_CHALLENGES_PER_TASK } from './cosChallenge.js';
+import { runLocalCodeReview, getCodeReviewDefaults } from './codeReview.js';
 
 // First non-empty line of a string. Used by addTask dedup: stored descriptions
 // are flattened to a single line by generateTasksMarkdown, so the comparison
@@ -694,4 +695,56 @@ export async function resolveTaskChallenge(taskId, { outcome, note, resolvedBy }
   console.log(`⚖️ Task ${taskId} challenge resolved: ${outcome} → ${nextStatus}`);
   cosEvents.emit('task:challenge-resolved', { taskId, taskType: resolvedType, outcome });
   return updated;
+}
+
+/**
+ * Resolve a parked challenge by AUTOMATIC reviewer re-check (#2471). Instead of a
+ * human verdict, re-run the disputed (or a second) local-LLM reviewer against the
+ * current diff and derive the outcome from its fresh findings — a blocking finding
+ * that survives sustains the rejection (→ escalated); nothing blocking overturns it
+ * (→ upheld). This is the cheap confirm/overturn pass that runs BEFORE falling back
+ * to user escalation, closing the gap #2470 left ("this slice resolves manually").
+ *
+ * Only the in-process local reviewers (`lmstudio`/`ollama`) are re-run here; CLI
+ * reviewers are re-run by the follow-up agent itself, which then calls the manual
+ * `resolveTaskChallenge` path with an explicit outcome.
+ *
+ * @returns the updated task, or `{ error, code }` on not-found / not-challenged /
+ *          RECHECK_FAILED (reviewer unreachable or no usable findings).
+ */
+export async function resolveTaskChallengeWithRecheck(taskId, { recheck, resolvedBy } = {}, taskType = 'user', { now = Date.now() } = {}) {
+  const task = await getTaskById(taskId);
+  if (!task) return { error: 'Task not found', code: 'NOT_FOUND' };
+  if (task.status !== 'challenged') {
+    return { error: 'Task is not under challenge', code: 'NOT_CHALLENGED' };
+  }
+  const backend = recheck?.backend;
+  // Model: explicit override wins, else the Code Review Defaults for this backend.
+  let model = recheck?.model;
+  if (!model) {
+    const defaults = await getCodeReviewDefaults().catch(() => null);
+    model = backend === 'ollama' ? defaults?.ollamaModel : defaults?.lmstudioModel;
+  }
+  // A missing model is a config problem (no Code Review Defaults set), not an
+  // upstream-reviewer failure — surface it as a 4xx (RECHECK_NO_MODEL → 400), not
+  // the 502 bucket reserved for a reviewer that's actually unreachable.
+  if (!model) {
+    return { error: `No model configured for the ${backend} reviewer — set one on the AI Providers → Code Review Defaults panel.`, code: 'RECHECK_NO_MODEL' };
+  }
+  console.log(`⚖️ Re-checking challenge on ${taskId} via ${backend} (${model})`);
+  const review = await runLocalCodeReview({ backend, model, diff: recheck?.diff });
+  if (!review?.ok) {
+    return { error: `Re-check failed: ${review?.error || 'unknown reviewer error'}`, code: 'RECHECK_FAILED' };
+  }
+  const outcome = classifyRecheckOutcome(review.findings);
+  if (!outcome) {
+    return { error: 'Re-check returned no usable findings', code: 'RECHECK_FAILED' };
+  }
+  const verdict = outcome === 'upheld'
+    ? `no blocking findings survived (${backend})`
+    : `a blocking finding still stands (${backend})`;
+  // The resolution note is auto-generated from the re-check verdict (any caller
+  // `note` is intentionally not threaded here — the machine verdict is the record).
+  const note = `Auto re-check by ${backend} (${model}): ${verdict}.`;
+  return resolveTaskChallenge(taskId, { outcome, note, resolvedBy: resolvedBy || `recheck:${backend}` }, taskType, { now });
 }

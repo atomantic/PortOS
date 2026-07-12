@@ -276,15 +276,35 @@ export const challengeTaskSchema = z.object({
   reviewer: z.enum(REVIEWER_VALUES).optional(),
 });
 
-// Resolution of a parked challenge (#2441). `outcome` mirrors CHALLENGE_OUTCOMES
-// in server/services/cosChallenge.js (source of truth; a parity test keeps them
-// in lockstep). `upheld` overturns the rejection (task → pending); `escalated`
-// surfaces the unresolved dispute to the user (task → blocked + arbitration task).
+// Automatic re-check request (#2471). Instead of a human `outcome`, the resolver
+// re-runs a local-LLM reviewer against the current diff and derives the verdict
+// from its fresh findings (classifyRecheckOutcome in cosChallenge.js). `model` is
+// optional — falls back to the Code Review Defaults for the backend. Only the
+// in-process local reviewers are supported here; CLI reviewers (claude/codex) are
+// re-run by the follow-up agent itself, which then resolves with an explicit
+// `outcome`.
+export const challengeRecheckSchema = z.object({
+  backend: z.enum(LOCAL_LLM_REVIEWERS),
+  model: z.string().trim().min(1).optional(),
+  diff: z.string().min(1).max(500_000),
+});
+
+// Resolution of a parked challenge (#2441, #2471). Either the caller supplies an
+// explicit `outcome` (manual verdict) OR a `recheck` object (auto re-run a
+// reviewer and derive the verdict) — exactly one, never both. `outcome` mirrors
+// CHALLENGE_OUTCOMES in server/services/cosChallenge.js (source of truth; a parity
+// test keeps them in lockstep). `upheld` overturns the rejection (task → pending);
+// `escalated` surfaces the unresolved dispute to the user (task → blocked +
+// arbitration task).
 export const resolveChallengeSchema = z.object({
-  outcome: z.enum(['upheld', 'escalated']),
+  outcome: z.enum(['upheld', 'escalated']).optional(),
+  recheck: challengeRecheckSchema.optional(),
   note: z.string().trim().max(5000).optional(),
   resolvedBy: z.string().trim().max(200).optional(),
-});
+}).refine(
+  (v) => (v.outcome != null) !== (v.recheck != null),
+  { message: 'Provide exactly one of `outcome` or `recheck`.', path: ['outcome'] },
+);
 
 // =============================================================================
 // LOOP SCHEMAS
