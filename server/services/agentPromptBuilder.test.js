@@ -582,7 +582,72 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).not.toMatch(/--review-with copilot/);
     });
 
-    it('threads the configured Codex model tier into the CLI invocation when codex reviews', () => {
+    it('threads a reviewer-keyed model map into each CLI invocation', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          reviewLoopFollowUp: true,
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+          reviewLoopPRBranch: 'b',
+          reviewLoopPRNumber: 9,
+          reviewLoopReviewers: ['codex', 'claude'],
+          reviewLoopReviewerModels: { codex: 'gpt-5.6-sol', claude: 'qwen2.5:7b' },
+          sourceTaskId: 'task-src-map',
+        }}),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta);
+      expect(prompt).toMatch(/codex --model gpt-5\.6-sol/);
+      expect(prompt).toMatch(/claude --model qwen2\.5:7b/);
+    });
+
+    it('threads a configured claude model (Ollama-backed reviewer) via the map', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: {
+          reviewLoopFollowUp: true,
+          reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+          reviewLoopPRBranch: 'b',
+          reviewLoopPRNumber: 9,
+          reviewLoopReviewers: ['claude'],
+          reviewLoopReviewerModels: { claude: 'qwen2.5:7b' },
+          sourceTaskId: 'task-src-cl',
+        }}),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta);
+      expect(prompt).toMatch(/claude --model qwen2\.5:7b/);
+    });
+
+    it('threads each configured model id verbatim, without env-dependent mapping', () => {
+      // Even with Bedrock enabled in the process env, the prompt layer does NOT
+      // map a bare Claude tier to a Bedrock id — it has only a providerId, not the
+      // merged spawn env, and the reviewer CLI is spawned by the agent, not PortOS.
+      // The user configures the exact id their environment needs (free-text field).
+      const prev = process.env.CLAUDE_CODE_USE_BEDROCK;
+      process.env.CLAUDE_CODE_USE_BEDROCK = '1';
+      try {
+        const prompt = buildLightContextPrompt(
+          makeTask({ metadata: {
+            reviewLoopFollowUp: true,
+            reviewLoopPRUrl: 'https://github.com/o/r/pull/9',
+            reviewLoopPRBranch: 'b',
+            reviewLoopPRNumber: 9,
+            reviewLoopReviewers: ['claude', 'codex'],
+            reviewLoopReviewerModels: { claude: 'us.anthropic.claude-opus-4-8', codex: 'gpt-5.6-sol' },
+            sourceTaskId: 'task-src-verbatim',
+          }}),
+          '/r',
+          { branchName: 'b', worktreePath: '/tmp/wt' },
+          isTruthyMeta);
+        // Both ids appear exactly as configured — no Bedrock rewrite, no mangling.
+        expect(prompt).toMatch(/claude --model us\.anthropic\.claude-opus-4-8/);
+        expect(prompt).toMatch(/codex --model gpt-5\.6-sol/);
+      } finally {
+        if (prev === undefined) delete process.env.CLAUDE_CODE_USE_BEDROCK;
+        else process.env.CLAUDE_CODE_USE_BEDROCK = prev;
+      }
+    });
+
+    it('falls back to the legacy codex-scalar metadata key when the map is absent', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: {
           reviewLoopFollowUp: true,
@@ -590,6 +655,7 @@ describe('buildLightContextPrompt', () => {
           reviewLoopPRBranch: 'b',
           reviewLoopPRNumber: 9,
           reviewLoopReviewers: ['codex'],
+          // Written by an older install: only the codex scalar, no map.
           reviewLoopCodexModel: 'gpt-5.6-sol',
           sourceTaskId: 'task-src-cx',
         }}),
@@ -599,7 +665,7 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/codex --model gpt-5\.6-sol/);
     });
 
-    it('omits the Codex model note when codex is not among the reviewers', () => {
+    it('does not leak a stale legacy codex scalar into a claude-only review', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: {
           reviewLoopFollowUp: true,
@@ -607,8 +673,8 @@ describe('buildLightContextPrompt', () => {
           reviewLoopPRBranch: 'b',
           reviewLoopPRNumber: 9,
           reviewLoopReviewers: ['claude'],
-          // Stale model tier from a prior codex config — must not leak into a
-          // claude-only review.
+          // Stale model tier from a prior codex config — the legacy fallback maps
+          // it to codex, which is NOT among the reviewers, so it must not leak.
           reviewLoopCodexModel: 'gpt-5.6-sol',
           sourceTaskId: 'task-src-noncx',
         }}),

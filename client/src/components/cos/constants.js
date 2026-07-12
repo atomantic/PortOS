@@ -89,7 +89,7 @@ export const AGENT_OPTIONS = [
 // `server/lib/validation.js`.
 export const REVIEWER_OPTIONS = [
   { value: 'copilot', label: 'Copilot', description: 'GitHub Copilot (GitHub-only)' },
-  { value: 'claude', label: 'Claude', description: 'Claude CLI reviews the PR diff' },
+  { value: 'claude', label: 'Claude', description: 'Claude CLI reviews the PR diff (optional model on AI Providers → Code Review Defaults; supports an Ollama-backed Claude for local-only setups)' },
   { value: 'antigravity', label: 'Antigravity', description: 'Antigravity CLI (agy) reviews the PR diff' },
   { value: 'codex', label: 'Codex', description: 'Codex CLI reviews the PR diff (optional model tier on AI Providers → Code Review Defaults)' },
   { value: 'grok', label: 'Grok', description: 'Grok Build CLI (grok) reviews the PR diff' },

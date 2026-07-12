@@ -21,6 +21,8 @@ export default function CodeReviewDefaultsPanel() {
   const lmStudioSelectId = useId();
   const ollamaSelectId = useId();
   const codexSelectId = useId();
+  const claudeSelectId = useId();
+  const claudeListId = useId();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [reviewers, setReviewers] = useState(DEFAULT_REVIEWERS);
@@ -30,8 +32,10 @@ export default function CodeReviewDefaultsPanel() {
   const [lmstudioModel, setLmstudioModel] = useState('');
   const [ollamaModel, setOllamaModel] = useState('');
   const [codexModel, setCodexModel] = useState('');
+  const [claudeModel, setClaudeModel] = useState('');
   const [localLlmStatus, setLocalLlmStatus] = useState(null);
   const [codexProvider, setCodexProvider] = useState(null);
+  const [claudeProvider, setClaudeProvider] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -49,11 +53,14 @@ export default function CodeReviewDefaultsPanel() {
         setLmstudioModel(defaults.lmstudioModel || '');
         setOllamaModel(defaults.ollamaModel || '');
         setCodexModel(defaults.codexModel || '');
+        setClaudeModel(defaults.claudeModel || '');
       }
       setLocalLlmStatus(status || null);
-      // Codex is a CLI reviewer, so its selectable model tiers come from the
-      // provider catalog (not the local-LLM status probe the others use).
-      setCodexProvider((providers?.providers || []).find((p) => p.id === 'codex') || null);
+      // Codex and Claude are CLI reviewers, so their selectable model tiers come
+      // from the provider catalog (not the local-LLM status probe the others use).
+      const providerList = providers?.providers || [];
+      setCodexProvider(providerList.find((p) => p.id === 'codex') || null);
+      setClaudeProvider(providerList.find((p) => p.id === 'claude-code') || null);
       setLoading(false);
     });
     return () => { cancelled = true; };
@@ -62,6 +69,7 @@ export default function CodeReviewDefaultsPanel() {
   const needsLmStudio = reviewers.includes('lmstudio');
   const needsOllama = reviewers.includes('ollama');
   const needsCodex = reviewers.includes('codex');
+  const needsClaude = reviewers.includes('claude');
 
   const lmStudioModels = useMemo(
     () => localLlmStatus?.lmstudio?.models?.map((m) => m.id).filter(Boolean) || [],
@@ -75,6 +83,15 @@ export default function CodeReviewDefaultsPanel() {
     () => codexProvider ? filterSelectableModels(codexProvider.models || [codexProvider.defaultModel]) : [],
     [codexProvider]
   );
+  // Claude reviewer suggestions span BOTH usage modes: the `claude-code` provider
+  // tiers (normal Claude) and installed Ollama models (an Ollama-backed `claude`
+  // reviewer, where `--model` selects the local model). Deduped, order-preserving.
+  // A datalist (not a hard <select>) so a user whose Ollama model id isn't in the
+  // probe list can still type it — ollama-backed model ids are arbitrary.
+  const claudeModelSuggestions = useMemo(() => {
+    const tiers = claudeProvider ? filterSelectableModels(claudeProvider.models || [claudeProvider.defaultModel]) : [];
+    return Array.from(new Set([...tiers, ...ollamaModels].filter(Boolean)));
+  }, [claudeProvider, ollamaModels]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -89,6 +106,7 @@ export default function CodeReviewDefaultsPanel() {
       lmstudioModel: lmstudioModel || undefined,
       ollamaModel: ollamaModel || undefined,
       codexModel: codexModel || undefined,
+      claudeModel: claudeModel.trim() || undefined,
     };
     const ok = await api.updateSettings({ codeReview: payload }, { silent: true })
       .then(() => true)
@@ -133,7 +151,7 @@ export default function CodeReviewDefaultsPanel() {
         <h2 className="text-base font-semibold text-white">Code Review Defaults</h2>
       </div>
       <p className="text-xs text-gray-500">
-        Default Review Loop reviewer chain — used by ad-hoc CoS tasks and task-type schedules that haven't pinned their own. Local-LLM reviewers route the diff through PortOS's local code-review endpoint; the Codex reviewer invokes the Codex CLI directly. Each runs the model selected below.
+        Default Review Loop reviewer chain — used by ad-hoc CoS tasks and task-type schedules that haven't pinned their own. Local-LLM reviewers route the diff through PortOS's local code-review endpoint; the Codex and Claude reviewers invoke their CLI directly. Each runs the model selected below (Claude also supports an Ollama-backed CLI for local-only setups).
       </p>
 
       {loading ? (
@@ -157,6 +175,26 @@ export default function CodeReviewDefaultsPanel() {
           {needsLmStudio && renderModelPicker('LM Studio', 'lmstudio', lmstudioModel, setLmstudioModel, lmStudioModels, lmStudioSelectId)}
           {needsOllama && renderModelPicker('Ollama', 'ollama', ollamaModel, setOllamaModel, ollamaModels, ollamaSelectId)}
           {needsCodex && renderModelPicker('Codex', 'codex', codexModel, setCodexModel, codexModels, codexSelectId, 'No selectable Codex models — configure the Codex provider on the AI Providers page (or leave blank to use the Codex CLI default).')}
+          {needsClaude && (
+            <div className="flex flex-col gap-1 mt-2">
+              <label htmlFor={claudeSelectId} className="text-xs text-gray-500">Claude model (optional):</label>
+              <input
+                id={claudeSelectId}
+                type="text"
+                list={claudeListId}
+                value={claudeModel}
+                onChange={(e) => setClaudeModel(e.target.value)}
+                placeholder="Leave blank for the Claude CLI default"
+                className="px-2 py-1 bg-port-bg border border-port-border rounded text-xs text-gray-300 min-h-[28px] max-w-md"
+              />
+              <datalist id={claudeListId}>
+                {claudeModelSuggestions.map((id) => <option key={id} value={id}>{id}</option>)}
+              </datalist>
+              <p className="text-xs text-gray-500">
+                Passed as <code>claude --model &lt;id&gt;</code>. Pick a Claude tier, or — if you run an Ollama-backed <code>claude</code> — type or pick one of your installed Ollama models.
+              </p>
+            </div>
+          )}
 
           <div className="flex justify-end">
             <button

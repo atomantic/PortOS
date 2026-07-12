@@ -109,6 +109,7 @@ describe('validation.js', () => {
         lmstudioModel: 'qwen2.5-coder:7b',
         ollamaModel: 'codellama',
         codexModel: 'gpt-5.6-sol',
+        claudeModel: 'qwen2.5:7b',
       })
       expect(r.success).toBe(true)
     })
@@ -117,6 +118,15 @@ describe('validation.js', () => {
       const r = codeReviewSettingsSchema.safeParse({ reviewers: ['codex'], codexModel: '' })
       expect(r.success).toBe(true)
       expect(r.data.codexModel).toBeUndefined()
+    })
+
+    it('accepts a claudeModel and coerces an empty one to undefined', () => {
+      const ok = codeReviewSettingsSchema.safeParse({ reviewers: ['claude'], claudeModel: 'qwen2.5:7b' })
+      expect(ok.success).toBe(true)
+      expect(ok.data.claudeModel).toBe('qwen2.5:7b')
+      const empty = codeReviewSettingsSchema.safeParse({ reviewers: ['claude'], claudeModel: '' })
+      expect(empty.success).toBe(true)
+      expect(empty.data.claudeModel).toBeUndefined()
     })
 
     it('accepts an empty object (all fields optional)', () => {
