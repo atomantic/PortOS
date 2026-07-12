@@ -354,7 +354,10 @@ const practiceResultSchema = z.object({
 });
 
 export const memoryPracticeSchema = z.object({
-  mode: z.enum(['fill-blank', 'sequence', 'element-flash', 'learn', 'speed-run']),
+  // `element-study` is the standalone flash-card study mode (ElementsSong.jsx) —
+  // logged like `learn`; it advances element mastery via results[].element but
+  // is NOT a POST-session drill type (no server generator, see generateMemoryDrill).
+  mode: z.enum(['fill-blank', 'sequence', 'element-flash', 'element-study', 'learn', 'speed-run']),
   chunkId: z.string().nullable().optional(),
   results: z.array(practiceResultSchema).min(1),
   totalMs: z.number().min(0).optional(),
