@@ -106,25 +106,19 @@ export default function GlobalConfigControls({ taskType, config, onUpdate, onTri
     setUpdating(false);
   };
 
-  const handleModelChange = async (newModel) => {
+  // Optimistic single-field update: set locally, PUT ('' → null clears the
+  // pin), roll back to the persisted value on failure. Shared by the model and
+  // effort selects (provider has its own handler — it also resets these two).
+  const makeScalarFieldHandler = (field, setter) => async (newValue) => {
     setUpdating(true);
-    setSelectedModel(newModel);
-    const model = newModel === '' ? null : newModel;
-    await onUpdate(taskType, { model }).catch(() => {
-      setSelectedModel(config.model || '');
+    setter(newValue);
+    await onUpdate(taskType, { [field]: newValue === '' ? null : newValue }).catch(() => {
+      setter(config[field] || '');
     });
     setUpdating(false);
   };
-
-  const handleEffortChange = async (newEffort) => {
-    setUpdating(true);
-    setSelectedEffort(newEffort);
-    const effort = newEffort === '' ? null : newEffort;
-    await onUpdate(taskType, { effort }).catch(() => {
-      setSelectedEffort(config.effort || '');
-    });
-    setUpdating(false);
-  };
+  const handleModelChange = makeScalarFieldHandler('model', setSelectedModel);
+  const handleEffortChange = makeScalarFieldHandler('effort', setSelectedEffort);
 
   const handlePrAuthorFilterChange = async (value) => {
     setUpdating(true);

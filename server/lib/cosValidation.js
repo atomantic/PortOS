@@ -284,9 +284,14 @@ const cosTaskDiagnosticsSchema = z.object({
   failureReason: z.string().optional(),
 }).passthrough();
 
-// Reasoning-effort override for effort-capable CLIs (claude/codex). '' from a
-// form's "Default" option → undefined (no override persisted).
+// Reasoning-effort override for effort-capable CLIs (claude/codex). On create,
+// '' from a form's "Default" option → undefined (no override persisted). On
+// update, ''/null must survive as null so the store's legacy-field normalizer
+// deletes the pin (absent-vs-cleared, CLAUDE.md) — emptyToUndefined would drop
+// the clear signal at the route's `!== undefined` gate and make a set effort
+// permanent through the API.
 const effortInputSchema = z.preprocess(emptyToUndefined, z.enum(EFFORT_LEVELS).optional());
+const effortUpdateSchema = z.preprocess(emptyToNull, z.enum(EFFORT_LEVELS).nullable().optional());
 
 export const createCosTaskSchema = z.object({
   description: z.string().min(1),
@@ -361,7 +366,7 @@ export const updateCosTaskSchema = z.object({
   context: z.string().optional(),
   model: z.string().optional(),
   provider: z.string().optional(),
-  effort: effortInputSchema,
+  effort: effortUpdateSchema,
   app: z.string().optional(),
   blockedReason: z.string().optional(),
   type: z.string().optional().default('user'),

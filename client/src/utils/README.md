@@ -36,7 +36,7 @@ grep -i "what you want to do" client/src/utils/README.md
 | `urlNormalize` | `isUrl` detection and `normalizeUrl` (optional git/`requireDot` modes). |
 | `platform` | `isMac` detection and `modKey` (⌘/Ctrl) for keyboard-shortcut display. |
 | `navWorkingSet` | Recent/pinned nav persistence in localStorage (`recordVisit`, `togglePin`, `isPinned`). |
-| `providers` | AI-provider type predicates and helpers (`isCliProvider`, `isApiProvider`, `filterSelectableModels`, `getProviderTimeout`, configured-default sentinels). |
+| `providers` | AI-provider type predicates and helpers (`isCliProvider`, `isApiProvider`, `isCodexProvider`, `filterSelectableModels`, `getProviderTimeout`, configured-default sentinels, and the claude/codex thinking-effort levels — `effortLevelsForProvider`, mirror of server `providerModels.js`). |
 | `layeredIntelligenceReasons` | Canonical gloss for the Layered Intelligence loop's run-outcome reason tokens, shared by the on-demand toast and the durable "Last run" line (`formatLiReason`, `liReasonTone`, `LI_NEUTRAL_REASONS`). |
 
 ## Module loading / resilience

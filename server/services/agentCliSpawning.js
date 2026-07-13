@@ -350,11 +350,14 @@ export function buildCliSpawnConfig(provider, model, settingsEnv = {}, { systemP
     args.push('--model', injectedModel);
   }
   // Per-task reasoning-effort override; a user-baked --effort in provider args
-  // wins (buildEffortArgs mirrors the hasModelFlag rule).
-  args.push(...buildEffortArgs(effort, provider, args));
+  // wins (buildEffortArgs mirrors the hasModelFlag rule). Keyed on the RESOLVED
+  // launch command — not the raw provider — so a blank-command claude provider
+  // still qualifies, matching the TUI builder's re-keying.
+  const command = provider?.command || process.env.CLAUDE_PATH || 'claude';
+  args.push(...buildEffortArgs(effort, { id: providerId, command }, args));
 
   return {
-    command: provider?.command || process.env.CLAUDE_PATH || 'claude',
+    command,
     args,
     stdinMode: 'prompt',
     streamFormat: 'stream-json'

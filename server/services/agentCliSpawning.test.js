@@ -304,6 +304,14 @@ describe('buildCliSpawnConfig', () => {
       expect(grok.args.join(' ')).not.toContain('effort');
     });
 
+    it('keys effort on the RESOLVED command, so a blank-command claude provider still qualifies', () => {
+      // id gives no claude-code* hint and command is blank; the builder resolves
+      // the launch command to `claude`, so the effort pin must apply — matching
+      // the TUI builder's re-keying (same pin, same behavior per execution mode).
+      const config = buildCliSpawnConfig({ id: 'whatever' }, null, {}, { effort: 'high' });
+      expect(config.args[config.args.indexOf('--effort') + 1]).toBe('high');
+    });
+
     it('never emits the claude-shaped --effort for a renamed codex provider (detection and emission agree)', () => {
       // id !== 'codex' routes this into the default (claude-style) branch, but
       // the effort arg shape must still follow the binary, not the branch.
