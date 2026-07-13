@@ -222,7 +222,11 @@ export async function buildTaskInput({ app } = {}) {
     const pinTask = await readPinTask()
     const pinId = pinTask?.providerId || null
     const pinType = await providerTypeOf(pinId)
-    if (pinId && pinType !== 'api') {
+    // Adopt the pin only when it RESOLVES to a real non-api provider. `pinType`
+    // is null for an unresolvable id (deleted/renamed/typo'd pin) — treating that
+    // as "not api" and adopting it would re-wedge the task on a doomed provider
+    // with a misleading "healed" warning, so require a positively-known type.
+    if (pinId && pinType && pinType !== 'api') {
       console.warn(`⚠️ Layered Intelligence: ${app.name} per-app provider '${config.providerId}' is API-only (no coding harness) — using the schedule provider '${pinId}' instead`)
       // Persist the healed provider/model onto config so the returned prompt input
       // (and the spawn's hookOverride) pins the AGENT to the pin, not the stale api
