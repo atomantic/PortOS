@@ -10,3 +10,7 @@
 ## Changed
 
 - **Elements Song study mode drops a redundant result field.** The Flash Cards study results tracked both `element` and `symbol` on each record even though they hold identical values; the review UI now reads the single `element` field, removing the duplicate.
+
+## Fixed
+
+- **Layered Intelligence no longer wedges on a stale API-only provider.** Any install that ran the Layered Intelligence loop on an api provider (ollama/lmstudio/kimi) before it became agent-backed (#2322) had that provider carried into the per-app override by migration 184 — where it now outranks the global Schedule pin at spawn. The agent-backed loop needs a file-writing CLI/TUI harness, so those runs skipped with "the selected provider is an API-only model with no coding harness," and picking a CLI/TUI provider on the global Schedule page silently missed (it only sets the fallback pin). The loop now self-heals: an api-only per-app provider falls back to a CLI/TUI schedule pin (adopting its matched model), so the Schedule-page selection finally takes effect. It still skips with the actionable message only when no CLI/TUI provider is configured anywhere.

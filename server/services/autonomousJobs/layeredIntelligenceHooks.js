@@ -180,28 +180,67 @@ export async function buildTaskInput({ app } = {}) {
   // The reasoning agent needs a file-writing CLI/TUI harness to emit its
   // `.agent-done` sentinel — an HTTP `api` provider (ollama / lmstudio / kimi)
   // has none, so an agent-backed run pinned to one fails provider resolution and
-  // the task sits pending forever (pre-#2322 LI called the API path directly, so
-  // installs routinely carried an api provider through migration 184). Preflight
-  // the EFFECTIVE agent provider — the per-app override (config.providerId, the
-  // documented home for LI's provider) OR, when unset, the global schedule pin the
-  // generator applies (interval.providerId) — and skip with an actionable reason
-  // instead of generating a doomed task the lifecycle path would only block. A
-  // null/absent effective provider inherits the default coding agent and is fine;
-  // a spawn-time api resolution (e.g. an api ACTIVE provider) still falls to the
-  // lifecycle block. A pinned api provider is skipped even if it's momentarily
-  // unavailable with a CLI fallback — guiding the user to a real CLI/TUI provider
-  // beats silently running LI on a provider they didn't choose.
-  let effectiveProviderId = config.providerId || null
-  if (!effectiveProviderId) {
-    const { loadSchedule } = await import('../taskSchedule.js')
-    const schedule = await loadSchedule().catch(() => null)
-    effectiveProviderId = schedule?.tasks?.['layered-intelligence']?.providerId || null
+  // the task sits pending forever. Pre-#2322 LI called the API path directly, so
+  // an api provider was a perfectly valid LI provider then; migration 184
+  // faithfully carried whatever `layeredIntelligence.providerId` held — INCLUDING
+  // ollama/lmstudio/kimi — into the per-app override, which now outranks
+  // everything at spawn (cosTaskGenerator applies the hook's providerId LAST). So
+  // any install that ran LI on an api provider before #2322 is wedged, and the
+  // user's natural fix — picking a CLI/TUI provider on the global Schedule page —
+  // silently misses, because that only sets the schedule pin (the FALLBACK) while
+  // the stale per-app override still wins.
+  //
+  // SELF-HEAL that residue: resolve the EFFECTIVE agent provider (per-app override,
+  // else the global schedule pin), and when the per-app override is api-only but
+  // the schedule pin IS a real CLI/TUI provider, adopt the pin (provider + its
+  // matched model) instead of wedging — this makes the global Schedule page's
+  // selection finally take effect for an install carrying the stale override. Only
+  // when NO CLI/TUI provider is configured anywhere the user chose (per-app api
+  // with no usable pin, or an api pin) do we skip with the actionable reason —
+  // guiding them to pick a real CLI/TUI provider beats silently substituting one
+  // they never chose. A null/absent effective provider inherits the default coding
+  // agent and is fine; a spawn-time api resolution still falls to the lifecycle
+  // block.
+  const { getProviderById } = await import('../providers.js')
+  const providerTypeOf = async (id) => {
+    if (!id) return null
+    const provider = await getProviderById(id).catch(() => null)
+    return provider?.type ?? null
   }
-  if (effectiveProviderId) {
-    const { getProviderById } = await import('../providers.js')
-    const provider = await getProviderById(effectiveProviderId).catch(() => null)
-    if (provider?.type === 'api') return skip('skipped', 'provider-not-agent-capable')
+  // The global schedule pin is LI's provider FALLBACK; read it via the canonical
+  // getTaskInterval (returns a defaulted { providerId: null, ... } when absent).
+  const readPinTask = async () => {
+    const { getTaskInterval } = await import('../taskSchedule.js')
+    return getTaskInterval('layered-intelligence')
   }
+
+  // Only `effectiveType` gates the decision below; the healed provider/model flow
+  // out via config.providerId/config.model (re-read by this hook's return).
+  let effectiveType = await providerTypeOf(config.providerId || null)
+
+  if (effectiveType === 'api') {
+    const pinTask = await readPinTask()
+    const pinId = pinTask?.providerId || null
+    const pinType = await providerTypeOf(pinId)
+    if (pinId && pinType !== 'api') {
+      console.warn(`⚠️ Layered Intelligence: ${app.name} per-app provider '${config.providerId}' is API-only (no coding harness) — using the schedule provider '${pinId}' instead`)
+      // Persist the healed provider/model onto config so the returned prompt input
+      // (and the spawn's hookOverride) pins the AGENT to the pin, not the stale api
+      // id. Adopt the pin's model too — provider+model are a matched pair the user
+      // set together on the Schedule page (an api-provider model name may not be
+      // valid for the CLI/TUI provider).
+      config.providerId = pinId
+      config.model = pinTask?.model ?? null
+      effectiveType = pinType
+    }
+  } else if (!config.providerId) {
+    // No per-app override → the generator applies the global schedule pin
+    // (interval.providerId) at spawn; check its type here so an api pin still skips.
+    const pinTask = await readPinTask()
+    effectiveType = await providerTypeOf(pinTask?.providerId || null)
+  }
+
+  if (effectiveType === 'api') return skip('skipped', 'provider-not-agent-capable')
 
   // A jira-tracked app with no usable instance/project can't file — skip before
   // burning an agent on a result we couldn't land.
