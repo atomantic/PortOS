@@ -24,9 +24,10 @@ vi.mock('../providers.js', () => ({
 }));
 
 // When no per-app provider is pinned, the guard falls back to the global LI
-// schedule provider. Default to no global pin so the no-provider path stays inert.
+// schedule provider via getTaskInterval. Default to no global pin so the
+// no-provider path stays inert.
 vi.mock('../taskSchedule.js', () => ({
-  loadSchedule: vi.fn(async () => ({ tasks: { 'layered-intelligence': {} } }))
+  getTaskInterval: vi.fn(async () => ({ providerId: null, model: null }))
 }));
 
 vi.mock('../layeredIntelligence.js', () => ({
@@ -72,7 +73,7 @@ import * as apps from '../apps.js';
 import { resolveAppWorkTracker } from '../../lib/workTracker.js';
 import { tryReadFile } from '../../lib/fileUtils.js';
 import { getProviderById } from '../providers.js';
-import { loadSchedule } from '../taskSchedule.js';
+import { getTaskInterval } from '../taskSchedule.js';
 
 const APP = { id: 'app-1', name: 'App One', repoPath: '/repo', taskTypeOverrides: {} };
 
@@ -80,7 +81,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   resolveAppWorkTracker.mockResolvedValue({ resolved: 'github', forge: 'gh' });
   getProviderById.mockImplementation(async (id) => ({ id, type: 'cli' }));
-  loadSchedule.mockResolvedValue({ tasks: { 'layered-intelligence': {} } });
+  getTaskInterval.mockResolvedValue({ providerId: null, model: null });
   li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: {} });
   li.filerForTracker.mockImplementation((r) => (r === 'github' || r === 'gitlab') ? 'forge' : (r === 'jira' ? 'jira' : 'plan'));
   li.trackerSupportsPause.mockImplementation((r) => r !== 'plan');
@@ -127,11 +128,35 @@ describe('buildTaskInput', () => {
 
   it('skips on an api-only GLOBAL schedule provider when no per-app provider is pinned', async () => {
     li.getEffectiveConfig.mockReturnValue({ providerId: null, model: null, allowedScopes: ['app-improvement'], sources: {} });
-    loadSchedule.mockResolvedValue({ tasks: { 'layered-intelligence': { providerId: 'ollama' } } });
+    getTaskInterval.mockResolvedValue({ providerId: 'ollama', model: null });
     getProviderById.mockResolvedValue({ id: 'ollama', type: 'api' });
     const res = await buildTaskInput({ app: APP });
     expect(res).toEqual({ skip: { reason: 'provider-not-agent-capable' } });
     expect(getProviderById).toHaveBeenCalledWith('ollama');
+  });
+
+  it('self-heals a stale api per-app provider by adopting a CLI/TUI schedule pin (migration-184 residue)', async () => {
+    // Per-app override carries an api provider (what migration 184 copied from the
+    // pre-#2322 layeredIntelligence.providerId); the global Schedule page pins a
+    // real CLI/TUI provider + its matched model. LI must run on the pin, not wedge.
+    li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: {} });
+    getTaskInterval.mockResolvedValue({ providerId: 'claude-ollama-tui', model: 'qwen3:35b' });
+    getProviderById.mockImplementation(async (id) => ({ id, type: id === 'claude-ollama-tui' ? 'tui' : 'api' }));
+    const res = await buildTaskInput({ app: APP });
+    expect(res.skip).toBeUndefined();
+    expect(res.prompt).toContain('REASONING PROMPT');
+    // Healed to the pin's provider + its matched model (not the stale api pair).
+    expect(res.providerId).toBe('claude-ollama-tui');
+    expect(res.model).toBe('qwen3:35b');
+  });
+
+  it('still skips when the per-app AND the schedule pin are both api-only (no CLI/TUI anywhere)', async () => {
+    li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: {} });
+    getTaskInterval.mockResolvedValue({ providerId: 'lmstudio', model: null });
+    getProviderById.mockResolvedValue({ id: 'any', type: 'api' });
+    const res = await buildTaskInput({ app: APP });
+    expect(res).toEqual({ skip: { reason: 'provider-not-agent-capable' } });
+    expect(li.gatherSources).not.toHaveBeenCalled();
   });
 
   it('skips a jira-tracked app with no usable jira config', async () => {
