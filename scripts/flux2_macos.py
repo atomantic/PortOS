@@ -42,6 +42,7 @@ from _runner_common import (  # noqa: E402
     make_generator,
     make_stepwise_callback,
     pick_device,
+    set_vae_tiling,
     suppress_cosmetic_clip_truncation,
     write_sidecar,
 )
@@ -430,7 +431,7 @@ def main() -> None:
         sys.exit(64)
     suppress_cosmetic_clip_truncation()
 
-    apply_memory_optimizations(pipe)
+    apply_memory_optimizations(pipe, width=args.width, height=args.height)
     apply_loras(pipe, args.lora_paths or [], args.lora_scales or [])
 
     seed = args.seed if args.seed is not None else int(torch.randint(0, 2**31 - 1, (1,)).item())
@@ -504,16 +505,14 @@ def main() -> None:
         # K/V-cache code path. The signature filter above guarantees the kwarg
         # is supported by the live pipeline.
         pipe_kwargs["image"] = reference_pils
-        vae = getattr(pipe, "vae", None)
-        if vae is not None and hasattr(vae, "disable_tiling"):
-            vae.disable_tiling()
+        # Reference-conditioned decode: disable VAE tiling for the same reason
+        # as i2i below (tiled encode of the reference images seams).
+        set_vae_tiling(pipe, False)
     elif init_image is not None and "image" in accepted:
         pipe_kwargs["image"] = init_image
         # Disable VAE tiling for i2i — tiled encode of a small image
         # produces seams on the output (matches the reference impl).
-        vae = getattr(pipe, "vae", None)
-        if vae is not None and hasattr(vae, "disable_tiling"):
-            vae.disable_tiling()
+        set_vae_tiling(pipe, False)
         if args.image_strength is not None and "strength" in accepted:
             pipe_kwargs["strength"] = float(args.image_strength)
 
