@@ -150,6 +150,18 @@ describe('buildTaskInput', () => {
     expect(res.model).toBe('qwen3:35b');
   });
 
+  it('skips (does not adopt) when the schedule pin references an unresolvable provider id', async () => {
+    // Stale api per-app override + a schedule pin pointing at a provider that no
+    // longer resolves (deleted/renamed). providerTypeOf(pin) → null; adopting it
+    // would re-wedge on a doomed id, so the heal must fall through to the skip.
+    li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: {} });
+    getTaskInterval.mockResolvedValue({ providerId: 'ghost-provider', model: null });
+    getProviderById.mockImplementation(async (id) => (id === 'ghost-provider' ? null : { id, type: 'api' }));
+    const res = await buildTaskInput({ app: APP });
+    expect(res).toEqual({ skip: { reason: 'provider-not-agent-capable' } });
+    expect(li.gatherSources).not.toHaveBeenCalled();
+  });
+
   it('still skips when the per-app AND the schedule pin are both api-only (no CLI/TUI anywhere)', async () => {
     li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: {} });
     getTaskInterval.mockResolvedValue({ providerId: 'lmstudio', model: null });
