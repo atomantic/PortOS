@@ -138,10 +138,14 @@ function escapeControlCharsInStrings(input) {
   for (let i = 0; i < input.length; i += 1) {
     const ch = input[i];
     if (inString) {
-      if (escaped) { out += ch; escaped = false; continue; }
-      if (ch === '\\') { out += ch; escaped = true; continue; }
-      if (ch === '"') { out += ch; inString = false; continue; }
       const code = input.charCodeAt(i);
+      // A raw control char is ALWAYS illegal inside a JSON string — it can
+      // never be the target of a valid `\`-escape (escape targets are the
+      // printable set `"\/bfnrtu`). So escape it BEFORE consulting `escaped`:
+      // a control char that follows a backslash means that backslash was a
+      // dangling/invalid escape, and copying the control char through (the old
+      // `escaped` branch) left the string unparseable. Resetting `escaped`
+      // consumes any pending (spurious) escape.
       if (code <= 0x1f) {
         if (ch === '\n') out += '\\n';
         else if (ch === '\r') out += '\\r';
@@ -149,8 +153,12 @@ function escapeControlCharsInStrings(input) {
         else if (ch === '\b') out += '\\b';
         else if (ch === '\f') out += '\\f';
         else out += `\\u${code.toString(16).padStart(4, '0')}`;
+        escaped = false;
         continue;
       }
+      if (escaped) { out += ch; escaped = false; continue; }
+      if (ch === '\\') { out += ch; escaped = true; continue; }
+      if (ch === '"') { out += ch; inString = false; continue; }
       out += ch;
       continue;
     }

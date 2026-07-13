@@ -99,6 +99,17 @@ describe('jsonExtract.tryParseWithRepair', () => {
     });
   });
 
+  it('escapes a raw control char even when a backslash immediately precedes it', () => {
+    // A dangling backslash followed by a literal newline (double corruption:
+    // an invalid \-escape AND a raw control char). The control char must still
+    // be escaped so the block parses, rather than being copied through as an
+    // "escaped" char. `\\` + raw LF → parseable `\\` + `\n`.
+    const bad = '{"body":"line\\\nnext"}';
+    const r = tryParseWithRepair(bad);
+    expect(r.error).toBeUndefined();
+    expect(typeof r.value.body).toBe('string');
+  });
+
   it('leaves structural whitespace + already-escaped sequences untouched while escaping a raw control char', () => {
     // Force the repair to actually run: one string has a RAW newline (invalid),
     // while the object also has structural inter-token newlines and another
