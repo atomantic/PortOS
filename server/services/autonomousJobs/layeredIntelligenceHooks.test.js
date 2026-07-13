@@ -171,6 +171,32 @@ describe('buildTaskInput', () => {
     expect(li.gatherSources).not.toHaveBeenCalled();
   });
 
+  it('keeps an explicit per-app model when the provider is absent but a non-api schedule pin resolves', async () => {
+    // No per-app PROVIDER, but a per-app MODEL is set, and the global schedule pins
+    // a real CLI provider. The resolved provider is the pin; the model must stay the
+    // per-app model (matching the pre-refactor net spawn behavior), not the pin's.
+    li.getEffectiveConfig.mockReturnValue({ providerId: null, model: 'my-model', allowedScopes: ['app-improvement'], sources: {} });
+    getTaskInterval.mockResolvedValue({ providerId: 'claude-cli', model: 'pin-model' });
+    getProviderById.mockImplementation(async (id) => ({ id, type: 'cli' }));
+    const res = await buildTaskInput({ app: APP });
+    expect(res.skip).toBeUndefined();
+    expect(res.providerId).toBe('claude-cli');
+    expect(res.model).toBe('my-model');
+  });
+
+  it('adopts the schedule pin provider + model when neither a per-app provider nor model is set', async () => {
+    // No per-app provider AND no per-app model → the resolved provider/model are
+    // both the pin's, so the hook fully owns the resolution (not delegated to the
+    // generator's interval.providerId/model).
+    li.getEffectiveConfig.mockReturnValue({ providerId: null, model: null, allowedScopes: ['app-improvement'], sources: {} });
+    getTaskInterval.mockResolvedValue({ providerId: 'claude-cli', model: 'pin-model' });
+    getProviderById.mockImplementation(async (id) => ({ id, type: 'cli' }));
+    const res = await buildTaskInput({ app: APP });
+    expect(res.skip).toBeUndefined();
+    expect(res.providerId).toBe('claude-cli');
+    expect(res.model).toBe('pin-model');
+  });
+
   it('skips a jira-tracked app with no usable jira config', async () => {
     resolveAppWorkTracker.mockResolvedValue({ resolved: 'jira', forge: null });
     const res = await buildTaskInput({ app: { ...APP, jira: { enabled: false } } });

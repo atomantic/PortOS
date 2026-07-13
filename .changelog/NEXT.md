@@ -9,6 +9,7 @@
 
 ## Changed
 
+- **[issue-2497] Layered Intelligence provider resolution unified into one resolver.** The reasoning-agent's provider/model walk (per-app override → schedule pin → default, with the api-only self-heal) is now a single `resolveLiAgentProvider` helper that is the sole source of truth — it reads the global schedule pin at most once, mutates nothing, and returns the fully-resolved `{ providerId, model }` the spawn path pins the agent to. No behavior change: the six provider cases resolve exactly as before.
 - **Elements Song study mode drops a redundant result field.** The Flash Cards study results tracked both `element` and `symbol` on each record even though they hold identical values; the review UI now reads the single `element` field, removing the duplicate.
 
 ## Fixed
