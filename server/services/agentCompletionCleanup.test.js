@@ -90,4 +90,13 @@ describe('handlePipelineProgression', () => {
     const [nextTask] = addTask.mock.calls[0];
     expect(nextTask.metadata.effort).toBeUndefined();
   });
+
+  it('inherits a task-level effort into a stage that has no effort pin of its own', async () => {
+    // Effort is SET-only on hand-off: a task-level effort (from the interval
+    // config) must reach stage 1+ via the metadata carry-forward, not be wiped.
+    const task = { id: 't', taskType: 'user', metadata: { effort: 'high', pipeline: runningPipeline() } };
+    await handlePipelineProgression(task, 'agent-1', true);
+    const [nextTask] = addTask.mock.calls[0];
+    expect(nextTask.metadata.effort).toBe('high');
+  });
 });

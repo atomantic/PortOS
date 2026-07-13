@@ -117,6 +117,10 @@ export async function handlePipelineProgression(task, agentId, success) {
     },
     autoApproved: true
   };
+  // Provider/model/effort are SET-only (never cleared) on hand-off: a stage
+  // without its own pin inherits the value carried in `...task.metadata` — either
+  // the task-level pin (interval config) or the prior stage's. Clearing an unset
+  // stage's effort here would wipe a task-level effort from stage 1+.
   if (nextStage.model) nextTask.metadata.model = nextStage.model;
   if (nextStage.providerId) {
     nextTask.metadata.provider = nextStage.providerId;
