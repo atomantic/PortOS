@@ -46,6 +46,115 @@ export function commandBasename(command) {
  */
 export const resolveCliModel = (model) => isConfiguredDefaultModel(model) ? null : (model || null);
 
+// ---------------------------------------------------------------------------
+// Reasoning-effort levels — Claude Code (`--effort <level>`) and Codex
+// (`-c model_reasoning_effort=<level>`) both accept a per-invocation override
+// of how hard the model thinks. Value sets verified against claude CLI
+// v2.1.x (`--help`) and codex-cli 0.144 (config enum). Mirrored in
+// client/src/utils/providers.js — keep in sync.
+// ---------------------------------------------------------------------------
+
+export const CLAUDE_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
+export const CODEX_EFFORT_LEVELS = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+
+/** Union of every accepted effort value across effort-capable CLIs, low→high. */
+export const EFFORT_LEVELS = Object.freeze([...new Set([...CODEX_EFFORT_LEVELS, ...CLAUDE_EFFORT_LEVELS])]);
+
+/**
+ * True when a provider is codex-flavored — the shipped `codex`/`codex-tui`
+ * provider ids or any provider whose launch command basename is `codex`
+ * (path/exe tolerant). The single home for the codex signature, same posture
+ * as `isClaudeCommand`/`isOpencodeCommand`.
+ * @param {{id?:string, command?:string}|null|undefined} provider
+ * @returns {boolean}
+ */
+export function isCodexProvider(provider) {
+  const id = String(provider?.id || '').toLowerCase();
+  return id === 'codex' || id === 'codex-tui' || commandBasename(provider?.command) === 'codex';
+}
+
+/**
+ * The effort levels a provider's CLI accepts, or null when the provider has no
+ * effort control (antigravity, opencode, grok, HTTP API providers). Keyed on the
+ * launch command basename (plus the shipped provider ids) so path-configured or
+ * renamed claude/codex providers still qualify — same detection posture as
+ * `isClaudeCommand`/`isOpencodeCommand`. A blank command does NOT default to
+ * Claude here (unlike `isClaudeCommand`): effort is an opt-in enhancement, and
+ * only a provider we can positively identify should advertise levels.
+ * @param {{id?:string, command?:string}|null|undefined} provider
+ * @returns {readonly string[]|null}
+ */
+export function effortLevelsForProvider(provider) {
+  if (!provider) return null;
+  if (isCodexProvider(provider)) return CODEX_EFFORT_LEVELS;
+  const id = String(provider.id || '').toLowerCase();
+  if (id.startsWith('claude-code') || commandBasename(provider.command) === 'claude') return CLAUDE_EFFORT_LEVELS;
+  return null;
+}
+
+// Codex-only values mapped to their nearest Claude equivalent, so an effort
+// saved against a codex pin survives a provider switch instead of vanishing.
+const EFFORT_CLAMP = Object.freeze({ minimal: 'low', ultra: 'max' });
+
+/**
+ * Resolve a stored effort override to the value the provider's CLI actually
+ * accepts, or null when the flag should be omitted entirely (no override set,
+ * provider has no effort control, or the value is unrecognized). Out-of-range
+ * values are clamped (`minimal`→`low`, `ultra`→`max`) rather than dropped.
+ * @param {string|null|undefined} effort
+ * @param {{id?:string, command?:string}|null|undefined} provider
+ * @returns {string|null}
+ */
+export function resolveCliEffort(effort, provider) {
+  if (!effort) return null;
+  const levels = effortLevelsForProvider(provider);
+  if (!levels) return null;
+  if (levels.includes(effort)) return effort;
+  const clamped = EFFORT_CLAMP[effort];
+  return clamped && levels.includes(clamped) ? clamped : null;
+}
+
+/**
+ * True when the user has already baked an effort override into the provider's
+ * args — claude's `--effort <level>` / `--effort=<level>` or a codex
+ * `-c model_reasoning_effort=…` config pair. Mirrors `hasModelFlag`: a baked
+ * pin wins and the runner-injected effort is suppressed.
+ * @param {unknown[]} args
+ * @returns {boolean}
+ */
+export function hasEffortFlag(args) {
+  if (!Array.isArray(args)) return false;
+  return args.some((a, i) => {
+    if (typeof a !== 'string') return false;
+    if (a.startsWith('--effort=') && a.length > '--effort='.length) return true;
+    if (a === '--effort') {
+      const next = args[i + 1];
+      return typeof next === 'string' && next.length > 0 && !next.startsWith('-');
+    }
+    return a.startsWith('model_reasoning_effort=');
+  });
+}
+
+/**
+ * The argv fragment that applies an effort override to an effort-capable CLI:
+ * `['--effort', <level>]` for claude, `['-c', 'model_reasoning_effort=<level>']`
+ * for codex, `[]` when the flag should be omitted (no override, provider has no
+ * effort control, or a user-baked pin already sits in `existingArgs`). The one
+ * home for both the detection AND the arg shape, so the two can't drift — spawn
+ * builders just spread the result.
+ * @param {string|null|undefined} effort
+ * @param {{id?:string, command?:string}|null|undefined} provider
+ * @param {unknown[]} [existingArgs]
+ * @returns {string[]}
+ */
+export function buildEffortArgs(effort, provider, existingArgs = []) {
+  const effectiveEffort = resolveCliEffort(effort, provider);
+  if (!effectiveEffort || hasEffortFlag(existingArgs)) return [];
+  return isCodexProvider(provider)
+    ? ['-c', `model_reasoning_effort=${effectiveEffort}`]
+    : ['--effort', effectiveEffort];
+}
+
 /**
  * True when a provider command points at the OpenCode binary — matching the bare
  * `opencode` on PATH OR an absolute/relative path to it (`/opt/homebrew/bin/opencode`,

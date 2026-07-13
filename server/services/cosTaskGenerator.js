@@ -1347,6 +1347,9 @@ export async function generateSelfImprovementTaskForType(taskType, state) {
   if (interval.model) {
     metadata.model = interval.model;
   }
+  if (interval.effort) {
+    metadata.effort = interval.effort;
+  }
 
   const approval = await resolveConfidenceApproval(state, `self-improve:${taskType}`, `Task self-improve:${taskType}`, metadata);
 
@@ -2091,6 +2094,9 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
   // default model at spawn time (see note in generateSelfImprovementTaskForType).
   if (interval.model) {
     metadata.model = interval.model;
+  }
+  if (interval.effort) {
+    metadata.effort = interval.effort;
   }
 
   // A buildTaskInput hook's per-app provider/model wins over the global interval

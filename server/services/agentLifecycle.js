@@ -501,9 +501,12 @@ export async function spawnAgentForTask(task) {
     // bake a bare, Bedrock-invalid --model into the argv. Cached (5-min TTL), so
     // the spawn helper's own getClaudeSettingsEnv() call is effectively free.
     const cliSettingsEnv = isClaudeCliProvider(provider) ? await getClaudeSettingsEnv() : {};
+    // Per-task reasoning-effort override (task form / schedule config). The
+    // builders no-op it for providers without an effort control.
+    const taskEffort = task.metadata?.effort || null;
     const cliConfig = isTui
-      ? buildTuiSpawnConfig(provider, selectedModel, { systemPromptFile })
-      : buildCliSpawnConfig(provider, selectedModel, cliSettingsEnv, { systemPromptFile });
+      ? buildTuiSpawnConfig(provider, selectedModel, { systemPromptFile, effort: taskEffort })
+      : buildCliSpawnConfig(provider, selectedModel, cliSettingsEnv, { systemPromptFile, effort: taskEffort });
 
     emitLog('success', `Spawning agent for task ${task.id}`, {
       agentId,

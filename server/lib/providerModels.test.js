@@ -20,7 +20,15 @@ import {
   applyLeanClaudeArgs,
   LEAN_CLAUDE_ARGS,
   commandBasename,
-  providerSuppliesGithubToken
+  providerSuppliesGithubToken,
+  CLAUDE_EFFORT_LEVELS,
+  CODEX_EFFORT_LEVELS,
+  EFFORT_LEVELS,
+  effortLevelsForProvider,
+  resolveCliEffort,
+  hasEffortFlag,
+  buildEffortArgs,
+  isCodexProvider
 } from './providerModels.js';
 
 describe('providerModels', () => {
@@ -146,6 +154,95 @@ describe('providerModels', () => {
     it('returns the model string when concrete', () => {
       expect(resolveCliModel('gpt-5')).toBe('gpt-5');
       expect(resolveCliModel('claude-opus-4-7')).toBe('claude-opus-4-7');
+    });
+  });
+
+  describe('effortLevelsForProvider', () => {
+    it('returns codex levels for the codex id or command (path/exe tolerant)', () => {
+      expect(effortLevelsForProvider({ id: 'codex', command: 'codex' })).toBe(CODEX_EFFORT_LEVELS);
+      expect(effortLevelsForProvider({ id: 'my-codex', command: '/opt/homebrew/bin/codex' })).toBe(CODEX_EFFORT_LEVELS);
+      expect(effortLevelsForProvider({ id: 'custom', command: 'Codex.exe' })).toBe(CODEX_EFFORT_LEVELS);
+    });
+
+    it('returns claude levels for claude-code* ids and the claude command', () => {
+      expect(effortLevelsForProvider({ id: 'claude-code', command: 'claude' })).toBe(CLAUDE_EFFORT_LEVELS);
+      expect(effortLevelsForProvider({ id: 'claude-code-bedrock', command: 'claude' })).toBe(CLAUDE_EFFORT_LEVELS);
+      expect(effortLevelsForProvider({ id: 'claude-code-tui' })).toBe(CLAUDE_EFFORT_LEVELS);
+      expect(effortLevelsForProvider({ id: 'claude-ollama', command: '/usr/local/bin/claude' })).toBe(CLAUDE_EFFORT_LEVELS);
+    });
+
+    it('returns null for providers without an effort control (and does NOT default blank commands to claude)', () => {
+      expect(effortLevelsForProvider({ id: 'antigravity-cli', command: 'agy' })).toBeNull();
+      expect(effortLevelsForProvider({ id: 'opencode-ollama', command: 'opencode' })).toBeNull();
+      expect(effortLevelsForProvider({ id: 'grok-cli', command: 'grok' })).toBeNull();
+      expect(effortLevelsForProvider({ id: 'ollama' })).toBeNull();
+      expect(effortLevelsForProvider(null)).toBeNull();
+    });
+
+  });
+
+  describe('isCodexProvider', () => {
+    it('matches shipped ids and codex command basenames', () => {
+      expect(isCodexProvider({ id: 'codex' })).toBe(true);
+      expect(isCodexProvider({ id: 'codex-tui' })).toBe(true);
+      expect(isCodexProvider({ id: 'custom', command: '/opt/homebrew/bin/codex' })).toBe(true);
+      expect(isCodexProvider({ id: 'claude-code', command: 'claude' })).toBe(false);
+      expect(isCodexProvider(null)).toBe(false);
+    });
+  });
+
+  describe('buildEffortArgs', () => {
+    it('emits --effort for claude and a -c config pair for codex', () => {
+      expect(buildEffortArgs('high', { id: 'claude-code', command: 'claude' })).toEqual(['--effort', 'high']);
+      expect(buildEffortArgs('ultra', { id: 'codex', command: 'codex' })).toEqual(['-c', 'model_reasoning_effort=ultra']);
+    });
+
+    it('emits the codex shape for a RENAMED codex provider (detection and emission agree)', () => {
+      expect(buildEffortArgs('ultra', { id: 'my-codex', command: '/opt/homebrew/bin/codex' }))
+        .toEqual(['-c', 'model_reasoning_effort=ultra']);
+    });
+
+    it('returns [] when unset, unsupported, or already baked into existing args', () => {
+      expect(buildEffortArgs(null, { id: 'codex', command: 'codex' })).toEqual([]);
+      expect(buildEffortArgs('high', { id: 'grok-cli', command: 'grok' })).toEqual([]);
+      expect(buildEffortArgs('max', { id: 'claude-code', command: 'claude' }, ['--effort', 'low'])).toEqual([]);
+    });
+  });
+
+  describe('resolveCliEffort', () => {
+    it('passes a supported level through for claude and codex', () => {
+      expect(resolveCliEffort('high', { id: 'claude-code', command: 'claude' })).toBe('high');
+      expect(resolveCliEffort('ultra', { id: 'codex', command: 'codex' })).toBe('ultra');
+    });
+
+    it('clamps codex-only values to the claude equivalents on a claude provider', () => {
+      expect(resolveCliEffort('minimal', { id: 'claude-code', command: 'claude' })).toBe('low');
+      expect(resolveCliEffort('ultra', { id: 'claude-code', command: 'claude' })).toBe('max');
+    });
+
+    it('returns null for unset/unknown values and effort-less providers', () => {
+      expect(resolveCliEffort(null, { id: 'codex', command: 'codex' })).toBeNull();
+      expect(resolveCliEffort('', { id: 'codex', command: 'codex' })).toBeNull();
+      expect(resolveCliEffort('bogus', { id: 'codex', command: 'codex' })).toBeNull();
+      expect(resolveCliEffort('high', { id: 'grok-cli', command: 'grok' })).toBeNull();
+    });
+  });
+
+  describe('hasEffortFlag', () => {
+    it('detects a baked --effort pin in both arg shapes', () => {
+      expect(hasEffortFlag(['--effort', 'high'])).toBe(true);
+      expect(hasEffortFlag(['--effort=high'])).toBe(true);
+    });
+
+    it('detects a baked codex model_reasoning_effort config pair', () => {
+      expect(hasEffortFlag(['-c', 'model_reasoning_effort=high'])).toBe(true);
+    });
+
+    it('ignores a dangling --effort with no value and unrelated args', () => {
+      expect(hasEffortFlag(['--effort'])).toBe(false);
+      expect(hasEffortFlag(['--effort', '--verbose'])).toBe(false);
+      expect(hasEffortFlag(['--model', 'gpt-5'])).toBe(false);
+      expect(hasEffortFlag(null)).toBe(false);
     });
   });
 

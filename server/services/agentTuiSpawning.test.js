@@ -274,6 +274,31 @@ describe('agent TUI spawning', () => {
     expect(config.commandLine).toBe('codex --dangerously-bypass-approvals-and-sandbox');
   });
 
+  it('adds --effort for a claude TUI and a -c model_reasoning_effort pair for a codex TUI', () => {
+    const claude = buildTuiSpawnConfig(
+      { id: 'claude-code-tui', command: 'claude', type: 'tui', args: [] },
+      'claude-opus-4-8',
+      { effort: 'xhigh' },
+    );
+    expect(claude.args[claude.args.indexOf('--effort') + 1]).toBe('xhigh');
+
+    const codex = buildTuiSpawnConfig(
+      { id: 'codex-tui', command: 'codex', type: 'tui', args: [] },
+      null,
+      { effort: 'ultra' },
+    );
+    expect(codex.args[codex.args.indexOf('-c') + 1]).toBe('model_reasoning_effort=ultra');
+    expect(codex.args).not.toContain('--effort');
+  });
+
+  it('omits effort args when unset or when the TUI has no effort control', () => {
+    const noEffort = buildTuiSpawnConfig({ id: 'claude-code-tui', command: 'claude', type: 'tui', args: [] }, null);
+    expect(noEffort.args).not.toContain('--effort');
+
+    const agy = buildTuiSpawnConfig({ id: 'antigravity-tui', command: 'agy', type: 'tui', args: [] }, null, { effort: 'high' });
+    expect(agy.args.join(' ')).not.toContain('effort');
+  });
+
   it('adds lean-mode flags and the system-prompt file for an Ollama-backed claude TUI', () => {
     const config = buildTuiSpawnConfig({
       id: 'claude-ollama-tui', type: 'tui', command: 'claude', ollamaBacked: true,

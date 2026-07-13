@@ -20,7 +20,7 @@ import { PATHS } from '../lib/fileUtils.js';
 import { DONE_SENTINEL_NAME, parseSentinelPayload } from '../lib/agentSentinel.js';
 import * as git from './git.js';
 import { shellQuote } from '../lib/shellQuote.js';
-import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, isClaudeCommand, applyLeanClaudeArgs, providerSuppliesGithubToken } from '../lib/providerModels.js';
+import { resolveCliModel, buildEffortArgs, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, isClaudeCommand, applyLeanClaudeArgs, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { createStreamingAnsiStripper, stripAnsi } from '../lib/ansiStrip.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { isAntigravityCommand } from '../lib/antigravity.js';
@@ -264,10 +264,13 @@ function appendModelArgs(args, model, command, provider) {
   return [...args, '--model', injectedModel];
 }
 
-export function buildTuiSpawnConfig(provider, model, { systemPromptFile = null } = {}) {
+export function buildTuiSpawnConfig(provider, model, { systemPromptFile = null, effort = null } = {}) {
   const command = provider?.command || inferTuiCommand(provider?.id);
   const baseArgs = applyCommandDefaults(command, [...(provider?.args || [])]);
   let args = appendModelArgs(baseArgs, model, command, provider);
+  // Reasoning-effort override — the provider is re-keyed on the RESOLVED launch
+  // command so an inferred command (blank provider.command) still qualifies.
+  args = [...args, ...buildEffortArgs(effort, { id: provider?.id, command }, args)];
   // Lean mode for Ollama-backed claude sessions (no-op otherwise) — must come
   // before the system-prompt flag so `--bare` is present when the contract
   // file rides along.

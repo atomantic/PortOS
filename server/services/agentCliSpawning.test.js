@@ -280,6 +280,56 @@ describe('buildCliSpawnConfig', () => {
     expect(config.args[idx + 1]).toBe('/data/cos/agents/agent-2/system-prompt.md');
   });
 
+  describe('reasoning-effort override', () => {
+    it('adds a -c model_reasoning_effort pair for codex', () => {
+      const config = buildCliSpawnConfig({ id: 'codex', command: 'codex' }, 'gpt-5.4', {}, { effort: 'xhigh' });
+      const idx = config.args.indexOf('-c');
+      expect(config.args[idx + 1]).toBe('model_reasoning_effort=xhigh');
+    });
+
+    it('adds --effort for claude', () => {
+      const config = buildCliSpawnConfig({ id: 'claude-code', command: 'claude' }, 'claude-opus-4-8', {}, { effort: 'high' });
+      expect(config.args[config.args.indexOf('--effort') + 1]).toBe('high');
+    });
+
+    it('clamps codex-only values on a claude provider', () => {
+      const config = buildCliSpawnConfig({ id: 'claude-code', command: 'claude' }, null, {}, { effort: 'ultra' });
+      expect(config.args[config.args.indexOf('--effort') + 1]).toBe('max');
+    });
+
+    it('omits the flag entirely when no effort is set or the provider has no effort control', () => {
+      expect(buildCliSpawnConfig({ id: 'codex', command: 'codex' }, 'gpt-5.4').args).not.toContain('-c');
+      expect(buildCliSpawnConfig({ id: 'claude-code', command: 'claude' }, null).args).not.toContain('--effort');
+      const grok = buildCliSpawnConfig({ id: 'grok-cli', command: 'grok', args: [] }, null, {}, { effort: 'high' });
+      expect(grok.args.join(' ')).not.toContain('effort');
+    });
+
+    it('never emits the claude-shaped --effort for a renamed codex provider (detection and emission agree)', () => {
+      // id !== 'codex' routes this into the default (claude-style) branch, but
+      // the effort arg shape must still follow the binary, not the branch.
+      const config = buildCliSpawnConfig(
+        { id: 'my-codex', command: '/opt/homebrew/bin/codex' },
+        null,
+        {},
+        { effort: 'ultra' },
+      );
+      expect(config.args).not.toContain('--effort');
+      expect(config.args[config.args.indexOf('-c') + 1]).toBe('model_reasoning_effort=ultra');
+    });
+
+    it('respects a user-baked --effort pin in provider args (mirrors the --model rule)', () => {
+      const config = buildCliSpawnConfig(
+        { id: 'claude-code', command: 'claude', args: ['--effort', 'low'] },
+        null,
+        {},
+        { effort: 'max' },
+      );
+      const effortArgs = config.args.filter(a => a === '--effort');
+      expect(effortArgs).toHaveLength(1);
+      expect(config.args[config.args.indexOf('--effort') + 1]).toBe('low');
+    });
+  });
+
   describe('Bedrock model-id mapping', () => {
     // buildCliSpawnConfig reads process.env for the Bedrock signal; isolate the
     // tests from whatever the host/CI environment happens to set.

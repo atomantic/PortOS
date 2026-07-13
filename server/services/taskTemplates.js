@@ -175,6 +175,7 @@ export async function createTemplate(templateData) {
     category: templateData.category || 'custom',
     provider: templateData.provider || '',
     model: templateData.model || '',
+    effort: templateData.effort || '',
     app: templateData.app || '',
     isBuiltin: false,
     createdAt: new Date().toISOString()
@@ -268,6 +269,7 @@ export async function createTemplateFromTask(task, templateName) {
     category: 'from-task',
     provider: task.provider || '',
     model: task.model || '',
+    effort: task.effort || '',
     app: task.app || ''
   });
 }

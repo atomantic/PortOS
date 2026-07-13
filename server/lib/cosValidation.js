@@ -10,6 +10,7 @@
  */
 import { z } from 'zod';
 import { emptyToUndefined, emptyToNull } from './zodCompat.js';
+import { EFFORT_LEVELS } from './providerModels.js';
 
 // =============================================================================
 // COS TASK SCHEMAS
@@ -283,6 +284,10 @@ const cosTaskDiagnosticsSchema = z.object({
   failureReason: z.string().optional(),
 }).passthrough();
 
+// Reasoning-effort override for effort-capable CLIs (claude/codex). '' from a
+// form's "Default" option → undefined (no override persisted).
+const effortInputSchema = z.preprocess(emptyToUndefined, z.enum(EFFORT_LEVELS).optional());
+
 export const createCosTaskSchema = z.object({
   description: z.string().min(1),
   diagnostics: cosTaskDiagnosticsSchema.optional(),
@@ -290,6 +295,7 @@ export const createCosTaskSchema = z.object({
   context: z.string().optional(),
   model: z.string().optional(),
   provider: z.string().optional(),
+  effort: effortInputSchema,
   app: z.string().optional(),
   type: z.string().optional().default('user'),
   approvalRequired: z.boolean().optional(),
@@ -355,6 +361,7 @@ export const updateCosTaskSchema = z.object({
   context: z.string().optional(),
   model: z.string().optional(),
   provider: z.string().optional(),
+  effort: effortInputSchema,
   app: z.string().optional(),
   blockedReason: z.string().optional(),
   type: z.string().optional().default('user'),

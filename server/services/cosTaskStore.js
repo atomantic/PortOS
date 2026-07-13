@@ -42,7 +42,7 @@ const CLAIM_KEY_SET = new Set(CLAIM_METADATA_KEYS);
 // Legacy fields an `updateTask` patch may carry directly (vs nested under
 // `metadata`); they're normalized into `metadata` on write. Listed once so the
 // content-edit detector and the normalizer below can't drift apart.
-const LEGACY_DIRECT_FIELDS = ['context', 'model', 'provider', 'app'];
+const LEGACY_DIRECT_FIELDS = ['context', 'model', 'provider', 'effort', 'app'];
 
 // Equality for metadata values across a fresh markdown re-parse: primitives by
 // ===, arrays/objects (reviewers[], screenshots[], …) by JSON since the two
@@ -236,6 +236,7 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     if (taskData.context) metadata.context = taskData.context;
     if (taskData.model) metadata.model = taskData.model;
     if (taskData.provider) metadata.provider = taskData.provider;
+    if (taskData.effort) metadata.effort = taskData.effort;
     if (taskData.app) metadata.app = taskData.app;
     // Tags a task dispatched by the voice code-agent tool so the proactive
     // speech layer can announce its completion (see voice/proactiveTriggers.js).

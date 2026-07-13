@@ -27,7 +27,7 @@ import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
 import { isGrokCommand, ensureGrokHeadlessArgs, prepareGrokPromptFile } from '../lib/grok.js';
-import { resolveCliModel, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs, providerSuppliesGithubToken } from '../lib/providerModels.js';
+import { resolveCliModel, buildEffortArgs, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { resolveForgeTokenEnv } from './git.js';
 import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
@@ -245,7 +245,7 @@ export function createStreamJsonParser() {
  * merge) — without it, a settings-only Bedrock box would map against an env
  * missing the flag and still emit a bare, Bedrock-invalid `--model`.
  */
-export function buildCliSpawnConfig(provider, model, settingsEnv = {}, { systemPromptFile = null } = {}) {
+export function buildCliSpawnConfig(provider, model, settingsEnv = {}, { systemPromptFile = null, effort = null } = {}) {
   const providerId = provider?.id || 'claude-code';
   // Configured-default sentinels (Codex / Antigravity / Grok Build) → null so
   // the CLI uses its own default without a --model flag.
@@ -267,6 +267,7 @@ export function buildCliSpawnConfig(provider, model, settingsEnv = {}, { systemP
     if (effectiveModel) {
       args.push('--model', effectiveModel);
     }
+    args.push(...buildEffortArgs(effort, provider, args));
     return {
       command: provider?.command || 'codex',
       args,
@@ -348,6 +349,9 @@ export function buildCliSpawnConfig(provider, model, settingsEnv = {}, { systemP
     });
     args.push('--model', injectedModel);
   }
+  // Per-task reasoning-effort override; a user-baked --effort in provider args
+  // wins (buildEffortArgs mirrors the hasModelFlag rule).
+  args.push(...buildEffortArgs(effort, provider, args));
 
   return {
     command: provider?.command || process.env.CLAUDE_PATH || 'claude',
