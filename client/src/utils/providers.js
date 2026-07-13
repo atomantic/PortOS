@@ -320,6 +320,21 @@ export const isClaudeCodePlanCli = (provider) =>
   !provider?.envVars?.CLAUDE_CODE_USE_VERTEX;
 
 /**
+ * Check if a provider is the Grok Build CLI/TUI (the `grok` command harness).
+ * Mirrors the Grok detection in `knownProviderContextWindow`: matches the shipped
+ * `grok-cli` / `grok-tui` samples or any process provider whose command basename
+ * is `grok`. Used to surface the `~/.grok/config.toml` privacy notice: the Grok
+ * harness uploads the entire working repo to xAI/GCP as it works unless the user
+ * opts out via `[harness] disable_codebase_upload = true`. The plain `grok` API
+ * provider (type `api`) doesn't run the harness, so it's intentionally excluded.
+ */
+export const isGrokBuildCli = (provider) => {
+  if (!isProcessProvider(provider)) return false;
+  const id = String(provider?.id || '').toLowerCase();
+  return id === 'grok-cli' || id === 'grok-tui' || commandBasename(provider?.command) === 'grok';
+};
+
+/**
  * Resolve the provider whose timeout is the "fallback" for a stage — the
  * stage's pinned provider when set, otherwise the active provider. Used to
  * power the placeholder + hint on stage-timeout UIs in PromptManager and
