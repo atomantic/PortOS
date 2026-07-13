@@ -178,7 +178,11 @@ async function resolveLiAgentProvider(app, config) {
     type = await providerTypeOf(pinId)
     if (type && type !== 'api') {
       providerId = pinId
-      model = pin?.model ?? null
+      // Keep an explicit per-app model if the user set one (provider absent but
+      // model present); only fall back to the pin's model when there's no per-app
+      // model. This matches the pre-refactor net spawn behavior, where the hook's
+      // returned model (the per-app model) overrode the generator's interval.model.
+      model = config.model ?? pin?.model ?? null
     }
   }
 
