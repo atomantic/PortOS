@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isOllamaBackedProvider, isClaudeCodePlanCli, effectiveModelContextWindow } from '../utils/providers';
+import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isOllamaBackedProvider, isClaudeCodePlanCli, isGrokBuildCli, effectiveModelContextWindow } from '../utils/providers';
 import useLocalModels from '../hooks/useLocalModels';
 import EmptyState from '../components/EmptyState';
 import {
@@ -564,6 +564,16 @@ export default function AIProviders() {
                     it will consume extra API credits instead of your Claude Code plan. Avoid this
                     provider; use the interactive <span className="font-semibold">Claude Code TUI</span> provider,
                     which stays on the plan.
+                  </div>
+                )}
+
+                {isGrokBuildCli(provider) && (
+                  <div className="mt-2 text-xs rounded-md border border-port-warning/40 bg-port-warning/10 text-port-warning px-2.5 py-2 leading-relaxed">
+                    ⚠️ The Grok harness uploads your <span className="font-semibold">entire working repo</span> to
+                    xAI (GCP) as it works. To keep your code local, add the following to{' '}
+                    <code className="font-mono">~/.grok/config.toml</code> before enabling this provider:
+                    <pre className="mt-1.5 whitespace-pre rounded bg-port-bg/60 px-2 py-1.5 font-mono text-[11px] text-port-warning">{`[harness]
+disable_codebase_upload = true`}</pre>
                   </div>
                 )}
 

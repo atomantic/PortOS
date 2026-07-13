@@ -29,6 +29,7 @@ import {
   isProcessProvider,
   isOllamaBackedProvider,
   isClaudeCodePlanCli,
+  isGrokBuildCli,
   enabledApiProviderFilter,
   providerTypeClass,
   getProviderTimeout,
@@ -157,6 +158,30 @@ describe('isClaudeCodePlanCli', () => {
   it('safely returns false for nullish input', () => {
     expect(isClaudeCodePlanCli(null)).toBe(false);
     expect(isClaudeCodePlanCli(undefined)).toBe(false);
+  });
+});
+
+describe('isGrokBuildCli', () => {
+  it('matches the shipped grok-cli / grok-tui samples', () => {
+    expect(isGrokBuildCli({ id: 'grok-cli', type: 'cli', command: 'grok' })).toBe(true);
+    expect(isGrokBuildCli({ id: 'grok-tui', type: 'tui', command: 'grok' })).toBe(true);
+  });
+
+  it('matches any process provider whose command basename is grok', () => {
+    expect(isGrokBuildCli({ id: 'custom', type: 'cli', command: '/opt/homebrew/bin/grok' })).toBe(true);
+  });
+
+  it('does not match the plain grok API provider (no harness upload)', () => {
+    expect(isGrokBuildCli({ id: 'grok', type: 'api', command: '' })).toBe(false);
+  });
+
+  it('does not match non-grok process providers', () => {
+    expect(isGrokBuildCli({ id: 'codex', type: 'cli', command: 'codex' })).toBe(false);
+  });
+
+  it('safely returns false for nullish input', () => {
+    expect(isGrokBuildCli(null)).toBe(false);
+    expect(isGrokBuildCli(undefined)).toBe(false);
   });
 });
 
