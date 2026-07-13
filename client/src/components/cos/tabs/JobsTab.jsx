@@ -5,8 +5,9 @@ import * as api from '../../../services/api';
 import { timeAgo, formatDateTime } from '../../../utils/formatters';
 import { CRON_PRESETS, DEFAULT_CRON, describeCron } from '../../../utils/cronHelpers';
 import WeekdayTimePicker from '../../WeekdayTimePicker';
-import { filterSelectableModels } from '../../../utils/providers';
+import { filterSelectableModels, effortLevelsForProvider } from '../../../utils/providers';
 import ProviderModelSelector from '../../ProviderModelSelector';
+import { FormField } from '../../ui/FormField';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 
@@ -75,6 +76,7 @@ const INITIAL_JOB = {
   appId: '',
   providerId: '',
   model: '',
+  effort: '',
   enabled: false
 };
 
@@ -114,14 +116,17 @@ function BriefingConfig({ config, onChange }) {
   );
 }
 
-// Provider + model override for an agent job. Empty selection = use the active
-// provider / its default model. Only rendered for agent jobs (shell/script jobs
-// never reach the AI runner). `data` carries `providerId`/`model`; `onChange`
-// applies a partial patch back onto the form state.
+// Provider + model + effort override for an agent job. Empty selection = use the
+// active provider / its default model / default effort. Only rendered for agent
+// jobs (shell/script jobs never reach the AI runner). `data` carries
+// `providerId`/`model`/`effort`; `onChange` applies a partial patch back onto the
+// form state. Effort only renders for effort-capable providers (claude/codex) and
+// resets when the provider changes.
 function JobProviderModelFields({ data, providers, onChange }) {
   if (!providers?.length) return null;
   const selectedProvider = providers.find(p => p.id === data.providerId);
   const availableModels = filterSelectableModels(selectedProvider?.models);
+  const effortLevels = effortLevelsForProvider(selectedProvider);
   return (
     <div>
       <span className="text-xs text-gray-400 block mb-1">AI Provider &amp; Model (optional)</span>
@@ -130,13 +135,27 @@ function JobProviderModelFields({ data, providers, onChange }) {
         selectedProviderId={data.providerId || ''}
         selectedModel={data.model || ''}
         availableModels={availableModels}
-        onProviderChange={id => onChange({ providerId: id, model: '' })}
+        onProviderChange={id => onChange({ providerId: id, model: '', effort: '' })}
         onModelChange={model => onChange({ model })}
         compact
         emptyProviderOption="Default (active provider)"
         emptyModelOption="Default model"
         alwaysShowModel
       />
+      {effortLevels && (
+        <FormField label="Thinking Effort (optional)" className="mt-2" labelClassName="text-xs text-gray-400 block mb-1">
+          <select
+            value={data.effort || ''}
+            onChange={e => onChange({ effort: e.target.value })}
+            className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs"
+          >
+            <option value="">Default effort</option>
+            {effortLevels.map(level => (
+              <option key={level} value={level}>{level}</option>
+            ))}
+          </select>
+        </FormField>
+      )}
     </div>
   );
 }
@@ -152,10 +171,11 @@ function normalizeJobPayload(formData) {
     // appId left over from when the job was an agent type — otherwise the saved
     // job shows a misleading app badge while executing in root.
     payload.appId = null;
-    // Provider/model overrides only apply to AI-agent jobs — clear any leftover
-    // selection so a shell/script job doesn't carry a misleading AI badge.
+    // Provider/model/effort overrides only apply to AI-agent jobs — clear any
+    // leftover selection so a shell/script job doesn't carry a misleading AI badge.
     payload.providerId = null;
     payload.model = null;
+    payload.effort = null;
   }
   // Empty app picker selection ('') → null so a PUT actively un-scopes the job
   // back to global (undefined would be dropped from JSON and updateJob would
@@ -302,7 +322,8 @@ function JobCard({ job, apps, providers, onToggle, onTrigger, onDelete, onUpdate
       promptTemplate: job.promptTemplate || '',
       appId: job.appId || '',
       providerId: job.providerId || '',
-      model: job.model || ''
+      model: job.model || '',
+      effort: job.effort || ''
     };
     // Always initialize shell fields so switching type to 'shell' during editing works
     base.command = job.command || '';
@@ -561,7 +582,7 @@ function JobCard({ job, apps, providers, onToggle, onTrigger, onDelete, onUpdate
                 <span>Priority: <span className="text-gray-300">{job.priority}</span></span>
                 {!isShell && <span>Autonomy: <span className="text-gray-300">{job.autonomyLevel}</span></span>}
                 {isAgentJobType(job.type) && job.providerId && (
-                  <span>AI: <span className="text-gray-300">{providers.find(p => p.id === job.providerId)?.name || job.providerId}{job.model ? ` / ${job.model}` : ''}</span></span>
+                  <span>AI: <span className="text-gray-300">{providers.find(p => p.id === job.providerId)?.name || job.providerId}{job.model ? ` / ${job.model}` : ''}{job.effort ? ` · ${job.effort}` : ''}</span></span>
                 )}
                 {isShell && <span>Action: <span className="text-gray-300">{job.triggerAction || 'log-only'}</span></span>}
                 <span>Created: <span className="text-gray-300">{job.createdAt ? new Date(job.createdAt).toLocaleDateString() : '—'}</span></span>

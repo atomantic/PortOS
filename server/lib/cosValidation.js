@@ -455,6 +455,11 @@ export const createCosJobSchema = z.object({
   // generated task's metadata as `provider`/`model` by generateTaskFromJob.
   providerId: z.preprocess(emptyToNull, z.string().nullable().optional()),
   model: z.preprocess(emptyToNull, z.string().nullable().optional()),
+  // Optional reasoning-effort override (claude/codex). Mirrors providerId's
+  // clearable-null semantics — '' from the UI picker → null so a PUT can reset it
+  // back to the provider default. Forwarded into the generated task's metadata as
+  // `effort` by generateTaskFromJob; no-op'd at spawn for non-effort providers.
+  effort: effortUpdateSchema,
   // Optional managed-app scope. Empty string from the UI picker → null so a PUT
   // can actively un-scope a job back to global (updateJob only skips `undefined`,
   // so undefined would silently preserve the old scope). Absent key stays

@@ -1419,12 +1419,13 @@ function initializePipelineMetadata(metadata) {
   if (stage0.readOnly !== undefined) {
     metadata.readOnly = stage0.readOnly;
   }
-  // Propagate stage 0's provider/model so the first agent uses per-stage config
+  // Propagate stage 0's provider/model/effort so the first agent uses per-stage config
   if (stage0.model) metadata.model = stage0.model;
   if (stage0.providerId) {
     metadata.provider = stage0.providerId;
     metadata.providerId = stage0.providerId;
   }
+  if (stage0.effort) metadata.effort = stage0.effort;
   // Save task-level defaults and apply stage 0 overrides in one pass
   // Read-only stages default flags to false to prevent worktree/PR/simplify on review-only stages
   metadata.pipeline.taskDefaults = {};
