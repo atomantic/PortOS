@@ -1,4 +1,4 @@
-import { filterSelectableModels } from '../../../../utils/providers';
+import { filterSelectableModels, effortLevelsForProvider } from '../../../../utils/providers';
 import { FormField } from '../../../ui/FormField';
 
 export default function PipelineStageConfig({ taskType, config, providers, onUpdate, updating, setUpdating }) {
@@ -14,9 +14,12 @@ export default function PipelineStageConfig({ taskType, config, providers, onUpd
       } else {
         updated[field] = value;
       }
-      // When provider changes, clear model (it may not be valid for new provider)
+      // When provider changes, clear model + effort (neither may be valid for the
+      // new provider — effort levels differ between claude/codex and non-effort
+      // providers have none).
       if (field === 'providerId') {
         delete updated.model;
+        delete updated.effort;
       }
       return updated;
     });
@@ -35,6 +38,7 @@ export default function PipelineStageConfig({ taskType, config, providers, onUpd
         {stages.map((stage, i) => {
           const stageProvider = providers?.find(p => p.id === stage.providerId);
           const stageModels = filterSelectableModels(stageProvider?.models);
+          const stageEffortLevels = effortLevelsForProvider(stageProvider);
           return (
             <div key={i} className="bg-port-card border border-port-border rounded-lg p-3">
               <div className="flex items-center gap-2 mb-3">
@@ -77,6 +81,21 @@ export default function PipelineStageConfig({ taskType, config, providers, onUpd
                     ))}
                   </select>
                 </FormField>
+                {stageEffortLevels && (
+                  <FormField label="Thinking Effort" labelClassName="text-xs text-gray-500 block mb-1">
+                    <select
+                      value={stage.effort || ''}
+                      onChange={(e) => handleStageUpdate(i, 'effort', e.target.value || null)}
+                      disabled={updating}
+                      className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs"
+                    >
+                      <option value="">Default effort</option>
+                      {stageEffortLevels.map(level => (
+                        <option key={level} value={level}>{level}</option>
+                      ))}
+                    </select>
+                  </FormField>
+                )}
               </div>
             </div>
           );

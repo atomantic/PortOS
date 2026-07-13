@@ -256,6 +256,28 @@ describe('CoS Job Routes', () => {
         expect.objectContaining({ providerId: null, model: null })
       );
     });
+
+    it('should accept effort and forward it to createJob', async () => {
+      autonomousJobs.createJob.mockResolvedValue({ id: 'j1' });
+
+      const response = await request(app)
+        .post('/api/cos/jobs')
+        .send({ name: 'Effort Task', type: 'agent', promptTemplate: 'test', providerId: 'claude-code', effort: 'xhigh' });
+
+      expect(response.status).toBe(200);
+      expect(autonomousJobs.createJob).toHaveBeenCalledWith(
+        expect.objectContaining({ effort: 'xhigh' })
+      );
+    });
+
+    it('should reject an effort value outside EFFORT_LEVELS', async () => {
+      const response = await request(app)
+        .post('/api/cos/jobs')
+        .send({ name: 'Bad Effort', type: 'agent', promptTemplate: 'test', effort: 'bogus' });
+
+      expect(response.status).toBe(400);
+      expect(autonomousJobs.createJob).not.toHaveBeenCalled();
+    });
   });
 
   describe('PUT /api/cos/jobs/:id', () => {

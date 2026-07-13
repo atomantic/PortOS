@@ -72,4 +72,22 @@ describe('handlePipelineProgression', () => {
     expect(nextTask.metadata.pipeline.status).toBe('running');
     expect(nextTask.metadata.pipeline.previousStageAgentId).toBe('agent-1');
   });
+
+  it('propagates the next stage provider/model/effort pins into the enqueued task', async () => {
+    const stages = [{ name: 'stage-0' }, { name: 'stage-1', providerId: 'codex', model: 'gpt-5', effort: 'xhigh' }];
+    const task = { id: 't', taskType: 'user', metadata: { pipeline: runningPipeline({ stages }) } };
+    await handlePipelineProgression(task, 'agent-1', true);
+    const [nextTask] = addTask.mock.calls[0];
+    expect(nextTask.metadata.provider).toBe('codex');
+    expect(nextTask.metadata.providerId).toBe('codex');
+    expect(nextTask.metadata.model).toBe('gpt-5');
+    expect(nextTask.metadata.effort).toBe('xhigh');
+  });
+
+  it('leaves effort unset when the next stage has no effort pin', async () => {
+    const task = { id: 't', taskType: 'user', metadata: { pipeline: runningPipeline() } };
+    await handlePipelineProgression(task, 'agent-1', true);
+    const [nextTask] = addTask.mock.calls[0];
+    expect(nextTask.metadata.effort).toBeUndefined();
+  });
 });

@@ -122,6 +122,7 @@ export async function handlePipelineProgression(task, agentId, success) {
     nextTask.metadata.provider = nextStage.providerId;
     nextTask.metadata.providerId = nextStage.providerId;
   }
+  if (nextStage.effort) nextTask.metadata.effort = nextStage.effort;
   // Apply per-stage overrides for agent behavior flags
   const stageReadOnly = nextStage.readOnly ?? false;
   const taskDefaults = pipeline.taskDefaults || {};

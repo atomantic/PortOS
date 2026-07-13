@@ -10,6 +10,7 @@
 ## Added
 
 - **Scheduled tasks and the new-task form can pin a thinking-effort level.** Alongside the existing provider/model overrides, a "Thinking Effort" select appears when the pinned provider is Claude Code or Codex (Claude: low→max; Codex: minimal→ultra). The spawned agent gets `--effort <level>` (claude) or `-c model_reasoning_effort=<level>` (codex) across all three execution modes — direct CLI, runner, and TUI. Codex-only values clamp to the nearest Claude equivalent if the task later runs on a Claude provider, a user-baked `--effort` in provider args wins over the injected one, and task templates save/re-apply the effort choice.
+- **[issue-2502] Thinking-effort pins now extend to pipeline stages and autonomous jobs.** The two remaining surfaces that carried provider/model overrides gain the same "Thinking Effort" select: each pipeline stage (code-reviewer's Review/Implement, pr-reviewer's Security/Review, etc.) can pin its own effort in its stage card, and each autonomous job can pin one in the job form. The select only renders for effort-capable providers (Claude Code / Codex) and resets when the stage/job provider changes. Stage 0's effort rides into the first agent and each subsequent stage re-applies its own on hand-off; a job's effort flows into every task it generates — spawning with `--effort`/`-c model_reasoning_effort=` and a no-op for non-effort providers.
 
 ## Changed
 
