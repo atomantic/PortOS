@@ -45,3 +45,44 @@ export function parseSentinelPayload(contents) {
 
   return { summary: trimmed, payload: null };
 }
+
+/**
+ * Lenient fallback for a STRUCTURED sentinel that the strict
+ * `parseSentinelPayload` couldn't read. A less-capable model (notably a local
+ * one) commonly emits an almost-valid `{ summary, payload }` envelope — wrapped
+ * in ```json fences, trailed by prose, or with raw newlines/tabs pasted into
+ * the long markdown `body` string — which `JSON.parse` rejects, silently
+ * dropping a real proposal as "unparseable-response". This runs the shared
+ * robust LLM-JSON extractor (`jsonExtract.extractJson`: strips fences, walks
+ * balanced blocks, repairs trailing commas / orphan braces / raw control
+ * chars) over the raw contents and, ONLY when it recovers the documented
+ * envelope shape (a `{ ..., "payload": ... }` object), surfaces its payload.
+ *
+ * Deliberately narrow: it requires the `payload` key so a legacy plain-markdown
+ * sentinel that merely happens to contain a `{...}` block is never misread as
+ * structured — that stays text (payload null). Async + a LAZY import of
+ * jsonExtract so the barrel re-export of this module doesn't statically pull
+ * jsonExtract's transitive services chain into every lib consumer / mocked
+ * suite. Callers use it as a second tier after `parseSentinelPayload` returns a
+ * null payload (see agentLifecycle's dispatchTaskOutputHook).
+ *
+ * @param {string|null|undefined} contents — raw `.agent-done` contents
+ * @returns {Promise<{ summary: string, payload: unknown }>}
+ */
+export async function salvageSentinelPayload(contents) {
+  const trimmed = typeof contents === 'string' ? contents.trim() : '';
+  if (!trimmed || !trimmed.includes('{')) return { summary: trimmed, payload: null };
+
+  // The documented sentinel envelope: a plain object carrying a `payload` key.
+  const isEnvelope = (v) => v && typeof v === 'object' && !Array.isArray(v) && 'payload' in v;
+
+  const { extractJson } = await import('./jsonExtract.js');
+  const { value } = extractJson(trimmed, { shapePredicate: isEnvelope });
+  // Re-verify the shape: extractJson falls back to the first block that merely
+  // PARSED (ignoring the predicate) when none matched, so an incidental
+  // non-envelope object must not be adopted as a payload.
+  if (!isEnvelope(value)) return { summary: trimmed, payload: null };
+
+  const summary = typeof value.summary === 'string' ? value.summary : '';
+  return { summary, payload: value.payload };
+}

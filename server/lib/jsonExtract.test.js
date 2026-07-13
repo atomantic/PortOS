@@ -89,6 +89,24 @@ describe('jsonExtract.tryParseWithRepair', () => {
     expect(tryParseWithRepair('{"vars":[...]}')).toEqual({ value: { vars: [] } });
   });
 
+  it('escapes raw control chars (literal newlines/tabs) inside a string value', () => {
+    // A model writes a multi-line markdown field with literal newlines/tabs
+    // instead of the `\n`/`\t` escapes JSON requires — JSON.parse throws
+    // "Bad control character". The repair escapes only inside-string controls.
+    const bad = '{"body":"line one\nline two\ttabbed","ok":true}';
+    expect(tryParseWithRepair(bad)).toEqual({
+      value: { body: 'line one\nline two\ttabbed', ok: true },
+    });
+  });
+
+  it('leaves structural whitespace (control chars OUTSIDE strings) untouched', () => {
+    // Newlines between tokens are legal structural whitespace — the
+    // control-char repair must not misfire on them or on already-escaped
+    // sequences inside strings.
+    const pretty = '{\n  "a": 1,\n  "b": "has \\n escaped"\n}';
+    expect(tryParseWithRepair(pretty)).toEqual({ value: { a: 1, b: 'has \n escaped' } });
+  });
+
   it('returns the concrete parse error when no repair can recover the input', () => {
     const r1 = tryParseWithRepair('{ this is not valid json');
     expect(r1.value).toBeUndefined();

@@ -935,10 +935,22 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath })
   const cwd = workspacePath || task?.metadata?.repoPath || null;
   let payload = null;
   if (cwd) {
-    const { DONE_SENTINEL_NAME, parseSentinelPayload } = await import('../lib/agentSentinel.js');
+    const { DONE_SENTINEL_NAME, parseSentinelPayload, salvageSentinelPayload } = await import('../lib/agentSentinel.js');
     const { tryReadFile } = await import('../lib/fileUtils.js');
     const contents = await tryReadFile(join(cwd, DONE_SENTINEL_NAME));
     payload = parseSentinelPayload(contents).payload;
+    // A less-capable (often local) reasoner can emit an almost-valid
+    // `{ summary, payload }` envelope — ```json-fenced, prose-trailed, or with
+    // raw newlines in the markdown body — that strict parse rejects, dropping a
+    // real proposal as "unparseable-response" and filing nothing. Before giving
+    // up, run the robust LLM-JSON extractor over the raw sentinel.
+    if (payload == null) {
+      const salvaged = await salvageSentinelPayload(contents);
+      if (salvaged.payload != null) {
+        payload = salvaged.payload;
+        emitLog('info', `Recovered structured .agent-done payload for ${agentId} (${taskType}) via lenient JSON extraction`, { agentId });
+      }
+    }
   }
 
   await hook({
