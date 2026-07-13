@@ -239,12 +239,15 @@ function buildCompletionContract() {
     'discarded. Your ONLY output is the JSON described above.',
     '',
     'When you have decided, write a file named `.agent-done` in the current',
-    'directory containing a single JSON object:',
+    'directory containing a single JSON object with this shape:',
     '',
     '```json',
     '{ "summary": "<one-line human summary of what you proposed, or that you proposed nothing>",',
     '  "payload": <the exact JSON object described above> }',
     '```',
+    '',
+    'The file MUST contain ONLY that raw JSON object — no ``` fences, no prose',
+    'before or after it, and every newline inside a string value escaped as \\n.',
     '',
     'Then stop. Do nothing else.'
   ].join('\n')

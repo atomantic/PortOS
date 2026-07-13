@@ -122,6 +122,53 @@ function replaceOutsideStrings(input, pattern, replacement) {
 }
 
 /**
+ * Escape raw ASCII control characters (U+0000–U+001F) that appear INSIDE a
+ * JSON string literal — the JSON spec forbids them there, they must be
+ * `\n`/`\t`/`\uXXXX` escapes. Less-capable models (notably local ones asked
+ * for a large multi-line markdown field) routinely paste literal newlines/tabs
+ * into a string value, which makes `JSON.parse` throw "Bad control character
+ * in string literal". String-aware: control chars OUTSIDE strings are the
+ * structural whitespace between tokens and are left untouched.
+ */
+function escapeControlCharsInStrings(input) {
+  if (typeof input !== 'string' || !input) return input;
+  let out = '';
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < input.length; i += 1) {
+    const ch = input[i];
+    if (inString) {
+      const code = input.charCodeAt(i);
+      // A raw control char is ALWAYS illegal inside a JSON string — it can
+      // never be the target of a valid `\`-escape (escape targets are the
+      // printable set `"\/bfnrtu`). So escape it BEFORE consulting `escaped`:
+      // a control char that follows a backslash means that backslash was a
+      // dangling/invalid escape, and copying the control char through (the old
+      // `escaped` branch) left the string unparseable. Resetting `escaped`
+      // consumes any pending (spurious) escape.
+      if (code <= 0x1f) {
+        if (ch === '\n') out += '\\n';
+        else if (ch === '\r') out += '\\r';
+        else if (ch === '\t') out += '\\t';
+        else if (ch === '\b') out += '\\b';
+        else if (ch === '\f') out += '\\f';
+        else out += `\\u${code.toString(16).padStart(4, '0')}`;
+        escaped = false;
+        continue;
+      }
+      if (escaped) { out += ch; escaped = false; continue; }
+      if (ch === '\\') { out += ch; escaped = true; continue; }
+      if (ch === '"') { out += ch; inString = false; continue; }
+      out += ch;
+      continue;
+    }
+    if (ch === '"') { out += ch; inString = true; continue; }
+    out += ch;
+  }
+  return out;
+}
+
+/**
  * Try JSON.parse on a candidate block. If it fails, apply cheap repairs
  * for observed LLM corruption patterns and try again:
  *   - Trailing commas before `}` or `]` (common LLM mistake).
@@ -130,10 +177,15 @@ function replaceOutsideStrings(input, pattern, replacement) {
  *     between a variation's close-brace and the array's `]`. Swapping
  *     `}}]` → `}]}` (not dropping the brace) keeps the brace count
  *     correct so the outer container still closes.
+ *   - Raw control chars (literal newlines/tabs) inside a string value —
+ *     escaped to their `\n`/`\t`/`\uXXXX` forms (see
+ *     escapeControlCharsInStrings). Common when a model writes a long
+ *     multi-line markdown field into a string literal verbatim.
  *
- * All repairs are STRING-AWARE: the regexes only touch characters
- * outside quoted JSON string values, so a string containing `,}` or
- * `}}]` as ordinary content is preserved.
+ * The brace/comma repairs are STRING-AWARE: the regexes only touch
+ * characters outside quoted JSON string values, so a string containing
+ * `,}` or `}}]` as ordinary content is preserved. The control-char repair
+ * is likewise confined to inside-string regions.
  *
  * Returns `{ value }` on success (where `value` may be a valid JSON
  * `null`); returns `{ error }` if all repairs fail. The wrapper lets a
@@ -161,6 +213,13 @@ export function tryParseWithRepair(jsonText) {
   const fixedOrphan = replaceOutsideStrings(noTrailing, /}\s*}\s*]/g, '}]}');
   const orphanResult = safeParse(fixedOrphan);
   if (!orphanResult.error) return orphanResult;
+
+  // Last resort: escape raw control chars inside string literals. Runs on top
+  // of the prior repairs (cumulative) so trailing-comma + orphan-brace + raw
+  // newline corruption in one block still recovers. safeParse already returns
+  // the discriminated { value }/{ error } shape, so pass it straight through.
+  const escaped = escapeControlCharsInStrings(fixedOrphan);
+  if (escaped !== fixedOrphan) return safeParse(escaped);
 
   // Surface the last attempt's parse error so the caller can include the
   // concrete reason ("Unexpected token } in JSON at position 47") in its
@@ -194,12 +253,19 @@ function safeParse(text) {
  *   skip in-prompt schema examples that parse cleanly but aren't the answer.
  * @param {'object'|'array'} [options.blockType='object'] — top-level shape
  *   to walk for (`{...}` vs `[...]`).
+ * @param {boolean} [options.skipInnerFence=false] — skip the "first inner
+ *   ```…``` block" heuristic (see below). Set this when the JSON's own string
+ *   VALUES may contain fenced markdown (e.g. a proposal `body` with a code
+ *   snippet): the heuristic would otherwise lock onto that inner fence and
+ *   discard the surrounding object. Only the outer-wrapper strip
+ *   (`stripCodeFences`) runs, then balanced-block walking — which is
+ *   string-aware, so backticks inside a JSON string can't derail it.
  * @returns {{ value:unknown, lastError?:Error, lastPreview?:string }}
  *   — `value` is the parsed block, or `undefined` when no block matches.
  *   On no-match, `lastError` + `lastPreview` (200-char excerpt of the last
  *   candidate text) are populated for use in caller error messages.
  */
-export function extractJson(text, { shapePredicate, blockType = 'object' } = {}) {
+export function extractJson(text, { shapePredicate, blockType = 'object', skipInnerFence = false } = {}) {
   if (typeof text !== 'string' || !text.trim()) {
     return { value: undefined, lastError: new Error('Empty LLM response'), lastPreview: '' };
   }
@@ -212,9 +278,13 @@ export function extractJson(text, { shapePredicate, blockType = 'object' } = {})
   // prompt-echo content BEFORE the real response should skip this
   // helper and walk the full text directly (see stageRunner.extractJson)
   // — the first-fence heuristic locks onto the echoed schema and never
-  // reaches the actual model output.
-  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fence) s = fence[1].trim();
+  // reaches the actual model output. skipInnerFence disables it for callers
+  // whose JSON string values legitimately contain fenced markdown (the fence
+  // is content, not a wrapper) — see the option doc above.
+  if (!skipInnerFence) {
+    const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (fence) s = fence[1].trim();
+  }
 
   const { startChar, endChar } = blockType === 'array'
     ? { startChar: '[', endChar: ']' }
