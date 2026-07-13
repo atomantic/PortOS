@@ -163,7 +163,7 @@ export default function AgentCard({ agent, onPause, onKill, onDelete, onResume, 
       setShowFeedbackComment(false);
       setFeedbackComment('');
       toast.success(`Feedback recorded: ${rating}`);
-      onFeedbackChange?.();
+      onFeedbackChange?.(result.agent);
     }
   }, [agent.id, feedbackComment, submittingFeedback, onFeedbackChange]);
 
