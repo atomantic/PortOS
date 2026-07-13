@@ -7,6 +7,7 @@ import { CRON_PRESETS, DEFAULT_CRON, describeCron } from '../../../utils/cronHel
 import WeekdayTimePicker from '../../WeekdayTimePicker';
 import { filterSelectableModels, effortLevelsForProvider } from '../../../utils/providers';
 import ProviderModelSelector from '../../ProviderModelSelector';
+import { FormField } from '../../ui/FormField';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 
@@ -142,10 +143,8 @@ function JobProviderModelFields({ data, providers, onChange }) {
         alwaysShowModel
       />
       {effortLevels && (
-        <div className="mt-2">
-          <span className="text-xs text-gray-400 block mb-1">Thinking Effort (optional)</span>
+        <FormField label="Thinking Effort (optional)" className="mt-2" labelClassName="text-xs text-gray-400 block mb-1">
           <select
-            aria-label="Thinking Effort"
             value={data.effort || ''}
             onChange={e => onChange({ effort: e.target.value })}
             className="w-full bg-port-bg border border-port-border rounded px-2 py-1.5 text-white text-xs"
@@ -155,7 +154,7 @@ function JobProviderModelFields({ data, providers, onChange }) {
               <option key={level} value={level}>{level}</option>
             ))}
           </select>
-        </div>
+        </FormField>
       )}
     </div>
   );
