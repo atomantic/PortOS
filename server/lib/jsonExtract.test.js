@@ -99,12 +99,15 @@ describe('jsonExtract.tryParseWithRepair', () => {
     });
   });
 
-  it('leaves structural whitespace (control chars OUTSIDE strings) untouched', () => {
-    // Newlines between tokens are legal structural whitespace — the
-    // control-char repair must not misfire on them or on already-escaped
-    // sequences inside strings.
-    const pretty = '{\n  "a": 1,\n  "b": "has \\n escaped"\n}';
-    expect(tryParseWithRepair(pretty)).toEqual({ value: { a: 1, b: 'has \n escaped' } });
+  it('leaves structural whitespace + already-escaped sequences untouched while escaping a raw control char', () => {
+    // Force the repair to actually run: one string has a RAW newline (invalid),
+    // while the object also has structural inter-token newlines and another
+    // string with an already-escaped `\n`. The repair must escape only the raw
+    // one and leave the structural whitespace and pre-escaped sequence intact.
+    const bad = '{\n  "a": "raw\nnewline",\n  "b": "already \\n escaped"\n}';
+    expect(tryParseWithRepair(bad)).toEqual({
+      value: { a: 'raw\nnewline', b: 'already \n escaped' },
+    });
   });
 
   it('returns the concrete parse error when no repair can recover the input', () => {

@@ -76,8 +76,13 @@ export async function salvageSentinelPayload(contents) {
   // The documented sentinel envelope: a plain object carrying a `payload` key.
   const isEnvelope = (v) => v && typeof v === 'object' && !Array.isArray(v) && 'payload' in v;
 
+  // skipInnerFence: the reasoner's `payload.proposal.body` is markdown that
+  // routinely contains its own ```code``` fence; without this, extractJson's
+  // inner-fence heuristic would lock onto that body fence and discard the whole
+  // envelope. Balanced-block walking is string-aware, so a fence inside the
+  // JSON string value can't derail it.
   const { extractJson } = await import('./jsonExtract.js');
-  const { value } = extractJson(trimmed, { shapePredicate: isEnvelope });
+  const { value } = extractJson(trimmed, { shapePredicate: isEnvelope, skipInnerFence: true });
   // Re-verify the shape: extractJson falls back to the first block that merely
   // PARSED (ignoring the predicate) when none matched, so an incidental
   // non-envelope object must not be adopted as a payload.

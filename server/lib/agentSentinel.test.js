@@ -83,6 +83,20 @@ describe('agentSentinel', () => {
       expect(payload).toEqual({ proposal: { slug: 'x', body: 'line one\nline two\ttabbed' } });
     });
 
+    it('recovers an envelope whose proposal body contains a markdown code fence', async () => {
+      // A reasoner proposing code writes a ```-fenced snippet into the body
+      // string. The inner-fence heuristic would otherwise lock onto that body
+      // fence and discard the envelope — salvage must skip it.
+      const withCodeBody = {
+        summary: 's',
+        payload: { proposal: { slug: 'x', body: 'Change this:\n```js\nconst a = 1;\n```\ndone' } }
+      };
+      // Both a fenced-wrapper form and a raw (unwrapped) form must recover.
+      const fenced = '```json\n' + JSON.stringify(withCodeBody) + '\n```';
+      expect((await salvageSentinelPayload(fenced)).payload).toEqual(withCodeBody.payload);
+      expect((await salvageSentinelPayload(JSON.stringify(withCodeBody))).payload).toEqual(withCodeBody.payload);
+    });
+
     it('does NOT misread a legacy markdown summary as structured', async () => {
       const md = '## Done\n\nRefactored `foo()` to return `{ ok: true }` on success.';
       expect(await salvageSentinelPayload(md)).toEqual({ summary: md, payload: null });

@@ -245,12 +245,19 @@ function safeParse(text) {
  *   skip in-prompt schema examples that parse cleanly but aren't the answer.
  * @param {'object'|'array'} [options.blockType='object'] — top-level shape
  *   to walk for (`{...}` vs `[...]`).
+ * @param {boolean} [options.skipInnerFence=false] — skip the "first inner
+ *   ```…``` block" heuristic (see below). Set this when the JSON's own string
+ *   VALUES may contain fenced markdown (e.g. a proposal `body` with a code
+ *   snippet): the heuristic would otherwise lock onto that inner fence and
+ *   discard the surrounding object. Only the outer-wrapper strip
+ *   (`stripCodeFences`) runs, then balanced-block walking — which is
+ *   string-aware, so backticks inside a JSON string can't derail it.
  * @returns {{ value:unknown, lastError?:Error, lastPreview?:string }}
  *   — `value` is the parsed block, or `undefined` when no block matches.
  *   On no-match, `lastError` + `lastPreview` (200-char excerpt of the last
  *   candidate text) are populated for use in caller error messages.
  */
-export function extractJson(text, { shapePredicate, blockType = 'object' } = {}) {
+export function extractJson(text, { shapePredicate, blockType = 'object', skipInnerFence = false } = {}) {
   if (typeof text !== 'string' || !text.trim()) {
     return { value: undefined, lastError: new Error('Empty LLM response'), lastPreview: '' };
   }
@@ -263,9 +270,13 @@ export function extractJson(text, { shapePredicate, blockType = 'object' } = {})
   // prompt-echo content BEFORE the real response should skip this
   // helper and walk the full text directly (see stageRunner.extractJson)
   // — the first-fence heuristic locks onto the echoed schema and never
-  // reaches the actual model output.
-  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
-  if (fence) s = fence[1].trim();
+  // reaches the actual model output. skipInnerFence disables it for callers
+  // whose JSON string values legitimately contain fenced markdown (the fence
+  // is content, not a wrapper) — see the option doc above.
+  if (!skipInnerFence) {
+    const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (fence) s = fence[1].trim();
+  }
 
   const { startChar, endChar } = blockType === 'array'
     ? { startChar: '[', endChar: ']' }
