@@ -42,5 +42,7 @@ describe('TasksTab Run Now', () => {
 
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Evaluation triggered'));
     expect(toast.error).not.toHaveBeenCalled();
+    // Must pass { silent: true } so the custom catch is the only error toast.
+    expect(api.forceCosEvaluate).toHaveBeenCalledWith({ silent: true });
   });
 });

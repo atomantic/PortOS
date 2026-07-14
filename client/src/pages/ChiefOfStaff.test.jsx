@@ -71,7 +71,7 @@ const renderConfigTab = () => render(
 );
 
 describe('ChiefOfStaff handleForceEvaluate', () => {
-  it('does not toast success when the evaluate request fails', async () => {
+  it('does not toast success or advance the status message when the evaluate fails', async () => {
     api.forceCosEvaluate.mockRejectedValue(new Error('evaluate failed'));
     renderConfigTab();
 
@@ -80,9 +80,13 @@ describe('ChiefOfStaff handleForceEvaluate', () => {
 
     await waitFor(() => expect(toast.error).toHaveBeenCalledWith('evaluate failed'));
     expect(toast.success).not.toHaveBeenCalled();
+    // State contract: a failed evaluate must NOT switch the status bubble to the
+    // "Evaluating tasks..." (thinking) message — it stays on the idle message.
+    expect(screen.queryAllByText('Evaluating tasks...')).toHaveLength(0);
+    expect(screen.queryAllByText('Idle - waiting for tasks...').length).toBeGreaterThan(0);
   });
 
-  it('toasts success only after the evaluate request resolves', async () => {
+  it('toasts success and advances the status message after the evaluate resolves', async () => {
     api.forceCosEvaluate.mockResolvedValue({ success: true });
     renderConfigTab();
 
@@ -91,5 +95,9 @@ describe('ChiefOfStaff handleForceEvaluate', () => {
 
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Evaluation triggered'));
     expect(toast.error).not.toHaveBeenCalled();
+    // State contract: success advances the status bubble to the evaluating message.
+    await waitFor(() => expect(screen.queryAllByText('Evaluating tasks...').length).toBeGreaterThan(0));
+    // Must pass { silent: true } so the custom catch is the only error toast.
+    expect(api.forceCosEvaluate).toHaveBeenCalledWith({ silent: true });
   });
 });

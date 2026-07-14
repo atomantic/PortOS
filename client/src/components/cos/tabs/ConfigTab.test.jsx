@@ -70,6 +70,8 @@ describe('ConfigTab handleSave', () => {
 
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Configuration updated'));
     expect(onUpdate).toHaveBeenCalled();
+    // The PUT must pass { silent: true } so the custom catch is the only error toast.
+    expect(api.updateCosConfig).toHaveBeenCalledWith(expect.any(Object), { silent: true });
     // Editor closed — the Edit button is back.
     expect(screen.getByRole('button', { name: /Edit/i })).toBeInTheDocument();
   });
@@ -104,7 +106,7 @@ describe('ConfigTab handleLevelChange', () => {
     expect(rowValue('Max Concurrent Agents')('3')).toBeInTheDocument();
   });
 
-  it('keeps the optimistic params and toasts the label after the change resolves', async () => {
+  it('keeps the optimistic params and toasts the label (silently) after the change resolves', async () => {
     api.updateCosConfig.mockResolvedValue({ success: true });
     render(<ConfigTab config={config} onUpdate={vi.fn()} onEvaluate={vi.fn()} avatarStyle="svg" setAvatarStyle={vi.fn()} />);
 
@@ -113,5 +115,35 @@ describe('ConfigTab handleLevelChange', () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Autonomy level set to Standby'));
     // Optimistic value persisted (Standby → maxConcurrentAgents: 1).
     expect(rowValue('Max Concurrent Agents')('1')).toBeInTheDocument();
+    // The PUT must pass { silent: true } so the custom catch is the only error toast.
+    expect(api.updateCosConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ maxConcurrentAgents: 1 }),
+      { silent: true },
+    );
+  });
+
+  it('does not clobber a newer successful preset when an earlier request fails late', async () => {
+    // Standby's PUT stays pending; YOLO's resolves first. When Standby then
+    // rejects, its rollback must NOT restore stale values over YOLO's now-
+    // persisted preset — only keys still holding Standby's optimistic value revert.
+    let rejectStandby;
+    api.updateCosConfig.mockImplementation((params) => {
+      if (params.maxConcurrentAgents === 1) {
+        return new Promise((_, reject) => { rejectStandby = () => reject(new Error('boom')); });
+      }
+      return Promise.resolve({ success: true });
+    });
+    render(<ConfigTab config={config} onUpdate={vi.fn()} onEvaluate={vi.fn()} avatarStyle="svg" setAvatarStyle={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Standby' })); // optimistic → 1 (pending)
+    fireEvent.click(screen.getByRole('button', { name: 'YOLO' }));    // optimistic → 5 (resolves)
+
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Autonomy level set to YOLO'));
+    expect(rowValue('Max Concurrent Agents')('5')).toBeInTheDocument();
+
+    rejectStandby();
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('boom'));
+    // YOLO's value survives — the stale Standby rollback must not reset it to 3.
+    expect(rowValue('Max Concurrent Agents')('5')).toBeInTheDocument();
   });
 });

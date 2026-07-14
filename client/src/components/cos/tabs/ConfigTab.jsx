@@ -280,11 +280,8 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
   });
 
   const handleLevelChange = async (params, label) => {
-    // Optimistically reflect the new params via a functional update, but revert
-    // ONLY the keys we set if the PUT fails — snapshotting and restoring the whole
-    // formData would clobber unrelated edits (or a later level pick) the user made
-    // while this request was in flight. Success toast / refresh only fire after the
-    // request resolves.
+    // Optimistically reflect the new params via a functional update. Success toast
+    // / refresh only fire after the request resolves.
     const revertKeys = Object.fromEntries(Object.keys(params).map(k => [k, formData[k]]));
     setFormData(prev => ({ ...prev, ...params }));
     try {
@@ -292,7 +289,16 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
       if (label) toast.success(`Autonomy level set to ${label}`);
       onUpdate();
     } catch (err) {
-      setFormData(prev => ({ ...prev, ...revertKeys }));
+      // Roll back only keys still holding THIS request's optimistic value — a newer
+      // successful level pick (or edit) to the same key must win, so a late-failing
+      // request can't clobber it with the stale value it captured at click time.
+      setFormData(prev => {
+        const next = { ...prev };
+        for (const key of Object.keys(params)) {
+          if (prev[key] === params[key]) next[key] = revertKeys[key];
+        }
+        return next;
+      });
       toast.error(err.message);
     }
   };
