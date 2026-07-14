@@ -161,16 +161,26 @@ export function buildEffortArgs(effort, provider, existingArgs = []) {
 export const CODEX_UPDATE_CHECK_KEY = 'check_for_update_on_startup';
 
 /**
- * True when the codex argv already pins the startup-update-check config (a
- * `-c check_for_update_on_startup=<v>` pair). Mirrors `hasEffortFlag`'s
- * config-pin scan (null-safe, matches the value element of the pair) so a
- * caller-supplied value wins over the injected default.
+ * True when the codex argv already pins the startup-update-check config, so a
+ * caller-supplied value wins over the injected default. Null-safe. Recognizes
+ * every codex override syntax for the key: the separate-arg value element of
+ * `-c <key>=<v>` / `--config <key>=<v>` (which arrives as a standalone
+ * `<key>=<v>` token), AND the joined forms `--config=<key>=<v>` / `-c=<key>=<v>`
+ * (a single token). Missing the joined form would inject a second, conflicting
+ * `-c <key>=false` that silently overrides the user's explicit value.
  * @param {unknown[]} args
  * @returns {boolean}
  */
 export function hasCodexUpdateCheckConfig(args) {
   if (!Array.isArray(args)) return false;
-  return args.some((a) => typeof a === 'string' && a.startsWith(`${CODEX_UPDATE_CHECK_KEY}=`));
+  const pin = `${CODEX_UPDATE_CHECK_KEY}=`;
+  return args.some((a) => {
+    if (typeof a !== 'string') return false;
+    if (a.startsWith(pin)) return true; // standalone value of `-c`/`--config <key>=<v>`
+    // Joined `--config=<key>=<v>` / `-c=<key>=<v>` — strip the flag prefix, then test.
+    const joined = a.startsWith('--config=') ? a.slice(9) : a.startsWith('-c=') ? a.slice(3) : null;
+    return joined !== null && joined.startsWith(pin);
+  });
 }
 
 /**

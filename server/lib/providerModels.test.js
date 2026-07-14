@@ -253,6 +253,13 @@ describe('providerModels', () => {
     it('detects a baked check_for_update_on_startup config pair (any value)', () => {
       expect(hasCodexUpdateCheckConfig(['-c', `${CODEX_UPDATE_CHECK_KEY}=false`])).toBe(true);
       expect(hasCodexUpdateCheckConfig(['-c', `${CODEX_UPDATE_CHECK_KEY}=true`])).toBe(true);
+      // separate-arg `--config` long form
+      expect(hasCodexUpdateCheckConfig(['--config', `${CODEX_UPDATE_CHECK_KEY}=true`])).toBe(true);
+    });
+
+    it('detects the joined `--config=<key>=<v>` / `-c=<key>=<v>` forms', () => {
+      expect(hasCodexUpdateCheckConfig([`--config=${CODEX_UPDATE_CHECK_KEY}=true`])).toBe(true);
+      expect(hasCodexUpdateCheckConfig([`-c=${CODEX_UPDATE_CHECK_KEY}=false`])).toBe(true);
     });
 
     it('is false for unrelated args, non-arrays, and non-string elements', () => {
@@ -271,6 +278,7 @@ describe('providerModels', () => {
 
     it('returns [] when the user already pinned the key (their value wins)', () => {
       expect(buildCodexStartupArgs(['-c', `${CODEX_UPDATE_CHECK_KEY}=true`])).toEqual([]);
+      expect(buildCodexStartupArgs([`--config=${CODEX_UPDATE_CHECK_KEY}=true`])).toEqual([]);
     });
   });
 
