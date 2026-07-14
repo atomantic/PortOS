@@ -11,6 +11,7 @@ import { ensureProviderReady as ensureOllamaProviderReady, isOllamaProvider } fr
 // eagerly import fileUtils `PATHS`) into every aiProvider consumer's module
 // graph, breaking suites that partial-mock fileUtils without PATHS.
 import { readResponseJson } from './readResponseJson.js';
+import { evaluateSecretEndpoint } from './aiToolkit/internal/endpointGuard.js';
 
 const isAPI = (p) => p && p.type === 'api' && p.enabled !== false;
 
@@ -132,7 +133,17 @@ async function ensureLMStudioModelLoaded(provider, statusOp) {
 
 async function postChatCompletion(provider, model, prompt, { temperature, max_tokens, timeout }) {
   const headers = { 'Content-Type': 'application/json' };
-  if (provider.apiKey) headers['Authorization'] = `Bearer ${provider.apiKey}`;
+  if (provider.apiKey) {
+    // Never send the API key to an arbitrary/metadata host (SSRF / key
+    // exfiltration). Keyless local-LLM calls skip this guard entirely.
+    const guard = evaluateSecretEndpoint(provider.endpoint, {
+      allowCustomEndpoint: provider.allowCustomEndpoint === true,
+    });
+    if (!guard.allowed) {
+      return { error: `Provider endpoint blocked: ${guard.reason}` };
+    }
+    headers['Authorization'] = `Bearer ${provider.apiKey}`;
+  }
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeout);

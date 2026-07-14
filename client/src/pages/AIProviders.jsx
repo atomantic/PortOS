@@ -717,6 +717,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
     args: provider?.args?.join(' ') || '',
     endpoint: provider?.endpoint || '',
     apiKey: '',
+    allowCustomEndpoint: provider?.allowCustomEndpoint === true,
     models: provider?.models || [],
     defaultModel: provider?.defaultModel || '',
     lightModel: provider?.lightModel || '',
@@ -960,6 +961,23 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                   placeholder={provider?.hasApiKey ? 'Key set — leave blank to keep' : 'Optional'}
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                 />
+              </FormField>
+
+              <FormField label="Custom endpoint">
+                <label htmlFor="allowCustomEndpoint" className="flex items-start gap-2 cursor-pointer">
+                  <input
+                    id="allowCustomEndpoint"
+                    type="checkbox"
+                    checked={formData.allowCustomEndpoint}
+                    onChange={(e) => setFormData(prev => ({ ...prev, allowCustomEndpoint: e.target.checked }))}
+                    className="mt-1"
+                  />
+                  <span className="text-sm text-gray-300">
+                    Allow sending the API key to this custom (non-local, non-allowlisted) endpoint.
+                    Loopback/LAN and known providers (OpenAI, Anthropic, OpenRouter, …) are always allowed;
+                    cloud-metadata hosts are always blocked. Leave off unless you trust this host.
+                  </span>
+                </label>
               </FormField>
             </>
           )}

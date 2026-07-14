@@ -2,6 +2,7 @@ import { readFile, rename } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, dirname, delimiter, isAbsolute } from 'path';
 import { atomicWrite } from './internal/atomicWrite.js';
+import { assertSecretEndpoint, evaluateSecretEndpoint } from './internal/endpointGuard.js';
 import { fileURLToPath } from 'url';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
@@ -452,6 +453,10 @@ export function createProviderService(config = {}) {
         // Claude Ollama marker — preserve so adopting the sample via POST drives
         // ollama-backed model refresh (see isOllamaBackedProvider).
         ...(providerData.ollamaBacked === true ? { ollamaBacked: true } : {}),
+        // Explicit opt-in to send the API key to an arbitrary (non-local,
+        // non-allowlisted) endpoint — see internal/endpointGuard.js. Only
+        // persisted when true so existing keyless/local providers stay clean.
+        ...(providerData.allowCustomEndpoint === true ? { allowCustomEndpoint: true } : {}),
         envVars: providerData.envVars || {},
         secretEnvVars: providerData.secretEnvVars || [],
         headlessArgs: providerData.headlessArgs || [],
@@ -596,6 +601,16 @@ export function createProviderService(config = {}) {
       }
 
       if (provider.type === 'api') {
+        // Never send the API key to an arbitrary/metadata host (SSRF / key
+        // exfiltration). Keyless local-LLM checks are unaffected.
+        if (provider.apiKey) {
+          const guard = evaluateSecretEndpoint(provider.endpoint, {
+            allowCustomEndpoint: provider.allowCustomEndpoint === true,
+          });
+          if (!guard.allowed) {
+            return { success: false, error: `Endpoint blocked: ${guard.reason}` };
+          }
+        }
         const modelsUrl = `${provider.endpoint}/models`;
         const response = await fetch(modelsUrl, {
           headers: provider.apiKey ? { 'Authorization': `Bearer ${provider.apiKey}` } : {},
@@ -669,6 +684,13 @@ export function createProviderService(config = {}) {
           }
         }
       }
+
+      // Guard before attaching the API key to a generic /models fetch so a
+      // hostile/mistyped endpoint can't harvest a paid LLM key (SSRF).
+      assertSecretEndpoint(provider.endpoint, {
+        hasSecret: Boolean(provider.apiKey),
+        allowCustomEndpoint: provider.allowCustomEndpoint === true,
+      });
 
       const modelsUrl = `${provider.endpoint}/models`;
       const headers = {};
