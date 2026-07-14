@@ -90,6 +90,8 @@ describe('codex provider — generateImage', () => {
     expect(args).toContain('--skip-git-repo-check');
     expect(args).toContain('--sandbox');
     expect(args).toContain('workspace-write');
+    // Codex's startup update check is disabled so image-gen never stalls on it.
+    expect(args).toEqual(expect.arrayContaining(['-c', 'check_for_update_on_startup=false']));
     expect(args).toContain('-m');
     expect(args).toContain('gpt-5.4');
     // The prompt must be prefixed with `$imagegen ` so codex's bundled
