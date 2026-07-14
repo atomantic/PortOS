@@ -186,8 +186,9 @@ export default function Wiki() {
 
       <TabPills tabs={TABS} activeTab={activeTab} onChange={(id) => navigate({ pathname: `/wiki/${id}`, search: searchParams.toString() })} ariaLabel="Wiki sections" />
 
-      {/* Tab content */}
-      <div className="flex-1 overflow-auto p-4">
+      {/* Tab content — Browse manages its own list/detail scroll, so it gets a
+          bare flex-fill parent (no padding/scroll) instead of the padded scroller. */}
+      <div className={activeTab === 'browse' ? 'flex-1 min-h-0 flex' : 'flex-1 overflow-auto p-4'}>
         {renderTabContent()}
       </div>
     </div>
