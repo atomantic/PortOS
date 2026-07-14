@@ -14,7 +14,8 @@ const router = Router();
 router.get('/', asyncHandler(async (req, res) => {
   const query = validateRequest(usageQuerySchema, req.query);
   const { from, to } = resolveUsageRange(query);
-  const providers = await getAllProviders();
+  const result = await getAllProviders();
+  const providers = Array.isArray(result) ? result : (result?.providers || []);
   const summary = usage.getUsageSummary({ from, to, providers });
   res.json(summary);
 }));

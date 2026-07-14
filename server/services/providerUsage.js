@@ -279,7 +279,8 @@ const fetchFamilyQuota = (family, { refresh }) =>
  * as `error` entries.
  */
 export async function getProviderQuotas({ refresh = false } = {}) {
-  const providers = await getAllProviders();
+  const result = await getAllProviders();
+  const providers = Array.isArray(result) ? result : (result?.providers || []);
   const families = resolveEnabledFamilies(providers);
   return Promise.all(families.map((family) => fetchFamilyQuota(family, { refresh })));
 }

@@ -3,13 +3,16 @@ import { describe, it, expect, vi } from 'vitest';
 // providerUsage imports the provider config service (toolkit-backed) and the
 // claude CLI wrapper — mock both so this suite stays hermetic.
 vi.mock('./providers.js', () => ({
-  getAllProviders: vi.fn().mockResolvedValue([])
+  // getAllProviders returns the wrapped { activeProvider, providers } shape —
+  // getProviderQuotas must unwrap `.providers` before resolving families.
+  getAllProviders: vi.fn().mockResolvedValue({ activeProvider: null, providers: [] })
 }));
 vi.mock('./claudeCodeUsage.js', () => ({
   getClaudeCodeUsage: vi.fn()
 }));
 
-import { parseCodexRateLimits, mapCodexQuota, resolveEnabledFamilies } from './providerUsage.js';
+import { parseCodexRateLimits, mapCodexQuota, resolveEnabledFamilies, getProviderQuotas } from './providerUsage.js';
+import { getAllProviders } from './providers.js';
 
 // Synthetic rollout line matching the codex event_msg/token_count shape —
 // invented values only, never a transcript from a real session.
@@ -97,5 +100,20 @@ describe('resolveEnabledFamilies', () => {
   it('returns empty for empty/undefined provider lists', () => {
     expect(resolveEnabledFamilies([])).toEqual([]);
     expect(resolveEnabledFamilies(undefined)).toEqual([]);
+  });
+});
+
+describe('getProviderQuotas', () => {
+  it('unwraps the { providers } object shape from getAllProviders', async () => {
+    // Regression: getAllProviders returns { activeProvider, providers }, not a
+    // bare array — passing the object straight into resolveEnabledFamilies threw
+    // "(providers || []).filter is not a function" and broke the Usage page.
+    getAllProviders.mockResolvedValueOnce({
+      activeProvider: 'grok',
+      providers: [{ id: 'grok', enabled: true, type: 'api', endpoint: 'https://api.x.ai/v1' }]
+    });
+    const quotas = await getProviderQuotas();
+    expect(Array.isArray(quotas)).toBe(true);
+    expect(quotas.map((q) => q.family)).toEqual(['grok']);
   });
 });
