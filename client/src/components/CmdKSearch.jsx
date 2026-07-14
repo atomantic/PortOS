@@ -170,12 +170,16 @@ export default function CmdKSearch() {
       return;
     }
     setLoading(true);
+    // Mirror the catalog effect's cancelled guard so a slow in-flight
+    // response for an older query can't overwrite results for a newer one
+    // (or flip loading off) after the user has typed on.
+    let cancelled = false;
     const timer = setTimeout(() => {
       search(query)
-        .then((data) => setSearchResults(data?.sources ?? []))
-        .finally(() => setLoading(false));
+        .then((data) => { if (!cancelled) setSearchResults(data?.sources ?? []); })
+        .finally(() => { if (!cancelled) setLoading(false); });
     }, 300);
-    return () => clearTimeout(timer);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [query]);
 
   useEffect(() => {
