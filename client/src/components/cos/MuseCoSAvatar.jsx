@@ -1,34 +1,54 @@
-import { useRef, useMemo, useEffect, useState, Suspense } from 'react';
+import { useRef, useMemo, useEffect, useState, useCallback, Suspense, Component } from 'react';
 import { Canvas, useFrame } from '@react-three/fiber';
-import { useGLTF, Sparkles } from '@react-three/drei';
+import { useGLTF, useAnimations, Sparkles } from '@react-three/drei';
 import * as THREE from 'three';
-import { AGENT_STATES } from './constants';
+import { SkeletonUtils } from 'three-stdlib';
+import {
+  AGENT_STATES,
+  MUSE_STATE_ANIMATIONS,
+  MUSE_ANIMATION_FALLBACK,
+  MUSE_SPEAKING_GESTURE,
+} from './constants';
 import CoSAvatarOrbitControls from './CoSAvatarOrbitControls';
 import CoSAvatarFrame from './CoSAvatarFrame';
 import CoSBackgroundCamera from './CoSBackgroundCamera';
 
 const MODEL_URL = '/api/avatar/model.glb';
+const FADE = 0.35; // crossfade seconds between state loops
 
-// Loaded head wrapped in a holographic material treatment.
-// Works with any rigged or static GLB — we auto-fit the bounding box
-// so the head fills the viewport regardless of original scale/origin.
-function GLBHead({ color, state, speaking }) {
+// Loaded avatar wrapped in a holographic material treatment. When the GLB
+// ships animation clips (the bundled RobotExpressive default does), an
+// AnimationMixer drives the skeleton per CoS state and `speaking`; otherwise it
+// falls back to the fully-procedural rotation/glow so static GLBs still render.
+function GLBAvatar({ color, state, speaking }) {
   const gltf = useGLTF(MODEL_URL);
   const ref = useRef();
 
-  // Clone so the cache copy isn't mutated.
-  const scene = useMemo(() => gltf.scene.clone(true), [gltf.scene]);
+  // SkeletonUtils.clone rebinds SkinnedMeshes to the cloned skeleton so the
+  // AnimationMixer actually deforms the visible mesh. A plain scene.clone(true)
+  // leaves the mixer driving bones the rendered mesh no longer references, so
+  // nothing would move — the reason clips were previously ignored.
+  const scene = useMemo(() => SkeletonUtils.clone(gltf.scene), [gltf.scene]);
+  const { actions, names, mixer } = useAnimations(gltf.animations, scene);
+  const hasClips = names.length > 0;
 
-  // Auto-fit to viewport + apply holographic material.
+  // Materials to pulse each frame (collected once so we don't traverse the
+  // whole scene graph on every frame).
+  const matsRef = useRef([]);
+
+  // Auto-fit to viewport + apply holographic material. Replacing the material
+  // does NOT affect skinning — the skeleton drives deformation regardless of
+  // the material bound to the SkinnedMesh, so clips still animate the body.
   useEffect(() => {
-    // Replace all mesh materials with a dark base + emissive glow that
-    // picks up the current state color. This avoids skin-tone uncanny
-    // valley and keeps the silhouette consistent with other avatars.
+    const mats = [];
     scene.traverse((obj) => {
       if (!obj.isMesh) return;
       obj.castShadow = false;
       obj.receiveShadow = false;
-      obj.material = new THREE.MeshStandardMaterial({
+      // Animated poses (arms out, jump) can exceed the bind-pose bounding box;
+      // disable frustum culling so the avatar never blinks out mid-clip.
+      obj.frustumCulled = false;
+      const material = new THREE.MeshStandardMaterial({
         color: '#120820',
         emissive: color,
         emissiveIntensity: 0.55,
@@ -38,7 +58,10 @@ function GLBHead({ color, state, speaking }) {
         opacity: 0.94,
         side: THREE.FrontSide,
       });
+      obj.material = material;
+      mats.push(material);
     });
+    matsRef.current = mats;
 
     // Fit bounding box into a fixed height so different models render consistently.
     const box = new THREE.Box3().setFromObject(scene);
@@ -54,19 +77,103 @@ function GLBHead({ color, state, speaking }) {
     );
   }, [scene, color]);
 
+  // --- Animation driving -------------------------------------------------
+  // The base loop we should return to when idle (updated by the state effect),
+  // plus a flag so a state change mid-gesture defers the crossfade to the
+  // gesture's finish handler instead of fighting it.
+  const activeRef = useRef(null);          // currently-playing action
+  const desiredBaseRef = useRef(null);     // { name, timeScale, once } to rest on
+  const gestureActiveRef = useRef(false);
+  const speakingRef = useRef(false);
+
+  // Crossfade the currently-active action to `clipName`.
+  const fadeTo = useCallback((clipName, opts = {}) => {
+    const next = actions[clipName];
+    if (!next) return;
+    const dur = opts.duration ?? FADE;
+    next.reset();
+    next.enabled = true;
+    next.setEffectiveTimeScale(opts.timeScale ?? 1);
+    next.setEffectiveWeight(1);
+    next.setLoop(opts.once ? THREE.LoopOnce : THREE.LoopRepeat, opts.once ? 1 : Infinity);
+    next.clampWhenFinished = !!opts.once;
+    next.fadeIn(dur).play();
+    const prev = activeRef.current;
+    if (prev && prev !== next) prev.fadeOut(dur);
+    activeRef.current = next;
+  }, [actions]);
+
+  // Resolve the base loop clip for the current state (guarded against a GLB
+  // that lacks the mapped clip).
+  const baseCfg = MUSE_STATE_ANIMATIONS[state] || {};
+  const baseClip = useMemo(() => {
+    if (!hasClips) return null;
+    if (baseCfg.clip && names.includes(baseCfg.clip)) return baseCfg.clip;
+    if (names.includes(MUSE_ANIMATION_FALLBACK)) return MUSE_ANIMATION_FALLBACK;
+    return names[0];
+  }, [hasClips, names, baseCfg.clip]);
+
+  // Play / crossfade the base state loop.
+  useEffect(() => {
+    if (!baseClip) return;
+    desiredBaseRef.current = { name: baseClip, timeScale: baseCfg.timeScale, once: baseCfg.once };
+    // Mid-gesture: don't crossfade now — the gesture's finish handler restores
+    // to whatever desiredBaseRef points at, so the latest state still wins.
+    if (gestureActiveRef.current) return;
+    fadeTo(baseClip, { timeScale: baseCfg.timeScale, once: baseCfg.once });
+  }, [fadeTo, baseClip, baseCfg.timeScale, baseCfg.once]);
+
+  // Persistent listener: when the one-shot speaking gesture finishes, hand
+  // control back to whatever base loop the current state wants (read live from
+  // desiredBaseRef, so a state change mid-gesture still lands correctly). Kept
+  // separate from the trigger effect below so that `speaking` flipping back to
+  // false mid-gesture can't tear down the restore path — the gesture always
+  // returns to a base loop instead of freezing on its end pose.
+  useEffect(() => {
+    if (!hasClips) return;
+    const gesture = actions[MUSE_SPEAKING_GESTURE];
+    const onFinished = (e) => {
+      if (!gestureActiveRef.current) return;
+      if (gesture && e.action !== gesture) return; // ignore base clips finishing
+      gestureActiveRef.current = false;
+      const rest = desiredBaseRef.current;
+      if (rest?.name) fadeTo(rest.name, { timeScale: rest.timeScale, once: rest.once, duration: 0.25 });
+    };
+    mixer.addEventListener('finished', onFinished);
+    return () => mixer.removeEventListener('finished', onFinished);
+  }, [fadeTo, hasClips, actions, mixer]);
+
+  // Speaking overlay: on the false→true edge, crossfade to the gesture once.
+  // The persistent listener above returns to the base loop when it finishes.
+  useEffect(() => {
+    if (!hasClips) return;
+    const was = speakingRef.current;
+    speakingRef.current = speaking;
+    if (!speaking || was) return; // only fire on the rising edge
+
+    const gesture = actions[MUSE_SPEAKING_GESTURE];
+    const base = desiredBaseRef.current;
+    if (!gesture || (base && gesture === actions[base.name])) return;
+
+    gestureActiveRef.current = true;
+    fadeTo(MUSE_SPEAKING_GESTURE, { once: true, duration: 0.2 });
+  }, [fadeTo, speaking, hasClips, actions]);
+
+  // Subtle container sway + holographic emissive pulse. The clip drives the
+  // body; this only adds the gentle float/glow that reads as "holographic".
   useFrame(({ clock }) => {
     const t = clock.getElapsedTime();
-    if (!ref.current) return;
-
-    const rotSpeed =
-      state === 'sleeping' ? 0.15 :
-      state === 'coding' ? 0.55 :
-      state === 'investigating' ? 0.4 :
-      state === 'thinking' ? 0.25 : 0.3;
-    ref.current.rotation.y = Math.sin(t * rotSpeed) * 0.25;
-    ref.current.rotation.x = speaking
-      ? Math.sin(t * 10) * 0.04
-      : Math.sin(t * 0.3) * 0.025;
+    if (ref.current) {
+      const rotSpeed =
+        state === 'sleeping' ? 0.15 :
+        state === 'coding' ? 0.55 :
+        state === 'investigating' ? 0.4 :
+        state === 'thinking' ? 0.25 : 0.3;
+      ref.current.rotation.y = Math.sin(t * rotSpeed) * 0.2;
+      ref.current.rotation.x = speaking
+        ? Math.sin(t * 10) * 0.03
+        : Math.sin(t * 0.3) * 0.02;
+    }
 
     const intensity =
       state === 'sleeping' ? 0.2 :
@@ -75,15 +182,15 @@ function GLBHead({ color, state, speaking }) {
       state === 'investigating' ? 0.7 + Math.sin(t * 5) * 0.25 :
       state === 'ideating' ? 0.8 + Math.sin(t * 4) * 0.4 :
       0.55;
-
-    scene.traverse((obj) => {
-      if (obj.isMesh && obj.material) {
-        obj.material.emissiveIntensity = intensity;
-      }
-    });
+    const mats = matsRef.current;
+    for (let i = 0; i < mats.length; i++) mats[i].emissiveIntensity = intensity;
   });
 
-  return <primitive ref={ref} object={scene} />;
+  return (
+    <group ref={ref}>
+      <primitive object={scene} />
+    </group>
+  );
 }
 
 function Halo({ color, state }) {
@@ -138,7 +245,7 @@ function Scene({ state, speaking, background }) {
       <pointLight position={[2, 3, 4]} intensity={0.6} color={color} />
       <pointLight position={[-2, 1, 3]} intensity={0.3} color="#f472b6" />
       <Halo color={color} state={state} />
-      <GLBHead color={color} state={state} speaking={speaking} />
+      <GLBAvatar color={color} state={state} speaking={speaking} />
       <StateEffects color={color} state={state} />
       <GroundGlow color={color} />
 
@@ -152,12 +259,31 @@ function MissingModelHint({ background = false }) {
     <div className={`${background ? 'relative w-full h-full min-h-full' : 'relative w-full max-w-[8rem] lg:max-w-[12rem] aspect-[5/6]'} flex flex-col items-center justify-center rounded-lg border border-port-border bg-port-card/60 text-center p-3`}>
       <div className="text-3xl mb-2">🎭</div>
       <div className="text-xs font-semibold text-gray-200 mb-1">No avatar model</div>
-      <div className="text-[10px] text-gray-400 mb-1.5">Drop a GLB at</div>
+      <div className="text-[10px] text-gray-400 mb-1.5">Run <code className="text-port-accent">npm run setup:data</code> or drop a GLB at</div>
       <code className="text-[9px] text-port-accent break-all leading-tight">
         data/avatar/model.glb
       </code>
     </div>
   );
+}
+
+// Error boundary so a corrupt/non-GLTF body (the HEAD probe only confirms
+// r.ok, not valid GLTF) degrades to the missing-model hint instead of
+// white-screening the whole CoS page.
+class AvatarErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { failed: false };
+  }
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  componentDidCatch(err) {
+    console.warn(`⚠️ Muse avatar failed to load: ${err?.message || err}`);
+  }
+  render() {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
 }
 
 function LoadingPlaceholder({ background = false }) {
@@ -189,15 +315,17 @@ export default function MuseCoSAvatar({ state, speaking, background = false }) {
 
   return (
     <CoSAvatarFrame label="Muse 3D avatar. Drag to rotate." background={background}>
-      <Canvas
-        camera={{ position: [0, 0, 3.3], fov: 45 }}
-        style={{ width: '100%', height: '100%', background: 'transparent' }}
-        gl={{ alpha: true, antialias: true }}
-      >
-        <Suspense fallback={null}>
-          <Scene state={state} speaking={speaking} background={background} />
-        </Suspense>
-      </Canvas>
+      <AvatarErrorBoundary fallback={<MissingModelHint background={background} />}>
+        <Canvas
+          camera={{ position: [0, 0, 3.3], fov: 45 }}
+          style={{ width: '100%', height: '100%', background: 'transparent' }}
+          gl={{ alpha: true, antialias: true }}
+        >
+          <Suspense fallback={null}>
+            <Scene state={state} speaking={speaking} background={background} />
+          </Suspense>
+        </Canvas>
+      </AvatarErrorBoundary>
     </CoSAvatarFrame>
   );
 }
