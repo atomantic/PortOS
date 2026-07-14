@@ -155,6 +155,53 @@ export function buildEffortArgs(effort, provider, existingArgs = []) {
     : ['--effort', effectiveEffort];
 }
 
+// Codex's config key (set via `-c <key>=<value>`) that gates its startup
+// update check. Kept as a named constant so a codex-side rename is a one-line
+// edit rather than a four-builder grep.
+export const CODEX_UPDATE_CHECK_KEY = 'check_for_update_on_startup';
+
+/**
+ * True when the codex argv already pins the startup-update-check config, so a
+ * caller-supplied value wins over the injected default. Null-safe. Recognizes
+ * every codex override syntax for the key: the separate-arg value element of
+ * `-c <key>=<v>` / `--config <key>=<v>` (which arrives as a standalone
+ * `<key>=<v>` token), AND the joined forms `--config=<key>=<v>` / `-c=<key>=<v>`
+ * (a single token). Missing the joined form would inject a second, conflicting
+ * `-c <key>=false` that silently overrides the user's explicit value.
+ * @param {unknown[]} args
+ * @returns {boolean}
+ */
+export function hasCodexUpdateCheckConfig(args) {
+  if (!Array.isArray(args)) return false;
+  const pin = `${CODEX_UPDATE_CHECK_KEY}=`;
+  return args.some((a) => {
+    if (typeof a !== 'string') return false;
+    if (a.startsWith(pin)) return true; // standalone value of `-c`/`--config <key>=<v>`
+    // Joined `--config=<key>=<v>` / `-c=<key>=<v>` — strip the flag prefix, then test.
+    const joined = a.startsWith('--config=') ? a.slice(9) : a.startsWith('-c=') ? a.slice(3) : null;
+    return joined !== null && joined.startsWith(pin);
+  });
+}
+
+/**
+ * The argv fragment that disables codex's interactive startup update check:
+ * `['-c', 'check_for_update_on_startup=false']`, or `[]` when a user-baked pin
+ * already sits in `existingArgs`. Codex checks GitHub for a newer release on
+ * every startup and, if one exists, an interactive run renders a BLOCKING
+ * "Update available! → 1. Update now" modal — a headless agent's submit-Enter
+ * lands on "Update now", triggering a ~100MB `brew upgrade` it can't complete,
+ * and the session dies without processing the prompt. Non-interactive `codex
+ * exec` runs never render the modal but still pay the check's network cost (and
+ * can trip an unattended upgrade), so every codex spawn builder spreads this.
+ * The one home for both the detection and the arg shape, so they can't drift.
+ * @param {unknown[]} [existingArgs]
+ * @returns {string[]}
+ */
+export function buildCodexStartupArgs(existingArgs = []) {
+  if (hasCodexUpdateCheckConfig(existingArgs)) return [];
+  return ['-c', `${CODEX_UPDATE_CHECK_KEY}=false`];
+}
+
 /**
  * True when a provider command points at the OpenCode binary — matching the bare
  * `opencode` on PATH OR an absolute/relative path to it (`/opt/homebrew/bin/opencode`,

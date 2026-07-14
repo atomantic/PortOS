@@ -17,7 +17,7 @@
  *   - Claude Code: `-p -`                (+ `--model <id>`)
  */
 
-import { resolveCliModel, hasModelFlag, resolveBedrockCliModel, prefixOpencodeModel, isOpencodeCommand } from './providerModels.js';
+import { resolveCliModel, hasModelFlag, resolveBedrockCliModel, prefixOpencodeModel, isOpencodeCommand, buildCodexStartupArgs } from './providerModels.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from './antigravity.js';
 import { isGrokCommand, ensureGrokHeadlessArgs } from './grok.js';
 
@@ -50,6 +50,10 @@ export function buildCliArgs(provider) {
   if (providerId === 'codex') {
     const hasExec = baseArgs.includes('exec');
     const args = hasExec ? [...baseArgs] : [...baseArgs, 'exec'];
+    // Disable codex's startup update check (see buildCodexStartupArgs) so a run
+    // never stalls on the update-check network round-trip or an unattended
+    // `brew upgrade` it can't complete headless. No-op when the user pinned it.
+    args.push(...buildCodexStartupArgs(baseArgs));
     if (effectiveDefaultModel) {
       args.push('--model', effectiveDefaultModel);
     }

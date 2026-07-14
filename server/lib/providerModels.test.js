@@ -28,6 +28,9 @@ import {
   resolveCliEffort,
   hasEffortFlag,
   buildEffortArgs,
+  CODEX_UPDATE_CHECK_KEY,
+  hasCodexUpdateCheckConfig,
+  buildCodexStartupArgs,
   isCodexProvider
 } from './providerModels.js';
 
@@ -243,6 +246,39 @@ describe('providerModels', () => {
       expect(hasEffortFlag(['--effort', '--verbose'])).toBe(false);
       expect(hasEffortFlag(['--model', 'gpt-5'])).toBe(false);
       expect(hasEffortFlag(null)).toBe(false);
+    });
+  });
+
+  describe('hasCodexUpdateCheckConfig', () => {
+    it('detects a baked check_for_update_on_startup config pair (any value)', () => {
+      expect(hasCodexUpdateCheckConfig(['-c', `${CODEX_UPDATE_CHECK_KEY}=false`])).toBe(true);
+      expect(hasCodexUpdateCheckConfig(['-c', `${CODEX_UPDATE_CHECK_KEY}=true`])).toBe(true);
+      // separate-arg `--config` long form
+      expect(hasCodexUpdateCheckConfig(['--config', `${CODEX_UPDATE_CHECK_KEY}=true`])).toBe(true);
+    });
+
+    it('detects the joined `--config=<key>=<v>` / `-c=<key>=<v>` forms', () => {
+      expect(hasCodexUpdateCheckConfig([`--config=${CODEX_UPDATE_CHECK_KEY}=true`])).toBe(true);
+      expect(hasCodexUpdateCheckConfig([`-c=${CODEX_UPDATE_CHECK_KEY}=false`])).toBe(true);
+    });
+
+    it('is false for unrelated args, non-arrays, and non-string elements', () => {
+      expect(hasCodexUpdateCheckConfig(['-c', 'model_reasoning_effort=high'])).toBe(false);
+      expect(hasCodexUpdateCheckConfig(['exec', '-'])).toBe(false);
+      expect(hasCodexUpdateCheckConfig(null)).toBe(false);
+      expect(hasCodexUpdateCheckConfig([undefined, 42])).toBe(false);
+    });
+  });
+
+  describe('buildCodexStartupArgs', () => {
+    it('emits the update-check disable pair when nothing is pinned', () => {
+      expect(buildCodexStartupArgs()).toEqual(['-c', `${CODEX_UPDATE_CHECK_KEY}=false`]);
+      expect(buildCodexStartupArgs(['exec', '-'])).toEqual(['-c', `${CODEX_UPDATE_CHECK_KEY}=false`]);
+    });
+
+    it('returns [] when the user already pinned the key (their value wins)', () => {
+      expect(buildCodexStartupArgs(['-c', `${CODEX_UPDATE_CHECK_KEY}=true`])).toEqual([]);
+      expect(buildCodexStartupArgs([`--config=${CODEX_UPDATE_CHECK_KEY}=true`])).toEqual([]);
     });
   });
 

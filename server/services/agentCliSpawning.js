@@ -27,7 +27,7 @@ import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
 import { isGrokCommand, ensureGrokHeadlessArgs, prepareGrokPromptFile } from '../lib/grok.js';
-import { resolveCliModel, buildEffortArgs, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs, providerSuppliesGithubToken } from '../lib/providerModels.js';
+import { resolveCliModel, buildEffortArgs, buildCodexStartupArgs, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { resolveForgeTokenEnv } from './git.js';
 import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
@@ -263,7 +263,17 @@ export function buildCliSpawnConfig(provider, model, settingsEnv = {}, { systemP
   // sandboxed" context this flag documents), matching how we already spawn the
   // other CLIs unrestricted.
   if (providerId === 'codex') {
-    const args = ['exec', '--dangerously-bypass-approvals-and-sandbox'];
+    // buildCodexStartupArgs disables codex's startup update check so a headless
+    // exec run never spends startup time hitting GitHub / kicking off a brew
+    // upgrade it can't complete unattended (the fatal interactive-modal variant
+    // is documented on buildCodexStartupArgs in providerModels.js). Injected
+    // UNCONDITIONALLY here (no provider.args passed): this branch builds codex's
+    // argv from scratch and never forwards provider.args, and a headless CoS
+    // agent can never dismiss the update modal — so the check must be off
+    // regardless of any provider.args pin. (Passing provider.args would detect a
+    // pin and skip injecting, but since the pin is never forwarded either, codex
+    // would fall back to its check-ON default — the exact wedge this prevents.)
+    const args = ['exec', '--dangerously-bypass-approvals-and-sandbox', ...buildCodexStartupArgs()];
     if (effectiveModel) {
       args.push('--model', effectiveModel);
     }

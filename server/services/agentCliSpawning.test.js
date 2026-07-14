@@ -185,13 +185,24 @@ describe('buildCliSpawnConfig', () => {
     // The bypass flag is the Codex equivalent of Claude/Antigravity's
     // --dangerously-skip-permissions. Without it, codex exec runs sandboxed (no network → `gh`
     // can't reach api.github.com) and non-interactive approval prompts get cancelled.
-    expect(config.args).toEqual(['exec', '--dangerously-bypass-approvals-and-sandbox']);
+    expect(config.args).toEqual(['exec', '--dangerously-bypass-approvals-and-sandbox', '-c', 'check_for_update_on_startup=false']);
   });
 
   it('passes explicit Codex model selections through alongside the sandbox bypass', () => {
     const config = buildCliSpawnConfig({ id: 'codex', command: 'codex' }, 'gpt-5.4');
 
-    expect(config.args).toEqual(['exec', '--dangerously-bypass-approvals-and-sandbox', '--model', 'gpt-5.4']);
+    expect(config.args).toEqual(['exec', '--dangerously-bypass-approvals-and-sandbox', '-c', 'check_for_update_on_startup=false', '--model', 'gpt-5.4']);
+  });
+
+  it('disables the codex update check unconditionally on the headless agent path (ignores provider.args)', () => {
+    // This builder constructs codex argv from scratch and never forwards
+    // provider.args, so a provider.args pin is NOT honored here — a headless CoS
+    // agent can never dismiss the update modal, so the check is always forced off.
+    const config = buildCliSpawnConfig(
+      { id: 'codex', command: 'codex', args: ['-c', 'check_for_update_on_startup=true'] },
+      'gpt-5.4',
+    );
+    expect(config.args).toContain('check_for_update_on_startup=false');
   });
 
   it('uses agy print mode for Antigravity without model flags', () => {
@@ -283,8 +294,7 @@ describe('buildCliSpawnConfig', () => {
   describe('reasoning-effort override', () => {
     it('adds a -c model_reasoning_effort pair for codex', () => {
       const config = buildCliSpawnConfig({ id: 'codex', command: 'codex' }, 'gpt-5.4', {}, { effort: 'xhigh' });
-      const idx = config.args.indexOf('-c');
-      expect(config.args[idx + 1]).toBe('model_reasoning_effort=xhigh');
+      expect(config.args).toContain('model_reasoning_effort=xhigh');
     });
 
     it('adds --effort for claude', () => {
@@ -298,7 +308,9 @@ describe('buildCliSpawnConfig', () => {
     });
 
     it('omits the flag entirely when no effort is set or the provider has no effort control', () => {
-      expect(buildCliSpawnConfig({ id: 'codex', command: 'codex' }, 'gpt-5.4').args).not.toContain('-c');
+      // Codex always carries `-c check_for_update_on_startup=false`, so assert the
+      // absence of the EFFORT config pair specifically, not any `-c`.
+      expect(buildCliSpawnConfig({ id: 'codex', command: 'codex' }, 'gpt-5.4').args.join(' ')).not.toContain('model_reasoning_effort');
       expect(buildCliSpawnConfig({ id: 'claude-code', command: 'claude' }, null).args).not.toContain('--effort');
       const grok = buildCliSpawnConfig({ id: 'grok-cli', command: 'grok', args: [] }, null, {}, { effort: 'high' });
       expect(grok.args.join(' ')).not.toContain('effort');
