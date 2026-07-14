@@ -95,9 +95,13 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
     : [];
 
   return (
-    <div className="flex -m-4" style={{ height: 'calc(100dvh - 220px)' }}>
-      {/* Left panel */}
-      <div className="w-80 border-r border-port-border flex flex-col shrink-0">
+    // Responsive list/detail: single column on mobile (tree hides once a note is
+    // opened; the detail pane's back button restores it), both panes from md+.
+    // Fills its flex parent (min-h-0) rather than a fixed calc() so a wrapped
+    // header never clips it.
+    <div className="grid grid-cols-1 md:grid-cols-[320px_1fr] grid-rows-1 h-full min-h-0 overflow-hidden">
+      {/* Left panel — tree/list. Hidden on mobile while a note is open. */}
+      <div className={`border-r border-port-border flex-col min-h-0 overflow-hidden ${selectedNote || loadingNote ? 'hidden md:flex' : 'flex'}`}>
         {/* Section toggle */}
         <div className="p-3 border-b border-port-border flex items-center gap-2">
           <button
@@ -194,8 +198,8 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
         </div>
       </div>
 
-      {/* Right panel: note viewer */}
-      <div className="flex-1 flex flex-col min-w-0">
+      {/* Right panel: note viewer. Hidden on mobile until a note is opened. */}
+      <div className={`flex-col min-w-0 min-h-0 overflow-hidden ${selectedNote || loadingNote ? 'flex' : 'hidden md:flex'}`}>
         {loadingNote ? (
           <div className="flex items-center justify-center h-full">
             <BrailleSpinner text="Loading" />
@@ -204,6 +208,13 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
           <>
             {/* Note header */}
             <div className="px-4 py-3 border-b border-port-border flex items-center gap-3">
+              <button
+                onClick={() => setSelectedNote(null)}
+                aria-label="Back to list"
+                className="p-1 rounded hover:bg-port-card text-gray-400 hover:text-white md:hidden"
+              >
+                <ArrowLeft size={16} />
+              </button>
               <div className="flex-1 min-w-0">
                 <h2 className="text-white font-medium truncate">{selectedNote.name}</h2>
                 <div className="flex items-center gap-3 text-xs text-gray-500">
@@ -266,7 +277,7 @@ export default function BrowseTab({ vaultId, notes, rawNotes, allNotes, onRefres
             )}
 
             {/* Note content */}
-            <div className="flex-1 overflow-auto flex">
+            <div className="flex-1 min-h-0 overflow-auto flex">
               <div className="flex-1 min-w-0">
                 {editing ? (
                   <textarea
