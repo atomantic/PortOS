@@ -25,12 +25,11 @@ import toast from '../../ui/Toast';
 import { formatDurationMs } from '../../../utils/formatters';
 import { narratePipelineProse } from '../../../services/api';
 import { STAGE_LABEL } from './constants';
+import { clickableProps } from '../../../lib/a11yKeyboard';
+import { safeReadStorage, safeWriteStorage } from '../../../lib/safeStorage';
 
 const NARRATOR_VOICE_KEY = 'portos.manuscript.narratorVoice';
-const initialVoice = () => {
-  if (typeof window === 'undefined') return '';
-  return window.localStorage.getItem(NARRATOR_VOICE_KEY) || '';
-};
+const initialVoice = () => safeReadStorage(NARRATOR_VOICE_KEY) || '';
 
 export default function ManuscriptReadAloud({ open, onClose, section }) {
   const content = section?.content || '';
@@ -181,7 +180,7 @@ export default function ManuscriptReadAloud({ open, onClose, section }) {
 
   const changeVoice = (next) => {
     setVoiceId(next);
-    if (typeof window !== 'undefined') window.localStorage.setItem(NARRATOR_VOICE_KEY, next || '');
+    safeWriteStorage(NARRATOR_VOICE_KEY, next || '');
     // Cached segments were synthesized with the prior voice — invalidate so the
     // next play re-synthesizes with the new narrator.
     resetNarration();
@@ -203,10 +202,8 @@ export default function ManuscriptReadAloud({ open, onClose, section }) {
       nodes.push(
         <span
           key={`seg-${seg.index}`}
-          role="button"
-          tabIndex={0}
+          {...clickableProps(() => jumpTo(seg.index))}
           onClick={() => jumpTo(seg.index)}
-          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); jumpTo(seg.index); } }}
           title={hard ? `Hard to say: ${reasons.join('; ')}` : undefined}
           className={[
             'cursor-pointer rounded transition-colors',

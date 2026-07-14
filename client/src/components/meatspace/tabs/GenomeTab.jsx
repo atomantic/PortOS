@@ -59,6 +59,7 @@ import { ATTACHMENT_MAX_FILE_SIZE } from '../../../utils/fileUpload';
 import GenomeCategoryCard from '../GenomeCategoryCard';
 import EpigeneticTracker from '../EpigeneticTracker';
 import ProvenanceChip from '../../ui/ProvenanceChip';
+import { clickableProps } from '../../../lib/a11yKeyboard';
 
 const CATEGORY_META = {
   longevity:          { emoji: '\u2728', label: 'Longevity',            color: 'purple' },
@@ -369,14 +370,7 @@ export default function GenomeTab() {
             onDragLeave={handleDragLeave}
             className="border-2 border-dashed border-port-border rounded-lg p-12 text-center transition-colors hover:border-gray-500 cursor-pointer focus:outline-none focus:border-port-accent"
             onClick={() => fileInputRef.current?.click()}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                fileInputRef.current?.click();
-              }
-            }}
-            role="button"
-            tabIndex={0}
+            {...clickableProps(() => fileInputRef.current?.click())}
             aria-label="Upload your 23andMe raw data file — drag and drop or activate to browse"
           >
             {uploading ? (

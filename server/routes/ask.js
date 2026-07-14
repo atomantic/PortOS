@@ -23,6 +23,7 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { awaitWritableDrain } from '../lib/streamBackpressure.js';
+import { SSE_HEADERS } from '../lib/sseHeaders.js';
 import * as convs from '../services/askConversations.js';
 import { runAsk, VALID_MODES } from '../services/askService.js';
 import { ID_RE as CONV_ID_RE } from '../services/askConversations.js';
@@ -144,13 +145,9 @@ router.post('/', asyncHandler(async (req, res) => {
   });
   conversation = afterUser;
 
-  // SSE handshake.
-  res.set({
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache, no-transform',
-    Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no',
-  });
+  // SSE handshake. Shared SSE_HEADERS plus `no-transform` — this stream must
+  // never be proxy-compressed/transformed, which the shared default omits.
+  res.set({ ...SSE_HEADERS, 'Cache-Control': 'no-cache, no-transform' });
   res.flushHeaders?.();
 
   // Propagate client disconnects (browser nav, tab close, abort) into

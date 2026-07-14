@@ -29,7 +29,7 @@
  * The pure mappers (video-id parse, day-label resolution, candidate mapping) are
  * exported and unit-tested against saved DOM-shaped fixtures — no browser or DB.
  */
-import { dataPath, ensureDir, atomicWrite, tryReadFile, safeJSONParse } from '../lib/fileUtils.js';
+import { dataPath, ensureDir, atomicWrite, tryReadFile, safeJSONParse, sleep } from '../lib/fileUtils.js';
 import { getUserTimezone, todayInTimezone } from '../lib/timezone.js';
 import { getSettings } from './settings.js';
 import { findOrOpenPage, listCdpPages, isAuthPage, evaluateOnPage } from './browserService.js';
@@ -252,8 +252,6 @@ async function writeSyncState(state) {
 // Browser helpers (side-effecting — CDP). Never throw to the caller: a scrape
 // failure returns a status report the UI renders (mirrors message lastSyncStatus).
 // ---------------------------------------------------------------------------
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Ensure the managed browser has the history page loaded and return the CDP page
 // object, or a { status } report when it can't. If a YouTube tab is open on a

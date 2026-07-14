@@ -39,6 +39,7 @@ import { usePipelineProgress } from '../hooks/usePipelineProgress';
 import { filterGenerationModels, mergeModelLists, localBackendForProvider, modelOptionLabel } from '../utils/providers';
 import useLocalModels from '../hooks/useLocalModels';
 import { locateAnchors } from '../lib/manuscriptAnchors';
+import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
 import ManuscriptLiveSection from '../components/pipeline/manuscript/ManuscriptLiveSection';
 import AnnotatedManuscriptSection from '../components/pipeline/manuscript/AnnotatedManuscriptSection';
 import ManuscriptCommentIndex from '../components/pipeline/manuscript/ManuscriptCommentIndex';
@@ -59,10 +60,7 @@ import {
 const EMPTY = [];
 
 const VIEW_MODE_KEY = 'portos.manuscript.viewMode';
-const initialViewMode = () => {
-  if (typeof window === 'undefined') return 'live';
-  return window.localStorage.getItem(VIEW_MODE_KEY) === 'review' ? 'review' : 'live';
-};
+const initialViewMode = () => (safeReadStorage(VIEW_MODE_KEY) === 'review' ? 'review' : 'live');
 
 export default function PipelineManuscriptEditor() {
   const params = useParams();
@@ -130,7 +128,7 @@ export default function PipelineManuscriptEditor() {
   const liveContentFor = (issueId) => liveSectionsRef.current.find((s) => s.issueId === issueId)?.content ?? '';
 
   useEffect(() => {
-    if (typeof window !== 'undefined') window.localStorage.setItem(VIEW_MODE_KEY, viewMode);
+    safeWriteStorage(VIEW_MODE_KEY, viewMode);
   }, [viewMode]);
 
   useEffect(() => {

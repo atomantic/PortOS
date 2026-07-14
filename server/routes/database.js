@@ -6,6 +6,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest, databaseSwitchSchema, databaseBackendSchema, databaseExportSchema } from '../lib/validation.js';
 import { checkHealth, query } from '../lib/db.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { stripAnsi } from '../lib/ansiStrip.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
 import { resolveBashBinary } from '../lib/bashResolver.js';
 
@@ -23,8 +24,6 @@ const dbScript = join(rootDir, 'scripts', 'db.sh').replace(/\\/g, '/');
 const bashBinary = resolveBashBinary();
 
 const router = Router();
-
-const stripAnsi = (s) => s.replace(/\x1b\[[0-9;]*m/g, '');
 
 /**
  * Run a command and return { stdout, stderr, exitCode }.

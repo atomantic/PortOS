@@ -67,6 +67,7 @@
 
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
+import { sleep } from '../../lib/fileUtils.js';
 import { broadcastSse, attachSseClient, SSE_CLEANUP_DELAY_MS } from '../../lib/sseUtils.js';
 import { getDomainMode } from '../../lib/domainAutonomy.js';
 import { parseComicScript } from '../../lib/comicScriptParser.js';
@@ -434,8 +435,6 @@ export const VISUAL_DRAFT_ENABLED = true;
 
 // Poll cadence while awaiting a delegated child runner (volume beats / auto-run).
 const CHILD_POLL_MS = 750;
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ---------------------------------------------------------------------------
 // Pure next-step resolver — the heart of the conductor (no I/O; unit-tested).
