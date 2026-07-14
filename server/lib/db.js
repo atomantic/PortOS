@@ -351,11 +351,13 @@ async function ensureSchemaImpl() {
   //     own retry/cleanup path (a failed CONCURRENT build leaves an INVALID index
   //     that must be dropped by hand), and roughly doubles build time — fragile to
   //     run unattended on every boot for a stall that only bites large-table upgrades.
-  //   If a future migration adds an index to a table known to already carry a large
-  //   row count on existing installs, prefer a versioned db-migration (see
-  //   server/scripts/db-migrations/) that issues CREATE INDEX CONCURRENTLY OUTSIDE a
-  //   transaction, rather than adding it here. See docs/STORAGE.md ("Boot schema
-  //   upgrades & the CREATE INDEX lock window").
+  //   If a future index must land on a table known to already carry a large row
+  //   count on existing installs, note that the standard db-migration runner
+  //   (server/scripts/run-db-migrations.js) wraps every migration in a
+  //   withTransaction() block, so CREATE INDEX CONCURRENTLY CANNOT run there
+  //   either — it must be issued from a dedicated non-transactional path (a
+  //   standalone maintenance script / manual step run outside any transaction).
+  //   See docs/STORAGE.md ("Boot schema upgrades & the CREATE INDEX lock window").
   const upgrades = [
     `ALTER TABLE memories ADD COLUMN IF NOT EXISTS sync_sequence BIGSERIAL`,
     `ALTER TABLE memories ADD COLUMN IF NOT EXISTS origin_instance_id VARCHAR(36)`,
