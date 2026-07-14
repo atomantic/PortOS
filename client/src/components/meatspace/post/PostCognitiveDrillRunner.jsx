@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Brain, Check, X, BookOpen, Play } from 'lucide-react';
 import { DRILL_LABELS, nBackBalancedAccuracy } from './constants';
+import { safeReadJsonStorage, safeWriteStorage } from '../../../lib/safeStorage.js';
 
 /**
  * Interactive runner for deterministic cognitive drills (n-back, digit-span,
@@ -67,14 +68,14 @@ function renderCognitiveDrill(shared) {
 // type is encountered, then never again (per-type flag in localStorage).
 // =============================================================================
 
-// One JSON blob keyed by drill type. SSR-guarded, mirroring the MorseTrainer
-// prefs pattern in this directory.
+// One JSON blob keyed by drill type. Reads/writes go through the shared
+// safeStorage helpers so a missing/blocked/corrupt store (SSR, Safari private
+// mode) can never crash the `useState` initializer that reads it — a storage
+// failure just means the tutorial shows again.
 const DRILL_TUTORIAL_SEEN_KEY = 'portos.post.drillTutorialSeen';
 
 function loadSeenTutorials() {
-  const raw = typeof window !== 'undefined' ? window.localStorage.getItem(DRILL_TUTORIAL_SEEN_KEY) : null;
-  if (!raw) return {};
-  const parsed = JSON.parse(raw);
+  const parsed = safeReadJsonStorage(DRILL_TUTORIAL_SEEN_KEY, {});
   return parsed && typeof parsed === 'object' ? parsed : {};
 }
 
@@ -83,11 +84,10 @@ export function hasSeenDrillTutorial(type) {
 }
 
 export function markDrillTutorialSeen(type) {
-  if (typeof window === 'undefined') return;
   const seen = loadSeenTutorials();
   if (seen[type]) return;
   seen[type] = true;
-  window.localStorage.setItem(DRILL_TUTORIAL_SEEN_KEY, JSON.stringify(seen));
+  safeWriteStorage(DRILL_TUTORIAL_SEEN_KEY, JSON.stringify(seen));
 }
 
 // Per-type how-to content. A pure function of the drill so config-dependent
