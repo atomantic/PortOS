@@ -143,6 +143,14 @@ The escape hatch is **guarded from bitrot by the test suite** (tests boot with `
 
 `PGPASSWORD`/`PGUSER`/`PGDATABASE`/`PGPORT` are resolved from `process.env` first, then `.env`, then the backward-compatible defaults (`portos`/`portos`/`portos`/`5432`). The default `portos` password is an **intentional** local-development fallback (see the Distribution model note in [`CLAUDE.md`](../CLAUDE.md)); production deployments override it via `PGPASSWORD`.
 
+### Boot schema upgrades & the CREATE INDEX lock window
+
+`ensureSchema()` in `server/lib/db.js` applies **idempotent** schema upgrades on every boot (`CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`). Every index it creates — including the HNSW vector index and the GIN full-text index on `catalog_scraps` — is a plain, **non-`CONCURRENT`** build.
+
+The **first** time a given index materializes on a table that **already holds many rows** (an existing install upgrading into a newly-added index), Postgres takes a `SHARE` lock that **blocks writes** (INSERT/UPDATE/DELETE) to that table until the build completes. So an existing install can see a one-time write stall at boot proportional to the table's row count — HNSW builds are the slowest. Fresh installs never see this: they build every index on an **empty** table, so the lock is effectively instant.
+
+This is left as-is deliberately rather than switched to `CREATE INDEX CONCURRENTLY`, because `CONCURRENTLY` cannot run inside a transaction block, needs its own retry/cleanup path (a failed concurrent build leaves an `INVALID` index that must be dropped by hand), and roughly doubles build time — too fragile to run unattended on every boot for a stall that only bites large-table upgrades. **If a future migration adds an index to a table known to already carry a large row count on existing installs, prefer a versioned db-migration** (`server/scripts/db-migrations/`) that issues `CREATE INDEX CONCURRENTLY` **outside** a transaction, rather than adding it to `ensureSchema()`.
+
 ---
 
 ## Adding a new data store? Answer these

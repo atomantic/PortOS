@@ -337,6 +337,25 @@ export async function ensureSchema() {
 }
 
 async function ensureSchemaImpl() {
+  // ⚠️ Boot CREATE INDEX lock window. Every `CREATE INDEX IF NOT EXISTS` below
+  // (and in the catalogDDL block, incl. the HNSW vector index on catalog_scraps)
+  // runs as a plain, non-CONCURRENT build. The FIRST time an index materializes
+  // on a table that ALREADY holds many rows, Postgres takes a SHARE lock that
+  // blocks writes (INSERT/UPDATE/DELETE) to that table until the build finishes —
+  // so an existing install upgrading into a new index sees a one-time write stall
+  // at boot proportional to that table's row count (HNSW builds are the slowest).
+  //   Why this is left as-is rather than switched to CONCURRENTLY:
+  //   - Fresh installs (the common case) build every index on an EMPTY table, so
+  //     the lock is effectively instant — there is nothing to block.
+  //   - CREATE INDEX CONCURRENTLY cannot run inside a transaction block, needs its
+  //     own retry/cleanup path (a failed CONCURRENT build leaves an INVALID index
+  //     that must be dropped by hand), and roughly doubles build time — fragile to
+  //     run unattended on every boot for a stall that only bites large-table upgrades.
+  //   If a future migration adds an index to a table known to already carry a large
+  //   row count on existing installs, prefer a versioned db-migration (see
+  //   server/scripts/db-migrations/) that issues CREATE INDEX CONCURRENTLY OUTSIDE a
+  //   transaction, rather than adding it here. See docs/STORAGE.md ("Boot schema
+  //   upgrades & the CREATE INDEX lock window").
   const upgrades = [
     `ALTER TABLE memories ADD COLUMN IF NOT EXISTS sync_sequence BIGSERIAL`,
     `ALTER TABLE memories ADD COLUMN IF NOT EXISTS origin_instance_id VARCHAR(36)`,
