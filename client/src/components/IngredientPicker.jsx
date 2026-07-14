@@ -25,6 +25,7 @@ import { Search, Plus, Loader2, X, Sparkles } from 'lucide-react';
 import Modal from './ui/Modal';
 import { listCatalogIngredients } from '../services/apiCatalog';
 import { CATALOG_BADGE_BY_ID, payloadSnippet } from '../lib/catalogTypes';
+import { clickableProps } from '../lib/a11yKeyboard';
 
 // Type chip color comes from the shared registry. Snippet uses the registry's
 // per-type fallback chain at a slightly longer cap for the picker rows.
@@ -222,8 +223,8 @@ export default function IngredientPicker({
               return (
                 <li key={it.id}>
                   {multi ? (
-                    <div role="button" tabIndex={0} onClick={() => toggleSelected(it.id)}
-                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleSelected(it.id); } }}
+                    <div onClick={() => toggleSelected(it.id)}
+                      {...clickableProps(() => toggleSelected(it.id))}
                       className={`${rowClass} cursor-pointer`}>
                       {inner}
                     </div>

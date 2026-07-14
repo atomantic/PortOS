@@ -35,6 +35,7 @@ import {
   READINESS_GATE_LABELS,
   READINESS_GATE_ORDER,
 } from '../../../lib/editorialHealth';
+import { clickableProps } from '../../../lib/a11yKeyboard';
 
 const SEVERITY_DOT = { high: 'bg-rose-400', medium: 'bg-amber-400', low: 'bg-gray-400' };
 
@@ -80,12 +81,10 @@ function Sparkline({ points, selectedIndex = null, onSelect }) {
             cx={c.x}
             cy={c.y}
             r={active ? 3.5 : isLast ? 2.5 : 2}
-            role="button"
-            tabIndex={0}
+            {...clickableProps(select)}
             aria-pressed={active}
             aria-label={`Revision ${i + 1} of ${coords.length}, score ${c.score}${active ? ' (selected)' : ''}`}
             onClick={select}
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); select(); } }}
             className={`cursor-pointer outline-none transition-all ${active ? 'fill-port-warning' : isLast ? 'fill-port-accent' : 'fill-port-accent/50 hover:fill-port-accent'}`}
           >
             <title>{`Revision ${i + 1} · score ${c.score}`}</title>
