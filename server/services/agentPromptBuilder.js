@@ -23,6 +23,7 @@ import { shellQuote } from '../lib/shellQuote.js';
 import * as jiraService from './jira.js';
 import { emitLog } from './cosEvents.js';
 import { PORTOS_APP_ID } from './apps.js';
+import { getCodeReviewDefaults } from './codeReview.js';
 
 const ROOT_DIR = PATHS.root;
 const AGENTS_DIR = PATHS.cosAgents;
@@ -626,8 +627,20 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   const providerCommand = options.providerCommand || null;
   const isTui = providerType === PROVIDER_TYPES.TUI;
 
+  // Install-wide default reviewer list (Code Review Defaults panel →
+  // `settings.codeReview.reviewers`). Threaded as the `normalizeReviewers`
+  // fallback so a task that pins no `reviewers` (e.g. every app-improve /
+  // self-improvement scheduled task) resolves to the configured default
+  // instead of the hardcoded `copilot` — which stalls the review loop on
+  // installs without GitHub Copilot review enabled (issue #2507). Unset →
+  // `['copilot']` (getCodeReviewDefaults returns the copilot fallback), so
+  // behavior is unchanged when nothing is configured. A settings read error
+  // degrades to the hardcoded default inside normalizeReviewers.
+  const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
+  const defaultReviewers = codeReviewDefaults?.reviewers;
+
   if (LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType)) {
-    const lightOptions = { isTui, providerId, providerCommand, leanMode: options.leanMode === true };
+    const lightOptions = { isTui, providerId, providerCommand, leanMode: options.leanMode === true, defaultReviewers };
     return options.split === true
       ? buildLightContextPromptParts(task, workspaceDir, worktreeInfo, isTruthyMetaFn, lightOptions)
       : buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTruthyMetaFn, lightOptions);
@@ -706,9 +719,10 @@ Use the findings from the previous stage to inform your work. If the previous st
 After completing your work and before committing, ${simplifyInstruction}. Fix any issues found, then ${worktreeInfo && willOpenPR ? 'commit your changes (do NOT push — on a successful run the system will push and open the PR after you exit; if the run fails, no push or PR happens)' : 'commit and push using `/do:push`'}.
 ` : '';
 
-  // Resolve the user's ordered reviewer list + flags (default `[copilot]`). Declared
-  // up here so the TUI completion block can thread `--review-with …` into `/do:pr`.
-  const taskReviewers = normalizeReviewers(task.metadata);
+  // Resolve the user's ordered reviewer list + flags (task metadata wins; else the
+  // install's configured Code Review Defaults; else `[copilot]`). Declared up here
+  // so the TUI completion block can thread `--review-with …` into `/do:pr`.
+  const taskReviewers = normalizeReviewers(task.metadata, defaultReviewers);
   const taskReviewerUsernames = normalizeReviewUsernames(task.metadata?.usernames);
   const taskOptionalReviewers = normalizeOptionalReviewers(task.metadata?.optionalReviewers) || [];
   const taskReviewStopMode = task.metadata?.reviewStopMode || DEFAULT_REVIEW_STOP_MODE;
@@ -968,7 +982,7 @@ export function buildLightContextPromptParts(task, workspaceDir, worktreeInfo, i
 
 const BEGIN_WORKING_LINE = 'Begin working on the task now.';
 
-function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMetaFn, { isTui = true, providerId = null, providerCommand = null, leanMode = false } = {}) {
+function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMetaFn, { isTui = true, providerId = null, providerCommand = null, leanMode = false, defaultReviewers } = {}) {
   // Idempotent with the reconcile in buildAgentPrompt; also protects the
   // directly-exported buildLightContextPrompt/Parts entry points.
   task = reconcileSplitContext(task);
@@ -979,9 +993,11 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   const discardWorktree = isTruthyMetaFn(task.metadata?.discardWorktree);
   const isReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
   const isWorktreeOnExistingBranch = worktreeInfo?.existingBranch === true;
-  // Ordered reviewer list + flags for the Review Loop (default `[copilot]`).
-  // Flows as `/do:pr --review-with a,b,c [--review-stop-on-*] [--reviewer-applies]`.
-  const lightReviewers = normalizeReviewers(task.metadata);
+  // Ordered reviewer list + flags for the Review Loop (task metadata wins; else
+  // the install's configured Code Review Defaults threaded from buildAgentPrompt;
+  // else `[copilot]`). Flows as `/do:pr --review-with a,b,c [--review-stop-on-*]
+  // [--reviewer-applies]`.
+  const lightReviewers = normalizeReviewers(task.metadata, defaultReviewers);
   const lightReviewerUsernames = normalizeReviewUsernames(task.metadata?.usernames);
   const lightOptionalReviewers = normalizeOptionalReviewers(task.metadata?.optionalReviewers) || [];
   const lightReviewStopMode = task.metadata?.reviewStopMode || DEFAULT_REVIEW_STOP_MODE;
