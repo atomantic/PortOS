@@ -3,6 +3,7 @@
 ## Security
 
 - **[issue-2514] Harden AI provider custom endpoints against SSRF / API-key exfiltration.** A provider's `endpoint` is a free-form URL, and model-refresh / API-run paths attached the paid `Authorization: Bearer <apiKey>` and fetched that host with no host checks — a hostile or mistyped endpoint could receive the user's paid LLM key and prompts, or be pointed at a cloud-metadata service (`169.254.169.254`). A new `endpointGuard` now gates every secret-bearing request: loopback/LAN (Tailscale) and known paid-provider hosts are allowed, cloud-metadata hosts are always blocked, and any other host requires the new per-provider **Allow custom endpoint** opt-in. Keyless local-LLM calls (Ollama/LM Studio) are unaffected.
+- **[issue-2515] Restrict Layered Intelligence custom `cmd` sources to allowlisted binaries (no `shell: true`).** A custom `cmd` source ran its full command string through `shell: true` with only a length/timeout cap, so any config-write path (hand edit, hostile sync payload) gained persistent, unattended RCE on the LI schedule (`; rm -rf ~`, `$(curl … | sh)`, pipes to `sh`). `runShellCommand` now denies the shell by default: the command is parsed and checked against the shared `commandSecurity` binary allowlist (rejecting shell metacharacters and non-allowlisted binaries), then spawned with `shell: false` and parsed args. An operator who genuinely needs a pipeline can set the install-level `settings.layeredIntelligence.trustShellSources` opt-in (off by default) to restore full-shell behavior for that install only.
 
 ## Fixed
 
