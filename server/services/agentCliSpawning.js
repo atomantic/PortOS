@@ -267,7 +267,7 @@ export function buildCliSpawnConfig(provider, model, settingsEnv = {}, { systemP
     // exec run never spends startup time hitting GitHub / kicking off a brew
     // upgrade it can't complete unattended (the fatal interactive-modal variant
     // is documented on buildCodexStartupArgs in providerModels.js).
-    const args = ['exec', '--dangerously-bypass-approvals-and-sandbox', ...buildCodexStartupArgs()];
+    const args = ['exec', '--dangerously-bypass-approvals-and-sandbox', ...buildCodexStartupArgs(provider?.args)];
     if (effectiveModel) {
       args.push('--model', effectiveModel);
     }

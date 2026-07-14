@@ -194,6 +194,15 @@ describe('buildCliSpawnConfig', () => {
     expect(config.args).toEqual(['exec', '--dangerously-bypass-approvals-and-sandbox', '-c', 'check_for_update_on_startup=false', '--model', 'gpt-5.4']);
   });
 
+  it('does not override a Codex provider that pins the update-check config in its args', () => {
+    const config = buildCliSpawnConfig(
+      { id: 'codex', command: 'codex', args: ['-c', 'check_for_update_on_startup=true'] },
+      'gpt-5.4',
+    );
+    // The user's explicit pin wins: no injected `check_for_update_on_startup=false`.
+    expect(config.args.filter((a) => a.startsWith('check_for_update_on_startup='))).toEqual([]);
+  });
+
   it('uses agy print mode for Antigravity without model flags', () => {
     const config = buildCliSpawnConfig({ id: 'antigravity-cli', command: 'agy', args: [] }, 'antigravity-configured-default');
 
