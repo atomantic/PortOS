@@ -25,9 +25,7 @@
  * DB pool is up, the same reason migrations 048–052 are boot-time + stubbed.
  */
 
-import { readFile, writeFile } from 'fs/promises';
-import { join } from 'path';
-import { PATHS } from '../lib/fileUtils.js';
+import { readMarker, writeMarker } from '../lib/migrationMarker.js';
 import { friendlifyUniverseTags } from '../lib/catalogUniverseTags.js';
 import { canonicalTagKey } from '../lib/catalogTypes.js';
 import { listUniverses } from '../services/universeBuilder.js';
@@ -39,18 +37,6 @@ import * as catalogDB from '../services/catalogDB.js';
 // repair instead of skipping it forever.
 const MARKER_VERSION = 2;
 const MARKER_FILENAME = 'catalog-universe-tags.applied.json';
-
-async function readMarker() {
-  const path = join(PATHS.data, MARKER_FILENAME);
-  const raw = await readFile(path, 'utf-8').catch(() => null);
-  if (!raw) return null;
-  try { return JSON.parse(raw); } catch { return null; }
-}
-
-async function writeMarker(payload) {
-  const path = join(PATHS.data, MARKER_FILENAME);
-  await writeFile(path, JSON.stringify(payload, null, 2), 'utf-8');
-}
 
 /**
  * Build a universeId → name lookup from every universe (including deleted, so a
@@ -73,7 +59,7 @@ async function buildUniverseNameMap() {
  * marker file. `force` re-runs the walk (used by tests / an admin re-trigger).
  */
 export async function repairUniverseTags({ force = false } = {}) {
-  const marker = await readMarker();
+  const marker = await readMarker(MARKER_FILENAME);
   if (marker?.version === MARKER_VERSION && !force) {
     return { skipped: true, marker };
   }
@@ -127,7 +113,7 @@ export async function repairUniverseTags({ force = false } = {}) {
   // repair next boot — already-friendlified rows are no-ops, so only the failed
   // / not-yet-resolvable rows retry.
   const wroteMarker = totals.errors === 0 && totals.unresolved === 0;
-  if (wroteMarker) await writeMarker(payload);
+  if (wroteMarker) await writeMarker(MARKER_FILENAME, payload);
 
   console.log(
     `🏷️  universe-tag repair: ${totals.scanned} scanned, ` +

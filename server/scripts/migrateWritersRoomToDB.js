@@ -28,24 +28,16 @@
  *     retries (ON CONFLICT DO NOTHING makes the retry safe).
  */
 
-import { readFile, writeFile, rename, readdir, stat } from 'fs/promises';
+import { readFile, rename, readdir, stat } from 'fs/promises';
 import { join } from 'path';
 import { PATHS, readJSONFile, safeJSONParse } from '../lib/fileUtils.js';
+import { markerExists, writeMarker } from '../lib/migrationMarker.js';
 import { query } from '../lib/db.js';
 import { mirrorTimestamp } from '../lib/pgTimestamp.js';
 
 const ROOT_DIRNAME = 'writers-room';
 const MARKER_FILENAME = 'writers-room.migrated.json';
 const WORK_ID_RE = /^wr-work-[0-9a-f-]+$/i;
-
-async function markerExists() {
-  const raw = await readFile(join(PATHS.data, MARKER_FILENAME), 'utf-8').catch(() => null);
-  return raw != null;
-}
-
-async function writeMarker(payload) {
-  await writeFile(join(PATHS.data, MARKER_FILENAME), JSON.stringify(payload, null, 2) + '\n', 'utf-8');
-}
 
 // Rename a file aside (path → path.replace('.json','.imported.json')) if it
 // exists; a missing file is a no-op. Never overwrites an existing recovery copy.
@@ -156,7 +148,7 @@ async function importWork(manifest) {
 }
 
 export async function migrateWritersRoomToDB() {
-  if (await markerExists()) return { ok: true, reason: 'already-applied' };
+  if (await markerExists(MARKER_FILENAME)) return { ok: true, reason: 'already-applied' };
 
   const root = join(PATHS.data, ROOT_DIRNAME);
   const rootStat = await stat(root).catch(() => null);
@@ -208,7 +200,7 @@ export async function migrateWritersRoomToDB() {
   await parkFileAside(exercisesFile);
   for (const p of importedManifestPaths) await parkFileAside(p);
 
-  await writeMarker({
+  await writeMarker(MARKER_FILENAME, {
     migratedAt: new Date().toISOString(),
     folders: folderCount, works: workCount, exercises: exerciseCount, reason: 'imported',
   });

@@ -29,9 +29,10 @@
  * the backend selector instead.
  */
 
-import { readFile, writeFile, rename } from 'fs/promises';
+import { readFile, rename } from 'fs/promises';
 import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
+import { markerExists, writeMarker } from '../lib/migrationMarker.js';
 import { query } from '../lib/db.js';
 import { mirrorStatus, mirrorTimestamp } from '../services/creativeDirector/projectsLogic.js';
 
@@ -39,20 +40,9 @@ const LEGACY_FILENAME = 'creative-director-projects.json';
 const IMPORTED_SUFFIX = '.imported';
 const MARKER_FILENAME = 'creative-director-projects.migrated.json';
 
-async function markerExists() {
-  const path = join(PATHS.data, MARKER_FILENAME);
-  const raw = await readFile(path, 'utf-8').catch(() => null);
-  return raw != null;
-}
-
-async function writeMarker(payload) {
-  const path = join(PATHS.data, MARKER_FILENAME);
-  await writeFile(path, JSON.stringify(payload, null, 2) + '\n', 'utf-8');
-}
-
 export async function migrateCreativeDirectorToDB() {
   // Already imported on a prior boot → no-op.
-  if (await markerExists()) return { ok: true, reason: 'already-applied' };
+  if (await markerExists(MARKER_FILENAME)) return { ok: true, reason: 'already-applied' };
 
   const legacyPath = join(PATHS.data, LEGACY_FILENAME);
   const raw = await readFile(legacyPath, 'utf-8').catch((err) => {
@@ -63,7 +53,7 @@ export async function migrateCreativeDirectorToDB() {
   // Fresh install (no legacy file): stamp the marker so we don't re-probe every
   // boot, and return.
   if (raw == null) {
-    await writeMarker({ migratedAt: new Date().toISOString(), imported: 0, reason: 'fresh-install' });
+    await writeMarker(MARKER_FILENAME, { migratedAt: new Date().toISOString(), imported: 0, reason: 'fresh-install' });
     return { ok: true, reason: 'fresh-install', imported: 0 };
   }
 
@@ -127,7 +117,7 @@ export async function migrateCreativeDirectorToDB() {
   });
   if (!renamed) return { ok: false, reason: 'rename-failed', imported, skipped };
 
-  await writeMarker({ migratedAt: new Date().toISOString(), imported, skipped });
+  await writeMarker(MARKER_FILENAME, { migratedAt: new Date().toISOString(), imported, skipped });
   console.log(`🎬 CD→DB import: imported ${imported} project(s) into creative_director_projects (${skipped} skipped); legacy file renamed to ${LEGACY_FILENAME}${IMPORTED_SUFFIX}`);
   return { ok: true, reason: 'imported', imported, skipped };
 }

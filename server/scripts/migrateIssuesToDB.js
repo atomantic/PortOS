@@ -19,9 +19,10 @@
  *     the dir → next boot retries (ON CONFLICT DO NOTHING makes the retry safe).
  */
 
-import { readFile, writeFile, rename, readdir, stat } from 'fs/promises';
+import { rename, readdir, stat } from 'fs/promises';
 import { join } from 'path';
 import { PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { markerExists, writeMarker } from '../lib/migrationMarker.js';
 import { query } from '../lib/db.js';
 import { mirrorTimestamp } from '../lib/pgTimestamp.js';
 
@@ -29,15 +30,6 @@ const LEGACY_DIRNAME = 'pipeline-issues';
 const IMPORTED_DIRNAME = 'pipeline-issues.imported';
 const MARKER_FILENAME = 'pipeline-issues.migrated.json';
 const RECORD_RE = /^iss-[A-Za-z0-9-]+$/;
-
-async function markerExists() {
-  const raw = await readFile(join(PATHS.data, MARKER_FILENAME), 'utf-8').catch(() => null);
-  return raw != null;
-}
-
-async function writeMarker(payload) {
-  await writeFile(join(PATHS.data, MARKER_FILENAME), JSON.stringify(payload, null, 2) + '\n', 'utf-8');
-}
 
 async function importRecord(record) {
   if (!record || typeof record !== 'object' || typeof record.id !== 'string' || !record.id) return false;
@@ -66,7 +58,7 @@ async function importRecord(record) {
 }
 
 export async function migrateIssuesToDB() {
-  if (await markerExists()) return { ok: true, reason: 'already-applied', imported: 0 };
+  if (await markerExists(MARKER_FILENAME)) return { ok: true, reason: 'already-applied', imported: 0 };
 
   const legacyDir = join(PATHS.data, LEGACY_DIRNAME);
   const dirStat = await stat(legacyDir).catch(() => null);
@@ -92,7 +84,7 @@ export async function migrateIssuesToDB() {
     console.warn(`⚠️ pipeline-issues→DB import: imported ${imported} issue(s) but renaming ${LEGACY_DIRNAME} aside failed (${err.message}) — leaving dir, will retry marker next boot`);
     return { ok: true, reason: 'imported-rename-failed', imported, skipped };
   }
-  await writeMarker({ migratedAt: new Date().toISOString(), imported, skipped, reason: 'imported' });
+  await writeMarker(MARKER_FILENAME, { migratedAt: new Date().toISOString(), imported, skipped, reason: 'imported' });
   console.log(`📚 pipeline-issues→DB import: imported ${imported} issue(s) (${skipped} skipped); data/${LEGACY_DIRNAME} renamed to ${IMPORTED_DIRNAME}`);
   return { ok: true, reason: 'imported', imported, skipped };
 }

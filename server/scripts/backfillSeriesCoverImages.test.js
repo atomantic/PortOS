@@ -10,7 +10,13 @@ const listSeries = vi.fn();
 const listAllIssues = vi.fn();
 const setSeriesCoverImage = vi.fn();
 
-vi.mock('../lib/fileUtils.js', () => ({ PATHS: { get data() { return DATA_DIR; } } }));
+// Keep the real fileUtils helpers (tryReadFile/atomicWrite/safeJSONParse feed
+// migrationMarker.js) and only point PATHS.data at the disposable temp dir, so
+// the marker is a real on-disk file the existsSync/readFileSync assertions read.
+vi.mock('../lib/fileUtils.js', async (importOriginal) => {
+  const actual = await importOriginal();
+  return { ...actual, PATHS: { ...actual.PATHS, get data() { return DATA_DIR; } } };
+});
 vi.mock('../services/pipeline/series.js', () => ({
   listSeries: (...a) => listSeries(...a),
   setSeriesCoverImage: (...a) => setSeriesCoverImage(...a),

@@ -16,14 +16,12 @@ const fsState = { marker: null, written: null };
 const dbState = { rows: {}, updates: [] };
 const uniState = { universes: [], canonStamps: [] };
 
-vi.mock('fs/promises', () => ({
-  readFile: vi.fn(async () => (fsState.marker == null
-    ? Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }))
-    : JSON.stringify(fsState.marker))),
-  writeFile: vi.fn(async (_p, data) => { fsState.written = JSON.parse(data); }),
+// Marker I/O is delegated to migrationMarker.js; mock it against `fsState`
+// (the marker helper has its own unit test in server/lib/migrationMarker.test.js).
+vi.mock('../lib/migrationMarker.js', () => ({
+  readMarker: vi.fn(async () => fsState.marker),
+  writeMarker: vi.fn(async (_name, payload) => { fsState.written = payload; }),
 }));
-
-vi.mock('../lib/fileUtils.js', () => ({ PATHS: { data: '/tmp/portos-data' } }));
 
 vi.mock('../services/universeBuilder.js', () => ({
   listUniverses: vi.fn(async () => uniState.universes),

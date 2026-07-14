@@ -28,24 +28,16 @@
  * it's gated on its own marker and invoked from the backend selector.
  */
 
-import { readFile, writeFile, rename, readdir, stat } from 'fs/promises';
+import { rename, readdir, stat } from 'fs/promises';
 import { join } from 'path';
 import { PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { markerExists, writeMarker } from '../lib/migrationMarker.js';
 import { query } from '../lib/db.js';
 import { mirrorTimestamp } from '../lib/pgTimestamp.js';
 
 const LEGACY_DIRNAME = 'universes';
 const IMPORTED_DIRNAME = 'universes.imported';
 const MARKER_FILENAME = 'universes.migrated.json';
-
-async function markerExists() {
-  const raw = await readFile(join(PATHS.data, MARKER_FILENAME), 'utf-8').catch(() => null);
-  return raw != null;
-}
-
-async function writeMarker(payload) {
-  await writeFile(join(PATHS.data, MARKER_FILENAME), JSON.stringify(payload, null, 2) + '\n', 'utf-8');
-}
 
 // One legacy universe record → `universes` row. Verbatim into `data`; the typed
 // mirror columns are bind-sanitized so a hand-edited/legacy timestamp or missing
@@ -92,7 +84,7 @@ async function importRun(run) {
 }
 
 export async function migrateUniversesToDB() {
-  if (await markerExists()) return { ok: true, reason: 'already-applied', imported: 0 };
+  if (await markerExists(MARKER_FILENAME)) return { ok: true, reason: 'already-applied', imported: 0 };
 
   const legacyDir = join(PATHS.data, LEGACY_DIRNAME);
   const dirStat = await stat(legacyDir).catch(() => null);
@@ -135,7 +127,7 @@ export async function migrateUniversesToDB() {
     console.warn(`⚠️ universes→DB import: imported ${imported} record(s)/${runs} run(s) but renaming ${LEGACY_DIRNAME} aside failed (${err.message}) — leaving dir, will retry marker next boot`);
     return { ok: true, reason: 'imported-rename-failed', imported, runs };
   }
-  await writeMarker({ migratedAt: new Date().toISOString(), imported, runs, skipped, reason: 'imported' });
+  await writeMarker(MARKER_FILENAME, { migratedAt: new Date().toISOString(), imported, runs, skipped, reason: 'imported' });
   console.log(`🌍 universes→DB import: imported ${imported} universe(s) + ${runs} run(s) (${skipped} skipped); data/${LEGACY_DIRNAME} renamed to ${IMPORTED_DIRNAME}`);
   return { ok: true, reason: 'imported', imported, runs, skipped };
 }
