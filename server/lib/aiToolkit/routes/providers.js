@@ -23,7 +23,7 @@ export function createProvidersRoutes(providerService, options = {}) {
   router.put('/active', asyncHandler(async (req, res) => {
     const result = validate(providerActiveSchema, req.body);
     if (!result.success) {
-      throw new ServerError('Provider ID required', { status: 400, code: 'VALIDATION_ERROR', context: { details: result.errors } });
+      throw new ServerError('Invalid provider data', { status: 400, code: 'VALIDATION_ERROR', context: { details: result.errors } });
     }
     const { id } = result.data;
 

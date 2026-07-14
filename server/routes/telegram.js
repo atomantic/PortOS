@@ -44,16 +44,7 @@ router.get('/status', asyncHandler(async (req, res) => {
 
 // PUT /api/telegram/method
 router.put('/method', asyncHandler(async (req, res) => {
-  const result = telegramMethodSchema.safeParse(req.body);
-  if (!result.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: result.error.issues }
-    });
-  }
-
-  const { method } = result.data;
+  const { method } = validateRequest(telegramMethodSchema, req.body);
   const settings = await getSettings();
 
   // Save method preference. Merge `telegram` against the FRESHEST snapshot inside
@@ -99,16 +90,7 @@ router.put('/method', asyncHandler(async (req, res) => {
 
 // PUT /api/telegram/config (manual bot only)
 router.put('/config', asyncHandler(async (req, res) => {
-  const result = telegramConfigSchema.safeParse(req.body);
-  if (!result.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: result.error.issues }
-    });
-  }
-
-  const { token, chatId } = result.data;
+  const { token, chatId } = validateRequest(telegramConfigSchema, req.body);
   const settings = await getSettings();
 
   // Preserve existing token if a new one wasn't provided
@@ -169,16 +151,8 @@ router.delete('/config', asyncHandler(async (req, res) => {
 
 // POST /api/telegram/test
 router.post('/test', asyncHandler(async (req, res) => {
-  const result = telegramTestSchema.safeParse(req.body);
-  if (!result.success) {
-    throw new ServerError('Validation failed', {
-      status: 400,
-      code: 'VALIDATION_ERROR',
-      context: { details: result.error.issues }
-    });
-  }
-
-  const message = result.data.message || '🧪 Test message from PortOS';
+  const { message: rawMessage } = validateRequest(telegramTestSchema, req.body);
+  const message = rawMessage || '🧪 Test message from PortOS';
   const service = await getActiveService();
   const sendResult = await service.sendMessage(message);
 
