@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { Palette, X } from 'lucide-react';
 import { listImageStylePresets } from '../../services/apiSystem';
 
@@ -10,6 +10,8 @@ export default function StylePresetPicker({
   label = 'Style preset',
 }) {
   const [presets, setPresets] = useState([]);
+  // Unique per instance so multiple pickers on one page each pair label→select.
+  const selectId = useId();
 
   useEffect(() => {
     let cancelled = false;
@@ -45,7 +47,7 @@ export default function StylePresetPicker({
   return (
     <div className={className}>
       <div className="flex items-center justify-between mb-1">
-        <label className="text-xs font-medium text-gray-400 flex items-center gap-1">
+        <label htmlFor={selectId} className="text-xs font-medium text-gray-400 flex items-center gap-1">
           <Palette className="w-3 h-3" /> {label}
         </label>
         {value && (
@@ -61,6 +63,7 @@ export default function StylePresetPicker({
         )}
       </div>
       <select
+        id={selectId}
         value={value || ''}
         onChange={handleChange}
         disabled={disabled || presets.length === 0}
