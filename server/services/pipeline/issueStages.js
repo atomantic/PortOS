@@ -182,4 +182,3 @@ export function updateStageWithLatest(issueId, stageId, computeFn, { snapshotPri
     queueSeriesIssuesWrite(existing.seriesId, work),
   );
 }
-

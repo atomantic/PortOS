@@ -420,4 +420,3 @@ export const renderVolumeCover = (seriesId, seasonId, options = {}) =>
  */
 export const renderVolumeBackCover = (seriesId, seasonId, options = {}) =>
   renderVolumeCoverLike(seriesId, seasonId, 'backCover', options);
-

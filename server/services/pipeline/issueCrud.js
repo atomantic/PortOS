@@ -498,4 +498,3 @@ export function deleteIssue(id) {
     })
   );
 }
-

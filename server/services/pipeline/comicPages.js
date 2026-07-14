@@ -665,4 +665,3 @@ export async function generateComicPanelImagePrompts(issueId, pageIndex, panelIn
   });
   return { candidates, requested, pageIndex: pi, panelIndex: ni };
 }
-
