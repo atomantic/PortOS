@@ -24,6 +24,11 @@ import { join } from 'path';
 import { query, withTransaction } from '../lib/db.js';
 import { ServerError } from '../lib/errorHandler.js';
 import { PATHS } from '../lib/fileUtils.js';
+import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+
+// Cap on each registry fetch so a hung broker source can't stall a
+// user-triggered refresh indefinitely (both fetchers run under Promise.all).
+const BROKER_FETCH_TIMEOUT_MS = 15000;
 
 // ─── Case state machine (pure) ──────────────────────────────────────────────
 
@@ -343,13 +348,13 @@ const BADBOOL_URL = 'https://raw.githubusercontent.com/bugbounty-zz/data-broker-
 const CA_REGISTRY_URL = 'https://cppa.ca.gov/data_broker_registry.csv';
 
 async function defaultFetchBadbool() {
-  const res = await fetch(BADBOOL_URL).catch(() => null);
+  const res = await fetchWithTimeout(BADBOOL_URL, {}, BROKER_FETCH_TIMEOUT_MS).catch(() => null);
   if (!res || !res.ok) return [];
   return parseBadboolList(await res.json().catch(() => null));
 }
 
 async function defaultFetchCaRegistry() {
-  const res = await fetch(CA_REGISTRY_URL).catch(() => null);
+  const res = await fetchWithTimeout(CA_REGISTRY_URL, {}, BROKER_FETCH_TIMEOUT_MS).catch(() => null);
   if (!res || !res.ok) return [];
   return parseCaRegistryCsv(await res.text().catch(() => ''));
 }
