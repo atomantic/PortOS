@@ -20,7 +20,7 @@ import { resolveEffectiveModel, runPromptThroughProvider, DEFAULT_TIMEOUT_MS, is
 import { stripCodeFences } from './aiProvider.js';
 import { extractCodexAssistant } from './codexAssistantExtract.js';
 import { getActiveProvider, getProviderById } from '../services/providers.js';
-import { commandBasename } from './providerModels.js';
+import { commandBasename, isCodexProvider } from './providerModels.js';
 import { buildPrompt, getStage } from '../services/promptService.js';
 import { createRun, patchRunMetadata } from '../services/runner.js';
 import { MIN_TIMEOUT as STAGE_TIMEOUT_MIN_MS, MAX_TIMEOUT as STAGE_TIMEOUT_MAX_MS } from './aiToolkit/constants.js';
@@ -150,7 +150,7 @@ export function knownProviderContextWindow(provider) {
   // resolves the same vendor window as a bare `grok` on PATH — matching how the
   // arg-builder predicates (isOpencodeCommand/isGrokCommand) key on commandBasename.
   const command = commandBasename(provider?.command);
-  if (id === 'codex' || id === 'codex-tui' || command === 'codex') return CODEX_CONTEXT_WINDOW;
+  if (isCodexProvider(provider)) return CODEX_CONTEXT_WINDOW;
   if (id === 'antigravity-cli' || id === 'antigravity-tui' || command === 'agy') return GEMINI_CONTEXT_WINDOW;
   if (id === 'grok-cli' || id === 'grok-tui' || command === 'grok') return GROK_CONTEXT_WINDOW;
   return null;

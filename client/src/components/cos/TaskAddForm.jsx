@@ -5,19 +5,12 @@ import AppContextPicker from '../AppContextPicker';
 import * as api from '../../services/api';
 import { processScreenshotUploads, processAttachmentUploads } from '../../utils/fileUpload';
 import { formatBytes } from '../../utils/formatters';
-import { filterSelectableModels, isTuiProvider, isCliProvider, isProcessProvider } from '../../utils/providers';
+import { filterSelectableModels, isTuiProvider, isCliProvider, isProcessProvider, isCodexProvider, effortLevelsForProvider } from '../../utils/providers';
 import { DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE } from './constants';
 import ReviewerPicker from './ReviewerPicker';
 
-const isCodexProvider = (provider) => {
-  if (!provider) return false;
-  if (provider.id === 'codex') return true;
-  const commandName = String(provider.command || '').split(/[\\/]/).pop().replace(/\.(exe|cmd|bat)$/i, '');
-  return commandName === 'codex';
-};
-
 export default function TaskAddForm({ providers, apps, onTaskAdded, compact = false, defaultExpanded = false, defaultApp = '' }) {
-  const [newTask, setNewTask] = useState({ description: '', model: '', provider: '', app: defaultApp });
+  const [newTask, setNewTask] = useState({ description: '', model: '', provider: '', effort: '', app: defaultApp });
   const [addToTop, setAddToTop] = useState(false);
   const [enhancePrompt, setEnhancePrompt] = useState(false);
   const [isEnhancing, setIsEnhancing] = useState(false);
@@ -96,7 +89,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   // "Auto" so the visible select and the submitted value can't diverge.
   useEffect(() => {
     if (newTask.provider && !enabledProviders.some(p => p.id === newTask.provider)) {
-      setNewTask(t => ({ ...t, provider: '', model: '' }));
+      setNewTask(t => ({ ...t, provider: '', model: '', effort: '' }));
     }
   }, [enabledProviders, newTask.provider]);
 
@@ -126,6 +119,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
   // Get models for selected provider
   const selectedProvider = providers?.find(p => p.id === newTask.provider);
   const availableModels = filterSelectableModels(selectedProvider?.models);
+  const effortLevels = effortLevelsForProvider(selectedProvider);
   const providerModelNote = (() => {
     if (!selectedProvider) return '';
     if (isTuiProvider(selectedProvider)) return `${selectedProvider.name} runs in an attachable terminal UI session.`;
@@ -140,6 +134,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       description: template.description,
       model: template.model || '',
       provider: template.provider || '',
+      effort: template.effort || '',
       app: template.app || ''
     });
     await api.useCosTaskTemplate(template.id).catch(() => {});
@@ -169,6 +164,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       description: newTask.description,
       provider: newTask.provider,
       model: newTask.model,
+      effort: newTask.effort,
       app: newTask.app
     }, { silent: true }).catch(err => {
       toast.error(err.message);
@@ -260,6 +256,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
       description: finalDescription,
       model: newTask.model || undefined,
       provider: newTask.provider || undefined,
+      effort: newTask.effort || undefined,
       app: newTask.app || undefined,
       createJiraTicket,
       useWorktree,
@@ -545,7 +542,7 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
             <select
               id="task-provider"
               value={newTask.provider}
-              onChange={e => setNewTask(t => ({ ...t, provider: e.target.value, model: '' }))}
+              onChange={e => setNewTask(t => ({ ...t, provider: e.target.value, model: '', effort: '' }))}
               className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
             >
               <option value="">Auto (default)</option>
@@ -574,6 +571,23 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               {providerModelNote}
             </div>
           ) : null}
+          {effortLevels && (
+            <div className="sm:w-40">
+              <label htmlFor="task-effort" className="sr-only">Thinking effort</label>
+              <select
+                id="task-effort"
+                value={newTask.effort}
+                onChange={e => setNewTask(t => ({ ...t, effort: e.target.value }))}
+                className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]"
+                title="Thinking effort — how hard the model reasons per turn"
+              >
+                <option value="">Default effort</option>
+                {effortLevels.map(level => (
+                  <option key={level} value={level}>{level}</option>
+                ))}
+              </select>
+            </div>
+          )}
         </div>
         {apiOnlyProviders && (
           <div className="px-3 py-2 bg-port-warning/10 border border-port-warning/40 rounded-lg text-xs text-port-warning">

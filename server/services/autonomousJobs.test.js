@@ -231,6 +231,17 @@ describe('autonomousJobs', () => {
       expect(task.metadata.provider).toBeUndefined()
       expect(task.metadata.model).toBeUndefined()
     })
+
+    it('forwards effort into metadata.effort', async () => {
+      const job = { ...mockJobsData.jobs[0], providerId: 'claude-code', effort: 'max' }
+      const task = await generateTaskFromJob(job)
+      expect(task.metadata.effort).toBe('max')
+    })
+
+    it('omits effort when job has no override', async () => {
+      const task = await generateTaskFromJob(mockJobsData.jobs[0])
+      expect(task.metadata.effort).toBeUndefined()
+    })
   })
 
   describe('createJob with resolveIntervalMs', () => {
@@ -786,6 +797,21 @@ describe('autonomousJobs', () => {
       })
       expect(job.providerId).toBe('anthropic')
       expect(job.model).toBe('claude-opus-4-8')
+    })
+
+    it('defaults effort to null when omitted', async () => {
+      const job = await createJob({ name: 'No Effort Job', promptTemplate: 'do it' })
+      expect(job.effort).toBeNull()
+    })
+
+    it('persists effort when provided', async () => {
+      const job = await createJob({
+        name: 'Effort Job',
+        promptTemplate: 'do it',
+        providerId: 'claude-code',
+        effort: 'xhigh'
+      })
+      expect(job.effort).toBe('xhigh')
     })
   })
 

@@ -20,7 +20,7 @@ afterEach(() => {
 
 describe('useTheme localStorage resilience', () => {
   it('initializes to the default theme when reads throw (blocked storage)', () => {
-    vi.spyOn(window.localStorage.__proto__, 'getItem').mockImplementation(() => {
+    vi.spyOn(window.localStorage, 'getItem').mockImplementation(() => {
       throw new DOMException('The operation is insecure.', 'SecurityError');
     });
 
@@ -40,7 +40,7 @@ describe('useTheme localStorage resilience', () => {
   });
 
   it('keeps in-memory theme switching functional when writes throw', () => {
-    vi.spyOn(window.localStorage.__proto__, 'setItem').mockImplementation(() => {
+    vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => {
       throw new DOMException('QuotaExceededError', 'QuotaExceededError');
     });
 

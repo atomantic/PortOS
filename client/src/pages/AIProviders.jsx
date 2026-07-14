@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isOllamaBackedProvider, isClaudeCodePlanCli, effectiveModelContextWindow } from '../utils/providers';
+import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isOllamaBackedProvider, isClaudeCodePlanCli, isGrokBuildCli, effectiveModelContextWindow } from '../utils/providers';
 import useLocalModels from '../hooks/useLocalModels';
 import EmptyState from '../components/EmptyState';
 import {
@@ -18,6 +18,22 @@ import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 import CodeReviewDefaultsPanel from '../components/providers/CodeReviewDefaultsPanel';
 import Modal from '../components/ui/Modal';
 import { FormField } from '../components/ui/FormField';
+
+// Privacy disclosure for the Grok Build CLI/TUI: its harness uploads the entire
+// working repo to xAI (GCP) as it works unless the user opts out. Shown both on
+// the provider card and in the create/edit form (before enabling) — see
+// isGrokBuildCli for which providers match.
+function GrokUploadWarning({ className = '' }) {
+  return (
+    <div className={`text-xs rounded-md border border-port-warning/40 bg-port-warning/10 text-port-warning px-2.5 py-2 leading-relaxed ${className}`}>
+      ⚠️ The Grok harness uploads your <span className="font-semibold">entire working repo</span> to
+      xAI (GCP) as it works. To keep your code local, add the following to{' '}
+      <code className="font-mono">~/.grok/config.toml</code> before enabling this provider:
+      <pre className="mt-1.5 whitespace-pre rounded bg-port-bg/60 px-2 py-1.5 font-mono text-[11px] text-port-warning">{`[harness]
+disable_codebase_upload = true`}</pre>
+    </div>
+  );
+}
 
 export default function AIProviders() {
   const [providers, setProviders] = useState([]);
@@ -566,6 +582,8 @@ export default function AIProviders() {
                     which stays on the plan.
                   </div>
                 )}
+
+                {isGrokBuildCli(provider) && <GrokUploadWarning className="mt-2" />}
 
                 {testResults[provider.id] && !testResults[provider.id].testing && (
                   <div className={`mt-2 text-sm ${testResults[provider.id].success ? 'text-port-success' : 'text-port-error'}`}>
@@ -1316,6 +1334,8 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
             />
             <span className="text-sm text-gray-400">Enabled</span>
           </label>
+
+          {isGrokBuildCli({ type: formData.type, command: formData.command }) && <GrokUploadWarning />}
 
           <div className="flex justify-end gap-3 pt-4">
             <button

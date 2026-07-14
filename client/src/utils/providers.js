@@ -53,11 +53,23 @@ const commandBasename = (command) =>
     ? command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '')
     : '';
 
+/**
+ * True when a provider is codex-flavored — the shipped `codex`/`codex-tui` ids
+ * or any provider whose launch command basename is `codex` (path/exe tolerant).
+ * MIRROR of `isCodexProvider` in server/lib/providerModels.js — keep in lockstep.
+ * @param {{id?:string, command?:string}|null|undefined} provider
+ * @returns {boolean}
+ */
+export const isCodexProvider = (provider) => {
+  const id = String(provider?.id || '').toLowerCase();
+  return id === 'codex' || id === 'codex-tui' || commandBasename(provider?.command) === 'codex';
+};
+
 export const knownProviderContextWindow = (provider) => {
   if (!isProcessProvider(provider)) return null;
   const id = String(provider?.id || '').toLowerCase();
   const command = commandBasename(provider?.command);
-  if (id === 'codex' || id === 'codex-tui' || command === 'codex') return CODEX_CONTEXT_WINDOW;
+  if (isCodexProvider(provider)) return CODEX_CONTEXT_WINDOW;
   if (id === 'antigravity-cli' || id === 'antigravity-tui' || command === 'agy') return GEMINI_CONTEXT_WINDOW;
   if (id === 'grok-cli' || id === 'grok-tui' || command === 'grok') return GROK_CONTEXT_WINDOW;
   return null;
@@ -85,6 +97,32 @@ export const PROVIDER_TYPES = Object.freeze({
  */
 export const filterSelectableModels = (models) =>
   (models || []).filter(m => !isConfiguredDefaultModel(m));
+
+/**
+ * Reasoning-effort levels per effort-capable CLI — MIRROR of
+ * `CLAUDE_EFFORT_LEVELS` / `CODEX_EFFORT_LEVELS` / `effortLevelsForProvider` in
+ * server/lib/providerModels.js; keep in lockstep. Claude Code takes
+ * `--effort <level>`, Codex takes `-c model_reasoning_effort=<level>`.
+ */
+export const CLAUDE_EFFORT_LEVELS = Object.freeze(['low', 'medium', 'high', 'xhigh', 'max']);
+export const CODEX_EFFORT_LEVELS = Object.freeze(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
+
+/**
+ * The effort levels a provider's CLI accepts, or null when the provider has no
+ * effort control (antigravity, opencode, grok, HTTP API providers). Keyed on
+ * the launch command basename plus the shipped provider ids, so path-configured
+ * or renamed claude/codex providers still qualify. Drives the "Effort
+ * (optional)" select in task/schedule forms.
+ * @param {{id?:string, command?:string}|null|undefined} provider
+ * @returns {readonly string[]|null}
+ */
+export const effortLevelsForProvider = (provider) => {
+  if (!provider) return null;
+  if (isCodexProvider(provider)) return CODEX_EFFORT_LEVELS;
+  const id = String(provider.id || '').toLowerCase();
+  if (id.startsWith('claude-code') || commandBasename(provider.command) === 'claude') return CLAUDE_EFFORT_LEVELS;
+  return null;
+};
 
 /**
  * Embedding-only model detector — mirror of `isEmbeddingModel` in
@@ -318,6 +356,21 @@ export const isClaudeCodePlanCli = (provider) =>
   !isOllamaBackedProvider(provider) &&
   !provider?.envVars?.CLAUDE_CODE_USE_BEDROCK &&
   !provider?.envVars?.CLAUDE_CODE_USE_VERTEX;
+
+/**
+ * Check if a provider is the Grok Build CLI/TUI (the `grok` command harness).
+ * Mirrors the Grok detection in `knownProviderContextWindow`: matches the shipped
+ * `grok-cli` / `grok-tui` samples or any process provider whose command basename
+ * is `grok`. Used to surface the `~/.grok/config.toml` privacy notice: the Grok
+ * harness uploads the entire working repo to xAI/GCP as it works unless the user
+ * opts out via `[harness] disable_codebase_upload = true`. The plain `grok` API
+ * provider (type `api`) doesn't run the harness, so it's intentionally excluded.
+ */
+export const isGrokBuildCli = (provider) => {
+  if (!isProcessProvider(provider)) return false;
+  const id = String(provider?.id || '').toLowerCase();
+  return id === 'grok-cli' || id === 'grok-tui' || commandBasename(provider?.command) === 'grok';
+};
 
 /**
  * Resolve the provider whose timeout is the "fallback" for a stage — the

@@ -219,10 +219,12 @@ describe('MusicVideo audio → MIDI transcription (MuScriptor)', () => {
   it('shows the MIDI download link once the project carries a transcription pointer', async () => {
     listTracks.mockResolvedValue([{ id: 't1', title: 'Neon Song', audioFilename: 'neon.mp3' }]);
     await openProject({ ...PROJECT_WITH_CLIP, midiTranscription: { filename: 'neon-midi.mid', model: 'medium' } });
-    const dl = await screen.findByRole('link', { name: /Download MIDI/i });
-    // Served from the music dir (same static route as the master audio) so the
-    // federated .mid resolves on peers too.
-    expect(dl.getAttribute('href')).toBe('/data/music/neon-midi.mid');
+    // Two links now: the download button and the MidiVisualization panel's
+    // download icon (#2477) — both serve from the music dir (same static route
+    // as the master audio) so the federated .mid resolves on peers too.
+    const links = await screen.findAllByRole('link', { name: /Download MIDI/i });
+    expect(links.length).toBeGreaterThanOrEqual(1);
+    links.forEach((dl) => expect(dl.getAttribute('href')).toBe('/data/music/neon-midi.mid'));
   });
 });
 

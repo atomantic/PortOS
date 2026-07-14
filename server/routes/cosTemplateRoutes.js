@@ -29,14 +29,14 @@ router.get('/templates/categories', asyncHandler(async (req, res) => {
 
 // POST /api/cos/templates - Create a new template
 router.post('/templates', asyncHandler(async (req, res) => {
-  const { name, icon, description, context, category, provider, model, app } = req.body;
+  const { name, icon, description, context, category, provider, model, effort, app } = req.body;
 
   if (!name || !description) {
     throw new ServerError('name and description are required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
   const template = await taskTemplates.createTemplate({
-    name, icon, description, context, category, provider, model, app
+    name, icon, description, context, category, provider, model, effort, app
   });
   res.json({ success: true, template });
 }));
@@ -61,7 +61,7 @@ router.post('/templates/:id/use', asyncHandler(async (req, res) => {
 
 // PUT /api/cos/templates/:id - Update a template
 router.put('/templates/:id', asyncHandler(async (req, res) => {
-  const { name, icon, description, context, category, provider, model, app } = req.body;
+  const { name, icon, description, context, category, provider, model, effort, app } = req.body;
   const updates = {};
   if (name !== undefined) updates.name = name;
   if (icon !== undefined) updates.icon = icon;
@@ -70,6 +70,7 @@ router.put('/templates/:id', asyncHandler(async (req, res) => {
   if (category !== undefined) updates.category = category;
   if (provider !== undefined) updates.provider = provider;
   if (model !== undefined) updates.model = model;
+  if (effort !== undefined) updates.effort = effort;
   if (app !== undefined) updates.app = app;
   const result = await taskTemplates.updateTemplate(req.params.id, updates);
   if (result.error) {

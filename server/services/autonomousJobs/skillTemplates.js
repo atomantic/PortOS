@@ -167,7 +167,11 @@ async function generateTaskFromJob(job) {
       // metadata.model as the highest-priority model choice. Absent = active
       // provider / per-task model selection (historical behavior).
       ...(job.providerId ? { provider: job.providerId } : {}),
-      ...(job.model ? { model: job.model } : {})
+      ...(job.model ? { model: job.model } : {}),
+      // Reasoning-effort override — agentLifecycle reads metadata.effort and the
+      // spawn builders emit `--effort`/`-c model_reasoning_effort=` (no-op for
+      // non-effort providers). Absent = provider default.
+      ...(job.effort ? { effort: job.effort } : {})
     },
     taskType: 'internal',
     autoApprove: job.autonomyLevel === 'yolo'

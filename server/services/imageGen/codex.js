@@ -32,6 +32,7 @@ import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { buildCodexStartupArgs } from '../../lib/providerModels.js';
 import { IMAGE_GEN_MODE } from './modes.js';
 
 // 20 minutes — built-in `image_gen` typically returns in 30–90s, but with the
@@ -187,6 +188,11 @@ export async function generateImage({
     'exec',
     '--skip-git-repo-check',
     '--sandbox', 'workspace-write',
+    // Disable codex's startup update check (see buildCodexStartupArgs) so an
+    // image-gen call never spends startup time on the update-check round-trip
+    // or an unattended `brew upgrade`. Placed before the variadic `-i` so it
+    // can't be swallowed as an image path.
+    ...buildCodexStartupArgs(),
     ...(validInitImagePath ? ['-i', validInitImagePath] : []),
     ...(model ? ['-m', String(model)] : []),
     ...(validInitImagePath ? ['--'] : []),

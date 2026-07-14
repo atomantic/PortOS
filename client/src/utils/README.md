@@ -35,8 +35,8 @@ grep -i "what you want to do" client/src/utils/README.md
 | `hashString` | Deterministic string → 32-bit hash (stable colors, keys, seeds). |
 | `urlNormalize` | `isUrl` detection and `normalizeUrl` (optional git/`requireDot` modes). |
 | `platform` | `isMac` detection and `modKey` (⌘/Ctrl) for keyboard-shortcut display. |
-| `navWorkingSet` | Recent/pinned nav persistence in localStorage (`recordVisit`, `togglePin`, `isPinned`). |
-| `providers` | AI-provider type predicates and helpers (`isCliProvider`, `isApiProvider`, `filterSelectableModels`, `getProviderTimeout`, configured-default sentinels). |
+| `navWorkingSet` | Recent/pinned nav persistence (`recordVisit`, `togglePin`, `isPinned`) plus `resolveRecentNavEntries` for mapping stored deep links back to their longest matching nav-manifest entry. |
+| `providers` | AI-provider type predicates and helpers (`isCliProvider`, `isApiProvider`, `isCodexProvider`, `filterSelectableModels`, `getProviderTimeout`, configured-default sentinels, and the claude/codex thinking-effort levels — `effortLevelsForProvider`, mirror of server `providerModels.js`). |
 | `layeredIntelligenceReasons` | Canonical gloss for the Layered Intelligence loop's run-outcome reason tokens, shared by the on-demand toast and the durable "Last run" line (`formatLiReason`, `liReasonTone`, `LI_NEUTRAL_REASONS`). |
 
 ## Module loading / resilience

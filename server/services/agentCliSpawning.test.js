@@ -185,13 +185,24 @@ describe('buildCliSpawnConfig', () => {
     // The bypass flag is the Codex equivalent of Claude/Antigravity's
     // --dangerously-skip-permissions. Without it, codex exec runs sandboxed (no network → `gh`
     // can't reach api.github.com) and non-interactive approval prompts get cancelled.
-    expect(config.args).toEqual(['exec', '--dangerously-bypass-approvals-and-sandbox']);
+    expect(config.args).toEqual(['exec', '--dangerously-bypass-approvals-and-sandbox', '-c', 'check_for_update_on_startup=false']);
   });
 
   it('passes explicit Codex model selections through alongside the sandbox bypass', () => {
     const config = buildCliSpawnConfig({ id: 'codex', command: 'codex' }, 'gpt-5.4');
 
-    expect(config.args).toEqual(['exec', '--dangerously-bypass-approvals-and-sandbox', '--model', 'gpt-5.4']);
+    expect(config.args).toEqual(['exec', '--dangerously-bypass-approvals-and-sandbox', '-c', 'check_for_update_on_startup=false', '--model', 'gpt-5.4']);
+  });
+
+  it('disables the codex update check unconditionally on the headless agent path (ignores provider.args)', () => {
+    // This builder constructs codex argv from scratch and never forwards
+    // provider.args, so a provider.args pin is NOT honored here — a headless CoS
+    // agent can never dismiss the update modal, so the check is always forced off.
+    const config = buildCliSpawnConfig(
+      { id: 'codex', command: 'codex', args: ['-c', 'check_for_update_on_startup=true'] },
+      'gpt-5.4',
+    );
+    expect(config.args).toContain('check_for_update_on_startup=false');
   });
 
   it('uses agy print mode for Antigravity without model flags', () => {
@@ -278,6 +289,65 @@ describe('buildCliSpawnConfig', () => {
     expect(config.args).not.toContain('--bare');
     const idx = config.args.indexOf('--append-system-prompt-file');
     expect(config.args[idx + 1]).toBe('/data/cos/agents/agent-2/system-prompt.md');
+  });
+
+  describe('reasoning-effort override', () => {
+    it('adds a -c model_reasoning_effort pair for codex', () => {
+      const config = buildCliSpawnConfig({ id: 'codex', command: 'codex' }, 'gpt-5.4', {}, { effort: 'xhigh' });
+      expect(config.args).toContain('model_reasoning_effort=xhigh');
+    });
+
+    it('adds --effort for claude', () => {
+      const config = buildCliSpawnConfig({ id: 'claude-code', command: 'claude' }, 'claude-opus-4-8', {}, { effort: 'high' });
+      expect(config.args[config.args.indexOf('--effort') + 1]).toBe('high');
+    });
+
+    it('clamps codex-only values on a claude provider', () => {
+      const config = buildCliSpawnConfig({ id: 'claude-code', command: 'claude' }, null, {}, { effort: 'ultra' });
+      expect(config.args[config.args.indexOf('--effort') + 1]).toBe('max');
+    });
+
+    it('omits the flag entirely when no effort is set or the provider has no effort control', () => {
+      // Codex always carries `-c check_for_update_on_startup=false`, so assert the
+      // absence of the EFFORT config pair specifically, not any `-c`.
+      expect(buildCliSpawnConfig({ id: 'codex', command: 'codex' }, 'gpt-5.4').args.join(' ')).not.toContain('model_reasoning_effort');
+      expect(buildCliSpawnConfig({ id: 'claude-code', command: 'claude' }, null).args).not.toContain('--effort');
+      const grok = buildCliSpawnConfig({ id: 'grok-cli', command: 'grok', args: [] }, null, {}, { effort: 'high' });
+      expect(grok.args.join(' ')).not.toContain('effort');
+    });
+
+    it('keys effort on the RESOLVED command, so a blank-command claude provider still qualifies', () => {
+      // id gives no claude-code* hint and command is blank; the builder resolves
+      // the launch command to `claude`, so the effort pin must apply — matching
+      // the TUI builder's re-keying (same pin, same behavior per execution mode).
+      const config = buildCliSpawnConfig({ id: 'whatever' }, null, {}, { effort: 'high' });
+      expect(config.args[config.args.indexOf('--effort') + 1]).toBe('high');
+    });
+
+    it('never emits the claude-shaped --effort for a renamed codex provider (detection and emission agree)', () => {
+      // id !== 'codex' routes this into the default (claude-style) branch, but
+      // the effort arg shape must still follow the binary, not the branch.
+      const config = buildCliSpawnConfig(
+        { id: 'my-codex', command: '/opt/homebrew/bin/codex' },
+        null,
+        {},
+        { effort: 'ultra' },
+      );
+      expect(config.args).not.toContain('--effort');
+      expect(config.args[config.args.indexOf('-c') + 1]).toBe('model_reasoning_effort=ultra');
+    });
+
+    it('respects a user-baked --effort pin in provider args (mirrors the --model rule)', () => {
+      const config = buildCliSpawnConfig(
+        { id: 'claude-code', command: 'claude', args: ['--effort', 'low'] },
+        null,
+        {},
+        { effort: 'max' },
+      );
+      const effortArgs = config.args.filter(a => a === '--effort');
+      expect(effortArgs).toHaveLength(1);
+      expect(config.args[config.args.indexOf('--effort') + 1]).toBe('low');
+    });
   });
 
   describe('Bedrock model-id mapping', () => {

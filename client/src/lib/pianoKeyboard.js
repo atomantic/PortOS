@@ -8,10 +8,14 @@
 // Pitch classes (semitone within an octave) that map to WHITE keys. Everything
 // else is a black key.
 const WHITE_PITCH_CLASSES = new Set([0, 2, 4, 5, 7, 9, 11]);
-const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+// Canonical sharps-spelling pitch-class name table — the single source for
+// note/chord naming (referenceAnalysis.js re-exports it; midiChords.js
+// consumes it). A spelling change here must not fork per consumer.
+export const PITCH_CLASS_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 
 // Positive modulo so negative MIDI numbers (below C-1) still classify correctly.
-const pitchClass = (midi) => ((midi % 12) + 12) % 12;
+export const pitchClass = (midi) => ((midi % 12) + 12) % 12;
 
 // True when this MIDI note is a black (sharp/flat) key.
 export const isBlackKey = (midi) => !WHITE_PITCH_CLASSES.has(pitchClass(midi));
@@ -19,7 +23,7 @@ export const isBlackKey = (midi) => !WHITE_PITCH_CLASSES.has(pitchClass(midi));
 // Scientific note name for a MIDI number (sharps spelling). MIDI 60 → "C4".
 export const midiNoteName = (midi) => {
   if (!Number.isFinite(midi)) return '';
-  return `${NOTE_NAMES[pitchClass(midi)]}${Math.floor(midi / 12) - 1}`;
+  return `${PITCH_CLASS_NAMES[pitchClass(midi)]}${Math.floor(midi / 12) - 1}`;
 };
 
 // Black-key width as a fraction of a white-key width (real pianos ≈ 0.6).

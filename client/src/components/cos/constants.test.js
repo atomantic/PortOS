@@ -4,7 +4,12 @@ import {
   normalizeBudgetLimit,
   getDomainBudget,
   getDomainMode,
-  DEFAULT_DOMAIN_MODE
+  DEFAULT_DOMAIN_MODE,
+  AGENT_STATES,
+  MUSE_STATE_ANIMATIONS,
+  MUSE_ANIMATION_FALLBACK,
+  MUSE_SPEAKING_GESTURE,
+  MUSE_ROOT_MOTION_CLIPS
 } from './constants';
 
 // These mirror the server's domainBudgets/domainAutonomy helpers so the UI's
@@ -39,6 +44,29 @@ describe('getDomainBudget (client mirror)', () => {
   it('reads and coerces stored caps', () => {
     const config = { domainBudgets: { cos: { maxActionsPerDay: 10, maxMinutesPerDay: -1 } } };
     expect(getDomainBudget(config, 'cos')).toEqual({ maxActionsPerDay: 10, maxMinutesPerDay: null });
+  });
+});
+
+// The Cyber Muse avatar drives RobotExpressive's clips off CoS state. Two
+// invariants must hold or the fixed-frame avatar breaks: every agent state
+// needs a base clip, and no mapped clip may carry root translation (those
+// walk the model out of view — enumerated in MUSE_ROOT_MOTION_CLIPS).
+
+describe('muse avatar animation triggers', () => {
+  it('maps every agent state to a base clip', () => {
+    for (const state of Object.keys(AGENT_STATES)) {
+      expect(MUSE_STATE_ANIMATIONS[state], `state "${state}" must map to a clip`).toBeTruthy();
+      expect(typeof MUSE_STATE_ANIMATIONS[state].clip).toBe('string');
+      expect(MUSE_STATE_ANIMATIONS[state].clip.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('never maps a state (or the fallback / speaking gesture) to a root-motion clip', () => {
+    for (const [state, cfg] of Object.entries(MUSE_STATE_ANIMATIONS)) {
+      expect(MUSE_ROOT_MOTION_CLIPS, `state "${state}" uses a root-motion clip`).not.toContain(cfg.clip);
+    }
+    expect(MUSE_ROOT_MOTION_CLIPS).not.toContain(MUSE_ANIMATION_FALLBACK);
+    expect(MUSE_ROOT_MOTION_CLIPS).not.toContain(MUSE_SPEAKING_GESTURE);
   });
 });
 

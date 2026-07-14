@@ -54,8 +54,15 @@ vi.mock('./jira.js', () => ({
 tryReadFile: vi.fn().mockResolvedValue(null),
   createTicket: vi.fn().mockResolvedValue(null),
 }));
+// Code Review Defaults resolver — mocked so tests can control the install-wide
+// default reviewer list threaded into buildAgentPrompt without touching disk.
+// Default matches pickCodeReviewDefaults's unset shape (`['copilot']`).
+vi.mock('./codeReview.js', () => ({
+  getCodeReviewDefaults: vi.fn().mockResolvedValue({ reviewers: ['copilot'] }),
+}));
 
 import { buildLightContextPrompt, buildAgentPrompt, buildCompletionGuidelineBullet, reconcileSplitContext } from './agentPromptBuilder.js';
+import { getCodeReviewDefaults } from './codeReview.js'; // mocked above — control the configured default
 import { isTruthyMeta } from './agentState.js';
 import { buildPrompt } from './promptService.js'; // mocked above — inspect call args
 
@@ -540,6 +547,45 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/--reviewer-applies/);
       // Ordered run instruction.
       expect(prompt).toMatch(/For EACH reviewer in order/);
+    });
+
+    // Regression for the release-review finding: #2507 made only the reviewer
+    // LIST default-aware on the inline `/do:pr` path (TUI + PR-owning claude-code
+    // agents), leaving its four companions (usernames, optionalReviewers,
+    // stopMode, reviewerApplies) resolved from task metadata alone. A task that
+    // pins no reviewer config must inherit ALL FIVE from Code Review Defaults —
+    // matching resolveReviewLoopOptions on the non-PR-owning CLI follow-up path.
+    it('threads ALL FIVE Code Review Default fields into the inline /do:pr (not just reviewers)', () => {
+      const codeReviewDefaults = {
+        reviewers: ['codex', 'ollama'],
+        usernames: ['alice'],
+        optionalReviewers: ['ollama'],
+        stopMode: 'on-findings',
+        reviewerApplies: true,
+      };
+      const prompt = buildLightContextPrompt(
+        // No reviewer config on the task itself — every field comes from defaults.
+        makeTask({ metadata: { openPR: true, reviewLoop: true } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true, defaultReviewers: codeReviewDefaults.reviewers, codeReviewDefaults });
+      expect(prompt).toMatch(/--review-with codex,ollama~opt,@alice --review-stop-on-findings --reviewer-applies/);
+    });
+
+    it('does not leak default usernames/stop-mode/reviewer-applies when no Code Review Defaults are set', () => {
+      // Same task, no `codeReviewDefaults` option → the lone-copilot default,
+      // which suppresses `--review-with` entirely and emits none of the flags.
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true });
+      expect(prompt).not.toMatch(/@alice/);
+      expect(prompt).not.toMatch(/~opt/);
+      expect(prompt).not.toMatch(/--review-stop-on-findings/);
+      expect(prompt).not.toMatch(/--reviewer-applies/);
     });
 
     it('appends GitHub reviewer usernames as @user tokens and instructs requesting them', () => {
@@ -1061,5 +1107,48 @@ describe('discardWorktree (reasoning-only) completion contract', () => {
     expect(prompt).toMatch(/Do NOT commit, push, or open a PR/);
     // Simplify-before-commit step is suppressed (nothing gets committed).
     expect(prompt).not.toMatch(/## Simplify Step/);
+  });
+});
+
+// #2507 — CoS app-improve/self-improvement tasks pin no `reviewers`, so the
+// review loop must resolve them from the install's Code Review Defaults
+// (settings.codeReview.reviewers) rather than the hardcoded copilot default,
+// which stalls on installs without GitHub Copilot review enabled.
+describe('buildAgentPrompt — reviewer resolution honors Code Review Defaults (#2507)', () => {
+  const reviewLoopTask = () => makeTask({ metadata: { openPR: true, reviewLoop: true, simplify: false } });
+  // Claude Code CLI keeps the slashdo /do:pr workflow, so the reviewer list
+  // surfaces as `--review-with <csv>` in the completion block.
+  const claudeCliOpts = { providerType: 'cli', providerId: 'claude-code', providerCommand: 'claude' };
+
+  it('threads a configured default reviewer list into --review-with when the task pins none', async () => {
+    vi.mocked(getCodeReviewDefaults).mockResolvedValueOnce({ reviewers: ['claude', 'codex'] });
+    const prompt = await buildAgentPrompt(reviewLoopTask(), {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' }, isTruthyMeta, claudeCliOpts);
+    expect(prompt).toMatch(/`\/do:pr --review-with claude,codex`/);
+    // The stalling copilot default must not leak in.
+    expect(prompt).not.toMatch(/--review-with copilot/);
+  });
+
+  it('falls back to copilot (unchanged behavior) when no default is configured', async () => {
+    vi.mocked(getCodeReviewDefaults).mockResolvedValueOnce({ reviewers: ['copilot'] });
+    const prompt = await buildAgentPrompt(reviewLoopTask(), {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' }, isTruthyMeta, claudeCliOpts);
+    // Lone-copilot default is suppressed from --review-with (buildReviewWithArgs
+    // isDefaultOnly), so /do:pr runs without an explicit reviewer flag.
+    expect(prompt).toMatch(/`\/do:pr`/);
+    expect(prompt).not.toMatch(/--review-with claude/);
+  });
+
+  it('a task-pinned reviewer list still wins over the configured default', async () => {
+    vi.mocked(getCodeReviewDefaults).mockResolvedValueOnce({ reviewers: ['claude', 'codex'] });
+    const task = makeTask({ metadata: { openPR: true, reviewLoop: true, simplify: false, reviewers: ['grok'] } });
+    const prompt = await buildAgentPrompt(task, {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' }, isTruthyMeta, claudeCliOpts);
+    expect(prompt).toMatch(/`\/do:pr --review-with grok`/);
+    expect(prompt).not.toMatch(/--review-with claude/);
+  });
+
+  it('degrades to the hardcoded copilot default when the settings read fails', async () => {
+    vi.mocked(getCodeReviewDefaults).mockRejectedValueOnce(new Error('settings unavailable'));
+    const prompt = await buildAgentPrompt(reviewLoopTask(), {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' }, isTruthyMeta, claudeCliOpts);
+    expect(prompt).toMatch(/`\/do:pr`/);
+    expect(prompt).not.toMatch(/--review-with claude/);
   });
 });

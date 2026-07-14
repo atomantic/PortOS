@@ -62,14 +62,14 @@ describe('cliProviderArgs', () => {
         defaultModel: 'gpt-5',
         envVars: { CLAUDE_CODE_USE_BEDROCK: '1' },
       });
-      expect(args).toEqual(['exec', '--model', 'gpt-5', '-']);
+      expect(args).toEqual(['exec', '-c', 'check_for_update_on_startup=false', '--model', 'gpt-5', '-']);
     });
 
     it('passes the selected GPT-5.6 Codex tier to the CLI', () => {
       const args = buildCliArgs({
         id: 'codex', command: 'codex', defaultModel: 'gpt-5.6-sol',
       });
-      expect(args).toEqual(['exec', '--model', 'gpt-5.6-sol', '-']);
+      expect(args).toEqual(['exec', '-c', 'check_for_update_on_startup=false', '--model', 'gpt-5.6-sol', '-']);
     });
   });
 

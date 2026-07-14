@@ -241,19 +241,64 @@ def make_generator(device: str, seed: int) -> "torch.Generator":
     return torch.Generator().manual_seed(int(seed))
 
 
-def apply_memory_optimizations(pipe) -> None:
-    """Enable every memory-saving knob diffusers exposes on the loaded
-    pipeline. Best-effort: each call is gated on hasattr so older / smaller
-    pipelines that don't ship a given slice / tile path still work."""
+# VAE *tiling* is a memory optimization for very large decodes: it splits a
+# single image's latent into overlapping spatial tiles, decodes each, and
+# blends the overlaps. That blend leaves visible seams / dark bands on the
+# small-to-mid resolutions PortOS actually renders — the same reason both
+# runners already disable tiling on their i2i paths ("tiled encode of a small
+# image produces seams"). At these sizes tiling buys no memory (the VAE decode
+# is a rounding error next to the ~20 GB transformer), so only turn it on above
+# an area floor no standard/experimental preset reaches. VAE-decode peak memory
+# scales with output *area*, so the floor is in total pixels, not edge length:
+# the largest preset that routes through these native runners is Qwen's
+# experimental 1328×2048 (~2.7 MP), and the image-gen route caps a single edge
+# at 3840 (so a 3840² custom render is ~14.7 MP and genuinely wants tiling to
+# avoid an OOM on decode). ~6.5 MP sits between the two. VAE *slicing* (batch-dim
+# split, no-op at batch 1) and attention slicing never touch spatial layout, so
+# they stay unconditional.
+_VAE_TILING_MIN_PIXELS = 2560 * 2560  # ~6.5 MP
+
+
+def set_vae_tiling(pipe, enabled: bool) -> None:
+    """Toggle VAE tiling on a loaded pipeline, preferring the pipeline-level
+    switch and falling back to the VAE's own. Best-effort (gated on hasattr) so
+    pipelines that expose neither still work. Shared by the txt2img size gate in
+    `apply_memory_optimizations` and the runners' i2i paths, which force tiling
+    off unconditionally (tiled encode of a small init image seams regardless of
+    output size)."""
+    pipe_attr = "enable_vae_tiling" if enabled else "disable_vae_tiling"
+    vae_attr = "enable_tiling" if enabled else "disable_tiling"
+    if hasattr(pipe, pipe_attr):
+        getattr(pipe, pipe_attr)()
+        return
+    vae = getattr(pipe, "vae", None)
+    if vae is not None and hasattr(vae, vae_attr):
+        getattr(vae, vae_attr)()
+
+
+def apply_memory_optimizations(pipe, width=None, height=None) -> None:
+    """Enable memory-saving knobs on the loaded pipeline. Best-effort: each
+    call is gated on hasattr so older / smaller pipelines that don't ship a
+    given slice / tile path still work.
+
+    Attention slicing and VAE slicing are always safe and always applied. VAE
+    *tiling* is applied only when the target render is large enough to need it
+    (total pixels > `_VAE_TILING_MIN_PIXELS`); below that it is explicitly
+    disabled to avoid tile-seam / black-band artifacts (issue: z-image-turbo
+    576×1024 renders showed a black strip at a content-dependent point near the
+    bottom). When `width`/`height` are omitted the old always-tile behavior is
+    preserved for back-compat."""
     if hasattr(pipe, "enable_attention_slicing"):
         pipe.enable_attention_slicing()
     if hasattr(pipe, "enable_vae_slicing"):
         pipe.enable_vae_slicing()
-    vae = getattr(pipe, "vae", None)
-    if hasattr(pipe, "enable_vae_tiling"):
-        pipe.enable_vae_tiling()
-    elif vae is not None and hasattr(vae, "enable_tiling"):
-        vae.enable_tiling()
+
+    # A diffusers default or a reused pipeline could leave tiling enabled, so
+    # drive it explicitly in both directions rather than only turning it on.
+    want_tiling = True
+    if width and height:
+        want_tiling = (int(width) * int(height)) > _VAE_TILING_MIN_PIXELS
+    set_vae_tiling(pipe, want_tiling)
 
 
 # Headroom reserved on top of the resident weights for activations + allocator

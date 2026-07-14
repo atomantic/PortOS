@@ -29,16 +29,16 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { buildCliArgs } from '../lib/cliProviderArgs.js';
 import { prepareGrokPromptFile } from '../lib/grok.js';
-import { resolveCliModel } from '../lib/providerModels.js';
+import { resolveCliModel, isCodexProvider, buildCodexStartupArgs } from '../lib/providerModels.js';
 import { extractCodexAssistant, extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
 import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn } from '../lib/bufferedSpawn.js';
 
 const CLI_VISION_TIMEOUT_MS = 120000;
 const IMAGE_BASENAME = 'vision-input.png';
 
-// Codex matches on id OR command so a renamed/duplicated codex provider still
-// takes the `-i` path. Everything else uses the cwd-local-file convention.
-const isCodexProvider = (provider) => provider?.id === 'codex' || provider?.command === 'codex';
+// Codex matches on id OR command basename (via the shared isCodexProvider) so a
+// renamed/duplicated/path-configured codex provider still takes the `-i` path.
+// Everything else uses the cwd-local-file convention.
 
 /**
  * Decode a `data:image/...;base64,...` URL to raw bytes. Throws on a malformed
@@ -75,6 +75,11 @@ export function buildCliVisionInvocation(provider, model, imageDir, prompt) {
     const args = [
       ...(hasExec ? baseArgs : [...baseArgs, 'exec']),
       '--skip-git-repo-check',
+      // Disable codex's startup update check (see buildCodexStartupArgs): this
+      // path runs under a hard vision timeout, so an update-check network stall
+      // or an unattended `brew upgrade` would blow the caption call. No-op when
+      // the user pinned the key in provider.args.
+      ...buildCodexStartupArgs(baseArgs),
       '-i', imagePath,
       ...(codexModel ? ['-m', String(codexModel)] : []),
       prompt,

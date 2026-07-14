@@ -11,6 +11,8 @@
 // schedule onto the audio clock and emits a per-note "now sounding" callback so
 // the UI can move a playhead. Pure (no React) — ScoreSheet wraps it in a hook.
 
+import { getAudioContext as ctx } from './audioContext.js';
+
 // --- Pitch → frequency ------------------------------------------------------
 // Equal-tempered, A4 = 440 Hz. MIDI 69 == A4, so f = 440 · 2^((midi−69)/12).
 const PITCH_CLASS = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
@@ -79,39 +81,39 @@ export const buildSchedule = (score, bpmOverride) => {
 };
 
 // --- Audio context ----------------------------------------------------------
-// Lazily create + reuse one AudioContext (browsers cap the count). Resumed on
-// demand because autoplay policy starts it suspended until a user gesture.
-let sharedCtx = null;
-const ctx = () => {
-  if (!sharedCtx) {
-    const Ctor = typeof window !== 'undefined'
-      ? (window.AudioContext || window.webkitAudioContext)
-      : (globalThis.AudioContext || globalThis.webkitAudioContext);
-    sharedCtx = new Ctor();
-  }
-  return sharedCtx;
-};
+// The app-wide shared AudioContext (imported at top from audioContext.js).
+// Resumed on demand because autoplay policy starts it suspended until a user
+// gesture.
 
 // Guard a UI callback that fires from a setInterval tick — an uncaught throw
 // there has no request boundary to bubble to and would leave the scheduler
 // interval orphaned. (CLAUDE.md: wrap non-request-lifecycle callbacks.)
-const safeCall = (cb, ...args) => {
+// Exported as a factory so midiPlayback.js shares the guard with its own
+// log prefix instead of duplicating the body.
+export const makeSafeCall = (label) => (cb, ...args) => {
   if (typeof cb !== 'function') return;
   try { cb(...args); }
-  catch (err) { console.error(`🎹 score playback callback failed: ${err.message}`); }
+  catch (err) { console.error(`🎹 ${label} callback failed: ${err.message}`); }
 };
+const safeCall = makeSafeCall('score playback');
 
-const LEAD = 0.08;          // seconds of lead-in before beat 0 sounds
-const LOOKAHEAD_MS = 25;    // how often the scheduler wakes
-const SCHEDULE_AHEAD = 0.12; // seconds of audio scheduled past "now"
+// Shared lookahead-scheduler timing — one export so the score synth and the
+// MIDI preview (midiPlayback.js) can't drift apart on feel.
+export const SYNTH_TIMING = {
+  LEAD: 0.08,          // seconds of lead-in before beat 0 sounds
+  LOOKAHEAD_MS: 25,    // how often the scheduler wakes
+  SCHEDULE_AHEAD: 0.12, // seconds of audio scheduled past "now"
+};
+const { LEAD, LOOKAHEAD_MS, SCHEDULE_AHEAD } = SYNTH_TIMING;
 const TONE_PEAK = 0.18;     // per-voice gain peak for a single sounding tone
 
 // Schedule one tone with a short attack/release gain envelope so it doesn't
 // click. Triangle wave reads as a soft reference tone. Routed into `destination`
 // (the context output for the solo player; a per-part gain → master bus for the
 // multi-part player). Returns the live { osc, gain } so the caller can track it
-// for teardown. Pure of any module state — both players share it.
-const scheduleTone = (c, freq, startAt, durSec, destination, peak = TONE_PEAK) => {
+// for teardown. Pure of any module state — both players here share it, and
+// midiPlayback.js imports it so the MIDI preview sounds like the score synth.
+export const scheduleTone = (c, freq, startAt, durSec, destination, peak = TONE_PEAK) => {
   const osc = c.createOscillator();
   const gain = c.createGain();
   osc.type = 'triangle';

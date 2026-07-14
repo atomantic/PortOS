@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   RECENT_KEY, PINNED_KEY, RECENT_CAP,
-  recordVisit, togglePin, isPinned,
+  recordVisit, togglePin, isPinned, resolveRecentNavEntries,
 } from './navWorkingSet.js';
 
 describe('navWorkingSet — constants', () => {
@@ -33,11 +33,39 @@ describe('recordVisit', () => {
     expect(recordVisit(null, ['/a'])).toEqual(['/a']);
     expect(recordVisit(undefined, ['/a'])).toEqual(['/a']);
     expect(recordVisit(42, ['/a'])).toEqual(['/a']);
+    expect(recordVisit('javascript:alert(1)', ['/a'])).toEqual(['/a']);
+    expect(recordVisit('//example.com', ['/a'])).toEqual(['/a']);
   });
 
   it('tolerates a non-array current list', () => {
     expect(recordVisit('/a', null)).toEqual(['/a']);
     expect(recordVisit('/a', undefined)).toEqual(['/a']);
+  });
+});
+
+describe('resolveRecentNavEntries', () => {
+  const commands = [
+    { id: 'nav.dashboard', path: '/', label: 'Dashboard' },
+    { id: 'nav.apps', path: '/apps', label: 'Apps' },
+    { id: 'nav.pipeline', path: '/pipeline', label: 'Pipeline' },
+    { id: 'nav.pipeline.series', path: '/pipeline/series', label: 'Series' },
+  ];
+
+  it('resolves exact paths and preserves deep-link destinations via the longest base route', () => {
+    expect(resolveRecentNavEntries(['/apps/example', '/pipeline/series/series-1', '/'], commands))
+      .toEqual([
+        { ...commands[1], path: '/apps/example' },
+        { ...commands[3], path: '/pipeline/series/series-1' },
+        commands[0],
+      ]);
+  });
+
+  it('skips the current, stale, duplicate, and unsafe paths while honoring the limit', () => {
+    expect(resolveRecentNavEntries(
+      ['/apps', '/missing', '/apps/example', '/apps/example', '//example.com'],
+      commands,
+      { currentPath: '/apps', limit: 1 },
+    )).toEqual([{ ...commands[1], path: '/apps/example' }]);
   });
 });
 

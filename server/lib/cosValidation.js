@@ -10,6 +10,7 @@
  */
 import { z } from 'zod';
 import { emptyToUndefined, emptyToNull } from './zodCompat.js';
+import { EFFORT_LEVELS } from './providerModels.js';
 
 // =============================================================================
 // COS TASK SCHEMAS
@@ -283,6 +284,15 @@ const cosTaskDiagnosticsSchema = z.object({
   failureReason: z.string().optional(),
 }).passthrough();
 
+// Reasoning-effort override for effort-capable CLIs (claude/codex). On create,
+// '' from a form's "Default" option → undefined (no override persisted). On
+// update, ''/null must survive as null so the store's legacy-field normalizer
+// deletes the pin (absent-vs-cleared, CLAUDE.md) — emptyToUndefined would drop
+// the clear signal at the route's `!== undefined` gate and make a set effort
+// permanent through the API.
+const effortInputSchema = z.preprocess(emptyToUndefined, z.enum(EFFORT_LEVELS).optional());
+const effortUpdateSchema = z.preprocess(emptyToNull, z.enum(EFFORT_LEVELS).nullable().optional());
+
 export const createCosTaskSchema = z.object({
   description: z.string().min(1),
   diagnostics: cosTaskDiagnosticsSchema.optional(),
@@ -290,6 +300,7 @@ export const createCosTaskSchema = z.object({
   context: z.string().optional(),
   model: z.string().optional(),
   provider: z.string().optional(),
+  effort: effortInputSchema,
   app: z.string().optional(),
   type: z.string().optional().default('user'),
   approvalRequired: z.boolean().optional(),
@@ -355,6 +366,7 @@ export const updateCosTaskSchema = z.object({
   context: z.string().optional(),
   model: z.string().optional(),
   provider: z.string().optional(),
+  effort: effortUpdateSchema,
   app: z.string().optional(),
   blockedReason: z.string().optional(),
   type: z.string().optional().default('user'),
@@ -443,6 +455,11 @@ export const createCosJobSchema = z.object({
   // generated task's metadata as `provider`/`model` by generateTaskFromJob.
   providerId: z.preprocess(emptyToNull, z.string().nullable().optional()),
   model: z.preprocess(emptyToNull, z.string().nullable().optional()),
+  // Optional reasoning-effort override (claude/codex). Mirrors providerId's
+  // clearable-null semantics — '' from the UI picker → null so a PUT can reset it
+  // back to the provider default. Forwarded into the generated task's metadata as
+  // `effort` by generateTaskFromJob; no-op'd at spawn for non-effort providers.
+  effort: effortUpdateSchema,
   // Optional managed-app scope. Empty string from the UI picker → null so a PUT
   // can actively un-scope a job back to global (updateJob only skips `undefined`,
   // so undefined would silently preserve the old scope). Absent key stays

@@ -501,9 +501,12 @@ export async function spawnAgentForTask(task) {
     // bake a bare, Bedrock-invalid --model into the argv. Cached (5-min TTL), so
     // the spawn helper's own getClaudeSettingsEnv() call is effectively free.
     const cliSettingsEnv = isClaudeCliProvider(provider) ? await getClaudeSettingsEnv() : {};
+    // Per-task reasoning-effort override (task form / schedule config). The
+    // builders no-op it for providers without an effort control.
+    const taskEffort = task.metadata?.effort || null;
     const cliConfig = isTui
-      ? buildTuiSpawnConfig(provider, selectedModel, { systemPromptFile })
-      : buildCliSpawnConfig(provider, selectedModel, cliSettingsEnv, { systemPromptFile });
+      ? buildTuiSpawnConfig(provider, selectedModel, { systemPromptFile, effort: taskEffort })
+      : buildCliSpawnConfig(provider, selectedModel, cliSettingsEnv, { systemPromptFile, effort: taskEffort });
 
     emitLog('success', `Spawning agent for task ${task.id}`, {
       agentId,
@@ -935,10 +938,22 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath })
   const cwd = workspacePath || task?.metadata?.repoPath || null;
   let payload = null;
   if (cwd) {
-    const { DONE_SENTINEL_NAME, parseSentinelPayload } = await import('../lib/agentSentinel.js');
+    const { DONE_SENTINEL_NAME, parseSentinelPayload, salvageSentinelPayload } = await import('../lib/agentSentinel.js');
     const { tryReadFile } = await import('../lib/fileUtils.js');
     const contents = await tryReadFile(join(cwd, DONE_SENTINEL_NAME));
     payload = parseSentinelPayload(contents).payload;
+    // A less-capable (often local) reasoner can emit an almost-valid
+    // `{ summary, payload }` envelope — ```json-fenced, prose-trailed, or with
+    // raw newlines in the markdown body — that strict parse rejects, dropping a
+    // real proposal as "unparseable-response" and filing nothing. Before giving
+    // up, run the robust LLM-JSON extractor over the raw sentinel.
+    if (payload == null) {
+      const salvaged = await salvageSentinelPayload(contents);
+      if (salvaged.payload != null) {
+        payload = salvaged.payload;
+        emitLog('info', `Recovered structured .agent-done payload for ${agentId} (${taskType}) via lenient JSON extraction`, { agentId });
+      }
+    }
   }
 
   await hook({

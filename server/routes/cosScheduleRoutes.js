@@ -7,6 +7,7 @@ import { z } from 'zod';
 import * as taskSchedule from '../services/taskSchedule.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { sanitizeTaskMetadata, validateRequest } from '../lib/validation.js';
+import { EFFORT_LEVELS } from '../lib/providerModels.js';
 
 const templateTaskSchema = z.object({
   name: z.string().min(1),
@@ -19,7 +20,7 @@ const templateTaskSchema = z.object({
 
 const router = Router();
 
-const SCHEDULE_FIELDS = ['type', 'enabled', 'intervalMs', 'cronExpression', 'providerId', 'model', 'prompt', 'taskMetadata', 'runAfter',
+const SCHEDULE_FIELDS = ['type', 'enabled', 'intervalMs', 'cronExpression', 'providerId', 'model', 'effort', 'prompt', 'taskMetadata', 'runAfter',
   // Perpetual (drain-until-done) recheck cadence: after a perpetual task drains
   // its backlog and parks, it re-probes its work-detector on this cadence.
   // `recheckCron` (5-field) takes precedence over `recheckIntervalMs`.
@@ -65,6 +66,9 @@ function pickScheduleSettings(body) {
       throw new ServerError('Invalid taskMetadata: unrecognized keys or values', { status: 400, code: 'VALIDATION_ERROR' });
     }
     settings.taskMetadata = sanitized;
+  }
+  if (settings.effort !== undefined && settings.effort !== null && !EFFORT_LEVELS.includes(settings.effort)) {
+    throw new ServerError(`effort must be one of ${EFFORT_LEVELS.join(', ')} or null`, { status: 400, code: 'VALIDATION_ERROR' });
   }
   if (settings.runAfter !== undefined && settings.runAfter !== null) {
     if (!Array.isArray(settings.runAfter)) {

@@ -15,6 +15,7 @@
 // same grid. Pure-ish: no React; the <Metronome> component wraps it for UI.
 
 import { parseScore } from './scoreNotation.js';
+import { getAudioContext as audioContext } from './audioContext.js';
 
 // BPM band — mirrors the server `tempo` validation (services/rounds.js
 // TEMPO_MIN / TEMPO_MAX, also enforced by the Zod schema in routes/rounds.js).
@@ -27,24 +28,9 @@ const LOOKAHEAD_MS = 25;        // how often the lookahead timer wakes
 const SCHEDULE_AHEAD_S = 0.12;  // how far ahead of `currentTime` we schedule audio
 const START_LEAD_S = 0.1;       // small lead before the first beat absorbs jitter
 
-// Lazily create + reuse one AudioContext for the metronome's clicks. Browsers
-// cap the number of contexts; reusing one keeps every click on the same clock.
-let sharedCtx = null;
-function audioContext() {
-  if (!sharedCtx) {
-    // Resolve the constructor lazily and never touch a bare `window` at module
-    // load — the server's vitest run globs this file's tests in the node
-    // environment (no jsdom), where `window` is undefined. Guard with
-    // `typeof window` and fall back to `globalThis` so the pure exports import
-    // cleanly and tests can inject a fake via globalThis.AudioContext.
-    const Ctor =
-      (typeof window !== 'undefined' && (window.AudioContext || window.webkitAudioContext)) ||
-      globalThis.AudioContext ||
-      globalThis.webkitAudioContext;
-    sharedCtx = new Ctor();
-  }
-  return sharedCtx;
-}
+// The app-wide shared AudioContext (imported at top from audioContext.js) —
+// reusing one keeps every click on the same clock as the other playback
+// features.
 
 // Clamp a BPM into the supported band. Returns null for non-numbers so a caller
 // can distinguish "no/invalid value" from a legitimately-clamped number.

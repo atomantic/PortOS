@@ -4,28 +4,17 @@ import {
   RECENT_KEY, PINNED_KEY,
   recordVisit, togglePin as togglePinPure, isPinned as isPinnedPure,
 } from '../utils/navWorkingSet.js';
+import { safeReadJsonStorage, safeWriteStorage } from '../lib/safeStorage.js';
 
 // Read a JSON string[] from localStorage, tolerating absent/corrupt/throwing storage.
 const readList = (key) => {
-  try {
-    const raw = localStorage.getItem(key);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.filter((p) => typeof p === 'string') : [];
-  } catch {
-    return [];
-  }
+  const parsed = safeReadJsonStorage(key, []);
+  return Array.isArray(parsed) ? parsed.filter((p) => typeof p === 'string') : [];
 };
 
 // Persist a JSON string[]; ignore storage failures (private mode / quota) so the
 // in-memory React state still updates and the app never crashes on a write.
-const writeList = (key, list) => {
-  try {
-    localStorage.setItem(key, JSON.stringify(list));
-  } catch {
-    /* storage unavailable (private mode / quota) — keep in-memory state only */
-  }
-};
+const writeList = (key, list) => safeWriteStorage(key, JSON.stringify(list));
 
 /**
  * Sidebar working-set state (Pinned + Recent), persisted to localStorage.

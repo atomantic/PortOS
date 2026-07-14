@@ -103,6 +103,9 @@ async function createJob(jobData) {
       // forwards these into the task metadata the agent runner resolves.
       providerId: jobData.providerId || null,
       model: jobData.model || null,
+      // Optional reasoning-effort override (claude/codex). Null = provider
+      // default. generateTaskFromJob forwards it into task metadata as `effort`.
+      effort: jobData.effort || null,
       command: jobData.command || null,
       triggerAction,
       config: jobData.config || null,
@@ -148,7 +151,7 @@ async function updateJob(jobId, updates) {
     const updatableFields = [
       'name', 'description', 'category', 'type', 'interval', 'intervalMs',
       'scheduledTime', 'cronExpression', 'weekdaysOnly', 'enabled', 'priority', 'autonomyLevel', 'promptTemplate',
-      'command', 'triggerAction', 'config', 'appId', 'taskMetadata', 'providerId', 'model'
+      'command', 'triggerAction', 'config', 'appId', 'taskMetadata', 'providerId', 'model', 'effort'
     ]
 
     for (const field of updatableFields) {

@@ -76,12 +76,17 @@ export * from './upsertByIdPrepend.js';
 export * from './voiceLabel.js';
 
 // === Page-scoped pure helpers ===
+export * from './audioContext.js';
 export * from './cityPlaybackFrame.js';
+export * from './canvasRoll.js';
 export * from './colorMatch.js';
 export * from './editorialChecks.js';
 export * from './editorialHealth.js';
 export * from './lossSparkline.js';
 export * from './metronome.js';
+export * from './midiChords.js';
+export * from './midiNotes.js';
+export * from './midiPlayback.js';
 export * from './pianoKeyboard.js';
 export * from './pitchDetect.js';
 export * from './referenceAnalysis.js';

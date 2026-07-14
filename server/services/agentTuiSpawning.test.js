@@ -181,8 +181,8 @@ describe('agent TUI spawning', () => {
     }, 'codex-configured-default');
 
     expect(config.command).toBe('codex');
-    expect(config.args).toEqual(['--dangerously-bypass-approvals-and-sandbox']);
-    expect(config.commandLine).toBe('codex --dangerously-bypass-approvals-and-sandbox');
+    expect(config.args).toEqual(['--dangerously-bypass-approvals-and-sandbox', '-c', 'check_for_update_on_startup=false']);
+    expect(config.commandLine).toBe('codex --dangerously-bypass-approvals-and-sandbox -c check_for_update_on_startup=false');
   });
 
   it('injects --dangerously-bypass-approvals-and-sandbox for codex TUI when not already set', () => {
@@ -192,17 +192,17 @@ describe('agent TUI spawning', () => {
       type: 'tui',
       args: ['--cd', '/tmp/work']
     }, null);
-    expect(config.args).toEqual(['--dangerously-bypass-approvals-and-sandbox', '--cd', '/tmp/work']);
+    expect(config.args).toEqual(['--dangerously-bypass-approvals-and-sandbox', '-c', 'check_for_update_on_startup=false', '--cd', '/tmp/work']);
   });
 
-  it('does not inject the bypass flag when the provider config already pins an approval policy', () => {
+  it('skips the bypass flag but still disables the update check when the provider config pins an approval policy', () => {
     const config = buildTuiSpawnConfig({
       id: 'codex-tui',
       command: 'codex',
       type: 'tui',
       args: ['--ask-for-approval', 'on-failure']
     }, null);
-    expect(config.args).toEqual(['--ask-for-approval', 'on-failure']);
+    expect(config.args).toEqual(['-c', 'check_for_update_on_startup=false', '--ask-for-approval', 'on-failure']);
   });
 
   it('does not inject the bypass flag for non-codex TUI commands', () => {
@@ -270,8 +270,33 @@ describe('agent TUI spawning', () => {
 
   it('omits the --model flag when model is null/empty', () => {
     const config = buildTuiSpawnConfig({ id: 'codex-tui', command: 'codex', type: 'tui', args: [] }, null);
-    expect(config.args).toEqual(['--dangerously-bypass-approvals-and-sandbox']);
-    expect(config.commandLine).toBe('codex --dangerously-bypass-approvals-and-sandbox');
+    expect(config.args).toEqual(['--dangerously-bypass-approvals-and-sandbox', '-c', 'check_for_update_on_startup=false']);
+    expect(config.commandLine).toBe('codex --dangerously-bypass-approvals-and-sandbox -c check_for_update_on_startup=false');
+  });
+
+  it('adds --effort for a claude TUI and a -c model_reasoning_effort pair for a codex TUI', () => {
+    const claude = buildTuiSpawnConfig(
+      { id: 'claude-code-tui', command: 'claude', type: 'tui', args: [] },
+      'claude-opus-4-8',
+      { effort: 'xhigh' },
+    );
+    expect(claude.args[claude.args.indexOf('--effort') + 1]).toBe('xhigh');
+
+    const codex = buildTuiSpawnConfig(
+      { id: 'codex-tui', command: 'codex', type: 'tui', args: [] },
+      null,
+      { effort: 'ultra' },
+    );
+    expect(codex.args).toContain('model_reasoning_effort=ultra');
+    expect(codex.args).not.toContain('--effort');
+  });
+
+  it('omits effort args when unset or when the TUI has no effort control', () => {
+    const noEffort = buildTuiSpawnConfig({ id: 'claude-code-tui', command: 'claude', type: 'tui', args: [] }, null);
+    expect(noEffort.args).not.toContain('--effort');
+
+    const agy = buildTuiSpawnConfig({ id: 'antigravity-tui', command: 'agy', type: 'tui', args: [] }, null, { effort: 'high' });
+    expect(agy.args.join(' ')).not.toContain('effort');
   });
 
   it('adds lean-mode flags and the system-prompt file for an Ollama-backed claude TUI', () => {
