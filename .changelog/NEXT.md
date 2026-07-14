@@ -7,6 +7,7 @@
 
 ## Fixed
 
+- **[issue-2544] Wiki vault selection now lives in the URL.** The selected Obsidian vault was local `useState`, so a reload, shared link, ⌘K jump, or voice nav always landed you back on the first vault. The vault is now encoded as a `?vault=<id>` search param (the tab route param is preserved when switching tabs), selection is driven from the URL, and a stale/deleted vault id renders a "Vault not found" fallback with a one-click "Show default vault" recovery.
 - **POST Digit Span: the form no longer jumps up as digits flash on and off.** During the show phase the visible-digit slot collapsed to zero height in the blank gaps between digits, so the container (padding + `min-h`) oscillated and the recall form/progress bar below shifted up on every flash. The slot now reserves its line box with a non-breaking space in the gaps, keeping the layout steady while digits flash.
 
 ## Security

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import * as api from '../services/api';
 import { BookOpen, Search, Network, FileText, BarChart3, Activity } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
@@ -24,21 +24,46 @@ export const TABS = [
 export default function Wiki() {
   const { tab } = useParams();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const activeTab = tab || 'overview';
+  // The selected vault lives in the URL (?vault=<id>) so reload/share/⌘K/voice restore it.
+  const vaultParam = searchParams.get('vault');
 
   const [vaults, setVaults] = useState([]);
-  const [selectedVaultId, setSelectedVaultId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [notes, setNotes] = useState([]);
 
   const loadVaults = useCallback(async () => {
     const data = await api.getNotesVaults().catch(() => []);
     setVaults(data);
-    if (data.length > 0) {
-      setSelectedVaultId(prev => prev || data[0].id);
-    }
     setLoading(false);
   }, []);
+
+  // Selection is derived FROM the URL: an explicit ?vault= wins, otherwise fall
+  // back to the first vault. A param that matches no vault is a stale/deleted id.
+  const selectedVault = useMemo(
+    () => (vaultParam ? vaults.find(v => v.id === vaultParam) : vaults[0]) || null,
+    [vaultParam, vaults]
+  );
+  const selectedVaultId = selectedVault?.id || null;
+  const vaultNotFound = !loading && vaults.length > 0 && !!vaultParam && !selectedVault;
+
+  // Selection handler writes the id to the URL; the tab route param is untouched.
+  const selectVault = useCallback((id) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      next.set('vault', id);
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
+
+  const clearVaultParam = useCallback(() => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      next.delete('vault');
+      return next;
+    }, { replace: true });
+  }, [setSearchParams]);
 
   const loadNotes = useCallback(async () => {
     if (!selectedVaultId) return;
@@ -100,6 +125,23 @@ export default function Wiki() {
     );
   }
 
+  if (vaultNotFound) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full text-gray-500">
+        <BookOpen size={48} className="mb-3 opacity-30" />
+        <p className="text-sm">Vault not found</p>
+        <p className="text-xs mt-1">The selected vault is no longer available.</p>
+        <button
+          type="button"
+          onClick={clearVaultParam}
+          className="mt-3 text-xs text-port-accent hover:underline"
+        >
+          Show default vault
+        </button>
+      </div>
+    );
+  }
+
   const renderTabContent = () => {
     switch (activeTab) {
       case 'overview':
@@ -130,7 +172,7 @@ export default function Wiki() {
             {vaults.length > 1 && (
               <select
                 value={selectedVaultId || ''}
-                onChange={e => setSelectedVaultId(e.target.value)}
+                onChange={e => selectVault(e.target.value)}
                 className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
               >
                 {vaults.map(v => (
@@ -142,7 +184,7 @@ export default function Wiki() {
         }
       />
 
-      <TabPills tabs={TABS} activeTab={activeTab} onChange={(id) => navigate(`/wiki/${id}`)} ariaLabel="Wiki sections" />
+      <TabPills tabs={TABS} activeTab={activeTab} onChange={(id) => navigate({ pathname: `/wiki/${id}`, search: searchParams.toString() })} ariaLabel="Wiki sections" />
 
       {/* Tab content */}
       <div className="flex-1 overflow-auto p-4">
