@@ -17,10 +17,12 @@
  * `evaluateTasks` and `dequeueNextTask` are 250+ LOC each and pull in 40+
  * imported helpers (loadState, getAllTasks, addTask, getActiveApps, mission
  * generation, taskSchedule, etc.). Mocking the full graph would be a brittle
- * test of mocks rather than logic, so we follow the established
- * inline-function-copy pattern from `subAgentSpawner.test.js` and
- * `agentLifecycle.test.js`: lift the priority/capacity slice into a pure
- * function that mirrors the production loop and exercise it with test data.
+ * test of mocks rather than logic, so we exercise the *real* capacity/gate
+ * exports the scheduler uses — `createDequeueCapacity`, `isMissionTierEligible`,
+ * `isIdleTierEligible` from cosDequeue.js (issue #2530) — through a thin drain
+ * harness. Only the tier-ordering loop glue is local; every capacity and
+ * eligibility decision routes through the same helpers `dequeueNextTask` calls,
+ * so a guard-logic regression fails here instead of only in production.
  *
  * A source-level regression check at the bottom asserts the priority order
  * and the capacity-guard early return are still in place in `cos.js`, so a
@@ -34,6 +36,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { firstLine, isPerpetualRefillCandidate } from './cos.js';
 import { canQueueImprovementTasks } from './cosState.js';
+import { createDequeueCapacity, isMissionTierEligible, isIdleTierEligible } from './cosDequeue.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const COS_SRC = readFileSync(join(__dirname, 'cos.js'), 'utf-8');
@@ -44,84 +47,81 @@ const COS_SRC = readFileSync(join(__dirname, 'cos.js'), 'utf-8');
 // whichever module now owns it.
 const GEN_SRC = readFileSync(join(__dirname, 'cosTaskGenerator.js'), 'utf-8');
 const SCHED_SRC = readFileSync(join(__dirname, 'cosJobScheduler.js'), 'utf-8');
+// The pure capacity tracker + mission/idle tier-eligibility predicates that
+// dequeueNextTask (and these tests) call live in cosDequeue.js (issue #2530).
+const DEQ_SRC = readFileSync(join(__dirname, 'cosDequeue.js'), 'utf-8');
 
-// ─── Inline replicas of the cos.js priority + capacity slice ───────────────
+// ─── Real capacity/gate exports driven by a thin harness ───────────────────
 
 /**
- * Replica of the capacity-tracking closure used in `evaluateTasks` (lines
- * 633–666) and `dequeueNextTask` (lines 2329–2349). These are the exact
- * guards that decide whether a task can spawn now or must wait.
+ * Build the REAL per-cycle capacity tracker (`createDequeueCapacity` from
+ * cosDequeue.js) from a fixture state — the same tracker `dequeueNextTask`
+ * constructs. Exposes `availableSlots`, `perProjectLimit`, `spawnProjectCounts`,
+ * and the `canSpawn`/`trackSpawn` closure the scheduler enforces. `spawned` is a
+ * live numeric getter (not an array), so the drain harness below keeps its own
+ * `admitted` list of the task objects it let through.
  */
 function makeCapacityTracker(state, agentsByProject = {}) {
-  const runningAgents = Object.values(state.agents).filter(a => a.status === 'running').length;
-  const availableSlots = state.config.maxConcurrentAgents - runningAgents;
-  const perProjectLimit = state.config.maxConcurrentAgentsPerProject || state.config.maxConcurrentAgents;
-
-  const spawnProjectCounts = { ...agentsByProject };
-  const spawned = [];
-
-  const canSpawn = (task) => {
-    if (spawned.length >= availableSlots) return false;
-    const project = task.metadata?.app || '_self';
-    return (spawnProjectCounts[project] || 0) < perProjectLimit;
-  };
-
-  const trackSpawn = (task) => {
-    const project = task.metadata?.app || '_self';
-    spawnProjectCounts[project] = (spawnProjectCounts[project] || 0) + 1;
-    spawned.push(task);
-  };
-
-  return { availableSlots, perProjectLimit, canSpawn, trackSpawn, spawned, spawnProjectCounts };
+  return createDequeueCapacity(state, { agentsByProject });
 }
 
 /**
- * Replica of the priority-bucket loop in `evaluateTasks` / `dequeueNextTask`.
- * The production code merges five buckets in this exact order:
+ * Thin drain harness modelling the priority-bucket loop in `dequeueNextTask`.
+ * The five buckets are drained in this exact order:
  *
- *   0. onDemand    — explicit user requests (highest)
+ *   0. onDemand    — explicit user requests (highest, bypasses pause)
  *   1. user        — user-authored pending tasks
  *   2. autoSystem  — auto-approved system / improvement tasks
- *   3. mission     — proactive mission tasks (only when no pending user)
- *   4. idle        — generated idle-review task (only when nothing else
- *                    has been queued/spawned in this cycle)
+ *   3. mission     — proactive mission tasks (only when eligible)
+ *   4. idle        — generated idle-review task (only when eligible)
  *
- * Within a bucket the iteration order is whatever the source array provides
- * (file order for parsed TASKS.md; arrival order for the on-demand request
- * queue). The dequeue loop does NOT re-sort by priorityValue at this layer
- * — it relies on the upstream parser/writer to keep CRITICAL/HIGH tasks
- * positioned earlier in the file. This is the contract these tests pin.
+ * Only the ordering/glue is local: every capacity decision routes through the
+ * real `capacity.canSpawn`/`trackSpawn`, and the mission/idle fences use the
+ * real `isMissionTierEligible` / `isIdleTierEligible` predicates the scheduler
+ * calls. Within a bucket, iteration order is the source array order (file order
+ * for parsed TASKS.md; arrival order for the on-demand queue) — the loop does
+ * NOT re-sort by priorityValue.
  *
- * Idle gating: production is stricter than just `!hasPendingUserTasks`. In
- * `dequeueNextTask` the idle generator is fenced by `if (spawned === 0 &&
- * state.config.idleReviewEnabled && !hasPendingUserTasks)` (cos.js:2480) —
- * i.e. NOTHING else (autoSystem, mission) may have spawned this cycle.
- * `evaluateTasks` mirrors this at cos.js:862 with `tasksToSpawn.length === 0`.
- * The replica enforces the same `spawned === 0` precondition.
+ * Idle gating is stricter than mission's: `isIdleTierEligible` requires
+ * `spawned === 0`, so ANY earlier spawn (autoSystem or mission) suppresses idle
+ * on the same cycle. Tests run with auto-run in `execute` and proactive/idle
+ * enabled so the tier predicates reduce to the pending-user + spawned gates.
  */
 function priorityDequeue(buckets, capacity, { paused = false } = {}) {
-  const order = ['onDemand', 'user', 'autoSystem', 'mission', 'idle'];
-
-  // Mission / idle only run when no pending user tasks exist, mirroring the
-  // production `hasPendingUserTasks` gate at lines 795 / 2450.
+  const admitted = [];
   const hasPendingUserTasks = (buckets.user || []).length > 0;
+  // No daily budget in these fixtures, so the autonomous ceiling equals the
+  // global slot count.
+  const ceiling = capacity.availableSlots;
 
-  for (const bucketName of order) {
-    // Global pause: on-demand (explicit user "Run") still drains, but every
-    // autonomous/scheduled/user tier below is skipped — mirrors the
-    // `if (paused) return;` gate in dequeueNextTask after Priority 0.
-    if (paused && bucketName !== 'onDemand') break;
-    if ((bucketName === 'mission' || bucketName === 'idle') && hasPendingUserTasks) continue;
-    // Idle is stricter: only fires when no other bucket has spawned yet.
-    if (bucketName === 'idle' && capacity.spawned.length > 0) continue;
-    const bucket = buckets[bucketName] || [];
-    for (const task of bucket) {
-      if (capacity.spawned.length >= capacity.availableSlots) return capacity.spawned;
+  const drain = (bucketName) => {
+    for (const task of buckets[bucketName] || []) {
+      if (capacity.spawned >= capacity.availableSlots) return;
       if (!capacity.canSpawn(task)) continue;
-      capacity.trackSpawn({ ...task, _bucket: bucketName });
+      capacity.trackSpawn(task);
+      admitted.push({ ...task, _bucket: bucketName });
     }
-  }
-  return capacity.spawned;
+  };
+
+  // Priority 0 (on-demand) drains even when paused.
+  drain('onDemand');
+  // Global pause stops every autonomous/scheduled/user tier below.
+  if (paused) return admitted;
+
+  drain('user');
+  drain('autoSystem');
+
+  if (isMissionTierEligible({
+    spawned: capacity.spawned, ceiling, hasPendingUserTasks,
+    proactiveMode: true, autonomyMode: 'execute'
+  })) drain('mission');
+
+  if (isIdleTierEligible({
+    spawned: capacity.spawned, hasPendingUserTasks,
+    idleReviewEnabled: true, autonomyMode: 'execute'
+  })) drain('idle');
+
+  return admitted;
 }
 
 // ─── Fixture helpers ───────────────────────────────────────────────────────
@@ -646,31 +646,30 @@ describe('cos.js source — priority + capacity invariants', () => {
     expect(fnBody).toMatch(/if\s*\(\s*availableSlots\s*<=\s*0\s*\)/);
   });
 
-  it('priority order in dequeueNextTask: onDemand → user → autoSystem → mission → idle', () => {
-    const fnStart = COS_SRC.indexOf('async function dequeueNextTask');
-    const fnBody = extractFnBody(COS_SRC, fnStart);
-
-    // Anchor on the actual code markers (declarations / generator calls)
-    // for each priority bucket — NOT the `// Priority N` comments. A comment
-    // rename or rewording shouldn't fail this test; only an actual reorder
-    // of the dequeue logic should.
+  it('dequeueNextTask orchestrates the spawnDequeuePriority* tiers in priority order', () => {
+    // dequeueNextTask (cos.js) decomposes each priority tier into a named
+    // `spawnDequeuePriorityN(ctx)` helper (issue #2530), mirroring evaluateTasks.
+    // This pins that the orchestrator actually INVOKES each tier helper, in order
+    // — an actual reorder of the dequeue logic is the only thing that fails it.
     //
-    //   Priority 0 (onDemand)    — `onDemandRequests` declaration + loop
-    //   Priority 1 (user)        — `pendingUserTasks` declaration + loop
-    //   Priority 2 (autoSystem)  — `autoApproved` declaration + loop
-    //   Priority 3 (mission)     — `generateMissionTasks(` call
-    //   Priority 4 (idle)        — `generateIdleReviewTask(` call
-    const onDemandIdx = fnBody.indexOf('onDemandRequests');
-    const userIdx     = fnBody.indexOf('pendingUserTasks');
-    const autoSysIdx  = fnBody.indexOf('autoApproved');
-    const missionIdx  = fnBody.indexOf('generateMissionTasks(');
-    const idleIdx     = fnBody.indexOf('generateIdleReviewTask(');
+    //   Priority 0 (onDemand)    — spawnDequeuePriority0OnDemand(ctx)
+    //   Priority 1 (user)        — spawnDequeuePriority1UserTasks(ctx)
+    //   Priority 2 (autoSystem)  — spawnDequeuePriority2AutoApproved(ctx)
+    //   Priority 3 (mission)     — spawnDequeuePriority3Missions(ctx)
+    //   Priority 4 (idle)        — spawnDequeuePriority4IdleReview(ctx)
+    const fnBody = extractFnBody(COS_SRC, COS_SRC.indexOf('async function dequeueNextTask'));
 
-    expect(onDemandIdx, 'onDemandRequests must appear').toBeGreaterThan(-1);
-    expect(userIdx, 'pendingUserTasks must appear after onDemand').toBeGreaterThan(onDemandIdx);
-    expect(autoSysIdx, 'autoApproved must appear after pendingUserTasks').toBeGreaterThan(userIdx);
-    expect(missionIdx, 'generateMissionTasks must appear after autoApproved').toBeGreaterThan(autoSysIdx);
-    expect(idleIdx, 'generateIdleReviewTask must appear after generateMissionTasks').toBeGreaterThan(missionIdx);
+    const onDemandIdx = fnBody.indexOf('spawnDequeuePriority0OnDemand(ctx)');
+    const userIdx     = fnBody.indexOf('spawnDequeuePriority1UserTasks(ctx)');
+    const autoSysIdx  = fnBody.indexOf('spawnDequeuePriority2AutoApproved(ctx)');
+    const missionIdx  = fnBody.indexOf('spawnDequeuePriority3Missions(ctx)');
+    const idleIdx     = fnBody.indexOf('spawnDequeuePriority4IdleReview(ctx)');
+
+    expect(onDemandIdx, 'spawnDequeuePriority0OnDemand must be invoked').toBeGreaterThan(-1);
+    expect(userIdx, 'spawnDequeuePriority1UserTasks must run after on-demand').toBeGreaterThan(onDemandIdx);
+    expect(autoSysIdx, 'spawnDequeuePriority2AutoApproved must run after user tasks').toBeGreaterThan(userIdx);
+    expect(missionIdx, 'spawnDequeuePriority3Missions must run after auto-approved').toBeGreaterThan(autoSysIdx);
+    expect(idleIdx, 'spawnDequeuePriority4IdleReview must run after missions').toBeGreaterThan(missionIdx);
   });
 
   it('evaluateTasks orchestrates the spawnPriority* tiers in priority order', () => {
@@ -707,12 +706,13 @@ describe('cos.js source — priority + capacity invariants', () => {
     const evalFn    = extractFnBody(GEN_SRC, GEN_SRC.indexOf('export async function evaluateTasks'));
 
     // dequeueNextTask: the `if (paused) return` gate appears AFTER the on-demand
-    // loop (`onDemandRequests`), and `paused` is NOT returned-on before it.
-    const dqOnDemandIdx = dequeueFn.indexOf('onDemandRequests');
+    // tier (`spawnDequeuePriority0OnDemand`), and `paused` is NOT returned-on
+    // before it.
+    const dqOnDemandIdx = dequeueFn.indexOf('spawnDequeuePriority0OnDemand(ctx)');
     const dqPauseGateIdx = dequeueFn.search(/if\s*\(\s*paused\s*\)\s*return/);
-    expect(dqOnDemandIdx, 'dequeueNextTask must process onDemandRequests').toBeGreaterThan(-1);
+    expect(dqOnDemandIdx, 'dequeueNextTask must invoke spawnDequeuePriority0OnDemand').toBeGreaterThan(-1);
     expect(dqPauseGateIdx, 'dequeueNextTask must keep an `if (paused) return` gate').toBeGreaterThan(-1);
-    expect(dqPauseGateIdx, 'pause gate must come AFTER the on-demand loop').toBeGreaterThan(dqOnDemandIdx);
+    expect(dqPauseGateIdx, 'pause gate must come AFTER the on-demand tier').toBeGreaterThan(dqOnDemandIdx);
 
     // evaluateTasks: Priority 0 runs unconditionally; Priorities 1+ are wrapped in
     // an `if (!paused)` block that begins after spawnPriority0OnDemand.
@@ -727,8 +727,10 @@ describe('cos.js source — priority + capacity invariants', () => {
   it('per-project cap defaults to global cap when unset', () => {
     // The fallback `state.config.maxConcurrentAgentsPerProject || state.config.maxConcurrentAgents`
     // is the safety net for older state.json files that pre-date the
-    // per-project cap. Both dequeueNextTask and evaluateTasks must keep it.
-    const dequeueFn = extractFnBody(COS_SRC, COS_SRC.indexOf('async function dequeueNextTask'));
+    // per-project cap. dequeueNextTask's capacity tracker was extracted to
+    // `createDequeueCapacity` in cosDequeue.js (issue #2530), so the dequeue-side
+    // fallback lives there now; evaluateTasks keeps its own inline copy.
+    const dequeueFn = extractFnBody(DEQ_SRC, DEQ_SRC.indexOf('export function createDequeueCapacity'));
     const evalFn    = extractFnBody(GEN_SRC, GEN_SRC.indexOf('export async function evaluateTasks'));
 
     const pattern = /maxConcurrentAgentsPerProject\s*\|\|\s*state\.config\.maxConcurrentAgents/;
@@ -737,17 +739,21 @@ describe('cos.js source — priority + capacity invariants', () => {
   });
 
   it('idle generator is fenced by spawned===0 / tasksToSpawn.length===0', () => {
-    // Pin the strict-idle gate that the replica enforces. If a refactor
-    // drops either fence, idle could spawn alongside autoSystem/mission and
-    // double-load the agent pool.
-    const dequeueFn = extractFnBody(COS_SRC, COS_SRC.indexOf('async function dequeueNextTask'));
-    // The generator engine's tiers are now decomposed into named spawnPriority*
-    // helpers (issue #1082), so this gate lives in `spawnPriority4IdleReview`
-    // rather than the `evaluateTasks` orchestrator body — scope to the whole
-    // cosTaskGenerator module (the engine) instead of the single function.
+    // Pin the strict-idle gate. If a refactor drops either fence, idle could
+    // spawn alongside autoSystem/mission and double-load the agent pool.
+    // dequeueNextTask's idle tier (spawnDequeuePriority4IdleReview) now routes
+    // through the shared `isIdleTierEligible` predicate in cosDequeue.js
+    // (issue #2530), whose body carries the `spawned === 0` fence.
+    const idleTier = extractFnBody(COS_SRC, COS_SRC.indexOf('async function spawnDequeuePriority4IdleReview'));
+    const idlePred = extractFnBody(DEQ_SRC, DEQ_SRC.indexOf('export function isIdleTierEligible'));
+    // The generator engine's tiers are decomposed into named spawnPriority*
+    // helpers (issue #1082), so its gate lives in `spawnPriority4IdleReview`
+    // — scope to the whole cosTaskGenerator module (the engine).
     const evalFn    = GEN_SRC;
 
-    expect(dequeueFn).toMatch(/spawned\s*===\s*0\s*&&\s*state\.config\.idleReviewEnabled/);
+    expect(idleTier, 'idle tier must call the shared isIdleTierEligible predicate').toMatch(/isIdleTierEligible\(/);
+    expect(idleTier, 'idle tier must pass state.config.idleReviewEnabled into the predicate').toMatch(/idleReviewEnabled:\s*state\.config\.idleReviewEnabled/);
+    expect(idlePred, 'isIdleTierEligible must fence on spawned === 0 && idleReviewEnabled').toMatch(/spawned\s*===\s*0\s*&&\s*!!idleReviewEnabled/);
     expect(evalFn).toMatch(/tasksToSpawn\.length\s*===\s*0\s*&&\s*state\.config\.idleReviewEnabled/);
   });
 
@@ -757,17 +763,27 @@ describe('cos.js source — priority + capacity invariants', () => {
     // (dequeueNextTask in cos.js, evaluateTasks in cosTaskGenerator.js) must read
     // the cos mode and fence their mission / idle / auto-approved blocks on it,
     // or "off"/"dry-run" leaks autonomous agents through the un-gated engine.
-    const dequeueFn = extractFnBody(COS_SRC, COS_SRC.indexOf('async function dequeueNextTask'));
+    // dequeueNextTask resolves the cos mode in spawnDequeuePriority2AutoApproved
+    // and fences its mission/idle tiers through the shared eligibility predicates
+    // (issue #2530) — both still live in the cos.js module, so scope to it.
+    const dequeueSrc = COS_SRC;
     // evaluateTasks resolves the mode in `resolveAutonomyBudget` and fences each
     // autonomous tier inside its spawnPriority* helper (issue #1082) — both still
     // live in the cosTaskGenerator module, so scope to the whole engine source.
     const evalFn    = GEN_SRC;
 
-    for (const [name, fnBody] of [['dequeueNextTask', dequeueFn], ['evaluateTasks (cosTaskGenerator)', evalFn]]) {
+    for (const [name, fnBody] of [['dequeueNextTask (cos.js)', dequeueSrc], ['evaluateTasks (cosTaskGenerator)', evalFn]]) {
       expect(fnBody, `${name} must resolve the cos autonomy mode`).toMatch(/getDomainMode\(\s*state\.config\s*,\s*['"]cos['"]\s*\)/);
-      // The mission/idle blocks must be fenced on execute so off/dry-run skip them.
-      expect(fnBody, `${name} must fence autonomous spawns on cosAutonomyMode === 'execute'`).toMatch(/cosAutonomyMode\s*===\s*['"]execute['"]/);
     }
+    // evaluateTasks fences autonomous spawns inline on `cosAutonomyMode === 'execute'`.
+    expect(evalFn, `evaluateTasks must fence autonomous spawns on cosAutonomyMode === 'execute'`).toMatch(/cosAutonomyMode\s*===\s*['"]execute['"]/);
+    // dequeueNextTask's autonomous tiers gate through the shared predicates, which
+    // enforce `autonomyMode === 'execute'` in cosDequeue.js; the auto-approved tier
+    // withholds spawns unless the mode is execute (`cosAutonomyMode !== 'execute'`).
+    expect(dequeueSrc, `dequeueNextTask must gate mission/idle via the eligibility predicates`).toMatch(/isMissionTierEligible\(/);
+    expect(dequeueSrc, `dequeueNextTask must gate the idle tier via the eligibility predicate`).toMatch(/isIdleTierEligible\(/);
+    expect(dequeueSrc, `dequeueNextTask auto-approved tier must withhold spawns unless mode is execute`).toMatch(/cosAutonomyMode\s*!==\s*['"]execute['"]/);
+    expect(DEQ_SRC, `cosDequeue predicates must enforce autonomyMode === 'execute'`).toMatch(/autonomyMode\s*===\s*['"]execute['"]/);
   });
 
   it('CoS auto-run domain gate (#711) covers the scheduled-job + improvement-check timers', () => {
@@ -801,12 +817,12 @@ describe('cos.js source — priority + capacity invariants', () => {
     // startup/manual `evaluateTasks` loop AND the event-driven `dequeueNextTask`
     // loop (the common "Run Now" path). Pin (a) the set is declared and (b) the
     // cooldown stamp is gated on it in each.
-    // evaluateTasks now lives in cosTaskGenerator.js, and its Priority-0 on-demand
-    // loop is the extracted `spawnPriority0OnDemand` helper (issue #1082);
-    // dequeueNextTask stays monolithic in cos.js.
+    // Both engines' Priority-0 on-demand loops are now extracted helpers:
+    // `spawnPriority0OnDemand` in cosTaskGenerator.js (issue #1082) and
+    // `spawnDequeuePriority0OnDemand` in cos.js (issue #2530).
     for (const { fnName, src } of [
       { fnName: 'async function spawnPriority0OnDemand', src: GEN_SRC },
-      { fnName: 'async function dequeueNextTask', src: COS_SRC },
+      { fnName: 'async function spawnDequeuePriority0OnDemand', src: COS_SRC },
     ]) {
       const fnBody = extractFnBody(src, src.indexOf(fnName));
       expect(
@@ -828,7 +844,7 @@ describe('cos.js source — priority + capacity invariants', () => {
     // active agent inside an `if (task)` guard after generation.
     for (const { fnName, src } of [
       { fnName: 'async function spawnPriority0OnDemand', src: GEN_SRC },
-      { fnName: 'async function dequeueNextTask', src: COS_SRC },
+      { fnName: 'async function spawnDequeuePriority0OnDemand', src: COS_SRC },
     ]) {
       const fnBody = extractFnBody(src, src.indexOf(fnName));
       expect(
