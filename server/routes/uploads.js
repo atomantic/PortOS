@@ -9,7 +9,7 @@ import { existsSync } from 'fs';
 import { join, resolve } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { ensureDir, PATHS, RISKY_MIME_TYPES, sanitizeFilename, getFileExtension, getMimeType } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, RISKY_MIME_TYPES, sanitizeFilename, getFileExtension, getMimeType, isPathInsideDir } from '../lib/fileUtils.js';
 
 const UPLOADS_DIR = PATHS.uploads;
 
@@ -59,8 +59,7 @@ router.post('/', asyncHandler(async (req, res) => {
   const filepath = join(UPLOADS_DIR, fname);
 
   // Double-check path is within uploads directory (defense in depth)
-  const resolvedPath = resolve(filepath);
-  if (!resolvedPath.startsWith(UPLOADS_DIR)) {
+  if (!isPathInsideDir(UPLOADS_DIR, filepath)) {
     throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
   }
 
@@ -125,7 +124,7 @@ router.get('/:filename', asyncHandler(async (req, res) => {
   const safeFilename = sanitizeFilename(filename);
   const filepath = resolve(UPLOADS_DIR, safeFilename);
 
-  if (!filepath.startsWith(UPLOADS_DIR)) {
+  if (!isPathInsideDir(UPLOADS_DIR, filepath)) {
     throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
   }
 
@@ -150,7 +149,7 @@ router.delete('/:filename', asyncHandler(async (req, res) => {
   const safeFilename = sanitizeFilename(filename);
   const filepath = resolve(UPLOADS_DIR, safeFilename);
 
-  if (!filepath.startsWith(UPLOADS_DIR)) {
+  if (!isPathInsideDir(UPLOADS_DIR, filepath)) {
     throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
   }
 

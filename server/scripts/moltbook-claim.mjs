@@ -27,8 +27,12 @@ if (!token || !tweetUrl) {
 
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+// Never print the full claim token — it's a bearer credential. Log only its
+// length and a short prefix so the run is identifiable without leaking it.
+const tokenHint = `${token.slice(0, 6)}… (${token.length} chars)`;
+
 console.log(`🦞 Moltbook Claim Bot`);
-console.log(`🔑 Token: ${token}`);
+console.log(`🔑 Token: ${tokenHint}`);
 console.log(`🐦 Tweet: ${tweetUrl}`);
 console.log(`⏱️  Backoff: ${BACKOFF_MS / 1000}s between attempts`);
 console.log(`🔁 Max attempts: ${MAX_ATTEMPTS}\n`);

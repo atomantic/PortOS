@@ -32,6 +32,7 @@ import {
   sha256File,
   resolveImageInputPath,
   resolveScreenshot,
+  isPathInsideDir,
   PATHS,
   sanitizeFilename,
   getFileExtension,
@@ -431,6 +432,34 @@ describe('fileUtils', () => {
       expect(formatDuration(25 * 60 * 60000)).toBe('1d 1h');
       expect(formatDuration(48 * 60 * 60000)).toBe('2d 0h');
       expect(formatDuration(50 * 60 * 60000)).toBe('2d 2h');
+    });
+  });
+
+  describe('isPathInsideDir', () => {
+    it('accepts a file directly inside the directory', () => {
+      expect(isPathInsideDir('/data/uploads', '/data/uploads/foo.png')).toBe(true);
+      expect(isPathInsideDir('/data/uploads', '/data/uploads/sub/foo.png')).toBe(true);
+    });
+
+    it('rejects a traversal that escapes the directory', () => {
+      expect(isPathInsideDir('/data/uploads', '/data/uploads/../etc/passwd')).toBe(false);
+      expect(isPathInsideDir('/data/uploads', '/etc/passwd')).toBe(false);
+    });
+
+    it('rejects a sibling dir whose name merely starts with the root (the trailing-sep bug)', () => {
+      // The old `startsWith(DIR)` check without a trailing separator let
+      // `/data/uploads-evil/x` slip through because the string prefix matched.
+      expect(isPathInsideDir('/data/uploads', '/data/uploads-evil/x.png')).toBe(false);
+    });
+
+    it('rejects the root itself (no trailing separator on the bare root)', () => {
+      expect(isPathInsideDir('/data/uploads', '/data/uploads')).toBe(false);
+    });
+
+    it('returns false for non-string / empty inputs', () => {
+      expect(isPathInsideDir('/data/uploads', '')).toBe(false);
+      expect(isPathInsideDir('', '/data/uploads/foo.png')).toBe(false);
+      expect(isPathInsideDir(null, undefined)).toBe(false);
     });
   });
 
