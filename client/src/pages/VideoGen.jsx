@@ -553,6 +553,27 @@ export default function VideoGen() {
   // again on cancel; runGeneration captures the value at start and bails
   // when the token has moved on (e.g. POST resolves after cancel).
   const runTokenRef = useRef(0);
+  // BUSY-backoff retry timer for the queue worker, held on a ref so it can be
+  // cleared from a stable unmount cleanup regardless of how often the worker
+  // effect re-runs (setQueue/setRunningQueueId churn consumes the effect's own
+  // cleanup before the async .catch ever assigns the timer, so the effect
+  // cleanup alone can't be trusted to clear it).
+  const busyRetryTimerRef = useRef(null);
+  // Generation token for the queue-worker dispatch. Bumped only when a new item
+  // is actually dispatched; a stale async then/catch/finally (from a superseded
+  // dispatch or after unmount) sees a moved-on token and bails without touching
+  // state or re-releasing the running slot.
+  const queueWorkerGenRef = useRef(0);
+  // Unmount guard for the queue worker's deferred callbacks. Never reset to true
+  // so StrictMode's mount→cleanup→remount can't strand it false.
+  const mountedRef = useRef(true);
+  useEffect(() => () => {
+    mountedRef.current = false;
+    if (busyRetryTimerRef.current) {
+      clearTimeout(busyRetryTimerRef.current);
+      busyRetryTimerRef.current = null;
+    }
+  }, []);
 
   // Batch queue. Each item snapshots the params at enqueue time so the user
   // can keep editing the form while jobs are in flight without affecting the
@@ -1266,6 +1287,11 @@ export default function VideoGen() {
     if (generating || runningQueueId) return;
     const next = queue.find((item) => item.status === 'pending');
     if (!next) return;
+    // Capture a generation token for this dispatch. Every deferred callback
+    // below re-checks it (via isCurrent) so a superseded dispatch or an
+    // unmount can't set state / re-release the running slot after teardown.
+    const myGen = ++queueWorkerGenRef.current;
+    const isCurrent = () => mountedRef.current && myGen === queueWorkerGenRef.current;
     setRunningQueueId(next.id);
     setQueue((q) => q.map((item) => item.id === next.id ? { ...item, status: 'running', startedAt: Date.now() } : item));
     const payload = { ...next.params };
@@ -1273,17 +1299,24 @@ export default function VideoGen() {
     if (next._blobs?.lastImage) payload.lastImage = next._blobs.lastImage;
     if (next._blobs?.audioFile) payload.audioFile = next._blobs.audioFile;
     let busyRetry = false;
-    let busyRetryTimer = null;
     runGeneration(payload).then((res) => {
+      if (!isCurrent()) return;
       setQueue((q) => q.map((item) => item.id === next.id ? { ...item, status: 'complete', result: res } : item));
     }).catch((err) => {
+      if (!isCurrent()) return;
       const isBusy = /already in progress|VIDEO_GEN_BUSY|409/i.test(err?.message || '');
       if (isBusy) {
         // Bounce the item back to pending after a short delay so the worker
         // re-tries once the server's previous child has finished cleaning up.
         busyRetry = true;
         setQueue((q) => q.map((item) => item.id === next.id ? { ...item, status: 'pending', startedAt: undefined } : item));
-        busyRetryTimer = setTimeout(() => setRunningQueueId((curr) => (curr === next.id ? null : curr)), 1500);
+        busyRetryTimerRef.current = setTimeout(() => {
+          busyRetryTimerRef.current = null;
+          // Stale/unmounted: a fresh dispatch (or teardown) already owns the
+          // slot, so don't release it out from under whatever runs now.
+          if (!isCurrent()) return;
+          setRunningQueueId((curr) => (curr === next.id ? null : curr));
+        }, 1500);
         return;
       }
       setQueue((q) => q.map((item) => item.id === next.id ? { ...item, status: 'error', error: err.message } : item));
@@ -1291,13 +1324,20 @@ export default function VideoGen() {
       // For the BUSY branch the timeout above releases the slot — releasing
       // it here too would let the worker immediately re-fire and hit the
       // same 409 before the server's old child has exited.
-      if (!busyRetry) setRunningQueueId(null);
+      if (isCurrent() && !busyRetry) setRunningQueueId(null);
     });
-    // Effect cleanup: cancel a pending BUSY-retry setTimeout when the
-    // component unmounts (or before this effect re-runs). Without this, an
-    // unmount during the 1.5s BUSY backoff would fire setRunningQueueId on
-    // a torn-down component (React warning + leaked state).
-    return () => { if (busyRetryTimer) clearTimeout(busyRetryTimer); };
+    // Effect cleanup: cancel a pending BUSY-retry setTimeout. This is a
+    // best-effort clear; because the worker effect re-runs on every
+    // setQueue/setRunningQueueId, this cleanup is usually consumed before the
+    // async .catch assigns the timer — the authoritative clear lives in the
+    // dedicated unmount effect above, and the isCurrent()/mountedRef guards in
+    // the timer callback prevent any stale setState.
+    return () => {
+      if (busyRetryTimerRef.current) {
+        clearTimeout(busyRetryTimerRef.current);
+        busyRetryTimerRef.current = null;
+      }
+    };
   }, [queue, generating, runningQueueId]);
 
   const handleCancel = async () => {
