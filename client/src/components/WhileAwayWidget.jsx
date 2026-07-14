@@ -12,6 +12,7 @@ import {
 import * as api from '../services/api';
 import socket from '../services/socket';
 import { timeAgo } from '../utils/formatters';
+import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
 
 // Per-device "last visit" marker. The widget shows agent activity that
 // completed since this timestamp; "Mark as seen" advances it to now. Kept in
@@ -20,13 +21,10 @@ import { timeAgo } from '../utils/formatters';
 const LAST_SEEN_KEY = 'portos.whileAway.lastSeen';
 
 const readLastSeen = () => {
-  // localStorage access can throw in private-mode / storage-disabled /
-  // security-error contexts — never let that crash the dashboard render.
-  // Even *reading* the `window.localStorage` property can throw in some
-  // sandboxed iframes, so it's acquired inside the try (not before it).
-  let raw = null;
-  try { raw = window.localStorage.getItem(LAST_SEEN_KEY); }
-  catch { return null; }
+  // safeReadStorage swallows the private-mode / storage-disabled / security-error
+  // throws (including the property-access throw in sandboxed iframes) and returns
+  // null so this never crashes the dashboard render.
+  const raw = safeReadStorage(LAST_SEEN_KEY);
   // A finite, non-future ISO string is the only valid marker; anything else
   // (absent, garbage, clock-skewed) means "no marker" → server applies its
   // own 24h fallback so the card still renders.
@@ -36,13 +34,10 @@ const readLastSeen = () => {
   return raw;
 };
 
-const writeLastSeen = (iso) => {
-  // A write failure (quota / disabled / property-access throw) must not break
-  // "Mark as seen" — the subsequent refetch still runs; the window just isn't
-  // persisted this time.
-  try { window.localStorage.setItem(LAST_SEEN_KEY, iso); }
-  catch { /* private mode / quota — graceful no-op */ }
-};
+// A write failure (quota / disabled / property-access throw) is swallowed by
+// safeWriteStorage — "Mark as seen" still refetches; the window just isn't
+// persisted this time.
+const writeLastSeen = (iso) => safeWriteStorage(LAST_SEEN_KEY, iso);
 
 function ActivityRow({ item, kind }) {
   const Icon = kind === 'incident' ? XCircle : CheckCircle;

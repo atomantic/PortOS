@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 
 import { RINGS, TRIBE_RINGS, ENERGY, STATUS_HEX, contactStatus, energyFor, initialsFor } from '../../lib/tribe.js';
+import { clickableProps } from '../../lib/a11yKeyboard';
 
 // Concentric-circles map of the Tribe: "Me" at the center, each Dunbar ring is a
 // tinted band (support innermost → village outermost) and every person is a node
@@ -243,12 +244,8 @@ export default function TribeCircleMap({ contacts, selectedId, onSelect, onLogTo
                 onMouseLeave={() => setHovered((cur) => (cur === contact.id ? null : cur))}
                 onFocus={() => { setHovered(contact.id); setActiveId(contact.id); }}
                 onBlur={() => setHovered((cur) => (cur === contact.id ? null : cur))}
-                tabIndex={0}
-                role="button"
+                {...clickableProps(() => onSelect?.(contact))}
                 aria-label={`${contact.name || 'Unnamed'} — ${ringLabel}, ${status.label}`}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect?.(contact); }
-                }}
               >
                 {isSelected && (
                   <circle r={r + 5} fill="none" stroke="#3b82f6" strokeWidth="2" strokeOpacity="0.9" />

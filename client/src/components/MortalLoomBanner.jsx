@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { X, ExternalLink, Smartphone } from 'lucide-react';
+import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
 
 const APP_STORE_URL = 'https://apps.apple.com/app/id6760883701';
 const DISMISS_KEY = 'mortalloom-banner-dismissed-v1';
@@ -9,12 +10,11 @@ export default function MortalLoomBanner({ section = 'this data' }) {
   const [dismissed, setDismissed] = useState(true);
 
   useEffect(() => {
-    const v = typeof window !== 'undefined' ? window.localStorage.getItem(DISMISS_KEY) : '1';
-    setDismissed(v === '1');
+    setDismissed(safeReadStorage(DISMISS_KEY) === '1');
   }, []);
 
   const handleDismiss = () => {
-    window.localStorage.setItem(DISMISS_KEY, '1');
+    safeWriteStorage(DISMISS_KEY, '1');
     setDismissed(true);
   };
 
