@@ -33,7 +33,16 @@ import {
   isPaginationRequested,
   paginateArray,
   seriesAutopilotSettingsSchema,
+  portsCheckSchema,
+  portsAllocateSchema,
+  databaseSwitchSchema,
+  databaseBackendSchema,
+  databaseExportSchema,
+  brainDigestRunSchema,
 } from './validation.js';
+import {
+  telegramForwardTypesSchema,
+} from './telegramValidation.js';
 
 describe('validation.js', () => {
   describe('isPaginationRequested', () => {
@@ -1354,5 +1363,75 @@ describe('seriesAutopilotSettingsSchema (#2174)', () => {
       schedules: [{ seriesId: 's1', cron: '0 3 * * *', provider: '', model: '' }],
     });
     expect(parsed.schedules[0]).toEqual({ seriesId: 's1', cron: '0 3 * * *', enabled: false });
+  });
+});
+
+describe('ad-hoc route schemas (#2521)', () => {
+  describe('portsCheckSchema', () => {
+    it('accepts a non-empty array of port numbers', () => {
+      expect(portsCheckSchema.safeParse({ ports: [3000, 8080] }).success).toBe(true);
+    });
+    it('rejects an empty array, non-array, and out-of-range/non-integer ports', () => {
+      expect(portsCheckSchema.safeParse({ ports: [] }).success).toBe(false);
+      expect(portsCheckSchema.safeParse({ ports: 'x' }).success).toBe(false);
+      expect(portsCheckSchema.safeParse({ ports: [0] }).success).toBe(false);
+      expect(portsCheckSchema.safeParse({ ports: [70000] }).success).toBe(false);
+      expect(portsCheckSchema.safeParse({ ports: [3000.5] }).success).toBe(false);
+    });
+  });
+
+  describe('portsAllocateSchema', () => {
+    it('defaults count to 1 when absent and coerces numeric strings', () => {
+      expect(portsAllocateSchema.parse({})).toEqual({ count: 1 });
+      expect(portsAllocateSchema.parse({ count: '5' })).toEqual({ count: 5 });
+    });
+    it('rejects out-of-range counts and non-numeric garbage', () => {
+      expect(portsAllocateSchema.safeParse({ count: 0 }).success).toBe(false);
+      expect(portsAllocateSchema.safeParse({ count: 11 }).success).toBe(false);
+      expect(portsAllocateSchema.safeParse({ count: 'abc' }).success).toBe(false);
+    });
+  });
+
+  describe('database schemas', () => {
+    it('databaseSwitchSchema accepts valid backends + optional migrate, rejects others', () => {
+      expect(databaseSwitchSchema.safeParse({ target: 'docker' }).success).toBe(true);
+      expect(databaseSwitchSchema.safeParse({ target: 'native', migrate: true }).success).toBe(true);
+      expect(databaseSwitchSchema.safeParse({ target: 'sqlite' }).success).toBe(false);
+      expect(databaseSwitchSchema.safeParse({}).success).toBe(false);
+      expect(databaseSwitchSchema.safeParse({ target: 'docker', migrate: 'yes' }).success).toBe(false);
+    });
+    it('databaseBackendSchema requires a valid backend enum', () => {
+      expect(databaseBackendSchema.safeParse({ backend: 'docker' }).success).toBe(true);
+      expect(databaseBackendSchema.safeParse({ backend: 'native' }).success).toBe(true);
+      expect(databaseBackendSchema.safeParse({ backend: 'mysql' }).success).toBe(false);
+      expect(databaseBackendSchema.safeParse({}).success).toBe(false);
+    });
+    it('databaseExportSchema allows an absent backend but rejects an invalid one', () => {
+      expect(databaseExportSchema.safeParse({}).success).toBe(true);
+      expect(databaseExportSchema.safeParse({ backend: 'native' }).success).toBe(true);
+      expect(databaseExportSchema.safeParse({ backend: 'oracle' }).success).toBe(false);
+    });
+  });
+
+  describe('brainDigestRunSchema', () => {
+    it('accepts empty body and optional string overrides', () => {
+      expect(brainDigestRunSchema.safeParse({}).success).toBe(true);
+      expect(brainDigestRunSchema.safeParse({ providerOverride: 'p', modelOverride: 'm' }).success).toBe(true);
+    });
+    it('rejects non-string overrides', () => {
+      expect(brainDigestRunSchema.safeParse({ providerOverride: 5 }).success).toBe(false);
+    });
+  });
+
+  describe('telegramForwardTypesSchema', () => {
+    it('accepts a string array (including empty to clear all)', () => {
+      expect(telegramForwardTypesSchema.safeParse({ forwardTypes: [] }).success).toBe(true);
+      expect(telegramForwardTypesSchema.safeParse({ forwardTypes: ['digest', 'inbox'] }).success).toBe(true);
+    });
+    it('rejects a non-array or non-string elements', () => {
+      expect(telegramForwardTypesSchema.safeParse({ forwardTypes: 'digest' }).success).toBe(false);
+      expect(telegramForwardTypesSchema.safeParse({ forwardTypes: [1, 2] }).success).toBe(false);
+      expect(telegramForwardTypesSchema.safeParse({}).success).toBe(false);
+    });
   });
 });

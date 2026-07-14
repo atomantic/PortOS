@@ -7,6 +7,7 @@
 import { Router } from 'express';
 import * as brainService from '../services/brain.js';
 import { asyncHandler } from '../lib/errorHandler.js';
+import { validateRequest, brainDigestRunSchema } from '../lib/validation.js';
 
 const router = Router();
 
@@ -34,7 +35,7 @@ router.get('/digests', asyncHandler(async (req, res) => {
  * Manually trigger daily digest generation
  */
 router.post('/digest/run', asyncHandler(async (req, res) => {
-  const { providerOverride, modelOverride } = req.body || {};
+  const { providerOverride, modelOverride } = validateRequest(brainDigestRunSchema, req.body || {});
   const digest = await brainService.runDailyDigest(providerOverride, modelOverride);
   res.json(digest);
 }));
@@ -63,7 +64,7 @@ router.get('/reviews', asyncHandler(async (req, res) => {
  * Manually trigger weekly review generation
  */
 router.post('/review/run', asyncHandler(async (req, res) => {
-  const { providerOverride, modelOverride } = req.body || {};
+  const { providerOverride, modelOverride } = validateRequest(brainDigestRunSchema, req.body || {});
   const review = await brainService.runWeeklyReview(providerOverride, modelOverride);
   res.json(review);
 }));

@@ -98,6 +98,11 @@ export const providerSchema = z.object({
   tuiMaxRuntimeMs: z.number().int().min(60000).max(43200000).optional()
 });
 
+// PUT /api/providers/active — set the active provider by id.
+export const providerActiveSchema = z.object({
+  id: z.string().min(1)
+});
+
 export const runSchema = z.object({
   // `type` defaults to 'ai' so the common case (AI run via /api/runs from
   // RunnerPage / AIProviders / etc.) doesn't have to send it explicitly.

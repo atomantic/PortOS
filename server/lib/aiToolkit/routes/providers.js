@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { ToolkitHttpError, defaultAsyncHandler } from '../internal/httpError.js';
+import { providerSchema, providerActiveSchema, validate } from '../validation.js';
 
 export function createProvidersRoutes(providerService, options = {}) {
   const router = Router();
@@ -20,10 +21,11 @@ export function createProvidersRoutes(providerService, options = {}) {
   }));
 
   router.put('/active', asyncHandler(async (req, res) => {
-    const { id } = req.body;
-    if (!id) {
-      throw new ServerError('Provider ID required', { status: 400 });
+    const result = validate(providerActiveSchema, req.body);
+    if (!result.success) {
+      throw new ServerError('Provider ID required', { status: 400, code: 'VALIDATION_ERROR', context: { details: result.errors } });
     }
+    const { id } = result.data;
 
     const provider = await providerService.setActiveProvider(id);
 
@@ -50,22 +52,24 @@ export function createProvidersRoutes(providerService, options = {}) {
   }));
 
   router.post('/', asyncHandler(async (req, res) => {
-    const { name, type } = req.body;
-
-    if (!name) {
-      throw new ServerError('Name is required', { status: 400 });
+    const result = validate(providerSchema, req.body);
+    if (!result.success) {
+      throw new ServerError('Invalid provider data', { status: 400, code: 'VALIDATION_ERROR', context: { details: result.errors } });
     }
 
-    if (!type || !['cli', 'api', 'tui'].includes(type)) {
-      throw new ServerError('Type must be "cli", "api", or "tui"', { status: 400 });
-    }
-
-    const provider = await providerService.createProvider(req.body);
+    const provider = await providerService.createProvider(result.data);
     res.status(201).json(provider);
   }));
 
   router.put('/:id', asyncHandler(async (req, res) => {
-    const provider = await providerService.updateProvider(req.params.id, req.body);
+    // Partial: a PUT may touch a single field; unknown keys are stripped so only
+    // the canonical provider shape reaches updateProvider's spread.
+    const result = validate(providerSchema.partial(), req.body);
+    if (!result.success) {
+      throw new ServerError('Invalid provider data', { status: 400, code: 'VALIDATION_ERROR', context: { details: result.errors } });
+    }
+
+    const provider = await providerService.updateProvider(req.params.id, result.data);
 
     if (!provider) {
       throw new ServerError('Provider not found', { status: 404 });

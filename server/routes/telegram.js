@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { telegramConfigSchema, telegramTestSchema, telegramMethodSchema } from '../lib/telegramValidation.js';
+import { validateRequest } from '../lib/validation.js';
+import { telegramConfigSchema, telegramTestSchema, telegramMethodSchema, telegramForwardTypesSchema } from '../lib/telegramValidation.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
 import * as telegram from '../services/telegram.js';
 import * as telegramBridge from '../services/telegramBridge.js';
@@ -193,13 +194,7 @@ router.post('/test', asyncHandler(async (req, res) => {
 
 // PUT /api/telegram/forward-types
 router.put('/forward-types', asyncHandler(async (req, res) => {
-  const { forwardTypes } = req.body;
-  if (!Array.isArray(forwardTypes)) {
-    throw new ServerError('forwardTypes must be an array', {
-      status: 400,
-      code: 'VALIDATION_ERROR'
-    });
-  }
+  const { forwardTypes } = validateRequest(telegramForwardTypesSchema, req.body);
 
   await updateSettingsWith((current) => ({
     ...current,

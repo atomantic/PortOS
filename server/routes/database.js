@@ -3,6 +3,7 @@ import { execFile, spawn } from 'child_process';
 import { existsSync, mkdirSync, createReadStream } from 'fs';
 import { join } from 'path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { validateRequest, databaseSwitchSchema, databaseBackendSchema, databaseExportSchema } from '../lib/validation.js';
 import { checkHealth, query } from '../lib/db.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
@@ -217,10 +218,7 @@ router.get('/status', asyncHandler(async (req, res) => {
 
 // POST /api/database/switch — switch mode and optionally migrate
 router.post('/switch', asyncHandler(async (req, res) => {
-  const { target, migrate } = req.body;
-  if (!target || !['docker', 'native'].includes(target)) {
-    throw new ServerError('target must be "docker" or "native"', { status: 400 });
-  }
+  const { target, migrate } = validateRequest(databaseSwitchSchema, req.body);
 
   const io = req.app.get('io');
   const emit = (event, data) => io?.emit('database:progress', { event, ...data });
@@ -505,10 +503,7 @@ router.post('/sync', asyncHandler(async (req, res) => {
 
 // POST /api/database/start — start a specific backend
 router.post('/start', asyncHandler(async (req, res) => {
-  const { backend } = req.body;
-  if (!backend || !['docker', 'native'].includes(backend)) {
-    throw new ServerError('backend must be "docker" or "native"', { status: 400 });
-  }
+  const { backend } = validateRequest(databaseBackendSchema, req.body);
 
   if (backend === 'docker') {
     const result = await runCmd('docker', ['compose', 'up', '-d', 'db'], 60_000);
@@ -522,10 +517,7 @@ router.post('/start', asyncHandler(async (req, res) => {
 
 // POST /api/database/stop — stop the non-active backend
 router.post('/stop', asyncHandler(async (req, res) => {
-  const { backend } = req.body;
-  if (!backend || !['docker', 'native'].includes(backend)) {
-    throw new ServerError('backend must be "docker" or "native"', { status: 400 });
-  }
+  const { backend } = validateRequest(databaseBackendSchema, req.body);
 
   if (backend === 'docker') {
     const result = await runCmd('docker', ['compose', 'stop', 'db'], 30_000);
@@ -539,10 +531,7 @@ router.post('/stop', asyncHandler(async (req, res) => {
 
 // POST /api/database/destroy — destroy the non-active backend's data
 router.post('/destroy', asyncHandler(async (req, res) => {
-  const { backend } = req.body;
-  if (!backend || !['docker', 'native'].includes(backend)) {
-    throw new ServerError('backend must be "docker" or "native"', { status: 400 });
-  }
+  const { backend } = validateRequest(databaseBackendSchema, req.body);
 
   // Safety: don't destroy the active backend
   const statusResult = await runDbScript(['status']);
@@ -593,10 +582,10 @@ router.post('/setup-native', asyncHandler(async (req, res) => {
 // Optional body.backend: 'docker' | 'native' to export from a specific backend
 // Default: exports from the active backend
 router.post('/export', asyncHandler(async (req, res) => {
-  const { backend } = req.body || {};
+  const { backend } = validateRequest(databaseExportSchema, req.body || {});
   const label = `backup-${Date.now()}`;
 
-  if (backend && ['docker', 'native'].includes(backend)) {
+  if (backend) {
     // Export from a specific backend by connecting directly to its port
     const port = backend === 'docker' ? DOCKER_PORT : NATIVE_PORT;
     const env = pgEnv(port);
