@@ -460,24 +460,42 @@ describe('tuiHandshake.inferTuiCommand', () => {
 });
 
 describe('tuiHandshake.applyCommandDefaults', () => {
-  it('injects `--dangerously-bypass-approvals-and-sandbox` for codex when not already present', () => {
+  it('injects the bypass flag and disables the startup update check for codex when not already present', () => {
     expect(applyCommandDefaults('codex', ['exec', '-'])).toEqual([
-      '--dangerously-bypass-approvals-and-sandbox', 'exec', '-',
+      '--dangerously-bypass-approvals-and-sandbox', '-c', 'check_for_update_on_startup=false', 'exec', '-',
     ]);
   });
 
-  it('passes codex args through unchanged when --ask-for-approval is already present', () => {
+  it('skips the bypass flag but still disables the update check when --ask-for-approval is already present', () => {
     const args = ['--ask-for-approval', 'auto-edit', 'exec', '-'];
-    expect(applyCommandDefaults('codex', args)).toBe(args);
+    expect(applyCommandDefaults('codex', args)).toEqual([
+      '-c', 'check_for_update_on_startup=false', '--ask-for-approval', 'auto-edit', 'exec', '-',
+    ]);
   });
 
-  it('passes codex args through unchanged when --sandbox is already present', () => {
+  it('skips the bypass flag but still disables the update check when --sandbox is already present', () => {
     const args = ['--sandbox', 'workspace-write', 'exec', '-'];
-    expect(applyCommandDefaults('codex', args)).toBe(args);
+    expect(applyCommandDefaults('codex', args)).toEqual([
+      '-c', 'check_for_update_on_startup=false', '--sandbox', 'workspace-write', 'exec', '-',
+    ]);
   });
 
   it('does not duplicate the bypass flag when codex args already pin it', () => {
     const args = ['--dangerously-bypass-approvals-and-sandbox', 'exec', '-'];
+    expect(applyCommandDefaults('codex', args)).toEqual([
+      '-c', 'check_for_update_on_startup=false', '--dangerously-bypass-approvals-and-sandbox', 'exec', '-',
+    ]);
+  });
+
+  it('does not duplicate the update-check config when codex args already pin it', () => {
+    const args = ['-c', 'check_for_update_on_startup=true', 'exec', '-'];
+    expect(applyCommandDefaults('codex', args)).toEqual([
+      '--dangerously-bypass-approvals-and-sandbox', '-c', 'check_for_update_on_startup=true', 'exec', '-',
+    ]);
+  });
+
+  it('returns the same codex arg list untouched when both policy and update-check are already pinned', () => {
+    const args = ['--dangerously-bypass-approvals-and-sandbox', '-c', 'check_for_update_on_startup=false', 'exec', '-'];
     expect(applyCommandDefaults('codex', args)).toBe(args);
   });
 
@@ -535,7 +553,7 @@ describe('tuiHandshake.buildTuiInvocation', () => {
     const provider = { id: 'codex' };
     const out = buildTuiInvocation(provider, null);
     expect(out.command).toBe('codex');
-    expect(out.args).toEqual(['--dangerously-bypass-approvals-and-sandbox']);
+    expect(out.args).toEqual(['--dangerously-bypass-approvals-and-sandbox', '-c', 'check_for_update_on_startup=false']);
   });
 
   it('appends --model when caller passes a model and provider.args has no model flag', () => {
@@ -560,13 +578,13 @@ describe('tuiHandshake.buildTuiInvocation', () => {
     // resolveCliModel(CODEX_CONFIGURED_DEFAULT) returns null → no flag.
     const provider = { id: 'codex', args: ['exec', '-'] };
     const out = buildTuiInvocation(provider, CODEX_CONFIGURED_DEFAULT);
-    expect(out.args).toEqual(['--dangerously-bypass-approvals-and-sandbox', 'exec', '-']);
+    expect(out.args).toEqual(['--dangerously-bypass-approvals-and-sandbox', '-c', 'check_for_update_on_startup=false', 'exec', '-']);
   });
 
   it('passes a selected Codex model tier to the interactive CLI', () => {
     const provider = { id: 'codex-tui', command: 'codex', args: [] };
     const out = buildTuiInvocation(provider, 'gpt-5.6-sol');
-    expect(out.args).toEqual(['--dangerously-bypass-approvals-and-sandbox', '--model', 'gpt-5.6-sol']);
+    expect(out.args).toEqual(['--dangerously-bypass-approvals-and-sandbox', '-c', 'check_for_update_on_startup=false', '--model', 'gpt-5.6-sol']);
   });
 
   it('skips --model injection when model is null/undefined/empty', () => {

@@ -46,6 +46,9 @@ describe('buildCliVisionInvocation', () => {
     expect(inv.args).toContain('-m');
     expect(inv.args).toContain('gpt-5');
     expect(inv.args[inv.args.length - 1]).toBe('describe'); // prompt is positional
+    // Codex's startup update check is disabled so it can't stall / brew-upgrade
+    // under the vision timeout.
+    expect(inv.args).toEqual(expect.arrayContaining(['-c', 'check_for_update_on_startup=false']));
     expect(inv.stdin).toBeNull();
     expect(inv.cwd).toBe('/tmp/x');
   });

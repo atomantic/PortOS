@@ -509,13 +509,13 @@ describe('buildCliArgs — codex (regression coverage for the existing logic)', 
   it('omits --model when defaultModel is the sentinel', () => {
     const provider = { id: 'codex', command: 'codex', args: [], defaultModel: 'codex-configured-default' };
     const args = buildCliArgs(provider);
-    expect(args).toEqual(['exec', '-']);
+    expect(args).toEqual(['exec', '-c', 'check_for_update_on_startup=false', '-']);
   });
 
   it('appends --model when a real model is given', () => {
     const provider = { id: 'codex', command: 'codex', args: [], defaultModel: 'o4-mini' };
     const args = buildCliArgs(provider);
-    expect(args).toEqual(['exec', '--model', 'o4-mini', '-']);
+    expect(args).toEqual(['exec', '-c', 'check_for_update_on_startup=false', '--model', 'o4-mini', '-']);
   });
 });
 
@@ -543,7 +543,7 @@ describe('buildCliArgs — strips dangling --model from baseArgs before injectin
   it('drops dangling --model on codex too (regression)', () => {
     const provider = { id: 'codex', command: 'codex', args: ['--model'], defaultModel: 'o4-mini' };
     const args = buildCliArgs(provider);
-    expect(args).toEqual(['exec', '--model', 'o4-mini', '-']);
+    expect(args).toEqual(['exec', '-c', 'check_for_update_on_startup=false', '--model', 'o4-mini', '-']);
   });
 
   it('preserves a properly-pinned --model and does NOT inject our own', () => {

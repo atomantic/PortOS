@@ -12,7 +12,7 @@
  * No cycle risk: this module imports nothing from either consumer.
  */
 
-import { resolveCliModel, hasModelFlag, resolveBedrockCliModel, prefixOpencodeModel, isOpencodeCommand } from './providerModels.js';
+import { resolveCliModel, hasModelFlag, resolveBedrockCliModel, prefixOpencodeModel, isOpencodeCommand, buildCodexStartupArgs } from './providerModels.js';
 import { ensureAntigravityTuiArgs, isAntigravityCommand } from './antigravity.js';
 import { ensureGrokTuiArgs, isGrokCommand } from './grok.js';
 
@@ -795,9 +795,12 @@ export function rendersWorkCounter(commandName) {
 // the CLI/exec path uses in `agentCliSpawning.js`. The bypass flag is mutually
 // exclusive with `--ask-for-approval` / `--sandbox`, so don't add it when the
 // provider config already pins an approval/sandbox/bypass policy of its own.
+// We ALSO disable codex's startup update check (see ensureCodexTuiArgs) —
+// independent of the approval posture, so it's injected even when a provider
+// pins its own policy.
 export function applyCommandDefaults(command, args) {
-  if (command === 'codex' && !codexHasApprovalPolicy(args)) {
-    return ['--dangerously-bypass-approvals-and-sandbox', ...args];
+  if (command === 'codex') {
+    return ensureCodexTuiArgs(args);
   }
   if (isAntigravityCommand(command)) {
     return ensureAntigravityTuiArgs(args);
@@ -806,6 +809,21 @@ export function applyCommandDefaults(command, args) {
     return ensureGrokTuiArgs(args);
   }
   return args;
+}
+
+// Disable codex's startup update check (see buildCodexStartupArgs in
+// providerModels.js for the full "Update available!" modal failure mode) and
+// inject the full-yolo bypass. Both are prepended; the update-check disable is
+// independent of the approval posture (the modal is orthogonal to sandboxing),
+// so it rides even when a provider pins its own policy, while the bypass flag is
+// skipped when the argv already declares an approval/sandbox posture.
+function ensureCodexTuiArgs(args) {
+  const prefix = [];
+  if (!codexHasApprovalPolicy(args)) {
+    prefix.push('--dangerously-bypass-approvals-and-sandbox');
+  }
+  prefix.push(...buildCodexStartupArgs(args));
+  return prefix.length ? [...prefix, ...args] : args;
 }
 
 // True when the codex argv already declares an approval/sandbox posture, so
