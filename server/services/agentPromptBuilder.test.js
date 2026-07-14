@@ -549,6 +549,45 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/For EACH reviewer in order/);
     });
 
+    // Regression for the release-review finding: #2507 made only the reviewer
+    // LIST default-aware on the inline `/do:pr` path (TUI + PR-owning claude-code
+    // agents), leaving its four companions (usernames, optionalReviewers,
+    // stopMode, reviewerApplies) resolved from task metadata alone. A task that
+    // pins no reviewer config must inherit ALL FIVE from Code Review Defaults —
+    // matching resolveReviewLoopOptions on the non-PR-owning CLI follow-up path.
+    it('threads ALL FIVE Code Review Default fields into the inline /do:pr (not just reviewers)', () => {
+      const codeReviewDefaults = {
+        reviewers: ['codex', 'ollama'],
+        usernames: ['alice'],
+        optionalReviewers: ['ollama'],
+        stopMode: 'on-findings',
+        reviewerApplies: true,
+      };
+      const prompt = buildLightContextPrompt(
+        // No reviewer config on the task itself — every field comes from defaults.
+        makeTask({ metadata: { openPR: true, reviewLoop: true } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true, defaultReviewers: codeReviewDefaults.reviewers, codeReviewDefaults });
+      expect(prompt).toMatch(/--review-with codex,ollama~opt,@alice --review-stop-on-findings --reviewer-applies/);
+    });
+
+    it('does not leak default usernames/stop-mode/reviewer-applies when no Code Review Defaults are set', () => {
+      // Same task, no `codeReviewDefaults` option → the lone-copilot default,
+      // which suppresses `--review-with` entirely and emits none of the flags.
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { openPR: true, reviewLoop: true } }),
+        '/r',
+        { branchName: 'b', worktreePath: '/tmp/wt' },
+        isTruthyMeta,
+        { isTui: true });
+      expect(prompt).not.toMatch(/@alice/);
+      expect(prompt).not.toMatch(/~opt/);
+      expect(prompt).not.toMatch(/--review-stop-on-findings/);
+      expect(prompt).not.toMatch(/--reviewer-applies/);
+    });
+
     it('appends GitHub reviewer usernames as @user tokens and instructs requesting them', () => {
       const prompt = buildLightContextPrompt(
         makeTask({ metadata: {

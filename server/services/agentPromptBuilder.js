@@ -16,7 +16,7 @@ import { getToolsSummaryForPrompt } from './tools.js';
 import { getActiveProvider } from './providers.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
 import { readJSONFile, loadSlashdoFile, PATHS, tryReadFile } from '../lib/fileUtils.js';
-import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, resolveKeyedReviewers, buildReviewWithArgs } from '../lib/validation.js';
+import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, resolveReviewUsernames, resolveOptionalReviewers, resolveKeyedReviewers, buildReviewWithArgs } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { isOpencodeCommand } from '../lib/providerModels.js';
 import { shellQuote } from '../lib/shellQuote.js';
@@ -640,7 +640,7 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   const defaultReviewers = codeReviewDefaults?.reviewers;
 
   if (LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType)) {
-    const lightOptions = { isTui, providerId, providerCommand, leanMode: options.leanMode === true, defaultReviewers };
+    const lightOptions = { isTui, providerId, providerCommand, leanMode: options.leanMode === true, defaultReviewers, codeReviewDefaults };
     return options.split === true
       ? buildLightContextPromptParts(task, workspaceDir, worktreeInfo, isTruthyMetaFn, lightOptions)
       : buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTruthyMetaFn, lightOptions);
@@ -722,11 +722,22 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
   // Resolve the user's ordered reviewer list + flags (task metadata wins; else the
   // install's configured Code Review Defaults; else `[copilot]`). Declared up here
   // so the TUI completion block can thread `--review-with …` into `/do:pr`.
+  // Thread the install's Code Review Defaults as the fallback for ALL five
+  // reviewer fields (not just `reviewers`) with task-over-default precedence —
+  // mirroring `resolveReviewLoopOptions` in codeReview.js. #2507 made only the
+  // reviewer LIST default-aware on this inline `/do:pr` path (TUI + claude-code
+  // agents that own the PR); its four companions (usernames, optionalReviewers,
+  // stopMode, reviewerApplies) were still resolved from task metadata alone, so
+  // a task pinning no reviewer config would silently drop the configured gating
+  // reviewers / stop-mode / reviewer-applies here while the non-PR-owning CLI
+  // follow-up path honored them — same defaults, different gating by provider.
   const taskReviewers = normalizeReviewers(task.metadata, defaultReviewers);
-  const taskReviewerUsernames = normalizeReviewUsernames(task.metadata?.usernames);
-  const taskOptionalReviewers = normalizeOptionalReviewers(task.metadata?.optionalReviewers) || [];
-  const taskReviewStopMode = task.metadata?.reviewStopMode || DEFAULT_REVIEW_STOP_MODE;
-  const taskReviewerApplies = isTruthyMetaFn(task.metadata?.reviewerApplies);
+  const taskReviewerUsernames = resolveReviewUsernames(task.metadata?.usernames, codeReviewDefaults?.usernames);
+  const taskOptionalReviewers = resolveOptionalReviewers(task.metadata?.optionalReviewers, codeReviewDefaults?.optionalReviewers);
+  const taskReviewStopMode = task.metadata?.reviewStopMode || codeReviewDefaults?.stopMode || DEFAULT_REVIEW_STOP_MODE;
+  const taskReviewerApplies = task.metadata?.reviewerApplies !== undefined
+    ? isTruthyMetaFn(task.metadata?.reviewerApplies)
+    : (codeReviewDefaults?.reviewerApplies === true);
 
   // TUI completion section — delegate to the shared light-path builder so
   // both prompt paths emit byte-identical workflows. (Background: TUI owns
@@ -982,7 +993,7 @@ export function buildLightContextPromptParts(task, workspaceDir, worktreeInfo, i
 
 const BEGIN_WORKING_LINE = 'Begin working on the task now.';
 
-function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMetaFn, { isTui = true, providerId = null, providerCommand = null, leanMode = false, defaultReviewers } = {}) {
+function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMetaFn, { isTui = true, providerId = null, providerCommand = null, leanMode = false, defaultReviewers, codeReviewDefaults } = {}) {
   // Idempotent with the reconcile in buildAgentPrompt; also protects the
   // directly-exported buildLightContextPrompt/Parts entry points.
   task = reconcileSplitContext(task);
@@ -996,12 +1007,16 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   // Ordered reviewer list + flags for the Review Loop (task metadata wins; else
   // the install's configured Code Review Defaults threaded from buildAgentPrompt;
   // else `[copilot]`). Flows as `/do:pr --review-with a,b,c [--review-stop-on-*]
-  // [--reviewer-applies]`.
+  // [--reviewer-applies]`. All five fields fall back to the defaults with
+  // task-over-default precedence (see the matching block in buildAgentPrompt and
+  // resolveReviewLoopOptions) — not just the reviewer list.
   const lightReviewers = normalizeReviewers(task.metadata, defaultReviewers);
-  const lightReviewerUsernames = normalizeReviewUsernames(task.metadata?.usernames);
-  const lightOptionalReviewers = normalizeOptionalReviewers(task.metadata?.optionalReviewers) || [];
-  const lightReviewStopMode = task.metadata?.reviewStopMode || DEFAULT_REVIEW_STOP_MODE;
-  const lightReviewerApplies = isTruthyMetaFn(task.metadata?.reviewerApplies);
+  const lightReviewerUsernames = resolveReviewUsernames(task.metadata?.usernames, codeReviewDefaults?.usernames);
+  const lightOptionalReviewers = resolveOptionalReviewers(task.metadata?.optionalReviewers, codeReviewDefaults?.optionalReviewers);
+  const lightReviewStopMode = task.metadata?.reviewStopMode || codeReviewDefaults?.stopMode || DEFAULT_REVIEW_STOP_MODE;
+  const lightReviewerApplies = task.metadata?.reviewerApplies !== undefined
+    ? isTruthyMetaFn(task.metadata?.reviewerApplies)
+    : (codeReviewDefaults?.reviewerApplies === true);
   // Claude Code CLI providers can drive `/simplify` + `/do:pr` themselves
   // (the slashdo submodule mounts those as project-level slash commands).
   // Other CLI providers (codex, antigravity) can't — they get the legacy
