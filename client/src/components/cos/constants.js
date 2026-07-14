@@ -103,6 +103,13 @@ export const MUSE_ANIMATION_FALLBACK = 'Idle';
 // returns to its base state loop.
 export const MUSE_SPEAKING_GESTURE = 'Wave';
 
+// RobotExpressive clips that carry root translation (they walk the model
+// forward). Never used as a base loop for the fixed-frame avatar — the state
+// map above avoids them, the constants test asserts it, and MuseCoSAvatar's
+// "GLB has clips but none are mapped" fallback skips them so a custom GLB
+// whose first clip happens to be a walk cycle can't drift out of view.
+export const MUSE_ROOT_MOTION_CLIPS = ['Walking', 'Running', 'WalkJump'];
+
 // Default messages shown when no specific event message is available
 export const STATE_MESSAGES = {
   sleeping: "Idle - waiting for tasks...",

@@ -8,7 +8,8 @@ import {
   AGENT_STATES,
   MUSE_STATE_ANIMATIONS,
   MUSE_ANIMATION_FALLBACK,
-  MUSE_SPEAKING_GESTURE
+  MUSE_SPEAKING_GESTURE,
+  MUSE_ROOT_MOTION_CLIPS
 } from './constants';
 
 // These mirror the server's domainBudgets/domainAutonomy helpers so the UI's
@@ -49,8 +50,7 @@ describe('getDomainBudget (client mirror)', () => {
 // The Cyber Muse avatar drives RobotExpressive's clips off CoS state. Two
 // invariants must hold or the fixed-frame avatar breaks: every agent state
 // needs a base clip, and no mapped clip may carry root translation (those
-// walk the model out of view). RobotExpressive's root-motion clips:
-const MUSE_ROOT_MOTION_CLIPS = ['Walking', 'Running', 'WalkJump'];
+// walk the model out of view — enumerated in MUSE_ROOT_MOTION_CLIPS).
 
 describe('muse avatar animation triggers', () => {
   it('maps every agent state to a base clip', () => {

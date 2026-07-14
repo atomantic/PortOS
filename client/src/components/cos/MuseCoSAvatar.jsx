@@ -8,6 +8,7 @@ import {
   MUSE_STATE_ANIMATIONS,
   MUSE_ANIMATION_FALLBACK,
   MUSE_SPEAKING_GESTURE,
+  MUSE_ROOT_MOTION_CLIPS,
 } from './constants';
 import CoSAvatarOrbitControls from './CoSAvatarOrbitControls';
 import CoSAvatarFrame from './CoSAvatarFrame';
@@ -36,9 +37,15 @@ function GLBAvatar({ color, state, speaking }) {
   // whole scene graph on every frame).
   const matsRef = useRef([]);
 
-  // Auto-fit to viewport + apply holographic material. Replacing the material
-  // does NOT affect skinning — the skeleton drives deformation regardless of
-  // the material bound to the SkinnedMesh, so clips still animate the body.
+  // Apply the holographic material + fit the model to the viewport ONCE per
+  // scene. Keyed on [scene] only — NOT color — because the fit is an absolute
+  // `setScalar`, so re-measuring the already-scaled scene on a color change
+  // would reset it toward native size (the avatar would pop between two sizes
+  // on every state transition) and re-allocating materials each time would
+  // leak GPU resources. Replacing the material does NOT affect skinning — the
+  // skeleton drives deformation regardless of the bound material, so clips
+  // still animate the body. The per-state emissive hue is handled separately
+  // below so this heavy pass runs just once.
   useEffect(() => {
     const mats = [];
     scene.traverse((obj) => {
@@ -50,7 +57,6 @@ function GLBAvatar({ color, state, speaking }) {
       obj.frustumCulled = false;
       const material = new THREE.MeshStandardMaterial({
         color: '#120820',
-        emissive: color,
         emissiveIntensity: 0.55,
         metalness: 0.55,
         roughness: 0.35,
@@ -75,7 +81,14 @@ function GLBAvatar({ color, state, speaking }) {
       -center.y * scale + 0.05,
       -center.z * scale
     );
-  }, [scene, color]);
+    return () => { for (const m of mats) m.dispose(); };
+  }, [scene]);
+
+  // Recolor the emissive hue in place when the CoS state changes — mutate the
+  // materials created above rather than re-allocating them (see the fit effect).
+  useEffect(() => {
+    for (const m of matsRef.current) m.emissive.set(color);
+  }, [color]);
 
   // --- Animation driving -------------------------------------------------
   // The base loop we should return to when idle (updated by the state effect),
@@ -110,7 +123,10 @@ function GLBAvatar({ color, state, speaking }) {
     if (!hasClips) return null;
     if (baseCfg.clip && names.includes(baseCfg.clip)) return baseCfg.clip;
     if (names.includes(MUSE_ANIMATION_FALLBACK)) return MUSE_ANIMATION_FALLBACK;
-    return names[0];
+    // Last resort for a custom GLB with clips but none mapped: prefer the first
+    // in-place clip so a leading walk cycle can't drift the fixed-frame avatar
+    // out of view; fall back to names[0] only if every clip is root-motion.
+    return names.find((n) => !MUSE_ROOT_MOTION_CLIPS.includes(n)) || names[0];
   }, [hasClips, names, baseCfg.clip]);
 
   // Play / crossfade the base state loop.
