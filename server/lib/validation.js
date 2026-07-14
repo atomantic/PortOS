@@ -272,6 +272,10 @@ export const providerSchema = z.object({
   defaultModel: z.string().nullable().optional(),
   timeout: z.number().int().min(1000).max(600000).optional(),
   enabled: z.boolean().optional(),
+  // Explicit opt-in to attach the API key to an arbitrary (non-local,
+  // non-allowlisted) endpoint — mirrors the aiToolkit providerSchema. Guards
+  // SSRF / key exfiltration (server/lib/aiToolkit/internal/endpointGuard.js).
+  allowCustomEndpoint: z.boolean().optional(),
   envVars: z.record(z.string()).optional(),
   headlessArgs: z.array(z.string()).optional(),
   tuiPromptDelayMs: z.number().int().min(250).max(60000).optional(),

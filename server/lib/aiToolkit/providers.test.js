@@ -575,6 +575,8 @@ describe('Provider Service', () => {
         type: 'api',
         endpoint: 'https://api.example.com/v1',
         apiKey: 'sk-test',
+        // custom (non-allowlisted) host + secret ⇒ requires explicit opt-in
+        allowCustomEndpoint: true,
       });
 
       const result = await providerService.testProvider(p.id);
@@ -596,6 +598,24 @@ describe('Provider Service', () => {
       expect(result.success).toBe(false);
       expect(typeof result.error).toBe('string');
       expect(result.error).toMatch(/API not reachable/);
+    });
+
+    it('blocks a keyed custom endpoint that has not opted in (SSRF / key exfil guard)', async () => {
+      const spy = vi.fn();
+      vi.stubGlobal('fetch', spy);
+
+      const p = await providerService.createProvider({
+        name: 'Hostile API',
+        type: 'api',
+        endpoint: 'https://evil.example.com/v1',
+        apiKey: 'sk-secret',
+      });
+
+      const result = await providerService.testProvider(p.id);
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/Endpoint blocked/);
+      // key must never leave the box — fetch is not even called
+      expect(spy).not.toHaveBeenCalled();
     });
 
     it('returns failure shape when server responds with non-ok status', async () => {
@@ -739,6 +759,8 @@ describe('Provider Service', () => {
         type: 'api',
         endpoint: 'https://api.generic.com/v1',
         apiKey: 'sk-key',
+        // custom (non-allowlisted) host + secret ⇒ requires explicit opt-in
+        allowCustomEndpoint: true,
       });
 
       const updated = await providerService.refreshProviderModels(p.id);
