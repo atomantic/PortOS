@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import DrillTransition from './DrillTransition';
+import { DRILL_TO_DOMAIN } from './constants';
 
 const baseProps = {
   nextDrillType: 'multiplication',
@@ -148,5 +149,18 @@ describe('DrillTransition', () => {
     fireEvent.blur(pauseButton, { relatedTarget: null });
     await tickSeconds(5);
     expect(onContinue).not.toHaveBeenCalled();
+  });
+
+  // Regression: DOMAIN_ICONS was missing a `cognitive` entry, so transitioning
+  // into a cognitive drill (e.g. after a math drill) resolved `Icon` to
+  // undefined and crashed the run page with React error #130. Every DOMAINS
+  // key must have a renderable icon in the transition card.
+  it('renders without crashing for every drill type in every domain', () => {
+    for (const type of Object.keys(DRILL_TO_DOMAIN)) {
+      const { unmount } = render(
+        <DrillTransition {...baseProps} nextDrillType={type} onContinue={vi.fn()} />,
+      );
+      unmount();
+    }
   });
 });

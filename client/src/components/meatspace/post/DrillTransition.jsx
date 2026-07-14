@@ -1,13 +1,18 @@
 import { useState, useEffect } from 'react';
-import { ChevronRight, Calculator, BookOpen, MessageCircle, Mic, Sparkles, Pause, Play } from 'lucide-react';
+import { ChevronRight, Calculator, BookOpen, MessageCircle, Mic, Sparkles, Brain, Pause, Play } from 'lucide-react';
 import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS } from './constants';
 
+// One entry per DOMAINS key — a domain missing here would make `Icon` resolve
+// to undefined and crash the transition render (React error #130). The
+// `|| ChevronRight` fallback below is the belt-and-suspenders guard, but keep
+// this map in sync with DOMAINS so the real icon shows.
 const DOMAIN_ICONS = {
   math: Calculator,
   memory: BookOpen,
   wordplay: MessageCircle,
   verbal: Mic,
   imagination: Sparkles,
+  cognitive: Brain,
 };
 
 export default function DrillTransition({ nextDrillType, drillIndex, drillCount, completedResults, onContinue }) {
@@ -26,7 +31,9 @@ export default function DrillTransition({ nextDrillType, drillIndex, drillCount,
 
   const domainKey = DRILL_TO_DOMAIN[nextDrillType];
   const domain = domainKey ? DOMAINS[domainKey] : null;
-  const Icon = domainKey ? DOMAIN_ICONS[domainKey] : ChevronRight;
+  // Fall back to ChevronRight for any domain not in DOMAIN_ICONS — an
+  // undefined element type here throws React error #130 and blanks the run page.
+  const Icon = DOMAIN_ICONS[domainKey] || ChevronRight;
 
   // Auto-advance after 3 seconds, unless paused (manually or via hover/focus).
   useEffect(() => {
