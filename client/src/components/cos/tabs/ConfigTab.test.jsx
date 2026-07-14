@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 // Regression coverage for #2519 — failed CoS config calls must NOT flash a
 // success toast, must keep the user in edit mode, and must revert optimistic
@@ -76,6 +76,9 @@ describe('ConfigTab handleSave', () => {
 });
 
 describe('ConfigTab handleLevelChange', () => {
+  // Reads the non-editing value span rendered next to a ConfigRow label.
+  const rowValue = (label) => within(screen.getByText(label).closest('div')).getByText;
+
   it('does not toast success when the autonomy level change fails', async () => {
     api.updateCosConfig.mockRejectedValue(new Error('boom'));
     render(<ConfigTab config={config} onUpdate={vi.fn()} onEvaluate={vi.fn()} avatarStyle="svg" setAvatarStyle={vi.fn()} />);
@@ -86,12 +89,29 @@ describe('ConfigTab handleLevelChange', () => {
     expect(toast.success).not.toHaveBeenCalled();
   });
 
-  it('toasts the level label only after the change resolves', async () => {
+  it('reverts the optimistic form params when the level change fails', async () => {
+    api.updateCosConfig.mockRejectedValue(new Error('boom'));
+    render(<ConfigTab config={config} onUpdate={vi.fn()} onEvaluate={vi.fn()} avatarStyle="svg" setAvatarStyle={vi.fn()} />);
+
+    // Baseline: Max Concurrent Agents shows the config value (3).
+    expect(rowValue('Max Concurrent Agents')('3')).toBeInTheDocument();
+
+    // Standby sets maxConcurrentAgents: 1 optimistically; on failure it must revert
+    // back to 3 (without the revert this row would be stuck showing 1).
+    fireEvent.click(screen.getByRole('button', { name: 'Standby' }));
+
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith('boom'));
+    expect(rowValue('Max Concurrent Agents')('3')).toBeInTheDocument();
+  });
+
+  it('keeps the optimistic params and toasts the label after the change resolves', async () => {
     api.updateCosConfig.mockResolvedValue({ success: true });
     render(<ConfigTab config={config} onUpdate={vi.fn()} onEvaluate={vi.fn()} avatarStyle="svg" setAvatarStyle={vi.fn()} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Standby' }));
 
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Autonomy level set to Standby'));
+    // Optimistic value persisted (Standby → maxConcurrentAgents: 1).
+    expect(rowValue('Max Concurrent Agents')('1')).toBeInTheDocument();
   });
 });

@@ -280,17 +280,19 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
   });
 
   const handleLevelChange = async (params, label) => {
-    // Optimistically reflect the new params, but revert if the PUT fails so the
-    // form doesn't lie about the persisted config. Success toast / refresh only
-    // fire after the request resolves.
-    const previousData = formData;
-    setFormData({ ...formData, ...params });
+    // Optimistically reflect the new params via a functional update, but revert
+    // ONLY the keys we set if the PUT fails — snapshotting and restoring the whole
+    // formData would clobber unrelated edits (or a later level pick) the user made
+    // while this request was in flight. Success toast / refresh only fire after the
+    // request resolves.
+    const revertKeys = Object.fromEntries(Object.keys(params).map(k => [k, formData[k]]));
+    setFormData(prev => ({ ...prev, ...params }));
     try {
       await api.updateCosConfig(params, { silent: true });
       if (label) toast.success(`Autonomy level set to ${label}`);
       onUpdate();
     } catch (err) {
-      setFormData(previousData);
+      setFormData(prev => ({ ...prev, ...revertKeys }));
       toast.error(err.message);
     }
   };
