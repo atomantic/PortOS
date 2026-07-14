@@ -332,6 +332,13 @@ export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
       '-v', 'ON_ERROR_STOP=1', '--single-transaction'
     ], { cwd: rootDir, env });
 
+    // The dump read stream and its line reader — declared up front so finish()
+    // can tear them down. If psql exits early (ON_ERROR_STOP rollback) or the
+    // timeout SIGKILLs it, the `drain` we may be waiting on never fires, so we
+    // must destroy the source ourselves or its file descriptor leaks.
+    const src = createReadStream(dumpFile);
+    const rl = createInterface({ input: src, crlfDelay: Infinity });
+
     let stdout = '';
     let stderr = '';
     let finished = false;
@@ -339,6 +346,9 @@ export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
+      rl.close();
+      src.destroy();
+      if (psql.stdin.writable) psql.stdin.end();
       if (exitCode !== 0) {
         const detail = stripAnsi(stderr || stdout || extraDetail || '').replace(/\s+/g, ' ').trim();
         console.error(`🗄️ psql import exited ${exitCode}: ${detail}`);
@@ -359,11 +369,11 @@ export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
     // resulting EPIPE would otherwise crash the process.
     psql.stdin.on('error', () => {});
 
-    const rl = createInterface({ input: createReadStream(dumpFile), crlfDelay: Infinity });
-    rl.on('error', (err) => {
-      if (psql.stdin.writable) psql.stdin.end();
-      finish(1, err.message);
-    });
+    // Attach to the read stream directly: readline does not forward its input
+    // stream's 'error' event, so a missing/unreadable dump would otherwise be
+    // an uncaught 'error' that crashes the process.
+    src.on('error', (err) => finish(1, err.message));
+    rl.on('error', (err) => finish(1, err.message));
     rl.on('line', (line) => {
       if (isPg17OnlyDirective(line) || !psql.stdin.writable) return;
       // Honor backpressure so a large dump doesn't buffer unboundedly in memory.
@@ -372,7 +382,7 @@ export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
         psql.stdin.once('drain', () => rl.resume());
       }
     });
-    rl.on('close', () => { if (psql.stdin.writable) psql.stdin.end(); });
+    rl.on('close', () => { if (!finished && psql.stdin.writable) psql.stdin.end(); });
   });
 }
 
