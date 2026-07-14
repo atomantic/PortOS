@@ -813,9 +813,9 @@ export default function MusicVideo() {
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-mono text-port-text-muted">#{scene.order + 1}</span>
                       <div className="flex items-center gap-1">
-                        <button onClick={() => moveScene(idx, -1)} disabled={idx === 0} className="p-1 disabled:opacity-30" title="Move up"><ArrowUp size={14} /></button>
-                        <button onClick={() => moveScene(idx, 1)} disabled={idx === selected.scenes.length - 1} className="p-1 disabled:opacity-30" title="Move down"><ArrowDown size={14} /></button>
-                        <button onClick={() => handleDeleteScene(scene.sceneId)} className="p-1 text-port-error" title="Delete scene"><Trash2 size={14} /></button>
+                        <button onClick={() => moveScene(idx, -1)} disabled={idx === 0} aria-label="Move up" className="p-1 disabled:opacity-30" title="Move up"><ArrowUp size={14} /></button>
+                        <button onClick={() => moveScene(idx, 1)} disabled={idx === selected.scenes.length - 1} aria-label="Move down" className="p-1 disabled:opacity-30" title="Move down"><ArrowDown size={14} /></button>
+                        <button onClick={() => handleDeleteScene(scene.sceneId)} aria-label="Delete scene" className="p-1 text-port-error" title="Delete scene"><Trash2 size={14} /></button>
                       </div>
                     </div>
                     <textarea
