@@ -9,7 +9,7 @@ import {
   enableVisionCapture, disableVisionCapture, isVisionCaptureEnabled, onVisionCaptureEnded,
   speakSynthesized,
 } from '../../services/voiceClient';
-import { resolveTurn, TIER } from '../../services/voiceFastPath';
+import { resolveTurn, buildRouterSystemPrompt, TIER } from '../../services/voiceFastPath';
 import { warmNano } from '../../services/browserLlm';
 import { getPaletteManifest } from '../../services/apiPalette';
 import { getVoiceConfig } from '../../services/apiVoice';
@@ -158,23 +158,37 @@ export default function VoiceWidget() {
   useLayoutEffect(() => { fastPathRef.current = fastPath; }, [fastPath]);
   useLayoutEffect(() => { dictationActiveRef.current = dictationActive; }, [dictationActive]);
 
-  // Load the palette nav manifest once the fast path is active so tier-1 trigger
-  // navigation ("go to tasks") can resolve against the same routes ⌘K uses.
+  // Load the palette nav manifest so tier-1 trigger navigation ("go to tasks")
+  // can resolve against the same routes ⌘K uses. Memoized + self-healing: a
+  // failed fetch clears the in-flight promise so the next turn retries, instead
+  // of permanently disabling tier-1 nav for the session.
+  const navFetchRef = useRef(null);
+  const ensureNavEntries = useCallback(async () => {
+    if (navEntriesRef.current.length) return;
+    if (!navFetchRef.current) {
+      navFetchRef.current = getPaletteManifest({ silent: true })
+        .then((data) => { navEntriesRef.current = Array.isArray(data?.nav) ? data.nav : []; })
+        .catch(() => { navFetchRef.current = null; }); // allow retry on the next turn
+    }
+    await navFetchRef.current;
+  }, []);
+
+  // Prefetch the manifest when the trigger tier is active so the first "go to X"
+  // doesn't pay the fetch (falls back to the lazy retry in runFastPath on failure).
   useEffect(() => {
     if (!enabled || !fastPath?.enabled || !fastPath?.triggers) return;
-    if (navEntriesRef.current.length) return;
-    getPaletteManifest({ silent: true })
-      .then((data) => { navEntriesRef.current = Array.isArray(data?.nav) ? data.nav : []; })
-      .catch(() => {});
-  }, [enabled, fastPath?.enabled, fastPath?.triggers]);
+    ensureNavEntries();
+  }, [enabled, fastPath?.enabled, fastPath?.triggers, ensureNavEntries]);
 
   // Pre-warm the on-device model when the browser-LLM tier is active so the
-  // first spoken turn doesn't pay session-creation latency. No-op unless Nano
-  // is already downloaded (we never kick off a download here).
+  // first spoken turn doesn't pay session-creation latency. Use the SAME router
+  // system prompt real turns use, so the warmed session isn't torn down and
+  // rebuilt on the first turn (the session cache is keyed by the prompt). No-op
+  // unless Nano is already downloaded (we never kick off a download here).
   useEffect(() => {
     if (!enabled || !fastPath?.enabled || !fastPath?.browserLlm) return;
     warmNano({
-      systemPrompt: 'You are a fast voice assistant.',
+      systemPrompt: buildRouterSystemPrompt(personalityRef.current || {}),
       temperature: fastPath?.browser?.temperature ?? 0.7,
       topK: fastPath?.browser?.topK ?? 3,
     }).catch(() => {});
@@ -331,6 +345,9 @@ export default function VoiceWidget() {
   const runFastPath = useCallback(async (text) => {
     const fp = fastPathRef.current;
     if (!fp?.enabled) return false;
+    // Ensure the nav manifest is loaded (retries if an earlier fetch failed) so
+    // tier-1 trigger nav works even when the prefetch didn't land.
+    if (fp.triggers) await ensureNavEntries();
     let decision;
     try {
       decision = await resolveTurn(text, {
@@ -368,7 +385,7 @@ export default function VoiceWidget() {
       return true;
     }
     return false;
-  }, [navigate]);
+  }, [navigate, ensureNavEntries]);
 
   // Proactive CoS speech — the server pushes a `voice:speak` event when the
   // assistant initiates a line (alerts, reminders, briefings). Audio plays

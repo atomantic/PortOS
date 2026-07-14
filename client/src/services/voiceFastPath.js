@@ -86,7 +86,13 @@ export const resolveNavIntent = (text, navEntries = []) => {
       best = { path: e.path, label: e.label || label, exact: exactAlias || exactLabel, coversAll, score };
     }
   }
-  if (!best || !(best.exact || best.coversAll)) return null;
+  // A single-word target is accepted ONLY on an exact alias/label match. A bare
+  // common word ("log", "settings") is `coversAll` for every page that embeds
+  // it, and the tie-break would silently pick one — so for one word, require an
+  // exact hit and otherwise fall through to the server. Multi-word phrases may
+  // resolve via full word-coverage.
+  const accept = !!best && (best.exact || (best.coversAll && targetWords.length >= 2));
+  if (!accept) return null;
   if (!hadLeadIn && (targetWords.length < 2 || targetWords.length > 5)) return null;
   return { path: best.path, label: best.label };
 };

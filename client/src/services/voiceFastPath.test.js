@@ -72,6 +72,12 @@ describe('resolveNavIntent', () => {
     expect(resolveNavIntent('go to settings', NAV)).toEqual({ path: '/settings/general', label: 'General' });
   });
 
+  it('does not resolve a bare common word to a page that merely embeds it', () => {
+    // "log" is not an exact alias of any entry (Daily Log's aliases are
+    // daily-log/journal); a single common word must not resolve via coversAll.
+    expect(resolveNavIntent('go to log', NAV)).toBeNull();
+  });
+
   it('does not navigate on ordinary chatter without a lead-in', () => {
     expect(resolveNavIntent('tell me a joke', NAV)).toBeNull();
     expect(resolveNavIntent('what time is it', NAV)).toBeNull();

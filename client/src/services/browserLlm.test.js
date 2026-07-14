@@ -78,6 +78,17 @@ describe('promptNano', () => {
     await expect(promptNano('hi', { timeoutMs: 20 })).rejects.toThrow(/timeout/i);
   });
 
+  it('tears down the (single-in-flight) session after a timeout so the next turn rebuilds', async () => {
+    const create = vi.fn()
+      .mockResolvedValueOnce({ prompt: vi.fn().mockImplementation(() => new Promise(() => {})), destroy: vi.fn() }) // stalls → timeout
+      .mockResolvedValueOnce({ prompt: vi.fn().mockResolvedValue('ok'), destroy: vi.fn() });
+    self.LanguageModel = { availability: vi.fn().mockResolvedValue('available'), create };
+    await expect(promptNano('hi', { timeoutMs: 20 })).rejects.toThrow(/timeout/i);
+    // A wedged session would make this reject too; instead it builds a fresh one.
+    await expect(promptNano('again', { timeoutMs: 500 })).resolves.toBe('ok');
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
   it('uses the legacy top-level systemPrompt shape', async () => {
     const create = vi.fn().mockResolvedValue({ prompt: vi.fn().mockResolvedValue('ok') });
     self.ai = { languageModel: { capabilities: vi.fn().mockResolvedValue({ available: 'readily' }), create } };

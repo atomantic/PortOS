@@ -136,10 +136,15 @@ describe('isToolCapable', () => {
       'gemma-3-270m-it',
       'l3.3-70b-euryale-v2.3-i1',
       'text-embedding-nomic-embed-text-v1.5',
-      // Vision variants of the bare-tag families must NOT match the broadened
-      // Ollama patterns (their catalog entries carry no `tools` capability).
+      // Vision / embedding / reranker variants of the bare-tag families must NOT
+      // match the broadened Ollama patterns — they can't chat or call tools, and
+      // auto-selecting one as the voice brain would hard-fail every tool turn.
       'qwen2.5vl:32b',
       'llama3.2-vision',
+      'qwen3-embedding',
+      'dengcao/qwen3-embedding-8b:q4_k_m',
+      'qwen3-reranker',
+      'qwen2.5-omni',
     ]) {
       expect(isToolCapable(id), id).toBe(false);
     }

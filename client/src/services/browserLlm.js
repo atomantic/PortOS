@@ -158,18 +158,36 @@ export const promptNano = async (text, {
   signal,
 } = {}) => {
   const s = await ensureNanoSession({ systemPrompt, temperature, topK });
+  // A Prompt API session is single-in-flight: a second prompt() while one is
+  // still running rejects. So a timed-out (or aborted) prompt must actually be
+  // cancelled AND the session torn down — otherwise the next turn reuses a
+  // wedged session and every subsequent turn rejects, silently killing the fast
+  // tier. We drive cancellation through our own controller (chained to the
+  // caller's signal) and destroy the session on ANY failure so the next call
+  // rebuilds clean.
+  const controller = new AbortController();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
   const run = (async () => {
     // Per-request output-language hint; older builds reject the opts arg, so
-    // retry bare — but never retry an abort (that would relaunch the work the
-    // user just cancelled).
+    // retry bare — but never retry an abort (that would relaunch cancelled work).
     try {
-      return await s.prompt(text, { outputLanguage: 'en', ...(signal ? { signal } : {}) });
+      return await s.prompt(text, { outputLanguage: 'en', signal: controller.signal });
     } catch (err) {
-      if (signal?.aborted) throw err;
+      if (controller.signal.aborted) throw err;
       return s.prompt(text);
     }
   })();
-  return withTimeout(run, timeoutMs);
+  try {
+    return await withTimeout(run, timeoutMs, () => controller.abort());
+  } catch (err) {
+    // Timeout / abort / model error — the cached session may be mid-flight or
+    // wedged; drop it so the next turn starts from a fresh session.
+    destroyNanoSession();
+    throw err;
+  }
 };
 
 // Pre-build the session so the first real turn doesn't pay create() latency.

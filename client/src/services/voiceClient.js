@@ -21,6 +21,11 @@ let ttsCooldownUntil = 0;
 // turn. While raised, incoming voice:tts:audio is dropped — prevents
 // in-flight chunks from the old turn overlaying the new turn's audio.
 let rejectingTts = false;
+// Generation counter for speakSynthesized (fast-path trigger/Nano replies).
+// Bumped on every new synthesized reply AND on stopPlayback, so a reply whose
+// TTS fetch is still in flight when a newer turn (or a barge-in) supersedes it
+// is dropped instead of playing over/after the newer audio.
+let synthGen = 0;
 
 const pickMime = () => {
   const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/mp4'];
@@ -50,6 +55,8 @@ const stopPlayback = () => {
   // Any chunks still in-flight from the cancelled turn must not be played —
   // they'll arrive asynchronously after we've torn down local playback.
   rejectingTts = true;
+  // Supersede any fast-path synthesized reply whose fetch is still in flight.
+  synthGen += 1;
 };
 
 // whisper.cpp only accepts 16-bit PCM WAV — it has no built-in audio decoder.
@@ -573,6 +580,9 @@ export const playWav = (arrayBuffer) => enqueuePlay(arrayBuffer);
 export const speakSynthesized = async (text, { engine, voice, rate, signal } = {}) => {
   const clean = (text || '').trim();
   if (!clean) return false;
+  // Claim this generation; a newer reply or a stopPlayback/barge-in bumps
+  // synthGen and supersedes us (checked after the fetch).
+  const gen = ++synthGen;
   // We're starting a fresh reply — lift any sticky rejection left by a prior
   // barge-in (normally cleared by voice:transcript, which a client-side turn
   // never emits), then remember the sentence so the next inbound STT result
@@ -591,6 +601,9 @@ export const speakSynthesized = async (text, { engine, voice, rate, signal } = {
   });
   if (!res.ok) throw new Error(`synthesize failed: ${res.status}`);
   const wav = await res.arrayBuffer();
+  // Superseded while the synth was in flight — drop this stale audio rather than
+  // playing it over/after the newer turn's reply.
+  if (gen !== synthGen) return false;
   await enqueuePlay(wav);
   return true;
 };
