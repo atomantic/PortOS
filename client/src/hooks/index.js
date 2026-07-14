@@ -46,6 +46,7 @@ export { default as useRowDraft } from './useRowDraft.js';
 export { default as useTheme } from './useTheme.js';
 export { default as useUniverse } from './useUniverse.js';
 export { default as useUniverseAction } from './useUniverseAction.js';
+export { default as useUniverseGallery } from './useUniverseGallery.js';
 export { default as useVideoDownload } from './useVideoDownload.js';
 export { default as useYoutubeTrackImport } from './useYoutubeTrackImport.js';
 export { default as useReferenceAudioImport } from './useReferenceAudioImport.js';
