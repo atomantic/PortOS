@@ -88,6 +88,7 @@
 import { join } from 'path';
 import { readdir, lstat, rm } from 'fs/promises';
 import { atomicWrite, readJSONFile, ensureDir } from './fileUtils.js';
+import { createFileWriteQueue, createRecordWriteQueue } from './fileWriteQueue.js';
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
@@ -166,39 +167,18 @@ export function createCollectionStore({
 
   // Per-record write queue. Tail-chained per `id` so two writes against the
   // same record serialize while writes against different records proceed in
-  // parallel. Mirrors `createFileWriteQueue` but keyed by id so the queue
-  // doesn't collapse to a single tail across the whole type.
-  //
-  // Map entries are pruned in `finally` once the chain settles to keep the
-  // map size bounded — see the `createFileWriteQueue` pattern for the same
-  // discipline at the single-tail level.
-  const recordTails = new Map();
-  function queueRecordWrite(id, fn) {
+  // parallel. The shared `createRecordWriteQueue` helper carries the id-keyed
+  // silence/self-prune discipline; the assert throws synchronously on a bad id
+  // before anything is enqueued.
+  const queueRecordWrite = createRecordWriteQueue((id) => {
     if (!isValidId(id)) {
       throw new Error(`collectionStore[${type}]: invalid record id "${id}" — must match ${idPattern}`);
     }
-    const prev = recordTails.get(id) || Promise.resolve();
-    const next = prev.then(fn, fn);
-    const silenced = next.catch(() => {});
-    recordTails.set(id, silenced);
-    silenced.finally(() => {
-      if (recordTails.get(id) === silenced) recordTails.delete(id);
-    });
-    return next;
-  }
+  });
 
   // Type-index single-tail queue. Used by `saveTypeIndex` and by callers that
   // need a write-fence around config-slot updates (`runs[]`, feature flags).
-  let typeIndexTail = Promise.resolve();
-  function queueTypeIndexWrite(fn) {
-    const next = typeIndexTail.then(fn, fn);
-    const silenced = next.catch(() => {});
-    typeIndexTail = silenced;
-    silenced.finally(() => {
-      if (typeIndexTail === silenced) typeIndexTail = Promise.resolve();
-    });
-    return next;
-  }
+  const queueTypeIndexWrite = createFileWriteQueue();
 
   const buildEmptyTypeIndex = () => ({
     schemaVersion,

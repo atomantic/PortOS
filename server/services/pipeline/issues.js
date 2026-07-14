@@ -21,6 +21,7 @@
 import { randomUUID } from 'crypto';
 import { getIssuesStore } from './issuesStore/store.js';
 import { isPlainObject } from '../../lib/objects.js';
+import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
 import {
   LENGTH_PROFILE_NAMES, DEFAULT_LENGTH_PROFILE,
@@ -53,17 +54,10 @@ export const issueStore = () => store();
 // so two concurrent writes to *different* issues in the same series could read a
 // stale index and clobber each other. A single tail per seriesId collapses that
 // race: each write awaits the previous one and merges against the freshest state.
-const seriesIssueTails = new Map();
+const seriesIssueQueue = createKeyCachedQueue();
 function queueSeriesIssuesWrite(seriesId, fn) {
   const key = typeof seriesId === 'string' && seriesId ? seriesId : '__unknown__';
-  const prev = seriesIssueTails.get(key) || Promise.resolve();
-  const next = prev.then(fn, fn);
-  const silenced = next.catch(() => {});
-  seriesIssueTails.set(key, silenced);
-  silenced.finally(() => {
-    if (seriesIssueTails.get(key) === silenced) seriesIssueTails.delete(key);
-  });
-  return next;
+  return seriesIssueQueue(key, fn);
 }
 
 export const ERR_NOT_FOUND = 'PIPELINE_ISSUE_NOT_FOUND';

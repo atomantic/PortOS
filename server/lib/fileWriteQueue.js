@@ -1,3 +1,5 @@
+import { createKeyCachedQueue } from './createKeyCachedQueue.js';
+
 /**
  * File Write Queue — single-tail promise chain for serializing writes
  * against a shared JSON state file.
@@ -60,16 +62,15 @@ export function createFileWriteQueue() {
  * Usage:
  *   const queueRecordWrite = createRecordWriteQueue(assertValidId);
  *   queueRecordWrite(id, () => saveOneNow(id, record));
+ *
+ * The per-key tail mechanics are `createKeyCachedQueue` — this is a thin wrapper
+ * that adds the optional synchronous id validator (so a malformed id rejects
+ * before it's ever enqueued).
  */
 export function createRecordWriteQueue(assertId) {
-  const tails = new Map();
+  const queue = createKeyCachedQueue();
   return function queueRecordWrite(id, fn) {
     if (assertId) assertId(id);
-    const prev = tails.get(id) || Promise.resolve();
-    const next = prev.then(fn, fn); // run fn even when prev rejects
-    const silenced = next.catch(() => {});
-    tails.set(id, silenced);
-    silenced.finally(() => { if (tails.get(id) === silenced) tails.delete(id); });
-    return next; // callers see the real resolve/reject
+    return queue(id, fn); // callers see the real resolve/reject
   };
 }

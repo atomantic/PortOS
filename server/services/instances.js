@@ -10,6 +10,7 @@ import net from 'net';
 import crypto from 'crypto';
 import { dataPath, readJSONFile, ensureDir, PATHS, atomicWrite } from '../lib/fileUtils.js';
 import { createMutex } from '../lib/asyncMutex.js';
+import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { instanceEvents } from './instanceEvents.js';
 import { connectToPeer, disconnectFromPeer } from './peerSocketRelay.js';
 import { DEFAULT_PEER_PORT } from '../lib/ports.js';
@@ -535,38 +536,31 @@ export async function updatePeer(id, updates) {
 // the peer and undo the newer change. Chaining per peer.id guarantees in-order
 // delivery, and each send re-reads the FRESHEST persisted category map (not a
 // value captured at enqueue time) so the final send always carries final state.
-const reciprocalSyncTails = new Map();
+// Per-peer serialization (silence prior + self-pruning tail) via the shared
+// helper — `work` runs on both fulfil and reject of the prior send, so a failed
+// send can't break the chain.
+const reciprocalSyncQueue = createKeyCachedQueue();
 
 export function enqueueReciprocalSync(peerId) {
-  const prev = reciprocalSyncTails.get(peerId) || Promise.resolve();
-  const next = prev
-    .catch(() => {}) // a failed prior send must not break the chain
-    .then(async () => {
-      // Re-read the peer fresh at send time — the last enqueued send wins with
-      // the latest persisted syncCategories, regardless of enqueue order.
-      const data = await loadData();
-      const peer = data.peers.find(p => p.id === peerId);
-      if (!peer?.instanceId) return { ok: false, reason: 'no-peer-identity' };
-      // For a full-sync peer send the all-on category view (its stored
-      // syncCategories can be all-false underneath — sending that raw would tell
-      // the peer to DISABLE everything, since reciprocal-sync apply is an
-      // authoritative overlay; the all-on map also makes a peer too old to
-      // understand the fullSync flag still mirror every category) plus the
-      // fullSync flag. A regular peer keeps sending its raw partial map so a
-      // category it never set stays untouched on the peer (absent ≠ false).
-      const reciprocalCategories = peer.fullSync === true ? allSyncCategoriesOn() : (peer.syncCategories || {});
-      return requestReciprocalSync(peer, reciprocalCategories, { fullSync: peer.fullSync === true }).catch((err) => {
-        console.log(`⚠️ peer: reciprocal sync request failed: ${err.message}`);
-        return { ok: false, reason: err.message };
-      });
+  return reciprocalSyncQueue(peerId, async () => {
+    // Re-read the peer fresh at send time — the last enqueued send wins with
+    // the latest persisted syncCategories, regardless of enqueue order.
+    const data = await loadData();
+    const peer = data.peers.find(p => p.id === peerId);
+    if (!peer?.instanceId) return { ok: false, reason: 'no-peer-identity' };
+    // For a full-sync peer send the all-on category view (its stored
+    // syncCategories can be all-false underneath — sending that raw would tell
+    // the peer to DISABLE everything, since reciprocal-sync apply is an
+    // authoritative overlay; the all-on map also makes a peer too old to
+    // understand the fullSync flag still mirror every category) plus the
+    // fullSync flag. A regular peer keeps sending its raw partial map so a
+    // category it never set stays untouched on the peer (absent ≠ false).
+    const reciprocalCategories = peer.fullSync === true ? allSyncCategoriesOn() : (peer.syncCategories || {});
+    return requestReciprocalSync(peer, reciprocalCategories, { fullSync: peer.fullSync === true }).catch((err) => {
+      console.log(`⚠️ peer: reciprocal sync request failed: ${err.message}`);
+      return { ok: false, reason: err.message };
     });
-  reciprocalSyncTails.set(peerId, next);
-  // Evict the tail once it settles and nothing newer has been chained, so the
-  // map doesn't grow unbounded across many peers/toggles.
-  next.finally(() => {
-    if (reciprocalSyncTails.get(peerId) === next) reciprocalSyncTails.delete(peerId);
   });
-  return next;
 }
 
 // --- Probing ---
