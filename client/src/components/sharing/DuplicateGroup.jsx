@@ -73,7 +73,7 @@ function RecordRow({ kind, record, onRenamed }) {
         ) : (
           <div className="flex items-center gap-2">
             <span className="text-white truncate">{record.name}</span>
-            <button type="button" onClick={() => setEditing(true)} className="text-gray-500 hover:text-white" title="Rename"><Pencil size={12} /></button>
+            <button type="button" onClick={() => setEditing(true)} aria-label="Rename" className="text-gray-500 hover:text-white" title="Rename"><Pencil size={12} /></button>
           </div>
         )}
         <div className="text-gray-500 mt-0.5 font-mono truncate">{record.id}</div>

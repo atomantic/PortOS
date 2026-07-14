@@ -115,9 +115,10 @@ export default function Templates() {
             </FormField>
 
             <div>
-              <label className="block text-sm text-gray-400 mb-1">Target Directory *</label>
+              <label htmlFor="template-target-directory" className="block text-sm text-gray-400 mb-1">Target Directory *</label>
               <div className="flex gap-2 items-stretch">
                 <input
+                  id="template-target-directory"
                   type="text"
                   value={targetPath}
                   onChange={(e) => setTargetPath(e.target.value)}
