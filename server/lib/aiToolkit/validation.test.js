@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeScreenshotRefs, providerSchema, validate } from './validation.js';
+import { sanitizeScreenshotRefs, providerSchema, providerActiveSchema, validate } from './validation.js';
 
 describe('sanitizeScreenshotRefs — POST /api/runs screenshot hardening (#1870)', () => {
   it('keeps an in-dir image basename unchanged', () => {
@@ -178,5 +178,30 @@ describe('validate', () => {
     const result = validate(providerSchema, { ...minimalProvider, models: [42] });
     expect(result.success).toBe(false);
     expect(result.errors.some(e => e.path === 'models.0')).toBe(true);
+  });
+});
+
+describe('providerActiveSchema — PUT /api/providers/active (#2521)', () => {
+  it('accepts a slug id and rejects empty/missing/non-string', () => {
+    expect(validate(providerActiveSchema, { id: 'codex' }).success).toBe(true);
+    expect(validate(providerActiveSchema, { id: 'claude-ollama-1' }).success).toBe(true);
+    expect(validate(providerActiveSchema, { id: '' }).success).toBe(false);
+    expect(validate(providerActiveSchema, {}).success).toBe(false);
+    expect(validate(providerActiveSchema, { id: 5 }).success).toBe(false);
+  });
+
+  it('rejects reserved prototype keys so setActiveProvider cannot walk the prototype chain', () => {
+    expect(validate(providerActiveSchema, { id: '__proto__' }).success).toBe(false);
+    expect(validate(providerActiveSchema, { id: 'constructor' }).success).toBe(true); // a valid slug, but only matches an OWN provider key
+    expect(validate(providerActiveSchema, { id: 'Codex' }).success).toBe(false); // uppercase disallowed
+  });
+});
+
+describe('providerSchema.partial() — PUT /api/providers/:id (#2521)', () => {
+  it('accepts a single-field update and rejects a bad enum/type', () => {
+    expect(validate(providerSchema.partial(), { defaultModel: 'gpt-5' }).success).toBe(true);
+    expect(validate(providerSchema.partial(), {}).success).toBe(true);
+    expect(validate(providerSchema.partial(), { type: 'magic' }).success).toBe(false);
+    expect(validate(providerSchema.partial(), { timeout: 'soon' }).success).toBe(false);
   });
 });

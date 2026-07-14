@@ -662,6 +662,54 @@ export const usageMessagesSchema = z.object({
   inputTokenCount: z.number().int().nonnegative().optional().default(0)
 });
 
+// =============================================================================
+// PORTS
+// =============================================================================
+
+// POST /api/ports/check — probe a set of ports for availability.
+export const portsCheckSchema = z.object({
+  ports: z.array(z.number().int().min(1).max(65535)).min(1)
+});
+
+// POST /api/ports/allocate — reserve N free ports. `count` accepts a number or
+// a numeric string (the UI may send either) and defaults to 1 when absent,
+// matching the prior `parseInt(count) || 1` behavior — but non-numeric garbage
+// now 400s instead of silently collapsing to 1. The preprocess only forwards
+// number|string so `z.coerce` can't quietly turn a boolean (`true → 1`) or an
+// array (`[5] → 5`) into a valid count.
+export const portsAllocateSchema = z.object({
+  count: z.preprocess(
+    (v) => {
+      if (v === undefined) return 1;
+      return (typeof v === 'number' || typeof v === 'string') ? v : NaN;
+    },
+    z.coerce.number().int().min(1).max(10)
+  )
+});
+
+// =============================================================================
+// DATABASE
+// =============================================================================
+
+const DB_BACKENDS = ['docker', 'native'];
+
+// POST /api/database/switch — switch active backend, optionally migrating data.
+export const databaseSwitchSchema = z.object({
+  target: z.enum(DB_BACKENDS),
+  migrate: z.boolean().optional()
+});
+
+// POST /api/database/{start,stop,destroy} — operate on a named backend.
+export const databaseBackendSchema = z.object({
+  backend: z.enum(DB_BACKENDS)
+});
+
+// POST /api/database/export — export from a specific backend, or (when omitted)
+// the active backend.
+export const databaseExportSchema = z.object({
+  backend: z.enum(DB_BACKENDS).optional()
+});
+
 /**
  * Validate data against a Zod schema, throwing on failure.
  * Returns parsed data on success, throws ServerError on failure.

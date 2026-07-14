@@ -781,4 +781,19 @@ describe('Provider Service', () => {
       expect(result).toBeNull();
     });
   });
+
+  describe('reserved-key prototype safety (#2521)', () => {
+    it('does not resolve Object.prototype members as existing providers', async () => {
+      // The providers map is null-prototyped on load, so a keyed lookup for an
+      // inherited member returns "not found" rather than a truthy prototype fn.
+      for (const key of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+        expect(await providerService.getProviderById(key)).toBeNull();
+        expect(await providerService.setActiveProvider(key)).toBeNull();
+        expect(await providerService.updateProvider(key, { name: 'x' })).toBeNull();
+        expect(await providerService.deleteProvider(key)).toBe(false);
+      }
+      const { activeProvider } = await providerService.getAllProviders();
+      expect(['__proto__', 'constructor', 'toString', 'hasOwnProperty']).not.toContain(activeProvider);
+    });
+  });
 });

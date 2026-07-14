@@ -98,6 +98,15 @@ export const providerSchema = z.object({
   tuiMaxRuntimeMs: z.number().int().min(60000).max(43200000).optional()
 });
 
+// PUT /api/providers/active — set the active provider by id. Constrain to the
+// same slug shape createProvider assigns (`providerSchema.id`) so a reserved
+// key like `__proto__` can't reach the `data.providers[id]` lookup in
+// setActiveProvider (which walks the prototype chain and would otherwise treat
+// `__proto__` as an existing provider and persist it as active).
+export const providerActiveSchema = z.object({
+  id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, 'id must be lowercase alphanumeric with hyphens').max(80)
+});
+
 export const runSchema = z.object({
   // `type` defaults to 'ai' so the common case (AI run via /api/runs from
   // RunnerPage / AIProviders / etc.) doesn't have to send it explicitly.

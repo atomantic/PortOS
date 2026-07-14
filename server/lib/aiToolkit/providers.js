@@ -295,6 +295,17 @@ export function createProviderService(config = {}) {
   let cacheGeneration = 0;
 
   function refreshProvidersCache(data) {
+    // Null-prototype the providers map so a keyed lookup (`data.providers[id]`)
+    // in getProviderById / setActiveProvider / updateProvider / etc. can't
+    // resolve an inherited Object.prototype member (`__proto__`, `constructor`,
+    // `toString`, …) as a "provider that exists". Without this, a crafted id
+    // like `constructor` walks the prototype chain, tests truthy, and gets
+    // treated as a real provider (e.g. persisted as `activeProvider`). Own
+    // enumerable keys still serialize/iterate normally (JSON.stringify,
+    // Object.values, spread, delete all behave identically on a null-proto map).
+    if (data?.providers && Object.getPrototypeOf(data.providers) !== null) {
+      data.providers = Object.assign(Object.create(null), data.providers);
+    }
     providersCache = data;
     providersCacheAt = Date.now();
     cacheGeneration += 1;

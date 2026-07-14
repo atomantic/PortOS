@@ -222,7 +222,8 @@ describe('POST /api/database/destroy', () => {
       const app = makeApp();
       const res = await request(app).post('/api/database/destroy').send({});
       expect(res.status).toBe(400);
-      expect(res.body.error).toMatch(/backend/i);
+      expect(res.body.code).toBe('VALIDATION_ERROR');
+      expect(res.body.context.details.some((d) => d.path === 'backend')).toBe(true);
     });
 
     it('returns 400 when backend is an unknown value', async () => {
@@ -231,7 +232,8 @@ describe('POST /api/database/destroy', () => {
         .post('/api/database/destroy')
         .send({ backend: 'mysql' });
       expect(res.status).toBe(400);
-      expect(res.body.error).toMatch(/docker.*native|native.*docker/i);
+      expect(res.body.code).toBe('VALIDATION_ERROR');
+      expect(res.body.context.details.some((d) => d.path === 'backend')).toBe(true);
     });
 
     it('returns 400 when backend is null', async () => {

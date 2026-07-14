@@ -61,13 +61,15 @@ describe('issue-1084: toolkit routes emit the PortOS error envelope', () => {
     expect(typeof res.body.timestamp).toBe('number');
   });
 
-  it('providers 400 (POST missing name) → BAD_REQUEST envelope', async () => {
+  it('providers 400 (POST missing name) → VALIDATION_ERROR envelope with details', async () => {
     const providers = { createProvider: vi.fn() };
     const app = portosApp('/api/providers', (opts) => createProvidersRoutes(providers, opts));
 
+    // Missing `name` fails providerSchema → the validation-reject branch.
     const res = await request(app).post('/api/providers').send({ type: 'cli' });
     expect(res.status).toBe(400);
-    expect(res.body).toMatchObject({ error: 'Name is required', code: 'BAD_REQUEST' });
+    expect(res.body).toMatchObject({ error: 'Invalid provider data', code: 'VALIDATION_ERROR' });
+    expect(res.body.context?.details?.some((d) => d.path === 'name')).toBe(true);
     expect(providers.createProvider).not.toHaveBeenCalled();
   });
 
