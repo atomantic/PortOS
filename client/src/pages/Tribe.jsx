@@ -658,12 +658,20 @@ export default function Tribe() {
   const [searchParams, setSearchParams] = useSearchParams();
   const rawTab = searchParams.get('tab');
   const activeTab = TAB_IDS.includes(rawTab) ? rawTab : DEFAULT_TAB;
+  // Resolve inside the setSearchParams updater so functional updates (e.g.
+  // startNewRelationship) read the FRESHEST tab from the URL, not the value
+  // captured when a since-superseded async closure was created — otherwise a
+  // create-in-flight + tab switch could clobber the user's current tab.
   const setActiveTab = (next) => {
-    const resolved = typeof next === 'function' ? next(activeTab) : next;
-    const params = new URLSearchParams(searchParams);
-    if (resolved === DEFAULT_TAB) params.delete('tab');
-    else params.set('tab', resolved);
-    setSearchParams(params, { replace: true });
+    setSearchParams((prev) => {
+      const prevRaw = prev.get('tab');
+      const prevTab = TAB_IDS.includes(prevRaw) ? prevRaw : DEFAULT_TAB;
+      const resolved = typeof next === 'function' ? next(prevTab) : next;
+      const params = new URLSearchParams(prev);
+      if (resolved === DEFAULT_TAB) params.delete('tab');
+      else params.set('tab', resolved);
+      return params;
+    }, { replace: true });
   };
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

@@ -22,11 +22,14 @@ vi.mock('../hooks/useAutoRefetch', () => ({
 import Loops from './Loops';
 
 describe('Loops new-loop form label associations', () => {
-  it('pairs the Interval label with the custom-interval input (htmlFor/id)', async () => {
+  it('pairs the Interval label with the custom-interval input via explicit htmlFor/id', async () => {
     render(<Loops />);
-    // getByLabelText only resolves when the <label> is wired to the control.
     const input = await screen.findByLabelText('Interval');
+    const label = screen.getByText('Interval');
     expect(input.tagName).toBe('INPUT');
     expect(input.getAttribute('placeholder')).toBe('custom');
+    // Prove the explicit htmlFor/id pairing (not merely an aria-label match).
+    expect(input.id).toBeTruthy();
+    expect(label.getAttribute('for')).toBe(input.id);
   });
 });

@@ -63,4 +63,16 @@ describe('Tribe deep-linkable tabs', () => {
       expect(screen.getByTestId('location').textContent).toBe('/tribe')
     );
   });
+
+  it('preserves a non-default tab when the Add action fires a functional update', async () => {
+    // "Add" calls startNewRelationship, which uses a functional setActiveTab
+    // updater that keeps the current tab unless it is focus/map. On Care it must
+    // resolve against the fresh URL and stay on care — not fall back to circle.
+    renderAt('/tribe?tab=care');
+    await screen.findByRole('button', { name: 'Add' });
+    fireEvent.click(screen.getByRole('button', { name: 'Add' }));
+    await waitFor(() =>
+      expect(screen.getByTestId('location').textContent).toBe('/tribe?tab=care')
+    );
+  });
 });
