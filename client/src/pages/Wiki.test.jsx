@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
+import { MemoryRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 
 vi.mock('../services/api', () => ({
   getNotesVaults: vi.fn(),
@@ -24,11 +24,18 @@ function LocationProbe() {
   return <div data-testid="location">{loc.pathname + loc.search}</div>;
 }
 
+// Mirrors App.jsx's RedirectWithSearch so the base /wiki redirect keeps ?vault=.
+function RedirectWithSearch({ to }) {
+  const { search, hash } = useLocation();
+  return <Navigate to={`${to}${search}${hash}`} replace />;
+}
+
 const renderWiki = (initialEntry) =>
   render(
     <MemoryRouter initialEntries={[initialEntry]}>
       <LocationProbe />
       <Routes>
+        <Route path="/wiki" element={<RedirectWithSearch to="/wiki/overview" />} />
         <Route path="/wiki/:tab" element={<Wiki />} />
       </Routes>
     </MemoryRouter>,
@@ -54,6 +61,14 @@ describe('Wiki vault URL wiring', () => {
     renderWiki('/wiki/overview?vault=vault-b');
     await waitFor(() => expect(screen.getByTestId('overview')).toHaveTextContent('overview:vault-b'));
     expect(scanNotesVault).toHaveBeenCalledWith('vault-b', { limit: 1000 });
+  });
+
+  it('preserves ?vault= through the base /wiki redirect', async () => {
+    renderWiki('/wiki?vault=vault-b');
+    await waitFor(() =>
+      expect(screen.getByTestId('location')).toHaveTextContent('/wiki/overview?vault=vault-b'),
+    );
+    await waitFor(() => expect(screen.getByTestId('overview')).toHaveTextContent('overview:vault-b'));
   });
 
   it('writes the chosen vault to the URL when selecting from the dropdown', async () => {

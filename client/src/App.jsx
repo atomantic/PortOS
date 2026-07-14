@@ -345,7 +345,7 @@ export default function App() {
           <Route path="video-gen" element={<RedirectWithSearch to="/media/video" />} />
           <Route path="media-history" element={<RedirectWithSearch to="/media/history" />} />
           <Route path="media-models" element={<RedirectWithSearch to="/media/models" />} />
-          <Route path="wiki" element={<Navigate to="/wiki/overview" replace />} />
+          <Route path="wiki" element={<RedirectWithSearch to="/wiki/overview" />} />
           <Route path="wiki/:tab" element={<Wiki />} />
           <Route path="rapid-reader" element={<RapidReaderPage />} />
           {/* `/universes` is the universe index (list/table). The editor lives
