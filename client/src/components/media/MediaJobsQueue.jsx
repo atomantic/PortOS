@@ -356,6 +356,7 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
             <button
               onClick={() => onCancel(job.id)}
               className="flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-xs hover:bg-port-error/20 hover:text-port-error"
+              aria-label="Cancel"
               title="Cancel"
             >
               <X className="w-3 h-3" />
