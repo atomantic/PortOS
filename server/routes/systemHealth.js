@@ -9,6 +9,7 @@ import { checkHealth } from '../lib/db.js';
 import { getCurrentVersion } from '../services/updateChecker.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { getMemoryStats } from '../lib/memoryStats.js';
+import { formatBytes } from '../lib/fileUtils.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
 
 // Defaults are tuned for a real dev machine: memory routinely sits in the
@@ -181,13 +182,6 @@ router.get('/health/details', asyncHandler(async (req, res) => {
   } : null;
 
   // Format memory for display
-  const formatBytes = (bytes) => {
-    const gb = bytes / (1024 * 1024 * 1024);
-    if (gb >= 1) return `${gb.toFixed(1)}GB`;
-    const mb = bytes / (1024 * 1024);
-    return `${mb.toFixed(0)}MB`;
-  };
-
   // Format uptime for display
   const uptime = process.uptime();
   const days = Math.floor(uptime / 86400);

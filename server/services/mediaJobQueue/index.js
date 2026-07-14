@@ -33,6 +33,7 @@ import { randomUUID } from 'crypto';
 import { unlink } from 'fs/promises';
 import { join, resolve as pathResolve, sep as PATH_SEP } from 'path';
 import { PATHS, readJSONFile, atomicWrite, ensureDir, sleep } from '../../lib/fileUtils.js';
+import { SSE_HEADERS } from '../../lib/sseHeaders.js';
 import { reapAndCleanDetachedDirs } from '../../lib/detachedSpawn.js';
 import {
   broadcastSse,
@@ -1039,11 +1040,7 @@ export function attachSseClient(jobId, res) {
     job.status === 'completed' ? { type: 'complete', result: job.result }
     : job.status === 'canceled' ? { type: 'canceled', reason: job.error || 'Canceled' }
     : { type: 'error', error: job.error || `Job ${job.status}` };
-  res.writeHead(200, {
-    'Content-Type': 'text/event-stream',
-    'Cache-Control': 'no-cache',
-    Connection: 'keep-alive',
-  });
+  res.writeHead(200, SSE_HEADERS);
   res.write(`data: ${JSON.stringify(terminal)}\n\n`);
   res.end();
   return true;
