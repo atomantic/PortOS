@@ -37,6 +37,7 @@ import {
   customSourceKey,
   fetchHttpSource,
   runShellCommand,
+  getTrustShellSources,
   normalizeIssueState,
   listForgeIssues,
   listBlockingIssues,
@@ -700,6 +701,27 @@ describe('gatherSources custom file confinement', () => {
     );
     expect(out['custom:link.md']).toBe('INSIDE');
   });
+
+  it('drops a non-allowlisted custom cmd source when shell trust is off (#2515)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const out = await gatherSources(
+      { repoPath: dir },
+      { sources: { custom: [{ type: 'cmd', cmd: 'rm -rf /tmp/x' }] } },
+      { trustShellSources: false } // injected so no settings.json read
+    );
+    expect(Object.keys(out).some(k => k.startsWith('custom:cmd:'))).toBe(false);
+    warn.mockRestore();
+  });
+
+  it('runs an allowlisted custom cmd source and captures stdout (#2515)', async () => {
+    // Real allowlisted `echo` through the shell:false runner — deterministic.
+    const out = await gatherSources(
+      { repoPath: dir },
+      { sources: { custom: [{ type: 'cmd', cmd: 'echo hello-source' }] } },
+      { trustShellSources: false }
+    );
+    expect(out['custom:cmd:echo hello-source']).toBe('hello-source');
+  });
 });
 
 describe('gatherSources appMetrics (METRICS.md)', () => {
@@ -780,25 +802,59 @@ describe('fetchHttpSource', () => {
   });
 });
 
-describe('runShellCommand', () => {
-  it('returns trimmed stdout on exit 0, running through the shell in cwd', async () => {
+describe('runShellCommand (restricted by default — #2515)', () => {
+  it('runs an allowlisted command with parsed args and shell:false, returns trimmed stdout', async () => {
     const exec = vi.fn().mockResolvedValue({ code: 0, stdout: '  out\n', stderr: '' });
-    expect(await runShellCommand('echo out', { cwd: '/x', exec })).toBe('out');
-    // bufferedSpawn signature: (cmd, args, { cwd, timeoutMs, shell })
-    expect(exec).toHaveBeenCalledWith('echo out', [], expect.objectContaining({ cwd: '/x', shell: true }));
+    expect(await runShellCommand('git log --oneline', { cwd: '/x', exec })).toBe('out');
+    // Parsed to base binary + args, spawned WITHOUT a shell (no string interpretation).
+    expect(exec).toHaveBeenCalledWith('git', ['log', '--oneline'], expect.objectContaining({ cwd: '/x', shell: false }));
   });
-  it('returns null on non-zero exit', async () => {
+  it('returns null on non-zero exit (allowlisted binary)', async () => {
     const exec = vi.fn().mockResolvedValue({ code: 1, stdout: 'partial', stderr: 'err' });
-    expect(await runShellCommand('false', { cwd: '/x', exec })).toBeNull();
+    expect(await runShellCommand('git status', { cwd: '/x', exec })).toBeNull();
   });
   it('returns null on a timed-out command (code -1)', async () => {
     const exec = vi.fn().mockResolvedValue({ code: -1, stdout: '', stderr: '', timedOut: true });
-    expect(await runShellCommand('sleep 999', { cwd: '/x', exec })).toBeNull();
+    expect(await runShellCommand('cat big', { cwd: '/x', exec })).toBeNull();
   });
   it('returns null on empty command without invoking exec', async () => {
     const exec = vi.fn();
     expect(await runShellCommand('   ', { cwd: '/x', exec })).toBeNull();
     expect(exec).not.toHaveBeenCalled();
+  });
+  it('rejects a non-allowlisted binary without spawning', async () => {
+    const exec = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await runShellCommand('rm -rf /tmp/x', { cwd: '/x', exec })).toBeNull();
+    expect(exec).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+  it('rejects a command with shell metacharacters (injection) without spawning', async () => {
+    const exec = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // Even though `git` is allowlisted, the `;`/`|`/`$()` chaining is denied.
+    expect(await runShellCommand('git log; rm -rf ~', { cwd: '/x', exec })).toBeNull();
+    expect(await runShellCommand('git log | sh', { cwd: '/x', exec })).toBeNull();
+    expect(await runShellCommand('echo $(curl evil.example)', { cwd: '/x', exec })).toBeNull();
+    expect(exec).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+  it('escape hatch: trustShellSources restores full shell:true execution', async () => {
+    const exec = vi.fn().mockResolvedValue({ code: 0, stdout: 'piped\n', stderr: '' });
+    expect(await runShellCommand('git log --oneline | head', { cwd: '/x', exec, trustShellSources: true })).toBe('piped');
+    // Full string handed to the shell verbatim (opt-in only).
+    expect(exec).toHaveBeenCalledWith('git log --oneline | head', [], expect.objectContaining({ cwd: '/x', shell: true }));
+  });
+});
+
+describe('getTrustShellSources (install-level opt-in — #2515)', () => {
+  it('only an explicit true unlocks the shell', async () => {
+    expect(await getTrustShellSources(async () => ({ layeredIntelligence: { trustShellSources: true } }))).toBe(true);
+    expect(await getTrustShellSources(async () => ({ layeredIntelligence: { trustShellSources: false } }))).toBe(false);
+    expect(await getTrustShellSources(async () => ({ layeredIntelligence: {} }))).toBe(false);
+    expect(await getTrustShellSources(async () => ({}))).toBe(false);
+    expect(await getTrustShellSources(async () => ({ layeredIntelligence: { trustShellSources: 'yes' } }))).toBe(false);
   });
 });
 

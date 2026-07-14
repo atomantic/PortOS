@@ -171,6 +171,16 @@ export const layeredIntelligenceConfigSchema = z.object({
   lastRunAt: z.string().nullable().optional()
 });
 
+// Install-level Layered Intelligence settings (data/settings.json, distinct from
+// the per-app config above). `trustShellSources` unlocks full-shell custom `cmd`
+// sources for the whole install — off by default; when false/absent, custom cmd
+// sources are restricted to the allowlisted-binary + shell:false runner. See the
+// threat-model comment on runShellCommand in server/services/layeredIntelligence.js
+// (issue #2515).
+export const layeredIntelligenceSettingsSchema = z.object({
+  trustShellSources: z.boolean().optional()
+});
+
 export const appSchema = z.object({
   name: z.string().min(1).max(100),
   repoPath: z.string().min(1),
