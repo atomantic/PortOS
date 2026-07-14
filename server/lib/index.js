@@ -121,6 +121,7 @@ export * from './schemaVersions.js';
 export * from './imageClean.js';
 export * from './imageWatermark.js';
 export * from './localImageFilename.js';
+export * from './pgFileFacade.js';
 export * from './multipart.js';
 export * from './safetensors.js';
 export * from './assetHash.js';
