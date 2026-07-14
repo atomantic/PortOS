@@ -23,6 +23,7 @@ import {
   listDirectoryByExtension,
   safeJSONParse,
   safeJSONLParse,
+  createCachedStore,
   readJSONFile,
   readJSONLFile,
   appendJSONLine,
@@ -939,6 +940,71 @@ describe('fileUtils', () => {
       await atomicWrite(target, { created: true });
       expect(JSON.parse(await readFile(target, 'utf8'))).toEqual({ created: true });
     });
+  });
+});
+
+// =============================================================================
+// createCachedStore — cached JSON store with serialized writes (#2539)
+// =============================================================================
+
+describe('createCachedStore', () => {
+  let dir;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cached-store-test-'));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('loads the default when the file is absent, then round-trips a save', async () => {
+    const store = createCachedStore(join(dir, 'x.json'), { n: 0 });
+    expect(await store.load()).toEqual({ n: 0 });
+    await store.save({ n: 5 });
+    expect(await store.load()).toEqual({ n: 5 });
+  });
+
+  it('mutate persists the fn result and returns it', async () => {
+    const store = createCachedStore(join(dir, 'x.json'), { n: 0 });
+    const out = await store.mutate((data) => { data.n = 9; });
+    expect(out).toEqual({ n: 9 });
+    // Persisted to disk, not just cache
+    expect(JSON.parse(await readFile(join(dir, 'x.json'), 'utf-8'))).toEqual({ n: 9 });
+  });
+
+  it('serializes concurrent read-modify-write so no update is lost', async () => {
+    const file = join(dir, 'counter.json');
+    const store = createCachedStore(file, { n: 0 }, { ttl: 0 });
+    // ttl:0 forces every load to re-read from disk — the worst case for the
+    // classic load→mutate→save clobber. Without serialization, N concurrent
+    // increments race down to ~1; mutate() must land all N.
+    const N = 25;
+    await Promise.all(
+      Array.from({ length: N }, () => store.mutate(async (data) => {
+        const current = data.n;
+        await Promise.resolve(); // yield — invites interleaving
+        data.n = current + 1;
+      }))
+    );
+    expect((await store.load()).n).toBe(N);
+    expect(JSON.parse(await readFile(file, 'utf-8')).n).toBe(N);
+  });
+
+  it('mutate that returns undefined persists the mutated input', async () => {
+    const store = createCachedStore(join(dir, 'x.json'), { items: [] });
+    await store.mutate((data) => { data.items.push('a'); });
+    await store.mutate((data) => { data.items.push('b'); });
+    expect((await store.load()).items).toEqual(['a', 'b']);
+  });
+
+  it('invalidateCache forces a re-read from disk', async () => {
+    const file = join(dir, 'x.json');
+    const store = createCachedStore(file, { n: 0 });
+    await store.load();
+    await writeFile(file, JSON.stringify({ n: 42 }));
+    store.invalidateCache();
+    expect((await store.load()).n).toBe(42);
   });
 });
 

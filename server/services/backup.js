@@ -11,6 +11,7 @@ import { access, readdir, readFile, stat, unlink } from 'fs/promises';
 import { hostname } from 'os';
 import { join, resolve, relative, isAbsolute } from 'path';
 import { PATHS, ensureDir, readJSONFile, atomicWrite, sha256File } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { getEvent } from './eventScheduler.js';
 import { checkHealth, getServerMajorVersion } from '../lib/db.js';
 import { resolvePgDumpBinary } from '../lib/pgTools.js';
@@ -24,6 +25,11 @@ import { reloadSettings } from './settings.js';
 let isRunning = false;
 
 const STATE_PATH = join(PATHS.data, 'backup', 'state.json');
+
+// Serialize state read-merge-write so two saveState() calls (e.g. a run
+// completing while the scheduler stamps a status) can't each read the same
+// pre-image and clobber the other's fields. Single tail per shared state file.
+const queueStateWrite = createFileWriteQueue();
 
 // Paths under data/ that are skipped by default on top of user-configured excludes.
 // Two classes live here: (1) ephemeral/cache data the user almost never wants in a
@@ -611,10 +617,13 @@ export async function getState() {
  * @param {object} patch - Fields to merge into state
  */
 export async function saveState(patch) {
-  await ensureDir(join(PATHS.data, 'backup'));
-  const current = await getState();
-  const updated = { ...current, ...patch };
-  await atomicWrite(STATE_PATH, updated);
+  return queueStateWrite(async () => {
+    await ensureDir(join(PATHS.data, 'backup'));
+    const current = await getState();
+    const updated = { ...current, ...patch };
+    await atomicWrite(STATE_PATH, updated);
+    return updated;
+  });
 }
 
 /**

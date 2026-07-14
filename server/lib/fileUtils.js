@@ -14,6 +14,7 @@ import { fileURLToPath } from 'url';
 import { homedir } from 'os';
 import { ServerError } from './errorHandler.js';
 import { resolveInstallRoot } from './dataRoot.js';
+import { createFileWriteQueue } from './fileWriteQueue.js';
 
 // Promisified execFile — shared so callers (e.g. backup's pg_dump probing)
 // don't each re-wrap it. Returns { stdout, stderr }.
@@ -556,12 +557,22 @@ export async function writeJSONLines(filePath, values) {
  * @param {Object} options
  * @param {number} [options.ttl=2000] - Cache TTL in milliseconds
  * @param {string} [options.context=''] - Context label for error logging
- * @returns {{ load, save, invalidateCache }}
+ * @returns {{ load, save, mutate, invalidateCache }}
+ *
+ * Writes are serialized through a single-tail `createFileWriteQueue` so two
+ * concurrent `save()` calls can't interleave their `atomicWrite` + cache
+ * assignment. For read-modify-write, use `mutate(fn)` — it runs the whole
+ * `load → fn → persist` cycle under the same tail, so a `load` always sees the
+ * previous cycle's committed result and one writer can't clobber the other
+ * (CLAUDE.md: "serialize writes server-side… a single tail per shared file").
+ * A bare `load()` + `save()` pair does NOT get that guarantee; reach for
+ * `mutate()` whenever the new value depends on the current one.
  */
 export function createCachedStore(filePath, defaultValue, { ttl = 2000, context = '' } = {}) {
   let cache = null;
   let cacheTimestamp = 0;
   const dir = dirname(filePath);
+  const queueWrite = createFileWriteQueue();
   // Safe clone for plain JSON defaults (structuredClone requires Node 17+)
   const cloneDefault = () => JSON.parse(JSON.stringify(defaultValue));
 
@@ -580,18 +591,32 @@ export function createCachedStore(filePath, defaultValue, { ttl = 2000, context 
     return cache;
   };
 
-  const save = async (data) => {
+  // Persist `data` and refresh the cache — the shared write body. Callers reach
+  // it via the serialized `save`/`mutate`, never directly.
+  const persist = async (data) => {
     await atomicWrite(filePath, data);
     cache = data;
     cacheTimestamp = Date.now();
+    return data;
   };
+
+  const save = (data) => queueWrite(() => persist(data));
+
+  // Serialized read-modify-write: load the freshest state under the tail, apply
+  // `fn`, then persist. `fn` may mutate the loaded object in place and/or return
+  // the value to write (returning `undefined` persists the mutated input).
+  const mutate = (fn) => queueWrite(async () => {
+    const data = await load();
+    const result = await fn(data);
+    return persist(result === undefined ? data : result);
+  });
 
   const invalidateCache = () => {
     cache = null;
     cacheTimestamp = 0;
   };
 
-  return { load, save, invalidateCache };
+  return { load, save, mutate, invalidateCache };
 }
 
 export const MINUTE = 60 * 1000;

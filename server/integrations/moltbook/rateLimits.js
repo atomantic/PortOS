@@ -5,6 +5,8 @@
  * These limits are enforced by the platform - exceeding them will result in errors.
  */
 
+import { createBoundedStateMap } from '../../lib/boundedStateMap.js';
+
 export const MOLTBOOK_RATE_LIMITS = {
   post: {
     cooldownMs: 30 * 60 * 1000, // 30 minutes between posts
@@ -24,8 +26,10 @@ export const MOLTBOOK_RATE_LIMITS = {
   }
 };
 
-// In-memory rate limit tracking per API key
-const rateLimitState = new Map();
+// In-memory rate limit tracking per API key. Bounded (TTL + LRU) so a process
+// cycling through many keys doesn't leak one entry per key forever — idle
+// state is worthless anyway once its daily counters have reset.
+const rateLimitState = createBoundedStateMap();
 
 /**
  * Get rate limit state for an API key

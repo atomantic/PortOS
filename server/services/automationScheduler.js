@@ -16,7 +16,6 @@ import { getUserTimezone } from '../lib/timezone.js';
 const SCHEDULES_FILE = join(PATHS.agentPersonalities, 'schedules.json');
 const store = createCachedStore(SCHEDULES_FILE, { schedules: {} }, { context: 'automation schedules' });
 const loadSchedules = store.load;
-const saveSchedules = store.save;
 
 // Event emitter for schedule changes
 export const scheduleEvents = new EventEmitter();
@@ -75,7 +74,6 @@ export async function getScheduleById(id) {
  * Create a new schedule
  */
 export async function createSchedule(scheduleData) {
-  const data = await loadSchedules();
   const id = uuidv4();
   const now = new Date().toISOString();
 
@@ -100,8 +98,7 @@ export async function createSchedule(scheduleData) {
     updatedAt: now
   };
 
-  data.schedules[id] = schedule;
-  await saveSchedules(data);
+  await store.mutate((data) => { data.schedules[id] = schedule; });
   notifyChanged('create', id);
 
   // If enabled, activate the schedule
@@ -117,24 +114,26 @@ export async function createSchedule(scheduleData) {
  * Update an existing schedule
  */
 export async function updateSchedule(id, updates) {
-  const data = await loadSchedules();
+  let schedule = null;
+  let wasEnabled = false;
+  await store.mutate((data) => {
+    if (!data.schedules[id]) return data;
 
-  if (!data.schedules[id]) {
-    return null;
-  }
+    const { id: _id, createdAt: _createdAt, ...cleanUpdates } = updates;
+    wasEnabled = data.schedules[id].enabled;
 
-  const { id: _id, createdAt: _createdAt, ...cleanUpdates } = updates;
-  const wasEnabled = data.schedules[id].enabled;
+    schedule = {
+      ...data.schedules[id],
+      ...cleanUpdates,
+      createdAt: data.schedules[id].createdAt,
+      updatedAt: new Date().toISOString()
+    };
 
-  const schedule = {
-    ...data.schedules[id],
-    ...cleanUpdates,
-    createdAt: data.schedules[id].createdAt,
-    updatedAt: new Date().toISOString()
-  };
+    data.schedules[id] = schedule;
+    return data;
+  });
 
-  data.schedules[id] = schedule;
-  await saveSchedules(data);
+  if (!schedule) return null;
   notifyChanged('update', id);
 
   // Handle enable/disable
@@ -156,17 +155,18 @@ export async function updateSchedule(id, updates) {
  * Delete a schedule
  */
 export async function deleteSchedule(id) {
-  const data = await loadSchedules();
+  let existed = false;
+  await store.mutate((data) => {
+    if (!data.schedules[id]) return data;
+    existed = true;
+    delete data.schedules[id];
+    return data;
+  });
 
-  if (!data.schedules[id]) {
-    return false;
-  }
+  if (!existed) return false;
 
   // Deactivate if running
   await deactivateSchedule(id);
-
-  delete data.schedules[id];
-  await saveSchedules(data);
   notifyChanged('delete', id);
 
   console.log(`🗑️ Deleted schedule (${id})`);
@@ -292,12 +292,12 @@ async function executeScheduledAction(scheduleId) {
   });
 
   // Update last run
-  const data = await loadSchedules();
-  if (data.schedules[scheduleId]) {
-    data.schedules[scheduleId].lastRun = now;
-    data.schedules[scheduleId].runCount = (data.schedules[scheduleId].runCount || 0) + 1;
-    await saveSchedules(data);
-  }
+  await store.mutate((data) => {
+    if (data.schedules[scheduleId]) {
+      data.schedules[scheduleId].lastRun = now;
+      data.schedules[scheduleId].runCount = (data.schedules[scheduleId].runCount || 0) + 1;
+    }
+  });
 
   // Emit event for platform integration to pick up
   scheduleEvents.emit('execute', {
