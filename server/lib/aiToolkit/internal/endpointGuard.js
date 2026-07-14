@@ -66,10 +66,26 @@ const ALLOWED_PROVIDER_HOSTS = new Set([
 
 const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;
 
-/** Strip an IPv4-mapped IPv6 prefix (`::ffff:127.0.0.1`) down to the v4 literal. */
+/**
+ * Collapse an IPv4-mapped IPv6 address down to its dotted-decimal v4 literal so
+ * the metadata / private-range checks below see the real target. Handles both
+ * the dotted form (`::ffff:169.254.169.254`) and the hex-compressed form
+ * (`::ffff:a9fe:a9fe`) that WHATWG URL emits — otherwise a mapped-v6 metadata
+ * address would bypass the "metadata always blocked" invariant. (Bare
+ * decimal/hex/octal IPv4 like `0xa9fea9fe` is already canonicalized to
+ * dotted-decimal by `new URL()`, so it needs no handling here.)
+ */
 function unwrapMappedV4(host) {
-  const m = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i.exec(host);
-  return m ? m[1] : host;
+  const h = host.toLowerCase();
+  const dotted = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(h);
+  if (dotted) return dotted[1];
+  const hex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(h);
+  if (hex) {
+    const hi = parseInt(hex[1], 16);
+    const lo = parseInt(hex[2], 16);
+    return `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
+  }
+  return host;
 }
 
 function isLoopbackOrPrivateV4(host) {

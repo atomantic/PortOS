@@ -37,6 +37,9 @@ describe('endpointGuard — evaluateSecretEndpoint', () => {
       expect(evaluateSecretEndpoint('http://[fd12:3456::1]:11434/v1').allowed).toBe(true);
       expect(evaluateSecretEndpoint('http://[fe80::1]:11434/v1').allowed).toBe(true);
     });
+    it('allows IPv4-mapped IPv6 loopback (::ffff:127.0.0.1)', () => {
+      expect(evaluateSecretEndpoint('http://[::ffff:127.0.0.1]:1234/v1').allowed).toBe(true);
+    });
   });
 
   describe('cloud-metadata endpoints are ALWAYS blocked', () => {
@@ -57,6 +60,14 @@ describe('endpointGuard — evaluateSecretEndpoint', () => {
     });
     it('blocks AWS IPv6 IMDS fd00:ec2::254', () => {
       expect(evaluateSecretEndpoint('http://[fd00:ec2::254]/', { allowCustomEndpoint: true }).allowed).toBe(false);
+    });
+    it('blocks metadata via decimal/hex IPv4 (URL canonicalizes to 169.254.169.254)', () => {
+      expect(evaluateSecretEndpoint('http://2852039166/', { allowCustomEndpoint: true }).allowed).toBe(false);
+      expect(evaluateSecretEndpoint('http://0xa9fea9fe/', { allowCustomEndpoint: true }).allowed).toBe(false);
+    });
+    it('blocks metadata via IPv4-mapped IPv6 (both dotted and hex-compressed forms)', () => {
+      expect(evaluateSecretEndpoint('http://[::ffff:169.254.169.254]/', { allowCustomEndpoint: true }).allowed).toBe(false);
+      expect(evaluateSecretEndpoint('http://[::ffff:a9fe:a9fe]/', { allowCustomEndpoint: true }).allowed).toBe(false);
     });
   });
 
