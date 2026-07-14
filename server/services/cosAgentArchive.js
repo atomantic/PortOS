@@ -8,7 +8,7 @@
  * The public barrel `cosAgents.js` re-exports everything here.
  */
 
-import { readFile, writeFile, rename, readdir, rm } from 'fs/promises';
+import { writeFile, rename, readdir, rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { cosEvents } from './cosEvents.js';

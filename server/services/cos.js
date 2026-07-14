@@ -713,8 +713,8 @@ async function spawnDequeuePriority0OnDemand(ctx) {
   const taskScheduleMod = await import('./taskSchedule.js');
   const taskSchedule = await taskScheduleMod.loadSchedule();
   const onDemandRequests = await taskScheduleMod.getOnDemandRequests();
-  // Stash for Priority 2's disabled-analysis-type gate (avoids a second load).
-  ctx.taskScheduleMod = taskScheduleMod;
+  // Stash the loaded schedule for Priority 2's disabled-analysis-type gate
+  // (avoids a second load).
   ctx.taskSchedule = taskSchedule;
 
   // Track apps already marked review-started this cycle so multiple on-demand
@@ -810,7 +810,6 @@ async function spawnDequeuePriority1UserTasks(ctx) {
 
   const userTaskData = await getUserTasks();
   const pendingUserTasks = userTaskData.grouped?.pending || [];
-  ctx.pendingUserTasks = pendingUserTasks;
   ctx.hasPendingUserTasks = pendingUserTasks.length > 0;
 
   for (const task of pendingUserTasks) {
@@ -1036,15 +1035,13 @@ async function dequeueNextTask() {
   // Shared spawn context threaded through each priority tier. The tiers mutate
   // the running spawn total + per-project counts through `capacity` (whose
   // `canSpawn`/`trackSpawn` close over that state), and stash cross-tier values
-  // (taskSchedule, pendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling) on
-  // `ctx` as they resolve them.
+  // (taskSchedule, hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling)
+  // on `ctx` as they resolve them.
   const ctx = {
     state,
     instanceId,
     capacity,
-    pendingUserTasks: [],
     hasPendingUserTasks: false,
-    taskScheduleMod: null,
     taskSchedule: null,
     cosAutonomyMode: null,
     autonomousSpawnCeiling: availableSlots
