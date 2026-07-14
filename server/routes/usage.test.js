@@ -13,7 +13,9 @@ vi.mock('../services/usage.js', () => ({
 }));
 
 vi.mock('../services/providers.js', () => ({
-  getAllProviders: vi.fn().mockResolvedValue([])
+  // getAllProviders returns the wrapped { activeProvider, providers } shape —
+  // the route must unwrap `.providers` before passing to getUsageSummary.
+  getAllProviders: vi.fn().mockResolvedValue({ activeProvider: null, providers: [] })
 }));
 
 vi.mock('../services/providerUsage.js', () => ({
@@ -55,7 +57,7 @@ describe('usage routes', () => {
 
   it('GET /api/usage passes an explicit from/to range through', async () => {
     usage.getUsageSummary.mockReturnValue({});
-    getAllProviders.mockResolvedValue([{ id: 'ollama' }]);
+    getAllProviders.mockResolvedValue({ activeProvider: 'ollama', providers: [{ id: 'ollama' }] });
     const res = await request(buildApp()).get('/api/usage?from=2026-01-01&to=2026-02-01');
     expect(res.status).toBe(200);
     expect(usage.getUsageSummary).toHaveBeenCalledWith({
