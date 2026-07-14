@@ -49,9 +49,10 @@ function AutonomyControl({ config, onLevelChange }) {
   const currentLevel = detectAutonomyLevel(config);
   const isCustom = currentLevel === null;
 
-  const handleLevelClick = async (level) => {
-    await onLevelChange(level.params);
-    toast.success(`Autonomy level set to ${level.label}`);
+  const handleLevelClick = (level) => {
+    // Success toast is owned by onLevelChange so it only fires once the PUT
+    // resolves — a failed level change must not report success.
+    onLevelChange(level.params, level.label);
   };
 
   // Get the level to show in preview (hovered or current)
@@ -278,11 +279,20 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
     immediateExecution: config?.immediateExecution ?? true
   });
 
-  const handleLevelChange = async (params) => {
-    const updatedData = { ...formData, ...params };
-    setFormData(updatedData);
-    await api.updateCosConfig(params, { silent: true }).catch(err => toast.error(err.message));
-    onUpdate();
+  const handleLevelChange = async (params, label) => {
+    // Optimistically reflect the new params, but revert if the PUT fails so the
+    // form doesn't lie about the persisted config. Success toast / refresh only
+    // fire after the request resolves.
+    const previousData = formData;
+    setFormData({ ...formData, ...params });
+    try {
+      await api.updateCosConfig(params, { silent: true });
+      if (label) toast.success(`Autonomy level set to ${label}`);
+      onUpdate();
+    } catch (err) {
+      setFormData(previousData);
+      toast.error(err.message);
+    }
   };
 
   // Today's per-domain usage for the Domain Budgets readout (#711).
@@ -322,10 +332,16 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
   };
 
   const handleSave = async () => {
-    await api.updateCosConfig(formData, { silent: true }).catch(err => toast.error(err.message));
-    toast.success('Configuration updated');
-    setEditing(false);
-    onUpdate();
+    // Keep the user in edit mode on failure — only close the editor and toast
+    // success once the config PUT actually resolves.
+    try {
+      await api.updateCosConfig(formData, { silent: true });
+      toast.success('Configuration updated');
+      setEditing(false);
+      onUpdate();
+    } catch (err) {
+      toast.error(err.message);
+    }
   };
 
   return (
