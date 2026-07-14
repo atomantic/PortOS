@@ -266,8 +266,14 @@ export function buildCliSpawnConfig(provider, model, settingsEnv = {}, { systemP
     // buildCodexStartupArgs disables codex's startup update check so a headless
     // exec run never spends startup time hitting GitHub / kicking off a brew
     // upgrade it can't complete unattended (the fatal interactive-modal variant
-    // is documented on buildCodexStartupArgs in providerModels.js).
-    const args = ['exec', '--dangerously-bypass-approvals-and-sandbox', ...buildCodexStartupArgs(provider?.args)];
+    // is documented on buildCodexStartupArgs in providerModels.js). Injected
+    // UNCONDITIONALLY here (no provider.args passed): this branch builds codex's
+    // argv from scratch and never forwards provider.args, and a headless CoS
+    // agent can never dismiss the update modal — so the check must be off
+    // regardless of any provider.args pin. (Passing provider.args would detect a
+    // pin and skip injecting, but since the pin is never forwarded either, codex
+    // would fall back to its check-ON default — the exact wedge this prevents.)
+    const args = ['exec', '--dangerously-bypass-approvals-and-sandbox', ...buildCodexStartupArgs()];
     if (effectiveModel) {
       args.push('--model', effectiveModel);
     }

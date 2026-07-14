@@ -539,14 +539,24 @@ describe('tuiHandshake.buildTuiInvocation', () => {
     else process.env.CLAUDE_CODE_USE_BEDROCK = savedBedrock;
   });
 
-  it('uses provider.command when present and skips codex defaults for non-literal-codex command names', () => {
+  it('uses provider.command when present and skips codex defaults for non-codex-basename command names', () => {
     const provider = { id: 'codex', command: 'my-codex-wrapper', args: ['exec', '-'] };
     const out = buildTuiInvocation(provider, null);
     expect(out.command).toBe('my-codex-wrapper');
-    // `applyCommandDefaults` checks `command === 'codex'` (strict). A
-    // wrapper name escapes the auto-inject — caller-controlled commands
-    // own their argv entirely.
+    // `applyCommandDefaults` matches codex by basename. `my-codex-wrapper`'s
+    // basename is not `codex`, so it escapes the auto-inject — a caller-
+    // controlled wrapper owns its argv entirely.
     expect(out.args).toEqual(['exec', '-']);
+  });
+
+  it('injects codex defaults for an absolute codex binary path (basename-aware match)', () => {
+    // A provider commonly pins the absolute path `which codex` returns; a strict
+    // `=== 'codex'` would skip the defaults and leave the TUI to wedge on the
+    // update modal. Basename `codex` still matches.
+    const provider = { id: 'codex-tui', command: '/opt/homebrew/bin/codex', args: [] };
+    const out = buildTuiInvocation(provider, null);
+    expect(out.command).toBe('/opt/homebrew/bin/codex');
+    expect(out.args).toEqual(['--dangerously-bypass-approvals-and-sandbox', '-c', 'check_for_update_on_startup=false']);
   });
 
   it('infers command from id when provider.command is missing', () => {

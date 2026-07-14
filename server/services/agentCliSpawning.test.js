@@ -194,13 +194,15 @@ describe('buildCliSpawnConfig', () => {
     expect(config.args).toEqual(['exec', '--dangerously-bypass-approvals-and-sandbox', '-c', 'check_for_update_on_startup=false', '--model', 'gpt-5.4']);
   });
 
-  it('does not override a Codex provider that pins the update-check config in its args', () => {
+  it('disables the codex update check unconditionally on the headless agent path (ignores provider.args)', () => {
+    // This builder constructs codex argv from scratch and never forwards
+    // provider.args, so a provider.args pin is NOT honored here — a headless CoS
+    // agent can never dismiss the update modal, so the check is always forced off.
     const config = buildCliSpawnConfig(
       { id: 'codex', command: 'codex', args: ['-c', 'check_for_update_on_startup=true'] },
       'gpt-5.4',
     );
-    // The user's explicit pin wins: no injected `check_for_update_on_startup=false`.
-    expect(config.args.filter((a) => a.startsWith('check_for_update_on_startup='))).toEqual([]);
+    expect(config.args).toContain('check_for_update_on_startup=false');
   });
 
   it('uses agy print mode for Antigravity without model flags', () => {

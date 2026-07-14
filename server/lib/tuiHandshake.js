@@ -12,7 +12,7 @@
  * No cycle risk: this module imports nothing from either consumer.
  */
 
-import { resolveCliModel, hasModelFlag, resolveBedrockCliModel, prefixOpencodeModel, isOpencodeCommand, buildCodexStartupArgs } from './providerModels.js';
+import { resolveCliModel, hasModelFlag, resolveBedrockCliModel, prefixOpencodeModel, isOpencodeCommand, buildCodexStartupArgs, commandBasename } from './providerModels.js';
 import { ensureAntigravityTuiArgs, isAntigravityCommand } from './antigravity.js';
 import { ensureGrokTuiArgs, isGrokCommand } from './grok.js';
 
@@ -797,9 +797,14 @@ export function rendersWorkCounter(commandName) {
 // provider config already pins an approval/sandbox/bypass policy of its own.
 // We ALSO disable codex's startup update check (see ensureCodexTuiArgs) —
 // independent of the approval posture, so it's injected even when a provider
-// pins its own policy.
+// pins its own policy. Match codex by BASENAME (`commandBasename`), not a strict
+// `=== 'codex'`: a provider commonly configures the absolute binary path
+// (`/opt/homebrew/bin/codex`, what `which codex` returns), and a strict match
+// would skip both the bypass flag and the update-check disable — leaving that
+// headless TUI to wedge on the update modal. A wrapper like `my-codex-wrapper`
+// has a non-`codex` basename and still (correctly) owns its own argv.
 export function applyCommandDefaults(command, args) {
-  if (command === 'codex') {
+  if (commandBasename(command) === 'codex') {
     return ensureCodexTuiArgs(args);
   }
   if (isAntigravityCommand(command)) {
