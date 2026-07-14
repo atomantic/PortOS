@@ -740,21 +740,43 @@ describe('customSourceKey', () => {
 
 describe('fetchHttpSource', () => {
   it('returns body text on a 2xx http(s) response', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, text: async () => 'remote body' });
-    expect(await fetchHttpSource('https://example.com/x', { fetchImpl })).toBe('remote body');
+    const fetchText = vi.fn().mockResolvedValue('remote body');
+    expect(await fetchHttpSource('https://example.com/x', { fetchText })).toBe('remote body');
+    // Routed through the SSRF-guarded fetcher, failing soft (no thrown 400).
+    expect(fetchText).toHaveBeenCalledWith('https://example.com/x', expect.objectContaining({ throwOnUnsafe: false }));
   });
-  it('rejects a non-http scheme without calling fetch', async () => {
-    const fetchImpl = vi.fn();
-    expect(await fetchHttpSource('file:///etc/hosts', { fetchImpl })).toBeNull();
-    expect(fetchImpl).not.toHaveBeenCalled();
+  it('rejects a non-http scheme without calling the fetcher', async () => {
+    const fetchText = vi.fn();
+    expect(await fetchHttpSource('file:///etc/hosts', { fetchText })).toBeNull();
+    expect(fetchText).not.toHaveBeenCalled();
   });
-  it('returns null on a non-ok response', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, text: async () => 'nope' });
-    expect(await fetchHttpSource('https://example.com/x', { fetchImpl })).toBeNull();
+  it('returns null when the fetcher yields null (non-ok / dead URL)', async () => {
+    const fetchText = vi.fn().mockResolvedValue(null);
+    expect(await fetchHttpSource('https://example.com/x', { fetchText })).toBeNull();
   });
-  it('returns null when fetch throws (dead URL / timeout)', async () => {
-    const fetchImpl = vi.fn().mockRejectedValue(new Error('boom'));
-    expect(await fetchHttpSource('https://example.com/x', { fetchImpl })).toBeNull();
+  it('returns null when the fetcher throws (timeout)', async () => {
+    const fetchText = vi.fn().mockRejectedValue(new Error('boom'));
+    expect(await fetchHttpSource('https://example.com/x', { fetchText })).toBeNull();
+  });
+
+  // SSRF: exercise the REAL fetchPublicText guard (default injected). IP-literal
+  // hosts are classified synchronously — no network — so these are deterministic.
+  it('blocks the cloud-metadata endpoint (169.254.169.254) — omits the key, no network', async () => {
+    expect(await fetchHttpSource('http://169.254.169.254/latest/meta-data/')).toBeNull();
+  });
+  it('blocks IPv4 loopback (127.0.0.1)', async () => {
+    expect(await fetchHttpSource('http://127.0.0.1:5555/api/settings')).toBeNull();
+  });
+  it('blocks IPv6 loopback ([::1])', async () => {
+    expect(await fetchHttpSource('http://[::1]/')).toBeNull();
+  });
+  it('blocks named cloud-metadata endpoints inside allowed private ranges (Alibaba/AWS IMDS)', async () => {
+    expect(await fetchHttpSource('http://100.100.100.200/latest/meta-data/')).toBeNull();
+    expect(await fetchHttpSource('http://[fd00:ec2::254]/latest/meta-data/')).toBeNull();
+  });
+  it('allows a public URL through the guard (real fetch stubbed at fetchText seam)', async () => {
+    const fetchText = vi.fn().mockResolvedValue('public body');
+    expect(await fetchHttpSource('https://example.com/feed', { fetchText })).toBe('public body');
   });
 });
 
