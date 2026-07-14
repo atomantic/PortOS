@@ -995,6 +995,30 @@ export function assertSafeFilename(filename, { extensions, subject = 'filename',
 }
 
 /**
+ * True when `candidatePath` resolves to a location strictly inside `dir`.
+ *
+ * Uses the same anchored-prefix containment idiom as `makePathResolver`
+ * (`resolvePath(dir) + PATH_SEP`): appending the platform separator to the
+ * resolved root means a sibling directory whose name merely *starts with* the
+ * root (e.g. `/data/uploads-evil` vs `/data/uploads`) can't slip past a bare
+ * `startsWith(root)` check. This is stricter than the `resolvedPath.startsWith(DIR)`
+ * guard the upload/attachment/screenshot routes used before. The root itself is
+ * NOT reported as "inside" (there's no trailing separator on the bare root),
+ * which is the desired behavior for file-containment checks.
+ *
+ * @param {string} dir - the containing directory (absolute or relative)
+ * @param {string} candidatePath - the path to test
+ * @returns {boolean}
+ */
+export function isPathInsideDir(dir, candidatePath) {
+  if (typeof dir !== 'string' || typeof candidatePath !== 'string' || !dir || !candidatePath) {
+    return false;
+  }
+  const rootPrefix = resolvePath(dir) + PATH_SEP;
+  return resolvePath(candidatePath).startsWith(rootPrefix);
+}
+
+/**
  * Build a single-root path resolver that returns a function with the same
  * signature as `resolveGalleryImage` / `resolveImageRef` / `resolveTemplateAsset`.
  *

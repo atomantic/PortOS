@@ -10,7 +10,7 @@ import { v4 as uuidv4 } from '../lib/uuid.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
   ensureDir, pathExists, PATHS, RISKY_MIME_TYPES,
-  sanitizeFilename, getFileExtension, getMimeType, ATTACHMENT_ALLOWED_EXTENSIONS,
+  sanitizeFilename, getFileExtension, getMimeType, ATTACHMENT_ALLOWED_EXTENSIONS, isPathInsideDir,
 } from '../lib/fileUtils.js';
 
 const ATTACHMENTS_DIR = PATHS.cosAttachments;
@@ -65,8 +65,7 @@ router.post('/', asyncHandler(async (req, res) => {
   const filepath = join(ATTACHMENTS_DIR, fname);
 
   // Double-check path is within attachments directory (defense in depth)
-  const resolvedPath = resolve(filepath);
-  if (!resolvedPath.startsWith(ATTACHMENTS_DIR)) {
+  if (!isPathInsideDir(ATTACHMENTS_DIR, filepath)) {
     throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
   }
 
@@ -80,7 +79,8 @@ router.post('/', asyncHandler(async (req, res) => {
     id,
     filename: fname,
     originalName: filename,
-    path: filepath,
+    // API-relative URL only — never the absolute FS path (leaks install layout).
+    path: `/api/attachments/${encodeURIComponent(fname)}`,
     size: buffer.length,
     mimeType
   });
@@ -94,7 +94,7 @@ router.get('/:filename', asyncHandler(async (req, res) => {
   const filepath = resolve(ATTACHMENTS_DIR, safeFilename);
 
   // Verify the resolved path is within attachments directory
-  if (!filepath.startsWith(ATTACHMENTS_DIR)) {
+  if (!isPathInsideDir(ATTACHMENTS_DIR, filepath)) {
     throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
   }
 
@@ -120,7 +120,7 @@ router.delete('/:filename', asyncHandler(async (req, res) => {
   const filepath = resolve(ATTACHMENTS_DIR, safeFilename);
 
   // Verify the resolved path is within attachments directory
-  if (!filepath.startsWith(ATTACHMENTS_DIR)) {
+  if (!isPathInsideDir(ATTACHMENTS_DIR, filepath)) {
     throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
   }
 
@@ -148,7 +148,8 @@ router.get('/', asyncHandler(async (req, res) => {
     const ext = getFileExtension(filename);
     return {
       filename,
-      path: filepath,
+      // API-relative URL only — never the absolute FS path (leaks install layout).
+      path: `/api/attachments/${encodeURIComponent(filename)}`,
       size: stats.size,
       mimeType: getMimeType(ext),
       createdAt: stats.birthtime

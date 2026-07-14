@@ -4,7 +4,7 @@ import { existsSync } from 'fs';
 import { join, resolve } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { ensureDir, PATHS, sanitizeFilename } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, sanitizeFilename, isPathInsideDir } from '../lib/fileUtils.js';
 
 const SCREENSHOTS_DIR = PATHS.screenshots;
 
@@ -77,8 +77,7 @@ router.post('/', asyncHandler(async (req, res) => {
   const filepath = join(SCREENSHOTS_DIR, fname);
 
   // Double-check path is within screenshots directory (defense in depth)
-  const resolvedPath = resolve(filepath);
-  if (!resolvedPath.startsWith(SCREENSHOTS_DIR)) {
+  if (!isPathInsideDir(SCREENSHOTS_DIR, filepath)) {
     throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
   }
 
@@ -89,7 +88,8 @@ router.post('/', asyncHandler(async (req, res) => {
   res.json({
     id,
     filename: fname,
-    path: filepath,
+    // API-relative URL only — never the absolute FS path (leaks install layout).
+    path: `/api/screenshots/${encodeURIComponent(fname)}`,
     size: buffer.length
   });
 }));
@@ -102,7 +102,7 @@ router.get('/:filename', asyncHandler(async (req, res) => {
   const filepath = resolve(SCREENSHOTS_DIR, safeFilename);
 
   // Verify the resolved path is within screenshots directory
-  if (!filepath.startsWith(SCREENSHOTS_DIR)) {
+  if (!isPathInsideDir(SCREENSHOTS_DIR, filepath)) {
     throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
   }
 
