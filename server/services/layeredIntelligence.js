@@ -26,6 +26,8 @@ import { existsSync } from 'fs';
 import { DAY, tryReadFile, readJSONFile, safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { bufferedSpawn } from '../lib/bufferedSpawn.js';
 import { fetchPublicText } from '../lib/safeUrlFetch.js';
+import { validateCommand } from '../lib/commandSecurity.js';
+import { getSettings } from './settings.js';
 import { createTicket, searchIssues, addLabels, escapeJql } from './jira.js';
 import { computeWindowedStats } from './taskLearning/store.js';
 
@@ -583,10 +585,19 @@ function runCli(cmd, args, options = {}) {
  * files degrade to omitted keys, never throws. `openIssues` is gathered
  * separately by the handler (it shells out to the forge).
  */
-export async function gatherSources(app, config, { cosPath = PATHS.cos } = {}) {
+export async function gatherSources(app, config, { cosPath = PATHS.cos, trustShellSources } = {}) {
   const out = {};
   const src = config.sources || {};
   const repo = app.repoPath;
+
+  // Resolve the install-level shell-trust opt-in lazily and once — only when a
+  // `cmd` source is actually present — so apps with no shell sources never read
+  // settings. Injected value (tests) wins; otherwise fall back to settings.json.
+  let trustShell = trustShellSources;
+  const resolveTrustShell = async () => {
+    if (trustShell === undefined) trustShell = await getTrustShellSources();
+    return trustShell;
+  };
 
   if (src.goals && repo) {
     const goals = await tryReadFile(join(repo, 'GOALS.md'));
@@ -651,7 +662,7 @@ export async function gatherSources(app, config, { cosPath = PATHS.cos } = {}) {
       const content = await fetchHttpSource(custom.url);
       if (content) out[key] = content.slice(0, 8000);
     } else if (custom.type === 'cmd' && typeof custom.cmd === 'string' && repo) {
-      const content = await runShellCommand(custom.cmd, { cwd: repo });
+      const content = await runShellCommand(custom.cmd, { cwd: repo, trustShellSources: await resolveTrustShell() });
       if (content) out[key] = content.slice(0, 8000);
     }
   }
@@ -694,19 +705,66 @@ export async function fetchHttpSource(url, { timeoutMs = 10_000, fetchText = fet
 }
 
 /**
- * Run a user-configured shell command for a `cmd` custom source and return its
- * stdout. Deterministic read, no LLM. Runs the full command string through the
- * shell (e.g. `git log --oneline -20 | head`) via the shared `bufferedSpawn`
- * helper — which caps output, kills the whole process tree on timeout (so a
- * hung pipeline grandchild can't linger), and never rejects. Returns null on
- * non-zero exit / timeout / no output so a failing command just omits the key.
- * `exec` is injectable for tests.
+ * THREAT MODEL — a `cmd` custom source is attacker-reachable persistent config.
+ *
+ * The `sources.custom` array lives in each app's stored `layeredIntelligence`
+ * config, written through the validated `PUT /api/apps/:id` route. A `cmd` entry
+ * is executed here on the Layered Intelligence SCHEDULE (Engine-B autonomous job),
+ * with the PortOS process's own privileges and cwd = the app repo. So any path
+ * that can land a string in that config (a hand-edited config, a hostile sync
+ * payload, a future config-writing feature, an XSS-driven same-origin POST) gets
+ * *persistent, unattended* code execution — not a one-shot the operator watched.
+ *
+ * Historically this ran the full command string with `shell: true`, capped only
+ * by length + a 15s timeout. That is arbitrary RCE: `; rm -rf ~`, `$(curl … | sh)`,
+ * pipes to `sh`, etc. all execute. Issue #2515.
+ *
+ * Defense: by default we DENY the shell. The command is parsed and checked
+ * against the shared binary allowlist (`validateCommand` in commandSecurity.js —
+ * same gate the manual command runner uses), which rejects shell metacharacters
+ * (`;|&$(){}` …) and any binary not on the allowlist, then we spawn the base
+ * binary with parsed args and `shell: false` — so no shell ever interprets the
+ * string. A non-allowlisted / metacharacter command is dropped (key omitted) with
+ * a warning, exactly like any other failed source read.
+ *
+ * Escape hatch: an operator who genuinely needs a pipeline (`git log … | head`)
+ * can set the install-level `settings.layeredIntelligence.trustShellSources`
+ * flag, which restores the full `shell: true` behavior for THIS install only.
+ * It is an explicit, install-wide opt-in — off by default — so a fresh install
+ * (or a synced-in app config) can never execute an un-allowlisted command.
+ *
+ * `exec` is injectable for tests; `trustShellSources` is resolved by the caller
+ * (`gatherSources`) from install settings and threaded in.
+ *
+ * Returns null on rejection / non-zero exit / timeout / no output so a failing or
+ * denied command just omits the source key rather than throwing.
  */
-export async function runShellCommand(cmd, { cwd, timeoutMs = 15_000, exec = bufferedSpawn } = {}) {
+export async function runShellCommand(cmd, { cwd, timeoutMs = 15_000, exec = bufferedSpawn, trustShellSources = false } = {}) {
   if (typeof cmd !== 'string' || !cmd.trim()) return null;
-  const { code, stdout } = await exec(cmd, [], { cwd, timeoutMs, shell: true });
+  if (trustShellSources) {
+    // Operator has explicitly opted this install into full-shell custom sources.
+    const { code, stdout } = await exec(cmd, [], { cwd, timeoutMs, shell: true });
+    if (code !== 0) return null;
+    return (stdout || '').trim() || null;
+  }
+  const check = validateCommand(cmd);
+  if (!check.valid) {
+    console.warn(`⚠️ Layered Intelligence: custom cmd source "${cmd}" rejected — ${check.error} (enable settings.layeredIntelligence.trustShellSources to allow arbitrary shell commands)`);
+    return null;
+  }
+  const { code, stdout } = await exec(check.baseCommand, check.args, { cwd, timeoutMs, shell: false });
   if (code !== 0) return null;
   return (stdout || '').trim() || null;
+}
+
+/**
+ * Resolve the install-level "trust shell sources" opt-in from settings.json.
+ * `null`/absent/non-true all read as OFF (the safe default) — only an explicit
+ * `true` unlocks full-shell custom `cmd` sources. Injectable read for tests.
+ */
+export async function getTrustShellSources(read = getSettings) {
+  const settings = await read();
+  return settings?.layeredIntelligence?.trustShellSources === true;
 }
 
 /**
