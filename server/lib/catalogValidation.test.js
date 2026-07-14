@@ -647,6 +647,15 @@ describe('catalogUrlIngestSchema — SSRF guard', () => {
     expect(() => catalogUrlIngestSchema.parse({ url: 'http://metadata.google.internal/x' })).toThrow();
   });
 
+  it('rejects named cloud-metadata endpoints hidden in allowed private ranges', () => {
+    // Alibaba ECS metadata (inside CGNAT 100.64/10) + AWS IPv6 IMDS (inside ULA
+    // fd00::/8) — both would leak under the allow-LAN posture without a literal
+    // block. The expanded IPv6 form normalizes to the same canonical literal.
+    expect(() => catalogUrlIngestSchema.parse({ url: 'http://100.100.100.200/latest/meta-data/' })).toThrow();
+    expect(() => catalogUrlIngestSchema.parse({ url: 'http://[fd00:ec2::254]/latest/meta-data/' })).toThrow();
+    expect(() => catalogUrlIngestSchema.parse({ url: 'http://[fd00:ec2:0:0:0:0:0:254]/x' })).toThrow();
+  });
+
   it('rejects IPv4-mapped IPv6 loopback/link-local + unspecified literals (no bypass)', () => {
     // WHATWG normalizes [::ffff:127.0.0.1] → [::ffff:7f00:1]; both must reject.
     expect(() => catalogUrlIngestSchema.parse({ url: 'http://[::ffff:127.0.0.1]/x' })).toThrow();

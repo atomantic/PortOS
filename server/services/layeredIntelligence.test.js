@@ -770,6 +770,10 @@ describe('fetchHttpSource', () => {
   it('blocks IPv6 loopback ([::1])', async () => {
     expect(await fetchHttpSource('http://[::1]/')).toBeNull();
   });
+  it('blocks named cloud-metadata endpoints inside allowed private ranges (Alibaba/AWS IMDS)', async () => {
+    expect(await fetchHttpSource('http://100.100.100.200/latest/meta-data/')).toBeNull();
+    expect(await fetchHttpSource('http://[fd00:ec2::254]/latest/meta-data/')).toBeNull();
+  });
   it('allows a public URL through the guard (real fetch stubbed at fetchText seam)', async () => {
     const fetchText = vi.fn().mockResolvedValue('public body');
     expect(await fetchHttpSource('https://example.com/feed', { fetchText })).toBe('public body');
