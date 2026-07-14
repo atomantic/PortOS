@@ -23,7 +23,7 @@
 import { join } from 'path';
 import { createHash } from 'crypto';
 import { atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
-import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
+import { createKeyedFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { createSseRunner } from '../../lib/sseUtils.js';
 import { runStagedLLM, resolveStageContext } from '../../lib/stageRunner.js';
 import { manuscriptContentBudgetChars, estimateTokens } from '../../lib/contextBudget.js';
@@ -101,13 +101,7 @@ function assertValidSeriesId(id) {
 
 // ---------- per-series write tail ----------
 
-const outlineQueues = new Map();
-function queueOutlineWrite(seriesId, fn) {
-  const key = typeof seriesId === 'string' && seriesId ? seriesId : '__unknown__';
-  let q = outlineQueues.get(key);
-  if (!q) { q = createFileWriteQueue(); outlineQueues.set(key, q); }
-  return q(fn);
-}
+const queueOutlineWrite = createKeyedFileWriteQueue();
 
 // ---------- sanitize LLM output ----------
 

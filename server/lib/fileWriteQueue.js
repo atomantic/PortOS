@@ -74,3 +74,36 @@ export function createRecordWriteQueue(assertId) {
     return queue(id, fn); // callers see the real resolve/reject
   };
 }
+
+/**
+ * Keyed file-write queue — collapses the per-key `createFileWriteQueue` factory
+ * the pipeline stage stores (editorialScore, reverseOutline, perspectiveRewrite,
+ * manuscriptReview, continuityBible) each rolled by hand:
+ *
+ *   const queues = new Map();
+ *   function queueWrite(id, fn) {
+ *     const key = typeof id === 'string' && id ? id : '__unknown__';
+ *     let q = queues.get(key);
+ *     if (!q) { q = createFileWriteQueue(); queues.set(key, q); }
+ *     return q(fn);
+ *   }
+ *
+ * Each stage keeps ONE JSON state file per key (series/issue), so writes must
+ * serialize per-key while different keys fan out in parallel — exactly
+ * `createKeyCachedQueue`, whose tail Map self-prunes so idle keys don't
+ * accumulate (unlike the hand-rolled Map, which grew unbounded).
+ *
+ * Falsy / non-string keys collapse to a shared `'__unknown__'` tail, matching
+ * the guards the stores used.
+ *
+ * Usage:
+ *   const queueLedgerWrite = createKeyedFileWriteQueue();
+ *   return queueLedgerWrite(seriesId, async () => { ... });
+ */
+export function createKeyedFileWriteQueue() {
+  const queue = createKeyCachedQueue();
+  return function queueKeyedWrite(key, fn) {
+    const safeKey = typeof key === 'string' && key ? key : '__unknown__';
+    return queue(safeKey, fn); // callers see the real resolve/reject
+  };
+}

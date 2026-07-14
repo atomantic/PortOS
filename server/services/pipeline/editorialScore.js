@@ -22,7 +22,7 @@
 
 import { join } from 'path';
 import { PATHS, atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
-import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
+import { createKeyedFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { getReview } from './manuscriptReview.js';
 import { DEFAULT_SEVERITY_WEIGHTS } from '../../lib/editorial/severityConfig.js';
 
@@ -278,13 +278,7 @@ export function computeHealth(comments, gate = DEFAULT_READINESS_GATE, { weights
 
 // Per-series write tail (the ledger file is distinct per series, so each only
 // serializes against itself). Mirrors manuscriptReview's queue pattern.
-const ledgerQueues = new Map();
-function queueLedgerWrite(seriesId, fn) {
-  const key = typeof seriesId === 'string' && seriesId ? seriesId : '__unknown__';
-  let q = ledgerQueues.get(key);
-  if (!q) { q = createFileWriteQueue(); ledgerQueues.set(key, q); }
-  return q(fn);
-}
+const queueLedgerWrite = createKeyedFileWriteQueue();
 
 const emptyLedger = (seriesId) => ({ schemaVersion: SCHEMA_VERSION, seriesId, snapshots: [] });
 
