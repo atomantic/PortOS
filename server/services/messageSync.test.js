@@ -76,7 +76,7 @@ vi.mock('../lib/timezone.js', () => ({
 
 import { readdir, unlink } from 'fs/promises';
 import { tryReadFile as readFile, atomicWrite } from '../lib/fileUtils.js';
-import { getMessages, getMessage, syncAccount, deleteCache, getSyncStatus, refreshMessage, logMessageTouchpoints } from './messageSync.js';
+import { getMessages, getMessage, syncAccount, deleteCache, getSyncStatus, refreshMessage, updateMessageEvaluations, logMessageTouchpoints } from './messageSync.js';
 import { autoLogTouchpoints } from './tribe.js';
 import { getAccount, updateSyncStatus } from './messageAccounts.js';
 import { syncGmail } from './messageGmailSync.js';
@@ -593,6 +593,74 @@ describe('refreshMessage', () => {
 
     const original = result.find(m => m.id === 'msg-1');
     expect(original.bodyText).toBe('');
+  });
+});
+
+// ─── Per-account write-tail serialization (#2537) ───
+// These prove the cache mutators (`updateMessageEvaluations`, `refreshMessage`)
+// serialize against each other on the same account so two concurrent load→save
+// regions can't clobber each other. The mock is stateful — reads see the last
+// write — and each op takes a tick, so an UNSERIALIZED implementation would load
+// stale state and lose the other op's update, failing these assertions.
+
+describe('cache mutator serialization (#2537)', () => {
+  const tick = () => new Promise((r) => setTimeout(r, 5));
+
+  // Wire readFile/atomicWrite to a shared in-memory cache so interleaved
+  // load→save regions race exactly as they would on disk.
+  function statefulCache(initial) {
+    let stored = initial;
+    readFile.mockImplementation(async () => {
+      await tick();
+      return JSON.stringify(stored);
+    });
+    atomicWrite.mockImplementation(async (_path, data) => {
+      await tick();
+      stored = data;
+    });
+    return () => stored;
+  }
+
+  it('serializes syncAccount against refreshMessage (both writes survive)', async () => {
+    const getStored = statefulCache({
+      messages: [{ id: 'msg-1', externalId: 'ext-1', from: { name: 'Ada' }, subject: 'Hi', date: '2026-01-01', bodyText: 'old' }],
+    });
+    getAccount.mockResolvedValue({ id: VALID_UUID, name: 'Gmail', type: 'gmail', enabled: true });
+    updateSyncStatus.mockResolvedValue();
+    // Sync appends a brand-new message (ext-2); refresh rewrites msg-1's body.
+    syncGmail.mockResolvedValue([{ id: 'srv-2', externalId: 'ext-2', subject: 'New', date: '2026-01-02', from: { name: 'Bob' } }]);
+    refreshMessageDetail.mockResolvedValue([{ from: 'Ada', date: '2026-01-01', body: 'refreshed body' }]);
+
+    await Promise.all([
+      syncAccount(VALID_UUID, null),
+      refreshMessage(VALID_UUID, 'msg-1'),
+    ]);
+
+    const messages = getStored().messages;
+    // Serialization preserves BOTH: the synced message AND the refreshed body.
+    // An unserialized interleave drops whichever saved first.
+    expect(messages.find((m) => m.externalId === 'ext-2')).toBeTruthy();
+    expect(messages.find((m) => m.id === 'msg-1').bodyText).toBe('refreshed body');
+  });
+
+  it('serializes refreshMessage against updateMessageEvaluations (both writes survive)', async () => {
+    const getStored = statefulCache({
+      messages: [{ id: 'msg-1', from: { name: 'Ada' }, subject: 'Hi', date: '2026-01-01', bodyText: 'old' }],
+    });
+    readdir.mockImplementation(async () => [`${VALID_UUID}.json`]);
+    getAccount.mockResolvedValue({ id: VALID_UUID, type: 'outlook' });
+    refreshMessageDetail.mockResolvedValue([{ from: 'Ada', date: '2026-01-01', body: 'refreshed body' }]);
+
+    // Body refresh and evaluation update both mutate msg-1 concurrently.
+    await Promise.all([
+      refreshMessage(VALID_UUID, 'msg-1'),
+      updateMessageEvaluations({ 'msg-1': { score: 9 } }),
+    ]);
+
+    const msg1 = getStored().messages.find((m) => m.id === 'msg-1');
+    // Serialization preserves BOTH writes; a clobber would drop one of them.
+    expect(msg1.bodyText).toBe('refreshed body');
+    expect(msg1.evaluation).toEqual({ score: 9 });
   });
 });
 
