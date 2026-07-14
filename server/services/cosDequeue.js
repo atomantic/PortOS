@@ -12,19 +12,11 @@
  * `task:ready`, advance cooldowns) stay in cos.js as `spawnDequeuePriorityN(ctx)`
  * helpers — they're integration-level and pinned by source-order regression
  * tests — but every capacity/gate decision they make routes through here.
+ *
+ * Priority-tier order (pinned by the source-order regression test in
+ * cos.test.js): 0 on-demand (bypasses pause) → 1 user → 2 auto-approved →
+ * 3 mission → 4 idle review.
  */
-
-// Canonical priority-tier order for the dequeue scheduler. `dequeueNextTask`
-// invokes its `spawnDequeuePriorityN` helpers in exactly this sequence; the
-// source-order regression test in cos.test.js pins the invocation order against
-// this list so a reshuffle fails loudly.
-export const DEQUEUE_PRIORITY_ORDER = Object.freeze([
-  'onDemand',   // Priority 0 — explicit user "Run" requests (bypasses pause)
-  'user',       // Priority 1 — user-authored pending tasks
-  'autoSystem', // Priority 2 — auto-approved system / improvement tasks
-  'mission',    // Priority 3 — proactive mission-driven tasks
-  'idle',       // Priority 4 — generated idle-review task
-]);
 
 /**
  * Per-cycle spawn-capacity tracker. Owns the running `spawned` count and the
