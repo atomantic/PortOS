@@ -1073,10 +1073,16 @@ function beginPolling() {
     if (cleared > 0) console.log(`🌐 Cleared backoff on ${cleared} peer(s) for fresh probe after boot`);
   }).catch(err => console.error(`❌ Failed to clear peer backoff on boot: ${err.message}`));
 
-  // Initial probe after a short delay
-  setTimeout(() => probeAllPeers(), INITIAL_PROBE_DELAY_MS);
+  // Initial probe after a short delay. probeAllPeers() awaits fs/network work
+  // that can reject; setTimeout/setInterval don't await the callback, so catch
+  // here to avoid a process-killing unhandled rejection.
+  setTimeout(() => {
+    probeAllPeers().catch(err => console.error(`❌ Initial peer probe failed: ${err?.message || String(err)}`));
+  }, INITIAL_PROBE_DELAY_MS);
 
-  pollTimer = setInterval(() => probeAllPeers(), POLL_INTERVAL_MS);
+  pollTimer = setInterval(() => {
+    probeAllPeers().catch(err => console.error(`❌ Peer probe failed: ${err?.message || String(err)}`));
+  }, POLL_INTERVAL_MS);
 }
 
 // A peer we can only reach over the tailnet: its probe URL (see peerBaseUrl)
