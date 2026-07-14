@@ -33,9 +33,7 @@
  * is at its current payload-shape version before this reconciles content.
  */
 
-import { readFile, writeFile } from 'fs/promises';
-import { join } from 'path';
-import { PATHS } from '../lib/fileUtils.js';
+import { readMarker, writeMarker } from '../lib/migrationMarker.js';
 import { BIBLE_FIELD } from '../lib/storyBible.js';
 import { listUniverses, updateUniverse } from '../services/universeBuilder.js';
 import * as catalogDB from '../services/catalogDB.js';
@@ -49,25 +47,13 @@ const MARKER_FILENAME = 'catalog-canon-reconcile.applied.json';
 
 const CANON_ARRAY_KEYS = Object.values(BIBLE_FIELD);     // ['characters','places','objects']
 
-async function readMarker() {
-  const path = join(PATHS.data, MARKER_FILENAME);
-  const raw = await readFile(path, 'utf-8').catch(() => null);
-  if (!raw) return null;
-  try { return JSON.parse(raw); } catch { return null; }
-}
-
-async function writeMarker(payload) {
-  const path = join(PATHS.data, MARKER_FILENAME);
-  await writeFile(path, JSON.stringify(payload, null, 2), 'utf-8');
-}
-
 /**
  * Public entry point. Walk every universe canon entry with an `ingredientId`,
  * LWW-merge embedded vs catalog payload, write the winner to both sides.
  * `force` re-runs past the marker (tests / admin re-trigger).
  */
 export async function reconcileCanonCatalog({ force = false } = {}) {
-  const marker = await readMarker();
+  const marker = await readMarker(MARKER_FILENAME);
   if (marker?.version === MARKER_VERSION && !force) {
     return { skipped: true, marker };
   }
@@ -172,7 +158,7 @@ export async function reconcileCanonCatalog({ force = false } = {}) {
   // Only stamp the completion marker on a clean pass — a row-level failure
   // withholds it so the (idempotent) reconcile retries next boot.
   const wroteMarker = totals.errors === 0;
-  if (wroteMarker) await writeMarker(payload);
+  if (wroteMarker) await writeMarker(MARKER_FILENAME, payload);
 
   console.log(
     `🔁 canon↔catalog reconcile: ${totals.universesScanned} universes, ${totals.scanned} entries scanned, ` +

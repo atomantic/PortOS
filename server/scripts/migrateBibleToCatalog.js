@@ -19,10 +19,8 @@
  * the marker file so the walk only runs once per install.
  */
 
-import { readFile, writeFile } from 'fs/promises';
-import { join } from 'path';
 import { createHash } from 'crypto';
-import { PATHS } from '../lib/fileUtils.js';
+import { readMarker, writeMarker } from '../lib/migrationMarker.js';
 import { BIBLE_KINDS, BIBLE_FIELD } from '../lib/storyBible.js';
 import { listUniverses, updateUniverse } from '../services/universeBuilder.js';
 import * as catalogDB from '../services/catalogDB.js';
@@ -61,18 +59,6 @@ function deterministicIngredientId(universeId, kind, entryId) {
   // id stays short enough to read in URLs and logs.
   const hash = createHash('sha256').update(seed).digest('hex').slice(0, 32);
   return `cat-${prefix}-bible-${hash}`;
-}
-
-async function readMarker() {
-  const path = join(PATHS.data, MARKER_FILENAME);
-  const raw = await readFile(path, 'utf-8').catch(() => null);
-  if (!raw) return null;
-  try { return JSON.parse(raw); } catch { return null; }
-}
-
-async function writeMarker(payload) {
-  const path = join(PATHS.data, MARKER_FILENAME);
-  await writeFile(path, JSON.stringify(payload, null, 2), 'utf-8');
 }
 
 /**
@@ -218,7 +204,7 @@ async function migrateUniverse(universe) {
  * subsequent boot. Wired into server/index.js after ensureSchema().
  */
 export async function migrateBibleToCatalog({ force = false } = {}) {
-  const marker = await readMarker();
+  const marker = await readMarker(MARKER_FILENAME);
   if (marker?.version === MARKER_VERSION && !force) {
     return { skipped: true, marker };
   }
@@ -242,7 +228,7 @@ export async function migrateBibleToCatalog({ force = false } = {}) {
     completedAt: new Date().toISOString(),
     stats: totals,
   };
-  await writeMarker(payload);
+  await writeMarker(MARKER_FILENAME, payload);
 
   console.log(
     `🪄 bible→catalog migration: ${totals.universesScanned} universes scanned, ` +

@@ -78,17 +78,12 @@ vi.mock('../services/catalogDB.js', () => ({
 }));
 
 // --- In-memory marker file -----------------------------------------------
+// Marker I/O is delegated to migrationMarker.js; mock it against `markerBlob`
+// (the marker helper has its own unit test in server/lib/migrationMarker.test.js).
 let markerBlob = null; // string | null
-vi.mock('fs/promises', () => ({
-  readFile: vi.fn(async () => {
-    if (markerBlob === null) {
-      const err = new Error('ENOENT');
-      err.code = 'ENOENT';
-      throw err;
-    }
-    return markerBlob;
-  }),
-  writeFile: vi.fn(async (_path, data) => { markerBlob = data; }),
+vi.mock('../lib/migrationMarker.js', () => ({
+  readMarker: vi.fn(async () => (markerBlob === null ? null : JSON.parse(markerBlob))),
+  writeMarker: vi.fn(async (_name, payload) => { markerBlob = JSON.stringify(payload); }),
 }));
 
 import { migrateBibleToCatalog } from './migrateBibleToCatalog.js';

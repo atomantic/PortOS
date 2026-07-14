@@ -24,9 +24,7 @@
  * the PostgreSQL backend (normal installs) and the file escape hatch (tests).
  */
 
-import { readFile, writeFile } from 'fs/promises';
-import { join } from 'path';
-import { PATHS } from '../lib/fileUtils.js';
+import { readMarker, writeMarker } from '../lib/migrationMarker.js';
 import { listSeries, setSeriesCoverImage } from '../services/pipeline/series.js';
 import { listAllIssues } from '../services/pipeline/issues.js';
 import { deriveSeriesCoverImage, pickVolumeCoverFilename } from '../services/pipeline/seriesCoverImage.js';
@@ -34,24 +32,12 @@ import { deriveSeriesCoverImage, pickVolumeCoverFilename } from '../services/pip
 const MARKER_VERSION = 1;
 const MARKER_FILENAME = 'series-cover-backfill.applied.json';
 
-async function readMarker() {
-  const path = join(PATHS.data, MARKER_FILENAME);
-  const raw = await readFile(path, 'utf-8').catch(() => null);
-  if (!raw) return null;
-  try { return JSON.parse(raw); } catch { return null; }
-}
-
-async function writeMarker(payload) {
-  const path = join(PATHS.data, MARKER_FILENAME);
-  await writeFile(path, JSON.stringify(payload, null, 2), 'utf-8');
-}
-
 /**
  * Public entry point. Runs once, then no-ops on every subsequent boot via the
  * marker file. `force` re-runs the walk regardless of the marker.
  */
 export async function backfillSeriesCoverImages({ force = false } = {}) {
-  const marker = await readMarker();
+  const marker = await readMarker(MARKER_FILENAME);
   if (marker?.version === MARKER_VERSION && !force) {
     return { skipped: true, marker };
   }
@@ -104,7 +90,7 @@ export async function backfillSeriesCoverImages({ force = false } = {}) {
     return { skipped: false, scanned, decorated, issueScanFailed: true };
   }
 
-  await writeMarker({ version: MARKER_VERSION, appliedAt: new Date().toISOString(), scanned });
+  await writeMarker(MARKER_FILENAME, { version: MARKER_VERSION, appliedAt: new Date().toISOString(), scanned });
   console.log(`🖼️  series cover backfill: scanned ${scanned} series, ${decorated} have a cover`);
   return { skipped: false, scanned, decorated };
 }
