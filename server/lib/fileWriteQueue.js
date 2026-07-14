@@ -43,3 +43,33 @@ export function createFileWriteQueue() {
     return next; // callers see the real resolve/reject
   };
 }
+
+/**
+ * Per-RECORD write queue — the id-keyed sibling of `createFileWriteQueue`.
+ *
+ * Two read-modify-write cycles on the SAME id serialize (the later one sees the
+ * earlier one's committed result); cycles on DIFFERENT ids fan out in parallel.
+ * This is the queue the PG/file store facades use so their writes serialize
+ * identically to `collectionStore.queueRecordWrite` on either backend. The tail
+ * Map self-prunes so it stays bounded.
+ *
+ * @param {(id: string) => void} [assertId] Optional per-id validator, invoked
+ *   before queueing (throws on a bad id, exactly as the callers' inline guards
+ *   did — so a malformed id rejects synchronously rather than being enqueued).
+ *
+ * Usage:
+ *   const queueRecordWrite = createRecordWriteQueue(assertValidId);
+ *   queueRecordWrite(id, () => saveOneNow(id, record));
+ */
+export function createRecordWriteQueue(assertId) {
+  const tails = new Map();
+  return function queueRecordWrite(id, fn) {
+    if (assertId) assertId(id);
+    const prev = tails.get(id) || Promise.resolve();
+    const next = prev.then(fn, fn); // run fn even when prev rejects
+    const silenced = next.catch(() => {});
+    tails.set(id, silenced);
+    silenced.finally(() => { if (tails.get(id) === silenced) tails.delete(id); });
+    return next; // callers see the real resolve/reject
+  };
+}

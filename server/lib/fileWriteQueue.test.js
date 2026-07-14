@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createFileWriteQueue } from './fileWriteQueue.js';
+import { createFileWriteQueue, createRecordWriteQueue } from './fileWriteQueue.js';
 
 // Defer one event-loop tick (setImmediate is a check-phase macrotask, not a
 // microtask) so we can interleave with another awaiter.
@@ -48,5 +48,45 @@ describe('createFileWriteQueue', () => {
     const bFast = qB(async () => { order.push('b-fast'); });
     await Promise.all([aSlow, bFast]);
     expect(order).toEqual(['b-fast', 'a-slow']);
+  });
+});
+
+describe('createRecordWriteQueue', () => {
+  it('serializes same-id cycles in submission order', async () => {
+    const queue = createRecordWriteQueue();
+    const order = [];
+    const a = queue('x', async () => { await tick(); order.push('a'); });
+    const b = queue('x', async () => { order.push('b'); });
+    await Promise.all([a, b]);
+    expect(order).toEqual(['a', 'b']);
+  });
+
+  it('lets different ids run concurrently', async () => {
+    const queue = createRecordWriteQueue();
+    const order = [];
+    // id 'x' yields; id 'y' should not wait for it.
+    const x = queue('x', async () => { await tick(); order.push('x-slow'); });
+    const y = queue('y', async () => { order.push('y-fast'); });
+    await Promise.all([x, y]);
+    expect(order).toEqual(['y-fast', 'x-slow']);
+  });
+
+  it('an earlier rejection on an id does not poison later same-id waiters', async () => {
+    const queue = createRecordWriteQueue();
+    const order = [];
+    const bad = queue('x', async () => { await tick(); order.push('bad'); throw new Error('nope'); });
+    const good = queue('x', async () => { order.push('good'); return 'ok'; });
+    await expect(bad).rejects.toThrow('nope');
+    await expect(good).resolves.toBe('ok');
+    expect(order).toEqual(['bad', 'good']);
+  });
+
+  it('invokes the optional id validator before queueing (throws synchronously)', () => {
+    const queue = createRecordWriteQueue((id) => {
+      if (id !== 'ok') throw new Error(`bad id ${id}`);
+    });
+    expect(() => queue('bad', () => {})).toThrow('bad id bad');
+    // A valid id queues without throwing.
+    expect(() => queue('ok', () => Promise.resolve())).not.toThrow();
   });
 });

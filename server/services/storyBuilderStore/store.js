@@ -30,7 +30,8 @@
 import { join } from 'path';
 import { PATHS } from '../../lib/fileUtils.js';
 import { createCollectionStore } from '../../lib/collectionStore.js';
-import { checkHealth, ensureSchema } from '../../lib/db.js';
+import { createPgFileFacade, resolvePgBackend, isFileBackend } from '../../lib/pgFileFacade.js';
+import { createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
 import { bumpChangeToken, getChangeToken } from '../changeToken.js';
 
 // TYPE-level (storage layout) schema version stamped on the file backend's
@@ -38,10 +39,6 @@ import { bumpChangeToken, getChangeToken } from '../changeToken.js';
 // hatch still passes the boot verifier. (PG has no type-index file.)
 const TYPE_SCHEMA_VERSION = 1;
 const ID_PATTERN = /^stb-[A-Za-z0-9-]+$/;
-
-function isFileBackend() {
-  return process.env.MEMORY_BACKEND === 'file' || process.env.NODE_ENV === 'test';
-}
 
 function assertValidId(id) {
   if (typeof id !== 'string' || !ID_PATTERN.test(id)) {
@@ -102,48 +99,30 @@ function makePgBackend(db, sanitizeRecord) {
   };
 }
 
-async function pgBackend(sanitizeRecord) {
-  const health = await checkHealth();
-  if (!health.connected) {
-    throw new Error('Story Builder requires PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file for the unsupported file backend)');
-  }
-  await ensureSchema();
-  const { migrateStoryBuilderToDB } = await import('../../scripts/migrateStoryBuilderToDB.js');
-  await migrateStoryBuilderToDB();
-  const db = await import('./db.js');
-  return makePgBackend(db, sanitizeRecord);
-}
+const pgBackend = (sanitizeRecord) => resolvePgBackend({
+  requirement: 'Story Builder requires PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file for the unsupported file backend)',
+  migrate: async () => {
+    const { migrateStoryBuilderToDB } = await import('../../scripts/migrateStoryBuilderToDB.js');
+    await migrateStoryBuilderToDB();
+  },
+  loadDb: () => import('./db.js'),
+  makePg: (db) => makePgBackend(db, sanitizeRecord),
+});
 
 // --- Facade: collectionStore-compatible, queues + epoch + sanitize ---
 function createFacade({ dir, sanitizeRecord }) {
   let sanitizer = typeof sanitizeRecord === 'function' ? sanitizeRecord : (r) => r;
 
-  // Memoize the backend selection PROMISE (not just the result) so two
-  // concurrent first calls — e.g. the boot warm racing a sync pull — don't both
-  // import the PG module and run the migration twice.
-  let backend = null;
-  let selecting = null;
-  const getBackend = () => {
-    if (backend) return Promise.resolve(backend);
-    if (!selecting) {
-      selecting = (isFileBackend() ? Promise.resolve(makeFileBackend(dir, sanitizer)) : pgBackend(sanitizer))
-        .then((b) => { backend = b; return b; })
-        .finally(() => { selecting = null; });
-    }
-    return selecting;
-  };
+  // Backend selection is memoized (promise, not just result) so two concurrent
+  // first calls — e.g. the boot warm racing a sync pull — don't both import the
+  // PG module and run the migration twice. `sanitizer` is read at selection time.
+  const { getBackend, getBackendName } = createPgFileFacade({
+    makeFile: () => makeFileBackend(dir, sanitizer),
+    makePg: () => pgBackend(sanitizer),
+  });
 
   // Per-id write queue — mirrors collectionStore.queueRecordWrite.
-  const recordTails = new Map();
-  function queueRecordWrite(id, fn) {
-    assertValidId(id);
-    const prev = recordTails.get(id) || Promise.resolve();
-    const next = prev.then(fn, fn);
-    const silenced = next.catch(() => {});
-    recordTails.set(id, silenced);
-    silenced.finally(() => { if (recordTails.get(id) === silenced) recordTails.delete(id); });
-    return next;
-  }
+  const queueRecordWrite = createRecordWriteQueue(assertValidId);
 
   const loadOne = async (id) => {
     if (typeof id !== 'string' || !ID_PATTERN.test(id)) return null;
@@ -167,7 +146,7 @@ function createFacade({ dir, sanitizeRecord }) {
     dir,
     type: 'storyBuilder',
     _setSanitizer: (fn) => { if (typeof fn === 'function') sanitizer = fn; },
-    getBackendName: () => backend?.name ?? null,
+    getBackendName,
 
     // Reads (sanitized, matching collectionStore.loadOne/loadAll)
     listIds: async () => (await getBackend()).listIds(),

@@ -30,7 +30,7 @@
 
 import { readFile, readdir } from 'fs/promises';
 import { atomicWrite, ensureDir, readJSONFile, safeJSONParse } from '../../lib/fileUtils.js';
-import { checkHealth, ensureSchema } from '../../lib/db.js';
+import { createPgFileFacade, resolvePgBackend } from '../../lib/pgFileFacade.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import {
   maybeJournalBeforeOverwrite, setSyncBaseHash, contentHashForRecord, flushBaseHashes,
@@ -43,10 +43,6 @@ import {
 import {
   WORK_ID_RE, wrRoot, wrFoldersFile, wrExercisesFile, wrWorksDir, wrManifestPath,
 } from './_shared.js';
-
-function isFileBackend() {
-  return process.env.MEMORY_BACKEND === 'file' || process.env.NODE_ENV === 'test';
-}
 
 // --- File backend (escape hatch / tests): the legacy on-disk JSON format ---
 // Reproduces local.js's original storage primitives verbatim so an install on
@@ -288,43 +284,33 @@ function makePgBackend(db) {
   return { name: 'postgres', ...db };
 }
 
-async function pgBackend() {
-  const health = await checkHealth();
-  if (!health.connected) {
-    throw new Error('Writers Room requires PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file for the unsupported file backend)');
-  }
-  await ensureSchema();
-  const { migrateWritersRoomToDB } = await import('../../scripts/migrateWritersRoomToDB.js');
-  await migrateWritersRoomToDB();
-  const db = await import('./db.js');
-  return makePgBackend(db);
-}
+const pgBackend = () => resolvePgBackend({
+  requirement: 'Writers Room requires PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file for the unsupported file backend)',
+  migrate: async () => {
+    const { migrateWritersRoomToDB } = await import('../../scripts/migrateWritersRoomToDB.js');
+    await migrateWritersRoomToDB();
+  },
+  loadDb: () => import('./db.js'),
+  makePg: (db) => makePgBackend(db),
+});
 
 // Memoize the backend-selection PROMISE (not just the result) so two concurrent
 // first calls — e.g. the boot warm racing a request — don't both import the PG
 // module and run the migration twice.
-let backend = null;
-let selecting = null;
+const facade = createPgFileFacade({
+  makeFile: () => makeFileBackend(),
+  makePg: () => pgBackend(),
+});
+const { getBackend } = facade;
 
 export function _resetWritersRoomStore() {
-  backend = null;
-  selecting = null;
-}
-
-function getBackend() {
-  if (backend) return Promise.resolve(backend);
-  if (!selecting) {
-    selecting = (isFileBackend() ? Promise.resolve(makeFileBackend()) : pgBackend())
-      .then((b) => { backend = b; return b; })
-      .finally(() => { selecting = null; });
-  }
-  return selecting;
+  facade.reset();
 }
 
 /** The Writers Room metadata store — backend resolved lazily per call. */
 export function writersRoomStore() {
   return {
-    getBackendName: () => backend?.name ?? null,
+    getBackendName: () => facade.getBackendName(),
     listFolders: async () => (await getBackend()).listFolders(),
     readFolder: async (id, opts) => (await getBackend()).readFolder(id, opts),
     listFolderIds: async (opts) => (await getBackend()).listFolderIds(opts),
