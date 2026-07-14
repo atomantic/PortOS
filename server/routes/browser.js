@@ -3,10 +3,17 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { validateChromePath, validateMacAppBundle } from '../lib/browserConfig.js';
-import { isSafeIngestUrl } from '../lib/catalogValidation.js';
+import { isSafeIngestUrl, isBlockedIngestHost } from '../lib/catalogValidation.js';
+import { assertPublicHttpUrl } from '../lib/safeUrlFetch.js';
 import * as browserService from '../services/browserService.js';
 
 const router = express.Router();
+
+// Settle window the pinned navigate holds open after the first document response
+// so a client-side redirect (meta-refresh / location.replace) that fires just
+// after load is captured and IP-verified too, not just the initial nav + HTTP
+// redirect chain. Small so an interactive "open this URL" stays responsive.
+const NAVIGATE_SETTLE_MS = 1000;
 
 // Validation schemas
 // SSRF guard (shared with catalog URL ingest): reject non-http(s) schemes
@@ -15,10 +22,12 @@ const router = express.Router();
 // exfiltration or a metadata endpoint. Private/LAN + Tailscale hosts stay
 // allowed (a single-user tool legitimately drives its browser there);
 // `localhost`/`127.x` are blocked — navigate by LAN IP/hostname for a local app.
-// This is a host-literal guard, not a DNS-resolution / post-redirect check: a
-// hostname that RESOLVES to loopback, or a server-side redirect the CDP browser
-// then follows to a blocked host, is out of scope here (the browser, not this
-// route, performs the redirect fetch).
+// This is the FIRST of three layers — a host-literal guard. The hostname→blocked
+// (DNS-rebinding) and post-navigate-redirect gaps it can't see are closed in the
+// handler: a DNS-resolve pre-check (`assertPublicHttpUrl`) rejects a hostname
+// whose A record points at a blocked address, and the CDP pin
+// (`navigateToUrlPinned`) verifies Chrome's ACTUAL per-hop connect IP for the
+// initial nav, every redirect, and any settle-window navigation.
 const navigateSchema = z.object({
   url: z.string().url()
     .refine(isSafeIngestUrl, 'only http(s) URLs to non-loopback/non-link-local hosts are allowed')
@@ -111,7 +120,21 @@ router.post('/navigate', asyncHandler(async (req, res) => {
   const caller = req.headers['referer'] || req.headers['origin'] || 'unknown';
   console.log(`🌐 Navigate: ${req.body?.url} (from ${caller})`);
   const { url } = validateRequest(navigateSchema, req.body);
-  const page = await browserService.navigateToUrl(url);
+  // Layer 2 — DNS-resolve pre-check: reject a hostname whose A record points at a
+  // blocked (loopback / link-local / cloud-metadata) address BEFORE opening a
+  // tab. Throws a clean 400 (UNSAFE_URL) via the shared safeUrlFetch gate; an
+  // IP-literal target skips the lookup (isSafeIngestUrl already classified it).
+  await assertPublicHttpUrl(url);
+  // Layer 3 — connect-time pin: Chrome resolves DNS itself, so a rebinding answer
+  // (or a server-side redirect) could still steer it to a blocked address after
+  // the pre-check. navigateToUrlPinned verifies, against Chrome's OWN reported
+  // remoteIPAddress, that the initial nav, EVERY HTTP redirect hop, and any
+  // client-side navigation during the settle window connected to an allowed
+  // address — tearing the tab down and failing closed (throws) otherwise.
+  const page = await browserService.navigateToUrlPinned(url, {
+    verifyRemoteIp: (ip) => !isBlockedIngestHost(ip),
+    settleMs: NAVIGATE_SETTLE_MS,
+  });
   res.json(page);
 }));
 
