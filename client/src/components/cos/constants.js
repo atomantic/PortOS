@@ -61,6 +61,55 @@ export const AGENT_STATES = {
   ideating: { label: 'Ideating', color: '#f97316', icon: '💡' },
 };
 
+// Cyber Muse (3D) avatar animation triggers. The bundled default model
+// (data.reference/avatar/model.glb) is three.js's RobotExpressive (CC0), which
+// ships 14 clips: Idle, Walking, Running, Dance, Death, Sitting, Standing,
+// Jump, Yes, No, Wave, Punch, ThumbsUp, WalkJump.
+//
+// Each of the 7 AGENT_STATES maps to an IN-PLACE base loop. Walking / Running /
+// WalkJump carry root translation (they move the model forward) and are
+// intentionally excluded so a fixed-frame avatar can't drift out of view. The
+// `speaking` boolean fires a one-shot gesture overlay (MUSE_SPEAKING_GESTURE)
+// that hands control back to the base loop when it finishes.
+//
+// Consumed by MuseCoSAvatar's AnimationMixer (via drei useAnimations). Clip
+// names are matched case-sensitively against the loaded GLB and guarded: a GLB
+// missing a mapped clip falls back to MUSE_ANIMATION_FALLBACK, and a GLB with
+// NO clips at all falls back to the fully-procedural rotation/glow behavior so
+// static models and other variants keep working. `once: true` clamps a
+// pose/transition clip (Sitting) on its final frame instead of looping it.
+// The emote clips (Yes/No/Wave/Punch/ThumbsUp) start and end near a neutral
+// pose, so looping them reads as a repeated, deliberate gesture (nodding,
+// scanning, jabbing) rather than snapping — that's what lets us give each
+// state its own body language instead of collapsing everything onto Idle. The
+// read for each: sleeping = seated rest; thinking = calm contemplation (Idle);
+// coding = jabbing away at the work (Punch); investigating = slow side-to-side
+// scan (No); reviewing = approving nod (Yes); planning = confident "locked in"
+// thumbs-up (ThumbsUp); ideating = creative celebration (Dance).
+export const MUSE_STATE_ANIMATIONS = {
+  sleeping:      { clip: 'Sitting',  timeScale: 0.8, once: true },
+  thinking:      { clip: 'Idle',     timeScale: 0.85 },
+  coding:        { clip: 'Punch',    timeScale: 1.1 },
+  investigating: { clip: 'No',       timeScale: 0.7 },
+  reviewing:     { clip: 'Yes',      timeScale: 0.8 },
+  planning:      { clip: 'ThumbsUp', timeScale: 0.85 },
+  ideating:      { clip: 'Dance',    timeScale: 1.0 },
+};
+
+// Clip used when a mapped state clip is absent from the loaded GLB.
+export const MUSE_ANIMATION_FALLBACK = 'Idle';
+
+// One-shot gesture played on the rising edge of `speaking`, then the avatar
+// returns to its base state loop.
+export const MUSE_SPEAKING_GESTURE = 'Wave';
+
+// RobotExpressive clips that carry root translation (they walk the model
+// forward). Never used as a base loop for the fixed-frame avatar — the state
+// map above avoids them, the constants test asserts it, and MuseCoSAvatar's
+// "GLB has clips but none are mapped" fallback skips them so a custom GLB
+// whose first clip happens to be a walk cycle can't drift out of view.
+export const MUSE_ROOT_MOTION_CLIPS = ['Walking', 'Running', 'WalkJump'];
+
 // Default messages shown when no specific event message is available
 export const STATE_MESSAGES = {
   sleeping: "Idle - waiting for tasks...",
