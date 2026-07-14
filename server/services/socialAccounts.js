@@ -176,7 +176,6 @@ export async function getAccountsByCategory(category) {
  * Create a new social account
  */
 export async function createAccount(accountData) {
-  const data = await loadAccounts();
   const id = uuidv4();
   const now = new Date().toISOString();
 
@@ -196,8 +195,7 @@ export async function createAccount(accountData) {
     updatedAt: now
   };
 
-  data.accounts[id] = account;
-  await saveAccounts(data);
+  await store.mutate((data) => { data.accounts[id] = account; });
   notifyChanged('create', id);
 
   console.log(`🔗 Added social account: ${account.platform}/${account.username} (${id})`);
@@ -208,39 +206,46 @@ export async function createAccount(accountData) {
  * Update a social account
  */
 export async function updateAccount(id, updates) {
-  const data = await loadAccounts();
-  if (!data.accounts[id]) return null;
+  let account = null;
+  await store.mutate((data) => {
+    if (!data.accounts[id]) return data;
 
-  const allowed = [
-    'username', 'displayName', 'url', 'bio', 'contentTypes',
-    'ingestionEnabled', 'ingestionStatus', 'lastIngested',
-    'contentCount', 'notes'
-  ];
+    const allowed = [
+      'username', 'displayName', 'url', 'bio', 'contentTypes',
+      'ingestionEnabled', 'ingestionStatus', 'lastIngested',
+      'contentCount', 'notes'
+    ];
 
-  for (const key of allowed) {
-    if (updates[key] !== undefined) {
-      data.accounts[id][key] = updates[key];
+    for (const key of allowed) {
+      if (updates[key] !== undefined) {
+        data.accounts[id][key] = updates[key];
+      }
     }
-  }
-  data.accounts[id].updatedAt = new Date().toISOString();
+    data.accounts[id].updatedAt = new Date().toISOString();
+    account = data.accounts[id];
+    return data;
+  });
 
-  await saveAccounts(data);
+  if (!account) return null;
   notifyChanged('update', id);
 
-  console.log(`📝 Updated social account: ${data.accounts[id].platform}/${data.accounts[id].username} (${id})`);
-  return { id, ...data.accounts[id] };
+  console.log(`📝 Updated social account: ${account.platform}/${account.username} (${id})`);
+  return { id, ...account };
 }
 
 /**
  * Delete a social account
  */
 export async function deleteAccount(id) {
-  const data = await loadAccounts();
-  if (!data.accounts[id]) return false;
+  let account = null;
+  await store.mutate((data) => {
+    if (!data.accounts[id]) return data;
+    account = data.accounts[id];
+    delete data.accounts[id];
+    return data;
+  });
 
-  const account = data.accounts[id];
-  delete data.accounts[id];
-  await saveAccounts(data);
+  if (!account) return false;
   notifyChanged('delete', id);
 
   console.log(`🗑️ Removed social account: ${account.platform}/${account.username} (${id})`);

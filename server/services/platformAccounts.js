@@ -14,7 +14,6 @@ import { PATHS, createCachedStore } from '../lib/fileUtils.js';
 const ACCOUNTS_FILE = join(PATHS.agentPersonalities, 'accounts.json');
 const store = createCachedStore(ACCOUNTS_FILE, { accounts: {} }, { context: 'platformAccounts' });
 const loadAccounts = store.load;
-const saveAccounts = store.save;
 
 // Event emitter for account changes
 export const platformAccountEvents = new EventEmitter();
@@ -77,7 +76,6 @@ export async function getAccountWithCredentials(id) {
  * Create a new platform account
  */
 export async function createAccount(accountData) {
-  const data = await loadAccounts();
   const id = uuidv4();
   const now = new Date().toISOString();
 
@@ -95,8 +93,7 @@ export async function createAccount(accountData) {
     createdAt: now
   };
 
-  data.accounts[id] = account;
-  await saveAccounts(data);
+  await store.mutate((data) => { data.accounts[id] = account; });
   notifyChanged('create', id);
 
   console.log(`🔗 Created platform account: ${account.platform}/${account.credentials.username} (${id})`);
@@ -114,22 +111,22 @@ export async function createAccount(accountData) {
  * Update account status
  */
 export async function updateAccountStatus(id, status, platformData = null) {
-  const data = await loadAccounts();
+  let found = false;
+  await store.mutate((data) => {
+    if (!data.accounts[id]) return data;
+    found = true;
+    data.accounts[id].status = status;
+    data.accounts[id].lastActivity = new Date().toISOString();
+    if (platformData) {
+      data.accounts[id].platformData = {
+        ...data.accounts[id].platformData,
+        ...platformData
+      };
+    }
+    return data;
+  });
 
-  if (!data.accounts[id]) {
-    return null;
-  }
-
-  data.accounts[id].status = status;
-  data.accounts[id].lastActivity = new Date().toISOString();
-  if (platformData) {
-    data.accounts[id].platformData = {
-      ...data.accounts[id].platformData,
-      ...platformData
-    };
-  }
-
-  await saveAccounts(data);
+  if (!found) return null;
   notifyChanged('update', id);
 
   return getAccountById(id);
@@ -139,15 +136,15 @@ export async function updateAccountStatus(id, status, platformData = null) {
  * Record activity on account
  */
 export async function recordActivity(id) {
-  const data = await loadAccounts();
+  let found = false;
+  await store.mutate((data) => {
+    if (!data.accounts[id]) return data;
+    found = true;
+    data.accounts[id].lastActivity = new Date().toISOString();
+    return data;
+  });
 
-  if (!data.accounts[id]) {
-    return null;
-  }
-
-  data.accounts[id].lastActivity = new Date().toISOString();
-  await saveAccounts(data);
-
+  if (!found) return null;
   return getAccountById(id);
 }
 
@@ -155,18 +152,18 @@ export async function recordActivity(id) {
  * Update account credentials
  */
 export async function updateCredentials(id, credentials) {
-  const data = await loadAccounts();
+  let found = false;
+  await store.mutate((data) => {
+    if (!data.accounts[id]) return data;
+    found = true;
+    data.accounts[id].credentials = {
+      ...data.accounts[id].credentials,
+      ...credentials
+    };
+    return data;
+  });
 
-  if (!data.accounts[id]) {
-    return null;
-  }
-
-  data.accounts[id].credentials = {
-    ...data.accounts[id].credentials,
-    ...credentials
-  };
-
-  await saveAccounts(data);
+  if (!found) return null;
   notifyChanged('update', id);
 
   console.log(`🔑 Updated credentials for account ${id}`);
@@ -177,15 +174,15 @@ export async function updateCredentials(id, credentials) {
  * Delete a platform account
  */
 export async function deleteAccount(id) {
-  const data = await loadAccounts();
+  let account = null;
+  await store.mutate((data) => {
+    if (!data.accounts[id]) return data;
+    account = data.accounts[id];
+    delete data.accounts[id];
+    return data;
+  });
 
-  if (!data.accounts[id]) {
-    return false;
-  }
-
-  const account = data.accounts[id];
-  delete data.accounts[id];
-  await saveAccounts(data);
+  if (!account) return false;
   notifyChanged('delete', id);
 
   console.log(`🗑️ Deleted platform account: ${account.platform}/${account.credentials.username} (${id})`);

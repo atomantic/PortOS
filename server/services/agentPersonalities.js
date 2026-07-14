@@ -14,7 +14,6 @@ import { PATHS, createCachedStore } from '../lib/fileUtils.js';
 const AGENTS_FILE = join(PATHS.agentPersonalities, 'agents.json');
 const store = createCachedStore(AGENTS_FILE, { agents: {} }, { context: 'agentPersonalities' });
 const loadAgents = store.load;
-const saveAgents = store.save;
 
 // Event emitter for agent personality changes
 export const agentPersonalityEvents = new EventEmitter();
@@ -53,7 +52,6 @@ export async function getAgentById(id) {
  * Create a new agent personality
  */
 export async function createAgent(agentData) {
-  const data = await loadAgents();
   const id = uuidv4();
   const now = new Date().toISOString();
 
@@ -75,8 +73,7 @@ export async function createAgent(agentData) {
     updatedAt: now
   };
 
-  data.agents[id] = agent;
-  await saveAgents(data);
+  await store.mutate((data) => { data.agents[id] = agent; });
   notifyChanged('create', id);
 
   console.log(`🤖 Created agent personality: ${agent.name} (${id})`);
@@ -87,31 +84,31 @@ export async function createAgent(agentData) {
  * Update an existing agent personality
  */
 export async function updateAgent(id, updates) {
-  const data = await loadAgents();
+  let agent = null;
+  await store.mutate((data) => {
+    if (!data.agents[id]) return data; // not found — persist unchanged
+    // Remove id from updates if present
+    const { id: _id, createdAt: _createdAt, ...cleanUpdates } = updates;
 
-  if (!data.agents[id]) {
-    return null;
-  }
+    // Handle nested personality updates properly
+    const existingPersonality = data.agents[id].personality || {};
+    const updatedPersonality = cleanUpdates.personality
+      ? { ...existingPersonality, ...cleanUpdates.personality }
+      : existingPersonality;
 
-  // Remove id from updates if present
-  const { id: _id, createdAt: _createdAt, ...cleanUpdates } = updates;
+    agent = {
+      ...data.agents[id],
+      ...cleanUpdates,
+      personality: updatedPersonality,
+      createdAt: data.agents[id].createdAt,
+      updatedAt: new Date().toISOString()
+    };
 
-  // Handle nested personality updates properly
-  const existingPersonality = data.agents[id].personality || {};
-  const updatedPersonality = cleanUpdates.personality
-    ? { ...existingPersonality, ...cleanUpdates.personality }
-    : existingPersonality;
+    data.agents[id] = agent;
+    return data;
+  });
 
-  const agent = {
-    ...data.agents[id],
-    ...cleanUpdates,
-    personality: updatedPersonality,
-    createdAt: data.agents[id].createdAt,
-    updatedAt: new Date().toISOString()
-  };
-
-  data.agents[id] = agent;
-  await saveAgents(data);
+  if (!agent) return null;
   notifyChanged('update', id);
 
   console.log(`📝 Updated agent personality: ${agent.name} (${id})`);
@@ -122,15 +119,15 @@ export async function updateAgent(id, updates) {
  * Delete an agent personality
  */
 export async function deleteAgent(id) {
-  const data = await loadAgents();
+  let agentName = null;
+  await store.mutate((data) => {
+    if (!data.agents[id]) return data; // not found — persist unchanged
+    agentName = data.agents[id].name;
+    delete data.agents[id];
+    return data;
+  });
 
-  if (!data.agents[id]) {
-    return false;
-  }
-
-  const agentName = data.agents[id].name;
-  delete data.agents[id];
-  await saveAgents(data);
+  if (agentName === null) return false;
   notifyChanged('delete', id);
 
   console.log(`🗑️ Deleted agent personality: ${agentName} (${id})`);

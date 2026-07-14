@@ -45,13 +45,14 @@ const isSortedNewestFirst = (items) => {
 
 async function ensureItemsSorted() {
   if (_itemsSorted) return;
-  const data = await store.load();
-  if (!isSortedNewestFirst(data.items)) {
-    sortItemsNewestFirst(data.items);
-    await store.save(data);
-  } else {
-    _itemsSorted = true;
-  }
+  await store.mutate((data) => {
+    if (!isSortedNewestFirst(data.items)) {
+      sortItemsNewestFirst(data.items);
+    } else {
+      _itemsSorted = true;
+    }
+    return data;
+  });
 }
 
 // ─── RSS/Atom Parser ────────────────────────────────────────────────────────
@@ -146,10 +147,11 @@ export async function getFeeds() {
 }
 
 export async function addFeed(url) {
-  const data = await store.load();
-
-  // Check for duplicate URL
-  if (data.feeds.some(f => f.url === url)) {
+  // Fast pre-check for an obvious duplicate so we don't fetch the network for
+  // a URL we're going to reject anyway. The authoritative re-check happens
+  // inside the serialized mutate below.
+  const existing = await store.load();
+  if (existing.feeds.some(f => f.url === url)) {
     return { error: 'Feed URL already subscribed' };
   }
 
@@ -169,8 +171,6 @@ export async function addFeed(url) {
     itemCount: parsed.items.length
   };
 
-  data.feeds.push(feed);
-
   // Add initial items
   const newItems = parsed.items.slice(0, MAX_ITEMS_PER_FEED).map(item => ({
     id: randomUUID(),
@@ -183,76 +183,65 @@ export async function addFeed(url) {
     read: false,
     fetchedAt: new Date().toISOString()
   }));
-  data.items.push(...newItems);
-  sortItemsNewestFirst(data.items);
 
-  await store.save(data);
+  let dup = false;
+  await store.mutate((data) => {
+    if (data.feeds.some(f => f.url === url)) { dup = true; return data; }
+    data.feeds.push(feed);
+    data.items.push(...newItems);
+    sortItemsNewestFirst(data.items);
+    return data;
+  });
+  if (dup) return { error: 'Feed URL already subscribed' };
+
   console.log(`📡 Feed added: ${feed.title} (${newItems.length} items)`);
 
   return { feed: { ...feed, unreadCount: newItems.length } };
 }
 
 export async function removeFeed(id) {
-  const data = await store.load();
-  const idx = data.feeds.findIndex(f => f.id === id);
-  if (idx === -1) return { error: 'Feed not found' };
+  let removedFeed = null;
+  await store.mutate((data) => {
+    const idx = data.feeds.findIndex(f => f.id === id);
+    if (idx === -1) return data;
+    removedFeed = data.feeds[idx];
+    data.feeds.splice(idx, 1);
+    data.items = data.items.filter(i => i.feedId !== id);
+    return data;
+  });
 
-  const feed = data.feeds[idx];
-  data.feeds.splice(idx, 1);
-  data.items = data.items.filter(i => i.feedId !== id);
-  await store.save(data);
-
-  console.log(`🗑️ Feed removed: ${feed.title}`);
+  if (!removedFeed) return { error: 'Feed not found' };
+  console.log(`🗑️ Feed removed: ${removedFeed.title}`);
   return { removed: true };
 }
 
 export async function refreshFeed(id) {
-  const data = await store.load();
-  const feed = data.feeds.find(f => f.id === id);
-  if (!feed) return { error: 'Feed not found' };
+  const snapshot = await store.load();
+  const feedSnapshot = snapshot.feeds.find(f => f.id === id);
+  if (!feedSnapshot) return { error: 'Feed not found' };
 
-  const xml = await fetchFeedXml(feed.url);
+  // Network fetch happens outside the write lock; the parsed result is applied
+  // under mutate so a concurrent write can't clobber the merge (applyParsedFeed
+  // is the shared no-I/O merge — dedupe, trim, bump lastFetched/itemCount/title).
+  const xml = await fetchFeedXml(feedSnapshot.url);
   if (!xml) return { error: 'Could not fetch feed' };
 
   const parsed = parseFeed(xml);
 
-  // Deduplicate by link
-  const existingLinks = new Set(data.items.filter(i => i.feedId === id).map(i => i.link));
-  const newItems = parsed.items
-    .filter(item => item.link && !existingLinks.has(item.link))
-    .slice(0, MAX_ITEMS_PER_FEED)
-    .map(item => ({
-      id: randomUUID(),
-      feedId: id,
-      title: item.title,
-      link: item.link,
-      description: item.description,
-      pubDate: item.pubDate,
-      author: item.author,
-      read: false,
-      fetchedAt: new Date().toISOString()
-    }));
+  let result = null;
+  await store.mutate((data) => {
+    const feed = data.feeds.find(f => f.id === id);
+    if (!feed) return data; // removed between fetch and apply
+    const newCount = applyParsedFeed(data, feed, parsed);
+    sortItemsNewestFirst(data.items);
+    const unreadCount = data.items.filter(i => i.feedId === id && !i.read).length;
+    result = { feed: { ...feed, unreadCount }, newCount };
+    return data;
+  });
 
-  data.items.push(...newItems);
-
-  // Trim to MAX_ITEMS_PER_FEED per feed (keep newest)
-  const feedItems = data.items
-    .filter(i => i.feedId === id)
-    .sort((a, b) => new Date(b.fetchedAt) - new Date(a.fetchedAt));
-  if (feedItems.length > MAX_ITEMS_PER_FEED) {
-    const keepIds = new Set(feedItems.slice(0, MAX_ITEMS_PER_FEED).map(i => i.id));
-    data.items = data.items.filter(i => i.feedId !== id || keepIds.has(i.id));
-  }
-
-  feed.lastFetched = new Date().toISOString();
-  feed.itemCount = data.items.filter(i => i.feedId === id).length;
-  if (parsed.title) feed.title = parsed.title;
-
-  sortItemsNewestFirst(data.items);
-  await store.save(data);
-  console.log(`🔄 Feed refreshed: ${feed.title} (+${newItems.length} new)`);
-
-  return { feed: { ...feed, unreadCount: data.items.filter(i => i.feedId === id && !i.read).length }, newCount: newItems.length };
+  if (!result) return { error: 'Feed not found' };
+  console.log(`🔄 Feed refreshed: ${result.feed.title} (+${result.newCount} new)`);
+  return result;
 }
 
 // Fetch and parse XML for a feed without touching the store (safe to run in parallel)
@@ -305,14 +294,17 @@ function applyParsedFeed(data, feed, parsed) {
 // runs per feed inside the loop and we'd otherwise re-sort the whole array
 // N times for an N-feed refresh.
 export async function refreshAllFeeds() {
-  const data = await store.load();
+  const snapshot = await store.load();
+  const feedList = [...snapshot.feeds];
   const CONCURRENCY = 5;
-  let totalNew = 0;
   let totalFailed = 0;
 
-  // Fetch in parallel batches; mutations are applied serially to avoid concurrent store.save() races
-  for (let i = 0; i < data.feeds.length; i += CONCURRENCY) {
-    const batch = data.feeds.slice(i, i + CONCURRENCY);
+  // Fetch in parallel batches (no store I/O), collecting parsed results; the
+  // merge into the store happens once under mutate so a concurrent write path
+  // can't clobber the batch.
+  const parsedResults = [];
+  for (let i = 0; i < feedList.length; i += CONCURRENCY) {
+    const batch = feedList.slice(i, i + CONCURRENCY);
     const fetched = await Promise.allSettled(batch.map(f => fetchAndParseFeed(f)));
     for (const r of fetched) {
       if (r.status === 'rejected') {
@@ -326,16 +318,25 @@ export async function refreshAllFeeds() {
         console.warn(`⚠️ feeds: refresh failed for ${feed.id} (${feed.url}): ${error}`);
         continue;
       }
+      parsedResults.push({ feed, parsed });
+    }
+  }
+
+  let totalNew = 0;
+  let feedCount = 0;
+  await store.mutate((data) => {
+    for (const { feed, parsed } of parsedResults) {
       const newCount = applyParsedFeed(data, feed, parsed);
       console.log(`🔄 Feed refreshed: ${feed.title || feed.id} (+${newCount} new)`);
       totalNew += newCount;
     }
-  }
+    if (totalNew > 0) sortItemsNewestFirst(data.items);
+    feedCount = data.feeds.length;
+    return data;
+  });
 
-  if (totalNew > 0) sortItemsNewestFirst(data.items);
-  await store.save(data);
   console.log(`📡 All feeds refreshed: +${totalNew} new items, ${totalFailed} failures`);
-  return { refreshed: data.feeds.length, newItems: totalNew, failures: totalFailed };
+  return { refreshed: feedCount, newItems: totalNew, failures: totalFailed };
 }
 
 export async function getItems({ feedId, unreadOnly, limit, offset = 0 } = {}) {
@@ -351,25 +352,30 @@ export async function getItems({ feedId, unreadOnly, limit, offset = 0 } = {}) {
 }
 
 export async function markItemRead(itemId) {
-  const data = await store.load();
-  const item = data.items.find(i => i.id === itemId);
-  if (!item) return { error: 'Item not found' };
-  item.read = true;
-  await store.save(data);
+  let found = false;
+  await store.mutate((data) => {
+    const item = data.items.find(i => i.id === itemId);
+    if (!item) return data;
+    item.read = true;
+    found = true;
+    return data;
+  });
+  if (!found) return { error: 'Item not found' };
   return { updated: true };
 }
 
 export async function markAllRead(feedId) {
-  const data = await store.load();
   let count = 0;
-  for (const item of data.items) {
-    if (feedId && item.feedId !== feedId) continue;
-    if (!item.read) {
-      item.read = true;
-      count++;
+  await store.mutate((data) => {
+    for (const item of data.items) {
+      if (feedId && item.feedId !== feedId) continue;
+      if (!item.read) {
+        item.read = true;
+        count++;
+      }
     }
-  }
-  await store.save(data);
+    return data;
+  });
   console.log(`✅ Marked ${count} items as read${feedId ? ` for feed ${feedId}` : ''}`);
   return { marked: count };
 }

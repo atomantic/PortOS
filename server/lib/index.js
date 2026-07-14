@@ -110,6 +110,7 @@ export * from './tuiHandshake.js';
 export * from './tuiPromptRunner.js';
 
 // === File & I/O ===
+export * from './boundedStateMap.js';
 export * from './collectionStore.js';
 export * from './conflictJournal.js';
 export * from './createKeyCachedQueue.js';
