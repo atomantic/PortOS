@@ -1,6 +1,7 @@
 import { Router } from 'express';
-import { execFile } from 'child_process';
-import { existsSync, mkdirSync } from 'fs';
+import { execFile, spawn } from 'child_process';
+import { existsSync, mkdirSync, createReadStream } from 'fs';
+import { createInterface } from 'readline';
 import { join } from 'path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { checkHealth, query } from '../lib/db.js';
@@ -301,6 +302,80 @@ const pgEnv = (port) => ({
   PGDATABASE: pgDb
 });
 
+// pg17-only directives that older psql chokes on. The legacy import piped the
+// dump through `sed -e '/^\restrict /d' …` to strip them; we filter the same
+// lines in-process instead (see importDumpFile) so no `sed`/`bash -c` shell is
+// involved. Exported for unit testing.
+const PG17_ONLY_DIRECTIVES = [/^\\restrict /, /^\\unrestrict /, /^SET transaction_timeout/];
+export const isPg17OnlyDirective = (line) => PG17_ONLY_DIRECTIVES.some((re) => re.test(line));
+
+/**
+ * Import a pg_dump SQL file into the target database WITHOUT invoking a shell.
+ *
+ * The legacy path built a `bash -c "sed … \"${dumpFile}\" | psql … -U ${pgUser}
+ * -d ${pgDb}"` string, interpolating the dump path, port, user, and db name
+ * into the shell — any shell metacharacter in those values (or in a hostile
+ * export line surfacing through the pipeline) was injectable. Here psql runs via
+ * spawn with an argv array (no shell), the dump is streamed on stdin, and the
+ * pg17-only directives are stripped in-process by isPg17OnlyDirective(),
+ * replacing the `sed` stage entirely.
+ *
+ * Runs outside the Express request lifecycle (spawn/stream callbacks), so every
+ * async boundary resolves rather than throws — an uncaught throw here would
+ * crash the Node process (there is no next(err) to bubble to). Returns the same
+ * { stdout, stderr, exitCode } shape as runCmd().
+ */
+export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
+  return new Promise((resolve) => {
+    const psql = spawn('psql', [
+      '-h', 'localhost', '-p', String(port), '-U', pgUser, '-d', pgDb,
+      '-v', 'ON_ERROR_STOP=1', '--single-transaction'
+    ], { cwd: rootDir, env });
+
+    let stdout = '';
+    let stderr = '';
+    let finished = false;
+    const finish = (exitCode, extraDetail) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      if (exitCode !== 0) {
+        const detail = stripAnsi(stderr || stdout || extraDetail || '').replace(/\s+/g, ' ').trim();
+        console.error(`🗄️ psql import exited ${exitCode}: ${detail}`);
+      }
+      resolve({ stdout: stripAnsi(stdout), stderr: stripAnsi(stderr), exitCode });
+    };
+
+    const timer = setTimeout(() => {
+      psql.kill('SIGKILL');
+      finish(1, `import timed out after ${timeout}ms`);
+    }, timeout);
+
+    psql.stdout.on('data', (d) => { stdout += d.toString(); });
+    psql.stderr.on('data', (d) => { stderr += d.toString(); });
+    psql.on('error', (err) => finish(1, err.message));
+    psql.on('close', (code) => finish(typeof code === 'number' ? code : 1));
+    // psql may exit early (e.g. ON_ERROR_STOP) while we're still writing — the
+    // resulting EPIPE would otherwise crash the process.
+    psql.stdin.on('error', () => {});
+
+    const rl = createInterface({ input: createReadStream(dumpFile), crlfDelay: Infinity });
+    rl.on('error', (err) => {
+      if (psql.stdin.writable) psql.stdin.end();
+      finish(1, err.message);
+    });
+    rl.on('line', (line) => {
+      if (isPg17OnlyDirective(line) || !psql.stdin.writable) return;
+      // Honor backpressure so a large dump doesn't buffer unboundedly in memory.
+      if (!psql.stdin.write(line + '\n')) {
+        rl.pause();
+        psql.stdin.once('drain', () => rl.resume());
+      }
+    });
+    rl.on('close', () => { if (psql.stdin.writable) psql.stdin.end(); });
+  });
+}
+
 /**
  * Read a specific backend's PostgreSQL major version by probing it on its own
  * port (native 5432 / Docker 5561 can run different majors, so the connection
@@ -375,12 +450,11 @@ router.post('/sync', asyncHandler(async (req, res) => {
     ], 10_000, sysEnv);
   }
 
-  // Step 3: Import into target (active backend untouched — different port)
-  // Strip pg17-only features for compat with older psql: \restrict/\unrestrict, transaction_timeout
+  // Step 3: Import into target (active backend untouched — different port).
+  // Streamed via spawn (no shell) with pg17-only directives stripped in-process,
+  // so no user/env value is ever interpolated into a shell string.
   emit('start', { message: `Importing into ${targetMode} (port ${targetPort})...` });
-  const importResult = await runCmd(bashBinary, ['-c',
-    `sed -e '/^\\\\restrict /d' -e '/^\\\\unrestrict /d' -e '/^SET transaction_timeout/d' "${dumpFile}" | psql -h localhost -p ${targetPort} -U ${pgUser} -d ${pgDb} -v ON_ERROR_STOP=1 --single-transaction`
-  ], 120_000, pgEnv(targetPort));
+  const importResult = await importDumpFile(dumpFile, targetPort, pgEnv(targetPort));
 
   if (importResult.exitCode !== 0) {
     emit('error', { message: `Import into ${targetMode} failed` });
