@@ -23,6 +23,11 @@
  */
 import { dataPath, ensureDir, atomicWrite, tryReadFile } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
+
+// Cap on each token-endpoint round-trip so a hung accounts.spotify.com can't
+// stall an OAuth callback or a history-sync refresh indefinitely.
+const TOKEN_TIMEOUT_MS = 15000;
 
 const AUTH_DIR = dataPath('spotify');
 const CREDENTIALS_FILE = dataPath('spotify', 'credentials.json');
@@ -129,14 +134,14 @@ async function requestToken(params) {
     throw new ServerError('No Spotify OAuth credentials configured', { status: 400 });
   }
   const basic = Buffer.from(`${credentials.clientId}:${credentials.clientSecret}`).toString('base64');
-  const res = await fetch(`${ACCOUNTS_BASE}/api/token`, {
+  const res = await fetchWithTimeout(`${ACCOUNTS_BASE}/api/token`, {
     method: 'POST',
     headers: {
       Authorization: `Basic ${basic}`,
       'Content-Type': 'application/x-www-form-urlencoded',
     },
     body: new URLSearchParams(params).toString(),
-  });
+  }, TOKEN_TIMEOUT_MS);
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new ServerError(
@@ -173,21 +178,13 @@ export async function handleCallback(code) {
   return { success: true };
 }
 
-/**
- * Return a valid access token, refreshing via the stored refresh token when the
- * current one is expired/near-expiry. Returns `null` when the user hasn't
- * connected (no tokens) or the grant is unrecoverable (no refresh token) — the
- * caller surfaces a "connect in Settings" prompt rather than throwing.
- *
- * Spotify may OMIT `refresh_token` from a refresh response (it stays valid), so
- * the existing refresh token is preserved when the response doesn't carry one.
- */
-export async function getAccessToken() {
-  const tokens = await getTokens();
-  if (!tokens?.access_token && !tokens?.refresh_token) return null;
-  if (!isTokenExpired(tokens)) return tokens.access_token;
-  if (!tokens?.refresh_token) return null;
+// Single-flight guard: while one refresh is in flight, concurrent callers await
+// the same promise instead of each POSTing their own refresh (Spotify rotates
+// the grant, so a double-refresh means the loser writes a stale token — classic
+// last-write-wins). Cleared in `finally` so a failed refresh can be retried.
+let refreshPromise = null;
 
+async function refreshAccessToken(tokens) {
   const refreshed = await requestToken({
     grant_type: 'refresh_token',
     refresh_token: tokens.refresh_token,
@@ -197,6 +194,32 @@ export async function getAccessToken() {
   await saveTokens(merged);
   console.log('🎧 Spotify OAuth access token refreshed');
   return merged.access_token;
+}
+
+/**
+ * Return a valid access token, refreshing via the stored refresh token when the
+ * current one is expired/near-expiry. Returns `null` when the user hasn't
+ * connected (no tokens) or the grant is unrecoverable (no refresh token) — the
+ * caller surfaces a "connect in Settings" prompt rather than throwing.
+ *
+ * Spotify may OMIT `refresh_token` from a refresh response (it stays valid), so
+ * the existing refresh token is preserved when the response doesn't carry one.
+ *
+ * Concurrent callers that all find the token expired share ONE refresh via the
+ * module-level `refreshPromise` (single-flight), so the grant is rotated once.
+ */
+export async function getAccessToken() {
+  const tokens = await getTokens();
+  if (!tokens?.access_token && !tokens?.refresh_token) return null;
+  if (!isTokenExpired(tokens)) return tokens.access_token;
+  if (!tokens?.refresh_token) return null;
+
+  if (!refreshPromise) {
+    refreshPromise = refreshAccessToken(tokens).finally(() => {
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise;
 }
 
 export async function getAuthStatus() {
