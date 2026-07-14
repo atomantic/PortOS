@@ -1,5 +1,13 @@
 # Unreleased
 
+## Added
+
+- **First-run tutorial for POST cognitive drills.** The timed, stimulus-driven cognitive drills (n-back, digit-span, stroop, schulte-table, mental-rotation, reaction-time) start flashing a stimulus the instant they mount, which is disorienting the first time you meet one. Each drill type now shows a one-time how-to card — a plain-language goal, numbered steps, and the controls — the first time it's encountered, and holds the drill (and its timers) until you tap **Start drill**. The card is config-aware (it names the n-back lag, the digit-span direction, and the reaction-time mode), then never shows again for that type (tracked per type in `localStorage`). Non-timed drills (math/memory, LLM/verbal) are self-explanatory and are not gated.
+
+## Fixed
+
+- **POST Digit Span: the form no longer jumps up as digits flash on and off.** During the show phase the visible-digit slot collapsed to zero height in the blank gaps between digits, so the container (padding + `min-h`) oscillated and the recall form/progress bar below shifted up on every flash. The slot now reserves its line box with a non-breaking space in the gaps, keeping the layout steady while digits flash.
+
 ## Security
 
 - **[issue-2514] Harden AI provider custom endpoints against SSRF / API-key exfiltration.** A provider's `endpoint` is a free-form URL, and model-refresh / API-run paths attached the paid `Authorization: Bearer <apiKey>` and fetched that host with no host checks — a hostile or mistyped endpoint could receive the user's paid LLM key and prompts, or be pointed at a cloud-metadata service (`169.254.169.254`). A new `endpointGuard` now gates every secret-bearing request: loopback/LAN (Tailscale) and known paid-provider hosts are allowed, cloud-metadata hosts are always blocked, and any other host requires the new per-provider **Allow custom endpoint** opt-in. Keyless local-LLM calls (Ollama/LM Studio) are unaffected.
