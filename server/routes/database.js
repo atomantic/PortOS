@@ -336,11 +336,20 @@ export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
     // can tear them down. If psql exits early (ON_ERROR_STOP rollback) or the
     // timeout SIGKILLs it, the `drain` we may be waiting on never fires, so we
     // must destroy the source ourselves or its file descriptor leaks.
-    const src = createReadStream(dumpFile);
+    //
+    // Read/write as latin1 (a lossless 1:1 byte↔char mapping): the dump's bytes
+    // pass through untouched regardless of the database's client_encoding — a
+    // utf8 decode→re-encode round-trip would corrupt non-utf8 dumps. This keeps
+    // the byte-transparency the old `sed | psql` pipe had.
+    const src = createReadStream(dumpFile, { encoding: 'latin1' });
     const rl = createInterface({ input: src, crlfDelay: Infinity });
 
+    // Cap diagnostic capture so a pathologically chatty psql (verbose \echo,
+    // giant error text) can't exhaust the heap. psql is near-silent on success.
+    const CAPTURE_LIMIT = 256 * 1024;
     let stdout = '';
     let stderr = '';
+    const capture = (buf, chunk) => (buf.length >= CAPTURE_LIMIT ? buf : buf + chunk);
     let finished = false;
     const finish = (exitCode, extraDetail) => {
       if (finished) return;
@@ -361,8 +370,8 @@ export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
       finish(1, `import timed out after ${timeout}ms`);
     }, timeout);
 
-    psql.stdout.on('data', (d) => { stdout += d.toString(); });
-    psql.stderr.on('data', (d) => { stderr += d.toString(); });
+    psql.stdout.on('data', (d) => { stdout = capture(stdout, d.toString()); });
+    psql.stderr.on('data', (d) => { stderr = capture(stderr, d.toString()); });
     psql.on('error', (err) => finish(1, err.message));
     psql.on('close', (code) => finish(typeof code === 'number' ? code : 1));
     // psql may exit early (e.g. ON_ERROR_STOP) while we're still writing — the
@@ -377,7 +386,7 @@ export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
     rl.on('line', (line) => {
       if (isPg17OnlyDirective(line) || !psql.stdin.writable) return;
       // Honor backpressure so a large dump doesn't buffer unboundedly in memory.
-      if (!psql.stdin.write(line + '\n')) {
+      if (!psql.stdin.write(line + '\n', 'latin1')) {
         rl.pause();
         psql.stdin.once('drain', () => rl.resume());
       }

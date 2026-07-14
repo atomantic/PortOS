@@ -106,13 +106,15 @@ describe('importDumpFile (no-shell streaming import)', () => {
     child.stderr = new PassThrough();
     const writes = [];
     child.stdin = new PassThrough();
-    child.stdin.on('data', (chunk) => writes.push(chunk.toString()));
+    child.stdin.on('data', (chunk) => writes.push(Buffer.from(chunk)));
     child.stdin.on('finish', () => {
       // Emulate psql exiting cleanly once stdin closes.
       child.emit('close', 0);
     });
     child.kill = vi.fn();
-    child.__writes = writes;
+    // Raw bytes piped to psql stdin, concatenated.
+    child.__pipedBuffer = () => Buffer.concat(writes);
+    child.__piped = (encoding = 'latin1') => Buffer.concat(writes).toString(encoding);
     return child;
   }
 
@@ -145,12 +147,36 @@ describe('importDumpFile (no-shell streaming import)', () => {
     expect(args.join(' ')).not.toMatch(/sed|\|/);
 
     // The pg17-only directives were stripped; real SQL survived.
-    const piped = child.__writes.join('');
+    const piped = child.__piped();
     expect(piped).not.toMatch(/\\restrict/);
     expect(piped).not.toMatch(/\\unrestrict/);
     expect(piped).not.toMatch(/SET transaction_timeout/);
     expect(piped).toMatch(/CREATE TABLE foo/);
     expect(piped).toMatch(/INSERT INTO foo VALUES \(1\);/);
+  });
+
+  it('preserves raw bytes (non-utf8-safe) instead of round-tripping through utf8', async () => {
+    const child = makeFakePsql();
+    spawn.mockReturnValue(child);
+
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'portos-dump-'));
+    const dumpPath = pathJoin(dir, 'dump.sql');
+    // A lone 0xE9 byte (LATIN1 'é') is NOT valid standalone UTF-8; a utf8
+    // decode→re-encode would replace it with 0xEFBFBD. Plus a valid multibyte
+    // UTF-8 sequence (emoji) that must also survive unchanged.
+    const body = Buffer.concat([
+      Buffer.from('INSERT INTO t VALUES (', 'utf8'),
+      Buffer.from([0xe9]),               // raw LATIN1 byte
+      Buffer.from(' -- 😀\n', 'utf8'),   // valid UTF-8 multibyte
+    ]);
+    writeFileSync(dumpPath, body);
+
+    const result = await importDumpFile(dumpPath, '5561', {});
+    expect(result.exitCode).toBe(0);
+
+    // Bytes piped to psql must equal the input bytes exactly (line kept; the
+    // '\n' terminator is re-emitted by the line filter).
+    expect(child.__pipedBuffer().equals(body)).toBe(true);
   });
 
   it('resolves with a non-zero exitCode when the dump file cannot be read (no throw)', async () => {
