@@ -328,12 +328,18 @@ export default function ChiefOfStaff() {
   };
 
   const handleForceEvaluate = async () => {
-    await api.forceCosEvaluate({ silent: true }).catch(err => toast.error(err.message));
-    toast.success('Evaluation triggered');
-    setAgentState('thinking');
-    setStatusMessage("Evaluating tasks...");
-    setSpeaking(true);
-    setTimeout(() => setSpeaking(false), 2000);
+    // Only announce success / drive the "thinking" state after the request
+    // actually resolves — a failed evaluate must not flash a success toast.
+    try {
+      await api.forceCosEvaluate({ silent: true });
+      toast.success('Evaluation triggered');
+      setAgentState('thinking');
+      setStatusMessage("Evaluating tasks...");
+      setSpeaking(true);
+      setTimeout(() => setSpeaking(false), 2000);
+    } catch (err) {
+      toast.error(err.message);
+    }
   };
 
   const handleTaskUnblocked = (taskId) => {
