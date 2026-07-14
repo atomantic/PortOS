@@ -11,11 +11,24 @@
  * (under-report). These tests pin both behaviors.
  */
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { selectDryRunAutoApproved, exceedsMaxSpawns, resolveIssueAuthorFilterBlock, resolveSwarmBlock, isCooldownExemptTask, emitOnDemandEmpty } from './cosTaskGenerator.js';
+
+// buildJiraTicketTask resolves the claim-issue-jira prompt body (dynamic import)
+// and the Code Review Defaults (static import). Mock both leaf services so the
+// behavioral test below drives the assembly without touching disk/settings.
+vi.mock('./taskPromptService.js', async (importActual) => ({
+  ...(await importActual()),
+  getTaskPrompt: vi.fn(async (key) => `# ${key}\nApp {appName} at {repoPath} (id {appId})\nReviewers: {reviewers}`),
+}));
+vi.mock('./codeReview.js', async (importActual) => ({
+  ...(await importActual()),
+  getCodeReviewDefaults: vi.fn(async () => ({ reviewers: ['copilot'], usernames: ['alice'], optionalReviewers: [] })),
+}));
+
+import { selectDryRunAutoApproved, exceedsMaxSpawns, resolveIssueAuthorFilterBlock, resolveSwarmBlock, isCooldownExemptTask, emitOnDemandEmpty, buildJiraTicketTask } from './cosTaskGenerator.js';
 import { cosEvents } from './cosEvents.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 
@@ -224,6 +237,39 @@ describe('claim-work single-source routing', () => {
     // A direct claim-work prompt customization overrides the tracker body, same
     // as the scheduled router's promptKeyForBody selection.
     expect(fn).toMatch(/getTaskPrompt\(interval\.prompt \? 'claim-work' : promptTaskType\)/);
+  });
+});
+
+// buildJiraTicketTask is the per-card "play" button's prompt assembly, extracted
+// out of cosTaskRoutes.js so the route stays thin (validate → gate → assemble →
+// queue) and the claim-reviewer + target-ticket logic lives next to
+// buildClaimWorkTask. Exercised directly with mocked leaf services.
+describe('buildJiraTicketTask', () => {
+  const app = { id: 'acme', name: 'Acme App', repoPath: '/repos/acme' };
+
+  it('substitutes app placeholders + reviewers and appends the target-ticket constraint', async () => {
+    const { ticketKey, prompt, taskMetadata } = await buildJiraTicketTask(app, 'proj-1234');
+    // Placeholders resolved from the app object.
+    expect(prompt).toContain('App Acme App at /repos/acme (id acme)');
+    // {reviewers} substituted (no literal placeholder left) with the Code Review
+    // Defaults reviewer + @username token.
+    expect(prompt).not.toContain('{reviewers}');
+    expect(prompt).toContain('copilot');
+    expect(prompt).toContain('@alice');
+    // Target-ticket constraint pins the uppercased key.
+    expect(prompt).toContain('## Target Ticket Constraint');
+    expect(prompt).toContain('PROJ-1234');
+    // Ticket key normalized to upper-case.
+    expect(ticketKey).toBe('PROJ-1234');
+    // claim-issue-jira self-manages worktree + PR.
+    expect(taskMetadata).toEqual({ useWorktree: false, openPR: false });
+  });
+
+  it('is exported so the /tasks/jira-ticket route reuses the shared assembly', () => {
+    expect(GEN_SRC).toContain('export async function buildJiraTicketTask(');
+    // Routes the JIRA flow directly, not via buildClaimWorkTask.
+    expect(GEN_SRC).toMatch(/buildJiraTicketTask[\s\S]*getTaskPrompt\('claim-issue-jira'\)/);
+    expect(GEN_SRC).toMatch(/buildJiraTicketTask[\s\S]*buildTargetTicketBlock\(key\)/);
   });
 });
 

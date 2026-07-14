@@ -8,10 +8,8 @@ import * as cos from '../services/cos.js';
 import * as taskWatcher from '../services/taskWatcher.js';
 import { enhanceTaskPrompt } from '../services/taskEnhancer.js';
 import { loadSlashdoCommand } from '../services/subAgentSpawner.js';
-import { buildClaimWorkTask } from '../services/cosTaskGenerator.js';
+import { buildClaimWorkTask, buildJiraTicketTask } from '../services/cosTaskGenerator.js';
 import { getAppById } from '../services/apps.js';
-import { getTaskPrompt } from '../services/taskPromptService.js';
-import { getCodeReviewDefaults } from '../services/codeReview.js';
 import { workTrackerLabel } from '../lib/workTracker.js';
 import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.js';
 import {
@@ -20,9 +18,6 @@ import {
   challengeTaskSchema,
   resolveChallengeSchema,
   validateRequest,
-  normalizeReviewers,
-  buildReviewersCsv,
-  LOCAL_LLM_REVIEWERS,
   isPaginationRequested,
   parsePagination,
 } from '../lib/validation.js';
@@ -38,33 +33,6 @@ const jiraTicketTaskSchema = z.object({
   app: z.string().min(1),
   ticketKey: z.string().trim().regex(/^[A-Za-z][A-Za-z0-9]*-\d+$/, 'Invalid JIRA ticket key'),
 });
-
-// Resolve the reviewers CSV for the claim flow exactly as buildClaimWorkTask
-// does (Code Review Defaults, minus local-LLM reviewers the claim prompt can't
-// drive, falling back to the hardcoded default). Mirrors the scheduled
-// claim-work resolution so the play button honors the user's reviewer choice.
-async function resolveClaimReviewersCsv() {
-  const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
-  const list = normalizeReviewers({}, codeReviewDefaults?.reviewers)
-    .filter((r) => !LOCAL_LLM_REVIEWERS.includes(r));
-  // Arbitrary GitHub reviewer usernames from the Code Review Defaults, appended
-  // as `@user` tokens so the play button's claim gates the merge on them too.
-  // Optional-reviewer set rides along so a `~opt` reviewer stays non-blocking.
-  return buildReviewersCsv(list, codeReviewDefaults?.usernames, codeReviewDefaults?.optionalReviewers);
-}
-
-// Append a "claim exactly this ticket" constraint to the claim-issue-jira body
-// — the JIRA analogue of buildPlanConstraintBlock. The base prompt's Phase 1
-// tells the agent to PICK the next-ready ticket; this overrides that to pin the
-// user's selection while keeping every safety check (already-claimed, stale,
-// too-ambiguous → exit cleanly).
-function buildTargetTicketBlock(ticketKey) {
-  return `
-
-## Target Ticket Constraint
-
-The user explicitly selected JIRA ticket \`${ticketKey}\` from the board. Override Phase 1 ("Pick the target ticket"): do NOT pick a different ticket and do NOT scan for the next-ready one — claim exactly \`${ticketKey}\`. Still honor the safety checks: if \`${ticketKey}\` is already In Progress / In Review / Done / closed, is already on a \`claim/${ticketKey}\` (or \`cos/.../${ticketKey}/...\`) branch, or its requirements are too ambiguous or too large to implement in a single PR, exit cleanly (file a Review Hub todo for ambiguous requirements) rather than forcing it. Otherwise run Phases 2–7 against \`${ticketKey}\`.`;
-}
 
 const SLASHDO_COMMANDS = {
   push:           { label: 'Push', description: 'Commit and push all work with changelog' },
@@ -209,7 +177,6 @@ router.post('/tasks/slashdo', asyncHandler(async (req, res) => {
 // the 7-phase body. Queue-only: the daemon picks it up on the next evaluation.
 router.post('/tasks/jira-ticket', asyncHandler(async (req, res) => {
   const { app, ticketKey } = validateRequest(jiraTicketTaskSchema, req.body);
-  const key = ticketKey.toUpperCase();
 
   const appObj = await getAppById(app);
   if (!appObj) {
@@ -219,31 +186,16 @@ router.post('/tasks/jira-ticket', asyncHandler(async (req, res) => {
     throw new ServerError(`JIRA is not enabled for ${appObj.name}`, { status: 400, code: 'JIRA_NOT_ENABLED' });
   }
 
-  // Resolve the claim-issue-jira body directly (not via buildClaimWorkTask) —
-  // an app can show a JIRA board while its general Work Tracker resolves to
-  // GitHub/PLAN, so route the click to the JIRA flow regardless of that setting.
-  // Independent reads (prompt body + Code Review Defaults) — fetch concurrently.
-  const [template, reviewersCsv] = await Promise.all([
-    getTaskPrompt('claim-issue-jira'),
-    resolveClaimReviewersCsv(),
-  ]);
-  const context = template
-    .replace(/\{appName\}/g, appObj.name)
-    .replace(/\{repoPath\}/g, appObj.repoPath)
-    .replace(/\{appId\}/g, appObj.id)
-    // Function-form replacer so a literal `$` in the reviewers CSV isn't read as
-    // a backreference.
-    .replace(/\{reviewers\}/g, () => reviewersCsv)
-    + buildTargetTicketBlock(key);
+  // Assemble the claim-issue-jira prompt + target-ticket constraint in the
+  // generator service (shared with the scheduled JIRA claim flow). The route
+  // stays thin: validate → gate → assemble → queue.
+  const { ticketKey: key, prompt, taskMetadata } = await buildJiraTicketTask(appObj, ticketKey);
 
-  // claim-issue-jira self-manages its worktree + MR/PR, so leave both false
-  // (matching the /do:next slashdo default for the JIRA tracker).
   const taskData = {
     description: `Claim JIRA ticket ${key} for ${appObj.name} — implement and ship a PR`,
     app,
-    context,
-    useWorktree: false,
-    openPR: false,
+    context: prompt,
+    ...taskMetadata,
     simplify: false,
     reviewLoop: false,
   };
