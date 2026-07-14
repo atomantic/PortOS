@@ -541,3 +541,10 @@ export const activityDigestSettingsSchema = z.object({
   runTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Expected HH:MM (24h)').optional(),
   catchUpDays: z.number().int().min(0).max(30).optional()
 }).strict();
+
+// POST /api/brain/{digest,review}/run — manual trigger with optional provider /
+// model overrides (both absent = use configured defaults).
+export const brainDigestRunSchema = z.object({
+  providerOverride: z.string().optional(),
+  modelOverride: z.string().optional()
+});

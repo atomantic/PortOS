@@ -671,12 +671,20 @@ export const portsCheckSchema = z.object({
   ports: z.array(z.number().int().min(1).max(65535)).min(1)
 });
 
-// POST /api/ports/allocate — reserve N free ports. `count` is coerced (the UI
-// may send a string) and defaults to 1 when absent, matching the prior
-// `parseInt(count) || 1` behavior — but non-numeric garbage now 400s instead of
-// silently collapsing to 1.
+// POST /api/ports/allocate — reserve N free ports. `count` accepts a number or
+// a numeric string (the UI may send either) and defaults to 1 when absent,
+// matching the prior `parseInt(count) || 1` behavior — but non-numeric garbage
+// now 400s instead of silently collapsing to 1. The preprocess only forwards
+// number|string so `z.coerce` can't quietly turn a boolean (`true → 1`) or an
+// array (`[5] → 5`) into a valid count.
 export const portsAllocateSchema = z.object({
-  count: z.coerce.number().int().min(1).max(10).default(1)
+  count: z.preprocess(
+    (v) => {
+      if (v === undefined) return 1;
+      return (typeof v === 'number' || typeof v === 'string') ? v : NaN;
+    },
+    z.coerce.number().int().min(1).max(10)
+  )
 });
 
 // =============================================================================
@@ -700,17 +708,6 @@ export const databaseBackendSchema = z.object({
 // the active backend.
 export const databaseExportSchema = z.object({
   backend: z.enum(DB_BACKENDS).optional()
-});
-
-// =============================================================================
-// BRAIN DIGEST / REVIEW
-// =============================================================================
-
-// POST /api/brain/{digest,review}/run — manual trigger with optional provider /
-// model overrides.
-export const brainDigestRunSchema = z.object({
-  providerOverride: z.string().optional(),
-  modelOverride: z.string().optional()
 });
 
 /**

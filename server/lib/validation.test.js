@@ -38,11 +38,13 @@ import {
   databaseSwitchSchema,
   databaseBackendSchema,
   databaseExportSchema,
-  brainDigestRunSchema,
 } from './validation.js';
 import {
   telegramForwardTypesSchema,
 } from './telegramValidation.js';
+import {
+  brainDigestRunSchema,
+} from './brainValidation.js';
 
 describe('validation.js', () => {
   describe('isPaginationRequested', () => {
@@ -1385,10 +1387,14 @@ describe('ad-hoc route schemas (#2521)', () => {
       expect(portsAllocateSchema.parse({})).toEqual({ count: 1 });
       expect(portsAllocateSchema.parse({ count: '5' })).toEqual({ count: 5 });
     });
-    it('rejects out-of-range counts and non-numeric garbage', () => {
+    it('rejects out-of-range counts, non-numeric strings, and non-scalar JSON', () => {
       expect(portsAllocateSchema.safeParse({ count: 0 }).success).toBe(false);
       expect(portsAllocateSchema.safeParse({ count: 11 }).success).toBe(false);
       expect(portsAllocateSchema.safeParse({ count: 'abc' }).success).toBe(false);
+      // z.coerce alone would turn these into valid counts (true→1, [5]→5); the
+      // preprocess forwards only number|string so they fail instead.
+      expect(portsAllocateSchema.safeParse({ count: true }).success).toBe(false);
+      expect(portsAllocateSchema.safeParse({ count: [5] }).success).toBe(false);
     });
   });
 

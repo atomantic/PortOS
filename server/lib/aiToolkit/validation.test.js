@@ -182,11 +182,18 @@ describe('validate', () => {
 });
 
 describe('providerActiveSchema — PUT /api/providers/active (#2521)', () => {
-  it('requires a non-empty id', () => {
+  it('accepts a slug id and rejects empty/missing/non-string', () => {
     expect(validate(providerActiveSchema, { id: 'codex' }).success).toBe(true);
+    expect(validate(providerActiveSchema, { id: 'claude-ollama-1' }).success).toBe(true);
     expect(validate(providerActiveSchema, { id: '' }).success).toBe(false);
     expect(validate(providerActiveSchema, {}).success).toBe(false);
     expect(validate(providerActiveSchema, { id: 5 }).success).toBe(false);
+  });
+
+  it('rejects reserved prototype keys so setActiveProvider cannot walk the prototype chain', () => {
+    expect(validate(providerActiveSchema, { id: '__proto__' }).success).toBe(false);
+    expect(validate(providerActiveSchema, { id: 'constructor' }).success).toBe(true); // a valid slug, but only matches an OWN provider key
+    expect(validate(providerActiveSchema, { id: 'Codex' }).success).toBe(false); // uppercase disallowed
   });
 });
 

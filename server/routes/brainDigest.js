@@ -7,7 +7,8 @@
 import { Router } from 'express';
 import * as brainService from '../services/brain.js';
 import { asyncHandler } from '../lib/errorHandler.js';
-import { validateRequest, brainDigestRunSchema } from '../lib/validation.js';
+import { validateRequest } from '../lib/validation.js';
+import { brainDigestRunSchema } from '../lib/brainValidation.js';
 
 const router = Router();
 
