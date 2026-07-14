@@ -85,7 +85,12 @@ vi.mock('../services/subAgentSpawner.js', () => ({
 
 // The `/do:next` slashdo route resolves the app's Work Tracker via
 // buildClaimWorkTask + getAppById instead of inlining the raw command body.
-vi.mock('../services/cosTaskGenerator.js', () => ({
+// buildClaimWorkTask is stubbed (the slashdo tests drive it directly), but the
+// real buildJiraTicketTask runs so the `/tasks/jira-ticket` route still exercises
+// the extracted prompt assembly — it resolves getTaskPrompt/getCodeReviewDefaults,
+// which are mocked below, so the route-level assertions stay verbatim.
+vi.mock('../services/cosTaskGenerator.js', async (importActual) => ({
+  ...(await importActual()),
   buildClaimWorkTask: vi.fn()
 }));
 vi.mock('../services/apps.js', () => ({
