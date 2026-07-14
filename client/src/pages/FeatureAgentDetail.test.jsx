@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor, act } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { MemoryRouter, Routes, Route, useNavigate } from 'react-router-dom';
 
 // Deferred-promise registry so a test can resolve A's load *after* navigating
@@ -103,5 +104,23 @@ describe('FeatureAgentDetail load race', () => {
     // B is still loading — the old agent name must be gone, spinner up.
     expect(screen.queryByText('Agent Alpha')).not.toBeInTheDocument();
     expect(screen.getByText(/Loading agent/)).toBeInTheDocument();
+  });
+
+  it('still renders the agent under StrictMode (mount→cleanup→remount must not strand the mounted guard)', async () => {
+    render(
+      <StrictMode>
+        <MemoryRouter initialEntries={['/feature-agents/agent-a/overview']}>
+          <Harness />
+        </MemoryRouter>
+      </StrictMode>,
+    );
+    // StrictMode fires setup→cleanup→setup; the last in-flight fetch is the
+    // current one. Resolve every fetch id we saw so the current seq resolves.
+    await act(async () => {
+      for (const d of Object.values(deferreds)) d.resolve({ id: 'agent-a', name: 'Agent Alpha', appId: 'app1' });
+    });
+    // If the mounted guard were stuck false (non-StrictMode-safe pattern) the
+    // result would be ignored and the spinner would hang forever.
+    await waitFor(() => expect(screen.getByText('Agent Alpha')).toBeInTheDocument());
   });
 });

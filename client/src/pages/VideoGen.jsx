@@ -56,6 +56,7 @@ import { useMediaJobSse } from '../hooks/useMediaJobSse';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import usePreviewRoute from '../hooks/usePreviewRoute';
+import useMounted from '../hooks/useMounted';
 import {
   getVideoGenStatus, generateVideo, cancelVideoGen,
   listVideoHistory, deleteVideoHistoryItem, setVideoHidden, extractLastFrame,
@@ -564,11 +565,13 @@ export default function VideoGen() {
   // dispatch or after unmount) sees a moved-on token and bails without touching
   // state or re-releasing the running slot.
   const queueWorkerGenRef = useRef(0);
-  // Unmount guard for the queue worker's deferred callbacks. Never reset to true
-  // so StrictMode's mount→cleanup→remount can't strand it false.
-  const mountedRef = useRef(true);
+  // Unmount guard for the queue worker's deferred callbacks (StrictMode-safe:
+  // resets to true on mount, so the mount→cleanup→remount cycle can't strand it
+  // false and freeze the queue worker). A dedicated unmount cleanup clears any
+  // pending BUSY-retry timer — this is the authoritative clear (the worker
+  // effect's own cleanup is unreliable, see the queue-worker effect below).
+  const mountedRef = useMounted();
   useEffect(() => () => {
-    mountedRef.current = false;
     if (busyRetryTimerRef.current) {
       clearTimeout(busyRetryTimerRef.current);
       busyRetryTimerRef.current = null;

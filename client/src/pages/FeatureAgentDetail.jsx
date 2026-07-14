@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import useMounted from '../hooks/useMounted';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Wand2, ArrowLeft } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -23,10 +24,9 @@ export default function FeatureAgentDetail() {
   const [loading, setLoading] = useState(!isCreate);
   const [apps, setApps] = useState([]);
 
-  // Unmount guard — never reset to true so StrictMode's mount→cleanup→remount
-  // can't strand it false and swallow the post-unmount stale-result check.
-  const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  // Unmount guard (StrictMode-safe: resets to true on mount) so an async agent
+  // load that resolves after teardown doesn't setState on a dead component.
+  const mountedRef = useMounted();
   // Monotonic load token: an A→B navigation fires a fresh fetch and bumps this,
   // so a slow response for A resolving after we've switched to B is ignored
   // instead of overwriting the displayed agent with the wrong record.
