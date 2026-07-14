@@ -39,7 +39,7 @@ export default function DataDog() {
   const loadInstances = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/datadog/instances');
+      const response = await api.get('/datadog/instances', { silent: true });
       setInstances(response.instances || {});
     } catch (error) {
       console.error(`❌ Failed to load DataDog instances: ${error.message}`);
@@ -102,7 +102,7 @@ export default function DataDog() {
         ...(formData.appKey && { appKey: formData.appKey })
       };
 
-      const saved = await api.post('/datadog/instances', payload);
+      const saved = await api.post('/datadog/instances', payload, { silent: true });
 
       toast.success(`DataDog instance "${payload.name}" saved successfully`);
       setInstances(prev => ({ ...prev, [saved.id]: saved }));
@@ -125,7 +125,7 @@ export default function DataDog() {
     setDeleteConfirm(null);
 
     try {
-      await api.delete(`/datadog/instances/${instanceId}`);
+      await api.delete(`/datadog/instances/${instanceId}`, { silent: true });
       toast.success(`DataDog instance "${instanceId}" deleted`);
       setInstances(prev => {
         const next = { ...prev };
@@ -147,7 +147,7 @@ export default function DataDog() {
       setTestingInstance(instanceId);
       setTestResults(prev => ({ ...prev, [instanceId]: null }));
 
-      const response = await api.post(`/datadog/instances/${instanceId}/test`);
+      const response = await api.post(`/datadog/instances/${instanceId}/test`, undefined, { silent: true });
       setTestResults(prev => ({ ...prev, [instanceId]: response }));
 
       if (response.success) {

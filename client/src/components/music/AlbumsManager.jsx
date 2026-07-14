@@ -223,7 +223,7 @@ export default function AlbumsManager() {
     if (!title) { toast.error('Album title is required'); return; }
     setSaving(true);
     if (isCreate) {
-      const created = await createAlbum(buildPayload({ includeTrackIds: true })).catch((err) => { toast.error(err.message || 'Failed to create album'); return null; });
+      const created = await createAlbum(buildPayload({ includeTrackIds: true }), { silent: true }).catch((err) => { toast.error(err.message || 'Failed to create album'); return null; });
       setSaving(false);
       if (!created) return;
       setAlbums((prev) => [...prev, created].sort((a, b) => (a.title || '').localeCompare(b.title || '')));
@@ -234,7 +234,7 @@ export default function AlbumsManager() {
       const original = selected?.trackIds || [];
       const trackIdsChanged = original.length !== form.trackIds.length
         || original.some((id, i) => id !== form.trackIds[i]);
-      const updated = await updateAlbum(id, buildPayload({ includeTrackIds: trackIdsChanged })).catch((err) => { toast.error(err.message || 'Failed to save album'); return null; });
+      const updated = await updateAlbum(id, buildPayload({ includeTrackIds: trackIdsChanged }), { silent: true }).catch((err) => { toast.error(err.message || 'Failed to save album'); return null; });
       setSaving(false);
       if (!updated) return;
       setAlbums((prev) => prev.map((a) => (a.id === updated.id ? updated : a)).sort((a, b) => (a.title || '').localeCompare(b.title || '')));
@@ -248,7 +248,7 @@ export default function AlbumsManager() {
     setAlbums((prev) => prev.filter((a) => a.id !== selected.id));
     setConfirmDelete(false);
     navigate('/music/albums');
-    await deleteAlbum(selected.id).catch((err) => { toast.error(err.message || 'Delete failed'); setAlbums(prior); });
+    await deleteAlbum(selected.id, { silent: true }).catch((err) => { toast.error(err.message || 'Delete failed'); setAlbums(prior); });
   };
 
   const availableTracks = allTracks.filter((t) => !form.trackIds.includes(t.id));

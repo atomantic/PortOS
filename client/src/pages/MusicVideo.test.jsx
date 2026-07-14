@@ -244,7 +244,7 @@ describe('MusicVideo autonomous shot planner (#1855)', () => {
     expect(planBtn).toHaveProperty('disabled', false);
 
     fireEvent.click(planBtn);
-    await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalledWith('mv-3', { seedPrompts: true }));
+    await waitFor(() => expect(planMusicVideoProject).toHaveBeenCalledWith('mv-3', { seedPrompts: true }, { silent: true }));
   });
 });
 

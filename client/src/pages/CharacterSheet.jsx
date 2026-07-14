@@ -10,9 +10,13 @@ import api, { generateAvatar } from '../services/api';
 import socket from '../services/socket';
 import { clickableProps } from '../lib/a11yKeyboard.js';
 
-const charGet = () => api.get('/character');
-const charPost = (path, body) => api.post(`/character${path}`, body);
-const charPut = (body) => api.put('/character', body);
+// Silent by default — every caller owns its own error UI (a catch-block toast,
+// or the loadError banner in load()), so the request() helper must not also
+// toast or the user sees a double error (issue #2520). Callers can still opt
+// back into the helper toast by passing { silent: false }.
+const charGet = (options = {}) => api.get('/character', { silent: true, ...options });
+const charPost = (path, body, options = {}) => api.post(`/character${path}`, body, { silent: true, ...options });
+const charPut = (body, options = {}) => api.put('/character', body, { silent: true, ...options });
 
 // D&D 5e XP thresholds (must match server)
 const XP_THRESHOLDS = [

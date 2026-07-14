@@ -77,7 +77,7 @@ describe('CharacterSheet name editing accessibility', () => {
 
     fireEvent.keyDown(input, { key: 'Enter' });
 
-    await waitFor(() => expect(put).toHaveBeenCalledWith('/character', { name: 'Strider' }));
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/character', { name: 'Strider' }, { silent: true }));
     // Back to the button view with the new name.
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /edit character name/i }))
