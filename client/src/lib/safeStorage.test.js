@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { safeReadStorage, safeWriteStorage, safeRemoveStorage } from './safeStorage.js';
+import { safeReadStorage, safeReadJsonStorage, safeWriteStorage, safeRemoveStorage } from './safeStorage.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -21,17 +21,26 @@ describe('safeStorage', () => {
   });
 
   it('returns null instead of throwing when getItem throws', () => {
-    vi.spyOn(window.localStorage.__proto__, 'getItem').mockImplementation(() => {
+    vi.spyOn(window.localStorage, 'getItem').mockImplementation(() => {
       throw new DOMException('The operation is insecure.', 'SecurityError');
     });
     expect(safeReadStorage('k')).toBeNull();
   });
 
+  it('reads JSON and returns the supplied fallback for missing or corrupt values', () => {
+    window.localStorage.setItem('valid', JSON.stringify(['/brain/inbox']));
+    window.localStorage.setItem('corrupt', '{not-json');
+
+    expect(safeReadJsonStorage('valid', [])).toEqual(['/brain/inbox']);
+    expect(safeReadJsonStorage('missing', [])).toEqual([]);
+    expect(safeReadJsonStorage('corrupt', [])).toEqual([]);
+  });
+
   it('swallows setItem / removeItem throws', () => {
-    vi.spyOn(window.localStorage.__proto__, 'setItem').mockImplementation(() => {
+    vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => {
       throw new DOMException('QuotaExceededError', 'QuotaExceededError');
     });
-    vi.spyOn(window.localStorage.__proto__, 'removeItem').mockImplementation(() => {
+    vi.spyOn(window.localStorage, 'removeItem').mockImplementation(() => {
       throw new DOMException('QuotaExceededError', 'QuotaExceededError');
     });
     expect(() => safeWriteStorage('k', 'v')).not.toThrow();

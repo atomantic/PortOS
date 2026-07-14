@@ -11,7 +11,7 @@ afterEach(() => {
 
 describe('useCitySettings localStorage resilience', () => {
   it('initializes to defaults when reads throw (blocked storage)', () => {
-    vi.spyOn(window.localStorage.__proto__, 'getItem').mockImplementation(() => {
+    vi.spyOn(window.localStorage, 'getItem').mockImplementation(() => {
       throw new DOMException('The operation is insecure.', 'SecurityError');
     });
 
@@ -33,7 +33,7 @@ describe('useCitySettings localStorage resilience', () => {
   });
 
   it('keeps in-memory setting updates working when writes throw', () => {
-    vi.spyOn(window.localStorage.__proto__, 'setItem').mockImplementation(() => {
+    vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => {
       throw new DOMException('QuotaExceededError', 'QuotaExceededError');
     });
 
@@ -54,7 +54,7 @@ describe('useCitySettings localStorage resilience', () => {
     // This is the listener fired by useTheme.setTheme; with storage blocked its
     // write must not surface an unhandled error on the theme-switch path.
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ timeOfDay: 'night' }));
-    vi.spyOn(window.localStorage.__proto__, 'setItem').mockImplementation(() => {
+    vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => {
       throw new DOMException('QuotaExceededError', 'QuotaExceededError');
     });
 

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { Brain, Cpu, Package, History, HeartPulse, Search, Loader2, Navigation, Play, LayoutGrid, BookMarked } from 'lucide-react';
 import { useCmdKSearch } from '../hooks/useCmdKSearch';
 import { useScrollLock } from '../hooks/useScrollLock';
@@ -9,6 +9,8 @@ import toast from './ui/Toast';
 import { modKey } from '../utils/platform';
 import { DASHBOARD_LAYOUT_CHANGED } from '../constants/events.js';
 import { recordManualLayoutPick } from '../utils/timeWindow.js';
+import { RECENT_KEY, RECENT_CAP, resolveRecentNavEntries } from '../utils/navWorkingSet.js';
+import { safeReadJsonStorage } from '../lib/safeStorage.js';
 
 const ICON_MAP = { Brain, Cpu, Package, History, HeartPulse };
 
@@ -62,6 +64,7 @@ const DEFAULT_ACTION_IDS = new Set(['brain_capture', 'time_now', 'goal_list', 'm
 export default function CmdKSearch() {
   const { open, setOpen } = useCmdKSearch();
   const navigate = useNavigate();
+  const location = useLocation();
   const inputRef = useRef(null);
 
   const [query, setQuery] = useState('');
@@ -71,6 +74,7 @@ export default function CmdKSearch() {
   const [loading, setLoading] = useState(false);
   const [focusedIndex, setFocusedIndex] = useState(0);
   const [expandedSources, setExpandedSources] = useState(new Set());
+  const [recentPaths, setRecentPaths] = useState([]);
   const resultRefs = useRef([]);
 
   useEffect(() => {
@@ -78,6 +82,13 @@ export default function CmdKSearch() {
   }, [open]);
 
   useScrollLock(open);
+
+  // Layout records every route visit in the shared sidebar working set. Refresh
+  // from storage on each open so the palette reflects navigation that happened
+  // since its previous use without owning a second history store.
+  useEffect(() => {
+    if (open) setRecentPaths(safeReadJsonStorage(RECENT_KEY, []));
+  }, [open]);
 
   useEffect(() => {
     if (!open) {
@@ -186,12 +197,21 @@ export default function CmdKSearch() {
   }, [searchResults, catalogResults, query]);
 
   const combined = useMemo(() => {
-    if (!manifest) return { nav: [], actions: [], layouts: [], commandCount: 0 };
+    if (!manifest) return { recentNav: [], nav: [], actions: [], layouts: [], commandCount: 0 };
     const q = query.trim().toLowerCase();
     if (!q) {
-      const nav = manifest.nav.filter((c) => DEFAULT_NAV_IDS.has(c.id)).map((c) => ({ ...c, kind: 'nav' }));
+      const recentNav = resolveRecentNavEntries(recentPaths, manifest.nav, {
+        currentPath: location.pathname,
+        limit: RECENT_CAP,
+      }).map((c) => ({ ...c, kind: 'nav' }));
+      const recentIds = new Set(recentNav.map((c) => c.id));
+      const fallbackLimit = Math.max(0, RECENT_CAP - recentNav.length);
+      const nav = manifest.nav
+        .filter((c) => DEFAULT_NAV_IDS.has(c.id) && !recentIds.has(c.id) && c.path !== location.pathname)
+        .slice(0, fallbackLimit)
+        .map((c) => ({ ...c, kind: 'nav' }));
       const actions = manifest.actions.filter((a) => DEFAULT_ACTION_IDS.has(a.id)).map((a) => ({ ...a, kind: 'action' }));
-      return { nav, actions, layouts: [], commandCount: nav.length + actions.length };
+      return { recentNav, nav, actions, layouts: [], commandCount: recentNav.length + nav.length + actions.length };
     }
     const rank = (items, max) => items
       .map((c) => ({ cmd: c, score: scoreCommand(c, q) }))
@@ -202,8 +222,8 @@ export default function CmdKSearch() {
     const nav = rank(manifest.nav, 8).map((c) => ({ ...c, kind: 'nav' }));
     const actions = rank(manifest.actions, 5).map((a) => ({ ...a, kind: 'action' }));
     const layouts = rank(manifest.layouts || [], 5).map((l) => ({ ...l, kind: 'layout' }));
-    return { nav, actions, layouts, commandCount: nav.length + actions.length + layouts.length };
-  }, [manifest, query]);
+    return { recentNav: [], nav, actions, layouts, commandCount: nav.length + actions.length + layouts.length };
+  }, [manifest, query, recentPaths, location.pathname]);
 
   const flatSearchResults = useMemo(
     () => searchResults.flatMap((source) => {
@@ -225,7 +245,7 @@ export default function CmdKSearch() {
   );
 
   const focusable = useMemo(
-    () => [...combined.nav, ...combined.actions, ...combined.layouts, ...catalogHits, ...flatSearchResults],
+    () => [...combined.recentNav, ...combined.nav, ...combined.actions, ...combined.layouts, ...catalogHits, ...flatSearchResults],
     [combined, catalogHits, flatSearchResults]
   );
 
@@ -296,7 +316,7 @@ export default function CmdKSearch() {
     const isFocused = focusedIndex === currentIdx;
     return (
       <div
-        key={`${item.kind}:${item.id ?? item.sourceId + ':' + title}`}
+        key={`${item.kind}:${item.path ?? item.id ?? item.sourceId + ':' + title}`}
         ref={(el) => { resultRefs.current[currentIdx] = el; }}
         onClick={() => dispatchCommand(item)}
         className={`flex items-start gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors ${
@@ -360,6 +380,14 @@ export default function CmdKSearch() {
         </div>
 
         <div className="max-h-96 overflow-y-auto p-2">
+          {renderGroup(
+            <History size={14} />,
+            'Recent destinations',
+            combined.recentNav.map((c) =>
+              renderRow(c, { icon: History, title: c.label, subtitle: `${c.section} · ${c.path}`, badge: 'RECENT' })
+            )
+          )}
+
           {renderGroup(
             <Navigation size={14} />,
             'Go to',

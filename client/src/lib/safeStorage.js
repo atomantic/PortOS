@@ -15,6 +15,19 @@ export const safeReadStorage = (key) => {
   }
 };
 
+// Parse a JSON value from storage, returning the caller's fallback for a missing,
+// inaccessible, or corrupt entry. Keeps JSON.parse's exception boundary beside
+// the storage boundary so feature code never needs its own try/catch.
+export const safeReadJsonStorage = (key, fallback = null) => {
+  const raw = safeReadStorage(key);
+  if (raw === null) return fallback;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return fallback;
+  }
+};
+
 // Best-effort write; silently no-ops when storage is unavailable.
 export const safeWriteStorage = (key, value) => {
   try {
