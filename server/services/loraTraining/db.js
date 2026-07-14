@@ -17,21 +17,14 @@
 
 import { query } from '../../lib/db.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 
 const rowToRun = (row) => row?.data ?? null;
 
-// id → tail Promise. Serializes read-modify-write cycles for one run.
-const writeTails = new Map();
-function queueRunWrite(id, fn) {
-  const prev = writeTails.get(id) || Promise.resolve();
-  const next = prev.then(fn, fn);
-  const silenced = next.catch(() => {});
-  writeTails.set(id, silenced);
-  silenced.finally(() => {
-    if (writeTails.get(id) === silenced) writeTails.delete(id);
-  });
-  return next;
-}
+// id → tail Promise. Serializes read-modify-write cycles for one run; writes to
+// different runs stay parallel. Same silence/prune discipline as the store
+// facades — routed through the shared `createKeyCachedQueue` helper.
+const queueRunWrite = createKeyCachedQueue();
 
 async function persist(run) {
   await query(

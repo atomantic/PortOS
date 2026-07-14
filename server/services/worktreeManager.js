@@ -14,6 +14,7 @@ import { readdir, rm, stat } from 'fs/promises';
 import { join } from 'path';
 import { ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
+import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { ensureInstanceId } from './instances.js';
 
 const WORKTREES_DIR = PATHS.worktrees;
@@ -80,19 +81,12 @@ export function addWorktreeWithRetry(args, repo, attempt = 1, firstError = null)
 // settle before touching the shared `.git/worktrees` state. Keyed by
 // realpath-resolved repo path so /var vs /private/var (macOS) don't split the
 // tail into two lanes that can still collide.
-const worktreeCreateTails = new Map();
+const queueWorktreeCreateForKey = createKeyCachedQueue();
 function queueWorktreeCreate(repo, fn) {
   let key = repo;
   try { key = realpathSync(repo); } catch { /* repo may not resolve — fall back to the raw path */ }
   if (!key) key = '__unknown__';
-  const prev = worktreeCreateTails.get(key) || Promise.resolve();
-  const next = prev.then(fn, fn);
-  const silenced = next.catch(() => {});
-  worktreeCreateTails.set(key, silenced);
-  silenced.finally(() => {
-    if (worktreeCreateTails.get(key) === silenced) worktreeCreateTails.delete(key);
-  });
-  return next;
+  return queueWorktreeCreateForKey(key, fn);
 }
 
 /**
