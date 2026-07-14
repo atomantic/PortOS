@@ -162,7 +162,7 @@ export default function ArtistsManager() {
   };
 
   useEffect(() => {
-    listArtists()
+    listArtists({ silent: true })
       .then((list) => setArtists(Array.isArray(list) ? list : []))
       .catch((err) => toast.error(err.message || 'Failed to load artists'))
       .finally(() => setLoading(false));
@@ -201,7 +201,7 @@ export default function ArtistsManager() {
     setSaving(true);
     const payload = { ...form, name };
     if (isCreate) {
-      const created = await createArtist(payload).catch((err) => {
+      const created = await createArtist(payload, { silent: true }).catch((err) => {
         toast.error(err.message || 'Failed to create artist');
         return null;
       });
@@ -211,7 +211,7 @@ export default function ArtistsManager() {
       navigate(`/music/artists/${encodeURIComponent(created.id)}`);
       toast.success(`Created "${created.name}"`);
     } else {
-      const updated = await updateArtist(id, payload).catch((err) => {
+      const updated = await updateArtist(id, payload, { silent: true }).catch((err) => {
         toast.error(err.message || 'Failed to save artist');
         return null;
       });
@@ -230,7 +230,7 @@ export default function ArtistsManager() {
     setArtists((prev) => prev.filter((a) => a.id !== selected.id));
     setConfirmDelete(false);
     navigate('/music/artists');
-    await deleteArtist(selected.id).catch((err) => {
+    await deleteArtist(selected.id, { silent: true }).catch((err) => {
       toast.error(err.message || 'Delete failed');
       setArtists(prior);
     });

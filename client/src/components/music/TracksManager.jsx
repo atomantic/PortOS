@@ -90,7 +90,7 @@ export default function TracksManager() {
 
   useEffect(() => {
     Promise.all([
-      listTracks().catch((err) => { toast.error(err.message || 'Failed to load tracks'); return []; }),
+      listTracks({ silent: true }).catch((err) => { toast.error(err.message || 'Failed to load tracks'); return []; }),
       listAlbums({ silent: true }).catch(() => []),
       listMusicVideoProjects({ silent: true }).catch(() => []),
     ])
@@ -156,7 +156,7 @@ export default function TracksManager() {
     if (!title) { toast.error('Track title is required'); return; }
     setSaving(true);
     if (isCreate) {
-      const created = await createTrack({ ...form, title }).catch((err) => { toast.error(err.message || 'Failed to create track'); return null; });
+      const created = await createTrack({ ...form, title }, { silent: true }).catch((err) => { toast.error(err.message || 'Failed to create track'); return null; });
       setSaving(false);
       if (!created) return;
       upsertLocal(created);
@@ -173,7 +173,7 @@ export default function TracksManager() {
       // remains the primary place to (re)order an album's tracks.
       const payload = { ...form, title };
       if ((selected?.albumId || '') === form.albumId) delete payload.albumId;
-      const updated = await updateTrack(id, payload).catch((err) => { toast.error(err.message || 'Failed to save track'); return null; });
+      const updated = await updateTrack(id, payload, { silent: true }).catch((err) => { toast.error(err.message || 'Failed to save track'); return null; });
       setSaving(false);
       if (!updated) return;
       upsertLocal(updated);
@@ -187,7 +187,7 @@ export default function TracksManager() {
     setTracks((prev) => prev.filter((t) => t.id !== selected.id));
     resetTrackViewState();
     navigate('/music/tracks');
-    await deleteTrack(selected.id).catch((err) => { toast.error(err.message || 'Delete failed'); setTracks(prior); });
+    await deleteTrack(selected.id, { silent: true }).catch((err) => { toast.error(err.message || 'Delete failed'); setTracks(prior); });
   };
 
   // Audio actions operate on the SAVED track (the server attaches the filename
