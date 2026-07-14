@@ -135,6 +135,24 @@ describe('Voice Routes', () => {
       expect(health.invalidateHealthCache).toHaveBeenCalled();
     });
 
+    it('accepts a valid llm.fastPath patch (fast-resolution cascade)', async () => {
+      config.updateVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG });
+      bootstrap.reconcile.mockResolvedValue({ skipped: true });
+      const patch = { llm: { fastPath: { enabled: true, triggers: true, browserLlm: true, browser: { temperature: 0.5, topK: 4 } } } };
+      const res = await request(buildApp()).put('/api/voice/config').send(patch);
+      expect(res.status).toBe(200);
+      expect(config.updateVoiceConfig).toHaveBeenCalledWith(patch);
+    });
+
+    it('rejects out-of-range fastPath.browser params', async () => {
+      const res = await request(buildApp())
+        .put('/api/voice/config')
+        .send({ llm: { fastPath: { browser: { temperature: 9 } } } });
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('VALIDATION_ERROR');
+      expect(config.updateVoiceConfig).not.toHaveBeenCalled();
+    });
+
     it('reports reconcile failures without 500-ing the route', async () => {
       config.updateVoiceConfig.mockResolvedValue({ ...DEFAULT_CFG, enabled: true });
       bootstrap.reconcile.mockRejectedValue(new Error('whisper-server not on PATH'));

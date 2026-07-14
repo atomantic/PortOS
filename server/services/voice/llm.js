@@ -69,6 +69,16 @@ export const TOOL_CAPABLE_PATTERNS = [
   /qwen3(\.\d+)?-?\d+b-2507/,    // Qwen3 / 3.5 / 3.6 non-thinking dated variants
   /qwen3\.5/,                     // Qwen3.5 family (e.g., qwen3.5-9b)
   /qwen3\.6/,                     // Qwen3.6 family
+  // Bare Ollama registry tags carry no "instruct" token (`qwen2.5:latest`,
+  // `qwen3:30b`, `llama3.1|3.2|3.3:<tag>`) so the *-instruct patterns above miss
+  // them — but Ollama's default builds for these tool-capable families ARE
+  // instruct-tuned. Match them as whole tokens (anchored on start / `/` / `:`)
+  // so vision & base variants (`qwen2.5vl`, `llama3.2-vision`) don't
+  // false-positive. The `-` branch also re-covers the LM Studio ids already
+  // matched above (harmless overlap).
+  /(?:^|[\/:])qwen2\.5(?:[:-]|$)/,
+  /(?:^|[\/:])qwen3(?:[:-]|$)/,
+  /(?:^|[\/:])llama3\.[1-9](?::|$)/,
   /hermes-?3/,
   /mistral-small/,
   /mistral.*instruct-v0\.[3-9]/,

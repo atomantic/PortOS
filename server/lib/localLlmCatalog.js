@@ -82,6 +82,33 @@ export const LOCAL_LLM_CATALOG = [
     lmstudio: 'lmstudio-community/Qwen2.5-7B-Instruct-GGUF'
   },
   {
+    key: 'qwen2.5-3b',
+    name: 'Qwen2.5 3B',
+    category: 'lightweight',
+    params: '3B',
+    size: '2.0 GB',
+    family: 'qwen',
+    description: 'Compact Qwen2.5 instruct model with solid tool use and no "thinking" delay — a fast, low-memory tool-calling brain for the voice agent.',
+    capabilities: ['chat', 'tools', 'multilingual'],
+    // hf.co/…-Instruct id (like the other 2507/instruct cards) so the model id
+    // reported by the backend carries the "instruct" token the voice
+    // tool-capability detector keys on — a bare `qwen2.5:3b` tag would not.
+    ollama: 'hf.co/lmstudio-community/Qwen2.5-3B-Instruct-GGUF:Q4_K_M',
+    lmstudio: 'lmstudio-community/Qwen2.5-3B-Instruct-GGUF'
+  },
+  {
+    key: 'hermes-3-llama-3.1-8b',
+    name: 'Hermes 3 8B',
+    category: 'chat',
+    params: '8B',
+    size: '4.9 GB',
+    family: 'hermes',
+    description: 'NousResearch Hermes 3 (Llama 3.1 8B) — tuned for reliable function-calling and structured tool use, with no "thinking" delay. A robust pick for the voice agent\'s tool turns.',
+    capabilities: ['chat', 'tools'],
+    ollama: 'hermes3',
+    lmstudio: 'NousResearch/Hermes-3-Llama-3.1-8B-GGUF'
+  },
+  {
     key: 'qwen3.6-35b-a3b',
     name: 'Qwen3.6 35B-A3B',
     category: 'coding',

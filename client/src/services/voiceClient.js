@@ -564,6 +564,37 @@ export const sendScreenshotResult = (requestId, dataUrl) => {
 
 export const playWav = (arrayBuffer) => enqueuePlay(arrayBuffer);
 
+// Speak arbitrary text through the server's configured TTS WITHOUT running the
+// LLM. Used by the fast-resolution cascade to voice trigger confirmations and
+// on-device Nano replies (see voiceFastPath.js). Reuses the same playback queue
+// + echo memory as server-streamed TTS, so barge-in (stopPlayback) and
+// echo-suppression keep working exactly as they do for normal turns. Resolves
+// once the audio is decoded and queued (not when playback finishes).
+export const speakSynthesized = async (text, { engine, voice, rate, signal } = {}) => {
+  const clean = (text || '').trim();
+  if (!clean) return false;
+  // We're starting a fresh reply — lift any sticky rejection left by a prior
+  // barge-in (normally cleared by voice:transcript, which a client-side turn
+  // never emits), then remember the sentence so the next inbound STT result
+  // that echoes it back through the mic is suppressed.
+  rejectingTts = false;
+  rememberTtsSentence(clean);
+  const body = { text: clean };
+  if (engine) body.engine = engine;
+  if (voice) body.voice = voice;
+  if (typeof rate === 'number') body.rate = rate;
+  const res = await fetch('/api/voice/public/synthesize', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok) throw new Error(`synthesize failed: ${res.status}`);
+  const wav = await res.arrayBuffer();
+  await enqueuePlay(wav);
+  return true;
+};
+
 // Resolves once every currently-queued TTS chunk has finished playing locally.
 // Used by continuous mode to know when to return from 'speaking' → listening.
 export const whenPlaybackDrained = () => playQueue.then(() => !isTtsActive());
@@ -956,9 +987,13 @@ export const startWebSpeechCapture = ({ language, ...callbacks } = {}) => {
         return;
       }
       callbacks.onFinal?.(final);
+      // Fast-resolution cascade: when the caller supplies routeFinal it OWNS
+      // this turn (triage through trigger/Nano/server itself). Otherwise fall
+      // back to the default — send straight to the server pipeline.
       // source='voice' so the server still treats this as a spoken utterance
       // for dictation-mode routing — the text path otherwise bypasses it.
-      sendText(final, 'voice');
+      if (typeof callbacks.routeFinal === 'function') callbacks.routeFinal(final);
+      else sendText(final, 'voice');
     }
   };
 

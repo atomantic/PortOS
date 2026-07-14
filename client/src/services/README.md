@@ -126,6 +126,8 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | File | Purpose |
 |---|---|
 | `voiceClient.js` | Browser-side voice capture + playback (two modes). |
+| `browserLlm.js` | Client for Chrome's on-device "Gemini Nano" (Prompt API): dual-shape detection, availability enum, cached `promptNano()` with timeout. Tier 2 of the voice fast-resolution cascade. |
+| `voiceFastPath.js` | Voice fast-resolution cascade: trigger nav → on-device Nano → server LLM. Decides how each spoken/typed turn is resolved. |
 | `voiceVisibility.js` | Voice UI state manager. |
 | `uiInteract.js` | Execute voice `ui_click` / `ui_fill` / `ui_select` against live DOM. |
 | `domIndex.js` | DOM indexer for voice accessibility mode. |

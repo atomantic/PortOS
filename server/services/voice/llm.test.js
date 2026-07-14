@@ -111,6 +111,15 @@ describe('isToolCapable', () => {
       'qwen/qwen3.5-9b',
       'qwen/qwen3.6-35b-a3b',
       'NousResearch/Hermes-3-Llama-3.1-8B',
+      'hermes3', // bare Ollama registry tag for the Hermes 3 catalog card
+      'lmstudio-community/Qwen2.5-3B-Instruct-GGUF', // Qwen2.5 3B catalog card
+      // Bare Ollama registry tags (no "instruct" token) for tool-capable families.
+      'qwen2.5:latest',
+      'qwen2.5',
+      'qwen3:30b',
+      'llama3.1:8b',
+      'llama3.2:latest',
+      'llama3.3:70b',
       'mistralai/Mistral-Small-24B-Instruct',
       'mistralai/devstral-small-2-2512',
       'mistralai/ministral-3-14b-reasoning',
@@ -127,6 +136,10 @@ describe('isToolCapable', () => {
       'gemma-3-270m-it',
       'l3.3-70b-euryale-v2.3-i1',
       'text-embedding-nomic-embed-text-v1.5',
+      // Vision variants of the bare-tag families must NOT match the broadened
+      // Ollama patterns (their catalog entries carry no `tools` capability).
+      'qwen2.5vl:32b',
+      'llama3.2-vision',
     ]) {
       expect(isToolCapable(id), id).toBe(false);
     }
