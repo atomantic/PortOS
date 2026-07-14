@@ -69,6 +69,19 @@ export const TOOL_CAPABLE_PATTERNS = [
   /qwen3(\.\d+)?-?\d+b-2507/,    // Qwen3 / 3.5 / 3.6 non-thinking dated variants
   /qwen3\.5/,                     // Qwen3.5 family (e.g., qwen3.5-9b)
   /qwen3\.6/,                     // Qwen3.6 family
+  // Bare Ollama registry tags carry no "instruct" token (`qwen2.5:latest`,
+  // `qwen3:30b`, `llama3.1|3.2|3.3:<tag>`) so the *-instruct patterns above miss
+  // them — but Ollama's default builds for these tool-capable families ARE
+  // instruct-tuned. Match the family only as a WHOLE tag token — anchored on
+  // start / `/` / `:`, and terminated only by `:` (a tag) or end-of-string.
+  // Deliberately NOT by `-`: a trailing `-` is what turns these families into
+  // NON-chat variants (`qwen3-embedding`, `qwen3-reranker`, `qwen3-vl`,
+  // `qwen2.5-omni`, `llama3.2-vision`) that can't do tool-calling. The
+  // legitimate hyphenated instruct builds (`Qwen2.5-7B-Instruct-GGUF`) are
+  // already covered by the `*instruct` patterns above.
+  /(?:^|[\/:])qwen2\.5(?::|$)/,
+  /(?:^|[\/:])qwen3(?::|$)/,
+  /(?:^|[\/:])llama3\.[1-9](?::|$)/,
   /hermes-?3/,
   /mistral-small/,
   /mistral.*instruct-v0\.[3-9]/,
@@ -111,8 +124,11 @@ export const isReasoningModel = (id) => {
 
 export const isToolCapable = (id) => {
   const n = String(id).toLowerCase();
-  if (TOOL_CAPABLE_PATTERNS.some((re) => re.test(n))) return true;
-  return false;
+  // Utility models (embeddings / rerankers) can't chat or call tools — never let
+  // a broadened family pattern (e.g. bare `qwen3…`) select one as the voice
+  // brain, which would hard-fail every tool turn. Mirrors sizeRank's guard.
+  if (/embed|rerank/.test(n)) return false;
+  return TOOL_CAPABLE_PATTERNS.some((re) => re.test(n));
 };
 
 const isToolIncompatible = (id) => {

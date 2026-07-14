@@ -97,6 +97,18 @@ const voiceConfigPatchSchema = z.object({
         end: z.string().regex(HHMM_RE).optional(),
       }).partial().optional(),
     }).partial().optional(),
+    // Fast-resolution cascade (client-side tiers before the server LLM). The
+    // browser tier's temperature/topK are bounded to the Prompt API's accepted
+    // ranges (topK is a small integer; temperature 0–2).
+    fastPath: z.object({
+      enabled: z.boolean().optional(),
+      triggers: z.boolean().optional(),
+      browserLlm: z.boolean().optional(),
+      browser: z.object({
+        temperature: z.number().min(0).max(2).optional(),
+        topK: z.number().int().min(1).max(128).optional(),
+      }).partial().optional(),
+    }).partial().optional(),
   }).partial().optional(),
   vad: z.object({
     endOfSpeechMs: z.number().int().min(100).max(5000).optional(),
@@ -128,7 +140,12 @@ router.put('/config', asyncHandler(async (req, res) => {
     sttEngine: next.stt?.engine,
     sttLanguage: next.stt?.language,
     ttsEngine: next.tts?.engine,
+    ttsVoice: next.tts?.[next.tts?.engine]?.voice,
+    ttsRate: next.tts?.rate,
     hotkey: next.hotkey,
+    // Fast-resolution cascade — the widget routes turns through client-side
+    // tiers when enabled, so it needs the fresh flags without a page reload.
+    fastPath: next.llm?.fastPath || null,
   });
   res.json({ config: next, reconciliation });
 }));

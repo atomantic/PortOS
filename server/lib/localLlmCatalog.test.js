@@ -49,6 +49,26 @@ describe('localLlmCatalog', () => {
       expect(getCatalog('nope')).toEqual([]);
     });
 
+    it('ships the small tool-calling models recommended for the voice fast-path tier-3', () => {
+      const ollama = getCatalog('ollama');
+      const lms = getCatalog('lmstudio');
+      const hermesO = ollama.find((m) => m.key === 'hermes-3-llama-3.1-8b');
+      const qwen3bO = ollama.find((m) => m.key === 'qwen2.5-3b');
+      // Present on both backends…
+      expect(hermesO?.id).toBe('hermes3');
+      expect(lms.find((m) => m.key === 'hermes-3-llama-3.1-8b')?.id).toBe('NousResearch/Hermes-3-Llama-3.1-8B-GGUF');
+      expect(qwen3bO?.id).toBe('hf.co/lmstudio-community/Qwen2.5-3B-Instruct-GGUF:Q4_K_M');
+      expect(lms.find((m) => m.key === 'qwen2.5-3b')?.id).toBe('lmstudio-community/Qwen2.5-3B-Instruct-GGUF');
+      // …and both advertise tool use (the reason they're recommended here).
+      expect(hermesO.capabilities).toContain('tools');
+      expect(qwen3bO.capabilities).toContain('tools');
+    });
+
+    it('keeps catalog keys unique', () => {
+      const keys = LOCAL_LLM_CATALOG.map((e) => e.key);
+      expect(new Set(keys).size).toBe(keys.length);
+    });
+
     it('surfaces a documented context window as contextLength, null otherwise', () => {
       const ollama = getCatalog('ollama');
       // mistral-large's description documents a 128K window.

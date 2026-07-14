@@ -7,7 +7,11 @@ import {
   webSpeechSupported, startWebSpeechCapture, stopWebSpeechCapture, isWebSpeechCapturing,
   onProactiveSpeech, captureScreenForVision, sendScreenshotResult,
   enableVisionCapture, disableVisionCapture, isVisionCaptureEnabled, onVisionCaptureEnded,
+  speakSynthesized,
 } from '../../services/voiceClient';
+import { resolveTurn, buildRouterSystemPrompt, TIER } from '../../services/voiceFastPath';
+import { warmNano } from '../../services/browserLlm';
+import { getPaletteManifest } from '../../services/apiPalette';
 import { getVoiceConfig } from '../../services/apiVoice';
 import toast from '../ui/Toast';
 import { useVoiceUiSync, pushUiIndexAfterAction } from '../../hooks/useVoiceUiSync';
@@ -93,6 +97,18 @@ export default function VoiceWidget() {
   const scrollRef = useRef(null);
   const useWebSpeech = sttEngine === 'web-speech' && webSpeechSupported;
 
+  // Fast-resolution cascade config (trigger → on-device Nano → server). Kept in
+  // refs alongside state so the routeFinal closure handed to
+  // startWebSpeechCapture always reads the latest values without re-binding the
+  // recognizer on every config change.
+  const [fastPath, setFastPath] = useState(null);
+  const fastPathRef = useRef(null);
+  const personalityRef = useRef(null);
+  const ttsRef = useRef({});
+  const navEntriesRef = useRef([]);
+  const dictationActiveRef = useRef(false);
+  const lastAssistantReplyRef = useRef('');
+
   // Keep the server's UI index fresh so the LLM knows what's on the page
   // and can drive it with ui_click / ui_fill / ui_select / ui_check.
   useVoiceUiSync(enabled);
@@ -117,19 +133,66 @@ export default function VoiceWidget() {
         setHotkey(cfg?.hotkey || 'Space');
         if (cfg?.stt?.engine) setSttEngine(cfg.stt.engine);
         if (cfg?.stt?.language) setSttLanguage(cfg.stt.language);
+        setFastPath(cfg?.llm?.fastPath || null);
+        personalityRef.current = cfg?.llm?.personality || null;
+        const engine = cfg?.tts?.engine;
+        ttsRef.current = { engine, voice: engine ? cfg?.tts?.[engine]?.voice : undefined, rate: cfg?.tts?.rate };
       })
       .catch(() => {});
     // Settings → Voice writes via PUT /api/voice/config and the route broadcasts
-    // voice:config:changed — keep the widget's enabled/engine/hotkey in sync so
-    // toggling voice mode mid-session takes effect without a reload.
+    // voice:config:changed — keep the widget's enabled/engine/hotkey/fastPath in
+    // sync so toggling voice mode mid-session takes effect without a reload.
     const off = onVoiceEvent('voice:config:changed', (cfg) => {
       if (typeof cfg?.enabled === 'boolean') setEnabled(cfg.enabled);
       if (cfg?.hotkey) setHotkey(cfg.hotkey);
       if (cfg?.sttEngine) setSttEngine(cfg.sttEngine);
       if (cfg?.sttLanguage) setSttLanguage(cfg.sttLanguage);
+      if ('fastPath' in (cfg || {})) setFastPath(cfg.fastPath || null);
+      if (cfg?.ttsEngine) ttsRef.current = { engine: cfg.ttsEngine, voice: cfg.ttsVoice, rate: cfg.ttsRate };
     });
     return off;
   }, []);
+
+  // Keep the cascade refs pointed at the latest config so the routeFinal closure
+  // (bound once at capture start) always triages against current settings.
+  useLayoutEffect(() => { fastPathRef.current = fastPath; }, [fastPath]);
+  useLayoutEffect(() => { dictationActiveRef.current = dictationActive; }, [dictationActive]);
+
+  // Load the palette nav manifest so tier-1 trigger navigation ("go to tasks")
+  // can resolve against the same routes ⌘K uses. Memoized + self-healing: a
+  // failed fetch clears the in-flight promise so the next turn retries, instead
+  // of permanently disabling tier-1 nav for the session.
+  const navFetchRef = useRef(null);
+  const ensureNavEntries = useCallback(async () => {
+    if (navEntriesRef.current.length) return;
+    if (!navFetchRef.current) {
+      navFetchRef.current = getPaletteManifest({ silent: true })
+        .then((data) => { navEntriesRef.current = Array.isArray(data?.nav) ? data.nav : []; })
+        .catch(() => { navFetchRef.current = null; }); // allow retry on the next turn
+    }
+    await navFetchRef.current;
+  }, []);
+
+  // Prefetch the manifest when the trigger tier is active so the first "go to X"
+  // doesn't pay the fetch (falls back to the lazy retry in runFastPath on failure).
+  useEffect(() => {
+    if (!enabled || !fastPath?.enabled || !fastPath?.triggers) return;
+    ensureNavEntries();
+  }, [enabled, fastPath?.enabled, fastPath?.triggers, ensureNavEntries]);
+
+  // Pre-warm the on-device model when the browser-LLM tier is active so the
+  // first spoken turn doesn't pay session-creation latency. Use the SAME router
+  // system prompt real turns use, so the warmed session isn't torn down and
+  // rebuilt on the first turn (the session cache is keyed by the prompt). No-op
+  // unless Nano is already downloaded (we never kick off a download here).
+  useEffect(() => {
+    if (!enabled || !fastPath?.enabled || !fastPath?.browserLlm) return;
+    warmNano({
+      systemPrompt: buildRouterSystemPrompt(personalityRef.current || {}),
+      temperature: fastPath?.browser?.temperature ?? 0.7,
+      topK: fastPath?.browser?.topK ?? 3,
+    }).catch(() => {});
+  }, [enabled, fastPath?.enabled, fastPath?.browserLlm]);
 
   useEffect(() => {
     if (!enabled) return;
@@ -266,6 +329,64 @@ export default function VoiceWidget() {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
   }, [history]);
 
+  // Track the most recent completed assistant reply so the cascade can detect a
+  // destructive-confirmation follow-up ("yes"/"cancel" after a gate prompt) and
+  // route it to the server instead of the on-device model.
+  useEffect(() => {
+    for (let i = history.length - 1; i >= 0; i--) {
+      if (history[i]?.role === 'assistant') { lastAssistantReplyRef.current = history[i].text || ''; return; }
+    }
+  }, [history]);
+
+  // Fast-resolution cascade executor. Triages one client transcript through
+  // trigger → Nano → server and, when a fast tier owns it, executes locally
+  // (navigate + speak, or speak). Returns true when handled; false means "send
+  // to the server pipeline as usual". Reads config via refs so it stays stable.
+  const runFastPath = useCallback(async (text) => {
+    const fp = fastPathRef.current;
+    if (!fp?.enabled) return false;
+    // Ensure the nav manifest is loaded (retries if an earlier fetch failed) so
+    // tier-1 trigger nav works even when the prefetch didn't land.
+    if (fp.triggers) await ensureNavEntries();
+    let decision;
+    try {
+      decision = await resolveTurn(text, {
+        fastPath: fp,
+        personality: personalityRef.current || {},
+        navEntries: navEntriesRef.current,
+        dictationActive: dictationActiveRef.current,
+        lastAssistantReply: lastAssistantReplyRef.current,
+      });
+    } catch {
+      return false;
+    }
+    if (decision.tier === TIER.SERVER) return false;
+
+    // A fast tier owns this turn. Stop any lingering playback, speak the reply
+    // through the same queue as server TTS, and settle the stage on drain.
+    const speak = (line) => {
+      interrupt();
+      setHistory((h) => [...h, { role: 'assistant', text: line }].slice(-MAX_HISTORY));
+      setStage('speaking');
+      speakSynthesized(line, ttsRef.current)
+        .catch(() => {})
+        .finally(() => whenPlaybackDrained().then(() => setStage((c) => (
+          ACTIVE_STAGES.has(c) ? c : (isWebSpeechCapturing() ? 'listening' : 'idle')
+        ))));
+    };
+
+    if (decision.tier === TIER.TRIGGER && decision.kind === 'navigate') {
+      navigate(decision.path);
+      speak(`Opening ${decision.label}.`);
+      return true;
+    }
+    if (decision.tier === TIER.NANO) {
+      speak(decision.reply);
+      return true;
+    }
+    return false;
+  }, [navigate, ensureNavEntries]);
+
   // Proactive CoS speech — the server pushes a `voice:speak` event when the
   // assistant initiates a line (alerts, reminders, briefings). Audio plays
   // automatically via voiceClient; surface a transient toast so the user has
@@ -295,6 +416,14 @@ export default function VoiceWidget() {
           setInterimTranscript('');
           setHistory((h) => [...h, { role: 'user', text }].slice(-MAX_HISTORY));
           setStage('thinking');
+        },
+        // routeFinal owns the turn: try the fast-resolution cascade first, and
+        // fall through to the server pipeline when no fast tier handles it.
+        // Gated on the live ref so toggling fast resolution in Settings takes
+        // effect on the next utterance without restarting the recognizer.
+        routeFinal: async (text) => {
+          const handled = fastPathRef.current?.enabled ? await runFastPath(text) : false;
+          if (!handled) sendText(text, 'voice');
         },
         onError: (err) => {
           toast.error(`Mic: ${err}`);
@@ -329,7 +458,7 @@ export default function VoiceWidget() {
       toast.error(`Mic: ${err.message}`);
       setStage('idle');
     });
-  }, [enabled, handsFree, useWebSpeech, sttLanguage]);
+  }, [enabled, handsFree, useWebSpeech, sttLanguage, runFastPath]);
 
   const handleStop = useCallback(async () => {
     if (useWebSpeech) {
@@ -391,14 +520,17 @@ export default function VoiceWidget() {
     setHistory([]);
   };
 
-  const handleSend = useCallback(() => {
+  const handleSend = useCallback(async () => {
     const text = draft.trim();
     if (!text) return;
     setHistory((h) => [...h, { role: 'user', text }].slice(-MAX_HISTORY));
-    sendText(text);
     setDraft('');
     setStage('thinking');
-  }, [draft]);
+    // Typed turns run through the same cascade (a typed "go to tasks" navigates
+    // instantly). Falls through to the server pipeline when unhandled.
+    const handled = fastPathRef.current?.enabled ? await runFastPath(text) : false;
+    if (!handled) sendText(text);
+  }, [draft, runFastPath]);
 
   const toggleCapture = useCallback(() => {
     if (isWebSpeechCapturing() || isCapturing() || isContinuous()) handleStop();

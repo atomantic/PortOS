@@ -64,6 +64,11 @@ All options live in `data/settings.json` under `voice` (Settings UI patches this
 | `tts.piper.voicePath` | `~/.portos/voice/voices/<voice>.onnx` | ONNX file location |
 | `llm.model` | `auto` | `auto` picks first loaded LM Studio model |
 | `llm.systemPrompt` | (concise voice prompt) | Edit to change personality |
+| `llm.fastPath.enabled` | `false` | Fast-resolution cascade (see below). Off = every turn runs on the server LLM. |
+| `llm.fastPath.triggers` | `true` | Tier 1: resolve navigation commands ("go to tasks") in the browser, no LLM. |
+| `llm.fastPath.browserLlm` | `true` | Tier 2: answer simple/conversational turns with Chrome's on-device Gemini Nano. |
+| `llm.fastPath.browser.temperature` | `0.7` | Nano sampling temperature (0–2). |
+| `llm.fastPath.browser.topK` | `3` | Nano sampling top-K (1–128). |
 
 ## Using voice mode
 
@@ -75,6 +80,24 @@ Two modes, toggle with the headset icon in the voice widget:
 Either mode: start speaking while the assistant is replying to interrupt it (barge-in). Click the square button to stop current TTS playback without sending a new turn.
 
 With `stt.engine = 'web-speech'` the browser's SpeechRecognition handles STT entirely client-side; PortOS sends the final transcript as `voice:text` instead of shipping audio, which skips whisper.cpp and avoids a 250–800 ms server-side round-trip.
+
+## Fast-resolution cascade (lower latency)
+
+The server LLM is the slowest part of a turn — a local model with tools attached can take several seconds. When `llm.fastPath.enabled` is on, the **client** triages each turn through faster tiers first and only falls through to the server LLM when it has to:
+
+1. **Trigger** (`fastPath.triggers`) — deterministic, offline. A navigation command ("go to tasks", "open the daily log") is matched against the ⌘K palette nav manifest and navigates immediately. No LLM.
+2. **Browser LLM** (`fastPath.browserLlm`) — Chrome's on-device **Gemini Nano** (the Prompt API: `window.LanguageModel` / legacy `self.ai.languageModel`) answers simple/conversational turns entirely in the browser (fast, private, offline). Nano is also asked to reply `ESCALATE` for anything that needs a real action.
+3. **Server** — the configured provider/model (recommend **Ollama** with a small model) via the existing pipeline. Handles every tool/action turn, personal-data retrieval, dictation, confirmations, and anything the fast tiers decline or can't run.
+
+Notes:
+
+- The cascade only applies to **client-produced transcripts** — Web Speech STT or typed input. Whisper / hands-free audio turns have no client transcript to triage, so they stay fully server-driven. Set `stt.engine = 'web-speech'` to get the benefit.
+- Trigger/Nano replies are spoken through the server's configured TTS (`POST /api/voice/public/synthesize`), reusing the normal playback queue and echo-suppression, so barge-in keeps working.
+- Fast-tier turns are handled without a server round-trip, so they are **not** added to the server-side conversation history; a later server turn won't have that chit-chat in its context. Action turns (which always hit the server) are unaffected.
+- Nano availability is surfaced in **Settings → Voice → Fast resolution**. When it isn't downloaded/enabled (`chrome://flags/#prompt-api-for-gemini-nano` + `#optimization-guide-on-device-model`), tier 2 transparently falls through to the server.
+- Nothing here runs a model the user hasn't triggered — Nano only executes on a real spoken/typed turn, consistent with the no-cold-bootstrap AI policy.
+
+Client modules: `client/src/services/browserLlm.js` (Nano client), `client/src/services/voiceFastPath.js` (the routing decision), wired into `VoiceWidget.jsx`.
 
 ## Architecture
 

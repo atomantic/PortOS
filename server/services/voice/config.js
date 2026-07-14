@@ -107,6 +107,29 @@ export const VOICE_DEFAULTS = Object.freeze({
         end: '07:00',
       },
     },
+    // Fast-resolution cascade — front-tier fast paths the CLIENT tries before
+    // the (slow) server LLM above, to cut spoken-turn latency:
+    //   tier 1  triggers   — deterministic client-side nav/command matching
+    //                        (instant, offline; e.g. "go to tasks").
+    //   tier 2  browserLlm — on-device Chrome built-in "Gemini Nano" for
+    //                        simple/conversational turns (fast, private).
+    //   tier 3  server     — the provider/model above (recommend Ollama) via
+    //                        the existing pipeline, used for tool/action turns
+    //                        and whenever the fast tiers decline/are absent.
+    // OFF by default: existing installs keep the all-server behavior until the
+    // user opts in under Settings → Voice. Tiers 1–2 run entirely in the
+    // browser and never touch a provider the user hasn't triggered, so this is
+    // consistent with the no-cold-bootstrap AI policy (Nano only runs on a real
+    // spoken/typed turn). `browser` holds the Nano generation params.
+    fastPath: {
+      enabled: false,
+      triggers: true,
+      browserLlm: true,
+      browser: {
+        temperature: 0.7,
+        topK: 3,
+      },
+    },
   },
 
   vad: { endOfSpeechMs: 700, minUtteranceMs: 250 },
