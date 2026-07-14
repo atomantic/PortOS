@@ -1,5 +1,6 @@
 import { mkdir, readFile, readdir, rm } from 'fs/promises';
 import { atomicWrite } from './internal/atomicWrite.js';
+import { evaluateSecretEndpoint } from './internal/endpointGuard.js';
 import { existsSync } from 'fs';
 import { join, extname, basename, isAbsolute, delimiter } from 'path';
 import { spawn, ChildProcess } from 'child_process';
@@ -542,9 +543,19 @@ export function createRunnerService(config = {}) {
         messageContent = prompt;
       }
 
+      // Never send the API key to an arbitrary/metadata host (SSRF / key
+      // exfiltration). Keyless local-LLM runs are unaffected.
+      const endpointGuard = provider.apiKey
+        ? evaluateSecretEndpoint(provider.endpoint, { allowCustomEndpoint: provider.allowCustomEndpoint === true })
+        : { allowed: true, reason: null };
+
       const ensureProviderReady = hooks.ensureProviderReady || (async () => ({ success: true }));
-      const ready = await ensureProviderReady(provider).catch((err) => ({ success: false, error: err.message }));
-      const response = ready.success
+      const ready = endpointGuard.allowed
+        ? await ensureProviderReady(provider).catch((err) => ({ success: false, error: err.message }))
+        : { success: false, error: `Endpoint blocked: ${endpointGuard.reason}` };
+      const response = !endpointGuard.allowed
+        ? { ok: false, error: `Endpoint blocked: ${endpointGuard.reason}`, status: 0 }
+        : ready.success
         ? await fetch(`${provider.endpoint}/chat/completions`, {
             method: 'POST',
             headers,
