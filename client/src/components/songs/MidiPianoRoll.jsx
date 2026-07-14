@@ -447,6 +447,14 @@ export default function MidiPianoRoll({
 
   useEffect(() => { draw(); }, [draw, zoom]);
 
+  // Drop the hovered note/chord identity when the underlying file swaps
+  // (re-transcription updating `data`, or the Retry path replacing `chords`).
+  // The identity holds objects from the PREVIOUS parse; without this, a
+  // stationary hover over the canvas would keep `paintOverlay` stroking the
+  // stale note/chord at coordinates mapped into the NEW file until the next
+  // pointer move or Escape.
+  useEffect(() => { setHover(null); }, [data, chords]);
+
   // Playback rAF loop: while playing, read the live audio position into the
   // playhead ref, page the view to keep it visible, compute the sounding
   // pitch set for the gutter, and repaint — but only when a frame is visually

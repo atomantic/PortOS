@@ -58,6 +58,34 @@ describe('<MidiPianoRoll>', () => {
     expect(labels).toContain('Cmaj');
   });
 
+  it('clears the stale hover identity when the data prop swaps', () => {
+    const { container, rerender } = render(
+      <MidiPianoRoll data={DATA} chords={[]} showChords={false} zoom={1} onZoomChange={() => {}} height={240} />,
+    );
+    // Hover the C4 note (midi 60, t≈0.15s) — a plain pointer move (no capture)
+    // takes the hit-test branch and sets the hover identity → tooltip appears.
+    fireEvent.pointerMove(container.querySelector('canvas'), { clientX: 100, clientY: 150 });
+    expect(container.textContent).toContain('C4');
+    ctx.stroke.mockClear();
+
+    // Swap in a different parse (no C4). The hover held a note object from the
+    // old `data`; the clear effect must drop it so the overlay stops stroking it.
+    const NEXT = {
+      durationSec: 2,
+      minMidi: 67,
+      maxMidi: 71,
+      notes: [{ id: '1:0', midi: 67, startSec: 0, durationSec: 0.5, velocity: 0.8, track: 0, name: 'G4' }],
+      tracks: [{ index: 0, name: null, noteCount: 1 }],
+    };
+    rerender(<MidiPianoRoll data={NEXT} chords={[]} showChords={false} zoom={1} onZoomChange={() => {}} height={240} />);
+    // Hover identity is gone: the tooltip no longer shows the old note…
+    expect(container.textContent).not.toContain('C4');
+    // …and a fresh repaint at the settled state strokes no hovered note.
+    ctx.stroke.mockClear();
+    rerender(<MidiPianoRoll data={NEXT} chords={[]} showChords={false} zoom={2} onZoomChange={() => {}} height={240} />);
+    expect(ctx.stroke).not.toHaveBeenCalled();
+  });
+
   it('renders an empty/default view-model without crashing', () => {
     const empty = { durationSec: 0, minMidi: 60, maxMidi: 71, notes: [], tracks: [] };
     expect(() => render(
