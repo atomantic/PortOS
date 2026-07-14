@@ -366,6 +366,73 @@ export async function buildClaimWorkTask(app, { issueAuthorFilter, reviewers } =
 }
 
 /**
+ * Resolve the reviewers CSV for the claim flow exactly as buildClaimWorkTask
+ * does (Code Review Defaults, minus local-LLM reviewers the claim prompt can't
+ * drive, falling back to the hardcoded default). Mirrors the scheduled
+ * claim-work resolution so the JIRA play button honors the user's reviewer choice.
+ */
+async function resolveClaimReviewersCsv() {
+  const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
+  const list = normalizeReviewers({}, codeReviewDefaults?.reviewers)
+    .filter((r) => !LOCAL_LLM_REVIEWERS.includes(r));
+  // Arbitrary GitHub reviewer usernames from the Code Review Defaults, appended
+  // as `@user` tokens so the play button's claim gates the merge on them too.
+  // Optional-reviewer set rides along so a `~opt` reviewer stays non-blocking.
+  return buildReviewersCsv(list, codeReviewDefaults?.usernames, codeReviewDefaults?.optionalReviewers);
+}
+
+/**
+ * Append a "claim exactly this ticket" constraint to the claim-issue-jira body
+ * — the JIRA analogue of buildPlanConstraintBlock. The base prompt's Phase 1
+ * tells the agent to PICK the next-ready ticket; this overrides that to pin the
+ * user's selection while keeping every safety check (already-claimed, stale,
+ * too-ambiguous → exit cleanly).
+ */
+function buildTargetTicketBlock(ticketKey) {
+  return `
+
+## Target Ticket Constraint
+
+The user explicitly selected JIRA ticket \`${ticketKey}\` from the board. Override Phase 1 ("Pick the target ticket"): do NOT pick a different ticket and do NOT scan for the next-ready one — claim exactly \`${ticketKey}\`. Still honor the safety checks: if \`${ticketKey}\` is already In Progress / In Review / Done / closed, is already on a \`claim/${ticketKey}\` (or \`cos/.../${ticketKey}/...\`) branch, or its requirements are too ambiguous or too large to implement in a single PR, exit cleanly (file a Review Hub todo for ambiguous requirements) rather than forcing it. Otherwise run Phases 2–7 against \`${ticketKey}\`.`;
+}
+
+/**
+ * Build a one-off "implement THIS JIRA ticket" task for `app` — the per-card
+ * "play" button on the app overview's sprint board (the JIRA analogue of the
+ * `/do:next` claim button). Resolves the `claim-issue-jira` prompt body directly
+ * (NOT via buildClaimWorkTask — an app can show a JIRA board while its general
+ * Work Tracker resolves to GitHub/PLAN, so route the click to the JIRA flow
+ * regardless of that setting), substitutes the standard placeholders, and appends
+ * a target-ticket constraint that pins the agent to `ticketKey` while keeping
+ * every claim safety check. `ticketKey` is normalized to upper-case (`PROJ-1234`).
+ *
+ * claim-issue-jira self-manages its worktree + MR/PR, so `taskMetadata` stays
+ * `false/false` (matching the `/do:next` slashdo default for the JIRA tracker).
+ *
+ * @returns {Promise<{ ticketKey: string, prompt: string, taskMetadata: { useWorktree: boolean, openPR: boolean } }>}
+ */
+export async function buildJiraTicketTask(app, ticketKey) {
+  const { getTaskPrompt } = await import('./taskPromptService.js');
+  const key = String(ticketKey || '').toUpperCase();
+
+  // Independent reads (prompt body + Code Review Defaults) — fetch concurrently.
+  const [template, reviewersCsv] = await Promise.all([
+    getTaskPrompt('claim-issue-jira'),
+    resolveClaimReviewersCsv(),
+  ]);
+  const prompt = template
+    .replace(/\{appName\}/g, app.name)
+    .replace(/\{repoPath\}/g, app.repoPath)
+    .replace(/\{appId\}/g, app.id)
+    // Function-form replacer so a literal `$` in the reviewers CSV isn't read as
+    // a backreference.
+    .replace(/\{reviewers\}/g, () => reviewersCsv)
+    + buildTargetTicketBlock(key);
+
+  return { ticketKey: key, prompt, taskMetadata: { useWorktree: false, openPR: false } };
+}
+
+/**
  * For feature-ideas / plan-task, read the target repo's PLAN.md, find which
  * item IDs are already in flight via branch/PR scan, and pick the first
  * available item. Mutates `metadata` in place by setting `planId` when a
