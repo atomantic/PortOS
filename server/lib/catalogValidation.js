@@ -154,6 +154,8 @@ export const catalogScrapPatchSchema = catalogScrapCreateSchema.partial();
 
 // A host (bracket-stripped, lowercased) that the URL ingest must refuse:
 // loopback, link-local (incl. the 169.254.169.254 cloud-metadata endpoint),
+// the named cloud-metadata endpoints that hide inside allowed private ranges
+// (Alibaba 100.100.100.200, AWS IPv6 IMDS fd00:ec2::254 — see inline note),
 // and the unspecified address — in plain IPv4, IPv6, IPv4-mapped-IPv6
 // (`::ffff:127.0.0.1` → WHATWG-hex `::ffff:7f00:1`), AND the deprecated
 // IPv4-compatible-IPv6 form (`::127.0.0.1` → `::7f00:1`), so the guard can't be
@@ -171,6 +173,17 @@ export const isBlockedIngestHost = (host) => {
   const h = host.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.+$/, '');
   if (h === 'localhost' || h.endsWith('.localhost') || h === 'metadata.google.internal') return true;
   if (h === '::1' || h === '::' || h === '0.0.0.0') return true;
+  // Named cloud-metadata endpoints that live INSIDE otherwise-allowed private
+  // ranges, so the "allow LAN" posture would leak them without an explicit
+  // literal block: Alibaba ECS metadata `100.100.100.200` sits in the CGNAT
+  // 100.64/10 block (which Tailscale also uses), and AWS's IPv6 IMDS
+  // `fd00:ec2::254` sits in IPv6 ULA fd00::/8. Both WHATWG-normalize to these
+  // exact canonical forms (and dns.lookup returns them canonical too), so an
+  // exact match catches both the URL-literal and DNS-resolved paths. Blocking
+  // these two exact IPs does NOT meaningfully shrink the Tailscale/ULA space a
+  // real peer could occupy (a peer landing on exactly 100.100.100.200 is a
+  // 1-in-4M collision), and a PortOS install has no reason to fetch cloud IMDS.
+  if (h === '100.100.100.200' || h === 'fd00:ec2::254') return true;
   // IPv6 link-local fe80::/10 (first hextet fe80–febf), e.g. [fe80::1].
   if (h.includes(':') && /^fe[89ab][0-9a-f]?:/i.test(h)) return true;
   const v4Blocked = (ip) => /^127\./.test(ip) || /^169\.254\./.test(ip) || ip === '0.0.0.0';

@@ -25,6 +25,7 @@ import { readFile, writeFile, appendFile, realpath } from 'fs/promises';
 import { existsSync } from 'fs';
 import { DAY, tryReadFile, readJSONFile, safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { bufferedSpawn } from '../lib/bufferedSpawn.js';
+import { fetchPublicText } from '../lib/safeUrlFetch.js';
 import { createTicket, searchIssues, addLabels, escapeJql } from './jira.js';
 import { computeWindowedStats } from './taskLearning/store.js';
 
@@ -674,14 +675,21 @@ export function customSourceKey(custom) {
  * Fetch an http(s) custom source for the loop's prompt. Deterministic read, no
  * LLM. Rejects any non-http(s) scheme (defense in depth over the Zod refine),
  * bounds the request with a 10s timeout, and returns null on any failure so a
- * dead URL just omits the key rather than throwing. `fetchImpl` is injectable
- * for tests.
+ * dead URL just omits the key rather than throwing.
+ *
+ * SSRF-guarded via `fetchPublicText` (default posture): loopback, link-local,
+ * and the cloud-metadata endpoint (127.0.0.1, 169.254.169.254,
+ * metadata.google.internal, ::1) are blocked so a hand-edited/hostile config
+ * can't exfiltrate them into the reasoner prompt, and redirects are revalidated
+ * against the same gate. LAN/private hosts (Tailscale peers, a home wiki) stay
+ * ALLOWED intentionally — PortOS is a single-user tool where a custom source
+ * legitimately points at the home network, and the URL is operator-configured.
+ * `throwOnUnsafe: false` makes a blocked host omit the key like any other dead
+ * URL instead of bubbling a 400. `fetchText` is injectable for tests.
  */
-export async function fetchHttpSource(url, { timeoutMs = 10_000, fetchImpl = fetch } = {}) {
+export async function fetchHttpSource(url, { timeoutMs = 10_000, fetchText = fetchPublicText } = {}) {
   if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) return null;
-  const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) }).catch(() => null);
-  if (!res || !res.ok) return null;
-  const text = await res.text().catch(() => null);
+  const text = await fetchText(url, { timeoutMs, throwOnUnsafe: false }).catch(() => null);
   return text || null;
 }
 
