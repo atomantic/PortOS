@@ -179,6 +179,30 @@ describe('importDumpFile (no-shell streaming import)', () => {
     expect(child.__pipedBuffer().equals(body)).toBe(true);
   });
 
+  it('preserves CR bytes in CRLF-terminated dumps (does not normalize to LF)', async () => {
+    const child = makeFakePsql();
+    spawn.mockReturnValue(child);
+
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'portos-dump-'));
+    const dumpPath = pathJoin(dir, 'dump.sql');
+    // A CRLF file with a stripped directive line and two data lines. The CR
+    // bytes on the surviving lines must be preserved.
+    const body = Buffer.from(
+      '\\restrict tok\r\nCREATE TABLE t (id int);\r\nINSERT INTO t VALUES (1);\r\n',
+      'latin1'
+    );
+    writeFileSync(dumpPath, body);
+
+    const result = await importDumpFile(dumpPath, '5561', {});
+    expect(result.exitCode).toBe(0);
+
+    const expected = Buffer.from(
+      'CREATE TABLE t (id int);\r\nINSERT INTO t VALUES (1);\r\n',
+      'latin1'
+    );
+    expect(child.__pipedBuffer().equals(expected)).toBe(true);
+  });
+
   it('resolves with a non-zero exitCode when the dump file cannot be read (no throw)', async () => {
     const child = makeFakePsql();
     spawn.mockReturnValue(child);

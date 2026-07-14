@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import { execFile, spawn } from 'child_process';
 import { existsSync, mkdirSync, createReadStream } from 'fs';
-import { createInterface } from 'readline';
 import { join } from 'path';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { checkHealth, query } from '../lib/db.js';
@@ -332,17 +331,18 @@ export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
       '-v', 'ON_ERROR_STOP=1', '--single-transaction'
     ], { cwd: rootDir, env });
 
-    // The dump read stream and its line reader — declared up front so finish()
-    // can tear them down. If psql exits early (ON_ERROR_STOP rollback) or the
-    // timeout SIGKILLs it, the `drain` we may be waiting on never fires, so we
-    // must destroy the source ourselves or its file descriptor leaks.
+    // The dump read stream — declared up front so finish() can tear it down. If
+    // psql exits early (ON_ERROR_STOP rollback) or the timeout SIGKILLs it, the
+    // `drain` we may be waiting on never fires, so we must destroy the source
+    // ourselves or its file descriptor leaks.
     //
-    // Read/write as latin1 (a lossless 1:1 byte↔char mapping): the dump's bytes
-    // pass through untouched regardless of the database's client_encoding — a
-    // utf8 decode→re-encode round-trip would corrupt non-utf8 dumps. This keeps
-    // the byte-transparency the old `sed | psql` pipe had.
+    // Read/write as latin1 (a lossless 1:1 byte↔char mapping) and split lines on
+    // the raw '\n' byte only: the dump's bytes pass through psql untouched
+    // regardless of the database's client_encoding, and CR bytes are preserved
+    // (readline's crlfDelay would silently drop them). A utf8 decode→re-encode
+    // round-trip would corrupt non-utf8 dumps — this keeps the byte-transparency
+    // the old `sed | psql` pipe had.
     const src = createReadStream(dumpFile, { encoding: 'latin1' });
-    const rl = createInterface({ input: src, crlfDelay: Infinity });
 
     // Cap diagnostic capture so a pathologically chatty psql (verbose \echo,
     // giant error text) can't exhaust the heap. psql is near-silent on success.
@@ -355,7 +355,6 @@ export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
       if (finished) return;
       finished = true;
       clearTimeout(timer);
-      rl.close();
       src.destroy();
       if (psql.stdin.writable) psql.stdin.end();
       if (exitCode !== 0) {
@@ -378,20 +377,40 @@ export function importDumpFile(dumpFile, port, env, timeout = 120_000) {
     // resulting EPIPE would otherwise crash the process.
     psql.stdin.on('error', () => {});
 
-    // Attach to the read stream directly: readline does not forward its input
-    // stream's 'error' event, so a missing/unreadable dump would otherwise be
-    // an uncaught 'error' that crashes the process.
-    src.on('error', (err) => finish(1, err.message));
-    rl.on('error', (err) => finish(1, err.message));
-    rl.on('line', (line) => {
-      if (isPg17OnlyDirective(line) || !psql.stdin.writable) return;
-      // Honor backpressure so a large dump doesn't buffer unboundedly in memory.
-      if (!psql.stdin.write(line + '\n', 'latin1')) {
-        rl.pause();
-        psql.stdin.once('drain', () => rl.resume());
+    // Byte-transparent line filter: buffer latin1 chars, split on '\n', drop the
+    // pg17-only directive lines, and forward every other line's original bytes
+    // (its trailing '\n' re-appended) to psql's stdin. Backpressure pauses the
+    // source; a drain resumes it and re-drains any buffered lines.
+    let pending = '';
+    const writeLine = (line) => {
+      if (isPg17OnlyDirective(line) || !psql.stdin.writable) return true;
+      return psql.stdin.write(line + '\n', 'latin1');
+    };
+    const pump = () => {
+      let nl;
+      while ((nl = pending.indexOf('\n')) !== -1) {
+        const line = pending.slice(0, nl); // excludes '\n', keeps any trailing '\r'
+        pending = pending.slice(nl + 1);
+        if (!writeLine(line)) {
+          src.pause();
+          psql.stdin.once('drain', () => { src.resume(); pump(); });
+          return;
+        }
       }
+    };
+
+    src.on('data', (chunk) => {
+      if (finished) return;
+      pending += chunk;
+      pump();
     });
-    rl.on('close', () => { if (!finished && psql.stdin.writable) psql.stdin.end(); });
+    src.on('error', (err) => finish(1, err.message));
+    src.on('end', () => {
+      // Flush a final line that lacked a trailing newline, then close stdin so
+      // psql runs the script and emits 'close'.
+      if (pending.length) { writeLine(pending); pending = ''; }
+      if (psql.stdin.writable) psql.stdin.end();
+    });
   });
 }
 
