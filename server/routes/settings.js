@@ -10,7 +10,7 @@ import {
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { isPlainObject } from '../lib/objects.js';
-import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, validateRequest } from '../lib/validation.js';
+import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -204,6 +204,12 @@ router.put('/', asyncHandler(async (req, res) => {
   // `.partial()` so a PUT that only carries { schedules } still validates.
   if (req.body?.seriesAutopilot !== undefined) {
     validateRequest(seriesAutopilotSettingsSchema.partial(), req.body.seriesAutopilot);
+  }
+  // Install-level Layered Intelligence settings (#2515) — validate the slice when
+  // present so a malformed `trustShellSources` can't persist and silently unlock
+  // full-shell custom `cmd` sources install-wide.
+  if (req.body.layeredIntelligence) {
+    validateRequest(layeredIntelligenceSettingsSchema.partial(), req.body.layeredIntelligence);
   }
   // User-defined catalog types moved out of settings.json into PostgreSQL
   // (`catalog_user_types`, #1001). The `/api/catalog/types` routes are the only
