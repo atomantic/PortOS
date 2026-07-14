@@ -181,7 +181,6 @@ router.get('/health/details', asyncHandler(async (req, res) => {
     queuedTasks: cosStatus.queueLength || 0
   } : null;
 
-  // Format memory for display
   // Format uptime for display
   const uptime = process.uptime();
   const days = Math.floor(uptime / 86400);
