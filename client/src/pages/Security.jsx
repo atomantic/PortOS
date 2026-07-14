@@ -13,6 +13,7 @@ export default function Security() {
   const audioContextRef = useRef(null);
   const analyserRef = useRef(null);
   const animationFrameRef = useRef(null);
+  const deviceRestartTimerRef = useRef(null);
 
   const [streaming, setStreaming] = useState(false);
   const [videoEnabled, setVideoEnabled] = useState(true);
@@ -241,10 +242,22 @@ export default function Security() {
 
     // Restart stream with new device if currently streaming
     if (streaming) {
-      // Small delay to let state update
-      setTimeout(() => startMedia(), 100);
+      // Small delay to let state update. Clear any pending restart first so
+      // rapid device switches don't stack multiple startMedia() calls, and
+      // so an unmount can cancel the last one (see cleanup effect below).
+      if (deviceRestartTimerRef.current) clearTimeout(deviceRestartTimerRef.current);
+      deviceRestartTimerRef.current = setTimeout(() => {
+        deviceRestartTimerRef.current = null;
+        startMedia();
+      }, 100);
     }
   }, [streaming, startMedia]);
+
+  // Cancel any pending device-change restart on unmount so a deferred
+  // startMedia() can't fire into a component that's no longer mounted.
+  useEffect(() => () => {
+    if (deviceRestartTimerRef.current) clearTimeout(deviceRestartTimerRef.current);
+  }, []);
 
   return (
     <div>
