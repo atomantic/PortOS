@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useId } from 'react';
 import {
   RefreshCw, Play, Square, Trash2, Plus, Clock, Zap, ChevronDown, ChevronRight,
   Bot, AlertCircle, CheckCircle, Loader2
@@ -49,6 +49,9 @@ function CreateLoopForm({ providers, onCreated }) {
   const [cwd, setCwd] = useState('');
   const [creating, setCreating] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  // Pairs the "Interval" label with the custom-interval input for click-to-focus
+  // and screen-reader association (the preset buttons carry their own names).
+  const customIntervalId = useId();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -90,7 +93,7 @@ function CreateLoopForm({ providers, onCreated }) {
 
       <div className="flex flex-wrap gap-3 items-end">
         <div>
-          <label className="block text-xs text-gray-400 mb-1">Interval</label>
+          <label htmlFor={customIntervalId} className="block text-xs text-gray-400 mb-1">Interval</label>
           <div className="flex gap-1">
             {INTERVAL_PRESETS.map(p => (
               <button
@@ -107,6 +110,7 @@ function CreateLoopForm({ providers, onCreated }) {
               </button>
             ))}
             <input
+              id={customIntervalId}
               type="text"
               value={customInterval}
               onChange={e => setCustomInterval(e.target.value)}
