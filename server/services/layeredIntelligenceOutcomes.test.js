@@ -145,6 +145,24 @@ describe('reconcileOutcomes', () => {
     expect(rows[0].outcome).toBe('merged');
   });
 
+  it('refreshes outcomeAt when a proposal re-closes to the same outcome with a newer close time (#2620)', async () => {
+    // closed → reopened → re-closed completed: the derived outcome is unchanged,
+    // but retention/GC keys on outcomeAt, so it must advance to the latest close.
+    await recordFiledProposal({ appId: 'app-1', slug: 'recycled', scope: 'app-improvement' }, store);
+    await reconcileOutcomes({
+      appId: 'app-1',
+      existingIssues: [{ slug: 'recycled', state: 'closed', stateReason: 'completed', closedAt: '2026-07-01T00:00:00Z' }]
+    }, store);
+    const updated = await reconcileOutcomes({
+      appId: 'app-1',
+      existingIssues: [{ slug: 'recycled', state: 'closed', stateReason: 'completed', closedAt: '2026-07-10T00:00:00Z' }]
+    }, store);
+    expect(updated).toBe(1);
+    const rows = await listOutcomes({ appId: 'app-1' }, store);
+    expect(rows[0].outcome).toBe('merged');
+    expect(rows[0].outcomeAt).toBe('2026-07-10T00:00:00Z');
+  });
+
   it('reclassifies a record persisted under the old any-close-is-merged mapping (#2620)', async () => {
     // Simulate an install upgrading: a duplicate-closed issue was reconciled as
     // `merged` by the pre-#2620 mapping. The next reconcile against the same

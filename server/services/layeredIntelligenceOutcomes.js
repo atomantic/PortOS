@@ -159,9 +159,11 @@ export async function listOutcomes({ appId, now = Date.now() } = {}, store = out
  * self-heals records persisted under the old any-close-is-merged mapping (e.g.
  * `merged` with a duplicate-close reason) instead of letting them inflate the
  * merge rate until they expire, and it tracks a reopened-then-re-closed issue's
- * latest fate. Returns the number of records updated. Never throws — a
- * per-record write failure is swallowed so one bad row can't abort the whole
- * reconciliation.
+ * latest fate. A re-close to the SAME outcome with a newer `closedAt` also
+ * refreshes the record, so retention/GC (which keys on `outcomeAt`) measures
+ * from the latest closure, not the first. Returns the number of records
+ * updated. Never throws — a per-record write failure is swallowed so one bad
+ * row can't abort the whole reconciliation.
  */
 export async function reconcileOutcomes({ appId, existingIssues = [], now = Date.now() } = {}, store = outcomesStore()) {
   if (!appId || !Array.isArray(existingIssues) || existingIssues.length === 0) return 0;
@@ -177,7 +179,15 @@ export async function reconcileOutcomes({ appId, existingIssues = [], now = Date
     const issue = bySlug.get(r.slug);
     if (!issue) continue;
     const outcome = deriveOutcome(issue);
-    if (!outcome || outcome === r.outcome) continue;
+    if (!outcome) continue;
+    // A same-outcome record is only rewritten when the tracker reports a NEWER
+    // close time (closed → reopened → re-closed): outcomeAt drives retention/GC,
+    // so it must track the latest closure. Timestampless trackers (plan) and an
+    // unchanged closedAt skip the write — no churn on every reconcile.
+    const closedMs = Date.parse(issue.closedAt);
+    const storedMs = Date.parse(r.outcomeAt);
+    const newerClose = Number.isFinite(closedMs) && (!Number.isFinite(storedMs) || closedMs > storedMs);
+    if (outcome === r.outcome && !newerClose) continue;
     const next = {
       ...r,
       outcome,
