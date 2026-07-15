@@ -138,6 +138,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.twin.identity', path: '/digital-twin/identity', label: 'Identity', section: 'Identity', aliases: ['twin-identity', 'identity'] },
   { id: 'nav.twin.import', path: '/digital-twin/import', label: 'Import', section: 'Identity', aliases: ['twin-import'] },
   { id: 'nav.twin.interview', path: '/digital-twin/interview', label: 'Interview', section: 'Identity', aliases: ['twin-interview'] },
+  { id: 'nav.twin.personality', path: '/digital-twin/personality', label: 'Personality', section: 'Identity', aliases: ['twin-personality', 'personality', 'model-personality'], keywords: ['llm', 'model', 'traits', 'radar', 'alignment', 'self-profile', 'compare', 'sycophancy'] },
   { id: 'nav.twin.personas', path: '/digital-twin/personas', label: 'Personas', section: 'Identity', aliases: ['twin-personas', 'personas', 'persona'], keywords: ['context', 'professional', 'casual', 'voice', 'mode'] },
   { id: 'nav.twin.taste', path: '/digital-twin/taste', label: 'Taste', section: 'Identity', aliases: ['twin-taste'] },
   { id: 'nav.twin.test', path: '/digital-twin/test', label: 'Test', section: 'Identity', aliases: ['twin-test'] },

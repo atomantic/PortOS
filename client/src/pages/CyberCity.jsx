@@ -13,7 +13,7 @@ import CityScanlines from '../components/city/CityScanlines';
 import CityPhotoOverlay from '../components/city/CityPhotoOverlay';
 import CityPlaybackOverlay from '../components/city/CityPlaybackOverlay';
 import { CitySettingsProvider, useCitySettingsContext } from '../components/city/CitySettingsContext';
-import CitySettingsPanel from '../components/city/CitySettingsPanel';
+import CitySettingsDrawer from '../components/city/CitySettingsDrawer';
 import { computeFilterResult } from '../utils/cityFilter';
 import { DEFAULT_PRESET_ID, cyclePreset } from '../utils/cityPhotoMode';
 import { computeSoundscape } from '../utils/citySoundscape';
@@ -435,7 +435,9 @@ function CyberCityInner() {
         onExit={playback.exit}
       />
       <CityScanlines settings={settings} crt={cityPalette.crt} />
-      {showSettings && <CitySettingsPanel />}
+      {/* Settings on the shared Drawer (issue #2591). Closing preserves other query
+          params (e.g. an open cityPane) so the disclosure state survives. */}
+      <CitySettingsDrawer open={showSettings} onClose={() => navigate(`/city${location.search}`)} />
     </div>
     </CityPaletteProvider>
   );
