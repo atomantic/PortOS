@@ -109,20 +109,26 @@ describe('reconcileOutcomes', () => {
   it('resolves unresolved records from the fresh tracker state', async () => {
     await recordFiledProposal({ appId: 'app-1', slug: 'merged-one', scope: 'app-data-gap' }, store);
     await recordFiledProposal({ appId: 'app-1', slug: 'rejected-one', scope: 'app-improvement' }, store);
+    await recordFiledProposal({ appId: 'app-1', slug: 'abandoned-one', scope: 'app-improvement' }, store);
     await recordFiledProposal({ appId: 'app-1', slug: 'still-open', scope: 'app-improvement' }, store);
 
     const existingIssues = [
       { slug: 'merged-one', state: 'closed', stateReason: 'completed', closedAt: '2026-07-01T00:00:00Z' },
       { slug: 'rejected-one', state: 'closed', stateReason: 'not_planned' },
+      { slug: 'abandoned-one', state: 'closed', stateReason: 'duplicate', closedAt: '2026-07-02T00:00:00Z' },
       { slug: 'still-open', state: 'open' }
     ];
     const updated = await reconcileOutcomes({ appId: 'app-1', existingIssues }, store);
-    expect(updated).toBe(2);
+    expect(updated).toBe(3);
 
     const byslug = Object.fromEntries((await listOutcomes({ appId: 'app-1' }, store)).map(r => [r.slug, r]));
     expect(byslug['merged-one'].outcome).toBe('merged');
     expect(byslug['merged-one'].outcomeAt).toBe('2026-07-01T00:00:00Z');
     expect(byslug['rejected-one'].outcome).toBe('rejected');
+    // A close with an unrecognized present reason persists as abandoned (#2620) —
+    // it must not inflate the merged count the reasoner calibrates against.
+    expect(byslug['abandoned-one'].outcome).toBe('abandoned');
+    expect(byslug['abandoned-one'].outcomeReason).toBe('duplicate');
     expect(byslug['still-open'].outcome).toBeNull();
   });
 

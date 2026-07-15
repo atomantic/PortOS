@@ -214,13 +214,13 @@ describe('isProposalDuplicate (dedup)', () => {
     expect(isProposalDuplicate({ slug: 'add-metrics', existingIssues: existing, now })).toBe(false);
   });
 
-  it('ALLOWS re-file for a checked PLAN item (closed with no closedAt — #2435)', () => {
-    // A `- [x]` PLAN item reads as closed with no timestamp; it must fall OUT of
-    // the dedup window so a completed proposal can be re-proposed, while an
-    // unchecked `- [ ]` item (state: 'open') stays suppressed.
+  it('SUPPRESSES a checked PLAN item (closed with no closedAt — #2620)', () => {
+    // A `- [x]` PLAN item reads as closed with no timestamp; it stays permanently
+    // within the dedup window — a completed proposal never needs re-proposal —
+    // and an unchecked `- [ ]` item (state: 'open') stays suppressed too.
     const closed = [{ slug: 'add-metrics', state: 'closed' }];
     const open = [{ slug: 'add-metrics', state: 'open' }];
-    expect(isProposalDuplicate({ slug: 'add-metrics', existingIssues: closed, now })).toBe(false);
+    expect(isProposalDuplicate({ slug: 'add-metrics', existingIssues: closed, now })).toBe(true);
     expect(isProposalDuplicate({ slug: 'add-metrics', existingIssues: open, now })).toBe(true);
   });
 
@@ -517,9 +517,19 @@ describe('deriveOutcome', () => {
     expect(deriveOutcome({ state: 'closed', stateReason: 'not planned' })).toBe('rejected');
   });
 
-  it('maps any other closed reason (incl. glab/jira with no reason) to merged', () => {
+  it('maps closed-completed (and reason-less closes from glab/jira/plan) to merged', () => {
     expect(deriveOutcome({ state: 'closed', stateReason: 'completed' })).toBe('merged');
+    // Graceful fallback: trackers that report no stateReason keep the current
+    // merged behavior — their common close path IS a merge (#2620).
     expect(deriveOutcome({ state: 'closed' })).toBe('merged');
+    expect(deriveOutcome({ state: 'closed', stateReason: null })).toBe('merged');
+    expect(deriveOutcome({ state: 'closed', stateReason: '' })).toBe('merged');
+  });
+
+  it('maps a close with any OTHER present reason to abandoned (#2620)', () => {
+    expect(deriveOutcome({ state: 'closed', stateReason: 'duplicate' })).toBe('abandoned');
+    expect(deriveOutcome({ state: 'closed', stateReason: 'stale' })).toBe('abandoned');
+    expect(deriveOutcome({ state: 'closed', stateReason: 'reopened' })).toBe('abandoned');
   });
 });
 
@@ -544,6 +554,20 @@ describe('computeOutcomesReport', () => {
     expect(report).toContain('app-data-gap: 2 filed, 2 merged (100%)');
     expect(report).toContain('app-improvement: 2 filed, 0 merged (0%)');
     expect(report).toContain('Common rejection reasons: too complex');
+  });
+
+  it('reports abandoned distinctly and excludes it from the merged numerator (#2620)', () => {
+    const outcomes = [
+      { scope: 'app-improvement', outcome: 'merged' },
+      { scope: 'app-improvement', outcome: 'abandoned' },
+      { scope: 'app-improvement', outcome: 'abandoned' },
+      { scope: 'app-improvement', outcome: 'rejected', outcomeReason: 'dup' }
+    ];
+    const report = computeOutcomesReport({ outcomes });
+    expect(report).toContain('Abandoned: 2 (50%)');
+    expect(report).toContain('Merged/implemented: 1 (25%)');
+    // Per-scope merge rate: abandoned counts in filed, never in merged.
+    expect(report).toContain('app-improvement: 4 filed, 1 merged (25%)');
   });
 
   it('exposes the recognized outcome set', () => {
@@ -576,7 +600,7 @@ describe('extractPlanSlugs', () => {
 
   it('treats a bare tag with no checkbox as open (absent ≠ done)', () => {
     // A tag mentioned inline, with no list checkbox, must NOT collapse to closed
-    // (which would make it re-proposable) — it stays open/suppressed.
+    // (which would mark it completed in the outcome loop) — it stays open.
     expect(extractPlanSlugs('see [lil-inline-ref] elsewhere')).toEqual([
       { slug: 'inline-ref', state: 'open' }
     ]);
@@ -1073,8 +1097,11 @@ describe('semantic dedup — pure helpers', () => {
       expect(isIssueWithinDedupWindow({ state: 'closed', closedAt: recent }, NOW)).toBe(true);
       expect(isIssueWithinDedupWindow({ state: 'closed', closedAt: old }, NOW)).toBe(false);
     });
-    it('closed with unknown close time falls out of window', () => {
-      expect(isIssueWithinDedupWindow({ state: 'closed' }, NOW)).toBe(false);
+    it('closed with missing/unparseable close time stays permanently in-window (#2620)', () => {
+      // The only producer of closed-without-closedAt is a checked `- [x]` PLAN
+      // item — a completed proposal must stay suppressed, not become re-proposable.
+      expect(isIssueWithinDedupWindow({ state: 'closed' }, NOW)).toBe(true);
+      expect(isIssueWithinDedupWindow({ state: 'closed', closedAt: 'not-a-date' }, NOW)).toBe(true);
     });
     it('agrees with isProposalDuplicate on the window boundary', () => {
       const old = new Date(NOW - (CLOSED_SUPPRESSION_MS + 1000)).toISOString();

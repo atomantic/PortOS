@@ -214,7 +214,8 @@ async function readIssues({ filer, forgeCli, cwd, jira, config }) {
     const planContent = await tryReadFile(join(cwd, 'PLAN.md'))
     // extractPlanSlugs preserves each tag's checkbox state ({ slug, state }): a
     // `- [x]` item reads 'closed' (with no closedAt) so the outcome loop can
-    // reconcile it and it falls out of the dedup window, while `- [ ]` stays open.
+    // reconcile it, and it stays PERMANENTLY within the dedup window — a completed
+    // plan item never needs re-proposal (#2620) — while `- [ ]` stays open.
     existingIssues = extractPlanSlugs(planContent || '')
   }
   return { openIssues, existingIssues, trackerReadFailed }
