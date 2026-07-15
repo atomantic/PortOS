@@ -78,11 +78,14 @@ const withTimeout = (promise, ms) =>
 // index.html (`server/lib/buildId.js`): only a confirmed different build
 // justifies dropping the caches. Returns the server's build id, or null when
 // offline/unreachable/unstamped (all "do not purge" signals). `cache:
-// 'no-store'` bypasses the HTTP cache, and the service worker routes this
-// non-navigation GET network-first, so a cached shell can't spoof the probe.
+// 'no-store'` bypasses the HTTP cache, and the unique query param guarantees a
+// Cache Storage miss inside the service worker — its fallback for this
+// non-navigation GET is `caches.match(request)`, which `no-store` does NOT
+// bypass, so without the param a historical cache entry keyed `/` could answer
+// the probe with old HTML and fake a "different build" while offline.
 export const fetchServerBuildId = async () => {
   if (typeof navigator !== 'undefined' && navigator.onLine === false) return null;
-  const res = await fetch('/', { cache: 'no-store' }).catch(() => null);
+  const res = await fetch(`/?portos-build-probe=${Date.now()}`, { cache: 'no-store' }).catch(() => null);
   if (!res || !res.ok) return null;
   const html = await res.text().catch(() => '');
   const doc = new DOMParser().parseFromString(html, 'text/html');
