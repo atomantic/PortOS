@@ -195,6 +195,27 @@ const FORGE_ISSUE_CONFIG = {
 };
 
 /**
+ * Best-effort count of ALL open issues in a repo, ignoring the author filter.
+ * Used to disambiguate an empty *author-filtered* list: a repo whose only open
+ * issues were filed by someone else must not be reported as "no open issues".
+ * Any probe failure (list error / bad JSON / non-array) returns 0 so the caller
+ * falls back to the definitive `no-open-issues` result rather than inventing a
+ * phantom count. Reuses `cfg.listArgs`, which is the base list WITHOUT the
+ * `--author` filter (the filter is appended separately in detectForgeIssues).
+ */
+async function countOpenIssuesUnfiltered(cfg, repoPath) {
+  const res = await runCli(cfg.cli, [...cfg.listArgs], repoPath);
+  if (res.code !== 0) return 0;
+  let raw;
+  try {
+    raw = JSON.parse(res.stdout || '[]');
+  } catch {
+    return 0;
+  }
+  return Array.isArray(raw) ? raw.length : 0;
+}
+
+/**
  * Shared claim-issue detector for both forges (config in FORGE_ISSUE_CONFIG).
  * Counts open issues that pass the same skip-list the claim agent applies,
  * honoring the author filter ('self' = only issues YOU filed (`@me`), the
@@ -214,16 +235,19 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self' } =
   // default plus any out-of-vocab value) = the @me security boundary. Transient
   // resolver failures skip this dispatch and retry next tick rather than parking
   // a full cadence.
+  let authorApplied = false;
   if (issueAuthorFilter === 'any') {
     // no --author filter
   } else if (issueAuthorFilter === 'owner') {
     const { owner, error } = await cfg.resolveOwner(repoPath);
     if (error) return { actionable: false, count: 0, reason: error, transient: true };
     args.push('--author', owner);
+    authorApplied = true;
   } else {
     const { author, error } = await cfg.resolveSelf(repoPath);
     if (error) return { actionable: false, count: 0, reason: error, transient: true };
     args.push('--author', author);
+    authorApplied = true;
   }
 
   const res = await runCli(cfg.cli, args, repoPath);
@@ -235,7 +259,40 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self' } =
     return { actionable: false, count: 0, reason: cfg.parseFail, transient: true };
   }
   if (!Array.isArray(raw)) return { actionable: false, count: 0, reason: cfg.parseFail, transient: true };
-  if (raw.length === 0) return { actionable: false, count: 0, total: 0, inFlightCount: 0, filteredCount: 0, reason: 'no-open-issues' };
+  if (raw.length === 0) {
+    // An empty *filtered* list is ambiguous: the repo may truly have no open
+    // issues, OR it has open issues that just don't match the author filter —
+    // the common trap being `owner`, which resolves to an ORG (never an issue
+    // author, so the filter matches nothing), or `self`/@me when the server's
+    // forge session is a different identity than whoever filed the issues.
+    // Reporting a flat "no open issues" there hid a claimable queue behind a
+    // full recheck park (the "open issues exist but the task still parked"
+    // failure this fixes). Re-probe WITHOUT the author filter; if issues exist,
+    // park with the actionable `no-authored-issues` reason + the real open
+    // count so the user is told to widen the filter, not that there is nothing
+    // to do. The count is raw open issues (any author), not claimable ones —
+    // best effort: switching to `any` may still yield `no-actionable-issues`
+    // when the other-authored issues are all blocked/assigned/epics. Counting
+    // claimable ones would cost the full normalize + skip-list scan here.
+    if (authorApplied) {
+      const openCount = await countOpenIssuesUnfiltered(cfg, repoPath);
+      if (openCount > 0) {
+        return {
+          actionable: false,
+          count: 0,
+          total: openCount,
+          inFlightCount: 0,
+          // These issues were excluded by the author filter upstream, not by
+          // the skip-list — the `reason` conveys that cause, so leave the
+          // skip-list "filtered" tally at 0 (the toast reads a clean
+          // "0 of N open" rather than a redundant "N filtered").
+          filteredCount: 0,
+          reason: 'no-authored-issues'
+        };
+      }
+    }
+    return { actionable: false, count: 0, total: 0, inFlightCount: 0, filteredCount: 0, reason: 'no-open-issues' };
+  }
 
   const inFlight = await inFlightIssueNumbers(repoPath, cfg.inFlightForge);
   const issues = cfg.normalize(raw);
