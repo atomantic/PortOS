@@ -57,6 +57,9 @@ const DEFAULT_HARD_TIMEOUT_MS = 45000; // absolute backstop for the whole scrape
  * @param {string} opts.command — TUI binary (`agy`, `grok`).
  * @param {string[]} [opts.args] — extra argv (default none).
  * @param {string} opts.slashCommand — e.g. `/usage` or `/usage show`.
+ * @param {object} [opts.env] — extra env vars merged over `process.env` (the
+ *   matched provider's `envVars`, so a provider that authenticates via env
+ *   scrapes with the same config a normal run uses).
  * @param {string} [opts.sandboxDir] — cwd override (default USAGE_SANDBOX_DIR).
  * @param {number} [opts.readyMs] @param {number} [opts.primerCapMs]
  * @param {number} [opts.idleMs] @param {number} [opts.renderCapMs]
@@ -67,6 +70,7 @@ export async function scrapeTuiUsage({
   command,
   args = [],
   slashCommand,
+  env: extraEnv = {},
   sandboxDir = USAGE_SANDBOX_DIR,
   readyMs = DEFAULT_READY_MS,
   primerCapMs = DEFAULT_PRIMER_CAP_MS,
@@ -79,9 +83,10 @@ export async function scrapeTuiUsage({
 
   mkdirSync(sandboxDir, { recursive: true });
 
+  // Provider envVars (auth/config) merged over process.env, then the PTY hints.
   // CLAUDECODE leaks when PortOS itself runs under Claude Code; strip it so a
   // spawned TUI doesn't think it's nested (mirrors tuiPromptRunner.js).
-  const env = { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor' };
+  const env = { ...process.env, ...extraEnv, TERM: 'xterm-256color', COLORTERM: 'truecolor' };
   delete env.CLAUDECODE;
 
   let pty;
@@ -112,10 +117,20 @@ export async function scrapeTuiUsage({
   // idle still returns when hardStop resolves. Callers reset `lastDataAt` right
   // after a keystroke so this measures idle relative to that input, not to stale
   // banner output from an earlier phase.
-  const waitForIdle = async (capMs) => {
-    const deadline = Date.now() + capMs;
+  //
+  // `requireOutput` guards the render phase: after submitting the command, a
+  // slow sign-in / quota lookup can stay silent for >idleMs, and without this
+  // the initial silence would read as "done" and kill the TUI before its panel
+  // ever renders. When set, idle can only mean completion once at least one
+  // chunk has arrived since the wait began (else we wait out `capMs`, then the
+  // hard-timeout backstop). The primer phase leaves it off so an already-trusted
+  // sandbox (which emits nothing) returns promptly.
+  const waitForIdle = async (capMs, { requireOutput = false } = {}) => {
+    const start = Date.now();
+    const deadline = start + capMs;
     while (!exited && !timedOut && Date.now() < deadline) {
-      if (Date.now() - lastDataAt >= idleMs) return;
+      const sawOutput = lastDataAt > start;
+      if ((!requireOutput || sawOutput) && Date.now() - lastDataAt >= idleMs) return;
       await Promise.race([sleep(250), hardStop]);
     }
   };
@@ -138,7 +153,7 @@ export async function scrapeTuiUsage({
       pty.write('\r');
       lastDataAt = Date.now();
     }
-    await waitForIdle(renderCapMs);
+    await waitForIdle(renderCapMs, { requireOutput: true });
   } finally {
     if (hardTimer) clearTimeout(hardTimer);
     killPty();
