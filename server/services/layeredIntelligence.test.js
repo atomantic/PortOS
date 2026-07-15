@@ -1098,8 +1098,9 @@ describe('semantic dedup — pure helpers', () => {
       expect(isIssueWithinDedupWindow({ state: 'closed', closedAt: old }, NOW)).toBe(false);
     });
     it('closed with missing/unparseable close time stays permanently in-window (#2620)', () => {
-      // The only producer of closed-without-closedAt is a checked `- [x]` PLAN
-      // item — a completed proposal must stay suppressed, not become re-proposable.
+      // Closed-without-closedAt (a checked `- [x]` PLAN item, or a tracker row
+      // missing its close time) is completed work — it must stay suppressed,
+      // not become re-proposable.
       expect(isIssueWithinDedupWindow({ state: 'closed' }, NOW)).toBe(true);
       expect(isIssueWithinDedupWindow({ state: 'closed', closedAt: 'not-a-date' }, NOW)).toBe(true);
     });

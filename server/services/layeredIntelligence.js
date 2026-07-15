@@ -209,12 +209,14 @@ export function normalizeSlug(slug) {
  * Whether an existing tracker issue is still within the dedup suppression window:
  * OPEN, or CLOSED within CLOSED_SUPPRESSION_MS. Only a closed-long-ago issue
  * falls out of the window so its work can be re-proposed. A closed issue with a
- * missing/unparseable `closedAt` is PERMANENTLY in-window (suppressed): the only
+ * missing/unparseable `closedAt` is PERMANENTLY in-window (suppressed): the main
  * producer of that shape is a checked `- [x]` PLAN.md item (checkboxes carry no
  * timestamp), and a completed plan item never needs re-proposal — treating it as
  * "closed long ago" made the reasoner re-propose every done item on every run
- * (#2620). Shared by both the slug dedup and the semantic dedup so the two
- * guards agree on which issues still count.
+ * (#2620). A tracker row missing its close time (e.g. a jira Done ticket with no
+ * resolutiondate) is likewise suppressed rather than re-proposed — done work is
+ * never worth re-reasoning. Shared by both the slug dedup and the semantic dedup
+ * so the two guards agree on which issues still count.
  */
 export function isIssueWithinDedupWindow(issue, now = Date.now()) {
   if ((issue?.state || '').toLowerCase() === 'open') return true;
