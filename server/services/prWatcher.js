@@ -27,6 +27,7 @@
 import { execGh } from './github.js';
 import { getAppById, updateApp } from './apps.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
+import { hostToWorkTracker } from '../lib/workTracker.js';
 import { PR_AUTHOR_FILTERS } from '../lib/validation.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 
@@ -41,53 +42,64 @@ import { safeJSONParse } from '../lib/fileUtils.js';
 // the cap. 200 matches the limit github.js#syncRepos already uses.
 const PR_LIST_LIMIT = 200;
 
-// Cache the gh-authenticated login for the process lifetime. It's the PortOS
-// operator's identity and effectively never changes within a run; re-resolving
-// it on every scheduler tick would add a gh round-trip per watched app.
-let _selfLoginCache;
+// Cache the gh-authenticated login PER HOST, for the process lifetime. Host-keyed
+// for two reasons: (1) `gh api` does NOT infer the host from the working
+// directory's git remote the way `gh pr list` / `gh issue list` do — it hits the
+// default host (github.com) unless given an explicit `--hostname`; (2) the
+// operator is commonly a DIFFERENT login on github.com vs a self-hosted
+// enterprise host, so one process-wide login would gate enterprise PRs against
+// the wrong identity. Each host resolves once and is cached independently.
+const _selfLoginCache = new Map();
 
 /**
- * Resolve the gh-authenticated user's login (e.g. "atomantic"). Returns null
- * when gh isn't authenticated / installed — callers that need it for an
- * author gate must treat null as "can't gate, don't fire blindly".
+ * Resolve the gh-authenticated user's login on `host` (e.g. "alice" on
+ * github.com, "alice_corp" on an enterprise host). Returns null when `host` is
+ * falsy or gh isn't authenticated there — callers that need it for an author
+ * gate must treat null as "can't gate, don't fire blindly".
  */
-export async function getSelfLogin() {
-  if (_selfLoginCache) return _selfLoginCache;
-  const login = await execGh(['api', 'user', '--jq', '.login']).catch(() => null);
+export async function getSelfLogin(host) {
+  if (!host) return null;
+  if (_selfLoginCache.has(host)) return _selfLoginCache.get(host);
+  // `--hostname` is required: without it `gh api` targets github.com regardless
+  // of cwd, resolving the wrong identity for an enterprise repo.
+  const login = await execGh(['api', 'user', '--hostname', host, '--jq', '.login']).catch(() => null);
   // Only memoize a SUCCESSFUL lookup. Caching a null from a transient gh/auth
   // failure (keychain locked mid-tick, gh re-auth in progress) would wedge every
-  // later self/others gate into 'self-login-unavailable' until process restart;
-  // leaving the cache unset lets the next tick retry once auth recovers.
+  // later self/others gate on this host into 'self-login-unavailable' until
+  // process restart; leaving it unset lets the next tick retry once auth recovers.
   const trimmed = login && login.trim();
-  if (trimmed) _selfLoginCache = trimmed;
-  return _selfLoginCache || null;
+  if (trimmed) _selfLoginCache.set(host, trimmed);
+  return trimmed || null;
 }
 
-// Test seam — reset the memoized login between cases.
+// Test seam — reset the memoized logins between cases.
 export function __resetSelfLoginCache() {
-  _selfLoginCache = undefined;
+  _selfLoginCache.clear();
 }
 
 /**
- * Resolve a repo's default branch via gh. Returns null on failure.
+ * Resolve a repo's default branch via gh. Runs inside `repoPath` so gh
+ * auto-detects the forge host from the repo's remote (works for github.com AND
+ * enterprise). Returns null on failure.
  */
-async function getDefaultBranch(repoFullName) {
-  const name = await execGh(['repo', 'view', repoFullName, '--json', 'defaultBranchRef', '-q', '.defaultBranchRef.name'])
+async function getDefaultBranch(repoPath) {
+  const name = await execGh(['repo', 'view', '--json', 'defaultBranchRef', '-q', '.defaultBranchRef.name'], repoPath)
     .catch(() => null);
   return name ? name.trim() : null;
 }
 
 /**
- * List open PRs targeting `baseBranch` for `repoFullName`. Returns an array of
- * normalized PR objects, or null when the gh call fails.
+ * List open PRs targeting `baseBranch` for the repo at `repoPath`. Runs inside
+ * `repoPath` so gh auto-detects the host (no `--repo`, which would default to
+ * github.com). Returns an array of normalized PR objects, or null on failure.
  */
-async function listOpenPullRequests(repoFullName, baseBranch) {
+async function listOpenPullRequests(repoPath, baseBranch) {
   const raw = await execGh([
-    'pr', 'list', '--repo', repoFullName,
+    'pr', 'list',
     '--base', baseBranch, '--state', 'open',
     '--limit', String(PR_LIST_LIMIT),
     '--json', 'number,title,author,url,createdAt,isDraft,headRefName'
-  ]).catch(() => null);
+  ], repoPath).catch(() => null);
   if (raw === null) return null;
   // Guard the parse: a success-exit gh that emits empty/malformed stdout would
   // otherwise throw a SyntaxError, breaking this module's "never throws"
@@ -178,27 +190,33 @@ export async function checkPullRequests(app, { authorFilter = 'any' } = {}) {
   const filter = PR_AUTHOR_FILTERS.includes(authorFilter) ? authorFilter : 'any';
 
   const origin = await getOriginInfo(app.repoPath).catch(() => null);
-  if (!origin?.hasOrigin || !origin.isGithub || !origin.fullName) {
+  // Accept any GitHub-family host — github.com AND self-hosted GitHub Enterprise
+  // (github.*) — not just github.com. `origin.isGithub` is github.com-only (it
+  // drives PortOS's own fork/update flow), so gating on it silently excluded
+  // enterprise repos. hostToWorkTracker classifies enterprise GitHub the same
+  // way the claim-issue router does; gitlab.* and non-forge hosts fall through.
+  if (!origin?.hasOrigin || !origin.fullName || hostToWorkTracker(origin.host) !== 'github') {
     return { ok: false, reason: 'not-a-github-repo' };
   }
   const repoFullName = origin.fullName;
+  const { repoPath } = app;
 
-  const defaultBranch = await getDefaultBranch(repoFullName);
+  const defaultBranch = await getDefaultBranch(repoPath);
   if (!defaultBranch) {
     return { ok: false, reason: 'default-branch-unresolved', repoFullName };
   }
 
   // Resolve self up front when the gate needs it — bail rather than firing
-  // blindly if gh can't tell us who "self" is.
+  // blindly if gh can't tell us who "self" is on THIS repo's host.
   let selfLogin = null;
   if (filter !== 'any') {
-    selfLogin = await getSelfLogin();
+    selfLogin = await getSelfLogin(origin.host);
     if (!selfLogin) {
       return { ok: false, reason: 'self-login-unavailable', repoFullName, defaultBranch };
     }
   }
 
-  const prs = await listOpenPullRequests(repoFullName, defaultBranch);
+  const prs = await listOpenPullRequests(repoPath, defaultBranch);
   if (prs === null) {
     return { ok: false, reason: 'pr-list-failed', repoFullName, defaultBranch };
   }
