@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   isStaleChunkError,
+  isServerReachable,
   reloadOnceForStaleChunk,
   purgeOfflineCaches,
 } from './staleChunkReload';
@@ -28,6 +29,13 @@ const setBuildId = (id) => {
   document.head.innerHTML = id
     ? `<meta name="portos-build-id" content="${id}">`
     : '';
+};
+
+// Reachability probe: HEAD / — resolve as reachable unless a test overrides.
+const stubFetch = (impl) => {
+  const fetch = vi.fn(impl ?? (() => Promise.resolve({ ok: true })));
+  vi.stubGlobal('fetch', fetch);
+  return fetch;
 };
 
 beforeEach(() => {
@@ -91,9 +99,35 @@ describe('purgeOfflineCaches', () => {
   });
 });
 
+describe('isServerReachable', () => {
+  it('is true when the HEAD probe succeeds', async () => {
+    const fetch = stubFetch();
+    await expect(isServerReachable()).resolves.toBe(true);
+    expect(fetch).toHaveBeenCalledWith('/', { method: 'HEAD', cache: 'no-store' });
+  });
+
+  it('is false when the probe rejects (offline)', async () => {
+    stubFetch(() => Promise.reject(new TypeError('Failed to fetch')));
+    await expect(isServerReachable()).resolves.toBe(false);
+  });
+
+  it('is false on a non-ok response', async () => {
+    stubFetch(() => Promise.resolve({ ok: false }));
+    await expect(isServerReachable()).resolves.toBe(false);
+  });
+
+  it('short-circuits false when navigator reports offline', async () => {
+    const fetch = stubFetch();
+    vi.stubGlobal('navigator', { onLine: false });
+    await expect(isServerReachable()).resolves.toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
 describe('reloadOnceForStaleChunk', () => {
   it('purges caches then reloads once for a given build', async () => {
     stubSessionStorage();
+    stubFetch();
     const reload = stubReload();
     const deleted = [];
     vi.stubGlobal('caches', {
@@ -110,8 +144,26 @@ describe('reloadOnceForStaleChunk', () => {
     expect(deleted).toEqual(['portos-shell-v1']);
   });
 
+  it('skips the purge but still reloads when the server is unreachable', async () => {
+    stubSessionStorage();
+    stubFetch(() => Promise.reject(new TypeError('Failed to fetch')));
+    const reload = stubReload();
+    const cacheDelete = vi.fn();
+    vi.stubGlobal('caches', {
+      keys: vi.fn().mockResolvedValue(['portos-shell-v1']),
+      delete: cacheDelete,
+    });
+
+    expect(reloadOnceForStaleChunk()).toBe(true);
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
+    // Offline: the (possibly current-build) offline shell must survive so the
+    // reload can boot it — purging would strand the user on a network error page.
+    expect(cacheDelete).not.toHaveBeenCalled();
+  });
+
   it('does not reload twice for the same build id', async () => {
     stubSessionStorage();
+    stubFetch();
     const reload = stubReload();
     vi.stubGlobal('caches', undefined);
 
@@ -124,6 +176,7 @@ describe('reloadOnceForStaleChunk', () => {
 
   it('reloads again after a new build ships (guard is build-scoped)', async () => {
     stubSessionStorage();
+    stubFetch();
     const reload = stubReload();
     vi.stubGlobal('caches', undefined);
 
@@ -135,9 +188,28 @@ describe('reloadOnceForStaleChunk', () => {
     await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(2));
   });
 
+  it('still reloads when the reachability probe hangs (timeout backstop)', async () => {
+    vi.useFakeTimers();
+    stubSessionStorage();
+    // Probe never resolves → the whole purge chain would hang without the timeout.
+    stubFetch(() => new Promise(() => {}));
+    const reload = stubReload();
+    vi.stubGlobal('caches', {
+      keys: vi.fn().mockResolvedValue([]),
+      delete: vi.fn(),
+    });
+
+    expect(reloadOnceForStaleChunk()).toBe(true);
+    expect(reload).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1500);
+    expect(reload).toHaveBeenCalledTimes(1);
+    vi.useRealTimers();
+  });
+
   it('still reloads when the cache purge hangs (timeout backstop)', async () => {
     vi.useFakeTimers();
     stubSessionStorage();
+    stubFetch();
     const reload = stubReload();
     // keys() never resolves → purge would hang without the timeout.
     vi.stubGlobal('caches', {

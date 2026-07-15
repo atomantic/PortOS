@@ -68,6 +68,20 @@ const withTimeout = (promise, ms) =>
     new Promise((resolve) => setTimeout(resolve, ms)),
   ]);
 
+// A dead network produces the same import-error messages as a genuinely stale
+// chunk, but the purge only helps when the server can hand back fresh code.
+// If the device is offline, purging would destroy the (possibly current-build)
+// offline shell and strand the user on the browser's connection-error page —
+// so probe first and keep the caches when unreachable; the recovery reload then
+// falls back to the service worker's cached shell, which is the correct offline
+// behavior. HEAD is never intercepted by the service worker (it handles GET
+// only), so this probe cannot be satisfied from cache.
+export const isServerReachable = async () => {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return false;
+  const res = await fetch('/', { method: 'HEAD', cache: 'no-store' }).catch(() => null);
+  return Boolean(res && res.ok);
+};
+
 export const reloadOnceForStaleChunk = () => {
   const buildId = getCurrentBuildId();
   const flag = buildId ? `${buildId}` : '1';
@@ -75,9 +89,14 @@ export const reloadOnceForStaleChunk = () => {
   sessionStorage.setItem(RELOAD_FLAG, flag);
   console.warn(`🔄 Stale chunk detected (build ${buildId || 'unknown'}) — clearing offline cache + reloading to pick up new bundle`);
   // Purge the offline caches BEFORE reloading so the reload can't be handed the
-  // stale shell/chunks back. Bounded by PURGE_TIMEOUT_MS so a hung Cache Storage
-  // still reloads. `reload()` fires exactly once — `Promise.race` settles once.
-  withTimeout(purgeOfflineCaches(), PURGE_TIMEOUT_MS).finally(() => {
+  // stale shell/chunks back — but only when the server is reachable (see
+  // isServerReachable). Bounded by PURGE_TIMEOUT_MS so a hung probe or Cache
+  // Storage still reloads. `reload()` fires exactly once — `Promise.race`
+  // settles once.
+  withTimeout(
+    isServerReachable().then((reachable) => (reachable ? purgeOfflineCaches() : undefined)),
+    PURGE_TIMEOUT_MS
+  ).finally(() => {
     window.location.reload();
   });
   return true;
