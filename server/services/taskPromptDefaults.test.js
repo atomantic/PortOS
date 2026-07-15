@@ -66,6 +66,24 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(actual).toEqual(SNAPSHOT.PREVIOUS_DEFAULT_PROMPTS);
   });
 
+  // feature-ideas v10: rejected-ideas ledger consultation (issue #2621).
+  // Pins the version-bump pairing — the prompt change ships WITH its version
+  // bump and the outgoing v9 default preserved for cross-install auto-upgrade.
+  it('feature-ideas v10 consults REJECTED.md and closed-unmerged PRs, preserving the v9 default', () => {
+    const current = DEFAULT_TASK_PROMPTS['feature-ideas'];
+    expect(current).toContain('REJECTED.md');
+    expect(current).toContain('is:unmerged');
+    expect(PROMPT_VERSIONS['feature-ideas']).toBe(10);
+
+    const previous = PREVIOUS_DEFAULT_PROMPTS['feature-ideas'];
+    const v9 = previous[previous.length - 1];
+    // The outgoing v9 default lacked the rejected-ideas consultation and is
+    // preserved verbatim so installs holding it are recognized and upgraded.
+    expect(v9).not.toContain('REJECTED.md');
+    expect(v9).toContain('.changelog/');
+    expect(v9).not.toBe(current);
+  });
+
   // NOTE: PROMPT_VERSIONS keys are SCHEDULE keys, not always prompt keys —
   // code-reviewer-a/b version a pipeline whose stages use the
   // code-reviewer-review / code-reviewer-implement prompt bodies — so there is

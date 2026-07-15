@@ -134,6 +134,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useCityAudio` | CyberCity ambient audio. | CyberCity only. |
 | `useCityData` | CyberCity environment data + physics. | CyberCity only. |
 | `useCityPlayback` | Timeline-scrubber transport: loads the snapshot series, steps a frame index, play/pause/speed. | CyberCity playback (history) mode only. |
+| `useCityViewport` | Classifies the window width into `phone` / `compact` / `desktop` brackets (mirrors Tailwind `sm`/`lg`) so the City HUD can branch between the desktop cockpit and the compact/phone disclosure layout in JS (only one tree mounts). Returns `{ mode, isPhone, isCompact, isDesktop, isCondensed }`. | CyberCity HUD responsive layout only. |
 | `useCitySettings` | CyberCity quality presets + persistence. | CyberCity only. |
 | `useColorMatch` | Drives a song color-match run: counts the singer in with the metronome, walks the notated score in tempo, grades each note against the live mic pitch (#1022 tracker + colorMatch lib), and exposes `{ running, countingIn, noteColors, summary, activeIndex, start, stop }` for the `<ScoreSheet>` + an accuracy readout. Taps the passed recording stream (no second mic); tears down on stop/unmount. | The Song editor's color-match panel. Don't re-wire the metronome + tracker + grading loop by hand. |
 | `useCodeReviewDefaults` | Global Code Review Defaults (Review Loop reviewer chain + per-backend local-LLM model) via a small Provider/hook pair. | TaskAddForm, ScheduleTab, anywhere a default reviewer picker is shown. |
