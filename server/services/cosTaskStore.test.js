@@ -67,6 +67,7 @@ import {
   getTaskById,
   addTask,
   updateTask,
+  reviveBlockedTask,
   deleteTask,
   reorderTasks,
   approveTask,
@@ -287,6 +288,72 @@ describe('cosTaskStore.addTask', () => {
     expect(second.duplicate).toBeUndefined();
     const { tasks } = await getCosTasks();
     expect(tasks.filter(t => firstLine(t.description) === 'shared raw')).toHaveLength(2);
+  });
+
+  it('rejects a duplicate of a failure-blocked task (#2614)', async () => {
+    // A task blocked by repeated failures still occupies its slot — without
+    // this, a persistently-failing scheduled type minted one identical blocked
+    // duplicate per cadence tick, forever.
+    const first = await addTask({ description: 'keeps failing', app: 'portos', id: 'sys-fail' }, 'internal');
+    await updateTask(first.id, { status: 'blocked', metadata: { blockedCategory: 'max-retries' } }, 'internal');
+    const second = await addTask({ description: 'keeps failing', app: 'portos' }, 'internal');
+    expect(second.duplicate).toBe(true);
+    expect(second.id).toBe(first.id);
+    const { tasks } = await getCosTasks();
+    expect(tasks.filter(t => firstLine(t.description) === 'keeps failing')).toHaveLength(1);
+  });
+
+  it('rejects a duplicate of a user-terminated blocked task (#2614)', async () => {
+    const first = await addTask({ description: 'killed on purpose', app: 'portos', id: 'sys-killed' }, 'internal');
+    await updateTask(first.id, { status: 'blocked', metadata: { blockedCategory: 'user-terminated' } }, 'internal');
+    const second = await addTask({ description: 'killed on purpose', app: 'portos' }, 'internal');
+    expect(second.duplicate).toBe(true);
+  });
+
+  it('emits tasks:changed action "unblocked" on a blocked → pending flip (#2614)', async () => {
+    // cos.init re-runs the dequeue on 'unblocked' (like 'approved') so a
+    // revived task spawns without waiting for an unrelated event or timer.
+    const task = await addTask({ description: 'revive me', app: 'portos', id: 'sys-revive' }, 'internal');
+    await updateTask(task.id, { status: 'blocked', metadata: { blockedCategory: 'max-retries' } }, 'internal');
+    mock.events.length = 0;
+    await updateTask(task.id, { status: 'pending' }, 'internal');
+    const evt = mock.events.find(e => e.name === 'tasks:changed');
+    expect(evt.payload.action).toBe('unblocked');
+    // A non-status edit still emits the plain 'updated' action.
+    mock.events.length = 0;
+    await updateTask(task.id, { priority: 'HIGH' }, 'internal');
+    expect(mock.events.find(e => e.name === 'tasks:changed').payload.action).toBe('updated');
+  });
+
+  it('reviveBlockedTask flips to pending with a FRESH retry budget (#2614)', async () => {
+    // A revived task must behave like a fresh one: without clearing the
+    // spawn/orphan budgets it would immediately re-block on the exhausted
+    // budget it blocked with. The reset also wins over caller metadata that
+    // carries a stale budget forward (pipeline hand-offs spread the prior
+    // stage's metadata).
+    const task = await addTask({ description: 'budget reset', app: 'portos', id: 'sys-budget' }, 'internal');
+    await updateTask(task.id, {
+      status: 'blocked',
+      metadata: { blockedCategory: 'max-spawns', totalSpawnCount: 99, orphanRetryCount: 3, lastOrphanedAt: '2026-01-01T00:00:00.000Z' }
+    }, 'internal');
+    const revived = await reviveBlockedTask(task.id, { metadata: { totalSpawnCount: 99, fresh: 'yes' } }, 'internal');
+    expect(revived.status).toBe('pending');
+    expect(revived.metadata.totalSpawnCount).toBeUndefined();
+    expect(revived.metadata.orphanRetryCount).toBeUndefined();
+    expect(revived.metadata.lastOrphanedAt).toBeUndefined();
+    expect(revived.metadata.blockedCategory).toBeUndefined();
+    expect(revived.metadata.fresh).toBe('yes');
+  });
+
+  it('resolving a blocked task re-opens the slot for an identical task (#2614)', async () => {
+    const first = await addTask({ description: 'retry me', app: 'portos', id: 'sys-retry' }, 'internal');
+    await updateTask(first.id, { status: 'blocked', metadata: { blockedCategory: 'max-retries' } }, 'internal');
+    // Completed no longer occupies the slot...
+    await updateTask(first.id, { status: 'completed' }, 'internal');
+    const second = await addTask({ description: 'retry me', app: 'portos', id: 'sys-retry-2' }, 'internal');
+    expect(second.duplicate).toBeUndefined();
+    const { tasks } = await getCosTasks();
+    expect(tasks.filter(t => firstLine(t.description) === 'retry me')).toHaveLength(2);
   });
 
   it('ignoreTaskId excludes one in-flight task from the dedup scan (perpetual drain-on-completion)', async () => {

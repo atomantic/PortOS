@@ -15,7 +15,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { addTask, cosEvents } from '../cos.js';
+import { addTask, reviveBlockedTask, cosEvents } from '../cos.js';
 import { buildTreatmentPrompt, buildEvaluatePrompt, buildPlanPrompt } from '../../lib/creativeDirectorPrompts.js';
 import { getToolSpecs } from '../creative/toolRegistry.js';
 import { getSettings } from '../settings.js';
@@ -78,34 +78,72 @@ async function buildTaskRecord(project, kind, scene, context) {
 }
 
 function buildDescription(project, kind, scene) {
+  // The [cd:…] suffix makes the first line unique per project: addTask's
+  // duplicate scan keys on first-line + metadata.app, and CD tasks carry no
+  // app — without a project discriminator, two projects sharing a name would
+  // dedup against each other's tasks (#2614). Full id, not a prefix — CD ids
+  // are `cd-<uuid>`, so a short slice keeps too little entropy.
+  const tag = `[cd:${project.id}]`;
   if (kind === 'treatment') {
-    return `Creative Director — Treatment for "${project.name}"`;
+    return `Creative Director — Treatment for "${project.name}" ${tag}`;
   }
   if (kind === 'plan') {
-    return `Creative Director — Production Plan for "${project.name}"`;
+    return `Creative Director — Production Plan for "${project.name}" ${tag}`;
   }
   if (kind === 'evaluate' && scene) {
     const total = project.treatment?.scenes?.length || '?';
     const intent = (scene.intent || '').slice(0, 60);
-    return `Creative Director — Evaluate Scene ${scene.order + 1}/${total}: "${intent}" (${project.name})`;
+    return `Creative Director — Evaluate Scene ${scene.order + 1}/${total}: "${intent}" (${project.name}) ${tag}`;
   }
-  return `Creative Director — ${kind} for "${project.name}"`;
+  return `Creative Director — ${kind} for "${project.name}" ${tag}`;
 }
 
 async function persistAndEmit({ id, runId, record }, project, kind, sceneId) {
-  // Record the run as `running` up-front so the Runs tab shows in-flight
-  // state immediately. completionHook updates the same runId on finish.
+  // Persist FIRST and resolve the effective task before recording the run or
+  // emitting `task:ready`. CD descriptions are deterministic per project+kind,
+  // so addTask's dedup (which also matches blocked tasks, #2614) can return an
+  // existing task instead of persisting this record — emitting `task:ready`
+  // for a never-persisted record spawns a ghost agent whose task doesn't
+  // exist (every state transition then fails with "Task not found").
+  const persisted = await addTask(record, 'internal', { raw: true });
+  let effective = record;
+  if (persisted?.duplicate) {
+    // Belt-and-braces: the [cd:…] description tag should make a cross-project
+    // match impossible, but never revive/adopt another project's task — that
+    // would rewrite its metadata to target this project.
+    if (persisted.metadata?.creativeDirector?.projectId !== project.id) {
+      console.log(`⚠️ CD ${kind} enqueue for ${project.id} collided with unrelated task ${persisted.id} — not enqueued`);
+      return persisted;
+    }
+    if (persisted.status === 'blocked') {
+      // A CD enqueue is an explicit user re-trigger — revive the blocked
+      // duplicate with the fresh payload (reviveBlockedTask clears the
+      // blocked metadata and retry budgets) instead of wedging forever.
+      await reviveBlockedTask(persisted.id, {
+        priority: record.priority,
+        metadata: record.metadata
+      }, 'internal');
+      effective = { ...record, id: persisted.id };
+      console.log(`📤 CD ${kind} task revived blocked duplicate ${persisted.id} on ${project.id}`);
+    } else {
+      // An identical CD task is already pending/in_progress — it will run and
+      // report through its own runId; don't spawn a second agent for it.
+      console.log(`⚠️ CD ${kind} task already queued as ${persisted.id} (${persisted.status}) — skipping duplicate enqueue`);
+      return persisted;
+    }
+  }
+  // Record the run as `running` so the Runs tab shows in-flight state.
+  // completionHook updates the same runId on finish.
   await recordRun(project.id, {
     runId,
-    taskId: id,
+    taskId: effective.id,
     kind,
     sceneId: sceneId || null,
     status: 'running',
   }).catch((err) => console.log(`⚠️ CD recordRun(running) failed: ${err.message}`));
-  await addTask(record, 'internal', { raw: true });
-  cosEvents.emit('task:ready', record);
-  console.log(`📤 CD task enqueued: ${id} (${kind}${sceneId ? ` for ${sceneId}` : ''} on ${project.id})`);
-  return record;
+  cosEvents.emit('task:ready', effective);
+  console.log(`📤 CD task enqueued: ${effective.id} (${kind}${sceneId ? ` for ${sceneId}` : ''} on ${project.id})`);
+  return effective;
 }
 
 export async function enqueueTreatmentTask(project) {

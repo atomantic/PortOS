@@ -152,6 +152,7 @@ vi.mock('../agentState.js', () => ({
 }));
 vi.mock('../cos.js', () => ({
   addTask: vi.fn(async (data) => ({ id: 'task-test', ...data })),
+  reviveBlockedTask: vi.fn(async () => ({})),
   isRunning: vi.fn(() => true),
   getAllTasks: vi.fn(async () => ({ user: { tasks: tasksRef.value }, cos: { tasks: [] } })),
 }));

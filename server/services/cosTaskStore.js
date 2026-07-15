@@ -188,7 +188,7 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
   }
 
   // Reject duplicate: same first-line description AND same target app already
-  // pending or in_progress. The `metadata.app` scope matters — the same
+  // pending, in_progress, or blocked. The `metadata.app` scope matters — the same
   // description against two different apps is two different pieces of work
   // (e.g. "fix the failing test" in PortOS vs in BookLoom), and collapsing
   // them silently drops the second dispatch.
@@ -213,14 +213,20 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
   // improvement-check timer firing close together) each add an identical
   // `[Improvement: PortOS] …` task, producing the overlapping duplicate runs.
   const targetApp = taskData.app ?? taskData.metadata?.app ?? null;
+  // Blocked tasks count as duplicates too (#2614): a task blocked by repeated
+  // failures (max-retries, max-spawns, provider-config, …) still occupies its
+  // slot — the retry path is unblocking the existing task, not minting a new
+  // identical one. Before this, a persistently-failing scheduled type piled up
+  // one blocked duplicate per cadence tick, forever (nothing reaps blocked
+  // tasks automatically).
   const duplicate = tasks.find(t =>
     t.id !== ignoreTaskId &&
-    (t.status === 'pending' || t.status === 'in_progress') &&
+    (t.status === 'pending' || t.status === 'in_progress' || t.status === 'blocked') &&
     firstLine(t.description).toLowerCase() === normalizedDesc &&
     (t.metadata?.app || null) === targetApp
   );
   if (duplicate) {
-    console.log(`⚠️ Duplicate task rejected: "${normalizedDesc.substring(0, 60)}" matches ${duplicate.id}`);
+    console.log(`⚠️ Duplicate task rejected: "${normalizedDesc.substring(0, 60)}" matches ${duplicate.id}${duplicate.status === 'blocked' ? ` (blocked: ${duplicate.metadata?.blockedCategory || 'unknown'})` : ''}`);
     return { ...duplicate, duplicate: true };
   }
 
@@ -426,6 +432,7 @@ export async function updateTask(taskId, updates, taskType = 'user', { now = Dat
     metadata: updatedMetadata
   };
 
+  const previousStatus = tasks[taskIndex].status;
   tasks[taskIndex] = updatedTask;
 
   // Write back to file
@@ -433,9 +440,43 @@ export async function updateTask(taskId, updates, taskType = 'user', { now = Dat
   const markdown = generateTasksMarkdown(tasks, includeApprovalFlags);
   await writeFile(filePath, markdown);
 
-  cosEvents.emit('tasks:changed', { type: taskType, action: 'updated', task: updatedTask });
+  // A blocked → pending flip is a revive: the task is newly spawnable, exactly
+  // like an approval. Emit a distinct action so cos.init's listener re-runs the
+  // dequeue (#2614) — the generic 'updated' action doesn't wake the scheduler,
+  // which left revived tasks stranded until an unrelated event or timer fired.
+  const action = previousStatus === 'blocked' && updatedTask.status === 'pending' ? 'unblocked' : 'updated';
+  cosEvents.emit('tasks:changed', { type: taskType, action, task: updatedTask });
   return updatedTask;
   });
+}
+
+/**
+ * Explicitly revive a blocked task back to pending (#2614).
+ *
+ * The retry path for a failure-blocked duplicate is unblocking the existing
+ * task, not minting a new one — every explicit dispatch path (on-demand Run,
+ * pipeline advance, Creative Director re-trigger, manual job trigger, voice
+ * dispatch) that collides with a blocked twin routes through here. On top of
+ * updateTask's blocked-transition clear (blocker/blockedReason/blockedCategory/
+ * blockedAt/failureCount/lastErrorCategory/lastFailureAt), this also resets the
+ * spawn/orphan retry budgets — a revived task must behave like a fresh one, not
+ * immediately re-block on the exhausted budget it blocked with. The reset keys
+ * are spread AFTER the caller's fresh metadata so a carried-forward budget
+ * (e.g. a pipeline hand-off spreading the prior stage's metadata) can't win.
+ * updateTask emits `tasks:changed` action 'unblocked', which re-runs the
+ * dequeue, so callers don't need a separate wake signal.
+ */
+export async function reviveBlockedTask(taskId, { priority, metadata } = {}, taskType = 'internal') {
+  return updateTask(taskId, {
+    status: 'pending',
+    ...(priority ? { priority } : {}),
+    metadata: {
+      ...(metadata || {}),
+      totalSpawnCount: undefined,
+      orphanRetryCount: undefined,
+      lastOrphanedAt: undefined
+    }
+  }, taskType);
 }
 
 /**
