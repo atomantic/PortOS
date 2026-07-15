@@ -257,6 +257,24 @@ describe('maybeCreateInvestigationTask', () => {
     await maybeCreateInvestigationTask('agent-1', { id: 'inv-2', description: 'x', metadata: { isInvestigation: 'true' } }, { category: 'unknown', message: 'boom' });
     expect(addTask).not.toHaveBeenCalled();
   });
+
+  it('recognizes pre-#2615 investigation tasks by their legacy headline (no metadata marker)', async () => {
+    await maybeCreateInvestigationTask('agent-1', {
+      id: 'inv-legacy',
+      description: '[Auto] Investigate agent failure: some old failure message\n\n## What happened\n...',
+      metadata: {}
+    }, { category: 'unknown', message: 'boom' });
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('does not mistake an ordinary task mentioning investigations for an investigation', async () => {
+    await maybeCreateInvestigationTask('agent-1', {
+      id: 'task-ordinary',
+      description: 'Improve the [Auto] Investigate agent failure flow',
+      metadata: {}
+    }, { category: 'unknown', message: 'boom' });
+    expect(addTask).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe('buildInvestigationFingerprint', () => {
@@ -357,16 +375,17 @@ describe('createInvestigationTask guards (#2615)', () => {
     expect(addTask).toHaveBeenCalledTimes(INVESTIGATION_CIRCUIT_MAX_CREATIONS + 1);
   });
 
-  it('embeds the failed task\'s app in the headline so first-line dedup cannot collapse different apps', async () => {
+  it('embeds the fingerprint in the headline so first-line dedup tracks fingerprint identity exactly', async () => {
     await createInvestigationTask('agent-1', { ...failedTask, metadata: { app: 'ExampleApp' } }, analysis);
     expect(addTask.mock.calls[0][0].description.split('\n')[0])
-      .toBe('[Auto] Investigate agent failure [ExampleApp]: Agent exited during startup');
-    // No app → unchanged headline shape.
+      .toBe('[Auto] Investigate agent failure [startup-failure:user:ExampleApp]: Agent exited during startup');
+    // Different kind, same message → different first line, so addTask's
+    // description dedup can never falsely collapse two distinct causes.
     addTask.mockClear();
     mockEmptyStore();
-    await createInvestigationTask('agent-2', failedTask, analysis);
+    await createInvestigationTask('agent-2', { ...failedTask, metadata: { analysisType: 'app-improve' } }, analysis);
     expect(addTask.mock.calls[0][0].description.split('\n')[0])
-      .toBe('[Auto] Investigate agent failure: Agent exited during startup');
+      .toBe('[Auto] Investigate agent failure [startup-failure:app-improve:none]: Agent exited during startup');
   });
 
   it('serializes concurrent same-fingerprint creates so only one task lands (TOCTOU)', async () => {

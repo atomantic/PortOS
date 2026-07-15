@@ -569,6 +569,22 @@ export function buildInvestigationFingerprint(originalTask, analysis) {
   return `${category}:${kind}:${app}`;
 }
 
+// Stable headline every investigation task ever created starts with — the one
+// signal that exists on BOTH new tasks and pre-#2615 tasks (and on tasks synced
+// from not-yet-upgraded federated peers, which a local migration couldn't fix).
+const INVESTIGATION_HEADLINE_PREFIX = '[Auto] Investigate agent failure';
+
+/**
+ * Is this task an investigation task? Prefers the durable metadata marker;
+ * falls back to the legacy headline shape so investigations persisted before
+ * the marker existed still never spawn meta-investigations.
+ */
+export function isInvestigationTask(task) {
+  if (isTruthyMeta(task?.metadata?.isInvestigation)) return true;
+  return typeof task?.description === 'string'
+    && task.description.trimStart().startsWith(INVESTIGATION_HEADLINE_PREFIX);
+}
+
 // Find an existing investigation task (user or internal queue) still tracking
 // this fingerprint in a non-terminal status.
 async function findOpenInvestigation(fingerprint) {
@@ -642,14 +658,14 @@ async function doCreateInvestigationTask(agentId, originalTask, errorAnalysis) {
     || analysis.suggestedFix
     || 'Review the agent output, decide whether to fix the underlying config/code and retry, or close the task.';
 
-  // The app rides in the headline (mirroring the `[Improvement: <app>]`
-  // convention) so addTask's first-line dedup — which sees no `metadata.app`
-  // on investigation tasks — can't collapse identical messages from DIFFERENT
-  // apps into one task. Same-app repeats are already caught by the fingerprint
-  // scan above; deliberately NOT passed as `app` to addTask, which would
-  // change workspace routing for the investigation agent.
-  const app = originalTask?.metadata?.app || null;
-  const description = `[Auto] Investigate agent failure${app ? ` [${app}]` : ''}: ${message}
+  // The fingerprint rides in the headline so addTask's first-line dedup —
+  // which sees no `metadata.app` on investigation tasks — tracks fingerprint
+  // identity exactly: identical messages from different apps OR different
+  // task kinds/categories can never falsely collapse into one task, and
+  // same-fingerprint repeats are already caught by the scan above. The app
+  // is deliberately NOT passed as `app` to addTask, which would change
+  // workspace routing for the investigation agent.
+  const description = `${INVESTIGATION_HEADLINE_PREFIX} [${fingerprint}]: ${message}
 
 ## What happened
 Agent \`${agentId}\` failed while working on task \`${originalTask.id}\` (${originalDesc}).
@@ -706,9 +722,11 @@ export async function maybeCreateInvestigationTask(agentId, task, analysis) {
     return;
   }
   // Meta-cascade guard (#2615): a failed investigation task must never spawn an
-  // investigation of the investigation. isTruthyMeta covers the markdown
-  // round-trip, where boolean metadata comes back as the string 'true'.
-  if (isTruthyMeta(task?.metadata?.isInvestigation)) {
+  // investigation of the investigation. isInvestigationTask prefers the durable
+  // metadata marker (isTruthyMeta covers the markdown round-trip, where boolean
+  // metadata comes back as the string 'true') and falls back to the legacy
+  // headline shape for tasks persisted before the marker existed.
+  if (isInvestigationTask(task)) {
     emitLog('info', `⏭️ Skipping meta-investigation for ${task.id}: failed task is itself an investigation`, { agentId, taskId: task.id, category: analysis?.category });
     return;
   }
