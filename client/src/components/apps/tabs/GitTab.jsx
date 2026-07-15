@@ -328,7 +328,10 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
   };
 
   const mergedBranchCount = remoteBranches.filter(rb => rb.merged && !rb.isDefault).length;
-  const localMergedCount = branches.filter(b => b.merged).length;
+  // Branches checked out in a worktree can't be locally deleted, so cleanup-merged
+  // skips them — don't count them toward the "Clean N merged" button or it promises
+  // deletions the server refuses.
+  const localMergedCount = branches.filter(b => b.merged && !b.worktree).length;
 
   const handleCleanupMerged = async () => {
     if (!repoPath || cleaningUp) return;
@@ -605,6 +608,15 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
                           <span className="flex items-center gap-1 text-xs text-port-success px-1.5 py-0.5 bg-port-success/10 rounded shrink-0">
                             <GitMerge size={10} />
                             merged
+                          </span>
+                        )}
+                        {branch.worktree && (
+                          <span
+                            className="flex items-center gap-1 text-xs text-gray-400 px-1.5 py-0.5 bg-gray-500/10 rounded shrink-0"
+                            title="Checked out in a worktree — can't be deleted until the worktree is removed"
+                          >
+                            <GitBranch size={10} />
+                            worktree
                           </span>
                         )}
                         {branch.tracking && (

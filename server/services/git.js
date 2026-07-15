@@ -666,17 +666,18 @@ async function getLocalMergedBranchNames(dir, defaultBranch) {
 
 /**
  * Get all local branches with tracking info
- * @returns {Promise<Array<{name: string, current: boolean, tracking: string|null, ahead: number, behind: number, isDefault: boolean, merged: boolean}>>}
+ * @returns {Promise<Array<{name: string, current: boolean, tracking: string|null, ahead: number, behind: number, isDefault: boolean, merged: boolean, worktree: boolean}>>}
  */
 export async function getBranches(dir) {
   // Get branches with verbose info (includes tracking)
-  const [result, { baseBranch }] = await Promise.all([
+  const [result, { baseBranch }, worktreeBranches] = await Promise.all([
     execGit(
       ['branch', '-vv', '--format=%(HEAD)|%(refname:short)|%(upstream:short)|%(upstream:track)'],
       dir,
       { ignoreExitCode: true }
     ),
-    getRepoBranches(dir)
+    getRepoBranches(dir),
+    getWorktreeBranches(dir)
   ]);
 
   const defaultBranch = baseBranch || 'main';
@@ -690,6 +691,11 @@ export async function getBranches(dir) {
     .map(b => ({
       ...b,
       isDefault: b.name === defaultBranch,
+      // A branch checked out in another worktree can't be `git branch -d`'d, so
+      // cleanup-merged skips it. Flag it so the UI doesn't advertise it as
+      // deletable (otherwise the "Clean N merged" button promises deletions the
+      // server correctly refuses, and the user gets "No merged branches to clean up").
+      worktree: !b.current && worktreeBranches.has(b.name),
       merged: !b.current && !protectedSet.has(b.name) && mergedSet.has(b.name)
     }));
 }
