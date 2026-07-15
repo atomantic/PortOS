@@ -36,10 +36,14 @@ describe('PersonalityTab helpers', () => {
     expect(dedupeSeriesLabels(['x', 'y'])).toEqual(['x', 'y']);
   });
 
-  it('providerModelOptions filters sentinel ids and falls back to a null default chip', () => {
+  it('providerModelOptions filters sentinel and embedding ids and falls back to a null default chip', () => {
     expect(
       providerModelOptions({ models: ['gpt-x', 'codex-configured-default'], defaultModel: 'gpt-x' })
     ).toEqual(['gpt-x']);
+    // Embedding-only models can't serve a chat-generation prompt.
+    expect(
+      providerModelOptions({ models: ['nomic-embed-text:latest', 'llama3.1:8b'], defaultModel: null })
+    ).toEqual(['llama3.1:8b']);
     // Sentinel-only provider (e.g. antigravity) → one "provider default" chip.
     expect(
       providerModelOptions({

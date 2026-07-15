@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Play,
   Brain,
@@ -18,7 +19,7 @@ import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 import useChartColors from '../../../hooks/useChartColors.js';
 import { timeAgo, formatDateShort } from '../../../utils/formatters';
-import { filterSelectableModels } from '../../../utils/providers.js';
+import { filterGenerationModels } from '../../../utils/providers.js';
 
 // Pure helpers are exported for unit tests (PersonalityTab.test.jsx).
 
@@ -37,12 +38,13 @@ export const seriesLabel = (run) => `${run.model || run.providerId} · ${formatD
 export const dedupeSeriesLabels = (bases) =>
   bases.map((base, i) => (bases.indexOf(base) === i ? base : `${base} (${i + 1})`));
 
-// Selectable model chips for a provider. A provider whose list holds only
-// configured-default sentinels (e.g. antigravity) still gets one `null` chip —
-// "provider default" — which submits no model override and lets the server
-// resolve the effective model.
+// Selectable model chips for a provider — configured-default sentinels AND
+// embedding-only models (which can't serve a chat-generation prompt) are
+// excluded. A provider whose list holds only sentinels (e.g. antigravity)
+// still gets one `null` chip — "provider default" — which submits no model
+// override and lets the server resolve the effective model.
 export const providerModelOptions = (provider) => {
-  const models = filterSelectableModels(
+  const models = filterGenerationModels(
     provider.models?.length ? provider.models : [provider.defaultModel]
   ).filter(Boolean);
   return models.length ? models : [null];
@@ -183,10 +185,25 @@ export default function PersonalityTab() {
   const [includeAlignment, setIncludeAlignment] = useState(true);
   const [running, setRunning] = useState(null); // { current, total, model } | null
 
-  // Results & views
+  // Results & views. The expanded run and compare selection live in the URL
+  // (?run=<id>&compare=<id,id>) per the repo's deep-linking convention, so a
+  // specific result or comparison is shareable/bookmarkable; stale ids
+  // degrade gracefully (filtered against loaded history).
   const [results, setResults] = useState([]);
-  const [expandedRunId, setExpandedRunId] = useState(null);
-  const [compareIds, setCompareIds] = useState([]);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const expandedRunId = searchParams.get('run') || null;
+  const compareIds = useMemo(
+    () => (searchParams.get('compare') || '').split(',').filter(Boolean),
+    [searchParams]
+  );
+  const updateParams = (mutate) =>
+    setSearchParams((prev) => {
+      const p = new URLSearchParams(prev);
+      mutate(p);
+      return p;
+    }, { replace: true });
+  const setExpandedRunId = (id) =>
+    updateParams((p) => (id ? p.set('run', id) : p.delete('run')));
 
   // Options panel
   const [showOptions, setShowOptions] = useState(false);
@@ -204,7 +221,9 @@ export default function PersonalityTab() {
     setLoading(true);
     const [providersData, historyData, settingsData] = await Promise.all([
       api.getProviders({ silent: true }).catch(() => ({ providers: [] })),
-      api.getModelPersonalityHistory(50, { silent: true }).catch(() => []),
+      // No limit — fetch the full retained history (server-capped) so every
+      // kept record is reachable for compare/delete.
+      api.getModelPersonalityHistory(undefined, { silent: true }).catch(() => []),
       api.getModelPersonalitySettings({ silent: true }).catch(() => null)
     ]);
     setProviders((providersData.providers || []).filter((p) => p.enabled));
@@ -248,6 +267,11 @@ export default function PersonalityTab() {
         setExpandedRunId(record.runId);
       }
     }
+    // Re-sync with the server's capped history — appending at the cap evicts
+    // the oldest record server-side, which the optimistic prepends above
+    // don't reflect (ghost rows would 404 on delete).
+    const fresh = await api.getModelPersonalityHistory(undefined, { silent: true }).catch(() => null);
+    if (Array.isArray(fresh)) setHistory(fresh);
     setRunning(null);
   };
 
@@ -259,8 +283,12 @@ export default function PersonalityTab() {
     if (!ok) return;
     setHistory((prev) => prev.filter((r) => r.runId !== runId));
     setResults((prev) => prev.filter((r) => r.runId !== runId));
-    setCompareIds((prev) => prev.filter((id) => id !== runId));
-    if (expandedRunId === runId) setExpandedRunId(null);
+    updateParams((p) => {
+      const remaining = (p.get('compare') || '').split(',').filter((id) => id && id !== runId);
+      if (remaining.length) p.set('compare', remaining.join(','));
+      else p.delete('compare');
+      if (p.get('run') === runId) p.delete('run');
+    });
   };
 
   const saveSettings = async () => {
@@ -278,9 +306,12 @@ export default function PersonalityTab() {
   };
 
   const toggleCompare = (runId) => {
-    setCompareIds((prev) =>
-      prev.includes(runId) ? prev.filter((id) => id !== runId) : [...prev, runId]
-    );
+    updateParams((p) => {
+      const ids = (p.get('compare') || '').split(',').filter(Boolean);
+      const next = ids.includes(runId) ? ids.filter((id) => id !== runId) : [...ids, runId];
+      if (next.length) p.set('compare', next.join(','));
+      else p.delete('compare');
+    });
   };
 
   const compareRuns = useMemo(
@@ -419,7 +450,7 @@ export default function PersonalityTab() {
                 className="w-full px-3 py-2 min-h-[40px] text-sm rounded-lg border border-port-border bg-port-bg text-white focus:ring-port-accent focus:border-port-accent disabled:opacity-50"
               >
                 <option value="">Provider default</option>
-                {filterSelectableModels(scorerProvider?.models).map((m) => (
+                {filterGenerationModels(scorerProvider?.models).map((m) => (
                   <option key={m} value={m}>{m}</option>
                 ))}
               </select>
