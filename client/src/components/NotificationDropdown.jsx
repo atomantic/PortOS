@@ -88,7 +88,7 @@ export default function NotificationDropdown({
       {/* Bell button with badge */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="relative inline-flex items-center justify-center min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 sm:p-2 rounded-lg hover:bg-port-card transition-colors focus:outline-hidden focus:ring-2 focus:ring-port-accent focus:ring-offset-2 focus:ring-offset-port-bg"
+        className="relative inline-flex items-center justify-center min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 sm:p-2 rounded-lg hover:bg-port-card transition-colors focus:outline-hidden focus:ring-2 focus:ring-port-accent focus:ring-offset-2 focus:ring-offset-port-bg"
         title="Notifications"
         aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
         aria-expanded={isOpen}
@@ -107,7 +107,7 @@ export default function NotificationDropdown({
         <div
           role="menu"
           aria-label="Notifications menu"
-          className={`absolute w-80 bg-port-card border border-port-border rounded-lg shadow-xl z-50 overflow-hidden ${
+          className={`absolute w-80 max-w-[calc(100vw-2rem)] bg-port-card border border-port-border rounded-lg shadow-xl z-50 overflow-hidden ${
             position === 'bottom'
               ? 'left-0 bottom-full mb-2'  // Opens upward from sidebar footer
               : 'right-0 top-full mt-2'     // Opens downward from header
