@@ -323,7 +323,7 @@ export default function CmdKSearch() {
         key={`${item.kind}:${item.path ?? item.id ?? item.sourceId + ':' + title}`}
         ref={(el) => { resultRefs.current[currentIdx] = el; }}
         onClick={() => dispatchCommand(item)}
-        className={`flex items-start gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors ${
+        className={`flex items-start gap-3 px-3 py-2 min-h-[44px] rounded-lg cursor-pointer transition-colors ${
           isFocused ? 'bg-port-accent/10' : 'hover:bg-white/5'
         }`}
         role="option"
