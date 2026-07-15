@@ -36,14 +36,11 @@ async function save(data) {
 }
 
 /**
- * Execute a gh CLI command safely using spawn. Pass `cwd` to run inside a repo
- * checkout so gh auto-detects the forge host from that repo's git remote (how
- * `gh pr list` / `gh repo view` target an enterprise host). `gh api` is the
- * exception — it ignores cwd and needs an explicit `--hostname` in `args`.
+ * Execute a gh CLI command safely using spawn
  */
-export function execGh(args, cwd) {
+export function execGh(args) {
   return new Promise((resolve, reject) => {
-    const child = spawn('gh', args, { cwd, shell: false, windowsHide: true });
+    const child = spawn('gh', args, { shell: false, windowsHide: true });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (d) => { stdout += d.toString(); });

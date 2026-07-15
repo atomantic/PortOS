@@ -78,28 +78,31 @@ export function __resetSelfLoginCache() {
 }
 
 /**
- * Resolve a repo's default branch via gh. Runs inside `repoPath` so gh
- * auto-detects the forge host from the repo's remote (works for github.com AND
- * enterprise). Returns null on failure.
+ * Resolve a repo's default branch via gh. `repoSpec` is a host-qualified
+ * `HOST/OWNER/REPO` selector (see checkPullRequests) — pinning the host makes
+ * this work on GitHub Enterprise (a bare `OWNER/REPO` defaults to github.com)
+ * while staying deterministic on a multi-remote (fork + upstream) checkout that
+ * cwd-based auto-detection would resolve ambiguously. Returns null on failure.
  */
-async function getDefaultBranch(repoPath) {
-  const name = await execGh(['repo', 'view', '--json', 'defaultBranchRef', '-q', '.defaultBranchRef.name'], repoPath)
+async function getDefaultBranch(repoSpec) {
+  const name = await execGh(['repo', 'view', repoSpec, '--json', 'defaultBranchRef', '-q', '.defaultBranchRef.name'])
     .catch(() => null);
   return name ? name.trim() : null;
 }
 
 /**
- * List open PRs targeting `baseBranch` for the repo at `repoPath`. Runs inside
- * `repoPath` so gh auto-detects the host (no `--repo`, which would default to
- * github.com). Returns an array of normalized PR objects, or null on failure.
+ * List open PRs targeting `baseBranch` for the host-qualified `repoSpec`
+ * (`HOST/OWNER/REPO`). The host qualifier is what makes this enterprise-correct
+ * and fork-safe — see getDefaultBranch. Returns an array of normalized PR
+ * objects, or null on failure.
  */
-async function listOpenPullRequests(repoPath, baseBranch) {
+async function listOpenPullRequests(repoSpec, baseBranch) {
   const raw = await execGh([
-    'pr', 'list',
+    'pr', 'list', '--repo', repoSpec,
     '--base', baseBranch, '--state', 'open',
     '--limit', String(PR_LIST_LIMIT),
     '--json', 'number,title,author,url,createdAt,isDraft,headRefName'
-  ], repoPath).catch(() => null);
+  ]).catch(() => null);
   if (raw === null) return null;
   // Guard the parse: a success-exit gh that emits empty/malformed stdout would
   // otherwise throw a SyntaxError, breaking this module's "never throws"
@@ -199,9 +202,14 @@ export async function checkPullRequests(app, { authorFilter = 'any' } = {}) {
     return { ok: false, reason: 'not-a-github-repo' };
   }
   const repoFullName = origin.fullName;
-  const { repoPath } = app;
+  // Host-qualified `HOST/OWNER/REPO` selector for gh's `--repo`. The host
+  // qualifier fixes the original bug (a bare `OWNER/REPO` defaults to
+  // github.com, so enterprise repos were silently queried against github.com)
+  // AND stays deterministic on a fork+upstream checkout, where relying on gh's
+  // cwd remote-detection would ambiguously resolve to the parent repo.
+  const repoSpec = `${origin.host}/${repoFullName}`;
 
-  const defaultBranch = await getDefaultBranch(repoPath);
+  const defaultBranch = await getDefaultBranch(repoSpec);
   if (!defaultBranch) {
     return { ok: false, reason: 'default-branch-unresolved', repoFullName };
   }
@@ -216,7 +224,7 @@ export async function checkPullRequests(app, { authorFilter = 'any' } = {}) {
     }
   }
 
-  const prs = await listOpenPullRequests(repoPath, defaultBranch);
+  const prs = await listOpenPullRequests(repoSpec, defaultBranch);
   if (prs === null) {
     return { ok: false, reason: 'pr-list-failed', repoFullName, defaultBranch };
   }

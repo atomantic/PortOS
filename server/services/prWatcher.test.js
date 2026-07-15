@@ -260,8 +260,18 @@ describe('checkPullRequests', () => {
     const r = await checkPullRequests({ id: 'ent', repoPath: '/repos/ent', prWatcherState: { lastSeenPrNumber: 6 } }, { authorFilter: 'self' });
     expect(r.ok).toBe(true);
     expect(r.newPrs.map(p => p.number)).toEqual([7]);
-    // self was resolved on the enterprise host, so the enterprise-login PR matches.
+    // Mechanism assertions (not just the end result): self is resolved on the
+    // enterprise host via --hostname, and repo view / pr list pin the
+    // host-qualified HOST/OWNER/REPO selector. These pin the exact contract so a
+    // regression that reintroduced the original bug — a host-less `--repo o/r`
+    // (defaults to github.com) or a dropped host qualifier — fails here.
     expect(execGhMock).toHaveBeenCalledWith(['api', 'user', '--hostname', 'github.enterprise.test', '--jq', '.login']);
+    expect(execGhMock).toHaveBeenCalledWith(['repo', 'view', 'github.enterprise.test/o/r', '--json', 'defaultBranchRef', '-q', '.defaultBranchRef.name']);
+    expect(execGhMock).toHaveBeenCalledWith(['pr', 'list', '--repo', 'github.enterprise.test/o/r', '--base', 'main', '--state', 'open', '--limit', '200', '--json', 'number,title,author,url,createdAt,isDraft,headRefName']);
+    // No call ever passes a host-less `--repo o/r` (the exact original bug).
+    const usedHostlessRepo = execGhMock.mock.calls.some(([args]) =>
+      Array.isArray(args) && args.indexOf('--repo') !== -1 && args[args.indexOf('--repo') + 1] === 'o/r');
+    expect(usedHostlessRepo).toBe(false);
   });
 
   it('rejects a non-GitHub (GitLab) host as not-a-github-repo', async () => {
