@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError, createServiceErrorMapper } from '../lib/errorHandler.js';
 import {
   validateRequest,
   storySessionCreateSchema,
@@ -36,11 +36,7 @@ const SERVICE_ERROR_STATUS = {
   [ERR_NOT_FOUND]: 404,
   [ERR_VALIDATION]: 400,
 };
-const mapServiceError = (err) => {
-  const status = SERVICE_ERROR_STATUS[err?.code];
-  if (status) return new ServerError(err.message, { status, code: err.code });
-  return err;
-};
+const mapServiceError = createServiceErrorMapper(SERVICE_ERROR_STATUS);
 
 // Echo the step manifest so the client stepper doesn't hardcode the order /
 // labels (single source of truth is server/lib/storyBuilderSteps.js).

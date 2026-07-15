@@ -5,7 +5,7 @@
  */
 
 import { z } from 'zod';
-import { ServerError } from '../../lib/errorHandler.js';
+import { createServiceErrorMapper } from '../../lib/errorHandler.js';
 import * as seriesSvc from '../../services/pipeline/series.js';
 import * as issuesSvc from '../../services/pipeline/issues.js';
 import * as seasonsSvc from '../../services/pipeline/seasons.js';
@@ -48,15 +48,10 @@ const SERVICE_ERROR_STATUS = {
   MERGE_CASCADE_INCOMPLETE: 409,
 };
 
-export const mapServiceError = (err) => {
-  const status = SERVICE_ERROR_STATUS[err?.code];
-  if (status) {
-    // An incomplete merge cascade forwards the survivor/loser ids + which step
-    // failed so the UI can tell the user exactly what didn't move.
-    return new ServerError(err.message, { status, code: err.code, context: buildCascadeContext(err) });
-  }
-  return err;
-};
+// An incomplete merge cascade forwards the survivor/loser ids + which step
+// failed (via buildCascadeContext) so the UI can tell the user exactly what
+// didn't move.
+export const mapServiceError = createServiceErrorMapper(SERVICE_ERROR_STATUS, buildCascadeContext);
 
 // Arc / season-episodes / verify — Phase 3 of Story Arc Planning. The LLM
 // calls share a provider/model override shape.

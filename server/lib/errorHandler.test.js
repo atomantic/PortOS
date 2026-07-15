@@ -4,7 +4,8 @@ import {
   normalizeError,
   emitErrorEvent,
   errorEvents,
-  errorMiddleware
+  errorMiddleware,
+  createServiceErrorMapper
 } from './errorHandler.js';
 
 describe('errorHandler.js', () => {
@@ -229,6 +230,47 @@ describe('errorHandler.js', () => {
       expect(safeContext).toEqual({ safe: 'visible' });
       expect(safeContext.apiKey).toBeUndefined();
       errorEvents.off('error', listener);
+    });
+  });
+
+  describe('createServiceErrorMapper', () => {
+    const STATUS = { SVC_NOT_FOUND: 404, SVC_VALIDATION: 400 };
+
+    it('maps a recognized code to a ServerError with the mapped status', () => {
+      const map = createServiceErrorMapper(STATUS);
+      const mapped = map(Object.assign(new Error('missing'), { code: 'SVC_NOT_FOUND' }));
+      expect(mapped).toBeInstanceOf(ServerError);
+      expect(mapped.status).toBe(404);
+      expect(mapped.code).toBe('SVC_NOT_FOUND');
+      expect(mapped.message).toBe('missing');
+    });
+
+    it('passes an unrecognized error through untouched', () => {
+      const map = createServiceErrorMapper(STATUS);
+      const original = Object.assign(new Error('boom'), { code: 'SOMETHING_ELSE' });
+      expect(map(original)).toBe(original);
+    });
+
+    it('passes a code-less error through untouched', () => {
+      const map = createServiceErrorMapper(STATUS);
+      const original = new Error('plain');
+      expect(map(original)).toBe(original);
+    });
+
+    it('attaches a non-empty buildContext result as context', () => {
+      const map = createServiceErrorMapper(STATUS, (err) => ({ blockingSeries: err.blockingSeries }));
+      const mapped = map(Object.assign(new Error('busy'), { code: 'SVC_VALIDATION', blockingSeries: ['s1'] }));
+      expect(mapped.context).toEqual({ blockingSeries: ['s1'] });
+    });
+
+    it('omits context when buildContext returns undefined or an empty object', () => {
+      const map = createServiceErrorMapper(STATUS, () => undefined);
+      const mapped = map(Object.assign(new Error('x'), { code: 'SVC_VALIDATION' }));
+      expect(mapped.context).toEqual({});
+
+      const mapEmpty = createServiceErrorMapper(STATUS, () => ({}));
+      const mappedEmpty = mapEmpty(Object.assign(new Error('y'), { code: 'SVC_VALIDATION' }));
+      expect(mappedEmpty.context).toEqual({});
     });
   });
 });

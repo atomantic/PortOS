@@ -76,6 +76,35 @@ export function failValidation(parsed) {
   );
 }
 
+/**
+ * Build a service-error → ServerError mapper for route handlers.
+ *
+ * Domain services throw coded plain Errors (`Object.assign(new Error(msg),
+ * { code })`); routes catch them and rethrow as `ServerError`s so the
+ * centralized middleware renders the standard `{ error, code, timestamp,
+ * context? }` envelope. This factory replaces the ~identical `mapServiceError`
+ * copies that had accreted across the pipeline / builder / media routers.
+ *
+ * @param {Record<string, number>} statusMap  service error `code` → HTTP status.
+ * @param {(err: any) => object|undefined} [buildContext]  optional per-error
+ *   context builder (e.g. a merge-cascade or delete-guard diagnostic payload);
+ *   an empty/undefined result is omitted from the response envelope.
+ * @returns {(err: any) => any} mapper — recognized codes become a `ServerError`;
+ *   anything else passes through untouched (it normalizes to a 500).
+ */
+export function createServiceErrorMapper(statusMap, buildContext) {
+  return (err) => {
+    const status = statusMap[err?.code];
+    if (!status) return err;
+    const context = buildContext ? buildContext(err) : undefined;
+    return new ServerError(err.message, {
+      status,
+      code: err.code,
+      ...(context && Object.keys(context).length > 0 ? { context } : {}),
+    });
+  };
+}
+
 export function asyncHandler(fn) {
   return (req, res, next) => {
     Promise.resolve(fn(req, res, next)).catch((err) => {
