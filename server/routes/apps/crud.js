@@ -18,96 +18,21 @@ import { notifyAppsChanged, PORTOS_APP_ID } from '../../services/apps.js';
 import * as pm2Service from '../../services/pm2.js';
 import { validateRequest, appSchema, appUpdateSchema } from '../../lib/validation.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { parseEcosystemFromPath, usesPm2 } from '../../services/streamingDetect.js';
+import { usesPm2 } from '../../services/streamingDetect.js';
 import { detectAppIcon } from '../../services/appIconDetect.js';
 import { hasDeployScript } from '../../services/appDeployer.js';
 import { checkScripts } from '../../services/xcodeScripts.js';
 import { applyEcosystemPortEdits } from '../../services/appPortConfig.js';
+import { enrichAppsWithPm2Status } from '../../services/appListEnrichment.js';
 import { loadApp, pathExists, deriveAppPorts, computeOverallStatus } from './shared.js';
 
 const router = Router();
 
-// GET /api/apps - List all apps
+// GET /api/apps - List all apps. The route fetches the raw records; the
+// appListEnrichment service owns the PM2 status/port/process enrichment.
 router.get('/', asyncHandler(async (req, res) => {
   const apps = await appsService.getAllApps();
-
-  // Group apps by their PM2_HOME (null = default)
-  const pm2HomeGroups = new Map();
-  for (const app of apps) {
-    const home = app.pm2Home || null;
-    if (!pm2HomeGroups.has(home)) {
-      pm2HomeGroups.set(home, []);
-    }
-    pm2HomeGroups.get(home).push(app);
-  }
-
-  // Fetch PM2 processes for each unique PM2_HOME.
-  // listProcessesStrict returns `null` on a failed read (vs `[]` for a
-  // successful read with no processes) — track those homes so we report
-  // `unknown` (status unavailable) instead of `not_started` (confidently not
-  // running) for their apps. See getAppStatuses() in the service for the same
-  // absent-vs-empty distinction.
-  const pm2Maps = new Map();
-  const failedHomes = new Set();
-  for (const pm2Home of pm2HomeGroups.keys()) {
-    const processes = await pm2Service.listProcessesStrict(pm2Home);
-    if (processes === null) {
-      failedHomes.add(pm2Home);
-      pm2Maps.set(pm2Home, new Map());
-    } else {
-      pm2Maps.set(pm2Home, new Map(processes.map(p => [p.name, p])));
-    }
-  }
-
-  // Enrich with PM2 status and auto-populate processes if needed
-  const enriched = await Promise.all(apps.map(async (app) => {
-    // Non-PM2 apps skip PM2 enrichment entirely
-    if (!usesPm2(app.type)) {
-      return { ...app, pm2Status: {}, overallStatus: 'n/a', hasDeployScript: hasDeployScript(app), xcodeScripts: checkScripts(app) };
-    }
-
-    const pm2Home = app.pm2Home || null;
-    const pm2Map = pm2Maps.get(pm2Home) || new Map();
-    const homeFailed = failedHomes.has(pm2Home);
-
-    const statuses = {};
-    for (const processName of app.pm2ProcessNames || []) {
-      const pm2Proc = pm2Map.get(processName);
-      // A failed PM2 read leaves status genuinely unknown — don't claim
-      // `not_found` (which the UI reads as "registered but never launched").
-      statuses[processName] = pm2Proc
-        ?? { name: processName, status: homeFailed ? 'unknown' : 'not_found', pm2_env: null };
-    }
-
-    // Compute overall status. A failed PM2 home short-circuits to `unknown`
-    // with a `degraded` flag rather than collapsing to `not_started`.
-    const overallStatus = computeOverallStatus(Object.values(statuses), homeFailed);
-
-    // Auto-populate processes from ecosystem config if not already set
-    let processes = app.processes;
-    if ((!processes || processes.length === 0) && await pathExists(app.repoPath)) {
-      const parsed = await parseEcosystemFromPath(app.repoPath).catch(() => ({ processes: [] }));
-      processes = parsed.processes;
-    }
-
-    // Auto-derive uiPort/apiPort/devUiPort from processes when not explicitly set
-    const { uiPort, apiPort, devUiPort } = deriveAppPorts(app, processes);
-
-    return {
-      ...app,
-      processes,
-      uiPort,
-      devUiPort,
-      apiPort,
-      pm2Status: statuses,
-      overallStatus,
-      degraded: homeFailed,
-      hasDeployScript: hasDeployScript(app),
-      xcodeScripts: checkScripts(app)
-    };
-  }));
-
-  res.json(enriched);
+  res.json(await enrichAppsWithPm2Status(apps));
 }));
 
 // GET /api/apps/:id - Get single app
