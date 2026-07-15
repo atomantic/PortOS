@@ -1,11 +1,26 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   ServerError,
   normalizeError,
   emitErrorEvent,
   errorEvents,
-  errorMiddleware
+  errorMiddleware,
+  asyncHandler
 } from './errorHandler.js';
+
+// Build a fake Express req/res pair. `res.status()` and `res.json()` are
+// chainable (they return `res`) to mirror Express, and `req.app.get('io')`
+// resolves to whatever io stub the test supplies (or null for the no-io path).
+function makeReqRes(io) {
+  const res = { status: vi.fn(() => res), json: vi.fn(() => res) };
+  const req = { method: 'GET', originalUrl: '/api/thing', app: { get: vi.fn(() => io) } };
+  return { req, res };
+}
+
+// asyncHandler wires the rejection handling onto a `.catch()` microtask and the
+// returned middleware does not itself return that promise — so flush the
+// microtask queue before asserting the response/emit happened.
+const flushMicrotasks = () => new Promise((r) => setImmediate(r));
 
 describe('errorHandler.js', () => {
   describe('ServerError', () => {
@@ -229,6 +244,99 @@ describe('errorHandler.js', () => {
       expect(safeContext).toEqual({ safe: 'visible' });
       expect(safeContext.apiKey).toBeUndefined();
       errorEvents.off('error', listener);
+    });
+  });
+
+  describe('asyncHandler', () => {
+    // `errorEvents` is a Node EventEmitter: emitting 'error' with zero listeners
+    // re-throws the argument (the classic footgun). Production always has
+    // subscribers (autoFixer / socket.js); keep a noop attached so emitErrorEvent
+    // doesn't throw out of asyncHandler's catch during these tests.
+    let noopErrorListener;
+    beforeEach(() => {
+      noopErrorListener = () => {};
+      errorEvents.on('error', noopErrorListener);
+    });
+    afterEach(() => {
+      errorEvents.off('error', noopErrorListener);
+    });
+
+    it('catches a thrown ServerError, emits, and responds with status + body', async () => {
+      const io = { emit: vi.fn() };
+      const { req, res } = makeReqRes(io);
+      const events = [];
+      const listener = (err, ctx) => events.push({ err, ctx });
+      errorEvents.on('error', listener);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const handler = asyncHandler(async () => {
+        throw new ServerError('nope', { status: 403, code: 'FORBIDDEN', context: { detail: 'x' } });
+      });
+      await handler(req, res, vi.fn());
+      await flushMicrotasks();
+
+      errorEvents.off('error', listener);
+      errorSpy.mockRestore();
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      const body = res.json.mock.calls[0][0];
+      expect(body.error).toBe('nope');
+      expect(body.code).toBe('FORBIDDEN');
+      expect(body.timestamp).toBeDefined();
+      expect(body.context).toEqual({ detail: 'x' });
+      // Both channels fire: the process-local errorEvents emitter and the io broadcast.
+      expect(events).toHaveLength(1);
+      expect(io.emit).toHaveBeenCalledWith(
+        'error:occurred',
+        expect.objectContaining({ code: 'FORBIDDEN', status: 403, message: 'nope' })
+      );
+    });
+
+    it('normalizes a plain thrown Error to a 500 INTERNAL_ERROR response', async () => {
+      const io = { emit: vi.fn() };
+      const { req, res } = makeReqRes(io);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const handler = asyncHandler(async () => {
+        throw new Error('kaboom');
+      });
+      await handler(req, res, vi.fn());
+      await flushMicrotasks();
+
+      errorSpy.mockRestore();
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      const body = res.json.mock.calls[0][0];
+      expect(body.code).toBe('INTERNAL_ERROR');
+      expect(body.error).toBe('kaboom');
+    });
+
+    it('does not touch res when the wrapped handler resolves successfully', async () => {
+      const { req, res } = makeReqRes({ emit: vi.fn() });
+
+      const handler = asyncHandler(async () => 'ok');
+      await handler(req, res, vi.fn());
+      await flushMicrotasks();
+
+      expect(res.status).not.toHaveBeenCalled();
+      expect(res.json).not.toHaveBeenCalled();
+    });
+
+    it('still responds when no io is registered on the app', async () => {
+      const { req, res } = makeReqRes(null);
+      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const handler = asyncHandler(async () => {
+        throw new ServerError('missing', { status: 404 });
+      });
+      await handler(req, res, vi.fn());
+      await flushMicrotasks();
+
+      errorSpy.mockRestore();
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      // status→code derivation still runs even without an io channel.
+      expect(res.json.mock.calls[0][0].code).toBe('NOT_FOUND');
     });
   });
 });
