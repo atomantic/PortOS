@@ -242,6 +242,10 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     // speech layer can announce its completion (see voice/proactiveTriggers.js).
     if (taskData.voiceDispatch === true) metadata.voiceDispatch = true;
     if (taskData.isRecovery === true) metadata.isRecovery = true;
+    // Investigation-task guards (#2615): the durable fingerprint dedupes repeat
+    // failures of the same cause; the marker blocks investigations-of-investigations.
+    if (taskData.isInvestigation === true) metadata.isInvestigation = true;
+    if (taskData.investigationFingerprint) metadata.investigationFingerprint = taskData.investigationFingerprint;
     if (taskData.createJiraTicket) metadata.createJiraTicket = true;
     // Boolean flags: persist both true and false so users can explicitly override defaults.
     // The string round-trip ('false' from TASKS.md) is handled by isTruthyMeta/isFalsyMeta.

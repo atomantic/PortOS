@@ -2,18 +2,30 @@ import { describe, expect, it, vi, beforeEach } from 'vitest';
 
 // maybeCreateInvestigationTask → createInvestigationTask → addTask does real
 // store I/O; stub it so the skip-vs-create gate can be asserted in isolation.
-vi.mock('./cos.js', () => ({ addTask: vi.fn(), updateTask: vi.fn() }));
+// getAllTasks feeds the fingerprint dedup scan (#2615).
+vi.mock('./cos.js', () => ({ addTask: vi.fn(), updateTask: vi.fn(), getAllTasks: vi.fn() }));
 
 import {
   analyzeAgentFailure,
   resolveFailedTaskDecision,
   maybeCreateInvestigationTask,
   createInvestigationTask,
+  buildInvestigationFingerprint,
   redactFailureSnippet,
-  MAX_TASK_RETRIES
+  MAX_TASK_RETRIES,
+  INVESTIGATION_CIRCUIT_WINDOW_MS,
+  INVESTIGATION_CIRCUIT_MAX_CREATIONS,
+  __resetInvestigationCircuit
 } from './agentErrorAnalysis.js';
-import { addTask } from './cos.js';
+import { addTask, getAllTasks } from './cos.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
+
+// Default store shape for suites that exercise the create path: no existing
+// tasks, so the fingerprint dedup never fires unless a test arranges it.
+const mockEmptyStore = () => {
+  getAllTasks.mockReset();
+  getAllTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [] } });
+};
 
 // analyzeAgentFailure ignores output shorter than 50 chars (treats it as a
 // startup failure), so wrap each error line with a benign, pattern-free lead
@@ -217,6 +229,8 @@ describe('maybeCreateInvestigationTask', () => {
   beforeEach(() => {
     addTask.mockReset();
     addTask.mockResolvedValue({ id: 'investigation-1' });
+    mockEmptyStore();
+    __resetInvestigationCircuit();
   });
 
   const task = { id: 'task-1', description: 'do the thing', metadata: {} };
@@ -232,6 +246,115 @@ describe('maybeCreateInvestigationTask', () => {
   it('creates an investigation task for a non-API-access category', async () => {
     await maybeCreateInvestigationTask('agent-1', task, { category: 'model-not-found', message: 'Model not found' });
     expect(addTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('never spawns an investigation for a failed investigation task (meta-cascade guard)', async () => {
+    await maybeCreateInvestigationTask('agent-1', { id: 'inv-1', description: '[Auto] Investigate agent failure: x', metadata: { isInvestigation: true } }, { category: 'unknown', message: 'boom' });
+    expect(addTask).not.toHaveBeenCalled();
+  });
+
+  it('honors the string-true marker from the markdown metadata round-trip', async () => {
+    await maybeCreateInvestigationTask('agent-1', { id: 'inv-2', description: 'x', metadata: { isInvestigation: 'true' } }, { category: 'unknown', message: 'boom' });
+    expect(addTask).not.toHaveBeenCalled();
+  });
+});
+
+describe('buildInvestigationFingerprint', () => {
+  it('keys on category, analysisType/taskType, and app — never the free-text message', () => {
+    const fp = buildInvestigationFingerprint(
+      { id: 't', taskType: 'internal', metadata: { analysisType: 'app-improve', app: 'ExampleApp' } },
+      { category: 'startup-failure', message: 'raw output line that varies per run' }
+    );
+    expect(fp).toBe('startup-failure:app-improve:ExampleApp');
+  });
+
+  it('falls back to taskType, then generic sentinels, when analysisType/app are absent', () => {
+    expect(buildInvestigationFingerprint({ id: 't', taskType: 'user', metadata: {} }, { category: 'unknown' })).toBe('unknown:user:none');
+    expect(buildInvestigationFingerprint({ id: 't' }, null)).toBe('unknown:task:none');
+  });
+});
+
+describe('createInvestigationTask guards (#2615)', () => {
+  const failedTask = { id: 'task-1', description: 'do the thing', taskType: 'user', metadata: {} };
+  const analysis = { category: 'startup-failure', message: 'Agent exited during startup' };
+
+  beforeEach(() => {
+    addTask.mockReset();
+    addTask.mockResolvedValue({ id: 'investigation-1' });
+    mockEmptyStore();
+    __resetInvestigationCircuit();
+  });
+
+  it('stamps the fingerprint and isInvestigation marker onto the created task', async () => {
+    await createInvestigationTask('agent-1', failedTask, analysis);
+    expect(addTask).toHaveBeenCalledWith(expect.objectContaining({
+      priority: 'HIGH',
+      approvalRequired: true,
+      isInvestigation: true,
+      investigationFingerprint: 'startup-failure:user:none'
+    }), 'internal');
+  });
+
+  it.each(['pending', 'in_progress', 'blocked'])(
+    'skips creation while a same-fingerprint investigation is %s',
+    async (status) => {
+      const existing = { id: 'inv-open', status, metadata: { investigationFingerprint: 'startup-failure:user:none' } };
+      getAllTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [existing] } });
+      const result = await createInvestigationTask('agent-1', failedTask, analysis);
+      expect(addTask).not.toHaveBeenCalled();
+      expect(result).toBe(existing);
+    }
+  );
+
+  it('creates a fresh task once the prior investigation reached a terminal status', async () => {
+    const done = { id: 'inv-done', status: 'completed', metadata: { investigationFingerprint: 'startup-failure:user:none' } };
+    getAllTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [done] } });
+    await createInvestigationTask('agent-1', failedTask, analysis);
+    expect(addTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not dedupe against an open investigation with a DIFFERENT fingerprint', async () => {
+    const other = { id: 'inv-other', status: 'pending', metadata: { investigationFingerprint: 'network-error:user:none' } };
+    getAllTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [other] } });
+    await createInvestigationTask('agent-1', failedTask, analysis);
+    expect(addTask).toHaveBeenCalledTimes(1);
+  });
+
+  it('caps creations per rolling hour across all fingerprints', async () => {
+    for (let i = 0; i < INVESTIGATION_CIRCUIT_MAX_CREATIONS; i++) {
+      await createInvestigationTask(`agent-${i}`, { ...failedTask, id: `task-${i}` }, { category: `cat-${i}`, message: 'x' });
+    }
+    expect(addTask).toHaveBeenCalledTimes(INVESTIGATION_CIRCUIT_MAX_CREATIONS);
+
+    const suppressed = await createInvestigationTask('agent-over', failedTask, analysis);
+    expect(suppressed).toBeNull();
+    expect(addTask).toHaveBeenCalledTimes(INVESTIGATION_CIRCUIT_MAX_CREATIONS);
+  });
+
+  it('re-closes the circuit once creations age out of the rolling window', async () => {
+    vi.useFakeTimers();
+    try {
+      for (let i = 0; i < INVESTIGATION_CIRCUIT_MAX_CREATIONS; i++) {
+        await createInvestigationTask(`agent-${i}`, { ...failedTask, id: `task-${i}` }, { category: `cat-${i}`, message: 'x' });
+      }
+      expect(await createInvestigationTask('agent-over', failedTask, analysis)).toBeNull();
+
+      vi.advanceTimersByTime(INVESTIGATION_CIRCUIT_WINDOW_MS + 1);
+      await createInvestigationTask('agent-later', failedTask, analysis);
+      expect(addTask).toHaveBeenCalledTimes(INVESTIGATION_CIRCUIT_MAX_CREATIONS + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not count an addTask description-level duplicate against the circuit', async () => {
+    addTask.mockResolvedValue({ id: 'inv-existing', duplicate: true });
+    for (let i = 0; i < INVESTIGATION_CIRCUIT_MAX_CREATIONS + 1; i++) {
+      await createInvestigationTask(`agent-${i}`, { ...failedTask, id: `task-${i}` }, { category: `cat-${i}`, message: 'x' });
+    }
+    // Every call reached addTask — none were suppressed by the circuit, because
+    // duplicate returns never consumed creation budget.
+    expect(addTask).toHaveBeenCalledTimes(INVESTIGATION_CIRCUIT_MAX_CREATIONS + 1);
   });
 });
 
@@ -291,6 +414,8 @@ describe('createInvestigationTask body', () => {
   beforeEach(() => {
     addTask.mockReset();
     addTask.mockResolvedValue({ id: 'investigation-1' });
+    mockEmptyStore();
+    __resetInvestigationCircuit();
   });
 
   const bodyOf = () => addTask.mock.calls[0][0].description;

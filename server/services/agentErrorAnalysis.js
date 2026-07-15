@@ -6,10 +6,11 @@
  */
 
 import { emitLog } from './cosEvents.js';
-import { addTask, updateTask } from './cos.js';
+import { addTask, updateTask, getAllTasks } from './cos.js';
 import { cosEvents } from './cosEvents.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { redactOutput } from '../lib/commandSecurity.js';
+import { isTruthyMeta } from './agentState.js';
 
 // Max retries before blocking a task
 export const MAX_TASK_RETRIES = 3;
@@ -520,14 +521,95 @@ export function analyzeAgentFailure(output, task, model) {
   };
 }
 
+// ===== Investigation-task creation guards (#2615) =====
+
+// An investigation in any of these states means the failure cause is already
+// being tracked — a repeat failure with the same fingerprint is the SAME cause,
+// not new work. Terminal states (completed/cancelled) allow a fresh task: the
+// cause was dealt with, so a recurrence is genuinely new.
+const OPEN_INVESTIGATION_STATUSES = new Set(['pending', 'in_progress', 'blocked']);
+
+// Rolling circuit breaker across ALL fingerprints, mirroring autoFixer.js's
+// tripCircuit: at most INVESTIGATION_CIRCUIT_MAX_CREATIONS investigation tasks
+// per rolling window. A systemic failure storm (provider outage, broken spawn
+// path) fails MANY distinct tasks at once, each minting a distinct fingerprint —
+// the per-fingerprint dedup alone can't stop that fan-out. The window is rolling:
+// stamps older than the window are pruned on every check, so the circuit
+// auto-closes once creations age out (no manual reset needed).
+export const INVESTIGATION_CIRCUIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+export const INVESTIGATION_CIRCUIT_MAX_CREATIONS = 3;
+let investigationCreationStamps = []; // ms timestamps, newest-last
+
+function investigationCircuitOpen(now) {
+  investigationCreationStamps = investigationCreationStamps.filter(t => now - t < INVESTIGATION_CIRCUIT_WINDOW_MS);
+  return investigationCreationStamps.length >= INVESTIGATION_CIRCUIT_MAX_CREATIONS;
+}
+
+// Test hook — the stamp list is module state, so suites reset it between cases.
+export function __resetInvestigationCircuit() {
+  investigationCreationStamps = [];
+}
+
+/**
+ * Durable dedup key for investigation tasks: same failure category against the
+ * same kind of task in the same app is the same cause. Deliberately NOT keyed
+ * on the free-text failure message — for `unknown`-category failures that is a
+ * raw agent-output line that varies per run, which is exactly the dedup hole
+ * that let near-identical investigations pile up (#2615).
+ */
+export function buildInvestigationFingerprint(originalTask, analysis) {
+  const category = analysis?.category || 'unknown';
+  const kind = originalTask?.metadata?.analysisType
+    || originalTask?.metadata?.selfImprovementType
+    || originalTask?.taskType
+    || 'task';
+  const app = originalTask?.metadata?.app || 'none';
+  return `${category}:${kind}:${app}`;
+}
+
+// Find an existing investigation task (user or internal queue) still tracking
+// this fingerprint in a non-terminal status.
+async function findOpenInvestigation(fingerprint) {
+  const { user, cos } = await getAllTasks();
+  const tasks = [...(user?.tasks || []), ...(cos?.tasks || [])];
+  return tasks.find(t =>
+    OPEN_INVESTIGATION_STATUSES.has(t.status) &&
+    t.metadata?.investigationFingerprint === fingerprint
+  ) || null;
+}
+
 /**
  * Create an investigation task in COS-TASKS.md for a failed agent.
+ *
+ * Guarded two ways (#2615): a durable fingerprint dedup (one open investigation
+ * per failure cause — returns the existing task when it fires) and a rolling
+ * circuit breaker (returns null when open). See maybeCreateInvestigationTask
+ * for the meta-cascade guard.
  */
 export async function createInvestigationTask(agentId, originalTask, errorAnalysis) {
   const analysis = errorAnalysis || {};
   const category = analysis.category || 'unknown';
   const rawMessage = analysis.message || 'Agent failed with an unrecognized error';
   const modelAttribution = analysis.affectedModel || analysis.configuredModel || null;
+
+  // Durable-fingerprint dedup: one open investigation per failure cause.
+  const fingerprint = buildInvestigationFingerprint(originalTask, analysis);
+  const existing = await findOpenInvestigation(fingerprint);
+  if (existing) {
+    emitLog('info', `⏭️ Skipping duplicate investigation for ${fingerprint}: ${existing.id} is still ${existing.status}`, {
+      agentId, taskId: originalTask.id, fingerprint, existingTaskId: existing.id, existingStatus: existing.status
+    });
+    return existing;
+  }
+
+  // Rolling circuit breaker: cap creations per window across all fingerprints.
+  const now = Date.now();
+  if (investigationCircuitOpen(now)) {
+    emitLog('warn', `🔌 Investigation circuit OPEN — ${INVESTIGATION_CIRCUIT_MAX_CREATIONS} investigations created within the last hour; suppressing task for ${fingerprint}`, {
+      agentId, taskId: originalTask.id, fingerprint
+    });
+    return null;
+  }
 
   // Every interpolated free-text field is redacted before it lands in the body —
   // this task is human-facing and may sync across federated peers, so no
@@ -562,8 +644,14 @@ Approving and applying the fix lets the original task \`${originalTask.id}\` be 
     description,
     priority: 'HIGH',
     context: `Auto-generated from agent ${agentId} failure`,
-    approvalRequired: true // Require human approval before auto-fixing
+    approvalRequired: true, // Require human approval before auto-fixing
+    isInvestigation: true, // Meta-cascade guard marker (#2615)
+    investigationFingerprint: fingerprint
   }, 'internal');
+
+  // Count only genuine creations against the circuit — addTask's own
+  // description-level dedup returning an existing task is not a new creation.
+  if (!investigationTask.duplicate) investigationCreationStamps.push(now);
 
   emitLog('info', `Created investigation task ${investigationTask.id} for failed agent ${agentId}`, {
     agentId,
@@ -592,6 +680,13 @@ export const API_ACCESS_ERROR_CATEGORIES = new Set([
 export async function maybeCreateInvestigationTask(agentId, task, analysis) {
   if (API_ACCESS_ERROR_CATEGORIES.has(analysis?.category)) {
     emitLog('debug', `⏭️ Skipping investigation task for ${task.id}: API access error (${analysis.category})`, { agentId, taskId: task.id, category: analysis.category });
+    return;
+  }
+  // Meta-cascade guard (#2615): a failed investigation task must never spawn an
+  // investigation of the investigation. isTruthyMeta covers the markdown
+  // round-trip, where boolean metadata comes back as the string 'true'.
+  if (isTruthyMeta(task?.metadata?.isInvestigation)) {
+    emitLog('info', `⏭️ Skipping meta-investigation for ${task.id}: failed task is itself an investigation`, { agentId, taskId: task.id, category: analysis?.category });
     return;
   }
   await createInvestigationTask(agentId, task, analysis).catch(err => {
