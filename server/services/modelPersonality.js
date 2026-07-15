@@ -46,7 +46,14 @@ const settingsFile = () => join(PATHS.data, 'model-personality', 'settings.json'
 
 export async function getSettings() {
   const stored = await readJSONFile(settingsFile(), {});
-  return { ...DEFAULT_SETTINGS, ...(stored && typeof stored === 'object' ? stored : {}) };
+  const merged = { ...DEFAULT_SETTINGS, ...(stored && typeof stored === 'object' ? stored : {}) };
+  // Guard hand-edited settings: a malformed historyCap would flow into
+  // `list.slice(0, historyCap)` and silently wipe the whole history
+  // (`slice(0, 'abc')` → `[]`). Same rule as backup.js's settings guards.
+  if (!Number.isInteger(merged.historyCap) || merged.historyCap < 1 || merged.historyCap > 1000) {
+    merged.historyCap = DEFAULT_SETTINGS.historyCap;
+  }
+  return merged;
 }
 
 export async function updateSettings(patch = {}) {

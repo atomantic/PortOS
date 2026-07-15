@@ -188,6 +188,20 @@ describe('history & settings', () => {
     expect(await svc.getHistory()).toEqual([]);
   });
 
+  it('falls back to the default historyCap when a hand-edited value is malformed', async () => {
+    const { writeFileSync, mkdirSync } = await import('fs');
+    mkdirSync(join(TEST_DATA_ROOT, 'model-personality'), { recursive: true });
+    writeFileSync(
+      join(TEST_DATA_ROOT, 'model-personality', 'settings.json'),
+      JSON.stringify({ historyCap: 'abc' })
+    );
+    expect((await svc.getSettings()).historyCap).toBe(svc.DEFAULT_SETTINGS.historyCap);
+    // The malformed cap must not wipe history via slice(0, 'abc') → [].
+    mockProfileRun();
+    await svc.runPersonalityTest({ providerId: 'prov-1', includeAlignment: false });
+    expect(await svc.getHistory()).toHaveLength(1);
+  });
+
   it('merges settings over defaults and persists them', async () => {
     expect(await svc.getSettings()).toEqual({ ...svc.DEFAULT_SETTINGS });
     const next = await svc.updateSettings({ historyCap: 42 });
