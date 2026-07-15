@@ -42,6 +42,9 @@ const DEFAULT_SETTINGS = {
   musicVolume: 0.3,
   sfxEnabled: true,
   sfxVolume: 0.5,
+  // Auto quality (issue #2592): new installs adapt at runtime, beginning at High.
+  // `qualityPreset` still names the manual preset AND the Auto starting tier.
+  qualityMode: 'auto', // 'auto' = adaptive render budget; 'manual' = fixed preset
   qualityPreset: 'high',
   timeOfDay: 'auto', // 'auto' follows the active theme's day/night mode; 'day'/'night' force it
   explorationMode: false,
@@ -59,7 +62,15 @@ const loadSettings = () => {
     return DEFAULT_SETTINGS; // Corrupt stored JSON — fall back to defaults.
   }
   if (!parsed || typeof parsed !== 'object') return DEFAULT_SETTINGS;
-  return { ...DEFAULT_SETTINGS, ...parsed };
+  const merged = { ...DEFAULT_SETTINGS, ...parsed };
+  // Migration: an existing payload predating Auto mode has no `qualityMode` key.
+  // Such installs keep their chosen fixed preset — Manual — rather than being
+  // silently opted into adaptation. Presence of the key (even 'auto') is honored;
+  // this is the "absent vs. present" distinction, so a stored 'auto' survives.
+  if (!Object.prototype.hasOwnProperty.call(parsed, 'qualityMode')) {
+    merged.qualityMode = 'manual';
+  }
+  return merged;
 };
 
 export { QUALITY_PRESETS };
@@ -82,9 +93,10 @@ export default function useCitySettings() {
 
   const updateSetting = useCallback((key, value) => {
     setSettings(prev => {
-      // If changing quality preset, apply bulk changes
+      // If changing quality preset, apply bulk changes. Explicitly picking a preset
+      // also pins Manual mode — the user has chosen a fixed tier over adaptation.
       if (key === 'qualityPreset' && QUALITY_PRESETS[value]) {
-        const next = { ...prev, qualityPreset: value, ...QUALITY_PRESETS[value] };
+        const next = { ...prev, qualityPreset: value, qualityMode: 'manual', ...QUALITY_PRESETS[value] };
         safeWriteStorage(STORAGE_KEY, JSON.stringify(next));
         return next;
       }

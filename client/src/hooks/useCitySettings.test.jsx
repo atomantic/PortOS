@@ -50,6 +50,41 @@ describe('useCitySettings localStorage resilience', () => {
     expect(settings.timeOfDay).toBe('night');
   });
 
+  it('defaults a fresh install to Auto quality beginning at High', () => {
+    const { result } = renderHook(() => useCitySettings());
+    const [settings] = result.current;
+    expect(settings.qualityMode).toBe('auto');
+    expect(settings.qualityPreset).toBe('high');
+  });
+
+  it('loads an existing pre-Auto payload as Manual, keeping its preset', () => {
+    // A stored payload from before Auto mode has no `qualityMode` key.
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ qualityPreset: 'ultra' }));
+    const { result } = renderHook(() => useCitySettings());
+    const [settings] = result.current;
+    expect(settings.qualityMode).toBe('manual');
+    expect(settings.qualityPreset).toBe('ultra');
+  });
+
+  it('preserves a stored qualityMode of auto (present-but-set, not absent)', () => {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ qualityMode: 'auto', qualityPreset: 'medium' }));
+    const { result } = renderHook(() => useCitySettings());
+    const [settings] = result.current;
+    expect(settings.qualityMode).toBe('auto');
+  });
+
+  it('picking a manual preset pins Manual mode', () => {
+    const { result } = renderHook(() => useCitySettings());
+    act(() => {
+      const [, updateSetting] = result.current;
+      updateSetting('qualityPreset', 'low');
+    });
+    const [settings] = result.current;
+    expect(settings.qualityMode).toBe('manual');
+    expect(settings.qualityPreset).toBe('low');
+    expect(settings.reflectionsEnabled).toBe(false); // low preset bulk-applied
+  });
+
   it('handles the time-of-day-auto event without throwing when writes fail', () => {
     // This is the listener fired by useTheme.setTheme; with storage blocked its
     // write must not surface an unhandled error on the theme-switch path.

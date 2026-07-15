@@ -99,11 +99,27 @@ function SectionHeader({ title, subtitle }) {
   );
 }
 
-export default function CitySettingsPanel() {
+// Format a diagnostics number, guarding the not-yet-measured (null) case.
+function fmt(value, digits = 0) {
+  return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '—';
+}
+
+export default function CitySettingsPanel({ qualityMode = 'manual', effectiveTier = 'high', diagnostics = null }) {
   const navigate = useNavigate();
   const { settings, updateSetting, resetSettings } = useCitySettingsContext();
 
   if (!settings) return null;
+
+  const isAuto = qualityMode === 'auto';
+  const modeLabel = isAuto
+    ? `AUTO · ${String(effectiveTier).toUpperCase()}`
+    : `MANUAL · ${String(settings.qualityPreset || 'high').toUpperCase()}`;
+
+  const setQuality = (key) => {
+    // 'auto' engages the adaptive budget; a named preset pins Manual (handled in the hook).
+    if (key === 'auto') updateSetting('qualityMode', 'auto');
+    else updateSetting('qualityPreset', key);
+  };
 
   return (
     <div className="absolute bottom-4 right-4 z-50 pointer-events-auto animate-in slide-in-from-bottom-4 duration-300">
@@ -130,16 +146,27 @@ export default function CitySettingsPanel() {
         </div>
 
         <div className="px-4 py-3 space-y-5">
-          {/* Quality Preset */}
+          {/* Quality */}
           <div>
-            <SectionHeader title="QUALITY PRESET" subtitle="Controls overall visual fidelity" />
+            <SectionHeader title="QUALITY" subtitle={modeLabel} />
+            {/* AUTO adapts the effective tier to sustained frame pressure. */}
+            <button
+              onClick={() => setQuality('auto')}
+              className={`w-full font-pixel text-[9px] py-2 mb-1.5 rounded border transition-all tracking-wide ${
+                isAuto
+                  ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.2)]'
+                  : 'bg-gray-800/40 border-gray-700/40 text-gray-500 hover:border-gray-600 hover:text-gray-400'
+              }`}
+            >
+              AUTO {isAuto ? `· ${String(effectiveTier).toUpperCase()}` : ''}
+            </button>
             <div className="grid grid-cols-4 gap-1.5">
               {Object.keys(QUALITY_PRESETS).map(preset => (
                 <button
                   key={preset}
-                  onClick={() => updateSetting('qualityPreset', preset)}
+                  onClick={() => setQuality(preset)}
                   className={`font-pixel text-[9px] py-2 rounded border transition-all tracking-wide ${
-                    settings.qualityPreset === preset
+                    !isAuto && settings.qualityPreset === preset
                       ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.2)]'
                       : 'bg-gray-800/40 border-gray-700/40 text-gray-500 hover:border-gray-600 hover:text-gray-400'
                   }`}
@@ -148,6 +175,14 @@ export default function CitySettingsPanel() {
                 </button>
               ))}
             </div>
+            {/* Local-only diagnostics — never persisted or transmitted (issue #2592). */}
+            {isAuto && (
+              <div className="mt-2 px-2 py-1.5 rounded bg-black/40 border border-cyan-500/10 font-pixel text-[8px] text-gray-500 tracking-wide flex items-center justify-between">
+                <span>TIER <span className="text-cyan-400/70">{String(effectiveTier).toUpperCase()}</span></span>
+                <span>{fmt(diagnostics?.fps)} FPS</span>
+                <span>P75 {fmt(diagnostics?.p75, 1)}ms</span>
+              </div>
+            )}
           </div>
 
           <div className="border-t border-cyan-500/10" />

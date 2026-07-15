@@ -13,6 +13,7 @@ import CityScanlines from '../components/city/CityScanlines';
 import CityPhotoOverlay from '../components/city/CityPhotoOverlay';
 import CityPlaybackOverlay from '../components/city/CityPlaybackOverlay';
 import { CitySettingsProvider, useCitySettingsContext } from '../components/city/CitySettingsContext';
+import { QUALITY_PRESETS } from '../hooks/useCitySettings';
 import CitySettingsPanel from '../components/city/CitySettingsPanel';
 import { computeFilterResult } from '../utils/cityFilter';
 import { DEFAULT_PRESET_ID, cyclePreset } from '../utils/cityPhotoMode';
@@ -54,10 +55,31 @@ function CyberCityInner() {
   // the backdrop swaps between the blue day sky and the dark night void to match.
   const cityTimeOfDay = resolveCityTimeOfDay(settings?.timeOfDay, cityPalette.isDay);
   const sceneBackground = cityTimeOfDay.daytime ? CITY_COLORS.timeOfDay.noon.midSky : cityPalette.nightBackground;
-  const sceneSettings = useMemo(
-    () => ({ ...settings, skyTheme: 'cyberpunk', timeOfDay: cityTimeOfDay.presetKey }),
-    [settings, cityTimeOfDay.presetKey],
-  );
+
+  // Auto quality mode (issue #2592). In Auto, an adaptive render budget picks the
+  // effective tier at runtime (starting at High); in Manual, the effective tier is the
+  // saved preset. The runtime tier is deliberately separate from persisted settings —
+  // adaptation never rewrites localStorage. `autoDiagnostics` is a local-only readout
+  // (never persisted or transmitted). Auto always *starts* at High per the spec, even
+  // if the user last had a different manual preset.
+  const qualityMode = settings?.qualityMode === 'auto' ? 'auto' : 'manual';
+  const [autoTier, setAutoTier] = useState('high');
+  const [autoDiagnostics, setAutoDiagnostics] = useState(null);
+  const effectiveTier = qualityMode === 'auto' ? autoTier : (settings?.qualityPreset ?? 'high');
+
+  const sceneSettings = useMemo(() => {
+    const base = { ...settings, effectiveTier, skyTheme: 'cyberpunk', timeOfDay: cityTimeOfDay.presetKey };
+    if (qualityMode !== 'auto') return base;
+    // Derive the render-affecting fields (reflections, particle density, DPR) from the
+    // adaptive tier; leave user-tuned lighting/scanline toggles untouched.
+    const tierCfg = QUALITY_PRESETS[effectiveTier] || QUALITY_PRESETS.high;
+    return {
+      ...base,
+      reflectionsEnabled: tierCfg.reflectionsEnabled,
+      particleDensity: tierCfg.particleDensity,
+      dpr: tierCfg.dpr,
+    };
+  }, [settings, effectiveTier, qualityMode, cityTimeOfDay.presetKey]);
 
   const [filter, setFilter] = useState(() => {
     // try/catch is necessary because sessionStorage values are external state
@@ -380,6 +402,11 @@ function CyberCityInner() {
         playSfx={playSfx}
         keysRef={keysRef}
         dimmedAppIds={filterResult.dimmed}
+        autoQuality={qualityMode === 'auto'}
+        autoStartTier="high"
+        diagnosticsEnabled={showSettings}
+        onAutoTierChange={setAutoTier}
+        onAutoDiagnostics={setAutoDiagnostics}
       />
       {/* The full HUD hides in photo + playback mode so the view is clean; each
           mode's overlay replaces it. */}
@@ -435,7 +462,13 @@ function CyberCityInner() {
         onExit={playback.exit}
       />
       <CityScanlines settings={settings} crt={cityPalette.crt} />
-      {showSettings && <CitySettingsPanel />}
+      {showSettings && (
+        <CitySettingsPanel
+          qualityMode={qualityMode}
+          effectiveTier={effectiveTier}
+          diagnostics={qualityMode === 'auto' ? autoDiagnostics : null}
+        />
+      )}
     </div>
     </CityPaletteProvider>
   );

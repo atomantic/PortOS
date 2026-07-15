@@ -56,6 +56,7 @@ export * from './cityMiniMap.js';
 export * from './cityPhotoMode.js';
 export * from './cityPlan.js';
 export * from './cityPlayerRig.js';
+export * from './cityRenderBudget.js';
 export * from './cityRooftops.js';
 export * from './cityProductivity.js';
 export * from './citySeasonalDecor.js';
