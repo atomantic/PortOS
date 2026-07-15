@@ -305,13 +305,17 @@ export function parseAgyUsage(text, { now = Date.now() } = {}) {
     if (remaining === null) continue; // not a real limit block
     const windowLabel = agyWindowLabel(w[1]);
     const key = `${slug(group)}-${slug(windowLabel)}`;
+    // Round ONE side and derive the other so used + remaining always == 100.
+    // Independently rounding both (e.g. 98.50% remaining → 99 left + 2 used)
+    // would show a card totalling 101%.
+    const percentUsed = Math.min(100, Math.max(0, Math.round(100 - remaining)));
     byKey.set(key, {
       key,
       label: `${group} · ${windowLabel}`,
       scope: slug(windowLabel),
       model: group,
-      percentUsed: Math.max(0, Math.round(100 - remaining)),
-      percentRemaining: Math.round(remaining),
+      percentUsed,
+      percentRemaining: 100 - percentUsed,
       resetsAt: quotaAvailable ? null : resetsAt,
       timezone: null,
     });
@@ -319,51 +323,64 @@ export function parseAgyUsage(text, { now = Date.now() } = {}) {
   return { limits: [...byKey.values()], groups: groups.size };
 }
 
+// Grok's `/usage show` panel reports usage as `<Window> limit: N%` (percent
+// USED). Its binary strings expose both `Weekly limit` and `Monthly limit`, so
+// different plans surface different windows — parse whichever appear.
+const GROK_WINDOWS = { weekly: { label: 'Weekly', scope: 'week' }, monthly: { label: 'Monthly', scope: 'month' } };
+
 /**
- * Parse the Grok Build `/usage show` panel text. Grok reports a single line
- * `Weekly limit: N%` (percent USED) plus `Next reset: <date>`. Exported for
- * tests. Pure.
+ * Parse the Grok Build `/usage show` panel text. Emits one row per usage window
+ * present (`Weekly limit: N%` and/or `Monthly limit: N%`, percent USED) plus a
+ * shared `Next reset: <date>`. Exported for tests. Pure.
  *
  * @returns {{ limits: Array }}
  */
 export function parseGrokUsage(text) {
   const str = String(text || '');
-  // Append-only terminal stream: a repaint leaves an older copy of the line
-  // ahead of the newer one, so take the LAST match (the freshest frame), not
-  // the first (see parseAgyUsage for the same repaint hazard).
-  const lastMatch = (re) => { const all = [...str.matchAll(re)]; return all.length ? all[all.length - 1] : null; };
-  const wl = lastMatch(/weekly limit:\s*([\d.]+)\s*%/gi);
-  if (!wl) return { limits: [] };
-  const percentUsed = Math.round(parseFloat(wl[1]));
-  const nr = lastMatch(/next reset:\s*([A-Za-z0-9 ,:]+?)(?:\s{2,}|$)/gi);
-  return {
-    limits: [{
-      key: 'weekly',
-      label: 'Weekly',
-      scope: 'week',
-      model: null,
-      percentUsed,
-      percentRemaining: Math.max(0, 100 - percentUsed),
-      // Grok gives a local-time date string without a year/zone; pass it
-      // through verbatim (the UI renders non-ISO reset strings as-is).
-      resetsAt: nr ? nr[1].trim() : null,
-      timezone: null,
-    }],
-  };
+  // Append-only terminal stream: a repaint leaves an older copy of a line ahead
+  // of the newer one, so keep the LAST value seen per window (freshest frame) —
+  // same repaint hazard as parseAgyUsage.
+  const byWindow = new Map();
+  for (const m of str.matchAll(/(weekly|monthly) limit:\s*([\d.]+)\s*%/gi)) {
+    byWindow.set(m[1].toLowerCase(), Math.round(parseFloat(m[2])));
+  }
+  if (!byWindow.size) return { limits: [] };
+  const resets = [...str.matchAll(/next reset:\s*([A-Za-z0-9 ,:]+?)(?:\s{2,}|$)/gi)];
+  const resetsAt = resets.length ? resets[resets.length - 1][1].trim() : null;
+  const limits = [...byWindow].map(([window, percentUsed]) => ({
+    key: window,
+    label: GROK_WINDOWS[window].label,
+    scope: GROK_WINDOWS[window].scope,
+    model: null,
+    percentUsed,
+    percentRemaining: Math.max(0, 100 - percentUsed),
+    // Grok gives a local-time date string without a year/zone; pass it through
+    // verbatim (the UI renders non-ISO reset strings as-is).
+    resetsAt,
+    timezone: null,
+  }));
+  return { limits };
 }
 
 /**
- * Pick the enabled provider to actually drive for a TUI scrape: a `cli`/`tui`
- * process provider (preferring one whose command basename is the expected
- * `binary`), never an `api` provider. The `/usage` panel is a property of the
- * local CLI/TUI, not the OpenAI-compatible API endpoint — an install that
+ * Pick the enabled provider to actually drive for a TUI scrape: a `tui` or `cli`
+ * process provider, never an `api` provider. The `/usage` panel is a property of
+ * the local CLI/TUI, not the OpenAI-compatible API endpoint — an install that
  * enables only the API provider (e.g. the built-in `grok` API, matched by id)
  * has no scrapeable surface and no `command` to spawn, so return null and let
  * the fetcher report it unsupported rather than launching an unrelated binary.
+ *
+ * A `tui`-type provider is preferred over a `cli`-type one (and within a type,
+ * the one whose command basename is `binary`): a TUI provider is configured for
+ * interactive use, so its `args` are safe to forward, whereas a CLI provider's
+ * args are one-shot/headless flags that would break the interactive `/usage`.
  */
 function pickScrapeProvider(providers, binary) {
   const cliTui = (providers || []).filter((p) => p?.type === 'cli' || p?.type === 'tui');
-  return cliTui.find((p) => commandBasename(p.command) === binary) || cliTui[0] || null;
+  const byBinary = (list) => list.find((p) => commandBasename(p.command) === binary) || list[0];
+  const tui = cliTui.filter((p) => p.type === 'tui');
+  const cli = cliTui.filter((p) => p.type === 'cli');
+  return byBinary(tui) || byBinary(cli) || null;
 }
 
 /**
@@ -386,11 +403,13 @@ function makeTuiUsageFetcher({ id, binary, slashCommand, label, parse, name, rea
       return Promise.resolve({ ...base, supported: false, limits: [], note: `${name} usage is read from the local CLI/TUI — enable the ${name} to see quota (the API provider has no queryable usage surface).` });
     }
     return cachedScrape(id, { refresh }, async () => {
-      // Only `command` + `envVars` are forwarded — deliberately NOT the
-      // provider's `args`. Stored args are headless-mode flags (`-p`, `exec -`,
-      // `--print`, `--prompt-file`) that would break the interactive TUI we need
-      // for `/usage`; the TUI launches bare.
-      const text = await scrapeTuiUsage({ command: provider.command || binary, slashCommand, env: provider.envVars, readyMarker });
+      // Forward the matched provider's command + envVars. Args are forwarded
+      // ONLY for a `tui`-type provider — those are interactive args (a wrapper
+      // script path, `--project <id>`, etc.). A `cli`-type provider's args are
+      // one-shot/headless flags (`-p`, `exec -`, `--print`, `--prompt-file`)
+      // that would break the interactive TUI `/usage` needs, so they're dropped.
+      const args = provider.type === 'tui' && Array.isArray(provider.args) ? provider.args : [];
+      const text = await scrapeTuiUsage({ command: provider.command || binary, args, slashCommand, env: provider.envVars, readyMarker });
       const { limits } = parse(text);
       return limits.length
         ? { ...base, supported: true, limits, note: `Scraped from the ${name} /usage panel — local, approximate.` }
@@ -447,7 +466,7 @@ const FAMILIES = [
     id: 'grok',
     label: 'Grok',
     matches: (p) => isGrokCommand(p.command) || /grok/i.test(p.id || ''),
-    fetch: makeTuiUsageFetcher({ id: 'grok', binary: 'grok', slashCommand: '/usage show', label: 'Grok', parse: parseGrokUsage, name: 'Grok Build CLI', readyMarker: /Weekly limit:/i })
+    fetch: makeTuiUsageFetcher({ id: 'grok', binary: 'grok', slashCommand: '/usage show', label: 'Grok', parse: parseGrokUsage, name: 'Grok Build CLI', readyMarker: /(Weekly|Monthly) limit:/i })
   }
 ];
 

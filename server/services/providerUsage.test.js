@@ -199,6 +199,14 @@ describe('parseAgyUsage', () => {
     expect(gem5h).toMatchObject({ label: 'Gemini · 5-hour', percentUsed: 20, percentRemaining: 80 });
   });
 
+  it('keeps used + remaining summing to 100 on half-percent values', () => {
+    // 98.50% remaining rounds to used 2 / left 99 = 101% if rounded independently.
+    const panel = AGY_PANEL.replace('98.99%', '98.50%').replace('99% remaining', '98% remaining');
+    const gemWeek = parseAgyUsage(panel, { now: NOW }).limits.find((l) => l.key === 'gemini-weekly');
+    expect(gemWeek.percentUsed + gemWeek.percentRemaining).toBe(100);
+    expect(gemWeek).toMatchObject({ percentUsed: 2, percentRemaining: 98 });
+  });
+
   it('preserves acronyms in group labels and null-resets a fully-available window', () => {
     const { limits } = parseAgyUsage(AGY_PANEL, { now: NOW });
     const cgWeek = limits.find((l) => l.key === 'claude-gpt-weekly');
@@ -240,6 +248,13 @@ describe('parseGrokUsage', () => {
     const { limits } = parseGrokUsage(repainted);
     expect(limits[0]).toMatchObject({ percentUsed: 73, percentRemaining: 27, resetsAt: 'August 1, 06:07' });
   });
+
+  it('parses a Monthly window and both windows when present', () => {
+    expect(parseGrokUsage('Monthly limit: 30% Next reset: Sep 1').limits[0])
+      .toMatchObject({ key: 'monthly', label: 'Monthly', scope: 'month', percentUsed: 30, percentRemaining: 70 });
+    const both = parseGrokUsage('Weekly limit: 12% Monthly limit: 45% Next reset: Sep 1').limits;
+    expect(both.map((l) => l.key).sort()).toEqual(['monthly', 'weekly']);
+  });
 });
 
 describe('TUI usage fetchers (via getProviderQuotas)', () => {
@@ -265,6 +280,36 @@ describe('TUI usage fetchers (via getProviderQuotas)', () => {
     scrapeTuiUsage.mockResolvedValueOnce(AGY_PANEL);
     await getProviderQuotas();
     expect(scrapeTuiUsage).toHaveBeenCalledWith(expect.objectContaining({ command: '/opt/tools/agy', env: { AGY_TOKEN: 'x' } }));
+  });
+
+  it('forwards a TUI provider\'s interactive args but drops a CLI provider\'s headless args', async () => {
+    // TUI provider: args are interactive → forwarded.
+    getAllProviders.mockResolvedValueOnce({ activeProvider: 'grok', providers: [
+      { id: 'grok-tui', enabled: true, type: 'tui', command: 'grok', args: ['--project', 'p1'] },
+    ] });
+    scrapeTuiUsage.mockResolvedValueOnce('Weekly limit: 5% Next reset: Jan 1');
+    await getProviderQuotas();
+    expect(scrapeTuiUsage).toHaveBeenCalledWith(expect.objectContaining({ command: 'grok', args: ['--project', 'p1'] }));
+
+    __resetUsageScrapeCache();
+    scrapeTuiUsage.mockReset();
+    // CLI provider: args are headless one-shot flags → dropped.
+    getAllProviders.mockResolvedValueOnce({ activeProvider: 'grok', providers: [
+      { id: 'grok-cli', enabled: true, type: 'cli', command: 'grok', args: ['--prompt-file', '/dev/stdin'] },
+    ] });
+    scrapeTuiUsage.mockResolvedValueOnce('Weekly limit: 5% Next reset: Jan 1');
+    await getProviderQuotas();
+    expect(scrapeTuiUsage).toHaveBeenCalledWith(expect.objectContaining({ command: 'grok', args: [] }));
+  });
+
+  it('prefers a TUI provider over a CLI provider when both are enabled', async () => {
+    getAllProviders.mockResolvedValueOnce({ activeProvider: 'grok', providers: [
+      { id: 'grok-cli', enabled: true, type: 'cli', command: 'grok', args: ['-p'] },
+      { id: 'grok-tui', enabled: true, type: 'tui', command: 'grok', args: ['--project', 'p1'] },
+    ] });
+    scrapeTuiUsage.mockResolvedValueOnce('Weekly limit: 5% Next reset: Jan 1');
+    await getProviderQuotas();
+    expect(scrapeTuiUsage).toHaveBeenCalledWith(expect.objectContaining({ args: ['--project', 'p1'] }));
   });
 
   it('surfaces a supported-but-error card when a CLI provider scrape yields no parseable data', async () => {

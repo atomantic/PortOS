@@ -44,7 +44,7 @@ const PTY_ROWS = 50;
 // Timing defaults (ms). The TUI needs a moment to sign in and paint its banner
 // before it accepts input; after the command we wait for the rendered panel to
 // stop changing (output-idle) rather than a fixed sleep, bounded by a hard cap.
-const DEFAULT_READY_MS = 6000;       // banner + sign-in settle before first keystroke
+const DEFAULT_READY_CAP_MS = 15000;  // cap on waiting for the banner/gate to paint + go idle
 const DEFAULT_PRIMER_CAP_MS = 3000;  // cap on waiting for the trust/menu dismissal to repaint
 const DEFAULT_IDLE_MS = 2500;        // "screen finished rendering" = no output for this long
 const DEFAULT_RENDER_CAP_MS = 12000; // hard cap on waiting for the panel after the command
@@ -78,7 +78,7 @@ export async function scrapeTuiUsage({
   env: extraEnv = {},
   readyMarker = null,
   sandboxDir = USAGE_SANDBOX_DIR,
-  readyMs = DEFAULT_READY_MS,
+  readyCapMs = DEFAULT_READY_CAP_MS,
   primerCapMs = DEFAULT_PRIMER_CAP_MS,
   idleMs = DEFAULT_IDLE_MS,
   renderCapMs = DEFAULT_RENDER_CAP_MS,
@@ -147,7 +147,13 @@ export async function scrapeTuiUsage({
   };
 
   try {
-    await Promise.race([sleep(readyMs), hardStop]);
+    // Wait for the TUI's initial paint (banner, sign-in spinner, and the
+    // trust/menu gate) to finish and go input-idle before touching the keyboard.
+    // A fixed sleep would fire the primer Enter before a slow startup's gate had
+    // rendered — the keystroke would be dropped or land mid-animation. Gating on
+    // output-idle instead means we press Enter exactly when the gate is up and
+    // waiting for input, however long sign-in took.
+    await waitForIdle(readyCapMs, { requireOutput: true });
 
     // Dismiss the first-run gate: agy shows "Do you trust this folder?" (default
     // "Yes, I trust"), grok shows a start menu (default highlighted item). One
