@@ -680,7 +680,7 @@ export default function ChiefOfStaff() {
           {/* Collapsible Content */}
           <div
             id="cos-agent-panel"
-            className={`${agentPanelCollapsed ? 'hidden' : 'flex'} lg:flex min-w-0 relative overflow-hidden ${hasCanvasAvatar ? 'flex-none min-h-dvh-cap [--dvh-cap:180px] sm:[--dvh-cap:190px] md:[--dvh-cap:190px] lg:[--dvh-cap:460px] lg:[--dvh-inset:1rem] xl:[--dvh-cap:620px]' : 'flex-1'}`}
+            className={`${agentPanelCollapsed ? 'hidden' : 'flex'} lg:flex min-w-0 relative overflow-hidden ${hasCanvasAvatar ? 'flex-none min-h-[180px] sm:min-h-[190px] md:min-h-[190px] lg:min-h-dvh-cap lg:[--dvh-cap:460px] lg:[--dvh-inset:1rem] xl:[--dvh-cap:620px]' : 'flex-1'}`}
           >
             {/* Background Effects */}
             <div
