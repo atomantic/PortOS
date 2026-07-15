@@ -252,31 +252,38 @@ describe('errorHandler.js', () => {
     // re-throws the argument (the classic footgun). Production always has
     // subscribers (autoFixer / socket.js); keep a noop attached so emitErrorEvent
     // doesn't throw out of asyncHandler's catch during these tests.
+    // Cleanup lives in afterEach (not test bodies) so a failing assertion can't
+    // leak the noop listener, any test-registered listener, or the console.error
+    // spy into sibling tests.
     let noopErrorListener;
+    let errorSpy;
+    let testListeners;
+    // Register an errorEvents 'error' listener that this describe will remove.
+    const trackListener = (fn) => { testListeners.push(fn); errorEvents.on('error', fn); };
+
     beforeEach(() => {
+      testListeners = [];
       noopErrorListener = () => {};
       errorEvents.on('error', noopErrorListener);
+      errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     });
     afterEach(() => {
       errorEvents.off('error', noopErrorListener);
+      for (const fn of testListeners) errorEvents.off('error', fn);
+      errorSpy.mockRestore();
     });
 
     it('catches a thrown ServerError, emits, and responds with status + body', async () => {
       const io = { emit: vi.fn() };
       const { req, res } = makeReqRes(io);
       const events = [];
-      const listener = (err, ctx) => events.push({ err, ctx });
-      errorEvents.on('error', listener);
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      trackListener((err, ctx) => events.push({ err, ctx }));
 
       const handler = asyncHandler(async () => {
         throw new ServerError('nope', { status: 403, code: 'FORBIDDEN', context: { detail: 'x' } });
       });
       await handler(req, res, vi.fn());
       await flushMicrotasks();
-
-      errorEvents.off('error', listener);
-      errorSpy.mockRestore();
 
       expect(res.status).toHaveBeenCalledWith(403);
       const body = res.json.mock.calls[0][0];
@@ -295,15 +302,12 @@ describe('errorHandler.js', () => {
     it('normalizes a plain thrown Error to a 500 INTERNAL_ERROR response', async () => {
       const io = { emit: vi.fn() };
       const { req, res } = makeReqRes(io);
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
       const handler = asyncHandler(async () => {
         throw new Error('kaboom');
       });
       await handler(req, res, vi.fn());
       await flushMicrotasks();
-
-      errorSpy.mockRestore();
 
       expect(res.status).toHaveBeenCalledWith(500);
       const body = res.json.mock.calls[0][0];
@@ -324,15 +328,12 @@ describe('errorHandler.js', () => {
 
     it('still responds when no io is registered on the app', async () => {
       const { req, res } = makeReqRes(null);
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
       const handler = asyncHandler(async () => {
         throw new ServerError('missing', { status: 404 });
       });
       await handler(req, res, vi.fn());
       await flushMicrotasks();
-
-      errorSpy.mockRestore();
 
       expect(res.status).toHaveBeenCalledWith(404);
       // status→code derivation still runs even without an io channel.

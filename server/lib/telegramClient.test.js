@@ -43,6 +43,10 @@ describe('createTelegramBot — async handler rejections', () => {
   let onUnhandled;
   let originalFetch;
   let errorSpy;
+  let bots;
+
+  // Track polling bots so afterEach stops them even if an assertion throws first.
+  const track = (bot) => { bots.push(bot); return bot; };
 
   beforeEach(() => {
     unhandled = null;
@@ -50,9 +54,11 @@ describe('createTelegramBot — async handler rejections', () => {
     process.on('unhandledRejection', onUnhandled);
     originalFetch = global.fetch;
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    bots = [];
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    for (const bot of bots) await bot.stopPolling().catch(() => {});
     process.off('unhandledRejection', onUnhandled);
     global.fetch = originalFetch;
     errorSpy.mockRestore();
@@ -60,7 +66,7 @@ describe('createTelegramBot — async handler rejections', () => {
 
   it('does not leak an unhandled rejection when an onText handler rejects', async () => {
     global.fetch = makeFetchMock();
-    const bot = createTelegramBot('test-token', { polling: true });
+    const bot = track(createTelegramBot('test-token', { polling: true }));
 
     let called = false;
     bot.onText(/\/boom/, async () => {
@@ -81,7 +87,7 @@ describe('createTelegramBot — async handler rejections', () => {
 
   it("does not leak an unhandled rejection when an 'message' listener rejects", async () => {
     global.fetch = makeFetchMock();
-    const bot = createTelegramBot('test-token', { polling: true });
+    const bot = track(createTelegramBot('test-token', { polling: true }));
 
     let called = false;
     bot.on('message', async () => {
