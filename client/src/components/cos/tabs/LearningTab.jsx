@@ -33,6 +33,15 @@ import * as api from '../../../services/api';
 import BrailleSpinner from '../../BrailleSpinner';
 import { formatDurationMin, formatDateTime } from '../../../utils/formatters';
 
+// Evidence pairing (issue #2617): when the server classified a task type on
+// its recency-windowed rate, label the percentage with the WINDOW's sample
+// count — rendering "0%" beside the lifetime total ("200 attempts") would
+// materially overstate the evidence behind the rate.
+export const runsLabel = (item, noun = 'runs') =>
+  item?.rateSource === 'windowed'
+    ? `${item.windowedCompleted} recent ${noun}`
+    : `${item?.completed} ${noun}`;
+
 export default function LearningTab() {
   const [learning, setLearning] = useState(null);
   const [performance, setPerformance] = useState(null);
@@ -422,7 +431,7 @@ export default function LearningTab() {
                           <div key={t.taskType} className="px-4 py-2 flex items-center justify-between">
                             <span className="text-sm text-gray-300 font-mono">{t.taskType}</span>
                             <div className="flex items-center gap-3">
-                              <span className="text-xs text-gray-500">{t.completed} runs</span>
+                              <span className="text-xs text-gray-500">{runsLabel(t)}</span>
                               <span className={`text-sm ${textClass} font-medium`}>{t.successRate}%</span>
                             </div>
                           </div>
@@ -465,7 +474,7 @@ export default function LearningTab() {
                           <div className="flex-1 min-w-0">
                             <div className="text-sm text-white truncate">{item.taskType}</div>
                             <div className="text-xs text-gray-500">
-                              {item.completed} tasks • {item.avgDurationMin}m avg
+                              {runsLabel(item, 'tasks')} • {item.avgDurationMin}m avg
                             </div>
                           </div>
                           <div className="flex items-center gap-3">
@@ -500,7 +509,7 @@ export default function LearningTab() {
                           <div className="flex-1 min-w-0">
                             <div className="text-sm text-white truncate">{item.taskType}</div>
                             <div className="text-xs text-gray-500">
-                              {item.completed} tasks • {item.avgDurationMin}m avg
+                              {runsLabel(item, 'tasks')} • {item.avgDurationMin}m avg
                             </div>
                           </div>
                           <div className="flex items-center gap-3">
@@ -552,7 +561,7 @@ export default function LearningTab() {
                         <div>
                           <span className="text-sm text-white">{item.taskType}</span>
                           <span className="text-xs text-gray-500 ml-2">
-                            ({item.completed} attempts)
+                            ({runsLabel(item, 'attempts')})
                           </span>
                         </div>
                         <div className="flex items-center gap-3">
