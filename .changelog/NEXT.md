@@ -3,6 +3,7 @@
 ## CoS self-learning reliability
 
 - **[issue-2615] One investigation per failure cause, not one per failure** — repeated agent failures now dedupe into a single investigation task, with an hourly cap and no investigations-of-investigations.
+- **[issue-2618] Provider outages no longer count against task learning** — rate-limit, auth, billing, and startup failures are tracked separately instead of denting a task type's success rate, so an outage can't get a healthy task skipped or demoted.
 - **[issue-2621] Feature brainstorming remembers rejected ideas** — the feature-ideas task now checks REJECTED.md and previously closed-unmerged proposals before suggesting, so declined ideas stop coming back.
 
 ## Added
