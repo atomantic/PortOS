@@ -91,6 +91,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `promptRunner.js` | Shared LLM runner wrapper. |
 | `tuiPromptRunner.js` | One-shot TUI prompt runner (PTY-driven). |
 | `tuiHandshake.js` | Shared TUI invocation + paste-handshake constants. |
+| `tuiUsageScrape.js` | `scrapeTuiUsage({ command, slashCommand, … })` + `USAGE_SANDBOX_DIR` — drive an agy/grok TUI in a sandbox PTY, send a slash command, return the ANSI-stripped screen (for quota panels `--print` can't reach). |
 | `stageRunner.js` | Shared staged-LLM runner. |
 | `promptTemplate.js` | Mustache-flavored, dot-notation-aware prompt template engine. |
 | `promptPartials.js` | Mustache-style partial expansion. |

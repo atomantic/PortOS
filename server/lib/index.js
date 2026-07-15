@@ -108,6 +108,7 @@ export * as runners from './runners.js';
 export * as stageRunner from './stageRunner.js';
 export * from './tuiHandshake.js';
 export * from './tuiPromptRunner.js';
+export * from './tuiUsageScrape.js';
 
 // === File & I/O ===
 export * from './boundedStateMap.js';

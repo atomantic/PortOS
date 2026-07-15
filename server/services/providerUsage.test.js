@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // providerUsage imports the provider config service (toolkit-backed) and the
 // claude CLI wrapper — mock both so this suite stays hermetic.
@@ -10,9 +10,52 @@ vi.mock('./providers.js', () => ({
 vi.mock('./claudeCodeUsage.js', () => ({
   getClaudeCodeUsage: vi.fn()
 }));
+// The agy/grok adapters drive a real TUI over a PTY — mock the scrape so these
+// tests exercise the parse + fetch wiring without spawning a subprocess.
+vi.mock('../lib/tuiUsageScrape.js', () => ({
+  scrapeTuiUsage: vi.fn()
+}));
 
-import { parseCodexRateLimits, mapCodexQuota, resolveEnabledFamilies, getProviderQuotas } from './providerUsage.js';
+import {
+  parseCodexRateLimits, mapCodexQuota, resolveEnabledFamilies, getProviderQuotas,
+  parseAgyUsage, parseGrokUsage, agyRefreshToIso, __resetUsageScrapeCache,
+} from './providerUsage.js';
 import { getAllProviders } from './providers.js';
+import { scrapeTuiUsage } from '../lib/tuiUsageScrape.js';
+
+// Synthetic Antigravity `/usage` panel — invented values, redacted account, in
+// the real rendered shape. The bar percentage is percent REMAINING; a full bar
+// with "Quota available" has no reset.
+const AGY_PANEL = `└ Models & Quota
+
+  Account: user@example.com
+
+GEMINI MODELS
+  Models within this group: Gemini Flash, Gemini Pro
+
+  Weekly Limit
+    [█████████████████████████████████████████████████░] 98.99%
+    99% remaining · Refreshes in 167h 57m
+
+  Five Hour Limit
+    [████████████████████████████████████████░░░░░░░░░░] 80.00%
+    80% remaining · Refreshes in 4h 30m
+
+
+CLAUDE AND GPT MODELS
+  Models within this group: Claude Opus, Claude Sonnet, GPT-OSS
+
+  Weekly Limit
+    [██████████████████████████████████████████████████] 100.00%
+    Quota available
+
+  Five Hour Limit
+    [██████████████████████████████████████████████████] 100.00%
+    Quota available
+`;
+
+// Synthetic Grok `/usage show` output — `Weekly limit: N%` is percent USED.
+const GROK_PANEL = 'noise noise  Weekly limit: 42% Next reset: August 1, 06:07   trailing noise';
 
 // Synthetic rollout line matching the codex event_msg/token_count shape —
 // invented values only, never a transcript from a real session.
@@ -112,8 +155,109 @@ describe('getProviderQuotas', () => {
       activeProvider: 'grok',
       providers: [{ id: 'grok', enabled: true, type: 'api', endpoint: 'https://api.x.ai/v1' }]
     });
+    scrapeTuiUsage.mockResolvedValue('Weekly limit: 5% Next reset: Jan 1, 00:00');
     const quotas = await getProviderQuotas();
     expect(Array.isArray(quotas)).toBe(true);
     expect(quotas.map((q) => q.family)).toEqual(['grok']);
+  });
+});
+
+describe('agyRefreshToIso', () => {
+  const NOW = Date.parse('2026-07-14T20:00:00.000Z');
+
+  it('parses hours + minutes into an absolute ISO reset time', () => {
+    expect(agyRefreshToIso('167h 57m', NOW)).toBe(new Date(NOW + (167 * 3600 + 57 * 60) * 1000).toISOString());
+    expect(agyRefreshToIso('4h 30m', NOW)).toBe(new Date(NOW + (4 * 3600 + 30 * 60) * 1000).toISOString());
+  });
+
+  it('parses days and standalone hours', () => {
+    expect(agyRefreshToIso('2d 3h', NOW)).toBe(new Date(NOW + (2 * 86400 + 3 * 3600) * 1000).toISOString());
+    expect(agyRefreshToIso('12h', NOW)).toBe(new Date(NOW + 12 * 3600 * 1000).toISOString());
+  });
+
+  it('returns null when no duration token is present', () => {
+    expect(agyRefreshToIso('soon')).toBeNull();
+    expect(agyRefreshToIso(null)).toBeNull();
+    expect(agyRefreshToIso('')).toBeNull();
+  });
+});
+
+describe('parseAgyUsage', () => {
+  const NOW = Date.parse('2026-07-14T20:00:00.000Z');
+
+  it('maps each model group + window, treating the bar percentage as REMAINING', () => {
+    const { limits, groups } = parseAgyUsage(AGY_PANEL, { now: NOW });
+    expect(groups).toBe(2);
+    expect(limits).toHaveLength(4);
+
+    const gemWeek = limits.find((l) => l.key === 'gemini-weekly');
+    // 98.99% remaining → 1% used (100 - 98.99 = 1.01, rounded).
+    expect(gemWeek).toMatchObject({ label: 'Gemini · Weekly', percentUsed: 1, percentRemaining: 99, model: 'Gemini' });
+    expect(gemWeek.resetsAt).toBe(new Date(NOW + (167 * 3600 + 57 * 60) * 1000).toISOString());
+
+    const gem5h = limits.find((l) => l.key === 'gemini-5-hour');
+    expect(gem5h).toMatchObject({ label: 'Gemini · 5-hour', percentUsed: 20, percentRemaining: 80 });
+  });
+
+  it('preserves acronyms in group labels and null-resets a fully-available window', () => {
+    const { limits } = parseAgyUsage(AGY_PANEL, { now: NOW });
+    const cgWeek = limits.find((l) => l.key === 'claude-gpt-weekly');
+    // "CLAUDE AND GPT MODELS" → "Claude/GPT" (GPT acronym kept); 100% remaining,
+    // "Quota available" → 0% used, no reset.
+    expect(cgWeek).toMatchObject({ label: 'Claude/GPT · Weekly', percentUsed: 0, percentRemaining: 100, resetsAt: null });
+  });
+
+  it('returns no limits for text without a model group', () => {
+    expect(parseAgyUsage('Welcome to the Antigravity CLI').limits).toEqual([]);
+    expect(parseAgyUsage('').limits).toEqual([]);
+  });
+});
+
+describe('parseGrokUsage', () => {
+  it('reads the weekly limit as percent USED and passes the reset string through', () => {
+    const { limits } = parseGrokUsage(GROK_PANEL);
+    expect(limits).toHaveLength(1);
+    expect(limits[0]).toMatchObject({ key: 'weekly', label: 'Weekly', percentUsed: 42, percentRemaining: 58, resetsAt: 'August 1, 06:07' });
+  });
+
+  it('returns no limits when the panel has no weekly-limit line', () => {
+    expect(parseGrokUsage('Grok Build Beta  0.2.101').limits).toEqual([]);
+    expect(parseGrokUsage(undefined).limits).toEqual([]);
+  });
+});
+
+describe('TUI usage fetchers (via getProviderQuotas)', () => {
+  beforeEach(() => {
+    __resetUsageScrapeCache();
+    scrapeTuiUsage.mockReset();
+  });
+
+  it('surfaces a supported Antigravity card with parsed limits', async () => {
+    getAllProviders.mockResolvedValueOnce({ activeProvider: 'agy', providers: [{ id: 'antigravity-cli', enabled: true, type: 'cli', command: 'agy' }] });
+    scrapeTuiUsage.mockResolvedValueOnce(AGY_PANEL);
+    const [card] = await getProviderQuotas();
+    expect(scrapeTuiUsage).toHaveBeenCalledWith({ command: 'agy', slashCommand: '/usage' });
+    expect(card).toMatchObject({ family: 'agy', supported: true });
+    expect(card.error).toBeUndefined();
+    expect(card.limits).toHaveLength(4);
+  });
+
+  it('surfaces a supported-but-error card when the scrape yields no parseable data', async () => {
+    getAllProviders.mockResolvedValueOnce({ activeProvider: 'grok', providers: [{ id: 'grok', enabled: true, type: 'api', endpoint: 'https://api.x.ai/v1' }] });
+    scrapeTuiUsage.mockResolvedValueOnce('unrecognized banner, no usage line');
+    const [card] = await getProviderQuotas();
+    expect(card).toMatchObject({ family: 'grok', supported: true });
+    expect(card.limits).toEqual([]);
+    expect(card.error).toMatch(/No quota data/);
+  });
+
+  it('caches a scrape and folds a bypassing refresh into a fresh call', async () => {
+    getAllProviders.mockResolvedValue({ activeProvider: 'agy', providers: [{ id: 'antigravity-cli', enabled: true, type: 'cli', command: 'agy' }] });
+    scrapeTuiUsage.mockResolvedValue(AGY_PANEL);
+    await getProviderQuotas();
+    await getProviderQuotas(); // cache hit — no second scrape
+    expect(scrapeTuiUsage).toHaveBeenCalledTimes(1);
+    await getProviderQuotas({ refresh: true }); // bypasses cache
+    expect(scrapeTuiUsage).toHaveBeenCalledTimes(2);
   });
 });
