@@ -142,6 +142,18 @@ export async function spawnAgentForTask(task) {
  * early `return null` and any throw is covered by the wrapper's release.
  */
 async function runAgentSpawn(task) {
+  // Normalize taskType once, up front (issue #2633). Direct `task:ready` emits —
+  // the Creative Director bridge, `dequeueNextTask`, and `spawnPriority0OnDemand` —
+  // publish task records without a `taskType`. Every claim/in_progress `updateTask`
+  // below falls back to `task.taskType || 'user'`, so an internal-file (`sys-*`)
+  // task without taskType would target TASKS.md instead of COS-TASKS.md, miss the
+  // record, and return a truthy `{ error }` object the `if (!updateResult)` check
+  // does not catch. Derive the type from the id here (mirrors the completion path,
+  // ~line 1084) so every write below routes to the correct file.
+  if (task && !task.taskType) {
+    task.taskType = isInternalTaskId(task.id || '') ? 'internal' : 'user';
+  }
+
   // Cross-instance claim guard (issue #1563, acceptance criterion 2). When this
   // task list is shared with a federated peer (full-sync mode, #1561), the peer
   // may already be working this task. Refuse to spawn while another instance
@@ -490,7 +502,14 @@ async function runAgentSpawn(task) {
         console.error(`❌ Failed to mark task ${task.id} as in_progress: ${err.message}`);
         return null;
       });
-    if (!updateResult) {
+    // Catch BOTH failure shapes: a null from the `.catch` above (updateTask threw)
+    // and a truthy `{ error }` object from a silent miss — e.g. the task id isn't
+    // present in the file for `task.taskType` (issue #2633). A bare `if (!updateResult)`
+    // lets the error object through, so the spawn proceeds against an unclaimed task.
+    if (!updateResult || updateResult.error) {
+      if (updateResult?.error) {
+        emitLog('warn', `⚠️ in_progress claim for task ${task.id} returned an error (taskType=${task.taskType}): ${updateResult.error}`, { taskId: task.id, error: updateResult.error });
+      }
       await cleanupOnError('Failed to update task status');
       return null;
     }
