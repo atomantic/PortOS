@@ -39,13 +39,19 @@ vi.mock('../lib/telegramClient.js', () => ({
   })),
 }));
 
-// Settings supply the token + authorized chat id init() caches.
-vi.mock('./settings.js', () => ({
-  getSettings: vi.fn(async () => ({
+// Settings supply the token + authorized chat id init() caches. Held in a
+// mutable holder so a test can drop the chatId to exercise the "no chatId
+// configured" send guard; reset to the default in beforeEach.
+const cfg = vi.hoisted(() => ({ settings: null }));
+function defaultSettings() {
+  return {
     secrets: { telegram: { token: 'test-token' } },
     telegram: { chatId: '42', forwardTypes: null },
     backup: { enabled: false },
-  })),
+  };
+}
+vi.mock('./settings.js', () => ({
+  getSettings: vi.fn(async () => cfg.settings),
 }));
 
 // A minimal EventEmitter stand-in so init()'s notification subscription works.
@@ -111,7 +117,14 @@ describe('telegram service', () => {
   let logSpy;
   let errorSpy;
 
+  // The active module instance (set by loadTelegram) so afterEach can always
+  // cleanup() — stopping the real health-check interval even if an assertion
+  // throws before the in-body cleanup runs.
+  let active;
+
   beforeEach(() => {
+    cfg.settings = defaultSettings();
+    active = null;
     h.textHandlers = [];
     h.eventHandlers = {};
     h.sendMessage = vi.fn(async () => ({ message_id: 1 }));
@@ -123,14 +136,21 @@ describe('telegram service', () => {
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    if (active) await active.cleanup();
     logSpy.mockRestore();
     errorSpy.mockRestore();
+    vi.useRealTimers();
   });
 
+  async function loadTelegramActive() {
+    active = await loadTelegram();
+    return active;
+  }
+
   describe('rate limiting (token bucket)', () => {
-    it('sends up to the bucket max then rejects further messages until refill', async () => {
-      const telegram = await loadTelegram();
+    it('sends up to the bucket max then rejects further messages in the same window', async () => {
+      const telegram = await loadTelegramActive();
       await telegram.init(false);
 
       const results = [];
@@ -139,8 +159,6 @@ describe('telegram service', () => {
         results.push(await telegram.sendMessage(`msg ${i}`));
       }
 
-      await telegram.cleanup();
-
       const successes = results.filter((r) => r.success).length;
       expect(successes).toBe(30);
       expect(results[30]).toEqual({ success: false, error: 'Rate limit exceeded' });
@@ -148,18 +166,44 @@ describe('telegram service', () => {
       expect(h.sendMessage).toHaveBeenCalledTimes(30);
     });
 
-    it('returns an error without calling the bot when no chatId is configured', async () => {
-      const telegram = await loadTelegram();
-      // Never init(): authorizedChatId stays null.
+    it('refills the bucket after the refill interval elapses', async () => {
+      // Fake timers control both setInterval AND Date.now(), so advancing the
+      // clock past REFILL_INTERVAL (60s) makes refillTokens() reset the bucket.
+      vi.useFakeTimers();
+      const telegram = await loadTelegramActive();
+      await telegram.init(false);
+
+      // Exhaust the bucket, confirm the next send is rate limited.
+      for (let i = 0; i < 30; i++) await telegram.sendMessage(`msg ${i}`);
+      const exhausted = await telegram.sendMessage('over');
+      expect(exhausted).toEqual({ success: false, error: 'Rate limit exceeded' });
+
+      // Advance past the 60s refill window; the next send succeeds again.
+      await vi.advanceTimersByTimeAsync(60_000);
+      const afterRefill = await telegram.sendMessage('after refill');
+      expect(afterRefill).toEqual({ success: true });
+    });
+
+    it('returns "No chatId configured" when a token is set but chatId is missing', async () => {
+      // Token present so init() builds a live bot, but chatId is null — so the
+      // send guard must hit the authorizedChatId branch, not the no-bot branch.
+      cfg.settings = {
+        secrets: { telegram: { token: 'test-token' } },
+        telegram: { chatId: null, forwardTypes: null },
+        backup: { enabled: false },
+      };
+      const telegram = await loadTelegramActive();
+      await telegram.init(false);
+
       const res = await telegram.sendMessage('hello');
-      expect(res.success).toBe(false);
+      expect(res).toEqual({ success: false, error: 'No chatId configured' });
       expect(h.sendMessage).not.toHaveBeenCalled();
     });
   });
 
   describe('unauthorized chat rejection', () => {
     it('rejects a message from a non-authorized chat id and notifies that chat', async () => {
-      const telegram = await loadTelegram();
+      const telegram = await loadTelegramActive();
       await telegram.init(false);
 
       const messageHandler = h.eventHandlers.message[0];
@@ -174,12 +218,10 @@ describe('telegram service', () => {
         '999',
         expect.stringContaining('not configured for your chat ID')
       );
-
-      await telegram.cleanup();
     });
 
     it('does not run command handlers for an unauthorized chat', async () => {
-      const telegram = await loadTelegram();
+      const telegram = await loadTelegramActive();
       await telegram.init(false);
 
       // /status is guarded by isAuthorized; find its handler.
@@ -196,12 +238,10 @@ describe('telegram service', () => {
         '999',
         expect.stringContaining('not configured for your chat ID')
       );
-
-      await telegram.cleanup();
     });
 
     it('rejects a callback_query from a non-authorized chat with an Unauthorized answer', async () => {
-      const telegram = await loadTelegram();
+      const telegram = await loadTelegramActive();
       await telegram.init(false);
 
       const cbHandler = h.eventHandlers.callback_query[0];
@@ -212,8 +252,6 @@ describe('telegram service', () => {
       expect(h.answerCallbackQuery).toHaveBeenCalledWith('cb-1', { text: 'Unauthorized' });
       // The memory action must not run for an unauthorized chat.
       expect(h.editMessageText).not.toHaveBeenCalled();
-
-      await telegram.cleanup();
     });
   });
 });

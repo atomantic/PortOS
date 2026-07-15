@@ -101,18 +101,27 @@ describe('createTelegramBot — async handler rejections', () => {
 
 describe('createTelegramBot — poll loop dispatch', () => {
   let originalFetch;
+  let bots;
+
+  // Track every polling bot so afterEach can stop it even if an assertion throws
+  // before the in-body stopPolling() — otherwise a live poll loop (and, for the
+  // retry test, enabled fake timers) would leak into sibling tests.
+  const track = (bot) => { bots.push(bot); return bot; };
 
   beforeEach(() => {
     originalFetch = global.fetch;
+    bots = [];
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    for (const bot of bots) await bot.stopPolling().catch(() => {});
+    if (vi.isFakeTimers()) vi.useRealTimers();
     global.fetch = originalFetch;
   });
 
   it('dispatches a getUpdates message to matching onText and message listeners', async () => {
     global.fetch = makeFetchMock();
-    const bot = createTelegramBot('test-token', { polling: true });
+    const bot = track(createTelegramBot('test-token', { polling: true }));
 
     let textMsg = null;
     let textMatch = null;
@@ -131,7 +140,7 @@ describe('createTelegramBot — poll loop dispatch', () => {
 
   it('does not dispatch onText when the regex does not match', async () => {
     global.fetch = makeFetchMock();
-    const bot = createTelegramBot('test-token', { polling: true });
+    const bot = track(createTelegramBot('test-token', { polling: true }));
 
     let matched = false;
     let sawMessage = false;
@@ -158,7 +167,7 @@ describe('createTelegramBot — poll loop dispatch', () => {
         });
       });
     });
-    const bot = createTelegramBot('test-token', { polling: true });
+    const bot = track(createTelegramBot('test-token', { polling: true }));
 
     await waitFor(() => calls >= 2);
     await bot.stopPolling();
@@ -184,7 +193,7 @@ describe('createTelegramBot — poll loop dispatch', () => {
         });
       });
     });
-    const bot = createTelegramBot('test-token', { polling: true });
+    const bot = track(createTelegramBot('test-token', { polling: true }));
 
     let query = null;
     bot.on('callback_query', (q) => { query = q; });
@@ -205,7 +214,7 @@ describe('createTelegramBot — poll loop dispatch', () => {
         });
       });
     });
-    const bot = createTelegramBot('test-token', { polling: true });
+    const bot = track(createTelegramBot('test-token', { polling: true }));
 
     await waitFor(() => capturedSignal !== null);
     expect(capturedSignal.aborted).toBe(false);
@@ -229,18 +238,24 @@ describe('createTelegramBot — poll loop dispatch', () => {
         });
       });
     });
-    const bot = createTelegramBot('test-token', { polling: true });
+    const bot = track(createTelegramBot('test-token', { polling: true }));
 
     let matched = null;
     bot.onText(/\/boom/, (_msg, match) => { matched = match; });
 
-    // Flush the first (non-ok) fetch + parse, then advance past the retry delay
-    // so the loop issues its second getUpdates, which delivers the message.
+    // Flush just the first (non-ok) fetch + parse without advancing the retry
+    // timer: the loop must have consumed the non-ok response and scheduled a
+    // retry, dispatching nothing.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(calls).toBe(1);
+    expect(matched).toBeNull();
+
+    // Advance past the 5s retry delay so the loop issues its second getUpdates,
+    // which this time delivers the message and dispatches it.
     await vi.advanceTimersByTimeAsync(5000);
     await vi.advanceTimersByTimeAsync(20);
 
     expect(calls).toBeGreaterThanOrEqual(2);
-    // A non-ok response must not have dispatched anything on the first pass.
     expect(matched?.[0]).toBe('/boom');
 
     await bot.stopPolling();
@@ -260,8 +275,9 @@ describe('createTelegramBot — apiCall methods', () => {
   });
 
   it('getMe posts to /getMe and returns the result on an ok response', async () => {
-    const fetchMock = vi.fn(async (url) => {
+    const fetchMock = vi.fn(async (url, opts) => {
       expect(url).toContain('/getMe');
+      expect(opts.method).toBe('POST');
       return jsonRes({ ok: true, result: { username: 'example_bot' } });
     });
     global.fetch = fetchMock;
@@ -275,6 +291,7 @@ describe('createTelegramBot — apiCall methods', () => {
   it('sendMessage posts chat_id + text and returns the result', async () => {
     const fetchMock = vi.fn(async (url, opts) => {
       expect(url).toContain('/sendMessage');
+      expect(opts.method).toBe('POST');
       const body = JSON.parse(opts.body);
       expect(body.chat_id).toBe(42);
       expect(body.text).toBe('hi there');
