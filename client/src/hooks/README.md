@@ -69,6 +69,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | Hook | Purpose | Use when |
 |---|---|---|
 | `useSocket` | Shared socket instance + connection status. | You need to subscribe to a socket event. |
+| `useShellSession` | All Socket.IO `shell:*` session/terminal state + lifecycle for the Shell page: owns the xterm instance, the attach/detach/generation-guard contract (`pendingAttachRef {target,generation}`, `claim`, `userIdleRef`, `mountedRef`), URL sync, and every session action. Returns `{ terminalRef, connected, sessions, activeSessionId, activeSession, interactiveCount, liveRunCount, isLiveRun, emitShellInput, sendCommand, sendCtrlC, sendNavKey, refitTerminal, restartSession, stopSession, startNewSession, switchToSession, killOtherSession }` so the route stays presentational. | The Shell page (`pages/Shell.jsx`) — don't re-roll the single-subscriber PTY attach lifecycle. |
 | `useUpdateChecker` | Detect stale client bundle; show reload toast. | Wire once at app root. |
 | `useMounted` | `mountedRef` whose `.current` is true while mounted. | Async deferred work that must abort on unmount. |
 | `usePrevious` | Returns the value from the previous render — snapshot updated in a `useEffect`. | Compare-and-act on prop/state change from inside a `useEffect`. |
