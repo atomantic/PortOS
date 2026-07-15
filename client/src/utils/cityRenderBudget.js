@@ -106,11 +106,21 @@ export function recordFrame(state, sample, config = DEFAULT_RENDER_BUDGET_CONFIG
   const inWarmup = now - state.startedAt < config.warmupMs;
   const isGap = dt > config.maxFrameGapMs || dt <= 0;
 
-  const samples = !inWarmup && !isGap ? state.samples.concat(dt) : state.samples;
+  // The window clock starts at its FIRST valid sample, not at reset time — otherwise the
+  // 1.2s warm-up (or a long gap) eats most of the first 2s window and it closes with a
+  // fraction of a window's samples yet still counts toward a streak. Pinning windowStart
+  // to the first sample guarantees every classified window spans a full windowMs of
+  // measured frames.
+  let samples = state.samples;
+  let windowStart = state.windowStart;
+  if (!inWarmup && !isGap) {
+    if (samples.length === 0) windowStart = now;
+    samples = samples.concat(dt);
+  }
 
   // Window still open — accumulate and return.
-  if (now - state.windowStart < config.windowMs) {
-    return { ...state, samples, windowClosed: false };
+  if (now - windowStart < config.windowMs) {
+    return { ...state, samples, windowStart, windowClosed: false };
   }
 
   // Window elapsed but no valid samples (e.g. entire window was warm-up or gaps):

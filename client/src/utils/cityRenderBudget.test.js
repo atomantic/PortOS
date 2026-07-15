@@ -70,6 +70,25 @@ describe('cityRenderBudget — warm-up & gap rejection (ignored samples)', () =>
     expect(s.samples.length).toBe(0);
     expect(s.diagnostics.windows).toBe(0);
   });
+
+  it('starts the window clock at the first post-warm-up sample (full first window)', () => {
+    // The budget resets at t=0 but the first real frame lands well after warm-up. The
+    // first classified window must still span a full windowMs of samples, not close
+    // early because the reset time was long ago.
+    let s = createRenderBudget('high', 0);
+    const firstSampleAt = 5000; // arbitrary time past warm-up
+    let now = firstSampleAt;
+    let closed = null;
+    for (let i = 0; i < 500 && !closed; i += 1) {
+      now += 16;
+      s = recordFrame(s, { now, dt: 16 });
+      if (s.windowClosed) closed = now;
+    }
+    expect(closed).not.toBeNull();
+    // The window closed ~windowMs after the first sample, not ~windowMs after t=0.
+    expect(closed - firstSampleAt).toBeGreaterThanOrEqual(CFG.windowMs);
+    expect(closed - firstSampleAt).toBeLessThan(CFG.windowMs + 32);
+  });
 });
 
 describe('cityRenderBudget — downshift', () => {

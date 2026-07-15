@@ -28,32 +28,37 @@ export default function CityAdaptiveQuality({
   onTierChange,
   onDiagnostics,
 }) {
+  const nowMs = () => (typeof performance !== 'undefined' ? performance.now() : 0);
   const stateRef = useRef(null);
   if (stateRef.current === null) {
-    stateRef.current = createRenderBudget(startTier, typeof performance !== 'undefined' ? performance.now() : 0);
+    stateRef.current = createRenderBudget(startTier, nowMs());
   }
+  // Tracks the last-seen resumeToken so the re-arm happens INSIDE the frame loop (below),
+  // before the first resumed frame is measured — a passive effect could run after the
+  // Canvas has already switched frameloop back to "always", letting one stale-window
+  // frame classify against pre-hide samples first.
+  const seenResumeRef = useRef(resumeToken);
 
   // Re-start the budget whenever Auto (re)engages or the starting tier changes, so a
   // Manual→Auto switch always begins at High rather than resuming a stale tier.
   useEffect(() => {
     if (!enabled) return;
-    const now = typeof performance !== 'undefined' ? performance.now() : 0;
-    stateRef.current = resetRenderBudget(stateRef.current, startTier, now);
+    stateRef.current = resetRenderBudget(stateRef.current, startTier, nowMs());
+    seenResumeRef.current = resumeToken;
     onTierChange?.(getEffectiveTier(stateRef.current));
     // Deps are intentionally just [enabled, startTier] — a fresh onTierChange callback
     // identity must not reset the live budget mid-run.
   }, [enabled, startTier]);
 
-  // Re-arm warm-up on frameloop resume (tab became visible again).
-  useEffect(() => {
-    if (!enabled) return;
-    const now = typeof performance !== 'undefined' ? performance.now() : 0;
-    stateRef.current = restartWarmup(stateRef.current, now);
-  }, [resumeToken]);
-
   useFrame((_, delta) => {
     if (!enabled) return;
-    const now = typeof performance !== 'undefined' ? performance.now() : 0;
+    const now = nowMs();
+    // Frameloop just resumed from a hidden tab → re-arm warm-up before measuring, so the
+    // first sluggish post-resume frames (and any pre-hide streaks/samples) are dropped.
+    if (seenResumeRef.current !== resumeToken) {
+      seenResumeRef.current = resumeToken;
+      stateRef.current = restartWarmup(stateRef.current, now);
+    }
     const prevTier = getEffectiveTier(stateRef.current);
     stateRef.current = recordFrame(stateRef.current, { now, dt: delta * 1000 });
     const nextTier = getEffectiveTier(stateRef.current);

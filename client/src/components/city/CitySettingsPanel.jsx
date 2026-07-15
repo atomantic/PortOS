@@ -123,6 +123,13 @@ export default function CitySettingsPanel({ qualityMode = 'manual', effectiveTie
     else updateSetting('qualityPreset', key);
   };
 
+  // In Auto mode the scene derives reflections + particle density from the effective
+  // tier, not the saved manual values — so the (disabled) controls display the effective
+  // preset's values and follow live tier changes rather than showing a stale manual value.
+  const effectivePreset = isAuto ? (QUALITY_PRESETS[effectiveTier] || QUALITY_PRESETS.high) : null;
+  const reflectionsValue = effectivePreset ? effectivePreset.reflectionsEnabled : settings.reflectionsEnabled;
+  const particleValue = effectivePreset ? effectivePreset.particleDensity : settings.particleDensity;
+
   return (
     <div className="absolute bottom-4 right-4 z-50 pointer-events-auto animate-in slide-in-from-bottom-4 duration-300">
       <div
@@ -234,7 +241,7 @@ export default function CitySettingsPanel({ qualityMode = 'manual', effectiveTie
             <SectionHeader title="VISUAL FX" subtitle={isAuto ? 'Reflections + density controlled by Auto' : 'Reflections and atmosphere'} />
             <SettingToggle
               label="REFLECTIONS"
-              value={settings.reflectionsEnabled}
+              value={reflectionsValue}
               onChange={(v) => updateSetting('reflectionsEnabled', v)}
               description={isAuto ? 'Set automatically by Auto quality' : 'Wet street reflections and puddles'}
               disabled={isAuto}
@@ -247,7 +254,7 @@ export default function CitySettingsPanel({ qualityMode = 'manual', effectiveTie
             />
             <SettingSlider
               label="PARTICLE DENSITY"
-              value={settings.particleDensity}
+              value={particleValue}
               onChange={(v) => updateSetting('particleDensity', v)}
               min={0.25}
               max={2}
