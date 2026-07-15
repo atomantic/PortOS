@@ -108,6 +108,10 @@ describe('<MidiVisualization>', () => {
   it('zoom controls are real labeled buttons', async () => {
     render(<MidiVisualization url="/uploads/test.mid" />);
     await screen.findByText(/3 notes · /);
+    // Let the initial paint settle, then clear the spy so the assertion proves
+    // the zoom interaction *itself* triggers a repaint (not the first paint).
+    await waitFor(() => expect(ctx.clearRect).toHaveBeenCalled());
+    ctx.clearRect.mockClear();
     fireEvent.click(screen.getByLabelText('Zoom in'));
     fireEvent.click(screen.getByLabelText('Zoom out'));
     fireEvent.click(screen.getByLabelText('Fit to width'));
