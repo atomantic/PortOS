@@ -106,27 +106,32 @@ export function recordFrame(state, sample, config = DEFAULT_RENDER_BUDGET_CONFIG
   const inWarmup = now - state.startedAt < config.warmupMs;
   const isGap = dt > config.maxFrameGapMs || dt <= 0;
 
+  // A frame inside the warm-up is dropped AND keeps the window clock pinned to now, so
+  // the first real window starts measuring only once warm-up ends.
+  if (inWarmup) {
+    return { ...state, windowStart: now, samples: [], windowClosed: false };
+  }
+
+  // A >250ms gap (tab hidden, main-thread stall, GC) breaks the continuity of the current
+  // rolling window: discard whatever partial window we'd accumulated and restart the clock
+  // after the gap, so a lone pre-gap sample can't be classified as a full window.
+  if (isGap) {
+    return { ...state, windowStart: now, samples: [], windowClosed: false };
+  }
+
   // The window clock starts at its FIRST valid sample, not at reset time — otherwise the
-  // 1.2s warm-up (or a long gap) eats most of the first 2s window and it closes with a
-  // fraction of a window's samples yet still counts toward a streak. Pinning windowStart
-  // to the first sample guarantees every classified window spans a full windowMs of
-  // measured frames.
+  // warm-up (or a long gap) eats most of the first 2s window and it closes with a fraction
+  // of a window's samples yet still counts toward a streak. Pinning windowStart to the
+  // first sample guarantees every classified window spans a full windowMs of measured
+  // frames.
   let samples = state.samples;
   let windowStart = state.windowStart;
-  if (!inWarmup && !isGap) {
-    if (samples.length === 0) windowStart = now;
-    samples = samples.concat(dt);
-  }
+  if (samples.length === 0) windowStart = now;
+  samples = samples.concat(dt);
 
   // Window still open — accumulate and return.
   if (now - windowStart < config.windowMs) {
     return { ...state, samples, windowStart, windowClosed: false };
-  }
-
-  // Window elapsed but no valid samples (e.g. entire window was warm-up or gaps):
-  // roll the window forward without classifying so streaks stay intact.
-  if (samples.length === 0) {
-    return { ...state, windowStart: now, samples: [], windowClosed: false };
   }
 
   const p75 = percentile(samples, config.percentile);
@@ -134,7 +139,11 @@ export function recordFrame(state, sample, config = DEFAULT_RENDER_BUDGET_CONFIG
 
   let tierIndex = state.tierIndex;
   let lastChangeAt = state.lastChangeAt;
-  const cooledDown = now - state.lastChangeAt >= config.cooldownMs;
+  // Cooldown eligibility keys on the window's START, not its close — a window that opened
+  // during the cooldown but happens to close just after expiry is NOT fresh evidence. Only
+  // windows that began fully after the cooldown ended count toward a streak, so a change
+  // requires two (or five) *complete* post-cooldown windows.
+  const cooledDown = windowStart - state.lastChangeAt >= config.cooldownMs;
 
   // Observation freeze during cooldown: windows classified inside the cooldown do NOT
   // bank a streak. Otherwise a streak accumulated while cooling would fire the instant

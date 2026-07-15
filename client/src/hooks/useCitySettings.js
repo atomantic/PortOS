@@ -77,6 +77,10 @@ export { QUALITY_PRESETS };
 
 export default function useCitySettings() {
   const [settings, setSettings] = useState(loadSettings);
+  // Monotonic counter bumped on every reset. The runtime render budget (Auto mode) lives
+  // outside `settings`, so a "RESET DEFAULTS" that leaves qualityMode/preset unchanged
+  // would otherwise not re-arm it — consumers watch this token to reset the budget too.
+  const [resetNonce, setResetNonce] = useState(0);
 
   useEffect(() => {
     const handleTimeOfDayAuto = () => {
@@ -109,7 +113,8 @@ export default function useCitySettings() {
   const resetSettings = useCallback(() => {
     safeRemoveStorage(STORAGE_KEY);
     setSettings(DEFAULT_SETTINGS);
+    setResetNonce(n => n + 1);
   }, []);
 
-  return [settings, updateSetting, resetSettings];
+  return [settings, updateSetting, resetSettings, resetNonce];
 }

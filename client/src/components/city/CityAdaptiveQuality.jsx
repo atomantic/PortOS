@@ -24,6 +24,7 @@ export default function CityAdaptiveQuality({
   enabled,
   startTier = 'high',
   resumeToken = 0,
+  resetToken = 0,
   diagnosticsEnabled = false,
   onTierChange,
   onDiagnostics,
@@ -39,16 +40,17 @@ export default function CityAdaptiveQuality({
   // frame classify against pre-hide samples first.
   const seenResumeRef = useRef(resumeToken);
 
-  // Re-start the budget whenever Auto (re)engages or the starting tier changes, so a
-  // Manual→Auto switch always begins at High rather than resuming a stale tier.
+  // Re-start the budget whenever Auto (re)engages, the starting tier changes, or the user
+  // resets defaults (resetToken) — so a Manual→Auto switch and a RESET DEFAULTS both begin
+  // adaptation fresh at the start tier rather than resuming a stale runtime tier.
   useEffect(() => {
     if (!enabled) return;
     stateRef.current = resetRenderBudget(stateRef.current, startTier, nowMs());
     seenResumeRef.current = resumeToken;
     onTierChange?.(getEffectiveTier(stateRef.current));
-    // Deps are intentionally just [enabled, startTier] — a fresh onTierChange callback
-    // identity must not reset the live budget mid-run.
-  }, [enabled, startTier]);
+    // Deps are intentionally [enabled, startTier, resetToken] — a fresh onTierChange
+    // callback identity must not reset the live budget mid-run.
+  }, [enabled, startTier, resetToken]);
 
   useFrame((_, delta) => {
     if (!enabled) return;

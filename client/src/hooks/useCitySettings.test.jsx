@@ -85,6 +85,18 @@ describe('useCitySettings localStorage resilience', () => {
     expect(settings.reflectionsEnabled).toBe(false); // low preset bulk-applied
   });
 
+  it('bumps resetNonce on reset so the runtime budget can re-arm', () => {
+    const { result } = renderHook(() => useCitySettings());
+    const before = result.current[3];
+    act(() => {
+      const resetSettings = result.current[2];
+      resetSettings();
+    });
+    expect(result.current[3]).toBe(before + 1);
+    const [settings] = result.current;
+    expect(settings.qualityMode).toBe('auto'); // reset restores Auto default
+  });
+
   it('handles the time-of-day-auto event without throwing when writes fail', () => {
     // This is the listener fired by useTheme.setTheme; with storage blocked its
     // write must not surface an unhandled error on the theme-switch path.

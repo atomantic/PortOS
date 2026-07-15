@@ -24,7 +24,7 @@ import { useThemeContext } from '../components/ThemeContext';
 
 function CyberCityInner() {
   const { apps, cosAgents, cosStatus, eventLogs, agentMap, reviewCounts, instances, systemHealth, notificationCounts, backupStatus, cosTasks, healthMetrics, voiceState, character, aiActivity, loading, connected } = useCityData();
-  const { settings, updateSetting } = useCitySettingsContext();
+  const { settings, updateSetting, resetNonce } = useCitySettingsContext();
 
   // Ambient soundscape (roadmap 3.4): the music's mood follows system health and its energy
   // follows live agent activity. Derived from data the page already has — no extra fetch.
@@ -66,6 +66,10 @@ function CyberCityInner() {
   const [autoTier, setAutoTier] = useState('high');
   const [autoDiagnostics, setAutoDiagnostics] = useState(null);
   const effectiveTier = qualityMode === 'auto' ? autoTier : (settings?.qualityPreset ?? 'high');
+
+  // On RESET DEFAULTS, clear the stale local diagnostics readout; the adaptive budget
+  // itself re-arms via CityScene's autoResetToken and re-reports tier + fresh samples.
+  useEffect(() => { setAutoDiagnostics(null); }, [resetNonce]);
 
   const sceneSettings = useMemo(() => {
     const base = { ...settings, effectiveTier, skyTheme: 'cyberpunk', timeOfDay: cityTimeOfDay.presetKey };
@@ -404,6 +408,7 @@ function CyberCityInner() {
         dimmedAppIds={filterResult.dimmed}
         autoQuality={qualityMode === 'auto'}
         autoStartTier="high"
+        autoResetToken={resetNonce}
         diagnosticsEnabled={showSettings}
         onAutoTierChange={setAutoTier}
         onAutoDiagnostics={setAutoDiagnostics}

@@ -71,6 +71,19 @@ describe('cityRenderBudget — warm-up & gap rejection (ignored samples)', () =>
     expect(s.diagnostics.windows).toBe(0);
   });
 
+  it('discards a partial window when a frame gap interrupts it', () => {
+    let s = createRenderBudget('high', 0);
+    // One valid sample past warm-up opens a window holding a single sample.
+    s = recordFrame(s, { now: CFG.warmupMs + 100, dt: 30 });
+    expect(s.samples.length).toBe(1);
+    // A long gap whose `now` is past windowMs must NOT classify the 1-sample window.
+    s = recordFrame(s, { now: CFG.warmupMs + 100 + CFG.windowMs + 500, dt: CFG.windowMs + 500 });
+    expect(s.windowClosed).toBe(false);
+    expect(s.diagnostics.windows).toBe(0);
+    expect(s.pressureStreak).toBe(0);
+    expect(s.samples.length).toBe(0);
+  });
+
   it('starts the window clock at the first post-warm-up sample (full first window)', () => {
     // The budget resets at t=0 but the first real frame lands well after warm-up. The
     // first classified window must still span a full windowMs of samples, not close
