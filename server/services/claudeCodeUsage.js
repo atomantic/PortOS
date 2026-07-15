@@ -49,7 +49,7 @@ export function zoneFromLocaltimeLink(link) {
 // child so headless output matches the interactive TUI. Memoized; best-effort
 // (null → inherit the process env unchanged).
 let cachedSystemTz;
-function systemTimeZone() {
+export function systemTimeZone() {
   if (cachedSystemTz !== undefined) return cachedSystemTz;
   cachedSystemTz = existsSync('/etc/localtime') && lstatSync('/etc/localtime').isSymbolicLink()
     ? zoneFromLocaltimeLink(readlinkSync('/etc/localtime'))

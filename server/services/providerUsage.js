@@ -2,7 +2,7 @@ import { open, readdir, readFile, stat } from 'fs/promises';
 import { homedir } from 'os';
 import { join } from 'path';
 import { getAllProviders } from './providers.js';
-import { getClaudeCodeUsage } from './claudeCodeUsage.js';
+import { getClaudeCodeUsage, systemTimeZone } from './claudeCodeUsage.js';
 import { commandBasename, isClaudeCommand } from '../lib/providerModels.js';
 import { isGrokCommand } from '../lib/grok.js';
 import { scrapeTuiUsage } from '../lib/tuiUsageScrape.js';
@@ -402,14 +402,23 @@ function makeTuiUsageFetcher({ id, binary, slashCommand, label, parse, name, rea
     if (!provider) {
       return Promise.resolve({ ...base, supported: false, limits: [], note: `${name} usage is read from the local CLI/TUI — enable the ${name} to see quota (the API provider has no queryable usage surface).` });
     }
-    return cachedScrape(id, { refresh }, async () => {
-      // Forward the matched provider's command + envVars. Args are forwarded
-      // ONLY for a `tui`-type provider — those are interactive args (a wrapper
-      // script path, `--project <id>`, etc.). A `cli`-type provider's args are
-      // one-shot/headless flags (`-p`, `exec -`, `--print`, `--prompt-file`)
-      // that would break the interactive TUI `/usage` needs, so they're dropped.
-      const args = provider.type === 'tui' && Array.isArray(provider.args) ? provider.args : [];
-      const text = await scrapeTuiUsage({ command: provider.command || binary, args, slashCommand, env: provider.envVars, readyMarker });
+    const command = provider.command || binary;
+    // Args are forwarded ONLY for a `tui`-type provider — those are interactive
+    // args (a wrapper script path, `--project <id>`, etc.). A `cli`-type
+    // provider's args are one-shot/headless flags (`-p`, `exec -`, `--print`,
+    // `--prompt-file`) that would break the interactive TUI `/usage` needs.
+    const args = provider.type === 'tui' && Array.isArray(provider.args) ? provider.args : [];
+    // The TUI renders reset times in its own timezone; a server under PM2 runs
+    // in UTC, so pass the machine's real zone (as claudeCodeUsage.js does) or
+    // Grok's zoneless "Next reset" is off for non-UTC installs.
+    const tz = systemTimeZone();
+    const env = { ...(provider.envVars || {}), ...(tz ? { TZ: tz } : {}) };
+    // Key the cache by the resolved invocation, not just the family id — so a
+    // provider edit (different account via envVars, tui↔cli switch, arg change)
+    // doesn't serve the previous account's quota from a stale entry.
+    const cacheKey = `${id}:${command}:${provider.type}:${JSON.stringify(env)}:${JSON.stringify(args)}`;
+    return cachedScrape(cacheKey, { refresh }, async () => {
+      const text = await scrapeTuiUsage({ command, args, slashCommand, env, readyMarker });
       const { limits } = parse(text);
       return limits.length
         ? { ...base, supported: true, limits, note: `Scraped from the ${name} /usage panel — local, approximate.` }
