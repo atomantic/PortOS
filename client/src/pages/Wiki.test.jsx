@@ -54,13 +54,16 @@ describe('Wiki vault URL wiring', () => {
   it('defaults to the first vault when no ?vault= param is present', async () => {
     renderWiki('/wiki/overview');
     await waitFor(() => expect(screen.getByTestId('overview')).toHaveTextContent('overview:vault-a'));
-    expect(scanNotesVault).toHaveBeenCalledWith('vault-a', { limit: 1000 });
+    // scanNotesVault is fired by a separate effect keyed on the selected vault id;
+    // wait for that async side-effect rather than asserting it synchronously — the
+    // passive effect can lag the committed overview render under full-suite load (#2643).
+    await waitFor(() => expect(scanNotesVault).toHaveBeenCalledWith('vault-a', { limit: 1000 }));
   });
 
   it('restores the selected vault from the ?vault= param', async () => {
     renderWiki('/wiki/overview?vault=vault-b');
     await waitFor(() => expect(screen.getByTestId('overview')).toHaveTextContent('overview:vault-b'));
-    expect(scanNotesVault).toHaveBeenCalledWith('vault-b', { limit: 1000 });
+    await waitFor(() => expect(scanNotesVault).toHaveBeenCalledWith('vault-b', { limit: 1000 }));
   });
 
   it('preserves ?vault= through the base /wiki redirect', async () => {
