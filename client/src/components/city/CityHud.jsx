@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import CityIntelPane from './CityIntelPane';
+import CityFocusPanel from './CityFocusPanel';
 import CityAgentBar from './CityAgentBar';
 import CityFilterBar from './CityFilterBar';
 import CityXpBadge from './CityXpBadge';
@@ -67,7 +68,8 @@ function Crosshair() {
   );
 }
 
-export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, connected, apps, reviewCounts, instances, productivityData, systemHealth, notificationCounts, character, filter, onFilterChange, onJumpToFirst, matchCount, onToggleExploration, explorationMode, onSelectApp, onEnterPhotoMode, onEnterPlayback }) {
+export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, connected, apps, reviewCounts, instances, productivityData, systemHealth, notificationCounts, character, filter, onFilterChange, onJumpToFirst, matchCount, onToggleExploration, explorationMode, onSelectApp, onEnterPhotoMode, onEnterPlayback, focusedAppId, focusedApp, focusNotFound, focusAgents, onCloseFocus, onOpenApp }) {
+  const isFocused = Boolean(focusedApp || focusNotFound);
   const navigate = useNavigate();
   const location = useLocation();
   const { isDesktop } = useCityViewport();
@@ -209,16 +211,28 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
             </div>
           </div>
 
-          {/* Right side: Intel pane (Attention + Activity tabs) */}
-          <CityIntelPane
-            apps={apps}
-            cosAgents={cosAgents}
-            reviewCounts={reviewCounts}
-            instances={instances}
-            systemHealth={systemHealth}
-            notificationCounts={notificationCounts}
-            eventLogs={eventLogs}
-          />
+          {/* Right side: focus detail panel while a borough is focused (issue #2593),
+              otherwise the Intel pane. The focus panel REPLACES the intel pane — never overlaps. */}
+          {isFocused ? (
+            <CityFocusPanel
+              app={focusedApp}
+              notFound={focusNotFound}
+              agents={focusAgents}
+              onClose={onCloseFocus}
+              onOpenApp={onOpenApp}
+              isDesktop
+            />
+          ) : (
+            <CityIntelPane
+              apps={apps}
+              cosAgents={cosAgents}
+              reviewCounts={reviewCounts}
+              instances={instances}
+              systemHealth={systemHealth}
+              notificationCounts={notificationCounts}
+              eventLogs={eventLogs}
+            />
+          )}
 
           {/* Bottom: Agent status bar */}
           <CityAgentBar cosAgents={cosAgents} agentMap={agentMap} />
@@ -229,7 +243,7 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
           {/* Bottom-left: mini-map + Settings gear + legend + corner decoration */}
           <div className="absolute bottom-16 left-3">
             {/* Top-down mini-map of every building (roadmap 2.8) */}
-            <CityMiniMap apps={apps} onSelectApp={onSelectApp} />
+            <CityMiniMap apps={apps} onSelectApp={onSelectApp} selectedAppId={focusedAppId} />
 
             {/* Status legend */}
             <div className="pointer-events-none mb-2 bg-black/70 backdrop-blur-sm border border-cyan-500/15 rounded-lg px-2.5 py-2 space-y-1">
@@ -348,6 +362,12 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
           onSelectApp={onSelectApp}
           onEnterPhotoMode={onEnterPhotoMode}
           onEnterPlayback={onEnterPlayback}
+          focusedAppId={focusedAppId}
+          focusedApp={focusedApp}
+          focusNotFound={focusNotFound}
+          focusAgents={focusAgents}
+          onCloseFocus={onCloseFocus}
+          onOpenApp={onOpenApp}
         />
       )}
 

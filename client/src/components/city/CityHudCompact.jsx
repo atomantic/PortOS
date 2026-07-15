@@ -6,6 +6,7 @@ import { buildAttentionItems, CityIntelContent } from './CityIntelPane';
 import CityVitalsList from './CityVitalsList';
 import CityMiniMap from './CityMiniMap';
 import CityFilterBar from './CityFilterBar';
+import CityFocusPanel from './CityFocusPanel';
 import { CITY_PANE_IDS, CITY_INTEL_PANE_IDS, CITY_PANE_LABELS } from './cityPanes';
 
 // A 44×44 dock control. `active`/`aria-pressed` mark a toggled disclosure launcher;
@@ -81,11 +82,18 @@ export default function CityHudCompact({
   onSelectApp,
   onEnterPhotoMode,
   onEnterPlayback,
+  focusedAppId,
+  focusedApp,
+  focusNotFound,
+  focusAgents,
+  onCloseFocus,
+  onOpenApp,
 }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [activePane, setActivePane] = useDrawerTab('cityPane', null, CITY_PANE_IDS);
   const togglePane = (id) => setActivePane(activePane === id ? null : id);
+  const isFocused = Boolean(focusedApp || focusNotFound);
 
   const items = useMemo(
     () => buildAttentionItems({ apps, cosAgents, reviewCounts, instances, systemHealth, notificationCounts }),
@@ -106,7 +114,7 @@ export default function CityHudCompact({
     }
     if (activePane === 'map') {
       return hasApps
-        ? <div className="p-3 flex justify-center"><CityMiniMap apps={apps} onSelectApp={onSelectApp} alwaysShow /></div>
+        ? <div className="p-3 flex justify-center"><CityMiniMap apps={apps} onSelectApp={onSelectApp} selectedAppId={focusedAppId} alwaysShow /></div>
         : <div className="p-6 text-center font-pixel text-[9px] text-cyan-500/40 tracking-wide">No buildings to map</div>;
     }
     if (activePane === 'filter') {
@@ -175,8 +183,21 @@ export default function CityHudCompact({
         )}
       </div>
 
+      {/* Focused building detail sheet (issue #2593) — replaces the disclosure sheet while a
+          borough is focused so the two never overlap. */}
+      {isFocused && (
+        <CityFocusPanel
+          app={focusedApp}
+          notFound={focusNotFound}
+          agents={focusAgents}
+          onClose={onCloseFocus}
+          onOpenApp={onOpenApp}
+          isDesktop={false}
+        />
+      )}
+
       {/* Disclosure sheet — one surface at a time, above the dock */}
-      {activePane && (
+      {!isFocused && activePane && (
         <div className="absolute inset-x-2 bottom-16 pointer-events-auto">
           <div className="bg-black/90 backdrop-blur-md border border-cyan-500/35 rounded-lg flex flex-col max-h-[55vh] overflow-hidden">
             <div className="flex items-center justify-between pl-3 pr-1 py-1.5 border-b border-cyan-500/20 shrink-0">
