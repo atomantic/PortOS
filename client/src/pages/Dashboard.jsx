@@ -341,7 +341,7 @@ export default function Dashboard() {
               <span className="absolute inline-flex h-full w-full rounded-full bg-port-success opacity-60 animate-ping" />
             )}
             <span
-              className={`relative inline-flex rounded-full h-2.5 w-2.5 ${health ? 'bg-port-success shadow-[0_0_8px_#22c55e]' : 'bg-port-error shadow-[0_0_8px_#ef4444]'}`}
+              className={`relative inline-flex rounded-full h-2.5 w-2.5 ${health ? 'bg-port-success shadow-[0_0_8px_rgb(var(--port-success))]' : 'bg-port-error shadow-[0_0_8px_rgb(var(--port-error))]'}`}
             />
           </span>
         </h2>
