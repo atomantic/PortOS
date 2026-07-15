@@ -651,6 +651,10 @@ async function spawnPriority0OnDemand(ctx) {
         // reconcile convergence signature so the detector below runs fresh (see
         // cos.dequeueNextTask for the full rationale).
         await taskSchedule.resetPerpetualForManualRun(request.taskType, targetApp.id);
+        // A manual "Run" also unparks a failure-parked type (#2616): the user
+        // explicitly re-running is an "I've addressed it" signal, so clear the
+        // per-type consecutive-failure ledger for this app.
+        await taskSchedule.clearTaskTypeFailurePark(request.taskType, targetApp.id);
         // Advance the cooldown eagerly (deduped per app per cycle), but defer
         // binding the active agent until a task is produced — a null result
         // here must not strand `activeAgentId` (issue #978).
@@ -666,6 +670,8 @@ async function spawnPriority0OnDemand(ctx) {
       } else {
         emitLog('info', `Processing on-demand improvement: ${request.taskType}`, { requestId: request.id });
         await taskSchedule.resetPerpetualForManualRun(request.taskType);
+        // Manual re-run unparks a failure-parked type (global scope) — #2616.
+        await taskSchedule.clearTaskTypeFailurePark(request.taskType);
         await taskSchedule.recordExecution(`task:${request.taskType}`);
         await withStateLock(async () => {
           const s = await loadState();

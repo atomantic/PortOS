@@ -8,6 +8,7 @@ vi.mock('./cos.js', () => ({ addTask: vi.fn(), updateTask: vi.fn(), getAllTasks:
 import {
   analyzeAgentFailure,
   resolveFailedTaskDecision,
+  resolveTypeFailureSignal,
   maybeCreateInvestigationTask,
   createInvestigationTask,
   buildInvestigationFingerprint,
@@ -219,6 +220,57 @@ describe('resolveFailedTaskDecision', () => {
       expect(decision.status).toBe('blocked');
       expect(decision.metadataUpdates.failureCount).toBe(MAX_TASK_RETRIES);
     });
+  });
+});
+
+describe('resolveTypeFailureSignal (#2616)', () => {
+  it('a user-terminated run is skipped (never touches the ledger)', () => {
+    expect(resolveTypeFailureSignal({ success: false, terminatedByUser: true }))
+      .toEqual({ record: 'skip', category: null });
+    // ...even when the exit code says success.
+    expect(resolveTypeFailureSignal({ success: true, terminatedByUser: true }).record).toBe('skip');
+  });
+
+  it('a clean exit with no hook is a success signal', () => {
+    expect(resolveTypeFailureSignal({ success: true })).toEqual({ record: 'success', category: null });
+  });
+
+  it('a failed exit with no hook is a failure signal carrying the error category', () => {
+    expect(resolveTypeFailureSignal({ success: false, errorCategory: 'rate-limit' }))
+      .toEqual({ record: 'failure', category: 'rate-limit' });
+    // No category → 'unknown'.
+    expect(resolveTypeFailureSignal({ success: false }).category).toBe('unknown');
+  });
+
+  it('an exit-0 run whose hook reports unparseable-response counts as a failure', () => {
+    const signal = resolveTypeFailureSignal({
+      success: true,
+      hookResult: { ran: true, outcome: { action: 'no-op', reason: 'unparseable-response' } }
+    });
+    expect(signal).toEqual({ record: 'failure', category: 'unparseable-response' });
+  });
+
+  it('a thrown hook counts as a failure (hook-error) even on a clean exit', () => {
+    const signal = resolveTypeFailureSignal({ success: true, hookResult: { ran: true, threw: true } });
+    expect(signal).toEqual({ record: 'failure', category: 'hook-error' });
+  });
+
+  it('a run that already failed keeps its real error category (hook throw does not relabel it)', () => {
+    const signal = resolveTypeFailureSignal({
+      success: false,
+      errorCategory: 'rate-limit',
+      hookResult: { ran: true, threw: true }
+    });
+    expect(signal).toEqual({ record: 'failure', category: 'rate-limit' });
+  });
+
+  it('benign hook reasons (no-proposal/duplicate) leave the exit-code verdict intact', () => {
+    for (const reason of ['no-proposal', 'duplicate', 'scope-suppressed', null]) {
+      expect(resolveTypeFailureSignal({ success: true, hookResult: { ran: true, outcome: { reason } } }).record)
+        .toBe('success');
+    }
+    // A hook that didn't run at all (no-op path) also defers to the exit code.
+    expect(resolveTypeFailureSignal({ success: true, hookResult: { ran: false } }).record).toBe('success');
   });
 });
 
