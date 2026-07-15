@@ -234,7 +234,48 @@ describe('AI Toolkit runner service', () => {
     const metadata = await completed;
     // Timeout aborted the run, and the slot is released — not leaked.
     expect(await runner.isRunActive('run-timeout')).toBe(false);
-    expect(metadata).toMatchObject({ success: false });
+    // The failure is classified as a timeout, not the AbortError's UNKNOWN/HTTP 0.
+    expect(metadata).toMatchObject({ success: false, errorCategory: 'timeout' });
+    expect(metadata.error).toMatch(/timed out/i);
+  });
+
+  it('bounds a run whose provider-readiness hook never resolves (fetch never reached)', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+
+    // ensureProviderReady hangs forever — the run never reaches the abortable
+    // fetch, so aborting the controller alone can't release the slot. The
+    // wall-clock timer must finalize the run independently.
+    const fetch = vi.fn();
+    vi.stubGlobal('fetch', fetch);
+    const runner = createRunnerService({
+      dataDir,
+      hooks: { ensureProviderReady: () => new Promise(() => {}) }
+    });
+
+    let done;
+    const completed = new Promise((resolve) => { done = resolve; });
+    // Do NOT await the run promise — with a readiness hook that never resolves,
+    // `executeApiRun` never returns. `activeRuns.set` runs synchronously before
+    // the first await, so the slot is already occupied; completion comes only
+    // from the wall-clock timer via onComplete.
+    runner.executeApiRun({
+      runId: 'run-hung-setup',
+      provider: runReady(),
+      model: null,
+      prompt: 'hi',
+      workspacePath: process.cwd(),
+      screenshots: [],
+      timeout: 20,
+      onData: undefined,
+      onComplete: (m) => done(m)
+    }).catch(() => {});
+
+    expect(await runner.isRunActive('run-hung-setup')).toBe(true);
+    const metadata = await completed;
+    expect(fetch).not.toHaveBeenCalled();
+    expect(await runner.isRunActive('run-hung-setup')).toBe(false);
+    expect(metadata).toMatchObject({ success: false, errorCategory: 'timeout' });
   });
 });
 

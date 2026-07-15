@@ -523,25 +523,54 @@ export function createRunnerService(config = {}) {
       const controller = new AbortController();
       activeRuns.set(runId, controller);
 
-      // Wall-clock timeout: without this a hung provider (opens the stream then
-      // stalls, or never responds at all) holds the AbortController in
-      // `activeRuns` forever, leaking the run slot. Arm it BEFORE the fetch and
-      // keep it armed through the entire stream-consumption window — an abort
-      // rejects the pending fetch/reader, which routes into the `!response.ok`
-      // or `processStream().catch` paths below where `activeRuns` is cleaned up.
-      // Every terminal path calls `clearApiTimeout()` so the timer can't fire
-      // after a natural completion. Mirrors executeCliRun's `timeoutHandle`.
+      // Wall-clock timeout with a single-settlement gate. Without a ceiling a
+      // hung provider (opens the stream then stalls, never responds, or — via
+      // the `ensureProviderReady` hook — never even reaches the abortable
+      // fetch) holds the AbortController in `activeRuns` forever, leaking the
+      // run slot. `markSettled()` ensures exactly one of {timer, response
+      // paths} finalizes the run: whoever wins clears the timer and flips the
+      // flag; the losers no-op. When the timer wins it aborts the fetch/reader
+      // AND independently finalizes the run as a TIMEOUT (so a hung setup hook
+      // that never reaches the fetch is still bounded, and the failure is
+      // classified as a timeout instead of the AbortError's UNKNOWN/HTTP-0).
       const effectiveTimeout = timeout || provider.timeout || DEFAULT_API_RUN_TIMEOUT_MS;
-      let apiTimeoutHandle = setTimeout(() => {
-        console.log(`⏱️ API run ${runId} timed out after ${effectiveTimeout}ms`);
-        controller.abort();
-      }, effectiveTimeout);
-      const clearApiTimeout = () => {
+      let settled = false;
+      let apiTimeoutHandle = null;
+      const markSettled = () => {
+        if (settled) return false;
+        settled = true;
         if (apiTimeoutHandle) {
           clearTimeout(apiTimeoutHandle);
           apiTimeoutHandle = null;
         }
+        return true;
       };
+      const finalizeTimeout = async () => {
+        if (!markSettled()) return;
+        activeRuns.delete(runId);
+        const error = `API execution timed out after ${effectiveTimeout}ms`;
+        try {
+          if (output) await atomicWrite(outputPath, output).catch(() => {});
+          const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
+          metadata.endTime = new Date().toISOString();
+          metadata.duration = Date.now() - startTime;
+          metadata.success = false;
+          metadata.error = error;
+          metadata.errorCategory = ERROR_CATEGORIES.TIMEOUT;
+          metadata.outputSize = Buffer.byteLength(output);
+          await atomicWrite(metadataPath, metadata);
+          safeSettle(() => hooks.onRunFailed?.(metadata, error, output), `Run ${runId} onRunFailed hook`);
+          safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
+        } catch (finalErr) {
+          console.error(`❌ API run ${runId} timeout finalize error: ${finalErr.message}`);
+          safeSettle(() => onComplete?.({ success: false, error, endTime: new Date().toISOString(), duration: Date.now() - startTime, outputSize: Buffer.byteLength(output) }), `Run ${runId} onComplete`);
+        }
+      };
+      apiTimeoutHandle = setTimeout(() => {
+        console.log(`⏱️ API run ${runId} timed out after ${effectiveTimeout}ms`);
+        controller.abort();
+        finalizeTimeout().catch((err) => console.error(`❌ API run ${runId} timeout handler error: ${err.message}`));
+      }, effectiveTimeout);
 
       hooks.onRunStarted?.({ runId, provider: provider.name, model });
 
@@ -600,7 +629,10 @@ export function createRunnerService(config = {}) {
         : { ok: false, error: `Ollama is not running and PortOS could not start it: ${ready.error || 'unknown error'}`, status: 0 };
 
       if (!response.ok) {
-        clearApiTimeout();
+        // The timeout path may already own this run (an abort surfaces here as
+        // a rejected fetch) — if so it has finalized as a TIMEOUT; don't
+        // double-complete or reclassify.
+        if (!markSettled()) return runId;
         activeRuns.delete(runId);
         const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
         metadata.endTime = new Date().toISOString();
@@ -678,7 +710,9 @@ export function createRunnerService(config = {}) {
           onData?.({ text: reasoning, isReasoning: true });
         }
 
-        clearApiTimeout();
+        // A timeout firing between the last read and here would have finalized
+        // the run already — don't overwrite a TIMEOUT with a spurious success.
+        if (!markSettled()) return;
         await atomicWrite(outputPath, output);
         activeRuns.delete(runId);
 
@@ -701,7 +735,9 @@ export function createRunnerService(config = {}) {
         // unguarded throw from handleProviderError/atomicWrite below would
         // surface as an unhandled rejection and crash the process. Wrap it.
         try {
-          clearApiTimeout();
+          // If the timeout won the race (this catch is the aborted reader
+          // rejecting), it already finalized as a TIMEOUT — bail out.
+          if (!markSettled()) return;
           activeRuns.delete(runId);
 
           if (output) {
