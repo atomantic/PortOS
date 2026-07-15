@@ -31,6 +31,7 @@ import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { spawningTasks, runnerAgents } from './agentState.js';
 import { withSpawnDedupGuard, withMapEntryCleanup, SPAWN_DEDUP_SKIP } from './agentGuards.js';
+import { isInternalTaskId } from '../lib/taskParser.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const AGENT_LIFECYCLE_SRC = readFileSync(join(__dirname, 'agentLifecycle.js'), 'utf-8');
@@ -425,5 +426,84 @@ describe('agentLifecycle — runner OpenCode Ollama env (#2243 / #2190)', () => 
     expect(fnBody).toMatch(/envVars:\s*\{[^}]*\.\.\.forgeTokenEnv[^}]*\}/);
     expect(fnBody.indexOf('...forgeTokenEnv'), 'forgeTokenEnv must be spread BEFORE provider.envVars')
       .toBeLessThan(fnBody.indexOf('...provider.envVars'));
+  });
+});
+
+// ─── taskType normalization for direct task:ready emits (issue #2633) ────────
+//
+// Direct `task:ready` emitters (Creative Director bridge, dequeueNextTask,
+// spawnPriority0OnDemand) publish task records with no `taskType`. Every
+// claim/in_progress `updateTask` in runAgentSpawn falls back to
+// `task.taskType || 'user'`, so an internal (`sys-*`) task without taskType
+// would write to TASKS.md, miss the record, and return a truthy `{ error }`
+// object the `if (!updateResult)` check silently swallowed. The fix normalizes
+// taskType at the top of runAgentSpawn via the real isInternalTaskId classifier.
+describe('taskType normalization — behavior (issue #2633)', () => {
+  // Mirrors the normalization at the top of runAgentSpawn against the REAL
+  // isInternalTaskId import, so a change to the internal-prefix list stays in
+  // sync with what the spawn path routes on (inline-pure-logic pattern).
+  const normalizeTaskType = (task) => {
+    if (task && !task.taskType) {
+      task.taskType = isInternalTaskId(task.id || '') ? 'internal' : 'user';
+    }
+    return task;
+  };
+
+  it('routes a sys-* id with no taskType to the internal file (COS-TASKS.md)', () => {
+    const task = { id: 'sys-002', description: 'internal task' };
+    normalizeTaskType(task);
+    expect(task.taskType, "sys-* must resolve to 'internal' so updateTask targets COS-TASKS.md").toBe('internal');
+  });
+
+  it('routes cd-* and app-improve-* ids (other internal prefixes) to internal', () => {
+    expect(normalizeTaskType({ id: 'cd-42' }).taskType).toBe('internal');
+    expect(normalizeTaskType({ id: 'app-improve-9' }).taskType).toBe('internal');
+  });
+
+  it('leaves a user task-* id defaulting to user (unchanged spawn behavior)', () => {
+    const task = { id: 'task-abc' };
+    normalizeTaskType(task);
+    expect(task.taskType).toBe('user');
+  });
+
+  it('preserves an already-present taskType (does not reclassify an explicit user task)', () => {
+    const task = { id: 'sys-003', taskType: 'user' };
+    normalizeTaskType(task);
+    expect(task.taskType, 'an explicit taskType must win over id-based inference').toBe('user');
+  });
+
+  it('defaults a missing id to user rather than throwing', () => {
+    expect(normalizeTaskType({}).taskType).toBe('user');
+  });
+});
+
+describe('runAgentSpawn source — taskType normalization + claim-miss guard (issue #2633)', () => {
+  it('normalizes taskType at the top, BEFORE the first claim updateTask', () => {
+    const normalizeIdx = RUN_SPAWN_BODY.indexOf('isInternalTaskId(task.id');
+    const firstUpdateIdx = RUN_SPAWN_BODY.indexOf('await updateTask(task.id');
+    expect(normalizeIdx, 'runAgentSpawn must derive taskType from the id via isInternalTaskId').toBeGreaterThan(-1);
+    expect(firstUpdateIdx, 'runAgentSpawn must call updateTask').toBeGreaterThan(-1);
+    expect(normalizeIdx, 'taskType must be normalized BEFORE any updateTask write so every claim routes to the right file')
+      .toBeLessThan(firstUpdateIdx);
+  });
+
+  it('only a null in_progress result is fatal — an { error } miss must NOT block the spawn', () => {
+    // A truthy `{ error }` is EXPECTED for legitimately-unpersisted autonomous
+    // emits (Priority 3 mission / Priority 4 idle-review tasks carry
+    // taskType:'internal' but are never written to COS-TASKS.md). Blocking on it
+    // would silently kill every mission/idle spawn — the pre-#2633 behavior
+    // spawned them anyway, so the fatal guard must remain `!updateResult` only.
+    const fatalIdx = RUN_SPAWN_BODY.indexOf('if (!updateResult) {');
+    expect(fatalIdx, 'the fatal guard must be `!updateResult` alone — the { error } shape must not be fatal').toBeGreaterThan(-1);
+    expect(RUN_SPAWN_BODY, 'the { error } shape must not be part of the fatal guard (it would block unpersisted mission/idle spawns)')
+      .not.toContain('if (!updateResult || updateResult.error)');
+  });
+
+  it('warn-logs when the in_progress claim returns an { error } object so silent misses are visible', () => {
+    const warnIdx = RUN_SPAWN_BODY.indexOf('if (updateResult?.error) {');
+    expect(warnIdx, 'a silent { error } miss must be surfaced via a warn log').toBeGreaterThan(-1);
+    const body = RUN_SPAWN_BODY.slice(warnIdx, warnIdx + 400);
+    expect(body).toMatch(/emitLog\('warn'/);
+    expect(body).toContain('updateResult.error');
   });
 });
