@@ -316,8 +316,9 @@ describe('quality-preset gates', () => {
   });
 
   it('detail gates prefer the explicit effectiveTier over particleDensity', () => {
-    // effectiveTier is authoritative when present — it ignores particleDensity, so a
-    // temporarily-reduced density (startup warm-up) can't flip the detail gates.
+    // effectiveTier is authoritative when present — particleDensity is ignored. The
+    // warm-up path expresses its detail suppression by setting effectiveTier:'low'
+    // (see CityScene.renderSettings), not by clamping particleDensity.
     expect(cityShowDetail({ effectiveTier: 'low', particleDensity: 2 })).toBe(false);
     expect(cityShowDetail({ effectiveTier: 'medium', particleDensity: 0.1 })).toBe(true);
     expect(cityShowInteriorWindows({ effectiveTier: 'medium', particleDensity: 2 })).toBe(false);

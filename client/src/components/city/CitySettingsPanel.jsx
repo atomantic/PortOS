@@ -17,15 +17,16 @@ function HudCorner({ position = 'tl', color = 'cyan' }) {
   );
 }
 
-function SettingToggle({ label, value, onChange, description }) {
+function SettingToggle({ label, value, onChange, description, disabled = false }) {
   return (
-    <div className="flex items-center justify-between py-1.5 group" title={description}>
+    <div className={`flex items-center justify-between py-1.5 group ${disabled ? 'opacity-40' : ''}`} title={description}>
       <span className="font-pixel text-[10px] text-gray-400 tracking-wide group-hover:text-gray-300 transition-colors">
         {label}
       </span>
       <button
-        onClick={() => onChange(!value)}
-        className={`w-9 h-5 rounded-full relative transition-colors ${value ? 'bg-cyan-500/40 border-cyan-500/60' : 'bg-gray-700/40 border-gray-600/40'} border`}
+        onClick={() => !disabled && onChange(!value)}
+        disabled={disabled}
+        className={`w-9 h-5 rounded-full relative transition-colors ${value ? 'bg-cyan-500/40 border-cyan-500/60' : 'bg-gray-700/40 border-gray-600/40'} border ${disabled ? 'cursor-not-allowed' : ''}`}
       >
         <div
           className={`absolute top-0.5 w-3 h-3 rounded-full transition-all ${value ? 'left-[16px] bg-cyan-400 shadow-[0_0_6px_rgba(6,182,212,0.5)]' : 'left-[2px] bg-gray-500'}`}
@@ -35,12 +36,12 @@ function SettingToggle({ label, value, onChange, description }) {
   );
 }
 
-function SettingSlider({ label, value, onChange, min = 0, max = 1, step = 0.05, format, description }) {
+function SettingSlider({ label, value, onChange, min = 0, max = 1, step = 0.05, format, description, disabled = false }) {
   const displayValue = format
     ? format(value)
     : `${Math.round(value * 100)}%`;
   return (
-    <div className="py-1.5" title={description}>
+    <div className={`py-1.5 ${disabled ? 'opacity-40' : ''}`} title={description}>
       <div className="flex items-center justify-between mb-1">
         <span className="font-pixel text-[10px] text-gray-400 tracking-wide">{label}</span>
         <span className="font-pixel text-[10px] text-cyan-400/70">{displayValue}</span>
@@ -51,8 +52,9 @@ function SettingSlider({ label, value, onChange, min = 0, max = 1, step = 0.05, 
         max={max}
         step={step}
         value={value}
+        disabled={disabled}
         onChange={(e) => onChange(parseFloat(e.target.value))}
-        className="w-full h-1.5 bg-gray-700 rounded-full appearance-none cursor-pointer accent-cyan-500"
+        className={`w-full h-1.5 bg-gray-700 rounded-full appearance-none accent-cyan-500 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
         style={{
           background: `linear-gradient(to right, #06b6d4 0%, #06b6d4 ${(value - min) / (max - min) * 100}%, #374151 ${(value - min) / (max - min) * 100}%, #374151 100%)`,
         }}
@@ -229,12 +231,13 @@ export default function CitySettingsPanel({ qualityMode = 'manual', effectiveTie
 
           {/* Visual Effects */}
           <div>
-            <SectionHeader title="VISUAL FX" subtitle="Reflections and atmosphere" />
+            <SectionHeader title="VISUAL FX" subtitle={isAuto ? 'Reflections + density controlled by Auto' : 'Reflections and atmosphere'} />
             <SettingToggle
               label="REFLECTIONS"
               value={settings.reflectionsEnabled}
               onChange={(v) => updateSetting('reflectionsEnabled', v)}
-              description="Wet street reflections and puddles"
+              description={isAuto ? 'Set automatically by Auto quality' : 'Wet street reflections and puddles'}
+              disabled={isAuto}
             />
             <SettingToggle
               label="SCANLINES"
@@ -249,7 +252,8 @@ export default function CitySettingsPanel({ qualityMode = 'manual', effectiveTie
               min={0.25}
               max={2}
               step={0.25}
-              description="Amount of floating particles in the scene"
+              description={isAuto ? 'Set automatically by Auto quality' : 'Amount of floating particles in the scene'}
+              disabled={isAuto}
             />
           </div>
 

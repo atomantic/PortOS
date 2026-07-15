@@ -118,11 +118,26 @@ describe('cityRenderBudget — cooldown', () => {
     d.window(30); // → downshift to medium, cooldown starts
     expect(d.tier).toBe('medium');
     d.window(30);
-    d.window(30); // two more pressure windows within cooldown → no change
+    d.window(30); // pressure windows within cooldown are frozen, not banked
     expect(d.tier).toBe('medium');
+    expect(d.state.pressureStreak).toBe(0); // no banked streak to fire at expiry
     d.advance(CFG.cooldownMs); // let the cooldown fully elapse
-    d.window(30); // pending pressure now resolves
+    d.window(30); // one fresh post-cooldown window — not enough on its own
+    expect(d.tier).toBe('medium');
+    d.window(30); // second fresh window → downshift
     expect(d.tier).toBe('low');
+  });
+
+  it('does not rebound to the tier it just left after a single quiet window', () => {
+    // Straddling workload: fast enough at the current tier, but the cooldown freeze
+    // means a lone headroom window can't immediately undo a downshift.
+    const d = makeDriver('high');
+    d.window(30);
+    d.window(30); // → medium
+    expect(d.tier).toBe('medium');
+    d.window(10); // headroom window during cooldown → frozen, no upshift
+    expect(d.tier).toBe('medium');
+    expect(d.state.headroomStreak).toBe(0);
   });
 });
 

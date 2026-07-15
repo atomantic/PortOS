@@ -98,8 +98,13 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
 
   const renderSettings = useMemo(() => {
     if (photoMode || startupSettled) return settings;
+    // During the startup (and post-visibility-resume) warm-up, drop to the cheapest
+    // render path. `effectiveTier: 'low'` also suppresses set dressing + the ray-marched
+    // interior-window shader via cityShowDetail/cityShowInteriorWindows — previously the
+    // clamped particleDensity (0.49) did that implicitly; the explicit tier now owns it.
     return {
       ...settings,
+      effectiveTier: 'low',
       reflectionsEnabled: false,
       particleDensity: Math.min(settings?.particleDensity ?? 1, STARTUP_PARTICLE_DENSITY),
       dpr: [1, 1],

@@ -122,25 +122,26 @@ export function recordFrame(state, sample, config = DEFAULT_RENDER_BUDGET_CONFIG
   const p75 = percentile(samples, config.percentile);
   const fps = 1000 / mean(samples);
 
-  let pressureStreak = state.pressureStreak;
-  let headroomStreak = state.headroomStreak;
-  if (p75 > config.downshiftFrameMs) {
-    pressureStreak += 1;
-    headroomStreak = 0;
-  } else if (p75 < config.upshiftFrameMs) {
-    headroomStreak += 1;
-    pressureStreak = 0;
-  } else {
-    // Dead band — a mixed window breaks both streaks (this is the anti-oscillation gap).
-    pressureStreak = 0;
-    headroomStreak = 0;
-  }
-
   let tierIndex = state.tierIndex;
   let lastChangeAt = state.lastChangeAt;
   const cooledDown = now - state.lastChangeAt >= config.cooldownMs;
 
+  // Observation freeze during cooldown: windows classified inside the cooldown do NOT
+  // bank a streak. Otherwise a streak accumulated while cooling would fire the instant
+  // the cooldown expires, producing a quality "pop" — and, for a workload that straddles
+  // the two thresholds (comfortable at tier N, over-budget at tier N+1), an endless
+  // downshift↔upshift bounce. Streaks are only counted from windows observed entirely
+  // after the last change, so a change requires fresh, post-cooldown evidence.
+  let pressureStreak = 0;
+  let headroomStreak = 0;
   if (cooledDown) {
+    if (p75 > config.downshiftFrameMs) {
+      pressureStreak = state.pressureStreak + 1;
+    } else if (p75 < config.upshiftFrameMs) {
+      headroomStreak = state.headroomStreak + 1;
+    }
+    // else: dead band (18–25ms) — a mixed window breaks both streaks (anti-oscillation gap).
+
     if (pressureStreak >= config.downshiftWindows && tierIndex > 0) {
       tierIndex -= 1;
       lastChangeAt = now;

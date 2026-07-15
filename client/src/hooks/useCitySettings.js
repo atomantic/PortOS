@@ -42,8 +42,8 @@ const DEFAULT_SETTINGS = {
   musicVolume: 0.3,
   sfxEnabled: true,
   sfxVolume: 0.5,
-  // Auto quality (issue #2592): new installs adapt at runtime, beginning at High.
-  // `qualityPreset` still names the manual preset AND the Auto starting tier.
+  // Auto quality (issue #2592): new installs adapt at runtime, always beginning at High
+  // (see CyberCity's autoStartTier). `qualityPreset` names the *Manual* preset only.
   qualityMode: 'auto', // 'auto' = adaptive render budget; 'manual' = fixed preset
   qualityPreset: 'high',
   timeOfDay: 'auto', // 'auto' follows the active theme's day/night mode; 'day'/'night' force it
