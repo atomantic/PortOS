@@ -271,7 +271,8 @@ export const THEMES = {
       '--port-error': '225 29 72',
       '--port-on-accent': '255 255 255',
       '--port-on-success': '5 46 22',
-      '--port-on-warning': '255 255 255',
+      // Black on #ca8a04 is ~7.15:1 (AA) vs white's ~2.94:1 (fails). See #2626.
+      '--port-on-warning': '0 0 0',
       '--port-on-error': '255 255 255',
       // violet-700 — darkened for AA contrast on the cream/white glass panels.
       '--port-accent-2': '126 34 206',
@@ -423,7 +424,8 @@ export const THEMES = {
       '--port-error': '185 29 106',
       '--port-on-accent': '255 255 255',
       '--port-on-success': '255 255 255',
-      '--port-on-warning': '255 255 255',
+      // Black on #aa6e00 is ~4.94:1 (AA) vs white's ~4.25:1 (fails small text). See #2626.
+      '--port-on-warning': '0 0 0',
       '--port-on-error': '255 255 255',
       // Plum ink — readable on cream paper, distinct from the rose error ink.
       '--port-accent-2': '106 27 154',
