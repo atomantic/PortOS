@@ -11,7 +11,7 @@
 import { Router } from 'express';
 import * as digitalTwinService from '../../services/digital-twin.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { validateRequest } from '../../lib/validation.js';
+import { validateRequest, isPaginationRequested, paginateArray } from '../../lib/validation.js';
 import {
   createDocumentInputSchema,
   updateDocumentInputSchema,
@@ -21,11 +21,14 @@ const router = Router();
 
 /**
  * GET /api/digital-twin/documents
- * List all digital twin documents
+ * List all digital twin documents. Backward-compatible full array by default;
+ * opt into a bounded `{ items, total, limit, offset }` envelope with
+ * `?limit=`/`?offset=`.
  */
 router.get('/documents', asyncHandler(async (req, res) => {
   const documents = await digitalTwinService.getDocuments();
-  res.json(documents);
+  if (!isPaginationRequested(req.query)) return res.json(documents);
+  res.json(paginateArray(documents, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 /**
