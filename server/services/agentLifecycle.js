@@ -502,14 +502,20 @@ async function runAgentSpawn(task) {
         console.error(`❌ Failed to mark task ${task.id} as in_progress: ${err.message}`);
         return null;
       });
-    // Catch BOTH failure shapes: a null from the `.catch` above (updateTask threw)
-    // and a truthy `{ error }` object from a silent miss — e.g. the task id isn't
-    // present in the file for `task.taskType` (issue #2633). A bare `if (!updateResult)`
-    // lets the error object through, so the spawn proceeds against an unclaimed task.
-    if (!updateResult || updateResult.error) {
-      if (updateResult?.error) {
-        emitLog('warn', `⚠️ in_progress claim for task ${task.id} returned an error (taskType=${task.taskType}): ${updateResult.error}`, { taskId: task.id, error: updateResult.error });
-      }
+    // Surface a silent `{ error }` miss (issue #2633) — the task id wasn't present
+    // in the file for `task.taskType`, so the claim didn't land. This is EXPECTED
+    // for legitimately-unpersisted autonomous emits: Priority 3 mission tasks
+    // (cos.js `spawnDequeuePriority3Missions`) and Priority 4 idle-review tasks
+    // carry `taskType: 'internal'` but are never written to COS-TASKS.md, so their
+    // in_progress `updateTask` returns `{ error: 'Task not found' }`. Warn-log it
+    // for visibility, but do NOT block the spawn on it — the pre-#2633 behavior
+    // spawned these anyway, and treating the error as fatal would silently kill
+    // every mission / idle-review autonomous spawn. Only a `null` (updateTask
+    // threw) is fatal.
+    if (updateResult?.error) {
+      emitLog('warn', `⚠️ in_progress claim for task ${task.id} returned an error (taskType=${task.taskType}): ${updateResult.error}`, { taskId: task.id, error: updateResult.error });
+    }
+    if (!updateResult) {
       await cleanupOnError('Failed to update task status');
       return null;
     }

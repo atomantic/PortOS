@@ -487,14 +487,22 @@ describe('runAgentSpawn source — taskType normalization + claim-miss guard (is
       .toBeLessThan(firstUpdateIdx);
   });
 
-  it('the in_progress claim check catches a truthy { error } object, not just null', () => {
-    const guardIdx = RUN_SPAWN_BODY.indexOf('if (!updateResult || updateResult.error)');
-    expect(guardIdx, 'the claim result must be rejected when it carries an { error } (silent miss)').toBeGreaterThan(-1);
+  it('only a null in_progress result is fatal — an { error } miss must NOT block the spawn', () => {
+    // A truthy `{ error }` is EXPECTED for legitimately-unpersisted autonomous
+    // emits (Priority 3 mission / Priority 4 idle-review tasks carry
+    // taskType:'internal' but are never written to COS-TASKS.md). Blocking on it
+    // would silently kill every mission/idle spawn — the pre-#2633 behavior
+    // spawned them anyway, so the fatal guard must remain `!updateResult` only.
+    const fatalIdx = RUN_SPAWN_BODY.indexOf('if (!updateResult) {');
+    expect(fatalIdx, 'the fatal guard must be `!updateResult` alone — the { error } shape must not be fatal').toBeGreaterThan(-1);
+    expect(RUN_SPAWN_BODY, 'the { error } shape must not be part of the fatal guard (it would block unpersisted mission/idle spawns)')
+      .not.toContain('if (!updateResult || updateResult.error)');
   });
 
   it('warn-logs when the in_progress claim returns an { error } object so silent misses are visible', () => {
-    const guardIdx = RUN_SPAWN_BODY.indexOf('if (!updateResult || updateResult.error)');
-    const body = RUN_SPAWN_BODY.slice(guardIdx, guardIdx + 400);
+    const warnIdx = RUN_SPAWN_BODY.indexOf('if (updateResult?.error) {');
+    expect(warnIdx, 'a silent { error } miss must be surfaced via a warn log').toBeGreaterThan(-1);
+    const body = RUN_SPAWN_BODY.slice(warnIdx, warnIdx + 400);
     expect(body).toMatch(/emitLog\('warn'/);
     expect(body).toContain('updateResult.error');
   });
