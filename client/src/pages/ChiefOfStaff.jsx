@@ -544,7 +544,7 @@ export default function ChiefOfStaff() {
       {desktopPanelCollapsed && (
         <button
           onClick={toggleDesktopPanel}
-          className="hidden lg:flex absolute left-0 top-2 z-20 p-1.5 text-gray-500 hover:text-white transition-colors rounded-r-md hover:bg-port-border/80 bg-port-card/60 border border-l-0 border-port-accent-2/20"
+          className="hidden lg:flex absolute left-0 top-2 z-20 p-1.5 text-port-text-muted hover:text-port-text transition-colors rounded-r-md hover:bg-port-border/80 bg-port-card/60 border border-l-0 border-port-accent-2/20"
           aria-label="Expand CoS panel"
           title="Expand CoS panel"
         >

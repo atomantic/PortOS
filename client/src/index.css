@@ -1080,7 +1080,7 @@ input[type="color"],
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgb(var(--port-border));
+  background: rgb(var(--port-text-muted) / 0.3);
   border-radius: 4px;
 }
 
