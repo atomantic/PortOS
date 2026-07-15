@@ -20,6 +20,8 @@ import {
   creativeDirectorSceneUpdateSchema,
   creativeDirectorAutoCastSuggestSchema,
   creativeDirectorAutoCastApplySchema,
+  isPaginationRequested,
+  paginateArray,
 } from '../lib/validation.js';
 import {
   listProjects,
@@ -40,8 +42,15 @@ import { createSmokeTestProject } from '../services/creativeDirector/smokeTest.j
 
 const router = Router();
 
-router.get('/', asyncHandler(async (_req, res) => {
-  res.json(await listProjects());
+// Backward-compatible by default: returns the full projects array. When a client
+// passes `limit`/`offset`, the response becomes the bounded
+// `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
+router.get('/', asyncHandler(async (req, res) => {
+  const projects = await listProjects();
+  if (!isPaginationRequested(req.query)) {
+    return res.json(projects);
+  }
+  res.json(paginateArray(projects, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 // Creative tool catalog (CDO Phase 4, #2186) — the studio Plan board + directive
