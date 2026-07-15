@@ -544,7 +544,7 @@ export default function ChiefOfStaff() {
       {desktopPanelCollapsed && (
         <button
           onClick={toggleDesktopPanel}
-          className="hidden lg:flex absolute left-0 top-2 z-20 p-1.5 text-gray-500 hover:text-white transition-colors rounded-r-md hover:bg-slate-800/80 bg-slate-900/60 border border-l-0 border-port-accent-2/20"
+          className="hidden lg:flex absolute left-0 top-2 z-20 p-1.5 text-gray-500 hover:text-white transition-colors rounded-r-md hover:bg-port-border/80 bg-port-card/60 border border-l-0 border-port-accent-2/20"
           aria-label="Expand CoS panel"
           title="Expand CoS panel"
         >
@@ -599,10 +599,10 @@ export default function ChiefOfStaff() {
         <>
           <div className="hidden lg:block overflow-hidden min-w-0" />
           {/* Mobile: still show the compact header */}
-          <div className="lg:hidden border-b border-port-accent-2/20 bg-gradient-to-b from-slate-900/80 to-slate-900/40">
+          <div className="lg:hidden border-b border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40">
             <button
               onClick={() => setAgentPanelCollapsed(!agentPanelCollapsed)}
-              className="flex items-center justify-between w-full px-3 py-2 bg-slate-900/60 border-b border-port-accent-2/20 min-h-[40px]"
+              className="flex items-center justify-between w-full px-3 py-2 bg-port-card/60 border-b border-port-accent-2/20 min-h-[40px]"
               aria-expanded={!agentPanelCollapsed}
               aria-controls="cos-agent-panel"
             >
@@ -639,7 +639,7 @@ export default function ChiefOfStaff() {
           </div>
         </>
       ) : (
-        <div className="relative flex flex-col border-b lg:border-b-0 lg:border-r border-port-accent-2/20 bg-gradient-to-b from-slate-900/80 to-slate-900/40 shrink-0 w-full max-w-full overflow-x-hidden lg:h-full lg:overflow-y-auto scrollbar-hide">
+        <div className="relative flex flex-col border-b lg:border-b-0 lg:border-r border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40 shrink-0 w-full max-w-full overflow-x-hidden lg:h-full lg:overflow-y-auto scrollbar-hide">
           {/* Desktop Collapse Button */}
           <button
             onClick={toggleDesktopPanel}
@@ -653,7 +653,7 @@ export default function ChiefOfStaff() {
           {/* Mobile Collapse Toggle Header */}
           <button
             onClick={() => setAgentPanelCollapsed(!agentPanelCollapsed)}
-            className="lg:hidden flex items-center justify-between w-full px-3 py-2 bg-slate-900/60 border-b border-port-accent-2/20 min-h-[40px]"
+            className="lg:hidden flex items-center justify-between w-full px-3 py-2 bg-port-card/60 border-b border-port-accent-2/20 min-h-[40px]"
             aria-expanded={!agentPanelCollapsed}
             aria-controls="cos-agent-panel"
           >
@@ -707,7 +707,7 @@ export default function ChiefOfStaff() {
 
             {/* Avatar UI overlays the full-width canvas stage for 3D styles. */}
             <div className={`${hasCanvasAvatar ? 'absolute inset-y-0 left-0 w-[46%] lg:relative lg:inset-auto lg:w-full lg:flex-none lg:min-h-full p-2 sm:p-3 lg:px-4 lg:py-6' : 'relative flex-1 min-w-0 lg:flex-none lg:min-h-full p-2 lg:px-4 lg:py-6'} min-w-0 flex flex-col items-center z-10`}>
-              <div className="hidden lg:block text-sm font-semibold tracking-widest uppercase text-slate-400 mb-1 font-mono">
+              <div className="hidden lg:block text-sm font-semibold tracking-widest uppercase text-port-text-muted mb-1 font-mono">
                 Digital Assistant
               </div>
               <h1
