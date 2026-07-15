@@ -54,8 +54,8 @@ export { runHealthCheck, getHealthStatus };
 // backward compat with `import * as cos` and the cos route handlers. The store
 // emits `tasks:changed`; init() below turns that into tryImmediateSpawn /
 // dequeueNextTask so the spawn-side logic stays here, not in the store.
-import { firstLine, PRIORITY_VALUES, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck } from './cosTaskStore.js';
-export { firstLine, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck };
+import { firstLine, PRIORITY_VALUES, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks } from './cosTaskStore.js';
+export { firstLine, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks };
 import { ensureInstanceId } from './instances.js';
 import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner } from './cosTaskClaim.js';
 
@@ -278,8 +278,18 @@ export async function start() {
       if (archived > 0) {
         emitLog('info', `📦 Auto-archived ${archived} stale agent(s) from state`);
       }
+      // Reap resolved failure artifacts (stale failure-blocked tasks +
+      // investigations whose origin is gone/completed) via federation-safe
+      // status flip — never deletion (#2619). Bounded per tick by the store.
+      const swept = await sweepResolvedFailureTasks().catch((err) => {
+        console.warn(`⚠️ sweepResolvedFailureTasks failed: ${err?.message || err}`);
+        return { reaped: 0 };
+      });
+      if (swept.reaped > 0) {
+        emitLog('info', `🧹 Auto-expired ${swept.reaped} resolved failure task(s) (${swept.staleBlocks} block(s), ${swept.investigations} investigation(s))`);
+      }
     },
-    metadata: { description: 'CoS health check + orphan cleanup + agent archival' }
+    metadata: { description: 'CoS health check + orphan cleanup + agent archival + failure-artifact reaper' }
   });
 
   // Performance summary (10 min)

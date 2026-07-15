@@ -9,7 +9,7 @@
  * module.
  */
 
-import { loadLearningData, emitLog, isSandboxedTaskType, computeEffectiveSuccessRate, isSkipCandidate, DEFAULT_WINDOW_MAX_AGE_MS } from './store.js';
+import { loadLearningData, emitLog, isSandboxedTaskType, computeEffectiveSuccessRate, computeWindowedStats, isSkipCandidate, DEFAULT_WINDOW_MAX_AGE_MS } from './store.js';
 import { resetTaskTypeLearning } from './metrics.js';
 import { computeCorrelationQuality, isCorrelationProven } from './correlationQuality.js';
 
@@ -120,12 +120,24 @@ function topKey(counts) {
  * stays at the aggressive `MIN_FAILURE_SAMPLES` for back-compat with direct
  * callers/tests.
  *
+ * `maxAgeMs` (issue #2619) windows the recent samples by age at read time,
+ * mirroring `computeWindowedStats`: a failure sample older than the window is
+ * ignored, so a fixed low-frequency type stops being steered off a tier by an
+ * outage-era sample that never gets pushed out of the count-capped ring. An
+ * undated sample (unparseable `recordedAt`) is kept — the count cap still bounds
+ * it. Defaults to the shared 30-day window.
+ *
  * @returns {{ avoidTiers: string[], sampleCount: number,
  *   dominant: { tier, failures, provider, model }|null }}
  */
-export function deriveFailureSignalAvoidance(data, taskType, { minFailureSamples = MIN_FAILURE_SAMPLES } = {}) {
+export function deriveFailureSignalAvoidance(data, taskType, {
+  minFailureSamples = MIN_FAILURE_SAMPLES,
+  maxAgeMs = DEFAULT_WINDOW_MAX_AGE_MS,
+  now = Date.now()
+} = {}) {
   const signatures = data?.failureSignatures || {};
   const routing = data?.routingAccuracy?.[taskType] || {};
+  const ageCutoff = Number.isFinite(maxAgeMs) && maxAgeMs > 0 ? now - maxAgeMs : null;
 
   // Gather recent failure samples scoped to this task type across all categories.
   const byTier = {};
@@ -134,6 +146,12 @@ export function deriveFailureSignalAvoidance(data, taskType, { minFailureSamples
     for (const sample of bucket?.recent || []) {
       if (sample?.taskType !== taskType || !sample.modelTier) continue;
       if (NON_ROUTABLE_LEARNED_TIERS.has(sample.modelTier)) continue;
+      // Age-window (#2619): drop a sample with a parseable timestamp older than
+      // the window; keep an undated one (the count cap still bounds it).
+      if (ageCutoff !== null) {
+        const ts = Date.parse(sample.recordedAt);
+        if (Number.isFinite(ts) && ts < ageCutoff) continue;
+      }
       sampleCount++;
       const tier = (byTier[sample.modelTier] ||= { failures: 0, pairs: {} });
       tier.failures++;
@@ -639,6 +657,36 @@ function isLifetimeDrivenSkip(metrics) {
   return Number.isFinite(metrics?.successRate) && metrics.successRate < 30;
 }
 
+// Recovery-based rehabilitation bars (issue #2619). The idle path only ever
+// resets a type that has gone QUIET; a type that was fixed but still runs
+// regularly never goes idle, so its poisoned lifetime/duration/failure-signature
+// data would never be cleared. These bars catch that case: a poor-lifetime type
+// whose RECENT window is clean has demonstrably recovered.
+const RECOVERY_MIN_WINDOW_SAMPLES = 5;
+const RECOVERY_MIN_WINDOW_SUCCESS_RATE = HIGH_SUCCESS_THRESHOLD; // 80%
+// "Poor lifetime" bar — a lifetime rate at/above this would already earn
+// auto-approval on its own, so there is nothing stale to rehabilitate.
+const RECOVERY_MAX_LIFETIME_SUCCESS_RATE = 50;
+
+/**
+ * True when a task type has RECOVERED (issue #2619): its lifetime success rate
+ * is still poor (< RECOVERY_MAX_LIFETIME_SUCCESS_RATE — would deny auto-approval
+ * on lifetime alone) but its recency window is clean (≥ RECOVERY_MIN_WINDOW_SAMPLES
+ * outcomes at ≥ RECOVERY_MIN_WINDOW_SUCCESS_RATE% success). A recovery reset
+ * clears the stale lifetime/duration/failure-signature data so the type stops
+ * being penalized by history it has already outgrown — and, unlike the idle
+ * path, it fires even for a type that still runs regularly. Pure.
+ */
+function hasRecoveredWindow(metrics, { now = Date.now() } = {}) {
+  if (!Number.isFinite(metrics?.successRate) || metrics.successRate >= RECOVERY_MAX_LIFETIME_SUCCESS_RATE) {
+    return false;
+  }
+  const { windowedCompleted, windowedSuccessRate } = computeWindowedStats(metrics?.recentOutcomes, { now });
+  return windowedSuccessRate !== null
+    && windowedCompleted >= RECOVERY_MIN_WINDOW_SAMPLES
+    && windowedSuccessRate >= RECOVERY_MIN_WINDOW_SUCCESS_RATE;
+}
+
 /**
  * Get all task types that should be skipped due to poor performance
  * Useful for filtering out problematic task types in evaluateTasks
@@ -700,41 +748,49 @@ export async function checkAndRehabilitateSkippedTasks(gracePeriodMs = 7 * 24 * 
   for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
     // Sandboxed fallback is never skipped, so never rehabilitated either (#2333).
     if (isSandboxedTaskType(taskType)) continue;
-    // Only consider task types that would be skipped (effective rate < 30% with
-    // 5+ attempts, issue #2617) — a type that recovered in its recent window is
-    // no longer skipped, so resetting its lifetime data would be pointless churn.
-    // And only reset when the skip is LIFETIME-driven: a windowed-driven skip
-    // (recent failure burst on a healthy lifetime record) self-heals as the
-    // window rolls, so the destructive reset would wipe good learning data.
-    if (!isSkipCandidate(metrics) || !isLifetimeDrivenSkip(metrics)) {
-      continue;
-    }
 
-    // Check if enough time has passed since last attempt
     const lastCompletedTime = metrics.lastCompleted
       ? new Date(metrics.lastCompleted).getTime()
       : 0;
     const timeSinceLastAttempt = now - lastCompletedTime;
+    const daysSinceLastAttempt = Math.round(timeSinceLastAttempt / (24 * 60 * 60 * 1000));
 
-    if (timeSinceLastAttempt >= gracePeriodMs) {
-      // This task type is eligible for rehabilitation
-      emitLog('info', `Auto-rehabilitating ${taskType} (was ${metrics.successRate}% success, ${Math.round(timeSinceLastAttempt / (24 * 60 * 60 * 1000))} days since last attempt)`, {
-        taskType,
-        previousSuccessRate: metrics.successRate,
-        previousAttempts: metrics.completed,
-        daysSinceLastAttempt: Math.round(timeSinceLastAttempt / (24 * 60 * 60 * 1000))
-      }, '📚 TaskLearning');
+    // IDLE path (existing): a LIFETIME-driven skip (effective rate < 30% with 5+
+    // attempts, issue #2617) that has sat untouched for the grace period gets a
+    // fresh start. Only a lifetime-driven skip qualifies — a windowed-driven skip
+    // (recent burst on a healthy lifetime record) self-heals as the window rolls,
+    // so the destructive reset would wipe good learning data.
+    const idleEligible = isSkipCandidate(metrics)
+      && isLifetimeDrivenSkip(metrics)
+      && timeSinceLastAttempt >= gracePeriodMs;
 
-      // Reset this task type's data
-      await resetTaskTypeLearning(taskType);
+    // RECOVERY path (issue #2619): a poor-lifetime type whose recent window is
+    // clean is rehabilitated regardless of idle time — a fixed type that still
+    // runs never goes idle, so the idle gate alone would never clear its stale
+    // lifetime data. Evaluated only when the idle path didn't already fire.
+    const recoveryEligible = !idleEligible && hasRecoveredWindow(metrics, { now });
 
-      rehabilitated.push({
-        taskType,
-        previousSuccessRate: metrics.successRate,
-        previousAttempts: metrics.completed,
-        daysSinceLastAttempt: Math.round(timeSinceLastAttempt / (24 * 60 * 60 * 1000))
-      });
-    }
+    if (!idleEligible && !recoveryEligible) continue;
+
+    const trigger = idleEligible ? 'idle' : 'recovery';
+    emitLog('info', `Auto-rehabilitating ${taskType} (${trigger}: was ${metrics.successRate}% lifetime success${idleEligible ? `, ${daysSinceLastAttempt} days since last attempt` : ', recent window recovered'})`, {
+      taskType,
+      trigger,
+      previousSuccessRate: metrics.successRate,
+      previousAttempts: metrics.completed,
+      daysSinceLastAttempt
+    }, '📚 TaskLearning');
+
+    // Reset this task type's data
+    await resetTaskTypeLearning(taskType);
+
+    rehabilitated.push({
+      taskType,
+      trigger,
+      previousSuccessRate: metrics.successRate,
+      previousAttempts: metrics.completed,
+      daysSinceLastAttempt
+    });
   }
 
   if (rehabilitated.length > 0) {
