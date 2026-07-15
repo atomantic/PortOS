@@ -5,7 +5,10 @@ import CityAgentBar from './CityAgentBar';
 import CityFilterBar from './CityFilterBar';
 import CityXpBadge from './CityXpBadge';
 import CityMiniMap from './CityMiniMap';
-import { formatDurationMs } from '../../utils/formatters';
+import CityVitalsList from './CityVitalsList';
+import CityHudCompact from './CityHudCompact';
+import { HudCorner, HealthBar, getHealthSentinel } from './cityHudBits';
+import useCityViewport from '../../hooks/useCityViewport';
 
 // WASD controls hint shown briefly on first exploration entry
 function ControlsHint({ visible }) {
@@ -50,68 +53,16 @@ function ControlsHint({ visible }) {
   );
 }
 
-const getHealthSentinel = (systemHealth, onlineRatio) => {
-  if (systemHealth?.overallHealth === 'critical') return { dot: 'bg-port-error', text: 'text-port-error', label: 'CRITICAL' };
-  if (systemHealth?.overallHealth === 'warning') return { dot: 'bg-port-warning', text: 'text-port-warning', label: 'WARN' };
-  if (systemHealth?.overallHealth === 'healthy') return { dot: 'bg-port-success', text: 'text-port-success', label: 'OK' };
-  if (onlineRatio >= 0.8) return { dot: 'bg-cyan-400', text: 'text-cyan-400', label: 'OK' };
-  if (onlineRatio >= 0.5) return { dot: 'bg-port-warning', text: 'text-port-warning', label: 'WARN' };
-  return { dot: 'bg-port-error', text: 'text-port-error', label: 'CRIT' };
-};
-
-const metricColor = (pct) => {
-  if (pct == null) return 'text-gray-500';
-  if (pct >= 90) return 'text-port-error';
-  if (pct >= 75) return 'text-port-warning';
-  return 'text-cyan-400';
-};
-
-// Animated corner decoration for HUD panels
-function HudCorner({ position = 'tl', color = 'cyan' }) {
-  const corners = {
-    tl: 'top-0 left-0 border-t border-l',
-    tr: 'top-0 right-0 border-t border-r',
-    bl: 'bottom-0 left-0 border-b border-l',
-    br: 'bottom-0 right-0 border-b border-r',
-  };
-
+function Crosshair() {
   return (
-    <div
-      className={`absolute w-2 h-2 ${corners[position]} border-${color}-400/60`}
-      style={{ borderWidth: '1px' }}
-    />
-  );
-}
-
-function StatButton({ label, valueClass, value, onClick, title, prefix = null }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      title={title}
-      className="w-full flex items-center justify-between gap-6 -mx-1 px-1 py-0.5 rounded hover:bg-cyan-500/5 transition-colors"
-    >
-      <span className="font-pixel text-[10px] text-gray-400 tracking-wide">{label}</span>
-      <span className={`font-pixel text-[11px] ${valueClass || 'text-cyan-400'}`}>
-        {prefix}
-        {value}
-      </span>
-    </button>
-  );
-}
-
-function HealthBar({ value, max, color }) {
-  const pct = max > 0 ? (value / max) * 100 : 0;
-  return (
-    <div className="w-full h-1 bg-gray-800/60 rounded-full overflow-hidden">
-      <div
-        className="h-full rounded-full transition-all duration-1000"
-        style={{
-          width: `${pct}%`,
-          backgroundColor: color,
-          boxShadow: `0 0 4px ${color}`,
-        }}
-      />
+    <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
+      <div className="relative w-6 h-6">
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-px h-2 bg-cyan-400/60" />
+        <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-px h-2 bg-cyan-400/60" />
+        <div className="absolute left-0 top-1/2 -translate-y-1/2 w-2 h-px bg-cyan-400/60" />
+        <div className="absolute right-0 top-1/2 -translate-y-1/2 w-2 h-px bg-cyan-400/60" />
+        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-1 rounded-full bg-cyan-400/40" />
+      </div>
     </div>
   );
 }
@@ -119,6 +70,7 @@ function HealthBar({ value, max, color }) {
 export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, connected, apps, reviewCounts, instances, productivityData, systemHealth, notificationCounts, character, filter, onFilterChange, onJumpToFirst, matchCount, onToggleExploration, explorationMode, onSelectApp, onEnterPhotoMode, onEnterPlayback }) {
   const navigate = useNavigate();
   const location = useLocation();
+  const { isDesktop } = useCityViewport();
   const [time, setTime] = useState(new Date());
   const [uptimeSeconds, setUptimeSeconds] = useState(0);
   useEffect(() => {
@@ -158,333 +110,252 @@ export default function CityHud({ cosStatus, cosAgents, agentMap, eventLogs, con
     a.status === 'running' || a.state === 'coding' || a.state === 'thinking' || a.state === 'investigating'
   ).length;
 
+  // The shared vitals payload — backs both the desktop cockpit's vitals panel and
+  // the compact/phone `vitals` disclosure surface (via <CityVitalsList>).
+  const vitals = {
+    uptimeSeconds,
+    sentinel,
+    cpuPct,
+    memPct,
+    diskPct,
+    warnings: systemHealth?.warnings,
+    activeAgentCount,
+    stoppedApps,
+    archivedApps,
+    pendingReview,
+    alertCount,
+    onlinePeers,
+    totalNodes,
+    notificationCounts,
+    productivityData,
+    activeApps,
+    totalApps,
+  };
+
   return (
     // z-20 keeps the HUD above the CityScanlines CRT overlay (z-10) so the vignette
     // + scanline-multiply + chromatic-aberration glow stay on the 3D scene and don't
     // haze the (now theme-colored) HUD panels.
     <div className="absolute inset-0 pointer-events-none overflow-hidden z-20">
-      {/* Top-left: Clock + system status + vitals */}
-      <div className="absolute top-3 left-3 pointer-events-auto">
-        <div className="relative bg-black/85 backdrop-blur-sm border border-cyan-500/40 rounded-lg px-4 py-3 overflow-hidden">
-          <HudCorner position="tl" />
-          <HudCorner position="tr" />
-          <HudCorner position="bl" />
-          <HudCorner position="br" />
+      {isDesktop ? (
+        <>
+          {/* Top-left: Clock + system status + vitals */}
+          <div className="absolute top-3 left-3 pointer-events-auto">
+            <div className="relative bg-black/85 backdrop-blur-sm border border-cyan-500/40 rounded-lg px-4 py-3 overflow-hidden">
+              <HudCorner position="tl" />
+              <HudCorner position="tr" />
+              <HudCorner position="bl" />
+              <HudCorner position="br" />
 
-          <div className="font-pixel text-cyan-400 text-xl tracking-wider" style={{ textShadow: '0 0 10px rgba(6,182,212,0.6)' }}>
-            {time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-          </div>
-          <div className="font-pixel text-[11px] text-cyan-500 tracking-wide mt-0.5">
-            {activeApps}/{totalApps} SYSTEMS ONLINE
-          </div>
+              <div className="font-pixel text-cyan-400 text-xl tracking-wider" style={{ textShadow: '0 0 10px rgba(6,182,212,0.6)' }}>
+                {time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+              </div>
+              <div className="font-pixel text-[11px] text-cyan-500 tracking-wide mt-0.5">
+                {activeApps}/{totalApps} SYSTEMS ONLINE
+              </div>
 
-          {/* System health bar */}
-          <div className="mt-2">
-            <HealthBar value={activeApps} max={totalApps} color="#06b6d4" />
-          </div>
-        </div>
+              {/* System health bar */}
+              <div className="mt-2">
+                <HealthBar value={activeApps} max={totalApps} color="#06b6d4" />
+              </div>
+            </div>
 
-        {/* System Vitals panel */}
-        <div className="relative mt-2 bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg px-3 py-2.5 space-y-1.5 overflow-hidden">
-          <HudCorner position="tl" />
-          <HudCorner position="tr" />
-          <HudCorner position="bl" />
-          <HudCorner position="br" />
+            {/* System Vitals panel */}
+            <div className="relative mt-2 bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg px-3 py-2.5 overflow-hidden">
+              <HudCorner position="tl" />
+              <HudCorner position="tr" />
+              <HudCorner position="bl" />
+              <HudCorner position="br" />
 
-          {/* Animated scan line (CSS-only, no React re-renders) */}
-          <div
-            className="absolute left-0 right-0 h-px bg-cyan-400/15 pointer-events-none animate-scanline"
-          />
+              {/* Animated scan line (CSS-only, no React re-renders) */}
+              <div className="absolute left-0 right-0 h-px bg-cyan-400/15 pointer-events-none animate-scanline" />
 
-          <div className="font-pixel text-[10px] text-cyan-500/70 tracking-wider mb-1">
-            SYSTEM VITALS
-          </div>
-
-          {/* Uptime */}
-          <div className="flex items-center justify-between gap-6">
-            <span className="font-pixel text-[10px] text-gray-400 tracking-wide">UPTIME</span>
-            <span className="font-pixel text-[11px] text-cyan-400" style={{ textShadow: '0 0 6px rgba(6,182,212,0.4)' }}>
-              {formatDurationMs(uptimeSeconds * 1000)}
-            </span>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => navigate('/')}
-            className="w-full flex items-center justify-between gap-3 -mx-1 px-1 py-1 rounded hover:bg-cyan-500/5 transition-colors"
-            title={systemHealth?.warnings?.length ? systemHealth.warnings.map(w => w.message).join(' · ') : 'System health — click to open dashboard'}
-          >
-            <span className="font-pixel text-[10px] text-gray-400 tracking-wide flex items-center gap-1.5">
-              <span className={`w-1.5 h-1.5 rounded-full ${sentinel.dot} shadow-[0_0_4px_currentColor]`} />
-              HEALTH
-            </span>
-            <span className="font-pixel text-[10px] tracking-wide flex items-center gap-2">
-              <span className={metricColor(cpuPct)}>{cpuPct != null ? `${cpuPct}%` : '—'}</span>
-              <span className="text-gray-600">/</span>
-              <span className={metricColor(memPct)}>{memPct != null ? `${memPct}%` : '—'}</span>
-              <span className="text-gray-600">/</span>
-              <span className={metricColor(diskPct)}>{diskPct != null ? `${diskPct}%` : '—'}</span>
-            </span>
-          </button>
-          <div className="flex items-center justify-between gap-6 -mt-0.5">
-            <span className="font-pixel text-[8px] text-gray-600 tracking-wider pl-3.5">CPU · MEM · DISK</span>
-            <span className={`font-pixel text-[8px] ${sentinel.text} tracking-wider`}>{sentinel.label}</span>
-          </div>
-
-          <StatButton
-            label="AGENTS"
-            valueClass={activeAgentCount > 0 ? 'text-emerald-400' : 'text-gray-600'}
-            value={`${activeAgentCount} ACTIVE`}
-            prefix={activeAgentCount > 0 ? <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 mr-1 animate-pulse" /> : null}
-            onClick={() => navigate('/cos')}
-            title="Open Chief of Staff"
-          />
-
-          {stoppedApps > 0 && (
-            <StatButton
-              label="STOPPED"
-              valueClass="text-red-400"
-              value={stoppedApps}
-              onClick={() => navigate('/apps')}
-              title="View apps"
-            />
-          )}
-
-          {archivedApps > 0 && (
-            <StatButton
-              label="ARCHIVED"
-              valueClass="text-gray-500"
-              value={archivedApps}
-              onClick={() => navigate('/apps')}
-              title="View apps"
-            />
-          )}
-
-          {(pendingReview > 0 || alertCount > 0) && (
-            <StatButton
-              label="REVIEW"
-              valueClass={alertCount > 0 ? 'text-orange-400' : 'text-cyan-400'}
-              value={`${pendingReview} PENDING${alertCount > 0 ? ` · ${alertCount} ALERT${alertCount === 1 ? '' : 'S'}` : ''}`}
-              onClick={() => navigate('/review')}
-              title="Open Review Hub"
-            />
-          )}
-
-          <StatButton
-            label="NODES"
-            valueClass={onlinePeers > 0 ? 'text-violet-400' : 'text-gray-500'}
-            value={`${onlinePeers}/${totalNodes} LINKED`}
-            onClick={() => navigate('/instances')}
-            title="Open Federation / Instances"
-          />
-
-          {notificationCounts?.unread > 0 && (
-            <StatButton
-              label="NOTIFS"
-              valueClass="text-cyan-400"
-              value={`${notificationCounts.unread} UNREAD`}
-              onClick={() => navigate('/')}
-              title="Open dashboard alerts"
-            />
-          )}
-
-          {productivityData?.todaySucceeded > 0 && (
-            <StatButton
-              label="TASKS"
-              valueClass="text-purple-400"
-              value={`${productivityData.todaySucceeded} TODAY`}
-              onClick={() => navigate('/cos')}
-              title="Open Chief of Staff"
-            />
-          )}
-
-          {productivityData?.currentDailyStreak > 0 && (
-            <StatButton
-              label="STREAK"
-              valueClass={productivityData.currentDailyStreak >= 3 ? 'text-orange-400' : 'text-gray-400'}
-              value={`${productivityData.currentDailyStreak}d`}
-              onClick={() => navigate('/cos')}
-              title="Open Chief of Staff"
-            />
-          )}
-
-          {/* Divider */}
-          <div className="border-t border-cyan-500/15 mt-1.5 pt-1.5">
-            <div className="flex items-center justify-between">
-              <span className="font-pixel text-[9px] text-cyan-500/40 tracking-widest">SYS.OK</span>
-              <span className="font-pixel text-[9px] text-cyan-500/40 tracking-widest">
-                {new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' }).toUpperCase()}
-              </span>
+              <CityVitalsList {...vitals} />
             </div>
           </div>
-        </div>
-      </div>
 
-      {filter && onFilterChange && (
-        <div className="absolute top-3 left-1/2 -translate-x-1/2">
-          <CityFilterBar
-            filter={filter}
-            onChange={onFilterChange}
-            onJumpToFirst={onJumpToFirst}
-            matchCount={matchCount}
+          {filter && onFilterChange && (
+            <div className="absolute top-3 left-1/2 -translate-x-1/2">
+              <CityFilterBar
+                filter={filter}
+                onChange={onFilterChange}
+                onJumpToFirst={onJumpToFirst}
+                matchCount={matchCount}
+              />
+            </div>
+          )}
+
+          {/* Top-right: Connection + CoS status */}
+          <div className="absolute top-3 right-3 pointer-events-auto">
+            <div className="relative bg-black/85 backdrop-blur-sm border border-cyan-500/40 rounded-lg px-4 py-2.5 flex items-center gap-4">
+              <HudCorner position="tl" />
+              <HudCorner position="tr" />
+              <HudCorner position="bl" />
+              <HudCorner position="br" />
+
+              <div className="flex items-center gap-2">
+                <span className={`w-2.5 h-2.5 rounded-full ${connected ? 'bg-port-success shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-port-error shadow-[0_0_8px_rgba(239,68,68,0.6)] animate-pulse'}`} />
+                <span className={`font-pixel text-[11px] tracking-wide ${connected ? 'text-gray-300' : 'text-port-error'}`}>
+                  {connected ? 'LINK' : 'OFFLINE'}
+                </span>
+              </div>
+              <div className="w-px h-5 bg-cyan-500/25" />
+              <div className="flex items-center gap-2">
+                <span className={`w-2.5 h-2.5 rounded-full ${cosStatus?.running ? 'bg-cyan-400 animate-pulse shadow-[0_0_8px_rgba(6,182,212,0.6)]' : 'bg-gray-600'}`} />
+                <span className={`font-pixel text-[11px] tracking-wide ${cosStatus?.running ? 'text-cyan-400' : 'text-gray-500'}`}>
+                  CoS {cosStatus?.running ? 'RUN' : 'IDLE'}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Right side: Intel pane (Attention + Activity tabs) */}
+          <CityIntelPane
+            apps={apps}
+            cosAgents={cosAgents}
+            reviewCounts={reviewCounts}
+            instances={instances}
+            systemHealth={systemHealth}
+            notificationCounts={notificationCounts}
+            eventLogs={eventLogs}
           />
-        </div>
+
+          {/* Bottom: Agent status bar */}
+          <CityAgentBar cosAgents={cosAgents} agentMap={agentMap} />
+
+          {/* Bottom-right: character level / XP HUD badge (roadmap 2.11) */}
+          <CityXpBadge character={character} />
+
+          {/* Bottom-left: mini-map + Settings gear + legend + corner decoration */}
+          <div className="absolute bottom-16 left-3">
+            {/* Top-down mini-map of every building (roadmap 2.8) */}
+            <CityMiniMap apps={apps} onSelectApp={onSelectApp} />
+
+            {/* Status legend */}
+            <div className="pointer-events-none mb-2 bg-black/70 backdrop-blur-sm border border-cyan-500/15 rounded-lg px-2.5 py-2 space-y-1">
+              <div className="font-pixel text-[8px] text-cyan-500/50 tracking-wider mb-1">LEGEND</div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-xs bg-cyan-500" />
+                <span className="font-pixel text-[8px] text-gray-400 tracking-wide">ONLINE</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-xs bg-red-500" />
+                <span className="font-pixel text-[8px] text-gray-400 tracking-wide">STOPPED</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-xs bg-violet-500" />
+                <span className="font-pixel text-[8px] text-gray-400 tracking-wide">NOT STARTED</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-xs bg-slate-500" />
+                <span className="font-pixel text-[8px] text-gray-400 tracking-wide">ARCHIVED</span>
+              </div>
+            </div>
+
+            {/* Drop In / Fly Out button */}
+            <button
+              onClick={onToggleExploration}
+              className={`pointer-events-auto mb-2 relative bg-black/85 backdrop-blur-sm border rounded-lg px-3 py-2 hover:bg-cyan-500/10 transition-all group ${
+                explorationMode
+                  ? 'border-cyan-400/60 shadow-[0_0_8px_rgba(6,182,212,0.3)]'
+                  : 'border-cyan-500/30 hover:border-cyan-400/60'
+              }`}
+              title={explorationMode ? 'Return to orbital view (Tab)' : 'Enter street-level exploration (Tab)'}
+            >
+              <HudCorner position="tl" />
+              <HudCorner position="br" />
+              <div className="font-pixel text-[10px] text-cyan-400 tracking-wider" style={{ textShadow: '0 0 6px rgba(6,182,212,0.4)' }}>
+                {explorationMode ? '[ FLY OUT ]' : '[ DROP IN ]'}
+              </div>
+              <div className="font-pixel text-[7px] text-cyan-500/40 tracking-wide mt-0.5 text-center">(Tab)</div>
+            </button>
+
+            {/* Photo mode — cinematic camera + postcard capture */}
+            {onEnterPhotoMode && (
+              <button
+                onClick={onEnterPhotoMode}
+                className="pointer-events-auto mb-2 relative bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg w-10 h-10 flex items-center justify-center hover:border-cyan-400/60 hover:bg-cyan-500/10 transition-all group"
+                title="Photo mode — cinematic camera & screenshots"
+              >
+                <HudCorner position="tl" />
+                <HudCorner position="br" />
+                <svg className="w-4.5 h-4.5 text-cyan-500/70 group-hover:text-cyan-400 transition-colors" style={{ filter: 'drop-shadow(0 0 6px rgba(6,182,212,0.4))' }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+                </svg>
+              </button>
+            )}
+
+            {/* History / playback mode — scrub recorded city-state snapshots */}
+            {onEnterPlayback && (
+              <button
+                onClick={onEnterPlayback}
+                className="pointer-events-auto mb-2 relative bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg w-10 h-10 flex items-center justify-center hover:border-cyan-400/60 hover:bg-cyan-500/10 transition-all group"
+                title="History — scrub back through past city states"
+              >
+                <HudCorner position="tl" />
+                <HudCorner position="br" />
+                <svg className="w-4.5 h-4.5 text-cyan-500/70 group-hover:text-cyan-400 transition-colors" style={{ filter: 'drop-shadow(0 0 6px rgba(6,182,212,0.4))' }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3 3v5h5" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.05 13A9 9 0 106 5.3L3 8" />
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 7v5l3 2" />
+                </svg>
+              </button>
+            )}
+
+            <button
+              onClick={() => navigate(location.pathname === '/city/settings' ? `/city${location.search}` : `/city/settings${location.search}`)}
+              className="pointer-events-auto mb-2 relative bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg w-10 h-10 flex items-center justify-center hover:border-cyan-400/60 hover:bg-cyan-500/10 transition-all group"
+              title="Settings"
+              aria-label="City settings"
+            >
+              <HudCorner position="tl" />
+              <HudCorner position="br" />
+              <svg className="w-4.5 h-4.5 text-cyan-500/70 group-hover:text-cyan-400 transition-colors" style={{ filter: 'drop-shadow(0 0 6px rgba(6,182,212,0.4))' }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+            </button>
+            <div className="pointer-events-none">
+              <div className="font-pixel text-[8px] text-cyan-500/20 tracking-widest leading-tight">
+                {'>'} SYS.INIT<br/>
+                {'>'} NET.LINK<br/>
+                {'>'} HUD.READY
+              </div>
+            </div>
+          </div>
+        </>
+      ) : (
+        <CityHudCompact
+          time={time}
+          vitals={vitals}
+          connected={connected}
+          cosStatus={cosStatus}
+          character={character}
+          filter={filter}
+          onFilterChange={onFilterChange}
+          onJumpToFirst={onJumpToFirst}
+          matchCount={matchCount}
+          apps={apps}
+          cosAgents={cosAgents}
+          reviewCounts={reviewCounts}
+          instances={instances}
+          systemHealth={systemHealth}
+          notificationCounts={notificationCounts}
+          eventLogs={eventLogs}
+          onToggleExploration={onToggleExploration}
+          explorationMode={explorationMode}
+          onSelectApp={onSelectApp}
+          onEnterPhotoMode={onEnterPhotoMode}
+          onEnterPlayback={onEnterPlayback}
+        />
       )}
 
-      {/* Top-right: Connection + CoS status */}
-      <div className="absolute top-3 right-3 pointer-events-auto">
-        <div className="relative bg-black/85 backdrop-blur-sm border border-cyan-500/40 rounded-lg px-4 py-2.5 flex items-center gap-4">
-          <HudCorner position="tl" />
-          <HudCorner position="tr" />
-          <HudCorner position="bl" />
-          <HudCorner position="br" />
+      {/* Center crosshair in exploration mode (shared by both layouts) */}
+      {explorationMode && <Crosshair />}
 
-          <div className="flex items-center gap-2">
-            <span className={`w-2.5 h-2.5 rounded-full ${connected ? 'bg-port-success shadow-[0_0_8px_rgba(34,197,94,0.6)]' : 'bg-port-error shadow-[0_0_8px_rgba(239,68,68,0.6)] animate-pulse'}`} />
-            <span className={`font-pixel text-[11px] tracking-wide ${connected ? 'text-gray-300' : 'text-port-error'}`}>
-              {connected ? 'LINK' : 'OFFLINE'}
-            </span>
-          </div>
-          <div className="w-px h-5 bg-cyan-500/25" />
-          <div className="flex items-center gap-2">
-            <span className={`w-2.5 h-2.5 rounded-full ${cosStatus?.running ? 'bg-cyan-400 animate-pulse shadow-[0_0_8px_rgba(6,182,212,0.6)]' : 'bg-gray-600'}`} />
-            <span className={`font-pixel text-[11px] tracking-wide ${cosStatus?.running ? 'text-cyan-400' : 'text-gray-500'}`}>
-              CoS {cosStatus?.running ? 'RUN' : 'IDLE'}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* Right side: Intel pane (Attention + Activity tabs) */}
-      <CityIntelPane
-        apps={apps}
-        cosAgents={cosAgents}
-        reviewCounts={reviewCounts}
-        instances={instances}
-        systemHealth={systemHealth}
-        notificationCounts={notificationCounts}
-        eventLogs={eventLogs}
-      />
-
-      {/* Bottom: Agent status bar */}
-      <CityAgentBar cosAgents={cosAgents} agentMap={agentMap} />
-
-      {/* Bottom-right: character level / XP HUD badge (roadmap 2.11) */}
-      <CityXpBadge character={character} />
-
-      {/* Center crosshair in exploration mode */}
-      {explorationMode && (
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
-          <div className="relative w-6 h-6">
-            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-px h-2 bg-cyan-400/60" />
-            <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-px h-2 bg-cyan-400/60" />
-            <div className="absolute left-0 top-1/2 -translate-y-1/2 w-2 h-px bg-cyan-400/60" />
-            <div className="absolute right-0 top-1/2 -translate-y-1/2 w-2 h-px bg-cyan-400/60" />
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-1 h-1 rounded-full bg-cyan-400/40" />
-          </div>
-        </div>
-      )}
-
-      {/* Controls hint overlay */}
+      {/* Controls hint overlay (shared) */}
       <ControlsHint visible={explorationMode} />
-
-      {/* Bottom-left: mini-map + Settings gear + legend + corner decoration */}
-      <div className="absolute bottom-16 left-3">
-        {/* Top-down mini-map of every building (roadmap 2.8) */}
-        <CityMiniMap apps={apps} onSelectApp={onSelectApp} />
-
-        {/* Status legend */}
-        <div className="pointer-events-none mb-2 bg-black/70 backdrop-blur-sm border border-cyan-500/15 rounded-lg px-2.5 py-2 space-y-1">
-          <div className="font-pixel text-[8px] text-cyan-500/50 tracking-wider mb-1">LEGEND</div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-xs bg-cyan-500" />
-            <span className="font-pixel text-[8px] text-gray-400 tracking-wide">ONLINE</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-xs bg-red-500" />
-            <span className="font-pixel text-[8px] text-gray-400 tracking-wide">STOPPED</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-xs bg-violet-500" />
-            <span className="font-pixel text-[8px] text-gray-400 tracking-wide">NOT STARTED</span>
-          </div>
-          <div className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-xs bg-slate-500" />
-            <span className="font-pixel text-[8px] text-gray-400 tracking-wide">ARCHIVED</span>
-          </div>
-        </div>
-
-        {/* Drop In / Fly Out button */}
-        <button
-          onClick={onToggleExploration}
-          className={`pointer-events-auto mb-2 relative bg-black/85 backdrop-blur-sm border rounded-lg px-3 py-2 hover:bg-cyan-500/10 transition-all group ${
-            explorationMode
-              ? 'border-cyan-400/60 shadow-[0_0_8px_rgba(6,182,212,0.3)]'
-              : 'border-cyan-500/30 hover:border-cyan-400/60'
-          }`}
-          title={explorationMode ? 'Return to orbital view (Tab)' : 'Enter street-level exploration (Tab)'}
-        >
-          <HudCorner position="tl" />
-          <HudCorner position="br" />
-          <div className="font-pixel text-[10px] text-cyan-400 tracking-wider" style={{ textShadow: '0 0 6px rgba(6,182,212,0.4)' }}>
-            {explorationMode ? '[ FLY OUT ]' : '[ DROP IN ]'}
-          </div>
-          <div className="font-pixel text-[7px] text-cyan-500/40 tracking-wide mt-0.5 text-center">(Tab)</div>
-        </button>
-
-        {/* Photo mode — cinematic camera + postcard capture */}
-        {onEnterPhotoMode && (
-          <button
-            onClick={onEnterPhotoMode}
-            className="pointer-events-auto mb-2 relative bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg w-10 h-10 flex items-center justify-center hover:border-cyan-400/60 hover:bg-cyan-500/10 transition-all group"
-            title="Photo mode — cinematic camera & screenshots"
-          >
-            <HudCorner position="tl" />
-            <HudCorner position="br" />
-            <svg className="w-4.5 h-4.5 text-cyan-500/70 group-hover:text-cyan-400 transition-colors" style={{ filter: 'drop-shadow(0 0 6px rgba(6,182,212,0.4))' }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
-            </svg>
-          </button>
-        )}
-
-        {/* History / playback mode — scrub recorded city-state snapshots */}
-        {onEnterPlayback && (
-          <button
-            onClick={onEnterPlayback}
-            className="pointer-events-auto mb-2 relative bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg w-10 h-10 flex items-center justify-center hover:border-cyan-400/60 hover:bg-cyan-500/10 transition-all group"
-            title="History — scrub back through past city states"
-          >
-            <HudCorner position="tl" />
-            <HudCorner position="br" />
-            <svg className="w-4.5 h-4.5 text-cyan-500/70 group-hover:text-cyan-400 transition-colors" style={{ filter: 'drop-shadow(0 0 6px rgba(6,182,212,0.4))' }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3 3v5h5" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3.05 13A9 9 0 106 5.3L3 8" />
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 7v5l3 2" />
-            </svg>
-          </button>
-        )}
-
-        <button
-          onClick={() => navigate(location.pathname === '/city/settings' ? '/city' : '/city/settings')}
-          className="pointer-events-auto mb-2 relative bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg w-10 h-10 flex items-center justify-center hover:border-cyan-400/60 hover:bg-cyan-500/10 transition-all group"
-          title="Settings"
-        >
-          <HudCorner position="tl" />
-          <HudCorner position="br" />
-          <svg className="w-4.5 h-4.5 text-cyan-500/70 group-hover:text-cyan-400 transition-colors" style={{ filter: 'drop-shadow(0 0 6px rgba(6,182,212,0.4))' }} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-          </svg>
-        </button>
-        <div className="pointer-events-none">
-          <div className="font-pixel text-[8px] text-cyan-500/20 tracking-widest leading-tight">
-            {'>'} SYS.INIT<br/>
-            {'>'} NET.LINK<br/>
-            {'>'} HUD.READY
-          </div>
-        </div>
-      </div>
     </div>
   );
 }

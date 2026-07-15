@@ -20,7 +20,7 @@ import { computeMiniMap } from '../../utils/cityMiniMap';
 // Map box size in px. Fixed so the projection has a stable target on desktop.
 const MAP_SIZE = 132;
 
-export default function CityMiniMap({ apps, onSelectApp }) {
+export default function CityMiniMap({ apps, onSelectApp, alwaysShow = false }) {
   // Status colors track the theme accent for 'online' (the rest stay semantic), so a
   // dot matches its building exactly. Read from the palette the city page provides.
   const { getBuildingColor } = useCityPalette();
@@ -32,7 +32,7 @@ export default function CityMiniMap({ apps, onSelectApp }) {
   if (view.empty) return null;
 
   return (
-    <div className="hidden md:block mb-2 pointer-events-auto">
+    <div className={`${alwaysShow ? 'block' : 'hidden md:block'} mb-2 pointer-events-auto`}>
       <div className="relative bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg p-2">
         <div className="flex items-center justify-between mb-1.5 px-0.5">
           <span className="font-pixel text-[8px] text-cyan-500/60 tracking-wider">MAP</span>
