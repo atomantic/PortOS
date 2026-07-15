@@ -82,4 +82,19 @@ describe('useOnDemandTaskToast — parked outcome', () => {
     expect(msg).not.toMatch(/filtered/);
     expect(msg).not.toMatch(/re-checked now — no open issues/);
   });
+
+  it('explains the owner-filter org trap distinctly (owner matches an org, cannot author issues)', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({
+      taskType: 'claim-issue', appName: 'App One', outcome: 'parked',
+      parkReason: 'owner-is-org', counts: { open: 10, inFlight: 0, filtered: 0 },
+      parkedUntil: new Date(Date.now() + 23 * 3600 * 1000).toISOString()
+    });
+    const [msg] = toastSpy.mock.calls[0];
+    // Steers the user to a working filter without implying a username mismatch.
+    expect(msg).toMatch(/matches an org/);
+    expect(msg).toMatch(/set it to "self" or "any"/);
+    expect(msg).toMatch(/0 of 10 open/);
+    expect(msg).not.toMatch(/re-checked now — no open issues/);
+  });
 });

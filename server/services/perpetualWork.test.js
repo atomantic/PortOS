@@ -211,21 +211,43 @@ describe('perpetualWork', () => {
       expect(issueCalls.some(([, a]) => !a.includes('--author'))).toBe(true);
     });
 
-    it('owner filter that resolves to an org (never an issue author) reports no-authored-issues with the real open count', async () => {
-      // The exact owner-filter trap: `gh repo view` owner is the ORG, so
-      // `--author <org>` matches nothing even though the repo has open issues.
+    it('owner filter on an org-owned repo reports owner-is-org with the real open count (never queries --author <org>)', async () => {
+      // The exact owner-filter trap: the repo owner is an ORG, and an org login
+      // can never be an issue author, so `--author <org>` is guaranteed empty.
+      // The detector short-circuits to `owner-is-org` and reports the true count.
       spawn.mockImplementation((cmd, args = []) => {
-        if (cmd === 'gh' && args[0] === 'repo') return fakeChild('AcmeOrg\n'); // owner login → org
+        if (cmd === 'gh' && args[0] === 'repo') {
+          return fakeChild(JSON.stringify({ owner: { login: 'AcmeOrg' }, isInOrganization: true }));
+        }
         if (cmd === 'gh' && args[0] === 'issue') {
-          const filtered = args.includes('--author');
-          return fakeChild(filtered ? '[]' : JSON.stringify([
-            { number: 5, title: 'x', assignees: [], labels: [] }
-          ]));
+          return fakeChild(JSON.stringify([{ number: 5, title: 'x', assignees: [], labels: [] }]));
         }
         return fakeChild('');
       });
       const out = await detectGithubIssues(app, { issueAuthorFilter: 'owner' });
-      expect(out).toMatchObject({ reason: 'no-authored-issues', total: 1, filteredCount: 0 });
+      expect(out).toMatchObject({ reason: 'owner-is-org', total: 1, count: 0, filteredCount: 0 });
+      // The guaranteed-empty `--author <org>` query is skipped entirely — only
+      // the unfiltered count re-probe runs.
+      const issueCalls = spawn.mock.calls.filter(([cmd, a]) => cmd === 'gh' && a[0] === 'issue');
+      expect(issueCalls.every(([, a]) => !a.includes('--author'))).toBe(true);
+    });
+
+    it('owner filter on a user-owned repo passes --author <login> and detects normally', async () => {
+      spawn.mockImplementation((cmd, args = []) => {
+        if (cmd === 'gh' && args[0] === 'repo') {
+          return fakeChild(JSON.stringify({ owner: { login: 'alice' }, isInOrganization: false }));
+        }
+        if (cmd === 'gh' && args[0] === 'issue') {
+          return fakeChild(JSON.stringify([{ number: 5, title: 'x', assignees: [], labels: [] }]));
+        }
+        if (cmd === 'git' && args[0] === 'branch') return fakeChild('main\n');
+        return fakeChild('');
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'owner' });
+      expect(out.actionable).toBe(true);
+      const listCall = spawn.mock.calls.find(([cmd, a]) => cmd === 'gh' && a[0] === 'issue');
+      expect(listCall[1]).toContain('--author');
+      expect(listCall[1]).toContain('alice');
     });
 
     it('still reports no-open-issues when the repo is genuinely empty under an author filter', async () => {
