@@ -183,6 +183,56 @@ export function isSkipCandidate(metrics) {
 /**
  * Default learning data structure
  */
+// Environmental/infrastructure error categories (issue #2618): failures that say
+// nothing about the task or the model — a provider outage, an exhausted quota, a
+// revoked key, a dead network, an agent that never started. These are EXCLUDED
+// from the success-rate aggregates (`byTaskType` / `byModelTier` /
+// `routingAccuracy` / `totals` / the `recentOutcomes` windowed ring / the
+// correlation window) so an hour of provider 529s can't crater a task type's
+// rate, steer routing off a healthy tier, or trip the <30% skip gate. They are
+// instead counted in `data.environmentalFailures[category]` (count +
+// lastOccurred + affected task types) so the events stay visible, and they STILL
+// feed `errorPatterns` / `failureSignatures` — prompt recommendations and
+// diagnostics appropriately consume those.
+//
+// Covers BOTH classifier vocabularies that can stamp `errorAnalysis.category`:
+// agentErrorAnalysis's ERROR_PATTERNS (`rate-limit`, `usage-limit`, `auth-error`,
+// `forbidden`, `billing-error`, `network-error`, `claude-error` —
+// `overloaded_error`, `startup-failure`, `model-not-found`,
+// `model-not-supported`) and agentRunTracking's extractErrorFromOutput (`auth`,
+// `connection`, `rate-limit`). `model-not-available` is the legacy naming for
+// the model-unavailability class (still present in stored learning data /
+// prompt insights).
+//
+// Deliberately EXCLUDES `timeout`, `unknown`, `process-killed`, and the generic
+// `api-error`: each can be genuine task/model signal (a task too big for its
+// tier times out or blows resource limits; an uncategorized or generic API
+// failure may be anything, including a task-induced bad request). Also EXCLUDES
+// the mixed-provenance categories `server-error` and `spawn-error`: their
+// classifier regexes (`/server error|internal error/`, `command not found`)
+// match ordinary task output too — a genuinely failing app test printing
+// "Internal Server Error" must keep denting the rate, not vanish as an
+// "outage". Superset of agentErrorAnalysis's `API_ACCESS_ERROR_CATEGORIES`
+// (auth-error / forbidden / usage-limit — asserted by a cross-check test in
+// agentErrorAnalysis.test.js) but defined here as its own leaf constant:
+// importing agentErrorAnalysis.js would drag the cos.js task-store graph into
+// every taskLearning consumer and suite.
+export const ENVIRONMENTAL_ERROR_CATEGORIES = new Set([
+  'rate-limit',
+  'usage-limit',
+  'auth-error',
+  'auth',
+  'forbidden',
+  'billing-error',
+  'connection',
+  'network-error',
+  'claude-error',
+  'startup-failure',
+  'model-not-available',
+  'model-not-found',
+  'model-not-supported'
+]);
+
 const DEFAULT_LEARNING_DATA = {
   // v2 (issue #2460): each byTaskType bucket carries a bounded `recentOutcomes`
   // ring so the signal LI reads can be recency-windowed (see appendRecentOutcome

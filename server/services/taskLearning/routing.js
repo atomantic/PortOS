@@ -9,7 +9,7 @@
  * module.
  */
 
-import { loadLearningData, emitLog, isSandboxedTaskType, computeEffectiveSuccessRate, computeWindowedStats, isSkipCandidate, DEFAULT_WINDOW_MAX_AGE_MS } from './store.js';
+import { loadLearningData, emitLog, isSandboxedTaskType, computeEffectiveSuccessRate, computeWindowedStats, isSkipCandidate, DEFAULT_WINDOW_MAX_AGE_MS, ENVIRONMENTAL_ERROR_CATEGORIES } from './store.js';
 import { resetTaskTypeLearning } from './metrics.js';
 import { computeCorrelationQuality, isCorrelationProven } from './correlationQuality.js';
 
@@ -139,10 +139,15 @@ export function deriveFailureSignalAvoidance(data, taskType, {
   const routing = data?.routingAccuracy?.[taskType] || {};
   const ageCutoff = Number.isFinite(maxAgeMs) && maxAgeMs > 0 ? now - maxAgeMs : null;
 
-  // Gather recent failure samples scoped to this task type across all categories.
+  // Gather recent failure samples scoped to this task type across all
+  // categories — except environmental ones (issue #2618): failureSignatures
+  // deliberately still records outage-class samples for diagnostics, but a
+  // burst of rate-limit failures says nothing about the tier, so it must not
+  // reach avoidTiers through this secondary signal either.
   const byTier = {};
   let sampleCount = 0;
-  for (const bucket of Object.values(signatures)) {
+  for (const [category, bucket] of Object.entries(signatures)) {
+    if (ENVIRONMENTAL_ERROR_CATEGORIES.has(category)) continue;
     for (const sample of bucket?.recent || []) {
       if (sample?.taskType !== taskType || !sample.modelTier) continue;
       if (NON_ROUTABLE_LEARNED_TIERS.has(sample.modelTier)) continue;
@@ -204,7 +209,9 @@ function mergeAvoidTiers(...lists) {
  */
 function tiersWithRecentFailures(data, taskType, { now = Date.now(), maxAgeMs = DEFAULT_WINDOW_MAX_AGE_MS } = {}) {
   const tiers = new Set();
-  for (const bucket of Object.values(data?.failureSignatures || {})) {
+  for (const [category, bucket] of Object.entries(data?.failureSignatures || {})) {
+    // Environmental categories can't mark a tier as recently-failing (#2618).
+    if (ENVIRONMENTAL_ERROR_CATEGORIES.has(category)) continue;
     for (const sample of bucket?.recent || []) {
       if (sample?.taskType !== taskType || !sample.modelTier) continue;
       const t = Date.parse(sample.recordedAt);

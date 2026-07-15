@@ -413,8 +413,6 @@ describe('ENVIRONMENTAL_ERROR_CATEGORIES (issue #2618)', () => {
       'model-not-supported',
       'network-error',
       'rate-limit',
-      'server-error',
-      'spawn-error',
       'startup-failure',
       'usage-limit'
     ]);
@@ -424,11 +422,16 @@ describe('ENVIRONMENTAL_ERROR_CATEGORIES (issue #2618)', () => {
     // timeout / process-killed: a task too big for its tier legitimately times
     // out or blows resource limits; unknown / api-error: could be anything,
     // including a task-induced bad request — excluding them from learning would
-    // blind routing to real signal.
+    // blind routing to real signal. server-error / spawn-error: their classifier
+    // regexes match ordinary task output ("Internal Server Error" from a failing
+    // app test, "command not found" from a broken build), so treating them as
+    // environmental would hide genuine failures from the rate.
     expect(ENVIRONMENTAL_ERROR_CATEGORIES.has('timeout')).toBe(false);
     expect(ENVIRONMENTAL_ERROR_CATEGORIES.has('unknown')).toBe(false);
     expect(ENVIRONMENTAL_ERROR_CATEGORIES.has('process-killed')).toBe(false);
     expect(ENVIRONMENTAL_ERROR_CATEGORIES.has('api-error')).toBe(false);
+    expect(ENVIRONMENTAL_ERROR_CATEGORIES.has('server-error')).toBe(false);
+    expect(ENVIRONMENTAL_ERROR_CATEGORIES.has('spawn-error')).toBe(false);
     expect(ENVIRONMENTAL_ERROR_CATEGORIES.has('test-failure')).toBe(false);
     expect(ENVIRONMENTAL_ERROR_CATEGORIES.has(null)).toBe(false);
   });
