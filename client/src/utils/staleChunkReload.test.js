@@ -109,7 +109,13 @@ describe('fetchServerBuildId', () => {
   it('reads the build id stamped into the served shell', async () => {
     const fetch = stubFetch();
     await expect(fetchServerBuildId()).resolves.toBe('build-new');
-    expect(fetch).toHaveBeenCalledWith('/', { cache: 'no-store' });
+    // Cache-busting query param: the SW's offline fallback is
+    // caches.match(request), which `no-store` does not bypass — a unique URL
+    // guarantees a miss so a historical cached shell can't spoof the probe.
+    expect(fetch).toHaveBeenCalledWith(
+      expect.stringMatching(/^\/\?portos-build-probe=\d+$/),
+      { cache: 'no-store' }
+    );
   });
 
   it('is null when the probe rejects (offline)', async () => {
