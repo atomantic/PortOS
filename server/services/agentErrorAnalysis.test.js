@@ -151,6 +151,89 @@ describe('analyzeAgentFailure — ERROR_PATTERNS classification', () => {
   });
 });
 
+// Classification provenance (#2642): the environmental-exclusion gate in
+// task-learning trusts `origin` to tell a genuine provider/runner signal from a
+// loose keyword sweep over agent output, so every classifier return stamps one.
+describe('analyzeAgentFailure — provenance origin (#2642)', () => {
+  it('stamps provider origin on a structured API-error rate-limit', () => {
+    const analysis = analyzeAgentFailure(withLead('API Error: 429 Too Many Requests, please slow down'), { id: 't' }, 'x');
+    expect(analysis.category).toBe('rate-limit');
+    expect(analysis.origin).toBe('provider');
+  });
+
+  it('stamps output-scan origin on a bare "rate limit" phrase in agent output', () => {
+    // A failing test whose tail prints "rate limit" trips /rate.?limit/ but is NOT
+    // a provider signal — it must stay output-scan so learning counts it as real.
+    const analysis = analyzeAgentFailure(withLead('FAIL src/foo.test.js — the rate limit guard rejected the request'), { id: 't' }, 'x');
+    expect(analysis.category).toBe('rate-limit');
+    expect(analysis.origin).toBe('output-scan');
+  });
+
+  it('stamps runner origin on a structured ECONNREFUSED but output-scan on a bare "network error"', () => {
+    const refused = analyzeAgentFailure(withLead('Error: connect ECONNREFUSED 127.0.0.1:443 while reaching the API'), { id: 't' }, 'x');
+    expect(refused.category).toBe('network-error');
+    expect(refused.origin).toBe('runner');
+
+    const bare = analyzeAgentFailure(withLead('The integration test asserted a network error banner is shown'), { id: 't' }, 'x');
+    expect(bare.category).toBe('network-error');
+    expect(bare.origin).toBe('output-scan');
+  });
+
+  it('stamps provider origin on a structured 401 but output-scan on a bare "unauthorized"', () => {
+    const structured = analyzeAgentFailure(withLead('API Error: 401 Unauthorized — authentication failed'), { id: 't' }, 'x');
+    expect(structured.origin).toBe('provider');
+
+    const bare = analyzeAgentFailure(withLead('The e2e suite failed: expected a 403 when unauthorized users hit /admin'), { id: 't' }, 'x');
+    expect(bare.category).toBe('auth-error');
+    expect(bare.origin).toBe('output-scan');
+  });
+
+  it('stamps provider origin on structured model errors', () => {
+    expect(analyzeAgentFailure(withLead('API Error: 404 - model: claude-4-ultra not found'), { id: 't' }, 'x').origin).toBe('provider');
+    expect(analyzeAgentFailure(withLead('Response: not_found_error - the requested model does not exist'), { id: 't' }, 'x').origin).toBe('provider');
+  });
+
+  it('stamps provider origin on a distinctive usage-limit idiom but output-scan on a bare "quota exceeded"', () => {
+    const idiom = analyzeAgentFailure(withLead('You have hit your usage limit for this account.'), { id: 't' }, 'x');
+    expect(idiom.category).toBe('usage-limit');
+    expect(idiom.origin).toBe('provider');
+
+    const generic = analyzeAgentFailure(withLead('The integration test expected a quota exceeded response from the stub.'), { id: 't' }, 'x');
+    expect(generic.category).toBe('usage-limit');
+    expect(generic.origin).toBe('output-scan');
+  });
+
+  it('stamps output-scan on model-not-supported (indistinguishable from a test asserting the phrase)', () => {
+    const analysis = analyzeAgentFailure(withLead("The 'gpt-5' model is not supported when using Codex with a ChatGPT account."), { id: 't' }, 'gpt-5');
+    expect(analysis.category).toBe('model-not-supported');
+    expect(analysis.origin).toBe('output-scan');
+  });
+
+  it('promotes to provider when a structured marker appears LATER than a loose match in the window', () => {
+    // Regex returns the leftmost match ("rate limit"), but a genuine "API Error: 429"
+    // later in the same output is still a real provider signal → provider, not output-scan.
+    const output = [
+      'Initializing agent session and preparing the working directory.',
+      'Note: the rate limit guard is enabled for this run',
+      'API Error: 429 Too Many Requests — backing off'
+    ].join('\n');
+    const analysis = analyzeAgentFailure(output, { id: 't' }, 'x');
+    expect(analysis.category).toBe('rate-limit');
+    expect(analysis.origin).toBe('provider');
+  });
+
+  it('stamps runner origin on a startup failure and output-scan on an unknown match', () => {
+    expect(analyzeAgentFailure('boom', { id: 't' }, 'x').origin).toBe('runner');
+    expect(analyzeAgentFailure(withLead('The agent halted after an unrecognized condition with no diagnostic.'), { id: 't' }, 'x').origin).toBe('output-scan');
+  });
+
+  it('stamps output-scan on a non-environmental keyword match (test-failure)', () => {
+    const analysis = analyzeAgentFailure(withLead('A unit test failed while running the suite; review the assertions'), { id: 't' }, 'x');
+    expect(analysis.category).toBe('test-failure');
+    expect(analysis.origin).toBe('output-scan');
+  });
+});
+
 // Pure decision branch of resolveFailedTaskUpdate. Replaces the inline
 // resolveFailedTaskStatus copy in subAgentSpawner.test.js, which omitted the
 // MAX_TOTAL_SPAWNS short-circuit and the compaction metadata entirely.

@@ -66,6 +66,19 @@ function snippetAround(text, index) {
  * Error patterns that warrant investigation tasks.
  * Patterns are checked in order — first match wins.
  * Categories help the learning system identify failure trends.
+ *
+ * Provenance (#2642): a pattern may carry a structured `origin`
+ * (`'provider'` | `'runner'`) declaring that a match comes from a genuine
+ * provider/runner signal (an `API Error: NNN` line, a Node error code, a
+ * provider-specific error token) rather than the loose regex sweep over agent
+ * output. When the same regex mixes a structured alternative with a loose
+ * keyword alternative (e.g. `API Error: 429` vs a bare `rate limit`), a
+ * `structuredMarker` sub-pattern gates the promotion: the structured `origin`
+ * is only honored when the marker is present in the matched text; otherwise the
+ * match is treated as `'output-scan'` (see `resolvePatternOrigin`). Patterns
+ * with no `origin` are always `'output-scan'`. Task-learning's environmental
+ * exclusion (metrics.js) diverts only non-`output-scan` failures, so a failing
+ * test whose tail prints "rate limit" is NOT misread as an infra outage.
  */
 export const ERROR_PATTERNS = [
   // ===== API & Authentication Errors =====
@@ -73,6 +86,7 @@ export const ERROR_PATTERNS = [
     pattern: /API Error: 404.*model:\s*(\S+)/i,
     category: 'model-not-found',
     actionable: true,
+    origin: 'provider', // fully structured — requires an `API Error: 404 … model:` line
     escalation: 'Set a valid model id for this task (or clear its model override so the CLI falls back to its own configured default), then approve the retry.',
     extract: (match, output, task, model) => ({
       message: `Model "${match[1]}" not found`,
@@ -85,6 +99,11 @@ export const ERROR_PATTERNS = [
     pattern: /(?:model:\s*)?["']?([A-Za-z0-9._:-]+)["']?\s+model is not supported|model\s+["']?([A-Za-z0-9._:-]+)["']?.*not supported/i,
     category: 'model-not-supported',
     actionable: true,
+    // Intentionally no structured origin (#2642): the matched text is just the
+    // "<model> model is not supported" phrase — a test asserting that string is
+    // indistinguishable from a genuine provider rejection here, so it stays
+    // output-scan. Real provider model rejections still divert via the structured
+    // `API Error: 4NN`/`not_found_error` patterns and `detectTerminalModelError`.
     escalation: 'Pick a model the provider account supports (or clear the override to use the CLI default), then approve the retry.',
     extract: (match, output, task, model) => ({
       message: `Model "${match[1] || match[2] || model || 'configured model'}" is not supported`,
@@ -97,6 +116,8 @@ export const ERROR_PATTERNS = [
     pattern: /API Error: 401|authentication|unauthorized/i,
     category: 'auth-error',
     actionable: true,
+    origin: 'provider',
+    structuredMarker: /API Error:\s*401/i, // loose `authentication`/`unauthorized` in output stays output-scan
     extract: () => ({
       message: 'Authentication failed',
       suggestedFix: 'Check API keys and provider configuration'
@@ -106,6 +127,8 @@ export const ERROR_PATTERNS = [
     pattern: /API Error: 429|rate.?limit|too many requests/i,
     category: 'rate-limit',
     actionable: false, // Transient, retry will handle
+    origin: 'provider',
+    structuredMarker: /API Error:\s*429/i, // a bare `rate limit` / `too many requests` in output stays output-scan
     extract: () => ({
       message: 'Rate limit exceeded',
       suggestedFix: 'Wait and retry - temporary rate limiting'
@@ -116,6 +139,12 @@ export const ERROR_PATTERNS = [
     pattern: /(?:hit your (?:usage )?limit|usage.?limit|quota exceeded|Upgrade to Pro|plan.?limit|daily.?limit|session.?limit|(?:^|\n)\s*(?:\[stderr\]\s*)?Now using extra usage\s*(?:\r?\n|$))/i,
     category: 'usage-limit',
     actionable: true, // Need to switch provider
+    // Promote only the distinctive provider-billing idioms (the matched
+    // alternative, i.e. match[0]) to a structured provider signal; generic
+    // phrasings like "quota exceeded" / "plan limit" / "daily limit" that a task's
+    // own output can print stay output-scan and count as genuine failures (#2642).
+    origin: 'provider',
+    structuredMarker: /hit your (?:usage )?limit|Upgrade to Pro|Now using extra usage/i,
     extract: (match, output) => {
       const timeMatch = output.match(/(?:try again in|resets?)\s+(.+?)(?:\.|·|\n|$)/im);
       const waitTime = timeMatch ? timeMatch[1].trim() : null;
@@ -143,6 +172,8 @@ export const ERROR_PATTERNS = [
     pattern: /API Error: 403|forbidden/i,
     category: 'forbidden',
     actionable: true,
+    origin: 'provider',
+    structuredMarker: /API Error:\s*403/i, // loose `forbidden` in output stays output-scan
     extract: () => ({
       message: 'API access forbidden',
       suggestedFix: 'API key lacks permission for this operation. Check API key permissions and provider configuration.'
@@ -161,6 +192,7 @@ export const ERROR_PATTERNS = [
     pattern: /not_found_error.*model/i,
     category: 'model-not-found',
     actionable: true,
+    origin: 'provider', // structured provider `not_found_error` API token
     extract: (match, output, task, model) => ({
       message: `Model not found in API response`,
       suggestedFix: `The model "${model}" specified for this task doesn't exist. Update provider or task configuration.`,
@@ -320,6 +352,8 @@ export const ERROR_PATTERNS = [
     pattern: /ECONNREFUSED|ETIMEDOUT|network error/i,
     category: 'network-error',
     actionable: false,
+    origin: 'runner',
+    structuredMarker: /ECONNREFUSED|ETIMEDOUT/i, // a bare `network error` in output stays output-scan
     extract: () => ({
       message: 'Network connection failed',
       suggestedFix: 'Check network connectivity and service availability.'
@@ -400,6 +434,8 @@ export const ERROR_PATTERNS = [
     pattern: /(?:claude|anthropic).?(?:error|failed)|overloaded_error/i,
     category: 'claude-error',
     actionable: false,
+    origin: 'provider',
+    structuredMarker: /overloaded_error/i, // loose `claude error`/`anthropic failed` in output stays output-scan
     extract: () => ({
       message: 'Claude API error',
       suggestedFix: 'Claude API returned an error. This is usually transient - retry recommended.'
@@ -467,6 +503,26 @@ function getFailureAnalysisWindow(output) {
 }
 
 /**
+ * Resolve the provenance origin for a matched ERROR_PATTERN (#2642). Returns the
+ * pattern's structured `origin` (`'provider'`/`'runner'`) only when it is
+ * declared AND — if a `structuredMarker` sub-pattern is present — that marker
+ * appears somewhere in the failure window. A pattern with no structured origin,
+ * or a `structuredMarker` that is absent, falls through to `'output-scan'`,
+ * marking the classification as coming solely from the loose regex sweep.
+ *
+ * The marker is tested against the WHOLE analysis window, not just the matched
+ * substring: the main pattern's alternation returns the LEFTMOST match, which
+ * may be a loose alternative (a bare `rate limit`) even when a genuine
+ * `API Error: 429` appears later in the same output — so a real provider signal
+ * anywhere in the window still promotes the classification (#2642 review). Pure.
+ */
+function resolvePatternOrigin(errorDef, analysisOutput) {
+  if (!errorDef.origin) return 'output-scan';
+  if (errorDef.structuredMarker && !errorDef.structuredMarker.test(analysisOutput || '')) return 'output-scan';
+  return errorDef.origin;
+}
+
+/**
  * Analyze agent failure output and categorize the error.
  */
 export function analyzeAgentFailure(output, task, model) {
@@ -475,6 +531,9 @@ export function analyzeAgentFailure(output, task, model) {
     return {
       category: 'startup-failure',
       actionable: false,
+      // Structural runner signal (#2642): inferred from the process producing no
+      // usable output, not from a regex sweep — so it stays environmental-eligible.
+      origin: 'runner',
       message: 'Agent failed to start or produced no output',
       suggestedFix: 'Agent process exited immediately. Check system resources and provider availability.',
       snippet: (output || '').trim(),
@@ -491,6 +550,9 @@ export function analyzeAgentFailure(output, task, model) {
       return {
         category: errorDef.category,
         actionable: errorDef.actionable,
+        // Provenance (#2642): 'provider'/'runner' only when a structured marker
+        // is present in the failure window; a loose keyword match stays 'output-scan'.
+        origin: resolvePatternOrigin(errorDef, analysisOutput),
         // Captured for the human-facing investigation body; redacted at embed time.
         snippet: snippetAround(analysisOutput, match.index ?? 0),
         // Optional category-specific "what to approve" prose (may be undefined).
@@ -513,6 +575,9 @@ export function analyzeAgentFailure(output, task, model) {
   return {
     category: 'unknown',
     actionable: false,
+    // Pure regex/keyword sweep over the output tail (#2642) — never diverted as
+    // environmental (and 'unknown' isn't an environmental category anyway).
+    origin: 'output-scan',
     message: summary,
     details: contextLines.map(l => l.trim()).join('\n'),
     snippet: contextLines.map(l => l.trim()).join(' '),

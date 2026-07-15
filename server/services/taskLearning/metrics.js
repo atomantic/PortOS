@@ -62,6 +62,33 @@ export function recordEnvironmentalFailure(data, { category, taskType } = {}) {
 }
 
 /**
+ * Decide whether a failed run should be diverted to `environmentalFailures`
+ * instead of counting against the learning aggregates (issues #2618, #2642).
+ * Pure. Two gates, both required:
+ *
+ *   1. Category gate (#2618) — `category` is in ENVIRONMENTAL_ERROR_CATEGORIES.
+ *   2. Provenance gate (#2642) — only an allowlisted provenance authorizes the
+ *      diversion. Structured provider/runner signals (`origin: 'provider'|
+ *      'runner'`) and records with NO origin marker (older runs / federated
+ *      peers — back-compat, category-only as before) divert. Everything else —
+ *      `'output-scan'` (a false positive: ordinary task output tripping a loose
+ *      pattern, e.g. a failing test whose tail prints "rate limit") OR an
+ *      unrecognized/future/malformed marker — is NOT diverted and counts as a
+ *      genuine failure. Allowlist (not `!== 'output-scan'`) so an unknown origin
+ *      can never silently exclude a real failure from the aggregates.
+ *
+ * @param {boolean} outcomeSuccess validation-authoritative outcome (#2344)
+ * @param {string|null} category failure category
+ * @param {string|null|undefined} origin provenance marker ('provider'|'runner'|'output-scan'|null)
+ */
+const DIVERTIBLE_ORIGINS = new Set(['provider', 'runner']);
+export function shouldDivertToEnvironmental(outcomeSuccess, category, origin) {
+  if (outcomeSuccess) return false;
+  if (!ENVIRONMENTAL_ERROR_CATEGORIES.has(category)) return false;
+  return origin == null || DIVERTIBLE_ORIGINS.has(origin);
+}
+
+/**
  * Remove a task type's contribution from every environmental bucket (issue
  * #2618 reset parity): decrement each bucket's count by the type's share,
  * delete the per-type entry, and drop a bucket left with nothing — so a reset
@@ -174,6 +201,13 @@ export function buildTaskTelemetryContext(agent, task) {
   const rawMessage = errorAnalysis?.message || errorAnalysis?.details || '';
   const failureSignature = outcomeSuccess ? null : {
     category: errorAnalysis?.category || null,
+    // Classification provenance (#2642): 'provider'|'runner'|'output-scan', or
+    // null on records that predate the marker (older runs / federated peers).
+    // Gates the environmental exclusion below so an output-scan false positive
+    // isn't diverted out of the learning aggregates. `?? null` (not `|| null`) so
+    // only a genuinely-absent marker becomes the back-compat null — a malformed
+    // falsy value (e.g. '') is preserved and rejected by the gate's allowlist.
+    origin: errorAnalysis?.origin ?? null,
     messageSnippet: rawMessage ? String(rawMessage).substring(0, 200) : null,
     // Best-available proxy for "where in a multi-step workflow it failed": the
     // phase the agent had reached at completion. null when no phase was stamped.
@@ -278,6 +312,9 @@ export async function recordTaskCompletion(agent, task) {
   const outcomeSuccess = telemetry.outcomeSuccess;
   const duration = agent.result?.duration || 0;
   const errorCategory = telemetry.failureSignature?.category || null;
+  // `?? null` preserves a malformed falsy origin ('') so the gate's allowlist
+  // rejects it, rather than `|| null` collapsing it into the back-compat null (#2642).
+  const errorOrigin = telemetry.failureSignature?.origin ?? null;
 
   // Environmental failure gate (issue #2618): a rate-limit/auth/billing/startup
   // failure says nothing about the task type or the model tier, so it must not
@@ -285,7 +322,11 @@ export async function recordTaskCompletion(agent, task) {
   // get a healthy task type skipped (<30% gate) or a healthy tier avoided. Such
   // runs are diverted to `environmentalFailures` below; errorPatterns and
   // failureSignatures still record them for diagnostics/prompt hints.
-  const isEnvironmentalFailure = !outcomeSuccess && ENVIRONMENTAL_ERROR_CATEGORIES.has(errorCategory);
+  // Provenance gate (#2642): a category derived only from the output-text regex
+  // sweep (`origin: 'output-scan'`) is NOT diverted — it may be a false positive
+  // (ordinary task output tripping a loose pattern). Structured provider/runner
+  // signals and pre-marker records (null origin) keep the category-only behavior.
+  const isEnvironmentalFailure = shouldDivertToEnvironmental(outcomeSuccess, errorCategory, errorOrigin);
 
   // Correlation-quality prediction snapshot (issue #2344) — captured HERE, before
   // ANY of this run's aggregates (byModelTier, routingAccuracy, failureSignatures)
