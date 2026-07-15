@@ -50,6 +50,12 @@ const DEFAULT_IDLE_MS = 2500;        // "screen finished rendering" = no output 
 const DEFAULT_RENDER_CAP_MS = 12000; // hard cap on waiting for the panel after the command
 const DEFAULT_HARD_TIMEOUT_MS = 45000; // absolute backstop for the whole scrape
 
+// Bounded tail for the PTY capture: slice back to CAP once it exceeds HEADROOM
+// (slicing on a headroom margin, not every chunk, keeps the common case free of
+// repeated reallocations). 512KB holds many repaints of a quota panel.
+const RAW_BUFFER_CAP = 512 * 1024;
+const RAW_BUFFER_HEADROOM = RAW_BUFFER_CAP * 2;
+
 /**
  * Spawn a TUI, send `slashCommand`, and resolve with the ANSI-stripped screen.
  *
@@ -104,10 +110,19 @@ export async function scrapeTuiUsage({
     throw new Error(`Failed to spawn TUI '${command}': ${err.message}`);
   }
 
+  // Keep only a bounded tail of the capture: the quota panel renders near the
+  // end and the parsers take the latest value per key, so the tail is what
+  // matters. Without this, a runaway/noisy TUI that repaints continuously could
+  // grow `raw` to hundreds of MB before the render cap / hard timeout and trip
+  // PM2's memory restart just from loading Usage (mirrors tuiPromptRunner's cap).
   let raw = '';
   let lastDataAt = Date.now();
   let exited = false;
-  pty.onData((d) => { raw += d; lastDataAt = Date.now(); });
+  pty.onData((d) => {
+    raw += d;
+    if (raw.length > RAW_BUFFER_HEADROOM) raw = raw.slice(-RAW_BUFFER_CAP);
+    lastDataAt = Date.now();
+  });
   pty.onExit(() => { exited = true; });
 
   const killPty = () => { try { if (!exited) pty.kill(); } catch { /* already gone */ } };
