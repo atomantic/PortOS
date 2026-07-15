@@ -400,25 +400,35 @@ describe('getWindowedStats (issue #2460)', () => {
 });
 
 describe('ENVIRONMENTAL_ERROR_CATEGORIES (issue #2618)', () => {
-  it('contains exactly the environmental/infrastructure categories', () => {
+  it('contains exactly the environmental/infrastructure categories from both classifier vocabularies', () => {
     expect([...ENVIRONMENTAL_ERROR_CATEGORIES].sort()).toEqual([
       'auth',
       'auth-error',
       'billing-error',
+      'claude-error',
       'connection',
       'forbidden',
       'model-not-available',
+      'model-not-found',
+      'model-not-supported',
+      'network-error',
       'rate-limit',
+      'server-error',
+      'spawn-error',
       'startup-failure',
       'usage-limit'
     ]);
   });
 
   it('deliberately excludes categories that can be genuine task/model signal', () => {
-    // timeout: a task too big for its tier legitimately times out; unknown: could
-    // be anything — excluding them from learning would blind routing to real signal.
+    // timeout / process-killed: a task too big for its tier legitimately times
+    // out or blows resource limits; unknown / api-error: could be anything,
+    // including a task-induced bad request — excluding them from learning would
+    // blind routing to real signal.
     expect(ENVIRONMENTAL_ERROR_CATEGORIES.has('timeout')).toBe(false);
     expect(ENVIRONMENTAL_ERROR_CATEGORIES.has('unknown')).toBe(false);
+    expect(ENVIRONMENTAL_ERROR_CATEGORIES.has('process-killed')).toBe(false);
+    expect(ENVIRONMENTAL_ERROR_CATEGORIES.has('api-error')).toBe(false);
     expect(ENVIRONMENTAL_ERROR_CATEGORIES.has('test-failure')).toBe(false);
     expect(ENVIRONMENTAL_ERROR_CATEGORIES.has(null)).toBe(false);
   });

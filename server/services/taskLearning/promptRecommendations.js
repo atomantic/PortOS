@@ -40,7 +40,14 @@ export async function getPromptImprovementRecommendations(taskType) {
     return recommendations;
   }
 
-  // Analyze error patterns specific to this task type
+  // Analyze error patterns specific to this task type. The percentage is each
+  // category's share of ALL categorized error events recorded for this type —
+  // NOT of `metrics.failed`: environmental failures (issue #2618) still record
+  // into errorPatterns (they feed these insights) but no longer count into the
+  // aggregate `failed`, so dividing by it could yield Infinity (only-environmental
+  // history) or >100% shares.
+  const totalTypeErrors = Object.values(data.errorPatterns)
+    .reduce((sum, pattern) => sum + (pattern.taskTypes[taskType] || 0), 0);
   const taskErrors = [];
   for (const [category, pattern] of Object.entries(data.errorPatterns)) {
     const taskTypeCount = pattern.taskTypes[taskType] || 0;
@@ -48,7 +55,7 @@ export async function getPromptImprovementRecommendations(taskType) {
       taskErrors.push({
         category,
         count: taskTypeCount,
-        percentage: Math.round((taskTypeCount / metrics.failed) * 100)
+        percentage: Math.round((taskTypeCount / totalTypeErrors) * 100)
       });
     }
   }
