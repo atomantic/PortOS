@@ -151,12 +151,17 @@ export async function listOutcomes({ appId, now = Date.now() } = {}, store = out
 }
 
 /**
- * Reconcile still-unresolved outcome records against a FRESH tracker read. For
- * each stored record whose outcome is null, find the matching existing issue (by
- * slug) and, when the tracker now reports it closed, persist the derived outcome
- * (`merged` / `rejected` / `abandoned`). Open issues stay unresolved. Returns the number of
- * records updated. Never throws — a per-record write failure is swallowed so one
- * bad row can't abort the whole reconciliation.
+ * Reconcile outcome records against a FRESH tracker read. For each stored record,
+ * find the matching existing issue (by slug) and, when the tracker now reports it
+ * closed, persist the derived outcome (`merged` / `rejected` / `abandoned`). Open
+ * issues never resolve — or flip back — a record. A record whose stored outcome
+ * DIFFERS from what the live closed state derives is reclassified (#2620): this
+ * self-heals records persisted under the old any-close-is-merged mapping (e.g.
+ * `merged` with a duplicate-close reason) instead of letting them inflate the
+ * merge rate until they expire, and it tracks a reopened-then-re-closed issue's
+ * latest fate. Returns the number of records updated. Never throws — a
+ * per-record write failure is swallowed so one bad row can't abort the whole
+ * reconciliation.
  */
 export async function reconcileOutcomes({ appId, existingIssues = [], now = Date.now() } = {}, store = outcomesStore()) {
   if (!appId || !Array.isArray(existingIssues) || existingIssues.length === 0) return 0;
@@ -169,15 +174,14 @@ export async function reconcileOutcomes({ appId, existingIssues = [], now = Date
   const records = await listOutcomes({ appId, now }, store);
   let updated = 0;
   for (const r of records) {
-    if (r.outcome) continue;
     const issue = bySlug.get(r.slug);
     if (!issue) continue;
     const outcome = deriveOutcome(issue);
-    if (!outcome) continue;
+    if (!outcome || outcome === r.outcome) continue;
     const next = {
       ...r,
       outcome,
-      outcomeAt: issue.closedAt || new Date(now).toISOString(),
+      outcomeAt: issue.closedAt || r.outcomeAt || new Date(now).toISOString(),
       outcomeReason: issue.stateReason || 'auto-derived from tracker state'
     };
     const ok = await store.saveOne(outcomeId(appId, r.slug), next).then(() => true, () => false);

@@ -138,8 +138,31 @@ describe('reconcileOutcomes', () => {
     // Second pass with the issue now reported open should NOT flip it back.
     const updated = await reconcileOutcomes({ appId: 'app-1', existingIssues: [{ slug: 's', state: 'open' }] }, store);
     expect(updated).toBe(0);
+    // And a pass with the SAME closed state is a no-op write.
+    const same = await reconcileOutcomes({ appId: 'app-1', existingIssues: [{ slug: 's', state: 'closed', stateReason: 'completed' }] }, store);
+    expect(same).toBe(0);
     const rows = await listOutcomes({ appId: 'app-1' }, store);
     expect(rows[0].outcome).toBe('merged');
+  });
+
+  it('reclassifies a record persisted under the old any-close-is-merged mapping (#2620)', async () => {
+    // Simulate an install upgrading: a duplicate-closed issue was reconciled as
+    // `merged` by the pre-#2620 mapping. The next reconcile against the same
+    // live tracker state must self-heal it to `abandoned` instead of letting it
+    // inflate the merge rate until the record expires.
+    await recordFiledProposal({ appId: 'app-1', slug: 'legacy', scope: 'app-improvement' }, store);
+    const legacy = (await listOutcomes({ appId: 'app-1' }, store))[0];
+    await store.saveOne('app-1--legacy', {
+      ...legacy, outcome: 'merged', outcomeAt: '2026-07-01T00:00:00Z', outcomeReason: 'duplicate'
+    });
+    const updated = await reconcileOutcomes({
+      appId: 'app-1',
+      existingIssues: [{ slug: 'legacy', state: 'closed', stateReason: 'duplicate', closedAt: '2026-07-01T00:00:00Z' }]
+    }, store);
+    expect(updated).toBe(1);
+    const rows = await listOutcomes({ appId: 'app-1' }, store);
+    expect(rows[0].outcome).toBe('abandoned');
+    expect(rows[0].outcomeAt).toBe('2026-07-01T00:00:00Z');
   });
 
   it('is a no-op with no existing issues', async () => {
