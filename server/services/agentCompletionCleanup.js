@@ -140,7 +140,28 @@ export async function handlePipelineProgression(task, agentId, success) {
     }
   }
 
-  await addTask(nextTask, 'internal', { raw: true });
+  const persisted = await addTask(nextTask, 'internal', { raw: true });
+  if (persisted?.duplicate) {
+    // A stage prompt interpolates only app fields, so two runs of the same
+    // pipeline produce identical first lines — and addTask's dedup also matches
+    // blocked tasks (#2614). A stale blocked stage task from an earlier run
+    // would otherwise silently swallow this advance (nothing reaps blocked
+    // tasks), wedging every future run of the pipeline. Revive it with the
+    // fresh stage payload — the retry path is unblocking the existing task,
+    // not minting a duplicate. updateTask clears the blocked metadata on the
+    // status transition and merges in the new pipeline state.
+    if (persisted.status === 'blocked') {
+      await updateTask(persisted.id, {
+        status: 'pending',
+        priority: nextTask.priority,
+        metadata: nextTask.metadata
+      }, 'internal');
+      emitLog('info', `🔗 Pipeline ${pipeline.id} advancing to stage ${nextStageIndex} by reviving blocked task ${persisted.id}: ${nextStage.name}`, { pipelineId: pipeline.id, agentId });
+      return;
+    }
+    emitLog('warn', `⚠️ Pipeline ${pipeline.id} stage ${nextStageIndex} already queued as ${persisted.id} (${persisted.status}) — skipping duplicate advance`, { pipelineId: pipeline.id, agentId });
+    return;
+  }
   emitLog('info', `🔗 Pipeline ${pipeline.id} advancing to stage ${nextStageIndex}: ${nextStage.name}`, { pipelineId: pipeline.id, agentId });
 }
 

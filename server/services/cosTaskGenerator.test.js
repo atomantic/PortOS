@@ -586,8 +586,34 @@ describe('buildImprovementDedupSets (#2614 — failure-blocked tasks occupy thei
     ]);
     expect(sets.existingTaskTypes.has('app:app-1:layered-intelligence')).toBe(true);
     expect(sets.appsWithPendingImprovement.has('app-1')).toBe(true);
-    expect(sets.blockedTaskTypes.has('app:app-1:layered-intelligence')).toBe(true);
-    expect(sets.appsWithBlockedImprovement.has('app-1')).toBe(true);
+    // The blocked maps carry the occupying task id so skip logs are actionable.
+    expect(sets.blockedTaskTypes.get('app:app-1:layered-intelligence')).toBe('sys-t1');
+    expect(sets.appsWithBlockedImprovement.get('app-1')).toBe('sys-t1');
+  });
+
+  it('a failure-blocked NON-improvement task never holds the per-app cap', () => {
+    // Blocked tasks are not reaped, so a blocked investigation / review
+    // follow-up (app-tagged but no derivable analysis type) holding the cap
+    // would freeze the app's improvement rotation forever.
+    const sets = buildImprovementDedupSets([{
+      id: 'sys-inv-1',
+      status: 'blocked',
+      description: 'Investigate AI provider failure',
+      metadata: { app: 'app-1', blockedCategory: 'max-retries' }
+    }]);
+    expect(sets.appsWithPendingImprovement.size).toBe(0);
+    expect(sets.appsWithBlockedImprovement.size).toBe(0);
+    expect(sets.existingTaskTypes.size).toBe(0);
+  });
+
+  it('an ACTIVE non-improvement app task still holds the per-app cap (pre-existing behavior)', () => {
+    const sets = buildImprovementDedupSets([{
+      id: 'sys-inv-2',
+      status: 'in_progress',
+      description: 'Investigate AI provider failure',
+      metadata: { app: 'app-1' }
+    }]);
+    expect(sets.appsWithPendingImprovement.has('app-1')).toBe(true);
   });
 
   it('a blocked task with NO blockedCategory counts as failure-blocked', () => {

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   addTask: vi.fn(),
+  updateTask: vi.fn(),
   emit: vi.fn(),
   buildTreatmentPrompt: vi.fn(),
   buildEvaluatePrompt: vi.fn(),
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../cos.js', () => ({
   addTask: mocks.addTask,
+  updateTask: mocks.updateTask,
   cosEvents: { emit: mocks.emit },
 }));
 vi.mock('../../lib/creativeDirectorPrompts.js', () => ({
@@ -95,5 +97,41 @@ describe('Creative Director agent bridge model assignments', () => {
       providerId: 'global-agent',
       model: 'global-model',
     });
+  });
+});
+
+describe('persistAndEmit duplicate handling (#2614 — addTask dedup also matches blocked tasks)', () => {
+  it('revives a blocked duplicate instead of emitting task:ready for an unpersisted record', async () => {
+    // CD descriptions are deterministic per project+kind, so a re-trigger after
+    // a failure collides with the blocked twin. The enqueue must revive that
+    // task (status flip clears blocked metadata server-side) and emit
+    // task:ready with the EXISTING id — never with the never-persisted one.
+    mocks.addTask.mockResolvedValue({ id: 'sys-cd-old', status: 'blocked', duplicate: true, metadata: { blockedCategory: 'max-retries' } });
+
+    const result = await enqueueTreatmentTask(project);
+
+    expect(mocks.updateTask).toHaveBeenCalledTimes(1);
+    const [taskId, updates, group] = mocks.updateTask.mock.calls[0];
+    expect(taskId).toBe('sys-cd-old');
+    expect(updates.status).toBe('pending');
+    expect(updates.metadata.creativeDirector.projectId).toBe('cd-1');
+    expect(group).toBe('internal');
+    // task:ready and the run record both reference the revived (existing) id.
+    expect(result.id).toBe('sys-cd-old');
+    const emitted = mocks.emit.mock.calls.find(([name]) => name === 'task:ready');
+    expect(emitted[1].id).toBe('sys-cd-old');
+    expect(mocks.recordRun.mock.calls[0][1].taskId).toBe('sys-cd-old');
+  });
+
+  it('does not spawn a second agent or record a run for a pending duplicate', async () => {
+    const existing = { id: 'sys-cd-live', status: 'pending', duplicate: true };
+    mocks.addTask.mockResolvedValue(existing);
+
+    const result = await enqueueTreatmentTask(project);
+
+    expect(mocks.updateTask).not.toHaveBeenCalled();
+    expect(mocks.emit).not.toHaveBeenCalled();
+    expect(mocks.recordRun).not.toHaveBeenCalled();
+    expect(result).toBe(existing);
   });
 });

@@ -99,4 +99,28 @@ describe('handlePipelineProgression', () => {
     const [nextTask] = addTask.mock.calls[0];
     expect(nextTask.metadata.effort).toBe('high');
   });
+
+  it('revives a blocked duplicate stage task instead of silently dropping the advance (#2614)', async () => {
+    // Stage prompts interpolate only app fields, so two runs of the same
+    // pipeline collide on the dedup scan — which now also matches blocked
+    // tasks. A stale blocked stage task from an earlier run must be revived
+    // with the fresh pipeline state, not swallow the advance.
+    addTask.mockResolvedValue({ id: 'sys-stale-stage', status: 'blocked', duplicate: true });
+    const task = { id: 't', taskType: 'user', metadata: { pipeline: runningPipeline() } };
+    await handlePipelineProgression(task, 'agent-1', true);
+    expect(updateTask).toHaveBeenCalledTimes(1);
+    const [taskId, updates, group] = updateTask.mock.calls[0];
+    expect(taskId).toBe('sys-stale-stage');
+    expect(updates.status).toBe('pending');
+    expect(updates.metadata.pipeline.currentStage).toBe(1);
+    expect(updates.metadata.pipeline.previousStageAgentId).toBe('agent-1');
+    expect(group).toBe('internal');
+  });
+
+  it('skips the advance without reviving when the duplicate stage task is still active (#2614)', async () => {
+    addTask.mockResolvedValue({ id: 'sys-live-stage', status: 'pending', duplicate: true });
+    const task = { id: 't', taskType: 'user', metadata: { pipeline: runningPipeline() } };
+    await handlePipelineProgression(task, 'agent-1', true);
+    expect(updateTask).not.toHaveBeenCalled();
+  });
 });

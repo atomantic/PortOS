@@ -15,7 +15,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { addTask, cosEvents } from '../cos.js';
+import { addTask, updateTask, cosEvents } from '../cos.js';
 import { buildTreatmentPrompt, buildEvaluatePrompt, buildPlanPrompt } from '../../lib/creativeDirectorPrompts.js';
 import { getToolSpecs } from '../creative/toolRegistry.js';
 import { getSettings } from '../settings.js';
@@ -93,19 +93,45 @@ function buildDescription(project, kind, scene) {
 }
 
 async function persistAndEmit({ id, runId, record }, project, kind, sceneId) {
-  // Record the run as `running` up-front so the Runs tab shows in-flight
-  // state immediately. completionHook updates the same runId on finish.
+  // Persist FIRST and resolve the effective task before recording the run or
+  // emitting `task:ready`. CD descriptions are deterministic per project+kind,
+  // so addTask's dedup (which also matches blocked tasks, #2614) can return an
+  // existing task instead of persisting this record — emitting `task:ready`
+  // for a never-persisted record spawns a ghost agent whose task doesn't
+  // exist (every state transition then fails with "Task not found").
+  const persisted = await addTask(record, 'internal', { raw: true });
+  let effective = record;
+  if (persisted?.duplicate) {
+    if (persisted.status === 'blocked') {
+      // A CD enqueue is an explicit user re-trigger — revive the blocked
+      // duplicate with the fresh payload (updateTask clears the blocked
+      // metadata on the status transition) instead of wedging forever.
+      await updateTask(persisted.id, {
+        status: 'pending',
+        priority: record.priority,
+        metadata: record.metadata
+      }, 'internal');
+      effective = { ...record, id: persisted.id };
+      console.log(`📤 CD ${kind} task revived blocked duplicate ${persisted.id} on ${project.id}`);
+    } else {
+      // An identical CD task is already pending/in_progress — it will run and
+      // report through its own runId; don't spawn a second agent for it.
+      console.log(`⚠️ CD ${kind} task already queued as ${persisted.id} (${persisted.status}) — skipping duplicate enqueue`);
+      return persisted;
+    }
+  }
+  // Record the run as `running` so the Runs tab shows in-flight state.
+  // completionHook updates the same runId on finish.
   await recordRun(project.id, {
     runId,
-    taskId: id,
+    taskId: effective.id,
     kind,
     sceneId: sceneId || null,
     status: 'running',
   }).catch((err) => console.log(`⚠️ CD recordRun(running) failed: ${err.message}`));
-  await addTask(record, 'internal', { raw: true });
-  cosEvents.emit('task:ready', record);
-  console.log(`📤 CD task enqueued: ${id} (${kind}${sceneId ? ` for ${sceneId}` : ''} on ${project.id})`);
-  return record;
+  cosEvents.emit('task:ready', effective);
+  console.log(`📤 CD task enqueued: ${effective.id} (${kind}${sceneId ? ` for ${sceneId}` : ''} on ${project.id})`);
+  return effective;
 }
 
 export async function enqueueTreatmentTask(project) {
