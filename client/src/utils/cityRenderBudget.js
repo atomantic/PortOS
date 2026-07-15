@@ -28,6 +28,10 @@ export const DEFAULT_RENDER_BUDGET_CONFIG = Object.freeze({
   upshiftFrameMs: 18,
   upshiftWindows: 5,
   cooldownMs: 10000, // no further tier change for this long after a change
+  // Consecutive over-cutoff (gap) frames that mean "the scene itself is rendering slower
+  // than ~4fps" rather than a one-off suspension/GC pause. Reaching this synthesizes a
+  // pressure window so Auto can still downshift instead of discarding every sample forever.
+  sustainedGapFrames: 8,
 });
 
 export function tierToIndex(tier) {
@@ -62,6 +66,7 @@ export function createRenderBudget(startTier = 'high', now = 0) {
     startedAt: now, // warm-up baseline
     windowStart: now,
     samples: [],
+    gapStreak: 0, // consecutive over-cutoff frames (sustained-slowness detector)
     pressureStreak: 0,
     headroomStreak: 0,
     lastChangeAt: -Infinity, // first change is allowed immediately once a streak is met
@@ -85,72 +90,26 @@ export function restartWarmup(state, now) {
     startedAt: now,
     windowStart: now,
     samples: [],
+    gapStreak: 0,
     pressureStreak: 0,
     headroomStreak: 0,
     windowClosed: false,
   };
 }
 
-// Reset the whole machine to a fresh start at `startTier` (e.g. Manual→Auto switch, or
-// the Auto starting tier changing). Keeps the module pure — caller passes `now`.
-export function resetRenderBudget(state, startTier, now) {
-  return createRenderBudget(startTier, now);
-}
-
-// Feed one frame. Returns a NEW state object (never mutates). `sample` is { now, dt }
-// in milliseconds. Frames during warm-up or with a gap above maxFrameGapMs are dropped
-// from the window (but still advance nothing else). A window is classified only once
-// `windowMs` of wall-clock has elapsed AND it holds at least one valid sample.
-export function recordFrame(state, sample, config = DEFAULT_RENDER_BUDGET_CONFIG) {
-  const { now, dt } = sample;
-  const inWarmup = now - state.startedAt < config.warmupMs;
-  const isGap = dt > config.maxFrameGapMs || dt <= 0;
-
-  // A frame inside the warm-up is dropped AND keeps the window clock pinned to now, so
-  // the first real window starts measuring only once warm-up ends.
-  if (inWarmup) {
-    return { ...state, windowStart: now, samples: [], windowClosed: false };
-  }
-
-  // A >250ms gap (tab hidden, main-thread stall, GC) breaks the continuity of the current
-  // rolling window: discard whatever partial window we'd accumulated and restart the clock
-  // after the gap, so a lone pre-gap sample can't be classified as a full window.
-  if (isGap) {
-    return { ...state, windowStart: now, samples: [], windowClosed: false };
-  }
-
-  // The window clock starts at its FIRST valid sample, not at reset time — otherwise the
-  // warm-up (or a long gap) eats most of the first 2s window and it closes with a fraction
-  // of a window's samples yet still counts toward a streak. Pinning windowStart to the
-  // first sample guarantees every classified window spans a full windowMs of measured
-  // frames.
-  let samples = state.samples;
-  let windowStart = state.windowStart;
-  if (samples.length === 0) windowStart = now;
-  samples = samples.concat(dt);
-
-  // Window still open — accumulate and return.
-  if (now - windowStart < config.windowMs) {
-    return { ...state, samples, windowStart, windowClosed: false };
-  }
-
-  const p75 = percentile(samples, config.percentile);
-  const fps = 1000 / mean(samples);
-
+// Classify a completed window (real, or a synthetic pressure window from sustained gaps)
+// and apply the cooldown/hysteresis decision. Pure; returns the closed-window state.
+function classifyWindow(state, { p75, fps, sampleCount, now, windowStart }, config) {
   let tierIndex = state.tierIndex;
   let lastChangeAt = state.lastChangeAt;
   // Cooldown eligibility keys on the window's START, not its close — a window that opened
-  // during the cooldown but happens to close just after expiry is NOT fresh evidence. Only
-  // windows that began fully after the cooldown ended count toward a streak, so a change
-  // requires two (or five) *complete* post-cooldown windows.
+  // during the cooldown but happens to close just after expiry is NOT fresh evidence.
   const cooledDown = windowStart - state.lastChangeAt >= config.cooldownMs;
 
-  // Observation freeze during cooldown: windows classified inside the cooldown do NOT
-  // bank a streak. Otherwise a streak accumulated while cooling would fire the instant
-  // the cooldown expires, producing a quality "pop" — and, for a workload that straddles
-  // the two thresholds (comfortable at tier N, over-budget at tier N+1), an endless
-  // downshift↔upshift bounce. Streaks are only counted from windows observed entirely
-  // after the last change, so a change requires fresh, post-cooldown evidence.
+  // Observation freeze during cooldown: windows classified inside the cooldown do NOT bank
+  // a streak, so a change requires fresh, post-cooldown evidence and a banked streak can't
+  // fire the instant the cooldown expires (which would pop, and could oscillate for a
+  // workload that straddles the two adjacent-tier thresholds).
   let pressureStreak = 0;
   let headroomStreak = 0;
   if (cooledDown) {
@@ -179,6 +138,7 @@ export function recordFrame(state, sample, config = DEFAULT_RENDER_BUDGET_CONFIG
     tierIndex,
     windowStart: now,
     samples: [],
+    gapStreak: 0,
     pressureStreak,
     headroomStreak,
     lastChangeAt,
@@ -187,8 +147,63 @@ export function recordFrame(state, sample, config = DEFAULT_RENDER_BUDGET_CONFIG
       effectiveTier: QUALITY_TIERS[tierIndex],
       p75,
       fps,
-      sampleCount: samples.length,
+      sampleCount,
       windows: state.diagnostics.windows + 1,
     },
   };
+}
+
+// Reset the whole machine to a fresh start at `startTier` (e.g. Manual→Auto switch, or
+// the Auto starting tier changing). Keeps the module pure — caller passes `now`.
+export function resetRenderBudget(state, startTier, now) {
+  return createRenderBudget(startTier, now);
+}
+
+// Feed one frame. Returns a NEW state object (never mutates). `sample` is { now, dt }
+// in milliseconds. Frames during warm-up or with a gap above maxFrameGapMs are dropped
+// from the window (but still advance nothing else). A window is classified only once
+// `windowMs` of wall-clock has elapsed AND it holds at least one valid sample.
+export function recordFrame(state, sample, config = DEFAULT_RENDER_BUDGET_CONFIG) {
+  const { now, dt } = sample;
+  const inWarmup = now - state.startedAt < config.warmupMs;
+  const isGap = dt > config.maxFrameGapMs || dt <= 0;
+
+  // A frame inside the warm-up is dropped AND keeps the window clock pinned to now, so
+  // the first real window starts measuring only once warm-up ends.
+  if (inWarmup) {
+    return { ...state, windowStart: now, samples: [], gapStreak: 0, windowClosed: false };
+  }
+
+  // A >250ms gap (tab hidden, main-thread stall, GC) breaks the continuity of the current
+  // rolling window: discard whatever partial window we'd accumulated and restart the clock
+  // after the gap, so a lone pre-gap sample can't be classified as a full window.
+  if (isGap) {
+    const gapStreak = state.gapStreak + 1;
+    // Sustained slowness (the SCENE itself renders slower than the gap cutoff, frame after
+    // frame — not a one-off suspension) must still be able to downshift. After enough
+    // consecutive gaps, synthesize a pressure window instead of discarding forever.
+    if (gapStreak >= config.sustainedGapFrames) {
+      return classifyWindow(state, { p75: dt, fps: 1000 / dt, sampleCount: 0, now, windowStart: now }, config);
+    }
+    return { ...state, windowStart: now, samples: [], gapStreak, windowClosed: false };
+  }
+
+  // The window clock starts at its FIRST valid sample, not at reset time — otherwise the
+  // warm-up (or a long gap) eats most of the first 2s window and it closes with a fraction
+  // of a window's samples yet still counts toward a streak. Pinning windowStart to the
+  // first sample guarantees every classified window spans a full windowMs of measured
+  // frames.
+  let samples = state.samples;
+  let windowStart = state.windowStart;
+  if (samples.length === 0) windowStart = now;
+  samples = samples.concat(dt);
+
+  // Window still open — accumulate and return (a valid frame resets the gap streak).
+  if (now - windowStart < config.windowMs) {
+    return { ...state, samples, windowStart, gapStreak: 0, windowClosed: false };
+  }
+
+  const p75 = percentile(samples, config.percentile);
+  const fps = 1000 / mean(samples);
+  return classifyWindow(state, { p75, fps, sampleCount: samples.length, now, windowStart }, config);
 }

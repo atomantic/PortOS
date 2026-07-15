@@ -84,6 +84,26 @@ describe('cityRenderBudget — warm-up & gap rejection (ignored samples)', () =>
     expect(s.samples.length).toBe(0);
   });
 
+  it('downshifts under sustained slow rendering (every frame over the gap cutoff)', () => {
+    // The scene itself renders < ~4fps: every delta exceeds maxFrameGapMs, so no normal
+    // window ever closes. Sustained gaps must still be able to downshift.
+    let s = createRenderBudget('high', 0);
+    let now = CFG.warmupMs + 1;
+    const slowDt = CFG.maxFrameGapMs + 100; // 350ms/frame, ~3fps
+    // Two synthetic pressure windows' worth of sustained gaps → one downshift.
+    for (let i = 0; i < CFG.sustainedGapFrames * 2 + 2; i += 1) {
+      now += slowDt;
+      s = recordFrame(s, { now, dt: slowDt });
+    }
+    expect(getEffectiveTier(s)).toBe('medium');
+    // A single isolated gap (streak resets on the next valid frame) does NOT downshift.
+    let s2 = createRenderBudget('high', 0);
+    s2 = recordFrame(s2, { now: CFG.warmupMs + 100, dt: 5000 }); // one-off suspension
+    s2 = recordFrame(s2, { now: CFG.warmupMs + 120, dt: 16 }); // resumes normally
+    expect(s2.gapStreak).toBe(0);
+    expect(getEffectiveTier(s2)).toBe('high');
+  });
+
   it('starts the window clock at the first post-warm-up sample (full first window)', () => {
     // The budget resets at t=0 but the first real frame lands well after warm-up. The
     // first classified window must still span a full windowMs of samples, not close

@@ -68,6 +68,10 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
     () => typeof document !== 'undefined' && document.visibilityState === 'hidden'
   );
   const [resumeToken, setResumeToken] = useState(0);
+  // Bumped whenever the scene warm-up (re)starts — startup, an app-count change, or a
+  // visibility resume — so the adaptive budget re-arms and ignores the 1.2s of artificially
+  // cheap (forced-Low) warm-up frames instead of banking them as headroom/erasing pressure.
+  const [budgetRearmToken, setBudgetRearmToken] = useState(0);
   useVisibilityEvent(useCallback((state) => {
     const hidden = state === 'hidden';
     setDocumentHidden(hidden);
@@ -92,6 +96,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
     }
 
     setStartupSettled(false);
+    setBudgetRearmToken(t => t + 1);
     const timer = window.setTimeout(() => setStartupSettled(true), 1200);
     return () => window.clearTimeout(timer);
   }, [apps.length, photoMode, resumeToken]);
@@ -347,7 +352,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
         <CityAdaptiveQuality
           enabled={autoQuality}
           startTier={autoStartTier}
-          resumeToken={resumeToken}
+          resumeToken={budgetRearmToken}
           resetToken={autoResetToken}
           diagnosticsEnabled={diagnosticsEnabled}
           onTierChange={onAutoTierChange}

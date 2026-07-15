@@ -67,9 +67,10 @@ function CyberCityInner() {
   const [autoDiagnostics, setAutoDiagnostics] = useState(null);
   const effectiveTier = qualityMode === 'auto' ? autoTier : (settings?.qualityPreset ?? 'high');
 
-  // On RESET DEFAULTS, clear the stale local diagnostics readout; the adaptive budget
-  // itself re-arms via CityScene's autoResetToken and re-reports tier + fresh samples.
-  useEffect(() => { setAutoDiagnostics(null); }, [resetNonce]);
+  // Clear the stale local diagnostics readout whenever the budget re-arms: a RESET DEFAULTS
+  // (resetNonce) or a quality-mode transition (Manual↔Auto). The adaptive budget itself
+  // re-arms via CityScene and re-reports tier + fresh samples on the next window.
+  useEffect(() => { setAutoDiagnostics(null); }, [resetNonce, qualityMode]);
 
   const sceneSettings = useMemo(() => {
     const base = { ...settings, effectiveTier, skyTheme: 'cyberpunk', timeOfDay: cityTimeOfDay.presetKey };
