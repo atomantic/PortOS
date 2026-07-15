@@ -20,17 +20,35 @@ import useChartColors from '../../../hooks/useChartColors.js';
 import { timeAgo, formatDateShort } from '../../../utils/formatters';
 import { filterSelectableModels } from '../../../utils/providers.js';
 
+// Pure helpers are exported for unit tests (PersonalityTab.test.jsx).
+
 // "errorAversion" → "Error Aversion"
-const humanizeTrait = (key) =>
+export const humanizeTrait = (key) =>
   key.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase()).trim();
 
 // Union of trait keys across runs — taxonomy versions may differ per record.
-const traitKeyUnion = (runs) => [...new Set(runs.flatMap((r) => Object.keys(r.traits || {})))];
+export const traitKeyUnion = (runs) => [...new Set(runs.flatMap((r) => Object.keys(r.traits || {})))];
 
 // Unique, readable series label for a run on the radar/table.
-const seriesLabel = (run) => `${run.model || run.providerId} · ${formatDateShort(run.timestamp)}`;
+export const seriesLabel = (run) => `${run.model || run.providerId} · ${formatDateShort(run.timestamp)}`;
 
-const alignmentColor = (score) =>
+// Disambiguate colliding series labels (same model re-tested the same day) by
+// suffixing later occurrences with their 1-based position.
+export const dedupeSeriesLabels = (bases) =>
+  bases.map((base, i) => (bases.indexOf(base) === i ? base : `${base} (${i + 1})`));
+
+// Selectable model chips for a provider. A provider whose list holds only
+// configured-default sentinels (e.g. antigravity) still gets one `null` chip —
+// "provider default" — which submits no model override and lets the server
+// resolve the effective model.
+export const providerModelOptions = (provider) => {
+  const models = filterSelectableModels(
+    provider.models?.length ? provider.models : [provider.defaultModel]
+  ).filter(Boolean);
+  return models.length ? models : [null];
+};
+
+export const alignmentColor = (score) =>
   score >= 0.7 ? 'text-port-success' : score >= 0.4 ? 'text-port-warning' : 'text-port-error';
 
 function TraitRadar({ runs, height = 320 }) {
@@ -38,8 +56,7 @@ function TraitRadar({ runs, height = 320 }) {
   // Keys can differ across taxonomy versions — chart the union.
   const { data, labels } = useMemo(() => {
     const keys = traitKeyUnion(runs);
-    const bases = runs.map(seriesLabel);
-    const labels = bases.map((base, i) => (bases.indexOf(base) === i ? base : `${base} (${i + 1})`));
+    const labels = dedupeSeriesLabels(runs.map(seriesLabel));
     const data = keys.map((k) => {
       const row = { trait: humanizeTrait(k) };
       runs.forEach((r, i) => {
@@ -90,6 +107,14 @@ function AlignmentSection({ run }) {
       <div className="flex items-start gap-2 p-3 rounded bg-port-warning/10 text-port-warning text-sm">
         <AlertCircle size={16} className="shrink-0 mt-0.5" />
         <span>Alignment check skipped: {run.alignmentSkipped}</span>
+      </div>
+    );
+  }
+  if (run.alignmentError) {
+    return (
+      <div className="flex items-start gap-2 p-3 rounded bg-port-error/10 text-port-error text-sm">
+        <AlertCircle size={16} className="shrink-0 mt-0.5" />
+        <span>Alignment check failed: {run.alignmentError}</span>
       </div>
     );
   }
@@ -168,6 +193,7 @@ export default function PersonalityTab() {
   const [scorerProviderId, setScorerProviderId] = useState('');
   const [scorerModel, setScorerModel] = useState('');
   const [historyCap, setHistoryCap] = useState(200);
+  const [defaultAlignment, setDefaultAlignment] = useState(true); // the SAVED default, distinct from this run's toggle
   const [savingSettings, setSavingSettings] = useState(false);
 
   useEffect(() => {
@@ -185,6 +211,7 @@ export default function PersonalityTab() {
     setHistory(Array.isArray(historyData) ? historyData : []);
     if (settingsData) {
       setIncludeAlignment(settingsData.defaultIncludeAlignment ?? true);
+      setDefaultAlignment(settingsData.defaultIncludeAlignment ?? true);
       setScorerProviderId(settingsData.scorerProviderId || '');
       setScorerModel(settingsData.scorerModel || '');
       setHistoryCap(settingsData.historyCap ?? 200);
@@ -213,7 +240,7 @@ export default function PersonalityTab() {
       setRunning({ current: i + 1, total: selectedProviders.length, model });
       // The api helper toasts the error; a failed model doesn't abort the rest.
       const record = await api
-        .runModelPersonalityTest({ providerId, model, includeAlignment })
+        .runModelPersonalityTest({ providerId, ...(model ? { model } : {}), includeAlignment })
         .catch(() => null);
       if (record) {
         setResults((prev) => [...prev, record]);
@@ -243,7 +270,7 @@ export default function PersonalityTab() {
         scorerProviderId: scorerProviderId || null,
         scorerModel: scorerModel || null,
         historyCap: Number(historyCap) || 200,
-        defaultIncludeAlignment: includeAlignment
+        defaultIncludeAlignment: defaultAlignment
       })
       .catch(() => null);
     setSavingSettings(false);
@@ -296,15 +323,13 @@ export default function PersonalityTab() {
             <div key={provider.id} className="space-y-2">
               <div className="text-sm font-medium text-gray-400">{provider.name}</div>
               <div className="flex flex-wrap gap-2">
-                {filterSelectableModels(
-                  provider.models?.length ? provider.models : [provider.defaultModel]
-                ).filter(Boolean).map((model) => {
+                {providerModelOptions(provider).map((model) => {
                   const isSelected = selectedProviders.some(
                     (p) => p.providerId === provider.id && p.model === model
                   );
                   return (
                     <button
-                      key={model}
+                      key={model ?? '__default__'}
                       onClick={() => toggleProvider(provider.id, model)}
                       className={`px-3 py-2 min-h-[40px] text-sm rounded-lg border transition-colors ${
                         isSelected
@@ -312,7 +337,7 @@ export default function PersonalityTab() {
                           : 'border-port-border text-gray-400 hover:text-white hover:border-gray-500'
                       }`}
                     >
-                      {model}
+                      {model ?? 'provider default'}
                     </button>
                   );
                 })}
@@ -414,6 +439,15 @@ export default function PersonalityTab() {
               />
             </div>
           </div>
+          <label className="flex items-center gap-2 min-h-[44px] cursor-pointer text-sm text-gray-300">
+            <input
+              type="checkbox"
+              checked={defaultAlignment}
+              onChange={(e) => setDefaultAlignment(e.target.checked)}
+              className="w-5 h-5 rounded border-port-border bg-port-bg text-port-accent focus:ring-port-accent"
+            />
+            Include the twin alignment check by default on new runs
+          </label>
           <button
             onClick={saveSettings}
             disabled={savingSettings}

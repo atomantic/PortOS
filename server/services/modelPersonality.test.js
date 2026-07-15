@@ -138,6 +138,20 @@ describe('runPersonalityTest', () => {
     });
   });
 
+  it('persists the self-profile with alignmentError when the scorer call fails', async () => {
+    loadMeta.mockResolvedValue({ traits: { bigFive: { openness: 0.8 } } });
+    mockProfileRun({ effectiveModel: 'kept-model' });
+    runPromptThroughProvider.mockRejectedValueOnce(new Error('scorer exploded'));
+
+    const record = await svc.runPersonalityTest({ providerId: 'prov-1', includeAlignment: true });
+
+    // Call 1's paid result survives; the failure is recorded, not thrown.
+    expect(record.model).toBe('kept-model');
+    expect(record.alignment).toBeUndefined();
+    expect(record.alignmentError).toBe('scorer exploded');
+    expect(await svc.getHistory()).toHaveLength(1);
+  });
+
   it('defaults includeAlignment from settings when the caller omits it', async () => {
     await svc.updateSettings({ defaultIncludeAlignment: false });
     mockProfileRun();

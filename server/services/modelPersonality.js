@@ -158,7 +158,14 @@ export async function runPersonalityTest({ providerId, model, includeAlignment, 
   };
 
   if (wantAlignment) {
-    Object.assign(record, await scoreAlignment(record, settings));
+    // A scorer failure (misconfigured scorer provider, runner cascade
+    // exhausted) must not discard the already-completed self-profile — the
+    // user paid for call 1. Persist the profile with the error noted instead.
+    const alignmentResult = await scoreAlignment(record, settings).catch((err) => {
+      console.error(`❌ Alignment scorer failed: ${err.message}`);
+      return { alignmentError: err.message };
+    });
+    Object.assign(record, alignmentResult);
   }
 
   await appendResult(record, settings.historyCap);
