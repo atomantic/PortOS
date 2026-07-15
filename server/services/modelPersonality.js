@@ -19,6 +19,7 @@
 import { randomUUID } from 'crypto';
 import { join } from 'path';
 import { PATHS, atomicWrite, readJSONFile } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 import { resolveProviderAndModel, runPromptThroughProvider, assertProvider } from '../lib/promptRunner.js';
 import {
   PERSONALITY_TAXONOMY_VERSION,
@@ -62,16 +63,11 @@ export async function getHistory(limit) {
 
 // Serialize results.json mutations: a run finishing while a delete is in
 // flight would otherwise read-modify-write the same file and drop one of the
-// two changes. Single tail — every write awaits the previous one to settle.
-let writeTail = Promise.resolve();
-function withResultsWrite(fn) {
-  const run = writeTail.then(fn, fn);
-  writeTail = run.then(() => {}, () => {});
-  return run;
-}
+// two changes.
+const queueResultsWrite = createFileWriteQueue();
 
 export async function deleteResult(runId) {
-  return withResultsWrite(async () => {
+  return queueResultsWrite(async () => {
     const list = await getHistory();
     const next = list.filter((r) => r.runId !== runId);
     if (next.length === list.length) return false;
@@ -81,7 +77,7 @@ export async function deleteResult(runId) {
 }
 
 function appendResult(record, historyCap) {
-  return withResultsWrite(async () => {
+  return queueResultsWrite(async () => {
     const list = await getHistory();
     list.unshift(record);
     await atomicWrite(resultsFile(), JSON.stringify(list.slice(0, historyCap), null, 2));

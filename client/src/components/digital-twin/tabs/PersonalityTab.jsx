@@ -18,10 +18,14 @@ import * as api from '../../../services/api';
 import toast from '../../ui/Toast';
 import useChartColors from '../../../hooks/useChartColors.js';
 import { timeAgo, formatDateShort } from '../../../utils/formatters';
+import { filterSelectableModels } from '../../../utils/providers.js';
 
 // "errorAversion" → "Error Aversion"
 const humanizeTrait = (key) =>
   key.replace(/([A-Z])/g, ' $1').replace(/^./, (c) => c.toUpperCase()).trim();
+
+// Union of trait keys across runs — taxonomy versions may differ per record.
+const traitKeyUnion = (runs) => [...new Set(runs.flatMap((r) => Object.keys(r.traits || {})))];
 
 // Unique, readable series label for a run on the radar/table.
 const seriesLabel = (run) => `${run.model || run.providerId} · ${formatDateShort(run.timestamp)}`;
@@ -33,11 +37,9 @@ function TraitRadar({ runs, height = 320 }) {
   const colors = useChartColors();
   // Keys can differ across taxonomy versions — chart the union.
   const { data, labels } = useMemo(() => {
-    const keys = [...new Set(runs.flatMap((r) => Object.keys(r.traits || {})))];
-    const labels = runs.map((r, i) => {
-      const base = seriesLabel(r);
-      return runs.findIndex((o) => seriesLabel(o) === base) === i ? base : `${base} (${i + 1})`;
-    });
+    const keys = traitKeyUnion(runs);
+    const bases = runs.map(seriesLabel);
+    const labels = bases.map((base, i) => (bases.indexOf(base) === i ? base : `${base} (${i + 1})`));
     const data = keys.map((k) => {
       const row = { trait: humanizeTrait(k) };
       runs.forEach((r, i) => {
@@ -121,9 +123,11 @@ function AlignmentSection({ run }) {
 }
 
 function RunDetail({ run }) {
+  // Stable array identity so TraitRadar's useMemo caches across parent re-renders.
+  const runs = useMemo(() => [run], [run]);
   return (
     <div className="space-y-4">
-      <TraitRadar runs={[run]} />
+      <TraitRadar runs={runs} />
       {run.summary && (
         <p className="text-sm text-gray-300 bg-port-bg p-3 rounded whitespace-pre-wrap">{run.summary}</p>
       )}
@@ -147,7 +151,6 @@ function RunDetail({ run }) {
 export default function PersonalityTab() {
   const [providers, setProviders] = useState([]);
   const [history, setHistory] = useState([]);
-  const [settings, setSettings] = useState(null);
   const [loading, setLoading] = useState(true);
 
   // Run configuration
@@ -181,7 +184,6 @@ export default function PersonalityTab() {
     setProviders((providersData.providers || []).filter((p) => p.enabled));
     setHistory(Array.isArray(historyData) ? historyData : []);
     if (settingsData) {
-      setSettings(settingsData);
       setIncludeAlignment(settingsData.defaultIncludeAlignment ?? true);
       setScorerProviderId(settingsData.scorerProviderId || '');
       setScorerModel(settingsData.scorerModel || '');
@@ -245,10 +247,7 @@ export default function PersonalityTab() {
       })
       .catch(() => null);
     setSavingSettings(false);
-    if (saved) {
-      setSettings(saved);
-      toast.success('Personality test settings saved');
-    }
+    if (saved) toast.success('Personality test settings saved');
   };
 
   const toggleCompare = (runId) => {
@@ -261,10 +260,7 @@ export default function PersonalityTab() {
     () => history.filter((r) => compareIds.includes(r.runId)),
     [history, compareIds]
   );
-  const compareTraitKeys = useMemo(
-    () => [...new Set(compareRuns.flatMap((r) => Object.keys(r.traits || {})))],
-    [compareRuns]
-  );
+  const compareTraitKeys = useMemo(() => traitKeyUnion(compareRuns), [compareRuns]);
 
   const scorerProvider = providers.find((p) => p.id === scorerProviderId);
 
@@ -300,7 +296,9 @@ export default function PersonalityTab() {
             <div key={provider.id} className="space-y-2">
               <div className="text-sm font-medium text-gray-400">{provider.name}</div>
               <div className="flex flex-wrap gap-2">
-                {(provider.models || [provider.defaultModel]).filter(Boolean).map((model) => {
+                {filterSelectableModels(
+                  provider.models?.length ? provider.models : [provider.defaultModel]
+                ).filter(Boolean).map((model) => {
                   const isSelected = selectedProviders.some(
                     (p) => p.providerId === provider.id && p.model === model
                   );
@@ -396,7 +394,7 @@ export default function PersonalityTab() {
                 className="w-full px-3 py-2 min-h-[40px] text-sm rounded-lg border border-port-border bg-port-bg text-white focus:ring-port-accent focus:border-port-accent disabled:opacity-50"
               >
                 <option value="">Provider default</option>
-                {(scorerProvider?.models || []).map((m) => (
+                {filterSelectableModels(scorerProvider?.models).map((m) => (
                   <option key={m} value={m}>{m}</option>
                 ))}
               </select>
