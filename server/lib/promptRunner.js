@@ -47,6 +47,11 @@ function loadAutoFixer() {
 }
 
 export const DEFAULT_TIMEOUT_MS = 300000;
+// Grace window past the runner's own API timeout before promptRunner's backstop
+// timer fires. Lets executeApiRun's internal timeout win (aborting + finalizing
+// as ERROR_CATEGORIES.TIMEOUT) so the normal path is classified correctly; the
+// backstop only intervenes if the runner never reports completion at all.
+const API_TIMEOUT_BACKSTOP_GRACE_MS = 2000;
 const APPEND_CHUNK = (acc, chunk) => acc + (typeof chunk === 'string' ? chunk : (chunk?.text || ''));
 
 // ── Local-backend concurrency gate ─────────────────────────────────────────
@@ -1266,22 +1271,24 @@ async function executeProviderRunOnce({ provider, prompt, source, model, runId: 
       executeCliRun({ runId, provider: providerForRun, prompt, workspacePath: effectiveCwd, onData, onComplete, timeout: effectiveTimeout }).catch(safeReject);
     } else if (effectiveProvider.type === PROVIDER_TYPES.API) {
       // API runs take model as a first-class arg — no clone needed. The
-      // toolkit's executeApiRun uses AbortController without a timer, so
-      // we enforce the per-call timeout here: if it fires before
-      // onComplete, reject with the same timeout shape CLI/TUI use and
-      // attempt to stop the run. Without this guard, API callers that
-      // used to enforce timeouts via fetchWithTimeout / AbortSignal.timeout
-      // (meatspacePostLlm, pm2Standardizer, brain) regress to hanging
-      // indefinitely on a stuck endpoint.
+      // toolkit's executeApiRun now owns the primary wall-clock timeout (it
+      // aborts AND finalizes the run as an ERROR_CATEGORIES.TIMEOUT, firing
+      // onComplete → our reject below with a proper timeout classification).
+      // We keep a SECONDARY backstop timer here — delayed past the runner's
+      // own deadline by a grace window — purely for the pathological case
+      // where the runner neither throws nor ever calls onComplete (e.g. a
+      // future override): it best-effort stops the run and rejects so callers
+      // (meatspacePostLlm, pm2Standardizer, brain) never hang indefinitely.
+      // The grace lets the runner's timeout win classification in the normal
+      // path; safeReject/safeResolve clear this timer once onComplete lands.
       apiTimeoutHandle = setTimeout(() => {
         stopRun(runId).catch(() => { /* best-effort cancel */ });
         safeReject(new Error(`API execution timed out after ${effectiveTimeout}ms`));
-      }, effectiveTimeout);
-      // Thread the caller's effectiveTimeout into the toolkit's own internal
-      // wall-clock timer so a per-call override (e.g. the importer's long stage
-      // timeout) isn't cut short by the runner's provider/default fallback —
-      // same caller-override precedence CLI/TUI runs already get. The outer
-      // apiTimeoutHandle above stays as a belt-and-suspenders backstop.
+      }, effectiveTimeout + API_TIMEOUT_BACKSTOP_GRACE_MS);
+      // Thread the caller's effectiveTimeout into the runner's internal timer so
+      // a per-call override (e.g. the importer's long stage timeout) governs the
+      // ceiling instead of the runner's provider/default fallback — same
+      // caller-override precedence CLI/TUI runs already get.
       executeApiRun({ runId, provider: effectiveProvider, model: effectiveModel, prompt, workspacePath: effectiveCwd, screenshots: Array.isArray(screenshots) ? screenshots : [], onData, onComplete, timeout: effectiveTimeout }).catch(safeReject);
     } else if (effectiveProvider.type === PROVIDER_TYPES.TUI) {
       // `source` (e.g. 'pipeline-manuscript-completeness') labels the live,

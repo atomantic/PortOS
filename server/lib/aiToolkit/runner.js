@@ -629,20 +629,25 @@ export function createRunnerService(config = {}) {
         : { ok: false, error: `Ollama is not running and PortOS could not start it: ${ready.error || 'unknown error'}`, status: 0 };
 
       if (!response.ok) {
+        // Read the (possibly stalled) error body BEFORE claiming settlement so
+        // the abort timer stays armed through the read — a provider that sends
+        // non-2xx headers then holds the body open is cancelled by the timeout
+        // instead of hanging here forever. `response.text()` consumes the same
+        // signal-bound body, so an abort rejects it (swallowed to the fallback).
+        let responseBody = response.error || '';
+        if (response.text) {
+          responseBody = await response.text().catch(() => response.error || '');
+        }
+
         // The timeout path may already own this run (an abort surfaces here as
-        // a rejected fetch) — if so it has finalized as a TIMEOUT; don't
-        // double-complete or reclassify.
+        // a rejected fetch, or the read above was aborted) — if so it has
+        // finalized as a TIMEOUT; don't double-complete or reclassify.
         if (!markSettled()) return runId;
         activeRuns.delete(runId);
         const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
         metadata.endTime = new Date().toISOString();
         metadata.duration = Date.now() - startTime;
         metadata.success = false;
-
-        let responseBody = response.error || '';
-        if (response.text) {
-          responseBody = await response.text().catch(() => response.error || '');
-        }
 
         const errorAnalysis = analyzeHttpError({
           status: response.status || 0,
@@ -735,13 +740,17 @@ export function createRunnerService(config = {}) {
           safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
         } catch (writeErr) {
           console.error(`❌ Run ${runId} success finalize error: ${writeErr.message}`);
-          const failMetadata = {
-            endTime: new Date().toISOString(),
-            duration: Date.now() - startTime,
-            success: false,
-            error: `Run finalization failed: ${writeErr.message}`,
-            outputSize: Buffer.byteLength(output),
-          };
+          // Build the failure from the stored record so runId/provider/model/
+          // workspace survive, and best-effort persist it so run history is
+          // terminal rather than stuck at `success: null`.
+          const failMetadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
+          failMetadata.endTime = new Date().toISOString();
+          failMetadata.duration = Date.now() - startTime;
+          failMetadata.success = false;
+          failMetadata.error = `Run finalization failed: ${writeErr.message}`;
+          failMetadata.errorCategory = ERROR_CATEGORIES.UNKNOWN;
+          failMetadata.outputSize = Buffer.byteLength(output);
+          await atomicWrite(metadataPath, failMetadata).catch(() => {});
           safeSettle(() => hooks.onRunFailed?.(failMetadata, failMetadata.error, output), `Run ${runId} onRunFailed hook`);
           safeSettle(() => onComplete?.(failMetadata), `Run ${runId} onComplete`);
         }

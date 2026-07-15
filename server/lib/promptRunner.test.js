@@ -593,17 +593,20 @@ describe('promptRunner — TUI provider routing', () => {
 });
 
 // =============================================================================
-// API timeout enforcement — the toolkit's executeApiRun has no internal
-// timer, so the central handler races a setTimeout against onComplete.
-// Verify that a stuck API run rejects with the timeout error AND that
-// stopRun is invoked for best-effort cancellation. Regression guard for
-// the round-2 review finding that API callers were hanging indefinitely.
+// API timeout enforcement — executeApiRun now owns the primary wall-clock
+// timeout (it aborts + finalizes as TIMEOUT and fires onComplete). promptRunner
+// keeps a SECONDARY backstop timer, delayed past the runner's deadline by
+// API_TIMEOUT_BACKSTOP_GRACE_MS, purely for the pathological case where the
+// runner (here a mock) neither throws nor ever calls onComplete. Verify that a
+// stuck API run still rejects with the timeout error AND invokes stopRun.
+// Regression guard for the round-2 review finding that API callers hung.
 // =============================================================================
 
 describe('promptRunner — API timeout enforcement', () => {
-  it('rejects with timeout error when executeApiRun never completes and calls stopRun', async () => {
+  it('backstop rejects with timeout error when executeApiRun never completes and calls stopRun', async () => {
     vi.useFakeTimers();
-    // executeApiRun hangs — never invokes onComplete or onData.
+    // executeApiRun hangs — never invokes onComplete or onData (as a mock it
+    // has no internal timer, so only promptRunner's backstop can fire).
     runner.executeApiRun.mockImplementation(() => new Promise(() => {}));
 
     // Kick off the call and attach the rejection assertion BEFORE advancing
@@ -616,10 +619,13 @@ describe('promptRunner — API timeout enforcement', () => {
     });
     const assertion = expect(promise).rejects.toThrow(/API execution timed out after 5000ms/);
 
-    await vi.advanceTimersByTimeAsync(6000);
+    // Backstop fires at timeout + grace (5000 + 2000) — advance past it.
+    await vi.advanceTimersByTimeAsync(8000);
     await assertion;
 
     expect(runner.stopRun).toHaveBeenCalledWith('run-xyz');
+    // The runner's effective timeout is threaded through for its own internal timer.
+    expect(runner.executeApiRun).toHaveBeenCalledWith(expect.objectContaining({ timeout: 5000 }));
     vi.useRealTimers();
   });
 
