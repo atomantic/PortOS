@@ -8,7 +8,8 @@ vi.mock('./providers.js', () => ({
   getAllProviders: vi.fn().mockResolvedValue({ activeProvider: null, providers: [] })
 }));
 vi.mock('./claudeCodeUsage.js', () => ({
-  getClaudeCodeUsage: vi.fn()
+  getClaudeCodeUsage: vi.fn(),
+  systemTimeZone: vi.fn(() => null) // default: no machine TZ → env unchanged
 }));
 // The agy/grok adapters drive a real TUI over a PTY — mock the scrape so these
 // tests exercise the parse + fetch wiring without spawning a subprocess.
@@ -22,6 +23,7 @@ import {
 } from './providerUsage.js';
 import { getAllProviders } from './providers.js';
 import { scrapeTuiUsage } from '../lib/tuiUsageScrape.js';
+import { systemTimeZone } from './claudeCodeUsage.js';
 
 // Synthetic Antigravity `/usage` panel — invented values, redacted account, in
 // the real rendered shape. The bar percentage is percent REMAINING; a full bar
@@ -310,6 +312,25 @@ describe('TUI usage fetchers (via getProviderQuotas)', () => {
     scrapeTuiUsage.mockResolvedValueOnce('Weekly limit: 5% Next reset: Jan 1');
     await getProviderQuotas();
     expect(scrapeTuiUsage).toHaveBeenCalledWith(expect.objectContaining({ args: ['--project', 'p1'] }));
+  });
+
+  it('passes the machine timezone into the scrape env when resolved', async () => {
+    systemTimeZone.mockReturnValueOnce('America/New_York');
+    getAllProviders.mockResolvedValueOnce({ activeProvider: 'grok', providers: [{ id: 'grok-tui', enabled: true, type: 'tui', command: 'grok' }] });
+    scrapeTuiUsage.mockResolvedValueOnce('Weekly limit: 5% Next reset: Jan 1');
+    await getProviderQuotas();
+    expect(scrapeTuiUsage).toHaveBeenCalledWith(expect.objectContaining({ env: expect.objectContaining({ TZ: 'America/New_York' }) }));
+  });
+
+  it('re-scrapes (does not serve a stale cache entry) when the provider config changes', async () => {
+    getAllProviders.mockResolvedValueOnce({ activeProvider: 'agy', providers: [{ id: 'antigravity-cli', enabled: true, type: 'cli', command: 'agy', envVars: { ACCT: 'a' } }] });
+    scrapeTuiUsage.mockResolvedValueOnce(AGY_PANEL);
+    await getProviderQuotas();
+    // Same family, different account (envVars) → different cache key → fresh scrape.
+    getAllProviders.mockResolvedValueOnce({ activeProvider: 'agy', providers: [{ id: 'antigravity-cli', enabled: true, type: 'cli', command: 'agy', envVars: { ACCT: 'b' } }] });
+    scrapeTuiUsage.mockResolvedValueOnce(AGY_PANEL);
+    await getProviderQuotas();
+    expect(scrapeTuiUsage).toHaveBeenCalledTimes(2);
   });
 
   it('surfaces a supported-but-error card when a CLI provider scrape yields no parseable data', async () => {
