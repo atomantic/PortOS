@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { existsSync, lstatSync, readlinkSync } from 'fs';
+import { existsSync, lstatSync, readlinkSync, readFileSync } from 'fs';
 import { stripAnsi } from '../lib/ansiStrip.js';
 
 /**
@@ -51,10 +51,26 @@ export function zoneFromLocaltimeLink(link) {
 let cachedSystemTz;
 export function systemTimeZone() {
   if (cachedSystemTz !== undefined) return cachedSystemTz;
-  cachedSystemTz = existsSync('/etc/localtime') && lstatSync('/etc/localtime').isSymbolicLink()
-    ? zoneFromLocaltimeLink(readlinkSync('/etc/localtime'))
-    : null;
+  cachedSystemTz = resolveSystemTimeZone();
   return cachedSystemTz;
+}
+
+// Resolve the machine's IANA zone WITHOUT trusting `process.env.TZ` (which PM2
+// forces to UTC). Order: the `/etc/localtime` symlink target (macOS + most
+// Linux), then the Debian/Ubuntu `/etc/timezone` file (a plain zone name, used
+// when `/etc/localtime` is a regular-file copy rather than a symlink). Windows
+// has no equivalent file, so it stays null (best-effort — reset times fall back
+// to the child's own TZ, same as before). Pure-ish; memoized by the caller.
+function resolveSystemTimeZone() {
+  if (existsSync('/etc/localtime') && lstatSync('/etc/localtime').isSymbolicLink()) {
+    const zone = zoneFromLocaltimeLink(readlinkSync('/etc/localtime'));
+    if (zone) return zone;
+  }
+  if (existsSync('/etc/timezone')) {
+    const zone = readFileSync('/etc/timezone', 'utf-8').trim();
+    if (/^[A-Za-z]+\/[A-Za-z0-9_+\-/]+$/.test(zone)) return zone;
+  }
+  return null;
 }
 
 /**
