@@ -4,13 +4,21 @@ vi.mock('../lib/execGit.js', () => ({
   execGit: vi.fn()
 }));
 
+vi.mock('./worktreeManager.js', () => ({
+  listWorktrees: vi.fn().mockResolvedValue([])
+}));
+
 describe('getBranches', () => {
   let getBranches;
   let execGit;
+  let listWorktrees;
 
   beforeEach(async () => {
     const execGitModule = await import('../lib/execGit.js');
     execGit = execGitModule.execGit;
+    const worktreeModule = await import('./worktreeManager.js');
+    listWorktrees = worktreeModule.listWorktrees;
+    listWorktrees.mockResolvedValue([]);
     const gitModule = await import('./git.js');
     getBranches = gitModule.getBranches;
   });
@@ -131,5 +139,59 @@ describe('getBranches', () => {
     expect(featureA.current).toBe(true);
     expect(featureA.merged).toBe(false);
     expect(featureB.merged).toBe(true);
+  });
+
+  it('flags a merged branch checked out in another worktree so the UI does not count it as locally deletable', async () => {
+    // `git branch -d` refuses a branch checked out in a worktree, so
+    // deleteMergedBranches skips it — getBranches must surface that via `worktree`
+    // or the "Clean N merged" button promises deletions the server won't perform.
+    listWorktrees.mockResolvedValue([
+      { branch: 'refs/heads/feature/locked' }, // merged but checked out elsewhere
+      { branch: 'refs/heads/main' }             // the current branch's own worktree
+    ]);
+    execGit.mockImplementation((args) => {
+      if (args[0] === 'branch' && args.includes('-vv')) {
+        return Promise.resolve({
+          stdout: [
+            '*|main||',
+            ' |feature/locked|origin/feature/locked|',
+            ' |feature/free|origin/feature/free|'
+          ].join('\n'),
+          stderr: '',
+          exitCode: 0
+        });
+      }
+      if (args[0] === 'symbolic-ref') {
+        return Promise.resolve({ stdout: 'origin/main', stderr: '', exitCode: 0 });
+      }
+      if (args[0] === 'rev-parse' && args.includes('--verify')) {
+        return Promise.resolve({ stdout: 'abc123', stderr: '', exitCode: 0 });
+      }
+      if (args[0] === 'branch' && args.includes('--list')) {
+        return Promise.resolve({ stdout: '  main\n  feature/locked\n  feature/free\n', stderr: '', exitCode: 0 });
+      }
+      if (args[0] === 'branch' && args.includes('--merged')) {
+        return Promise.resolve({ stdout: 'main\nfeature/locked\nfeature/free\n', stderr: '', exitCode: 0 });
+      }
+      return Promise.resolve({ stdout: '', stderr: '', exitCode: 0 });
+    });
+
+    const branches = await getBranches('/fake/dir');
+    const locked = branches.find(b => b.name === 'feature/locked');
+    const free = branches.find(b => b.name === 'feature/free');
+    const main = branches.find(b => b.name === 'main');
+
+    // The worktree-locked branch is merged but flagged as a worktree branch,
+    // so `merged && !worktree` (the client's deletable count) excludes it.
+    expect(locked.merged).toBe(true);
+    expect(locked.worktree).toBe(true);
+
+    // A merged branch NOT in a worktree stays deletable.
+    expect(free.merged).toBe(true);
+    expect(free.worktree).toBe(false);
+
+    // The current branch is never flagged as a worktree branch even though its
+    // own worktree appears in listWorktrees (the `!b.current` guard).
+    expect(main.worktree).toBe(false);
   });
 });
