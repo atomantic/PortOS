@@ -236,19 +236,39 @@ describe('TUI usage fetchers (via getProviderQuotas)', () => {
     getAllProviders.mockResolvedValueOnce({ activeProvider: 'agy', providers: [{ id: 'antigravity-cli', enabled: true, type: 'cli', command: 'agy' }] });
     scrapeTuiUsage.mockResolvedValueOnce(AGY_PANEL);
     const [card] = await getProviderQuotas();
-    expect(scrapeTuiUsage).toHaveBeenCalledWith({ command: 'agy', slashCommand: '/usage' });
+    expect(scrapeTuiUsage).toHaveBeenCalledWith(expect.objectContaining({ command: 'agy', slashCommand: '/usage' }));
     expect(card).toMatchObject({ family: 'agy', supported: true });
     expect(card.error).toBeUndefined();
     expect(card.limits).toHaveLength(4);
   });
 
-  it('surfaces a supported-but-error card when the scrape yields no parseable data', async () => {
-    getAllProviders.mockResolvedValueOnce({ activeProvider: 'grok', providers: [{ id: 'grok', enabled: true, type: 'api', endpoint: 'https://api.x.ai/v1' }] });
+  it("drives the matched provider's configured command and envVars, not the bare binary", async () => {
+    getAllProviders.mockResolvedValueOnce({ activeProvider: 'agy', providers: [
+      { id: 'antigravity-cli', enabled: true, type: 'cli', command: '/opt/tools/agy', envVars: { AGY_TOKEN: 'x' } },
+    ] });
+    scrapeTuiUsage.mockResolvedValueOnce(AGY_PANEL);
+    await getProviderQuotas();
+    expect(scrapeTuiUsage).toHaveBeenCalledWith(expect.objectContaining({ command: '/opt/tools/agy', env: { AGY_TOKEN: 'x' } }));
+  });
+
+  it('surfaces a supported-but-error card when a CLI provider scrape yields no parseable data', async () => {
+    getAllProviders.mockResolvedValueOnce({ activeProvider: 'grok', providers: [{ id: 'grok-tui', enabled: true, type: 'tui', command: 'grok' }] });
     scrapeTuiUsage.mockResolvedValueOnce('unrecognized banner, no usage line');
     const [card] = await getProviderQuotas();
     expect(card).toMatchObject({ family: 'grok', supported: true });
     expect(card.limits).toEqual([]);
     expect(card.error).toMatch(/No quota data/);
+  });
+
+  it('does NOT scrape when only the API provider is enabled — reports it unsupported', async () => {
+    // The built-in `grok` API provider matches the family by id, but the /usage
+    // panel is a CLI/TUI surface; scraping would launch an unrelated (possibly
+    // absent) binary against a different account. Regression for that.
+    getAllProviders.mockResolvedValueOnce({ activeProvider: 'grok', providers: [{ id: 'grok', enabled: true, type: 'api', endpoint: 'https://api.x.ai/v1' }] });
+    const [card] = await getProviderQuotas();
+    expect(scrapeTuiUsage).not.toHaveBeenCalled();
+    expect(card).toMatchObject({ family: 'grok', supported: false });
+    expect(card.limits).toEqual([]);
   });
 
   it('caches a scrape and folds a bypassing refresh into a fresh call', async () => {

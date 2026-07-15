@@ -345,19 +345,40 @@ export function parseGrokUsage(text) {
 }
 
 /**
- * Build a family `fetch` fn that scrapes a TUI `/usage` panel and maps it to the
- * common quota shape (cached; `refresh` bypasses). `parse` returns `{ limits }`;
- * an empty result becomes a `supported`-but-`error` card so the UI shows a soft
- * warning rather than a blank card. `name` is the human product name spliced
- * into the note/error copy (e.g. `Antigravity CLI`).
+ * Pick the enabled provider to actually drive for a TUI scrape: a `cli`/`tui`
+ * process provider (preferring one whose command basename is the expected
+ * `binary`), never an `api` provider. The `/usage` panel is a property of the
+ * local CLI/TUI, not the OpenAI-compatible API endpoint — an install that
+ * enables only the API provider (e.g. the built-in `grok` API, matched by id)
+ * has no scrapeable surface and no `command` to spawn, so return null and let
+ * the fetcher report it unsupported rather than launching an unrelated binary.
  */
-function makeTuiUsageFetcher({ id, command, slashCommand, label, parse, name }) {
-  return ({ refresh = false } = {}) => cachedScrape(id, { refresh }, async () => {
-    const { limits } = parse(await scrapeTuiUsage({ command, slashCommand }));
-    const base = { family: id, label, supported: true, plan: null, activity: [], approximate: true, fetchedAt: new Date().toISOString() };
+function pickScrapeProvider(providers, binary) {
+  const cliTui = (providers || []).filter((p) => p?.type === 'cli' || p?.type === 'tui');
+  return cliTui.find((p) => commandBasename(p.command) === binary) || cliTui[0] || null;
+}
+
+/**
+ * Build a family `fetch` fn that scrapes a TUI `/usage` panel and maps it to the
+ * common quota shape (cached; `refresh` bypasses). It drives the matched
+ * provider's configured `command` (falling back to `binary`) and `envVars`, so
+ * an absolute-path or env-authenticated provider scrapes with the same
+ * invocation a normal run uses. `parse` returns `{ limits }`; an empty result
+ * becomes a `supported`-but-`error` card so the UI shows a soft warning rather
+ * than a blank card. `name` is the human product name spliced into the copy.
+ */
+function makeTuiUsageFetcher({ id, binary, slashCommand, label, parse, name }) {
+  return ({ refresh = false, providers = [] } = {}) => cachedScrape(id, { refresh }, async () => {
+    const base = { family: id, label, plan: null, activity: [], approximate: true, fetchedAt: new Date().toISOString() };
+    const provider = pickScrapeProvider(providers, binary);
+    if (!provider) {
+      return { ...base, supported: false, limits: [], note: `${name} usage is read from the local CLI/TUI — enable the ${name} to see quota (the API provider has no queryable usage surface).` };
+    }
+    const text = await scrapeTuiUsage({ command: provider.command || binary, slashCommand, env: provider.envVars });
+    const { limits } = parse(text);
     return limits.length
-      ? { ...base, limits, note: `Scraped from the ${name} /usage panel — local, approximate.` }
-      : { ...base, limits: [], error: `No quota data found in the ${name} /usage panel.` };
+      ? { ...base, supported: true, limits, note: `Scraped from the ${name} /usage panel — local, approximate.` }
+      : { ...base, supported: true, limits: [], error: `No quota data found in the ${name} /usage panel.` };
   });
 }
 
@@ -403,13 +424,13 @@ const FAMILIES = [
     id: 'agy',
     label: 'Antigravity',
     matches: (p) => commandBasename(p.command) === 'agy' || /antigravity/i.test(p.id || ''),
-    fetch: makeTuiUsageFetcher({ id: 'agy', command: 'agy', slashCommand: '/usage', label: 'Antigravity', parse: parseAgyUsage, name: 'Antigravity CLI' })
+    fetch: makeTuiUsageFetcher({ id: 'agy', binary: 'agy', slashCommand: '/usage', label: 'Antigravity', parse: parseAgyUsage, name: 'Antigravity CLI' })
   },
   {
     id: 'grok',
     label: 'Grok',
     matches: (p) => isGrokCommand(p.command) || /grok/i.test(p.id || ''),
-    fetch: makeTuiUsageFetcher({ id: 'grok', command: 'grok', slashCommand: '/usage show', label: 'Grok', parse: parseGrokUsage, name: 'Grok Build CLI' })
+    fetch: makeTuiUsageFetcher({ id: 'grok', binary: 'grok', slashCommand: '/usage show', label: 'Grok', parse: parseGrokUsage, name: 'Grok Build CLI' })
   }
 ];
 
@@ -425,8 +446,8 @@ export function resolveEnabledFamilies(providers) {
   return FAMILIES.filter((family) => enabled.some((p) => family.matches(p)));
 }
 
-const fetchFamilyQuota = (family, { refresh }) =>
-  Promise.resolve(family.fetch({ refresh })).catch((err) => ({
+const fetchFamilyQuota = (family, { refresh, providers }) =>
+  Promise.resolve(family.fetch({ refresh, providers })).catch((err) => ({
     family: family.id,
     label: family.label,
     supported: true,
@@ -440,11 +461,15 @@ const fetchFamilyQuota = (family, { refresh }) =>
 /**
  * Quota status for every enabled provider family. `refresh: true` bypasses
  * the claude adapter's 60s cache. Never rejects — per-family failures surface
- * as `error` entries.
+ * as `error` entries. Each family fetch receives the enabled providers that
+ * matched it, so TUI-scrape adapters drive the actual configured provider
+ * (command + envVars), not a hardcoded binary.
  */
 export async function getProviderQuotas({ refresh = false } = {}) {
   const result = await getAllProviders();
   const providers = Array.isArray(result) ? result : (result?.providers || []);
+  const enabled = providers.filter((p) => p?.enabled && p.ollamaBacked !== true);
   const families = resolveEnabledFamilies(providers);
-  return Promise.all(families.map((family) => fetchFamilyQuota(family, { refresh })));
+  return Promise.all(families.map((family) =>
+    fetchFamilyQuota(family, { refresh, providers: enabled.filter((p) => family.matches(p)) })));
 }
