@@ -214,7 +214,8 @@ async function readIssues({ filer, forgeCli, cwd, jira, config }) {
     const planContent = await tryReadFile(join(cwd, 'PLAN.md'))
     // extractPlanSlugs preserves each tag's checkbox state ({ slug, state }): a
     // `- [x]` item reads 'closed' (with no closedAt) so the outcome loop can
-    // reconcile it and it falls out of the dedup window, while `- [ ]` stays open.
+    // reconcile it, and it stays PERMANENTLY within the dedup window — a completed
+    // plan item never needs re-proposal (#2620) — while `- [ ]` stays open.
     existingIssues = extractPlanSlugs(planContent || '')
   }
   return { openIssues, existingIssues, trackerReadFailed }
@@ -338,8 +339,9 @@ async function fileProposal({ filer, forgeCli, cwd, app, proposal, jira }) {
   if (filer === 'plan' && cwd) {
     const res = await appendProposalToPlan({ repoPath: cwd, appName: app.name, slug: proposal.slug, title: proposal.title, body: proposal.body })
     // Propagate `duplicate`: appendProposalToPlan dedups on the raw `[lil-<slug>]`
-    // tag regardless of checkbox, so a CHECKED item the reasoner re-proposed (now
-    // out of the dedup window, #2435) writes nothing and returns duplicate. The
+    // tag regardless of checkbox. Since #2620 a CHECKED item stays within the
+    // dedup window, so a re-proposal normally never reaches here; should the
+    // guard ever miss, this backstop writes nothing and returns duplicate. The
     // caller must NOT treat that as a fresh file — see processTaskOutput.
     return { success: res.success, number: null, duplicate: res.duplicate }
   }
@@ -447,10 +449,12 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
       const filed = await fileProposal({ filer, forgeCli, cwd, app, proposal, jira })
       if (filed.success && filed.duplicate) {
         // The tracker already carries this slug's tag (a checked PLAN item the
-        // reasoner re-proposed): appendProposalToPlan wrote nothing. Report a
-        // duplicate and leave any recorded outcome untouched — reporting `filed`
-        // here would clear the merged outcome and let the still-checked item
-        // reconcile as a false fresh merge on the next run (#2435).
+        // reasoner re-proposed — normally caught by the dedup guard since #2620,
+        // so this is the guard-miss backstop): appendProposalToPlan wrote
+        // nothing. Report a duplicate and leave any recorded outcome untouched —
+        // reporting `filed` here would clear the merged outcome and let the
+        // still-checked item reconcile as a false fresh merge on the next run
+        // (#2435).
         filedAction = 'duplicate'
         reason = 'duplicate'
         console.log(`♻️ Layered Intelligence: ${app.name} proposal "${proposal.slug}" already tracked in PLAN.md — suppressed`)
