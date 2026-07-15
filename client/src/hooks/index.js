@@ -131,6 +131,8 @@ export * from './useAppOverrideActions.js';
 export * from './useCanonPatch.js';
 export * from './useCityData.js';
 export * from './useCityPlayback.js';
+export { default as useCityViewport } from './useCityViewport.js';
+export * from './useCityViewport.js';
 export * from './useDeathClock.js';
 export * from './useGoalDetail.js';
 export * from './usePostSession.js';

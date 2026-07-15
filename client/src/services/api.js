@@ -42,6 +42,7 @@ export * from './apiTimeline.js';
 export * from './apiBrain.js';
 export * from './apiNotes.js';
 export * from './apiDigitalTwin.js';
+export * from './apiModelPersonality.js';
 export * from './apiMeatspace.js';
 export * from './apiMortalLoom.js';
 export * from './apiOpenClaw.js';

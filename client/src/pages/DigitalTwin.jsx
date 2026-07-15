@@ -14,6 +14,7 @@ import { TABS, getHealthColor, getHealthLabel } from '../components/digital-twin
 const OverviewTab = lazy(() => import('../components/digital-twin/tabs/OverviewTab'));
 const DocumentsTab = lazy(() => import('../components/digital-twin/tabs/DocumentsTab'));
 const TestTab = lazy(() => import('../components/digital-twin/tabs/TestTab'));
+const PersonalityTab = lazy(() => import('../components/digital-twin/tabs/PersonalityTab'));
 const EnrichTab = lazy(() => import('../components/digital-twin/tabs/EnrichTab'));
 const TasteTab = lazy(() => import('../components/digital-twin/tabs/TasteTab'));
 const AccountsTab = lazy(() => import('../components/digital-twin/tabs/AccountsTab'));
@@ -63,6 +64,8 @@ export default function DigitalTwin() {
         return <DocumentsTab onRefresh={refetch} />;
       case 'test':
         return <TestTab onRefresh={refetch} />;
+      case 'personality':
+        return <PersonalityTab />;
       case 'enrich':
         return <EnrichTab onRefresh={refetch} />;
       case 'taste':

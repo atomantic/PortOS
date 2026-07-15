@@ -127,6 +127,59 @@ export function computeWindowedStats(recentOutcomes, {
   return { windowedCompleted, windowedSucceeded, windowedFailed, windowedSuccessRate };
 }
 
+// Minimum windowed outcomes before the windowed rate is trusted over the
+// lifetime rate (issue #2617). Below this bar the window is too thin to read a
+// trend from, so decisions keep today's lifetime behavior (cold-start parity).
+export const EFFECTIVE_RATE_MIN_WINDOW_SAMPLES = 5;
+
+/**
+ * Effective success rate for DECISION paths (issue #2617). Pure / no I/O.
+ *
+ * Lifetime `successRate` never decays, so a burst of since-fixed failures
+ * permanently depresses it — cooldown/skip/approval decisions built on it keep
+ * punishing a task type long after it recovered. This returns the recency-
+ * windowed rate (`computeWindowedStats` over the bucket's `recentOutcomes`
+ * ring) whenever the window holds at least `minWindowSamples` outcomes, and
+ * falls back to the lifetime rate otherwise — so a type with a thin/empty
+ * window behaves exactly as before, while a type with a healthy recent record
+ * recovers as soon as it starts succeeding again.
+ *
+ * Sentinel discipline: `successRate` is `null` (never a fabricated 0) when the
+ * fallback lifetime rate is itself absent. `source` names which rate was used
+ * (`'windowed'` | `'lifetime'`) so decisions can surface it in reasons/logs.
+ *
+ * @param {Object|null|undefined} metrics - a `byTaskType` bucket
+ * @param {{ minWindowSamples?:number, maxCount?:number, maxAgeMs?:number, now?:number }} [opts]
+ *   - extra keys are forwarded to `computeWindowedStats` (window bounds/clock seam)
+ * @returns {{ successRate:number|null, source:'windowed'|'lifetime', windowedCompleted:number }}
+ */
+export function computeEffectiveSuccessRate(metrics, opts = {}) {
+  const { minWindowSamples = EFFECTIVE_RATE_MIN_WINDOW_SAMPLES } = opts;
+  const { windowedCompleted, windowedSuccessRate } = computeWindowedStats(metrics?.recentOutcomes, opts);
+  if (windowedSuccessRate !== null && windowedCompleted >= minWindowSamples) {
+    return { successRate: windowedSuccessRate, source: 'windowed', windowedCompleted };
+  }
+  return { successRate: metrics?.successRate ?? null, source: 'lifetime', windowedCompleted };
+}
+
+/**
+ * Shared skip predicate (issue #2617): a task type is a skip candidate when it
+ * has ≥5 lifetime completions AND its EFFECTIVE success rate is <30%. Pure.
+ *
+ * This is THE definition of "skipped" — used by the scheduling decision
+ * (`getAdaptiveCooldownMultiplier`'s skip branch mirrors it), the skip list
+ * (`getSkippedTaskTypes`), the rehabilitation/status views, AND the health
+ * summaries (`getPerformanceSummary`, `getLearningSummary`). Keeping every
+ * consumer on one predicate is what stops a dashboard/alert surface from
+ * claiming a type is skipped after the actual decision path stopped skipping
+ * it (or vice versa).
+ */
+export function isSkipCandidate(metrics) {
+  if (!metrics || (metrics.completed ?? 0) < 5) return false;
+  const { successRate } = computeEffectiveSuccessRate(metrics);
+  return successRate !== null && successRate < 30;
+}
+
 /**
  * Default learning data structure
  */

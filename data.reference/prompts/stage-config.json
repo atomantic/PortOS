@@ -275,6 +275,20 @@
       "returnsJson": true,
       "variables": []
     },
+    "model-personality-profile": {
+      "name": "Model Personality Self-Profile",
+      "description": "Blind single-prompt introspective self-evaluation returning a structured personality trait map",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
+    "model-personality-alignment-scorer": {
+      "name": "Model Personality Alignment Scorer",
+      "description": "Score how well a model's self-reported personality aligns with the digital twin's stored trait profile",
+      "model": "default",
+      "returnsJson": true,
+      "variables": []
+    },
     "pipeline-idea-expansion": {
       "name": "Pipeline — Idea / Beat Sheet",
       "description": "Turn a rough seed idea for one issue or episode into a tight beat sheet with logline, theme, beats, setting, and any new characters. Spine for prose, comic script, TV script, and storyboard stages.",
