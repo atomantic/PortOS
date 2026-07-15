@@ -84,6 +84,14 @@ describe.skipIf(!dbReady)('pipeline issues DB adapter round-trip', () => {
     expect((await db.listIds()).sort()).toEqual(['iss-dead', 'iss-ghost', 'iss-live']);
   });
 
+  it('listIds({ includeDeleted: false }) excludes tombstones via the mirror column (#2540)', async () => {
+    await db.writeRaw('iss-live', I('iss-live'));
+    await db.writeRaw('iss-ghost', I('iss-ghost', { ephemeral: true }));
+    await db.writeRaw('iss-dead', I('iss-dead', { deleted: true, deletedAt: '2026-02-02T00:00:00.000Z' }));
+    // Ephemeral rows are live (deleted = false) so they stay in the sweep.
+    expect((await db.listIds({ includeDeleted: false })).sort()).toEqual(['iss-ghost', 'iss-live']);
+  });
+
   it('tolerates a malformed timestamp without throwing', async () => {
     await db.writeRaw('iss-bad', I('iss-bad', { updatedAt: 'not-a-date', createdAt: 'nope' }));
     const col = (await query(`SELECT created_at, updated_at FROM pipeline_issues WHERE id = 'iss-bad'`)).rows[0];

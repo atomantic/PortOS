@@ -50,7 +50,17 @@ function makeFileBackend(dir, sanitizeRecord) {
   return {
     name: 'file',
     readOne: (id) => cs.loadOne(id),
-    listIds: () => cs.listIds(),
+    // Default returns every id (incl tombstones). `includeDeleted: false` has no
+    // per-record `deleted` column to filter on in the file backend, so it loads
+    // raw records to drop tombstones — same "filter the full set in JS" tradeoff
+    // as `listRawBySeries` below; the file backend is dev/test-only, and the PG
+    // backend (production) filters via the mirrored column with no JSONB load.
+    listIds: async ({ includeDeleted = true } = {}) => {
+      const ids = await cs.listIds();
+      if (includeDeleted) return ids;
+      const records = await Promise.all(ids.map((id) => cs.loadOneRaw(id)));
+      return ids.filter((_, i) => records[i] != null && records[i].deleted !== true);
+    },
     listRaw: async () => {
       const ids = await cs.listIds();
       const records = await Promise.all(ids.map((id) => cs.loadOneRaw(id)));
@@ -128,7 +138,7 @@ function createFacade({ dir, sanitizeRecord }) {
     type: 'pipelineIssues',
     getBackendName,
 
-    listIds: async () => (await getBackend()).listIds(),
+    listIds: async (opts) => (await getBackend()).listIds(opts),
     loadOne: async (id) => {
       if (typeof id !== 'string' || !ID_PATTERN.test(id)) return null;
       return (await getBackend()).readOne(id);

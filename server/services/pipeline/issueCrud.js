@@ -63,11 +63,15 @@ export async function listIssues({
  * the complete id set (e.g. the conflict-journal orphan-base-hash sweep, which
  * would otherwise prune a live issue's base hash and silently disable conflict
  * detection for it) use this. Returns ids only — no projection, no history.
+ *
+ * Sources from the store's `SELECT id` projection (#2540) rather than
+ * `readState()` → `loadAll()`, which would pull every issue's full `data` JSONB
+ * (up to ~12MB of stage runHistory each) into memory only to read the ids. The
+ * PG backend filters tombstones via the mirrored `deleted` column, so the
+ * whole-record load is avoided entirely for the default live-membership sweep.
  */
 export async function listIssueIds({ includeDeleted = false } = {}) {
-  const { issues } = await readState();
-  const live = includeDeleted ? issues : issues.filter((i) => !i.deleted);
-  return live.map((i) => i.id);
+  return store().listIds({ includeDeleted });
 }
 
 /**

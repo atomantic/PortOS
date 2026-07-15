@@ -76,7 +76,7 @@ vi.mock('../lib/timezone.js', () => ({
 
 import { readdir, unlink } from 'fs/promises';
 import { tryReadFile as readFile, atomicWrite } from '../lib/fileUtils.js';
-import { getMessages, getMessage, syncAccount, deleteCache, getSyncStatus, refreshMessage, updateMessageEvaluations, logMessageTouchpoints } from './messageSync.js';
+import { getMessages, getMessage, syncAccount, deleteCache, getSyncStatus, refreshMessage, updateMessageEvaluations, logMessageTouchpoints, aggregatePagedMessages } from './messageSync.js';
 import { autoLogTouchpoints } from './tribe.js';
 import { getAccount, updateSyncStatus } from './messageAccounts.js';
 import { syncGmail } from './messageGmailSync.js';
@@ -249,6 +249,79 @@ describe('getMessages', () => {
     const result = await getMessages({});
     expect(result.messages).toEqual([]);
     expect(result.total).toBe(0);
+  });
+});
+
+// ─── aggregatePagedMessages (bounded multi-account merge, #2540) ───
+
+describe('aggregatePagedMessages', () => {
+  // Build N accounts each with `perAccount` dated messages (newest = highest index).
+  const buildCaches = (n, perAccount) =>
+    Array.from({ length: n }, (_, a) => ({
+      id: `acct-${a}`,
+      cache: {
+        messages: Array.from({ length: perAccount }, (_, i) => ({
+          id: `a${a}-m${i}`,
+          subject: `Acct ${a} Msg ${i}`,
+          date: `2026-01-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+        })),
+      },
+    }));
+
+  it('returns the global date-sorted page and the exact total across accounts', () => {
+    const caches = buildCaches(3, 5); // 15 messages total
+    const { messages, total } = aggregatePagedMessages(caches, { limit: 4, offset: 0 });
+    expect(total).toBe(15);
+    expect(messages).toHaveLength(4);
+    // Newest date is m4 (2026-01-05) present in all 3 accounts → top of the page.
+    expect(messages[0].date).toBe('2026-01-05T00:00:00Z');
+    // Sorted strictly newest-first.
+    const dates = messages.map((m) => m.date);
+    expect([...dates].sort().reverse()).toEqual(dates);
+  });
+
+  it('matches a full unbounded aggregate for an across-account page (offset+limit)', () => {
+    const caches = buildCaches(4, 8);
+    // Reference: spread everything, global sort, slice — the pre-#2540 behavior.
+    const all = caches.flatMap(({ id, cache }) =>
+      cache.messages.map((m) => ({ ...m, accountId: m.accountId || id })));
+    all.sort((a, b) => new Date(b.date) - new Date(a.date));
+    const ref = all.slice(3, 3 + 5).map((m) => m.id);
+    const { messages, total } = aggregatePagedMessages(caches, { limit: 5, offset: 3 });
+    expect(total).toBe(32);
+    expect(messages.map((m) => m.id)).toEqual(ref);
+  });
+
+  it('stamps accountId from the owning cache when the message lacks one', () => {
+    const caches = [{ id: 'acct-x', cache: { messages: [{ id: 'm1', date: '2026-01-01' }] } }];
+    const { messages } = aggregatePagedMessages(caches, { limit: 10, offset: 0 });
+    expect(messages[0].accountId).toBe('acct-x');
+  });
+
+  it('preserves a message-level accountId over the cache id', () => {
+    const caches = [{ id: 'acct-x', cache: { messages: [{ id: 'm1', date: '2026-01-01', accountId: 'orig' }] } }];
+    const { messages } = aggregatePagedMessages(caches, { limit: 10, offset: 0 });
+    expect(messages[0].accountId).toBe('orig');
+  });
+
+  it('applies the search filter and reports the filtered total', () => {
+    const caches = [
+      { id: 'a', cache: { messages: [
+        { id: 'm1', subject: 'Invoice', date: '2026-01-02' },
+        { id: 'm2', subject: 'Lunch', date: '2026-01-01' },
+      ] } },
+      { id: 'b', cache: { messages: [{ id: 'm3', subject: 'Invoice due', date: '2026-01-03' }] } },
+    ];
+    const { messages, total } = aggregatePagedMessages(caches, { search: 'invoice', limit: 10, offset: 0 });
+    expect(total).toBe(2);
+    expect(messages.map((m) => m.id)).toEqual(['m3', 'm1']);
+  });
+
+  it('returns total but no messages when limit is 0', () => {
+    const caches = buildCaches(2, 3);
+    const { messages, total } = aggregatePagedMessages(caches, { limit: 0, offset: 0 });
+    expect(total).toBe(6);
+    expect(messages).toEqual([]);
   });
 });
 

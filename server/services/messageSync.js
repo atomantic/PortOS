@@ -29,6 +29,45 @@ function filterBySearch(messages, search) {
   return genericFilterBySearch(messages, search, MESSAGE_SEARCH_FIELDS);
 }
 
+/**
+ * Merge per-account caches into ONE date-sorted page (#2540) without spreading
+ * every message across every account into a single giant array first.
+ *
+ * A message can only appear in the global top `(offset + limit)` if it is also
+ * in the top `(offset + limit)` of its OWN account (there can't be more than
+ * `offset+limit` messages globally ahead of it without more than that many
+ * ahead of it within its own account). So each account contributes at most
+ * `offset+limit` heads to the cross-account merge — bounding the spread + sort
+ * to `accounts × (offset+limit)` instead of the full multi-account total. The
+ * per-account filter still walks every message (needed for the exact `total`),
+ * but no whole-inbox intermediate array is built or globally sorted.
+ *
+ * Pure helper (no I/O) so the paging math is unit-testable; the caller loads the
+ * caches.
+ */
+export function aggregatePagedMessages(caches, { search, limit = 50, offset = 0 } = {}) {
+  const safeOffset = Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0;
+  const safeLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 50;
+  const perAccountCap = safeOffset + safeLimit;
+  const byDateDesc = (a, b) => safeDate(b.date) - safeDate(a.date);
+  let total = 0;
+  const heads = [];
+  for (const { id, cache } of caches) {
+    const filtered = filterBySearch(cache.messages, search);
+    total += filtered.length;
+    if (perAccountCap === 0) continue;
+    const top = [...filtered]
+      .sort(byDateDesc)
+      .slice(0, perAccountCap)
+      .map((m) => ({ ...m, accountId: m.accountId || id }));
+    heads.push(...top);
+  }
+  return {
+    messages: heads.sort(byDateDesc).slice(safeOffset, safeOffset + safeLimit),
+    total,
+  };
+}
+
 async function loadCache(accountId) {
   if (!UUID_RE.test(accountId)) throw new Error(`Invalid accountId: ${accountId}`);
   await ensureDir(CACHE_DIR);
@@ -71,16 +110,9 @@ export async function getMessages(options = {}) {
   const caches = await Promise.all(
     accountIds.map(async id => ({ id, cache: await loadCache(id) }))
   );
-  let allMessages = [];
-  for (const { id, cache } of caches) {
-    allMessages.push(...cache.messages.map(m => ({ ...m, accountId: m.accountId || id })));
-  }
-  allMessages = filterBySearch(allMessages, search);
-  allMessages.sort((a, b) => safeDate(b.date) - safeDate(a.date));
-  return {
-    messages: allMessages.slice(offset, offset + limit),
-    total: allMessages.length
-  };
+  // Bound the cross-account merge to `accounts × (offset+limit)` heads instead
+  // of spreading + globally sorting every message across every account (#2540).
+  return aggregatePagedMessages(caches, { search, limit, offset });
 }
 
 export async function deleteCache(accountId) {
