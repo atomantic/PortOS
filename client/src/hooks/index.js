@@ -96,6 +96,7 @@ export * from './useCatalogTypes.jsx';
 
 // === Sockets & lifecycle ===
 export * from './usePrevious.js';
+export * from './useShellSession.js';
 export * from './useSocket.js';
 export * from './useTimeTick.js';
 export * from './useUpdateChecker.jsx';
