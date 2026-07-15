@@ -187,7 +187,7 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
   }
 
   // Reject duplicate: same first-line description AND same target app already
-  // pending or in_progress. The `metadata.app` scope matters — the same
+  // pending, in_progress, or blocked. The `metadata.app` scope matters — the same
   // description against two different apps is two different pieces of work
   // (e.g. "fix the failing test" in PortOS vs in BookLoom), and collapsing
   // them silently drops the second dispatch.
@@ -212,14 +212,20 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
   // improvement-check timer firing close together) each add an identical
   // `[Improvement: PortOS] …` task, producing the overlapping duplicate runs.
   const targetApp = taskData.app ?? taskData.metadata?.app ?? null;
+  // Blocked tasks count as duplicates too (#2614): a task blocked by repeated
+  // failures (max-retries, max-spawns, provider-config, …) still occupies its
+  // slot — the retry path is unblocking the existing task, not minting a new
+  // identical one. Before this, a persistently-failing scheduled type piled up
+  // one blocked duplicate per cadence tick, forever (nothing reaps blocked
+  // tasks automatically).
   const duplicate = tasks.find(t =>
     t.id !== ignoreTaskId &&
-    (t.status === 'pending' || t.status === 'in_progress') &&
+    (t.status === 'pending' || t.status === 'in_progress' || t.status === 'blocked') &&
     firstLine(t.description).toLowerCase() === normalizedDesc &&
     (t.metadata?.app || null) === targetApp
   );
   if (duplicate) {
-    console.log(`⚠️ Duplicate task rejected: "${normalizedDesc.substring(0, 60)}" matches ${duplicate.id}`);
+    console.log(`⚠️ Duplicate task rejected: "${normalizedDesc.substring(0, 60)}" matches ${duplicate.id}${duplicate.status === 'blocked' ? ` (blocked: ${duplicate.metadata?.blockedCategory || 'unknown'})` : ''}`);
     return { ...duplicate, duplicate: true };
   }
 

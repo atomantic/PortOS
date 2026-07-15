@@ -256,6 +256,37 @@ describe('cosTaskStore.addTask', () => {
     expect(tasks.filter(t => firstLine(t.description) === 'shared raw')).toHaveLength(2);
   });
 
+  it('rejects a duplicate of a failure-blocked task (#2614)', async () => {
+    // A task blocked by repeated failures still occupies its slot — without
+    // this, a persistently-failing scheduled type minted one identical blocked
+    // duplicate per cadence tick, forever.
+    const first = await addTask({ description: 'keeps failing', app: 'portos', id: 'sys-fail' }, 'internal');
+    await updateTask(first.id, { status: 'blocked', metadata: { blockedCategory: 'max-retries' } }, 'internal');
+    const second = await addTask({ description: 'keeps failing', app: 'portos' }, 'internal');
+    expect(second.duplicate).toBe(true);
+    expect(second.id).toBe(first.id);
+    const { tasks } = await getCosTasks();
+    expect(tasks.filter(t => firstLine(t.description) === 'keeps failing')).toHaveLength(1);
+  });
+
+  it('rejects a duplicate of a user-terminated blocked task (#2614)', async () => {
+    const first = await addTask({ description: 'killed on purpose', app: 'portos', id: 'sys-killed' }, 'internal');
+    await updateTask(first.id, { status: 'blocked', metadata: { blockedCategory: 'user-terminated' } }, 'internal');
+    const second = await addTask({ description: 'killed on purpose', app: 'portos' }, 'internal');
+    expect(second.duplicate).toBe(true);
+  });
+
+  it('resolving a blocked task re-opens the slot for an identical task (#2614)', async () => {
+    const first = await addTask({ description: 'retry me', app: 'portos', id: 'sys-retry' }, 'internal');
+    await updateTask(first.id, { status: 'blocked', metadata: { blockedCategory: 'max-retries' } }, 'internal');
+    // Completed no longer occupies the slot...
+    await updateTask(first.id, { status: 'completed' }, 'internal');
+    const second = await addTask({ description: 'retry me', app: 'portos', id: 'sys-retry-2' }, 'internal');
+    expect(second.duplicate).toBeUndefined();
+    const { tasks } = await getCosTasks();
+    expect(tasks.filter(t => firstLine(t.description) === 'retry me')).toHaveLength(2);
+  });
+
   it('ignoreTaskId excludes one in-flight task from the dedup scan (perpetual drain-on-completion)', async () => {
     // The just-completed perpetual task is still in_progress on disk when the
     // refill re-queues an identical first-line for the same app. Passing its id
