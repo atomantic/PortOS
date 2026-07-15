@@ -656,7 +656,7 @@ Approving and applying the fix lets the original task \`${originalTask.id}\` be 
   emitLog('info', `Created investigation task ${investigationTask.id} for failed agent ${agentId}`, {
     agentId,
     taskId: investigationTask.id,
-    errorCategory: errorAnalysis.category
+    errorCategory: category
   });
 
   cosEvents.emit('investigation:created', {
