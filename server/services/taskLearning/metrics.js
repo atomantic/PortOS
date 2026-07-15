@@ -62,6 +62,28 @@ export function recordEnvironmentalFailure(data, { category, taskType } = {}) {
 }
 
 /**
+ * Remove a task type's contribution from every environmental bucket (issue
+ * #2618 reset parity): decrement each bucket's count by the type's share,
+ * delete the per-type entry, and drop a bucket left with nothing — so a reset
+ * type's old outages stop appearing in insights and error-share denominators.
+ * Pure — mutates `data`. Returns the number of events removed.
+ */
+export function purgeEnvironmentalFailuresForType(data, taskType) {
+  let removed = 0;
+  for (const [category, bucket] of Object.entries(data.environmentalFailures || {})) {
+    const typeCount = bucket.taskTypes?.[taskType] || 0;
+    if (typeCount === 0) continue;
+    removed += typeCount;
+    bucket.count = Math.max(0, (Number(bucket.count) || 0) - typeCount);
+    delete bucket.taskTypes[taskType];
+    if (bucket.count <= 0 && Object.keys(bucket.taskTypes || {}).length === 0) {
+      delete data.environmentalFailures[category];
+    }
+  }
+  return removed;
+}
+
+/**
  * Milliseconds between two ISO timestamps. Pure. Returns null (not 0) when
  * either bound is missing/unparseable so an absent timestamp never masquerades
  * as a zero-latency measurement (repo "sentinel, don't conflate absent" rule).
@@ -526,8 +548,18 @@ export async function resetTaskTypeLearning(taskType) {
   return withLock(async () => {
   const data = await loadLearningData();
 
+  // Purge this type from the environmental buckets FIRST (#2618): an
+  // outage-only type has no byTaskType bucket, so the purge must not sit
+  // behind the task-type-not-found early return below.
+  const environmentalRemoved = purgeEnvironmentalFailuresForType(data, taskType);
+
   const metrics = data.byTaskType[taskType];
   if (!metrics) {
+    if (environmentalRemoved > 0) {
+      await saveLearningData(data);
+      emitLog('info', `Reset environmental-only learning data for ${taskType} (${environmentalRemoved} outage events purged)`, { taskType, environmentalRemoved }, '📚 TaskLearning');
+      return { reset: true, reason: 'environmental-only', taskType, environmentalRemoved };
+    }
     return { reset: false, reason: 'task-type-not-found', taskType };
   }
 

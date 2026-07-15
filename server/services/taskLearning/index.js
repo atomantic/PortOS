@@ -48,6 +48,7 @@ export {
   computeLatencySplit,
   recordFailureSignature,
   recordEnvironmentalFailure,
+  purgeEnvironmentalFailuresForType,
   ENVIRONMENTAL_ERROR_CATEGORIES,
   resetTaskTypeLearning,
   recalculateModelTierMetrics,

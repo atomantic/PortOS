@@ -110,4 +110,29 @@ describe('resetTaskTypeLearning — failure-signature + correlation purge (#2619
     expect(result.reset).toBe(true);
     expect(store.saved.byTaskType['self-improve:x']).toBeUndefined();
   });
+
+  it('purges the type from environmental buckets, dropping emptied ones (#2618)', async () => {
+    const data = fixture();
+    data.environmentalFailures = {
+      'rate-limit': { count: 3, lastOccurred: '2026-07-01T00:00:00Z', taskTypes: { 'self-improve:x': 2, 'self-improve:y': 1 } },
+      'auth-error': { count: 1, lastOccurred: '2026-07-01T00:00:00Z', taskTypes: { 'self-improve:x': 1 } }
+    };
+    vi.mocked(loadLearningData).mockResolvedValue(data);
+    const result = await resetTaskTypeLearning('self-improve:x');
+    expect(result.reset).toBe(true);
+    // rate-limit keeps the other type's share; auth-error emptied → dropped.
+    expect(store.saved.environmentalFailures['rate-limit']).toEqual({ count: 1, lastOccurred: '2026-07-01T00:00:00Z', taskTypes: { 'self-improve:y': 1 } });
+    expect(store.saved.environmentalFailures['auth-error']).toBeUndefined();
+  });
+
+  it('resets an environmental-only type (no byTaskType bucket) instead of returning not-found (#2618)', async () => {
+    const data = fixture();
+    data.environmentalFailures = {
+      'usage-limit': { count: 2, lastOccurred: '2026-07-01T00:00:00Z', taskTypes: { 'outage-only-type': 2 } }
+    };
+    vi.mocked(loadLearningData).mockResolvedValue(data);
+    const result = await resetTaskTypeLearning('outage-only-type');
+    expect(result).toMatchObject({ reset: true, reason: 'environmental-only', environmentalRemoved: 2 });
+    expect(store.saved.environmentalFailures['usage-limit']).toBeUndefined();
+  });
 });
