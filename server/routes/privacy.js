@@ -10,7 +10,7 @@
 
 import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest, isPaginationRequested, paginateArray } from '../lib/validation.js';
 import {
   privacyVaultCreateSchema,
   privacyVaultUpdateSchema,
@@ -88,7 +88,9 @@ router.get('/status', asyncHandler(async (_req, res) => {
 
 router.get('/vault', asyncHandler(async (req, res) => {
   const { type } = validateRequest(privacyVaultListQuerySchema, req.query);
-  res.json(await listVaultRecords({ type }));
+  const records = await listVaultRecords({ type });
+  if (!isPaginationRequested(req.query)) return res.json(records);
+  res.json(paginateArray(records, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.post('/vault', asyncHandler(async (req, res) => {
@@ -122,8 +124,10 @@ router.post('/vault/:id/reveal', asyncHandler(async (req, res) => {
 // ─── Trusted Organizations registry (issue #2141) ──────────────────────────
 
 router.get('/orgs', asyncHandler(async (req, res) => {
-  const filters = validateRequest(privacyOrgListQuerySchema, req.query);
-  res.json(await listOrgs(filters));
+  const { limit, offset, ...filters } = validateRequest(privacyOrgListQuerySchema, req.query);
+  const orgs = await listOrgs(filters);
+  if (!isPaginationRequested(req.query)) return res.json(orgs);
+  res.json(paginateArray(orgs, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.post('/orgs', asyncHandler(async (req, res) => {
@@ -170,8 +174,10 @@ router.put('/orgs/:id/holdings', asyncHandler(async (req, res) => {
 
 // ─── Change-of-address events + inventory workflow (issue #2143) ────────────
 
-router.get('/changes', asyncHandler(async (_req, res) => {
-  res.json(await listChangeEvents());
+router.get('/changes', asyncHandler(async (req, res) => {
+  const events = await listChangeEvents();
+  if (!isPaginationRequested(req.query)) return res.json(events);
+  res.json(paginateArray(events, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.post('/changes', asyncHandler(async (req, res) => {
@@ -203,7 +209,9 @@ router.post('/changes/:id/orgs/:orgId/draft-email', asyncHandler(async (req, res
 
 router.get('/brokers', asyncHandler(async (req, res) => {
   const { enabled } = validateRequest(privacyBrokerListQuerySchema, req.query);
-  res.json(await listBrokers({ enabled }));
+  const brokers = await listBrokers({ enabled });
+  if (!isPaginationRequested(req.query)) return res.json(brokers);
+  res.json(paginateArray(brokers, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 // User-triggered refresh (never at boot) — pulls BADBOOL + CA registry, never
@@ -223,7 +231,9 @@ router.put('/brokers/:id', asyncHandler(async (req, res) => {
 
 router.get('/broker-cases', asyncHandler(async (req, res) => {
   const { state } = validateRequest(privacyBrokerCaseListQuerySchema, req.query);
-  res.json(await listBrokerCases({ state }));
+  const cases = await listBrokerCases({ state });
+  if (!isPaginationRequested(req.query)) return res.json(cases);
+  res.json(paginateArray(cases, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 // Force a case due for recheck NOW (case drawer "Re-check" control, #2146).
