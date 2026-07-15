@@ -83,9 +83,11 @@ export const PROPOSAL_COMPLEXITIES = ['trivial', 'moderate', 'complex'];
 export const HANDOFF_COMPLEXITY = 'trivial';
 
 // The resolved outcomes a filed proposal can reach (the feedback loop, #2428).
-// A record with a null outcome is still open/unresolved. `abandoned` is reserved
-// for a superseded proposal — auto-derivation only distinguishes merged/rejected
-// from the tracker's closed state; `abandoned` is set by a user/future path.
+// A record with a null outcome is still open/unresolved. All three are
+// auto-derived from the tracker's closed state by deriveOutcome: completed →
+// merged, not_planned → rejected, and any other PRESENT close reason
+// (duplicate/stale/etc.) → abandoned (#2620); a reason-less close falls back
+// to merged for trackers that report no stateReason.
 export const PROPOSAL_OUTCOMES = ['merged', 'rejected', 'abandoned'];
 
 /**

@@ -154,7 +154,7 @@ export async function listOutcomes({ appId, now = Date.now() } = {}, store = out
  * Reconcile still-unresolved outcome records against a FRESH tracker read. For
  * each stored record whose outcome is null, find the matching existing issue (by
  * slug) and, when the tracker now reports it closed, persist the derived outcome
- * (`merged` / `rejected`). Open issues stay unresolved. Returns the number of
+ * (`merged` / `rejected` / `abandoned`). Open issues stay unresolved. Returns the number of
  * records updated. Never throws — a per-record write failure is swallowed so one
  * bad row can't abort the whole reconciliation.
  */
