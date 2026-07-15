@@ -10,7 +10,7 @@ vi.mock('./store.js', async (importOriginal) => {
 });
 
 import { loadLearningData, loadDismissedRecommendations } from './store.js';
-import { getLearningInsights } from './insights.js';
+import { getLearningInsights, getLearningSummary } from './insights.js';
 
 const learningData = (overrides = {}) => ({
   lastUpdated: '2026-07-09T00:00:00Z',
@@ -99,5 +99,44 @@ describe('insights.getLearningInsights — standing learnings surfacing (issue #
     loadLearningData.mockResolvedValue(learningData());
     const view = await getLearningInsights();
     expect(view.standingLearnings).toEqual([]);
+  });
+});
+
+describe('insights.getLearningSummary — effective (windowed) rates (issue #2617)', () => {
+  const ring = (results, now = Date.now()) =>
+    results.map((s, i) => ({ t: new Date(now - (results.length - i) * 60000).toISOString(), s }));
+
+  it('does not count a windowed-recovered type as skipped (no false "critical" alert)', async () => {
+    // Lifetime 27% after a since-fixed bug, 15 recent successes → the
+    // scheduler no longer skips it, so the dashboard/alert summary must not
+    // claim it is skipped either.
+    loadLearningData.mockResolvedValue(learningData({
+      totals: { completed: 55, succeeded: 15, avgDurationMs: 60000 },
+      byTaskType: {
+        'recovered': {
+          completed: 55, succeeded: 15, failed: 40, successRate: 27,
+          recentOutcomes: ring(Array(15).fill(true))
+        }
+      }
+    }));
+    const summary = await getLearningSummary();
+    expect(summary.skipped).toBe(0);
+    expect(summary.healthy).toBe(1); // windowed 100% ≥ 70
+    expect(summary.status).not.toBe('critical');
+  });
+
+  it('still counts a genuinely failing type as skipped', async () => {
+    loadLearningData.mockResolvedValue(learningData({
+      totals: { completed: 20, succeeded: 2, avgDurationMs: 60000 },
+      byTaskType: {
+        'still-broken': {
+          completed: 20, succeeded: 2, failed: 18, successRate: 10,
+          recentOutcomes: ring(Array(8).fill(false))
+        }
+      }
+    }));
+    const summary = await getLearningSummary();
+    expect(summary.skipped).toBe(1);
+    expect(summary.status).toBe('critical');
   });
 });

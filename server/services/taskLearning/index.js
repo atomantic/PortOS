@@ -35,6 +35,7 @@ export {
   appendRecentOutcome,
   computeWindowedStats,
   computeEffectiveSuccessRate,
+  isSkipCandidate,
   EFFECTIVE_RATE_MIN_WINDOW_SAMPLES,
   RECENT_OUTCOMES_CAP,
   DEFAULT_WINDOW_MAX_COUNT,

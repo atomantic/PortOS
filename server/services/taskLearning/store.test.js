@@ -14,6 +14,7 @@ import {
   appendRecentOutcome,
   computeWindowedStats,
   computeEffectiveSuccessRate,
+  isSkipCandidate,
   EFFECTIVE_RATE_MIN_WINDOW_SAMPLES,
   RECENT_OUTCOMES_CAP,
   DEFAULT_WINDOW_MAX_COUNT
@@ -551,5 +552,37 @@ describe('store.computeEffectiveSuccessRate (issue #2617)', () => {
       recentOutcomes: ring(Array(6).fill(false))
     };
     expect(computeEffectiveSuccessRate(metrics)).toMatchObject({ successRate: 0, source: 'windowed' });
+  });
+});
+
+describe('store.isSkipCandidate (issue #2617)', () => {
+  const ring = (results, now = Date.now()) =>
+    results.map((s, i) => ({ t: new Date(now - (results.length - i) * 60000).toISOString(), s }));
+
+  it('is false for a recovered type (poor lifetime, ≥5 recent successes)', () => {
+    expect(isSkipCandidate({
+      completed: 55, succeeded: 15, failed: 40, successRate: 27,
+      recentOutcomes: ring(Array(15).fill(true))
+    })).toBe(false);
+  });
+
+  it('is true for a still-failing type (poor lifetime AND poor window)', () => {
+    expect(isSkipCandidate({
+      completed: 20, succeeded: 2, failed: 18, successRate: 10,
+      recentOutcomes: ring(Array(8).fill(false))
+    })).toBe(true);
+  });
+
+  it('falls back to the lifetime rate on a thin window (acceptance criterion 2)', () => {
+    expect(isSkipCandidate({
+      completed: 55, succeeded: 15, failed: 40, successRate: 27,
+      recentOutcomes: ring([true, true, true])
+    })).toBe(true);
+  });
+
+  it('is false below the 5-completion threshold or for a missing bucket', () => {
+    expect(isSkipCandidate({ completed: 4, successRate: 0 })).toBe(false);
+    expect(isSkipCandidate(undefined)).toBe(false);
+    expect(isSkipCandidate(null)).toBe(false);
   });
 });

@@ -9,7 +9,7 @@
  * module.
  */
 
-import { loadLearningData, emitLog, isSandboxedTaskType, computeEffectiveSuccessRate } from './store.js';
+import { loadLearningData, emitLog, isSandboxedTaskType, computeEffectiveSuccessRate, isSkipCandidate } from './store.js';
 import { resetTaskTypeLearning } from './metrics.js';
 import { computeCorrelationQuality, isCorrelationProven } from './correlationQuality.js';
 
@@ -308,11 +308,15 @@ export async function suggestModelTier(taskType) {
     }
   }
 
-  // Fallback: if overall success rate is low, suggest heavier model
-  if (metrics.successRate < 60) {
+  // Fallback: if the overall EFFECTIVE success rate is low (issue #2617:
+  // windowed when the ring has enough samples, else lifetime), suggest a
+  // heavier model. On the lifetime rate alone, a type that recovered from a
+  // since-fixed failure burst would be routed to `heavy` forever.
+  const { successRate: effectiveRate } = computeEffectiveSuccessRate(metrics);
+  if (effectiveRate !== null && effectiveRate < 60) {
     return withFailureSignal({
       suggested: 'heavy',
-      reason: `${taskType} has ${metrics.successRate}% success rate - heavier model may help`
+      reason: `${taskType} has ${effectiveRate}% success rate - heavier model may help`
     });
   }
 
@@ -424,23 +428,27 @@ export async function getPerformanceSummary() {
     skipped: []
   };
 
-  // Analyze each task type
+  // Analyze each task type on the EFFECTIVE rate (issue #2617) so this
+  // summary — logged during evaluation and served to the Learning UI — agrees
+  // with the actual cooldown/skip decisions instead of resurrecting the
+  // "punished forever" lifetime view they just stopped using.
   for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
     if (metrics.completed < 3) continue;
 
+    const { successRate } = computeEffectiveSuccessRate(metrics);
     const entry = {
       taskType,
-      successRate: metrics.successRate,
+      successRate,
       completed: metrics.completed,
       avgDurationMin: Math.round(metrics.avgDurationMs / 60000)
     };
 
-    if (metrics.successRate >= 80) {
+    if (successRate >= 80) {
       summary.topPerformers.push(entry);
-    } else if (metrics.successRate < 50 && metrics.completed >= 5) {
+    } else if (successRate !== null && successRate < 50 && metrics.completed >= 5) {
       summary.needsAttention.push(entry);
-      // Also mark as skipped if very low
-      if (metrics.successRate < 30) {
+      // Also mark as skipped if very low (same predicate as getSkippedTaskTypes)
+      if (isSkipCandidate(metrics)) {
         summary.skipped.push(entry);
       }
     }
@@ -570,18 +578,17 @@ export async function getAdaptiveCooldownMultiplier(taskType) {
 }
 
 /**
- * Shared skip predicate (issue #2617): a task type is a skip candidate when it
- * has ≥5 lifetime completions AND its EFFECTIVE success rate is <30%. Using the
- * effective rate (windowed when the ring has enough samples, else lifetime)
- * keeps this decision, `getAdaptiveCooldownMultiplier`'s skip branch, and the
- * rehabilitation/status views agreeing — a type that recovered in its recent
- * window is no longer skipped, so it must not be listed as skipped or have its
- * lifetime data auto-reset either.
+ * True when a skip is LIFETIME-driven (the stored all-time rate itself is
+ * below the skip bar), as opposed to a windowed-driven skip caused by a recent
+ * failure burst on an otherwise-healthy type. Rehabilitation is a DESTRUCTIVE
+ * reset (`resetTaskTypeLearning` deletes the whole bucket — duration/ETA
+ * stats, routing accuracy, error patterns), which only makes sense when the
+ * lifetime data itself is what's poisoned; a windowed-driven skip self-heals
+ * as the window rolls off, so resetting would wipe hundreds of good runs of
+ * learning for a type that was never structurally broken.
  */
-function isSkipCandidate(metrics) {
-  if (!metrics || (metrics.completed ?? 0) < 5) return false;
-  const { successRate } = computeEffectiveSuccessRate(metrics);
-  return successRate !== null && successRate < 30;
+function isLifetimeDrivenSkip(metrics) {
+  return Number.isFinite(metrics?.successRate) && metrics.successRate < 30;
 }
 
 /**
@@ -643,7 +650,10 @@ export async function checkAndRehabilitateSkippedTasks(gracePeriodMs = 7 * 24 * 
     // Only consider task types that would be skipped (effective rate < 30% with
     // 5+ attempts, issue #2617) — a type that recovered in its recent window is
     // no longer skipped, so resetting its lifetime data would be pointless churn.
-    if (!isSkipCandidate(metrics)) {
+    // And only reset when the skip is LIFETIME-driven: a windowed-driven skip
+    // (recent failure burst on a healthy lifetime record) self-heals as the
+    // window rolls, so the destructive reset would wipe good learning data.
+    if (!isSkipCandidate(metrics) || !isLifetimeDrivenSkip(metrics)) {
       continue;
     }
 
@@ -706,8 +716,10 @@ export async function getSkippedTaskTypesWithStatus(gracePeriodMs = 7 * 24 * 60 
       ? new Date(metrics.lastCompleted).getTime()
       : 0;
     const timeSinceLastAttempt = now - lastCompletedTime;
-    const eligibleForRehabilitation = timeSinceLastAttempt >= gracePeriodMs;
-    const timeUntilEligible = eligibleForRehabilitation
+    // Mirrors checkAndRehabilitateSkippedTasks: only a lifetime-driven skip is
+    // ever rehabilitation-eligible (a windowed-driven skip self-heals instead).
+    const eligibleForRehabilitation = timeSinceLastAttempt >= gracePeriodMs && isLifetimeDrivenSkip(metrics);
+    const timeUntilEligible = timeSinceLastAttempt >= gracePeriodMs
       ? 0
       : gracePeriodMs - timeSinceLastAttempt;
 
@@ -737,12 +749,16 @@ export async function getSkippedTaskTypesWithStatus(gracePeriodMs = 7 * 24 * 60 
 function classifyConfidenceTier(metrics, { highThreshold = 80, lowThreshold = 50, minSamples = 5 } = {}) {
   const completed = metrics?.completed ?? 0;
   const effective = computeEffectiveSuccessRate(metrics);
-  const successRate = effective.successRate ?? 0;
+  // Compare on a 0-defaulted value, but RETURN the raw nullable rate — the
+  // null sentinel ("no rate recorded") must survive to callers (repo
+  // absent-vs-empty rule), not collapse into a fabricated 0%.
+  const rate = effective.successRate ?? 0;
+  const result = { successRate: effective.successRate, rateSource: effective.source };
 
-  if (completed < minSamples) return { tier: 'new', autoApprove: true, successRate, rateSource: effective.source };
-  if (successRate >= highThreshold) return { tier: 'high', autoApprove: true, successRate, rateSource: effective.source };
-  if (successRate >= lowThreshold) return { tier: 'medium', autoApprove: true, successRate, rateSource: effective.source };
-  return { tier: 'low', autoApprove: false, successRate, rateSource: effective.source };
+  if (completed < minSamples) return { tier: 'new', autoApprove: true, ...result };
+  if (rate >= highThreshold) return { tier: 'high', autoApprove: true, ...result };
+  if (rate >= lowThreshold) return { tier: 'medium', autoApprove: true, ...result };
+  return { tier: 'low', autoApprove: false, ...result };
 }
 
 /**
@@ -760,7 +776,7 @@ export async function getTaskTypeConfidence(taskType, thresholds = {}) {
   // Reasons quote the EFFECTIVE rate the tier was classified on (issue #2617),
   // annotated when it came from the recency window so "82% success" next to a
   // depressed lifetime rate is explainable.
-  const rateLabel = rateSource === 'windowed' ? `${successRate}% recent success` : `${successRate}% success`;
+  const rateLabel = rateSource === 'windowed' ? `${successRate ?? 0}% recent success` : `${successRate ?? 0}% success`;
   const reasons = {
     new: `Fewer than ${thresholds.minSamples ?? 5} completions — auto-approve by default`,
     high: `${rateLabel} across ${metrics?.completed} runs — high confidence`,
@@ -772,7 +788,9 @@ export async function getTaskTypeConfidence(taskType, thresholds = {}) {
     taskType,
     tier,
     autoApprove,
-    successRate: metrics ? successRate : null,
+    // Nullable: preserves the "no rate recorded" sentinel (absent bucket OR a
+    // bucket without a stored rate and a thin window) instead of a fake 0.
+    successRate,
     rateSource,
     completed: metrics?.completed ?? 0,
     reason: reasons[tier]
@@ -794,7 +812,7 @@ export async function getConfidenceLevels(thresholds = {}) {
     const { tier, autoApprove, successRate } = classifyConfidenceTier(metrics, thresholds);
     levels[tier].push({
       taskType,
-      successRate,
+      successRate: successRate ?? 0, // display list keeps the pre-existing 0 default
       completed: metrics.completed || 0,
       autoApprove,
       lastCompleted: metrics.lastCompleted

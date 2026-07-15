@@ -163,6 +163,24 @@ export function computeEffectiveSuccessRate(metrics, opts = {}) {
 }
 
 /**
+ * Shared skip predicate (issue #2617): a task type is a skip candidate when it
+ * has ≥5 lifetime completions AND its EFFECTIVE success rate is <30%. Pure.
+ *
+ * This is THE definition of "skipped" — used by the scheduling decision
+ * (`getAdaptiveCooldownMultiplier`'s skip branch mirrors it), the skip list
+ * (`getSkippedTaskTypes`), the rehabilitation/status views, AND the health
+ * summaries (`getPerformanceSummary`, `getLearningSummary`). Keeping every
+ * consumer on one predicate is what stops a dashboard/alert surface from
+ * claiming a type is skipped after the actual decision path stopped skipping
+ * it (or vice versa).
+ */
+export function isSkipCandidate(metrics) {
+  if (!metrics || (metrics.completed ?? 0) < 5) return false;
+  const { successRate } = computeEffectiveSuccessRate(metrics);
+  return successRate !== null && successRate < 30;
+}
+
+/**
  * Default learning data structure
  */
 const DEFAULT_LEARNING_DATA = {

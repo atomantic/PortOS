@@ -13,7 +13,9 @@ import {
   loadDismissedRecommendations,
   saveDismissedRecommendations,
   summarizeFailureSignatures,
-  appendInsight
+  appendInsight,
+  computeEffectiveSuccessRate,
+  isSkipCandidate
 } from './store.js';
 import { computeCorrelationQuality, isCorrelationProven, CORRELATION_QUALITY_THRESHOLD } from './correlationQuality.js';
 
@@ -306,16 +308,22 @@ export async function getLearningSummary() {
   let criticalCount = 0;
   let skippedCount = 0;
 
+  // Health tiers read the EFFECTIVE rate (issue #2617) and the skipped count
+  // uses the shared skip predicate, so this dashboard summary — and the
+  // proactive "task types skipped" alert built on it — reflects what the
+  // scheduler actually does. On lifetime rates alone, a type that recovered
+  // in its recent window would be alerted as "skipped" forever.
   for (const [, metrics] of Object.entries(data.byTaskType)) {
     if (metrics.completed < 3) continue; // Insufficient data
 
-    if (metrics.successRate >= 70) {
+    const { successRate } = computeEffectiveSuccessRate(metrics);
+    if (successRate >= 70) {
       healthyCount++;
-    } else if (metrics.successRate >= 40) {
+    } else if (successRate >= 40) {
       warningCount++;
     } else {
       criticalCount++;
-      if (metrics.completed >= 5 && metrics.successRate < 30) {
+      if (isSkipCandidate(metrics)) {
         skippedCount++;
       }
     }

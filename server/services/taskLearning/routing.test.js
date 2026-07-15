@@ -5,7 +5,10 @@ import {
   getSkippedTaskTypes,
   getTaskTypeConfidence,
   getTaskTypePriorityMultiplier,
-  checkAndRehabilitateSkippedTasks
+  checkAndRehabilitateSkippedTasks,
+  getSkippedTaskTypesWithStatus,
+  suggestModelTier,
+  getPerformanceSummary
 } from './routing.js';
 import { loadLearningData } from './store.js';
 import { resetTaskTypeLearning } from './metrics.js';
@@ -256,6 +259,28 @@ describe('windowed-rate decisions (issue #2617)', () => {
       expect(resetTaskTypeLearning).not.toHaveBeenCalled();
     });
 
+    it('does not reset a healthy-lifetime type skipped by a recent failure burst (windowed-driven skip)', async () => {
+      // 200 runs at 95% lifetime, then a transient outage: 6 recent failures →
+      // windowed 0% → the type IS skipped. But the skip is windowed-driven, so
+      // the destructive lifetime reset must NOT fire — the window self-heals.
+      const tenDaysAgo = Date.now() - 10 * 24 * 60 * 60 * 1000;
+      const healthy = {
+        completed: 200, succeeded: 190, failed: 10, successRate: 95,
+        lastCompleted: new Date(tenDaysAgo).toISOString(),
+        recentOutcomes: ring(Array(6).fill(false), tenDaysAgo)
+      };
+      loadLearningData.mockResolvedValue(learningWith({ 'healthy-burst': healthy }));
+      // Confirm it is indeed currently skipped…
+      const skipped = await getSkippedTaskTypes();
+      expect(skipped.map(s => s.taskType)).toContain('healthy-burst');
+      // …but never rehabilitated/reset, and the status view says not eligible.
+      const out = await checkAndRehabilitateSkippedTasks(7 * 24 * 60 * 60 * 1000);
+      expect(out.count).toBe(0);
+      expect(resetTaskTypeLearning).not.toHaveBeenCalled();
+      const status = await getSkippedTaskTypesWithStatus(7 * 24 * 60 * 60 * 1000);
+      expect(status[0]).toMatchObject({ taskType: 'healthy-burst', eligibleForRehabilitation: false });
+    });
+
     it('still rehabilitates a genuinely skipped type past the grace period', async () => {
       const broken = stillFailingMetrics();
       // Push BOTH the ring and lastCompleted outside any recency concern for the
@@ -267,6 +292,45 @@ describe('windowed-rate decisions (issue #2617)', () => {
       const out = await checkAndRehabilitateSkippedTasks(7 * 24 * 60 * 60 * 1000);
       expect(out.count).toBe(1);
       expect(resetTaskTypeLearning).toHaveBeenCalledWith('still-broken');
+    });
+  });
+
+  describe('suggestModelTier', () => {
+    it('no longer suggests heavy for a recovered type (effective rate in the low-success fallback)', async () => {
+      loadLearningData.mockResolvedValue(learningWith({ 'self-improve:x': recoveredMetrics() }));
+      expect(await suggestModelTier('self-improve:x')).toBeNull();
+    });
+
+    it('still suggests heavy on the lifetime rate when the window is too thin', async () => {
+      loadLearningData.mockResolvedValue(learningWith({ 'self-improve:x': thinWindowMetrics() }));
+      const out = await suggestModelTier('self-improve:x');
+      expect(out).toMatchObject({ suggested: 'heavy' });
+      expect(out.reason).toContain('27%');
+    });
+  });
+
+  describe('getPerformanceSummary', () => {
+    it('classifies a recovered type as a top performer, not needs-attention/skipped', async () => {
+      loadLearningData.mockResolvedValue(learningWith({
+        'recovered': recoveredMetrics(),
+        'still-broken': stillFailingMetrics()
+      }));
+      const summary = await getPerformanceSummary();
+      expect(summary.topPerformers.map(e => e.taskType)).toContain('recovered');
+      expect(summary.needsAttention.map(e => e.taskType)).not.toContain('recovered');
+      expect(summary.skipped.map(e => e.taskType)).not.toContain('recovered');
+      expect(summary.skipped.map(e => e.taskType)).toContain('still-broken');
+    });
+  });
+
+  describe('confidence null sentinel', () => {
+    it('preserves null (not a fabricated 0) for a bucket with no stored rate and a thin window', async () => {
+      loadLearningData.mockResolvedValue(learningWith({
+        'legacy': { completed: 6, lastCompleted: new Date().toISOString() } // no successRate field, no ring
+      }));
+      const out = await getTaskTypeConfidence('legacy');
+      expect(out.successRate).toBeNull();
+      expect(out.tier).toBe('low'); // comparisons treat the absent rate as 0
     });
   });
 });
