@@ -185,6 +185,57 @@ describe('AI Toolkit runner service', () => {
 
     errSpy.mockRestore();
   });
+
+  it('times out a hung API run: aborts the fetch and releases activeRuns', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'ai-toolkit-runner-'));
+    tempDirs.push(dataDir);
+
+    // Simulate a provider that opens the stream then stalls forever — the
+    // reader only settles when the run's AbortController fires. Without the
+    // wall-clock timeout this would hold `activeRuns` open indefinitely.
+    const fetch = vi.fn(async (_url, opts) => {
+      const { signal } = opts;
+      const body = {
+        getReader: () => ({
+          read: () => new Promise((_resolve, reject) => {
+            const fail = () => reject(Object.assign(new Error('The operation was aborted'), { name: 'AbortError' }));
+            if (signal.aborted) return fail();
+            signal.addEventListener('abort', fail, { once: true });
+          }),
+          cancel: async () => {}
+        })
+      };
+      return { ok: true, body };
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    const runner = createRunnerService({
+      dataDir,
+      hooks: { ensureProviderReady: async () => ({ success: true }) }
+    });
+
+    let done;
+    const completed = new Promise((resolve) => { done = resolve; });
+    await runner.executeApiRun({
+      runId: 'run-timeout',
+      provider: runReady(),
+      model: null,
+      prompt: 'hi',
+      workspacePath: process.cwd(),
+      screenshots: [],
+      timeout: 20,
+      onData: undefined,
+      onComplete: (m) => done(m)
+    });
+
+    // The stream is still hanging, so the run is active until the timer fires.
+    expect(await runner.isRunActive('run-timeout')).toBe(true);
+
+    const metadata = await completed;
+    // Timeout aborted the run, and the slot is released — not leaked.
+    expect(await runner.isRunActive('run-timeout')).toBe(false);
+    expect(metadata).toMatchObject({ success: false });
+  });
 });
 
 describe('AI Toolkit runner — declared extension points', () => {

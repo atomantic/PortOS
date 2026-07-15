@@ -112,6 +112,7 @@ export function createRunsRoutes(runnerService, options = {}) {
         onComplete: (finalMetadata) => {
           io?.emit(`run:${runId}:complete`, finalMetadata);
         },
+        timeout: effectiveTimeout,
       });
     } else if (provider.type === 'tui' && typeof runnerService.executeTuiRun === 'function') {
       // Honor the user-picked model from the Runs UI — `executeTuiRun` reads

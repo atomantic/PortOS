@@ -20,6 +20,12 @@ const IS_WIN32 = process.platform === 'win32';
 // wrappers (for Git Bash/WSL), and that stub is not natively launchable here.
 const WIN_EXECUTABLE_EXTS = ['.exe', '.cmd', '.bat', '.com'];
 
+// Wall-clock ceiling for an API run when neither the caller nor the provider
+// sets one. Mirrors aiProvider's DEFAULT_PROVIDER_TIMEOUT_MS / askService's
+// `provider.timeout || 300000` so a hung upstream can't hold `activeRuns`
+// (and thus the run slot) open forever.
+const DEFAULT_API_RUN_TIMEOUT_MS = 300000;
+
 /**
  * Resolve a bare command name to its full path WITH extension on Windows, so
  * the caller knows exactly which file (and which kind — `.exe` vs
@@ -499,7 +505,7 @@ export function createRunnerService(config = {}) {
       return runId;
     },
 
-    async executeApiRun({ runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete }) {
+    async executeApiRun({ runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete, timeout }) {
       const runDir = join(RUNS_PATH, runId);
       const outputPath = join(runDir, 'output.txt');
       const metadataPath = join(runDir, 'metadata.json');
@@ -516,6 +522,26 @@ export function createRunnerService(config = {}) {
 
       const controller = new AbortController();
       activeRuns.set(runId, controller);
+
+      // Wall-clock timeout: without this a hung provider (opens the stream then
+      // stalls, or never responds at all) holds the AbortController in
+      // `activeRuns` forever, leaking the run slot. Arm it BEFORE the fetch and
+      // keep it armed through the entire stream-consumption window — an abort
+      // rejects the pending fetch/reader, which routes into the `!response.ok`
+      // or `processStream().catch` paths below where `activeRuns` is cleaned up.
+      // Every terminal path calls `clearApiTimeout()` so the timer can't fire
+      // after a natural completion. Mirrors executeCliRun's `timeoutHandle`.
+      const effectiveTimeout = timeout || provider.timeout || DEFAULT_API_RUN_TIMEOUT_MS;
+      let apiTimeoutHandle = setTimeout(() => {
+        console.log(`⏱️ API run ${runId} timed out after ${effectiveTimeout}ms`);
+        controller.abort();
+      }, effectiveTimeout);
+      const clearApiTimeout = () => {
+        if (apiTimeoutHandle) {
+          clearTimeout(apiTimeoutHandle);
+          apiTimeoutHandle = null;
+        }
+      };
 
       hooks.onRunStarted?.({ runId, provider: provider.name, model });
 
@@ -574,6 +600,7 @@ export function createRunnerService(config = {}) {
         : { ok: false, error: `Ollama is not running and PortOS could not start it: ${ready.error || 'unknown error'}`, status: 0 };
 
       if (!response.ok) {
+        clearApiTimeout();
         activeRuns.delete(runId);
         const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
         metadata.endTime = new Date().toISOString();
@@ -651,6 +678,7 @@ export function createRunnerService(config = {}) {
           onData?.({ text: reasoning, isReasoning: true });
         }
 
+        clearApiTimeout();
         await atomicWrite(outputPath, output);
         activeRuns.delete(runId);
 
@@ -673,6 +701,7 @@ export function createRunnerService(config = {}) {
         // unguarded throw from handleProviderError/atomicWrite below would
         // surface as an unhandled rejection and crash the process. Wrap it.
         try {
+          clearApiTimeout();
           activeRuns.delete(runId);
 
           if (output) {
