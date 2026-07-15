@@ -631,6 +631,13 @@ async function doCreateInvestigationTask(agentId, originalTask, errorAnalysis) {
     emitLog('info', `⏭️ Skipping duplicate investigation for ${fingerprint}: ${existing.id} is still ${existing.status}`, {
       agentId, taskId: originalTask.id, fingerprint, existingTaskId: existing.id, existingStatus: existing.status
     });
+    // Union this failure's task id into the surviving investigation, so the
+    // record names EVERY task blocked on this cause — resolving it should
+    // unblock all of them, not just the first one mentioned in the body.
+    const affected = Array.isArray(existing.metadata?.affectedTasks) ? existing.metadata.affectedTasks : [];
+    if (originalTask.id && !affected.includes(originalTask.id)) {
+      await updateTask(existing.id, { metadata: { affectedTasks: [...affected, originalTask.id] } }, 'internal');
+    }
     return existing;
   }
 
@@ -685,7 +692,8 @@ Approving and applying the fix lets the original task \`${originalTask.id}\` be 
     context: `Auto-generated from agent ${agentId} failure`,
     approvalRequired: true, // Require human approval before auto-fixing
     isInvestigation: true, // Meta-cascade guard marker (#2615)
-    investigationFingerprint: fingerprint
+    investigationFingerprint: fingerprint,
+    affectedTasks: [originalTask.id] // later same-fingerprint failures union in
   }, 'internal');
 
   // Count only genuine creations against the circuit — addTask's own

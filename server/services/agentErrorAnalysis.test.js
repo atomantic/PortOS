@@ -17,7 +17,7 @@ import {
   INVESTIGATION_CIRCUIT_MAX_CREATIONS,
   __resetInvestigationCircuit
 } from './agentErrorAnalysis.js';
-import { addTask, getAllTasks } from './cos.js';
+import { addTask, updateTask, getAllTasks } from './cos.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 
 // Default store shape for suites that exercise the create path: no existing
@@ -299,18 +299,42 @@ describe('createInvestigationTask guards (#2615)', () => {
   beforeEach(() => {
     addTask.mockReset();
     addTask.mockResolvedValue({ id: 'investigation-1' });
+    updateTask.mockReset();
+    updateTask.mockResolvedValue({});
     mockEmptyStore();
     __resetInvestigationCircuit();
   });
 
-  it('stamps the fingerprint and isInvestigation marker onto the created task', async () => {
+  it('stamps the fingerprint, isInvestigation marker, and affectedTasks onto the created task', async () => {
     await createInvestigationTask('agent-1', failedTask, analysis);
     expect(addTask).toHaveBeenCalledWith(expect.objectContaining({
       priority: 'HIGH',
       approvalRequired: true,
       isInvestigation: true,
-      investigationFingerprint: 'startup-failure:user:none'
+      investigationFingerprint: 'startup-failure:user:none',
+      affectedTasks: ['task-1']
     }), 'internal');
+  });
+
+  it('unions a later same-fingerprint failure into the surviving investigation\'s affectedTasks', async () => {
+    const existing = {
+      id: 'inv-open', status: 'pending',
+      metadata: { investigationFingerprint: 'startup-failure:user:none', affectedTasks: ['task-1'] }
+    };
+    getAllTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [existing] } });
+    await createInvestigationTask('agent-2', { ...failedTask, id: 'task-2' }, analysis);
+    expect(addTask).not.toHaveBeenCalled();
+    expect(updateTask).toHaveBeenCalledWith('inv-open', { metadata: { affectedTasks: ['task-1', 'task-2'] } }, 'internal');
+  });
+
+  it('does not re-write affectedTasks when the failed task is already recorded', async () => {
+    const existing = {
+      id: 'inv-open', status: 'pending',
+      metadata: { investigationFingerprint: 'startup-failure:user:none', affectedTasks: ['task-1'] }
+    };
+    getAllTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [existing] } });
+    await createInvestigationTask('agent-2', failedTask, analysis); // task-1 again
+    expect(updateTask).not.toHaveBeenCalled();
   });
 
   it.each(['pending', 'in_progress', 'challenged', 'blocked'])(

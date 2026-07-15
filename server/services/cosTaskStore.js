@@ -243,9 +243,11 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     if (taskData.voiceDispatch === true) metadata.voiceDispatch = true;
     if (taskData.isRecovery === true) metadata.isRecovery = true;
     // Investigation-task guards (#2615): the durable fingerprint dedupes repeat
-    // failures of the same cause; the marker blocks investigations-of-investigations.
+    // failures of the same cause; the marker blocks investigations-of-investigations;
+    // affectedTasks names every task blocked on the cause (later dedup hits union in).
     if (taskData.isInvestigation === true) metadata.isInvestigation = true;
     if (taskData.investigationFingerprint) metadata.investigationFingerprint = taskData.investigationFingerprint;
+    if (Array.isArray(taskData.affectedTasks) && taskData.affectedTasks.length > 0) metadata.affectedTasks = taskData.affectedTasks;
     if (taskData.createJiraTicket) metadata.createJiraTicket = true;
     // Boolean flags: persist both true and false so users can explicitly override defaults.
     // The string round-trip ('false' from TASKS.md) is handled by isTruthyMeta/isFalsyMeta.
