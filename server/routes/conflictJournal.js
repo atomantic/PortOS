@@ -5,7 +5,7 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { asyncHandler, createServiceErrorMapper } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import * as resolver from '../services/conflictJournalResolver.js';
 
@@ -18,11 +18,7 @@ const SERVICE_ERROR_STATUS = {
   // still actionable via discard, so surface 409 rather than a generic 500.
   [resolver.ERR_TARGET_GONE]: 409,
 };
-const mapServiceError = (err) => {
-  const status = SERVICE_ERROR_STATUS[err?.code];
-  if (status) return new ServerError(err.message, { status, code: err.code });
-  return err;
-};
+const mapServiceError = createServiceErrorMapper(SERVICE_ERROR_STATUS);
 
 // Entries are only ever 'pending' (on archive) or 'resolved' (after the user
 // restores/merges/discards); there is no 'dismissed' state — discard resolves
