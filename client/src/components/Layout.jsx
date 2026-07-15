@@ -1049,8 +1049,8 @@ export default function Layout() {
             onMouseLeave={scheduleCloseFlyout}
             onFocus={cancelCloseFlyout}
             onBlur={scheduleCloseFlyout}
-            style={{ top: flyoutPos.top, left: flyoutPos.left, position: 'fixed', maxHeight: 'calc(100vh - 16px)' }}
-            className="hidden lg:block z-[60] min-w-[220px] max-w-[min(320px,calc(100vw-5rem))] overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-2xl py-1"
+            style={{ top: flyoutPos.top, left: flyoutPos.left, position: 'fixed', '--dvh-inset': '16px' }}
+            className="hidden lg:block z-[60] min-w-[220px] max-w-[min(320px,calc(100vw-5rem))] max-h-dvh-cap overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-2xl py-1"
           >
             <div className="px-3 py-1.5 text-[10px] uppercase text-gray-500 tracking-wider border-b border-port-border mb-1">
               {item.label}

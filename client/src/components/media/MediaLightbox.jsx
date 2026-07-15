@@ -217,7 +217,7 @@ export default function MediaLightbox({
     ? 'relative w-full h-full bg-black flex'
     : 'relative bg-port-card border border-port-border rounded-xl overflow-hidden max-w-6xl w-full max-h-[92vh] flex flex-col md:flex-row';
   const overlayPad = fullScreen ? 'p-0' : 'p-4';
-  const imgMax = fullScreen ? 'max-w-[100vw] max-h-[100vh]' : 'max-w-full max-h-[92vh]';
+  const imgMax = fullScreen ? 'max-w-[100vw] max-h-dvh-cap' : 'max-w-full max-h-[92vh]';
   // Anchor low in fullscreen so the chevrons land in the letterbox bar of a
   // landscape image instead of covering it. Non-fullscreen keeps them centered
   // — bottom-anchoring would bury them in the SettingsPane underneath.
