@@ -2,8 +2,8 @@
 
 Living reference of every third-party dependency in PortOS, why it's kept, and what the current verdict is. Updated by `/do:depfree` runs.
 
-**Last audited:** 2026-04-28 (default mode); tables corrected 2026-07-01 during a docs audit.
-**Verdict:** All dependencies justified. Since the last full audit: `sax` was removed (replaced with an owned parser, issue #1824), `portos-ai-toolkit` was vendored in-tree (`server/lib/aiToolkit/`), and monolithic `googleapis` was replaced with scoped `@googleapis/*` packages.
+**Last audited:** 2026-07-14 (dependency-freedom follow-up, issue #2547); prior full audit 2026-04-28 (default mode), tables corrected 2026-07-01 during a docs audit.
+**Verdict:** All dependencies justified. Since the last full audit: `sax` was removed (replaced with an owned parser, issue #1824), `portos-ai-toolkit` was vendored in-tree (`server/lib/aiToolkit/`), and monolithic `googleapis` was replaced with scoped `@googleapis/*` packages. The 2026-07-14 follow-up bumped `kokoro-js` to its latest patch `1.2.1` (still on maintenance watch — no publish since 2025-05) and aligned the dual `pm2` pins (root + server both `7.0.3`).
 
 ## Audit Methodology
 
@@ -20,7 +20,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | Package | Tier | Verdict | Where Used | Notes |
 |---------|------|---------|------------|-------|
 | **Root devDeps** | | | | |
-| `pm2` | 1 | KEEP | top-level scripts | Process manager, foundational |
+| `pm2` | 1 | KEEP | top-level scripts | Process manager, foundational. Pinned `7.0.3` (aligned with server pin) |
 | **Server deps** | | | | |
 | `@googleapis/calendar` | 1 | KEEP | Calendar integration | Scoped official Google SDK (replaced monolithic `googleapis`) |
 | `@googleapis/gmail` | 1 | KEEP | Messages/Gmail integration | Scoped official Google SDK |
@@ -30,7 +30,7 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 | `node-pty` | 1 | KEEP | shell/terminal services | Native PTY binding (N-API) |
 | `pdf-lib` | 1 | KEEP | PDF generation/manipulation | |
 | `pg` | 1 | KEEP | Postgres access | Official `pg` driver |
-| `pm2` | 1 | KEEP | app lifecycle | Process manager |
+| `pm2` | 1 | KEEP | app lifecycle | Process manager. Pinned `7.0.3` (aligned with root pin) |
 | `sharp` | 1 | KEEP | image processing | Native, widely-audited |
 | `socket.io` | 1 | KEEP | realtime | Foundational |
 | `socket.io-client` | 1 | KEEP | server-to-client | Paired with socket.io |
@@ -76,11 +76,12 @@ Before removing a Tier 3 candidate, run a transitive-dep check (`npm ls <pkg>`).
 ### `kokoro-js` — KEEP (Tier 2)
 
 - **Usage**: 1 dynamic import in `server/services/voice/tts-kokoro.js` (~80 LOC module). 3 call sites: `KokoroTTS.from_pretrained()`, `tts.generate(text, {voice, speed})`, `audio.toWav()`.
-- **Maintenance**: pinned at 1.2.0. Active upstream.
+- **Maintenance**: pinned at `1.2.1` (latest; published 2025-05-03). **Maintenance watch** — no publish since ~May 2025, so the package is effectively stale even at latest. This is not disqualifying today (small, pure-JS, no CVEs), but re-evaluate on the trigger below.
 - **Vulns**: None (npm audit clean).
 - **Replacement complexity**: Moderate (~50–80 LOC) but requires Python subprocess + JSON IPC + process pooling + lifecycle management. Operational overhead exceeds the supply-chain risk.
-- **Decision**: KEEP. The only pure-JS in-process TTS option; Web Speech API is cloud-dependent and Piper requires CLI install.
-- **Re-audit trigger**: if maintenance lapses (no publish for >12 months) or a CVE is reported, revisit and migrate to Piper subprocess.
+- **Decision**: KEEP (on maintenance watch). The only pure-JS in-process TTS option; Web Speech API is cloud-dependent and Piper requires CLI install.
+- **Re-audit trigger**: the >12-months-stale trigger already fired and was actioned by this audit (bumped to latest, put on watch). Re-evaluate on any of: a CVE reported, the model-load path breaking against a newer Transformers.js, or the package still showing no upstream publish at the next dependency audit — then revisit and migrate (see escape hatch below).
+- **Piper escape hatch (if dropped later)**: Piper is **already implemented** as a peer backend — `server/services/voice/tts-piper.js` (`synthesizePiper(text, cfg, signal) → { wav, latencyMs }`, plus `listPiperVoices`), which `server/services/voice/tts.js` already dispatches to alongside `synthesizeKokoro`. Both backends share the same `(text, cfg, signal) → { wav, latencyMs }` contract, so dropping `kokoro-js` is a delete, not a rewrite: remove the `kokoro` branch (and the `tts-kokoro.js` module + its `kokoro-js` dependency) from the dispatcher in `tts.js` and let Piper be the default engine. The tradeoff Piper carries — and the reason it isn't the default today — is a native `piper` binary + ONNX voice download (vs. `kokoro-js`'s npm-only, in-process install).
 
 ### `sax` — REMOVED (issue #1824)
 
