@@ -316,8 +316,11 @@ function CyberCityInner() {
 
   const handleJumpToFirst = useCallback(() => {
     const first = filterResult.matches[0];
-    if (first?.id) navigate(`/city/apps/${first.id}`);
-  }, [filterResult.matches, navigate]);
+    if (!first?.id) return;
+    // Mirror handleBuildingClick: focus in-place from the overview, open the app page in exploration.
+    if (settings?.explorationMode) navigate(`/apps/${first.id}`);
+    else navigate(`/city/apps/${first.id}`);
+  }, [filterResult.matches, navigate, settings?.explorationMode]);
 
   // Close focus → back to the plain overview. Open app → the existing app detail page (explicit).
   const handleCloseFocus = useCallback(() => navigate('/city'), [navigate]);

@@ -44,7 +44,7 @@ export default function CityFocusPanel({ app, notFound = false, agents = [], onC
 
   const activeAgents = useMemo(
     () => (Array.isArray(agents) ? agents : []).filter(
-      (a) => a && (a.status === 'running' || a.state === 'coding' || a.state === 'thinking' || a.state === 'investigating' || a.status === 'failed' || a.error)
+      (a) => a && (a.status === 'running' || a.state === 'coding' || a.state === 'thinking' || a.state === 'investigating' || a.status === 'failed' || a.state === 'error' || a.error)
     ),
     [agents]
   );

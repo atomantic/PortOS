@@ -29,9 +29,12 @@ describe('CityFocusPanel', () => {
     const agents = [
       { agentId: 'a1', status: 'running', task: 'Refactor module' },
       { agentId: 'a2', status: 'completed', task: 'Old done task' },
+      { agentId: 'a3', state: 'error', task: 'Broke the build' },
     ];
     render(<CityFocusPanel app={app} agents={agents} />);
     expect(screen.getByText('Refactor module')).toBeTruthy();
+    // A failed agent whose only signal is state:'error' is still surfaced.
+    expect(screen.getByText('Broke the build')).toBeTruthy();
     // A completed (non-active) agent is filtered out.
     expect(screen.queryByText('Old done task')).toBeNull();
   });

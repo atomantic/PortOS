@@ -50,6 +50,10 @@ export default function CityFocusCamera({ focusedAppId, positions, orbitRef, act
 
     if (key !== currentKeyRef.current) {
       currentKeyRef.current = key;
+      // Only capture the controls' "real" enabled state when NO fly is in progress. Retargeting
+      // mid-fly (rapid building/minimap clicks, or Close before the fly settles) would otherwise
+      // capture the already-disabled value and restore `false` forever.
+      const wasSettled = animRef.current === null;
       const startTarget = controls?.target ? controls.target.clone() : deriveLookAt(camera);
 
       let endPos;
@@ -74,7 +78,7 @@ export default function CityFocusCamera({ focusedAppId, positions, orbitRef, act
       };
       // Take over from OrbitControls for the duration of the fly, remembering its prior state.
       if (controls) {
-        controlsWasEnabledRef.current = controls.enabled;
+        if (wasSettled) controlsWasEnabledRef.current = controls.enabled;
         controls.enabled = false;
       }
     }
