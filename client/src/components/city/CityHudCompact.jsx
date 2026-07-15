@@ -105,7 +105,9 @@ export default function CityHudCompact({
       return <div className="p-3"><CityVitalsList {...vitals} /></div>;
     }
     if (activePane === 'map') {
-      return <div className="p-3 flex justify-center"><CityMiniMap apps={apps} onSelectApp={onSelectApp} alwaysShow /></div>;
+      return hasApps
+        ? <div className="p-3 flex justify-center"><CityMiniMap apps={apps} onSelectApp={onSelectApp} alwaysShow /></div>
+        : <div className="p-6 text-center font-pixel text-[9px] text-cyan-500/40 tracking-wide">No buildings to map</div>;
     }
     if (activePane === 'filter') {
       return (
