@@ -2,6 +2,8 @@ import { useMemo, useRef, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { formatClockTime } from '../../utils/formatters';
 import { computeActivityDensity, buildTimelineBuckets } from '../../utils/cityTimeline';
+import useDrawerTab from '../../hooks/useDrawerTab';
+import { CITY_PANE_IDS, CITY_INTEL_PANE_IDS } from './cityPanes';
 
 const SEVERITY_RANK = { critical: 0, warning: 1, info: 2 };
 const SEVERITY_COLORS = {
@@ -10,7 +12,7 @@ const SEVERITY_COLORS = {
   info: { dot: 'bg-cyan-400', text: 'text-cyan-300', border: 'border-cyan-500/25' },
 };
 
-function buildAttentionItems({ apps, cosAgents, reviewCounts, instances, systemHealth, notificationCounts }) {
+export function buildAttentionItems({ apps, cosAgents, reviewCounts, instances, systemHealth, notificationCounts }) {
   const items = [];
 
   (apps || []).forEach(app => {
@@ -333,8 +335,31 @@ function TimelineView({ logs }) {
   );
 }
 
+// Intel-pane tabs. `attention`/`timeline`/`activity` line up with the same-named
+// `cityPane` values so the desktop tab and the compact disclosure sheet address the
+// same surface through one URL param.
+export const CITY_INTEL_TABS = [
+  { id: 'attention', label: 'ATTENTION' },
+  { id: 'timeline', label: 'TIMELINE' },
+  { id: 'activity', label: 'ACTIVITY' },
+];
+
+// Renders just the body for a given intel tab — reused by the desktop cockpit pane
+// and the compact/phone disclosure sheet so both show identical content. The parent
+// must be a bounded `flex flex-col` container (the lists are `flex-1`).
+export function CityIntelContent({ tab, items, eventLogs }) {
+  if (tab === 'timeline') return <TimelineView logs={eventLogs} />;
+  if (tab === 'activity') return <ActivityLogList logs={eventLogs} />;
+  return <AttentionList items={items} />;
+}
+
 export default function CityIntelPane({ apps, cosAgents, reviewCounts, instances, systemHealth, notificationCounts, eventLogs }) {
-  const [tab, setTab] = useState('attention');
+  // The active tab is URL-addressable via `cityPane` (shared with the compact
+  // layout), so a reload / back-forward restores it and a deep link opens it.
+  // `vitals`/`map`/etc. aren't intel tabs, so anything outside the intel subset
+  // falls back to `attention`.
+  const [activePane, setActivePane] = useDrawerTab('cityPane', null, CITY_PANE_IDS);
+  const tab = CITY_INTEL_PANE_IDS.includes(activePane) ? activePane : 'attention';
   const [collapsed, setCollapsed] = useState(false);
 
   const items = useMemo(
@@ -343,14 +368,17 @@ export default function CityIntelPane({ apps, cosAgents, reviewCounts, instances
   );
 
   const criticalCount = items.filter(i => i.severity === 'critical').length;
+  const selectTab = (id) => { setActivePane(id); setCollapsed(false); };
 
   return (
     <div className={`absolute top-16 right-3 ${collapsed ? '' : 'bottom-20'} w-72 pointer-events-auto`}>
       <div className={`${collapsed ? '' : 'h-full'} bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg overflow-hidden flex flex-col`}>
-        <div className="flex items-stretch border-b border-cyan-500/20">
+        <div className="flex items-stretch border-b border-cyan-500/20" role="tablist" aria-label="Intel">
           <button
             type="button"
-            onClick={() => { setTab('attention'); setCollapsed(false); }}
+            role="tab"
+            aria-selected={tab === 'attention' && !collapsed}
+            onClick={() => selectTab('attention')}
             className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 transition-colors ${
               tab === 'attention' && !collapsed
                 ? 'bg-cyan-500/10 text-cyan-400'
@@ -369,7 +397,9 @@ export default function CityIntelPane({ apps, cosAgents, reviewCounts, instances
           </button>
           <button
             type="button"
-            onClick={() => { setTab('timeline'); setCollapsed(false); }}
+            role="tab"
+            aria-selected={tab === 'timeline' && !collapsed}
+            onClick={() => selectTab('timeline')}
             className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 border-l border-cyan-500/20 transition-colors ${
               tab === 'timeline' && !collapsed
                 ? 'bg-cyan-500/10 text-cyan-400'
@@ -381,7 +411,9 @@ export default function CityIntelPane({ apps, cosAgents, reviewCounts, instances
           </button>
           <button
             type="button"
-            onClick={() => { setTab('activity'); setCollapsed(false); }}
+            role="tab"
+            aria-selected={tab === 'activity' && !collapsed}
+            onClick={() => selectTab('activity')}
             className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 border-l border-cyan-500/20 transition-colors ${
               tab === 'activity' && !collapsed
                 ? 'bg-cyan-500/10 text-cyan-400'
@@ -399,17 +431,12 @@ export default function CityIntelPane({ apps, cosAgents, reviewCounts, instances
             onClick={() => setCollapsed(c => !c)}
             className="px-2 py-2 border-l border-cyan-500/20 text-cyan-500/50 hover:bg-cyan-500/5 hover:text-cyan-400 transition-colors"
             title={collapsed ? 'Expand' : 'Collapse'}
+            aria-label={collapsed ? 'Expand intel pane' : 'Collapse intel pane'}
           >
             <span className="font-pixel text-[11px]">{collapsed ? '[+]' : '[-]'}</span>
           </button>
         </div>
-        {!collapsed && (
-          tab === 'attention'
-            ? <AttentionList items={items} />
-            : tab === 'timeline'
-              ? <TimelineView logs={eventLogs} />
-              : <ActivityLogList logs={eventLogs} />
-        )}
+        {!collapsed && <CityIntelContent tab={tab} items={items} eventLogs={eventLogs} />}
       </div>
     </div>
   );

@@ -6,13 +6,18 @@
  * automated pulse on system health. On each run it:
  *   1. Reads the task-learning per-category metrics (`byTaskType`) — the same
  *      completion data the Learning tab renders.
- *   2. For every category with `failed > 0`, records a structured single-line log
- *      entry (slug, total/failed counts, lastCompleted, avg/max duration).
+ *   2. For every category with failures in the RECENT WINDOW (issue #2617: the
+ *      `recentOutcomes` ring windowed by `computeWindowedStats`, NOT the
+ *      never-decaying lifetime `failed` counter), records a structured
+ *      single-line log entry (slug, windowed total/failed counts, lastCompleted,
+ *      avg/max duration). A category that failed historically but has a clean
+ *      recent window drops off as the window rolls.
  *   3. Aggregates the failing categories, ordered by impact, into ONE persistent
  *      GitHub summary issue — reusing an existing issue marked `monitoring` so the
  *      loop never files a fresh duplicate each cycle.
- *   4. Applies a `needs attention` label while failures exist (and removes it once
- *      the categories recover) so the same summary isn't re-reported as stale.
+ *   4. Applies a `needs attention` label while recent failures exist (and removes
+ *      it once the windowed failing set is empty) so the same summary isn't
+ *      re-reported as stale.
  *
  * NO LLM calls — this is a pure metrics-read + `gh` issue write, safe to run on a
  * schedule under the cold-bootstrap AI policy. The pure helpers (compute/sort,
@@ -22,7 +27,7 @@
 
 import { spawn } from 'child_process'
 import { PATHS, safeJSONParse } from '../../lib/fileUtils.js'
-import { loadLearningData } from '../taskLearning/store.js'
+import { loadLearningData, computeWindowedStats } from '../taskLearning/store.js'
 
 // The label that marks the ONE persistent summary issue to reuse across runs, and
 // the attention label the loop toggles so a still-open summary isn't re-filed.
@@ -38,33 +43,43 @@ const SLUG_MARKER = `<!-- lil-slug: ${DIAGNOSTICS_SLUG} -->`
 const STABLE_TITLE = 'CoS self-diagnostics: self-healing failures'
 
 /**
- * Reduce the learning `byTaskType` map to the categories that have at least one
- * failure, projected onto the fields the summary + logs need, ordered by impact.
- * Pure. Impact order: most failures first, then lowest success rate, then most
- * total runs (a big-sample low-rate category outranks a one-off flake).
+ * Reduce the learning `byTaskType` map to the categories with at least one
+ * failure in the RECENT WINDOW (issue #2617), projected onto the fields the
+ * summary + logs need, ordered by impact. Pure. Counts come from
+ * `computeWindowedStats` over each bucket's `recentOutcomes` ring (bounded by
+ * both sample count and age) — NOT the lifetime `failed` counter, which never
+ * decays and would keep a long-fixed category on the monitoring issue forever.
+ * A category with a clean (or empty) recent window is excluded, so stale rows
+ * drop off as the window rolls and the `needs attention` label can clear.
+ * Impact order: most recent failures first, then lowest windowed success rate,
+ * then most windowed runs (a big-sample low-rate category outranks a one-off
+ * flake).
  *
  * @param {Record<string, object>} byTaskType
- * @param {{ minCompleted?: number }} [opts] - ignore thin categories below this
- *   completion count (default 1 — any category with a recorded failure qualifies).
+ * @param {{ minCompleted?: number, now?: number }} [opts] - `minCompleted`
+ *   ignores thin categories below this windowed run count (default 1 — any
+ *   category with a recent failure qualifies); `now` is the clock seam
+ *   forwarded to the windowing (epoch ms).
  * @returns {Array<{ slug, total, failed, succeeded, successRate, lastCompleted, avgDurationMs, maxDurationMs }>}
  */
-export function computeFailingCategories(byTaskType, { minCompleted = 1 } = {}) {
+export function computeFailingCategories(byTaskType, { minCompleted = 1, now = Date.now() } = {}) {
   if (!byTaskType || typeof byTaskType !== 'object') return []
   return Object.entries(byTaskType)
-    .map(([slug, m]) => ({
-      slug,
-      total: m?.completed ?? 0,
-      failed: m?.failed ?? 0,
-      succeeded: m?.succeeded ?? 0,
-      // Prefer the stored rate; fall back to a derived one so an older record
-      // without `successRate` still sorts/renders correctly.
-      successRate: Number.isFinite(m?.successRate)
-        ? m.successRate
-        : (m?.completed > 0 ? Math.round(((m.succeeded ?? 0) / m.completed) * 100) : 0),
-      lastCompleted: m?.lastCompleted ?? null,
-      avgDurationMs: m?.avgDurationMs ?? null,
-      maxDurationMs: m?.maxDurationMs ?? null
-    }))
+    .map(([slug, m]) => {
+      const w = computeWindowedStats(m?.recentOutcomes, { now })
+      return {
+        slug,
+        total: w.windowedCompleted,
+        failed: w.windowedFailed,
+        succeeded: w.windowedSucceeded,
+        // Post-filter rows always have windowed samples, so the null sentinel
+        // (empty window) only shows up in rows the filter drops.
+        successRate: w.windowedSuccessRate ?? 0,
+        lastCompleted: m?.lastCompleted ?? null,
+        avgDurationMs: m?.avgDurationMs ?? null,
+        maxDurationMs: m?.maxDurationMs ?? null
+      }
+    })
     .filter(c => c.failed > 0 && c.total >= minCompleted)
     .sort((a, b) =>
       b.failed - a.failed ||
@@ -94,7 +109,7 @@ export function formatDurationShort(ms) {
  * emits it via console so logs stay single-line + emoji-prefixed (CLAUDE.md).
  */
 export function formatCategoryLogLine(c) {
-  return `🩺 ${c.slug}: ${c.failed}/${c.total} failed (${c.successRate}% success) · ` +
+  return `🩺 ${c.slug}: ${c.failed}/${c.total} recent failed (${c.successRate}% success) · ` +
     `last ${c.lastCompleted || 'n/a'} · avg ${formatDurationShort(c.avgDurationMs)} · max ${formatDurationShort(c.maxDurationMs)}`
 }
 
@@ -113,11 +128,11 @@ export function buildDiagnosticsIssueBody(failing, { generatedAt = new Date().to
   lines.push('_Automated CoS self-diagnostics — regenerated each run. Do not hand-edit; edits are overwritten._')
   lines.push('')
   if (!failing || failing.length === 0) {
-    lines.push('✅ **All self-healing categories are passing** — no categories with recorded failures.')
+    lines.push('✅ **All self-healing categories are passing** — no categories with failures in the recent window.')
   } else {
-    lines.push(`Found **${failing.length}** self-healing categor${failing.length === 1 ? 'y' : 'ies'} with recorded failures, ordered by impact:`)
+    lines.push(`Found **${failing.length}** self-healing categor${failing.length === 1 ? 'y' : 'ies'} with recent failures (recency-windowed — long-fixed categories drop off as the window rolls), ordered by impact:`)
     lines.push('')
-    lines.push('| Category | Failed / Total | Success rate | Last completed | Avg duration | Max duration |')
+    lines.push('| Category | Failed / Total (recent) | Success rate (recent) | Last completed | Avg duration | Max duration |')
     lines.push('| --- | --- | --- | --- | --- | --- |')
     for (const c of failing) {
       lines.push(`| \`${c.slug}\` | ${c.failed} / ${c.total} | ${c.successRate}% | ${c.lastCompleted || '—'} | ${formatDurationShort(c.avgDurationMs)} | ${formatDurationShort(c.maxDurationMs)} |`)
@@ -215,10 +230,11 @@ export async function runSelfDiagnostics({
   now = () => new Date().toISOString()
 } = {}) {
   const data = await loadLearning()
-  const failing = computeFailingCategories(data?.byTaskType)
+  // Window against the injected clock so tests are deterministic (issue #2617).
+  const failing = computeFailingCategories(data?.byTaskType, { now: new Date(now()).getTime() })
 
   if (failing.length === 0) {
-    console.log('🩺 Self-diagnostics: no self-healing categories with recorded failures — all clear')
+    console.log('🩺 Self-diagnostics: no self-healing categories with recent failures — all clear')
   } else {
     console.log(`🩺 Self-diagnostics: ${failing.length} failing categor${failing.length === 1 ? 'y' : 'ies'} (top: ${failing[0].slug} ${failing[0].failed}/${failing[0].total})`)
     for (const c of failing) console.log(formatCategoryLogLine(c))

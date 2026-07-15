@@ -281,22 +281,25 @@ When PLAN.md is missing, empty, or fully completed, brainstorm and implement a n
 1. Read GOALS.md from {repoPath} for context on the app's goals and priorities.
    If no GOALS.md exists, focus on general improvements.
 2. Skim recent \`.changelog/\` entries and the last 50 \`git log\` entries to avoid re-implementing completed features
-3. Review the codebase structure, recent git log, and any README or docs to understand the app
-4. Identify ONE small, high-impact feature that:
+3. Read REJECTED.md from {repoPath} (if it exists) to understand previously rejected ideas — do NOT re-propose an idea matching a rejected entry
+4. Check the repo's recently closed-unmerged PRs (\`gh pr list --state closed --search "is:unmerged" --limit 20\`, or the forge's equivalent) — a brainstormed feature whose PR the user closed WITHOUT merging was rejected; treat those ideas as rejected too
+5. Review the codebase structure, recent git log, and any README or docs to understand the app
+6. Identify ONE small, high-impact feature that:
    - Aligns with GOALS.md priorities (if available)
    - Is NOT already shipped per recent \`.changelog/\` entries or \`git log\` (avoid re-implementing shipped features)
+   - Does NOT match a REJECTED.md entry or a closed-unmerged automation PR (rejected ideas stay rejected)
    - Saves user time, improves UX, or makes the app more useful
    - Is self-contained and completable in one session
    - Does NOT duplicate existing functionality
-5. Implement the feature:
+7. Implement the feature:
    - Write clean, tested code following existing patterns
    - Run tests to ensure nothing is broken
-6. **Review your changed code for reuse, quality, and efficiency** (DRY, dead code, naming, simpler equivalents, missed edge cases) and fix any findings. Claude Code can run \`/simplify\` for this pass; on other CLIs, do the equivalent diff review by hand.
-7. Add the feature as a checked item in PLAN.md (create the file if needed) **with a slug ID** derived from the feature title (lowercase kebab-case, ≤50 chars, unique against every existing \`[slug]\` in PLAN.md):
+8. **Review your changed code for reuse, quality, and efficiency** (DRY, dead code, naming, simpler equivalents, missed edge cases) and fix any findings. Claude Code can run \`/simplify\` for this pass; on other CLIs, do the equivalent diff review by hand.
+9. Add the feature as a checked item in PLAN.md (create the file if needed) **with a slug ID** derived from the feature title (lowercase kebab-case, ≤50 chars, unique against every existing \`[slug]\` in PLAN.md):
    \`\`\`
    - [x] [<slug-of-feature>] <description of the feature you implemented>
    \`\`\`
-8. Commit with a clear description of the feature and rationale`,
+10. Commit with a clear description of the feature and rationale`,
 
   'plan-task': `[Plan Task: {appName}] Claim and ship next PLAN.md item
 

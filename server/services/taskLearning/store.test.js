@@ -13,6 +13,9 @@ import {
   EXTERNAL_UNTYPED_TASK_TYPE,
   appendRecentOutcome,
   computeWindowedStats,
+  computeEffectiveSuccessRate,
+  isSkipCandidate,
+  EFFECTIVE_RATE_MIN_WINDOW_SAMPLES,
   RECENT_OUTCOMES_CAP,
   DEFAULT_WINDOW_MAX_COUNT
 } from './store.js';
@@ -478,5 +481,108 @@ describe('store.computeWindowedStats', () => {
     const ring = Array.from({ length: DEFAULT_WINDOW_MAX_COUNT + 20 }, (_, i) => ({ t: `r-${i}`, s: true }));
     const stats = computeWindowedStats(ring, { maxAgeMs: Infinity });
     expect(stats.windowedCompleted).toBe(DEFAULT_WINDOW_MAX_COUNT);
+  });
+});
+
+describe('store.computeEffectiveSuccessRate (issue #2617)', () => {
+  // A recent ring of `n` outcomes ending now, oldest first.
+  const ring = (results, now = Date.now()) =>
+    results.map((s, i) => ({ t: new Date(now - (results.length - i) * 60000).toISOString(), s }));
+
+  it('returns the windowed rate when the window has enough samples (the issue\'s failure scenario)', () => {
+    // 40 failures during a since-fixed bug, then 15 straight successes:
+    // lifetime ≈ 27%, windowed = 100%. Decisions must read the windowed rate.
+    const metrics = {
+      completed: 55, succeeded: 15, failed: 40, successRate: 27,
+      recentOutcomes: ring(Array(15).fill(true))
+    };
+    expect(computeEffectiveSuccessRate(metrics)).toEqual({
+      successRate: 100, source: 'windowed', windowedCompleted: 15
+    });
+  });
+
+  it('falls back to the lifetime rate when the window has fewer than the minimum samples', () => {
+    const metrics = {
+      completed: 20, succeeded: 4, failed: 16, successRate: 20,
+      recentOutcomes: ring([true, true, true, true]) // 4 < EFFECTIVE_RATE_MIN_WINDOW_SAMPLES(5)
+    };
+    expect(computeEffectiveSuccessRate(metrics)).toEqual({
+      successRate: 20, source: 'lifetime', windowedCompleted: 4
+    });
+  });
+
+  it('falls back to lifetime on an empty or missing ring (pre-migration bucket)', () => {
+    expect(computeEffectiveSuccessRate({ completed: 10, successRate: 40 })).toMatchObject({
+      successRate: 40, source: 'lifetime', windowedCompleted: 0
+    });
+    expect(computeEffectiveSuccessRate({ completed: 10, successRate: 40, recentOutcomes: [] }).successRate).toBe(40);
+  });
+
+  it('returns the null sentinel (never a fabricated 0) when no rate exists at all', () => {
+    expect(computeEffectiveSuccessRate(undefined)).toEqual({
+      successRate: null, source: 'lifetime', windowedCompleted: 0
+    });
+    expect(computeEffectiveSuccessRate({ completed: 0 }).successRate).toBeNull();
+  });
+
+  it('ages stale samples out of the window before deciding — an old burst cannot keep the window "full"', () => {
+    const now = Date.parse('2026-07-12T00:00:00.000Z');
+    const DAY = 24 * 60 * 60 * 1000;
+    const stale = Array.from({ length: 10 }, () => ({ t: new Date(now - 40 * DAY).toISOString(), s: false }));
+    const metrics = { completed: 10, succeeded: 0, failed: 10, successRate: 0, recentOutcomes: stale };
+    // All 10 samples are older than the 30-day default window → lifetime fallback.
+    expect(computeEffectiveSuccessRate(metrics, { now })).toEqual({
+      successRate: 0, source: 'lifetime', windowedCompleted: 0
+    });
+  });
+
+  it('respects a caller-supplied minWindowSamples bar', () => {
+    const metrics = { successRate: 10, recentOutcomes: ring([true, true, true]) };
+    expect(computeEffectiveSuccessRate(metrics).source).toBe('lifetime'); // 3 < default 5
+    expect(computeEffectiveSuccessRate(metrics, { minWindowSamples: 3 })).toMatchObject({
+      successRate: 100, source: 'windowed'
+    });
+    expect(EFFECTIVE_RATE_MIN_WINDOW_SAMPLES).toBe(5);
+  });
+
+  it('trusts a BAD recent window too — recency cuts both ways', () => {
+    // Good lifetime rate but 6 recent failures → windowed 0% wins.
+    const metrics = {
+      completed: 100, succeeded: 90, failed: 10, successRate: 90,
+      recentOutcomes: ring(Array(6).fill(false))
+    };
+    expect(computeEffectiveSuccessRate(metrics)).toMatchObject({ successRate: 0, source: 'windowed' });
+  });
+});
+
+describe('store.isSkipCandidate (issue #2617)', () => {
+  const ring = (results, now = Date.now()) =>
+    results.map((s, i) => ({ t: new Date(now - (results.length - i) * 60000).toISOString(), s }));
+
+  it('is false for a recovered type (poor lifetime, ≥5 recent successes)', () => {
+    expect(isSkipCandidate({
+      completed: 55, succeeded: 15, failed: 40, successRate: 27,
+      recentOutcomes: ring(Array(15).fill(true))
+    })).toBe(false);
+  });
+
+  it('is true for a still-failing type (poor lifetime AND poor window)', () => {
+    expect(isSkipCandidate({
+      completed: 20, succeeded: 2, failed: 18, successRate: 10,
+      recentOutcomes: ring(Array(8).fill(false))
+    })).toBe(true);
+  });
+
+  it('falls back to the lifetime rate on a thin window (acceptance criterion 2)', () => {
+    expect(isSkipCandidate({
+      completed: 55, succeeded: 15, failed: 40, successRate: 27,
+      recentOutcomes: ring([true, true, true])
+    })).toBe(true);
+  });
+
+  it('is false below the 5-completion threshold or for a missing bucket', () => {
+    expect(isSkipCandidate({ completed: 4, successRate: 0 })).toBe(false);
+    expect(isSkipCandidate(undefined)).toBe(false);
+    expect(isSkipCandidate(null)).toBe(false);
   });
 });
