@@ -525,9 +525,11 @@ export function analyzeAgentFailure(output, task, model) {
 
 // An investigation in any of these states means the failure cause is already
 // being tracked — a repeat failure with the same fingerprint is the SAME cause,
-// not new work. Terminal states (completed/cancelled) allow a fresh task: the
-// cause was dealt with, so a recurrence is genuinely new.
-const OPEN_INVESTIGATION_STATUSES = new Set(['pending', 'in_progress', 'blocked']);
+// not new work. `completed` is the only terminal status in the task vocabulary
+// (see taskParser.js STATUS_MAP); everything else — including `challenged`,
+// where a task can park for days awaiting user arbitration — stays open, so a
+// fresh task is only allowed once the prior cause was actually dealt with.
+const OPEN_INVESTIGATION_STATUSES = new Set(['pending', 'in_progress', 'challenged', 'blocked']);
 
 // Rolling circuit breaker across ALL fingerprints, mirroring autoFixer.js's
 // tripCircuit: at most INVESTIGATION_CIRCUIT_MAX_CREATIONS investigation tasks
@@ -585,8 +587,22 @@ async function findOpenInvestigation(fingerprint) {
  * per failure cause — returns the existing task when it fires) and a rolling
  * circuit breaker (returns null when open). See maybeCreateInvestigationTask
  * for the meta-cascade guard.
+ *
+ * Serialized on a module-level promise tail: a failure storm fires several
+ * concurrent finalize chains, and without the tail two same-fingerprint creates
+ * can both pass the fingerprint scan (and both read a below-cap circuit) before
+ * either addTask lands — the exact TOCTOU the guards exist to close. Each
+ * caller still sees its own result/rejection; the tail itself never poisons.
  */
-export async function createInvestigationTask(agentId, originalTask, errorAnalysis) {
+let investigationCreateTail = Promise.resolve();
+
+export function createInvestigationTask(agentId, originalTask, errorAnalysis) {
+  const run = investigationCreateTail.then(() => doCreateInvestigationTask(agentId, originalTask, errorAnalysis));
+  investigationCreateTail = run.catch(() => {});
+  return run;
+}
+
+async function doCreateInvestigationTask(agentId, originalTask, errorAnalysis) {
   const analysis = errorAnalysis || {};
   const category = analysis.category || 'unknown';
   const rawMessage = analysis.message || 'Agent failed with an unrecognized error';
@@ -626,7 +642,14 @@ export async function createInvestigationTask(agentId, originalTask, errorAnalys
     || analysis.suggestedFix
     || 'Review the agent output, decide whether to fix the underlying config/code and retry, or close the task.';
 
-  const description = `[Auto] Investigate agent failure: ${message}
+  // The app rides in the headline (mirroring the `[Improvement: <app>]`
+  // convention) so addTask's first-line dedup — which sees no `metadata.app`
+  // on investigation tasks — can't collapse identical messages from DIFFERENT
+  // apps into one task. Same-app repeats are already caught by the fingerprint
+  // scan above; deliberately NOT passed as `app` to addTask, which would
+  // change workspace routing for the investigation agent.
+  const app = originalTask?.metadata?.app || null;
+  const description = `[Auto] Investigate agent failure${app ? ` [${app}]` : ''}: ${message}
 
 ## What happened
 Agent \`${agentId}\` failed while working on task \`${originalTask.id}\` (${originalDesc}).

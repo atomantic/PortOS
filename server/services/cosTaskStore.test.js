@@ -199,6 +199,30 @@ describe('cosTaskStore.addTask', () => {
     expect(reloaded.metadata.diagnostics).toEqual(diagnostics);
   });
 
+  it('persists the investigation guard markers into metadata and round-trips them through markdown (#2615)', async () => {
+    const created = await addTask({
+      description: '[Auto] Investigate agent failure: agent exited during startup',
+      approvalRequired: true,
+      isInvestigation: true,
+      investigationFingerprint: 'startup-failure:user:none'
+    }, 'internal');
+    expect(created.metadata.isInvestigation).toBe(true);
+    expect(created.metadata.investigationFingerprint).toBe('startup-failure:user:none');
+    // Survives the markdown serialize → parse round-trip: the colon-bearing
+    // fingerprint stays intact (parser splits on the FIRST colon only) and the
+    // boolean marker comes back as the string 'true' (isTruthyMeta territory).
+    const { tasks } = await getCosTasks();
+    const reloaded = tasks.find(t => t.id === created.id);
+    expect(reloaded.metadata.investigationFingerprint).toBe('startup-failure:user:none');
+    expect(reloaded.metadata.isInvestigation === true || reloaded.metadata.isInvestigation === 'true').toBe(true);
+  });
+
+  it('omits investigation guard metadata when not supplied', async () => {
+    const created = await addTask({ description: 'ordinary task' }, 'user');
+    expect(created.metadata.isInvestigation).toBeUndefined();
+    expect(created.metadata.investigationFingerprint).toBeUndefined();
+  });
+
   it('omits diagnostics metadata when none is supplied and ignores a non-object / array value', async () => {
     const created = await addTask({ description: 'no diagnostics here' }, 'user');
     expect(created.metadata.diagnostics).toBeUndefined();

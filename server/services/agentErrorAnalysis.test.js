@@ -295,7 +295,7 @@ describe('createInvestigationTask guards (#2615)', () => {
     }), 'internal');
   });
 
-  it.each(['pending', 'in_progress', 'blocked'])(
+  it.each(['pending', 'in_progress', 'challenged', 'blocked'])(
     'skips creation while a same-fingerprint investigation is %s',
     async (status) => {
       const existing = { id: 'inv-open', status, metadata: { investigationFingerprint: 'startup-failure:user:none' } };
@@ -355,6 +355,47 @@ describe('createInvestigationTask guards (#2615)', () => {
     // Every call reached addTask — none were suppressed by the circuit, because
     // duplicate returns never consumed creation budget.
     expect(addTask).toHaveBeenCalledTimes(INVESTIGATION_CIRCUIT_MAX_CREATIONS + 1);
+  });
+
+  it('embeds the failed task\'s app in the headline so first-line dedup cannot collapse different apps', async () => {
+    await createInvestigationTask('agent-1', { ...failedTask, metadata: { app: 'ExampleApp' } }, analysis);
+    expect(addTask.mock.calls[0][0].description.split('\n')[0])
+      .toBe('[Auto] Investigate agent failure [ExampleApp]: Agent exited during startup');
+    // No app → unchanged headline shape.
+    addTask.mockClear();
+    mockEmptyStore();
+    await createInvestigationTask('agent-2', failedTask, analysis);
+    expect(addTask.mock.calls[0][0].description.split('\n')[0])
+      .toBe('[Auto] Investigate agent failure: Agent exited during startup');
+  });
+
+  it('serializes concurrent same-fingerprint creates so only one task lands (TOCTOU)', async () => {
+    // Stateful store double: created tasks become visible to the NEXT scan,
+    // proving the second create's fingerprint scan runs after the first's
+    // addTask instead of interleaving ahead of it.
+    const store = [];
+    getAllTasks.mockReset();
+    getAllTasks.mockImplementation(async () => ({ user: { tasks: [] }, cos: { tasks: [...store] } }));
+    addTask.mockReset();
+    addTask.mockImplementation(async (taskData) => {
+      const created = {
+        id: `inv-${store.length + 1}`,
+        status: 'pending',
+        metadata: { investigationFingerprint: taskData.investigationFingerprint, isInvestigation: true }
+      };
+      store.push(created);
+      return created;
+    });
+
+    const [first, second] = await Promise.all([
+      createInvestigationTask('agent-a', failedTask, analysis),
+      createInvestigationTask('agent-b', { ...failedTask, id: 'task-2' }, analysis)
+    ]);
+
+    expect(addTask).toHaveBeenCalledTimes(1);
+    expect(store).toHaveLength(1);
+    expect(first).toBe(store[0]);  // creator gets the created task
+    expect(second).toBe(store[0]); // second create deduped to the same task
   });
 });
 
