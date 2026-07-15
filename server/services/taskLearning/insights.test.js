@@ -102,6 +102,45 @@ describe('insights.getLearningInsights — standing learnings surfacing (issue #
   });
 });
 
+describe('insights.getLearningInsights — effective (windowed) rates (issue #2617)', () => {
+  const ring = (results, now = Date.now()) =>
+    results.map((s, i) => ({ t: new Date(now - (results.length - i) * 60000).toISOString(), s }));
+
+  it('ranks performers on the effective rate and drops the stale worst-perf warning for a recovered type', async () => {
+    loadLearningData.mockResolvedValue(learningData({
+      byTaskType: {
+        'recovered': {
+          completed: 55, succeeded: 15, failed: 40, successRate: 27,
+          avgDurationMs: 60000, recentOutcomes: ring(Array(15).fill(true))
+        },
+        'steady': { completed: 10, succeeded: 8, failed: 2, successRate: 80, avgDurationMs: 60000, recentOutcomes: [] }
+      }
+    }));
+    const view = await getLearningInsights();
+    // Recovered ranks best (windowed 100% > steady's lifetime 80%) and carries
+    // its evidence pairing.
+    expect(view.insights.bestPerforming[0]).toMatchObject({
+      type: 'recovered', successRate: 100, rateSource: 'windowed', windowedCompleted: 15
+    });
+    // No "may need prompt improvements" warning for the recovered type.
+    const worstWarning = view.recommendations.find(r => r.id === 'worst-perf:recovered');
+    expect(worstWarning).toBeUndefined();
+  });
+
+  it('still warns on a genuinely failing type', async () => {
+    loadLearningData.mockResolvedValue(learningData({
+      byTaskType: {
+        'still-broken': {
+          completed: 20, succeeded: 2, failed: 18, successRate: 10,
+          avgDurationMs: 60000, recentOutcomes: ring(Array(8).fill(false))
+        }
+      }
+    }));
+    const view = await getLearningInsights();
+    expect(view.recommendations.find(r => r.id === 'worst-perf:still-broken')).toBeDefined();
+  });
+});
+
 describe('insights.getLearningSummary — effective (windowed) rates (issue #2617)', () => {
   const ring = (results, now = Date.now()) =>
     results.map((s, i) => ({ t: new Date(now - (results.length - i) * 60000).toISOString(), s }));

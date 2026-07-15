@@ -264,6 +264,16 @@ export async function suggestModelTier(taskType) {
     return failureAvoidance.avoidTiers.length > 0 ? avoidanceOnlySuggestion() : null;
   }
 
+  // Effective (windowed-when-available) task-type rate (issue #2617). Used both
+  // to gate the all-time failing-tier branch below and in the low-success
+  // fallback: routingAccuracy's per-tier counters have no recency window of
+  // their own, so after a since-fixed failure burst a tier reads "failing"
+  // forever — when the type's recent window is healthy, that all-time evidence
+  // is stale and must not steer routing (to `heavy`, or away from the very tier
+  // that is currently succeeding).
+  const effective = computeEffectiveSuccessRate(metrics);
+  const recentlyHealthy = effective.source === 'windowed' && effective.successRate >= 60;
+
   // Check routing accuracy for tier-specific signals
   const routingData = data.routingAccuracy?.[taskType];
   if (routingData) {
@@ -294,9 +304,13 @@ export async function suggestModelTier(taskType) {
       );
     }
 
-    // If current default tier is failing, find a better one
+    // If current default tier is failing, find a better one. Recency gate
+    // (issue #2617): skip this branch entirely when the type's recent window is
+    // healthy — the all-time tier rates are stale after a since-fixed burst, and
+    // acting on them would route a currently-working type to `heavy` (and steer
+    // selection off the tier it is presently succeeding on) indefinitely.
     const failingTiers = tierResults.filter(t => t.successRate < 40);
-    if (failingTiers.length > 0) {
+    if (failingTiers.length > 0 && !recentlyHealthy) {
       const successfulTier = tierResults.find(t => t.successRate >= 60);
       return withFailureSignal(
         {
@@ -312,11 +326,10 @@ export async function suggestModelTier(taskType) {
   // windowed when the ring has enough samples, else lifetime), suggest a
   // heavier model. On the lifetime rate alone, a type that recovered from a
   // since-fixed failure burst would be routed to `heavy` forever.
-  const { successRate: effectiveRate } = computeEffectiveSuccessRate(metrics);
-  if (effectiveRate !== null && effectiveRate < 60) {
+  if (effective.successRate !== null && effective.successRate < 60) {
     return withFailureSignal({
       suggested: 'heavy',
-      reason: `${taskType} has ${effectiveRate}% success rate - heavier model may help`
+      reason: `${taskType} has ${effective.successRate}% success rate - heavier model may help`
     });
   }
 
@@ -435,10 +448,15 @@ export async function getPerformanceSummary() {
   for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
     if (metrics.completed < 3) continue;
 
-    const { successRate } = computeEffectiveSuccessRate(metrics);
+    const { successRate, source: rateSource, windowedCompleted } = computeEffectiveSuccessRate(metrics);
     const entry = {
       taskType,
       successRate,
+      // Evidence pairing (issue #2617): a windowed rate must travel with its
+      // own sample count — "0% success across 200 tasks" (lifetime completed
+      // next to a 6-sample windowed rate) materially overstates the evidence.
+      rateSource,
+      windowedCompleted,
       completed: metrics.completed,
       avgDurationMin: Math.round(metrics.avgDurationMs / 60000)
     };
@@ -753,7 +771,7 @@ function classifyConfidenceTier(metrics, { highThreshold = 80, lowThreshold = 50
   // null sentinel ("no rate recorded") must survive to callers (repo
   // absent-vs-empty rule), not collapse into a fabricated 0%.
   const rate = effective.successRate ?? 0;
-  const result = { successRate: effective.successRate, rateSource: effective.source };
+  const result = { successRate: effective.successRate, rateSource: effective.source, windowedCompleted: effective.windowedCompleted };
 
   if (completed < minSamples) return { tier: 'new', autoApprove: true, ...result };
   if (rate >= highThreshold) return { tier: 'high', autoApprove: true, ...result };
@@ -771,17 +789,19 @@ function classifyConfidenceTier(metrics, { highThreshold = 80, lowThreshold = 50
 export async function getTaskTypeConfidence(taskType, thresholds = {}) {
   const data = await loadLearningData();
   const metrics = data.byTaskType[taskType];
-  const { tier, autoApprove, successRate, rateSource } = classifyConfidenceTier(metrics, thresholds);
+  const { tier, autoApprove, successRate, rateSource, windowedCompleted } = classifyConfidenceTier(metrics, thresholds);
 
   // Reasons quote the EFFECTIVE rate the tier was classified on (issue #2617),
-  // annotated when it came from the recency window so "82% success" next to a
-  // depressed lifetime rate is explainable.
+  // annotated when it came from the recency window — and paired with the
+  // WINDOW's sample count, not the lifetime one, so "100% recent success
+  // across 15 recent runs" never overstates its evidence as 200 lifetime runs.
   const rateLabel = rateSource === 'windowed' ? `${successRate ?? 0}% recent success` : `${successRate ?? 0}% success`;
+  const attemptsLabel = rateSource === 'windowed' ? `${windowedCompleted} recent runs` : `${metrics?.completed} runs`;
   const reasons = {
     new: `Fewer than ${thresholds.minSamples ?? 5} completions — auto-approve by default`,
-    high: `${rateLabel} across ${metrics?.completed} runs — high confidence`,
+    high: `${rateLabel} across ${attemptsLabel} — high confidence`,
     medium: `${rateLabel} — acceptable confidence`,
-    low: `${rateLabel} after ${metrics?.completed} attempts — requires approval`
+    low: `${rateLabel} after ${attemptsLabel} — requires approval`
   };
 
   return {
@@ -792,6 +812,7 @@ export async function getTaskTypeConfidence(taskType, thresholds = {}) {
     // bucket without a stored rate and a thin window) instead of a fake 0.
     successRate,
     rateSource,
+    windowedCompleted,
     completed: metrics?.completed ?? 0,
     reason: reasons[tier]
   };

@@ -307,6 +307,25 @@ describe('windowed-rate decisions (issue #2617)', () => {
       expect(out).toMatchObject({ suggested: 'heavy' });
       expect(out.reason).toContain('27%');
     });
+
+    it('gates the all-time failing-tier branch on the recent window (populated routingAccuracy)', async () => {
+      // The issue's scenario with REAL routing data: all 55 runs on one tier →
+      // that tier's all-time routingAccuracy is 27% (<40 "failing"), which
+      // pre-fix returned `heavy` before the effective-rate fallback ever ran.
+      const data = learningWith({ 'self-improve:x': recoveredMetrics() });
+      data.routingAccuracy = { 'self-improve:x': { default: { succeeded: 15, failed: 40 } } };
+      loadLearningData.mockResolvedValue(data);
+      expect(await suggestModelTier('self-improve:x')).toBeNull();
+    });
+
+    it('still escalates on failing tier data when the window is too thin (lifetime behavior preserved)', async () => {
+      const data = learningWith({ 'self-improve:x': thinWindowMetrics() });
+      data.routingAccuracy = { 'self-improve:x': { default: { succeeded: 15, failed: 40 } } };
+      loadLearningData.mockResolvedValue(data);
+      const out = await suggestModelTier('self-improve:x');
+      expect(out).toMatchObject({ suggested: 'heavy' });
+      expect(out.avoidTiers).toContain('default');
+    });
   });
 
   describe('getPerformanceSummary', () => {
@@ -320,6 +339,21 @@ describe('windowed-rate decisions (issue #2617)', () => {
       expect(summary.needsAttention.map(e => e.taskType)).not.toContain('recovered');
       expect(summary.skipped.map(e => e.taskType)).not.toContain('recovered');
       expect(summary.skipped.map(e => e.taskType)).toContain('still-broken');
+    });
+
+    it('pairs a windowed rate with its own sample count (evidence pairing for alerts/UI)', async () => {
+      // Healthy lifetime (200 runs) hit by a 6-failure burst: the windowed 0%
+      // must travel with windowedCompleted=6, not the 200 lifetime completions.
+      loadLearningData.mockResolvedValue(learningWith({
+        'healthy-burst': {
+          completed: 200, succeeded: 190, failed: 10, successRate: 95,
+          lastCompleted: new Date().toISOString(), avgDurationMs: 60000,
+          recentOutcomes: ring(Array(6).fill(false))
+        }
+      }));
+      const summary = await getPerformanceSummary();
+      const entry = summary.needsAttention.find(e => e.taskType === 'healthy-burst');
+      expect(entry).toMatchObject({ successRate: 0, rateSource: 'windowed', windowedCompleted: 6, completed: 200 });
     });
   });
 

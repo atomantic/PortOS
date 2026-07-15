@@ -31,12 +31,16 @@ export async function getLearningInsights() {
     ? Math.round((data.totals.succeeded / data.totals.completed) * 100)
     : 0;
 
-  // Find best and worst performing task types
+  // Find best and worst performing task types on the EFFECTIVE rate (issue
+  // #2617: windowed when the outcome ring has enough samples, else lifetime) —
+  // otherwise a type that recovered from a since-fixed failure burst keeps
+  // ranking "worst" and generating a prompt-improvement warning forever, right
+  // next to the windowed performance/confidence views that call it healthy.
   const taskTypes = Object.entries(data.byTaskType)
-    .map(([type, metrics]) => ({
-      type,
-      ...metrics
-    }))
+    .map(([type, metrics]) => {
+      const { successRate, source: rateSource, windowedCompleted } = computeEffectiveSuccessRate(metrics);
+      return { type, ...metrics, successRate: successRate ?? 0, rateSource, windowedCompleted };
+    })
     .filter(t => t.completed >= 3) // Only include types with enough data
     .sort((a, b) => b.successRate - a.successRate);
 
@@ -92,12 +96,16 @@ export async function getLearningInsights() {
       bestPerforming: bestPerforming.map(t => ({
         type: t.type,
         successRate: t.successRate,
+        rateSource: t.rateSource,
+        windowedCompleted: t.windowedCompleted,
         avgDurationMin: Math.round(t.avgDurationMs / 60000),
         completed: t.completed
       })),
       worstPerforming: worstPerforming.map(t => ({
         type: t.type,
         successRate: t.successRate,
+        rateSource: t.rateSource,
+        windowedCompleted: t.windowedCompleted,
         avgDurationMin: Math.round(t.avgDurationMs / 60000),
         completed: t.completed
       })),
