@@ -36,7 +36,7 @@ describe('videoTimeline routes', () => {
     });
 
     it('returns a bounded envelope when pagination is requested', async () => {
-      svc.listProjects.mockResolvedValue(
+      svc.listProjects.mockResolvedValueOnce(
         Array.from({ length: 5 }, (_, i) => ({ id: `p${i}`, name: `P${i}` }))
       );
       const r = await request(app).get('/api/video-timeline/projects?limit=2&offset=1');

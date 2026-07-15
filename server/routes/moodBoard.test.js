@@ -25,7 +25,7 @@ import moodBoardRoutes from './moodBoard.js';
 const makeApp = () => {
   const app = express();
   app.use(express.json());
-  app.use('/api/mood-board', moodBoardRoutes);
+  app.use('/api/mood-boards', moodBoardRoutes);
   app.use(errorMiddleware);
   return app;
 };
@@ -36,7 +36,7 @@ describe('mood-board routes', () => {
   describe('GET /', () => {
     it('returns the full boards array by default', async () => {
       svc.listBoards.mockResolvedValueOnce([{ id: 'mb-1', name: 'A' }]);
-      const res = await request(makeApp()).get('/api/mood-board');
+      const res = await request(makeApp()).get('/api/mood-boards');
       expect(res.status).toBe(200);
       expect(Array.isArray(res.body)).toBe(true);
       expect(res.body).toHaveLength(1);
@@ -46,7 +46,7 @@ describe('mood-board routes', () => {
       svc.listBoards.mockResolvedValueOnce(
         Array.from({ length: 5 }, (_, i) => ({ id: `mb-${i}`, name: `B${i}` }))
       );
-      const res = await request(makeApp()).get('/api/mood-board?limit=2&offset=1');
+      const res = await request(makeApp()).get('/api/mood-boards?limit=2&offset=1');
       expect(res.status).toBe(200);
       expect(res.body.items).toHaveLength(2);
       expect(res.body.items[0].id).toBe('mb-1');
@@ -59,13 +59,13 @@ describe('mood-board routes', () => {
   describe('GET /:id', () => {
     it('returns 404 when the board is missing', async () => {
       svc.getBoard.mockResolvedValueOnce(null);
-      const res = await request(makeApp()).get('/api/mood-board/nope');
+      const res = await request(makeApp()).get('/api/mood-boards/nope');
       expect(res.status).toBe(404);
     });
 
     it('returns the board when found', async () => {
       svc.getBoard.mockResolvedValueOnce({ id: 'mb-1', name: 'A' });
-      const res = await request(makeApp()).get('/api/mood-board/mb-1');
+      const res = await request(makeApp()).get('/api/mood-boards/mb-1');
       expect(res.status).toBe(200);
       expect(res.body.id).toBe('mb-1');
     });
