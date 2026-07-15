@@ -79,6 +79,7 @@ vi.mock('./eventScheduler.js', () => ({
 vi.mock('./notifications.js', () => ({
   addNotification: vi.fn().mockResolvedValue({}),
   exists: vi.fn().mockResolvedValue(false),
+  removeByMetadata: vi.fn().mockResolvedValue({ success: true, removedIds: [] }),
   NOTIFICATION_TYPES: { AGENT_WARNING: 'agent_warning' },
   PRIORITY_LEVELS: { HIGH: 'high' }
 }))
@@ -149,7 +150,7 @@ import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, clearAllPrWatcherState
 import { getLocalParts } from '../lib/timezone.js'
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js'
 import { parseCronToNextRun, parseCronToPrevRun } from './eventScheduler.js'
-import { addNotification, exists as notificationExists } from './notifications.js'
+import { addNotification, exists as notificationExists, removeByMetadata } from './notifications.js'
 
 const mockSchedule = ({ tasks = {}, executions = {}, templates = [] } = {}) => {
   readJSONFile.mockResolvedValue({ version: 2, tasks, executions, templates })
@@ -1509,6 +1510,28 @@ describe('taskSchedule', () => {
         })
         await recordTaskTypeFailure('security', 'app-1', { errorCategory: 'auth-error' })
         expect(addNotification).not.toHaveBeenCalled()
+      })
+
+      it('recordTaskTypeSuccess prunes the stale park notification (so a re-park re-notifies)', async () => {
+        mockSchedule({
+          tasks: { security: { type: 'rotation', enabled: true } },
+          executions: { 'task:security': { lastRun: null, count: 0, perApp: {
+            'app-1': { lastRun: null, count: 0, consecutiveFailures: 5, failureParkedAt: new Date().toISOString(), failureParkReason: 'auth-error' }
+          } } }
+        })
+        await recordTaskTypeSuccess('security', 'app-1')
+        expect(removeByMetadata).toHaveBeenCalledWith('failureParkKey', 'security:app-1')
+      })
+
+      it('recordTaskTypeSuccess does NOT prune when the type was not parked', async () => {
+        mockSchedule({
+          tasks: { security: { type: 'rotation', enabled: true } },
+          executions: { 'task:security': { lastRun: null, count: 0, perApp: {
+            'app-1': { lastRun: null, count: 0, consecutiveFailures: 2 }
+          } } }
+        })
+        await recordTaskTypeSuccess('security', 'app-1')
+        expect(removeByMetadata).not.toHaveBeenCalled()
       })
 
       it('recordTaskTypeSuccess resets the ledger and returns false when already clean', async () => {

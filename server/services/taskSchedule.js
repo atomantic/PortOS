@@ -694,11 +694,17 @@ export async function updateTaskInterval(taskType, settings) {
   // Config change unparks a failure-parked type (#2616): editing a type's
   // settings is an explicit "I've addressed the cause" signal, so clear the
   // consecutive-failure ledger + auto-park (global + every per-app record) so
-  // the type gets a fresh start on its next tick.
+  // the type gets a fresh start on its next tick. Track the scopes that were
+  // actually parked so their stale notifications can be pruned after the save.
   const topExec = schedule.executions[`task:${taskType}`];
+  const unparkedScopes = [];
   if (topExec) {
+    if (topExec.failureParkedAt) unparkedScopes.push(null);
     clearFailureLedgerFields(topExec);
-    for (const rec of Object.values(topExec.perApp || {})) clearFailureLedgerFields(rec);
+    for (const [id, rec] of Object.entries(topExec.perApp || {})) {
+      if (rec.failureParkedAt) unparkedScopes.push(id);
+      clearFailureLedgerFields(rec);
+    }
   }
 
   // Globally disabling pr-watcher also drops its execution cooldown so a later
@@ -739,6 +745,10 @@ export async function updateTaskInterval(taskType, settings) {
     await clearAllPrWatcherState().catch((err) => {
       emitLog('warn', `pr-watcher global-disable state clear failed: ${err.message}`, {}, '📅 TaskSchedule');
     });
+  }
+
+  for (const scope of unparkedScopes) {
+    await clearTaskTypeFailureParkNotification(taskType, scope);
   }
 
   emitLog('info', `Updated task interval for ${taskType}`, { taskType, settings }, '📅 TaskSchedule');
@@ -964,6 +974,11 @@ export async function resetPerpetualForManualRun(taskType, appId = null) {
 // Type-level consecutive-failure ledger (#2616)
 // ============================================================
 
+/** Dedup / notification key for a type+app failure park. */
+function failureParkKeyFor(taskType, appId) {
+  return appId ? `${taskType}:${appId}` : taskType;
+}
+
 /** Delete every failure-ledger field from a record. Returns true if any changed. */
 function clearFailureLedgerFields(record) {
   if (!record) return false;
@@ -975,6 +990,17 @@ function clearFailureLedgerFields(record) {
 }
 
 /**
+ * Remove any lingering auto-park notification for a now-unparked type+app so the
+ * bell stops showing a stale "parked" warning AND a later re-park can re-notify
+ * (the `exists` dedup in notifyTaskTypeFailurePark keys on this same field, and
+ * scans read notifications too). Best-effort — lazy-imported, never throws out.
+ */
+async function clearTaskTypeFailureParkNotification(taskType, appId) {
+  const { removeByMetadata } = await import('./notifications.js');
+  await removeByMetadata('failureParkKey', failureParkKeyFor(taskType, appId)).catch(() => {});
+}
+
+/**
  * Surface a user-facing notification when a task type auto-parks. Lazy-imports
  * the notifications service so taskSchedule has no static dependency on it (and
  * so the failure path stays free of that I/O until a park actually fires).
@@ -982,7 +1008,7 @@ function clearFailureLedgerFields(record) {
  */
 async function notifyTaskTypeFailurePark(taskType, appId, record) {
   const { addNotification, exists, NOTIFICATION_TYPES, PRIORITY_LEVELS } = await import('./notifications.js');
-  const dedupeKey = appId ? `${taskType}:${appId}` : taskType;
+  const dedupeKey = failureParkKeyFor(taskType, appId);
   if (await exists(NOTIFICATION_TYPES.AGENT_WARNING, 'failureParkKey', dedupeKey)) return;
   const scope = appId ? `app ${appId}` : 'global';
   const category = record.failureParkReason || record.lastErrorCategory || 'unknown';
@@ -1046,9 +1072,11 @@ export async function recordTaskTypeFailure(taskType, appId = null, { errorCateg
 export async function recordTaskTypeSuccess(taskType, appId = null) {
   const schedule = await loadSchedule();
   const record = resolveExecutionRecord(schedule, taskType, appId);
+  const wasParked = !!record?.failureParkedAt;
   if (!clearFailureLedgerFields(record)) return false;
   await saveSchedule(schedule);
   emitLog('info', `Task type ${taskType}${appId ? ` (app ${appId})` : ''} succeeded — failure ledger reset`, { taskType, appId }, '📅 TaskSchedule');
+  if (wasParked) await clearTaskTypeFailureParkNotification(taskType, appId);
   return true;
 }
 
@@ -1080,16 +1108,27 @@ export async function clearTaskTypeFailurePark(taskType, appId = null) {
   const schedule = await loadSchedule();
   const top = schedule.executions[executionKey(taskType)];
   if (!top) return false;
+  // Collect the type+app scopes whose park we clear so their stale
+  // notifications can be pruned after the write (so a re-park re-notifies).
+  const unparkedScopes = [];
   let changed = false;
   if (appId) {
+    const wasParked = !!top.perApp?.[appId]?.failureParkedAt;
     changed = clearFailureLedgerFields(top.perApp?.[appId]);
+    if (wasParked) unparkedScopes.push(appId);
   } else {
+    if (top.failureParkedAt) unparkedScopes.push(null);
     changed = clearFailureLedgerFields(top);
-    for (const rec of Object.values(top.perApp || {})) {
+    for (const [id, rec] of Object.entries(top.perApp || {})) {
+      const wasParked = !!rec.failureParkedAt;
       if (clearFailureLedgerFields(rec)) changed = true;
+      if (wasParked) unparkedScopes.push(id);
     }
   }
   if (changed) await saveSchedule(schedule);
+  for (const scope of unparkedScopes) {
+    await clearTaskTypeFailureParkNotification(taskType, scope);
+  }
   return changed;
 }
 
