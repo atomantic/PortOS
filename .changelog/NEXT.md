@@ -1,5 +1,9 @@
 # Unreleased
 
+## CoS self-learning reliability
+
+- **[issue-2620] Layered Intelligence stops re-proposing finished work** — completed plan items stay recognized as done, and proposal outcomes now distinguish merged, rejected, and abandoned instead of counting every closed issue as merged.
+
 ## Added
 
 - **First-run tutorial for POST cognitive drills.** The timed, stimulus-driven cognitive drills (n-back, digit-span, stroop, schulte-table, mental-rotation, reaction-time) start flashing a stimulus the instant they mount, which is disorienting the first time you meet one. Each drill type now shows a one-time how-to card — a plain-language goal, numbered steps, and the controls — the first time it's encountered, and holds the drill (and its timers) until you tap **Start drill**. The card is config-aware (it names the n-back lag, the digit-span direction, and the reaction-time mode), then never shows again for that type (tracked per type in `localStorage`). Non-timed drills (math/memory, LLM/verbal) are self-explanatory and are not gated.
