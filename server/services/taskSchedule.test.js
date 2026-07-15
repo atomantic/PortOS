@@ -120,7 +120,6 @@ import {
   setPerpetualSignature,
   recordTaskTypeFailure,
   recordTaskTypeSuccess,
-  getTaskTypeFailureInfo,
   clearTaskTypeFailurePark,
   computeFailureBackoffMs,
   FAILURE_BACKOFF_BASE_MS,
@@ -1551,36 +1550,41 @@ describe('taskSchedule', () => {
         expect(await recordTaskTypeSuccess('security', 'app-1')).toBe(false)
       })
 
-      it('getTaskTypeFailureInfo reads back the ledger (0 defaults when absent)', async () => {
-        mockSchedule({
-          tasks: { security: { type: 'rotation', enabled: true } },
-          executions: { 'task:security': { lastRun: null, count: 0, perApp: {
-            'app-1': { lastRun: null, count: 0, consecutiveFailures: 2, lastErrorCategory: 'timeout' }
-          } } }
-        })
-        expect(await getTaskTypeFailureInfo('security', 'app-1')).toMatchObject({ consecutiveFailures: 2, lastErrorCategory: 'timeout' })
-        expect(await getTaskTypeFailureInfo('security', 'app-2')).toBeNull()
-      })
-
-      it('clearTaskTypeFailurePark(appId=null) clears global + every per-app record', async () => {
+      it('clearTaskTypeFailurePark(appId=null) clears ONLY the global record, not other apps', async () => {
         mockSchedule({
           tasks: { security: { type: 'rotation', enabled: true } },
           executions: { 'task:security': {
             lastRun: null, count: 0, consecutiveFailures: 4, failureParkedAt: new Date().toISOString(),
             perApp: {
-              'app-1': { lastRun: null, count: 0, consecutiveFailures: 5, failureParkedAt: new Date().toISOString() },
-              'app-2': { lastRun: null, count: 0, consecutiveFailures: 1 }
+              'app-1': { lastRun: null, count: 0, consecutiveFailures: 5, failureParkedAt: new Date().toISOString() }
             }
           } }
         })
         expect(await clearTaskTypeFailurePark('security')).toBe(true)
         const saved = JSON.parse(writeFile.mock.calls.at(-1)[1])
         const top = saved.executions['task:security']
+        // Global record cleared...
         expect(top.consecutiveFailures).toBeUndefined()
         expect(top.failureParkedAt).toBeUndefined()
-        expect(top.perApp['app-1'].consecutiveFailures).toBeUndefined()
+        // ...but app-1's independent ledger is untouched (its cause was never addressed).
+        expect(top.perApp['app-1'].consecutiveFailures).toBe(5)
+        expect(top.perApp['app-1'].failureParkedAt).toBeTruthy()
+      })
+
+      it('clearTaskTypeFailurePark(appId) clears ONLY that app, not the global record', async () => {
+        mockSchedule({
+          tasks: { security: { type: 'rotation', enabled: true } },
+          executions: { 'task:security': {
+            lastRun: null, count: 0, consecutiveFailures: 4, failureParkedAt: new Date().toISOString(),
+            perApp: { 'app-1': { lastRun: null, count: 0, consecutiveFailures: 5, failureParkedAt: new Date().toISOString() } }
+          } }
+        })
+        expect(await clearTaskTypeFailurePark('security', 'app-1')).toBe(true)
+        const saved = JSON.parse(writeFile.mock.calls.at(-1)[1])
+        const top = saved.executions['task:security']
         expect(top.perApp['app-1'].failureParkedAt).toBeUndefined()
-        expect(top.perApp['app-2'].consecutiveFailures).toBeUndefined()
+        expect(top.consecutiveFailures).toBe(4)
+        expect(removeByMetadata).toHaveBeenCalledWith('failureParkKey', 'security:app-1')
       })
 
       it('shouldRunTask returns failure-parked for a parked ROTATION type', async () => {

@@ -1081,55 +1081,27 @@ export async function recordTaskTypeSuccess(taskType, appId = null) {
 }
 
 /**
- * Read the failure-park state for a task type (or null when not parked). Mirrors
- * getPerpetualParkInfo for the failure ledger.
- */
-export async function getTaskTypeFailureInfo(taskType, appId = null) {
-  const schedule = await loadSchedule();
-  const record = resolveExecutionRecord(schedule, taskType, appId);
-  if (!record) return null;
-  return {
-    consecutiveFailures: Number(record.consecutiveFailures) || 0,
-    lastFailureAt: record.lastFailureAt ?? null,
-    lastErrorCategory: record.lastErrorCategory ?? null,
-    failureParkedAt: record.failureParkedAt ?? null,
-    failureParkReason: record.failureParkReason ?? null
-  };
-}
-
-/**
- * Clear a task type's failure ledger + auto-park for a manual retry or config
- * change (unpark). Clears the global record AND every per-app record for the
- * type when `appId` is null, so a config change resets the whole type; targets a
- * single app when `appId` is set (a manual per-app "Run now"). Returns true if
- * anything was cleared.
+ * Clear a task type's failure ledger + auto-park for a manual retry (unpark),
+ * scoped to exactly the record being re-run: the per-app record when `appId` is
+ * set (a per-app "Run now"), or the global (appId-less) record when null (a
+ * global self-improvement "Run now"). Does NOT touch other apps' independent
+ * ledgers — a global retrigger must not silently unpark an app whose failure
+ * cause was never addressed. (The config-change unpark in updateTaskInterval,
+ * which DOES reset every scope of the type, has its own inline clear.) Returns
+ * true if anything was cleared.
  */
 export async function clearTaskTypeFailurePark(taskType, appId = null) {
   const schedule = await loadSchedule();
   const top = schedule.executions[executionKey(taskType)];
   if (!top) return false;
-  // Collect the type+app scopes whose park we clear so their stale
-  // notifications can be pruned after the write (so a re-park re-notifies).
-  const unparkedScopes = [];
-  let changed = false;
-  if (appId) {
-    const wasParked = !!top.perApp?.[appId]?.failureParkedAt;
-    changed = clearFailureLedgerFields(top.perApp?.[appId]);
-    if (wasParked) unparkedScopes.push(appId);
-  } else {
-    if (top.failureParkedAt) unparkedScopes.push(null);
-    changed = clearFailureLedgerFields(top);
-    for (const [id, rec] of Object.entries(top.perApp || {})) {
-      const wasParked = !!rec.failureParkedAt;
-      if (clearFailureLedgerFields(rec)) changed = true;
-      if (wasParked) unparkedScopes.push(id);
-    }
-  }
-  if (changed) await saveSchedule(schedule);
-  for (const scope of unparkedScopes) {
-    await clearTaskTypeFailureParkNotification(taskType, scope);
-  }
-  return changed;
+  const record = appId ? top.perApp?.[appId] : top;
+  const wasParked = !!record?.failureParkedAt;
+  if (!clearFailureLedgerFields(record)) return false;
+  await saveSchedule(schedule);
+  // Prune the stale park notification (if any) so the bell clears and a later
+  // re-park can re-notify.
+  if (wasParked) await clearTaskTypeFailureParkNotification(taskType, appId);
+  return true;
 }
 
 /**
