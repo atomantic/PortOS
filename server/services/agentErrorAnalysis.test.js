@@ -316,15 +316,18 @@ describe('createInvestigationTask guards (#2615)', () => {
     }), 'internal');
   });
 
-  it('unions a later same-fingerprint failure into the surviving investigation\'s affectedTasks', async () => {
+  it('unions a later same-fingerprint failure into the surviving investigation\'s affectedTasks and body', async () => {
     const existing = {
-      id: 'inv-open', status: 'pending',
+      id: 'inv-open', status: 'pending', description: '[Auto] Investigate agent failure [startup-failure:user:none]: x\n\nbody',
       metadata: { investigationFingerprint: 'startup-failure:user:none', affectedTasks: ['task-1'] }
     };
     getAllTasks.mockResolvedValue({ user: { tasks: [] }, cos: { tasks: [existing] } });
     await createInvestigationTask('agent-2', { ...failedTask, id: 'task-2' }, analysis);
     expect(addTask).not.toHaveBeenCalled();
-    expect(updateTask).toHaveBeenCalledWith('inv-open', { metadata: { affectedTasks: ['task-1', 'task-2'] } }, 'internal');
+    expect(updateTask).toHaveBeenCalledWith('inv-open', {
+      description: `${existing.description}\n- Also blocks task \`task-2\` (same cause; agent \`agent-2\`).`,
+      metadata: { affectedTasks: ['task-1', 'task-2'] }
+    }, 'internal');
   });
 
   it('does not re-write affectedTasks when the failed task is already recorded', async () => {

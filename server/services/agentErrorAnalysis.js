@@ -631,12 +631,16 @@ async function doCreateInvestigationTask(agentId, originalTask, errorAnalysis) {
     emitLog('info', `⏭️ Skipping duplicate investigation for ${fingerprint}: ${existing.id} is still ${existing.status}`, {
       agentId, taskId: originalTask.id, fingerprint, existingTaskId: existing.id, existingStatus: existing.status
     });
-    // Union this failure's task id into the surviving investigation, so the
-    // record names EVERY task blocked on this cause — resolving it should
-    // unblock all of them, not just the first one mentioned in the body.
+    // Union this failure's task id into the surviving investigation — both in
+    // metadata AND appended to the human/agent-facing body — so the record
+    // names EVERY task blocked on this cause: resolving it should unblock all
+    // of them, not just the first one mentioned in "What unblocks".
     const affected = Array.isArray(existing.metadata?.affectedTasks) ? existing.metadata.affectedTasks : [];
     if (originalTask.id && !affected.includes(originalTask.id)) {
-      await updateTask(existing.id, { metadata: { affectedTasks: [...affected, originalTask.id] } }, 'internal');
+      await updateTask(existing.id, {
+        description: `${existing.description}\n- Also blocks task \`${originalTask.id}\` (same cause; agent \`${agentId}\`).`,
+        metadata: { affectedTasks: [...affected, originalTask.id] }
+      }, 'internal');
     }
     return existing;
   }
