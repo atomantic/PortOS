@@ -712,22 +712,39 @@ export function createRunnerService(config = {}) {
 
         // A timeout firing between the last read and here would have finalized
         // the run already — don't overwrite a TIMEOUT with a spurious success.
+        // Once we claim settlement the outer processStream().catch bails, so
+        // this block owns cleanup end-to-end: release the slot up front and
+        // guarantee onComplete fires even if a persistence write throws (full
+        // disk, rename failure) — otherwise the caller would hang forever.
         if (!markSettled()) return;
-        await atomicWrite(outputPath, output);
         activeRuns.delete(runId);
+        try {
+          await atomicWrite(outputPath, output);
 
-        const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
-        metadata.endTime = new Date().toISOString();
-        metadata.duration = Date.now() - startTime;
-        metadata.exitCode = 0;
-        metadata.success = true;
-        metadata.outputSize = Buffer.byteLength(output);
-        metadata.hadReasoning = reasoning.length > 0;
-        metadata.usedReasoningAsFallback = usedReasoningAsFallback;
-        await atomicWrite(metadataPath, metadata);
+          const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
+          metadata.endTime = new Date().toISOString();
+          metadata.duration = Date.now() - startTime;
+          metadata.exitCode = 0;
+          metadata.success = true;
+          metadata.outputSize = Buffer.byteLength(output);
+          metadata.hadReasoning = reasoning.length > 0;
+          metadata.usedReasoningAsFallback = usedReasoningAsFallback;
+          await atomicWrite(metadataPath, metadata);
 
-        hooks.onRunCompleted?.(metadata, output);
-        onComplete?.(metadata);
+          safeSettle(() => hooks.onRunCompleted?.(metadata, output), `Run ${runId} onRunCompleted hook`);
+          safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
+        } catch (writeErr) {
+          console.error(`❌ Run ${runId} success finalize error: ${writeErr.message}`);
+          const failMetadata = {
+            endTime: new Date().toISOString(),
+            duration: Date.now() - startTime,
+            success: false,
+            error: `Run finalization failed: ${writeErr.message}`,
+            outputSize: Buffer.byteLength(output),
+          };
+          safeSettle(() => hooks.onRunFailed?.(failMetadata, failMetadata.error, output), `Run ${runId} onRunFailed hook`);
+          safeSettle(() => onComplete?.(failMetadata), `Run ${runId} onComplete`);
+        }
       };
 
       processStream().catch(async (err) => {

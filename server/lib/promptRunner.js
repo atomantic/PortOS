@@ -1277,7 +1277,12 @@ async function executeProviderRunOnce({ provider, prompt, source, model, runId: 
         stopRun(runId).catch(() => { /* best-effort cancel */ });
         safeReject(new Error(`API execution timed out after ${effectiveTimeout}ms`));
       }, effectiveTimeout);
-      executeApiRun({ runId, provider: effectiveProvider, model: effectiveModel, prompt, workspacePath: effectiveCwd, screenshots: Array.isArray(screenshots) ? screenshots : [], onData, onComplete }).catch(safeReject);
+      // Thread the caller's effectiveTimeout into the toolkit's own internal
+      // wall-clock timer so a per-call override (e.g. the importer's long stage
+      // timeout) isn't cut short by the runner's provider/default fallback —
+      // same caller-override precedence CLI/TUI runs already get. The outer
+      // apiTimeoutHandle above stays as a belt-and-suspenders backstop.
+      executeApiRun({ runId, provider: effectiveProvider, model: effectiveModel, prompt, workspacePath: effectiveCwd, screenshots: Array.isArray(screenshots) ? screenshots : [], onData, onComplete, timeout: effectiveTimeout }).catch(safeReject);
     } else if (effectiveProvider.type === PROVIDER_TYPES.TUI) {
       // `source` (e.g. 'pipeline-manuscript-completeness') labels the live,
       // interactive view this TUI run surfaces in the Shell page.
