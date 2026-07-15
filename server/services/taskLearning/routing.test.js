@@ -326,6 +326,28 @@ describe('windowed-rate decisions (issue #2617)', () => {
       expect(out).toMatchObject({ suggested: 'heavy' });
       expect(out.avoidTiers).toContain('default');
     });
+
+    it('keeps tier-failure evidence when the failing tier failed RECENTLY (recovery may be on another tier)', async () => {
+      // Task-wide window is healthy, but the `default` tier has fresh failure
+      // samples in failureSignatures — the recent successes may all have run on
+      // a different tier (the ring carries no tier identity), so the failing
+      // tier must stay steered away from, not be cleared by task-wide recovery.
+      const data = learningWith({ 'self-improve:x': recoveredMetrics() });
+      data.routingAccuracy = { 'self-improve:x': { default: { succeeded: 0, failed: 10 } } };
+      data.failureSignatures = {
+        'tool-error': {
+          count: 2,
+          recent: [
+            { taskType: 'self-improve:x', modelTier: 'default', recordedAt: new Date().toISOString() },
+            { taskType: 'self-improve:x', modelTier: 'default', recordedAt: new Date().toISOString() }
+          ]
+        }
+      };
+      loadLearningData.mockResolvedValue(data);
+      const out = await suggestModelTier('self-improve:x');
+      expect(out).toMatchObject({ suggested: 'heavy' });
+      expect(out.avoidTiers).toContain('default');
+    });
   });
 
   describe('getPerformanceSummary', () => {

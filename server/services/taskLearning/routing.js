@@ -9,7 +9,7 @@
  * module.
  */
 
-import { loadLearningData, emitLog, isSandboxedTaskType, computeEffectiveSuccessRate, isSkipCandidate } from './store.js';
+import { loadLearningData, emitLog, isSandboxedTaskType, computeEffectiveSuccessRate, isSkipCandidate, DEFAULT_WINDOW_MAX_AGE_MS } from './store.js';
 import { resetTaskTypeLearning } from './metrics.js';
 import { computeCorrelationQuality, isCorrelationProven } from './correlationQuality.js';
 
@@ -173,6 +173,30 @@ function mergeAvoidTiers(...lists) {
 }
 
 /**
+ * Tiers with at least one RECENT failure sample for this task type, read from
+ * the enriched `failureSignatures.recent[]` rings (issue #2617). Pure.
+ *
+ * The task-type `recentOutcomes` ring carries no tier identity, so a healthy
+ * task-wide recent window alone cannot prove that a specific tier's failure
+ * evidence is stale — the recent successes may all have run on a DIFFERENT
+ * tier. The failure samples DO carry `modelTier` + `recordedAt`, so this is
+ * the tier-scoped recency signal: a failing tier that appears here failed
+ * recently and must keep being steered away from; one that doesn't has only
+ * stale (pre-window) failure evidence.
+ */
+function tiersWithRecentFailures(data, taskType, { now = Date.now(), maxAgeMs = DEFAULT_WINDOW_MAX_AGE_MS } = {}) {
+  const tiers = new Set();
+  for (const bucket of Object.values(data?.failureSignatures || {})) {
+    for (const sample of bucket?.recent || []) {
+      if (sample?.taskType !== taskType || !sample.modelTier) continue;
+      const t = Date.parse(sample.recordedAt);
+      if (Number.isFinite(t) && now - t <= maxAgeMs) tiers.add(sample.modelTier);
+    }
+  }
+  return tiers;
+}
+
+/**
  * Get suggested priority boost for a task type based on historical success
  * Returns a multiplier: >1 for boost, <1 for demotion
  *
@@ -305,12 +329,18 @@ export async function suggestModelTier(taskType) {
     }
 
     // If current default tier is failing, find a better one. Recency gate
-    // (issue #2617): skip this branch entirely when the type's recent window is
-    // healthy — the all-time tier rates are stale after a since-fixed burst, and
-    // acting on them would route a currently-working type to `heavy` (and steer
-    // selection off the tier it is presently succeeding on) indefinitely.
+    // (issue #2617): skip this branch only when the type's recent window is
+    // healthy AND none of the "failing" tiers has a recent failure on record
+    // (tiersWithRecentFailures) — then the all-time tier rates are stale
+    // evidence from a since-fixed burst, and acting on them would route a
+    // currently-working type to `heavy` (and steer selection off the tier it
+    // is presently succeeding on) indefinitely. A failing tier with RECENT
+    // failure samples keeps its evidence: the task-wide recovery may have
+    // happened on a different tier, and the ring carries no tier identity.
     const failingTiers = tierResults.filter(t => t.successRate < 40);
-    if (failingTiers.length > 0 && !recentlyHealthy) {
+    const recentFailTiers = tiersWithRecentFailures(data, taskType);
+    const failingEvidenceStale = recentlyHealthy && !failingTiers.some(t => recentFailTiers.has(t.tier));
+    if (failingTiers.length > 0 && !failingEvidenceStale) {
       const successfulTier = tierResults.find(t => t.successRate >= 60);
       return withFailureSignal(
         {
@@ -622,9 +652,14 @@ export async function getSkippedTaskTypes() {
     if (isSandboxedTaskType(taskType)) continue;
     // Skip if: completed >= 5 AND effective success rate < 30%
     if (isSkipCandidate(metrics)) {
+      const { successRate, source: rateSource, windowedCompleted } = computeEffectiveSuccessRate(metrics);
       skipped.push({
         taskType,
-        successRate: computeEffectiveSuccessRate(metrics).successRate,
+        successRate,
+        // Evidence pairing (issue #2617): a windowed rate ships with its own
+        // sample count so consumers never render it beside the lifetime total.
+        rateSource,
+        windowedCompleted,
         completed: metrics.completed,
         lastCompleted: metrics.lastCompleted
       });
@@ -741,9 +776,12 @@ export async function getSkippedTaskTypesWithStatus(gracePeriodMs = 7 * 24 * 60 
       ? 0
       : gracePeriodMs - timeSinceLastAttempt;
 
+    const { successRate, source: rateSource, windowedCompleted } = computeEffectiveSuccessRate(metrics);
     skipped.push({
       taskType,
-      successRate: computeEffectiveSuccessRate(metrics).successRate,
+      successRate,
+      rateSource,
+      windowedCompleted,
       completed: metrics.completed,
       lastCompleted: metrics.lastCompleted,
       daysSinceLastAttempt: Math.round(timeSinceLastAttempt / (24 * 60 * 60 * 1000)),
@@ -830,10 +868,12 @@ export async function getConfidenceLevels(thresholds = {}) {
   const levels = { high: [], medium: [], low: [], new: [] };
 
   for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
-    const { tier, autoApprove, successRate } = classifyConfidenceTier(metrics, thresholds);
+    const { tier, autoApprove, successRate, rateSource, windowedCompleted } = classifyConfidenceTier(metrics, thresholds);
     levels[tier].push({
       taskType,
       successRate: successRate ?? 0, // display list keeps the pre-existing 0 default
+      rateSource,
+      windowedCompleted,
       completed: metrics.completed || 0,
       autoApprove,
       lastCompleted: metrics.lastCompleted
