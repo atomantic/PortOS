@@ -1080,12 +1080,12 @@ input[type="color"],
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgb(var(--port-text-muted) / 0.3);
+  background: rgb(var(--port-text-muted));
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgb(var(--port-text-muted) / 0.5);
+  background: rgb(var(--port-text));
 }
 
 /* Hide scrollbar utility */
