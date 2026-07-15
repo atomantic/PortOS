@@ -255,6 +255,15 @@ describe('resolveTypeFailureSignal (#2616)', () => {
     expect(signal).toEqual({ record: 'failure', category: 'hook-error' });
   });
 
+  it('a run that already failed keeps its real error category (hook throw does not relabel it)', () => {
+    const signal = resolveTypeFailureSignal({
+      success: false,
+      errorCategory: 'rate-limit',
+      hookResult: { ran: true, threw: true }
+    });
+    expect(signal).toEqual({ record: 'failure', category: 'rate-limit' });
+  });
+
   it('benign hook reasons (no-proposal/duplicate) leave the exit-code verdict intact', () => {
     for (const reason of ['no-proposal', 'duplicate', 'scope-suppressed', null]) {
       expect(resolveTypeFailureSignal({ success: true, hookResult: { ran: true, outcome: { reason } } }).record)

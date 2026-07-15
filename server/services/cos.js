@@ -758,6 +758,11 @@ async function spawnDequeuePriority0OnDemand(ctx) {
       // detector/reconcile below runs fresh and dispatches on live state (and,
       // if still idle, re-stamps a park reflecting THIS check).
       await taskScheduleMod.resetPerpetualForManualRun(request.taskType, targetApp.id);
+      // A manual "Run" also unparks a failure-parked type (#2616) — clear this
+      // app's consecutive-failure ledger. (Mirrors the sibling
+      // spawnPriority0OnDemand engine in cosTaskGenerator.js; either engine may
+      // drain a given on-demand request, so both must unpark.)
+      await taskScheduleMod.clearTaskTypeFailurePark(request.taskType, targetApp.id);
       // Advance the cooldown eagerly (deduped per app per cycle), but defer
       // binding the active agent until a task is produced — a null result
       // here must not strand `activeAgentId` (issue #978).
@@ -774,6 +779,8 @@ async function spawnDequeuePriority0OnDemand(ctx) {
       emitLog('info', `Processing on-demand improvement: ${request.taskType}`, { requestId: request.id });
       // Same fresh-check guarantee as the app-scoped branch above.
       await taskScheduleMod.resetPerpetualForManualRun(request.taskType);
+      // Manual re-run unparks a failure-parked type (global scope) — #2616.
+      await taskScheduleMod.clearTaskTypeFailurePark(request.taskType);
       await taskScheduleMod.recordExecution(`task:${request.taskType}`);
       await withStateLock(async () => {
         const s = await loadState();

@@ -839,22 +839,18 @@ export function resolveFailedTaskDecision(task, errorAnalysis) {
 export function resolveTypeFailureSignal({ success, terminatedByUser = false, hookResult = null, errorCategory = null } = {}) {
   if (terminatedByUser) return { record: 'skip', category: null };
 
-  let failure = !success;
-  let category = errorCategory || 'unknown';
+  // An already-failed run keeps its real exit-code category; the hook override
+  // only UPGRADES an exit-0 (`success`) run to a failure (the exit-0-but-
+  // unparseable / thrown-hook case). A hook that throws on top of a run that
+  // already failed for e.g. `rate-limit` must not relabel the cause `hook-error`.
+  if (!success) return { record: 'failure', category: errorCategory || 'unknown' };
 
   if (hookResult?.ran) {
-    if (hookResult.threw) {
-      failure = true;
-      category = 'hook-error';
-    } else if (hookResult.outcome?.reason === 'unparseable-response') {
-      failure = true;
-      category = 'unparseable-response';
-    }
+    if (hookResult.threw) return { record: 'failure', category: 'hook-error' };
+    if (hookResult.outcome?.reason === 'unparseable-response') return { record: 'failure', category: 'unparseable-response' };
   }
 
-  return failure
-    ? { record: 'failure', category }
-    : { record: 'success', category: null };
+  return { record: 'success', category: null };
 }
 
 /**
