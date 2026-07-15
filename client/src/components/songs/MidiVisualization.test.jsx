@@ -1,4 +1,4 @@
-import { render, screen, cleanup, fireEvent } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import MidiVisualization from './MidiVisualization.jsx';
 import { __clearMidiNotesCache } from '../../hooks/useMidiNotes.js';
@@ -71,7 +71,9 @@ describe('<MidiVisualization>', () => {
     // Loading state first, then the parsed roll.
     expect(screen.getByText(/Parsing MIDI/)).toBeTruthy();
     await screen.findByText(/3 notes · /);
-    expect(ctx.fill).toHaveBeenCalled(); // note bars painted
+    // The roll paints in a child effect a tick after the footer text commits —
+    // wait for the draw rather than asserting it synchronously (#2580).
+    await waitFor(() => expect(ctx.fill).toHaveBeenCalled()); // note bars painted
     expect(screen.getByText(/C4–G4/)).toBeTruthy();
     expect(screen.getByText(/MuScriptor medium/)).toBeTruthy();
     // Chord lane detected the triad — toggle button present and sr summary names it.
@@ -109,7 +111,7 @@ describe('<MidiVisualization>', () => {
     fireEvent.click(screen.getByLabelText('Zoom in'));
     fireEvent.click(screen.getByLabelText('Zoom out'));
     fireEvent.click(screen.getByLabelText('Fit to width'));
-    expect(ctx.clearRect).toHaveBeenCalled();
+    await waitFor(() => expect(ctx.clearRect).toHaveBeenCalled());
   });
 
   it('play button starts the synth preview and toggles to pause (#2490)', async () => {
