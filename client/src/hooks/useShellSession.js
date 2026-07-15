@@ -792,7 +792,6 @@ export function useShellSession({ isFullscreen } = {}) {
     sendCommand,
     sendCtrlC,
     sendNavKey,
-    refitTerminal,
     restartSession,
     stopSession,
     startNewSession,
