@@ -276,6 +276,21 @@ describe('cosTaskStore.addTask', () => {
     expect(second.duplicate).toBe(true);
   });
 
+  it('emits tasks:changed action "unblocked" on a blocked → pending flip (#2614)', async () => {
+    // cos.init re-runs the dequeue on 'unblocked' (like 'approved') so a
+    // revived task spawns without waiting for an unrelated event or timer.
+    const task = await addTask({ description: 'revive me', app: 'portos', id: 'sys-revive' }, 'internal');
+    await updateTask(task.id, { status: 'blocked', metadata: { blockedCategory: 'max-retries' } }, 'internal');
+    mock.events.length = 0;
+    await updateTask(task.id, { status: 'pending' }, 'internal');
+    const evt = mock.events.find(e => e.name === 'tasks:changed');
+    expect(evt.payload.action).toBe('unblocked');
+    // A non-status edit still emits the plain 'updated' action.
+    mock.events.length = 0;
+    await updateTask(task.id, { priority: 'HIGH' }, 'internal');
+    expect(mock.events.find(e => e.name === 'tasks:changed').payload.action).toBe('updated');
+  });
+
   it('resolving a blocked task re-opens the slot for an identical task (#2614)', async () => {
     const first = await addTask({ description: 'retry me', app: 'portos', id: 'sys-retry' }, 'internal');
     await updateTask(first.id, { status: 'blocked', metadata: { blockedCategory: 'max-retries' } }, 'internal');

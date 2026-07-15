@@ -789,6 +789,17 @@ async function spawnDequeuePriority0OnDemand(ctx) {
       if (!persisted?.duplicate) {
         cosEvents.emit('task:ready', task);
         capacity.trackSpawn(task);
+      } else if (persisted.status === 'blocked') {
+        // Explicit user Run colliding with a failure-blocked twin (#2614): the
+        // retry path is reviving the existing task, not minting a duplicate —
+        // and without this branch the Run is a silent no-op that strands the
+        // bound on-demand review marker. updateTask clears the blocked
+        // metadata on the status flip and merges the fresh payload.
+        await updateTask(persisted.id, { status: 'pending', priority: task.priority, metadata: task.metadata }, 'internal');
+        const revived = { ...task, id: persisted.id };
+        cosEvents.emit('task:ready', revived);
+        capacity.trackSpawn(revived);
+        emitLog('info', `🔁 On-demand ${request.taskType} revived blocked task ${persisted.id}`, { taskId: persisted.id });
       }
     } else if (!task) {
       // Explicit user "Run" produced no task — surface WHY (parked / transient /
@@ -1211,6 +1222,8 @@ export async function init() {
   //   fire tryImmediateSpawn so the just-added task starts instantly, bypassing
   //   the evaluation interval that's meant for system task generation.
   // - 'approved': a newly approved internal task can now spawn — re-run dequeue.
+  // - 'unblocked': a blocked task flipped back to pending (revive/retry, #2614)
+  //   is newly spawnable exactly like an approval — re-run dequeue.
   cosEvents.on('tasks:changed', (data) => {
     if (!isDaemonRunning() || !data?.action) return;
     if (data.action === 'added') {
@@ -1221,7 +1234,7 @@ export async function init() {
       // first; tryImmediateSpawn then handles the just-added task.
       setImmediate(() => dequeueNextTask());
       if (data.type === 'user' && data.task) setImmediate(() => tryImmediateSpawn(data.task));
-    } else if (data.action === 'approved') {
+    } else if (data.action === 'approved' || data.action === 'unblocked') {
       setImmediate(() => dequeueNextTask());
     }
   });

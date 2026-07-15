@@ -78,18 +78,23 @@ async function buildTaskRecord(project, kind, scene, context) {
 }
 
 function buildDescription(project, kind, scene) {
+  // The [cd:…] suffix makes the first line unique per project: addTask's
+  // duplicate scan keys on first-line + metadata.app, and CD tasks carry no
+  // app — without a project discriminator, two projects sharing a name would
+  // dedup against each other's tasks (#2614).
+  const tag = `[cd:${String(project.id).slice(0, 8)}]`;
   if (kind === 'treatment') {
-    return `Creative Director — Treatment for "${project.name}"`;
+    return `Creative Director — Treatment for "${project.name}" ${tag}`;
   }
   if (kind === 'plan') {
-    return `Creative Director — Production Plan for "${project.name}"`;
+    return `Creative Director — Production Plan for "${project.name}" ${tag}`;
   }
   if (kind === 'evaluate' && scene) {
     const total = project.treatment?.scenes?.length || '?';
     const intent = (scene.intent || '').slice(0, 60);
-    return `Creative Director — Evaluate Scene ${scene.order + 1}/${total}: "${intent}" (${project.name})`;
+    return `Creative Director — Evaluate Scene ${scene.order + 1}/${total}: "${intent}" (${project.name}) ${tag}`;
   }
-  return `Creative Director — ${kind} for "${project.name}"`;
+  return `Creative Director — ${kind} for "${project.name}" ${tag}`;
 }
 
 async function persistAndEmit({ id, runId, record }, project, kind, sceneId) {
@@ -102,6 +107,13 @@ async function persistAndEmit({ id, runId, record }, project, kind, sceneId) {
   const persisted = await addTask(record, 'internal', { raw: true });
   let effective = record;
   if (persisted?.duplicate) {
+    // Belt-and-braces: the [cd:…] description tag should make a cross-project
+    // match impossible, but never revive/adopt another project's task — that
+    // would rewrite its metadata to target this project.
+    if (persisted.metadata?.creativeDirector?.projectId !== project.id) {
+      console.log(`⚠️ CD ${kind} enqueue for ${project.id} collided with unrelated task ${persisted.id} — not enqueued`);
+      return persisted;
+    }
     if (persisted.status === 'blocked') {
       // A CD enqueue is an explicit user re-trigger — revive the blocked
       // duplicate with the fresh payload (updateTask clears the blocked

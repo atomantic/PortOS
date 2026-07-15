@@ -425,6 +425,7 @@ export async function updateTask(taskId, updates, taskType = 'user', { now = Dat
     metadata: updatedMetadata
   };
 
+  const previousStatus = tasks[taskIndex].status;
   tasks[taskIndex] = updatedTask;
 
   // Write back to file
@@ -432,7 +433,12 @@ export async function updateTask(taskId, updates, taskType = 'user', { now = Dat
   const markdown = generateTasksMarkdown(tasks, includeApprovalFlags);
   await writeFile(filePath, markdown);
 
-  cosEvents.emit('tasks:changed', { type: taskType, action: 'updated', task: updatedTask });
+  // A blocked → pending flip is a revive: the task is newly spawnable, exactly
+  // like an approval. Emit a distinct action so cos.init's listener re-runs the
+  // dequeue (#2614) — the generic 'updated' action doesn't wake the scheduler,
+  // which left revived tasks stranded until an unrelated event or timer fired.
+  const action = previousStatus === 'blocked' && updatedTask.status === 'pending' ? 'unblocked' : 'updated';
+  cosEvents.emit('tasks:changed', { type: taskType, action, task: updatedTask });
   return updatedTask;
   });
 }

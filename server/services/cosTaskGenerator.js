@@ -681,6 +681,16 @@ async function spawnPriority0OnDemand(ctx) {
         if (!persisted?.duplicate) {
           tasksToSpawn.push(task);
           trackSpawn(task);
+        } else if (persisted.status === 'blocked') {
+          // Explicit user Run colliding with a failure-blocked twin (#2614):
+          // revive the existing task instead of silently dropping the Run and
+          // stranding the bound on-demand review marker. Mirrors the sibling
+          // dequeueNextTask on-demand engine in cos.js.
+          await updateTask(persisted.id, { status: 'pending', priority: task.priority, metadata: task.metadata }, 'internal');
+          const revived = { ...task, id: persisted.id };
+          tasksToSpawn.push(revived);
+          trackSpawn(revived);
+          emitLog('info', `🔁 On-demand ${request.taskType} revived blocked task ${persisted.id}`, { taskId: persisted.id });
         }
       } else if (!task) {
         // Explicit user Run produced no task on THIS engine too — same feedback
