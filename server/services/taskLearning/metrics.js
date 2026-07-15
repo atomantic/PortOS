@@ -536,6 +536,31 @@ export async function resetTaskTypeLearning(taskType) {
   // Remove the task type entry
   delete data.byTaskType[taskType];
 
+  // Purge the task type's samples from the enriched failure signatures (#2619).
+  // Each `recent[]` sample carries its `taskType` and drives
+  // deriveFailureSignalAvoidance, so a leftover sample would keep steering a
+  // just-reset type off a tier. Decrement each bucket's rolling count by the
+  // samples removed and drop a bucket left with nothing.
+  if (data.failureSignatures && typeof data.failureSignatures === 'object') {
+    for (const [category, bucket] of Object.entries(data.failureSignatures)) {
+      if (!Array.isArray(bucket?.recent)) continue;
+      const kept = bucket.recent.filter((s) => s?.taskType !== taskType);
+      const removed = bucket.recent.length - kept.length;
+      if (removed === 0) continue;
+      bucket.recent = kept;
+      bucket.count = Math.max(0, (Number(bucket.count) || 0) - removed);
+      if (bucket.recent.length === 0 && bucket.count <= 0) {
+        delete data.failureSignatures[category];
+      }
+    }
+  }
+
+  // Drop the task type's rows from the cross-type correlation window (#2619) so a
+  // rehabilitated type contributes no stale prediction/outcome pairs to the gauge.
+  if (Array.isArray(data.correlationWindow)) {
+    data.correlationWindow = data.correlationWindow.filter((row) => row?.taskType !== taskType);
+  }
+
   await saveLearningData(data);
 
   emitLog('info', `Reset learning data for ${taskType} (was ${metrics.successRate}% success after ${metrics.completed} attempts)`, {

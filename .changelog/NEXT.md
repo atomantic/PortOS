@@ -4,6 +4,7 @@
 
 - **[issue-2620] Layered Intelligence stops re-proposing finished work** — completed plan items stay recognized as done, and proposal outcomes now distinguish merged, rejected, and abandoned instead of counting every closed issue as merged.
 - **[issue-2617] Task learning forgives fixed problems** — scheduling, model-routing, and self-diagnostics decisions now weigh recent runs instead of lifetime totals, so a task type recovers as soon as it starts succeeding again.
+- **[issue-2619] Self-heal cleanup after a fixed failure storm** — a health-tick reaper now auto-expires stale failure-blocked tasks (older than 14 days) and investigation tasks whose origin is gone/completed via a federation-safe status flip (never deletion); resetting a task type's learning now also purges its stale failure-signature samples and correlation-window rows; failure signatures are age-windowed (30 days) so an outage-era sample stops steering routing; and a poor-lifetime task type whose recent window is clean is now auto-rehabilitated even while it keeps running (not just when idle).
 - **[issue-2615] One investigation per failure cause, not one per failure** — repeated agent failures now dedupe into a single investigation task, with an hourly cap and no investigations-of-investigations.
 - **[issue-2621] Feature brainstorming remembers rejected ideas** — the feature-ideas task now checks REJECTED.md and previously closed-unmerged proposals before suggesting, so declined ideas stop coming back.
 
