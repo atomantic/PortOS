@@ -63,7 +63,7 @@ import mediaRoutes from './routes/media.js';
 import calendarRoutes from './routes/calendar.js';
 import messagesRoutes from './routes/messages.js';
 import genomeRoutes from './routes/genome.js';
-import digitalTwinRoutes from './routes/digital-twin.js';
+import digitalTwinRoutes from './routes/digital-twin/index.js';
 import socialAccountsRoutes from './routes/socialAccounts.js';
 import lmstudioRoutes from './routes/lmstudio.js';
 import voiceRoutes from './routes/voice.js';

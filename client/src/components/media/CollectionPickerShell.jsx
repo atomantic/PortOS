@@ -182,12 +182,13 @@ export default function CollectionPickerShell({
     <div
       ref={menuRef}
       role="menu"
-      className="fixed bg-port-card border border-port-border rounded-lg shadow-xl z-[100] p-1.5 flex flex-col"
+      className="fixed bg-port-card border border-port-border rounded-lg shadow-xl z-[100] p-1.5 flex flex-col max-h-dvh-cap"
       style={{
         left: style?.left ?? `${VIEWPORT_PADDING}px`,
         top: style?.top ?? `${VIEWPORT_PADDING}px`,
         width: style?.width ?? `${width}px`,
-        maxHeight: 'min(360px, calc(100vh - 16px))',
+        '--dvh-cap': '360px',
+        '--dvh-inset': '16px',
         visibility: style ? 'visible' : 'hidden',
       }}
       onClick={(e) => e.stopPropagation()}

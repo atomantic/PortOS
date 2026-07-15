@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
-import { request } from '../lib/testHelper.js';
+import { request } from '../../lib/testHelper.js';
 
 // The route delegates to several service modules; we don't exercise their
 // internals here — this suite pins the ROUTE contract (Zod validation → 400,
@@ -12,7 +12,7 @@ import { request } from '../lib/testHelper.js';
 // module) can call it.
 const fnMap = vi.hoisted(() => (names) => Object.fromEntries(names.map((n) => [n, vi.fn()])));
 
-vi.mock('../services/digital-twin.js', () => fnMap([
+vi.mock('../../services/digital-twin.js', () => fnMap([
   'getDigitalTwinStatus', 'getDocuments', 'getDocumentById', 'createDocument', 'updateDocument', 'deleteDocument',
   'parseTestSuite', 'runTests', 'runMultiTests', 'getTestHistory', 'parseValuesAlignmentSuite', 'runValuesAlignmentTests',
   'getValuesAlignmentHistory', 'parseAdversarialSuite', 'runAdversarialTests', 'getAdversarialTestHistory',
@@ -25,19 +25,19 @@ vi.mock('../services/digital-twin.js', () => fnMap([
   'calculateConfidence', 'getGapRecommendations', 'analyzeAssessment', 'getImportSources', 'analyzeImportedData',
   'saveImportAsDocument',
 ]));
-vi.mock('../services/taste-questionnaire.js', () => fnMap([
+vi.mock('../../services/taste-questionnaire.js', () => fnMap([
   'TASTE', 'getNextQuestion', 'submitAnswer', 'getTasteProfile', 'getSectionResponses', 'generateSectionSummary',
   'generateOverallSummary', 'resetSection', 'generatePersonalizedTasteQuestion',
 ]));
-vi.mock('../services/feedbackLoop.js', () => fnMap([
+vi.mock('../../services/feedbackLoop.js', () => fnMap([
   'submitFeedback', 'getFeedbackStats', 'getRecentFeedback', 'recalculateWeights',
 ]));
-vi.mock('../services/timeCapsule.js', () => fnMap([
+vi.mock('../../services/timeCapsule.js', () => fnMap([
   'createSnapshot', 'listSnapshots', 'getSnapshot', 'deleteSnapshot', 'compareSnapshots',
 ]));
 
-import digitalTwinRoutes from './digital-twin.js';
-import * as digitalTwinService from '../services/digital-twin.js';
+import digitalTwinRoutes from './index.js';
+import * as digitalTwinService from '../../services/digital-twin.js';
 
 const VALID_UUID = '11111111-1111-1111-1111-111111111111';
 
