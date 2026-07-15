@@ -24,7 +24,8 @@ import {
   appendRecentOutcome,
   computeWindowedStats,
   DEFAULT_WINDOW_MAX_COUNT,
-  DEFAULT_WINDOW_MAX_AGE_MS
+  DEFAULT_WINDOW_MAX_AGE_MS,
+  ENVIRONMENTAL_ERROR_CATEGORIES
 } from './store.js';
 import { deriveFailureSignalAvoidance, isNonRoutableLearnedTier } from './routing.js';
 import { recordCorrelationSample } from './correlationQuality.js';
@@ -33,6 +34,54 @@ import { recordCorrelationSample } from './correlationQuality.js';
 // way `recentUnknownErrors` does, while keeping enough recent context to spot
 // trends (provider/model/tier correlation) without a full agent-archive scan.
 const MAX_SIGNATURE_SAMPLES = 10;
+
+// ENVIRONMENTAL_ERROR_CATEGORIES lives in store.js (the leaf module) so both
+// this recorder and routing.js can consume it without deepening the existing
+// metrics⇄routing import cycle; re-exported here for back-compat.
+export { ENVIRONMENTAL_ERROR_CATEGORIES };
+
+
+/**
+ * Record an environmental failure into `data.environmentalFailures` (issue
+ * #2618). Pure — mutates and returns `data`. Mirrors the `errorPatterns` bucket
+ * shape (count + lastOccurred + per-task-type counts) so the UI can render both
+ * the same way. Additive + back-compat: tolerates a learning.json that predates
+ * the `environmentalFailures` key. No-op when the failure carries no category.
+ */
+export function recordEnvironmentalFailure(data, { category, taskType } = {}) {
+  if (!category) return data;
+  if (!data.environmentalFailures) data.environmentalFailures = {};
+  if (!data.environmentalFailures[category]) {
+    data.environmentalFailures[category] = { count: 0, lastOccurred: null, taskTypes: {} };
+  }
+  const bucket = data.environmentalFailures[category];
+  bucket.count++;
+  bucket.lastOccurred = new Date().toISOString();
+  bucket.taskTypes[taskType] = (bucket.taskTypes[taskType] || 0) + 1;
+  return data;
+}
+
+/**
+ * Remove a task type's contribution from every environmental bucket (issue
+ * #2618 reset parity): decrement each bucket's count by the type's share,
+ * delete the per-type entry, and drop a bucket left with nothing — so a reset
+ * type's old outages stop appearing in insights and error-share denominators.
+ * Pure — mutates `data`. Returns the number of events removed.
+ */
+export function purgeEnvironmentalFailuresForType(data, taskType) {
+  let removed = 0;
+  for (const [category, bucket] of Object.entries(data.environmentalFailures || {})) {
+    const typeCount = bucket.taskTypes?.[taskType] || 0;
+    if (typeCount === 0) continue;
+    removed += typeCount;
+    bucket.count = Math.max(0, (Number(bucket.count) || 0) - typeCount);
+    delete bucket.taskTypes[taskType];
+    if (bucket.count <= 0 && Object.keys(bucket.taskTypes || {}).length === 0) {
+      delete data.environmentalFailures[category];
+    }
+  }
+  return removed;
+}
 
 /**
  * Milliseconds between two ISO timestamps. Pure. Returns null (not 0) when
@@ -230,6 +279,14 @@ export async function recordTaskCompletion(agent, task) {
   const duration = agent.result?.duration || 0;
   const errorCategory = telemetry.failureSignature?.category || null;
 
+  // Environmental failure gate (issue #2618): a rate-limit/auth/billing/startup
+  // failure says nothing about the task type or the model tier, so it must not
+  // dent any success-rate aggregate or routing matrix — an outage would otherwise
+  // get a healthy task type skipped (<30% gate) or a healthy tier avoided. Such
+  // runs are diverted to `environmentalFailures` below; errorPatterns and
+  // failureSignatures still record them for diagnostics/prompt hints.
+  const isEnvironmentalFailure = !outcomeSuccess && ENVIRONMENTAL_ERROR_CATEGORIES.has(errorCategory);
+
   // Correlation-quality prediction snapshot (issue #2344) — captured HERE, before
   // ANY of this run's aggregates (byModelTier, routingAccuracy, failureSignatures)
   // are folded in below, so the prediction reflects history strictly BEFORE this
@@ -245,82 +302,91 @@ export async function recordTaskCompletion(agent, task) {
     ? deriveFailureSignalAvoidance(data, taskType).avoidTiers.includes(modelTier)
     : null;
 
-  // Initialize task type bucket if needed
-  if (!data.byTaskType[taskType]) {
-    data.byTaskType[taskType] = {
-      completed: 0,
-      succeeded: 0,
-      failed: 0,
-      totalDurationMs: 0,
-      avgDurationMs: 0,
-      maxDurationMs: 0,
-      p80DurationMs: 0,
-      lastCompleted: null,
-      successRate: 0,
-      // Bounded recency ring (issue #2460) — feeds the windowed rate LI reads.
-      recentOutcomes: []
-    };
-  }
-
-  // Initialize model tier bucket if needed
-  if (!data.byModelTier[modelTier]) {
-    data.byModelTier[modelTier] = {
-      completed: 0,
-      succeeded: 0,
-      failed: 0,
-      totalDurationMs: 0,
-      successDurationMs: 0,
-      avgDurationMs: 0
-    };
-  }
-
-  // Update task type metrics
-  const typeMetrics = data.byTaskType[taskType];
-  typeMetrics.completed++;
-  if (outcomeSuccess) {
-    typeMetrics.succeeded++;
-    // Only include successful durations in ETA calculations — failed agents often
-    // run long in error loops and skew estimates
-    typeMetrics.successDurationMs = (typeMetrics.successDurationMs || 0) + duration;
-    typeMetrics.successMaxDurationMs = Math.max(typeMetrics.successMaxDurationMs || 0, duration);
+  if (isEnvironmentalFailure) {
+    // Divert to the separate environmental record (issue #2618): the event stays
+    // visible (count + lastOccurred + affected task types) without touching any
+    // bucket the routing/skip/approval decisions read. Deliberately skips even
+    // bucket *initialization* so a task type whose only history is an outage
+    // never grows an empty aggregate entry.
+    recordEnvironmentalFailure(data, { category: errorCategory, taskType });
   } else {
-    typeMetrics.failed++;
-  }
-  typeMetrics.totalDurationMs += duration;
-  Object.assign(typeMetrics, calculateDurationETA(typeMetrics));
-  typeMetrics.lastCompleted = new Date().toISOString();
-  typeMetrics.successRate = Math.round((typeMetrics.succeeded / typeMetrics.completed) * 100);
-  // Append this run to the bounded recency ring (issue #2460). The lifetime
-  // counters above never decay; the ring lets LI read a recency-windowed rate so
-  // a since-resolved failure burst ages out of the "is work needed" signal
-  // instead of depressing it forever. Stamped with the same `lastCompleted` time.
-  appendRecentOutcome(typeMetrics, { success: outcomeSuccess, at: typeMetrics.lastCompleted });
+    // Initialize task type bucket if needed
+    if (!data.byTaskType[taskType]) {
+      data.byTaskType[taskType] = {
+        completed: 0,
+        succeeded: 0,
+        failed: 0,
+        totalDurationMs: 0,
+        avgDurationMs: 0,
+        maxDurationMs: 0,
+        p80DurationMs: 0,
+        lastCompleted: null,
+        successRate: 0,
+        // Bounded recency ring (issue #2460) — feeds the windowed rate LI reads.
+        recentOutcomes: []
+      };
+    }
 
-  // Update model tier metrics
-  const tierMetrics = data.byModelTier[modelTier];
-  tierMetrics.completed++;
-  if (outcomeSuccess) {
-    tierMetrics.succeeded++;
-    tierMetrics.successDurationMs = (tierMetrics.successDurationMs || 0) + duration;
-  } else {
-    tierMetrics.failed++;
-  }
-  tierMetrics.totalDurationMs += duration;
-  tierMetrics.avgDurationMs = calculateDurationETA(tierMetrics).avgDurationMs;
+    // Initialize model tier bucket if needed
+    if (!data.byModelTier[modelTier]) {
+      data.byModelTier[modelTier] = {
+        completed: 0,
+        succeeded: 0,
+        failed: 0,
+        totalDurationMs: 0,
+        successDurationMs: 0,
+        avgDurationMs: 0
+      };
+    }
 
-  // Track routing accuracy: taskType × modelTier cross-reference
-  if (!data.routingAccuracy) data.routingAccuracy = {};
-  if (!data.routingAccuracy[taskType]) data.routingAccuracy[taskType] = {};
-  if (!data.routingAccuracy[taskType][modelTier]) {
-    data.routingAccuracy[taskType][modelTier] = { succeeded: 0, failed: 0, lastAttempt: null };
+    // Update task type metrics
+    const typeMetrics = data.byTaskType[taskType];
+    typeMetrics.completed++;
+    if (outcomeSuccess) {
+      typeMetrics.succeeded++;
+      // Only include successful durations in ETA calculations — failed agents often
+      // run long in error loops and skew estimates
+      typeMetrics.successDurationMs = (typeMetrics.successDurationMs || 0) + duration;
+      typeMetrics.successMaxDurationMs = Math.max(typeMetrics.successMaxDurationMs || 0, duration);
+    } else {
+      typeMetrics.failed++;
+    }
+    typeMetrics.totalDurationMs += duration;
+    Object.assign(typeMetrics, calculateDurationETA(typeMetrics));
+    typeMetrics.lastCompleted = new Date().toISOString();
+    typeMetrics.successRate = Math.round((typeMetrics.succeeded / typeMetrics.completed) * 100);
+    // Append this run to the bounded recency ring (issue #2460). The lifetime
+    // counters above never decay; the ring lets LI read a recency-windowed rate so
+    // a since-resolved failure burst ages out of the "is work needed" signal
+    // instead of depressing it forever. Stamped with the same `lastCompleted` time.
+    appendRecentOutcome(typeMetrics, { success: outcomeSuccess, at: typeMetrics.lastCompleted });
+
+    // Update model tier metrics
+    const tierMetrics = data.byModelTier[modelTier];
+    tierMetrics.completed++;
+    if (outcomeSuccess) {
+      tierMetrics.succeeded++;
+      tierMetrics.successDurationMs = (tierMetrics.successDurationMs || 0) + duration;
+    } else {
+      tierMetrics.failed++;
+    }
+    tierMetrics.totalDurationMs += duration;
+    tierMetrics.avgDurationMs = calculateDurationETA(tierMetrics).avgDurationMs;
+
+    // Track routing accuracy: taskType × modelTier cross-reference
+    if (!data.routingAccuracy) data.routingAccuracy = {};
+    if (!data.routingAccuracy[taskType]) data.routingAccuracy[taskType] = {};
+    if (!data.routingAccuracy[taskType][modelTier]) {
+      data.routingAccuracy[taskType][modelTier] = { succeeded: 0, failed: 0, lastAttempt: null };
+    }
+    const routing = data.routingAccuracy[taskType][modelTier];
+    if (outcomeSuccess) {
+      routing.succeeded++;
+    } else {
+      routing.failed++;
+    }
+    routing.lastAttempt = new Date().toISOString();
   }
-  const routing = data.routingAccuracy[taskType][modelTier];
-  if (outcomeSuccess) {
-    routing.succeeded++;
-  } else {
-    routing.failed++;
-  }
-  routing.lastAttempt = new Date().toISOString();
 
   // Track error patterns — gated on the validation-authoritative outcome so a
   // commit-found run isn't logged as an error and a criterion-miss is (#2344).
@@ -365,7 +431,10 @@ export async function recordTaskCompletion(agent, task) {
   // with the actual outcome. Reuses the same validation-authoritative
   // `outcomeSuccess` the aggregates above learn from, so the correlation `bad`
   // label and the routing counts can never disagree about a single run.
-  if (correlationPredictedRisk !== null) {
+  // Environmental failures are excluded (issue #2618): the window measures how
+  // well the routing signal predicts task/model outcomes, and an outage-shaped
+  // `bad` sample would grade the predictor on something it can't predict.
+  if (correlationPredictedRisk !== null && !isEnvironmentalFailure) {
     recordCorrelationSample(data, { taskType, tier: modelTier, predictedRisk: correlationPredictedRisk, bad: !outcomeSuccess });
   }
 
@@ -399,17 +468,20 @@ export async function recordTaskCompletion(agent, task) {
     }
   }
 
-  // Update totals
-  data.totals.completed++;
-  if (outcomeSuccess) {
-    data.totals.succeeded++;
-    data.totals.successDurationMs = (data.totals.successDurationMs || 0) + duration;
-    data.totals.successMaxDurationMs = Math.max(data.totals.successMaxDurationMs || 0, duration);
-  } else {
-    data.totals.failed++;
+  // Update totals — environmental failures stay out (issue #2618): the overall
+  // success rate is a rate aggregate too, and an outage must not dent it.
+  if (!isEnvironmentalFailure) {
+    data.totals.completed++;
+    if (outcomeSuccess) {
+      data.totals.succeeded++;
+      data.totals.successDurationMs = (data.totals.successDurationMs || 0) + duration;
+      data.totals.successMaxDurationMs = Math.max(data.totals.successMaxDurationMs || 0, duration);
+    } else {
+      data.totals.failed++;
+    }
+    data.totals.totalDurationMs += duration;
+    Object.assign(data.totals, calculateDurationETA(data.totals));
   }
-  data.totals.totalDurationMs += duration;
-  Object.assign(data.totals, calculateDurationETA(data.totals));
 
   await saveLearningData(data);
 
@@ -421,7 +493,7 @@ export async function recordTaskCompletion(agent, task) {
   // rather than the misleading `success` the raw exit code would show (#2344).
   const outcomeLabel = outcomeSuccess
     ? 'success'
-    : `failed:${errorCategory || (success ? 'validation-miss' : 'uncategorized')}`;
+    : `failed:${errorCategory || (success ? 'validation-miss' : 'uncategorized')}${isEnvironmentalFailure ? ' environmental' : ''}`;
   emitLog('debug', `Recorded task completion: ${taskType} (${outcomeLabel}) via ${provider || '?'}/${model || '?'}@${modelTier} [${component || '?'}] wall=${wallSecs}s`, {
     taskType,
     modelTier,
@@ -433,6 +505,7 @@ export async function recordTaskCompletion(agent, task) {
     validationPassed: telemetry.validationPassed,
     outcomeSuccess,
     errorCategory,
+    environmental: isEnvironmentalFailure,
     failurePosition: telemetry.failureSignature?.failurePosition ?? null,
     wallMs,
     queueMs,
@@ -475,8 +548,18 @@ export async function resetTaskTypeLearning(taskType) {
   return withLock(async () => {
   const data = await loadLearningData();
 
+  // Purge this type from the environmental buckets FIRST (#2618): an
+  // outage-only type has no byTaskType bucket, so the purge must not sit
+  // behind the task-type-not-found early return below.
+  const environmentalRemoved = purgeEnvironmentalFailuresForType(data, taskType);
+
   const metrics = data.byTaskType[taskType];
   if (!metrics) {
+    if (environmentalRemoved > 0) {
+      await saveLearningData(data);
+      emitLog('info', `Reset environmental-only learning data for ${taskType} (${environmentalRemoved} outage events purged)`, { taskType, environmentalRemoved }, '📚 TaskLearning');
+      return { reset: true, reason: 'environmental-only', taskType, environmentalRemoved };
+    }
     return { reset: false, reason: 'task-type-not-found', taskType };
   }
 

@@ -46,6 +46,32 @@ describe('deriveFailureSignalAvoidance (#2329)', () => {
     expect(out.sampleCount).toBe(2);
   });
 
+  it('ignores environmental-category signatures entirely (issue #2618)', () => {
+    // An hour of provider rate-limiting piles samples into the 'rate-limit'
+    // bucket; those must not reach avoidTiers through the signature signal.
+    const data = {
+      failureSignatures: {
+        'rate-limit': { count: 5, recent: [sample(), sample(), sample(), sample(), sample()] }
+      },
+      routingAccuracy: {}
+    };
+    const out = deriveFailureSignalAvoidance(data, 'user-task');
+    expect(out.avoidTiers).toEqual([]);
+    expect(out.sampleCount).toBe(0);
+
+    // Mixed buckets: only the non-environmental samples count.
+    const mixed = {
+      failureSignatures: {
+        'rate-limit': { count: 3, recent: [sample(), sample(), sample()] },
+        'test-failure': { count: 2, recent: [sample(), sample()] }
+      },
+      routingAccuracy: {}
+    };
+    const outMixed = deriveFailureSignalAvoidance(mixed, 'user-task');
+    expect(outMixed.sampleCount).toBe(2); // below MIN_FAILURE_SAMPLES(3)
+    expect(outMixed.avoidTiers).toEqual([]);
+  });
+
   it('flags an unproven tier with enough recent failures and attributes provider/model', () => {
     const data = dataWith([
       sample({ modelTier: 'heavy', provider: 'claude', model: 'opus' }),
