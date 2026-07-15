@@ -31,6 +31,12 @@ describe('computeFocusCamera', () => {
     expect(tallB.radius).toBeGreaterThan(shortB.radius);
   });
 
+  it('reserves headroom above the tower for the hologram / floating agents', () => {
+    const { target, radius } = computeFocusCamera({ building, aspect: 1.6 });
+    // The framed sphere reaches well above the tower top so agent markers are not clipped.
+    expect(target[1] + radius).toBeGreaterThan(building.height + 3);
+  });
+
   it('uses the borough ground radius floor for short buildings', () => {
     const { radius } = computeFocusCamera({ building: { x: 0, z: 0, height: 1 }, aspect: 1.6 });
     expect(radius).toBeGreaterThanOrEqual(BOROUGH_GROUND_RADIUS);

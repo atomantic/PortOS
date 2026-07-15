@@ -19,6 +19,12 @@ export const BOROUGH_GROUND_RADIUS = 4.5;
 // Empty space left around the framed borough (1 = edge-to-edge, 1.35 = 35% margin).
 const FRAMING_MARGIN = 1.35;
 
+// Extra vertical reach above the tower for the things that float over it — the building hologram
+// (~tower + 1.8) and the stacked AgentEntity markers — so a borough with several active agents
+// isn't clipped above the frame. A fixed cushion (the pure math only knows the tower `height`, not
+// the live agent count) that comfortably covers a typical stack.
+const BOROUGH_TOP_CLEARANCE = 3.0;
+
 // How far above the horizon the focus camera sits (~40°). Keeps the shot looking slightly down onto
 // the borough like the overview, without going full top-down.
 const PITCH_RAD = (40 * Math.PI) / 180;
@@ -48,9 +54,10 @@ export function computeFocusCamera({ building, aspect = 1, fovDeg = CITY_CAMERA_
   const safeAspect = Number.isFinite(aspect) && aspect > 0 ? aspect : 1;
   const safeFov = Number.isFinite(fovDeg) && fovDeg > 0 ? fovDeg : CITY_CAMERA_FOV_DEG;
 
-  // Bounding radius: the wider of the borough's ground footprint and half its tower height, so both
-  // a tall skinny tower and a short wide cluster stay fully in frame.
-  const radius = Math.max(BOROUGH_GROUND_RADIUS, height * 0.6) * FRAMING_MARGIN;
+  // Bounding radius: the wider of the borough's ground footprint and half its tower height (plus the
+  // hologram/agent clearance above), so a tall skinny tower, a short wide cluster, and a
+  // many-agent borough all stay fully in frame.
+  const radius = Math.max(BOROUGH_GROUND_RADIUS, height * 0.6 + BOROUGH_TOP_CLEARANCE) * FRAMING_MARGIN;
 
   // Usable viewport fraction once the HUD safe area is subtracted, clamped to a floor.
   const right = clamp01(hudSafe?.right ?? 0);
