@@ -14,7 +14,7 @@ import CityPhotoOverlay from '../components/city/CityPhotoOverlay';
 import CityPlaybackOverlay from '../components/city/CityPlaybackOverlay';
 import { CitySettingsProvider, useCitySettingsContext } from '../components/city/CitySettingsContext';
 import { QUALITY_PRESETS } from '../hooks/useCitySettings';
-import CitySettingsPanel from '../components/city/CitySettingsPanel';
+import CitySettingsDrawer from '../components/city/CitySettingsDrawer';
 import { computeFilterResult } from '../utils/cityFilter';
 import { DEFAULT_PRESET_ID, cyclePreset } from '../utils/cityPhotoMode';
 import { computeSoundscape } from '../utils/citySoundscape';
@@ -468,13 +468,16 @@ function CyberCityInner() {
         onExit={playback.exit}
       />
       <CityScanlines settings={settings} crt={cityPalette.crt} />
-      {showSettings && (
-        <CitySettingsPanel
-          qualityMode={qualityMode}
-          effectiveTier={effectiveTier}
-          diagnostics={qualityMode === 'auto' ? autoDiagnostics : null}
-        />
-      )}
+      {/* Settings on the shared Drawer (issue #2591). Closing preserves other query
+          params (e.g. an open cityPane) so the disclosure state survives. The Auto-quality
+          props (#2592) drive the Performance tab's effective-tier label + local diagnostics. */}
+      <CitySettingsDrawer
+        open={showSettings}
+        onClose={() => navigate(`/city${location.search}`)}
+        qualityMode={qualityMode}
+        effectiveTier={effectiveTier}
+        diagnostics={qualityMode === 'auto' ? autoDiagnostics : null}
+      />
     </div>
     </CityPaletteProvider>
   );
