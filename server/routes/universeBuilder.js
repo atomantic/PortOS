@@ -15,8 +15,8 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest, optionalBooleanMap, llmSchema } from '../lib/validation.js';
+import { asyncHandler, ServerError, createServiceErrorMapper } from '../lib/errorHandler.js';
+import { validateRequest, optionalBooleanMap, llmSchema, isPaginationRequested, paginateArray } from '../lib/validation.js';
 import * as svc from '../services/universeBuilder.js';
 import * as canonSvc from '../services/universeCanon.js';
 import { expandUniverseCharacter } from '../services/universeCharacterExpand.js';
@@ -57,19 +57,12 @@ const SERVICE_ERROR_STATUS = {
   MERGE_CASCADE_INCOMPLETE: 409,
 };
 
-const mapServiceError = (err) => {
-  const status = SERVICE_ERROR_STATUS[err?.code];
-  if (status) {
-    // Propagate diagnostic context onto the response body via `context`: the
-    // blocking-series list for a delete-guard 409, or the survivor/loser ids +
-    // which children failed to re-point for an incomplete merge cascade.
-    const context = err?.blockingSeries
-      ? { blockingSeries: err.blockingSeries }
-      : buildCascadeContext(err);
-    return new ServerError(err.message, { status, code: err.code, context });
-  }
-  return err;
-};
+// Propagate diagnostic context onto the response body via `context`: the
+// blocking-series list for a delete-guard 409, or the survivor/loser ids +
+// which children failed to re-point for an incomplete merge cascade.
+const mapServiceError = createServiceErrorMapper(SERVICE_ERROR_STATUS, (err) =>
+  err?.blockingSeries ? { blockingSeries: err.blockingSeries } : buildCascadeContext(err),
+);
 
 // ---- shared zod fragments ----
 // `id` is optional on input — the service-layer sanitizer mints one with a
@@ -377,8 +370,15 @@ const renderSchema = z.object({
   path: ['collectionName'],
 });
 
-router.get('/', asyncHandler(async (_req, res) => {
-  res.json(await svc.listUniverses());
+// Backward-compatible by default: returns the full universes array. When a client
+// passes `limit`/`offset`, the response becomes the bounded
+// `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
+router.get('/', asyncHandler(async (req, res) => {
+  const universes = await svc.listUniverses();
+  if (!isPaginationRequested(req.query)) {
+    return res.json(universes);
+  }
+  res.json(paginateArray(universes, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.post('/', asyncHandler(async (req, res) => {

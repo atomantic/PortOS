@@ -76,6 +76,38 @@ const WEEK = 7 * DAY;
 // work-detector, when neither `recheckCron` nor `recheckIntervalMs` is set.
 const DEFAULT_PERPETUAL_RECHECK_MS = DAY;
 
+// ── Type-level consecutive-failure backoff (#2616) ────────────────────────────
+// Distinct from the per-INSTANCE retry ladder (MAX_TASK_RETRIES /
+// MAX_TOTAL_SPAWNS in agentErrorAnalysis.js), which blocks a SINGLE task after
+// too many failures. This ledger tracks a task TYPE (per app + global) so a
+// permanently-broken scheduled type slows down and eventually auto-parks instead
+// of burning provider quota on schedule forever. The ledger lives on the
+// execution record alongside `lastRun` (survives restarts; per-install runtime
+// state, never synced).
+export const FAILURE_BACKOFF_BASE_MS = HOUR;  // scaled by 2^n (n = consecutiveFailures)
+export const FAILURE_BACKOFF_CAP_MS = DAY;    // cap the escalation
+export const FAILURE_PARK_THRESHOLD = 5;      // auto-park after N consecutive failures
+
+// The full set of ledger fields, kept as one list so the record/reset/clear
+// paths can't drift from what recordTaskTypeFailure writes.
+const FAILURE_LEDGER_FIELDS = [
+  'consecutiveFailures',
+  'lastFailureAt',
+  'lastErrorCategory',
+  'failureParkedAt',
+  'failureParkReason'
+];
+
+/**
+ * Escalating failure cooldown: 2^n × base, capped. n=0 → 0 (no cooldown).
+ * Pure — exported for direct unit testing.
+ */
+export function computeFailureBackoffMs(consecutiveFailures, baseMs = FAILURE_BACKOFF_BASE_MS, capMs = FAILURE_BACKOFF_CAP_MS) {
+  const n = Number(consecutiveFailures) || 0;
+  if (n <= 0) return 0;
+  return Math.min(baseMs * Math.pow(2, n), capMs);
+}
+
 /**
  * Get learning-adjusted interval for a task type
  */
@@ -659,6 +691,22 @@ export async function updateTaskInterval(taskType, settings) {
   // gets the locked value back in its response.
   enforceManagedAgentOptions(taskType, schedule.tasks[taskType]);
 
+  // Config change unparks a failure-parked type (#2616): editing a type's
+  // settings is an explicit "I've addressed the cause" signal, so clear the
+  // consecutive-failure ledger + auto-park (global + every per-app record) so
+  // the type gets a fresh start on its next tick. Track the scopes that were
+  // actually parked so their stale notifications can be pruned after the save.
+  const topExec = schedule.executions[`task:${taskType}`];
+  const unparkedScopes = [];
+  if (topExec) {
+    if (topExec.failureParkedAt) unparkedScopes.push(null);
+    clearFailureLedgerFields(topExec);
+    for (const [id, rec] of Object.entries(topExec.perApp || {})) {
+      if (rec.failureParkedAt) unparkedScopes.push(id);
+      clearFailureLedgerFields(rec);
+    }
+  }
+
   // Globally disabling pr-watcher also drops its execution cooldown so a later
   // re-enable baselines on the very next tick rather than waiting out the prior
   // 30-min interval — otherwise PRs opened in that delayed window slip past the
@@ -697,6 +745,10 @@ export async function updateTaskInterval(taskType, settings) {
     await clearAllPrWatcherState().catch((err) => {
       emitLog('warn', `pr-watcher global-disable state clear failed: ${err.message}`, {}, '📅 TaskSchedule');
     });
+  }
+
+  for (const scope of unparkedScopes) {
+    await clearTaskTypeFailureParkNotification(taskType, scope);
   }
 
   emitLog('info', `Updated task interval for ${taskType}`, { taskType, settings }, '📅 TaskSchedule');
@@ -918,6 +970,140 @@ export async function resetPerpetualForManualRun(taskType, appId = null) {
   return changed;
 }
 
+// ============================================================
+// Type-level consecutive-failure ledger (#2616)
+// ============================================================
+
+/** Dedup / notification key for a type+app failure park. */
+function failureParkKeyFor(taskType, appId) {
+  return appId ? `${taskType}:${appId}` : taskType;
+}
+
+/** Delete every failure-ledger field from a record. Returns true if any changed. */
+function clearFailureLedgerFields(record) {
+  if (!record) return false;
+  let changed = false;
+  for (const field of FAILURE_LEDGER_FIELDS) {
+    if (record[field] !== undefined) { delete record[field]; changed = true; }
+  }
+  return changed;
+}
+
+/**
+ * Remove any lingering auto-park notification for a now-unparked type+app so the
+ * bell stops showing a stale "parked" warning AND a later re-park can re-notify
+ * (the `exists` dedup in notifyTaskTypeFailurePark keys on this same field, and
+ * scans read notifications too). Best-effort — lazy-imported, never throws out.
+ */
+async function clearTaskTypeFailureParkNotification(taskType, appId) {
+  const { removeByMetadata } = await import('./notifications.js');
+  await removeByMetadata('failureParkKey', failureParkKeyFor(taskType, appId)).catch(() => {});
+}
+
+/**
+ * Surface a user-facing notification when a task type auto-parks. Lazy-imports
+ * the notifications service so taskSchedule has no static dependency on it (and
+ * so the failure path stays free of that I/O until a park actually fires).
+ * Deduped per type+app so a re-park after a manual retry doesn't spam the bell.
+ */
+async function notifyTaskTypeFailurePark(taskType, appId, record) {
+  const { addNotification, exists, NOTIFICATION_TYPES, PRIORITY_LEVELS } = await import('./notifications.js');
+  const dedupeKey = failureParkKeyFor(taskType, appId);
+  if (await exists(NOTIFICATION_TYPES.AGENT_WARNING, 'failureParkKey', dedupeKey)) return;
+  const scope = appId ? `app ${appId}` : 'global';
+  const category = record.failureParkReason || record.lastErrorCategory || 'unknown';
+  await addNotification({
+    type: NOTIFICATION_TYPES.AGENT_WARNING,
+    title: `Scheduled task "${taskType}" auto-parked after ${record.consecutiveFailures} failures`,
+    description: `The "${taskType}" scheduled task (${scope}) failed ${record.consecutiveFailures} times in a row (last error: ${category}). It is parked and will not re-queue until you retry it or change its config.`,
+    priority: PRIORITY_LEVELS.HIGH,
+    link: '/cos/schedule',
+    metadata: {
+      taskType,
+      appId: appId || null,
+      failureParkKey: dedupeKey,
+      consecutiveFailures: record.consecutiveFailures,
+      lastErrorCategory: category
+    }
+  });
+}
+
+/**
+ * Record a task-type FAILURE into the per-type ledger (per app + global).
+ * Increments `consecutiveFailures`, stamps `lastFailureAt`/`lastErrorCategory`,
+ * and auto-parks (+notifies) once the threshold is crossed. The auto-park is
+ * indefinite — cleared only by a success, a manual retry, or a config change.
+ */
+export async function recordTaskTypeFailure(taskType, appId = null, { errorCategory = null } = {}) {
+  const schedule = await loadSchedule();
+  const record = ensureExecutionRecord(schedule, taskType, appId);
+  record.consecutiveFailures = (Number(record.consecutiveFailures) || 0) + 1;
+  record.lastFailureAt = new Date().toISOString();
+  if (errorCategory) record.lastErrorCategory = errorCategory;
+
+  let justParked = false;
+  if (record.consecutiveFailures >= FAILURE_PARK_THRESHOLD && !record.failureParkedAt) {
+    record.failureParkedAt = new Date().toISOString();
+    record.failureParkReason = errorCategory || record.lastErrorCategory || 'unknown';
+    justParked = true;
+  }
+
+  await saveSchedule(schedule);
+  emitLog(
+    justParked ? 'warn' : 'info',
+    `Task type ${taskType}${appId ? ` (app ${appId})` : ''} failure #${record.consecutiveFailures}${justParked ? ' — AUTO-PARKED' : ''} (${errorCategory || 'unknown'})`,
+    { taskType, appId, consecutiveFailures: record.consecutiveFailures, parked: justParked },
+    '📅 TaskSchedule'
+  );
+
+  if (justParked) {
+    cosEvents.emit('schedule:failure-parked', { taskType, appId, consecutiveFailures: record.consecutiveFailures, reason: record.failureParkReason });
+    await notifyTaskTypeFailurePark(taskType, appId, record).catch((err) => {
+      emitLog('warn', `Failure-park notification failed for ${taskType}: ${err.message}`, { taskType, appId }, '📅 TaskSchedule');
+    });
+  }
+  return record;
+}
+
+/**
+ * Record a task-type SUCCESS: reset the consecutive-failure ledger (and any
+ * auto-park) for this type. No-op (no write) when the ledger is already clean.
+ */
+export async function recordTaskTypeSuccess(taskType, appId = null) {
+  const schedule = await loadSchedule();
+  const record = resolveExecutionRecord(schedule, taskType, appId);
+  const wasParked = !!record?.failureParkedAt;
+  if (!clearFailureLedgerFields(record)) return false;
+  await saveSchedule(schedule);
+  emitLog('info', `Task type ${taskType}${appId ? ` (app ${appId})` : ''} succeeded — failure ledger reset`, { taskType, appId }, '📅 TaskSchedule');
+  if (wasParked) await clearTaskTypeFailureParkNotification(taskType, appId);
+  return true;
+}
+
+/**
+ * Clear a task type's failure ledger + auto-park for a manual retry (unpark),
+ * scoped to exactly the record being re-run: the per-app record when `appId` is
+ * set (a per-app "Run now"), or the global (appId-less) record when null (a
+ * global self-improvement "Run now"). Does NOT touch other apps' independent
+ * ledgers — a global retrigger must not silently unpark an app whose failure
+ * cause was never addressed. (The config-change unpark in updateTaskInterval,
+ * which DOES reset every scope of the type, has its own inline clear.) Returns
+ * true if anything was cleared.
+ */
+export async function clearTaskTypeFailurePark(taskType, appId = null) {
+  const schedule = await loadSchedule();
+  const top = schedule.executions[executionKey(taskType)];
+  if (!top) return false;
+  const record = appId ? top.perApp?.[appId] : top;
+  const wasParked = !!record?.failureParkedAt;
+  if (!clearFailureLedgerFields(record)) return false;
+  await saveSchedule(schedule);
+  // Prune the stale park notification (if any) so the bell clears and a later
+  // re-park can re-notify.
+  if (wasParked) await clearTaskTypeFailureParkNotification(taskType, appId);
+  return true;
+}
+
 /**
  * Check if all runAfter dependencies have completed since this task's last run.
  * Returns { satisfied, pending } where pending lists unfinished dependency task types.
@@ -1002,6 +1188,20 @@ export async function shouldRunTask(taskType, appId = null) {
   const appExecution = appId
     ? (execution.perApp[appId] || { lastRun: null, count: 0 })
     : execution;
+
+  // Type-level failure auto-park (#2616): a type whose instances failed
+  // FAILURE_PARK_THRESHOLD times in a row is parked for ALL cadence types
+  // (including ROTATION) until a manual retry or config change clears the
+  // ledger. Checked before the cadence switch so it short-circuits every type.
+  if (appExecution.failureParkedAt) {
+    return {
+      shouldRun: false,
+      reason: 'failure-parked',
+      failureParkedAt: appExecution.failureParkedAt,
+      failureParkReason: appExecution.failureParkReason || null,
+      consecutiveFailures: Number(appExecution.consecutiveFailures) || 0
+    };
+  }
 
   const now = Date.now();
   const lastRun = appExecution.lastRun ? new Date(appExecution.lastRun).getTime() : 0;
@@ -1171,6 +1371,32 @@ export async function shouldRunTask(taskType, appId = null) {
 
     default:
       result = { shouldRun: true, reason: 'unknown-default-rotation' };
+  }
+
+  // Escalating failure backoff (#2616): a type with recent consecutive failures
+  // (still below the park threshold) slows down — 2^n × base, capped — instead
+  // of re-queuing every tick. Applies to ALL cadence types, including ROTATION
+  // (which is otherwise `shouldRun: true` unconditionally). Gated on
+  // `lastFailureAt` so a never-failed type is unaffected; a success resets the
+  // ledger via recordTaskTypeSuccess so the backoff lifts immediately.
+  if (result.shouldRun) {
+    const consecutiveFailures = Number(appExecution.consecutiveFailures) || 0;
+    const lastFailure = appExecution.lastFailureAt ? new Date(appExecution.lastFailureAt).getTime() : 0;
+    if (consecutiveFailures > 0 && lastFailure) {
+      const backoffMs = computeFailureBackoffMs(consecutiveFailures);
+      const sinceFailure = now - lastFailure;
+      if (sinceFailure < backoffMs) {
+        result = {
+          shouldRun: false,
+          reason: 'failure-cooldown',
+          consecutiveFailures,
+          failureBackoffMs: backoffMs,
+          nextRunIn: backoffMs - sinceFailure,
+          nextRunAt: new Date(lastFailure + backoffMs).toISOString(),
+          lastErrorCategory: appExecution.lastErrorCategory || null
+        };
+      }
+    }
   }
 
   // If the task would run, check runAfter dependencies — blocked until all enabled deps have run since our last run.

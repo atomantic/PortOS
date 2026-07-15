@@ -15,18 +15,13 @@
  */
 
 import { Router } from 'express';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError, createServiceErrorMapper } from '../lib/errorHandler.js';
 import { validateRequest, mediaSketchSaveSchema } from '../lib/validation.js';
 import * as svc from '../services/mediaSketches.js';
 
 const router = Router();
 
-const mapServiceError = (err) => {
-  if (err?.code === svc.ERR_VALIDATION) {
-    return new ServerError(err.message, { status: 400, code: err.code });
-  }
-  return err;
-};
+const mapServiceError = createServiceErrorMapper({ [svc.ERR_VALIDATION]: 400 });
 
 // Mint a blank-canvas sketch key. The client can't rely on crypto.randomUUID
 // (PortOS is served over plain HTTP on Tailscale, an insecure origin), so the

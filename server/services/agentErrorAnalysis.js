@@ -818,6 +818,42 @@ export function resolveFailedTaskDecision(task, errorAnalysis) {
 }
 
 /**
+ * Pure decision for the type-LEVEL failure ledger (#2616), distinct from the
+ * per-instance retry decision above. Given a finished run's exit-code success,
+ * whether the user terminated it, and the programmatic-I/O hook result (if any),
+ * decide what signal to feed the per-type consecutive-failure ledger:
+ *
+ *   - `'skip'`    — don't touch the ledger (user-terminated run).
+ *   - `'success'` — reset the type's failure counter.
+ *   - `'failure'` — increment it (with `category`).
+ *
+ * The key case this exists for: a layered-intelligence run that exits 0 but whose
+ * `.agent-done` output was unparseable (`hookResult.outcome.reason ===
+ * 'unparseable-response'`) — or whose hook threw (`hookResult.threw`) — produced
+ * nothing usable, so it's a FAILURE even though the exit code says success. Other
+ * benign hook reasons (no-proposal, duplicate, scope-suppressed) leave the
+ * exit-code verdict intact. Extracted pure so the branching is unit-tested here.
+ *
+ * @returns {{ record: 'skip'|'success'|'failure', category: string|null }}
+ */
+export function resolveTypeFailureSignal({ success, terminatedByUser = false, hookResult = null, errorCategory = null } = {}) {
+  if (terminatedByUser) return { record: 'skip', category: null };
+
+  // An already-failed run keeps its real exit-code category; the hook override
+  // only UPGRADES an exit-0 (`success`) run to a failure (the exit-0-but-
+  // unparseable / thrown-hook case). A hook that throws on top of a run that
+  // already failed for e.g. `rate-limit` must not relabel the cause `hook-error`.
+  if (!success) return { record: 'failure', category: errorCategory || 'unknown' };
+
+  if (hookResult?.ran) {
+    if (hookResult.threw) return { record: 'failure', category: 'hook-error' };
+    if (hookResult.outcome?.reason === 'unparseable-response') return { record: 'failure', category: 'unparseable-response' };
+  }
+
+  return { record: 'success', category: null };
+}
+
+/**
  * Handle task status update after agent failure.
  * Tracks retry count and blocks the task after MAX_TASK_RETRIES,
  * creating an investigation task instead of retrying endlessly.

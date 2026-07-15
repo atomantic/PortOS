@@ -16,6 +16,8 @@ import {
   moodBoardItemCreateSchema,
   moodBoardItemUpdateSchema,
   moodBoardPinterestLinkSchema,
+  isPaginationRequested,
+  paginateArray,
 } from '../lib/validation.js';
 import {
   listBoards,
@@ -33,8 +35,15 @@ import {
 
 const router = Router();
 
-router.get('/', asyncHandler(async (_req, res) => {
-  res.json(await listBoards());
+// Backward-compatible by default: returns the full boards array. When a client
+// passes `limit`/`offset`, the response becomes the bounded
+// `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
+router.get('/', asyncHandler(async (req, res) => {
+  const boards = await listBoards();
+  if (!isPaginationRequested(req.query)) {
+    return res.json(boards);
+  }
+  res.json(paginateArray(boards, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {

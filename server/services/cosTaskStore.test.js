@@ -74,7 +74,12 @@ import {
   mergePeerTasks,
   challengeTask,
   resolveTaskChallenge,
-  resolveTaskChallengeWithRecheck
+  resolveTaskChallengeWithRecheck,
+  blockedFailureAgeMs,
+  isReapableBlockedFailure,
+  isReapableInvestigation,
+  sweepResolvedFailureTasks,
+  DEFAULT_FAILURE_TASK_MAX_AGE_MS
 } from './cosTaskStore.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/cosValidation.js';
 
@@ -686,6 +691,165 @@ describe('cosTaskStore.mergePeerTasks', () => {
     const adopted = after.tasks.find(t => t.id === 'task-nometa');
     expect(adopted).toBeTruthy();
     expect(adopted.description).toBe('no metadata here');
+  });
+});
+
+describe('cosTaskStore — stale failure-artifact reaper (#2619)', () => {
+  const NOW = Date.parse('2026-06-25T12:00:00.000Z');
+  const daysAgo = (n) => new Date(NOW - n * 24 * 60 * 60 * 1000).toISOString();
+
+  describe('blockedFailureAgeMs / isReapableBlockedFailure (pure)', () => {
+    const blocked = (category, blockedAt) => ({ status: 'blocked', metadata: { blockedCategory: category, blockedAt } });
+
+    it('returns null for a non-blocked task', () => {
+      expect(blockedFailureAgeMs({ status: 'pending', metadata: { blockedCategory: 'max-retries', blockedAt: daysAgo(30) } }, NOW)).toBeNull();
+    });
+
+    it('returns null when there is no blockedCategory', () => {
+      expect(blockedFailureAgeMs({ status: 'blocked', metadata: { blockedAt: daysAgo(30) } }, NOW)).toBeNull();
+    });
+
+    it('leaves user-intent / open-decision categories alone', () => {
+      for (const cat of ['user-terminated', 'agent-paused', 'challenge-escalation']) {
+        expect(blockedFailureAgeMs(blocked(cat, daysAgo(30)), NOW)).toBeNull();
+        expect(isReapableBlockedFailure(blocked(cat, daysAgo(30)), { now: NOW })).toBe(false);
+      }
+    });
+
+    it('computes age from blockedAt and reaps only past the threshold', () => {
+      expect(blockedFailureAgeMs(blocked('max-retries', daysAgo(20)), NOW)).toBe(20 * 24 * 60 * 60 * 1000);
+      expect(isReapableBlockedFailure(blocked('max-retries', daysAgo(20)), { now: NOW })).toBe(true);
+      expect(isReapableBlockedFailure(blocked('max-retries', daysAgo(10)), { now: NOW })).toBe(false);
+    });
+
+    it('falls back to lastFailureAt then updatedAt when blockedAt is absent', () => {
+      expect(blockedFailureAgeMs({ status: 'blocked', metadata: { blockedCategory: 'provider-config', lastFailureAt: daysAgo(20) } }, NOW)).toBe(20 * 24 * 60 * 60 * 1000);
+      expect(blockedFailureAgeMs({ status: 'blocked', metadata: { blockedCategory: 'provider-config', updatedAt: daysAgo(20) } }, NOW)).toBe(20 * 24 * 60 * 60 * 1000);
+    });
+
+    it('never reaps an undated block (cannot prove it is old)', () => {
+      expect(blockedFailureAgeMs({ status: 'blocked', metadata: { blockedCategory: 'max-retries' } }, NOW)).toBeNull();
+      expect(isReapableBlockedFailure({ status: 'blocked', metadata: { blockedCategory: 'max-retries', blockedAt: 'not-a-date' } }, { now: NOW })).toBe(false);
+    });
+  });
+
+  describe('isReapableInvestigation (pure)', () => {
+    const investigation = (overrides = {}) => ({
+      status: 'pending',
+      description: '[Auto] Investigate agent failure [fp]: boom',
+      metadata: { isInvestigation: true, affectedTasks: ['task-a'] },
+      ...overrides
+    });
+
+    it('reaps when every originating task is completed or gone', () => {
+      const byId = new Map([['task-a', { id: 'task-a', status: 'completed' }]]);
+      expect(isReapableInvestigation(investigation(), byId)).toBe(true);
+      // absent origin (already reaped/deleted) also counts as resolved
+      expect(isReapableInvestigation(investigation(), new Map())).toBe(true);
+    });
+
+    it('does not reap while any originating task is still live', () => {
+      const byId = new Map([['task-a', { id: 'task-a', status: 'blocked' }]]);
+      expect(isReapableInvestigation(investigation(), byId)).toBe(false);
+    });
+
+    it('detects investigations by the legacy headline when the marker is absent', () => {
+      const legacy = { status: 'pending', description: '[Auto] Investigate agent failure: legacy', metadata: { affectedTasks: ['task-a'] } };
+      expect(isReapableInvestigation(legacy, new Map())).toBe(true);
+    });
+
+    it('leaves a non-investigation task and an already-completed investigation alone', () => {
+      expect(isReapableInvestigation({ status: 'pending', description: 'ordinary', metadata: {} }, new Map())).toBe(false);
+      expect(isReapableInvestigation(investigation({ status: 'completed' }), new Map())).toBe(false);
+    });
+
+    it('leaves a linkless investigation alone (cannot prove its cause is resolved)', () => {
+      expect(isReapableInvestigation(investigation({ metadata: { isInvestigation: true } }), new Map())).toBe(false);
+    });
+  });
+
+  describe('sweepResolvedFailureTasks (orchestration)', () => {
+    it('flips a stale failure-blocked task to completed with an auto-expired marker, not deletion', async () => {
+      await addTask({ description: 'failed thing', id: 'task-old', priority: 'HIGH' }, 'user', { now: NOW });
+      await updateTask('task-old', { status: 'blocked', metadata: { blockedCategory: 'max-retries', blockedAt: daysAgo(20) } }, 'user', { now: NOW });
+      mock.events = [];
+      const res = await sweepResolvedFailureTasks({ now: NOW });
+      expect(res).toMatchObject({ reaped: 1, staleBlocks: 1, investigations: 0 });
+      const after = await getUserTasks();
+      const task = after.tasks.find(t => t.id === 'task-old');
+      expect(task).toBeTruthy(); // NOT deleted — federation-safe
+      expect(task.status).toBe('completed');
+      expect(task.metadata.resolution).toBe('auto-expired');
+      expect(task.metadata.autoExpiredReason).toBe('stale-failure-block');
+      // Leaving-blocked clears the failure metadata (existing updateTask behavior).
+      expect(task.metadata.blockedCategory).toBeUndefined();
+    });
+
+    it('leaves a fresh failure block and a user-terminated block untouched', async () => {
+      await addTask({ description: 'fresh', id: 'task-fresh', priority: 'LOW' }, 'user', { now: NOW });
+      await updateTask('task-fresh', { status: 'blocked', metadata: { blockedCategory: 'max-retries', blockedAt: daysAgo(3) } }, 'user', { now: NOW });
+      await addTask({ description: 'stopped', id: 'task-stop', priority: 'LOW' }, 'user', { now: NOW });
+      await updateTask('task-stop', { status: 'blocked', metadata: { blockedCategory: 'user-terminated', blockedAt: daysAgo(60) } }, 'user', { now: NOW });
+      const res = await sweepResolvedFailureTasks({ now: NOW });
+      expect(res.reaped).toBe(0);
+      const after = await getUserTasks();
+      expect(after.tasks.find(t => t.id === 'task-fresh').status).toBe('blocked');
+      expect(after.tasks.find(t => t.id === 'task-stop').status).toBe('blocked');
+    });
+
+    it('flips an investigation whose originating task has completed', async () => {
+      await addTask({ description: 'origin work', id: 'task-origin', priority: 'HIGH' }, 'user', { now: NOW });
+      await updateTask('task-origin', { status: 'completed' }, 'user', { now: NOW });
+      await addTask({
+        description: '[Auto] Investigate agent failure [fp]: boom',
+        id: 'sys-inv',
+        isInvestigation: true,
+        affectedTasks: ['task-origin']
+      }, 'internal', { now: NOW });
+      const res = await sweepResolvedFailureTasks({ now: NOW });
+      expect(res).toMatchObject({ reaped: 1, investigations: 1 });
+      const after = await getCosTasks();
+      const inv = after.tasks.find(t => t.id === 'sys-inv');
+      expect(inv.status).toBe('completed');
+      expect(inv.metadata.autoExpiredReason).toBe('investigation-resolved');
+    });
+
+    it('keeps an investigation whose originating task is still blocked', async () => {
+      await addTask({ description: 'origin still broken', id: 'task-origin2', priority: 'HIGH' }, 'user', { now: NOW });
+      await updateTask('task-origin2', { status: 'blocked', metadata: { blockedCategory: 'max-retries', blockedAt: daysAgo(1) } }, 'user', { now: NOW });
+      await addTask({
+        description: '[Auto] Investigate agent failure [fp]: boom',
+        id: 'sys-inv2',
+        isInvestigation: true,
+        affectedTasks: ['task-origin2']
+      }, 'internal', { now: NOW });
+      const res = await sweepResolvedFailureTasks({ now: NOW });
+      expect(res.reaped).toBe(0);
+      const after = await getCosTasks();
+      expect(after.tasks.find(t => t.id === 'sys-inv2').status).toBe('pending');
+    });
+
+    it('bounds the number of flips per sweep to the limit', async () => {
+      for (let i = 0; i < 4; i++) {
+        await addTask({ description: `old ${i}`, id: `task-b${i}`, priority: 'LOW' }, 'user', { now: NOW });
+        await updateTask(`task-b${i}`, { status: 'blocked', metadata: { blockedCategory: 'max-retries', blockedAt: daysAgo(20) } }, 'user', { now: NOW });
+      }
+      const res = await sweepResolvedFailureTasks({ now: NOW, limit: 2 });
+      expect(res.reaped).toBe(2);
+      const after = await getUserTasks();
+      expect(after.tasks.filter(t => t.status === 'completed')).toHaveLength(2);
+      expect(after.tasks.filter(t => t.status === 'blocked')).toHaveLength(2);
+    });
+
+    it('is a no-op returning zeroed counts when nothing is reapable', async () => {
+      await addTask({ description: 'plain pending', id: 'task-p', priority: 'LOW' }, 'user', { now: NOW });
+      const res = await sweepResolvedFailureTasks({ now: NOW });
+      expect(res).toEqual({ reaped: 0, staleBlocks: 0, investigations: 0 });
+    });
+
+    it('exposes a 14-day default threshold', () => {
+      expect(DEFAULT_FAILURE_TASK_MAX_AGE_MS).toBe(14 * 24 * 60 * 60 * 1000);
+    });
   });
 });
 

@@ -32,6 +32,18 @@ export const PRIVACY_VAULT_STATUSES = Object.freeze(['current', 'previous']);
 // ISO calendar date (DATE column) — nullable to clear.
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'expected YYYY-MM-DD').nullable().optional();
 
+// Opt-in pagination query params (?limit=&offset=) spread into the .strict()
+// list-query schemas below so the paginateArray envelope can be requested
+// without the strict guard rejecting the keys. Kept as passthrough strings —
+// parsePagination (validation.js) does the parseInt + clamp, so garbage falls
+// back to the default page rather than 400-ing. Defined locally (not imported
+// from validation.js) to avoid a circular import: validation.js re-exports this
+// module. Mirror any change into validation.js's parsePagination contract.
+const paginationQueryFields = {
+  limit: z.string().optional(),
+  offset: z.string().optional(),
+};
+
 const rejectSensitiveScans = (val, ctx) => {
   if (val.useForScans === true && PRIVACY_SENSITIVE_TYPES.includes(val.type)) {
     ctx.addIssue({
@@ -71,6 +83,7 @@ export const privacyVaultUpdateSchema = z.object({
 
 export const privacyVaultListQuerySchema = z.object({
   type: z.enum(PRIVACY_VAULT_TYPES).optional(),
+  ...paginationQueryFields,
 }).strict();
 
 export const privacyVaultIdParamsSchema = z.object({
@@ -130,6 +143,7 @@ export const privacyOrgListQuerySchema = z.object({
   trust: z.enum(PRIVACY_ORG_TRUST_LEVELS).optional(),
   status: z.enum(PRIVACY_ORG_STATUSES).optional(),
   category: z.enum(PRIVACY_ORG_CATEGORIES).optional(),
+  ...paginationQueryFields,
 }).strict();
 
 export const privacyOrgIdParamsSchema = z.object({
@@ -219,11 +233,13 @@ export const privacyBrokerListQuerySchema = z.object({
     (v) => (v === undefined ? undefined : v === 'true' || v === true),
     z.boolean().optional(),
   ),
+  ...paginationQueryFields,
 }).strict();
 
 // GET /api/privacy/broker-cases?state=found
 export const privacyBrokerCaseListQuerySchema = z.object({
   state: z.enum(PRIVACY_BROKER_CASE_STATES).optional(),
+  ...paginationQueryFields,
 }).strict();
 
 // POST /api/privacy/brokers/refresh — no body; empty object.

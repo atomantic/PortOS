@@ -11,7 +11,7 @@ import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { deepMerge, isPlainObject } from '../lib/objects.js';
-import { emptyToUndefined, validateRequest } from '../lib/validation.js';
+import { emptyToUndefined, validateRequest, isPaginationRequested, paginateArray } from '../lib/validation.js';
 import {
   deleteLora,
   getLora,
@@ -29,8 +29,15 @@ import { openSseStream } from '../lib/sseDownload.js';
 
 const router = Router();
 
-router.get('/', asyncHandler(async (_req, res) => {
-  res.json(await listLoras());
+// Backward-compatible by default: returns the full LoRA array. When a client
+// passes `limit`/`offset`, the response becomes the bounded
+// `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
+router.get('/', asyncHandler(async (req, res) => {
+  const loras = await listLoras();
+  if (!isPaginationRequested(req.query)) {
+    return res.json(loras);
+  }
+  res.json(paginateArray(loras, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 // LoRA suggestions — Civitai image LoRAs per runner family (mflux / flux2 /

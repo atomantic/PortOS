@@ -24,6 +24,7 @@ import { mergeTaskLists } from './cosTaskMerge.js';
 import { canChallenge, getChallengeCount, buildChallengePatch, buildChallengeResolutionPatch, classifyRecheckOutcome, MAX_CHALLENGES_PER_TASK } from './cosChallenge.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { runLocalCodeReview, getCodeReviewDefaults } from './codeReview.js';
+import { isTruthyMeta } from './agentState.js';
 
 // First non-empty line of a string. Used by addTask dedup: stored descriptions
 // are flattened to a single line by generateTasksMarkdown, so the comparison
@@ -555,6 +556,143 @@ export async function deleteTask(taskId, taskType = 'user') {
   cosEvents.emit('tasks:changed', { type: taskType, action: 'deleted', taskId });
   return { success: true, taskId };
   });
+}
+
+// ── Stale failure-artifact reaper (issue #2619) ──────────────────────────────
+//
+// After a failure storm is fixed, nothing retired what it left behind: tasks
+// parked in `blocked` by a failure category, and the `[Auto] Investigate agent
+// failure` tasks filed against them. They persisted indefinitely and stayed
+// input to every generator/learning read. The sweep below runs on the CoS
+// health tick and resolves them via STATUS FLIP (→ completed + a `resolution:
+// 'auto-expired'` marker), NEVER deletion: LWW federation sync does not
+// propagate deletions, so a delete just resurrects from any peer still holding
+// the row.
+
+// Default age a failure-blocked task must exceed before it is auto-expired.
+export const DEFAULT_FAILURE_TASK_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000; // 14 days
+
+// Max tasks the reaper flips in a single sweep — bounded so one tick can't fan
+// out an unbounded burst of writes/`tasks:changed` events after a large storm.
+export const DEFAULT_REAP_LIMIT = 50;
+
+// Blocked categories that encode USER INTENT or an OPEN user decision, not a
+// stale failure artifact — the reaper leaves these alone. Everything else with a
+// `blockedCategory` is a failure-path block and therefore reapable.
+const NON_REAPABLE_BLOCKED_CATEGORIES = new Set([
+  'user-terminated',      // user explicitly stopped the agent
+  'agent-paused',         // user paused; resumable on demand
+  'challenge-escalation'  // parked awaiting the user's arbitration
+]);
+
+// Durable marker + legacy-headline fallback for an investigation task. Kept
+// local (not imported from agentErrorAnalysis.js) to avoid a cosTaskStore ↔
+// cos.js ↔ agentErrorAnalysis import cycle; the headline prefix is the one
+// signal present on BOTH new and pre-#2615 investigation tasks.
+const INVESTIGATION_HEADLINE_PREFIX = '[Auto] Investigate agent failure';
+const isInvestigationTaskLocal = (task) =>
+  isTruthyMeta(task?.metadata?.isInvestigation) ||
+  (typeof task?.description === 'string' && task.description.trimStart().startsWith(INVESTIGATION_HEADLINE_PREFIX));
+
+/**
+ * Age (ms) of a failure-blocked task, read from the most specific timestamp it
+ * carries. Returns null when the task is not a reapable failure block, or when
+ * it has no parseable timestamp — an undated block is never reaped (we can't
+ * prove it is old, so leaving it is the safe default). Pure.
+ */
+export function blockedFailureAgeMs(task, now = Date.now()) {
+  if (task?.status !== 'blocked') return null;
+  const category = task.metadata?.blockedCategory;
+  if (!category || NON_REAPABLE_BLOCKED_CATEGORIES.has(category)) return null;
+  const stampedAt = task.metadata?.blockedAt
+    || task.metadata?.lastFailureAt
+    || task.metadata?.updatedAt;
+  const t = Date.parse(stampedAt);
+  if (!Number.isFinite(t)) return null;
+  return Math.max(0, now - t);
+}
+
+/** True when a failure-blocked task is old enough to auto-expire. Pure. */
+export function isReapableBlockedFailure(task, { now = Date.now(), maxAgeMs = DEFAULT_FAILURE_TASK_MAX_AGE_MS } = {}) {
+  const age = blockedFailureAgeMs(task, now);
+  return age !== null && age >= maxAgeMs;
+}
+
+/**
+ * True when an investigation task's originating task(s) are all resolved —
+ * absent (already reaped/deleted) or in a terminal `completed` status — so the
+ * investigation no longer tracks any live failure. Requires a known originating
+ * link (`metadata.affectedTasks`); a legacy investigation with no link is left
+ * alone (we can't prove its cause is resolved). Pure.
+ *
+ * @param {object} task       the candidate investigation task
+ * @param {Map}    tasksById  id → task across BOTH queues
+ */
+export function isReapableInvestigation(task, tasksById) {
+  if (!isInvestigationTaskLocal(task)) return false;
+  if (task.status === 'completed') return false; // already terminal
+  const affected = Array.isArray(task.metadata?.affectedTasks) ? task.metadata.affectedTasks : [];
+  if (affected.length === 0) return false;
+  return affected.every((id) => {
+    const origin = tasksById?.get(id);
+    return !origin || origin.status === 'completed';
+  });
+}
+
+/**
+ * Sweep resolved failure artifacts and auto-expire them via status flip (#2619).
+ *
+ * Two categories, both resolved to `completed` with a `resolution: 'auto-expired'`
+ * marker (never deleted — federation-safe): (1) tasks parked in `blocked` by a
+ * failure `blockedCategory` older than `maxAgeMs`, and (2) `[Auto] Investigate
+ * agent failure` tasks whose originating task(s) are gone/completed. Bounded to
+ * `limit` flips per call and single-line-logged. Runs off the health tick.
+ *
+ * @param {{ now?:number, maxAgeMs?:number, limit?:number }} [opts]
+ * @returns {Promise<{ reaped:number, staleBlocks:number, investigations:number }>}
+ */
+export async function sweepResolvedFailureTasks({
+  now = Date.now(),
+  maxAgeMs = DEFAULT_FAILURE_TASK_MAX_AGE_MS,
+  limit = DEFAULT_REAP_LIMIT
+} = {}) {
+  const { user, cos } = await getAllTasks();
+  const userTasks = user?.tasks || [];
+  const cosTasks = cos?.tasks || [];
+  const tasksById = new Map([...userTasks, ...cosTasks].map((t) => [t.id, t]));
+
+  // Collect targets across both queues, tagging each with its file type so the
+  // flip writes back to the right markdown store. Bounded by `limit`.
+  const targets = [];
+  for (const [type, list] of [['user', userTasks], ['internal', cosTasks]]) {
+    for (const task of list) {
+      const reason = isReapableBlockedFailure(task, { now, maxAgeMs })
+        ? 'stale-failure-block'
+        : (isReapableInvestigation(task, tasksById) ? 'investigation-resolved' : null);
+      if (reason) targets.push({ task, type, reason });
+      if (targets.length >= limit) break;
+    }
+    if (targets.length >= limit) break;
+  }
+
+  if (targets.length === 0) return { reaped: 0, staleBlocks: 0, investigations: 0 };
+
+  let staleBlocks = 0;
+  let investigations = 0;
+  for (const { task, type, reason } of targets) {
+    const updated = await updateTask(task.id, {
+      status: 'completed',
+      metadata: { resolution: 'auto-expired', autoExpiredReason: reason, autoExpiredAt: new Date(now).toISOString() }
+    }, type, { now });
+    if (updated?.error) continue;
+    if (reason === 'stale-failure-block') staleBlocks++; else investigations++;
+  }
+
+  const reaped = staleBlocks + investigations;
+  if (reaped > 0) {
+    console.log(`🧹 Reaped ${reaped} resolved failure task(s): ${staleBlocks} stale block(s), ${investigations} investigation(s)`);
+  }
+  return { reaped, staleBlocks, investigations };
 }
 
 /**
