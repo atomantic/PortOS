@@ -20,7 +20,7 @@ import { computeMiniMap } from '../../utils/cityMiniMap';
 // Map box size in px. Fixed so the projection has a stable target on desktop.
 const MAP_SIZE = 132;
 
-export default function CityMiniMap({ apps, onSelectApp, alwaysShow = false }) {
+export default function CityMiniMap({ apps, onSelectApp, selectedAppId = null, alwaysShow = false }) {
   // Status colors track the theme accent for 'online' (the rest stay semantic), so a
   // dot matches its building exactly. Read from the palette the city page provides.
   const { getBuildingColor } = useCityPalette();
@@ -80,7 +80,8 @@ export default function CityMiniMap({ apps, onSelectApp, alwaysShow = false }) {
               backgroundColor: color,
               boxShadow: `0 0 4px ${color}`,
             };
-            const title = `${dot.name} — ${dot.status.replace(/_/g, ' ')}`;
+            const isSelected = selectedAppId != null && dot.id === selectedAppId;
+            const title = `${dot.name} — ${dot.status.replace(/_/g, ' ')}${isSelected ? ' (focused)' : ''}`;
 
             if (onSelectApp) {
               return (
@@ -90,7 +91,10 @@ export default function CityMiniMap({ apps, onSelectApp, alwaysShow = false }) {
                   onClick={() => onSelectApp({ id: dot.id })}
                   title={title}
                   aria-label={title}
-                  className="absolute w-1.5 h-1.5 rounded-full -translate-x-1/2 -translate-y-1/2 hover:scale-[2] hover:z-10 transition-transform focus:outline-none focus:ring-1 focus:ring-cyan-400"
+                  aria-current={isSelected ? 'true' : undefined}
+                  className={`absolute w-1.5 h-1.5 rounded-full -translate-x-1/2 -translate-y-1/2 hover:scale-[2] hover:z-10 transition-transform focus:outline-none focus:ring-1 focus:ring-cyan-400 ${
+                    isSelected ? 'ring-2 ring-cyan-200 scale-[1.8] z-10' : ''
+                  }`}
                   style={dotStyle}
                 />
               );

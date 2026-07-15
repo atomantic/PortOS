@@ -5,7 +5,7 @@ import Building from './Building';
 import AgentEntity from './AgentEntity';
 import ProcessBuilding from './ProcessBuilding';
 
-export default function Borough({ app, position, agentMap, onBuildingClick, playSfx, neonBrightness, isProximity, dimmed = false, settings, playback = false, transitionState = null, onExited }) {
+export default function Borough({ app, position, agentMap, onBuildingClick, playSfx, neonBrightness, isProximity, focused = false, dimmed = false, settings, playback = false, transitionState = null, onExited }) {
   const agentData = agentMap.get(app.id);
   const agents = agentData?.agents || [];
   const height = getBuildingHeight(app);
@@ -50,6 +50,7 @@ export default function Borough({ app, position, agentMap, onBuildingClick, play
         interiorWindows={cityShowInteriorWindows(settings)}
         neonBrightness={neonBrightness}
         isProximity={isProximity}
+        focused={focused}
         dimmed={dimmed}
         dayMix={dayMix}
         playback={playback}

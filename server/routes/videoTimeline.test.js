@@ -34,6 +34,19 @@ describe('videoTimeline routes', () => {
       expect(r.status).toBe(200);
       expect(r.body).toHaveLength(1);
     });
+
+    it('returns a bounded envelope when pagination is requested', async () => {
+      svc.listProjects.mockResolvedValueOnce(
+        Array.from({ length: 5 }, (_, i) => ({ id: `p${i}`, name: `P${i}` }))
+      );
+      const r = await request(app).get('/api/video-timeline/projects?limit=2&offset=1');
+      expect(r.status).toBe(200);
+      expect(r.body.items).toHaveLength(2);
+      expect(r.body.items[0].id).toBe('p1');
+      expect(r.body.total).toBe(5);
+      expect(r.body.limit).toBe(2);
+      expect(r.body.offset).toBe(1);
+    });
   });
 
   describe('POST /projects', () => {

@@ -114,6 +114,59 @@ describe('GET /api/privacy/vault', () => {
   });
 });
 
+// Opt-in pagination (#2535): full array by default, bounded envelope with
+// ?limit/?offset. Verified once here for the vault; the orgs/changes/brokers/
+// broker-cases + digital-twin routes share the same paginateArray helper.
+describe('GET /api/privacy/* pagination', () => {
+  it('vault returns a bounded envelope when limit/offset are passed', async () => {
+    service.listVaultRecords.mockResolvedValueOnce(
+      Array.from({ length: 5 }, (_, i) => ({ id: `r${i}`, type: 'email' })),
+    );
+    const res = await request(makeApp()).get('/api/privacy/vault?limit=2&offset=1');
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(2);
+    expect(res.body.items[0].id).toBe('r1');
+    expect(res.body.total).toBe(5);
+    expect(res.body.limit).toBe(2);
+    expect(res.body.offset).toBe(1);
+  });
+
+  it('vault stays a plain array when no pagination param is passed', async () => {
+    const res = await request(makeApp()).get('/api/privacy/vault');
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  it('orgs strips pagination params before filtering the service', async () => {
+    const res = await request(makeApp()).get('/api/privacy/orgs?trust=trusted&limit=1');
+    expect(res.status).toBe(200);
+    expect(orgService.listOrgs).toHaveBeenCalledWith({ trust: 'trusted' });
+    expect(res.body.limit).toBe(1);
+    expect(Array.isArray(res.body.items)).toBe(true);
+  });
+
+  it('broker-cases paginates while preserving the state filter', async () => {
+    brokerService.listBrokerCases.mockResolvedValueOnce(
+      Array.from({ length: 3 }, (_, i) => ({ id: `case-${i}`, state: 'found' })),
+    );
+    const res = await request(makeApp()).get('/api/privacy/broker-cases?state=found&limit=2');
+    expect(res.status).toBe(200);
+    expect(brokerService.listBrokerCases).toHaveBeenCalledWith({ state: 'found' });
+    expect(res.body.items).toHaveLength(2);
+    expect(res.body.total).toBe(3);
+  });
+
+  it('changes paginates the change-event feed', async () => {
+    changeService.listChangeEvents.mockResolvedValueOnce(
+      Array.from({ length: 4 }, (_, i) => ({ id: `chg-${i}` })),
+    );
+    const res = await request(makeApp()).get('/api/privacy/changes?limit=1&offset=2');
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(1);
+    expect(res.body.items[0].id).toBe('chg-2');
+    expect(res.body.total).toBe(4);
+  });
+});
+
 describe('POST /api/privacy/vault', () => {
   it('creates a record from a valid body', async () => {
     const res = await request(makeApp()).post('/api/privacy/vault')

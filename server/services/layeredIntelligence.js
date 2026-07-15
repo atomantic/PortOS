@@ -83,9 +83,11 @@ export const PROPOSAL_COMPLEXITIES = ['trivial', 'moderate', 'complex'];
 export const HANDOFF_COMPLEXITY = 'trivial';
 
 // The resolved outcomes a filed proposal can reach (the feedback loop, #2428).
-// A record with a null outcome is still open/unresolved. `abandoned` is reserved
-// for a superseded proposal — auto-derivation only distinguishes merged/rejected
-// from the tracker's closed state; `abandoned` is set by a user/future path.
+// A record with a null outcome is still open/unresolved. All three are
+// auto-derived from the tracker's closed state by deriveOutcome: completed →
+// merged, not_planned → rejected, and any other PRESENT close reason
+// (duplicate/stale/etc.) → abandoned (#2620); a reason-less close falls back
+// to merged for trackers that report no stateReason.
 export const PROPOSAL_OUTCOMES = ['merged', 'rejected', 'abandoned'];
 
 /**
@@ -207,15 +209,22 @@ export function normalizeSlug(slug) {
 
 /**
  * Whether an existing tracker issue is still within the dedup suppression window:
- * OPEN, or CLOSED within CLOSED_SUPPRESSION_MS. A closed-long-ago (or unknown
- * close time, treated as long ago) issue falls out of the window so its work can
- * be re-proposed. Shared by both the slug dedup and the semantic dedup so the two
- * guards agree on which issues still count.
+ * OPEN, or CLOSED within CLOSED_SUPPRESSION_MS. Only a closed-long-ago issue
+ * falls out of the window so its work can be re-proposed. A closed issue with a
+ * missing/unparseable `closedAt` is PERMANENTLY in-window (suppressed): the main
+ * producer of that shape is a checked `- [x]` PLAN.md item (checkboxes carry no
+ * timestamp), and a completed plan item never needs re-proposal — treating it as
+ * "closed long ago" made the reasoner re-propose every done item on every run
+ * (#2620). A tracker row missing its close time (e.g. a jira Done ticket with no
+ * resolutiondate) is likewise suppressed rather than re-proposed — done work is
+ * never worth re-reasoning. Shared by both the slug dedup and the semantic dedup
+ * so the two guards agree on which issues still count.
  */
 export function isIssueWithinDedupWindow(issue, now = Date.now()) {
   if ((issue?.state || '').toLowerCase() === 'open') return true;
   const closedAt = issue?.closedAt ? Date.parse(issue.closedAt) : NaN;
-  return Number.isFinite(closedAt) && now - closedAt <= CLOSED_SUPPRESSION_MS;
+  if (!Number.isFinite(closedAt)) return true;
+  return now - closedAt <= CLOSED_SUPPRESSION_MS;
 }
 
 /**
@@ -425,17 +434,24 @@ export function trackerSupportsPause(resolved) {
  * Derive a resolved outcome for a filed proposal from its live tracker issue.
  * Pure — the reconciler feeds it a `{ state, stateReason, closedAt }` issue:
  *   - still open (or unknown state)     → null   (unresolved)
+ *   - closed as "completed"             → 'merged'
  *   - closed as "not planned"           → 'rejected'
- *   - closed for any other reason        → 'merged' (the common auto-close-on-merge
- *                                          path; glab/jira report no stateReason)
- * GitHub reports `stateReason` ('completed' | 'not_planned' | 'reopened'); other
- * forges omit it, so a bare closed issue reads as merged.
+ *   - closed with any OTHER reason       → 'abandoned' (duplicate/stale/etc. —
+ *                                          counting these as merged inflated the
+ *                                          merge-rate calibration signal, #2620)
+ *   - closed with NO reason              → 'merged' (graceful fallback: glab/jira
+ *                                          and the plan filer report no stateReason,
+ *                                          and their common close path IS a merge —
+ *                                          absent ≠ other, per the sentinel rule)
+ * GitHub reports `stateReason` ('completed' | 'not_planned' | 'reopened' | …);
+ * other trackers omit it, so a bare closed issue reads as merged.
  */
 export function deriveOutcome(issue) {
   if ((issue?.state || '').toLowerCase() !== 'closed') return null;
   const reason = (issue?.stateReason || '').toLowerCase().replace(/[\s-]+/g, '_');
   if (reason === 'not_planned') return 'rejected';
-  return 'merged';
+  if (reason === '' || reason === 'completed') return 'merged';
+  return 'abandoned';
 }
 
 /**
@@ -1113,8 +1129,8 @@ export async function appendProposalToPlan({ repoPath, appName, slug, title, bod
  * checkbox stays `open` (still tracked/suppressed) rather than collapsing to
  * `closed` — a missing checkbox must not silently make an item re-proposable.
  * A `closed` item carries no `closedAt` (PLAN.md checkboxes have no timestamp),
- * which `isIssueWithinDedupWindow` already treats as out-of-window → the item
- * becomes re-proposable, exactly the desired behavior for a completed proposal.
+ * which `isIssueWithinDedupWindow` treats as permanently in-window → a completed
+ * proposal stays suppressed forever instead of being re-reasoned every run (#2620).
  */
 export function extractPlanSlugs(planContent) {
   if (typeof planContent !== 'string') return [];

@@ -13,6 +13,7 @@ import { cosEvents, emitLog } from './cosEvents.js';
 import { loadState, saveState, withStateLock, AGENTS_DIR } from './cosState.js';
 import { atomicWrite, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { loadAgentIndex, getAgentDir } from './cosAgentIndex.js';
+import { ServerError } from '../lib/errorHandler.js';
 
 // Submit feedback for a completed agent
 export async function submitAgentFeedback(agentId, feedback) {
@@ -28,7 +29,7 @@ export async function submitAgentFeedback(agentId, feedback) {
     if (state.agents[agentId]) {
       const agent = state.agents[agentId];
       if (agent.status !== 'completed') {
-        return { error: 'Can only submit feedback for completed agents' };
+        throw new ServerError('Can only submit feedback for completed agents', { status: 400, code: 'INVALID_STATE' });
       }
       state.agents[agentId].feedback = feedbackData;
       await saveState(state);
@@ -56,14 +57,14 @@ export async function submitAgentFeedback(agentId, feedback) {
     // Agent not in state — look up from disk via index
     const idx = await loadAgentIndex();
     const dateStr = idx.get(agentId);
-    if (!dateStr) return { error: 'Agent not found' };
+    if (!dateStr) throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });
 
     const metaPath = join(AGENTS_DIR, dateStr, agentId, 'metadata.json');
     const content = await tryReadFile(metaPath);
-    if (!content) return { error: 'Agent not found' };
+    if (!content) throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });
 
     const raw = safeJSONParse(content, null);
-    if (!raw) return { error: 'Agent not found' };
+    if (!raw) throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });
 
     raw.feedback = feedbackData;
     await atomicWrite(metaPath, raw);

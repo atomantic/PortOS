@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
+import { ServerError } from '../lib/errorHandler.js';
 import cosRoutes from './cos.js';
 
 // Mock the cos service
@@ -663,7 +664,7 @@ describe('CoS Routes', () => {
     });
 
     it('should return 404 if agent not found', async () => {
-      cos.deleteAgent.mockResolvedValue({ error: 'Agent not found' });
+      cos.deleteAgent.mockRejectedValue(new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' }));
 
       const response = await request(app).delete('/api/cos/agents/agent-999');
 
@@ -1129,13 +1130,24 @@ describe('CoS Routes', () => {
     });
 
     it('should return 404 if agent not found', async () => {
-      cos.submitAgentFeedback.mockResolvedValue({ error: 'Agent not found' });
+      cos.submitAgentFeedback.mockRejectedValue(new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' }));
 
       const response = await request(app)
         .post('/api/cos/agents/agent-999/feedback')
         .send({ rating: 'negative' });
 
       expect(response.status).toBe(404);
+    });
+
+    it('should return 400 (INVALID_STATE) when the agent is not completed', async () => {
+      cos.submitAgentFeedback.mockRejectedValue(new ServerError('Can only submit feedback for completed agents', { status: 400, code: 'INVALID_STATE' }));
+
+      const response = await request(app)
+        .post('/api/cos/agents/agent-001/feedback')
+        .send({ rating: 'positive' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('INVALID_STATE');
     });
   });
 
@@ -1176,13 +1188,24 @@ describe('CoS Routes', () => {
     });
 
     it('should return 404 if agent not found', async () => {
-      cos.sendBtwToAgent.mockResolvedValue({ error: 'Agent not found' });
+      cos.sendBtwToAgent.mockRejectedValue(new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' }));
 
       const response = await request(app)
         .post('/api/cos/agents/agent-999/btw')
         .send({ message: 'hello' });
 
       expect(response.status).toBe(404);
+    });
+
+    it('should return 400 (INVALID_STATE) when BTW is unsupported for the agent', async () => {
+      cos.sendBtwToAgent.mockRejectedValue(new ServerError('Agent is not running', { status: 400, code: 'INVALID_STATE' }));
+
+      const response = await request(app)
+        .post('/api/cos/agents/agent-001/btw')
+        .send({ message: 'hello' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.code).toBe('INVALID_STATE');
     });
   });
 

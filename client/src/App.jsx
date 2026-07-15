@@ -298,6 +298,7 @@ export default function App() {
           <Route path="devtools/jira/reports" element={<JiraReports />} />
           <Route path="city" element={<CyberCity />} />
           <Route path="city/settings" element={<CyberCity />} />
+          <Route path="city/apps/:appId" element={<CyberCity />} />
           <Route path="data" element={<DataManager />} />
           <Route path="character" element={<CharacterSheet />} />
           <Route path="ask" element={<Ask />} />

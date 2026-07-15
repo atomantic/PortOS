@@ -68,6 +68,19 @@ describe('Digital Twin Routes', () => {
       expect(res.body).toHaveLength(2);
     });
 
+    it('GET /documents returns a bounded envelope when pagination is requested (#2535)', async () => {
+      digitalTwinService.getDocuments.mockResolvedValue(
+        Array.from({ length: 5 }, (_, i) => ({ id: `doc-${i}` })),
+      );
+      const res = await request(app).get('/api/digital-twin/documents?limit=2&offset=1');
+      expect(res.status).toBe(200);
+      expect(res.body.items).toHaveLength(2);
+      expect(res.body.items[0].id).toBe('doc-1');
+      expect(res.body.total).toBe(5);
+      expect(res.body.limit).toBe(2);
+      expect(res.body.offset).toBe(1);
+    });
+
     it('GET /documents/:id returns 404 for an unknown doc', async () => {
       digitalTwinService.getDocumentById.mockResolvedValue(null);
       const res = await request(app).get('/api/digital-twin/documents/nope');

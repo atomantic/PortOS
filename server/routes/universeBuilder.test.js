@@ -252,6 +252,19 @@ describe('universe-builder routes', () => {
     expect(res.body).toEqual([]);
   });
 
+  it('GET / returns a bounded envelope when pagination is requested', async () => {
+    const app = buildApp();
+    for (const name of ['Alpha', 'Beta', 'Gamma']) {
+      await request(app).post('/api/universe-builder').send({ name });
+    }
+    const res = await request(app).get('/api/universe-builder?limit=2&offset=1');
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(2);
+    expect(res.body.total).toBe(3);
+    expect(res.body.limit).toBe(2);
+    expect(res.body.offset).toBe(1);
+  });
+
   it('GET /:id for a missing universe 404s without spamming console.error', async () => {
     // LoraDatasetDetail speculatively fetches a dataset's character.universeId
     // ({ silent: true }); that 404s whenever the universe was deleted. The route

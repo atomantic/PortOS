@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { asyncHandler, createServiceErrorMapper } from '../lib/errorHandler.js';
 import {
   validateRequest,
   importerAnalyzeSchema,
@@ -45,17 +45,9 @@ const SERVICE_ERROR_STATUS = {
   [seriesSvc.ERR_NOT_FOUND]: 404,
 };
 
-const mapServiceError = (err) => {
-  const status = SERVICE_ERROR_STATUS[err?.code];
-  // Preserve `err.context` — ERR_PARTIAL_COMMIT_ISSUES carries the
-  // arcAlreadyPersisted retry signal the client gates on.
-  if (status) return new ServerError(err.message, {
-    status,
-    code: err.code,
-    ...(err.context ? { context: err.context } : {}),
-  });
-  return err;
-};
+// Preserve `err.context` — ERR_PARTIAL_COMMIT_ISSUES carries the
+// arcAlreadyPersisted retry signal the client gates on.
+const mapServiceError = createServiceErrorMapper(SERVICE_ERROR_STATUS, (err) => err.context);
 
 // Surfaces server-canonical constants so the client doesn't hardcode (and
 // drift from) the source-char limit, the arc-role enum, or the arc-shape
