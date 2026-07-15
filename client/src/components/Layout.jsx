@@ -424,7 +424,7 @@ export function SingleNavRow({ item, collapsed, active, badgeCount, pinned, onTo
             <Icon size={20} className="shrink-0" />
             {/* Badge for collapsed state */}
             {showBadge && collapsed && (
-              <span className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] flex items-center justify-center text-[9px] font-bold rounded-full bg-yellow-500 text-black px-0.5">
+              <span className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] flex items-center justify-center text-[9px] font-bold rounded-full bg-port-warning text-port-on-warning px-0.5">
                 {badgeText}
               </span>
             )}
@@ -435,7 +435,7 @@ export function SingleNavRow({ item, collapsed, active, badgeCount, pinned, onTo
         </div>
         {/* Badge for expanded state — sits left of the absolute pin */}
         {showBadge && !collapsed && (
-          <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1 shrink-0 mt-0.5">
+          <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-port-warning text-port-on-warning px-1 shrink-0 mt-0.5">
             {badgeText}
           </span>
         )}
@@ -788,7 +788,7 @@ export default function Layout() {
               <div className="relative">
                 <Icon size={20} className="shrink-0" />
                 {item.showBadge && unreadCount > 0 && collapsed && (
-                  <span className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] flex items-center justify-center text-[9px] font-bold rounded-full bg-yellow-500 text-black px-0.5">
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] flex items-center justify-center text-[9px] font-bold rounded-full bg-port-warning text-port-on-warning px-0.5">
                     {unreadCount > 9 ? '9+' : unreadCount}
                   </span>
                 )}
@@ -798,7 +798,7 @@ export default function Layout() {
               </span>
             </div>
             {!collapsed && item.showBadge && unreadCount > 0 && (
-              <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1 shrink-0">
+              <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-port-warning text-port-on-warning px-1 shrink-0">
                 {unreadCount > 9 ? '9+' : unreadCount}
               </span>
             )}
