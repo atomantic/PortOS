@@ -23,9 +23,19 @@ export async function readRaw(id) {
   return rows[0]?.data ?? null;
 }
 
-/** Every issue id (live, ephemeral, AND tombstones) — the service filters. */
-export async function listIds() {
-  const { rows } = await query(`SELECT id FROM pipeline_issues`);
+/**
+ * Issue ids only — SELECT id, never the `data` JSONB (each issue can carry up to
+ * ~12MB of stage runHistory, so an id sweep that loaded `data` would move the
+ * whole table into memory just to read the ids, #2540). Default returns every
+ * id (live, ephemeral, AND tombstones) — the "the service filters" contract the
+ * facade relies on. `includeDeleted: false` scopes to non-tombstoned rows via
+ * the mirrored `deleted` column so a live-membership sweep (tombstoneGc) skips
+ * the whole-record load entirely.
+ */
+export async function listIds({ includeDeleted = true } = {}) {
+  const { rows } = includeDeleted
+    ? await query(`SELECT id FROM pipeline_issues`)
+    : await query(`SELECT id FROM pipeline_issues WHERE deleted = false`);
   return rows.map((r) => r.id);
 }
 
