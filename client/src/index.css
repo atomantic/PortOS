@@ -150,6 +150,31 @@ body {
   height: 100dvh;
 }
 
+/* dvh-aware sizing utilities (see .h-dvh-screen above for the cascade rationale).
+   iOS Safari's retractable browser chrome makes 100vh taller than the visible
+   viewport, so surfaces sized to 100vh spill *under* the chrome. These size to
+   100dvh — the visible dynamic viewport — while keeping a 100vh fallback for
+   engines that predate dvh (the two-declaration idiom: the vh line lands first,
+   the dvh line overrides it wherever dvh parses). Parametrized so one utility
+   serves the plain, capped, and inset variants used across the app:
+     --dvh-cap    upper bound for the size            (default: the full viewport)
+     --dvh-inset  amount subtracted from the viewport (default: 0px)
+   Defined with @utility so responsive variants (sm:, lg:, xl:) are available;
+   drive the caps per-breakpoint with arbitrary-property utilities, e.g.
+   `min-h-dvh-cap lg:[--dvh-cap:460px] lg:[--dvh-inset:1rem]`. */
+@utility max-h-dvh-cap {
+  max-height: min(var(--dvh-cap, 100vh), calc(100vh - var(--dvh-inset, 0px)));
+  max-height: min(var(--dvh-cap, 100dvh), calc(100dvh - var(--dvh-inset, 0px)));
+}
+@utility min-h-dvh-cap {
+  min-height: min(var(--dvh-cap, 100vh), calc(100vh - var(--dvh-inset, 0px)));
+  min-height: min(var(--dvh-cap, 100dvh), calc(100dvh - var(--dvh-inset, 0px)));
+}
+@utility h-dvh-cap {
+  height: min(var(--dvh-cap, 100vh), calc(100vh - var(--dvh-inset, 0px)));
+  height: min(var(--dvh-cap, 100dvh), calc(100dvh - var(--dvh-inset, 0px)));
+}
+
 body::before {
   content: "";
   position: fixed;

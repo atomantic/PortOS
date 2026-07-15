@@ -680,7 +680,7 @@ export default function ChiefOfStaff() {
           {/* Collapsible Content */}
           <div
             id="cos-agent-panel"
-            className={`${agentPanelCollapsed ? 'hidden' : 'flex'} lg:flex min-w-0 relative overflow-hidden ${hasCanvasAvatar ? 'flex-none min-h-[180px] sm:min-h-[190px] md:min-h-[190px] lg:min-h-[min(460px,calc(100vh-1rem))] xl:min-h-[min(620px,calc(100vh-1rem))]' : 'flex-1'}`}
+            className={`${agentPanelCollapsed ? 'hidden' : 'flex'} lg:flex min-w-0 relative overflow-hidden ${hasCanvasAvatar ? 'flex-none min-h-dvh-cap [--dvh-cap:180px] sm:[--dvh-cap:190px] md:[--dvh-cap:190px] lg:[--dvh-cap:460px] lg:[--dvh-inset:1rem] xl:[--dvh-cap:620px]' : 'flex-1'}`}
           >
             {/* Background Effects */}
             <div
@@ -700,7 +700,7 @@ export default function ChiefOfStaff() {
               // + event log without clipping; without this cap the inset-0 canvas
               // grows with the panel on desktop, dragging the framed avatar down
               // into the stats grid below it.
-              <div className="absolute inset-0 lg:bottom-auto lg:h-[min(460px,calc(100vh-1rem))] xl:h-[min(620px,calc(100vh-1rem))] z-[1] -translate-x-16 -translate-y-1 sm:translate-x-0 sm:-translate-y-6 md:-translate-y-8 lg:-translate-y-28 xl:-translate-y-36">
+              <div className="absolute inset-0 lg:bottom-auto lg:h-dvh-cap lg:[--dvh-cap:460px] lg:[--dvh-inset:1rem] xl:[--dvh-cap:620px] z-[1] -translate-x-16 -translate-y-1 sm:translate-x-0 sm:-translate-y-6 md:-translate-y-8 lg:-translate-y-28 xl:-translate-y-36">
                 {renderAvatar(true)}
               </div>
             )}
