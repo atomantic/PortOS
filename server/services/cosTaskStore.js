@@ -444,6 +444,35 @@ export async function updateTask(taskId, updates, taskType = 'user', { now = Dat
 }
 
 /**
+ * Explicitly revive a blocked task back to pending (#2614).
+ *
+ * The retry path for a failure-blocked duplicate is unblocking the existing
+ * task, not minting a new one — every explicit dispatch path (on-demand Run,
+ * pipeline advance, Creative Director re-trigger, manual job trigger, voice
+ * dispatch) that collides with a blocked twin routes through here. On top of
+ * updateTask's blocked-transition clear (blocker/blockedReason/blockedCategory/
+ * blockedAt/failureCount/lastErrorCategory/lastFailureAt), this also resets the
+ * spawn/orphan retry budgets — a revived task must behave like a fresh one, not
+ * immediately re-block on the exhausted budget it blocked with. The reset keys
+ * are spread AFTER the caller's fresh metadata so a carried-forward budget
+ * (e.g. a pipeline hand-off spreading the prior stage's metadata) can't win.
+ * updateTask emits `tasks:changed` action 'unblocked', which re-runs the
+ * dequeue, so callers don't need a separate wake signal.
+ */
+export async function reviveBlockedTask(taskId, { priority, metadata } = {}, taskType = 'internal') {
+  return updateTask(taskId, {
+    status: 'pending',
+    ...(priority ? { priority } : {}),
+    metadata: {
+      ...(metadata || {}),
+      totalSpawnCount: undefined,
+      orphanRetryCount: undefined,
+      lastOrphanedAt: undefined
+    }
+  }, taskType);
+}
+
+/**
  * Merge a full-sync peer's task list into one local task file (#1712).
  *
  * The receiver side of CoS task federation: `syncCosTasksFromPeer` fetches the

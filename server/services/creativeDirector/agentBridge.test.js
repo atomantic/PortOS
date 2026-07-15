@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   addTask: vi.fn(),
-  updateTask: vi.fn(),
+  reviveBlockedTask: vi.fn(),
   emit: vi.fn(),
   buildTreatmentPrompt: vi.fn(),
   buildEvaluatePrompt: vi.fn(),
@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('../cos.js', () => ({
   addTask: mocks.addTask,
-  updateTask: mocks.updateTask,
+  reviveBlockedTask: mocks.reviveBlockedTask,
   cosEvents: { emit: mocks.emit },
 }));
 vi.mock('../../lib/creativeDirectorPrompts.js', () => ({
@@ -115,10 +115,9 @@ describe('persistAndEmit duplicate handling (#2614 — addTask dedup also matche
 
     const result = await enqueueTreatmentTask(project);
 
-    expect(mocks.updateTask).toHaveBeenCalledTimes(1);
-    const [taskId, updates, group] = mocks.updateTask.mock.calls[0];
+    expect(mocks.reviveBlockedTask).toHaveBeenCalledTimes(1);
+    const [taskId, updates, group] = mocks.reviveBlockedTask.mock.calls[0];
     expect(taskId).toBe('sys-cd-old');
-    expect(updates.status).toBe('pending');
     expect(updates.metadata.creativeDirector.projectId).toBe('cd-1');
     expect(group).toBe('internal');
     // task:ready and the run record both reference the revived (existing) id.
@@ -134,7 +133,7 @@ describe('persistAndEmit duplicate handling (#2614 — addTask dedup also matche
 
     const result = await enqueueTreatmentTask(project);
 
-    expect(mocks.updateTask).not.toHaveBeenCalled();
+    expect(mocks.reviveBlockedTask).not.toHaveBeenCalled();
     expect(mocks.emit).not.toHaveBeenCalled();
     expect(mocks.recordRun).not.toHaveBeenCalled();
     expect(result).toBe(existing);
@@ -146,7 +145,7 @@ describe('persistAndEmit duplicate handling (#2614 — addTask dedup also matche
 
     const result = await enqueueTreatmentTask(project);
 
-    expect(mocks.updateTask).not.toHaveBeenCalled();
+    expect(mocks.reviveBlockedTask).not.toHaveBeenCalled();
     expect(mocks.emit).not.toHaveBeenCalled();
     expect(result).toBe(foreign);
   });

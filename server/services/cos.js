@@ -54,8 +54,8 @@ export { runHealthCheck, getHealthStatus };
 // backward compat with `import * as cos` and the cos route handlers. The store
 // emits `tasks:changed`; init() below turns that into tryImmediateSpawn /
 // dequeueNextTask so the spawn-side logic stays here, not in the store.
-import { firstLine, PRIORITY_VALUES, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck } from './cosTaskStore.js';
-export { firstLine, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck };
+import { firstLine, PRIORITY_VALUES, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck } from './cosTaskStore.js';
+export { firstLine, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck };
 import { ensureInstanceId } from './instances.js';
 import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner } from './cosTaskClaim.js';
 
@@ -793,9 +793,8 @@ async function spawnDequeuePriority0OnDemand(ctx) {
         // Explicit user Run colliding with a failure-blocked twin (#2614): the
         // retry path is reviving the existing task, not minting a duplicate —
         // and without this branch the Run is a silent no-op that strands the
-        // bound on-demand review marker. updateTask clears the blocked
-        // metadata on the status flip and merges the fresh payload.
-        await updateTask(persisted.id, { status: 'pending', priority: task.priority, metadata: task.metadata }, 'internal');
+        // bound on-demand review marker.
+        await reviveBlockedTask(persisted.id, { priority: task.priority, metadata: task.metadata }, 'internal');
         const revived = { ...task, id: persisted.id };
         cosEvents.emit('task:ready', revived);
         capacity.trackSpawn(revived);

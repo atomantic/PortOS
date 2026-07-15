@@ -29,7 +29,7 @@ import { getDomainMode } from '../lib/domainAutonomy.js';
 import { remainingActionBudget } from '../lib/domainBudgets.js';
 import { getDomainBudgetStatus } from './domainUsage.js';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { addTask, updateTask, getAllTasks, getCosTasks, firstLine, PRIORITY_VALUES } from './cosTaskStore.js';
+import { addTask, updateTask, reviveBlockedTask, getAllTasks, getCosTasks, firstLine, PRIORITY_VALUES } from './cosTaskStore.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
 import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, markIdleReviewStarted, getNextAppForReview, loadAppActivity, isAppActivityOnCooldown } from './appActivity.js';
 import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
@@ -686,7 +686,7 @@ async function spawnPriority0OnDemand(ctx) {
           // revive the existing task instead of silently dropping the Run and
           // stranding the bound on-demand review marker. Mirrors the sibling
           // dequeueNextTask on-demand engine in cos.js.
-          await updateTask(persisted.id, { status: 'pending', priority: task.priority, metadata: task.metadata }, 'internal');
+          await reviveBlockedTask(persisted.id, { priority: task.priority, metadata: task.metadata }, 'internal');
           const revived = { ...task, id: persisted.id };
           tasksToSpawn.push(revived);
           trackSpawn(revived);

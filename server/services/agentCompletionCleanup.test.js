@@ -15,6 +15,7 @@ vi.mock('./cosAgents.js', () => ({ updateAgent: vi.fn() }));
 vi.mock('./cos.js', () => ({
   updateTask: vi.fn().mockResolvedValue({}),
   addTask: vi.fn().mockResolvedValue({}),
+  reviveBlockedTask: vi.fn().mockResolvedValue({}),
   checkStagePrecondition: vi.fn().mockReturnValue({ passed: true }),
   getAgent: vi.fn().mockResolvedValue(null),
 }));
@@ -25,7 +26,7 @@ vi.mock('./agentWorktreeCleanup.js', () => ({ cleanupAgentWorktree: vi.fn().mock
 vi.mock('./taskPromptService.js', () => ({ getStagePrompt: vi.fn().mockResolvedValue('do stage work in {appName}') }));
 
 import { handlePipelineProgression } from './agentCompletionCleanup.js';
-import { updateTask, addTask } from './cos.js';
+import { updateTask, addTask, reviveBlockedTask } from './cos.js';
 
 const runningPipeline = (overrides = {}) => ({
   id: 'p1',
@@ -108,10 +109,9 @@ describe('handlePipelineProgression', () => {
     addTask.mockResolvedValue({ id: 'sys-stale-stage', status: 'blocked', duplicate: true });
     const task = { id: 't', taskType: 'user', metadata: { pipeline: runningPipeline() } };
     await handlePipelineProgression(task, 'agent-1', true);
-    expect(updateTask).toHaveBeenCalledTimes(1);
-    const [taskId, updates, group] = updateTask.mock.calls[0];
+    expect(reviveBlockedTask).toHaveBeenCalledTimes(1);
+    const [taskId, updates, group] = reviveBlockedTask.mock.calls[0];
     expect(taskId).toBe('sys-stale-stage');
-    expect(updates.status).toBe('pending');
     expect(updates.metadata.pipeline.currentStage).toBe(1);
     expect(updates.metadata.pipeline.previousStageAgentId).toBe('agent-1');
     expect(group).toBe('internal');
@@ -121,6 +121,7 @@ describe('handlePipelineProgression', () => {
     addTask.mockResolvedValue({ id: 'sys-live-stage', status: 'pending', duplicate: true });
     const task = { id: 't', taskType: 'user', metadata: { pipeline: runningPipeline() } };
     await handlePipelineProgression(task, 'agent-1', true);
+    expect(reviveBlockedTask).not.toHaveBeenCalled();
     expect(updateTask).not.toHaveBeenCalled();
   });
 });

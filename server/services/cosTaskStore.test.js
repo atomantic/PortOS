@@ -67,6 +67,7 @@ import {
   getTaskById,
   addTask,
   updateTask,
+  reviveBlockedTask,
   deleteTask,
   reorderTasks,
   approveTask,
@@ -289,6 +290,26 @@ describe('cosTaskStore.addTask', () => {
     mock.events.length = 0;
     await updateTask(task.id, { priority: 'HIGH' }, 'internal');
     expect(mock.events.find(e => e.name === 'tasks:changed').payload.action).toBe('updated');
+  });
+
+  it('reviveBlockedTask flips to pending with a FRESH retry budget (#2614)', async () => {
+    // A revived task must behave like a fresh one: without clearing the
+    // spawn/orphan budgets it would immediately re-block on the exhausted
+    // budget it blocked with. The reset also wins over caller metadata that
+    // carries a stale budget forward (pipeline hand-offs spread the prior
+    // stage's metadata).
+    const task = await addTask({ description: 'budget reset', app: 'portos', id: 'sys-budget' }, 'internal');
+    await updateTask(task.id, {
+      status: 'blocked',
+      metadata: { blockedCategory: 'max-spawns', totalSpawnCount: 99, orphanRetryCount: 3, lastOrphanedAt: '2026-01-01T00:00:00.000Z' }
+    }, 'internal');
+    const revived = await reviveBlockedTask(task.id, { metadata: { totalSpawnCount: 99, fresh: 'yes' } }, 'internal');
+    expect(revived.status).toBe('pending');
+    expect(revived.metadata.totalSpawnCount).toBeUndefined();
+    expect(revived.metadata.orphanRetryCount).toBeUndefined();
+    expect(revived.metadata.lastOrphanedAt).toBeUndefined();
+    expect(revived.metadata.blockedCategory).toBeUndefined();
+    expect(revived.metadata.fresh).toBe('yes');
   });
 
   it('resolving a blocked task re-opens the slot for an identical task (#2614)', async () => {

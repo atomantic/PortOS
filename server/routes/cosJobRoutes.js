@@ -193,6 +193,18 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
     res.json({ success: false, type: 'agent', error: 'Task was not queued (may be duplicate or blocked)' });
     return;
   }
+  if (taskResult.duplicate) {
+    // A manual trigger is an explicit retry: a failure-blocked twin is revived
+    // with a fresh retry budget (#2614) instead of silently pointing the user
+    // at a task that will never run; an active twin is surfaced as-is.
+    if (taskResult.status === 'blocked') {
+      await cos.reviveBlockedTask(taskResult.id, { priority: task.priority, metadata: task.metadata }, 'internal');
+      res.json({ success: true, type: 'agent', taskId: taskResult.id, revived: true });
+      return;
+    }
+    res.json({ success: true, type: 'agent', taskId: taskResult.id, duplicate: true });
+    return;
+  }
   res.json({ success: true, type: 'agent', taskId: taskResult.id });
 }));
 

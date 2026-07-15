@@ -72,4 +72,4 @@
 
 ## CoS self-learning reliability
 
-- **[issue-2614] Failing scheduled tasks no longer pile up duplicates** — a task blocked by repeated failures now counts as "already queued," so the same improvement task isn't re-created every cycle.
+- **[issue-2614] Failing scheduled tasks no longer pile up duplicates** — a task blocked by repeated failures now counts as "already queued," so the same improvement task isn't re-created every cycle. Explicit retries (an on-demand Run, a manual job trigger, a Creative Director re-generate, or a repeated voice dispatch) revive the blocked task with a fresh retry budget instead of silently doing nothing, and the CoS log names the blocking task whenever it suppresses new work.

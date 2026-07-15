@@ -15,7 +15,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { addTask, updateTask, cosEvents } from '../cos.js';
+import { addTask, reviveBlockedTask, cosEvents } from '../cos.js';
 import { buildTreatmentPrompt, buildEvaluatePrompt, buildPlanPrompt } from '../../lib/creativeDirectorPrompts.js';
 import { getToolSpecs } from '../creative/toolRegistry.js';
 import { getSettings } from '../settings.js';
@@ -81,8 +81,9 @@ function buildDescription(project, kind, scene) {
   // The [cd:…] suffix makes the first line unique per project: addTask's
   // duplicate scan keys on first-line + metadata.app, and CD tasks carry no
   // app — without a project discriminator, two projects sharing a name would
-  // dedup against each other's tasks (#2614).
-  const tag = `[cd:${String(project.id).slice(0, 8)}]`;
+  // dedup against each other's tasks (#2614). Full id, not a prefix — CD ids
+  // are `cd-<uuid>`, so a short slice keeps too little entropy.
+  const tag = `[cd:${project.id}]`;
   if (kind === 'treatment') {
     return `Creative Director — Treatment for "${project.name}" ${tag}`;
   }
@@ -116,10 +117,9 @@ async function persistAndEmit({ id, runId, record }, project, kind, sceneId) {
     }
     if (persisted.status === 'blocked') {
       // A CD enqueue is an explicit user re-trigger — revive the blocked
-      // duplicate with the fresh payload (updateTask clears the blocked
-      // metadata on the status transition) instead of wedging forever.
-      await updateTask(persisted.id, {
-        status: 'pending',
+      // duplicate with the fresh payload (reviveBlockedTask clears the
+      // blocked metadata and retry budgets) instead of wedging forever.
+      await reviveBlockedTask(persisted.id, {
         priority: record.priority,
         metadata: record.metadata
       }, 'internal');
