@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   isStaleChunkError,
-  isServerReachable,
+  fetchServerBuildId,
   reloadOnceForStaleChunk,
   purgeOfflineCaches,
 } from './staleChunkReload';
@@ -31,9 +31,15 @@ const setBuildId = (id) => {
     : '';
 };
 
-// Reachability probe: HEAD / — resolve as reachable unless a test overrides.
+// Build-id probe: GET / returns the server's stamped shell. Default to serving
+// a DIFFERENT build than the page's `build-abc`, i.e. "a new build exists".
+const shellHtml = (id) =>
+  `<html><head><meta name="portos-build-id" content="${id}"></head><body></body></html>`;
+
 const stubFetch = (impl) => {
-  const fetch = vi.fn(impl ?? (() => Promise.resolve({ ok: true })));
+  const fetch = vi.fn(
+    impl ?? (() => Promise.resolve({ ok: true, text: () => Promise.resolve(shellHtml('build-new')) }))
+  );
   vi.stubGlobal('fetch', fetch);
   return fetch;
 };
@@ -99,27 +105,34 @@ describe('purgeOfflineCaches', () => {
   });
 });
 
-describe('isServerReachable', () => {
-  it('is true when the HEAD probe succeeds', async () => {
+describe('fetchServerBuildId', () => {
+  it('reads the build id stamped into the served shell', async () => {
     const fetch = stubFetch();
-    await expect(isServerReachable()).resolves.toBe(true);
-    expect(fetch).toHaveBeenCalledWith('/', { method: 'HEAD', cache: 'no-store' });
+    await expect(fetchServerBuildId()).resolves.toBe('build-new');
+    expect(fetch).toHaveBeenCalledWith('/', { cache: 'no-store' });
   });
 
-  it('is false when the probe rejects (offline)', async () => {
+  it('is null when the probe rejects (offline)', async () => {
     stubFetch(() => Promise.reject(new TypeError('Failed to fetch')));
-    await expect(isServerReachable()).resolves.toBe(false);
+    await expect(fetchServerBuildId()).resolves.toBeNull();
   });
 
-  it('is false on a non-ok response', async () => {
+  it('is null on a non-ok response', async () => {
     stubFetch(() => Promise.resolve({ ok: false }));
-    await expect(isServerReachable()).resolves.toBe(false);
+    await expect(fetchServerBuildId()).resolves.toBeNull();
   });
 
-  it('short-circuits false when navigator reports offline', async () => {
+  it('is null when the shell has no build-id meta tag', async () => {
+    stubFetch(() =>
+      Promise.resolve({ ok: true, text: () => Promise.resolve('<html><head></head></html>') })
+    );
+    await expect(fetchServerBuildId()).resolves.toBeNull();
+  });
+
+  it('short-circuits null when navigator reports offline', async () => {
     const fetch = stubFetch();
     vi.stubGlobal('navigator', { onLine: false });
-    await expect(isServerReachable()).resolves.toBe(false);
+    await expect(fetchServerBuildId()).resolves.toBeNull();
     expect(fetch).not.toHaveBeenCalled();
   });
 });
@@ -158,6 +171,25 @@ describe('reloadOnceForStaleChunk', () => {
     await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
     // Offline: the (possibly current-build) offline shell must survive so the
     // reload can boot it — purging would strand the user on a network error page.
+    expect(cacheDelete).not.toHaveBeenCalled();
+  });
+
+  it('skips the purge when the server still serves the SAME build (transient failure)', async () => {
+    stubSessionStorage();
+    // Server reachable, but serving the build the page already runs — the
+    // import error was a network blip, not a stale deployment.
+    stubFetch(() =>
+      Promise.resolve({ ok: true, text: () => Promise.resolve(shellHtml('build-abc')) })
+    );
+    const reload = stubReload();
+    const cacheDelete = vi.fn();
+    vi.stubGlobal('caches', {
+      keys: vi.fn().mockResolvedValue(['portos-shell-v1']),
+      delete: cacheDelete,
+    });
+
+    expect(reloadOnceForStaleChunk()).toBe(true);
+    await vi.waitFor(() => expect(reload).toHaveBeenCalledTimes(1));
     expect(cacheDelete).not.toHaveBeenCalled();
   });
 

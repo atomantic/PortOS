@@ -68,18 +68,26 @@ const withTimeout = (promise, ms) =>
     new Promise((resolve) => setTimeout(resolve, ms)),
   ]);
 
-// A dead network produces the same import-error messages as a genuinely stale
-// chunk, but the purge only helps when the server can hand back fresh code.
-// If the device is offline, purging would destroy the (possibly current-build)
-// offline shell and strand the user on the browser's connection-error page —
-// so probe first and keep the caches when unreachable; the recovery reload then
-// falls back to the service worker's cached shell, which is the correct offline
-// behavior. HEAD is never intercepted by the service worker (it handles GET
-// only), so this probe cannot be satisfied from cache.
-export const isServerReachable = async () => {
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) return false;
-  const res = await fetch('/', { method: 'HEAD', cache: 'no-store' }).catch(() => null);
-  return Boolean(res && res.ok);
+// A flaky or dead network produces the same import-error messages as a
+// genuinely stale chunk, but the purge only helps when the server actually has
+// a NEW build to hand back. Purging on a transient failure would destroy the
+// valid current-build offline shell — if the link then drops again during the
+// recovery reload, the service worker has no fallback and the user lands on
+// the browser's connection-error page instead of the offline app. So before
+// purging, fetch the server's live shell and read the build id it stamps into
+// index.html (`server/lib/buildId.js`): only a confirmed different build
+// justifies dropping the caches. Returns the server's build id, or null when
+// offline/unreachable/unstamped (all "do not purge" signals). `cache:
+// 'no-store'` bypasses the HTTP cache, and the service worker routes this
+// non-navigation GET network-first, so a cached shell can't spoof the probe.
+export const fetchServerBuildId = async () => {
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) return null;
+  const res = await fetch('/', { cache: 'no-store' }).catch(() => null);
+  if (!res || !res.ok) return null;
+  const html = await res.text().catch(() => '');
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const el = doc.querySelector('meta[name="portos-build-id"]');
+  return (el && el.getAttribute('content')) || null;
 };
 
 export const reloadOnceForStaleChunk = () => {
@@ -87,14 +95,17 @@ export const reloadOnceForStaleChunk = () => {
   const flag = buildId ? `${buildId}` : '1';
   if (sessionStorage.getItem(RELOAD_FLAG) === flag) return false;
   sessionStorage.setItem(RELOAD_FLAG, flag);
-  console.warn(`🔄 Stale chunk detected (build ${buildId || 'unknown'}) — clearing offline cache + reloading to pick up new bundle`);
+  console.warn(`🔄 Stale chunk detected (build ${buildId || 'unknown'}) — reloading to pick up new bundle`);
   // Purge the offline caches BEFORE reloading so the reload can't be handed the
-  // stale shell/chunks back — but only when the server is reachable (see
-  // isServerReachable). Bounded by PURGE_TIMEOUT_MS so a hung probe or Cache
-  // Storage still reloads. `reload()` fires exactly once — `Promise.race`
-  // settles once.
+  // stale shell/chunks back — but only when the server confirms a different
+  // build exists (see fetchServerBuildId); a transient network failure must
+  // not cost the user their valid offline shell. Bounded by PURGE_TIMEOUT_MS
+  // so a hung probe or Cache Storage still reloads. `reload()` fires exactly
+  // once — `Promise.race` settles once.
   withTimeout(
-    isServerReachable().then((reachable) => (reachable ? purgeOfflineCaches() : undefined)),
+    fetchServerBuildId().then((serverBuildId) =>
+      serverBuildId && serverBuildId !== buildId ? purgeOfflineCaches() : undefined
+    ),
     PURGE_TIMEOUT_MS
   ).finally(() => {
     window.location.reload();
