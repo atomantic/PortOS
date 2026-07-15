@@ -9,7 +9,7 @@
  * module.
  */
 
-import { loadLearningData, emitLog, isSandboxedTaskType } from './store.js';
+import { loadLearningData, emitLog, isSandboxedTaskType, computeEffectiveSuccessRate } from './store.js';
 import { resetTaskTypeLearning } from './metrics.js';
 import { computeCorrelationQuality, isCorrelationProven } from './correlationQuality.js';
 
@@ -175,6 +175,10 @@ function mergeAvoidTiers(...lists) {
 /**
  * Get suggested priority boost for a task type based on historical success
  * Returns a multiplier: >1 for boost, <1 for demotion
+ *
+ * Reads the EFFECTIVE success rate (issue #2617): the recency-windowed rate
+ * when the outcome ring has enough samples, else the lifetime rate — so a type
+ * that recovered from a since-fixed failure burst stops being demoted.
  */
 export async function getTaskTypePriorityMultiplier(taskType) {
   const data = await loadLearningData();
@@ -184,12 +188,14 @@ export async function getTaskTypePriorityMultiplier(taskType) {
     return 1.0; // Not enough data, use default priority
   }
 
+  const { successRate } = computeEffectiveSuccessRate(metrics);
+
   // High success rate = boost priority
-  if (metrics.successRate >= 90) return 1.2;
-  if (metrics.successRate >= 75) return 1.1;
+  if (successRate >= 90) return 1.2;
+  if (successRate >= 75) return 1.1;
 
   // Low success rate = demote priority slightly (but not too much, as we want to retry)
-  if (metrics.successRate < 50) return 0.9;
+  if (successRate !== null && successRate < 50) return 0.9;
 
   return 1.0;
 }
@@ -482,7 +488,11 @@ export async function getAdaptiveCooldownMultiplier(taskType) {
     };
   }
 
-  const successRate = metrics.successRate;
+  // Effective rate (issue #2617): windowed when the outcome ring has enough
+  // samples, else lifetime — so a since-fixed failure burst stops inflating the
+  // cooldown (or holding `skip: true`) once the type succeeds again. All the
+  // completed-count thresholds below stay on the LIFETIME counter, unchanged.
+  const { successRate, source: rateSource } = computeEffectiveSuccessRate(metrics);
 
   // Very high success (90%+): Reduce cooldown by 30% - this task type works well
   if (successRate >= 90) {
@@ -491,6 +501,7 @@ export async function getAdaptiveCooldownMultiplier(taskType) {
       reason: 'high-success',
       skip: false,
       successRate,
+      rateSource,
       completed: metrics.completed,
       recommendation: `Task type has ${successRate}% success rate - reduced cooldown`
     };
@@ -503,6 +514,7 @@ export async function getAdaptiveCooldownMultiplier(taskType) {
       reason: 'good-success',
       skip: false,
       successRate,
+      rateSource,
       completed: metrics.completed
     };
   }
@@ -514,6 +526,7 @@ export async function getAdaptiveCooldownMultiplier(taskType) {
       reason: 'moderate-success',
       skip: false,
       successRate,
+      rateSource,
       completed: metrics.completed
     };
   }
@@ -525,6 +538,7 @@ export async function getAdaptiveCooldownMultiplier(taskType) {
       reason: 'low-success',
       skip: false,
       successRate,
+      rateSource,
       completed: metrics.completed,
       recommendation: `Task type has only ${successRate}% success rate - increased cooldown`
     };
@@ -537,6 +551,7 @@ export async function getAdaptiveCooldownMultiplier(taskType) {
       reason: 'skip-failing',
       skip: true,
       successRate,
+      rateSource,
       completed: metrics.completed,
       recommendation: `Task type has ${successRate}% success rate after ${metrics.completed} attempts - skipping until reviewed`
     };
@@ -548,9 +563,25 @@ export async function getAdaptiveCooldownMultiplier(taskType) {
     reason: 'very-low-success',
     skip: false,
     successRate,
+    rateSource,
     completed: metrics.completed,
     recommendation: `Task type has ${successRate}% success rate - doubled cooldown for retry`
   };
+}
+
+/**
+ * Shared skip predicate (issue #2617): a task type is a skip candidate when it
+ * has ≥5 lifetime completions AND its EFFECTIVE success rate is <30%. Using the
+ * effective rate (windowed when the ring has enough samples, else lifetime)
+ * keeps this decision, `getAdaptiveCooldownMultiplier`'s skip branch, and the
+ * rehabilitation/status views agreeing — a type that recovered in its recent
+ * window is no longer skipped, so it must not be listed as skipped or have its
+ * lifetime data auto-reset either.
+ */
+function isSkipCandidate(metrics) {
+  if (!metrics || (metrics.completed ?? 0) < 5) return false;
+  const { successRate } = computeEffectiveSuccessRate(metrics);
+  return successRate !== null && successRate < 30;
 }
 
 /**
@@ -564,11 +595,11 @@ export async function getSkippedTaskTypes() {
   for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
     // Sandboxed fallback is never globally skipped (issue #2333).
     if (isSandboxedTaskType(taskType)) continue;
-    // Skip if: completed >= 5 AND success rate < 30%
-    if (metrics.completed >= 5 && metrics.successRate < 30) {
+    // Skip if: completed >= 5 AND effective success rate < 30%
+    if (isSkipCandidate(metrics)) {
       skipped.push({
         taskType,
-        successRate: metrics.successRate,
+        successRate: computeEffectiveSuccessRate(metrics).successRate,
         completed: metrics.completed,
         lastCompleted: metrics.lastCompleted
       });
@@ -609,8 +640,10 @@ export async function checkAndRehabilitateSkippedTasks(gracePeriodMs = 7 * 24 * 
   for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
     // Sandboxed fallback is never skipped, so never rehabilitated either (#2333).
     if (isSandboxedTaskType(taskType)) continue;
-    // Only consider task types that would be skipped (< 30% success with 5+ attempts)
-    if (metrics.completed < 5 || metrics.successRate >= 30) {
+    // Only consider task types that would be skipped (effective rate < 30% with
+    // 5+ attempts, issue #2617) — a type that recovered in its recent window is
+    // no longer skipped, so resetting its lifetime data would be pointless churn.
+    if (!isSkipCandidate(metrics)) {
       continue;
     }
 
@@ -664,8 +697,8 @@ export async function getSkippedTaskTypesWithStatus(gracePeriodMs = 7 * 24 * 60 
   for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
     // Sandboxed fallback is never skipped (#2333) — exclude from the skip status list.
     if (isSandboxedTaskType(taskType)) continue;
-    // Only include task types that would be skipped
-    if (metrics.completed < 5 || metrics.successRate >= 30) {
+    // Only include task types that would be skipped (effective rate, issue #2617)
+    if (!isSkipCandidate(metrics)) {
       continue;
     }
 
@@ -680,7 +713,7 @@ export async function getSkippedTaskTypesWithStatus(gracePeriodMs = 7 * 24 * 60 
 
     skipped.push({
       taskType,
-      successRate: metrics.successRate,
+      successRate: computeEffectiveSuccessRate(metrics).successRate,
       completed: metrics.completed,
       lastCompleted: metrics.lastCompleted,
       daysSinceLastAttempt: Math.round(timeSinceLastAttempt / (24 * 60 * 60 * 1000)),
@@ -693,17 +726,23 @@ export async function getSkippedTaskTypesWithStatus(gracePeriodMs = 7 * 24 * 60 
 }
 
 /**
- * Pure classifier — returns { tier, autoApprove } for a given metrics object.
- * Shared by getTaskTypeConfidence() and getConfidenceLevels().
+ * Pure classifier — returns { tier, autoApprove, successRate, rateSource } for
+ * a given metrics object. Shared by getTaskTypeConfidence() and
+ * getConfidenceLevels() so the auto-approve gate and the Learning tab display
+ * always agree. Classifies on the EFFECTIVE success rate (issue #2617):
+ * windowed when the outcome ring has enough samples, else lifetime — so a type
+ * with a poor lifetime rate but a healthy recent window regains auto-approval.
+ * The returned `successRate` is the rate the tier was classified on.
  */
 function classifyConfidenceTier(metrics, { highThreshold = 80, lowThreshold = 50, minSamples = 5 } = {}) {
   const completed = metrics?.completed ?? 0;
-  const successRate = metrics?.successRate ?? 0;
+  const effective = computeEffectiveSuccessRate(metrics);
+  const successRate = effective.successRate ?? 0;
 
-  if (completed < minSamples) return { tier: 'new', autoApprove: true };
-  if (successRate >= highThreshold) return { tier: 'high', autoApprove: true };
-  if (successRate >= lowThreshold) return { tier: 'medium', autoApprove: true };
-  return { tier: 'low', autoApprove: false };
+  if (completed < minSamples) return { tier: 'new', autoApprove: true, successRate, rateSource: effective.source };
+  if (successRate >= highThreshold) return { tier: 'high', autoApprove: true, successRate, rateSource: effective.source };
+  if (successRate >= lowThreshold) return { tier: 'medium', autoApprove: true, successRate, rateSource: effective.source };
+  return { tier: 'low', autoApprove: false, successRate, rateSource: effective.source };
 }
 
 /**
@@ -716,20 +755,25 @@ function classifyConfidenceTier(metrics, { highThreshold = 80, lowThreshold = 50
 export async function getTaskTypeConfidence(taskType, thresholds = {}) {
   const data = await loadLearningData();
   const metrics = data.byTaskType[taskType];
-  const { tier, autoApprove } = classifyConfidenceTier(metrics, thresholds);
+  const { tier, autoApprove, successRate, rateSource } = classifyConfidenceTier(metrics, thresholds);
 
+  // Reasons quote the EFFECTIVE rate the tier was classified on (issue #2617),
+  // annotated when it came from the recency window so "82% success" next to a
+  // depressed lifetime rate is explainable.
+  const rateLabel = rateSource === 'windowed' ? `${successRate}% recent success` : `${successRate}% success`;
   const reasons = {
     new: `Fewer than ${thresholds.minSamples ?? 5} completions — auto-approve by default`,
-    high: `${metrics?.successRate}% success across ${metrics?.completed} runs — high confidence`,
-    medium: `${metrics?.successRate}% success — acceptable confidence`,
-    low: `${metrics?.successRate}% success after ${metrics?.completed} attempts — requires approval`
+    high: `${rateLabel} across ${metrics?.completed} runs — high confidence`,
+    medium: `${rateLabel} — acceptable confidence`,
+    low: `${rateLabel} after ${metrics?.completed} attempts — requires approval`
   };
 
   return {
     taskType,
     tier,
     autoApprove,
-    successRate: metrics?.successRate ?? null,
+    successRate: metrics ? successRate : null,
+    rateSource,
     completed: metrics?.completed ?? 0,
     reason: reasons[tier]
   };
@@ -747,10 +791,10 @@ export async function getConfidenceLevels(thresholds = {}) {
   const levels = { high: [], medium: [], low: [], new: [] };
 
   for (const [taskType, metrics] of Object.entries(data.byTaskType)) {
-    const { tier, autoApprove } = classifyConfidenceTier(metrics, thresholds);
+    const { tier, autoApprove, successRate } = classifyConfidenceTier(metrics, thresholds);
     levels[tier].push({
       taskType,
-      successRate: metrics.successRate ?? 0,
+      successRate,
       completed: metrics.completed || 0,
       autoApprove,
       lastCompleted: metrics.lastCompleted

@@ -34,6 +34,8 @@ export {
   EXTERNAL_UNTYPED_TASK_TYPE,
   appendRecentOutcome,
   computeWindowedStats,
+  computeEffectiveSuccessRate,
+  EFFECTIVE_RATE_MIN_WINDOW_SAMPLES,
   RECENT_OUTCOMES_CAP,
   DEFAULT_WINDOW_MAX_COUNT,
   DEFAULT_WINDOW_MAX_AGE_MS
