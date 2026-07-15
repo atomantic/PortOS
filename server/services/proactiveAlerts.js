@@ -74,9 +74,14 @@ async function checkSuccessRates() {
     type: 'success_drop',
     severity: item.successRate < 30 ? 'high' : 'medium',
     title: `Low success rate: ${item.taskType}`,
-    detail: `${item.successRate}% success across ${item.completed} tasks`,
+    // Evidence pairing (issue #2617): a recency-windowed rate is quoted with
+    // the WINDOW's sample count — "0% success across 200 tasks" (lifetime
+    // count next to a 6-sample windowed rate) would overstate the evidence.
+    detail: item.rateSource === 'windowed'
+      ? `${item.successRate}% success across the last ${item.windowedCompleted} runs`
+      : `${item.successRate}% success across ${item.completed} tasks`,
     link: '/cos/learning',
-    metadata: { taskType: item.taskType, successRate: item.successRate, completed: item.completed }
+    metadata: { taskType: item.taskType, successRate: item.successRate, completed: item.completed, rateSource: item.rateSource, windowedCompleted: item.windowedCompleted }
   }));
 }
 
