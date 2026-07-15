@@ -277,7 +277,11 @@ export function agyRefreshToIso(text, now = Date.now()) {
  */
 export function parseAgyUsage(text, { now = Date.now() } = {}) {
   const lines = String(text || '').split('\n').map((l) => l.trim());
-  const limits = [];
+  // The scraped buffer is an append-only terminal stream: if the TUI repaints
+  // the panel, an older and newer copy of each window both survive the ANSI
+  // strip. Key by the stable limit key so a repaint OVERWRITES (latest wins)
+  // instead of emitting duplicate rows (which would collide on the React key).
+  const byKey = new Map();
   const groups = new Set();
   let group = null;
   for (let i = 0; i < lines.length; i++) {
@@ -300,19 +304,19 @@ export function parseAgyUsage(text, { now = Date.now() } = {}) {
     }
     if (remaining === null) continue; // not a real limit block
     const windowLabel = agyWindowLabel(w[1]);
-    const percentRemaining = Math.round(remaining);
-    limits.push({
-      key: `${slug(group)}-${slug(windowLabel)}`,
+    const key = `${slug(group)}-${slug(windowLabel)}`;
+    byKey.set(key, {
+      key,
       label: `${group} · ${windowLabel}`,
       scope: slug(windowLabel),
       model: group,
       percentUsed: Math.max(0, Math.round(100 - remaining)),
-      percentRemaining,
+      percentRemaining: Math.round(remaining),
       resetsAt: quotaAvailable ? null : resetsAt,
       timezone: null,
     });
   }
-  return { limits, groups: groups.size };
+  return { limits: [...byKey.values()], groups: groups.size };
 }
 
 /**
@@ -324,10 +328,14 @@ export function parseAgyUsage(text, { now = Date.now() } = {}) {
  */
 export function parseGrokUsage(text) {
   const str = String(text || '');
-  const wl = str.match(/weekly limit:\s*([\d.]+)\s*%/i);
+  // Append-only terminal stream: a repaint leaves an older copy of the line
+  // ahead of the newer one, so take the LAST match (the freshest frame), not
+  // the first (see parseAgyUsage for the same repaint hazard).
+  const lastMatch = (re) => { const all = [...str.matchAll(re)]; return all.length ? all[all.length - 1] : null; };
+  const wl = lastMatch(/weekly limit:\s*([\d.]+)\s*%/gi);
   if (!wl) return { limits: [] };
   const percentUsed = Math.round(parseFloat(wl[1]));
-  const nr = str.match(/next reset:\s*([A-Za-z0-9 ,:]+?)(?:\s{2,}|$)/i);
+  const nr = lastMatch(/next reset:\s*([A-Za-z0-9 ,:]+?)(?:\s{2,}|$)/gi);
   return {
     limits: [{
       key: 'weekly',
@@ -367,19 +375,28 @@ function pickScrapeProvider(providers, binary) {
  * becomes a `supported`-but-`error` card so the UI shows a soft warning rather
  * than a blank card. `name` is the human product name spliced into the copy.
  */
-function makeTuiUsageFetcher({ id, binary, slashCommand, label, parse, name }) {
-  return ({ refresh = false, providers = [] } = {}) => cachedScrape(id, { refresh }, async () => {
+function makeTuiUsageFetcher({ id, binary, slashCommand, label, parse, name, readyMarker }) {
+  return ({ refresh = false, providers = [] } = {}) => {
     const base = { family: id, label, plan: null, activity: [], approximate: true, fetchedAt: new Date().toISOString() };
     const provider = pickScrapeProvider(providers, binary);
+    // No CLI/TUI provider (e.g. only the API provider is enabled) → unsupported.
+    // Returned OUTSIDE cachedScrape so it is NOT cached: enabling the CLI later
+    // must take effect on the next load, not be masked by a 5-min stale "off".
     if (!provider) {
-      return { ...base, supported: false, limits: [], note: `${name} usage is read from the local CLI/TUI — enable the ${name} to see quota (the API provider has no queryable usage surface).` };
+      return Promise.resolve({ ...base, supported: false, limits: [], note: `${name} usage is read from the local CLI/TUI — enable the ${name} to see quota (the API provider has no queryable usage surface).` });
     }
-    const text = await scrapeTuiUsage({ command: provider.command || binary, slashCommand, env: provider.envVars });
-    const { limits } = parse(text);
-    return limits.length
-      ? { ...base, supported: true, limits, note: `Scraped from the ${name} /usage panel — local, approximate.` }
-      : { ...base, supported: true, limits: [], error: `No quota data found in the ${name} /usage panel.` };
-  });
+    return cachedScrape(id, { refresh }, async () => {
+      // Only `command` + `envVars` are forwarded — deliberately NOT the
+      // provider's `args`. Stored args are headless-mode flags (`-p`, `exec -`,
+      // `--print`, `--prompt-file`) that would break the interactive TUI we need
+      // for `/usage`; the TUI launches bare.
+      const text = await scrapeTuiUsage({ command: provider.command || binary, slashCommand, env: provider.envVars, readyMarker });
+      const { limits } = parse(text);
+      return limits.length
+        ? { ...base, supported: true, limits, note: `Scraped from the ${name} /usage panel — local, approximate.` }
+        : { ...base, supported: true, limits: [], error: `No quota data found in the ${name} /usage panel.` };
+    });
+  };
 }
 
 // --- Claude: wrap the existing /usage CLI parser ---------------------------
@@ -424,13 +441,13 @@ const FAMILIES = [
     id: 'agy',
     label: 'Antigravity',
     matches: (p) => commandBasename(p.command) === 'agy' || /antigravity/i.test(p.id || ''),
-    fetch: makeTuiUsageFetcher({ id: 'agy', binary: 'agy', slashCommand: '/usage', label: 'Antigravity', parse: parseAgyUsage, name: 'Antigravity CLI' })
+    fetch: makeTuiUsageFetcher({ id: 'agy', binary: 'agy', slashCommand: '/usage', label: 'Antigravity', parse: parseAgyUsage, name: 'Antigravity CLI', readyMarker: /Weekly Limit|Five Hour Limit|Models & Quota/i })
   },
   {
     id: 'grok',
     label: 'Grok',
     matches: (p) => isGrokCommand(p.command) || /grok/i.test(p.id || ''),
-    fetch: makeTuiUsageFetcher({ id: 'grok', binary: 'grok', slashCommand: '/usage show', label: 'Grok', parse: parseGrokUsage, name: 'Grok Build CLI' })
+    fetch: makeTuiUsageFetcher({ id: 'grok', binary: 'grok', slashCommand: '/usage show', label: 'Grok', parse: parseGrokUsage, name: 'Grok Build CLI', readyMarker: /Weekly limit:/i })
   }
 ];
 
