@@ -47,6 +47,8 @@ export {
   buildTaskTelemetryContext,
   computeLatencySplit,
   recordFailureSignature,
+  recordEnvironmentalFailure,
+  ENVIRONMENTAL_ERROR_CATEGORIES,
   resetTaskTypeLearning,
   recalculateModelTierMetrics,
   recalculateDurationStats,

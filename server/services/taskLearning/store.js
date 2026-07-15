@@ -210,6 +210,14 @@ const DEFAULT_LEARNING_DATA = {
   // Records which model tiers work/fail for each task type
   routingAccuracy: {},
 
+  // Environmental/infrastructure failures (issue #2618): category →
+  // { count, lastOccurred, taskTypes } for rate-limit/auth/billing/startup-class
+  // failures, which are kept OUT of every success-rate aggregate above so an
+  // outage can't poison routing/skip decisions (see ENVIRONMENTAL_ERROR_CATEGORIES
+  // in metrics.js). Additive: older learning.json files predate this key and load
+  // fine — the recording path initializes it on first use.
+  environmentalFailures: {},
+
   // Rolling correlation-quality window (issue #2344): prediction/outcome pairs
   // measuring how well the enriched failure signals predict actual outcomes.
   // Gates auto-adjustment aggressiveness (see correlationQuality.js). Additive:

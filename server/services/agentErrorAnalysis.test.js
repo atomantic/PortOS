@@ -17,6 +17,8 @@ import {
   INVESTIGATION_CIRCUIT_MAX_CREATIONS,
   __resetInvestigationCircuit
 } from './agentErrorAnalysis.js';
+import { API_ACCESS_ERROR_CATEGORIES } from './agentErrorAnalysis.js';
+import { ENVIRONMENTAL_ERROR_CATEGORIES } from './taskLearning/metrics.js';
 import { addTask, updateTask, getAllTasks } from './cos.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 
@@ -563,5 +565,19 @@ describe('createInvestigationTask body', () => {
     expect(body).not.toContain('192.0.2.10');
     expect(body).not.toContain('build-box');
     expect(body).not.toContain('/Users/alice');
+  });
+});
+
+describe('API_ACCESS_ERROR_CATEGORIES ⊆ ENVIRONMENTAL_ERROR_CATEGORIES (issue #2618)', () => {
+  it('every investigation-skip category is also excluded from learning aggregates', () => {
+    // The two sets stay separate on purpose: API_ACCESS_ERROR_CATEGORIES gates
+    // investigation-task spawning here, while taskLearning's environmental set
+    // (a leaf constant — importing this module there would drag the cos.js task
+    // graph into every taskLearning consumer) gates the success-rate aggregates.
+    // But the subset relation must hold: a category whose failures can't even be
+    // investigated by an LLM is certainly not task/model signal.
+    for (const category of API_ACCESS_ERROR_CATEGORIES) {
+      expect(ENVIRONMENTAL_ERROR_CATEGORIES.has(category)).toBe(true);
+    }
   });
 });

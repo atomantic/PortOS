@@ -10,7 +10,7 @@ vi.mock('./store.js', async (importActual) => {
   return { ...actual, loadLearningData: vi.fn() };
 });
 
-import { buildTaskTelemetryContext, computeLatencySplit, recordFailureSignature, getWindowedStats } from './metrics.js';
+import { buildTaskTelemetryContext, computeLatencySplit, recordFailureSignature, getWindowedStats, recordEnvironmentalFailure, ENVIRONMENTAL_ERROR_CATEGORIES } from './metrics.js';
 import { loadLearningData } from './store.js';
 
 // buildTaskTelemetryContext + recordFailureSignature are the pure telemetry
@@ -396,5 +396,60 @@ describe('getWindowedStats (issue #2460)', () => {
     const stats = await getWindowedStats('auto-fix', { maxCount: 3, maxAgeMs: Infinity });
     expect(stats.windowedCompleted).toBe(3);
     expect(stats.windowedSuccessRate).toBe(100);
+  });
+});
+
+describe('ENVIRONMENTAL_ERROR_CATEGORIES (issue #2618)', () => {
+  it('contains exactly the environmental/infrastructure categories', () => {
+    expect([...ENVIRONMENTAL_ERROR_CATEGORIES].sort()).toEqual([
+      'auth',
+      'auth-error',
+      'billing-error',
+      'connection',
+      'forbidden',
+      'model-not-available',
+      'rate-limit',
+      'startup-failure',
+      'usage-limit'
+    ]);
+  });
+
+  it('deliberately excludes categories that can be genuine task/model signal', () => {
+    // timeout: a task too big for its tier legitimately times out; unknown: could
+    // be anything — excluding them from learning would blind routing to real signal.
+    expect(ENVIRONMENTAL_ERROR_CATEGORIES.has('timeout')).toBe(false);
+    expect(ENVIRONMENTAL_ERROR_CATEGORIES.has('unknown')).toBe(false);
+    expect(ENVIRONMENTAL_ERROR_CATEGORIES.has('test-failure')).toBe(false);
+    expect(ENVIRONMENTAL_ERROR_CATEGORIES.has(null)).toBe(false);
+  });
+});
+
+describe('recordEnvironmentalFailure (issue #2618)', () => {
+  it('initializes the additive key on data that predates it (back-compat)', () => {
+    const data = {}; // old learning.json shape — no environmentalFailures key
+    recordEnvironmentalFailure(data, { category: 'rate-limit', taskType: 'auto-fix' });
+
+    expect(data.environmentalFailures['rate-limit'].count).toBe(1);
+    expect(data.environmentalFailures['rate-limit'].lastOccurred).toEqual(expect.any(String));
+    expect(data.environmentalFailures['rate-limit'].taskTypes).toEqual({ 'auto-fix': 1 });
+  });
+
+  it('accumulates counts and affected task types per category', () => {
+    const data = {};
+    recordEnvironmentalFailure(data, { category: 'rate-limit', taskType: 'auto-fix' });
+    recordEnvironmentalFailure(data, { category: 'rate-limit', taskType: 'auto-fix' });
+    recordEnvironmentalFailure(data, { category: 'rate-limit', taskType: 'user-task' });
+    recordEnvironmentalFailure(data, { category: 'billing-error', taskType: 'user-task' });
+
+    expect(data.environmentalFailures['rate-limit'].count).toBe(3);
+    expect(data.environmentalFailures['rate-limit'].taskTypes).toEqual({ 'auto-fix': 2, 'user-task': 1 });
+    expect(data.environmentalFailures['billing-error'].count).toBe(1);
+  });
+
+  it('is a no-op when the failure carries no category', () => {
+    const data = {};
+    recordEnvironmentalFailure(data, { category: null, taskType: 'auto-fix' });
+    recordEnvironmentalFailure(data, {});
+    expect(data.environmentalFailures).toBeUndefined();
   });
 });
