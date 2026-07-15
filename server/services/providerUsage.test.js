@@ -211,6 +211,16 @@ describe('parseAgyUsage', () => {
     expect(parseAgyUsage('Welcome to the Antigravity CLI').limits).toEqual([]);
     expect(parseAgyUsage('').limits).toEqual([]);
   });
+
+  it('dedups repainted frames to one row per key (no duplicate React keys)', () => {
+    // The append-only PTY buffer can contain the panel twice if the TUI
+    // repaints; latest-wins so keys stay unique and the newer value survives.
+    const repainted = AGY_PANEL + '\n' + AGY_PANEL.replace('98.99%', '55.00%').replace('99% remaining', '55% remaining');
+    const { limits } = parseAgyUsage(repainted, { now: NOW });
+    expect(limits).toHaveLength(4);
+    expect(new Set(limits.map((l) => l.key)).size).toBe(4);
+    expect(limits.find((l) => l.key === 'gemini-weekly').percentRemaining).toBe(55); // newest frame won
+  });
 });
 
 describe('parseGrokUsage', () => {
@@ -223,6 +233,12 @@ describe('parseGrokUsage', () => {
   it('returns no limits when the panel has no weekly-limit line', () => {
     expect(parseGrokUsage('Grok Build Beta  0.2.101').limits).toEqual([]);
     expect(parseGrokUsage(undefined).limits).toEqual([]);
+  });
+
+  it('takes the freshest (last) frame when the panel is repainted', () => {
+    const repainted = 'Weekly limit: 10% Next reset: July 1, 00:00\nWeekly limit: 73% Next reset: August 1, 06:07';
+    const { limits } = parseGrokUsage(repainted);
+    expect(limits[0]).toMatchObject({ percentUsed: 73, percentRemaining: 27, resetsAt: 'August 1, 06:07' });
   });
 });
 

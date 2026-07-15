@@ -60,6 +60,11 @@ const DEFAULT_HARD_TIMEOUT_MS = 45000; // absolute backstop for the whole scrape
  * @param {object} [opts.env] — extra env vars merged over `process.env` (the
  *   matched provider's `envVars`, so a provider that authenticates via env
  *   scrapes with the same config a normal run uses).
+ * @param {RegExp} [opts.readyMarker] — when set, the render phase does not
+ *   treat output-idle as "done" until this pattern appears in the captured
+ *   screen. Guards against a TUI that renders a loading row (which would arm
+ *   the plain idle heuristic) before its real panel arrives — completion then
+ *   requires the panel itself, not merely "some output then quiet."
  * @param {string} [opts.sandboxDir] — cwd override (default USAGE_SANDBOX_DIR).
  * @param {number} [opts.readyMs] @param {number} [opts.primerCapMs]
  * @param {number} [opts.idleMs] @param {number} [opts.renderCapMs]
@@ -71,6 +76,7 @@ export async function scrapeTuiUsage({
   args = [],
   slashCommand,
   env: extraEnv = {},
+  readyMarker = null,
   sandboxDir = USAGE_SANDBOX_DIR,
   readyMs = DEFAULT_READY_MS,
   primerCapMs = DEFAULT_PRIMER_CAP_MS,
@@ -125,12 +131,17 @@ export async function scrapeTuiUsage({
   // chunk has arrived since the wait began (else we wait out `capMs`, then the
   // hard-timeout backstop). The primer phase leaves it off so an already-trusted
   // sandbox (which emits nothing) returns promptly.
-  const waitForIdle = async (capMs, { requireOutput = false } = {}) => {
+  // `ready` (optional) is a final predicate on the captured screen that must
+  // also hold before idle counts as done — used to require the actual quota
+  // panel, not just any post-submit output. Only evaluated when idle is already
+  // reached, so its stripAnsi cost is paid at most once per idle poll.
+  const waitForIdle = async (capMs, { requireOutput = false, ready = null } = {}) => {
     const start = Date.now();
     const deadline = start + capMs;
     while (!exited && !timedOut && Date.now() < deadline) {
       const sawOutput = lastDataAt > start;
-      if ((!requireOutput || sawOutput) && Date.now() - lastDataAt >= idleMs) return;
+      const idle = Date.now() - lastDataAt >= idleMs;
+      if ((!requireOutput || sawOutput) && idle && (!ready || ready())) return;
       await Promise.race([sleep(250), hardStop]);
     }
   };
@@ -153,7 +164,10 @@ export async function scrapeTuiUsage({
       pty.write('\r');
       lastDataAt = Date.now();
     }
-    await waitForIdle(renderCapMs, { requireOutput: true });
+    await waitForIdle(renderCapMs, {
+      requireOutput: true,
+      ready: readyMarker ? () => readyMarker.test(stripAnsi(raw)) : null,
+    });
   } finally {
     if (hardTimer) clearTimeout(hardTimer);
     killPty();
