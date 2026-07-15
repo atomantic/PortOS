@@ -4,7 +4,7 @@ import { DISTRICT_PARAMS, PIXEL_FONT_URL, cityDayMix } from './cityConstants';
 import Borough from './Borough';
 import CityLabel from './CityLabel';
 
-export default function BuildingCluster({ apps, agentMap, onBuildingClick, onPositionsReady, playSfx, settings, proximityAppId, dimmedAppIds, playback = false }) {
+export default function BuildingCluster({ apps, agentMap, onBuildingClick, onPositionsReady, playSfx, settings, proximityAppId, dimmedAppIds, focusedAppId, playback = false }) {
   const positions = useMemo(() => computeCityLayout(apps), [apps]);
   const dayMix = cityDayMix(settings);
 
@@ -74,6 +74,7 @@ export default function BuildingCluster({ apps, agentMap, onBuildingClick, onPos
             playSfx={playSfx}
             neonBrightness={settings?.neonBrightness ?? 1.2}
             isProximity={proximityAppId === app.id}
+            focused={focusedAppId === app.id}
             dimmed={dimmedAppIds?.has?.(app.id) || false}
             settings={settings}
             playback={playback}
