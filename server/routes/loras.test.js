@@ -40,7 +40,7 @@ vi.mock('../services/settings.js', () => ({
 
 const { default: lorasRoutes } = await import('./loras.js');
 const { searchLorasInFamily } = await import('../services/civitaiSuggestions.js');
-const { installFromHuggingface } = await import('../services/loras.js');
+const { installFromHuggingface, listLoras } = await import('../services/loras.js');
 
 // Parse an SSE response body into an array of decoded frame objects.
 const parseSseFrames = (text) => text
@@ -55,6 +55,29 @@ const makeApp = () => {
   app.use(errorMiddleware);
   return app;
 };
+
+describe('GET /api/loras', () => {
+  it('returns the full LoRA array by default', async () => {
+    listLoras.mockResolvedValueOnce([{ filename: 'a.safetensors' }]);
+    const res = await request(makeApp()).get('/api/loras');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+    expect(res.body).toHaveLength(1);
+  });
+
+  it('returns a bounded envelope when pagination is requested', async () => {
+    listLoras.mockResolvedValueOnce(
+      Array.from({ length: 5 }, (_, i) => ({ filename: `l${i}.safetensors` }))
+    );
+    const res = await request(makeApp()).get('/api/loras?limit=2&offset=1');
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(2);
+    expect(res.body.items[0].filename).toBe('l1.safetensors');
+    expect(res.body.total).toBe(5);
+    expect(res.body.limit).toBe(2);
+    expect(res.body.offset).toBe(1);
+  });
+});
 
 describe('POST /api/loras/install/huggingface/stream', () => {
   it('streams byte-progress frames then a complete frame carrying the sidecar', async () => {
