@@ -54,7 +54,7 @@ describe('useOnDemandTaskToast — parked outcome', () => {
   it('renders a bare "no open issues" when the repo is genuinely empty', () => {
     renderHook(() => useOnDemandTaskToast());
     fire({
-      taskType: 'claim-issue', appName: 'aix-university', outcome: 'parked',
+      taskType: 'claim-issue', appName: 'App One', outcome: 'parked',
       parkReason: 'no-open-issues', counts: { open: 0, inFlight: 0, filtered: 0 },
       parkedUntil: new Date(Date.now() + 23 * 3600 * 1000).toISOString()
     });
@@ -66,9 +66,12 @@ describe('useOnDemandTaskToast — parked outcome', () => {
 
   it('explains the author-filter trap (not "no open issues") when open issues exist but none match the filter', () => {
     renderHook(() => useOnDemandTaskToast());
+    // The detector reports filtered: 0 on this path (the issues were excluded by
+    // the author filter, not the skip-list), so the toast reads a clean
+    // "0 of N open" with no redundant "N filtered".
     fire({
-      taskType: 'claim-issue', appName: 'aix-university', outcome: 'parked',
-      parkReason: 'no-authored-issues', counts: { open: 10, inFlight: 0, filtered: 10 },
+      taskType: 'claim-issue', appName: 'App One', outcome: 'parked',
+      parkReason: 'no-authored-issues', counts: { open: 10, inFlight: 0, filtered: 0 },
       parkedUntil: new Date(Date.now() + 23 * 3600 * 1000).toISOString()
     });
     const [msg] = toastSpy.mock.calls[0];
@@ -76,6 +79,7 @@ describe('useOnDemandTaskToast — parked outcome', () => {
     expect(msg).toMatch(/none match the author filter/);
     expect(msg).toMatch(/set it to "any"/);
     expect(msg).toMatch(/0 of 10 open/);
+    expect(msg).not.toMatch(/filtered/);
     expect(msg).not.toMatch(/re-checked now — no open issues/);
   });
 });

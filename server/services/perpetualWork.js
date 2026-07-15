@@ -266,10 +266,14 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self' } =
     // author, so the filter matches nothing), or `self`/@me when the server's
     // forge session is a different identity than whoever filed the issues.
     // Reporting a flat "no open issues" there hid a claimable queue behind a
-    // full recheck park (the aix-university "10 open but parked" report).
-    // Re-probe WITHOUT the author filter; if issues exist, park with the
-    // actionable `no-authored-issues` reason + the real open count so the user
-    // is told to widen the filter, not that there is nothing to do.
+    // full recheck park (the "open issues exist but the task still parked"
+    // failure this fixes). Re-probe WITHOUT the author filter; if issues exist,
+    // park with the actionable `no-authored-issues` reason + the real open
+    // count so the user is told to widen the filter, not that there is nothing
+    // to do. The count is raw open issues (any author), not claimable ones —
+    // best effort: switching to `any` may still yield `no-actionable-issues`
+    // when the other-authored issues are all blocked/assigned/epics. Counting
+    // claimable ones would cost the full normalize + skip-list scan here.
     if (authorApplied) {
       const openCount = await countOpenIssuesUnfiltered(cfg, repoPath);
       if (openCount > 0) {
@@ -278,9 +282,12 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self' } =
           count: 0,
           total: openCount,
           inFlightCount: 0,
-          filteredCount: openCount,
-          reason: 'no-authored-issues',
-          authorFilter: issueAuthorFilter
+          // These issues were excluded by the author filter upstream, not by
+          // the skip-list — the `reason` conveys that cause, so leave the
+          // skip-list "filtered" tally at 0 (the toast reads a clean
+          // "0 of N open" rather than a redundant "N filtered").
+          filteredCount: 0,
+          reason: 'no-authored-issues'
         };
       }
     }

@@ -202,8 +202,8 @@ describe('perpetualWork', () => {
       });
       const out = await detectGithubIssues(app, { issueAuthorFilter: 'self' });
       expect(out).toMatchObject({
-        actionable: false, count: 0, total: 3, filteredCount: 3, inFlightCount: 0,
-        reason: 'no-authored-issues', authorFilter: 'self'
+        actionable: false, count: 0, total: 3, filteredCount: 0, inFlightCount: 0,
+        reason: 'no-authored-issues'
       });
       // Exactly two `gh issue` calls: the filtered probe + the unfiltered re-probe.
       const issueCalls = spawn.mock.calls.filter(([cmd, a]) => cmd === 'gh' && a[0] === 'issue');
@@ -212,7 +212,7 @@ describe('perpetualWork', () => {
     });
 
     it('owner filter that resolves to an org (never an issue author) reports no-authored-issues with the real open count', async () => {
-      // The exact aix-university trap: `gh repo view` owner is the ORG, so
+      // The exact owner-filter trap: `gh repo view` owner is the ORG, so
       // `--author <org>` matches nothing even though the repo has open issues.
       spawn.mockImplementation((cmd, args = []) => {
         if (cmd === 'gh' && args[0] === 'repo') return fakeChild('AcmeOrg\n'); // owner login → org
@@ -225,7 +225,7 @@ describe('perpetualWork', () => {
         return fakeChild('');
       });
       const out = await detectGithubIssues(app, { issueAuthorFilter: 'owner' });
-      expect(out).toMatchObject({ reason: 'no-authored-issues', total: 1, authorFilter: 'owner' });
+      expect(out).toMatchObject({ reason: 'no-authored-issues', total: 1, filteredCount: 0 });
     });
 
     it('still reports no-open-issues when the repo is genuinely empty under an author filter', async () => {
@@ -354,7 +354,7 @@ describe('perpetualWork', () => {
         return fakeChild('');
       });
       const out = await detectGitlabIssues(app, { issueAuthorFilter: 'self' });
-      expect(out).toMatchObject({ actionable: false, reason: 'no-authored-issues', total: 1, authorFilter: 'self' });
+      expect(out).toMatchObject({ actionable: false, reason: 'no-authored-issues', total: 1, filteredCount: 0 });
     });
   });
 });
