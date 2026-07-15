@@ -73,6 +73,16 @@ vi.mock('./eventScheduler.js', () => ({
   parseCronToPrevRun: vi.fn()
 }))
 
+// Failure-park auto-notification (#2616): recordTaskTypeFailure lazy-imports
+// notifications.js and fires an AGENT_WARNING when a type auto-parks. Mock it so
+// the ledger tests can assert the notification without touching the real store.
+vi.mock('./notifications.js', () => ({
+  addNotification: vi.fn().mockResolvedValue({}),
+  exists: vi.fn().mockResolvedValue(false),
+  NOTIFICATION_TYPES: { AGENT_WARNING: 'agent_warning' },
+  PRIORITY_LEVELS: { HIGH: 'high' }
+}))
+
 // Use the real isImprovementEnabled implementation; only stub loadState.
 // Mocking the helper would let regressions in production logic slip through.
 vi.mock('./cosState.js', async () => {
@@ -107,6 +117,14 @@ import {
   getPerpetualParkInfo,
   getPerpetualSignature,
   setPerpetualSignature,
+  recordTaskTypeFailure,
+  recordTaskTypeSuccess,
+  getTaskTypeFailureInfo,
+  clearTaskTypeFailurePark,
+  computeFailureBackoffMs,
+  FAILURE_BACKOFF_BASE_MS,
+  FAILURE_BACKOFF_CAP_MS,
+  FAILURE_PARK_THRESHOLD,
   PROMPT_VERSIONS,
   DEFAULT_TASK_INTERVALS,
   MANAGED_AGENT_OPTIONS,
@@ -131,6 +149,7 @@ import { isTaskTypeEnabledForApp, getAppTaskTypeInterval, clearAllPrWatcherState
 import { getLocalParts } from '../lib/timezone.js'
 import { getAdaptiveCooldownMultiplier } from './taskLearning.js'
 import { parseCronToNextRun, parseCronToPrevRun } from './eventScheduler.js'
+import { addNotification, exists as notificationExists } from './notifications.js'
 
 const mockSchedule = ({ tasks = {}, executions = {}, templates = [] } = {}) => {
   readJSONFile.mockResolvedValue({ version: 2, tasks, executions, templates })
@@ -1437,6 +1456,166 @@ describe('taskSchedule', () => {
         await parkPerpetual('branch-reconcile', 'app-1', { reason: 'no-in-flight-branches', actionableCount: 0, signature: null })
         const saved = JSON.parse(writeFile.mock.calls.at(-1)[1])
         expect(saved.executions['task:branch-reconcile'].perApp['app-1'].lastActionableSignature).toBeUndefined()
+      })
+    })
+
+    describe('type-level failure ledger (#2616)', () => {
+      it('computeFailureBackoffMs scales 2^n × base, capped, and 0 for n<=0', () => {
+        expect(computeFailureBackoffMs(0)).toBe(0)
+        expect(computeFailureBackoffMs(-3)).toBe(0)
+        expect(computeFailureBackoffMs(1)).toBe(FAILURE_BACKOFF_BASE_MS * 2)
+        expect(computeFailureBackoffMs(2)).toBe(FAILURE_BACKOFF_BASE_MS * 4)
+        expect(computeFailureBackoffMs(3)).toBe(FAILURE_BACKOFF_BASE_MS * 8)
+        // Large n saturates at the cap.
+        expect(computeFailureBackoffMs(50)).toBe(FAILURE_BACKOFF_CAP_MS)
+      })
+
+      it('recordTaskTypeFailure increments consecutiveFailures + stamps category', async () => {
+        mockSchedule({ tasks: { security: { type: 'rotation', enabled: true } } })
+        const rec = await recordTaskTypeFailure('security', 'app-1', { errorCategory: 'timeout' })
+        expect(rec.consecutiveFailures).toBe(1)
+        expect(rec.lastErrorCategory).toBe('timeout')
+        expect(rec.lastFailureAt).toBeTruthy()
+        expect(rec.failureParkedAt).toBeUndefined()
+        const saved = JSON.parse(writeFile.mock.calls.at(-1)[1])
+        expect(saved.executions['task:security'].perApp['app-1'].consecutiveFailures).toBe(1)
+      })
+
+      it('auto-parks + notifies after FAILURE_PARK_THRESHOLD consecutive failures', async () => {
+        mockSchedule({
+          tasks: { security: { type: 'rotation', enabled: true } },
+          executions: { 'task:security': { lastRun: null, count: 0, perApp: {
+            'app-1': { lastRun: null, count: 0, consecutiveFailures: FAILURE_PARK_THRESHOLD - 1, lastFailureAt: new Date().toISOString() }
+          } } }
+        })
+        const rec = await recordTaskTypeFailure('security', 'app-1', { errorCategory: 'auth-error' })
+        expect(rec.consecutiveFailures).toBe(FAILURE_PARK_THRESHOLD)
+        expect(rec.failureParkedAt).toBeTruthy()
+        expect(rec.failureParkReason).toBe('auth-error')
+        expect(addNotification).toHaveBeenCalledTimes(1)
+        expect(addNotification.mock.calls[0][0]).toMatchObject({
+          type: 'agent_warning',
+          metadata: { taskType: 'security', appId: 'app-1', failureParkKey: 'security:app-1' }
+        })
+      })
+
+      it('does not re-notify (deduped) when a park already exists', async () => {
+        notificationExists.mockResolvedValueOnce(true)
+        mockSchedule({
+          tasks: { security: { type: 'rotation', enabled: true } },
+          executions: { 'task:security': { lastRun: null, count: 0, perApp: {
+            'app-1': { lastRun: null, count: 0, consecutiveFailures: FAILURE_PARK_THRESHOLD - 1, lastFailureAt: new Date().toISOString() }
+          } } }
+        })
+        await recordTaskTypeFailure('security', 'app-1', { errorCategory: 'auth-error' })
+        expect(addNotification).not.toHaveBeenCalled()
+      })
+
+      it('recordTaskTypeSuccess resets the ledger and returns false when already clean', async () => {
+        mockSchedule({
+          tasks: { security: { type: 'rotation', enabled: true } },
+          executions: { 'task:security': { lastRun: null, count: 0, perApp: {
+            'app-1': { lastRun: null, count: 0, consecutiveFailures: 3, lastFailureAt: new Date().toISOString(), failureParkedAt: new Date().toISOString(), failureParkReason: 'x' }
+          } } }
+        })
+        expect(await recordTaskTypeSuccess('security', 'app-1')).toBe(true)
+        const saved = JSON.parse(writeFile.mock.calls.at(-1)[1])
+        const rec = saved.executions['task:security'].perApp['app-1']
+        expect(rec.consecutiveFailures).toBeUndefined()
+        expect(rec.failureParkedAt).toBeUndefined()
+        // Second call: nothing left to clear.
+        mockSchedule({ tasks: { security: { type: 'rotation', enabled: true } }, executions: { 'task:security': { lastRun: null, count: 0, perApp: { 'app-1': { lastRun: null, count: 0 } } } } })
+        expect(await recordTaskTypeSuccess('security', 'app-1')).toBe(false)
+      })
+
+      it('getTaskTypeFailureInfo reads back the ledger (0 defaults when absent)', async () => {
+        mockSchedule({
+          tasks: { security: { type: 'rotation', enabled: true } },
+          executions: { 'task:security': { lastRun: null, count: 0, perApp: {
+            'app-1': { lastRun: null, count: 0, consecutiveFailures: 2, lastErrorCategory: 'timeout' }
+          } } }
+        })
+        expect(await getTaskTypeFailureInfo('security', 'app-1')).toMatchObject({ consecutiveFailures: 2, lastErrorCategory: 'timeout' })
+        expect(await getTaskTypeFailureInfo('security', 'app-2')).toBeNull()
+      })
+
+      it('clearTaskTypeFailurePark(appId=null) clears global + every per-app record', async () => {
+        mockSchedule({
+          tasks: { security: { type: 'rotation', enabled: true } },
+          executions: { 'task:security': {
+            lastRun: null, count: 0, consecutiveFailures: 4, failureParkedAt: new Date().toISOString(),
+            perApp: {
+              'app-1': { lastRun: null, count: 0, consecutiveFailures: 5, failureParkedAt: new Date().toISOString() },
+              'app-2': { lastRun: null, count: 0, consecutiveFailures: 1 }
+            }
+          } }
+        })
+        expect(await clearTaskTypeFailurePark('security')).toBe(true)
+        const saved = JSON.parse(writeFile.mock.calls.at(-1)[1])
+        const top = saved.executions['task:security']
+        expect(top.consecutiveFailures).toBeUndefined()
+        expect(top.failureParkedAt).toBeUndefined()
+        expect(top.perApp['app-1'].consecutiveFailures).toBeUndefined()
+        expect(top.perApp['app-1'].failureParkedAt).toBeUndefined()
+        expect(top.perApp['app-2'].consecutiveFailures).toBeUndefined()
+      })
+
+      it('shouldRunTask returns failure-parked for a parked ROTATION type', async () => {
+        mockSchedule({
+          tasks: { security: { type: 'rotation', enabled: true } },
+          executions: { 'task:security': { lastRun: null, count: 0, perApp: {
+            'app-1': { lastRun: null, count: 0, consecutiveFailures: FAILURE_PARK_THRESHOLD, failureParkedAt: new Date().toISOString(), failureParkReason: 'auth-error' }
+          } } }
+        })
+        const res = await shouldRunTask('security', 'app-1')
+        expect(res.shouldRun).toBe(false)
+        expect(res.reason).toBe('failure-parked')
+        expect(res.failureParkReason).toBe('auth-error')
+      })
+
+      it('shouldRunTask applies escalating failure-cooldown to ROTATION (otherwise always-run)', async () => {
+        // 2 consecutive failures → backoff = base*4; last failure just now → in cooldown.
+        mockSchedule({
+          tasks: { security: { type: 'rotation', enabled: true } },
+          executions: { 'task:security': { lastRun: null, count: 0, perApp: {
+            'app-1': { lastRun: null, count: 0, consecutiveFailures: 2, lastFailureAt: new Date().toISOString(), lastErrorCategory: 'timeout' }
+          } } }
+        })
+        const res = await shouldRunTask('security', 'app-1')
+        expect(res.shouldRun).toBe(false)
+        expect(res.reason).toBe('failure-cooldown')
+        expect(res.consecutiveFailures).toBe(2)
+        expect(res.failureBackoffMs).toBe(FAILURE_BACKOFF_BASE_MS * 4)
+      })
+
+      it('shouldRunTask lets ROTATION run once the failure-cooldown has elapsed', async () => {
+        // 1 failure → backoff = base*2; last failure long ago → cooldown elapsed.
+        const longAgo = new Date(Date.now() - (FAILURE_BACKOFF_CAP_MS + 60_000)).toISOString()
+        mockSchedule({
+          tasks: { security: { type: 'rotation', enabled: true } },
+          executions: { 'task:security': { lastRun: null, count: 0, perApp: {
+            'app-1': { lastRun: null, count: 0, consecutiveFailures: 1, lastFailureAt: longAgo }
+          } } }
+        })
+        const res = await shouldRunTask('security', 'app-1')
+        expect(res.shouldRun).toBe(true)
+        expect(res.reason).toBe('rotation')
+      })
+
+      it('updateTaskInterval clears the failure ledger (config-change unpark)', async () => {
+        mockSchedule({
+          tasks: { security: { type: 'rotation', enabled: true } },
+          executions: { 'task:security': {
+            lastRun: null, count: 0, consecutiveFailures: 5, failureParkedAt: new Date().toISOString(),
+            perApp: { 'app-1': { lastRun: null, count: 0, consecutiveFailures: 5, failureParkedAt: new Date().toISOString() } }
+          } }
+        })
+        await updateTaskInterval('security', { enabled: true })
+        const saved = JSON.parse(writeFile.mock.calls.at(-1)[1])
+        const top = saved.executions['task:security']
+        expect(top.consecutiveFailures).toBeUndefined()
+        expect(top.failureParkedAt).toBeUndefined()
+        expect(top.perApp['app-1'].failureParkedAt).toBeUndefined()
       })
     })
 
