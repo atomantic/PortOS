@@ -135,12 +135,16 @@ export function nextLocalTime(afterMs, hours, minutes, timezone) {
 }
 
 /**
- * Get today's date string (YYYY-MM-DD) in the user's timezone.
+ * Get the date string (YYYY-MM-DD) for an instant in the user's timezone —
+ * "today" by default, or a caller-supplied instant. Pass the SAME instant a
+ * writer stamped into its `timestamp`/`startedAt` so the day key and the instant
+ * can't land on different days across a midnight boundary (issue #2681).
  * @param {string} timezone - IANA timezone string
+ * @param {Date} [atDate] - instant to key (defaults to now)
  * @returns {string}
  */
-export function todayInTimezone(timezone) {
-  const parts = getLocalParts(new Date(), timezone)
+export function todayInTimezone(timezone, atDate = new Date()) {
+  const parts = getLocalParts(atDate, timezone)
   return `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`
 }
 
@@ -154,10 +158,15 @@ export function todayInTimezone(timezone) {
  * `TZ=UTC`, so deriving the day from a bare `new Date().toISOString()` would use
  * the server's UTC day and misfile activity around the local/UTC midnight boundary
  * for non-UTC users (issue #2681).
+ * Pass `atDate` (the instant a writer already captured for its timestamp) so the
+ * day key derives from the SAME instant, never a fresh `new Date()` sampled after
+ * the awaited settings read — which could cross midnight and split the two fields
+ * onto different days (issue #2681 r5).
+ * @param {Date} [atDate] - instant to key (defaults to now)
  * @returns {Promise<string>}
  */
-export async function userLocalToday() {
-  return todayInTimezone(await getUserTimezone())
+export async function userLocalToday(atDate = new Date()) {
+  return todayInTimezone(await getUserTimezone(), atDate)
 }
 
 // ---------------------------------------------------------------------------

@@ -32,6 +32,7 @@ import { join } from 'path';
 
 const SESSIONS_REL = 'data/meatspace/post-sessions.json';
 const TRAINING_REL = 'data/meatspace/post-training-log.json';
+const MORSE_REL = 'data/meatspace/post-morse-progress.json';
 const SETTINGS_REL = 'data/settings.json';
 
 // Resolve the install's configured timezone the same way the runtime does:
@@ -95,7 +96,8 @@ function sessionInstant(s) {
 }
 
 // Training entries carry `timestamp` (full UTC ISO); memory-practice entries
-// historically stored a full ISO in `date` itself.
+// historically stored a full ISO in `date` itself. Morse rounds share the same
+// `{ date, timestamp }` shape, so this doubles as their instant resolver.
 function trainingInstant(e) {
   if (typeof e?.timestamp === 'string' && e.timestamp.includes('T')) return e.timestamp;
   if (typeof e?.date === 'string' && e.date.includes('T')) return e.date;
@@ -163,10 +165,14 @@ export default {
     const training = await normalizeFile(
       join(rootDir, TRAINING_REL), 'entries', trainingInstant, timezone,
     );
+    // Morse rounds share the training entry's `{ date, timestamp }` shape.
+    const morse = await normalizeFile(
+      join(rootDir, MORSE_REL), 'rounds', trainingInstant, timezone,
+    );
 
-    const total = sessions.updated + training.updated;
+    const total = sessions.updated + training.updated + morse.updated;
     if (total > 0) {
-      console.log(`📝 POST dates: normalized ${sessions.updated} session(s) + ${training.updated} training entr${training.updated === 1 ? 'y' : 'ies'} to ${timezone} local days`);
+      console.log(`📝 POST dates: normalized ${sessions.updated} session(s) + ${training.updated} training + ${morse.updated} Morse to ${timezone} local days`);
     } else {
       console.log(`✅ POST dates: already local-day consistent for ${timezone} — no changes`);
     }

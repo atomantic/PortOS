@@ -31,13 +31,15 @@ async function saveTrainingLog(data) {
  */
 export async function submitTrainingEntry(entry) {
   const data = await loadTrainingLog();
-  const now = new Date().toISOString();
+  const nowDate = new Date();
+  const now = nowDate.toISOString();
   // Stamp the entry's day in the user's local timezone (issue #2681). Training
   // entries feed the SHARED unified streak (getUnifiedActivityStreak), which now
   // compares against the user's local `today` — a bare UTC-day stamp here would
   // date a local-evening practice on tomorrow's UTC day and drop it from today's
-  // streak. `timestamp` stays the full UTC ISO instant for exact ordering.
-  const todayLocal = await userLocalToday();
+  // streak. Derive the day from the SAME `nowDate` used for `timestamp` so a
+  // midnight boundary can't split them onto different days.
+  const todayLocal = await userLocalToday(nowDate);
 
   const record = {
     id: randomUUID(),

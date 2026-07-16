@@ -215,11 +215,14 @@ export async function getPostSession(id) {
 export async function submitPostSession(sessionData) {
   const config = await getPostConfig();
   const data = await loadSessions();
-  const now = new Date().toISOString();
+  const nowDate = new Date();
+  const now = nowDate.toISOString();
   // Stamp the session's day in the user's local timezone, so `completedToday`
   // and the day-keyed streak/stats math classify it by the local day the user
-  // actually completed it — not the server's UTC day (issue #2681).
-  const todayLocal = await localToday();
+  // actually completed it — not the server's UTC day (issue #2681). Derive the
+  // day from the SAME `nowDate` used for startedAt/completedAt so a midnight
+  // boundary can't split the day key and the timestamps onto different days.
+  const todayLocal = await localToday(nowDate);
 
   // Strip client-provided score/correct — plus every separated metric field
   // (issue #2094) — and recompute server-side. Stripping up front means the

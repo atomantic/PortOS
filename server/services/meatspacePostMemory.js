@@ -451,14 +451,16 @@ export async function submitPractice(id, practiceData) {
   if (!item) return null;
 
   const { mode, chunkId, results, totalMs } = practiceData;
-  const now = new Date().toISOString();
+  const nowDate = new Date();
+  const now = nowDate.toISOString();
   // Day-key in the user's local timezone (issue #2681): this practice is a
   // training-log entry feeding the SHARED unified streak, which now reads against
   // the user's local `today`. A full UTC ISO here (the old `date: now`) split to
   // the UTC day would drop a local-evening practice from today's streak. `date`
   // is a day-key (every reader does `String(date).split('T')[0]`); `timestamp`
-  // keeps the exact instant, matching submitTrainingEntry's shape.
-  const todayLocal = await userLocalToday();
+  // keeps the exact instant, matching submitTrainingEntry's shape. Derive the day
+  // from the SAME `nowDate` so a midnight boundary can't split date and timestamp.
+  const todayLocal = await userLocalToday(nowDate);
 
   // Update chunk mastery
   if (chunkId) {

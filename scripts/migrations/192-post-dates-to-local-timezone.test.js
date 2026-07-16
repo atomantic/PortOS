@@ -14,11 +14,14 @@ describe('migration 192 — normalize POST dates to the user local timezone', ()
   let trainingPath;
   let settingsPath;
 
+  let morsePath;
+
   beforeEach(() => {
     rootDir = mkdtempSync(join(tmpdir(), 'migration-192-'));
     mkdirSync(join(rootDir, 'data', 'meatspace'), { recursive: true });
     sessionsPath = join(rootDir, 'data', 'meatspace', 'post-sessions.json');
     trainingPath = join(rootDir, 'data', 'meatspace', 'post-training-log.json');
+    morsePath = join(rootDir, 'data', 'meatspace', 'post-morse-progress.json');
     settingsPath = join(rootDir, 'data', 'settings.json');
   });
 
@@ -90,6 +93,17 @@ describe('migration 192 — normalize POST dates to the user local timezone', ()
     });
     await migration.up({ rootDir });
     expect(readJson(sessionsPath).sessions[0].date).toBe('2026-07-15');
+  });
+
+  it('re-derives Morse round dates from their timestamps', async () => {
+    writeJson(settingsPath, { timezone: 'America/Los_Angeles' });
+    writeJson(morsePath, {
+      kochLevel: 2, settings: null,
+      rounds: [{ id: 'r1', date: '2026-07-16', timestamp: '2026-07-16T05:00:00.000Z', mode: 'copy' }],
+    });
+    const result = await migration.up({ rootDir });
+    expect(result.updated).toBe(1);
+    expect(readJson(morsePath).rounds[0].date).toBe('2026-07-15');
   });
 
   it('re-derives a training entry date from its timestamp', async () => {
