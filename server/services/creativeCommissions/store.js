@@ -160,22 +160,31 @@ export async function createCommission(input) {
 
 export async function updateCommission(id, patch) {
   const store = commissionStore();
-  const current = await store.loadOne(id);
-  if (!current) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
   if (patch.schedule) assertValidSchedule(patch.schedule);
-  const merged = sanitizeCommission({
-    ...current,
-    ...patch,
-    // Deep-merge the nested objects so a partial brief/generation patch doesn't
-    // wipe unspecified fields.
-    brief: patch.brief ? { ...current.brief, ...patch.brief } : current.brief,
-    schedule: patch.schedule ? { ...current.schedule, ...patch.schedule } : current.schedule,
-    generation: patch.generation ? { ...current.generation, ...patch.generation } : current.generation,
-    id,
-    createdAt: current.createdAt,
-    updatedAt: new Date().toISOString(),
+  // Serialize the load→merge→save inside the per-id write queue so a concurrent
+  // scheduler fire (recordCommissionRun, also queued) can't have its run-history
+  // append clobbered by a stale pre-read here — the scheduler-vs-request race
+  // CLAUDE.md requires serializing at the file level.
+  const merged = await store.queueRecordWrite(id, async () => {
+    const current = await store.loadOne(id);
+    if (!current) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
+    const next = sanitizeCommission({
+      ...current,
+      ...patch,
+      // Deep-merge the nested objects so a partial brief/generation patch doesn't
+      // wipe unspecified fields. The update-path brief schema carries no defaults
+      // (unlike the create schema), so an omitted key stays omitted and is
+      // preserved here rather than overwritten with a defaulted empty.
+      brief: patch.brief ? { ...current.brief, ...patch.brief } : current.brief,
+      schedule: patch.schedule ? { ...current.schedule, ...patch.schedule } : current.schedule,
+      generation: patch.generation ? { ...current.generation, ...patch.generation } : current.generation,
+      id,
+      createdAt: current.createdAt,
+      updatedAt: new Date().toISOString(),
+    });
+    await store.saveOneNow(id, next);
+    return next;
   });
-  await store.saveOne(id, merged);
   commissionEvents.emit('commission:changed', { id, action: 'update' });
   return merged;
 }

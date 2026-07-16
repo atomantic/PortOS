@@ -24,6 +24,7 @@
 
 import { schedule, cancel, isValidCron } from '../eventScheduler.js';
 import { getUserTimezone } from '../../lib/timezone.js';
+import { settingsEvents } from '../settings.js';
 import { listCommissions, getCommission, recordCommissionRun, commissionEvents } from './store.js';
 import { commissionToCron, buildCommissionDirective } from './directive.js';
 
@@ -31,14 +32,19 @@ const eventId = (commissionId) => `creative-commission-${commissionId}`;
 const registered = new Set();
 let lastSignature = null;
 
-// Re-arm crons whenever a commission is created/updated/deleted through ANY
-// writer, not just the REST route — mirrors seriesAutopilotScheduler's
-// `settings:updated` subscription. The signature guard makes an unrelated
-// change a cheap no-op.
-commissionEvents.on('commission:changed', () => {
+function triggerResync() {
   syncCommissionSchedules().catch((err) =>
     console.error(`❌ Creative commission schedule re-sync failed: ${err.message}`));
-});
+}
+
+// Re-arm crons whenever a commission is created/updated/deleted through ANY
+// writer, not just the REST route — decoupled from the HTTP handler.
+commissionEvents.on('commission:changed', triggerResync);
+// Also re-sync on a settings save so a global timezone change re-registers the
+// crons of commissions that use the fallback tz (schedule.timezone == null) —
+// same reason seriesAutopilotScheduler subscribes here. The signature guard
+// makes an unrelated settings save a cheap no-op.
+settingsEvents.on('settings:updated', triggerResync);
 
 /**
  * Enabled commissions whose schedule composes into a cron the scheduler honors.

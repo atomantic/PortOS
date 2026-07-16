@@ -12,6 +12,9 @@ vi.mock('../eventScheduler.js', () => ({
 
 vi.mock('../../lib/timezone.js', () => ({ getUserTimezone: async () => 'UTC' }));
 
+const settingsEvents = new EventEmitter();
+vi.mock('../settings.js', () => ({ settingsEvents }));
+
 const listCommissionsMock = vi.fn();
 const getCommissionMock = vi.fn();
 const recordRunMock = vi.fn(async () => ({}));
@@ -108,6 +111,14 @@ describe('startCommissionScheduler (no cold-boot generation)', () => {
     listCommissionsMock.mockResolvedValue([videoCommission()]);
     // Emitting the store event should trigger a re-sync without the route calling in.
     commissionEvents.emit('commission:changed', { id: 'commission-1', action: 'create' });
+    await vi.waitFor(() => expect(scheduleMock).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'creative-commission-commission-1',
+    })));
+  });
+
+  it('re-syncs on settings:updated so a global timezone change re-registers crons', async () => {
+    listCommissionsMock.mockResolvedValue([videoCommission()]);
+    settingsEvents.emit('settings:updated', {});
     await vi.waitFor(() => expect(scheduleMock).toHaveBeenCalledWith(expect.objectContaining({
       id: 'creative-commission-commission-1',
     })));
