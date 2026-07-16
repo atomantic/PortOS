@@ -60,8 +60,11 @@ describe('ActionableInsightsBanner refreshKey', () => {
 
   it('refetches insights when refreshKey changes (a task was deleted)', async () => {
     const { rerender } = renderBanner(0);
-    await waitFor(() => expect(api.getCosActionableInsights).toHaveBeenCalled());
-    const before = api.getCosActionableInsights.mock.calls.length;
+    // Mount must fetch exactly once — the hook's own immediate fetch. The
+    // refreshKey effect skips mount (the didMountRef guard), so a second fetch
+    // here would mean the guard was dropped and every mount double-fetches
+    // /cos/actionable-insights in production. Pinning the count catches that.
+    await waitFor(() => expect(api.getCosActionableInsights).toHaveBeenCalledTimes(1));
 
     rerender(
       <MemoryRouter>
@@ -69,9 +72,8 @@ describe('ActionableInsightsBanner refreshKey', () => {
       </MemoryRouter>,
     );
 
-    await waitFor(() =>
-      expect(api.getCosActionableInsights.mock.calls.length).toBeGreaterThan(before),
-    );
+    // Key changed → exactly one more fetch (the refetch), not zero, not two.
+    await waitFor(() => expect(api.getCosActionableInsights).toHaveBeenCalledTimes(2));
   });
 
   it('does not refetch when re-rendered without a key change', async () => {
