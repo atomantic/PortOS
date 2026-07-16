@@ -215,17 +215,30 @@ export const cityDayMix = (settings) => {
   return smoothstepRange(0.35, 1, preset?.daylightFactor ?? 0);
 };
 
-// True when the active quality preset is above "low" (particleDensity 0.5) — the shared
-// gate for optional set dressing (rooftop kits, street furniture, transit trams). The
-// boundary is exact-0.5-excluded on purpose: the low preset renders structure only.
-export const cityShowDetail = (settings) => (settings?.particleDensity ?? 1) > 0.5;
+// Explicit tier rank for the detail gates below. `settings.effectiveTier` is the
+// runtime tier (Auto mode's adaptive tier, or the Manual preset) — a first-class
+// signal that replaces the old `particleDensity`-as-quality-proxy (issue #2592).
+// When it's absent (older payloads, tests, or code that never set it) we fall back
+// to the legacy particleDensity thresholds so behavior is unchanged.
+const DETAIL_TIER_RANK = { low: 0, medium: 1, high: 2, ultra: 3 };
 
-// True when the active quality preset is "high" or above (particleDensity ≥ 1.0)
-// — the gate for the heavier InteriorMappingMaterial window panes, which
-// ray-march a fake interior per pane and so cost more than the flat window
-// texture. Held one tier above cityShowDetail so medium-tier machines keep the
-// rest of the set dressing but skip the per-pane interior shader.
-export const cityShowInteriorWindows = (settings) => (settings?.particleDensity ?? 1) >= 1;
+// True at medium tier and above — the shared gate for optional set dressing (rooftop
+// kits, street furniture, transit trams). The low tier renders structure only.
+export const cityShowDetail = (settings) => (
+  settings?.effectiveTier
+    ? (DETAIL_TIER_RANK[settings.effectiveTier] ?? DETAIL_TIER_RANK.high) >= DETAIL_TIER_RANK.medium
+    : (settings?.particleDensity ?? 1) > 0.5
+);
+
+// True at high tier and above — the gate for the heavier InteriorMappingMaterial
+// window panes, which ray-march a fake interior per pane and so cost more than the
+// flat window texture. Held one tier above cityShowDetail so medium-tier machines
+// keep the rest of the set dressing but skip the per-pane interior shader.
+export const cityShowInteriorWindows = (settings) => (
+  settings?.effectiveTier
+    ? (DETAIL_TIER_RANK[settings.effectiveTier] ?? DETAIL_TIER_RANK.high) >= DETAIL_TIER_RANK.high
+    : (settings?.particleDensity ?? 1) >= 1
+);
 
 // Drei <Text> props for an informational in-world label that stays legible in both
 // the night-neon scene AND the bright daytime scene. At night (dayMix→0) the label

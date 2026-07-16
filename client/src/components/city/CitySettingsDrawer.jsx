@@ -10,10 +10,10 @@ import { QUALITY_PRESETS } from '../../hooks/useCitySettings';
 // state lives in CitySettingsContext ABOVE this remounting body, so switching tabs
 // (which remounts the body) never drops an edit.
 
-function SettingToggle({ id, label, value, onChange, description }) {
+function SettingToggle({ id, label, value, onChange, description, disabled = false }) {
   return (
-    <div className="flex items-center justify-between py-2 group" title={description}>
-      <label htmlFor={id} className="font-pixel text-[11px] text-gray-300 tracking-wide cursor-pointer">
+    <div className={`flex items-center justify-between py-2 group ${disabled ? 'opacity-40' : ''}`} title={description}>
+      <label htmlFor={id} className={`font-pixel text-[11px] text-gray-300 tracking-wide ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
         {label}
       </label>
       <button
@@ -22,8 +22,9 @@ function SettingToggle({ id, label, value, onChange, description }) {
         role="switch"
         aria-checked={value}
         aria-label={label}
-        onClick={() => onChange(!value)}
-        className={`w-11 h-6 rounded-full relative transition-colors border ${value ? 'bg-cyan-500/40 border-cyan-500/60' : 'bg-gray-700/40 border-gray-600/40'}`}
+        disabled={disabled}
+        onClick={() => !disabled && onChange(!value)}
+        className={`w-11 h-6 rounded-full relative transition-colors border ${value ? 'bg-cyan-500/40 border-cyan-500/60' : 'bg-gray-700/40 border-gray-600/40'} ${disabled ? 'cursor-not-allowed' : ''}`}
       >
         <span
           className={`absolute top-0.5 w-4 h-4 rounded-full transition-all ${value ? 'left-[22px] bg-cyan-400 shadow-[0_0_6px_rgba(6,182,212,0.5)]' : 'left-[2px] bg-gray-500'}`}
@@ -33,10 +34,10 @@ function SettingToggle({ id, label, value, onChange, description }) {
   );
 }
 
-function SettingSlider({ id, label, value, onChange, min = 0, max = 1, step = 0.05, format, description }) {
+function SettingSlider({ id, label, value, onChange, min = 0, max = 1, step = 0.05, format, description, disabled = false }) {
   const displayValue = format ? format(value) : `${Math.round(value * 100)}%`;
   return (
-    <div className="py-2" title={description}>
+    <div className={`py-2 ${disabled ? 'opacity-40' : ''}`} title={description}>
       <div className="flex items-center justify-between mb-1.5">
         <label htmlFor={id} className="font-pixel text-[11px] text-gray-300 tracking-wide">{label}</label>
         <span className="font-pixel text-[10px] text-cyan-400/70">{displayValue}</span>
@@ -48,9 +49,10 @@ function SettingSlider({ id, label, value, onChange, min = 0, max = 1, step = 0.
         max={max}
         step={step}
         value={value}
+        disabled={disabled}
         onChange={(e) => onChange(parseFloat(e.target.value))}
         aria-label={label}
-        className="w-full h-2 bg-gray-700 rounded-full appearance-none cursor-pointer accent-cyan-500"
+        className={`w-full h-2 bg-gray-700 rounded-full appearance-none accent-cyan-500 ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'}`}
         style={{
           background: `linear-gradient(to right, #06b6d4 0%, #06b6d4 ${(value - min) / (max - min) * 100}%, #374151 ${(value - min) / (max - min) * 100}%, #374151 100%)`,
         }}
@@ -105,11 +107,29 @@ export const CITY_SETTINGS_TABS = [
 ];
 const TAB_IDS = CITY_SETTINGS_TABS.map(t => t.id);
 
-export default function CitySettingsDrawer({ open, onClose }) {
+// Format a diagnostics number, guarding the not-yet-measured (null) case.
+function fmt(value, digits = 0) {
+  return typeof value === 'number' && Number.isFinite(value) ? value.toFixed(digits) : '—';
+}
+
+export default function CitySettingsDrawer({ open, onClose, qualityMode = 'manual', effectiveTier = 'high', diagnostics = null }) {
   const { settings, updateSetting, resetSettings } = useCitySettingsContext();
   const [activeTab, setActiveTab] = useDrawerTab('cityTab', 'performance', TAB_IDS);
 
   if (!open || !settings) return null;
+
+  // Auto quality mode (#2592). 'auto' engages the adaptive render budget; picking a named
+  // preset pins Manual (handled in useCitySettings). In Auto the scene derives reflections +
+  // particle density from the effective tier, so those (disabled) controls display the
+  // effective preset's values and follow live tier changes rather than a stale manual value.
+  const isAuto = qualityMode === 'auto';
+  const effectivePreset = isAuto ? (QUALITY_PRESETS[effectiveTier] || QUALITY_PRESETS.high) : null;
+  const reflectionsValue = effectivePreset ? effectivePreset.reflectionsEnabled : settings.reflectionsEnabled;
+  const particleValue = effectivePreset ? effectivePreset.particleDensity : settings.particleDensity;
+  const setQuality = (key) => {
+    if (key === 'auto') updateSetting('qualityMode', 'auto');
+    else updateSetting('qualityPreset', key);
+  };
 
   return (
     <Drawer
@@ -125,16 +145,32 @@ export default function CitySettingsDrawer({ open, onClose }) {
       {activeTab === 'performance' && (
         <div className="space-y-5">
           <div>
-            <SectionHeader title="QUALITY PRESET" subtitle="Controls overall visual fidelity" />
+            <SectionHeader
+              title="QUALITY"
+              subtitle={isAuto ? `AUTO · ${String(effectiveTier).toUpperCase()}` : `MANUAL · ${String(settings.qualityPreset || 'high').toUpperCase()}`}
+            />
+            {/* AUTO adapts the effective tier to sustained frame pressure (#2592). */}
+            <button
+              type="button"
+              aria-pressed={isAuto}
+              onClick={() => setQuality('auto')}
+              className={`w-full font-pixel text-[10px] min-h-[44px] mb-1.5 rounded border transition-all tracking-wide ${
+                isAuto
+                  ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.2)]'
+                  : 'bg-gray-800/40 border-gray-700/40 text-gray-400 hover:border-gray-600 hover:text-gray-300'
+              }`}
+            >
+              AUTO {isAuto ? `· ${String(effectiveTier).toUpperCase()}` : ''}
+            </button>
             <div className="grid grid-cols-4 gap-1.5" role="group" aria-label="Quality preset">
               {Object.keys(QUALITY_PRESETS).map(preset => (
                 <button
                   key={preset}
                   type="button"
-                  aria-pressed={settings.qualityPreset === preset}
-                  onClick={() => updateSetting('qualityPreset', preset)}
+                  aria-pressed={!isAuto && settings.qualityPreset === preset}
+                  onClick={() => setQuality(preset)}
                   className={`font-pixel text-[10px] min-h-[44px] rounded border transition-all tracking-wide ${
-                    settings.qualityPreset === preset
+                    !isAuto && settings.qualityPreset === preset
                       ? 'bg-cyan-500/20 border-cyan-500/50 text-cyan-400 shadow-[0_0_8px_rgba(6,182,212,0.2)]'
                       : 'bg-gray-800/40 border-gray-700/40 text-gray-400 hover:border-gray-600 hover:text-gray-300'
                   }`}
@@ -143,16 +179,25 @@ export default function CitySettingsDrawer({ open, onClose }) {
                 </button>
               ))}
             </div>
+            {/* Local-only diagnostics — never persisted or transmitted (#2592). */}
+            {isAuto && (
+              <div className="mt-2 px-2 py-1.5 rounded bg-black/40 border border-cyan-500/10 font-pixel text-[9px] text-gray-400 tracking-wide flex items-center justify-between">
+                <span>TIER <span className="text-cyan-400/70">{String(effectiveTier).toUpperCase()}</span></span>
+                <span>{fmt(diagnostics?.fps)} FPS</span>
+                <span>P75 {fmt(diagnostics?.p75, 1)}ms</span>
+              </div>
+            )}
           </div>
           <SettingSlider
             id="city-particle-density"
             label="PARTICLE DENSITY"
-            value={settings.particleDensity}
+            value={particleValue}
             onChange={(v) => updateSetting('particleDensity', v)}
             min={0.25}
             max={2}
             step={0.25}
-            description="Amount of floating particles in the scene"
+            description={isAuto ? 'Set automatically by Auto quality' : 'Amount of floating particles in the scene'}
+            disabled={isAuto}
           />
         </div>
       )}
@@ -207,9 +252,10 @@ export default function CitySettingsDrawer({ open, onClose }) {
             <SettingToggle
               id="city-reflections"
               label="REFLECTIONS"
-              value={settings.reflectionsEnabled}
+              value={reflectionsValue}
               onChange={(v) => updateSetting('reflectionsEnabled', v)}
-              description="Wet street reflections and puddles"
+              description={isAuto ? 'Set automatically by Auto quality' : 'Wet street reflections and puddles'}
+              disabled={isAuto}
             />
             <SettingToggle
               id="city-scanlines"

@@ -13,6 +13,7 @@ import CityScanlines from '../components/city/CityScanlines';
 import CityPhotoOverlay from '../components/city/CityPhotoOverlay';
 import CityPlaybackOverlay from '../components/city/CityPlaybackOverlay';
 import { CitySettingsProvider, useCitySettingsContext } from '../components/city/CitySettingsContext';
+import { QUALITY_PRESETS } from '../hooks/useCitySettings';
 import CitySettingsDrawer from '../components/city/CitySettingsDrawer';
 import { computeFilterResult } from '../utils/cityFilter';
 import { resolveCityFocus } from '../utils/cityFocusState';
@@ -25,7 +26,7 @@ import { useThemeContext } from '../components/ThemeContext';
 
 function CyberCityInner() {
   const { apps, cosAgents, cosStatus, eventLogs, agentMap, reviewCounts, instances, systemHealth, notificationCounts, backupStatus, cosTasks, healthMetrics, voiceState, character, aiActivity, loading, connected } = useCityData();
-  const { settings, updateSetting } = useCitySettingsContext();
+  const { settings, updateSetting, resetNonce } = useCitySettingsContext();
 
   // Ambient soundscape (roadmap 3.4): the music's mood follows system health and its energy
   // follows live agent activity. Derived from data the page already has — no extra fetch.
@@ -72,10 +73,36 @@ function CyberCityInner() {
   // the backdrop swaps between the blue day sky and the dark night void to match.
   const cityTimeOfDay = resolveCityTimeOfDay(settings?.timeOfDay, cityPalette.isDay);
   const sceneBackground = cityTimeOfDay.daytime ? CITY_COLORS.timeOfDay.noon.midSky : cityPalette.nightBackground;
-  const sceneSettings = useMemo(
-    () => ({ ...settings, skyTheme: 'cyberpunk', timeOfDay: cityTimeOfDay.presetKey }),
-    [settings, cityTimeOfDay.presetKey],
-  );
+
+  // Auto quality mode (issue #2592). In Auto, an adaptive render budget picks the
+  // effective tier at runtime (starting at High); in Manual, the effective tier is the
+  // saved preset. The runtime tier is deliberately separate from persisted settings —
+  // adaptation never rewrites localStorage. `autoDiagnostics` is a local-only readout
+  // (never persisted or transmitted). Auto always *starts* at High per the spec, even
+  // if the user last had a different manual preset.
+  const qualityMode = settings?.qualityMode === 'auto' ? 'auto' : 'manual';
+  const [autoTier, setAutoTier] = useState('high');
+  const [autoDiagnostics, setAutoDiagnostics] = useState(null);
+  const effectiveTier = qualityMode === 'auto' ? autoTier : (settings?.qualityPreset ?? 'high');
+
+  // Clear the stale local diagnostics readout whenever the budget re-arms: a RESET DEFAULTS
+  // (resetNonce) or a quality-mode transition (Manual↔Auto). The adaptive budget itself
+  // re-arms via CityScene and re-reports tier + fresh samples on the next window.
+  useEffect(() => { setAutoDiagnostics(null); }, [resetNonce, qualityMode]);
+
+  const sceneSettings = useMemo(() => {
+    const base = { ...settings, effectiveTier, skyTheme: 'cyberpunk', timeOfDay: cityTimeOfDay.presetKey };
+    if (qualityMode !== 'auto') return base;
+    // Derive the render-affecting fields (reflections, particle density, DPR) from the
+    // adaptive tier; leave user-tuned lighting/scanline toggles untouched.
+    const tierCfg = QUALITY_PRESETS[effectiveTier] || QUALITY_PRESETS.high;
+    return {
+      ...base,
+      reflectionsEnabled: tierCfg.reflectionsEnabled,
+      particleDensity: tierCfg.particleDensity,
+      dpr: tierCfg.dpr,
+    };
+  }, [settings, effectiveTier, qualityMode, cityTimeOfDay.presetKey]);
 
   const [filter, setFilter] = useState(() => {
     // try/catch is necessary because sessionStorage values are external state
@@ -416,6 +443,12 @@ function CyberCityInner() {
         playSfx={playSfx}
         keysRef={keysRef}
         dimmedAppIds={filterResult.dimmed}
+        autoQuality={qualityMode === 'auto'}
+        autoStartTier="high"
+        autoResetToken={resetNonce}
+        diagnosticsEnabled={showSettings}
+        onAutoTierChange={setAutoTier}
+        onAutoDiagnostics={setAutoDiagnostics}
         focusedAppId={appId || null}
         hudSafe={focusHudSafe}
       />
@@ -480,8 +513,15 @@ function CyberCityInner() {
       />
       <CityScanlines settings={settings} crt={cityPalette.crt} />
       {/* Settings on the shared Drawer (issue #2591). Closing preserves other query
-          params (e.g. an open cityPane) so the disclosure state survives. */}
-      <CitySettingsDrawer open={showSettings} onClose={() => navigate(`/city${location.search}`)} />
+          params (e.g. an open cityPane) so the disclosure state survives. The Auto-quality
+          props (#2592) drive the Performance tab's effective-tier label + local diagnostics. */}
+      <CitySettingsDrawer
+        open={showSettings}
+        onClose={() => navigate(`/city${location.search}`)}
+        qualityMode={qualityMode}
+        effectiveTier={effectiveTier}
+        diagnostics={qualityMode === 'auto' ? autoDiagnostics : null}
+      />
     </div>
     </CityPaletteProvider>
   );

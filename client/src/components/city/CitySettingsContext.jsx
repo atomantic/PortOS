@@ -4,10 +4,10 @@ import useCitySettings from '../../hooks/useCitySettings';
 const CitySettingsContext = createContext(null);
 
 export function CitySettingsProvider({ children }) {
-  const [settings, updateSetting, resetSettings] = useCitySettings();
+  const [settings, updateSetting, resetSettings, resetNonce] = useCitySettings();
 
   return (
-    <CitySettingsContext.Provider value={{ settings, updateSetting, resetSettings }}>
+    <CitySettingsContext.Provider value={{ settings, updateSetting, resetSettings, resetNonce }}>
       {children}
     </CitySettingsContext.Provider>
   );
@@ -15,6 +15,6 @@ export function CitySettingsProvider({ children }) {
 
 export function useCitySettingsContext() {
   const ctx = useContext(CitySettingsContext);
-  if (!ctx) return { settings: null, updateSetting: () => {}, resetSettings: () => {} };
+  if (!ctx) return { settings: null, updateSetting: () => {}, resetSettings: () => {}, resetNonce: 0 };
   return ctx;
 }

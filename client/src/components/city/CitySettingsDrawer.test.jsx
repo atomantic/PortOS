@@ -27,15 +27,37 @@ describe('CitySettingsDrawer', () => {
       expect(screen.getByRole('tab', { name: label })).toBeInTheDocument();
     });
     // Default tab content.
-    expect(screen.getByText('QUALITY PRESET')).toBeInTheDocument();
+    expect(screen.getByText('QUALITY')).toBeInTheDocument();
   });
 
   it('switches tabs and persists the active tab in the URL', () => {
     renderDrawer();
     fireEvent.click(screen.getByRole('tab', { name: 'Audio' }));
     expect(screen.getByText('MUSIC')).toBeInTheDocument();
-    expect(screen.queryByText('QUALITY PRESET')).not.toBeInTheDocument();
+    expect(screen.queryByText('QUALITY')).not.toBeInTheDocument();
     expect(screen.getByTestId('loc').textContent).toContain('cityTab=audio');
+  });
+
+  it('shows the Auto effective-tier label and local diagnostics when in Auto mode', () => {
+    render(
+      <MemoryRouter initialEntries={['/city/settings']}>
+        <CitySettingsProvider>
+          <CitySettingsDrawer
+            open
+            onClose={() => {}}
+            qualityMode="auto"
+            effectiveTier="medium"
+            diagnostics={{ fps: 58, p75: 16.2 }}
+          />
+        </CitySettingsProvider>
+      </MemoryRouter>,
+    );
+    // AUTO button reflects the effective tier, and the local diagnostics readout renders.
+    expect(screen.getByRole('button', { name: /AUTO · MEDIUM/ })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('58 FPS')).toBeInTheDocument();
+    expect(screen.getByText('P75 16.2ms')).toBeInTheDocument();
+    // The Auto-controlled particle-density slider is disabled.
+    expect(screen.getByLabelText('PARTICLE DENSITY')).toBeDisabled();
   });
 
   it('deep-links the active tab from the URL param', () => {
