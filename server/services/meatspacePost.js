@@ -1296,12 +1296,10 @@ async function getAdaptiveSignal(type) {
  */
 async function getMultiplicationLevelStats(windowDays = MASTERY_DEFAULTS.windowDays) {
   const sessions = await getPostSessions();
-  let cutoffStr = null;
-  if (windowDays > 0) {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - windowDays);
-    cutoffStr = cutoff.toISOString().split('T')[0];
-  }
+  // Window off the user's local today (DST-safe day math) so the cutoff stays
+  // consistent with the tz-correct session dates submitPostSession now stamps
+  // (issue #2681) — a UTC-day cutoff would skew the window edge by the tz offset.
+  const cutoffStr = windowDays > 0 ? ymdShift(await localToday(), -windowDays) : null;
 
   const byLevel = {};
   let floorLevel = 0;
@@ -1365,12 +1363,9 @@ export async function getMultiplicationProgress() {
  */
 async function getCognitiveLevelStats(type, windowDays = COGNITIVE_MASTERY_DEFAULTS.windowDays) {
   const sessions = await getPostSessions();
-  let cutoffStr = null;
-  if (windowDays > 0) {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - windowDays);
-    cutoffStr = cutoff.toISOString().split('T')[0];
-  }
+  // Window off the user's local today (DST-safe) so the cutoff stays consistent
+  // with the tz-correct session dates submitPostSession now stamps (issue #2681).
+  const cutoffStr = windowDays > 0 ? ymdShift(await localToday(), -windowDays) : null;
 
   const byLevel = {};
   let floorLevel = 0;
