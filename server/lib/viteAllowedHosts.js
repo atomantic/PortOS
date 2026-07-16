@@ -116,32 +116,55 @@ const VITE_SCAN_IGNORE_DIRS = new Set([
   'fixtures', 'fixture', 'playground', 'docs', 'storybook'
 ]);
 
+// Hard cap on directories the recursive fallback will read. `checkViteHost` runs
+// automatically whenever an app's detail view opens, so an app repo with no vite
+// config and a broad tree (a large persisted `data/`, generated sources) must not
+// turn that request into thousands of sequential `readdir`s. Once the budget is
+// spent the scan gives up and returns null (reported as "no config found") rather
+// than walking the whole tree.
+const VITE_SCAN_MAX_DIRS = 600;
+
 /**
  * Breadth-first scan for a vite config under `root`, skipping heavy/vendor dirs.
  * Breadth-first so the shallowest (most likely the app's own) config wins, and
- * bounded by `maxDepth` so a deep monorepo can't turn this into a full-tree walk.
- * Returns the same `{ path, filename, dir }` shape as `findViteConfig` (content
- * read by the caller), or `null` when nothing is found within the depth budget.
+ * bounded by `maxDepth` + `VITE_SCAN_MAX_DIRS` so a deep or broad monorepo can't
+ * turn this into a full-tree walk. Returns the same `{ path, filename, dir }`
+ * shape as `findViteConfig` (content read by the caller), or `null` when nothing
+ * is found within budget.
+ *
+ * Ambiguity is resolved conservatively: all config-bearing directories at the
+ * shallowest level are collected before deciding, and if more than one app has a
+ * config at that level (e.g. `packages/admin` and `packages/marketing`) the scan
+ * returns null rather than guess which one the Dev UI launches — guessing could
+ * let the deterministic auto-fix rewrite the wrong app's config. A single match
+ * (one dir, even if it holds both `vite.config.js` and `.ts`) is unambiguous.
  */
 async function discoverViteConfig(root, { maxDepth = 3 } = {}) {
   let level = [root];
+  let budget = VITE_SCAN_MAX_DIRS;
   for (let depth = 0; depth <= maxDepth && level.length; depth++) {
     const next = [];
+    const matches = []; // config-bearing dirs found at THIS level
     for (const dir of level) {
+      if (budget-- <= 0) return null;
       const entries = await readdir(dir, { withFileTypes: true }).catch(() => null);
       if (!entries) continue;
-      // Match a config file at this level before descending, so shallower wins.
-      for (const filename of VITE_CONFIG_FILENAMES) {
-        if (entries.some((e) => e.isFile() && e.name === filename)) {
-          return { path: join(dir, filename), filename, dir };
-        }
-      }
+      // Record at most one match per dir (VITE_CONFIG_FILENAMES order picks the
+      // preferred variant), so two variants in one app don't read as ambiguous.
+      const filename = VITE_CONFIG_FILENAMES.find(
+        (f) => entries.some((e) => e.isFile() && e.name === f)
+      );
+      if (filename) matches.push({ path: join(dir, filename), filename, dir });
       for (const e of entries) {
         if (e.isDirectory() && !e.name.startsWith('.') && !VITE_SCAN_IGNORE_DIRS.has(e.name)) {
           next.push(join(dir, e.name));
         }
       }
     }
+    // Shallowest level with any match decides: exactly one → use it; more than
+    // one → ambiguous, don't guess. Only descend when this level had none.
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) return null;
     level = next;
   }
   return null;

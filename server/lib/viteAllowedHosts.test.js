@@ -215,6 +215,36 @@ export default defineConfig({ server: { allowedHosts: true } });`;
     expect(cfg).toBeNull();
   });
 
+  it('returns null (does not guess) when two unlisted apps have a config at the same depth', async () => {
+    // Guessing here could let the auto-fix rewrite the wrong app's config.
+    await mkdir(join(repo, 'packages', 'admin-ui'), { recursive: true });
+    await mkdir(join(repo, 'packages', 'marketing'), { recursive: true });
+    await writeFile(join(repo, 'packages', 'admin-ui', 'vite.config.js'), ALLOW_ALL);
+    await writeFile(join(repo, 'packages', 'marketing', 'vite.config.js'), ALLOW_ALL);
+    const cfg = await findViteConfig(repo);
+    expect(cfg).toBeNull();
+  });
+
+  it('treats two config variants in ONE dir as a single unambiguous match', async () => {
+    await mkdir(join(repo, 'packages', 'dashboard'), { recursive: true });
+    await writeFile(join(repo, 'packages', 'dashboard', 'vite.config.js'), ALLOW_ALL);
+    await writeFile(join(repo, 'packages', 'dashboard', 'vite.config.ts'), ALLOW_ALL);
+    const cfg = await findViteConfig(repo);
+    // VITE_CONFIG_FILENAMES prefers .js over .ts.
+    expect(cfg?.path).toBe(join(repo, 'packages', 'dashboard', 'vite.config.js'));
+  });
+
+  it('prefers a shallower single config over deeper ones (ambiguity is per-level)', async () => {
+    // A config at the repo root is unambiguous even if deeper dirs also have some.
+    await writeFile(join(repo, 'vite.config.js'), ALLOW_ALL);
+    await mkdir(join(repo, 'packages', 'a'), { recursive: true });
+    await mkdir(join(repo, 'packages', 'b'), { recursive: true });
+    await writeFile(join(repo, 'packages', 'a', 'vite.config.js'), ALLOW_ALL);
+    await writeFile(join(repo, 'packages', 'b', 'vite.config.js'), ALLOW_ALL);
+    const cfg = await findViteConfig(repo);
+    expect(cfg?.path).toBe(join(repo, 'vite.config.js'));
+  });
+
   it('returns null when no config exists', async () => {
     const cfg = await findViteConfig(repo);
     expect(cfg).toBeNull();
