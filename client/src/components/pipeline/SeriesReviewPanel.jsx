@@ -106,22 +106,28 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
 
   const reviewRunIdRef = useRef(null);
   const fixRunIdRef = useRef(null);
+  // The series this panel currently represents — used to drop a late-resolving
+  // verdict response from a series the user has already switched away from.
+  const activeSeriesRef = useRef(seriesId);
+  activeSeriesRef.current = seriesId;
   const onSeriesUpdateRef = useRef(onSeriesUpdate);
   const onIssuesUpdateRef = useRef(onIssuesUpdate);
   onSeriesUpdateRef.current = onSeriesUpdate;
   onIssuesUpdateRef.current = onIssuesUpdate;
 
-  const { latest: reviewLatest, frames: reviewFrames } = usePipelineProgress(
+  const { latest: reviewLatest, frames: reviewFrames, closed: reviewClosed } = usePipelineProgress(
     pipelineSeriesReviewSseUrl, [seriesId], { enabled: reviewing },
   );
-  const { latest: fixLatest } = usePipelineProgress(
+  const { latest: fixLatest, closed: fixClosed } = usePipelineProgress(
     pipelineSeriesFixSseUrl, [seriesId], { enabled: fixing },
   );
 
   const loadVerdict = useCallback(async () => {
     if (!seriesId) return;
     const res = await getPipelineSeriesReview(seriesId, { silent: true }).catch(() => null);
-    if (!res) return;
+    // Drop a response that resolved after the user switched series (P2) — the
+    // request was bound to `seriesId`, so compare it against the live series.
+    if (!res || activeSeriesRef.current !== seriesId) return;
     // Always adopt the server's verdict (including null) so switching to a series
     // with no stored review clears the previous series' findings (P2).
     setReview(res.review ?? null);
@@ -176,12 +182,20 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
     if (fixRunIdRef.current && fixLatest.runId && fixLatest.runId !== fixRunIdRef.current) return;
     setFixing(false);
     if (fixLatest.type === 'complete') {
-      getPipelineSeries(seriesId, { silent: true }).then((s) => { if (s) onSeriesUpdateRef.current?.(s); }).catch(() => null);
-      listPipelineIssues(seriesId, { silent: true }).then((is) => onIssuesUpdateRef.current?.(Array.isArray(is) ? is : [])).catch(() => null);
-      setReview(null);
-      setConfirmDismissed(false);
       const fixed = fixLatest.fixed ?? 0;
-      toast.success(`Fixed ${fixed} of ${fixLatest.total ?? 0} — re-review to confirm${fixLatest.budgetStopped ? ' (stopped: daily budget reached)' : ''}`);
+      if (fixed > 0) {
+        // Fixes landed — the manuscript + findings changed, so the verdict is
+        // stale; clear it and prompt a re-review to confirm.
+        getPipelineSeries(seriesId, { silent: true }).then((s) => { if (s) onSeriesUpdateRef.current?.(s); }).catch(() => null);
+        listPipelineIssues(seriesId, { silent: true }).then((is) => onIssuesUpdateRef.current?.(Array.isArray(is) ? is : [])).catch(() => null);
+        setReview(null);
+        setConfirmDismissed(false);
+        toast.success(`Fixed ${fixed} of ${fixLatest.total ?? 0} — re-review to confirm${fixLatest.budgetStopped ? ' (stopped: daily budget reached)' : ''}`);
+      } else {
+        // Nothing was applied (all unanchorable / budget stopped first) — KEEP the
+        // findings visible instead of clearing them, and warn (not a success).
+        toast.warning(`No fixes could be auto-applied (${fixLatest.total ?? 0} finding(s))${fixLatest.budgetStopped ? ' — daily budget reached' : ' — patch them from each finding instead'}.`);
+      }
     } else if (fixLatest.type === 'rejected') {
       toast.error(fixLatest.mode === 'dry-run'
         ? 'Fixing is preview-only right now (CoS auto-run is in dry-run) — set it to execute to apply fixes.'
@@ -192,6 +206,24 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
       toast.error(fixLatest.error || 'Fixing failed');
     }
   }, [fixing, fixLatest, seriesId]);
+
+  // Recover when an SSE stream closes WITHOUT a terminal frame (the runner was
+  // pruned / the endpoint 404'd before we attached) — otherwise reviewing/fixing
+  // stays true forever and the controls are stuck disabled (P2). The terminal
+  // frame, when it does arrive, is handled by the effects above; this only fires
+  // for the no-terminal-frame close.
+  useEffect(() => {
+    if (reviewing && reviewClosed && !(reviewLatest && RUN_ENDED.has(reviewLatest.type))) {
+      setReviewing(false);
+      loadVerdict();
+    }
+  }, [reviewing, reviewClosed, reviewLatest, loadVerdict]);
+  useEffect(() => {
+    if (fixing && fixClosed && !(fixLatest && FIX_RUN_ENDED.has(fixLatest.type))) {
+      setFixing(false);
+      loadVerdict();
+    }
+  }, [fixing, fixClosed, fixLatest, loadVerdict]);
 
   const runReview = useCallback(async () => {
     setStarting(true);
@@ -205,8 +237,9 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
     if (!res) return;
     // The note has now been consumed by this run — clear it so a later re-review
     // (after fixes clear `review`, re-showing the textarea) can't silently re-seed
-    // the same note as a fresh duplicate finding.
-    if (body.feedback) setFeedback('');
+    // the same note as a fresh duplicate finding. Don't clear when the server
+    // coalesced onto an already-running review (the note wasn't actually taken).
+    if (body.feedback && !res.alreadyRunning) setFeedback('');
     reviewRunIdRef.current = res.runId || null;
     setReviewing(true);
   }, [seriesId, feedback, review]);
@@ -245,6 +278,16 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
   const hasFixableFindings = (review?.findings?.length || 0) > 0;
   const canFix = fixAvail?.canFix !== false;
   const showConfirm = hasIssues && !confirmDismissed && !fixing && !reviewing;
+  // Name the blockers behind an 'issues' verdict with zero listed findings, so
+  // the headline never contradicts itself with "0 issue(s)" (P2).
+  const nonFindingBlockers = [];
+  if (review) {
+    if (review.foundation && Number.isFinite(review.foundation.weightedScore)
+      && review.foundation.weightedScore < (review.foundationThreshold ?? 7.5)) nonFindingBlockers.push('foundation');
+    if (review.canon && review.canon.ready === false) nonFindingBlockers.push('canon');
+    if (review.health && review.health.ready === false) nonFindingBlockers.push('health');
+    if (review.incomplete) nonFindingBlockers.push('incomplete review');
+  }
 
   return (
     <div className="border border-port-border rounded-lg bg-port-card/40">
@@ -318,9 +361,24 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
             {review.verdict === 'ready' ? (
               <><CheckCircle2 size={15} className="text-port-success" /><span className="text-port-success">Looks ready to move forward.</span></>
             ) : (
-              <><AlertTriangle size={15} className="text-port-warning" /><span className="text-port-warning">{review.findingCount || 0} issue(s) to address before moving forward.</span></>
+              <><AlertTriangle size={15} className="text-port-warning" /><span className="text-port-warning">
+                {review.findingCount > 0
+                  ? `${review.findingCount} issue(s) to address before moving forward.`
+                  : (nonFindingBlockers.length
+                    ? `Blocked by ${nonFindingBlockers.join(', ')} — address before moving forward.`
+                    : 'Not ready to move forward yet.')}
+              </span></>
             )}
           </div>
+
+          {/* Stale banner — the findings changed since this verdict (e.g. a
+              finding was fixed/dismissed via "Fix here"), so it's out of date. */}
+          {review.stale ? (
+            <p className="text-[11px] text-port-warning flex items-center gap-1.5">
+              <AlertTriangle size={12} />
+              The findings changed since this review ran — re-review for an up-to-date verdict.
+            </p>
+          ) : null}
 
           {/* Signal chips */}
           <div className="flex flex-wrap gap-2 text-[11px]">

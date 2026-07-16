@@ -338,8 +338,16 @@ export async function runSeriesReview(seriesId, {
     failedStages,
     checksErrored,
     erroredCheckIds,
+    // The open-finding comment ids this verdict was computed from — so a later
+    // GET can detect that the review is stale (findings were accepted/dismissed,
+    // e.g. via a "Fix here" link) without re-running.
+    findingIds: findings.map((f) => f.commentId),
     hadFeedback: !!(feedback && String(feedback).trim()),
   };
+  // Don't persist (or return) a verdict for a run the user canceled mid-flight —
+  // the SSE wrapper will broadcast `canceled`, and a reload must not restore a
+  // verdict from a run that never finished.
+  if (aborted()) return null;
   await saveSnapshot(result);
   console.log(`🔎 series review — series=${seriesId.slice(0, 12)} verdict=${verdict} findings=${findings.length} foundation=${foundation?.weightedScore ?? '—'} health=${health?.score ?? '—'}`);
   return result;
@@ -365,6 +373,13 @@ async function clearSnapshot(seriesId) {
  * Read the last stored review verdict for a series (null when never run). Also
  * reports whether the FIX path is currently available (cos-domain autonomy):
  * with the domain `off`, review still works read-only but fixing is disabled.
+ *
+ * Stamps a `stale` flag when the live open-finding set no longer matches the
+ * snapshot's `findingIds` — i.e. findings were accepted/dismissed since (e.g. via
+ * a "Fix here" link) or new findings appeared — so a reload can warn the verdict
+ * is out of date instead of presenting it as current. (This covers the
+ * findings-store drift this feature introduces; foundation/canon/manuscript edits
+ * through other paths are a broader pre-existing concern tracked in PLAN.md.)
  */
 export async function getSeriesReview(seriesId) {
   assertValidSeriesId(seriesId);
@@ -372,7 +387,16 @@ export async function getSeriesReview(seriesId) {
   const verdict = content === null
     ? null
     : safeJSONParse(content, null, { allowArray: false, logError: true, context: snapshotPath(seriesId) });
-  const fix = await getFixAvailability();
+  const [fix, review] = await Promise.all([
+    getFixAvailability(),
+    verdict ? getReview(seriesId).catch(() => ({ comments: [] })) : Promise.resolve(null),
+  ]);
+  if (verdict && review) {
+    const liveOpen = new Set(collectReviewFindings(review.comments).map((f) => f.commentId));
+    const snapshotIds = Array.isArray(verdict.findingIds) ? verdict.findingIds : (verdict.findings || []).map((f) => f?.commentId).filter(Boolean);
+    const stale = snapshotIds.length !== liveOpen.size || snapshotIds.some((id) => !liveOpen.has(id));
+    verdict.stale = stale;
+  }
   return { review: verdict, fix };
 }
 
