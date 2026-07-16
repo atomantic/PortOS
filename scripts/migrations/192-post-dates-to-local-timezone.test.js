@@ -76,6 +76,22 @@ describe('migration 192 — normalize POST dates to the user local timezone', ()
     expect(days).toEqual(['2026-07-15', '2026-07-16']);
   });
 
+  it('prefers startedAt over completedAt so a cross-midnight retry keeps its original day', async () => {
+    // An idempotent re-submit preserves the original startedAt (local July 15)
+    // but overwrites completedAt to the retry instant (local July 16). The
+    // migration must key off startedAt so the session stays on July 15.
+    writeJson(settingsPath, { timezone: 'America/Los_Angeles' });
+    writeJson(sessionsPath, {
+      sessions: [{
+        id: 's1', date: '2026-07-16',
+        startedAt: '2026-07-16T04:00:00.000Z',   // 2026-07-15 21:00 PDT
+        completedAt: '2026-07-17T05:00:00.000Z', // 2026-07-16 22:00 PDT (retry)
+      }],
+    });
+    await migration.up({ rootDir });
+    expect(readJson(sessionsPath).sessions[0].date).toBe('2026-07-15');
+  });
+
   it('re-derives a training entry date from its timestamp', async () => {
     writeJson(settingsPath, { timezone: 'America/Los_Angeles' });
     writeJson(trainingPath, {

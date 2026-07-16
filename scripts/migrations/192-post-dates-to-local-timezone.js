@@ -74,11 +74,15 @@ function localDayFor(instant, timezone) {
   }).format(d);
 }
 
-// Pick the UTC instant that best represents when a session was completed. A
-// full-ISO `date` (contains 'T') is only a fallback for pre-completedAt records.
+// Pick the UTC instant that best represents the session's ORIGINAL day. Prefer
+// `startedAt`: an idempotent re-submit (submitPostSession) deliberately preserves
+// the original `startedAt` (and `date`) but OVERWRITES `completedAt` — so a retry
+// that crosses local midnight would, via `completedAt`, redate the session to the
+// retry day and undo that invariant. `startedAt` keeps it on the day it began.
+// A full-ISO `date` (contains 'T') is only a fallback for pre-timestamp records.
 function sessionInstant(s) {
-  if (typeof s?.completedAt === 'string' && s.completedAt.includes('T')) return s.completedAt;
   if (typeof s?.startedAt === 'string' && s.startedAt.includes('T')) return s.startedAt;
+  if (typeof s?.completedAt === 'string' && s.completedAt.includes('T')) return s.completedAt;
   if (typeof s?.date === 'string' && s.date.includes('T')) return s.date;
   return null;
 }

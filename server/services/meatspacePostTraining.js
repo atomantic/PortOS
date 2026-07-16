@@ -9,6 +9,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { userLocalToday } from '../lib/timezone.js';
+import { ymdShift } from '../lib/postStreak.js';
 import { getUnifiedActivityStreak } from './meatspacePost.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
@@ -77,9 +78,10 @@ export async function getTrainingStats(days = 30) {
 
   let entries = allEntries;
   if (days > 0) {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - days);
-    const cutoffStr = cutoff.toISOString().split('T')[0];
+    // Window off the user's local today (DST-safe day math) so the cutoff matches
+    // the local-day strings the training/practice writers now stamp (issue #2681);
+    // a UTC-day cutoff would clip the oldest local day or admit an extra one.
+    const cutoffStr = ymdShift(await userLocalToday(), -days);
     entries = allEntries.filter(e => String(e.date || '').split('T')[0] >= cutoffStr);
   }
 

@@ -11,11 +11,13 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   readJSONFile: vi.fn().mockResolvedValue({ entries: [] }),
 }));
 
-// submitTrainingEntry + getUnifiedActivityStreak (via meatspacePost.js) derive the
-// local day through getUserTimezone → getSettings (issue #2681). Pin it to UTC so
-// the day boundary is the UTC day regardless of the runner's own system timezone.
+// submitTrainingEntry + getUnifiedActivityStreak + getTrainingStats (via
+// meatspacePost.js) derive the local day through getUserTimezone → getSettings
+// (issue #2681). Default-pin to UTC so the day boundary is the UTC day regardless
+// of the runner's own system timezone; tz-specific tests set settingsState.current.
+const settingsState = vi.hoisted(() => ({ current: { timezone: 'UTC' } }));
 vi.mock('../services/settings.js', () => ({
-  getSettings: () => Promise.resolve({ timezone: 'UTC' }),
+  getSettings: () => Promise.resolve(settingsState.current),
 }));
 
 import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
@@ -187,6 +189,30 @@ describe('getTrainingStats', () => {
 
     const stats = await getTrainingStats(7);
     expect(stats.totalEntries).toBe(1);
+  });
+
+  it('derives the window cutoff from the user local day, not the server UTC day (issue #2681)', async () => {
+    // Freeze at 2026-07-16T05:00Z = 2026-07-15 22:00 PDT (UTC day July 16, LA day
+    // July 15) and configure LA. A 7-day window ends at local July 15, so its
+    // cutoff is 2026-07-08; an entry dated 2026-07-08 (local) is the oldest that
+    // must be INCLUDED. Under the old UTC-day cutoff (today=July 16 → cutoff
+    // July 09) that entry would be wrongly excluded.
+    settingsState.current = { timezone: 'America/Los_Angeles' };
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-16T05:00:00.000Z'));
+    try {
+      readJSONFile.mockResolvedValue({
+        entries: [
+          { date: '2026-07-08', module: 'mental-math', drillType: 'powers', questionCount: 5, correctCount: 5, totalMs: 3000 },
+          { date: '2026-07-07', module: 'mental-math', drillType: 'powers', questionCount: 5, correctCount: 4, totalMs: 3000 },
+        ],
+      });
+      const stats = await getTrainingStats(7);
+      expect(stats.totalEntries).toBe(1); // only 2026-07-08 falls inside the local window
+    } finally {
+      vi.useRealTimers();
+      settingsState.current = { timezone: 'UTC' };
+    }
   });
 });
 

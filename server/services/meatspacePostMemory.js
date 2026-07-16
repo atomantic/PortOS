@@ -9,6 +9,7 @@ import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
 import { shuffle } from '../lib/arrayUtils.js';
+import { userLocalToday } from '../lib/timezone.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const MEMORY_ITEMS_FILE = join(MEATSPACE_DIR, 'post-memory-items.json');
@@ -451,6 +452,13 @@ export async function submitPractice(id, practiceData) {
 
   const { mode, chunkId, results, totalMs } = practiceData;
   const now = new Date().toISOString();
+  // Day-key in the user's local timezone (issue #2681): this practice is a
+  // training-log entry feeding the SHARED unified streak, which now reads against
+  // the user's local `today`. A full UTC ISO here (the old `date: now`) split to
+  // the UTC day would drop a local-evening practice from today's streak. `date`
+  // is a day-key (every reader does `String(date).split('T')[0]`); `timestamp`
+  // keeps the exact instant, matching submitTrainingEntry's shape.
+  const todayLocal = await userLocalToday();
 
   // Update chunk mastery
   if (chunkId) {
@@ -507,7 +515,8 @@ export async function submitPractice(id, practiceData) {
     correct: results.filter(r => r.correct).length,
     total: results.length,
     totalMs: totalMs || 0,
-    date: now,
+    date: todayLocal,
+    timestamp: now,
   });
   await saveTrainingLog(log);
 
