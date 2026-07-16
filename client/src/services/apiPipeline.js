@@ -952,6 +952,40 @@ export const getPipelineAutopilotStatus = (seriesId, options = {}) =>
 export const pipelineAutopilotSseUrl = (seriesId) =>
   `/api/pipeline/series/${encodeURIComponent(seriesId)}/autopilot/progress`;
 
+// ---- Holistic "Review this series" (#2664) ----
+// Composes the foundation judge + editorial checks + health/readiness + canon
+// into ONE read-only verdict (no manuscript writes). Optional free-text feedback
+// is routed into an anchored finding. Fixing reuses the autopilot revision cycle
+// (startPipelineAutopilot) + per-finding manuscriptFix — not a second orchestrator.
+
+// Last stored verdict + current fix availability:
+// { review: { verdict, foundation, health, canon, findings, ... } | null,
+//   fix: { mode, canFix } }.
+export const getPipelineSeriesReview = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/review`, options);
+
+// Kick off a review. { runId, alreadyRunning, sseUrl } — subscribe via
+// pipelineSeriesReviewSseUrl, then re-fetch the verdict on `complete`.
+export const startPipelineSeriesReview = (seriesId, opts = {}, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/review`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...options,
+  });
+
+// { active: boolean } — lets a (re)mounting view re-attach to an in-flight review.
+export const getPipelineSeriesReviewStatus = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/review/status`, options);
+
+export const cancelPipelineSeriesReview = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/review/cancel`, {
+    method: 'POST',
+    ...options,
+  });
+
+export const pipelineSeriesReviewSseUrl = (seriesId) =>
+  `/api/pipeline/series/${encodeURIComponent(seriesId)}/review/progress`;
+
 // ---- Canon descriptive-integrity (production readiness) ----
 // Read-only: which canon nouns appear where they'd be drawn but lack a
 // description (blocking visual production).

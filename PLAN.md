@@ -65,3 +65,8 @@ by `/do:replan --issues`:
   drain parks. Prompt change → PROMPT_VERSIONS bump for claim-issue +
   claim-issue-gitlab (+ jira) with outgoing defaults preserved. Surfaced while
   diagnosing a managed-app perpetual-drain churn.
+
+### Series review ("Review this series", #2664) follow-ups
+
+- [ ] **Parallelize the foundation judge + canon readiness with the editorial-checks pass in `runSeriesReview`** (`server/services/pipeline/seriesReview.js`). Today foundation (a full LLM round-trip) runs to completion before `runEditorialChecks` even starts, and canon sits idle until checks finish; only the seed→read chain (feedback-seed → checks-seed → health/getReview) is a real ordering constraint. `judgeFoundation` writes only its own snapshot and `checkSeriesCanonReadiness` is store-independent, so both can be kicked off at function entry and awaited just before `computeReviewVerdict`. Deferred from the /simplify pass because it changes the SSE progress-frame ordering (foundation/canon `step:*` frames would interleave with `check:*` frames) — needs the progress emits moved to kickoff/settle and a quick UX check that the interleaved stream still reads cleanly. Largest wall-clock win (~the foundation-judge duration).
+- [ ] **Hoist the pipeline `port-error/port-warning` severity palette to a shared export** and use it in `SeriesReviewPanel.jsx` (`SEVERITY_STYLES`), `AutopilotPanel.jsx` (`SEVERITY_COLORS`), and `ArcCanvas.jsx` — three byte-for-byte inline copies today. Candidate home: `client/src/components/pipeline/manuscript/constants.js`. Deferred from /simplify because it touches two files outside the #2664 diff.

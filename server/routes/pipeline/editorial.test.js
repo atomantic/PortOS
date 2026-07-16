@@ -56,6 +56,18 @@ vi.mock('../../services/pipeline/editorialScore.js', async (importOriginal) => (
   getSeriesHealth: (...a) => getSeriesHealth(...a),
 }));
 
+// Holistic series-review service (#2664) — stub so the route test exercises the
+// param-validation + series-resolve wiring without running the composed passes.
+const startSeriesReviewRun = vi.fn(() => ({ runId: 'rev-1', alreadyRunning: false }));
+const getSeriesReview = vi.fn(async () => ({ review: { seriesId: 'ser-1', verdict: 'issues', findings: [] }, fix: { mode: 'execute', canFix: true } }));
+vi.mock('../../services/pipeline/seriesReview.js', () => ({
+  startSeriesReviewRun: (...a) => startSeriesReviewRun(...a),
+  getSeriesReview: (...a) => getSeriesReview(...a),
+  attachClient: vi.fn(() => false),
+  isSeriesReviewActive: vi.fn(() => false),
+  cancelSeriesReview: vi.fn(() => true),
+}));
+
 const editorialRoutes = (await import('./editorial.js')).default;
 
 const app = express();
@@ -69,6 +81,53 @@ beforeEach(() => {
   previewCustomCheck.mockClear();
   getSeriesHealth.mockClear();
   getVoiceFingerprint.mockClear();
+  startSeriesReviewRun.mockClear();
+  getSeriesReview.mockClear();
+});
+
+describe('Holistic "Review this series" (#2664)', () => {
+  it('POST /series/:id/review starts a run and returns the SSE url', async () => {
+    const res = await request(app)
+      .post('/api/pipeline/series/ser-1/review')
+      .send({ feedback: 'volume 1 has no real development' });
+    expect(res.status).toBe(200);
+    expect(res.body.runId).toBe('rev-1');
+    expect(res.body.sseUrl).toBe('/api/pipeline/series/ser-1/review/progress');
+    expect(startSeriesReviewRun).toHaveBeenCalledWith('ser-1', expect.objectContaining({ feedback: 'volume 1 has no real development' }));
+  });
+
+  it('POST /series/:id/review threads provider/model/readinessGate overrides', async () => {
+    await request(app)
+      .post('/api/pipeline/series/ser-1/review')
+      .send({ providerId: 'openai', model: 'gpt-x', readinessGate: 'noOpenHighOrMedium' });
+    expect(startSeriesReviewRun).toHaveBeenCalledWith('ser-1', expect.objectContaining({
+      providerOverride: 'openai', modelOverride: 'gpt-x', readinessGate: 'noOpenHighOrMedium',
+    }));
+  });
+
+  it('POST /series/:id/review 400s on an invalid readiness gate', async () => {
+    const res = await request(app).post('/api/pipeline/series/ser-1/review').send({ readinessGate: 'bogus' });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /series/:id/review 404s for a missing series', async () => {
+    const res = await request(app).post('/api/pipeline/series/missing/review').send({});
+    expect(res.status).toBe(404);
+    expect(startSeriesReviewRun).not.toHaveBeenCalled();
+  });
+
+  it('GET /series/:id/review returns the stored verdict + fix availability', async () => {
+    const res = await request(app).get('/api/pipeline/series/ser-1/review');
+    expect(res.status).toBe(200);
+    expect(res.body.review.verdict).toBe('issues');
+    expect(res.body.fix).toEqual({ mode: 'execute', canFix: true });
+  });
+
+  it('GET /series/:id/review/status reports active=false when no run is in flight', async () => {
+    const res = await request(app).get('/api/pipeline/series/ser-1/review/status');
+    expect(res.status).toBe(200);
+    expect(res.body.active).toBe(false);
+  });
 });
 
 describe('GET /api/pipeline/series/:id/voice-fingerprint (#2194)', () => {

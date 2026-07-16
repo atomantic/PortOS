@@ -35,6 +35,7 @@ import * as readerPanelRunner from '../../services/pipeline/readerPanelRunner.js
 import * as comparativeRank from '../../services/pipeline/editorial/comparativeRank.js';
 import * as voiceFingerprint from '../../services/pipeline/voiceFingerprint.js';
 import * as checkRunner from '../../services/pipeline/editorial/checkRunner.js';
+import * as seriesReview from '../../services/pipeline/seriesReview.js';
 import { getSeriesHealth, READINESS_GATES, DEFAULT_READINESS_GATE } from '../../services/pipeline/editorialScore.js';
 import { getSettings, updateSettingsWith } from '../../services/settings.js';
 import { mapServiceError } from './shared.js';
@@ -213,6 +214,66 @@ router.post('/series/:id/editorial/rank', asyncHandler(async (req, res) => {
   const body = validateRequest(comparativeRankRunSchema, req.body ?? {});
   await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
   res.json(await comparativeRank.runComparativeRank(req.params.id, body));
+}));
+
+// ---------------------------------------------------------------------------
+// Holistic "Review this series" flow (#2664) — composes the foundation judge +
+// editorial checks + health/readiness + canon readiness into ONE read-only
+// verdict, streamed over SSE. Optional free-text feedback is routed into an
+// anchored finding. No manuscript writes (safe to run repeatedly). The FIX path
+// reuses the existing autopilot revision cycle + per-finding manuscriptFix
+// routes — it is NOT here.
+// ---------------------------------------------------------------------------
+
+// Optional free-text observation + provider/model overrides + a per-run
+// readiness-gate override + `force` (re-judge an unchanged foundation).
+const seriesReviewRunSchema = z.object({
+  feedback: z.string().trim().max(4000).optional(),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+  force: z.boolean().optional(),
+  readinessGate: z.enum([...READINESS_GATES]).optional(),
+});
+
+// Last stored verdict (+ current fix availability from the cos-domain gate), or
+// `{ review: null, fix }` when never run — so a (re)mounting client can reload
+// without re-running.
+router.get('/series/:id/review', asyncHandler(async (req, res) => {
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  res.json(await seriesReview.getSeriesReview(req.params.id));
+}));
+
+// Kick off the holistic review (batch — progress via SSE).
+router.post('/series/:id/review', asyncHandler(async (req, res) => {
+  const body = validateRequest(seriesReviewRunSchema, req.body ?? {});
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const result = seriesReview.startSeriesReviewRun(req.params.id, {
+    feedback: body.feedback,
+    providerOverride: body.providerId,
+    modelOverride: body.model,
+    force: body.force,
+    readinessGate: body.readinessGate,
+  });
+  res.json({
+    ...result,
+    sseUrl: `/api/pipeline/series/${req.params.id}/review/progress`,
+  });
+}));
+
+router.get('/series/:id/review/progress', (req, res) => {
+  const attached = seriesReview.attachClient(req.params.id, res);
+  if (!attached) {
+    throw new ServerError('No active series review for this series', { status: 404 });
+  }
+});
+
+// Lightweight probe so a (re)mounting client can re-attach to an in-flight review.
+router.get('/series/:id/review/status', (req, res) => {
+  res.json({ active: seriesReview.isSeriesReviewActive(req.params.id) });
+});
+
+router.post('/series/:id/review/cancel', asyncHandler(async (req, res) => {
+  res.json({ canceled: seriesReview.cancelSeriesReview(req.params.id) });
 }));
 
 // ---------------------------------------------------------------------------
