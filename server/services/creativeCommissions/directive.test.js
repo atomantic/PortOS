@@ -128,4 +128,18 @@ describe('buildCommissionDirective', () => {
     });
     expect(directive.goal.length).toBeLessThanOrEqual(4500);
   });
+
+  it('keeps the feedback digest even when the brief text is very long (digest is reserved, brief is clamped)', () => {
+    // A 2000-char intent + 3000-char style would fill the whole 4500 budget; the
+    // digest must survive (it is appended last, but reserved for) rather than
+    // being truncated away — otherwise ratings stop steering the run.
+    const directive = buildCommissionDirective({
+      targetAbility: 'video',
+      brief: { intent: 'x'.repeat(2000), styleSpec: 'y'.repeat(3000) },
+      feedback: [{ rating: 'down', note: 'less horror' }],
+      feedbackWindow: 5,
+    });
+    expect(directive.goal.length).toBeLessThanOrEqual(4500);
+    expect(directive.goal).toContain('Recent dislikes: less horror.');
+  });
 });

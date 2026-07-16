@@ -18,9 +18,14 @@
 // headroom under the CD schema limit.
 export const MAX_DIGEST_NOTE_LEN = 300;
 export const MAX_DIRECTIVE_GOAL_LEN = 4500;
+// The digest is the whole point of the feedback loop, so it gets a reserved
+// slice of the goal budget the brief text can't eat into (see
+// buildCommissionDirective). Bounded on its own too, so 50 reactions can't blow
+// the reservation.
+export const MAX_DIGEST_LEN = 1500;
 
-const clampNote = (note) =>
-  note.length > MAX_DIGEST_NOTE_LEN ? `${note.slice(0, MAX_DIGEST_NOTE_LEN - 1)}…` : note;
+const clamp = (s, max) => (s.length > max ? `${s.slice(0, Math.max(0, max - 1))}…` : s);
+const clampNote = (note) => clamp(note, MAX_DIGEST_NOTE_LEN);
 
 /**
  * Compose a 5-field cron (`minute hour dayOfMonth month dayOfWeek`) from a
@@ -81,7 +86,7 @@ export function renderFeedbackDigest(feedback, windowSize = 5) {
   if (likes.length) parts.push(`Recent likes: ${likes.join('; ')}.`);
   if (dislikes.length) parts.push(`Recent dislikes: ${dislikes.join('; ')}.`);
   parts.push('Steer toward the likes and away from the dislikes.');
-  return parts.join(' ');
+  return clamp(parts.join(' '), MAX_DIGEST_LEN);
 }
 
 /**
@@ -101,17 +106,24 @@ export function buildCommissionDirective(commission) {
   if (brief.styleSpec) lines.push(`Style: ${brief.styleSpec}.`);
 
   const digest = renderFeedbackDigest(commission?.feedback, commission?.feedbackWindow ?? 5);
-  if (digest) lines.push(digest);
 
   const constraints = {};
   if (brief.constraints?.universeId) constraints.universeId = brief.constraints.universeId;
   if (brief.constraints?.seriesId) constraints.seriesId = brief.constraints.seriesId;
 
-  // Hard-cap the goal so an internally-composed directive (scheduler path, which
-  // skips the route's 5000-char validation) can never exceed what the CD planner
-  // should receive.
-  let goal = lines.join(' ');
-  if (goal.length > MAX_DIRECTIVE_GOAL_LEN) goal = `${goal.slice(0, MAX_DIRECTIVE_GOAL_LEN - 1)}…`;
+  // Compose the goal under the CD's 5000-char cap (the scheduler feeds this
+  // straight into createProject, skipping the route's input validation). RESERVE
+  // room for the digest first, then clamp the BRIEF text into whatever remains —
+  // truncating the tail of the whole string would drop the digest (appended last)
+  // whenever a long intent/style fills the budget, silently killing the feedback
+  // signal. The digest is bounded (MAX_DIGEST_LEN) so the reservation is finite.
+  const briefText = lines.join(' ');
+  const reserve = digest ? digest.length + 1 : 0; // +1 for the joining space
+  const briefBudget = Math.max(0, MAX_DIRECTIVE_GOAL_LEN - reserve);
+  const clampedBrief = clamp(briefText, briefBudget);
+  let goal = digest ? `${clampedBrief} ${digest}`.trim() : clampedBrief;
+  // Final safety net (defensive — brief+reserve already fits): clamp the whole.
+  goal = clamp(goal, MAX_DIRECTIVE_GOAL_LEN);
 
   return {
     goal,

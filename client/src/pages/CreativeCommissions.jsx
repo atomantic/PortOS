@@ -159,6 +159,14 @@ export default function CreativeCommissions() {
   const handleSave = async () => {
     if (!form.name.trim()) { toast.error('Name is required'); return; }
     if (!form.brief.intent.trim()) { toast.error('Brief intent is required'); return; }
+    // A cleared number input is '', which Number() coerces to 0 — and 0 is the
+    // valid "disable conditioning" value, so a blank field would silently turn
+    // feedback off. Reject it instead of guessing intent.
+    const fw = Number(form.feedbackWindow);
+    if (form.feedbackWindow === '' || !Number.isInteger(fw) || fw < 0 || fw > 50) {
+      toast.error('Feedback window must be a whole number from 0 to 50');
+      return;
+    }
     const payload = toPayload(form);
     setSaving(true);
     try {
