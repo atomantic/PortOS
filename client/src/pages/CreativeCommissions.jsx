@@ -21,7 +21,7 @@ import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { timeAgo } from '../utils/formatters';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import {
-  listCommissions, createCommission, updateCommission, deleteCommission,
+  listCommissions, getCommission, createCommission, updateCommission, deleteCommission,
   submitCommissionFeedback,
 } from '../services/api';
 
@@ -146,6 +146,28 @@ export default function CreativeCommissions() {
       syncedTargetRef.current = null; // drawer closed / target not yet loaded
     }
   }, [id, creating, editing]);
+
+  // Refresh the deep-linked commission when entering its detail route. The SPA
+  // does NOT remount when navigating index → :id (both routes render this same
+  // component), and the list is loaded only in the mount-only effect above — so
+  // a run added by a scheduled fire (surfaced via a notification deep link)
+  // wouldn't appear in the drawer's run history until a full reload. Refetch the
+  // single record and merge it in. The form-sync guard (syncedTargetRef) means
+  // this refresh updates the run/feedback shown in the drawer WITHOUT clobbering
+  // any unsaved field edits.
+  useEffect(() => {
+    if (!id || creating) return;
+    let cancelled = false;
+    getCommission(id, { silent: true })
+      .then((fresh) => {
+        if (cancelled || !fresh?.id) return;
+        setCommissions((prev) => (prev.some((c) => c.id === fresh.id)
+          ? prev.map((c) => (c.id === fresh.id ? fresh : c))
+          : [...prev, fresh]));
+      })
+      .catch(() => {}); // stale/deleted id → the not-found fallback handles it
+    return () => { cancelled = true; };
+  }, [id, creating]);
 
   const closeDrawer = useCallback(() => navigate('/creative-commission'), [navigate]);
 
