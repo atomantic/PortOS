@@ -209,14 +209,18 @@ export async function runScheduledCommission(commissionId) {
     // trip agentBridge's harness-boundary guard.
     //
     // Guard the pin at fire time: treatment/plan run as CoS agent tasks, which
-    // only accept an agent-harness (cli/tui) provider — an api-type or removed
-    // provider trips agentBridge's harness-boundary guard and the task never
-    // processes (the run would record `started` but silently produce nothing).
-    // The UI only offers agent-harness providers, but a direct REST write or a
-    // provider whose type later changed to `api` could slip a bad pin past it.
-    // Resolve the provider now and DROP an unusable pin (falling back to the
-    // install default) so the commission still generates rather than stalling.
-    // Fail open: an unresolvable provider (toolkit hiccup) also falls back.
+    // only accept an ENABLED agent-harness (cli/tui) provider. A pin becomes
+    // unusable three ways — an api-type provider (trips agentBridge's
+    // harness-boundary guard), a removed provider, or a provider the user later
+    // DISABLED (the agent runner honors an explicit task pin without re-checking
+    // `enabled`, so a disabled provider would keep launching commissions and
+    // defeat the disable control). The UI only offers enabled agent-harness
+    // providers, but a direct REST write, a provider whose type later changed to
+    // `api`, or a post-pin disable could slip a bad pin past it. Resolve the
+    // provider now and DROP an unusable pin (falling back to the install default)
+    // so the commission still generates rather than stalling or running through a
+    // disabled provider. Fail open: an unresolvable provider (toolkit hiccup)
+    // also falls back.
     let modelOverrides = {};
     if (commission.assignment?.providerId) {
       const [{ getProviderById }, { PROVIDER_TYPES }] = await Promise.all([
@@ -224,12 +228,14 @@ export async function runScheduledCommission(commissionId) {
         import('../../lib/aiToolkit/constants.js'),
       ]);
       const provider = await getProviderById(commission.assignment.providerId).catch(() => null);
-      const agentCapable = provider?.type === PROVIDER_TYPES.CLI || provider?.type === PROVIDER_TYPES.TUI;
+      const isAgentHarness = provider?.type === PROVIDER_TYPES.CLI || provider?.type === PROVIDER_TYPES.TUI;
+      const agentCapable = isAgentHarness && provider?.enabled !== false;
       if (agentCapable) {
         const pin = { providerId: commission.assignment.providerId, ...(commission.assignment.model ? { model: commission.assignment.model } : {}) };
         modelOverrides = { treatment: pin, plan: pin };
       } else {
-        console.warn(`⚠️ Creative commission ${commissionId} pins non-agent provider '${commission.assignment.providerId}' (${provider?.type || 'missing'}) — falling back to the default CD assignment`);
+        const reason = !provider ? 'missing' : (!isAgentHarness ? `non-agent:${provider.type}` : 'disabled');
+        console.warn(`⚠️ Creative commission ${commissionId} pins unusable provider '${commission.assignment.providerId}' (${reason}) — falling back to the default CD assignment`);
       }
     }
     // createProject prefixes "Creative Director: " (19 chars) before a

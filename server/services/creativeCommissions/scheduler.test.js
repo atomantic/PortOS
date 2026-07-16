@@ -207,6 +207,18 @@ describe('runScheduledCommission gates', () => {
     expect(createProjectMock).toHaveBeenCalledWith(expect.objectContaining({ modelOverrides: {} }));
   });
 
+  it('drops a pin to a DISABLED agent provider (respects the provider disable control)', async () => {
+    // The agent runner honors an explicit task pin without re-checking `enabled`,
+    // so a commission pinned to a provider the user later disabled would keep
+    // launching through it. The guard drops the pin and falls back to the default.
+    getProviderByIdMock.mockResolvedValueOnce({ id: 'claude-tui', type: 'tui', enabled: false });
+    getCommissionMock.mockResolvedValue(videoCommission({
+      assignment: { providerId: 'claude-tui', model: 'sonnet' },
+    }));
+    await runScheduledCommission('commission-1');
+    expect(createProjectMock).toHaveBeenCalledWith(expect.objectContaining({ modelOverrides: {} }));
+  });
+
   it('does NOT surface when the fire is skipped (nothing was generated)', async () => {
     creativeModeMock.mockReturnValue('off');
     getCommissionMock.mockResolvedValue(videoCommission());
