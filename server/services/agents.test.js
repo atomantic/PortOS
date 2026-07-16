@@ -131,6 +131,37 @@ describe('agents.js', () => {
       const { killAgent } = await import('./subAgentSpawner.js');
       expect(killAgent).toHaveBeenCalledWith('agent-ts');
     });
+
+    it('killProcess falls back to a raw kill when CoS killAgent throws', async () => {
+      // killAgent now throws a ServerError when the agent is already gone
+      // (issue #2534). killProcess must catch that and fall through to a raw
+      // kill rather than surfacing the throw.
+      const { killAgent } = await import('./subAgentSpawner.js');
+      killAgent.mockRejectedValueOnce(
+        Object.assign(new Error('Agent not found or not running'), { status: 404, code: 'NOT_FOUND' }),
+      );
+      // Capture the command the fallback raw-kill runs.
+      mockExecWith('');
+
+      registerSpawnedAgent(88888, {
+        agentId: 'agent-gone',
+        taskId: 'task-gone',
+        model: 'claude-3-sonnet',
+        workspacePath: '/tmp',
+        fullCommand: 'claude',
+        prompt: 'hi'
+      });
+
+      const result = await killProcess(88888);
+
+      expect(killAgent).toHaveBeenCalledWith('agent-gone');
+      // Fell through to the raw platform kill (kill -9 on POSIX, taskkill on Windows).
+      const rawKillCmd = exec.mock.calls.map(c => c[0]).find(cmd => /kill/i.test(cmd));
+      expect(rawKillCmd).toBeDefined();
+      expect(rawKillCmd).toContain('88888');
+      expect(result).toBe(true);
+      unregisterSpawnedAgent(88888);
+    });
   });
 
   // ===========================================================================

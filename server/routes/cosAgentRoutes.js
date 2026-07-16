@@ -74,21 +74,19 @@ router.post('/agents/:id/terminate', asyncHandler(async (req, res) => {
 }));
 
 // POST /api/cos/agents/:id/pause - Stop process, preserve task/worktree for later resume
+// pauseAgent throws a ServerError — 404 when the agent is missing, 500 when the
+// runner/persist step fails — so no result-shape string-matching here.
 router.post('/agents/:id/pause', asyncHandler(async (req, res) => {
   const { reason } = validateRequest(pauseBodySchema, req.body ?? {});
   const result = await cos.pauseAgent(req.params.id, reason || null);
-  if (result?.error) {
-    throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
-  }
   res.json(result);
 }));
 
 // POST /api/cos/agents/:id/kill - Force kill agent (immediate SIGKILL)
+// killAgent throws a ServerError — 404 when the agent is missing, 500 when the
+// runner termination fails — so no result-shape string-matching here.
 router.post('/agents/:id/kill', asyncHandler(async (req, res) => {
   const result = await cos.killAgent(req.params.id);
-  if (result?.error) {
-    throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
-  }
   res.json(result);
 }));
 

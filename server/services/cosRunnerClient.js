@@ -175,7 +175,9 @@ export async function terminateAgentViaRunner(agentId) {
   }, 30000);
   if (!response.ok) {
     const error = await readRunnerJson(response);
-    throw new Error(error.error || 'Failed to terminate agent');
+    // Preserve the runner's HTTP status so callers can distinguish a genuine
+    // 404 (agent gone / runner restarted out of sync) from a 5xx infra failure.
+    throw Object.assign(new Error(error.error || 'Failed to terminate agent'), { status: response.status });
   }
   return readRunnerJson(response);
 }
@@ -189,7 +191,7 @@ export async function killAgentViaRunner(agentId) {
   }, 30000);
   if (!response.ok) {
     const error = await readRunnerJson(response);
-    throw new Error(error.error || 'Failed to kill agent');
+    throw Object.assign(new Error(error.error || 'Failed to kill agent'), { status: response.status });
   }
   return readRunnerJson(response);
 }
@@ -205,7 +207,7 @@ export async function pauseAgentViaRunner(agentId, reason = null) {
   }, 30000);
   if (!response.ok) {
     const error = await readRunnerJson(response);
-    throw new Error(error.error || 'Failed to pause agent');
+    throw Object.assign(new Error(error.error || 'Failed to pause agent'), { status: response.status });
   }
   return readRunnerJson(response);
 }

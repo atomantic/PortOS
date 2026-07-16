@@ -284,10 +284,14 @@ export async function killProcess(pid) {
   if (spawnedData?.agentId) {
     console.log(`🔪 PID ${safePid} is CoS agent ${spawnedData.agentId}, delegating to CoS killAgent`);
     const { killAgent } = await import('./subAgentSpawner.js');
-    const result = await killAgent(spawnedData.agentId);
-    if (result.success) return true;
-    // Fall through to raw kill if CoS kill failed (agent may have already exited)
-    console.log(`⚠️ CoS killAgent failed for ${spawnedData.agentId}: ${result.error}, falling back to raw kill`);
+    // killAgent throws a ServerError when the agent is missing or the kill
+    // fails; treat that as "already gone" and fall through to the raw kill
+    // below rather than surfacing it — this path is a best-effort cleanup.
+    const killed = await killAgent(spawnedData.agentId).then(() => true, (err) => {
+      console.log(`⚠️ CoS killAgent failed for ${spawnedData.agentId}: ${err.message}, falling back to raw kill`);
+      return false;
+    });
+    if (killed) return true;
   }
 
   const platform = process.platform;

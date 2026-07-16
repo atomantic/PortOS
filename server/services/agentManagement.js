@@ -6,6 +6,7 @@
  */
 
 import { join } from 'path';
+import { ServerError } from '../lib/errorHandler.js';
 import { emitLog } from './cosEvents.js';
 import { completeAgent, updateAgent } from './cosAgents.js';
 import { updateTask, addTask, getTaskById } from './cos.js';
@@ -30,13 +31,32 @@ const MAX_ORPHAN_RETRIES = 3;
 const ORPHAN_RETRY_COOLDOWN_MS = 30 * 60 * 1000;
 
 /**
+ * Map a failed runner-op result (`{ error?, status? }`) to a ServerError.
+ * A genuine runner 404 — the agent is gone / the runner restarted out of sync
+ * with `runnerAgents` — preserves the missing-agent contract (404 NOT_FOUND);
+ * any other runner/RPC failure is a 500 operational error under `failCode`.
+ */
+function runnerFailureError(result, fallbackMessage, failCode) {
+  const notFound = result?.status === 404;
+  return new ServerError(result?.error || fallbackMessage, {
+    status: notFound ? 404 : 500,
+    code: notFound ? 'NOT_FOUND' : failCode,
+  });
+}
+
+/**
  * Shared runner-mode termination path for terminateAgent and killAgent.
- * Calls runnerFn, marks the task blocked, and cleans up.
+ * Calls runnerFn, marks the task blocked, and cleans up. Returns the runner
+ * result shape (`{ success, error?, status? }`) — callers decide whether a
+ * failure throws (killAgent, whose route surfaces status) or is returned for
+ * internal orchestration to inspect (terminateAgent, whose route is
+ * fire-and-forget). The runner's HTTP `status` is preserved on failure so
+ * killAgent can distinguish a genuine 404 from a 5xx infra error.
  */
 async function terminateRunnerAgent(agentId, runnerFn, errorMessage, blockedReason) {
   const agentInfo = runnerAgents.get(agentId);
   if (agentInfo?.initializationTimeout) clearTimeout(agentInfo.initializationTimeout);
-  const result = await runnerFn(agentId).catch(err => ({ success: false, error: err.message }));
+  const result = await runnerFn(agentId).catch(err => ({ success: false, error: err.message, status: err.status }));
   if (result.success) {
     // Drain + drop this agent's runner output batcher before the terminal
     // record so pending ~250ms-batched output lands first, and the Map entry
@@ -113,10 +133,10 @@ export async function pauseAgent(agentId, reason = null) {
     const agentInfo = runnerAgents.get(agentId);
     if (agentInfo?.initializationTimeout) clearTimeout(agentInfo.initializationTimeout);
     pausedAgents.set(agentId, { pausedAt, reason });
-    const result = await pauseAgentViaRunner(agentId, reason).catch(err => ({ success: false, error: err.message }));
+    const result = await pauseAgentViaRunner(agentId, reason).catch(err => ({ success: false, error: err.message, status: err.status }));
     if (!result.success) {
       pausedAgents.delete(agentId);
-      return result;
+      throw runnerFailureError(result, 'Failed to pause runner agent', 'AGENT_PAUSE_FAILED');
     }
     // Persist failure must roll back the in-memory flag too, or the maps drift
     // (pausedAgents set, runnerAgents never deleted) until the next restart.
@@ -125,7 +145,9 @@ export async function pauseAgent(agentId, reason = null) {
       emitLog('error', `❌ Failed to persist pause for runner agent ${agentId}: ${err.message}`, { agentId });
       return false;
     });
-    if (!persistedRunner) return { success: false, error: 'Failed to persist paused state' };
+    if (!persistedRunner) {
+      throw new ServerError('Failed to persist paused state', { status: 500, code: 'AGENT_PAUSE_FAILED' });
+    }
     runnerAgents.delete(agentId);
     emitLog('info', `⏸️ Paused runner agent ${agentId}${reason ? `: ${reason}` : ''}`, { agentId, reason });
     return { success: true, agentId, pausedAt, mode: 'runner' };
@@ -133,7 +155,7 @@ export async function pauseAgent(agentId, reason = null) {
 
   const agent = activeAgents.get(agentId);
   if (!agent) {
-    return { success: false, error: 'Agent not found or not running' };
+    throw new ServerError('Agent not found or not running', { status: 404, code: 'NOT_FOUND' });
   }
 
   pausedAgents.set(agentId, { pausedAt, reason });
@@ -145,7 +167,9 @@ export async function pauseAgent(agentId, reason = null) {
     emitLog('error', `❌ Failed to persist pause for agent ${agentId}: ${err.message}`, { agentId });
     return false;
   });
-  if (!persisted) return { success: false, error: 'Failed to persist paused state' };
+  if (!persisted) {
+    throw new ServerError('Failed to persist paused state', { status: 500, code: 'AGENT_PAUSE_FAILED' });
+  }
 
   if (agent.tuiSessionId) {
     shellService.writeToSession(agent.tuiSessionId, '\x1b');
@@ -181,6 +205,12 @@ export async function terminateAgent(agentId) {
   // Direct mode
   const agent = activeAgents.get(agentId);
 
+  // terminateAgent stays result-shaped (not a throw): its route path is
+  // fire-and-forget (cosAgentLifecycle emits `agent:terminate` and returns
+  // `{ success: true }` before termination runs), and its other callers are
+  // internal orchestration (the event handler, killAllAgents' bulk sweep) that
+  // inspect the result rather than a thrown ServerError. Only pauseAgent and
+  // killAgent — whose routes surface an HTTP status — throw (issue #2534).
   if (!agent) {
     return { success: false, error: 'Agent not found or not running' };
   }
@@ -268,14 +298,22 @@ export function getActiveAgents() {
 export async function killAgent(agentId) {
   // Check if agent is in runner mode
   if (runnerAgents.has(agentId)) {
-    return terminateRunnerAgent(agentId, killAgentViaRunner, 'Agent force killed by user (SIGKILL)', 'Force killed by user');
+    const result = await terminateRunnerAgent(agentId, killAgentViaRunner, 'Agent force killed by user (SIGKILL)', 'Force killed by user');
+    // Surface a runner failure to the kill route as a ServerError instead of
+    // the old result-shape 404 string-match (issue #2534): a genuine runner
+    // 404 (agent gone / runner out of sync) stays NOT_FOUND, any other
+    // runner-RPC failure is a 500 AGENT_KILL_FAILED.
+    if (!result.success) {
+      throw runnerFailureError(result, 'Failed to kill runner agent', 'AGENT_KILL_FAILED');
+    }
+    return result;
   }
 
   // Direct mode
   const agent = activeAgents.get(agentId);
 
   if (!agent) {
-    return { success: false, error: 'Agent not found or not running' };
+    throw new ServerError('Agent not found or not running', { status: 404, code: 'NOT_FOUND' });
   }
 
   // Track as user-terminated so the close handler doesn't re-queue
