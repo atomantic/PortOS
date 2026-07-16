@@ -93,6 +93,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiMedia.js` | Screenshots + media assets. |
 | `apiMediaJobs.js` | Media generation job tracking. |
 | `apiCreativeDirector.js` | Creative Director (video production). |
+| `apiCreativeCommission.js` | Creative Commissions (Autonomous Creation Engine — standing recurring briefs). |
 | `apiMusicVideo.js` | Music Video projects + scene board + audio analysis. |
 | `apiPipeline.js` | Pipeline (issues + stages + canon). |
 | `apiUniverseBuilder.js` | Universe Builder (generate + edit + commit). |
