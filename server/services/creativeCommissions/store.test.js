@@ -111,6 +111,25 @@ describe('updateCommission', () => {
     expect(updated.brief.constraints).toEqual({ universeId: 'u-1' });
   });
 
+  it('deep-merges constraints so a partial constraints patch keeps the other key', async () => {
+    const created = await createCommission({
+      ...validInput(),
+      brief: { intent: 'x', constraints: { universeId: 'u-1', seriesId: 's-1' } },
+    });
+    const parsed = creativeCommissionUpdateSchema.parse({ brief: { constraints: { universeId: 'u-2' } } });
+    const updated = await updateCommission(created.id, parsed);
+    expect(updated.brief.constraints).toEqual({ universeId: 'u-2', seriesId: 's-1' });
+  });
+
+  it('preserves omitted generation fields on a partial generation patch', async () => {
+    const created = await createCommission(validInput()); // quality 'high', aspect '9:16', duration 20
+    const parsed = creativeCommissionUpdateSchema.parse({ generation: { quality: 'draft' } });
+    const updated = await updateCommission(created.id, parsed);
+    expect(updated.generation.quality).toBe('draft');
+    expect(updated.generation.aspectRatio).toBe('9:16'); // preserved, not defaulted to 16:9
+    expect(updated.generation.targetDurationSeconds).toBe(20); // preserved, not defaulted to 10
+  });
+
   it('throws NOT_FOUND for an unknown id', async () => {
     try { await updateCommission('nope', { enabled: false }); }
     catch (e) { expect(e.code).toBe(ERR_NOT_FOUND); }

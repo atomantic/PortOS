@@ -75,6 +75,13 @@ describe('POST /api/creative-commission', () => {
     expect(svc.createCommission).not.toHaveBeenCalled();
   });
 
+  it('rejects an invalid IANA timezone with 400 (before it can wedge the scheduler)', async () => {
+    const res = await request(buildApp()).post('/api/creative-commission')
+      .send({ ...validBody(), schedule: { kind: 'DAILY', atLocalTime: '02:00', timezone: 'Not/AZone' } });
+    expect(res.status).toBe(400);
+    expect(svc.createCommission).not.toHaveBeenCalled();
+  });
+
   it('maps a service VALIDATION_ERROR to 400', async () => {
     svc.createCommission.mockRejectedValue(Object.assign(new Error('bad cron'), { code: 'VALIDATION_ERROR' }));
     const res = await request(buildApp()).post('/api/creative-commission').send(validBody());

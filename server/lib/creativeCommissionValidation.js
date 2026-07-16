@@ -77,6 +77,14 @@ export const creativeCommissionScheduleSchema = z.object({
   if (val.kind === 'CUSTOM' && !val.cron) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['cron'], message: 'CUSTOM schedule requires a cron expression' });
   }
+  // Reject an invalid IANA timezone at the request boundary — eventScheduler
+  // passes it to Intl.DateTimeFormat, which throws RangeError on a bad zone; a
+  // bad value persisted here would wedge the whole scheduler sync at register
+  // time. Intl is a global, so this keeps the module a dependency-free leaf.
+  if (val.timezone) {
+    try { new Intl.DateTimeFormat('en-US', { timeZone: val.timezone }); }
+    catch { ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['timezone'], message: 'invalid IANA timezone' }); }
+  }
 });
 
 // Render knobs handed to the CD project the commission mints each fire. `model`
@@ -93,6 +101,17 @@ export const creativeCommissionGenerationSchema = z.object({
   quality: z.enum(CREATIVE_COMMISSION_QUALITIES).default('standard'),
   aspectRatio: z.enum(CREATIVE_COMMISSION_ASPECT_RATIOS).default('16:9'),
   targetDurationSeconds: z.number().int().min(5).max(600).default(10),
+});
+
+// Generation schema for the UPDATE path: no per-field defaults, so a partial
+// `PATCH { generation: { quality: 'draft' } }` doesn't materialize `aspectRatio`
+// / `targetDurationSeconds` defaults that would overwrite stored values in the
+// service merge — same absent-vs-empty rule as the brief update schema.
+export const creativeCommissionGenerationUpdateSchema = z.object({
+  model: z.string().trim().max(64).nullable().optional(),
+  quality: z.enum(CREATIVE_COMMISSION_QUALITIES).optional(),
+  aspectRatio: z.enum(CREATIVE_COMMISSION_ASPECT_RATIOS).optional(),
+  targetDurationSeconds: z.number().int().min(5).max(600).optional(),
 });
 
 export const creativeCommissionCreateSchema = z.object({
@@ -136,6 +155,6 @@ export const creativeCommissionUpdateSchema = z.object({
   targetAbility: z.enum(CREATIVE_COMMISSION_ABILITIES).optional(),
   brief: creativeCommissionBriefUpdateSchema.optional(),
   schedule: creativeCommissionScheduleSchema.optional(),
-  generation: creativeCommissionGenerationSchema.optional(),
+  generation: creativeCommissionGenerationUpdateSchema.optional(),
   feedbackWindow: z.number().int().min(0).max(50).optional(),
 }).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });

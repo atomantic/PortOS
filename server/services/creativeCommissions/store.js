@@ -172,10 +172,18 @@ export async function updateCommission(id, patch) {
       ...current,
       ...patch,
       // Deep-merge the nested objects so a partial brief/generation patch doesn't
-      // wipe unspecified fields. The update-path brief schema carries no defaults
-      // (unlike the create schema), so an omitted key stays omitted and is
-      // preserved here rather than overwritten with a defaulted empty.
-      brief: patch.brief ? { ...current.brief, ...patch.brief } : current.brief,
+      // wipe unspecified fields. The update-path brief/generation schemas carry
+      // no defaults (unlike the create schemas), so an omitted key stays omitted
+      // and is preserved here rather than overwritten with a defaulted empty.
+      // `constraints` is merged one level deeper too, so `{ universeId }` in a
+      // patch doesn't drop a stored `seriesId`.
+      brief: patch.brief ? {
+        ...current.brief,
+        ...patch.brief,
+        constraints: patch.brief.constraints
+          ? { ...current.brief.constraints, ...patch.brief.constraints }
+          : current.brief.constraints,
+      } : current.brief,
       schedule: patch.schedule ? { ...current.schedule, ...patch.schedule } : current.schedule,
       generation: patch.generation ? { ...current.generation, ...patch.generation } : current.generation,
       id,
