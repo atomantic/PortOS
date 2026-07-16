@@ -15,6 +15,7 @@ import {
 import useFieldDraft from '../hooks/useFieldDraft';
 import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 import { FormField } from '../components/ui/FormField';
+import Modal from '../components/ui/Modal';
 
 const VALID_PROMPT_TABS = ['stages', 'variables', 'job-skills'];
 
@@ -773,18 +774,25 @@ export default function PromptManager() {
       )}
 
       {/* Create Stage Modal */}
-      {creatingStage && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-port-card border border-port-border rounded-xl p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-medium text-white">Create New Stage</h3>
-              <button
-                onClick={() => setCreatingStage(false)}
-                className="text-gray-400 hover:text-white"
-              >
-                ✕
-              </button>
-            </div>
+      <Modal
+        open={creatingStage}
+        onClose={() => setCreatingStage(false)}
+        size="lg"
+        backdropClassName="bg-black/50"
+        closeOnBackdrop={false}
+        ariaLabelledBy="create-stage-title"
+      >
+        <div className="bg-port-card border border-port-border rounded-xl p-6 max-h-[90vh] overflow-y-auto">
+          <div className="flex items-center justify-between mb-4">
+            <h3 id="create-stage-title" className="text-lg font-medium text-white">Create New Stage</h3>
+            <button
+              onClick={() => setCreatingStage(false)}
+              aria-label="Close"
+              className="text-gray-400 hover:text-white"
+            >
+              ✕
+            </button>
+          </div>
 
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-4">
@@ -909,48 +917,51 @@ export default function PromptManager() {
               </div>
             </div>
           </div>
-        </div>
-      )}
+      </Modal>
 
       {/* Delete Stage Confirmation Modal */}
-      {deleteConfirm && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-port-card border border-port-border rounded-xl p-6 max-w-md w-full">
-            <h3 className="text-lg font-medium text-white mb-3">
-              {deleteConfirm.isSystemStage ? 'Delete System Stage?' : 'Delete Stage?'}
-            </h3>
-            {deleteConfirm.isSystemStage ? (
-              <div className="space-y-2 mb-6">
-                <p className="text-port-warning text-sm font-medium">
-                  "{deleteConfirm.stageName}" is a system stage.
-                </p>
-                {deleteConfirm.usedBy?.length > 0 && (
-                  <p className="text-gray-400 text-sm">Used by: {deleteConfirm.usedBy.join(', ')}</p>
-                )}
-                <p className="text-gray-400 text-sm">Deleting this will break PortOS functionality.</p>
-              </div>
-            ) : (
-              <p className="text-gray-400 text-sm mb-6">
-                Delete "{deleteConfirm.stageName}"? This cannot be undone.
+      <Modal
+        open={!!deleteConfirm}
+        onClose={() => setDeleteConfirm(null)}
+        size="sm"
+        backdropClassName="bg-black/50"
+        ariaLabelledBy="delete-stage-title"
+      >
+        <div className="bg-port-card border border-port-border rounded-xl p-6">
+          <h3 id="delete-stage-title" className="text-lg font-medium text-white mb-3">
+            {deleteConfirm?.isSystemStage ? 'Delete System Stage?' : 'Delete Stage?'}
+          </h3>
+          {deleteConfirm?.isSystemStage ? (
+            <div className="space-y-2 mb-6">
+              <p className="text-port-warning text-sm font-medium">
+                "{deleteConfirm.stageName}" is a system stage.
               </p>
-            )}
-            <div className="flex gap-2 justify-end">
-              <button
-                onClick={() => setDeleteConfirm(null)}
-                className="px-4 py-2 text-gray-400 hover:text-white"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={confirmDeleteStage}
-                className="px-4 py-2 bg-port-error hover:bg-port-error/80 text-white rounded"
-              >
-                Delete
-              </button>
+              {deleteConfirm.usedBy?.length > 0 && (
+                <p className="text-gray-400 text-sm">Used by: {deleteConfirm.usedBy.join(', ')}</p>
+              )}
+              <p className="text-gray-400 text-sm">Deleting this will break PortOS functionality.</p>
             </div>
+          ) : (
+            <p className="text-gray-400 text-sm mb-6">
+              Delete "{deleteConfirm?.stageName}"? This cannot be undone.
+            </p>
+          )}
+          <div className="flex gap-2 justify-end">
+            <button
+              onClick={() => setDeleteConfirm(null)}
+              className="px-4 py-2 text-gray-400 hover:text-white"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={confirmDeleteStage}
+              className="px-4 py-2 bg-port-error hover:bg-port-error/80 text-white rounded"
+            >
+              Delete
+            </button>
           </div>
         </div>
-      )}
+      </Modal>
       </div>
     </div>
   );

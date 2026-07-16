@@ -12,6 +12,7 @@ import {
 } from '../services/api';
 import { timeAgo } from '../utils/formatters';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import Modal from '../components/ui/Modal';
 
 const FILTERS = ['all', 'npm', 'secrets', 'archived'];
 
@@ -166,39 +167,43 @@ export default function GitHub() {
       <h1 className="text-xl sm:text-2xl font-bold text-white mb-6">GitHub Repos</h1>
 
       {/* Archive Confirmation Modal */}
-      {archiveConfirm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-800 rounded-lg p-4 sm:p-6 max-w-md w-full">
-            <h3 className="text-lg font-bold text-white mb-4">
-              {archiveConfirm.action === 'archive' ? 'Archive' : 'Unarchive'} Repository?
-            </h3>
-            <p className="text-gray-300 mb-6 text-sm break-words">
-              {archiveConfirm.action === 'archive'
-                ? `Archiving "${archiveConfirm.fullName}" will make it read-only on GitHub.`
-                : `Unarchiving "${archiveConfirm.fullName}" will restore it to active status on GitHub.`
-              }
-            </p>
-            <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
-              <button
-                onClick={() => setArchiveConfirm(null)}
-                className="w-full sm:w-auto px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleArchiveConfirm}
-                className={`w-full sm:w-auto px-4 py-2 text-white rounded ${
-                  archiveConfirm.action === 'archive'
-                    ? 'bg-port-warning hover:bg-port-warning/80'
-                    : 'bg-port-success hover:bg-port-success/80'
-                }`}
-              >
-                {archiveConfirm.action === 'archive' ? 'Archive' : 'Unarchive'}
-              </button>
-            </div>
+      <Modal
+        open={!!archiveConfirm}
+        onClose={() => setArchiveConfirm(null)}
+        size="sm"
+        backdropClassName="bg-black/50"
+        ariaLabelledBy="github-archive-title"
+      >
+        <div className="bg-gray-800 rounded-lg p-4 sm:p-6">
+          <h3 id="github-archive-title" className="text-lg font-bold text-white mb-4">
+            {archiveConfirm?.action === 'archive' ? 'Archive' : 'Unarchive'} Repository?
+          </h3>
+          <p className="text-gray-300 mb-6 text-sm break-words">
+            {archiveConfirm?.action === 'archive'
+              ? `Archiving "${archiveConfirm?.fullName}" will make it read-only on GitHub.`
+              : `Unarchiving "${archiveConfirm?.fullName}" will restore it to active status on GitHub.`
+            }
+          </p>
+          <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
+            <button
+              onClick={() => setArchiveConfirm(null)}
+              className="w-full sm:w-auto px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleArchiveConfirm}
+              className={`w-full sm:w-auto px-4 py-2 text-white rounded ${
+                archiveConfirm?.action === 'archive'
+                  ? 'bg-port-warning hover:bg-port-warning/80'
+                  : 'bg-port-success hover:bg-port-success/80'
+              }`}
+            >
+              {archiveConfirm?.action === 'archive' ? 'Archive' : 'Unarchive'}
+            </button>
           </div>
         </div>
-      )}
+      </Modal>
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6 items-start">
         {/* Repo List */}
