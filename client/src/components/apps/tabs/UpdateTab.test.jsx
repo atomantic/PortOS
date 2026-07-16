@@ -213,4 +213,35 @@ describe('UpdateTab — active CoS agent suppression', () => {
     await screen.findByRole('button', { name: 'Reconcile Now' });
     expect(screen.queryByText(/Update paused/i)).toBeNull();
   });
+
+  it('auto-clears the paused notice when the last agent finishes (4s status poll)', async () => {
+    // Pins the notice's "this notice clears automatically" claim: while agents
+    // are live the tab polls status every 4s (useAutoRefetch), so when the last
+    // agent finishes the block lifts without the user re-checking.
+    // Fake timers must be active BEFORE render so they own the poll interval the
+    // effect schedules; and we drive re-renders with advanceTimersByTimeAsync
+    // (flushes microtasks) instead of findBy/waitFor, which use real timers and
+    // would hang against fake ones.
+    let agentCount = 1;
+    mockGetUpdateStatus.mockReset().mockImplementation(async () => ({
+      ...OUT_OF_SYNC_STATUS,
+      activeCosAgents: agentCount,
+    }));
+    vi.useFakeTimers();
+    render(<UpdateTab />);
+
+    // Flush the on-mount status fetch → blocked while the one agent runs.
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByText(/Update paused — CoS agents running/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Reconcile Now' })).toBeNull();
+
+    // The agent finishes; the next 4s poll observes activeCosAgents: 0.
+    agentCount = 0;
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+    vi.useRealTimers();
+
+    // Notice cleared, reconcile action restored — no manual re-check needed.
+    expect(screen.queryByText(/Update paused/i)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Reconcile Now' })).toBeTruthy();
+  });
 });
