@@ -186,7 +186,10 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
     setFixStarting(true);
     // Reuse the existing autopilot orchestrator's revision cycle — no second
     // orchestrator. It reuses the cos-domain autonomy gate + budget + SSE.
-    const res = await startPipelineAutopilot(seriesId, { revisionEnabled: true }, { silent: true })
+    // Scope to editorial fixing: includeVisual:false so "Fix these issues" never
+    // silently kicks off comic-art / teaser rendering (large unexpected spend) —
+    // it iterates the story, not the visual production run.
+    const res = await startPipelineAutopilot(seriesId, { revisionEnabled: true, includeVisual: false }, { silent: true })
       .catch((err) => {
         // cos domain off → 409; degrade gracefully (review still works read-only).
         toast.error(err?.message || 'Autonomous fixing is disabled — set the CoS auto-run domain to dry-run or execute.');
