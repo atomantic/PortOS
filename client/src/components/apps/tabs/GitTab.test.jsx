@@ -118,3 +118,34 @@ describe('GitTab merged-branch cleanup scoping', () => {
     expect(screen.queryByText('Clean 2 merged')).toBeNull();
   });
 });
+
+describe('GitTab merged branches checked out in worktrees', () => {
+  beforeEach(() => {
+    // Both merged branches are checked out in worktrees, so cleanup-merged would
+    // skip them locally — the button must not advertise them as deletable.
+    api.getBranches.mockResolvedValue({
+      branches: [
+        { name: 'main', current: true, tracking: 'origin/main', ahead: 0, behind: 0, isDefault: true, merged: false, worktree: false },
+        { name: 'claim/issue-1', current: false, tracking: null, ahead: 0, behind: 0, isDefault: false, merged: true, worktree: true },
+        { name: 'claim/issue-2', current: false, tracking: null, ahead: 0, behind: 0, isDefault: false, merged: true, worktree: true },
+      ],
+    });
+    api.getRemoteBranches.mockResolvedValue({ branches: [], defaultBranch: 'main' });
+  });
+
+  it('does not show the local "Clean N merged" button when every merged branch is locked in a worktree', async () => {
+    render(<GitTab appId="x" appName="App" repoPath="/repo" />);
+
+    // The merged branches still render (with their badges) so the user can see them...
+    expect(await screen.findByText('claim/issue-1')).toBeInTheDocument();
+    // ...but there is no phantom cleanup button that would delete zero branches.
+    expect(screen.queryByText(/Clean \d+ merged/)).toBeNull();
+  });
+
+  it('labels worktree-checked-out branches with a worktree badge', async () => {
+    render(<GitTab appId="x" appName="App" repoPath="/repo" />);
+
+    await screen.findByText('claim/issue-1');
+    expect(screen.getAllByText('worktree')).toHaveLength(2);
+  });
+});

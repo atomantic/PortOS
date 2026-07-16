@@ -154,12 +154,22 @@ const FORGE_ISSUE_CONFIG = {
     listArgs: ['issue', 'list', '--state', 'open', '--search', 'sort:created-asc', '--json', 'number,assignees,labels,title', '--limit', '100'],
     listFail: 'gh-list-failed',
     parseFail: 'gh-parse-failed',
-    // Authoritative repo owner (org or user) via gh; transient if gh is
-    // unauthenticated / not a GitHub remote.
+    // Authoritative repo owner (org or user) + whether that owner is an org, via
+    // gh; transient if gh is unauthenticated / not a GitHub remote. `isOrg` lets
+    // detectForgeIssues short-circuit the owner-filter org trap — an org login is
+    // never an issue author, so `--author <org>` is guaranteed to match nothing.
     resolveOwner: async (repoPath) => {
-      const r = await runCli('gh', ['repo', 'view', '--json', 'owner', '-q', '.owner.login'], repoPath);
-      const owner = (r.stdout || '').trim();
-      return (r.code !== 0 || !owner) ? { error: 'gh-unavailable' } : { owner };
+      const r = await runCli('gh', ['repo', 'view', '--json', 'owner,isInOrganization'], repoPath);
+      if (r.code !== 0) return { error: 'gh-unavailable' };
+      let parsed;
+      try {
+        parsed = JSON.parse(r.stdout || '{}');
+      } catch {
+        return { error: 'gh-unavailable' };
+      }
+      const owner = (parsed?.owner?.login || '').trim();
+      if (!owner) return { error: 'gh-unavailable' };
+      return { owner, isOrg: parsed?.isInOrganization === true };
     },
     // `--self` mode: gh natively understands the `@me` token for `--author`, so
     // no extra lookup is needed — the API resolves it to the authenticated user.
@@ -195,6 +205,27 @@ const FORGE_ISSUE_CONFIG = {
 };
 
 /**
+ * Best-effort count of ALL open issues in a repo, ignoring the author filter.
+ * Used to disambiguate an empty *author-filtered* list: a repo whose only open
+ * issues were filed by someone else must not be reported as "no open issues".
+ * Any probe failure (list error / bad JSON / non-array) returns 0 so the caller
+ * falls back to the definitive `no-open-issues` result rather than inventing a
+ * phantom count. Reuses `cfg.listArgs`, which is the base list WITHOUT the
+ * `--author` filter (the filter is appended separately in detectForgeIssues).
+ */
+async function countOpenIssuesUnfiltered(cfg, repoPath) {
+  const res = await runCli(cfg.cli, [...cfg.listArgs], repoPath);
+  if (res.code !== 0) return 0;
+  let raw;
+  try {
+    raw = JSON.parse(res.stdout || '[]');
+  } catch {
+    return 0;
+  }
+  return Array.isArray(raw) ? raw.length : 0;
+}
+
+/**
  * Shared claim-issue detector for both forges (config in FORGE_ISSUE_CONFIG).
  * Counts open issues that pass the same skip-list the claim agent applies,
  * honoring the author filter ('self' = only issues YOU filed (`@me`), the
@@ -208,22 +239,43 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self' } =
   const repoPath = app?.repoPath;
   if (!repoPath) return { actionable: false, count: 0, reason: 'no-repo-path' };
 
+  // Shared shape for a "parked" (no actionable work) result where only `reason`
+  // and `total` (the open-issue denominator) vary. `count`/`inFlightCount`/
+  // `filteredCount` are always 0 on these paths — the issues are excluded
+  // upstream (author filter / empty repo), never by the skip-list — so the toast
+  // reads a clean "0 of N open" with no redundant "N filtered".
+  const parked = (reason, total = 0) => ({
+    actionable: false, count: 0, total, inFlightCount: 0, filteredCount: 0, reason
+  });
+
   const args = [...cfg.listArgs];
   // Resolve the author filter symmetrically with resolveIssueAuthorFilterBlock:
   // 'any' = no filter; 'owner' = repo/project owner; everything else (the 'self'
   // default plus any out-of-vocab value) = the @me security boundary. Transient
   // resolver failures skip this dispatch and retry next tick rather than parking
   // a full cadence.
+  let authorApplied = false;
   if (issueAuthorFilter === 'any') {
     // no --author filter
   } else if (issueAuthorFilter === 'owner') {
-    const { owner, error } = await cfg.resolveOwner(repoPath);
+    const { owner, isOrg, error } = await cfg.resolveOwner(repoPath);
     if (error) return { actionable: false, count: 0, reason: error, transient: true };
+    if (isOrg) {
+      // The owner filter resolved to an ORG login, which can never be an issue
+      // author — `--author <org>` is guaranteed to match zero. Skip that empty
+      // query and report the real open count with a distinct `owner-is-org`
+      // reason, so the toast steers the user to 'self'/'any' instead of implying
+      // a personal-username mismatch (the failure that motivated this branch).
+      const openCount = await countOpenIssuesUnfiltered(cfg, repoPath);
+      return parked('owner-is-org', openCount);
+    }
     args.push('--author', owner);
+    authorApplied = true;
   } else {
     const { author, error } = await cfg.resolveSelf(repoPath);
     if (error) return { actionable: false, count: 0, reason: error, transient: true };
     args.push('--author', author);
+    authorApplied = true;
   }
 
   const res = await runCli(cfg.cli, args, repoPath);
@@ -235,7 +287,27 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self' } =
     return { actionable: false, count: 0, reason: cfg.parseFail, transient: true };
   }
   if (!Array.isArray(raw)) return { actionable: false, count: 0, reason: cfg.parseFail, transient: true };
-  if (raw.length === 0) return { actionable: false, count: 0, total: 0, inFlightCount: 0, filteredCount: 0, reason: 'no-open-issues' };
+  if (raw.length === 0) {
+    // An empty *filtered* list is ambiguous: the repo may truly have no open
+    // issues, OR it has open issues that just don't match the author filter —
+    // e.g. `self`/@me resolving to a different identity than whoever filed the
+    // issues, or a non-org `owner` who simply filed none. (The org-owner trap is
+    // caught earlier with the distinct `owner-is-org` reason.)
+    // Reporting a flat "no open issues" there hid a claimable queue behind a
+    // full recheck park (the "open issues exist but the task still parked"
+    // failure this fixes). Re-probe WITHOUT the author filter; if issues exist,
+    // park with the actionable `no-authored-issues` reason + the real open
+    // count so the user is told to widen the filter, not that there is nothing
+    // to do. The count is raw open issues (any author), not claimable ones —
+    // best effort: switching to `any` may still yield `no-actionable-issues`
+    // when the other-authored issues are all blocked/assigned/epics. Counting
+    // claimable ones would cost the full normalize + skip-list scan here.
+    if (authorApplied) {
+      const openCount = await countOpenIssuesUnfiltered(cfg, repoPath);
+      if (openCount > 0) return parked('no-authored-issues', openCount);
+    }
+    return parked('no-open-issues');
+  }
 
   const inFlight = await inFlightIssueNumbers(repoPath, cfg.inFlightForge);
   const issues = cfg.normalize(raw);
