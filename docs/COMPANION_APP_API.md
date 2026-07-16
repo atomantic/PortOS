@@ -142,7 +142,10 @@ upload endpoint.
 
 - `POST /api/brain/daily-log/:date/append` — body `{ "text": "…", "source": "…" }`.
   `:date` accepts `today` (resolved server-side) or `YYYY-MM-DD`. Empty/whitespace
-  `text` 400s. The optional `source` tags the entry's origin (e.g. `"portdeck"`).
+  `text` 400s. `source` records the **input modality** and is a controlled
+  vocabulary — one of `text`, `voice`, or `edit` (any other value is silently
+  normalized to `text` by `brainJournal.normalizeSource`). A dictated capture sends
+  `"voice"`; a typed one sends `"text"`. It is **not** a free-form app-identity tag.
 - `GET /api/brain/daily-log/:date` — read a day's log.
 
 (The `daily_log_append` / `daily_log_read` palette actions wrap this same path —
@@ -150,9 +153,17 @@ either surface works.)
 
 ## 5. MeatSpace POST training & testing
 
-`/api/meatspace/post/*` (`server/routes/meatspacePostRoutes.js`). POST progress is
-a first-class federation sync category (`meatspace`), so it already reconciles
-across peers.
+`/api/meatspace/post/*` (`server/routes/meatspacePostRoutes.js`). These are the
+read/write endpoints for POST config, sessions, and progress on a single instance.
+
+> **Note — POST progress does not cross-peer federate today.** The `meatspace`
+> peer-sync category (`MEATSPACE_FILES` in `server/services/dataSync.js`) covers the
+> daily-log and health-record files but **not** the POST files
+> (`post-sessions.json`, `post-config.json`, …), so POST progress written to one
+> instance stays local to it. Cross-instance POST reconciliation is a deferred
+> follow-up (see below) — either add the POST files to the sync category or ship the
+> iCloud import endpoint. A companion app that shows POST progress across instances
+> must read each instance's `/api/meatspace/post/*` directly until then.
 
 | Method | Path | Purpose |
 |--------|------|---------|
@@ -178,8 +189,9 @@ is MortalLoom (`server/routes/mortalloom.js`, `server/services/mortalLoomStore.j
 A POST-progress iCloud reconciliation endpoint mirroring this
 (`POST /api/…/import`, non-destructive by-id merge into `data/meatspace/post/*`) is
 **out of scope for this foundation** and will be filed as its own follow-up. Until
-it lands, POST progress reconciles through the standard `/api/meatspace/post/*`
-routes plus federation sync.
+it lands there is no cross-instance POST reconciliation — a companion app reads and
+writes each instance's `/api/meatspace/post/*` routes directly (see the note in
+§5).
 
 ## Deferred follow-ups (filed separately)
 
