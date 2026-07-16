@@ -59,6 +59,20 @@ describe('settings.js', () => {
       expect(result).toEqual({});
     });
 
+    it('does not cache a corrupt read, so a repaired file is picked up next call (#2684)', async () => {
+      // A malformed settings.json must NOT poison the cache with {} — otherwise
+      // verifyPassword() and every other consumer stay stranded on empty settings
+      // (rejecting the correct password) until a save or restart.
+      tryReadFile.mockResolvedValueOnce('{ truncated');
+      const first = await getSettings();
+      expect(first).toEqual({});
+
+      // File repaired: the next read must reflect it, proving {} was not cached.
+      tryReadFile.mockResolvedValue(JSON.stringify({ secrets: { auth: { enabled: true, passwordHash: 'h', salt: 's' } } }));
+      const second = await getSettings();
+      expect(second.secrets.auth.enabled).toBe(true);
+    });
+
     it('should handle complex nested settings', async () => {
       const mockSettings = {
         display: {

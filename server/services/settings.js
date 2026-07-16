@@ -204,14 +204,28 @@ const save = async (settings) => {
 
 export const getSettings = async () => {
   if (settingsCache === null) {
-    // stripStoreKeys builds a fresh top-level object over the just-parsed
-    // loadRaw() graph, which nothing else references — safe to cache directly.
-    const loaded = stripStoreKeys(await loadRaw());
+    const raw = await tryReadFile(SETTINGS_FILE);
+    // Distinguish a CORRUPT (present but unparseable) settings.json from an
+    // absent/empty one so a corrupt read does NOT poison the cache with `{}`
+    // (issue #2684). Caching a corrupt-derived empty object would strand every
+    // consumer — verifyPassword, schedulers, feature reads — on empty settings
+    // until a save() or restart, defeating the no-restart self-heal that the
+    // auth fail-closed path promises. A malformed file (`raw` present but not a
+    // JSON object) is the corrupt case handled here; `tryReadFile` collapses an
+    // absent OR unreadable file to null, which we treat as an empty, cacheable
+    // snapshot (absent is the fresh-install default; the rarer unreadable case is
+    // still failed CLOSED by isAuthEnabled's stricter readSettingsStrict).
+    const parsed = raw === null ? {} : safeJSONParse(raw, null);
+    const corrupt = raw !== null && !isPlainObject(parsed);
+    const loaded = stripStoreKeys(isPlainObject(parsed) ? parsed : {});
     // A save()/reloadSettings() may have populated the cache via the
     // settings:updated listener while this cold read was awaiting the disk read.
-    // Only fill if still empty, so an older on-disk snapshot can't clobber that
-    // fresher in-memory value and strand consumers on stale settings.
-    if (settingsCache === null) settingsCache = loaded;
+    // Prefer that fresher in-memory value over our (older) on-disk snapshot.
+    if (settingsCache !== null) return structuredClone(settingsCache);
+    // On a corrupt read, hand back the empty snapshot WITHOUT caching it, so the
+    // very next call re-reads and picks up a repair immediately.
+    if (corrupt) return structuredClone(loaded);
+    settingsCache = loaded;
   }
   // Hand out a private deep copy so a caller mutating nested settings in place
   // can't corrupt the shared cache — matching the prior per-call
