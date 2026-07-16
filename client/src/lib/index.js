@@ -42,6 +42,7 @@ export * from './wrImageDefaults.js';
 // === Graph & sim ===
 export * from './brainGraphFocus.js';
 export * from './graphSimulation.js';
+export * from './goalFeatureMap.js';
 
 // === Generic UI / collection utilities ===
 export * from './a11yKeyboard.js';

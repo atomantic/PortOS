@@ -149,17 +149,23 @@ const DEFAULT_LAYOUTS = [
     id: 'morning-review',
     name: 'Morning Review',
     builtIn: true,
-    widgets: ['proactive-alerts', 'upcoming-tasks', 'review-hub', 'goal-progress', 'death-clock'],
-    // Scan-and-act morning ritual — all 5 widgets above the fold.
-    // Tasks list takes the tall center column (the actionable hot zone);
-    // alerts top-left grab attention first; death-clock top-right for
-    // mortality framing; review + goals fill the remaining quadrants.
+    widgets: ['proactive-alerts', 'upcoming-tasks', 'review-hub', 'goal-progress', 'death-clock', 'daily-driver'],
+    // Scan-and-act morning ritual — the classic scan quadrants above the fold.
+    // Tasks list takes the tall center column (the actionable hot zone); alerts
+    // top-left grab attention first; death-clock top-right for mortality framing;
+    // review + goals fill the remaining quadrants. The Daily Driver (#2666) — the
+    // first-visit-of-day sequence (POST → goal next-actions) — sits full-width in
+    // a fresh row BELOW the scan quadrants: it self-hides once handled, and a
+    // gated-off widget's grid slot is dropped without compacting the rows above
+    // it, so placing it last (like the gated tribe-care/feeds widgets) means its
+    // absence leaves only harmless trailing space instead of a gap at the top.
     grid: [
       { id: 'proactive-alerts', x: 0, y: 0, w: 4, h: 4 },
       { id: 'upcoming-tasks',   x: 4, y: 0, w: 5, h: 8 },
       { id: 'death-clock',      x: 9, y: 0, w: 3, h: 2 },
       { id: 'goal-progress',    x: 9, y: 2, w: 3, h: 4 },
       { id: 'review-hub',       x: 0, y: 4, w: 4, h: 4 },
+      { id: 'daily-driver',     x: 0, y: 8, w: 12, h: 6 },
     ],
   },
   {
