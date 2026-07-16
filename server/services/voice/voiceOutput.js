@@ -133,6 +133,15 @@ export const getVoiceOutputSocket = () => {
 // harmlessly reaches peer-relay sockets (they ignore `voice:speak`). Any
 // transient multi-tab duplication only recurs among pre-upgrade tabs during an
 // upgrade window and self-heals on reload.
+//
+// Known limitation (accepted): if a pre-upgrade tab coexists with a *current*
+// tab during the upgrade window, the current tab announces and this direct-send
+// branch wins, so the old tab is excluded until it reloads — proactive audio
+// still plays (on the current tab), just possibly not the one the user is
+// looking at. Fully fixing this would require the old client to speak the new
+// announce/claim protocol, which by definition it cannot. The stale-build toast
+// prompts a reload, which resolves it. Not worth carrying dual-protocol routing
+// for a single-user app's brief upgrade window.
 export const emitVoiceOutput = (io, event, payload) => {
   const target = getVoiceOutputSocket();
   if (target) {

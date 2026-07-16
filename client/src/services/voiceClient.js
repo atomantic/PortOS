@@ -412,6 +412,14 @@ socket.on('voice:output:detached', () => {
   if (!isVoiceOutputPrimary) return;
   isVoiceOutputPrimary = false;
   notifyVoiceOutputPrimary();
+  // Another tab just took over proactive output. Drain any proactive audio
+  // still playing/queued here so the handoff is clean — otherwise this tab
+  // keeps speaking a briefing while the new primary starts the next one and
+  // both talk at once, breaking the single-recipient contract. stopPlayback
+  // only sets the sticky reject flag for per-turn `voice:tts:audio` (the
+  // proactive `voice:speak` handler is intentionally ungated), so a future
+  // proactive line still plays if this tab later reclaims output.
+  stopPlayback();
 });
 // A disconnect ends this socket's ownership — the server released it and, on
 // reconnect, this tab gets a fresh socket with no claim (it only re-announces
