@@ -1,8 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import {
   parseAllowedHosts,
   hostIsAllowed,
-  rewriteAllowedHosts
+  rewriteAllowedHosts,
+  findViteConfig,
+  checkViteHost
 } from './viteAllowedHosts.js';
 
 describe('parseAllowedHosts', () => {
@@ -154,5 +159,103 @@ export default defineConfig(({ mode }) => ({
   it('bails when it cannot find a config object', () => {
     const out = rewriteAllowedHosts('const x = 1; module.exports = x;');
     expect(out.ok).toBe(false);
+  });
+});
+
+describe('findViteConfig', () => {
+  let repo;
+  const ALLOW_ALL = `import { defineConfig } from 'vite';
+export default defineConfig({ server: { allowedHosts: true } });`;
+
+  beforeEach(async () => {
+    repo = await mkdtemp(join(tmpdir(), 'vite-cfg-'));
+  });
+  afterEach(async () => {
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  it('finds a config at the repo root', async () => {
+    await writeFile(join(repo, 'vite.config.js'), ALLOW_ALL);
+    const cfg = await findViteConfig(repo);
+    expect(cfg?.filename).toBe('vite.config.js');
+    expect(cfg?.dir).toBe(repo);
+  });
+
+  it('finds a config in the admin/ subdir (critical-mass — the original false-negative)', async () => {
+    // `admin` is the critical-mass Vite client dir that produced a bogus
+    // "no vite.config was found" warning. It is now a fast-path subdir; the
+    // recursive-fallback contract is pinned separately by the nested test below.
+    await mkdir(join(repo, 'admin'), { recursive: true });
+    await writeFile(join(repo, 'admin', 'vite.config.js'), ALLOW_ALL);
+    const cfg = await findViteConfig(repo);
+    expect(cfg?.path).toBe(join(repo, 'admin', 'vite.config.js'));
+  });
+
+  it('finds a config nested two levels deep via the recursive fallback (unlisted subdir)', async () => {
+    // `packages/dashboard` is NOT in the fast-path subdir list, so this only
+    // passes if discoverViteConfig actually walks the tree — it pins the fallback.
+    await mkdir(join(repo, 'packages', 'dashboard'), { recursive: true });
+    await writeFile(join(repo, 'packages', 'dashboard', 'vite.config.ts'), ALLOW_ALL);
+    const cfg = await findViteConfig(repo);
+    expect(cfg?.path).toBe(join(repo, 'packages', 'dashboard', 'vite.config.ts'));
+  });
+
+  it('ignores configs inside node_modules', async () => {
+    await mkdir(join(repo, 'node_modules', 'some-dep'), { recursive: true });
+    await writeFile(join(repo, 'node_modules', 'some-dep', 'vite.config.js'), ALLOW_ALL);
+    const cfg = await findViteConfig(repo);
+    expect(cfg).toBeNull();
+  });
+
+  it('ignores a stray config inside an example/fixture dir', async () => {
+    // A demo/example app's vite config must not be mistaken for the real one.
+    await mkdir(join(repo, 'examples', 'demo'), { recursive: true });
+    await writeFile(join(repo, 'examples', 'demo', 'vite.config.js'), ALLOW_ALL);
+    const cfg = await findViteConfig(repo);
+    expect(cfg).toBeNull();
+  });
+
+  it('returns null (does not guess) when two unlisted apps have a config at the same depth', async () => {
+    // Guessing here could let the auto-fix rewrite the wrong app's config.
+    await mkdir(join(repo, 'packages', 'admin-ui'), { recursive: true });
+    await mkdir(join(repo, 'packages', 'marketing'), { recursive: true });
+    await writeFile(join(repo, 'packages', 'admin-ui', 'vite.config.js'), ALLOW_ALL);
+    await writeFile(join(repo, 'packages', 'marketing', 'vite.config.js'), ALLOW_ALL);
+    const cfg = await findViteConfig(repo);
+    expect(cfg).toBeNull();
+  });
+
+  it('treats two config variants in ONE dir as a single unambiguous match', async () => {
+    await mkdir(join(repo, 'packages', 'dashboard'), { recursive: true });
+    await writeFile(join(repo, 'packages', 'dashboard', 'vite.config.js'), ALLOW_ALL);
+    await writeFile(join(repo, 'packages', 'dashboard', 'vite.config.ts'), ALLOW_ALL);
+    const cfg = await findViteConfig(repo);
+    // VITE_CONFIG_FILENAMES prefers .js over .ts.
+    expect(cfg?.path).toBe(join(repo, 'packages', 'dashboard', 'vite.config.js'));
+  });
+
+  it('prefers a shallower single config over deeper ones (ambiguity is per-level)', async () => {
+    // A config at the repo root is unambiguous even if deeper dirs also have some.
+    await writeFile(join(repo, 'vite.config.js'), ALLOW_ALL);
+    await mkdir(join(repo, 'packages', 'a'), { recursive: true });
+    await mkdir(join(repo, 'packages', 'b'), { recursive: true });
+    await writeFile(join(repo, 'packages', 'a', 'vite.config.js'), ALLOW_ALL);
+    await writeFile(join(repo, 'packages', 'b', 'vite.config.js'), ALLOW_ALL);
+    const cfg = await findViteConfig(repo);
+    expect(cfg?.path).toBe(join(repo, 'vite.config.js'));
+  });
+
+  it('returns null when no config exists', async () => {
+    const cfg = await findViteConfig(repo);
+    expect(cfg).toBeNull();
+  });
+
+  it('reports host allowed for an admin/ config that allows all hosts', async () => {
+    await mkdir(join(repo, 'admin'), { recursive: true });
+    await writeFile(join(repo, 'admin', 'vite.config.js'), ALLOW_ALL);
+    const status = await checkViteHost(repo, 'void.taile8179.ts.net');
+    expect(status.hasViteConfig).toBe(true);
+    expect(status.allowsAll).toBe(true);
+    expect(status.hostAllowed).toBe(true);
   });
 });
