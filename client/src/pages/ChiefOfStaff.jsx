@@ -153,7 +153,11 @@ export default function ChiefOfStaff() {
       if (!healthData) return prev ?? null;
       const prevT = Date.parse(prev?.lastCheck ?? '');
       const newT = Date.parse(healthData.lastCheck ?? '');
-      return (!Number.isNaN(prevT) && !Number.isNaN(newT) && newT < prevT) ? prev : healthData;
+      // Keep prev when it is strictly newer, OR when this read has no comparable
+      // timestamp but prev does — a timestamped health check is fresher than an
+      // untimed read, so an absent/unparseable lastCheck must not clobber it.
+      if (!Number.isNaN(prevT) && (Number.isNaN(newT) || newT < prevT)) return prev;
+      return healthData;
     });
     setProviders(providersData.providers || []);
     // Filter out PortOS Autofixer (it's part of PortOS project)
