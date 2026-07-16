@@ -1,5 +1,5 @@
 import { memo, useMemo } from 'react';
-import { getChordVoicing } from '../../lib/chordShapes.js';
+import { getChordVoicing, splitJoinedChords } from '../../lib/chordShapes.js';
 
 /**
  * Small chord-voicing diagram for the SongBook viewer's instrument views:
@@ -136,9 +136,8 @@ const PianoChips = ({ voicing, size }) => (
   </span>
 );
 
-function ChordDiagram({ name, instrument, size = 'md' }) {
-  const voicing = useMemo(() => getChordVoicing(name, instrument), [name, instrument]);
-
+const SingleChordDiagram = ({ name, instrument, size }) => {
+  const voicing = getChordVoicing(name, instrument);
   if (!voicing) {
     return <span className="text-[10px] text-gray-500 italic">no diagram</span>;
   }
@@ -151,6 +150,26 @@ function ChordDiagram({ name, instrument, size = 'md' }) {
       {voicing.bass && (
         <span className="text-[9px] text-gray-500 leading-tight">/{voicing.bass} bass</span>
       )}
+    </span>
+  );
+};
+
+function ChordDiagram({ name, instrument, size = 'md' }) {
+  // Dash-joined quick changes ("Am-Am7") arrive as one token from the parser —
+  // render one voicing per segment, labeled when there's more than one.
+  const parts = useMemo(() => splitJoinedChords(name), [name]);
+
+  if (parts.length <= 1) {
+    return <SingleChordDiagram name={parts[0] ?? name} instrument={instrument} size={size} />;
+  }
+  return (
+    <span className="inline-flex items-start gap-2">
+      {parts.map((part, i) => (
+        <span key={`${part}-${i}`} className="inline-flex flex-col items-center gap-0.5">
+          <span className="text-[9px] text-gray-500 font-mono leading-tight">{part}</span>
+          <SingleChordDiagram name={part} instrument={instrument} size={size} />
+        </span>
+      ))}
     </span>
   );
 }

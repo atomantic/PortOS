@@ -98,6 +98,26 @@ describe('useKeyboardShortcuts', () => {
     expect(d).toHaveBeenCalledTimes(1);
   });
 
+  it("space on a focused button activates the button, never a page ' ' shortcut", () => {
+    const space = vi.fn();
+    const g = vi.fn();
+    renderHook(() => useKeyboardShortcuts(true, { ' ': space, g }));
+    const btn = document.createElement('button');
+    document.body.appendChild(btn);
+    // Space must fall through to native button activation (no preventDefault).
+    const spaceEvent = press(' ', { target: btn });
+    expect(space).not.toHaveBeenCalled();
+    expect(spaceEvent.defaultPrevented).toBe(false);
+    // Letter shortcuts still fire with a button focused — only ' ' collides
+    // with activation semantics.
+    press('g', { target: btn });
+    expect(g).toHaveBeenCalledTimes(1);
+    btn.remove();
+    // Space from a non-interactive target still drives the page shortcut.
+    press(' ');
+    expect(space).toHaveBeenCalledTimes(1);
+  });
+
   it('suppresses shortcuts while an aria-modal dialog is open (page card stays behind it)', () => {
     const d = vi.fn();
     renderHook(() => useKeyboardShortcuts(true, { d }));
