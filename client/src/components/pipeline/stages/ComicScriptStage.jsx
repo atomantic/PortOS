@@ -389,7 +389,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
   const persistCoverFieldScript = async (field, nextScript) => {
     const updated = await updatePipelineIssue(issue.id, {
       stages: { comicPages: { [field]: { script: nextScript } } },
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Save failed');
       return null;
     });
@@ -858,7 +858,7 @@ function PageRow({
     const next = (issue.stages?.comicPages?.pages || []).filter((_, i) => i !== pageIndex);
     const patched = await updatePipelineIssue(issue.id, {
       stages: { comicPages: { status: next.length ? 'edited' : 'empty', pages: next } },
-    }).catch((err) => { toast.error(err.message || 'Delete failed'); return null; });
+    }, { silent: true }).catch((err) => { toast.error(err.message || 'Delete failed'); return null; });
     if (patched) {
       onStageUpdate?.('comicPages', patched.stages.comicPages, patched);
       toast.success(`Page ${pageIndex + 1} deleted`);

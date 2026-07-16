@@ -51,7 +51,7 @@ describe('SeriesLlmPicker', () => {
     // come from the async getProviders result — same populate race as above).
     await screen.findByRole('option', { name: 'Provider One' });
     fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: 'p1' } });
-    await waitFor(() => expect(updatePipelineSeries).toHaveBeenCalledWith('s1', { llm: { provider: 'p1', model: null } }));
+    await waitFor(() => expect(updatePipelineSeries).toHaveBeenCalledWith('s1', { llm: { provider: 'p1', model: null } }, { silent: true }));
     await waitFor(() => expect(onSeriesUpdate).toHaveBeenCalledWith({ id: 's1', llm: { provider: 'p1', model: null } }));
   });
 
@@ -59,7 +59,7 @@ describe('SeriesLlmPicker', () => {
     renderPicker({ id: 's1', llm: { provider: 'p1', model: 'm1' } });
     await waitFor(() => expect(getProviders).toHaveBeenCalled());
     fireEvent.change(screen.getAllByRole('combobox')[0], { target: { value: '' } });
-    await waitFor(() => expect(updatePipelineSeries).toHaveBeenCalledWith('s1', { llm: { provider: null, model: null } }));
+    await waitFor(() => expect(updatePipelineSeries).toHaveBeenCalledWith('s1', { llm: { provider: null, model: null } }, { silent: true }));
   });
 
   it('disables the model select when the resolved provider has no models', async () => {
@@ -78,6 +78,6 @@ describe('SeriesLlmPicker', () => {
     // picker mid-populate and saves the wrong (empty) provider (flaky in CI).
     await screen.findByRole('option', { name: 'm2' });
     fireEvent.change(screen.getAllByRole('combobox')[1], { target: { value: 'm2' } });
-    await waitFor(() => expect(updatePipelineSeries).toHaveBeenCalledWith('s1', { llm: { provider: 'p1', model: 'm2' } }));
+    await waitFor(() => expect(updatePipelineSeries).toHaveBeenCalledWith('s1', { llm: { provider: 'p1', model: 'm2' } }, { silent: true }));
   });
 });

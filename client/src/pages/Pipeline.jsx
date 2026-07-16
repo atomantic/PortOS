@@ -79,7 +79,7 @@ export default function Pipeline() {
       listPipelineSeries().catch(() => []),
       // Universes are optional — failing the fetch should still let the user
       // create a series without one. Surface the error as a quiet toast.
-      listUniverses().catch((err) => {
+      listUniverses({ silent: true }).catch((err) => {
         toast.error(err.message || 'Failed to load universes');
         return [];
       }),

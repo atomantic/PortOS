@@ -1132,7 +1132,7 @@ function ThemeChips({ series, arc, onSeriesUpdate }) {
     savingRef.current = true;
     setSaving(true);
     onSeriesUpdate({ ...series, arc: { ...arc, themes: nextThemes } });
-    const updated = await updatePipelineSeries(series.id, { arc: { ...arc, themes: nextThemes } })
+    const updated = await updatePipelineSeries(series.id, { arc: { ...arc, themes: nextThemes } }, { silent: true })
       .catch((err) => {
         toast.error(err.message || 'Failed to save themes');
         return null;
@@ -1502,7 +1502,7 @@ function ArcContent({ series, onSeriesUpdate }) {
 
   const save = async () => {
     setSaving(true);
-    const updated = await updatePipelineSeries(series.id, { arc: draft }).catch((err) => {
+    const updated = await updatePipelineSeries(series.id, { arc: draft }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Save failed');
       return null;
     });
@@ -2711,7 +2711,7 @@ function IssueRow({ issue, seasons, onIssuesUpdate }) {
     setReassigning(true);
     const patched = await updatePipelineIssue(issue.id, {
       seasonId: newSeasonId || null,
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Reassign failed');
       return null;
     });

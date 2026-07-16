@@ -248,7 +248,7 @@ export default function PipelineSeriesRoadmap() {
   useEffect(() => {
     let canceled = false;
     setLoading(true);
-    getPipelineSeries(seriesId)
+    getPipelineSeries(seriesId, { silent: true })
       .then((s) => { if (!canceled) setSeries(s); })
       .catch((err) => {
         if (canceled) return;

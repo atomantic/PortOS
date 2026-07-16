@@ -55,7 +55,7 @@ export default function ComicPagesStage({ issue, onStageUpdate, actionsGated = f
     setPages(nextPages);
     const updated = await updatePipelineIssue(issue.id, {
       stages: { comicPages: { status: nextPages.length ? 'edited' : 'empty', pages: nextPages } },
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Save failed');
       return null;
     });

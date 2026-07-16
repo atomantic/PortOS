@@ -76,7 +76,7 @@ export default function PipelineExport() {
   useEffect(() => {
     let canceled = false;
     setLoading(true);
-    getPipelineSeries(seriesId)
+    getPipelineSeries(seriesId, { silent: true })
       .then((s) => {
         if (canceled) return;
         setSeries(s);
