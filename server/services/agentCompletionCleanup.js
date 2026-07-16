@@ -20,7 +20,7 @@ import { join, relative, resolve, sep } from 'path';
 import { unlink, rm } from 'fs/promises';
 import { emitLog } from './cosEvents.js';
 import { updateAgent } from './cosAgents.js';
-import { updateTask, addTask, checkStagePrecondition } from './cos.js';
+import { updateTask, addTask, reviveBlockedTask, checkStagePrecondition } from './cos.js';
 import { PIPELINE_BEHAVIOR_FLAGS, normalizeReviewers } from '../lib/validation.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import * as jiraService from './jira.js';
@@ -140,7 +140,27 @@ export async function handlePipelineProgression(task, agentId, success) {
     }
   }
 
-  await addTask(nextTask, 'internal', { raw: true });
+  const persisted = await addTask(nextTask, 'internal', { raw: true });
+  if (persisted?.duplicate) {
+    // A stage prompt interpolates only app fields, so two runs of the same
+    // pipeline produce identical first lines — and addTask's dedup also matches
+    // blocked tasks (#2614). A stale blocked stage task from an earlier run
+    // would otherwise silently swallow this advance (nothing reaps blocked
+    // tasks), wedging every future run of the pipeline. Revive it with the
+    // fresh stage payload — the retry path is unblocking the existing task,
+    // not minting a duplicate. reviveBlockedTask clears the blocked metadata
+    // and retry budgets and merges in the new pipeline state.
+    if (persisted.status === 'blocked') {
+      await reviveBlockedTask(persisted.id, {
+        priority: nextTask.priority,
+        metadata: nextTask.metadata
+      }, 'internal');
+      emitLog('info', `🔗 Pipeline ${pipeline.id} advancing to stage ${nextStageIndex} by reviving blocked task ${persisted.id}: ${nextStage.name}`, { pipelineId: pipeline.id, agentId });
+      return;
+    }
+    emitLog('warn', `⚠️ Pipeline ${pipeline.id} stage ${nextStageIndex} already queued as ${persisted.id} (${persisted.status}) — skipping duplicate advance`, { pipelineId: pipeline.id, agentId });
+    return;
+  }
   emitLog('info', `🔗 Pipeline ${pipeline.id} advancing to stage ${nextStageIndex}: ${nextStage.name}`, { pipelineId: pipeline.id, agentId });
 }
 

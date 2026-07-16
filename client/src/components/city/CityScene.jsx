@@ -45,6 +45,7 @@ import CityTransitLoop from './CityTransitLoop';
 import CityEnergyOverlay from './CityEnergyOverlay';
 import PlayerController from './PlayerController';
 import CameraTransition from './CameraTransition';
+import CityFocusCamera from './CityFocusCamera';
 import CityPhotoCamera from './CityPhotoCamera';
 import CityDepthOfField from './CityDepthOfField';
 import CityAdaptiveQuality from './CityAdaptiveQuality';
@@ -55,7 +56,7 @@ import { useVisibilityEvent } from '../../hooks/useVisibilityEvent';
 
 const STARTUP_PARTICLE_DENSITY = 0.49;
 
-export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCameraView, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, introspection, playback = false, photoMode, photoPresetId, photoDof, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds, background, palette, autoQuality = false, autoStartTier = 'high', autoResetToken = 0, diagnosticsEnabled = false, onAutoTierChange, onAutoDiagnostics }) {
+export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCameraView, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, introspection, playback = false, photoMode, photoPresetId, photoDof, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds, focusedAppId, hudSafe, background, palette, autoQuality = false, autoStartTier = 'high', autoResetToken = 0, diagnosticsEnabled = false, onAutoTierChange, onAutoDiagnostics }) {
   const [positions, setPositions] = useState(null);
   const [proximityApp, setProximityApp] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
@@ -292,6 +293,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
         settings={renderSettings}
         proximityAppId={proximityApp?.id}
         dimmedAppIds={dimmedAppIds}
+        focusedAppId={focusedAppId}
         playback={playback}
       />
       <CityDataStreams positions={positions} apps={apps} agentMap={agentMap} />
@@ -363,6 +365,18 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
         active={explorationMode}
         onTransitionComplete={handleTransitionComplete}
       />
+      {/* URL-addressed building focus (issue #2593). Mounted only in the orbital overview (not
+          exploration/photo, which own the camera). Placed AFTER CameraTransition so its per-frame
+          camera write wins during any brief overlap on load. */}
+      {!explorationMode && !photoMode && (
+        <CityFocusCamera
+          focusedAppId={focusedAppId}
+          positions={positions}
+          orbitRef={orbitRef}
+          active={!explorationMode && !photoMode}
+          hudSafe={hudSafe}
+        />
+      )}
       <CityPhotoCamera active={photoMode} presetId={photoPresetId} onReady={onPhotoCaptureReady} composerRef={photoComposerRef} />
       {/* Depth-of-field is photo-mode-only: mounting it here (never in the live dashboard) keeps the
           extra composer render targets off the always-on frameloop. It stays mounted for the whole

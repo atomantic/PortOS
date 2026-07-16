@@ -29,7 +29,7 @@ import { getDomainMode } from '../lib/domainAutonomy.js';
 import { remainingActionBudget } from '../lib/domainBudgets.js';
 import { getDomainBudgetStatus } from './domainUsage.js';
 import { cosEvents, emitLog } from './cosEvents.js';
-import { addTask, updateTask, getAllTasks, getCosTasks, firstLine, PRIORITY_VALUES } from './cosTaskStore.js';
+import { addTask, updateTask, reviveBlockedTask, getAllTasks, getCosTasks, firstLine, PRIORITY_VALUES } from './cosTaskStore.js';
 import { recordDecision, DECISION_TYPES } from './decisionLog.js';
 import { isAppOnCooldown, markAppReviewCooldown, bindAppReviewAgent, markIdleReviewStarted, getNextAppForReview, loadAppActivity, isAppActivityOnCooldown } from './appActivity.js';
 import { getActiveApps, getAppTaskTypeOverrides } from './apps.js';
@@ -651,6 +651,10 @@ async function spawnPriority0OnDemand(ctx) {
         // reconcile convergence signature so the detector below runs fresh (see
         // cos.dequeueNextTask for the full rationale).
         await taskSchedule.resetPerpetualForManualRun(request.taskType, targetApp.id);
+        // A manual "Run" also unparks a failure-parked type (#2616): the user
+        // explicitly re-running is an "I've addressed it" signal, so clear the
+        // per-type consecutive-failure ledger for this app.
+        await taskSchedule.clearTaskTypeFailurePark(request.taskType, targetApp.id);
         // Advance the cooldown eagerly (deduped per app per cycle), but defer
         // binding the active agent until a task is produced — a null result
         // here must not strand `activeAgentId` (issue #978).
@@ -666,6 +670,8 @@ async function spawnPriority0OnDemand(ctx) {
       } else {
         emitLog('info', `Processing on-demand improvement: ${request.taskType}`, { requestId: request.id });
         await taskSchedule.resetPerpetualForManualRun(request.taskType);
+        // Manual re-run unparks a failure-parked type (global scope) — #2616.
+        await taskSchedule.clearTaskTypeFailurePark(request.taskType);
         await taskSchedule.recordExecution(`task:${request.taskType}`);
         await withStateLock(async () => {
           const s = await loadState();
@@ -681,6 +687,16 @@ async function spawnPriority0OnDemand(ctx) {
         if (!persisted?.duplicate) {
           tasksToSpawn.push(task);
           trackSpawn(task);
+        } else if (persisted.status === 'blocked') {
+          // Explicit user Run colliding with a failure-blocked twin (#2614):
+          // revive the existing task instead of silently dropping the Run and
+          // stranding the bound on-demand review marker. Mirrors the sibling
+          // dequeueNextTask on-demand engine in cos.js.
+          await reviveBlockedTask(persisted.id, { priority: task.priority, metadata: task.metadata }, 'internal');
+          const revived = { ...task, id: persisted.id };
+          tasksToSpawn.push(revived);
+          trackSpawn(revived);
+          emitLog('info', `🔁 On-demand ${request.taskType} revived blocked task ${persisted.id}`, { taskId: persisted.id });
         }
       } else if (!task) {
         // Explicit user Run produced no task on THIS engine too — same feedback
@@ -1160,6 +1176,74 @@ export async function generateIdleReviewTask(state) {
 }
 
 /**
+ * Build the dedup sets `queueEligibleImprovementTasks` uses to decide whether
+ * an improvement slot is already occupied.
+ *
+ * Active (pending/in_progress) tasks occupy both their per-type slot and the
+ * per-app "one improvement at a time" cap. Blocked tasks ALSO occupy their
+ * per-type slot regardless of blockedCategory (#2614): before this, only
+ * `user-terminated` blocked tasks counted, so a task blocked by repeated
+ * failures (max-retries, max-spawns, provider-config, unknown, …) was
+ * invisible to dedup and the generator minted an identical duplicate every
+ * cadence tick — nothing reaps blocked tasks, so the pile grew unbounded.
+ * Failure-blocked *improvement* tasks (blocked with any category except
+ * `user-terminated`, AND an analysis type is derivable) also count toward the
+ * per-app cap — the retry path is unblocking the existing task, not creating
+ * a new one. A blocked NON-improvement task (an investigation, a review
+ * follow-up) never holds the app cap: blocked tasks are not reaped, so it
+ * would freeze the app's improvement rotation forever. `user-terminated`
+ * keeps its original scope (per-type slot only) so an intentional kill of
+ * one type doesn't freeze the whole app's rotation either.
+ *
+ * `blockedTaskTypes` / `appsWithBlockedImprovement` are Maps (key → blocking
+ * task id) mirroring which entries came from blocked tasks so the caller can
+ * log a visible, actionable skip reason instead of silently suppressing
+ * generation.
+ *
+ * `ignoreTaskId` excludes one task from every set — used by the perpetual
+ * drain-on-completion refill, where the just-completed task is still
+ * `in_progress` on disk (agent:completed fires before updateTask finalizes
+ * it). Without it the completing task would make its own app look busy and
+ * block the next perpetual run.
+ */
+export function buildImprovementDedupSets(existingTasks, { ignoreTaskId = null } = {}) {
+  const existingTaskTypes = new Set();
+  // Apps that already have *any* pending/in_progress/failure-blocked improvement
+  // task. We cap each app at one queued improvement at a time to avoid a fan-out
+  // where multiple improvement types pile up faster than the per-app cooldown
+  // can drain them.
+  const appsWithPendingImprovement = new Set();
+  const blockedTaskTypes = new Map();
+  const appsWithBlockedImprovement = new Map();
+
+  for (const task of existingTasks) {
+    if (task.id === ignoreTaskId) continue;
+    const isActive = task.status === 'pending' || task.status === 'in_progress';
+    const isBlocked = task.status === 'blocked';
+    const isFailureBlocked = isBlocked && task.metadata?.blockedCategory !== 'user-terminated';
+    const analysisType = task.metadata?.analysisType ||
+      task.metadata?.selfImprovementType ||
+      task.description?.match(/\[(?:self-improvement|improvement)\]\s*(\w[\w-]*)/i)?.[1];
+    const appId = task.metadata?.app;
+    if ((isActive || isBlocked) && analysisType) {
+      const taskKey = appId ? `app:${appId}:${analysisType}` : analysisType;
+      existingTaskTypes.add(taskKey);
+      if (isBlocked && !blockedTaskTypes.has(taskKey)) blockedTaskTypes.set(taskKey, task.id);
+    }
+    // Active tasks of ANY kind with an app hold the per-app cap (pre-existing
+    // behavior — active tasks drain, so the hold is temporary). Blocked tasks
+    // hold it only when failure-blocked AND actually an improvement task —
+    // see the docstring above.
+    if ((isActive || (isFailureBlocked && analysisType)) && appId && !isRecoveryTask(task)) {
+      appsWithPendingImprovement.add(appId);
+      if (isFailureBlocked && !appsWithBlockedImprovement.has(appId)) appsWithBlockedImprovement.set(appId, task.id);
+    }
+  }
+
+  return { existingTaskTypes, appsWithPendingImprovement, blockedTaskTypes, appsWithBlockedImprovement };
+}
+
+/**
  * Queue eligible self-improvement and app improvement tasks as system tasks
  * Called during every evaluation to ensure system tasks are queued even when user tasks exist
  * Tasks are queued to COS-TASKS.md and will be picked up in Priority 2
@@ -1169,38 +1253,13 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, { ignore
 
   if (!isImprovementEnabled(state)) return;
 
-  // Get existing pending/in_progress system tasks to avoid duplicates
-  // Also skip task types where a user-terminated blocked task exists (user intentionally killed it)
-  // `ignoreTaskId` excludes one task from both the per-app "already busy" cap and
-  // the per-type dedup set — used by the perpetual drain-on-completion refill,
-  // where the just-completed task is still `in_progress` on disk (agent:completed
-  // fires before updateTask finalizes it). Without it the completing task would
-  // make its own app look busy and block the next perpetual run. The same id is
-  // forwarded to addTask below so its disk-level duplicate scan ignores it too.
+  // Existing active AND blocked system tasks feed the dedup sets — see
+  // buildImprovementDedupSets for the occupancy semantics (#2614). The same
+  // `ignoreTaskId` is forwarded to addTask below so its disk-level duplicate
+  // scan ignores it too.
   const existingTasks = cosTaskData.tasks || [];
-  const existingTaskTypes = new Set();
-  // Apps that already have *any* pending/in_progress improvement task. We cap each
-  // app at one queued improvement at a time to avoid a fan-out where multiple
-  // improvement types pile up faster than the per-app cooldown can drain them.
-  const appsWithPendingImprovement = new Set();
-
-  for (const task of existingTasks) {
-    if (task.id === ignoreTaskId) continue;
-    const isActive = task.status === 'pending' || task.status === 'in_progress';
-    const isUserTerminated = task.status === 'blocked' && task.metadata?.blockedCategory === 'user-terminated';
-    if (isActive || isUserTerminated) {
-      const analysisType = task.metadata?.analysisType ||
-        task.metadata?.selfImprovementType ||
-        task.description?.match(/\[(?:self-improvement|improvement)\]\s*(\w[\w-]*)/i)?.[1];
-      const appId = task.metadata?.app;
-      if (analysisType) {
-        existingTaskTypes.add(appId ? `app:${appId}:${analysisType}` : analysisType);
-      }
-    }
-    if (isActive && task.metadata?.app && !isRecoveryTask(task)) {
-      appsWithPendingImprovement.add(task.metadata.app);
-    }
-  }
+  const { existingTaskTypes, appsWithPendingImprovement, blockedTaskTypes, appsWithBlockedImprovement } =
+    buildImprovementDedupSets(existingTasks, { ignoreTaskId });
 
   let queued = 0;
 
@@ -1223,7 +1282,11 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, { ignore
     // until the current task drains, otherwise they queue faster than they
     // can run (per-project concurrency limit + cooldown after each completion).
     if (appsWithPendingImprovement.has(app.id)) {
-      emitLog('debug', `App ${app.name} already has a pending improvement task — skipping queue`);
+      if (appsWithBlockedImprovement.has(app.id)) {
+        emitLog('info', `⛔ Skipping improvement queue for ${app.name}: failure-blocked improvement task ${appsWithBlockedImprovement.get(app.id)} occupies the app slot — resolve or delete it to resume`, { appId: app.id });
+      } else {
+        emitLog('debug', `App ${app.name} already has a pending improvement task — skipping queue`);
+      }
       continue;
     }
 
@@ -1268,7 +1331,11 @@ export async function queueEligibleImprovementTasks(state, cosTaskData, { ignore
 
     const taskKey = `app:${app.id}:${nextType}`;
     if (existingTaskTypes.has(taskKey)) {
-      emitLog('debug', `Improvement task ${nextType} for ${app.name} already queued`);
+      if (blockedTaskTypes.has(taskKey)) {
+        emitLog('info', `⛔ Skipping ${nextType} for ${app.name}: blocked task ${blockedTaskTypes.get(taskKey)} of this type already exists — resolve or delete it to resume`, { appId: app.id });
+      } else {
+        emitLog('debug', `Improvement task ${nextType} for ${app.name} already queued`);
+      }
       continue;
     }
 

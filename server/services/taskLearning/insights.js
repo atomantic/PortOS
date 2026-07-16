@@ -62,6 +62,19 @@ export async function getLearningInsights() {
   // success-criteria miss counts the coarse errorPatterns aggregate can't carry.
   const failureSignatures = summarizeFailureSignatures(data.failureSignatures);
 
+  // Environmental/infrastructure failures (issue #2618): rate-limit/auth/billing/
+  // startup-class events tracked apart from the task aggregates — surfaced here
+  // so the Learning UI can show an outage happened without it denting any rate.
+  // `|| {}` tolerates a learning.json that predates the additive key.
+  const environmentalFailures = Object.entries(data.environmentalFailures || {})
+    .map(([category, info]) => ({
+      category,
+      count: info.count,
+      lastOccurred: info.lastOccurred,
+      affectedTypes: Object.keys(info.taskTypes || {})
+    }))
+    .sort((a, b) => b.count - a.count);
+
   // Model tier effectiveness
   const modelEffectiveness = Object.entries(data.byModelTier)
     .map(([tier, metrics]) => ({
@@ -111,6 +124,7 @@ export async function getLearningInsights() {
       })),
       commonErrors,
       failureSignatures,
+      environmentalFailures,
       modelEffectiveness,
       recentUnknownErrors: data.recentUnknownErrors || []
     },

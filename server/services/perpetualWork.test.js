@@ -185,6 +185,104 @@ describe('perpetualWork', () => {
       expect(out).toMatchObject({ actionable: false, reason: 'no-open-issues', total: 0, inFlightCount: 0 });
     });
 
+    it('reports no-authored-issues (not no-open-issues) when the author filter hides an otherwise non-empty queue', async () => {
+      // The author-filtered probe finds nothing (e.g. self/@me is the wrong forge
+      // identity); the unfiltered re-probe sees 3 open. Must NOT flatten to
+      // "no open issues" — surface the real count + the actionable reason.
+      spawn.mockImplementation((cmd, args = []) => {
+        if (cmd === 'gh' && args[0] === 'issue') {
+          const filtered = args.includes('--author');
+          return fakeChild(filtered ? '[]' : JSON.stringify([
+            { number: 1, title: 'a', assignees: [], labels: [] },
+            { number: 2, title: 'b', assignees: [], labels: [] },
+            { number: 3, title: 'c', assignees: [], labels: [] }
+          ]));
+        }
+        return fakeChild('');
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'self' });
+      expect(out).toMatchObject({
+        actionable: false, count: 0, total: 3, filteredCount: 0, inFlightCount: 0,
+        reason: 'no-authored-issues'
+      });
+      // Exactly two `gh issue` calls: the filtered probe + the unfiltered re-probe.
+      const issueCalls = spawn.mock.calls.filter(([cmd, a]) => cmd === 'gh' && a[0] === 'issue');
+      expect(issueCalls.some(([, a]) => a.includes('--author'))).toBe(true);
+      expect(issueCalls.some(([, a]) => !a.includes('--author'))).toBe(true);
+    });
+
+    it('owner filter on an org-owned repo reports owner-is-org with the real open count (never queries --author <org>)', async () => {
+      // The exact owner-filter trap: the repo owner is an ORG, and an org login
+      // can never be an issue author, so `--author <org>` is guaranteed empty.
+      // The detector short-circuits to `owner-is-org` and reports the true count.
+      spawn.mockImplementation((cmd, args = []) => {
+        if (cmd === 'gh' && args[0] === 'repo') {
+          return fakeChild(JSON.stringify({ owner: { login: 'AcmeOrg' }, isInOrganization: true }));
+        }
+        if (cmd === 'gh' && args[0] === 'issue') {
+          return fakeChild(JSON.stringify([{ number: 5, title: 'x', assignees: [], labels: [] }]));
+        }
+        return fakeChild('');
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'owner' });
+      expect(out).toMatchObject({ reason: 'owner-is-org', total: 1, count: 0, filteredCount: 0 });
+      // The guaranteed-empty `--author <org>` query is skipped entirely — only
+      // the unfiltered count re-probe runs.
+      const issueCalls = spawn.mock.calls.filter(([cmd, a]) => cmd === 'gh' && a[0] === 'issue');
+      expect(issueCalls.every(([, a]) => !a.includes('--author'))).toBe(true);
+    });
+
+    it('owner filter on a user-owned repo passes --author <login> and detects normally', async () => {
+      spawn.mockImplementation((cmd, args = []) => {
+        if (cmd === 'gh' && args[0] === 'repo') {
+          return fakeChild(JSON.stringify({ owner: { login: 'alice' }, isInOrganization: false }));
+        }
+        if (cmd === 'gh' && args[0] === 'issue') {
+          return fakeChild(JSON.stringify([{ number: 5, title: 'x', assignees: [], labels: [] }]));
+        }
+        if (cmd === 'git' && args[0] === 'branch') return fakeChild('main\n');
+        return fakeChild('');
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'owner' });
+      expect(out.actionable).toBe(true);
+      const listCall = spawn.mock.calls.find(([cmd, a]) => cmd === 'gh' && a[0] === 'issue');
+      expect(listCall[1]).toContain('--author');
+      expect(listCall[1]).toContain('alice');
+    });
+
+    it('still reports no-open-issues when the repo is genuinely empty under an author filter', async () => {
+      // Both the filtered probe AND the unfiltered re-probe are empty → truly nothing.
+      spawn.mockImplementation((cmd, args = []) => {
+        if (cmd === 'gh' && args[0] === 'issue') return fakeChild('[]');
+        return fakeChild('');
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'self' });
+      expect(out).toMatchObject({ actionable: false, reason: 'no-open-issues', total: 0 });
+    });
+
+    it('does not run a fallback re-probe under the "any" filter (no author was applied)', async () => {
+      let issueCalls = 0;
+      spawn.mockImplementation((cmd, args = []) => {
+        if (cmd === 'gh' && args[0] === 'issue') { issueCalls++; return fakeChild('[]'); }
+        return fakeChild('');
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
+      expect(out.reason).toBe('no-open-issues');
+      expect(issueCalls).toBe(1); // no second, unfiltered probe
+    });
+
+    it('falls back to no-open-issues when the unfiltered re-probe itself fails (safe, not a phantom count)', async () => {
+      spawn.mockImplementation((cmd, args = []) => {
+        if (cmd === 'gh' && args[0] === 'issue') {
+          if (args.includes('--author')) return fakeChild('[]', 0); // filtered: clean empty
+          return fakeChild('', 1); // unfiltered re-probe errors
+        }
+        return fakeChild('');
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'self' });
+      expect(out.reason).toBe('no-open-issues');
+    });
+
     it('reports a transient failure when gh exits non-zero', async () => {
       routeSpawn({ 'gh issue': { stdout: '', code: 1 } });
       const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
@@ -266,6 +364,19 @@ describe('perpetualWork', () => {
       routeSpawn({ 'glab api': { stdout: '', code: 1 } });
       const out = await detectGitlabIssues(app, { issueAuthorFilter: 'self' });
       expect(out).toMatchObject({ actionable: false, reason: 'glab-unavailable', transient: true });
+    });
+
+    it('self mode reports no-authored-issues when the author filter hides a non-empty queue', async () => {
+      spawn.mockImplementation((cmd, args = []) => {
+        if (cmd === 'glab' && args[0] === 'api') return fakeChild('octo\n'); // glab api user
+        if (cmd === 'glab' && args[0] === 'issue') {
+          const filtered = args.includes('--author');
+          return fakeChild(filtered ? '[]' : JSON.stringify([{ iid: 10, title: 'x', assignees: [], labels: [] }]));
+        }
+        return fakeChild('');
+      });
+      const out = await detectGitlabIssues(app, { issueAuthorFilter: 'self' });
+      expect(out).toMatchObject({ actionable: false, reason: 'no-authored-issues', total: 1, filteredCount: 0 });
     });
   });
 });

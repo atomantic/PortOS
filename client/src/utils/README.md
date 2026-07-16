@@ -44,7 +44,7 @@ grep -i "what you want to do" client/src/utils/README.md
 | Module | Purpose |
 |---|---|
 | `lazyWithReload` | `React.lazy` wrapper that auto-reloads once on a stale-chunk import error (post-deploy hash mismatch). |
-| `staleChunkReload` | Detects stale dynamic-import chunk errors (`isStaleChunkError`) and triggers a one-time reload guard. |
+| `staleChunkReload` | Detects stale dynamic-import chunk errors (`isStaleChunkError`) and triggers a one-time reload guard; `purgeOfflineCaches()` drops the service-worker caches so the recovery reload boots the fresh bundle. |
 
 ## File handling
 
@@ -77,6 +77,8 @@ its tunable constants and placement helpers.
 | `cityEasterEggs` | Unlockable easter eggs from context (date/character/goals) → placements (`computeEasterEggs`). |
 | `cityFederation` | Sync-peer reachability horizon: status color/opacity, bridge state, peer placement (`computeFederationHorizon`). |
 | `cityFilter` | Status-filter definitions and app-filtering result (`computeFilterResult`). |
+| `cityFocusCamera` | Pure camera-framing math for building focus mode: orbital `position`/`target` that frame one borough for a given aspect ratio + HUD safe area (`computeFocusCamera`). |
+| `cityFocusState` | Resolve the `/city/apps/:appId` route param + app list into `{ hasFocus, focusedApp, notFound }`, deferring the not-found flag until apps finish loading (`resolveCityFocus`). |
 | `cityFlowLines` | Inter-building flow-line connections between active/agent nodes (`computeFlowConnections`). |
 | `cityGoalMonuments` | Goal monuments & forest: stall detection, milestone segments, placement (`computeGoalMonuments`, `computeGoalForest`). |
 | `cityHealthTower` | Health-metric tower segments from the latest health entry (`computeHealthTower`). |

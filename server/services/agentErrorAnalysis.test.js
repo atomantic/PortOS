@@ -8,6 +8,7 @@ vi.mock('./cos.js', () => ({ addTask: vi.fn(), updateTask: vi.fn(), getAllTasks:
 import {
   analyzeAgentFailure,
   resolveFailedTaskDecision,
+  resolveTypeFailureSignal,
   maybeCreateInvestigationTask,
   createInvestigationTask,
   buildInvestigationFingerprint,
@@ -17,6 +18,8 @@ import {
   INVESTIGATION_CIRCUIT_MAX_CREATIONS,
   __resetInvestigationCircuit
 } from './agentErrorAnalysis.js';
+import { API_ACCESS_ERROR_CATEGORIES } from './agentErrorAnalysis.js';
+import { ENVIRONMENTAL_ERROR_CATEGORIES } from './taskLearning/metrics.js';
 import { addTask, updateTask, getAllTasks } from './cos.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 
@@ -148,6 +151,89 @@ describe('analyzeAgentFailure — ERROR_PATTERNS classification', () => {
   });
 });
 
+// Classification provenance (#2642): the environmental-exclusion gate in
+// task-learning trusts `origin` to tell a genuine provider/runner signal from a
+// loose keyword sweep over agent output, so every classifier return stamps one.
+describe('analyzeAgentFailure — provenance origin (#2642)', () => {
+  it('stamps provider origin on a structured API-error rate-limit', () => {
+    const analysis = analyzeAgentFailure(withLead('API Error: 429 Too Many Requests, please slow down'), { id: 't' }, 'x');
+    expect(analysis.category).toBe('rate-limit');
+    expect(analysis.origin).toBe('provider');
+  });
+
+  it('stamps output-scan origin on a bare "rate limit" phrase in agent output', () => {
+    // A failing test whose tail prints "rate limit" trips /rate.?limit/ but is NOT
+    // a provider signal — it must stay output-scan so learning counts it as real.
+    const analysis = analyzeAgentFailure(withLead('FAIL src/foo.test.js — the rate limit guard rejected the request'), { id: 't' }, 'x');
+    expect(analysis.category).toBe('rate-limit');
+    expect(analysis.origin).toBe('output-scan');
+  });
+
+  it('stamps runner origin on a structured ECONNREFUSED but output-scan on a bare "network error"', () => {
+    const refused = analyzeAgentFailure(withLead('Error: connect ECONNREFUSED 127.0.0.1:443 while reaching the API'), { id: 't' }, 'x');
+    expect(refused.category).toBe('network-error');
+    expect(refused.origin).toBe('runner');
+
+    const bare = analyzeAgentFailure(withLead('The integration test asserted a network error banner is shown'), { id: 't' }, 'x');
+    expect(bare.category).toBe('network-error');
+    expect(bare.origin).toBe('output-scan');
+  });
+
+  it('stamps provider origin on a structured 401 but output-scan on a bare "unauthorized"', () => {
+    const structured = analyzeAgentFailure(withLead('API Error: 401 Unauthorized — authentication failed'), { id: 't' }, 'x');
+    expect(structured.origin).toBe('provider');
+
+    const bare = analyzeAgentFailure(withLead('The e2e suite failed: expected a 403 when unauthorized users hit /admin'), { id: 't' }, 'x');
+    expect(bare.category).toBe('auth-error');
+    expect(bare.origin).toBe('output-scan');
+  });
+
+  it('stamps provider origin on structured model errors', () => {
+    expect(analyzeAgentFailure(withLead('API Error: 404 - model: claude-4-ultra not found'), { id: 't' }, 'x').origin).toBe('provider');
+    expect(analyzeAgentFailure(withLead('Response: not_found_error - the requested model does not exist'), { id: 't' }, 'x').origin).toBe('provider');
+  });
+
+  it('stamps provider origin on a distinctive usage-limit idiom but output-scan on a bare "quota exceeded"', () => {
+    const idiom = analyzeAgentFailure(withLead('You have hit your usage limit for this account.'), { id: 't' }, 'x');
+    expect(idiom.category).toBe('usage-limit');
+    expect(idiom.origin).toBe('provider');
+
+    const generic = analyzeAgentFailure(withLead('The integration test expected a quota exceeded response from the stub.'), { id: 't' }, 'x');
+    expect(generic.category).toBe('usage-limit');
+    expect(generic.origin).toBe('output-scan');
+  });
+
+  it('stamps output-scan on model-not-supported (indistinguishable from a test asserting the phrase)', () => {
+    const analysis = analyzeAgentFailure(withLead("The 'gpt-5' model is not supported when using Codex with a ChatGPT account."), { id: 't' }, 'gpt-5');
+    expect(analysis.category).toBe('model-not-supported');
+    expect(analysis.origin).toBe('output-scan');
+  });
+
+  it('promotes to provider when a structured marker appears LATER than a loose match in the window', () => {
+    // Regex returns the leftmost match ("rate limit"), but a genuine "API Error: 429"
+    // later in the same output is still a real provider signal → provider, not output-scan.
+    const output = [
+      'Initializing agent session and preparing the working directory.',
+      'Note: the rate limit guard is enabled for this run',
+      'API Error: 429 Too Many Requests — backing off'
+    ].join('\n');
+    const analysis = analyzeAgentFailure(output, { id: 't' }, 'x');
+    expect(analysis.category).toBe('rate-limit');
+    expect(analysis.origin).toBe('provider');
+  });
+
+  it('stamps runner origin on a startup failure and output-scan on an unknown match', () => {
+    expect(analyzeAgentFailure('boom', { id: 't' }, 'x').origin).toBe('runner');
+    expect(analyzeAgentFailure(withLead('The agent halted after an unrecognized condition with no diagnostic.'), { id: 't' }, 'x').origin).toBe('output-scan');
+  });
+
+  it('stamps output-scan on a non-environmental keyword match (test-failure)', () => {
+    const analysis = analyzeAgentFailure(withLead('A unit test failed while running the suite; review the assertions'), { id: 't' }, 'x');
+    expect(analysis.category).toBe('test-failure');
+    expect(analysis.origin).toBe('output-scan');
+  });
+});
+
 // Pure decision branch of resolveFailedTaskUpdate. Replaces the inline
 // resolveFailedTaskStatus copy in subAgentSpawner.test.js, which omitted the
 // MAX_TOTAL_SPAWNS short-circuit and the compaction metadata entirely.
@@ -219,6 +305,57 @@ describe('resolveFailedTaskDecision', () => {
       expect(decision.status).toBe('blocked');
       expect(decision.metadataUpdates.failureCount).toBe(MAX_TASK_RETRIES);
     });
+  });
+});
+
+describe('resolveTypeFailureSignal (#2616)', () => {
+  it('a user-terminated run is skipped (never touches the ledger)', () => {
+    expect(resolveTypeFailureSignal({ success: false, terminatedByUser: true }))
+      .toEqual({ record: 'skip', category: null });
+    // ...even when the exit code says success.
+    expect(resolveTypeFailureSignal({ success: true, terminatedByUser: true }).record).toBe('skip');
+  });
+
+  it('a clean exit with no hook is a success signal', () => {
+    expect(resolveTypeFailureSignal({ success: true })).toEqual({ record: 'success', category: null });
+  });
+
+  it('a failed exit with no hook is a failure signal carrying the error category', () => {
+    expect(resolveTypeFailureSignal({ success: false, errorCategory: 'rate-limit' }))
+      .toEqual({ record: 'failure', category: 'rate-limit' });
+    // No category → 'unknown'.
+    expect(resolveTypeFailureSignal({ success: false }).category).toBe('unknown');
+  });
+
+  it('an exit-0 run whose hook reports unparseable-response counts as a failure', () => {
+    const signal = resolveTypeFailureSignal({
+      success: true,
+      hookResult: { ran: true, outcome: { action: 'no-op', reason: 'unparseable-response' } }
+    });
+    expect(signal).toEqual({ record: 'failure', category: 'unparseable-response' });
+  });
+
+  it('a thrown hook counts as a failure (hook-error) even on a clean exit', () => {
+    const signal = resolveTypeFailureSignal({ success: true, hookResult: { ran: true, threw: true } });
+    expect(signal).toEqual({ record: 'failure', category: 'hook-error' });
+  });
+
+  it('a run that already failed keeps its real error category (hook throw does not relabel it)', () => {
+    const signal = resolveTypeFailureSignal({
+      success: false,
+      errorCategory: 'rate-limit',
+      hookResult: { ran: true, threw: true }
+    });
+    expect(signal).toEqual({ record: 'failure', category: 'rate-limit' });
+  });
+
+  it('benign hook reasons (no-proposal/duplicate) leave the exit-code verdict intact', () => {
+    for (const reason of ['no-proposal', 'duplicate', 'scope-suppressed', null]) {
+      expect(resolveTypeFailureSignal({ success: true, hookResult: { ran: true, outcome: { reason } } }).record)
+        .toBe('success');
+    }
+    // A hook that didn't run at all (no-op path) also defers to the exit code.
+    expect(resolveTypeFailureSignal({ success: true, hookResult: { ran: false } }).record).toBe('success');
   });
 });
 
@@ -563,5 +700,19 @@ describe('createInvestigationTask body', () => {
     expect(body).not.toContain('192.0.2.10');
     expect(body).not.toContain('build-box');
     expect(body).not.toContain('/Users/alice');
+  });
+});
+
+describe('API_ACCESS_ERROR_CATEGORIES ⊆ ENVIRONMENTAL_ERROR_CATEGORIES (issue #2618)', () => {
+  it('every investigation-skip category is also excluded from learning aggregates', () => {
+    // The two sets stay separate on purpose: API_ACCESS_ERROR_CATEGORIES gates
+    // investigation-task spawning here, while taskLearning's environmental set
+    // (a leaf constant — importing this module there would drag the cos.js task
+    // graph into every taskLearning consumer) gates the success-rate aggregates.
+    // But the subset relation must hold: a category whose failures can't even be
+    // investigated by an LLM is certainly not task/model signal.
+    for (const category of API_ACCESS_ERROR_CATEGORIES) {
+      expect(ENVIRONMENTAL_ERROR_CATEGORIES.has(category)).toBe(true);
+    }
   });
 });

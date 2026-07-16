@@ -1,5 +1,5 @@
 import { useCallback, useState, useEffect, useMemo, useRef } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, useParams } from 'react-router-dom';
 import { useCityData } from '../hooks/useCityData';
 import { useCityPlayback } from '../hooks/useCityPlayback';
 import useCityAudio from '../hooks/useCityAudio';
@@ -16,6 +16,8 @@ import { CitySettingsProvider, useCitySettingsContext } from '../components/city
 import { QUALITY_PRESETS } from '../hooks/useCitySettings';
 import CitySettingsDrawer from '../components/city/CitySettingsDrawer';
 import { computeFilterResult } from '../utils/cityFilter';
+import { resolveCityFocus } from '../utils/cityFocusState';
+import useCityViewport from '../hooks/useCityViewport';
 import { DEFAULT_PRESET_ID, cyclePreset } from '../utils/cityPhotoMode';
 import { computeSoundscape } from '../utils/citySoundscape';
 import { CITY_COLORS, deriveCityPalette, resolveCityTimeOfDay } from '../components/city/cityConstants';
@@ -39,6 +41,22 @@ function CyberCityInner() {
   const { playSfx } = useCityAudio(settings, soundscape);
   const navigate = useNavigate();
   const location = useLocation();
+  const { appId } = useParams();
+  const { isDesktop } = useCityViewport();
+
+  // URL-addressed building focus (issue #2593). The `/city/apps/:appId` route param is the single
+  // source of truth for "which borough is focused" — reload/back-forward/deep-link all restore it.
+  const { hasFocus, focusedApp, notFound: focusNotFound } = useMemo(
+    () => resolveCityFocus(appId, apps, { loading }),
+    [appId, apps, loading],
+  );
+  const focusAgents = useMemo(() => agentMap?.get?.(appId)?.agents || [], [agentMap, appId]);
+  // HUD safe area the focus camera frames around: the detail panel sits on the right (desktop) or
+  // as a bottom sheet (compact), so keep the borough clear of it.
+  const focusHudSafe = useMemo(
+    () => (isDesktop ? { right: 0.28, bottom: 0 } : { right: 0, bottom: 0.5 }),
+    [isDesktop],
+  );
 
   // CyberCity follows the active PortOS theme: the HUD recolors via the
   // `cybercity-themed` CSS scope (see index.css) and the 3D scene's brand colors
@@ -123,9 +141,17 @@ function CyberCityInner() {
 
   const showSettings = location.pathname === '/city/settings';
 
+  // Mode precedence (issue #2593): entering exploration/photo/history while a borough is focused
+  // clears the focused route first, so the focus camera + detail panel stand down deterministically
+  // before the new mode takes the camera. `hasFocus` reads the URL, the single source of truth.
+  const clearFocusRoute = useCallback(() => {
+    if (hasFocus) navigate('/city');
+  }, [hasFocus, navigate]);
+
   const handleToggleExploration = useCallback(() => {
+    clearFocusRoute();
     updateSetting('explorationMode', !settings?.explorationMode);
-  }, [updateSetting, settings?.explorationMode]);
+  }, [clearFocusRoute, updateSetting, settings?.explorationMode]);
 
   // V (in exploration mode) swaps the follow-camera character view and first person.
   const handleToggleCameraView = useCallback(() => {
@@ -152,19 +178,21 @@ function CyberCityInner() {
 
   // Entering photo mode leaves exploration + playback; they're mutually exclusive modes.
   const enterPhotoMode = useCallback(() => {
+    clearFocusRoute();
     updateSetting('explorationMode', false);
     playback.exit();
     setPhotoPresetId(DEFAULT_PRESET_ID);
     setPhotoMode(true);
-  }, [updateSetting, playback]);
+  }, [clearFocusRoute, updateSetting, playback]);
   const exitPhotoMode = useCallback(() => setPhotoMode(false), []);
 
   // Entering playback leaves photo + exploration mode.
   const enterPlayback = useCallback(() => {
+    clearFocusRoute();
     setPhotoMode(false);
     updateSetting('explorationMode', false);
     playback.enter();
-  }, [updateSetting, playback]);
+  }, [clearFocusRoute, updateSetting, playback]);
 
   // Esc exits photo mode; ←/→ cycle the framing preset; D toggles depth-of-field. Bound only while
   // photo mode is on so it doesn't shadow other shortcuts. Ignores key events while typing.
@@ -304,18 +332,26 @@ function CyberCityInner() {
     { enabled: jiraAppsKey.length > 0 },
   );
 
+  // Selecting a building focuses it in-place (issue #2593) — the URL becomes /city/apps/:id and the
+  // camera flies to frame the borough WITHOUT leaving City. In street-level exploration the old
+  // behavior stands (walking up to a building and interacting opens the app page).
   const handleBuildingClick = useCallback((app) => {
-    if (app?.id) {
-      navigate(`/apps/${app.id}`);
-    } else {
-      navigate('/apps');
-    }
-  }, [navigate]);
+    if (!app?.id) return;
+    if (settings?.explorationMode) navigate(`/apps/${app.id}`);
+    else navigate(`/city/apps/${app.id}`);
+  }, [navigate, settings?.explorationMode]);
 
   const handleJumpToFirst = useCallback(() => {
     const first = filterResult.matches[0];
-    if (first?.id) navigate(`/apps/${first.id}`);
-  }, [filterResult.matches, navigate]);
+    if (!first?.id) return;
+    // Mirror handleBuildingClick: focus in-place from the overview, open the app page in exploration.
+    if (settings?.explorationMode) navigate(`/apps/${first.id}`);
+    else navigate(`/city/apps/${first.id}`);
+  }, [filterResult.matches, navigate, settings?.explorationMode]);
+
+  // Close focus → back to the plain overview. Open app → the existing app detail page (explicit).
+  const handleCloseFocus = useCallback(() => navigate('/city'), [navigate]);
+  const handleOpenApp = useCallback((id) => { if (id) navigate(`/apps/${id}`); }, [navigate]);
 
   // Headline numbers baked onto a captured city postcard. Derived from data the page already
   // has — no extra fetch. buildPostcardStats (in the overlay) omits absent/zero fields.
@@ -413,6 +449,8 @@ function CyberCityInner() {
         diagnosticsEnabled={showSettings}
         onAutoTierChange={setAutoTier}
         onAutoDiagnostics={setAutoDiagnostics}
+        focusedAppId={appId || null}
+        hudSafe={focusHudSafe}
       />
       {/* The full HUD hides in photo + playback mode so the view is clean; each
           mode's overlay replaces it. */}
@@ -439,6 +477,12 @@ function CyberCityInner() {
           onSelectApp={handleBuildingClick}
           onEnterPhotoMode={enterPhotoMode}
           onEnterPlayback={enterPlayback}
+          focusedAppId={appId || null}
+          focusedApp={focusedApp}
+          focusNotFound={focusNotFound}
+          focusAgents={focusAgents}
+          onCloseFocus={handleCloseFocus}
+          onOpenApp={handleOpenApp}
         />
       )}
       <CityPhotoOverlay

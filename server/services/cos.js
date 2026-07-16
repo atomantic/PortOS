@@ -54,8 +54,8 @@ export { runHealthCheck, getHealthStatus };
 // backward compat with `import * as cos` and the cos route handlers. The store
 // emits `tasks:changed`; init() below turns that into tryImmediateSpawn /
 // dequeueNextTask so the spawn-side logic stays here, not in the store.
-import { firstLine, PRIORITY_VALUES, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck } from './cosTaskStore.js';
-export { firstLine, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck };
+import { firstLine, PRIORITY_VALUES, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks } from './cosTaskStore.js';
+export { firstLine, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks };
 import { ensureInstanceId } from './instances.js';
 import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner } from './cosTaskClaim.js';
 
@@ -278,8 +278,18 @@ export async function start() {
       if (archived > 0) {
         emitLog('info', `📦 Auto-archived ${archived} stale agent(s) from state`);
       }
+      // Reap resolved failure artifacts (stale failure-blocked tasks +
+      // investigations whose origin is gone/completed) via federation-safe
+      // status flip — never deletion (#2619). Bounded per tick by the store.
+      const swept = await sweepResolvedFailureTasks().catch((err) => {
+        console.warn(`⚠️ sweepResolvedFailureTasks failed: ${err?.message || err}`);
+        return { reaped: 0 };
+      });
+      if (swept.reaped > 0) {
+        emitLog('info', `🧹 Auto-expired ${swept.reaped} resolved failure task(s) (${swept.staleBlocks} block(s), ${swept.investigations} investigation(s))`);
+      }
     },
-    metadata: { description: 'CoS health check + orphan cleanup + agent archival' }
+    metadata: { description: 'CoS health check + orphan cleanup + agent archival + failure-artifact reaper' }
   });
 
   // Performance summary (10 min)
@@ -758,6 +768,11 @@ async function spawnDequeuePriority0OnDemand(ctx) {
       // detector/reconcile below runs fresh and dispatches on live state (and,
       // if still idle, re-stamps a park reflecting THIS check).
       await taskScheduleMod.resetPerpetualForManualRun(request.taskType, targetApp.id);
+      // A manual "Run" also unparks a failure-parked type (#2616) — clear this
+      // app's consecutive-failure ledger. (Mirrors the sibling
+      // spawnPriority0OnDemand engine in cosTaskGenerator.js; either engine may
+      // drain a given on-demand request, so both must unpark.)
+      await taskScheduleMod.clearTaskTypeFailurePark(request.taskType, targetApp.id);
       // Advance the cooldown eagerly (deduped per app per cycle), but defer
       // binding the active agent until a task is produced — a null result
       // here must not strand `activeAgentId` (issue #978).
@@ -774,6 +789,8 @@ async function spawnDequeuePriority0OnDemand(ctx) {
       emitLog('info', `Processing on-demand improvement: ${request.taskType}`, { requestId: request.id });
       // Same fresh-check guarantee as the app-scoped branch above.
       await taskScheduleMod.resetPerpetualForManualRun(request.taskType);
+      // Manual re-run unparks a failure-parked type (global scope) — #2616.
+      await taskScheduleMod.clearTaskTypeFailurePark(request.taskType);
       await taskScheduleMod.recordExecution(`task:${request.taskType}`);
       await withStateLock(async () => {
         const s = await loadState();
@@ -789,6 +806,16 @@ async function spawnDequeuePriority0OnDemand(ctx) {
       if (!persisted?.duplicate) {
         cosEvents.emit('task:ready', task);
         capacity.trackSpawn(task);
+      } else if (persisted.status === 'blocked') {
+        // Explicit user Run colliding with a failure-blocked twin (#2614): the
+        // retry path is reviving the existing task, not minting a duplicate —
+        // and without this branch the Run is a silent no-op that strands the
+        // bound on-demand review marker.
+        await reviveBlockedTask(persisted.id, { priority: task.priority, metadata: task.metadata }, 'internal');
+        const revived = { ...task, id: persisted.id };
+        cosEvents.emit('task:ready', revived);
+        capacity.trackSpawn(revived);
+        emitLog('info', `🔁 On-demand ${request.taskType} revived blocked task ${persisted.id}`, { taskId: persisted.id });
       }
     } else if (!task) {
       // Explicit user "Run" produced no task — surface WHY (parked / transient /
@@ -1211,6 +1238,8 @@ export async function init() {
   //   fire tryImmediateSpawn so the just-added task starts instantly, bypassing
   //   the evaluation interval that's meant for system task generation.
   // - 'approved': a newly approved internal task can now spawn — re-run dequeue.
+  // - 'unblocked': a blocked task flipped back to pending (revive/retry, #2614)
+  //   is newly spawnable exactly like an approval — re-run dequeue.
   cosEvents.on('tasks:changed', (data) => {
     if (!isDaemonRunning() || !data?.action) return;
     if (data.action === 'added') {
@@ -1221,7 +1250,7 @@ export async function init() {
       // first; tryImmediateSpawn then handles the just-added task.
       setImmediate(() => dequeueNextTask());
       if (data.type === 'user' && data.task) setImmediate(() => tryImmediateSpawn(data.task));
-    } else if (data.action === 'approved') {
+    } else if (data.action === 'approved' || data.action === 'unblocked') {
       setImmediate(() => dequeueNextTask());
     }
   });

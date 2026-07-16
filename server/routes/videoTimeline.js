@@ -9,7 +9,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest, isPaginationRequested, paginateArray } from '../lib/validation.js';
 import {
   listProjects,
   getProject,
@@ -41,8 +41,15 @@ const updateBodySchema = z.object({
   message: 'PATCH body must include at least name or clips',
 });
 
-router.get('/projects', asyncHandler(async (_req, res) => {
-  res.json(await listProjects());
+// Backward-compatible by default: returns the full projects array. When a client
+// passes `limit`/`offset`, the response becomes the bounded
+// `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
+router.get('/projects', asyncHandler(async (req, res) => {
+  const projects = await listProjects();
+  if (!isPaginationRequested(req.query)) {
+    return res.json(projects);
+  }
+  res.json(paginateArray(projects, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.post('/projects', asyncHandler(async (req, res) => {

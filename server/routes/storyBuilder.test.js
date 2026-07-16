@@ -56,6 +56,27 @@ describe('GET /api/story-builder/steps', () => {
   });
 });
 
+describe('GET /api/story-builder', () => {
+  it('returns the full sessions array by default', async () => {
+    const res = await request(makeApp()).get('/api/story-builder');
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body)).toBe(true);
+  });
+
+  it('returns a bounded envelope when pagination is requested', async () => {
+    svc.listStorySessions.mockResolvedValueOnce(
+      Array.from({ length: 5 }, (_, i) => ({ id: `stb-${i}` }))
+    );
+    const res = await request(makeApp()).get('/api/story-builder?limit=2&offset=1');
+    expect(res.status).toBe(200);
+    expect(res.body.items).toHaveLength(2);
+    expect(res.body.items[0].id).toBe('stb-1');
+    expect(res.body.total).toBe(5);
+    expect(res.body.limit).toBe(2);
+    expect(res.body.offset).toBe(1);
+  });
+});
+
 describe('POST /api/story-builder', () => {
   it('creates a session (201) and dispatches to the service', async () => {
     const res = await request(makeApp()).post('/api/story-builder').send({ title: 'Salt Run', seedIdea: 'seed' });

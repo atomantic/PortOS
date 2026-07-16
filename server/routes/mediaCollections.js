@@ -12,7 +12,7 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError, createServiceErrorMapper } from '../lib/errorHandler.js';
 import { validateRequest, mediaCollectionBulkItemsSchema } from '../lib/validation.js';
 import * as svc from '../services/mediaCollections.js';
 
@@ -24,11 +24,7 @@ const SERVICE_ERROR_STATUS = {
   [svc.ERR_VALIDATION]: 400,
 };
 
-const mapServiceError = (err) => {
-  const status = SERVICE_ERROR_STATUS[err?.code];
-  if (status) return new ServerError(err.message, { status, code: err.code });
-  return err;
-};
+const mapServiceError = createServiceErrorMapper(SERVICE_ERROR_STATUS);
 
 const nameSchema = z.string().trim().min(1).max(svc.NAME_MAX_LENGTH);
 const descriptionSchema = z.string().trim().max(svc.DESCRIPTION_MAX_LENGTH);

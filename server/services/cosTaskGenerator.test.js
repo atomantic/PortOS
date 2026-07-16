@@ -28,7 +28,7 @@ vi.mock('./codeReview.js', async (importActual) => ({
   getCodeReviewDefaults: vi.fn(async () => ({ reviewers: ['copilot'], usernames: ['alice'], optionalReviewers: [] })),
 }));
 
-import { selectDryRunAutoApproved, exceedsMaxSpawns, resolveIssueAuthorFilterBlock, resolveSwarmBlock, isCooldownExemptTask, emitOnDemandEmpty, buildJiraTicketTask } from './cosTaskGenerator.js';
+import { selectDryRunAutoApproved, exceedsMaxSpawns, resolveIssueAuthorFilterBlock, resolveSwarmBlock, isCooldownExemptTask, emitOnDemandEmpty, buildJiraTicketTask, buildImprovementDedupSets } from './cosTaskGenerator.js';
 import { cosEvents } from './cosEvents.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 
@@ -558,5 +558,120 @@ describe('emitOnDemandEmpty', () => {
     const body = GEN_SRC.slice(idx, idx + 1600);
     expect(body).toMatch(/request\.taskType === 'layered-intelligence'/);
     expect(body).toMatch(/layeredIntelligence\?\.lastRunReason/);
+  });
+});
+
+describe('buildImprovementDedupSets (#2614 — failure-blocked tasks occupy their slot)', () => {
+  const liTask = (over = {}, meta = {}) => ({
+    id: 'sys-t1',
+    status: 'pending',
+    description: '[Improvement: App One] Layered Intelligence',
+    metadata: { app: 'app-1', analysisType: 'layered-intelligence', ...meta },
+    ...over
+  });
+
+  it('an active (pending) task occupies its type slot and the per-app cap, unflagged as blocked', () => {
+    const sets = buildImprovementDedupSets([liTask()]);
+    expect(sets.existingTaskTypes.has('app:app-1:layered-intelligence')).toBe(true);
+    expect(sets.appsWithPendingImprovement.has('app-1')).toBe(true);
+    expect(sets.blockedTaskTypes.size).toBe(0);
+    expect(sets.appsWithBlockedImprovement.size).toBe(0);
+  });
+
+  it('a failure-blocked task occupies its type slot AND the per-app cap, flagged for logging', () => {
+    // Pre-fix, a task blocked with a failure category counted toward NEITHER
+    // set, so the generator minted an identical duplicate every cadence tick.
+    const sets = buildImprovementDedupSets([
+      liTask({ status: 'blocked' }, { blockedCategory: 'max-retries' })
+    ]);
+    expect(sets.existingTaskTypes.has('app:app-1:layered-intelligence')).toBe(true);
+    expect(sets.appsWithPendingImprovement.has('app-1')).toBe(true);
+    // The blocked maps carry the occupying task id so skip logs are actionable.
+    expect(sets.blockedTaskTypes.get('app:app-1:layered-intelligence')).toBe('sys-t1');
+    expect(sets.appsWithBlockedImprovement.get('app-1')).toBe('sys-t1');
+  });
+
+  it('a failure-blocked NON-improvement task never holds the per-app cap', () => {
+    // Blocked tasks are not reaped, so a blocked investigation / review
+    // follow-up (app-tagged but no derivable analysis type) holding the cap
+    // would freeze the app's improvement rotation forever.
+    const sets = buildImprovementDedupSets([{
+      id: 'sys-inv-1',
+      status: 'blocked',
+      description: 'Investigate AI provider failure',
+      metadata: { app: 'app-1', blockedCategory: 'max-retries' }
+    }]);
+    expect(sets.appsWithPendingImprovement.size).toBe(0);
+    expect(sets.appsWithBlockedImprovement.size).toBe(0);
+    expect(sets.existingTaskTypes.size).toBe(0);
+  });
+
+  it('an ACTIVE non-improvement app task still holds the per-app cap (pre-existing behavior)', () => {
+    const sets = buildImprovementDedupSets([{
+      id: 'sys-inv-2',
+      status: 'in_progress',
+      description: 'Investigate AI provider failure',
+      metadata: { app: 'app-1' }
+    }]);
+    expect(sets.appsWithPendingImprovement.has('app-1')).toBe(true);
+  });
+
+  it('a blocked task with NO blockedCategory counts as failure-blocked', () => {
+    const sets = buildImprovementDedupSets([liTask({ status: 'blocked' })]);
+    expect(sets.existingTaskTypes.has('app:app-1:layered-intelligence')).toBe(true);
+    expect(sets.appsWithPendingImprovement.has('app-1')).toBe(true);
+  });
+
+  it('a user-terminated blocked task occupies ONLY its type slot (semantics unchanged)', () => {
+    // An intentional kill of one type must not freeze the whole app's rotation.
+    const sets = buildImprovementDedupSets([
+      liTask({ status: 'blocked' }, { blockedCategory: 'user-terminated' })
+    ]);
+    expect(sets.existingTaskTypes.has('app:app-1:layered-intelligence')).toBe(true);
+    expect(sets.blockedTaskTypes.has('app:app-1:layered-intelligence')).toBe(true);
+    expect(sets.appsWithPendingImprovement.size).toBe(0);
+    expect(sets.appsWithBlockedImprovement.size).toBe(0);
+  });
+
+  it('a resolved (completed) task re-opens the slot — occupies nothing', () => {
+    const sets = buildImprovementDedupSets([liTask({ status: 'completed' })]);
+    expect(sets.existingTaskTypes.size).toBe(0);
+    expect(sets.appsWithPendingImprovement.size).toBe(0);
+    expect(sets.blockedTaskTypes.size).toBe(0);
+    expect(sets.appsWithBlockedImprovement.size).toBe(0);
+  });
+
+  it('ignoreTaskId excludes that task from every set', () => {
+    const sets = buildImprovementDedupSets(
+      [liTask({ status: 'blocked' }, { blockedCategory: 'max-retries' })],
+      { ignoreTaskId: 'sys-t1' }
+    );
+    expect(sets.existingTaskTypes.size).toBe(0);
+    expect(sets.appsWithPendingImprovement.size).toBe(0);
+  });
+
+  it('recovery tasks never count toward the per-app cap, blocked or not', () => {
+    const sets = buildImprovementDedupSets([
+      liTask({ status: 'blocked' }, { blockedCategory: 'max-retries', isRecovery: true })
+    ]);
+    expect(sets.appsWithPendingImprovement.size).toBe(0);
+    // ...but the type slot is still held so the same recovery type doesn't dupe.
+    expect(sets.existingTaskTypes.has('app:app-1:layered-intelligence')).toBe(true);
+  });
+
+  it('falls back to the description [improvement] tag when metadata has no analysis type', () => {
+    const sets = buildImprovementDedupSets([{
+      id: 'sys-t2',
+      status: 'blocked',
+      description: '[improvement] performance for the app',
+      metadata: { app: 'app-2', blockedCategory: 'unknown' }
+    }]);
+    expect(sets.existingTaskTypes.has('app:app-2:performance')).toBe(true);
+  });
+
+  it('queueEligibleImprovementTasks derives its dedup sets from the shared helper', () => {
+    // Source-pinned: the queue path must consume buildImprovementDedupSets so
+    // its occupancy semantics can't silently drift from the tested helper.
+    expect(GEN_SRC).toMatch(/buildImprovementDedupSets\(existingTasks/);
   });
 });

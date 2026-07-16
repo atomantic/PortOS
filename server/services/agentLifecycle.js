@@ -19,7 +19,7 @@ import { isInternalTaskId } from '../lib/taskParser.js';
 import { ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { createToolExecution, startExecution, completeExecution, errorExecution } from './toolStateMachine.js';
 import { determineLane, acquire, release } from './executionLanes.js';
-import { analyzeAgentFailure, resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
+import { analyzeAgentFailure, resolveFailedTaskUpdate, resolveTypeFailureSignal } from './agentErrorAnalysis.js';
 import { createAgentRun, completeAgentRun, checkForTaskCommit } from './agentRunTracking.js';
 import { buildAgentPrompt, getAppWorkspace } from './agentPromptBuilder.js';
 import { isOllamaClaudeProvider, isClaudeCommand, providerSuppliesGithubToken } from '../lib/providerModels.js';
@@ -142,6 +142,18 @@ export async function spawnAgentForTask(task) {
  * early `return null` and any throw is covered by the wrapper's release.
  */
 async function runAgentSpawn(task) {
+  // Normalize taskType once, up front (issue #2633). Direct `task:ready` emits —
+  // the Creative Director bridge, `dequeueNextTask`, and `spawnPriority0OnDemand` —
+  // publish task records without a `taskType`. Every claim/in_progress `updateTask`
+  // below falls back to `task.taskType || 'user'`, so an internal-file (`sys-*`)
+  // task without taskType would target TASKS.md instead of COS-TASKS.md, miss the
+  // record, and return a truthy `{ error }` object the `if (!updateResult)` check
+  // does not catch. Derive the type from the id here (mirrors the completion path,
+  // ~line 1084) so every write below routes to the correct file.
+  if (task && !task.taskType) {
+    task.taskType = isInternalTaskId(task.id || '') ? 'internal' : 'user';
+  }
+
   // Cross-instance claim guard (issue #1563, acceptance criterion 2). When this
   // task list is shared with a federated peer (full-sync mode, #1561), the peer
   // may already be working this task. Refuse to spawn while another instance
@@ -490,6 +502,19 @@ async function runAgentSpawn(task) {
         console.error(`❌ Failed to mark task ${task.id} as in_progress: ${err.message}`);
         return null;
       });
+    // Surface a silent `{ error }` miss (issue #2633) — the task id wasn't present
+    // in the file for `task.taskType`, so the claim didn't land. This is EXPECTED
+    // for legitimately-unpersisted autonomous emits: Priority 3 mission tasks
+    // (cos.js `spawnDequeuePriority3Missions`) and Priority 4 idle-review tasks
+    // carry `taskType: 'internal'` but are never written to COS-TASKS.md, so their
+    // in_progress `updateTask` returns `{ error: 'Task not found' }`. Warn-log it
+    // for visibility, but do NOT block the spawn on it — the pre-#2633 behavior
+    // spawned these anyway, and treating the error as fatal would silently kill
+    // every mission / idle-review autonomous spawn. Only a `null` (updateTask
+    // threw) is fatal.
+    if (updateResult?.error) {
+      emitLog('warn', `⚠️ in_progress claim for task ${task.id} returned an error (taskType=${task.taskType}): ${updateResult.error}`, { taskId: task.id, error: updateResult.error });
+    }
     if (!updateResult) {
       await cleanupOnError('Failed to update task status');
       return null;
@@ -917,9 +942,36 @@ export async function finalizeAgent({
   // isolated from the agent's discarded worktree — the payload is the only
   // durable channel out. Errors are caught: a hook failure must not strand the
   // rest of finalize. See taskTypeHooks.js + the design plan.
-  await dispatchTaskOutputHook({ agentId, task, success, workspacePath }).catch(err => {
+  const hookResult = await dispatchTaskOutputHook({ agentId, task, success, workspacePath }).catch(err => {
     emitLog('error', `processTaskOutput hook threw for ${agentId} (${task?.taskType}): ${err.message}`, { agentId, error: err.message });
+    // A thrown hook is a non-success signal for the type ledger (#2616).
+    return { ran: true, threw: true };
   });
+
+  // Type-level consecutive-failure ledger (#2616): feed the per-type
+  // backoff/auto-park in taskSchedule. Only SCHEDULED task types carry
+  // `metadata.analysisType`; user/ad-hoc tasks don't participate. The pure
+  // resolveTypeFailureSignal decides success vs failure vs skip — including the
+  // exit-0-but-unparseable-output case that must count as a failure.
+  const scheduledType = task?.metadata?.analysisType || null;
+  if (scheduledType) {
+    const signal = resolveTypeFailureSignal({
+      success,
+      terminatedByUser,
+      hookResult,
+      errorCategory: errorAnalysis?.category
+    });
+    if (signal.record !== 'skip') {
+      const ledgerAppId = task?.metadata?.app || null;
+      const { recordTaskTypeFailure, recordTaskTypeSuccess } = await import('./taskSchedule.js');
+      const ledgerUpdate = signal.record === 'failure'
+        ? recordTaskTypeFailure(scheduledType, ledgerAppId, { errorCategory: signal.category })
+        : recordTaskTypeSuccess(scheduledType, ledgerAppId);
+      await ledgerUpdate.catch(err => {
+        emitLog('warn', `⚠️ Task-type ledger update failed for ${scheduledType}: ${err.message}`, { taskType: scheduledType, agentId });
+      });
+    }
+  }
 
   await processAgentCompletion(agentId, task, success, outputBuffer);
 }
@@ -935,10 +987,10 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath })
   // task.taskType is the CoS queue category, e.g. 'internal'). A programmatic-I/O
   // hook is keyed on the scheduled type.
   const taskType = task?.metadata?.analysisType || task?.taskType;
-  if (!taskType) return;
+  if (!taskType) return { ran: false };
   const { getTaskOutputHook } = await import('./taskTypeHooks.js');
   const hook = await getTaskOutputHook(taskType);
-  if (!hook) return;
+  if (!hook) return { ran: false };
 
   const cwd = workspacePath || task?.metadata?.repoPath || null;
   let payload = null;
@@ -961,7 +1013,7 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath })
     }
   }
 
-  await hook({
+  const outcome = await hook({
     appId: task?.metadata?.app || null,
     success,
     payload,
@@ -969,6 +1021,10 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath })
     agentId,
     task,
   });
+  // The outcome's `reason` is what lets finalizeAgent count a "completed" run
+  // that produced nothing usable (`unparseable-response`) as a type-level
+  // failure (#2616) — an exit-0 run whose structured output couldn't be parsed.
+  return { ran: true, outcome };
 }
 
 /**

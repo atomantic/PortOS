@@ -46,6 +46,32 @@ describe('deriveFailureSignalAvoidance (#2329)', () => {
     expect(out.sampleCount).toBe(2);
   });
 
+  it('ignores environmental-category signatures entirely (issue #2618)', () => {
+    // An hour of provider rate-limiting piles samples into the 'rate-limit'
+    // bucket; those must not reach avoidTiers through the signature signal.
+    const data = {
+      failureSignatures: {
+        'rate-limit': { count: 5, recent: [sample(), sample(), sample(), sample(), sample()] }
+      },
+      routingAccuracy: {}
+    };
+    const out = deriveFailureSignalAvoidance(data, 'user-task');
+    expect(out.avoidTiers).toEqual([]);
+    expect(out.sampleCount).toBe(0);
+
+    // Mixed buckets: only the non-environmental samples count.
+    const mixed = {
+      failureSignatures: {
+        'rate-limit': { count: 3, recent: [sample(), sample(), sample()] },
+        'test-failure': { count: 2, recent: [sample(), sample()] }
+      },
+      routingAccuracy: {}
+    };
+    const outMixed = deriveFailureSignalAvoidance(mixed, 'user-task');
+    expect(outMixed.sampleCount).toBe(2); // below MIN_FAILURE_SAMPLES(3)
+    expect(outMixed.avoidTiers).toEqual([]);
+  });
+
   it('flags an unproven tier with enough recent failures and attributes provider/model', () => {
     const data = dataWith([
       sample({ modelTier: 'heavy', provider: 'claude', model: 'opus' }),
@@ -116,6 +142,67 @@ describe('deriveFailureSignalAvoidance (#2329)', () => {
     // Once enough failures accumulate, even the conservative bar steers off.
     const more = dataWith([sample(), sample(), sample(), sample(), sample()]);
     expect(deriveFailureSignalAvoidance(more, 'user-task', { minFailureSamples: 5 }).avoidTiers).toContain('heavy');
+  });
+
+  describe('age windowing (issue #2619)', () => {
+    const NOW = Date.parse('2026-06-25T12:00:00.000Z');
+    const at = (days) => new Date(NOW - days * 24 * 60 * 60 * 1000).toISOString();
+
+    it('ignores failure samples older than the window (outage-era samples stop steering)', () => {
+      // Three heavy-tier failures, all >30 days old — a since-fixed outage.
+      const data = dataWith([
+        sample({ recordedAt: at(40) }),
+        sample({ recordedAt: at(45) }),
+        sample({ recordedAt: at(50) })
+      ]);
+      const out = deriveFailureSignalAvoidance(data, 'user-task', { now: NOW });
+      expect(out.sampleCount).toBe(0);
+      expect(out.avoidTiers).toEqual([]);
+    });
+
+    it('still steers off a tier whose recent failures are within the window', () => {
+      const data = dataWith([
+        sample({ recordedAt: at(1) }),
+        sample({ recordedAt: at(2) }),
+        sample({ recordedAt: at(3) })
+      ]);
+      const out = deriveFailureSignalAvoidance(data, 'user-task', { now: NOW });
+      expect(out.sampleCount).toBe(3);
+      expect(out.avoidTiers).toContain('heavy');
+    });
+
+    it('counts only in-window samples toward the failure-sample bar', () => {
+      // 2 fresh + 2 stale: below the aggressive bar (3) once the stale two drop.
+      const data = dataWith([
+        sample({ recordedAt: at(1) }),
+        sample({ recordedAt: at(2) }),
+        sample({ recordedAt: at(40) }),
+        sample({ recordedAt: at(45) })
+      ]);
+      const out = deriveFailureSignalAvoidance(data, 'user-task', { now: NOW });
+      expect(out.sampleCount).toBe(2);
+      expect(out.avoidTiers).toEqual([]);
+    });
+
+    it('keeps an undated sample (unparseable recordedAt), mirroring computeWindowedStats', () => {
+      const data = dataWith([
+        sample(), // no recordedAt
+        sample({ recordedAt: 'not-a-date' }),
+        sample({ recordedAt: at(1) })
+      ]);
+      const out = deriveFailureSignalAvoidance(data, 'user-task', { now: NOW });
+      expect(out.sampleCount).toBe(3);
+      expect(out.avoidTiers).toContain('heavy');
+    });
+
+    it('disables the age filter when maxAgeMs is null/0 (back-compat with direct callers)', () => {
+      const data = dataWith([
+        sample({ recordedAt: at(40) }),
+        sample({ recordedAt: at(45) }),
+        sample({ recordedAt: at(50) })
+      ]);
+      expect(deriveFailureSignalAvoidance(data, 'user-task', { now: NOW, maxAgeMs: 0 }).avoidTiers).toContain('heavy');
+    });
   });
 });
 
@@ -250,10 +337,22 @@ describe('windowed-rate decisions (issue #2617)', () => {
   });
 
   describe('checkAndRehabilitateSkippedTasks', () => {
-    it('does not reset a recovered type — it is no longer skipped, so there is nothing to rehabilitate', async () => {
-      const old = recoveredMetrics();
-      old.lastCompleted = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-      loadLearningData.mockResolvedValue(learningWith({ 'recovered': old }));
+    it('resets a recovered type via the recovery path even though it is not idle (issue #2619)', async () => {
+      // Poor lifetime (27%) but a clean recent window (100% over 15 samples) and
+      // still running (lastCompleted just now). Pre-#2619 the idle gate left its
+      // stale lifetime/duration/failure-signature data in place forever; now the
+      // recovery path clears it regardless of idle time.
+      loadLearningData.mockResolvedValue(learningWith({ 'recovered': recoveredMetrics() }));
+      const out = await checkAndRehabilitateSkippedTasks();
+      expect(out.count).toBe(1);
+      expect(out.rehabilitated[0]).toMatchObject({ taskType: 'recovered', trigger: 'recovery' });
+      expect(resetTaskTypeLearning).toHaveBeenCalledWith('recovered');
+    });
+
+    it('does not reset a poor-lifetime type whose recent window is still too thin to prove recovery (#2619)', async () => {
+      // Same 27% lifetime, but only 3 recent samples — below the 5-sample
+      // recovery bar — and not idle. Neither path should fire.
+      loadLearningData.mockResolvedValue(learningWith({ 'thin': thinWindowMetrics() }));
       const out = await checkAndRehabilitateSkippedTasks();
       expect(out.count).toBe(0);
       expect(resetTaskTypeLearning).not.toHaveBeenCalled();

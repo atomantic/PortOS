@@ -13,6 +13,7 @@ import { readFile, writeFile, rename, readdir, rm } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { cosEvents } from './cosEvents.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { loadState, saveState, withStateLock, AGENTS_DIR } from './cosState.js';
 import { atomicWrite, ensureDir, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
 import { recordDomainUsage } from './domainUsage.js';
@@ -347,10 +348,10 @@ export async function getAgent(agentId) {
 export async function getAgentPrompt(agentId) {
   const state = await loadState();
   const agent = state.agents[agentId];
-  if (!agent) return { error: 'Agent not found' };
+  if (!agent) throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });
   const agentDir = getAgentDir(agentId, agent.archiveDate);
   const promptPath = join(agentDir, 'prompt.txt');
-  if (!existsSync(promptPath)) return { error: 'Prompt file not found' };
+  if (!existsSync(promptPath)) throw new ServerError('Prompt file not found', { status: 404, code: 'NOT_FOUND' });
   const prompt = await readFile(promptPath, 'utf8');
   return { prompt, bytes: prompt.length };
 }
@@ -389,25 +390,23 @@ export async function sendBtwToAgent(agentId, message) {
   const agentInfo = await withStateLock(async () => {
     const state = await loadState();
     const agent = state.agents[agentId];
-    if (!agent) return { error: 'Agent not found' };
-    if (agent.status !== 'running') return { error: 'Agent is not running' };
+    if (!agent) throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });
+    if (agent.status !== 'running') throw new ServerError('Agent is not running', { status: 400, code: 'INVALID_STATE' });
     if (agent.metadata?.executionMode !== 'tui') {
-      return { error: 'BTW is only supported for Claude Code TUI agents.' };
+      throw new ServerError('BTW is only supported for Claude Code TUI agents.', { status: 400, code: 'INVALID_STATE' });
     }
     if (agent.metadata?.tuiKind !== 'claude') {
-      return { error: `BTW is only supported for Claude Code TUI agents (this agent runs ${agent.metadata.tuiKind || 'an unknown TUI'}).` };
+      throw new ServerError(`BTW is only supported for Claude Code TUI agents (this agent runs ${agent.metadata.tuiKind || 'an unknown TUI'}).`, { status: 400, code: 'INVALID_STATE' });
     }
     if (!agent.metadata?.tuiSessionId) {
-      return { error: 'Agent has no attached TUI session' };
+      throw new ServerError('Agent has no attached TUI session', { status: 400, code: 'INVALID_STATE' });
     }
     return { tuiSessionId: agent.metadata.tuiSessionId };
   });
 
-  if (agentInfo.error) return agentInfo;
-
   const shellService = await import('./shell.js');
   if (!shellService.getSession(agentInfo.tuiSessionId)) {
-    return { error: 'TUI session is no longer alive' };
+    throw new ServerError('TUI session is no longer alive', { status: 400, code: 'INVALID_STATE' });
   }
   // Bracketed-paste + delayed Enter, mirroring the initial prompt paste in
   // agentTuiSpawning.js: Claude Code commits the paste buffer before the
@@ -560,7 +559,7 @@ export async function deleteAgent(agentId) {
     const inState = !!state.agents[agentId];
     const inIndex = idx.has(agentId);
     if (!inState && !inIndex) {
-      return { error: 'Agent not found' };
+      throw new ServerError('Agent not found', { status: 404, code: 'NOT_FOUND' });
     }
 
     delete state.agents[agentId];

@@ -134,22 +134,45 @@ describe('formatPullRequestsForPrompt', () => {
 });
 
 describe('getSelfLogin', () => {
-  it('caches the resolved login', async () => {
+  it('resolves against the given host (via --hostname) and caches per host', async () => {
     execGhMock.mockResolvedValueOnce('bob\n');
-    expect(await getSelfLogin()).toBe('bob');
-    expect(await getSelfLogin()).toBe('bob');
+    expect(await getSelfLogin('github.com')).toBe('bob');
+    expect(await getSelfLogin('github.com')).toBe('bob');
     expect(execGhMock).toHaveBeenCalledTimes(1);
+    // --hostname is required: without it `gh api` hits github.com regardless of
+    // cwd and would resolve the wrong identity on an enterprise repo.
+    expect(execGhMock).toHaveBeenCalledWith(['api', 'user', '--hostname', 'github.com', '--jq', '.login']);
   });
+
+  it('caches each host independently — a different login per host', async () => {
+    execGhMock
+      .mockResolvedValueOnce('alice\n')        // github.com
+      .mockResolvedValueOnce('alice_corp\n');  // enterprise
+    expect(await getSelfLogin('github.com')).toBe('alice');
+    expect(await getSelfLogin('github.enterprise.test')).toBe('alice_corp');
+    // Both cached — no re-resolve for either host.
+    expect(await getSelfLogin('github.com')).toBe('alice');
+    expect(await getSelfLogin('github.enterprise.test')).toBe('alice_corp');
+    expect(execGhMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns null with no host and never shells out', async () => {
+    expect(await getSelfLogin()).toBe(null);
+    expect(await getSelfLogin('')).toBe(null);
+    expect(execGhMock).not.toHaveBeenCalled();
+  });
+
   it('returns null when gh fails', async () => {
     execGhMock.mockRejectedValueOnce(new Error('not authed'));
-    expect(await getSelfLogin()).toBe(null);
+    expect(await getSelfLogin('github.com')).toBe(null);
   });
+
   it('does not cache a failed lookup — retries on the next call', async () => {
     execGhMock.mockRejectedValueOnce(new Error('keychain locked'));
-    expect(await getSelfLogin()).toBe(null);
+    expect(await getSelfLogin('github.com')).toBe(null);
     // A transient failure must not wedge the cache: the next call retries.
     execGhMock.mockResolvedValueOnce('bob');
-    expect(await getSelfLogin()).toBe('bob');
+    expect(await getSelfLogin('github.com')).toBe('bob');
     expect(execGhMock).toHaveBeenCalledTimes(2);
   });
 });
@@ -164,7 +187,7 @@ describe('checkPullRequests', () => {
   });
 
   it('bails when the default branch cannot be resolved', async () => {
-    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, fullName: 'o/r' });
+    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'o/r' });
     execGhMock.mockResolvedValueOnce(''); // repo view → empty
     const r = await checkPullRequests(app, { authorFilter: 'any' });
     expect(r.ok).toBe(false);
@@ -172,7 +195,7 @@ describe('checkPullRequests', () => {
   });
 
   it('bails when an author gate is set but self login is unavailable', async () => {
-    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, fullName: 'o/r' });
+    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'o/r' });
     execGhMock
       .mockResolvedValueOnce('main')          // repo view → default branch
       .mockRejectedValueOnce(new Error('no auth')); // api user → fails
@@ -182,7 +205,7 @@ describe('checkPullRequests', () => {
   });
 
   it('bails when the PR list call fails', async () => {
-    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, fullName: 'o/r' });
+    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'o/r' });
     execGhMock
       .mockResolvedValueOnce('main')                  // repo view
       .mockRejectedValueOnce(new Error('list failed')); // pr list
@@ -192,7 +215,7 @@ describe('checkPullRequests', () => {
   });
 
   it('first run baselines without dispatching', async () => {
-    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, fullName: 'o/r' });
+    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'o/r' });
     execGhMock
       .mockResolvedValueOnce('main') // repo view
       .mockResolvedValueOnce(JSON.stringify([
@@ -206,7 +229,7 @@ describe('checkPullRequests', () => {
   });
 
   it('dispatches new PRs above the mark, honoring the author gate', async () => {
-    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, fullName: 'o/r' });
+    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'o/r' });
     execGhMock
       .mockResolvedValueOnce('main')        // repo view
       .mockResolvedValueOnce('bob')         // api user
@@ -221,5 +244,40 @@ describe('checkPullRequests', () => {
     expect(r.newLastSeen).toBe(8);
     expect(r.repoFullName).toBe('o/r');
     expect(r.defaultBranch).toBe('main');
+  });
+
+  it('accepts a GitHub Enterprise host (isGithub false) and resolves self against THAT host', async () => {
+    // The core fix: an enterprise repo (github.* but not github.com, so
+    // origin.isGithub is false) must still be watched, and the self gate must
+    // resolve identity on the enterprise host — not github.com.
+    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: false, host: 'github.enterprise.test', fullName: 'o/r' });
+    execGhMock
+      .mockResolvedValueOnce('main')           // repo view (default branch)
+      .mockResolvedValueOnce('alice_corp')     // api user --hostname github.enterprise.test
+      .mockResolvedValueOnce(JSON.stringify([
+        { number: 7, title: 'mine', author: { login: 'alice_corp' }, url: 'u7', createdAt: '2026-06-04T00:00:00Z', isDraft: false, headRefName: 'h7' }
+      ]));
+    const r = await checkPullRequests({ id: 'ent', repoPath: '/repos/ent', prWatcherState: { lastSeenPrNumber: 6 } }, { authorFilter: 'self' });
+    expect(r.ok).toBe(true);
+    expect(r.newPrs.map(p => p.number)).toEqual([7]);
+    // Mechanism assertions (not just the end result): self is resolved on the
+    // enterprise host via --hostname, and repo view / pr list pin the
+    // host-qualified HOST/OWNER/REPO selector. These pin the exact contract so a
+    // regression that reintroduced the original bug — a host-less `--repo o/r`
+    // (defaults to github.com) or a dropped host qualifier — fails here.
+    expect(execGhMock).toHaveBeenCalledWith(['api', 'user', '--hostname', 'github.enterprise.test', '--jq', '.login']);
+    expect(execGhMock).toHaveBeenCalledWith(['repo', 'view', 'github.enterprise.test/o/r', '--json', 'defaultBranchRef', '-q', '.defaultBranchRef.name']);
+    expect(execGhMock).toHaveBeenCalledWith(['pr', 'list', '--repo', 'github.enterprise.test/o/r', '--base', 'main', '--state', 'open', '--limit', '200', '--json', 'number,title,author,url,createdAt,isDraft,headRefName']);
+    // No call ever passes a host-less `--repo o/r` (the exact original bug).
+    const usedHostlessRepo = execGhMock.mock.calls.some(([args]) =>
+      Array.isArray(args) && args.indexOf('--repo') !== -1 && args[args.indexOf('--repo') + 1] === 'o/r');
+    expect(usedHostlessRepo).toBe(false);
+  });
+
+  it('rejects a non-GitHub (GitLab) host as not-a-github-repo', async () => {
+    getOriginInfoMock.mockResolvedValue({ hasOrigin: true, isGithub: false, host: 'gitlab.enterprise.test', fullName: 'o/r' });
+    const r = await checkPullRequests({ id: 'gl', repoPath: '/repos/gl' }, { authorFilter: 'any' });
+    expect(r).toEqual({ ok: false, reason: 'not-a-github-repo' });
+    expect(execGhMock).not.toHaveBeenCalled();
   });
 });

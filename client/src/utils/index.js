@@ -46,6 +46,8 @@ export * from './cityDistrictLayout.js';
 export * from './cityEasterEggs.js';
 export * from './cityFederation.js';
 export * from './cityFilter.js';
+export * from './cityFocusCamera.js';
+export * from './cityFocusState.js';
 export * from './cityFlowLines.js';
 export * from './cityGoalMonuments.js';
 export * from './cityHealthTower.js';

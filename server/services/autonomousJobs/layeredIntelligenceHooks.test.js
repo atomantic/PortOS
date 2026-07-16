@@ -318,15 +318,17 @@ describe('processTaskOutput', () => {
   });
 
   it('reports a re-proposed already-tracked PLAN slug as duplicate without resetting its outcome (#2435)', async () => {
-    // A checked `- [x]` item passes the dedup guard (re-proposable), but
-    // appendProposalToPlan writes nothing (tag already present) and returns
-    // duplicate — the hook must NOT report `filed` or record a fresh outcome.
+    // Since #2620 a checked `- [x]` item stays within the dedup window, so this
+    // path normally never reaches the append. Belt-and-suspenders: should the
+    // dedup guard ever miss, appendProposalToPlan writes nothing (tag already
+    // present) and returns duplicate — the hook must NOT report `filed` or
+    // record a fresh outcome.
     resolveAppWorkTracker.mockResolvedValue({ resolved: 'plan', forge: null });
     li.validateReasonerResponse.mockReturnValue({
       proposal: { scope: 'app-improvement', slug: 'add-metrics', title: 'Add metrics', body: 'do it' },
       pause: null
     });
-    li.isProposalDuplicate.mockReturnValue(false); // out of dedup window (checked, no closedAt)
+    li.isProposalDuplicate.mockReturnValue(false); // simulate a dedup-guard miss
     li.appendProposalToPlan.mockResolvedValue({ success: true, duplicate: true });
     li.getEffectiveConfig.mockReturnValue({ allowedScopes: ['app-improvement'], sources: { outcomes: true } });
     const out = await processTaskOutput({ appId: 'app-1', success: true, payload: { proposal: {} } });
