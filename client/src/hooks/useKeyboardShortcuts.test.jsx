@@ -113,9 +113,17 @@ describe('useKeyboardShortcuts', () => {
     press('g', { target: btn });
     expect(g).toHaveBeenCalledTimes(1);
     btn.remove();
+    // Anchors do NOT activate on Space (Enter only) — a focused link must
+    // still drive the page shortcut, not leave Space dead.
+    const link = document.createElement('a');
+    link.href = '#x';
+    document.body.appendChild(link);
+    press(' ', { target: link });
+    expect(space).toHaveBeenCalledTimes(1);
+    link.remove();
     // Space from a non-interactive target still drives the page shortcut.
     press(' ');
-    expect(space).toHaveBeenCalledTimes(1);
+    expect(space).toHaveBeenCalledTimes(2);
   });
 
   it('suppresses shortcuts while an aria-modal dialog is open (page card stays behind it)', () => {
