@@ -88,13 +88,16 @@ export const releaseVoiceOutput = (socket) => {
   }
 };
 
-// The current proactive-output recipient, or null when no tab is connected.
-// Lazily promotes when there is no primary (or it has gone stale) so the very
-// first proactive line after a connect still reaches exactly one tab even if no
-// explicit claim has arrived yet.
+// The current proactive-output recipient, or null when no candidate tab is
+// registered. Lazily promotes when there is no primary (or it has gone stale) so
+// the very first proactive line after a connect still reaches exactly one tab
+// even if no explicit claim has arrived yet. Notifies the lazily-elected tab so
+// its UI reflects that it is now the speaker (without this, a never-focused tab
+// would play proactive audio while its indicator still read "muted").
 export const getVoiceOutputSocket = () => {
   if (isLive(primary) && candidates.has(primary)) return primary;
   primary = pruneAndPickLatest();
+  if (primary) primary.emit('voice:output:primary', { primary: true });
   return primary;
 };
 

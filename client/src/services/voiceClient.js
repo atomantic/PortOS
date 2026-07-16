@@ -385,6 +385,15 @@ export const claimVoiceOutput = () => {
   if (socket.connected) socket.emit('voice:output:claim');
 };
 
+// Announce this browser tab as a voice-output surface so the server registers
+// it as a proactive-audio candidate. Sent unconditionally (even for a
+// backgrounded, never-focused tab) so audio still has a home when no tab has
+// claimed — but ONLY real browser tabs load this module, so non-playing sockets
+// (e.g. a federated peer's Socket.IO relay) never announce and can't be elected.
+const announceVoiceOutputAvailable = () => {
+  if (socket.connected) socket.emit('voice:output:available');
+};
+
 // Subscribe to voice-output ownership changes. Fires immediately with the
 // current value so a late subscriber (widget mount) reflects state without
 // waiting for the next handoff. Returns an unsubscribe function.
@@ -413,6 +422,9 @@ socket.on('voice:output:detached', () => {
 if (typeof window !== 'undefined' && typeof document !== 'undefined') {
   window.addEventListener('focus', claimVoiceOutput);
   subscribeVisibility((state) => { if (state === 'visible') claimVoiceOutput(); });
+  // The socket may already be connected by the time this module loads; the
+  // connect handler below re-announces on every (re)connect.
+  announceVoiceOutputAvailable();
 }
 
 // voice:transcript marks the start of a new turn's outputs — any pending
@@ -497,6 +509,9 @@ socket.on('connect', () => {
   if (lastDictationRequest.enabled) {
     socket.emit('voice:dictation:set', lastDictationRequest);
   }
+  // Re-register as a voice-output candidate on every (re)connect — a fresh
+  // socket has no server-side candidacy until this tab announces again.
+  announceVoiceOutputAvailable();
   // On (re)connect, re-claim voice output if this tab is the one the user is
   // looking at — otherwise a reconnect could leave audio pointed at a stale
   // primary. Only a visible+focused tab claims so a backgrounded reconnect

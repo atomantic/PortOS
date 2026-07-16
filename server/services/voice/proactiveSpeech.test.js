@@ -180,11 +180,15 @@ describe('speakProactive', () => {
     expect(socketEmit).not.toHaveBeenCalled();
   });
 
+  // The recipient socket may also receive a voice:output:primary notification
+  // (lazy promotion), so filter to the voice:speak call specifically.
+  const speakCalls = (socketEmit) => socketEmit.mock.calls.filter((c) => c[0] === 'voice:speak');
+
   it('accepts text exactly at MAX_PROACTIVE_TEXT_LEN', async () => {
     const { io, socketEmit } = makeIo();
     const r = await speakProactive({ io, text: 'x'.repeat(MAX_PROACTIVE_TEXT_LEN) });
     expect(r.ok).toBe(true);
-    expect(socketEmit).toHaveBeenCalledTimes(1);
+    expect(speakCalls(socketEmit)).toHaveLength(1);
   });
 
   it('routes voice:speak with audio to the recipient tab (never io.emit)', async () => {
@@ -192,9 +196,9 @@ describe('speakProactive', () => {
     const r = await speakProactive({ io, text: 'Heads up — meeting in five.' });
     expect(r.ok).toBe(true);
     expect(emit).not.toHaveBeenCalled(); // no broadcast
-    expect(socketEmit).toHaveBeenCalledTimes(1);
-    const [event, payload] = socketEmit.mock.calls[0];
-    expect(event).toBe('voice:speak');
+    const speaks = speakCalls(socketEmit);
+    expect(speaks).toHaveLength(1);
+    const [, payload] = speaks[0];
     expect(payload.sentence).toBe('Heads up — meeting in five.');
     expect(payload.wav).toBeInstanceOf(Buffer);
     expect(payload.priority).toBe('normal');

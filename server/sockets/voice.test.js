@@ -201,12 +201,30 @@ describe('voice:text validation', () => {
 describe('voice:output single-recipient wiring', () => {
   beforeEach(() => __resetVoiceOutput());
 
-  it('registers the voice:output:claim handler and a candidate on connect', () => {
+  it('registers a candidate only after the tab announces voice:output:available', () => {
     const socket = makeFakeSocket();
     registerVoiceHandlers(socket);
+    expect(socket.has('voice:output:available')).toBe(true);
     expect(socket.has('voice:output:claim')).toBe(true);
-    // Registered as the sole candidate → lazily eligible to receive output.
+    // A bare connection is NOT a candidate — a non-browser socket (e.g. a peer
+    // relay) that never announces must never be elected to receive audio.
+    expect(getVoiceOutputSocket()).toBe(null);
+    // After announcing, it becomes the (sole) lazily-eligible recipient.
+    socket.fire('voice:output:available');
     expect(getVoiceOutputSocket()).toBe(socket);
+  });
+
+  it('a connection that never announces is never elected primary', () => {
+    const relay = makeFakeSocket(); // stands in for a peer-relay Socket.IO client
+    const tab = makeFakeSocket();
+    registerVoiceHandlers(relay);
+    registerVoiceHandlers(tab);
+    tab.fire('voice:output:available');
+    // Even though the relay connected, output routes to the real tab.
+    const io = { emit: () => { throw new Error('must not broadcast'); } };
+    emitVoiceOutput(io, 'voice:speak', { sentence: 'ping' });
+    expect(relay.emitted.filter((e) => e.event === 'voice:speak')).toHaveLength(0);
+    expect(tab.emitted.filter((e) => e.event === 'voice:speak')).toHaveLength(1);
   });
 
   it('claiming routes proactive output to the claiming tab, not another', () => {
@@ -214,6 +232,8 @@ describe('voice:output single-recipient wiring', () => {
     const b = makeFakeSocket();
     registerVoiceHandlers(a);
     registerVoiceHandlers(b);
+    a.fire('voice:output:available');
+    b.fire('voice:output:available');
     // b is the active tab and claims output.
     b.fire('voice:output:claim');
 
@@ -223,11 +243,13 @@ describe('voice:output single-recipient wiring', () => {
     expect(b.emitted.filter((e) => e.event === 'voice:speak')).toHaveLength(1);
   });
 
-  it('disconnecting the primary promotes another live tab', () => {
+  it('disconnecting the primary promotes another announced tab', () => {
     const a = makeFakeSocket();
     const b = makeFakeSocket();
     registerVoiceHandlers(a);
     registerVoiceHandlers(b);
+    a.fire('voice:output:available');
+    b.fire('voice:output:available');
     a.fire('voice:output:claim');
     expect(getVoiceOutputSocket()).toBe(a);
 

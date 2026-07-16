@@ -1,7 +1,7 @@
 // Per-socket voice handlers.
 // Inbound:  voice:turn | voice:text | voice:interrupt | voice:reset
 //           | voice:dictation:set | voice:ui:index | voice:screenshot:result
-//           | voice:ui:read-response | voice:output:claim
+//           | voice:ui:read-response | voice:output:available | voice:output:claim
 // Outbound: voice:transcript | voice:llm:delta | voice:llm:done | voice:tts:audio
 //           | voice:tool | voice:dictation | voice:navigate
 //           | voice:ui:click | voice:ui:fill | voice:ui:select | voice:ui:check
@@ -92,12 +92,6 @@ export const registerVoiceHandlers = (socket) => {
     recentTts: [],
   };
   registerEchoBuffer(state.recentTts);
-
-  // Register this tab as a possible recipient of proactive (server-initiated)
-  // voice output. It does NOT become the sole recipient until it claims output
-  // (below) — proactive audio is routed to exactly ONE tab so a reminder doesn't
-  // play on every open tab/machine at once. See services/voice/voiceOutput.js.
-  registerVoiceOutputCandidate(socket);
 
   const pushHistory = (role, content) => {
     if (!content) return;
@@ -335,6 +329,17 @@ export const registerVoiceHandlers = (socket) => {
       // the snapshot changed (navigation) between request and response.
       resolve(capped);
     }
+  });
+
+  // A real browser tab announces itself as a possible recipient of proactive
+  // (server-initiated) voice output on connect. Only sockets that send this are
+  // eligible — registering EVERY connection would make non-playing sockets
+  // (e.g. a federated peer's Socket.IO relay client, which lands on the same
+  // io.on('connection')) eligible, and electing one as primary would silently
+  // route proactive audio into a socket that never plays it. It does NOT become
+  // the sole recipient until it claims output (below). See voiceOutput.js.
+  socket.on('voice:output:available', () => {
+    registerVoiceOutputCandidate(socket);
   });
 
   // The user's active tab claims proactive voice output — whichever tab is

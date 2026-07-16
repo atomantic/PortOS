@@ -42,6 +42,9 @@ describe('voiceOutput single-recipient routing', () => {
     expect(emittedEvents(a)).not.toContain('voice:output:primary');
     // But the sole candidate is the lazy recipient so audio has a home.
     expect(getVoiceOutputSocket()).toBe(a);
+    // And lazy promotion notifies the elected tab so its UI reflects it's now
+    // the speaker (it never claimed, so this is the only signal it gets).
+    expect(emittedEvents(a)).toContain('voice:output:primary');
   });
 
   it('emitVoiceOutput routes to the single primary, not other candidates', () => {
