@@ -82,6 +82,24 @@ describe('authGate middleware', () => {
     expect(gated.res.body).toEqual({ error: 'Authentication required', code: 'AUTH_REQUIRED' });
   });
 
+  it('stays fail-closed when a corrupt settings.json is loaded via reloadSettings (#2684)', async () => {
+    // A backup restore of a malformed snapshot calls reloadSettings(). It must NOT
+    // broadcast the corrupt file as {} and prime the auth cache to disabled — that
+    // would reopen the gate (fail open) and stick, since the cache is no longer null.
+    writeFileSync(join(tempRoot, 'settings.json'), '{ corrupt snapshot');
+    const { reloadSettings } = await import('../services/settings.js');
+    const { authGate } = await import('./authGate.js');
+
+    await reloadSettings();
+
+    // Gated route stays blocked (fail closed), public discovery stays reachable.
+    const gated = await runGate(authGate, { path: '/api/cos', headers: {} });
+    expect(gated.called).toBe(false);
+    expect(gated.res.statusCode).toBe(401);
+    const health = await runGate(authGate, { path: '/api/system/health', headers: {} });
+    expect(health.called).toBe(true);
+  });
+
   it('treats an absent settings.json as auth OFF (fresh install, no regression)', async () => {
     // ENOENT is the one non-failure case — a fresh install legitimately has no
     // settings and auth is off, so gated routes pass through.

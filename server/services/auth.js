@@ -132,6 +132,12 @@ const recomputeEnabledCache = (settings) => {
   enabledCache = !!(a?.enabled && a?.passwordHash && a?.salt);
 };
 settingsEvents.on('settings:updated', recomputeEnabledCache);
+// A corrupt reload (e.g. a backup restore of a malformed settings.json — see
+// reloadSettings() in settings.js) emits this instead of a `{}`-valued
+// settings:updated. Drop the cached boolean so the next isAuthEnabled() goes
+// through the strict read and FAILS CLOSED rather than reopening the gate from a
+// corrupt-derived empty snapshot. See #2684.
+settingsEvents.on('settings:invalidated', () => { enabledCache = null; });
 
 export const isAuthEnabled = async () => {
   if (enabledCache === null) {

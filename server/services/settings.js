@@ -1,5 +1,5 @@
 import { join } from 'path';
-import { readFile } from 'fs/promises';
+import { access } from 'fs/promises';
 import { EventEmitter } from 'events';
 import { safeJSONParse, PATHS, atomicWrite, tryReadFile } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
@@ -95,24 +95,26 @@ const loadRaw = async () => {
  * exists so unit tests can point it at a temp file without touching real data.
  */
 export const readSettingsStrict = async (filePath = SETTINGS_FILE) => {
-  let raw;
-  try {
-    raw = await readFile(filePath, 'utf8');
-  } catch (err) {
-    // ENOENT is the only "not a failure" case — no file means no settings yet.
-    if (err?.code === 'ENOENT') return { present: false, corrupt: false, settings: {} };
-    // EACCES / EIO / EISDIR / … — the file is there but we couldn't read it.
-    return { present: true, corrupt: true, settings: {} };
+  const raw = await tryReadFile(filePath);
+  if (raw === null) {
+    // tryReadFile collapses BOTH an absent file (ENOENT) and a read failure
+    // (EACCES / EIO / …) to null. Probe with access() to tell them apart: an
+    // ABSENT file is the fresh-install default (auth off), while a file that
+    // EXISTS but couldn't be read is corrupt (fail closed).
+    try {
+      await access(filePath);
+      return { present: true, corrupt: true, settings: {} };   // exists but unreadable
+    } catch {
+      return { present: false, corrupt: false, settings: {} };  // ENOENT — genuinely absent
+    }
   }
-  try {
-    const parsed = JSON.parse(raw);
-    // A valid-JSON but non-object root (array, string, number, null) is not a
-    // settings document — treat it as corrupt rather than reading properties off it.
-    if (!isPlainObject(parsed)) return { present: true, corrupt: true, settings: {} };
-    return { present: true, corrupt: false, settings: parsed };
-  } catch {
-    return { present: true, corrupt: true, settings: {} };
-  }
+  // Present and read. safeJSONParse returns null for malformed/empty input; a
+  // valid-JSON but non-object root (array, string, number) is likewise not a
+  // settings document — either way, treat it as corrupt rather than reading
+  // properties off it.
+  const parsed = safeJSONParse(raw, null);
+  if (!isPlainObject(parsed)) return { present: true, corrupt: true, settings: {} };
+  return { present: true, corrupt: false, settings: parsed };
 };
 
 // Read-side cache. `getSettings()` is called 100+ times across the codebase
@@ -158,7 +160,21 @@ export const __resetSettingsCache = () => {
 // since such a write bypasses the save()-emitted event the cache rides on and
 // would otherwise leave every settings consumer serving pre-restore values.
 export const reloadSettings = async () => {
-  const cleaned = stripStoreKeys(await loadRaw());
+  const { corrupt, settings } = await readSettingsStrict();
+  if (corrupt) {
+    // Do NOT broadcast a corrupt on-disk settings.json as `{}` (issue #2684). The
+    // concrete path is a backup restore of a malformed snapshot: backup.js calls
+    // reloadSettings() after installing it. Emitting `settings:updated` with `{}`
+    // would prime the read cache AND the auth enabled-cache to an empty/disabled
+    // state — reopening the gate (FAIL OPEN) and sticking there because the cache
+    // is no longer null. Invalidate instead: drop the read cache and signal
+    // consumers (auth) to drop theirs, so the next read goes to disk and fails
+    // closed / re-reads. Self-heals on the next clean read.
+    settingsCache = null;
+    settingsEvents.emit('settings:invalidated');
+    return {};
+  }
+  const cleaned = stripStoreKeys(settings);
   settingsEvents.emit('settings:updated', cleaned);
   return cleaned;
 };
@@ -204,20 +220,15 @@ const save = async (settings) => {
 
 export const getSettings = async () => {
   if (settingsCache === null) {
-    const raw = await tryReadFile(SETTINGS_FILE);
-    // Distinguish a CORRUPT (present but unparseable) settings.json from an
-    // absent/empty one so a corrupt read does NOT poison the cache with `{}`
-    // (issue #2684). Caching a corrupt-derived empty object would strand every
-    // consumer — verifyPassword, schedulers, feature reads — on empty settings
-    // until a save() or restart, defeating the no-restart self-heal that the
-    // auth fail-closed path promises. A malformed file (`raw` present but not a
-    // JSON object) is the corrupt case handled here; `tryReadFile` collapses an
-    // absent OR unreadable file to null, which we treat as an empty, cacheable
-    // snapshot (absent is the fresh-install default; the rarer unreadable case is
-    // still failed CLOSED by isAuthEnabled's stricter readSettingsStrict).
-    const parsed = raw === null ? {} : safeJSONParse(raw, null);
-    const corrupt = raw !== null && !isPlainObject(parsed);
-    const loaded = stripStoreKeys(isPlainObject(parsed) ? parsed : {});
+    // Route the cold read through the STRICT reader so a corrupt/unreadable
+    // settings.json does NOT poison the cache with `{}` (issue #2684). Caching a
+    // corrupt-derived empty object would strand every consumer — verifyPassword,
+    // schedulers, feature reads — on empty settings until a save() or restart,
+    // defeating the no-restart self-heal the auth fail-closed path promises. This
+    // covers BOTH failure modes (malformed content and an unreadable-but-present
+    // file); only a genuinely ABSENT file (fresh install) caches `{}`.
+    const { corrupt, settings } = await readSettingsStrict();
+    const loaded = stripStoreKeys(settings);
     // A save()/reloadSettings() may have populated the cache via the
     // settings:updated listener while this cold read was awaiting the disk read.
     // Prefer that fresher in-memory value over our (older) on-disk snapshot.
