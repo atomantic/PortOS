@@ -4,15 +4,25 @@
  * A CreativeCommission is a standing, recurring creative brief that fires on a
  * schedule and drives the Creative Director's directive pipeline unattended.
  *
- * Storage: a `createCollectionStore` collection at `data/creative-commissions/`,
- * one record per commission. Commissions are MACHINE-LOCAL and NOT federated in
- * Phase 1 — the same rationale as `seriesAutopilotScheduler`'s settings-based
- * schedules: a schedule that federated across sync peers would double-run on
- * every machine. Federation is Phase 2 work, and it must split this record: the
- * brief/feedback CAN federate, but the `schedule` field (+ a future "home peer"
- * pointer) MUST stay machine-local, or the whole double-run avoidance breaks.
- * seriesAutopilot already proved this shape out (local schedule → federated
- * series); Phase 2 will decompose the monolithic local record accordingly.
+ * Storage: `db-primary` (docs/STORAGE.md). Real installs store one row per
+ * commission in the `creative_commissions` PostgreSQL table (the full sanitized
+ * record in `data` JSONB — see ./db.js). A file backend (collectionStore at
+ * `data/creative-commissions/`) is retained ONLY as the dev/test escape hatch
+ * (`MEMORY_BACKEND=file` or `NODE_ENV=test`), exactly like universeBuilder — so
+ * the unit tests keep exercising a real store without a database. This facade
+ * owns the sanitizer + merge semantics uniformly (applied on the service side,
+ * not inside a backend) so the two backends can't drift, serializes the
+ * scheduler-vs-request read-modify-write on a shared per-id write queue
+ * (`createRecordWriteQueue`, identical to universeBuilder), and delegates only
+ * plain leaf I/O to the selected backend.
+ *
+ * Commissions are MACHINE-LOCAL and NOT federated in Phase 1 — the same rationale
+ * as `seriesAutopilotScheduler`'s settings-based schedules: a schedule that
+ * federated across sync peers would double-run on every machine. The DB row
+ * carries no sync cursor/tombstone (deletes are hard deletes, mirroring tribe).
+ * Federation is Phase 2 work, and it must split this record: the brief/feedback
+ * CAN federate, but the `schedule` field (+ a future "home peer" pointer) MUST
+ * stay machine-local, or the whole double-run avoidance breaks.
  *
  * The record shape is stable/forward-looking: `feedback[]` + `feedbackWindow`
  * exist now (Phase 1 leaves feedback empty) so Phase 2 only needs the rate
@@ -30,6 +40,8 @@ import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
 import { PATHS } from '../../lib/fileUtils.js';
 import { createCollectionStore } from '../../lib/collectionStore.js';
+import { createPgFileFacade, resolvePgBackend, isFileBackend } from '../../lib/pgFileFacade.js';
+import { createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
 import { isValidCron } from '../eventScheduler.js';
 import { commissionToCron } from './directive.js';
 
@@ -51,8 +63,9 @@ const isStr = (v) => typeof v === 'string';
 
 /**
  * Normalize a raw record into the canonical stored shape. Returns null for a
- * non-object / id-less record (collectionStore drops nulls), so a malformed
- * on-disk file can't surface. Passed to every `loadOne`.
+ * non-object / id-less record (so a malformed on-disk / on-row record can't
+ * surface). Applied by the service on every read and before every write, so both
+ * backends return an identical shape.
  */
 export function sanitizeCommission(raw) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -97,28 +110,110 @@ export function sanitizeCommission(raw) {
   };
 }
 
-let _store = null;
-/** Lazily construct the singleton commission store (avoids touching PATHS at import). */
-export function commissionStore() {
-  if (!_store) {
-    _store = createCollectionStore({
-      dir: join(PATHS.data, TYPE),
-      type: TYPE,
-      schemaVersion: COMMISSIONS_SCHEMA_VERSION,
-      sanitizeRecord: sanitizeCommission,
-    });
-  }
-  return _store;
+// --- File backend (dev/test escape hatch): wraps collectionStore ---
+// No sanitizer on the collectionStore — the facade sanitizes uniformly on the
+// service side so file and PG return an identical shape. The type-level index is
+// stamped on the first write so the boot verifier reports the real version.
+function makeFileBackend(dir) {
+  const cs = createCollectionStore({
+    dir,
+    type: TYPE,
+    schemaVersion: COMMISSIONS_SCHEMA_VERSION,
+  });
+  let stamped = false;
+  const ensureTypeIndex = async () => {
+    if (stamped) return;
+    stamped = true;
+    await cs.saveTypeIndex({}).catch(() => { stamped = false; });
+  };
+  return {
+    name: 'file',
+    listRaw: () => cs.loadAll(),
+    readRaw: (id) => cs.loadOne(id),
+    writeRaw: async (id, record) => { await ensureTypeIndex(); await cs.saveOneNow(id, record); return record; },
+    deleteRaw: (id) => cs.deleteOneNow(id),
+    verify: () => cs.verifySchemaVersion(),
+  };
 }
 
-// `saveOne` writes only the per-record file, never the type-level index.json
-// (which stamps schemaVersion). Stamp it once per process on first write so the
-// boot verifier reports the real version and a future bump can detect v1 data.
-const _stamped = new WeakSet();
-async function ensureTypeIndex(store) {
-  if (_stamped.has(store)) return;
-  _stamped.add(store);
-  await store.saveTypeIndex({}).catch(() => { _stamped.delete(store); });
+// --- PostgreSQL backend: pure leaf I/O from ./db.js ---
+// No `verify` — the facade's verifySchemaVersion short-circuits the PG case
+// without touching the backend (see below), so PG has no type-index to check.
+function makePgBackend(db) {
+  return {
+    name: 'postgres',
+    listRaw: db.listRaw,
+    readRaw: db.readRaw,
+    writeRaw: db.writeRaw,
+    deleteRaw: db.deleteRaw,
+  };
+}
+
+// Self-sufficient PG bring-up: the boot DB gate fail-fasts a required-but-missing
+// DB, but an early scheduler warm can call in BEFORE that gate's ensureSchema()
+// runs — so resolvePgBackend health-checks + brings the (idempotent) schema up.
+// No file→DB migration: commissions are a brand-new record kind that never
+// shipped on the file backend.
+const pgBackend = () => resolvePgBackend({
+  requirement: 'Creative Commissions require PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file for the unsupported file backend)',
+  loadDb: () => import('./db.js'),
+  makePg: makePgBackend,
+});
+
+// --- Facade: memoized backend selection + per-id write queue + verify ---
+// Keyed by data dir so a test harness that swaps PATHS.data per-test still sees
+// the right root. commissionStore() is the accessor the boot verifier calls.
+// The facade owns the scheduler-vs-request serialization via a shared per-id
+// write queue (identical to universeBuilder/storyBuilder) rather than a backend
+// row lock — commissions are machine-local and written only by the single main
+// server process (the scheduler fire + the REST route), so in-process per-id
+// serialization is sufficient and keeps both backends serializing identically.
+let _facade = null;
+let _facadeDir = null;
+
+function createFacade(dir) {
+  const { getBackend, getBackendName } = createPgFileFacade({
+    makeFile: () => makeFileBackend(dir),
+    makePg: () => pgBackend(),
+  });
+  // Tail-chained per id: two RMW cycles on the SAME id serialize while different
+  // ids fan out. Backend-agnostic, so file and PG serialize the same way.
+  const queueRecordWrite = createRecordWriteQueue();
+  return {
+    dir,
+    type: TYPE,
+    getBackendName,
+    listRaw: async () => (await getBackend()).listRaw(),
+    readRaw: async (id) => (await getBackend()).readRaw(id),
+    writeRaw: async (id, record) => (await getBackend()).writeRaw(id, record),
+    deleteRaw: async (id) => (await getBackend()).deleteRaw(id),
+    queueRecordWrite,
+    // Under PG, report ok WITHOUT forcing backend selection (the early boot
+    // verifier runs before the dbReady gate); under the file escape hatch, read
+    // the on-disk type index. The env check matches the selection predicate.
+    verifySchemaVersion: async () => {
+      if (!isFileBackend()) {
+        return { ok: true, type: TYPE, onDisk: null, expected: null,
+          message: `collection "${TYPE}" @ postgres (#2657)` };
+      }
+      return (await getBackend()).verify();
+    },
+  };
+}
+
+/** Get the memoized commission store facade (the boot verifier calls this). */
+export function commissionStore() {
+  const dir = join(PATHS.data, TYPE);
+  if (_facade && _facadeDir === dir) return _facade;
+  _facade = createFacade(dir);
+  _facadeDir = dir;
+  return _facade;
+}
+
+/** Reset the memoized facade — test seam only. */
+export function _resetCommissionStore() {
+  _facade = null;
+  _facadeDir = null;
 }
 
 /**
@@ -135,39 +230,40 @@ export function assertValidSchedule(schedule) {
 }
 
 export async function listCommissions() {
-  return commissionStore().loadAll();
+  const raw = await commissionStore().listRaw();
+  return raw.map(sanitizeCommission).filter(Boolean);
 }
 
 export async function getCommission(id) {
-  const rec = await commissionStore().loadOne(id);
+  const raw = await commissionStore().readRaw(id);
+  const rec = raw ? sanitizeCommission(raw) : null;
   if (!rec) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
   return rec;
 }
 
 export async function createCommission(input) {
   assertValidSchedule(input.schedule);
-  const store = commissionStore();
   const now = new Date().toISOString();
   const id = `commission-${randomUUID()}`;
   // sanitizeCommission defaults runs/feedback to [] and the create schema carries
   // neither key, so no explicit empties are needed here.
   const record = sanitizeCommission({ ...input, id, createdAt: now, updatedAt: now });
-  await ensureTypeIndex(store);
-  await store.saveOne(id, record);
+  await commissionStore().writeRaw(id, record);
   commissionEvents.emit('commission:changed', { id, action: 'create' });
   return record;
 }
 
 export async function updateCommission(id, patch) {
-  const store = commissionStore();
   if (patch.schedule) assertValidSchedule(patch.schedule);
-  // Serialize the load→merge→save inside the per-id write queue so a concurrent
+  const store = commissionStore();
+  // Serialize the load→merge→save on the per-id write queue so a concurrent
   // scheduler fire (recordCommissionRun, also queued) can't have its run-history
   // append clobbered by a stale pre-read here — the scheduler-vs-request race
-  // CLAUDE.md requires serializing at the file level.
+  // CLAUDE.md requires serializing at the record level.
   const merged = await store.queueRecordWrite(id, async () => {
-    const current = await store.loadOne(id);
-    if (!current) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
+    const currentRaw = await store.readRaw(id);
+    if (!currentRaw) return null;
+    const current = sanitizeCommission(currentRaw);
     const next = sanitizeCommission({
       ...current,
       ...patch,
@@ -190,33 +286,34 @@ export async function updateCommission(id, patch) {
       createdAt: current.createdAt,
       updatedAt: new Date().toISOString(),
     });
-    await store.saveOneNow(id, next);
+    await store.writeRaw(id, next);
     return next;
   });
+  if (!merged) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
   commissionEvents.emit('commission:changed', { id, action: 'update' });
   return merged;
 }
 
 export async function deleteCommission(id) {
-  const store = commissionStore();
-  const current = await store.loadOne(id);
+  const current = await commissionStore().readRaw(id);
   if (!current) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
-  await store.deleteOne(id);
+  await commissionStore().deleteRaw(id);
   commissionEvents.emit('commission:changed', { id, action: 'delete' });
   return { id, deleted: true };
 }
 
 /**
  * Append a run entry to a commission (fire history). Runs are capped to the last
- * MAX_PERSISTED_RUNS. Serialized per-id by the collectionStore write queue.
- * Best-effort: called from the scheduler's fire handler (outside the request
- * lifecycle) — the caller wraps errors.
+ * MAX_PERSISTED_RUNS. Serialized per-record on the write queue. Best-effort:
+ * called from the scheduler's fire handler (outside the request lifecycle) — the
+ * caller wraps errors. Returns the appended run, or null if the commission is gone.
  */
 export async function recordCommissionRun(id, runEntry) {
   const store = commissionStore();
   return store.queueRecordWrite(id, async () => {
-    const current = await store.loadOne(id);
-    if (!current) return null;
+    const currentRaw = await store.readRaw(id);
+    if (!currentRaw) return null;
+    const current = sanitizeCommission(currentRaw);
     const run = {
       id: runEntry.id || `run-${randomUUID()}`,
       ranAt: runEntry.ranAt || new Date().toISOString(),
@@ -227,7 +324,7 @@ export async function recordCommissionRun(id, runEntry) {
       error: isStr(runEntry.error) ? runEntry.error : null,
     };
     const runs = [...(current.runs || []), run].slice(-MAX_PERSISTED_RUNS);
-    await store.saveOneNow(id, { ...current, runs, updatedAt: new Date().toISOString() });
+    await store.writeRaw(id, { ...current, runs, updatedAt: new Date().toISOString() });
     return run;
   });
 }
