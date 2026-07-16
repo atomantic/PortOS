@@ -30,3 +30,13 @@ export const deleteCommission = (id, options = {}) =>
     method: 'DELETE',
     ...options,
   });
+
+// Rate/annotate a specific run's output (#2657, Phase 2). `feedback` is
+// `{ runId, rating: 'up'|'down'|number, note?, tags? }`. Resolves to the full
+// updated commission (with the new reaction in `feedback[]`) for reactive state.
+export const submitCommissionFeedback = (id, feedback, options = {}) =>
+  request(`/creative-commission/${encodeURIComponent(id)}/feedback`, {
+    method: 'POST',
+    body: JSON.stringify(feedback),
+    ...options,
+  });

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, X, CheckCheck, Trash2, Brain, ListTodo, AlertTriangle, Code, HelpCircle, BellRing } from 'lucide-react';
+import { Bell, X, CheckCheck, Trash2, Brain, ListTodo, AlertTriangle, Code, HelpCircle, BellRing, Sparkles } from 'lucide-react';
 import { timeAgo } from '../utils/formatters';
 
 const NOTIFICATION_TYPE_CONFIG = {
@@ -38,6 +38,11 @@ const NOTIFICATION_TYPE_CONFIG = {
     icon: BellRing,
     color: 'text-cyan-400',
     bgColor: 'bg-cyan-500/20'
+  },
+  creative_commission: {
+    icon: Sparkles,
+    color: 'text-port-accent',
+    bgColor: 'bg-port-accent/20'
   }
 };
 

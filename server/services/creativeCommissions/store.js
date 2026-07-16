@@ -52,6 +52,12 @@ export const commissionEvents = new EventEmitter();
 export const TYPE = 'creative-commissions';
 export const COMMISSIONS_SCHEMA_VERSION = 1;
 export const MAX_PERSISTED_RUNS = 50;
+// Feedback is kept inline on the commission record (not a separate federated
+// store) — Phase 1's store shape reserved `feedback[]` precisely so Phase 2 adds
+// the rate surface without a schema change. Capped like runs so a long-lived
+// nightly commission can't grow the row unbounded; the directive builder only
+// ever reads the last `feedbackWindow` reactions anyway.
+export const MAX_PERSISTED_FEEDBACK = 100;
 
 // Service-layer error codes (mapped to HTTP status by the route via
 // createServiceErrorMapper), mirroring the universeBuilder convention.
@@ -60,6 +66,30 @@ export const ERR_VALIDATION = 'VALIDATION_ERROR';
 export const makeErr = (message, code) => Object.assign(new Error(message), { code });
 
 const isStr = (v) => typeof v === 'string';
+
+/**
+ * Normalize a single feedback reaction (#2657, Phase 2). A reaction MUST carry a
+ * meaningful rating — 'up'/'down' or a non-zero number (numeric ratings are
+ * preserved verbatim so `renderFeedbackDigest`'s >0/<0 test still works). Returns
+ * null for anything without a usable rating so a malformed/id-less entry can't
+ * pollute the digest. Applied inside `sanitizeCommission` on every read/write, so
+ * both backends return an identical, already-sanitized `feedback[]`.
+ */
+export function sanitizeFeedbackEntry(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const isUp = raw.rating === 'up' || (typeof raw.rating === 'number' && raw.rating > 0);
+  const isDown = raw.rating === 'down' || (typeof raw.rating === 'number' && raw.rating < 0);
+  if (!isUp && !isDown) return null;
+  const rating = typeof raw.rating === 'number' ? raw.rating : (isUp ? 'up' : 'down');
+  return {
+    id: isStr(raw.id) && raw.id ? raw.id : `feedback-${randomUUID()}`,
+    runId: isStr(raw.runId) ? raw.runId : null,
+    rating,
+    note: isStr(raw.note) ? raw.note : '',
+    tags: Array.isArray(raw.tags) ? raw.tags.filter(isStr).slice(0, 20) : [],
+    at: isStr(raw.at) ? raw.at : new Date().toISOString(),
+  };
+}
 
 /**
  * Normalize a raw record into the canonical stored shape. Returns null for a
@@ -101,8 +131,12 @@ export function sanitizeCommission(raw) {
       aspectRatio: isStr(generation.aspectRatio) ? generation.aspectRatio : '16:9',
       targetDurationSeconds: Number.isInteger(generation.targetDurationSeconds) ? generation.targetDurationSeconds : 10,
     },
-    // Phase 2 populates these; kept stable now.
-    feedback: Array.isArray(raw.feedback) ? raw.feedback : [],
+    // Phase 2: deep-sanitize each reaction (drop ratingless/malformed entries)
+    // and cap history. Phase 1 records carry an empty array, so this is a no-op
+    // for them and preserves stored, already-id'd feedback idempotently.
+    feedback: Array.isArray(raw.feedback)
+      ? raw.feedback.map(sanitizeFeedbackEntry).filter(Boolean).slice(-MAX_PERSISTED_FEEDBACK)
+      : [],
     feedbackWindow: Number.isInteger(raw.feedbackWindow) ? raw.feedbackWindow : 5,
     runs: Array.isArray(raw.runs) ? raw.runs.slice(-MAX_PERSISTED_RUNS) : [],
     createdAt: isStr(raw.createdAt) ? raw.createdAt : now,
@@ -295,9 +329,20 @@ export async function updateCommission(id, patch) {
 }
 
 export async function deleteCommission(id) {
-  const current = await commissionStore().readRaw(id);
-  if (!current) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
-  await commissionStore().deleteRaw(id);
+  const store = commissionStore();
+  // Serialize the read+delete on the SAME per-id write queue as
+  // update/recordRun/submitFeedback. Otherwise an in-flight feedback write (its
+  // own queued read→writeRaw) could interleave with a delete that runs outside
+  // the queue: feedback reads the row, delete hard-deletes it, feedback's
+  // writeRaw then upserts the stale record and resurrects the commission. With
+  // delete on the tail, a feedback write queued after it finds no row and 404s.
+  const existed = await store.queueRecordWrite(id, async () => {
+    const current = await store.readRaw(id);
+    if (!current) return false;
+    await store.deleteRaw(id);
+    return true;
+  });
+  if (!existed) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
   commissionEvents.emit('commission:changed', { id, action: 'delete' });
   return { id, deleted: true };
 }
@@ -327,4 +372,57 @@ export async function recordCommissionRun(id, runEntry) {
     await store.writeRaw(id, { ...current, runs, updatedAt: new Date().toISOString() });
     return run;
   });
+}
+
+/**
+ * Record a user reaction to a commission run (#2657, Phase 2 — the taste
+ * feedback loop). Appends a sanitized `CommissionFeedback` entry onto the
+ * commission's inline `feedback[]`, keyed to the run being rated. The next
+ * scheduled fire's `buildCommissionDirective` folds the last `feedbackWindow`
+ * reactions into the directive, so a 👍/👎 + note demonstrably steers the next
+ * run (the epic's core acceptance criterion).
+ *
+ * Serialized per-record on the SAME write queue as recordCommissionRun/
+ * updateCommission, so a rating submitted while the scheduler is appending a run
+ * can't clobber it (load→merge→save merges against the freshest persisted row).
+ * Throws ERR_NOT_FOUND (→404) for an unknown commission and ERR_VALIDATION
+ * (→400) when the referenced run isn't on the commission or the rating is
+ * unusable. Returns the full updated commission so the UI updates reactively.
+ *
+ * Does NOT emit `commission:changed`: feedback never alters the schedule
+ * signature, so a scheduler re-sync would be a pure no-op (mirrors
+ * recordCommissionRun, which also stays silent).
+ */
+export async function submitCommissionFeedback(id, input) {
+  const store = commissionStore();
+  const result = await store.queueRecordWrite(id, async () => {
+    const currentRaw = await store.readRaw(id);
+    if (!currentRaw) return { notFound: true };
+    const current = sanitizeCommission(currentRaw);
+    // The UI always rates a specific run; reject a runId that isn't on the record
+    // so feedback can't dangle against a non-existent run.
+    if (input?.runId && !current.runs.some((r) => r.id === input.runId)) {
+      throw makeErr(`Run not found on commission: ${input.runId}`, ERR_VALIDATION);
+    }
+    const entry = sanitizeFeedbackEntry({
+      ...input,
+      id: `feedback-${randomUUID()}`,
+      at: new Date().toISOString(),
+    });
+    if (!entry) throw makeErr('Invalid feedback: a non-zero rating (up/down) is required', ERR_VALIDATION);
+    // UPSERT by runId, don't append: re-rating a run must REPLACE its prior
+    // reaction, not stack a second one. The UI shows only the latest reaction per
+    // run, but `renderFeedbackDigest` consumes every entry — so a stacked
+    // like-then-dislike for the same run would fold BOTH a "like" and a "dislike"
+    // for one output into the next directive, and repeated votes would each burn a
+    // `feedbackWindow` slot. Dropping the prior same-runId entry keeps one reaction
+    // per run and moves the re-rated run to the most-recent position.
+    const prior = (current.feedback || []).filter((f) => !f.runId || f.runId !== entry.runId);
+    const feedback = [...prior, entry].slice(-MAX_PERSISTED_FEEDBACK);
+    const next = { ...current, feedback, updatedAt: new Date().toISOString() };
+    await store.writeRaw(id, next);
+    return { record: next };
+  });
+  if (result?.notFound) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
+  return result.record;
 }

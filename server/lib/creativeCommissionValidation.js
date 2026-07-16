@@ -146,6 +146,25 @@ export const creativeCommissionBriefUpdateSchema = z.object({
   seedRefs: z.array(z.string().trim().max(64)).max(50).optional(),
 });
 
+// A user reaction to a specific commission run (#2657, Phase 2 — the taste
+// feedback loop). `runId` is required: the UI always rates a specific run, and
+// the service verifies the run exists on the record. `rating` is 'up'/'down' or
+// a non-zero score (numeric ratings are preserved verbatim so the directive
+// digest's >0/<0 test still applies); a 0 score is rejected as meaningless. The
+// note is the steering signal ("less horror, more Magritte") folded into the
+// next run's prompt.
+export const COMMISSION_FEEDBACK_NOTE_MAX = 1000;
+export const commissionFeedbackSchema = z.object({
+  runId: z.string().trim().min(1).max(120),
+  rating: z.union([z.enum(['up', 'down']), z.number().int().min(-5).max(5)]),
+  note: z.string().trim().max(COMMISSION_FEEDBACK_NOTE_MAX).default(''),
+  tags: z.array(z.string().trim().min(1).max(40)).max(20).default([]),
+}).superRefine((val, ctx) => {
+  if (typeof val.rating === 'number' && val.rating === 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['rating'], message: 'rating must be non-zero (up/down)' });
+  }
+});
+
 // PATCH: every field optional; at least one must be present. `.partial()` on a
 // ZodEffects (the schedule uses superRefine) isn't available, so we rebuild the
 // object rather than call `.partial()` on the whole create schema.

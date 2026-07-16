@@ -68,6 +68,33 @@ describe('renderFeedbackDigest', () => {
     expect(renderFeedbackDigest([{ rating: 'up', note: 'x' }], 0)).toBe('');
   });
 
+  it('gives a one-sided window the whole budget (does not reserve half for the absent group)', () => {
+    // 3 × 300-char likes = ~900 chars — fits the full digest budget but would
+    // overrun a half-budget (~730), truncating the newest like. With no dislikes,
+    // the likes group must get the whole budget so all three survive.
+    const feedback = [
+      { rating: 'up', note: 'A'.repeat(300) },
+      { rating: 'up', note: 'B'.repeat(300) },
+      { rating: 'up', note: 'C'.repeat(300) },
+    ];
+    const digest = renderFeedbackDigest(feedback, 3);
+    // newest-first: C should be present (it's the latest), and all three fit.
+    expect(digest).toContain('C'.repeat(300));
+    expect(digest).toContain('A'.repeat(300));
+    expect(digest).not.toContain('Recent dislikes');
+  });
+
+  it('keeps recent dislikes even when many long likes precede them (per-group budget)', () => {
+    const feedback = [
+      ...Array.from({ length: 5 }, () => ({ rating: 'up', note: 'L'.repeat(300) })),
+      { rating: 'down', note: 'newer dislike wins' },
+    ];
+    const digest = renderFeedbackDigest(feedback, 6);
+    expect(digest).toContain('Recent likes:');
+    expect(digest).toContain('Recent dislikes: newer dislike wins.');
+    expect(digest).toContain('Steer toward the likes');
+  });
+
   it('treats numeric ratings as up (>0) / down (<0)', () => {
     const digest = renderFeedbackDigest([{ rating: 1, note: 'plus' }, { rating: -1, note: 'minus' }]);
     expect(digest).toContain('Recent likes: plus.');
@@ -110,5 +137,36 @@ describe('buildCommissionDirective', () => {
   it('omits absent constraints', () => {
     const directive = buildCommissionDirective({ targetAbility: 'video', brief: { intent: 'x' } });
     expect(directive.constraints).toEqual({});
+  });
+
+  it('clamps the goal so a large feedback window + long notes stay under the CD 5000-char cap', () => {
+    // 50 reactions × 1000-char notes would blow well past the CD directive goal
+    // limit; the scheduler feeds this goal straight into createProject without the
+    // route's validation, so the builder must bound it itself.
+    const feedback = Array.from({ length: 50 }, (_, i) => ({
+      rating: i % 2 === 0 ? 'up' : 'down',
+      note: 'z'.repeat(1000),
+    }));
+    const directive = buildCommissionDirective({
+      targetAbility: 'video',
+      brief: { intent: 'surreal' },
+      feedback,
+      feedbackWindow: 50,
+    });
+    expect(directive.goal.length).toBeLessThanOrEqual(4500);
+  });
+
+  it('keeps the feedback digest even when the brief text is very long (digest is reserved, brief is clamped)', () => {
+    // A 2000-char intent + 3000-char style would fill the whole 4500 budget; the
+    // digest must survive (it is appended last, but reserved for) rather than
+    // being truncated away — otherwise ratings stop steering the run.
+    const directive = buildCommissionDirective({
+      targetAbility: 'video',
+      brief: { intent: 'x'.repeat(2000), styleSpec: 'y'.repeat(3000) },
+      feedback: [{ rating: 'down', note: 'less horror' }],
+      feedbackWindow: 5,
+    });
+    expect(directive.goal.length).toBeLessThanOrEqual(4500);
+    expect(directive.goal).toContain('Recent dislikes: less horror.');
   });
 });

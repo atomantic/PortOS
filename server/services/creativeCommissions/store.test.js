@@ -18,15 +18,18 @@ vi.mock('../../lib/fileUtils.js', () => ({ PATHS: { data: '/tmp/portos-test-data
 
 const {
   sanitizeCommission,
+  sanitizeFeedbackEntry,
   assertValidSchedule,
   createCommission,
   updateCommission,
   deleteCommission,
   getCommission,
   recordCommissionRun,
+  submitCommissionFeedback,
   ERR_VALIDATION,
   ERR_NOT_FOUND,
 } = await import('./store.js');
+const { buildCommissionDirective } = await import('./directive.js');
 
 beforeEach(() => records.clear());
 
@@ -154,5 +157,88 @@ describe('deleteCommission', () => {
     const r = await deleteCommission(created.id);
     expect(r).toEqual({ id: created.id, deleted: true });
     expect(records.has(created.id)).toBe(false);
+  });
+});
+
+describe('sanitizeFeedbackEntry', () => {
+  it('normalizes an up/down reaction and mints an id', () => {
+    const e = sanitizeFeedbackEntry({ runId: 'run-1', rating: 'up', note: 'more Magritte' });
+    expect(e).toMatchObject({ runId: 'run-1', rating: 'up', note: 'more Magritte' });
+    expect(e.id).toMatch(/^feedback-/);
+    expect(typeof e.at).toBe('string');
+  });
+
+  it('preserves a non-zero numeric rating verbatim', () => {
+    expect(sanitizeFeedbackEntry({ rating: 2 }).rating).toBe(2);
+    expect(sanitizeFeedbackEntry({ rating: -3 }).rating).toBe(-3);
+  });
+
+  it('drops a reaction with no usable rating (null/0/garbage)', () => {
+    expect(sanitizeFeedbackEntry({ note: 'x' })).toBeNull();
+    expect(sanitizeFeedbackEntry({ rating: 0 })).toBeNull();
+    expect(sanitizeFeedbackEntry({ rating: 'meh' })).toBeNull();
+    expect(sanitizeFeedbackEntry(null)).toBeNull();
+  });
+});
+
+describe('sanitizeCommission (feedback)', () => {
+  it('deep-sanitizes and caps feedback, dropping ratingless entries', () => {
+    const feedback = [
+      { id: 'f-keep', runId: 'r1', rating: 'up', note: 'keep' },
+      { note: 'no rating — dropped' },
+      ...Array.from({ length: 120 }, (_, i) => ({ id: `f-${i}`, rating: 'down' })),
+    ];
+    const rec = sanitizeCommission({ id: 'c1', feedback });
+    expect(rec.feedback).toHaveLength(100); // MAX_PERSISTED_FEEDBACK
+    // The ratingless entry is filtered before capping.
+    expect(rec.feedback.every((f) => f.rating === 'up' || f.rating === 'down')).toBe(true);
+  });
+});
+
+describe('submitCommissionFeedback', () => {
+  it('appends a reaction keyed to an existing run and returns the updated commission', async () => {
+    const created = await createCommission(validInput());
+    await recordCommissionRun(created.id, { id: 'run-A', status: 'started', projectId: 'cd-1' });
+    const updated = await submitCommissionFeedback(created.id, { runId: 'run-A', rating: 'up', note: 'more Magritte' });
+    expect(updated.feedback).toHaveLength(1);
+    expect(updated.feedback[0]).toMatchObject({ runId: 'run-A', rating: 'up', note: 'more Magritte' });
+    expect(updated.feedback[0].id).toMatch(/^feedback-/);
+  });
+
+  it('closes the loop: the reaction folds into the next directive', async () => {
+    const created = await createCommission(validInput());
+    await recordCommissionRun(created.id, { id: 'run-A', status: 'started', projectId: 'cd-1' });
+    await submitCommissionFeedback(created.id, { runId: 'run-A', rating: 'down', note: 'less horror' });
+    const after = await getCommission(created.id);
+    const directive = buildCommissionDirective(after);
+    expect(directive.goal).toContain('Recent dislikes: less horror.');
+  });
+
+  it('re-rating a run REPLACES its prior reaction (no contradictory stacking)', async () => {
+    const created = await createCommission(validInput());
+    await recordCommissionRun(created.id, { id: 'run-A', status: 'started', projectId: 'cd-1' });
+    await submitCommissionFeedback(created.id, { runId: 'run-A', rating: 'up', note: 'first take' });
+    const updated = await submitCommissionFeedback(created.id, { runId: 'run-A', rating: 'down', note: 'changed my mind' });
+    // Exactly one reaction for the run — the latest — not two.
+    const forRun = updated.feedback.filter((f) => f.runId === 'run-A');
+    expect(forRun).toHaveLength(1);
+    expect(forRun[0]).toMatchObject({ rating: 'down', note: 'changed my mind' });
+    // And the digest reflects only the latest vote, not both.
+    const directive = buildCommissionDirective(await getCommission(created.id));
+    expect(directive.goal).toContain('Recent dislikes: changed my mind.');
+    expect(directive.goal).not.toContain('first take');
+  });
+
+  it('rejects a reaction referencing a run not on the commission (VALIDATION)', async () => {
+    const created = await createCommission(validInput());
+    await expect(
+      submitCommissionFeedback(created.id, { runId: 'ghost', rating: 'up' }),
+    ).rejects.toMatchObject({ code: ERR_VALIDATION });
+  });
+
+  it('throws NOT_FOUND for an unknown commission', async () => {
+    await expect(
+      submitCommissionFeedback('nope', { runId: 'r', rating: 'up' }),
+    ).rejects.toMatchObject({ code: ERR_NOT_FOUND });
   });
 });

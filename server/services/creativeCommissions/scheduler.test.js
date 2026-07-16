@@ -26,6 +26,11 @@ vi.mock('./store.js', () => ({
   commissionEvents,
 }));
 
+// Surfacing (notification + brain inbox) is mocked so the fire handler stays
+// hermetic — the real surface.js lazy-imports notifications/brainStorage.
+const surfaceMock = vi.fn(async () => {});
+vi.mock('./surface.js', () => ({ surfaceCommissionRun: (...a) => surfaceMock(...a) }));
+
 // CD graph + autonomy/budget mocks (dynamic-imported inside the fire handler).
 const createProjectMock = vi.fn(async () => ({ id: 'cd-xyz' }));
 const advanceMock = vi.fn(async () => {});
@@ -139,9 +144,19 @@ describe('runScheduledCommission gates', () => {
     }));
     expect(advanceMock).toHaveBeenCalledWith('cd-xyz');
     expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({ status: 'started', projectId: 'cd-xyz' }));
+    // Phase 2: a successful fire surfaces the run (notification + brain inbox) so
+    // the user can rate it — the reaction steers the next fire.
+    expect(surfaceMock).toHaveBeenCalledTimes(1);
     // The planner's cos action is accounted by completeAgent on completion — the
     // fire handler must NOT pre-charge (that would double-count).
     expect(recordUsageMock).not.toHaveBeenCalled();
+  });
+
+  it('does NOT surface when the fire is skipped (nothing was generated)', async () => {
+    creativeModeMock.mockReturnValue('off');
+    getCommissionMock.mockResolvedValue(videoCommission());
+    await runScheduledCommission('commission-1');
+    expect(surfaceMock).not.toHaveBeenCalled();
   });
 
   it('caps the derived project name so createCollection (80-char limit) never fails', async () => {

@@ -27,6 +27,7 @@ import { getUserTimezone } from '../../lib/timezone.js';
 import { settingsEvents } from '../settings.js';
 import { listCommissions, getCommission, recordCommissionRun, commissionEvents } from './store.js';
 import { commissionToCron, buildCommissionDirective } from './directive.js';
+import { surfaceCommissionRun } from './surface.js';
 
 const eventId = (commissionId) => `creative-commission-${commissionId}`;
 const registered = new Set();
@@ -216,11 +217,18 @@ export async function runScheduledCommission(commissionId) {
       directive,
     });
 
-    await recordCommissionRun(commissionId, {
+    const run = await recordCommissionRun(commissionId, {
       status: 'started',
       projectId: project.id,
       promptUsed: directive.goal,
-    }).catch(() => {});
+    }).catch(() => null);
+
+    // Surface the fire (notification + brain inbox) so the user can rate the
+    // result once it lands — the reaction feeds the next run via
+    // buildCommissionDirective. Best-effort; surface.js swallows its own errors,
+    // and the outer catch backstops anything unexpected (we're outside the
+    // request lifecycle). Only surface real runs (a run row was persisted).
+    if (run) await surfaceCommissionRun(commission, run).catch(() => {});
 
     // Kick the planner → plan → execute loop. Fire-and-forget within this
     // try/catch (already outside the request lifecycle).
