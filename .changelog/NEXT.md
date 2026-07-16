@@ -10,6 +10,10 @@
 - **[issue-2621] Feature brainstorming remembers rejected ideas** — the feature-ideas task now checks REJECTED.md and previously closed-unmerged proposals before suggesting, so declined ideas stop coming back.
 - **[issue-2614] Failing scheduled tasks no longer pile up duplicates** — a task blocked by repeated failures now counts as "already queued," so the same improvement task isn't re-created every cycle. Explicit retries (an on-demand Run, a manual job trigger, a Creative Director re-generate, or a repeated voice dispatch) revive the blocked task with a fresh retry budget instead of silently doing nothing, and the CoS log names the blocking task whenever it suppresses new work.
 
+## Security
+
+- **[issue-2684] A corrupt settings file can no longer silently disable your password.** Previously, if `settings.json` became unreadable or malformed, PortOS read it as "no settings" and treated the password gate as **off** — leaving the API open. The auth check now tells a genuinely absent settings file (a fresh install, correctly password-free) apart from one that exists but can't be read, and **fails closed** in the latter case: protected routes require a password and the health endpoint reports auth as required, until the file is readable again. The state self-heals on the next clean read with no restart.
+
 ## Companion app
 
 - **[issue-2678] Instance identity is discoverable before you sign in.** The public `GET /api/system/health` endpoint now also reports the instance's display **name**, whether a **password is required**, and the **scheme** (http/https) it serves — so a native companion app can list, label, and decide whether to prompt for a password across your tailnet without a credential or a second request. Ships with a documented native-client API contract (`docs/COMPANION_APP_API.md`, linked from the API reference) covering discovery, auth, instance management, quick actions, daily-log, and POST progress.

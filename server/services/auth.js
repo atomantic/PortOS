@@ -3,7 +3,7 @@ import { EventEmitter } from 'events';
 import { createHash, randomBytes, scrypt, timingSafeEqual } from 'crypto';
 import { promisify } from 'util';
 import { atomicWrite, PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
-import { getSettings, settingsEvents, updateSettings } from './settings.js';
+import { getSettings, readSettingsStrict, settingsEvents, updateSettings } from './settings.js';
 import { ServerError } from '../lib/errorHandler.js';
 
 // Auth gates the PortOS UI + API behind a single user-set password. PortOS is
@@ -135,13 +135,27 @@ settingsEvents.on('settings:updated', recomputeEnabledCache);
 
 export const isAuthEnabled = async () => {
   if (enabledCache === null) {
-    const settings = await getSettings();
+    // Cold path: read settings.json STRICTLY so a corrupt/unreadable file fails
+    // CLOSED (assume auth ON) instead of silently disabling the gate. A genuinely
+    // absent file (fresh install) still means auth off, as before. See #2684.
+    const { corrupt, settings } = await readSettingsStrict();
     // Double-check after the await — a concurrent updateSettings firing
     // settings:updated between the null check and this point would have
     // primed the cache already; clobbering it with the stale pre-write
     // snapshot would open a fail-open window if the concurrent write
     // was a first-time auth enable.
-    if (enabledCache === null) recomputeEnabledCache(settings);
+    if (enabledCache !== null) return enabledCache;
+    if (corrupt) {
+      // Fail closed WITHOUT caching: the file may be transiently unreadable (a
+      // mid-write window, a momentary permission blip). Returning `true` blocks
+      // gated routes for now, and leaving `enabledCache` null means the next
+      // call re-reads — so the state self-heals on the first clean read (or the
+      // next settings:updated event) without a restart. Paying one extra read
+      // per request in this abnormal, security-relevant window is the right
+      // trade for never silently disabling auth.
+      return true;
+    }
+    recomputeEnabledCache(settings);
   }
   return enabledCache;
 };

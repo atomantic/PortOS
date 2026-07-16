@@ -1,4 +1,5 @@
 import { join } from 'path';
+import { readFile } from 'fs/promises';
 import { EventEmitter } from 'events';
 import { safeJSONParse, PATHS, atomicWrite, tryReadFile } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
@@ -68,6 +69,50 @@ settingsEvents.setMaxListeners(50);
 const loadRaw = async () => {
   const raw = await tryReadFile(SETTINGS_FILE);
   return safeJSONParse(raw ?? '{}', {});
+};
+
+/**
+ * Security-sensitive STRICT read of settings.json for the auth gate (#2684).
+ *
+ * The normal loadRaw()/getSettings() path collapses THREE distinct states to
+ * `{}`: an ABSENT file (fresh install — legitimately no settings), a file that
+ * exists but can't be READ (permission / I/O error), and a file that reads but
+ * won't PARSE (truncated / corrupt JSON, or a non-object root). For feature
+ * reads that collapse is fine, but for the auth-enabled decision it fails OPEN:
+ * a corrupt settings.json makes `isAuthEnabled()` compute `false` over `{}` and
+ * silently disables the password gate (see `server/lib/authGate.js`).
+ *
+ * This read preserves the distinction so a security caller can fail CLOSED on
+ * the two failure modes while still treating a genuinely absent file as
+ * "auth off" (the correct default for a fresh install):
+ *   { present: false, corrupt: false } → absent (ENOENT): auth legitimately off
+ *   { present: true,  corrupt: true }  → exists but unreadable/unparseable: fail closed
+ *   { present: true,  corrupt: false } → parsed cleanly into `settings`
+ *
+ * `settings` is always a plain object (`{}` in the two non-clean cases) so
+ * callers can read it unconditionally; they gate their fail-closed behavior on
+ * `corrupt`. The default path is the real SETTINGS_FILE; the optional argument
+ * exists so unit tests can point it at a temp file without touching real data.
+ */
+export const readSettingsStrict = async (filePath = SETTINGS_FILE) => {
+  let raw;
+  try {
+    raw = await readFile(filePath, 'utf8');
+  } catch (err) {
+    // ENOENT is the only "not a failure" case — no file means no settings yet.
+    if (err?.code === 'ENOENT') return { present: false, corrupt: false, settings: {} };
+    // EACCES / EIO / EISDIR / … — the file is there but we couldn't read it.
+    return { present: true, corrupt: true, settings: {} };
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    // A valid-JSON but non-object root (array, string, number, null) is not a
+    // settings document — treat it as corrupt rather than reading properties off it.
+    if (!isPlainObject(parsed)) return { present: true, corrupt: true, settings: {} };
+    return { present: true, corrupt: false, settings: parsed };
+  } catch {
+    return { present: true, corrupt: true, settings: {} };
+  }
 };
 
 // Read-side cache. `getSettings()` is called 100+ times across the codebase

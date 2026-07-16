@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // settings.js persists via the shared atomicWrite helper and reads via
 // tryReadFile (both from server/lib/fileUtils.js). Mock just those two and
@@ -13,8 +13,11 @@ vi.mock('../lib/fileUtils.js', async (importActual) => {
   };
 });
 
+import { writeFileSync, mkdtempSync, rmSync } from 'fs';
+import { join as joinPath } from 'path';
+import { tmpdir } from 'os';
 import { atomicWrite, tryReadFile } from '../lib/fileUtils.js';
-import { getSettings, updateSettings, updateSettingsWith, reloadSettings, settingsEvents, __resetSettingsCache } from './settings.js';
+import { getSettings, updateSettings, updateSettingsWith, reloadSettings, settingsEvents, __resetSettingsCache, readSettingsStrict } from './settings.js';
 
 describe('settings.js', () => {
   beforeEach(() => {
@@ -500,6 +503,51 @@ describe('settings.js', () => {
       expect(result).toEqual({ theme: 'dark' });
       // Confirm no prototype pollution — a fresh object must not see `polluted`.
       expect({}.polluted).toBeUndefined();
+    });
+  });
+
+  // Strict read for the auth gate (#2684): distinguishes absent (auth off) from
+  // present-but-corrupt (fail closed), which loadRaw()/getSettings() collapse to {}.
+  // These exercise the REAL fs read path against temp files (not the tryReadFile
+  // mock), which is the whole point — the collapse the mock would hide is the bug.
+  describe('readSettingsStrict', () => {
+    let dir;
+    beforeEach(() => { dir = mkdtempSync(joinPath(tmpdir(), 'portos-strict-')); });
+    afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+    it('reports absent (not corrupt) when the file does not exist', async () => {
+      const res = await readSettingsStrict(joinPath(dir, 'nope.json'));
+      expect(res).toEqual({ present: false, corrupt: false, settings: {} });
+    });
+
+    it('parses a clean settings file', async () => {
+      const p = joinPath(dir, 'settings.json');
+      writeFileSync(p, JSON.stringify({ secrets: { auth: { enabled: true, passwordHash: 'h', salt: 's' } } }));
+      const res = await readSettingsStrict(p);
+      expect(res.present).toBe(true);
+      expect(res.corrupt).toBe(false);
+      expect(res.settings.secrets.auth.enabled).toBe(true);
+    });
+
+    it('flags a present-but-malformed file as corrupt (fail-closed signal)', async () => {
+      const p = joinPath(dir, 'settings.json');
+      writeFileSync(p, '{ this is not valid json');
+      const res = await readSettingsStrict(p);
+      expect(res).toEqual({ present: true, corrupt: true, settings: {} });
+    });
+
+    it('flags an empty file as corrupt', async () => {
+      const p = joinPath(dir, 'settings.json');
+      writeFileSync(p, '');
+      const res = await readSettingsStrict(p);
+      expect(res.corrupt).toBe(true);
+    });
+
+    it('flags a valid-JSON but non-object root as corrupt', async () => {
+      const p = joinPath(dir, 'settings.json');
+      writeFileSync(p, '[1,2,3]');
+      const res = await readSettingsStrict(p);
+      expect(res.corrupt).toBe(true);
     });
   });
 });

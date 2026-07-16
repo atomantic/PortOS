@@ -1,5 +1,5 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { writeFileSync } from 'fs';
+import { writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { mockPathsDataRoot } from './mockPathsDataRoot.js';
 import { bindSettingsFile } from './settingsTestUtil.js';
@@ -60,6 +60,34 @@ describe('authGate middleware', () => {
     await auth.setPassword({ newPassword: 'correct-horse' });
     const { authGate } = await import('./authGate.js');
     const result = await runGate(authGate, { path: '/api/auth/login', headers: {} });
+    expect(result.called).toBe(true);
+  });
+
+  it('fails closed (auth ON) when settings.json exists but is corrupt (#2684)', async () => {
+    // A present-but-malformed settings.json must NOT silently disable the gate.
+    // isAuthEnabled() reads it strictly, can't confirm auth is off, and assumes
+    // ON — gated routes are blocked while public discovery paths stay reachable.
+    writeFileSync(join(tempRoot, 'settings.json'), '{ this is not valid json');
+    const { authGate } = await import('./authGate.js');
+
+    // Public discovery path (health) is still reachable — a client must be able
+    // to identify the instance even when settings can't be read.
+    const health = await runGate(authGate, { path: '/api/system/health', headers: {} });
+    expect(health.called).toBe(true);
+
+    // A gated route is blocked (401) — fail closed, not fail open.
+    const gated = await runGate(authGate, { path: '/api/cos', headers: {} });
+    expect(gated.called).toBe(false);
+    expect(gated.res.statusCode).toBe(401);
+    expect(gated.res.body).toEqual({ error: 'Authentication required', code: 'AUTH_REQUIRED' });
+  });
+
+  it('treats an absent settings.json as auth OFF (fresh install, no regression)', async () => {
+    // ENOENT is the one non-failure case — a fresh install legitimately has no
+    // settings and auth is off, so gated routes pass through.
+    rmSync(join(tempRoot, 'settings.json'), { force: true });
+    const { authGate } = await import('./authGate.js');
+    const result = await runGate(authGate, { path: '/api/cos', headers: {} });
     expect(result.called).toBe(true);
   });
 
