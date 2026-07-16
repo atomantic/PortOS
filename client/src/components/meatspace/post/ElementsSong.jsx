@@ -746,7 +746,15 @@ function ElementFlashMode({ item, mastery, onBack, onComplete }) {
   useEffect(() => {
     if (!showResult) return undefined;
     const onKeyDown = (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); next(); }
+      if (e.key !== 'Enter' || e.repeat) return;
+      // Don't hijack Enter that a focused control (the Back/Next buttons fire
+      // their own activation) or an open overlay/dialog (e.g. the command
+      // palette) already owns — otherwise a focused Next button double-advances
+      // and an Enter meant for the overlay leaks through to the quiz. Only act
+      // when no interactive element owns the keystroke (focus is on the body).
+      if (e.target?.closest?.('button, a, input, textarea, select, [role="dialog"], [role="menu"], [contenteditable="true"]')) return;
+      e.preventDefault();
+      next();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
