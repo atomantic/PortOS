@@ -141,7 +141,18 @@ export default function ChiefOfStaff() {
     setStatus(statusData);
     setTasks(tasksData);
     setAgents(agentsData);
-    setHealth(healthData);
+    // `getCosHealth` above reads the *pre-check* persisted health, while the
+    // getCosActionableInsights call in this same batch triggers a fresh server
+    // health check (cos.runHealthCheck) that emits `cos:health:check` — the
+    // socket handler's setHealth can land in `prev` before this runs. Don't let
+    // this fetch's older read clobber that fresher result; keep whichever health
+    // check is newer by lastCheck (lexicographic on ISO / numeric both order by
+    // time). A null read (fetch failed) still applies, matching prior behavior.
+    setHealth(prev =>
+      (prev?.lastCheck && healthData?.lastCheck && healthData.lastCheck < prev.lastCheck)
+        ? prev
+        : healthData,
+    );
     setProviders(providersData.providers || []);
     // Filter out PortOS Autofixer (it's part of PortOS project)
     setApps(appsData.filter(a => a.id !== 'portos-autofixer'));
@@ -415,8 +426,14 @@ export default function ChiefOfStaff() {
     setSpeaking(false);
     if (result) {
       setHealth({ lastCheck: result.metrics?.timestamp, issues: result.issues });
-      // Refresh the banner's health-issue count without a full fetchData (which
-      // would clobber the health-specific status message set below).
+      // Refresh the banner's server-derived health-issue count without a full
+      // fetchData (which would clobber the health-specific status message set
+      // below). This deliberately runs a second health check inside the insights
+      // endpoint — a small, user-initiated redundancy; on a single-user install
+      // two back-to-back checks return identical issues, and the fresher one's
+      // socket emit wins the lastCheck guard in fetchData, so health stays
+      // consistent. The alternative (client-computing the insight) isn't viable:
+      // insights aggregate approvals/learning, not just health.
       refreshInsights();
       toast.success('Health check complete');
       if (result.issues?.length > 0) {
