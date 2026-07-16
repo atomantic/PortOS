@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { creativeCommissionUpdateSchema } from '../../lib/creativeCommissionValidation.js';
 
 // In-memory collectionStore so CRUD is exercised without touching the filesystem.
 const records = new Map();
@@ -98,6 +99,16 @@ describe('updateCommission', () => {
     expect(updated.brief.intent).toBe('new intent');
     expect(updated.brief.styleSpec).toBe('flat'); // preserved
     expect(updated.createdAt).toBe(created.createdAt);
+  });
+
+  it('preserves brief.constraints when a partial brief patch omits them', async () => {
+    // Regression: the create-path brief schema defaults constraints/seedRefs, so
+    // a PATCH that omitted them used to wipe a stored universeId. The update-path
+    // schema carries no defaults, so an omitted key is preserved by the merge.
+    const created = await createCommission(validInput()); // constraints.universeId = 'u-1'
+    const parsed = creativeCommissionUpdateSchema.parse({ brief: { intent: 'reworked' } });
+    const updated = await updateCommission(created.id, parsed);
+    expect(updated.brief.constraints).toEqual({ universeId: 'u-1' });
   });
 
   it('throws NOT_FOUND for an unknown id', async () => {

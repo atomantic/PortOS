@@ -108,6 +108,25 @@ export const creativeCommissionCreateSchema = z.object({
   feedbackWindow: z.number().int().min(0).max(50).default(5),
 });
 
+// Brief schema for the UPDATE path: every field optional and — critically — NO
+// defaults. The create-path `creativeCommissionBriefSchema` defaults
+// `constraints`/`seedRefs`/`styleSpec`, which on a PATCH would inject those keys
+// even when the client omitted them, so the service's `{ ...current.brief,
+// ...patch.brief }` merge would overwrite a stored `constraints.universeId` with
+// an empty default (the absent-vs-empty footgun). With no defaults here, an
+// omitted key stays omitted and the merge preserves the stored value.
+export const creativeCommissionBriefUpdateSchema = z.object({
+  intent: z.string().trim().min(1).max(COMMISSION_INTENT_MAX).optional(),
+  genre: z.string().trim().max(120).nullable().optional(),
+  category: z.string().trim().max(120).nullable().optional(),
+  styleSpec: z.string().max(5000).optional(),
+  constraints: z.object({
+    universeId: z.string().max(120).nullable().optional(),
+    seriesId: z.string().max(120).nullable().optional(),
+  }).optional(),
+  seedRefs: z.array(z.string().trim().max(64)).max(50).optional(),
+});
+
 // PATCH: every field optional; at least one must be present. `.partial()` on a
 // ZodEffects (the schedule uses superRefine) isn't available, so we rebuild the
 // object rather than call `.partial()` on the whole create schema.
@@ -115,7 +134,7 @@ export const creativeCommissionUpdateSchema = z.object({
   name: z.string().trim().min(1).max(COMMISSION_NAME_MAX).optional(),
   enabled: z.boolean().optional(),
   targetAbility: z.enum(CREATIVE_COMMISSION_ABILITIES).optional(),
-  brief: creativeCommissionBriefSchema.optional(),
+  brief: creativeCommissionBriefUpdateSchema.optional(),
   schedule: creativeCommissionScheduleSchema.optional(),
   generation: creativeCommissionGenerationSchema.optional(),
   feedbackWindow: z.number().int().min(0).max(50).optional(),
