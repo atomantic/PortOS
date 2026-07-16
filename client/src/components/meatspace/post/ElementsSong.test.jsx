@@ -109,4 +109,32 @@ describe('ElementsSong — Element Flash recall test', () => {
     expect(screen.getByText('2 / 2')).toBeInTheDocument();
     expect(screen.getByRole('textbox')).toBeInTheDocument();
   });
+
+  it('does not hijack Enter fired from a focused button (no double-advance)', async () => {
+    render(<ElementsSong item={item} onBack={() => {}} />);
+    await settle();
+
+    fireEvent.click(screen.getByText('Element Flash'));
+    await settle();
+    expect(screen.getByText('1 / 2')).toBeInTheDocument();
+
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: 'x' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await settle();
+
+    // Enter originating from the focused Next button must be ignored by the
+    // window listener — the button's own activation is the single advance, so
+    // the window listener firing too would skip a question. (RTL keyDown does
+    // not trigger the native click, so the guard working = no advance here.)
+    const nextBtn = screen.getByText('Next');
+    fireEvent.keyDown(nextBtn, { key: 'Enter' });
+    await settle();
+    expect(screen.getByText('1 / 2')).toBeInTheDocument();
+
+    // A genuine click on Next still advances exactly once.
+    fireEvent.click(nextBtn);
+    await settle();
+    expect(screen.getByText('2 / 2')).toBeInTheDocument();
+  });
 });
