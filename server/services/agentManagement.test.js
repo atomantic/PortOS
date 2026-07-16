@@ -413,7 +413,7 @@ describe('pauseAgent — runner branch', () => {
     }), 'user');
   });
 
-  it('failure path: pauseAgentViaRunner rejects → pausedAgents rolled back, runnerAgents intact', async () => {
+  it('failure path: pauseAgentViaRunner rejects → throws, pausedAgents rolled back, runnerAgents intact', async () => {
     runnerAgents.set('runner-agent-2', {
       taskId: 'task-r2',
       task: { id: 'task-r2', taskType: 'user', description: 'Runner task 2', metadata: {} },
@@ -421,9 +421,11 @@ describe('pauseAgent — runner branch', () => {
     });
     pauseAgentViaRunner.mockResolvedValue({ success: false, error: 'runner unreachable' });
 
-    const result = await pauseAgent('runner-agent-2', 'test-pause');
-
-    expect(result).toMatchObject({ success: false, error: 'runner unreachable' });
+    await expect(pauseAgent('runner-agent-2', 'test-pause')).rejects.toMatchObject({
+      message: 'runner unreachable',
+      status: 500,
+      code: 'AGENT_PAUSE_FAILED',
+    });
     // pausedAgents must be rolled back when runner call fails
     expect(pausedAgents.has('runner-agent-2')).toBe(false);
     // runnerAgents must still contain the agent (not prematurely deleted)
@@ -511,9 +513,12 @@ describe('pauseAgent — agent not found', () => {
     pausedAgents.clear();
   });
 
-  it('returns failure when agent is not in activeAgents or runnerAgents', async () => {
-    const result = await pauseAgent('nonexistent-agent');
-    expect(result).toMatchObject({ success: false, error: 'Agent not found or not running' });
+  it('throws a 404 ServerError when agent is not in activeAgents or runnerAgents', async () => {
+    await expect(pauseAgent('nonexistent-agent')).rejects.toMatchObject({
+      message: 'Agent not found or not running',
+      status: 404,
+      code: 'NOT_FOUND',
+    });
   });
 });
 

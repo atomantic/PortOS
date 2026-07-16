@@ -601,7 +601,9 @@ describe('CoS Routes', () => {
     });
 
     it('should return 404 if agent not found', async () => {
-      cos.pauseAgent.mockResolvedValue({ error: 'Agent not found or not running' });
+      cos.pauseAgent.mockRejectedValue(
+        new ServerError('Agent not found or not running', { status: 404, code: 'NOT_FOUND' }),
+      );
 
       const response = await request(app).post('/api/cos/agents/agent-999/pause');
 
@@ -620,7 +622,9 @@ describe('CoS Routes', () => {
     });
 
     it('should return 404 if agent not found', async () => {
-      cos.killAgent.mockResolvedValue({ error: 'Agent not found or not running' });
+      cos.killAgent.mockRejectedValue(
+        new ServerError('Agent not found or not running', { status: 404, code: 'NOT_FOUND' }),
+      );
 
       const response = await request(app).post('/api/cos/agents/agent-999/kill');
 

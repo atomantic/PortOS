@@ -6,6 +6,7 @@
  */
 
 import { join } from 'path';
+import { ServerError } from '../lib/errorHandler.js';
 import { emitLog } from './cosEvents.js';
 import { completeAgent, updateAgent } from './cosAgents.js';
 import { updateTask, addTask, getTaskById } from './cos.js';
@@ -37,29 +38,37 @@ async function terminateRunnerAgent(agentId, runnerFn, errorMessage, blockedReas
   const agentInfo = runnerAgents.get(agentId);
   if (agentInfo?.initializationTimeout) clearTimeout(agentInfo.initializationTimeout);
   const result = await runnerFn(agentId).catch(err => ({ success: false, error: err.message }));
-  if (result.success) {
-    // Drain + drop this agent's runner output batcher before the terminal
-    // record so pending ~250ms-batched output lands first, and the Map entry
-    // doesn't leak if the runner never emits a later completion event. Dynamic
-    // import avoids a static cycle (subAgentSpawner statically re-exports this
-    // module). flushRunnerOutputBatcher is a no-op if no batcher exists.
-    const { flushRunnerOutputBatcher } = await import('./subAgentSpawner.js');
-    await flushRunnerOutputBatcher(agentId);
-    await completeAgent(agentId, { success: false, error: errorMessage });
-    const task = agentInfo?.task;
-    if (task) {
-      await updateTask(task.id, {
-        status: 'blocked',
-        metadata: {
-          ...task.metadata,
-          blockedReason,
-          blockedCategory: 'user-terminated',
-          blockedAt: new Date().toISOString()
-        }
-      }, task.taskType || 'user');
-    }
-    runnerAgents.delete(agentId);
+  // The agent is present in runnerAgents, so a failure here is an operational
+  // runner-RPC error (not a missing agent) — surface it as a 500 ServerError
+  // so the route renders the standard envelope instead of string-matching the
+  // result shape into a misleading 404.
+  if (!result.success) {
+    throw new ServerError(result.error || 'Failed to terminate runner agent', {
+      status: 500,
+      code: 'AGENT_TERMINATE_FAILED',
+    });
   }
+  // Drain + drop this agent's runner output batcher before the terminal
+  // record so pending ~250ms-batched output lands first, and the Map entry
+  // doesn't leak if the runner never emits a later completion event. Dynamic
+  // import avoids a static cycle (subAgentSpawner statically re-exports this
+  // module). flushRunnerOutputBatcher is a no-op if no batcher exists.
+  const { flushRunnerOutputBatcher } = await import('./subAgentSpawner.js');
+  await flushRunnerOutputBatcher(agentId);
+  await completeAgent(agentId, { success: false, error: errorMessage });
+  const task = agentInfo?.task;
+  if (task) {
+    await updateTask(task.id, {
+      status: 'blocked',
+      metadata: {
+        ...task.metadata,
+        blockedReason,
+        blockedCategory: 'user-terminated',
+        blockedAt: new Date().toISOString()
+      }
+    }, task.taskType || 'user');
+  }
+  runnerAgents.delete(agentId);
   return result;
 }
 
@@ -116,7 +125,10 @@ export async function pauseAgent(agentId, reason = null) {
     const result = await pauseAgentViaRunner(agentId, reason).catch(err => ({ success: false, error: err.message }));
     if (!result.success) {
       pausedAgents.delete(agentId);
-      return result;
+      throw new ServerError(result.error || 'Failed to pause runner agent', {
+        status: 500,
+        code: 'AGENT_PAUSE_FAILED',
+      });
     }
     // Persist failure must roll back the in-memory flag too, or the maps drift
     // (pausedAgents set, runnerAgents never deleted) until the next restart.
@@ -125,7 +137,9 @@ export async function pauseAgent(agentId, reason = null) {
       emitLog('error', `❌ Failed to persist pause for runner agent ${agentId}: ${err.message}`, { agentId });
       return false;
     });
-    if (!persistedRunner) return { success: false, error: 'Failed to persist paused state' };
+    if (!persistedRunner) {
+      throw new ServerError('Failed to persist paused state', { status: 500, code: 'AGENT_PAUSE_FAILED' });
+    }
     runnerAgents.delete(agentId);
     emitLog('info', `⏸️ Paused runner agent ${agentId}${reason ? `: ${reason}` : ''}`, { agentId, reason });
     return { success: true, agentId, pausedAt, mode: 'runner' };
@@ -133,7 +147,7 @@ export async function pauseAgent(agentId, reason = null) {
 
   const agent = activeAgents.get(agentId);
   if (!agent) {
-    return { success: false, error: 'Agent not found or not running' };
+    throw new ServerError('Agent not found or not running', { status: 404, code: 'NOT_FOUND' });
   }
 
   pausedAgents.set(agentId, { pausedAt, reason });
@@ -145,7 +159,9 @@ export async function pauseAgent(agentId, reason = null) {
     emitLog('error', `❌ Failed to persist pause for agent ${agentId}: ${err.message}`, { agentId });
     return false;
   });
-  if (!persisted) return { success: false, error: 'Failed to persist paused state' };
+  if (!persisted) {
+    throw new ServerError('Failed to persist paused state', { status: 500, code: 'AGENT_PAUSE_FAILED' });
+  }
 
   if (agent.tuiSessionId) {
     shellService.writeToSession(agent.tuiSessionId, '\x1b');
@@ -182,7 +198,7 @@ export async function terminateAgent(agentId) {
   const agent = activeAgents.get(agentId);
 
   if (!agent) {
-    return { success: false, error: 'Agent not found or not running' };
+    throw new ServerError('Agent not found or not running', { status: 404, code: 'NOT_FOUND' });
   }
 
   // Track as user-terminated so the close handler doesn't re-queue
@@ -275,7 +291,7 @@ export async function killAgent(agentId) {
   const agent = activeAgents.get(agentId);
 
   if (!agent) {
-    return { success: false, error: 'Agent not found or not running' };
+    throw new ServerError('Agent not found or not running', { status: 404, code: 'NOT_FOUND' });
   }
 
   // Track as user-terminated so the close handler doesn't re-queue
@@ -409,7 +425,10 @@ export async function killAllAgents() {
   const directIds = Array.from(activeAgents.keys());
   const runnerIds = Array.from(runnerAgents.keys());
 
-  await Promise.all([...directIds, ...runnerIds].map(agentId => terminateAgent(agentId)));
+  // Best-effort bulk cleanup: terminateAgent now throws (404/500) on a missing
+  // or failed agent, so use allSettled — one agent that has already exited must
+  // not abort termination of the rest.
+  await Promise.allSettled([...directIds, ...runnerIds].map(agentId => terminateAgent(agentId)));
   return { killed: directIds.length + runnerIds.length };
 }
 
