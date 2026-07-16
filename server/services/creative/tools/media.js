@@ -6,9 +6,59 @@
 
 import { z } from 'zod';
 import { enqueueJob } from '../../mediaJobQueue/index.js';
+import { ASPECT_PRESETS, QUALITY_PRESETS, presetToRenderParams } from '../../../lib/creativeDirectorPresets.js';
 import { COST_RENDER, resolveOwner } from './shared.js';
 
 const paramsSchema = z.object({ params: z.record(z.any()).default({}), owner: z.string().optional() });
+
+/**
+ * Force a video render's dimensions + quality knobs onto the project's LOCKED
+ * preset, overriding whatever the planner LLM authored.
+ *
+ * The planner (cd-plan) writes `media_enqueueVideoJob` params freehand and has
+ * historically guessed an `aspectRatio` string (e.g. "16:9") that the video
+ * worker doesn't even read — `generateVideo` consumes `width`/`height`, not
+ * `aspectRatio`, and defaults to a 768×512 box when they're absent. That silently
+ * dropped the project's chosen 9:16. A project's aspect ratio / quality / target
+ * duration are locked at creation (see creativeDirectorPresets.js), so resolve
+ * them deterministically here rather than trusting the LLM to reproduce them.
+ *
+ * The planner still owns the CREATIVE params (`prompt`, `negativePrompt`,
+ * `style`, `durationSeconds`). Only the render geometry is enforced. An
+ * unrecognized aspect/quality (hand-edited/legacy project) falls through to the
+ * LLM's params untouched — best-effort, never throws.
+ */
+async function enforceVideoRenderPreset(params, ctx) {
+  if (!ctx?.projectId) return params;
+  const { getProject } = await import('../../creativeDirector/local.js');
+  const project = await getProject(ctx.projectId).catch(() => null);
+  // Only a directive-driven CD project locks a preset; a bare enqueue (no
+  // recognized aspect/quality) keeps the caller's params as-is.
+  if (!project || !ASPECT_PRESETS[project.aspectRatio] || !QUALITY_PRESETS[project.quality]) {
+    return params;
+  }
+  // The planner may legitimately ask for a shorter beat than the project target,
+  // so a positive per-step durationSeconds wins; otherwise use the project's.
+  const stepDuration = Number(params?.durationSeconds);
+  const durationSeconds = stepDuration > 0 ? stepDuration : (project.targetDurationSeconds || 10);
+  const preset = presetToRenderParams({
+    aspectRatio: project.aspectRatio,
+    quality: project.quality,
+    durationSeconds,
+  });
+  // Drop the worker-ignored `aspectRatio` key so a stale value can't mislead, and
+  // force the locked geometry + quality-derived knobs.
+  const { aspectRatio: _ignored, ...rest } = params || {};
+  return {
+    ...rest,
+    width: preset.width,
+    height: preset.height,
+    fps: preset.fps,
+    numFrames: preset.numFrames,
+    steps: preset.steps,
+    guidanceScale: preset.guidanceScale,
+  };
+}
 
 const mediaTool = (kind, label) => ({
   name: `media_enqueue${label}Job`,
@@ -24,7 +74,12 @@ const mediaTool = (kind, label) => ({
     },
     required: ['params'],
   },
-  execute: (args, ctx) => enqueueJob({ kind, params: args.params || {}, owner: resolveOwner(args, ctx) }),
+  execute: async (args, ctx) => {
+    const params = kind === 'video'
+      ? await enforceVideoRenderPreset(args.params || {}, ctx)
+      : (args.params || {});
+    return enqueueJob({ kind, params, owner: resolveOwner(args, ctx) });
+  },
 });
 
 export const MEDIA_TOOLS = [

@@ -36,6 +36,10 @@ Parameters (JSON schema): {{parametersJson}}
 
 {{/tools}}
 
+## Locked render settings
+
+This project is locked to **{{render.aspectRatio}}** ({{render.width}}×{{render.height}}), **{{render.quality}}** quality, target ~{{render.targetDurationSeconds}}s. For any `media_enqueueVideoJob` step, set ONLY the creative params (`prompt`, `negativePrompt`, `style`, and optionally a shorter per-beat `durationSeconds`). Do NOT set `aspectRatio`, `width`, `height`, `fps`, or `steps` — the server forces the locked geometry onto every render, so any values you supply for those are ignored.
+
 ## Task
 
 1. Decompose the directive into the smallest sequence of registry tool calls that delivers the requested deliverables. Prefer existing records over creating new ones where the constraints name a target universe/series id.

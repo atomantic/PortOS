@@ -32,7 +32,7 @@ vi.mock('../services/promptService.js', () => ({
   }),
 }));
 
-const { buildTreatmentPrompt, buildEvaluatePrompt } = await import('./creativeDirectorPrompts.js');
+const { buildTreatmentPrompt, buildEvaluatePrompt, buildPlanPrompt } = await import('./creativeDirectorPrompts.js');
 
 const baseProject = {
   id: 'cd-1',
@@ -61,6 +61,20 @@ const baseScene = {
 
 beforeEach(() => {
   // Templates are loaded fresh from disk — no state to reset.
+});
+
+describe('buildPlanPrompt — locked render settings', () => {
+  const planProject = { ...baseProject, aspectRatio: '9:16', quality: 'high', directive: { goal: 'make a surreal clip', deliverables: [], constraints: {} } };
+  const toolSpecs = [{ type: 'function', function: { name: 'media_enqueueVideoJob', description: 'render', parameters: { type: 'object' } } }];
+
+  it('surfaces the project preset (9:16 → 432×768) so the planner stops guessing dimensions', async () => {
+    const out = await buildPlanPrompt(planProject, { toolSpecs });
+    expect(out).toContain('## Locked render settings');
+    expect(out).toContain('**9:16** (432×768)');
+    expect(out).toContain('**high** quality');
+    // Instructs the planner not to author the enforced params.
+    expect(out).toMatch(/Do NOT set `aspectRatio`, `width`, `height`, `fps`, or `steps`/);
+  });
 });
 
 describe('buildTreatmentPrompt — template-rendered output', () => {
