@@ -21,8 +21,16 @@ export default function useAutoscroll(containerRef, { initialPxPerSec = 30 } = {
   const pxPerSecRef = useRef(pxPerSec);
   pxPerSecRef.current = pxPerSec;
 
+  // Reset to true in setup, not just initialized: StrictMode dev runs effects
+  // setup→cleanup→setup on the same instance (refs persist), so a cleanup-only
+  // guard would stay false forever and wheel-pause / bottom-stop would no-op.
+  // (The CLAUDE.md "never reset to true" rule is for deferred network emits,
+  // where staying false is the safe direction — here it gates live UI.)
   const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   useEffect(() => {
     if (!playing) return undefined;

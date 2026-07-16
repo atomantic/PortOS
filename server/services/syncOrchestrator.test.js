@@ -22,6 +22,15 @@ vi.mock('./brainSyncLog.js', () => ({
 vi.mock('./brainSync.js', () => ({
   applyRemoteChanges: vi.fn()
 }));
+// Real brainStorage builds data paths at module load, which the fileUtils mock
+// breaks — the orchestrator only needs the type list for the checksum-cache
+// signature. Keep it a stable literal here; the real list is pinned elsewhere.
+vi.mock('./brainStorage.js', () => ({
+  BRAIN_ENTITY_TYPES: Object.freeze([
+    'people', 'projects', 'ideas', 'admin', 'memories',
+    'links', 'buckets', 'journals', 'inbox', 'songs',
+  ]),
+}));
 vi.mock('./brainReconcile.js', () => ({
   getBrainChecksum: vi.fn().mockResolvedValue('local-cksum'),
   getBrainSnapshot: vi.fn(),
@@ -88,6 +97,7 @@ vi.mock('fs/promises', () => ({
 import { readJSONFile } from '../lib/fileUtils.js';
 import { getPeers } from './instances.js';
 import { applyRemoteChanges as applyBrainChanges } from './brainSync.js';
+import { BRAIN_ENTITY_TYPES } from './brainStorage.js';
 import { applyRemoteChanges as applyMemoryChanges } from './memorySync.js';
 import { applyRemoteChanges as applyCatalogChanges } from './catalogSync.js';
 import { instanceEvents } from './instanceEvents.js';
@@ -719,7 +729,10 @@ describe('syncOrchestrator', () => {
     });
 
     it('SKIPS reconcile entirely when peer checksum matches the cached cursor checksum', async () => {
-      readJSONFile.mockImplementation(async () => ({ [mockPeer.instanceId]: { brainSeq: 0, brainChecksum: 'cached-DDD' } }));
+      const typesSig = [...BRAIN_ENTITY_TYPES].sort().join(',');
+      readJSONFile.mockImplementation(async () => ({
+        [mockPeer.instanceId]: { brainSeq: 0, brainChecksum: 'cached-DDD', brainChecksumTypes: typesSig },
+      }));
       routeFetch({ checksum: { checksum: 'cached-DDD' }, snapshot: { records: {} } });
 
       await syncWithPeer(mockPeer);
@@ -727,6 +740,28 @@ describe('syncOrchestrator', () => {
       // Cached match → never even computes local checksum or fetches snapshot.
       expect(getBrainChecksum).not.toHaveBeenCalled();
       expect(applyBrainSnapshot).not.toHaveBeenCalled();
+    });
+
+    it('IGNORES a cached checksum from a different entity-type enrollment (version-skew healing)', async () => {
+      // An older install skipped unknown types (e.g. `songs`) while applying a
+      // snapshot yet cached the peer's checksum. Post-upgrade, that cache must
+      // NOT short-circuit reconcile — a stale/absent type signature is cold.
+      getBrainChecksum.mockResolvedValue('local-post-upgrade');
+      readJSONFile.mockImplementation(async () => ({
+        [mockPeer.instanceId]: {
+          brainSeq: 0,
+          brainChecksum: 'cached-DDD', // matches the remote, but from old code
+          brainChecksumTypes: 'people,projects', // pre-songs enrollment (also covers absent)
+        },
+      }));
+      routeFetch({ checksum: { checksum: 'cached-DDD' }, snapshot: { records: {}, checksum: 'cached-DDD' } });
+
+      await syncWithPeer(mockPeer);
+
+      // Stale signature → cache treated as cold → local checksum computed,
+      // mismatch → snapshot pulled and merged.
+      expect(getBrainChecksum).toHaveBeenCalled();
+      expect(applyBrainSnapshot).toHaveBeenCalled();
     });
 
     it('falls back to delta-only when peer is too old to expose /reconcile/checksum', async () => {
