@@ -176,7 +176,7 @@ export function ImageGenTab() {
   useEffect(() => () => closeRenderSse(), [closeRenderSse]);
 
   useEffect(() => {
-    Promise.all([getSettings(), getToolsList()])
+    Promise.all([getSettings({ silent: true }), getToolsList({ silent: true })])
       .then(([s, tools]) => {
         const ig = s?.imageGen || {};
         const m = ig.mode || IMAGE_GEN_MODE.EXTERNAL;
@@ -268,7 +268,7 @@ export function ImageGenTab() {
       },
     };
     try {
-      await updateSettings(patch);
+      await updateSettings(patch, { silent: true });
       // Store trimmed values to match what was persisted — otherwise
       // trailing whitespace in the inputs leaves isDirty stuck true even
       // after a successful save (state has " codex " but `saved` was
@@ -316,11 +316,11 @@ export function ImageGenTab() {
 
     const syncTool = async ({ id, registered, data, shouldCreate, onCreated, errLabel }) => {
       if (registered) {
-        return updateTool(id, data).catch((err) => toast.error(err.message || `Failed to update ${errLabel}`));
+        return updateTool(id, data, { silent: true }).catch((err) => toast.error(err.message || `Failed to update ${errLabel}`));
       }
       if (shouldCreate) {
         try {
-          await registerTool({ id, ...data });
+          await registerTool({ id, ...data }, { silent: true });
           onCreated?.();
         } catch (err) {
           toast.error(err.message || `Failed to register ${errLabel}`);
@@ -355,7 +355,7 @@ export function ImageGenTab() {
       // with unsaved changes, but reading from `saved` makes the contract
       // explicit. Codex is async like local (returns a job descriptor
       // immediately) so the SSE branch handles it.
-      const result = await generateImage({ prompt: testPrompt.trim(), mode: saved.mode });
+      const result = await generateImage({ prompt: testPrompt.trim(), mode: saved.mode }, { silent: true });
       // Local + Codex modes return immediately after spawning the child —
       // the PNG isn't on disk yet. Subscribe to the per-job SSE and only
       // mark the render complete on the `complete` event (or fail on

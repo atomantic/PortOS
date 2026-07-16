@@ -137,22 +137,26 @@ export const clearNotifications = () => request('/notifications', { method: 'DEL
 
 // Telegram
 export const getTelegramStatus = () => request('/telegram/status');
-export const updateTelegramConfig = (data) => request('/telegram/config', {
+export const updateTelegramConfig = (data, options) => request('/telegram/config', {
   method: 'PUT',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const deleteTelegramConfig = () => request('/telegram/config', { method: 'DELETE' });
-export const testTelegram = (message) => request('/telegram/test', {
+export const deleteTelegramConfig = (options) => request('/telegram/config', { method: 'DELETE', ...options });
+export const testTelegram = (message, options) => request('/telegram/test', {
   method: 'POST',
-  body: JSON.stringify({ message })
+  body: JSON.stringify({ message }),
+  ...options
 });
-export const updateTelegramForwardTypes = (forwardTypes) => request('/telegram/forward-types', {
+export const updateTelegramForwardTypes = (forwardTypes, options) => request('/telegram/forward-types', {
   method: 'PUT',
-  body: JSON.stringify({ forwardTypes })
+  body: JSON.stringify({ forwardTypes }),
+  ...options
 });
-export const updateTelegramMethod = (method) => request('/telegram/method', {
+export const updateTelegramMethod = (method, options) => request('/telegram/method', {
   method: 'PUT',
-  body: JSON.stringify({ method })
+  body: JSON.stringify({ method }),
+  ...options
 });
 export const reloadTelegramBridge = () => request('/telegram/bridge/reload', { method: 'POST' });
 
@@ -234,15 +238,17 @@ export const uploadGalleryImage = (base64Data, options = {}) => request('/image-
 });
 
 // Tools Registry
-export const getToolsList = () => request('/tools');
+export const getToolsList = (options) => request('/tools', options);
 export const getEnabledTools = () => request('/tools/enabled');
-export const registerTool = (data) => request('/tools', {
+export const registerTool = (data, options) => request('/tools', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
-export const updateTool = (id, data) => request(`/tools/${id}`, {
+export const updateTool = (id, data, options) => request(`/tools/${id}`, {
   method: 'PUT',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
 export const deleteTool = (id) => request(`/tools/${id}`, { method: 'DELETE' });
 

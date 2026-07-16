@@ -47,7 +47,7 @@ export function MortalLoomTab() {
           path: path.trim(),
           lastImportAt: lastImport
         }
-      });
+      }, { silent: true });
       toast.success('MortalLoom settings saved');
       await refreshStatus();
     } catch (err) {
