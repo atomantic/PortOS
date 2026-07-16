@@ -65,6 +65,7 @@ grep -i "what you want to do" client/src/lib/README.md
 |---|---|
 | `brainGraphFocus.js` | Pure focus-trail (breadcrumb) transitions for BrainGraph re-focus navigation. |
 | `graphSimulation.js` | 3D force simulation parameters for BrainGraph / CyberCity. |
+| `goalFeatureMap.js` | Deterministic goal `category` → PortOS feature-area deep-link map (Daily Driver). `getGoalFeatureAreas(goal)` honors the per-goal `featureAreas` override, else the category default. Mirrored byte-for-byte from `server/lib/`. |
 
 ## Generic UI / collection utilities
 

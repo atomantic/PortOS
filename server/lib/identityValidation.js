@@ -1,4 +1,10 @@
 import { z } from 'zod';
+import { FEATURE_AREA_IDS } from './goalFeatureMap.js';
+
+// Per-goal feature-area override (issue #2666): an ordered list of feature-area
+// ids the Daily Driver deep-links to for this goal, overriding the category
+// default. Absent/empty → the goal falls back to its category's default map.
+const featureAreasSchema = z.array(z.enum(FEATURE_AREA_IDS)).max(FEATURE_AREA_IDS.length);
 
 export const sectionStatusEnum = z.enum(['active', 'pending', 'unavailable']);
 
@@ -69,7 +75,8 @@ export const createGoalInputSchema = z.object({
   parentId: z.string().min(1).nullable().optional().default(null),
   tags: z.array(z.string().min(1).max(50)).max(20).optional().default([]),
   targetDate: validCalendarDate.optional(),
-  timeBlockConfig: timeBlockConfigSchema.optional()
+  timeBlockConfig: timeBlockConfigSchema.optional(),
+  featureAreas: featureAreasSchema.optional()
 });
 
 export const updateGoalInputSchema = z.object({
@@ -82,7 +89,8 @@ export const updateGoalInputSchema = z.object({
   parentId: z.string().min(1).nullable().optional(),
   tags: z.array(z.string().min(1).max(50)).max(20).optional(),
   targetDate: validCalendarDate.nullable().optional(),
-  timeBlockConfig: timeBlockConfigSchema.nullable().optional()
+  timeBlockConfig: timeBlockConfigSchema.nullable().optional(),
+  featureAreas: featureAreasSchema.optional()
 });
 
 export const addMilestoneInputSchema = z.object({
