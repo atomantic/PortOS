@@ -181,16 +181,19 @@ export default defineConfig({ server: { allowedHosts: true } });`;
     expect(cfg?.dir).toBe(repo);
   });
 
-  it('finds a config in an unlisted subdir via recursive fallback (critical-mass admin/)', async () => {
-    // `admin` is the critical-mass Vite client dir — the false-negative that
-    // produced a bogus "no vite.config was found" warning.
+  it('finds a config in the admin/ subdir (critical-mass — the original false-negative)', async () => {
+    // `admin` is the critical-mass Vite client dir that produced a bogus
+    // "no vite.config was found" warning. It is now a fast-path subdir; the
+    // recursive-fallback contract is pinned separately by the nested test below.
     await mkdir(join(repo, 'admin'), { recursive: true });
     await writeFile(join(repo, 'admin', 'vite.config.js'), ALLOW_ALL);
     const cfg = await findViteConfig(repo);
     expect(cfg?.path).toBe(join(repo, 'admin', 'vite.config.js'));
   });
 
-  it('finds a config nested two levels deep', async () => {
+  it('finds a config nested two levels deep via the recursive fallback (unlisted subdir)', async () => {
+    // `packages/dashboard` is NOT in the fast-path subdir list, so this only
+    // passes if discoverViteConfig actually walks the tree — it pins the fallback.
     await mkdir(join(repo, 'packages', 'dashboard'), { recursive: true });
     await writeFile(join(repo, 'packages', 'dashboard', 'vite.config.ts'), ALLOW_ALL);
     const cfg = await findViteConfig(repo);
@@ -200,6 +203,14 @@ export default defineConfig({ server: { allowedHosts: true } });`;
   it('ignores configs inside node_modules', async () => {
     await mkdir(join(repo, 'node_modules', 'some-dep'), { recursive: true });
     await writeFile(join(repo, 'node_modules', 'some-dep', 'vite.config.js'), ALLOW_ALL);
+    const cfg = await findViteConfig(repo);
+    expect(cfg).toBeNull();
+  });
+
+  it('ignores a stray config inside an example/fixture dir', async () => {
+    // A demo/example app's vite config must not be mistaken for the real one.
+    await mkdir(join(repo, 'examples', 'demo'), { recursive: true });
+    await writeFile(join(repo, 'examples', 'demo', 'vite.config.js'), ALLOW_ALL);
     const cfg = await findViteConfig(repo);
     expect(cfg).toBeNull();
   });

@@ -104,10 +104,16 @@ export function hostIsAllowed(parsed, hostname) {
 const VITE_CONFIG_SUBDIRS = ['', 'client', 'frontend', 'web', 'app', 'ui', 'admin', 'apps/web', 'packages/client'];
 
 // Directories that never hold an app's own vite config but are expensive to walk
-// (or would surface a dependency's config). Skipped by the recursive fallback.
+// (or would surface a config that isn't the app's — a dependency's, an example's,
+// or a test fixture's). Skipped by the recursive fallback so it can't return a
+// stray shallower `vite.config.*` in place of the real app config. Dot-dirs are
+// already skipped by the `!e.name.startsWith('.')` guard, so `.storybook` etc.
+// need no entry here.
 const VITE_SCAN_IGNORE_DIRS = new Set([
   'node_modules', '.git', '.hg', '.svn', 'dist', 'build', 'out', 'coverage',
-  '.next', '.nuxt', '.cache', '.turbo', '.vite', 'tmp', 'temp', 'vendor', '.venv'
+  '.next', '.nuxt', '.cache', '.turbo', '.vite', 'tmp', 'temp', 'vendor', '.venv',
+  'examples', 'example', 'test', 'tests', '__tests__', 'e2e',
+  'fixtures', 'fixture', 'playground', 'docs', 'storybook'
 ]);
 
 /**
