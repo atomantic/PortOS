@@ -93,12 +93,11 @@ export default function SongBook() {
   const selectClass = 'bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:border-port-accent focus:outline-none';
 
   return (
-    <div>
+    <div className="flex flex-col h-full min-h-0">
       <PageHeader
         icon={ListMusic}
         title="SongBook"
         subtitle="Songs you're learning — tabs, chord sheets, and sheet music"
-        className="border-b-0 px-0 sm:px-0 py-0 sm:py-1 mb-3"
         actions={(
           <Link
             to="/songbook/import"
@@ -110,6 +109,7 @@ export default function SongBook() {
         )}
       />
 
+      <div className="flex-1 overflow-auto p-3 sm:p-4">
       {/* Create row */}
       <form
         onSubmit={(e) => { e.preventDefault(); create(); }}
@@ -256,6 +256,7 @@ export default function SongBook() {
           ))}
         </ul>
       )}
+      </div>
     </div>
   );
 }

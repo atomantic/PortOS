@@ -173,12 +173,11 @@ export default function SongBookImport() {
   }, { errorMessage: 'Failed to save song' });
 
   return (
-    <div>
+    <div className="flex flex-col h-full min-h-0">
       <PageHeader
         icon={ListMusic}
         title="Import Song"
         subtitle="Paste a tab or fetch one from a URL, review, then save"
-        className="border-b-0 px-0 sm:px-0 py-0 sm:py-1 mb-3"
         actions={(
           <Link to="/songbook" className={btnClass}>
             <ArrowLeft size={15} />
@@ -187,7 +186,9 @@ export default function SongBookImport() {
         )}
       />
 
-      <TabPills tabs={TABS} activeTab={tab} onChange={setTab} size="sm" ariaLabel="Import source" className="mb-4" />
+      <TabPills tabs={TABS} activeTab={tab} onChange={setTab} size="sm" ariaLabel="Import source" />
+
+      <div className="flex-1 overflow-auto p-3 sm:p-4">
 
       {tab === 'paste' ? (
         <div className="mb-4">
@@ -312,6 +313,7 @@ export default function SongBookImport() {
           </button>
         </div>
       </form>
+      </div>
     </div>
   );
 }

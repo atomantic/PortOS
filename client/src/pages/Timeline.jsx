@@ -167,13 +167,15 @@ export default function Timeline() {
   }, [date]);
 
   return (
-    <div className="mx-auto flex max-w-4xl flex-col gap-4">
+    <div className="flex flex-col h-full min-h-0">
       <PageHeader
         icon={CalendarClock}
         title="Timeline"
         subtitle="Your unified activity across messages, calendar, and more."
       />
 
+      <div className="flex-1 overflow-auto p-3 sm:p-4">
+        <div className="mx-auto flex max-w-4xl flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <button
@@ -245,6 +247,8 @@ export default function Timeline() {
           {events.map((event) => <EventRow key={event.id} event={event} timezone={day?.timezone} />)}
         </div>
       )}
+        </div>
+      </div>
     </div>
   );
 }

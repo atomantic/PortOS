@@ -22,6 +22,7 @@ export const TABS = [
   { id: 'imessage', label: 'iMessage', to: '/settings/imessage' },
   { id: 'local-llm', label: 'Local LLMs', to: '/settings/local-llm' },
   { id: 'mortalloom', label: 'MortalLoom', to: '/settings/mortalloom' },
+  { id: 'openclaw', label: 'OpenClaw', to: '/openclaw' },
   { id: 'prompts', label: 'Prompts', to: '/prompts' },
   { id: 'providers', label: 'Providers', to: '/ai' },
   { id: 'security', label: 'Security', to: '/settings/security' },

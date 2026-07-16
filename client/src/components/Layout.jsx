@@ -151,11 +151,9 @@ const navItems = [
       { to: '/brain/graph', label: 'Graph', icon: Network },
       { to: '/brain/import', label: 'Import', icon: Upload },
       { to: '/brain/inbox', label: 'Inbox', icon: MessageSquare },
-      { to: '/insights/overview', label: 'Insights', icon: Lightbulb },
       { to: '/brain/links', label: 'Links', icon: Link2 },
       { to: '/brain/memory', label: 'Memory', icon: Database },
       { to: '/brain/notes', label: 'Notes', icon: FileText },
-      { to: '/openclaw', label: 'OpenClaw', icon: MessagesSquare },
       { to: '/rapid-reader', label: 'Rapid Reader', icon: Zap },
       { to: '/songbook', label: 'SongBook', icon: ListMusic },
       { to: '/timeline', label: 'Timeline', icon: CalendarClock },
@@ -299,6 +297,7 @@ const navItems = [
       { to: '/settings/general', label: 'General', icon: Settings },
       { to: '/settings/local-llm', label: 'Local LLMs', icon: Cpu },
       { to: '/settings/mortalloom', label: 'MortalLoom', icon: Activity },
+      { to: '/openclaw', label: 'OpenClaw', icon: MessagesSquare },
       { to: '/prompts', label: 'Prompts', icon: FileText },
       { to: '/ai', label: 'Providers', icon: Bot },
       { to: '/settings/security', label: 'Security', icon: Lock },
@@ -322,6 +321,7 @@ const navItems = [
       { to: '/digital-twin/export', label: 'Export', icon: Download },
       { to: '/digital-twin/identity', label: 'Identity', icon: Fingerprint },
       { to: '/digital-twin/import', label: 'Import', icon: Upload },
+      { to: '/insights/overview', label: 'Insights', icon: Lightbulb },
       { to: '/digital-twin/interview', label: 'Interview', icon: MessageSquare },
       { to: '/digital-twin/overview', label: 'Overview', icon: Heart },
       { to: '/privacy/overview', label: 'Privacy', icon: Shield },
@@ -1171,6 +1171,11 @@ export default function Layout() {
             location.pathname.startsWith('/media') ||
             location.pathname.startsWith('/messages') ||
             location.pathname.startsWith('/local-llm/') ||
+            // OpenClaw lives under the Settings nav group; it's a full-bleed
+            // chat surface (sidebar + message pane) that owns its own internal
+            // scroll, so it needs the bare full-width main like the other
+            // Settings pages (/ai, /prompts, /settings/*).
+            location.pathname === '/openclaw' ||
             location.pathname.startsWith('/pipeline/issues/') ||
             location.pathname.startsWith('/pipeline/series/') ||
             location.pathname.startsWith('/post') ||
@@ -1200,6 +1205,15 @@ export default function Layout() {
             // scroll (PageHeader + a `flex-1 overflow-auto` main); keep it out
             // of the default padded+scrolling main or it double-pads and clips.
             location.pathname === '/tribe' ||
+            // Rapid Reader is a full-bleed brain sub-page: full-width PageHeader
+            // over an internal `flex-1 overflow-auto` scroll region.
+            location.pathname === '/rapid-reader' ||
+            // Timeline (/timeline and /timeline/:date) is a full-bleed brain
+            // sub-page: full-width PageHeader over an internal `flex-1
+            // overflow-auto` scroll region that wraps the centered max-w-4xl
+            // content — keep it out of the default padded main or it double-pads.
+            location.pathname === '/timeline' ||
+            location.pathname.startsWith('/timeline/') ||
             // Only the App DETAIL editor (/apps/:id, /apps/:id/:tab) is
             // full-width and owns its own scroll; the Add App form
             // (/apps/create) is a plain scrolling page and must stay OUT of
@@ -1208,11 +1222,12 @@ export default function Layout() {
             // create(?:\/|$) lookahead also excludes the trailing-slash URL
             // /apps/create/ (React Router treats it as the same route).
             /^\/apps\/(?!create(?:\/|$))[^/]+(?:\/|$)/.test(location.pathname) ||
-            // Only the SongBook VIEWER (/songbook/:id) is full-bleed and owns
-            // its own scroll (autoscroll container); the /songbook index and
-            // /songbook/import are plain scrolling pages — the import(?:\/|$)
-            // lookahead mirrors the /apps/create exclusion above.
-            /^\/songbook\/(?!import(?:\/|$))[^/]+(?:\/|$)/.test(location.pathname);
+            // Every SongBook route — index (/songbook), import (/songbook/import),
+            // and viewer (/songbook/:id) — is full-bleed and owns its own scroll
+            // (flex-col h-full + an internal overflow-auto region; the viewer adds
+            // its autoscroll container). They share the standard bordered
+            // PageHeader bar over that scroll region.
+            location.pathname.startsWith('/songbook');
           return (
             <main id="main-content" className={`flex-1 min-h-0 print:overflow-visible print:min-h-0 ${isFullWidth ? 'relative overflow-hidden' : 'overflow-auto p-4 md:p-6'}`}>
               <Outlet />
