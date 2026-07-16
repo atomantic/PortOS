@@ -60,7 +60,7 @@ export function BackupTab() {
 
   useEffect(() => {
     Promise.all([
-      getSettings(),
+      getSettings({ silent: true }),
       getBackupStatus({ silent: true }).catch(() => null),
       getBackupSnapshots({ silent: true }).catch(() => []),
     ])
@@ -89,7 +89,7 @@ export function BackupTab() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await updateSettings({ backup: { destPath, enabled, cronExpression, excludePaths, disabledDefaultExcludes } });
+      await updateSettings({ backup: { destPath, enabled, cronExpression, excludePaths, disabledDefaultExcludes } }, { silent: true });
       setSavedDestPath(destPath);
       setSavedExcludePaths(excludePaths);
       setSavedDisabledDefaultExcludes(disabledDefaultExcludes);

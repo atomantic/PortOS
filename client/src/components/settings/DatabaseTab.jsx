@@ -188,7 +188,7 @@ export function DatabaseTab() {
 
   const loadStatus = useCallback(() => {
     setDbLoading(true);
-    getDatabaseStatus()
+    getDatabaseStatus({ silent: true })
       .then(setDbStatus)
       .catch(() => toast.error('Failed to load database status'))
       .finally(() => setDbLoading(false));

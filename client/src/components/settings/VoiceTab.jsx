@@ -124,7 +124,7 @@ export function VoiceTab() {
   }, [currentEngine]);
 
   useEffect(() => {
-    Promise.all([getVoiceConfig(), getVoiceStatus()])
+    Promise.all([getVoiceConfig({ silent: true }), getVoiceStatus({ silent: true })])
       .then(([config, s]) => { setCfg(config); setStatus(s); })
       .catch(() => toast.error('Failed to load voice settings'))
       .finally(() => setLoading(false));
@@ -180,7 +180,7 @@ export function VoiceTab() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      const r = await updateVoiceConfig(cfg);
+      const r = await updateVoiceConfig(cfg, { silent: true });
       setCfg(r.config);
       const rec = r.reconciliation || {};
       if (rec.error) {
@@ -394,7 +394,7 @@ export function VoiceTab() {
                 // preview button while a download is in flight.
                 if (v && v.downloaded === false) {
                   setDownloadingVoice(val);
-                  fetchPiperVoice(val)
+                  fetchPiperVoice(val, { silent: true })
                     .then(() => listVoices('piper'))
                     .then((fresh) => setVoiceList(fresh))
                     .catch((err) => toast.error(`Voice download failed: ${err.message}`))

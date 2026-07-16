@@ -73,7 +73,7 @@ describe('BackupTab', () => {
           excludePaths: [],
           disabledDefaultExcludes: [],
         },
-      });
+      }, { silent: true });
       expect(toast.success).toHaveBeenCalledWith('Settings saved');
     });
 
