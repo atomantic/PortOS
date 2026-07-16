@@ -227,6 +227,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `issueLength.js` | Per-issue size targets fed into text stages. |
 | `mediaItemKey.js` | `<kind>:<ref>` key vocabulary for media items. |
 | `migrationMarker.js` | Shared marker-file helpers for one-time migration/repair/reconcile scripts — `markerExists(filename)` (boolean gate), `readMarker(filename)` (parsed payload or null), `writeMarker(filename, payload)` (atomic write). All anchor `filename` under `PATHS.data` and use `tryReadFile`/`atomicWrite` so a crash can't leave a truncated marker. |
+| `goalFeatureMap.js` | Deterministic goal `category` → PortOS feature-area map (deep-links sourced from `NAV_COMMANDS`). `getGoalFeatureAreas(goal)` honors the per-goal `featureAreas` override, else the category default. Mirrored byte-for-byte to `client/src/lib/`. |
 | `navManifest.js` | Single source of truth for nav (`⌘K` palette + voice). Add an entry when you add a page. |
 | `personaTraitBlend.js` | Digital-twin persona trait-blending (M34 P7). Blends a persona's `traitAdjustments` against the base twin's communication profile + Big-Five into a "Communication Calibration" directive. Mirrored to `client/src/lib/`. |
 | `textUtils.js` | Pure server-side prose helpers. `countWords(text)` — canonical whitespace-token count (`\S+`), the single home for what `writersRoom/local.js`, `issueLength.js`, and the client's `formatters.js` used to each re-implement. |

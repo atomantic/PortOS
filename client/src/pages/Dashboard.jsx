@@ -22,6 +22,7 @@ export default function Dashboard() {
   const [tribeCare, setTribeCare] = useState(null);
   const [feeds, setFeeds] = useState(null);
   const [meatspaceLogging, setMeatspaceLogging] = useState(null);
+  const [dailyDriver, setDailyDriver] = useState(null);
   const [loading, setLoading] = useState(true);
   const [dataError, setDataError] = useState(null);
   const [layoutsError, setLayoutsError] = useState(null);
@@ -61,13 +62,16 @@ export default function Dashboard() {
 
   const fetchData = useCallback(async () => {
     setDataError(null);
-    const [appsData, healthData, usageData, tribeCareData, feedsData, meatspaceLoggingData] = await Promise.all([
+    const [appsData, healthData, usageData, tribeCareData, feedsData, meatspaceLoggingData, dailyDriverData] = await Promise.all([
       api.getApps().catch((err) => { setDataError(err.message); return []; }),
       api.checkHealth().catch(() => null),
       api.getUsage().catch(() => null),
       api.getTribeCareSummary({ silent: true }).catch(() => null),
       api.getFeedStats({ silent: true }).catch(() => null),
       api.getMeatspaceLoggingStats({ silent: true }).catch(() => null),
+      // GET records the first-visit-of-day signal (issue #2666); a failure just
+      // hides the Daily Driver card via its gate. No LLM calls here.
+      api.getDailyDriverState().catch(() => null),
     ]);
     setApps(appsData);
     setHealth(healthData);
@@ -75,6 +79,7 @@ export default function Dashboard() {
     setTribeCare(tribeCareData);
     setFeeds(feedsData);
     setMeatspaceLogging(meatspaceLoggingData);
+    setDailyDriver(dailyDriverData);
     setLoading(false);
   }, []);
 
@@ -171,8 +176,8 @@ export default function Dashboard() {
   }), [activeApps]);
 
   const dashboardState = useMemo(
-    () => ({ apps, sortedApps, activeApps, appStats, health, usage, tribeCare, feeds, meatspaceLogging, refetch: fetchData }),
-    [apps, sortedApps, activeApps, appStats, health, usage, tribeCare, feeds, meatspaceLogging, fetchData]
+    () => ({ apps, sortedApps, activeApps, appStats, health, usage, tribeCare, feeds, meatspaceLogging, dailyDriver, refetch: fetchData }),
+    [apps, sortedApps, activeApps, appStats, health, usage, tribeCare, feeds, meatspaceLogging, dailyDriver, fetchData]
   );
 
   // Falls back to a local minimal layout only AFTER the initial fetch has

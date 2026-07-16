@@ -37,3 +37,9 @@ export const saveDashboardLayout = (id, { name, widgets, grid, activateWindow })
 
 export const deleteDashboardLayout = (id) =>
   queueMutation(() => request(`/dashboard/layouts/${encodeURIComponent(id)}`, { method: 'DELETE' }));
+
+// Daily Driver (issue #2666) — per-day first-visit + handled flags gating the
+// Daily Driver dashboard card. GET records the visit; the caller owns error UI
+// (falls back to hiding the card), so it's silent. POST marks the day handled.
+export const getDailyDriverState = (options = {}) => request('/daily-driver', { silent: true, ...options });
+export const markDailyDriverHandled = () => request('/daily-driver/handled', { method: 'POST' });

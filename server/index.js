@@ -92,6 +92,7 @@ import { ensureProviderReady as ensureOllamaProviderReady, ensureRunning as ensu
 import searchRoutes from './routes/search.js';
 import paletteRoutes from './routes/palette.js';
 import dashboardLayoutsRoutes from './routes/dashboardLayouts.js';
+import dailyDriverRoutes from './routes/dailyDriver.js';
 import mediaCollectionsRoutes from './routes/mediaCollections.js';
 import mediaAnnotationsRoutes from './routes/mediaAnnotations.js';
 import mediaSketchesRoutes from './routes/mediaSketches.js';
@@ -466,6 +467,7 @@ app.use('/api/screenshots', screenshotsRoutes);
 app.use('/api/search', searchRoutes);
 app.use('/api/palette', paletteRoutes);
 app.use('/api/dashboard/layouts', dashboardLayoutsRoutes);
+app.use('/api/daily-driver', dailyDriverRoutes);
 app.use('/api/media/collections', mediaCollectionsRoutes);
 app.use('/api/media/annotations', mediaAnnotationsRoutes);
 app.use('/api/media/sketches', mediaSketchesRoutes);

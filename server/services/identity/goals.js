@@ -185,6 +185,7 @@ export async function getGoals() {
     if (!Array.isArray(goal.tags)) { goal.tags = []; needsSave = true; }
     if (!Array.isArray(goal.linkedActivities)) { goal.linkedActivities = []; needsSave = true; }
     if (!Array.isArray(goal.linkedCalendars)) { goal.linkedCalendars = []; needsSave = true; }
+    if (!Array.isArray(goal.featureAreas)) { goal.featureAreas = []; needsSave = true; }
     if (goal.progress === undefined) { goal.progress = 0; needsSave = true; }
     if (!Array.isArray(goal.progressHistory)) { goal.progressHistory = []; needsSave = true; }
     if (!Array.isArray(goal.todos)) { goal.todos = []; needsSave = true; }
@@ -232,7 +233,7 @@ export async function setBirthDate(birthDate) {
   return goals;
 }
 
-export async function createGoal({ title, description, horizon, category, goalType, parentId, tags, targetDate, timeBlockConfig }) {
+export async function createGoal({ title, description, horizon, category, goalType, parentId, tags, targetDate, timeBlockConfig, featureAreas }) {
   const goals = await getGoals();
   const longevity = await loadJSON(LONGEVITY_FILE, DEFAULT_LONGEVITY);
 
@@ -253,6 +254,7 @@ export async function createGoal({ title, description, horizon, category, goalTy
     tags: [...new Set((tags || []).map(t => t.trim()).filter(Boolean))],
     linkedActivities: [],
     linkedCalendars: [],
+    featureAreas: Array.isArray(featureAreas) ? featureAreas : [],
     targetDate: targetDate || null,
     timeBlockConfig: timeBlockConfig || null,
     scheduledEvents: [],
@@ -297,7 +299,7 @@ export async function updateGoal(goalId, updates) {
     }
   }
 
-  const allowed = ['title', 'description', 'horizon', 'category', 'goalType', 'status', 'parentId', 'tags', 'targetDate', 'timeBlockConfig'];
+  const allowed = ['title', 'description', 'horizon', 'category', 'goalType', 'status', 'parentId', 'tags', 'targetDate', 'timeBlockConfig', 'featureAreas'];
   for (const key of allowed) {
     if (updates[key] !== undefined) goal[key] = updates[key];
   }
