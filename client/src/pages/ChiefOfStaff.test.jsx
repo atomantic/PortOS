@@ -113,12 +113,13 @@ describe('ChiefOfStaff handleForceEvaluate', () => {
   });
 });
 
-// #2654: the banner is now prop-driven. The manual "Run Check" button updates
-// `health` locally (keeping its own status message), so it must re-pull insights
-// to refresh the banner's health-issue count. But the SOCKET `cos:health:check`
-// handler must NOT re-pull insights: the /cos/actionable-insights endpoint runs a
-// health check that re-emits that same socket event, so a socket-driven refresh
-// would be an unbounded feedback loop (regression guard for the review finding).
+// #2654: the banner is now prop-driven, refreshed only through fetchData. There
+// is deliberately no on-demand insights refresh: /cos/actionable-insights runs a
+// health check that AUTO-RESTARTS errored processes and re-emits cos:health:check,
+// so an on-demand refresh would either loop (from the socket handler) or fire a
+// second process-restart (from the manual "Run Check" button). These guards pin
+// that neither the socket handler nor the manual button re-fetches insights, plus
+// the lastCheck guard that stops a stale fetchData read clobbering fresher health.
 describe('ChiefOfStaff insight freshness (#2654)', () => {
   const getSocketHandler = (event) => {
     const entry = socketStub.on.mock.calls.find(([evt]) => evt === event);
@@ -154,7 +155,7 @@ describe('ChiefOfStaff insight freshness (#2654)', () => {
     expect(api.getCosActionableInsights.mock.calls.length).toBe(before);
   });
 
-  it('re-fetches insights when the manual "Run Check" button runs a health check', async () => {
+  it('does NOT re-fetch insights on the manual "Run Check" button (no second process-restart)', async () => {
     renderAt('health');
     await waitFor(() => expect(api.getCosActionableInsights).toHaveBeenCalled());
     const before = api.getCosActionableInsights.mock.calls.length;
@@ -162,12 +163,12 @@ describe('ChiefOfStaff insight freshness (#2654)', () => {
     const button = await screen.findByRole('button', { name: /Run Check/i });
     fireEvent.click(button);
 
-    // The manual path awaits forceHealthCheck, sets health locally, then calls
-    // refreshInsights() — a one-shot, loop-free insights re-pull.
+    // The button runs its own health check via forceHealthCheck and shows the
+    // result — but must NOT also hit the insights endpoint, which would run a
+    // second process-restarting health check ~1s later. Banner refreshes on poll.
     await waitFor(() => expect(api.forceHealthCheck).toHaveBeenCalledWith({ silent: true }));
-    await waitFor(() =>
-      expect(api.getCosActionableInsights.mock.calls.length).toBeGreaterThan(before),
-    );
+    await act(async () => { await Promise.resolve(); });
+    expect(api.getCosActionableInsights.mock.calls.length).toBe(before);
   });
 
   it('does not let a stale fetchData health read clobber a fresher one', async () => {
@@ -193,6 +194,27 @@ describe('ChiefOfStaff insight freshness (#2654)', () => {
     });
 
     // The guard keeps the fresher health — the issue must NOT disappear.
+    await waitFor(() => expect(api.getApps.mock.calls.length).toBeGreaterThan(1));
+    expect(screen.getByText('FRESH_ISSUE')).toBeInTheDocument();
+    expect(screen.queryByText('All Systems Healthy')).not.toBeInTheDocument();
+  });
+
+  it('preserves last-good health when a fetchData health read fails (null)', async () => {
+    api.getCosHealth.mockResolvedValue({
+      lastCheck: '2026-01-01T00:00:02Z',
+      issues: [{ type: 'error', category: 'memory', message: 'FRESH_ISSUE' }],
+    });
+    renderAt('health');
+    expect(await screen.findByText('FRESH_ISSUE')).toBeInTheDocument();
+
+    // A failed health read (rejects → .catch → null) must not blank the banner.
+    api.getCosHealth.mockRejectedValue(new Error('boom'));
+    const handleAppsChanged = getSocketHandler('apps:changed');
+    await act(async () => {
+      handleAppsChanged();
+      await Promise.resolve();
+    });
+
     await waitFor(() => expect(api.getApps.mock.calls.length).toBeGreaterThan(1));
     expect(screen.getByText('FRESH_ISSUE')).toBeInTheDocument();
     expect(screen.queryByText('All Systems Healthy')).not.toBeInTheDocument();

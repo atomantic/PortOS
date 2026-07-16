@@ -146,13 +146,15 @@ export default function ChiefOfStaff() {
     // health check (cos.runHealthCheck) that emits `cos:health:check` — the
     // socket handler's setHealth can land in `prev` before this runs. Don't let
     // this fetch's older read clobber that fresher result; keep whichever health
-    // check is newer by lastCheck (lexicographic on ISO / numeric both order by
-    // time). A null read (fetch failed) still applies, matching prior behavior.
-    setHealth(prev =>
-      (prev?.lastCheck && healthData?.lastCheck && healthData.lastCheck < prev.lastCheck)
-        ? prev
-        : healthData,
-    );
+    // check is newer by lastCheck (Date.parse normalizes the ISO timestamps so
+    // the compare never goes lexicographic). A failed read (null) keeps the
+    // last-good health rather than blanking a fresher socket-delivered one.
+    setHealth(prev => {
+      if (!healthData) return prev ?? null;
+      const prevT = Date.parse(prev?.lastCheck ?? '');
+      const newT = Date.parse(healthData.lastCheck ?? '');
+      return (!Number.isNaN(prevT) && !Number.isNaN(newT) && newT < prevT) ? prev : healthData;
+    });
     setProviders(providersData.providers || []);
     // Filter out PortOS Autofixer (it's part of PortOS project)
     setApps(appsData.filter(a => a.id !== 'portos-autofixer'));
@@ -173,22 +175,15 @@ export default function ChiefOfStaff() {
     setActiveAgentMeta(runningAgent?.metadata || null);
   }, [deriveAgentState]);
 
-  // Targeted insights-only refresh for the manual "Run health check" button,
-  // which updates `health` locally (to keep its own status messaging) rather
-  // than calling fetchData — so the banner's server-derived "N health issues"
-  // count would otherwise lag until the 30s poll. Same last-good/silent
-  // semantics as fetchData.
-  //
-  // IMPORTANT: never wire this to the `cos:health:check` SOCKET handler. The
-  // /cos/actionable-insights endpoint itself runs a health check
-  // (cos.runHealthCheck → cosEvents 'health:check' → socket 'cos:health:check'),
-  // so a socket-driven refreshInsights would re-emit the very event that
-  // triggered it — an unbounded health-check/request/socket feedback loop.
-  // Daemon-driven health checks refresh the banner on the next fetchData poll.
-  const refreshInsights = useCallback(async () => {
-    const insightsData = await api.getCosActionableInsights({ silent: true }).catch(() => null);
-    if (insightsData?.insights) setInsights(insightsData.insights);
-  }, []);
+  // NOTE: there is deliberately no on-demand "refresh just the banner insights"
+  // path. The /cos/actionable-insights endpoint runs a health check that
+  // AUTO-RESTARTS errored PM2 processes (see server/services/cosHealthMonitor.js)
+  // and re-emits `cos:health:check`. So an on-demand refresh — whether from the
+  // `cos:health:check` socket handler or the manual "Run Check" button — would
+  // either loop (socket) or fire a second, redundant process-restart ~1s after
+  // the button's own check. The banner's server-derived counts refresh only
+  // through fetchData: the 30s poll, task mutations (TasksTab onRefresh), the
+  // unblock-up path, and agent spawn/completion (which already call fetchData).
 
   // Redirect unknown tab IDs to the default tab — `activeTab !== tab` only
   // when the param failed validation and fell back.
@@ -290,9 +285,9 @@ export default function ChiefOfStaff() {
 
     const handleHealthCheck = (data) => {
       setHealth({ lastCheck: data.metrics?.timestamp, issues: data.issues });
-      // Do NOT refreshInsights() here — the insights endpoint runs a health
-      // check that re-emits this very socket event (see refreshInsights above),
-      // which would loop. The banner's health count refreshes on the next poll.
+      // Do NOT refresh banner insights here — /cos/actionable-insights runs a
+      // health check that re-emits this very socket event, which would loop
+      // (see the note by the redirect effect). Banner refreshes on the next poll.
       if (data.issues?.length > 0) {
         setAgentState('investigating');
         setStatusMessage(`Health check: ${data.issues.length} issue${data.issues.length > 1 ? 's' : ''} found`);
@@ -426,15 +421,10 @@ export default function ChiefOfStaff() {
     setSpeaking(false);
     if (result) {
       setHealth({ lastCheck: result.metrics?.timestamp, issues: result.issues });
-      // Refresh the banner's server-derived health-issue count without a full
-      // fetchData (which would clobber the health-specific status message set
-      // below). This deliberately runs a second health check inside the insights
-      // endpoint — a small, user-initiated redundancy; on a single-user install
-      // two back-to-back checks return identical issues, and the fresher one's
-      // socket emit wins the lastCheck guard in fetchData, so health stays
-      // consistent. The alternative (client-computing the insight) isn't viable:
-      // insights aggregate approvals/learning, not just health.
-      refreshInsights();
+      // Do NOT refresh the banner insights here — /cos/actionable-insights runs
+      // a process-restarting health check, so an on-demand refresh would fire a
+      // second restart ~1s after forceHealthCheck's own. The banner's health
+      // count refreshes on the next fetchData poll instead (see the note above).
       toast.success('Health check complete');
       if (result.issues?.length > 0) {
         setStatusMessage(`Health: ${result.issues.length} issue${result.issues.length > 1 ? 's' : ''} detected`);
