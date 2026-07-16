@@ -140,7 +140,6 @@ export function stopCommissionScheduler() {
  * each plan step through the gated `dispatchCreativeTool`).
  */
 export async function runScheduledCommission(commissionId) {
-  let charged = false;
   try {
     const commission = await getCommission(commissionId).catch(() => null);
     if (!commission || commission.enabled === false) return;
@@ -150,19 +149,28 @@ export async function runScheduledCommission(commissionId) {
 
     // Gate on creative autonomy mode + daily cos budget BEFORE spawning anything
     // (the planner is itself an LLM call) — honors "off ⇒ no generation" and the
-    // no-cold-LLM policy.
-    const [{ loadState }, { getCreativeAutonomyMode }, { getDomainBudgetStatus, recordDomainUsage }] = await Promise.all([
+    // no-cold-LLM policy. Both reads FAIL CLOSED: if governance state can't be
+    // verified we skip rather than launch a paid planner on a permissive default.
+    const [{ loadState }, { getCreativeAutonomyMode }, { getDomainBudgetStatus }] = await Promise.all([
       import('../cosState.js'),
       import('../../lib/domainAutonomy.js'),
       import('../domainUsage.js'),
     ]);
-    const state = await loadState().catch(() => ({ config: {} }));
+    const state = await loadState().catch(() => null);
+    if (!state) {
+      await recordCommissionRun(commissionId, { status: 'skipped', reason: 'governance-unavailable' }).catch(() => {});
+      return;
+    }
     const mode = getCreativeAutonomyMode(state.config);
     if (mode !== 'execute') {
       await recordCommissionRun(commissionId, { status: 'skipped', reason: `autonomy-${mode}` }).catch(() => {});
       return;
     }
-    const budget = await getDomainBudgetStatus('cos').catch(() => ({ withinBudget: true }));
+    const budget = await getDomainBudgetStatus('cos').catch(() => null);
+    if (!budget) {
+      await recordCommissionRun(commissionId, { status: 'skipped', reason: 'budget-unavailable' }).catch(() => {});
+      return;
+    }
     if (!budget.withinBudget) {
       await recordCommissionRun(commissionId, { status: 'skipped', reason: 'budget' }).catch(() => {});
       return;
@@ -175,16 +183,13 @@ export async function runScheduledCommission(commissionId) {
       return;
     }
 
-    // Charge the planner action against the shared daily cos budget on admission.
-    // The planner LLM call is enqueued via task:ready and bypasses
-    // dequeueNextTask's allowance check, so without this two commissions firing
-    // in the same tick could each observe the same remaining budget and overrun
-    // the user's cap. Charging here narrows that window (refunded below if the
-    // spawn fails). Not a hard reservation — the deeper fix is a shared
-    // admission gate at the planner boundary (tracked on #2657).
-    await recordDomainUsage('cos', { actions: 1 }).catch(() => {});
-    charged = true;
-
+    // NOTE: we deliberately do NOT pre-charge the cos budget here. The planner
+    // spawns as a normal CoS agent (a `cd-` task) and is accounted by
+    // `completeAgent` → `recordDomainUsage('cos', { actions: 1 })` on completion,
+    // so a pre-charge would double-count. A hard concurrency/budget admission for
+    // the planner (routing it through dequeueNextTask instead of the direct
+    // task:ready emit shared with the CD directive flow) is the deeper CoS-queue
+    // gap tracked on #2657.
     const [{ createProject }, { advanceAfterPlanStepSettled }, { defaultVideoModelId }] = await Promise.all([
       import('../creativeDirector/local.js'),
       import('../creativeDirector/planAdvance.js'),
@@ -222,11 +227,6 @@ export async function runScheduledCommission(commissionId) {
     await advanceAfterPlanStepSettled(project.id);
   } catch (err) {
     console.error(`❌ Creative commission ${commissionId} fire failed: ${err?.message || err}`);
-    // Refund the reserved planner action — the spawn threw, so it never ran.
-    if (charged) {
-      const { recordDomainUsage } = await import('../domainUsage.js').catch(() => ({}));
-      await recordDomainUsage?.('cos', { actions: -1 }).catch(() => {});
-    }
     await recordCommissionRun(commissionId, { status: 'failed', error: err?.message || String(err) }).catch(() => {});
   }
 }
