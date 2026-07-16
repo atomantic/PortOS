@@ -23,6 +23,13 @@ vi.mock('../lib/fileUtils.js', () => ({
   }),
 }));
 
+// getPostStats (via getPostRecommendations) derives the local day through
+// getUserTimezone → getSettings (issue #2681). Mock it to no configured tz so
+// the day boundary falls back to the process timezone (TZ=UTC in tests).
+vi.mock('../services/settings.js', () => ({
+  getSettings: () => Promise.resolve({}),
+}));
+
 import {
   composePostRecommendations,
   weakestSkillFromStats,
