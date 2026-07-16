@@ -67,7 +67,7 @@ describe('DailyDriverWidget', () => {
     const writersLink = screen.getByText('Writers Room').closest('a');
     expect(writersLink.getAttribute('href')).toBe('/writers-room');
 
-    expect(screen.getByText('Check in on all goals').closest('a').getAttribute('href')).toBe('/goals/list');
+    expect(screen.getByText(/Review & check in on goals/).closest('a').getAttribute('href')).toBe('/goals/list');
   });
 
   it('surfaces the latest check-in recommendation on a goal row', async () => {
@@ -87,5 +87,18 @@ describe('DailyDriverWidget', () => {
     fireEvent.click(await screen.findByLabelText('Dismiss for today'));
     await waitFor(() => expect(mocks.markDailyDriverHandled).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(refetch).toHaveBeenCalledTimes(1));
+  });
+
+  it('re-enables the dismiss button and does not refetch when the handled request fails', async () => {
+    mocks.markDailyDriverHandled.mockRejectedValue(new Error('network'));
+    const refetch = vi.fn().mockResolvedValue();
+    renderWidget({ refetch });
+    const btn = await screen.findByLabelText('Dismiss for today');
+    fireEvent.click(btn);
+    await waitFor(() => expect(mocks.markDailyDriverHandled).toHaveBeenCalledTimes(1));
+    // Failed dismissal must not mark the dashboard clean, and the button
+    // returns to enabled so the user can retry.
+    await waitFor(() => expect(btn.disabled).toBe(false));
+    expect(refetch).not.toHaveBeenCalled();
   });
 });

@@ -49,10 +49,13 @@ export default function DailyDriverWidget({ dashboardState }) {
   useEffect(() => { fetchData(); }, [fetchData]);
 
   // Mark the day handled, then refetch dashboard state so the registry gate
-  // drops the card. Optimistically hides immediately.
+  // drops the card (which unmounts this widget). On failure, re-enable the
+  // dismiss button so the user can retry — otherwise a failed POST leaves the
+  // still-visible card's only control disabled until a full reload.
   const handleDismiss = useCallback(async () => {
     setDismissing(true);
-    await api.markDailyDriverHandled().catch(() => null);
+    const ok = await api.markDailyDriverHandled().then(() => true).catch(() => false);
+    if (!ok) { setDismissing(false); return; }
     if (refetchDashboard) await refetchDashboard();
   }, [refetchDashboard]);
 
@@ -151,11 +154,16 @@ export default function DailyDriverWidget({ dashboardState }) {
                 </div>
               );
             })}
+            {/* One-click entry INTO the goals check-in flow (navigation, not a
+                bulk check-in — an aggregate check-in would fire an LLM call per
+                goal, which the AI Provider Usage Policy requires stay an
+                explicit per-goal action on the goals page). */}
             <Link
               to="/goals/list"
               className="flex items-center justify-center gap-1 p-2 rounded-lg bg-port-accent/10 text-port-accent text-sm hover:bg-port-accent/20 transition-colors"
             >
-              <Compass size={14} /> Check in on all goals
+              <Compass size={14} /> Review &amp; check in on goals
+              <ArrowRight size={12} />
             </Link>
           </>
         )}
