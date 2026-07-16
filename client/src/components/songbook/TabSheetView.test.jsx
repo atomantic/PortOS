@@ -58,4 +58,22 @@ describe('TabSheetView', () => {
     const { container } = render(<TabSheetView text="" />);
     expect(container.firstChild).toBeTruthy();
   });
+
+  it('hides ChordPro meta directives — values belong in badges, not the sheet', () => {
+    const { container } = render(
+      <TabSheetView text={'{title: Example Song}\n{capo: 3}\nC G\nNonsense line'} />,
+    );
+    expect(container.textContent).not.toContain('{title: Example Song}');
+    expect(container.textContent).not.toContain('{capo: 3}');
+    expect(container.textContent).toContain('Nonsense line');
+  });
+
+  it("format='plain' renders verbatim: no headings, no chord highlighting", () => {
+    const { container } = render(<TabSheetView text={SAMPLE} format="plain" />);
+    // The raw [Verse 1] marker stays literal text (not a styled heading)...
+    expect(container.textContent).toContain('[Verse 1]');
+    expect(container.querySelector('.uppercase.tracking-wide')).toBeNull();
+    // ...and no chord token gets the accent highlight.
+    expect(container.querySelector('.text-port-accent.font-semibold')).toBeNull();
+  });
 });

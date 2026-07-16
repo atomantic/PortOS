@@ -25,8 +25,9 @@
 //   'chordlyric' — ChordPro inline [C]lyric; text is the bare lyric, chords
 //                  carry col offsets into it
 //   'blank'      — whitespace-only
-//   'text'       — everything else (incl. {directive} lines; meta directives
-//                  still populate meta)
+//   'directive'  — ChordPro meta directives ({title:}/{artist:}/{key:}/{capo:});
+//                  values populate meta, renderers hide the raw line
+//   'text'       — everything else (incl. non-meta {directive} lines)
 
 // ---------------------------------------------------------------------------
 // Chord tokens
@@ -169,13 +170,16 @@ const classifyLine = (raw) => {
 
   const meta = META_DIRECTIVE_RE.exec(line);
   if (meta) {
+    // 'directive' (not 'text'): the value is extracted into meta, so renderers
+    // hide the raw {title:}/{artist:}/{key:}/{capo:} line instead of showing
+    // ChordPro plumbing above the song.
     const key = META_ALIASES[meta[1].toLowerCase()] || meta[1].toLowerCase();
     const value = meta[2];
     if (key === 'capo') {
-      if (/^\d{1,2}$/.test(value)) return { type: 'text', text: line, meta: { capo: Number(value) }, chordpro: true };
-      return { type: 'text', text: line, error: `invalid capo value "${value}"`, chordpro: true };
+      if (/^\d{1,2}$/.test(value)) return { type: 'directive', text: line, meta: { capo: Number(value) }, chordpro: true };
+      return { type: 'directive', text: line, error: `invalid capo value "${value}"`, chordpro: true };
     }
-    return { type: 'text', text: line, meta: { [key]: value }, chordpro: true };
+    return { type: 'directive', text: line, meta: { [key]: value }, chordpro: true };
   }
 
   const cpSection = CHORDPRO_SECTION_RE.exec(line);

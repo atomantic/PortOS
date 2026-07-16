@@ -229,6 +229,15 @@ describe('parseTabSheet — meta + errors', () => {
     expect(meta).toEqual({ title: 'Example Song', artist: 'The Placeholders', key: 'G', capo: 2 });
   });
 
+  it("classifies meta directives as 'directive' so renderers hide the raw line", () => {
+    const { lines } = parseTabSheet('{title: Example Song}\n{capo: 2}\n{capo: banana}\nplain words');
+    expect(lines.map((l) => l.type)).toEqual(['directive', 'directive', 'directive', 'text']);
+    // Non-meta directives stay 'text' (e.g. {comment: ...} conventionally shows).
+    expect(parseTabSheet('{comment: watch the bridge}').lines[0].type).toBe('text');
+    // transposeText passes directive lines through untouched.
+    expect(transposeText('{key: G}\nC G', 2)).toBe('{key: G}\nD A');
+  });
+
   it('supports the short aliases {t:} and {st:}', () => {
     const { meta } = parseTabSheet('{t: Example Song}\n{st: The Placeholders}');
     expect(meta).toEqual({ title: 'Example Song', artist: 'The Placeholders' });

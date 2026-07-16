@@ -455,7 +455,7 @@ export default function SongBookViewer() {
             <div>
               <div className="text-xs text-gray-400 mb-1">Preview</div>
               <div className="bg-port-card border border-port-border rounded-lg p-3 overflow-x-auto">
-                <TabSheetView text={draft.text} fontSizeRem={fontSize} />
+                <TabSheetView text={draft.text} format={draft.format} fontSizeRem={fontSize} />
               </div>
             </div>
           </div>
@@ -545,7 +545,12 @@ export default function SongBookViewer() {
 
           <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">
             {song.content?.text ? (
-              <TabSheetView text={renderedText} fontSizeRem={fontSize} className="max-w-4xl" />
+              <TabSheetView
+                text={renderedText}
+                format={song?.content?.format || 'tab'}
+                fontSizeRem={fontSize}
+                className="max-w-4xl"
+              />
             ) : (
               <p className="text-sm text-gray-500">
                 No sheet content yet — <button type="button" onClick={() => setMode('edit')} className="text-port-accent hover:underline">add some in Edit mode</button>.
