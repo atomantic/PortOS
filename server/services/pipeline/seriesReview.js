@@ -34,6 +34,7 @@
  */
 
 import { join } from 'path';
+import { unlink } from 'fs/promises';
 import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
 import { createSseRunner } from '../../lib/sseUtils.js';
 import { runStageScopedInlineLLM } from '../../lib/stageRunner.js';
@@ -82,18 +83,17 @@ const SEVERITY_RANK = { high: 0, medium: 1, low: 2 };
  * The single 'ready' | 'issues' verdict. A series is only "ready to move
  * forward" when the editorial-health readiness gate is clean AND the foundation
  * clears the quality threshold AND every drawn noun is described (canon ready)
- * AND no requested editorial check errored out (an unevaluated check means the
- * review is incomplete — it must never read as 'ready'). Any of those failing →
- * 'issues'. Pure.
+ * AND the review actually completed (`incomplete` false — a stage that errored /
+ * never ran means the verdict is untrustworthy and must never read 'ready').
+ * Any of those failing → 'issues'. Pure.
  */
-export function computeReviewVerdict({ health, foundation, canon, threshold = DEFAULT_FOUNDATION_THRESHOLD, checksErrored = 0 } = {}) {
+export function computeReviewVerdict({ health, foundation, canon, threshold = DEFAULT_FOUNDATION_THRESHOLD, incomplete = false } = {}) {
   const healthReady = health?.ready === true;
   const foundationReady = !foundation || !Number.isFinite(foundation.weightedScore)
     ? true
     : foundation.weightedScore >= threshold;
   const canonReady = canon?.ready !== false;
-  const checksClean = !(Number(checksErrored) > 0);
-  return healthReady && foundationReady && canonReady && checksClean ? 'ready' : 'issues';
+  return healthReady && foundationReady && canonReady && !incomplete ? 'ready' : 'issues';
 }
 
 /**
@@ -241,12 +241,18 @@ export async function runSeriesReview(seriesId, {
   const weights = mergeSeverityWeights(series?.severityWeights);
 
   const aborted = () => signal?.aborted;
+  // Stages that errored / never ran this pass — any of these makes the verdict
+  // untrustworthy, so it must never read 'ready' (fail closed). Surfaced on the
+  // result so the UI can warn the review is incomplete.
+  const failedStages = [];
 
   // 1. Foundation judge (holistic pre-draft quality — catches "looks complete
-  //    but no development"). Writes only its own snapshot.
+  //    but no development"). Writes only its own snapshot. A throw is a genuine
+  //    failure (judgeFoundation otherwise always returns a snapshot), not an
+  //    absent-but-fine result — record it so the verdict fails closed.
   onProgress({ type: 'step:start', kind: 'foundation' });
   const foundation = await judgeFoundation(seriesId, { providerId: providerOverride, model: modelOverride, force })
-    .catch((err) => { console.error(`⚠️ series-review foundation judge failed — series=${seriesId.slice(0, 12)} ${err.message}`); return null; });
+    .catch((err) => { console.error(`⚠️ series-review foundation judge failed — series=${seriesId.slice(0, 12)} ${err.message}`); failedStages.push('foundation'); return null; });
   onProgress({ type: 'step:complete', kind: 'foundation', weightedScore: foundation?.weightedScore ?? null });
   if (aborted()) return null;
 
@@ -262,24 +268,31 @@ export async function runSeriesReview(seriesId, {
 
   // 3. Editorial checks — registry-driven review; seeds the shared review store.
   onProgress({ type: 'step:start', kind: 'editorialChecks' });
+  // A runner-level REJECT (e.g. it threw while building shared context, before
+  // producing any perCheck entries) is a whole-pass failure — the checks never
+  // ran, so mark the review incomplete rather than reporting an empty clean pass.
+  let checksRunFailed = false;
   const checks = await runEditorialChecks(seriesId, {
     providerOverride,
     modelOverride,
     signal,
     onProgress,
-  }).catch((err) => { console.error(`⚠️ series-review editorial checks failed — series=${seriesId.slice(0, 12)} ${err.message}`); return { findings: [], perCheck: [], canceled: false }; });
-  // A check that threw (e.g. an unavailable LLM provider) is caught internally by
-  // the runner and surfaced in perCheck as `{ checkId, error }` — that dimension
-  // was never evaluated, so it must block a 'ready' verdict (P2).
+  }).catch((err) => { console.error(`⚠️ series-review editorial checks failed — series=${seriesId.slice(0, 12)} ${err.message}`); checksRunFailed = true; failedStages.push('editorialChecks'); return { findings: [], perCheck: [], canceled: false }; });
+  // A single check that threw (e.g. an unavailable LLM provider) is caught
+  // internally by the runner and surfaced in perCheck as `{ checkId, error }` —
+  // that dimension was never evaluated, so it too must block a 'ready' verdict.
   const erroredCheckIds = (Array.isArray(checks?.perCheck) ? checks.perCheck : [])
     .filter((p) => p && p.error).map((p) => p.checkId);
   const checksErrored = erroredCheckIds.length;
-  onProgress({ type: 'step:complete', kind: 'editorialChecks', findingCount: checks?.findings?.length ?? 0, errored: checksErrored });
+  onProgress({ type: 'step:complete', kind: 'editorialChecks', findingCount: checks?.findings?.length ?? 0, errored: checksErrored, failed: checksRunFailed });
   if (aborted() || checks?.canceled) return null;
 
-  // 4. Canon readiness (deterministic — no LLM).
+  // 4. Canon readiness (deterministic — no LLM). A throw is a genuine failure —
+  //    record it so the verdict fails closed rather than treating the missing
+  //    result as "canon fine".
   onProgress({ type: 'step:start', kind: 'canon' });
-  const canon = await checkSeriesCanonReadiness(seriesId).catch(() => null);
+  const canon = await checkSeriesCanonReadiness(seriesId)
+    .catch((err) => { console.error(`⚠️ series-review canon readiness failed — series=${seriesId.slice(0, 12)} ${err.message}`); failedStages.push('canon'); return null; });
   onProgress({ type: 'step:complete', kind: 'canon', ready: canon?.ready !== false });
 
   // 5. Health + readiness + the seeded findings — both only READ the store the
@@ -291,10 +304,14 @@ export async function runSeriesReview(seriesId, {
   ]);
   onProgress({ type: 'step:complete', kind: 'health', ready: health?.ready === true, score: health?.score ?? null });
   const findings = collectReviewFindings(review.comments);
+  if (!health) failedStages.push('health');
   const threshold = Number.isFinite(settings?.pipelineEditorialChecks?.foundationThreshold)
     ? settings.pipelineEditorialChecks.foundationThreshold
     : DEFAULT_FOUNDATION_THRESHOLD;
-  const verdict = computeReviewVerdict({ health, foundation, canon, threshold, checksErrored });
+  // The review is incomplete when ANY dimension errored/never-ran OR an
+  // individual check errored — the verdict then fails closed (never 'ready').
+  const incomplete = failedStages.length > 0 || checksErrored > 0;
+  const verdict = computeReviewVerdict({ health, foundation, canon, threshold, incomplete });
 
   const result = {
     seriesId,
@@ -313,8 +330,12 @@ export async function runSeriesReview(seriesId, {
       : null,
     findings,
     findingCount: findings.length,
-    // Requested checks that errored out this run (never evaluated) — surfaced so
-    // the UI can warn that a 'ready'-looking review is actually incomplete (P2).
+    // Whether the review actually completed every dimension. When false, a stage
+    // errored / never ran, so the verdict is forced to 'issues' and the UI warns
+    // the review is incomplete (P2). `failedStages` names which dimensions failed;
+    // `checksErrored`/`erroredCheckIds` detail individual check errors.
+    incomplete,
+    failedStages,
     checksErrored,
     erroredCheckIds,
     hadFeedback: !!(feedback && String(feedback).trim()),
@@ -331,6 +352,13 @@ export async function runSeriesReview(seriesId, {
 async function saveSnapshot(result) {
   await ensureDir(reviewDir());
   await atomicWrite(snapshotPath(result.seriesId), result);
+}
+
+// Drop the persisted verdict for a series so a reload/remount doesn't restore a
+// now-stale review (e.g. after fixes accepted findings + mutated the manuscript).
+// GET /review then returns `{ review: null }` until the user re-reviews.
+async function clearSnapshot(seriesId) {
+  await unlink(snapshotPath(seriesId)).catch(() => {}); // best-effort; ENOENT is fine
 }
 
 /**
@@ -420,6 +448,9 @@ export async function runSeriesFix(seriesId, { commentIds, providerOverride, mod
     if (applied) { fixed += 1; onProgress({ type: 'fix:done', commentId: f.commentId }); }
     else { skipped += 1; onProgress({ type: 'fix:skip', commentId: f.commentId, reason: 'could not anchor' }); }
   }
+  // Fixes accepted findings + rewrote manuscript sections, so the persisted
+  // verdict is now stale — drop it so a reload can't re-surface (and re-fix) it.
+  if (fixed > 0) await clearSnapshot(seriesId);
   console.log(`🔧 series fix — series=${seriesId.slice(0, 12)} fixed=${fixed} skipped=${skipped}/${open.length}${budgetStopped ? ' (budget-stopped)' : ''}`);
   return { fixed, skipped, total: open.length, budgetStopped };
 }

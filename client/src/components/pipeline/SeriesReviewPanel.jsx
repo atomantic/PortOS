@@ -122,14 +122,26 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
     if (!seriesId) return;
     const res = await getPipelineSeriesReview(seriesId, { silent: true }).catch(() => null);
     if (!res) return;
-    if (res.review) { setReview(res.review); setConfirmDismissed(false); }
+    // Always adopt the server's verdict (including null) so switching to a series
+    // with no stored review clears the previous series' findings (P2).
+    setReview(res.review ?? null);
+    setConfirmDismissed(false);
     if (res.fix) setFixAvail(res.fix);
   }, [seriesId]);
 
-  // Initial load — restore the last verdict + re-attach to an in-flight review.
+  // Initial load / series switch — reset transient state first (React Router
+  // reuses this component across seriesIds, so stale review/run state must not
+  // carry over), then restore the verdict + re-attach to any in-flight run.
   useEffect(() => {
     if (!seriesId) return undefined;
     let canceled = false;
+    setReview(null);
+    setFeedback('');
+    setConfirmDismissed(false);
+    setReviewing(false);
+    setFixing(false);
+    reviewRunIdRef.current = null;
+    fixRunIdRef.current = null;
     loadVerdict();
     getPipelineSeriesReviewStatus(seriesId, { silent: true })
       .then((s) => { if (!canceled && s?.active) setReviewing(true); })
@@ -191,6 +203,10 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
       .catch((err) => { toast.error(err.message || 'Could not start review'); return null; });
     setStarting(false);
     if (!res) return;
+    // The note has now been consumed by this run — clear it so a later re-review
+    // (after fixes clear `review`, re-showing the textarea) can't silently re-seed
+    // the same note as a fresh duplicate finding.
+    if (body.feedback) setFeedback('');
     reviewRunIdRef.current = res.runId || null;
     setReviewing(true);
   }, [seriesId, feedback, review]);
@@ -201,11 +217,14 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
 
   const startFix = useCallback(async () => {
     setFixStarting(true);
-    // Patch each open finding at its anchor via the per-finding manuscriptFix
+    // Patch each DISPLAYED finding at its anchor via the per-finding manuscriptFix
     // machinery (server-side, cos-execute-gated + budgeted). Not the autopilot —
     // that only auto-resolves completeness findings, so it can't fix the
-    // editorial-check findings this review surfaced.
-    const res = await startPipelineSeriesFix(seriesId, {}, { silent: true })
+    // editorial-check findings this review surfaced. Scope to the ids the user
+    // reviewed here, so a finding added by another run after this snapshot isn't
+    // silently auto-fixed too (P1).
+    const commentIds = (review?.findings || []).map((f) => f.commentId);
+    const res = await startPipelineSeriesFix(seriesId, { commentIds }, { silent: true })
       .catch((err) => { toast.error(err?.message || 'Could not start fixing'); return null; });
     setFixStarting(false);
     if (!res) return;
@@ -213,13 +232,17 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
     setConfirmDismissed(true);
     setFixing(true);
     toast.success('Fixing started — patching findings at their anchors');
-  }, [seriesId]);
+  }, [seriesId, review]);
 
   if (!seriesId) return null;
 
   const reviewLabel = reviewing ? (reviewFrameLabel(reviewLatest) || 'Working…') : null;
   const groups = review ? groupFindings(review.findings) : [];
   const hasIssues = review?.verdict === 'issues';
+  // Only the manuscript-review findings are auto-fixable; a verdict that is
+  // 'issues' solely because of foundation / canon / an incomplete run has no
+  // fixable comments, so the bulk-fix action must not be offered (P2).
+  const hasFixableFindings = (review?.findings?.length || 0) > 0;
   const canFix = fixAvail?.canFix !== false;
   const showConfirm = hasIssues && !confirmDismissed && !fixing && !reviewing;
 
@@ -235,7 +258,8 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
             <button
               type="button"
               onClick={runReview}
-              disabled={starting}
+              disabled={starting || fixing || fixStarting}
+              title={fixing || fixStarting ? 'Fixing is in progress — wait for it to finish before re-reviewing' : undefined}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium border bg-port-bg text-port-accent border-port-border hover:border-port-accent/40 disabled:opacity-40"
             >
               {starting ? <Loader2 size={14} className="animate-spin" /> : <ClipboardCheck size={14} />}
@@ -317,12 +341,15 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
             ) : null}
           </div>
 
-          {/* Incomplete-review warning — a requested check errored, so this
-              verdict is not trustworthy as "ready" (P2). */}
-          {review.checksErrored > 0 ? (
+          {/* Incomplete-review warning — a stage errored / never ran, so the
+              verdict can't be trusted as "ready" (P2). */}
+          {review.incomplete ? (
             <p className="text-[11px] text-port-warning flex items-center gap-1.5">
               <AlertTriangle size={12} />
-              {review.checksErrored} editorial check(s) errored (e.g. a provider was unavailable) — this review is incomplete; re-run before trusting it.
+              {review.checksErrored > 0
+                ? `${review.checksErrored} editorial check(s) errored (e.g. a provider was unavailable) — `
+                : `Some review steps${review.failedStages?.length ? ` (${review.failedStages.join(', ')})` : ''} did not complete — `}
+              this review is incomplete; re-run before trusting it.
             </p>
           ) : null}
 
@@ -374,21 +401,31 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
                 >
                   <ThumbsUp size={12} /> Looks good
                 </button>
-                <button
-                  type="button"
-                  onClick={startFix}
-                  disabled={fixStarting || !canFix}
-                  title={canFix ? 'Patch each finding at its anchor via the per-finding manuscript fixer' : 'Auto-fixing needs the CoS auto-run domain set to execute'}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium text-port-accent border border-port-border bg-port-bg hover:border-port-accent/40 disabled:opacity-40"
-                >
-                  {fixStarting ? <Loader2 size={12} className="animate-spin" /> : <Wrench size={12} />} Fix these issues
-                </button>
+                {/* Bulk-fix is only meaningful when there are auto-fixable
+                    manuscript findings; a verdict blocked only by foundation /
+                    canon / an incomplete run has none, so offer only "Looks good". */}
+                {hasFixableFindings ? (
+                  <button
+                    type="button"
+                    onClick={startFix}
+                    disabled={fixStarting || !canFix}
+                    title={canFix ? 'Patch each finding at its anchor via the per-finding manuscript fixer' : 'Auto-fixing needs the CoS auto-run domain set to execute'}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium text-port-accent border border-port-border bg-port-bg hover:border-port-accent/40 disabled:opacity-40"
+                  >
+                    {fixStarting ? <Loader2 size={12} className="animate-spin" /> : <Wrench size={12} />} Fix these issues
+                  </button>
+                ) : null}
               </div>
-              {!canFix ? (
+              {hasFixableFindings && !canFix ? (
                 <p className="w-full text-[11px] text-gray-500 mt-1">
                   {fixAvail?.mode === 'dry-run'
                     ? 'Auto-fixing is preview-only right now (CoS auto-run is in dry-run — it makes no changes). Set it to execute, or open each finding above and fix it manually.'
                     : 'Auto-fixing is off (CoS auto-run domain is disabled). You can still open each finding above and fix it manually.'}
+                </p>
+              ) : null}
+              {!hasFixableFindings ? (
+                <p className="w-full text-[11px] text-gray-500 mt-1">
+                  These blockers (foundation, canon, or an incomplete run) aren&apos;t auto-fixable here — address them from their own pages, then re-review.
                 </p>
               ) : null}
             </div>

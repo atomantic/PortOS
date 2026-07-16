@@ -53,21 +53,21 @@ describe('computeReviewVerdict', () => {
     })).toBe('ready');
   });
 
-  it("is 'issues' when a requested check errored (review incomplete, must not read ready)", () => {
+  it("is 'issues' when the review is incomplete (a stage errored / never ran — must not read ready)", () => {
     expect(computeReviewVerdict({
       health: { ready: true },
       foundation: { weightedScore: 9 },
       canon: { ready: true },
-      checksErrored: 1,
+      incomplete: true,
     })).toBe('issues');
   });
 
-  it('is unaffected when zero checks errored', () => {
+  it("is 'ready' when complete and all dimensions pass (incomplete false)", () => {
     expect(computeReviewVerdict({
       health: { ready: true },
       foundation: { weightedScore: 9 },
       canon: { ready: true },
-      checksErrored: 0,
+      incomplete: false,
     })).toBe('ready');
   });
 });
