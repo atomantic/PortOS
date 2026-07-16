@@ -5,6 +5,8 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 vi.mock('../../../services/api', () => ({
   getPostSessions: vi.fn(),
   getPostStats: vi.fn(),
+  // useUserTimezone (via the range-floor day key) reads getSettings; pin to UTC.
+  getSettings: vi.fn().mockResolvedValue({ timezone: 'UTC' }),
 }));
 
 // recharts ResponsiveContainer renders nothing at 0-width in jsdom; the

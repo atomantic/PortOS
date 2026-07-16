@@ -11,6 +11,7 @@
  *   tests      — behavioral / values-alignment / adversarial / multi-turn suites + generate
  *   enrichment — enrichment questionnaire (categories, progress, question/answer, lists)
  *   export     — export formats + export
+ *   avatarBio  — live-avatar bio (deterministic build + optional LLM polish)
  *   settings   — GET/PUT settings
  *   personas   — persona CRUD + active pointer (M34 P7)
  *   analysis   — validate, writing/style analysis, identity image, traits, confidence, gaps, assessment
@@ -33,6 +34,7 @@ import documentRoutes from './documents.js';
 import testRoutes from './tests.js';
 import enrichmentRoutes from './enrichment.js';
 import exportRoutes from './export.js';
+import avatarBioRoutes from './avatar-bio.js';
 import settingsRoutes from './settings.js';
 import personaRoutes from './personas.js';
 import analysisRoutes from './analysis.js';
@@ -49,6 +51,7 @@ router.use(documentRoutes);
 router.use(testRoutes);
 router.use(enrichmentRoutes);
 router.use(exportRoutes);
+router.use(avatarBioRoutes);
 router.use(settingsRoutes);
 router.use(personaRoutes);
 router.use(analysisRoutes);

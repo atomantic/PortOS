@@ -134,7 +134,7 @@ export default function PipelineManuscriptEditor() {
   useEffect(() => {
     let canceled = false;
     Promise.all([
-      getPipelineSeries(seriesId),
+      getPipelineSeries(seriesId, { silent: true }),
       getPipelineManuscript(seriesId),
       getPipelineManuscriptReview(seriesId).catch(() => ({ comments: [] })),
     ])

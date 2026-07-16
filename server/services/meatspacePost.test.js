@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock file I/O so submitPostSession tests stay pure. Shared by meatspacePost.js
 // AND meatspacePostMemory.js (imported transitively for advanceScheduleFromSession) —
@@ -11,6 +11,18 @@ vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { data: '/tmp/test-data', meatspace: '/tmp/test-meatspace' },
   ensureDir: vi.fn().mockResolvedValue(undefined),
   readJSONFile: vi.fn((path, defaultValue) => Promise.resolve(defaultValue)),
+}));
+
+// getUserTimezone (via ../lib/timezone.js) reads getSettings() to derive the
+// user's local day (issue #2681). Mock settings so the day-boundary is
+// controllable. Default `{ timezone: 'UTC' }` pins the boundary to the UTC day
+// regardless of the runner's own system timezone — so every existing UTC-today
+// assertion holds deterministically (an unpinned `{}` would fall back to the
+// runner's system tz and break these suites off a non-UTC CI runner). tz-specific
+// tests set settingsState.current to a real IANA zone.
+const settingsState = vi.hoisted(() => ({ current: { timezone: 'UTC' } }));
+vi.mock('../services/settings.js', () => ({
+  getSettings: () => Promise.resolve(settingsState.current),
 }));
 
 import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
@@ -1286,6 +1298,86 @@ describe('getPostStats — byModule averaging, days window cutoff, empty-window 
     expect(stats.completedToday).toBe(true);
     expect(stats.currentStreak).toBe(1);
     expect(stats.todayScore).toBe(80);
+  });
+});
+
+// =============================================================================
+// getPostStats / submitPostSession — timezone-correct day boundary (issue #2681)
+//
+// The server process runs TZ=UTC, so a bare `new Date().toISOString()` day
+// derivation misfiles POSTs around the local/UTC midnight boundary. These tests
+// pin `now` to an instant where the UTC day and the user's LOCAL day DIFFER, and
+// prove `completedToday`/`todayScore`/the session `date` stamp all key off the
+// user's configured timezone — not the server's UTC day. Each case would fail
+// under the old UTC-day logic (asserted by contrasting the UTC-day session).
+// =============================================================================
+
+describe('getPostStats / submitPostSession — timezone-correct day boundary (issue #2681)', () => {
+  beforeEach(() => { vi.clearAllMocks(); });
+  afterEach(() => { vi.useRealTimers(); settingsState.current = { timezone: 'UTC' }; });
+
+  function mockSessions(sessions) {
+    readJSONFile.mockImplementation((path, defaultValue) => {
+      if (String(path).includes('post-sessions')) return Promise.resolve({ sessions });
+      return Promise.resolve(defaultValue);
+    });
+  }
+
+  // Freeze the clock at a UTC instant and set the user's timezone.
+  function freezeAt(utcIso, timezone) {
+    settingsState.current = { timezone };
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(utcIso));
+  }
+
+  it('completedToday reads TRUE for a session on the local day even when UTC has already rolled to the next day (America/Los_Angeles)', async () => {
+    // 2026-07-16T05:00Z = 2026-07-15 22:00 PDT — UTC day July 16, LA day July 15.
+    freezeAt('2026-07-16T05:00:00Z', 'America/Los_Angeles');
+    mockSessions([
+      { date: '2026-07-15', score: 88, tasks: [{ module: 'mental-math', type: 'doubling-chain', score: 88 }] },
+    ]);
+    const stats = await getPostStats(30);
+    // Old UTC logic derived today='2026-07-16' → would have read completedToday=false.
+    expect(stats.completedToday).toBe(true);
+    expect(stats.todayScore).toBe(88);
+    expect(stats.currentStreak).toBe(1);
+  });
+
+  it('completedToday reads FALSE for a session stamped on the UTC day but belonging to the PREVIOUS local evening (America/Los_Angeles)', async () => {
+    // Same instant: UTC day July 16, LA day July 15. A session dated '2026-07-16'
+    // (the UTC day) is NOT the user's local today, so it must not read as done.
+    freezeAt('2026-07-16T05:00:00Z', 'America/Los_Angeles');
+    mockSessions([
+      { date: '2026-07-16', score: 88, tasks: [{ module: 'mental-math', type: 'doubling-chain', score: 88 }] },
+    ]);
+    const stats = await getPostStats(30);
+    // Old UTC logic derived today='2026-07-16' → would have wrongly read TRUE.
+    expect(stats.completedToday).toBe(false);
+    expect(stats.todayScore).toBeNull();
+  });
+
+  it('completedToday reads TRUE for a session on the local day when the local day is AHEAD of UTC (Asia/Tokyo)', async () => {
+    // 2026-07-15T20:00Z = 2026-07-16 05:00 JST — UTC day July 15, Tokyo day July 16.
+    freezeAt('2026-07-15T20:00:00Z', 'Asia/Tokyo');
+    mockSessions([
+      { date: '2026-07-16', score: 72, tasks: [{ module: 'mental-math', type: 'doubling-chain', score: 72 }] },
+    ]);
+    const stats = await getPostStats(30);
+    // Old UTC logic derived today='2026-07-15' → would have read completedToday=false.
+    expect(stats.completedToday).toBe(true);
+    expect(stats.todayScore).toBe(72);
+  });
+
+  it('submitPostSession stamps a new session date in the user local timezone, not the server UTC day', async () => {
+    // UTC day July 16 / LA day July 15 — a freshly submitted session must be
+    // dated by the user's local day so completedToday later agrees with it.
+    freezeAt('2026-07-16T05:00:00Z', 'America/Los_Angeles');
+    mockSessions([]);
+    const session = await submitPostSession({
+      modules: ['mental-math'],
+      tasks: [{ module: 'mental-math', type: 'doubling-chain', questions: [] }],
+    });
+    expect(session.date).toBe('2026-07-15');
   });
 });
 

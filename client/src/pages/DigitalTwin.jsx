@@ -26,6 +26,7 @@ const PersonasTab = lazy(() => import('../components/digital-twin/tabs/PersonasT
 const GoalsTab = lazy(() => import('../components/digital-twin/tabs/GoalsTab'));
 const AutobiographyTab = lazy(() => import('../components/digital-twin/tabs/AutobiographyTab'));
 const ImportTab = lazy(() => import('../components/digital-twin/tabs/ImportTab'));
+const AvatarBioTab = lazy(() => import('../components/digital-twin/tabs/AvatarBioTab'));
 const ExportTab = lazy(() => import('../components/digital-twin/tabs/ExportTab'));
 const LegacyExportTab = lazy(() => import('../components/digital-twin/tabs/LegacyExportTab'));
 const TimeCapsuleTab = lazy(() => import('../components/digital-twin/tabs/TimeCapsuleTab'));
@@ -88,6 +89,8 @@ export default function DigitalTwin() {
         return <AutobiographyTab onRefresh={refetch} />;
       case 'import':
         return <ImportTab onRefresh={refetch} />;
+      case 'avatar-bio':
+        return <AvatarBioTab />;
       case 'export':
         return <ExportTab onRefresh={refetch} />;
       case 'legacy':

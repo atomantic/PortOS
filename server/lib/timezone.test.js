@@ -195,6 +195,14 @@ describe('timezone', () => {
 
       vi.useRealTimers()
     })
+
+    it('keys a caller-supplied instant (not a fresh Date) when atDate is passed', () => {
+      // 2026-07-16T05:00Z = 2026-07-15 22:00 PDT. The passed instant, not "now",
+      // must drive the day key so a writer's date + timestamp stay on one day.
+      const instant = new Date('2026-07-16T05:00:00.000Z')
+      expect(todayInTimezone('America/Los_Angeles', instant)).toBe('2026-07-15')
+      expect(todayInTimezone('UTC', instant)).toBe('2026-07-16')
+    })
   })
 
   describe('getTimezoneUpdatedAt (#2040)', () => {

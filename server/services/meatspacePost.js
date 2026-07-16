@@ -25,12 +25,23 @@ import { applySessionToMemoryItems, getMemoryItems, getDueMemoryItems, isStatMas
 import { applySessionToReviewSchedule, getDueReviews, getRetentionReport } from './meatspacePostReview.js';
 import { getAllTrainingEntries } from './meatspacePostTraining.js';
 import { getMorseProgress, MAX_KOCH_LEVEL } from './meatspacePostMorse.js';
-import { computePostStreaks, computeUnifiedStreak, ymdToUTC } from '../lib/postStreak.js';
+import { computePostStreaks, computeUnifiedStreak, ymdToUTC, ymdShift } from '../lib/postStreak.js';
+import { userLocalToday as localToday } from '../lib/timezone.js';
 
 // Re-export the shared streak helper so existing importers of
 // `computePostStreaks` from this module keep working after it moved to
 // server/lib/postStreak.js (single implementation — see that file).
 export { computePostStreaks };
+
+// `localToday()` = today's `YYYY-MM-DD` in the USER's configured timezone (shared
+// helper in server/lib/timezone.js). The process runs `TZ=UTC`, so a bare
+// `new Date().toISOString()` day derivation misfiles POSTs around the local/UTC
+// midnight boundary — a scored session completed the previous local evening reads
+// as "done today," or a just-completed local-day session reads as incomplete
+// (issue #2681). Both the session `date` stamp (write side) and the
+// `completedToday`/`todayScore`/streak derivations (read side) key off this so
+// they agree on the user's local day, mirroring the Daily Driver's tz-correct
+// first-visit/handled markers (#2666).
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const SESSIONS_FILE = join(MEATSPACE_DIR, 'post-sessions.json');
@@ -204,7 +215,14 @@ export async function getPostSession(id) {
 export async function submitPostSession(sessionData) {
   const config = await getPostConfig();
   const data = await loadSessions();
-  const now = new Date().toISOString();
+  const nowDate = new Date();
+  const now = nowDate.toISOString();
+  // Stamp the session's day in the user's local timezone, so `completedToday`
+  // and the day-keyed streak/stats math classify it by the local day the user
+  // actually completed it — not the server's UTC day (issue #2681). Derive the
+  // day from the SAME `nowDate` used for startedAt/completedAt so a midnight
+  // boundary can't split the day key and the timestamps onto different days.
+  const todayLocal = await localToday(nowDate);
 
   // Strip client-provided score/correct — plus every separated metric field
   // (issue #2094) — and recompute server-side. Stripping up front means the
@@ -275,7 +293,7 @@ export async function submitPostSession(sessionData) {
     // crosses midnight (or just arrives later) must not move the session to a
     // new date, which would corrupt history ordering and streak math. Only a
     // fresh insert stamps "now".
-    date: existing?.date ?? now.split('T')[0],
+    date: existing?.date ?? todayLocal,
     startedAt: existing?.startedAt ?? now,
     completedAt: now,
     durationMs: rescoredTasks.reduce((sum, t) => sum + (t.totalMs || 0), 0),
@@ -574,14 +592,15 @@ export function deriveTaskAvgResponseMs(task) {
  * a scored session or a training-log entry (Morse / memory practice). Computed
  * over ALL history, independent of any stats window.
  */
-export async function getUnifiedActivityStreak(todayStr = new Date().toISOString().split('T')[0]) {
+export async function getUnifiedActivityStreak(todayStr) {
+  const day = todayStr ?? await localToday();
   const [sessions, training] = await Promise.all([getPostSessions(), getAllTrainingEntries()]);
-  return computeUnifiedStreak(sessions, training, todayStr);
+  return computeUnifiedStreak(sessions, training, day);
 }
 
 export async function getPostStats(days = 30) {
   const sessions = await getPostSessions();
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = await localToday();
   // Streaks are computed over ALL history, independent of the stats window, and
   // over BOTH scored sessions and the training log so the launcher/dashboard
   // streak matches the Morse trainer and the Progress page (issue #2091).
@@ -599,9 +618,9 @@ export async function getPostStats(days = 30) {
   };
   let recent = sessions;
   if (days > 0) {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - days);
-    const cutoffStr = cutoff.toISOString().split('T')[0];
+    // Window the stats relative to the user's local today (day-string math via
+    // UTC midnight, DST-safe) so the cutoff matches the tz-correct session dates.
+    const cutoffStr = ymdShift(todayStr, -days);
     recent = sessions.filter(s => s.date >= cutoffStr);
   }
 
@@ -715,7 +734,7 @@ function finalizeMetricSeries(map) {
  * fallback for legacy sessions.
  */
 export async function getPostProgress({ days = 90 } = {}) {
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = await localToday();
   const window = Number.isFinite(days) && days > 0 ? Math.min(days, 365) : 0;
 
   const allSessions = await getPostSessions();
@@ -1277,12 +1296,10 @@ async function getAdaptiveSignal(type) {
  */
 async function getMultiplicationLevelStats(windowDays = MASTERY_DEFAULTS.windowDays) {
   const sessions = await getPostSessions();
-  let cutoffStr = null;
-  if (windowDays > 0) {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - windowDays);
-    cutoffStr = cutoff.toISOString().split('T')[0];
-  }
+  // Window off the user's local today (DST-safe day math) so the cutoff stays
+  // consistent with the tz-correct session dates submitPostSession now stamps
+  // (issue #2681) — a UTC-day cutoff would skew the window edge by the tz offset.
+  const cutoffStr = windowDays > 0 ? ymdShift(await localToday(), -windowDays) : null;
 
   const byLevel = {};
   let floorLevel = 0;
@@ -1346,12 +1363,9 @@ export async function getMultiplicationProgress() {
  */
 async function getCognitiveLevelStats(type, windowDays = COGNITIVE_MASTERY_DEFAULTS.windowDays) {
   const sessions = await getPostSessions();
-  let cutoffStr = null;
-  if (windowDays > 0) {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - windowDays);
-    cutoffStr = cutoff.toISOString().split('T')[0];
-  }
+  // Window off the user's local today (DST-safe) so the cutoff stays consistent
+  // with the tz-correct session dates submitPostSession now stamps (issue #2681).
+  const cutoffStr = windowDays > 0 ? ymdShift(await localToday(), -windowDays) : null;
 
   const byLevel = {};
   let floorLevel = 0;
