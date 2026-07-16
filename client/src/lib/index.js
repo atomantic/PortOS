@@ -79,6 +79,7 @@ export * from './voiceLabel.js';
 export * from './audioContext.js';
 export * from './cityPlaybackFrame.js';
 export * from './canvasRoll.js';
+export * from './chordShapes.js';
 export * from './colorMatch.js';
 export * from './editorialChecks.js';
 export * from './editorialHealth.js';
