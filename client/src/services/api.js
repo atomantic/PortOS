@@ -63,6 +63,7 @@ export * from './apiMusic.js';
 export * from './apiPipeline.js';
 export * from './apiSharing.js';
 export * from './apiRounds.js';
+export * from './apiSongbook.js';
 export * from './apiPeerSync.js';
 export * from './apiSyncReview.js';
 export * from './apiCreativeDirector.js';

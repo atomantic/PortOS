@@ -58,6 +58,7 @@ import {
   Lightbulb,
   GitBranch,
   Link2,
+  ListMusic,
   Database,
   Shield,
   Lock,
@@ -156,6 +157,7 @@ const navItems = [
       { to: '/brain/notes', label: 'Notes', icon: FileText },
       { to: '/openclaw', label: 'OpenClaw', icon: MessagesSquare },
       { to: '/rapid-reader', label: 'Rapid Reader', icon: Zap },
+      { to: '/songbook', label: 'SongBook', icon: ListMusic },
       { to: '/timeline', label: 'Timeline', icon: CalendarClock },
       { to: '/tribe', label: 'Tribe', icon: Users },
       { to: '/brain/trust', label: 'Trust', icon: Shield },
@@ -1205,7 +1207,12 @@ export default function Layout() {
             // internal overflow-y-auto container). The trailing (?:\/|$) +
             // create(?:\/|$) lookahead also excludes the trailing-slash URL
             // /apps/create/ (React Router treats it as the same route).
-            /^\/apps\/(?!create(?:\/|$))[^/]+(?:\/|$)/.test(location.pathname);
+            /^\/apps\/(?!create(?:\/|$))[^/]+(?:\/|$)/.test(location.pathname) ||
+            // Only the SongBook VIEWER (/songbook/:id) is full-bleed and owns
+            // its own scroll (autoscroll container); the /songbook index and
+            // /songbook/import are plain scrolling pages — the import(?:\/|$)
+            // lookahead mirrors the /apps/create exclusion above.
+            /^\/songbook\/(?!import(?:\/|$))[^/]+(?:\/|$)/.test(location.pathname);
           return (
             <main id="main-content" className={`flex-1 min-h-0 print:overflow-visible print:min-h-0 ${isFullWidth ? 'relative overflow-hidden' : 'overflow-auto p-4 md:p-6'}`}>
               <Outlet />

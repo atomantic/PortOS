@@ -47,7 +47,7 @@ const DATA_DIR = PATHS.brain;
 // backfill all cover them with no per-type branching.
 export const BRAIN_ENTITY_TYPES = Object.freeze([
   'people', 'projects', 'ideas', 'admin', 'memories', 'links', 'buckets',
-  'journals', 'inbox',
+  'journals', 'inbox', 'songs',
 ]);
 
 // A tombstone is a deleted-record marker kept IN PLACE in `data.records[id]`
@@ -92,6 +92,10 @@ const FILES = {
   // from the old inbox_log.jsonl to inbox.json (migration 081).
   journals: join(DATA_DIR, 'journals.json'),
   inbox: join(DATA_DIR, 'inbox.json'),
+  // SongBook repertoire records (guitar tabs / chord sheets / sheet music).
+  // Attachment BYTES live machine-local under data/brain/songbook/ (see
+  // routes/brainSongbook.js); only the metadata rides in the synced record.
+  songs: join(DATA_DIR, 'songs.json'),
   digests: join(DATA_DIR, 'digests.jsonl'),
   reviews: join(DATA_DIR, 'reviews.jsonl')
 };
@@ -111,6 +115,7 @@ const caches = {
   buckets: { data: null, timestamp: 0 },
   journals: { data: null, timestamp: 0 },
   inbox: { data: null, timestamp: 0 },
+  songs: { data: null, timestamp: 0 },
   digests: { data: null, timestamp: 0 },
   reviews: { data: null, timestamp: 0 }
 };

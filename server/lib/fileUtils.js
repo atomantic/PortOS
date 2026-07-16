@@ -129,6 +129,10 @@ export const PATHS = {
   // archive JSON lives one level up (data/brain/imports/<source>/) and is NOT
   // served — only this assets subtree is.
   brainImportAssets: join(INSTALL_ROOT, 'data/brain/imports/assets'),
+  // SongBook attachment BYTES (PDF sheet music, images, MIDI). Machine-local —
+  // only the metadata syncs inside the brain `songs` record; peers lacking a
+  // file render "not on this machine". Covered by backup via data/brain/.
+  brainSongbook: join(INSTALL_ROOT, 'data/brain/songbook'),
   slashdo: join(CODE_ROOT, 'lib/slashdo')
 };
 
@@ -799,6 +803,8 @@ export const EXTENSION_MIME_MAP = {
   '.wav':  'audio/wav',
   '.ogg':  'audio/ogg',
   '.m4a':  'audio/mp4',
+  '.mid':  'audio/midi',
+  '.midi': 'audio/midi',
   // Video
   '.mp4':  'video/mp4',
   '.webm': 'video/webm',
