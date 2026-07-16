@@ -610,6 +610,14 @@ function CommissionForm({ form, patchForm, runs, feedback, onRate, saving, onSav
 // Per-run rate/annotate control (#2657, Phase 2). Thumbs submit immediately,
 // carrying whatever note is in the field; the current rating (if any) is shown
 // highlighted. Note state is local so typing doesn't re-render the whole form.
+//
+// Note edits use an EXPLICIT Save affordance, not blur/focus autosave. Autosave
+// on blur is a nest of edge cases — it races the vote request (blur during a
+// busy window never retries), and can't reliably tell "tabbed through a thumb"
+// from "clicked a thumb." A visible Save button (shown only while the note is
+// dirty) makes the unsaved state obvious and unambiguous, and Enter is a
+// shortcut for the same action. A note can't be saved before a rating exists (a
+// rating is required), so the affordance only appears once the run is thumbed.
 function RunFeedback({ runId, current, onRate }) {
   const [note, setNote] = useState(current?.note || '');
   const [busy, setBusy] = useState(false);
@@ -623,22 +631,10 @@ function RunFeedback({ runId, current, onRate }) {
     finally { setBusy(false); }
   };
 
-  // Persist a note edit WITHOUT requiring another vote: once the run is rated,
-  // editing the note and blurring (or pressing Enter) re-saves it under the
-  // existing rating. Without this, a typed-but-not-re-voted note is silently
-  // discarded on close/save (the drawer Save doesn't carry feedback). A note
-  // can't be saved before a rating exists — a rating is required — so this is a
-  // no-op until the run has been thumbed at least once.
-  const persistNoteEdit = async (e) => {
-    // Don't autosave when focus is moving to a rating button — the thumb's own
-    // click will save the (edited) note under the NEW vote. Autosaving here would
-    // fire submit(oldRating) + setBusy(true), disabling the thumb before its
-    // click lands, so the newly clicked vote would be silently dropped.
-    if (e?.relatedTarget?.hasAttribute?.('data-commission-rate')) return;
-    if (busy || !rating) return;
-    if (note.trim() === (current?.note || '')) return; // unchanged
-    await submit(rating);
-  };
+  // A note edited after the run was rated is "dirty" until re-saved under the
+  // existing rating. The Save button/Enter shortcut is gated on this.
+  const noteDirty = !!rating && note.trim() !== (current?.note || '');
+  const saveNote = () => { if (noteDirty && !busy) submit(rating); };
 
   return (
     <div className="mt-1.5 flex items-center gap-1.5">
@@ -646,7 +642,6 @@ function RunFeedback({ runId, current, onRate }) {
         type="button"
         disabled={busy}
         onClick={() => submit('up')}
-        data-commission-rate
         aria-label="Like this result"
         aria-pressed={isUp}
         title="Like — steer future runs toward this"
@@ -658,7 +653,6 @@ function RunFeedback({ runId, current, onRate }) {
         type="button"
         disabled={busy}
         onClick={() => submit('down')}
-        data-commission-rate
         aria-label="Dislike this result"
         aria-pressed={isDown}
         title="Dislike — steer future runs away from this"
@@ -673,9 +667,19 @@ function RunFeedback({ runId, current, onRate }) {
         placeholder={rating ? 'note (Enter to save)' : 'note — rate first, then add a note'}
         aria-label={`Feedback note for run ${runId}`}
         onChange={(e) => setNote(e.target.value)}
-        onBlur={persistNoteEdit}
-        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); saveNote(); } }}
       />
+      {noteDirty && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={saveNote}
+          aria-label={`Save note for run ${runId}`}
+          className="text-xs text-port-accent hover:text-blue-400 disabled:opacity-50 px-1.5 py-1 whitespace-nowrap"
+        >
+          Save
+        </button>
+      )}
     </div>
   );
 }
