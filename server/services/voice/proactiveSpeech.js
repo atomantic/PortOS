@@ -17,7 +17,7 @@
 
 import { synthesize } from './tts.js';
 import { getVoiceConfig } from './config.js';
-import { rememberTtsForSocket } from './echo.js';
+import { rememberTtsForAllSockets } from './echo.js';
 import { emitVoiceOutput } from './voiceOutput.js';
 import { getUserTimezone, getLocalParts, isWithinTimeWindow } from '../../lib/timezone.js';
 
@@ -130,7 +130,18 @@ export const speakProactive = async ({ io, text, priority = 'normal', source = '
   // can echo it; recording it on other connected devices would falsely suppress
   // their legitimate speech (they never heard the line).
   if (delivery.socket) rememberTtsForSocket(delivery.socket, trimmed);
-  const dest = delivery.socketId ?? 'none';
+  // Mirror the per-turn `state.recentTts` write so a proactive line bleeding
+  // from speakers back into the mic gets dropped as echo on the next turn.
+  // Deliberately remembered on EVERY socket, not just the recipient: only the
+  // recipient tab plays the audio, but a *sibling tab on the same machine* that
+  // is hands-free listening hears it through the shared speakers/mic, and must
+  // also suppress it or the bot answers its own voice in a feedback loop. The
+  // cost is that a different device speaking a 4+ word phrase closely matching
+  // the line within the 8s window could be falsely dropped — a rare, transient
+  // miss, strictly safer than re-opening the feedback loop echo suppression
+  // exists to prevent.
+  rememberTtsForAllSockets(trimmed);
+  const dest = delivery.broadcast ? 'broadcast' : (delivery.socketId ?? 'none');
   console.log(`🔔 voice: proactive sent (${priority}) → ${dest} "${trimmed.slice(0, 80)}" (${latencyMs}ms synth)`);
   return { ok: true, latencyMs };
 };

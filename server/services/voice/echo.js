@@ -58,30 +58,26 @@ export const rememberTtsSentence = (recent, sentence, { now = Date.now(), window
   return recent;
 };
 
-// Per-socket echo buffers keyed by their owning socket, registered by
-// `sockets/voice.js`. Server-emitted proactive speech (`speakProactive`) has no
-// socket context of its own, so this module-scope registry lets the proactive
-// path reach the RECIPIENT socket's `state.recentTts` — proactive audio plays
-// on exactly one tab, so only that tab's mic can echo it back; remembering the
-// line in that one buffer suppresses the echo on the next user turn without
-// falsely flagging a different device's legitimate speech (which never heard
-// it). Single-instance app, so a process-wide registry is fine.
-const echoBuffers = new Map(); // socket -> recentTts buffer
+// Per-socket echo buffers registered by `sockets/voice.js`. Server-emitted
+// proactive speech (`speakProactive`) broadcasts to every connected client
+// but has no socket context of its own, so it can't reach into a single
+// socket's `state.recentTts`. This module-scope registry lets the proactive
+// path write a remembered sentence into every active socket's buffer in one
+// call, so the next user turn picks up echoed proactive audio and drops it
+// just like an in-turn TTS line. Single-instance app, so a process-wide
+// registry is fine.
+const echoBuffers = new Set();
 
-export const registerEchoBuffer = (socket, buf) => {
-  if (socket && Array.isArray(buf)) echoBuffers.set(socket, buf);
+export const registerEchoBuffer = (buf) => {
+  if (Array.isArray(buf)) echoBuffers.add(buf);
 };
 
-export const unregisterEchoBuffer = (socket) => {
-  echoBuffers.delete(socket);
+export const unregisterEchoBuffer = (buf) => {
+  echoBuffers.delete(buf);
 };
 
-// Remember a spoken line in a single socket's echo buffer — the tab that will
-// actually play the audio. No-op when the socket has no registered buffer
-// (e.g. no tab is currently the voice-output recipient).
-export const rememberTtsForSocket = (socket, sentence, opts = {}) => {
-  const buf = echoBuffers.get(socket);
-  if (buf) rememberTtsSentence(buf, sentence, opts);
+export const rememberTtsForAllSockets = (sentence, opts = {}) => {
+  for (const buf of echoBuffers) rememberTtsSentence(buf, sentence, opts);
 };
 
 // Returns true iff the transcript is almost certainly the bot's own TTS

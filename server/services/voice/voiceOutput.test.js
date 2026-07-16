@@ -26,13 +26,16 @@ describe('voiceOutput single-recipient routing', () => {
     expect(getVoiceOutputSocket()).toBe(null);
   });
 
-  it('emitVoiceOutput never broadcasts via io.emit when nobody is registered', () => {
-    // The whole point of the module: proactive audio reaching nobody (no tab
-    // connected) is strictly better than a broadcast to every tab/machine.
+  it('emitVoiceOutput falls back to io.emit only when no candidate is announced', () => {
+    // Backward-compat path: a pre-upgrade client speaks the same voice:speak
+    // event but never announces, so with no candidate we broadcast rather than
+    // silently drop its proactive audio. In normal operation a tab always
+    // announces, so this path is not taken (see the routing test below).
     const io = { emit: vi.fn() };
     const res = emitVoiceOutput(io, 'voice:speak', { sentence: 'hi' });
-    expect(io.emit).not.toHaveBeenCalled();
-    expect(res).toMatchObject({ delivered: false });
+    expect(io.emit).toHaveBeenCalledTimes(1);
+    expect(io.emit).toHaveBeenCalledWith('voice:speak', { sentence: 'hi' });
+    expect(res).toMatchObject({ delivered: true, broadcast: true });
   });
 
   it('registering a candidate does NOT auto-steal primary, but is promoted lazily', () => {
@@ -117,6 +120,24 @@ describe('voiceOutput single-recipient routing', () => {
     // b (the primary tab) disconnects.
     releaseVoiceOutput(b);
     // a inherits output (last focused survivor), NOT c (newest connected).
+    expect(getVoiceOutputSocket()).toBe(a);
+  });
+
+  it('promotes a focused survivor over a background tab that reconnected later', () => {
+    const a = makeSocket('a');
+    const c = makeSocket('c');
+    registerVoiceOutputCandidate(a);
+    registerVoiceOutputCandidate(c);
+    claimVoiceOutput(a); // user focused a
+    claimVoiceOutput(c); // then focused c → c is primary
+    // A background tab announces AFTER the last claim (e.g. a hidden tab
+    // reconnecting) — newest in connection order, but never focused.
+    const bg = makeSocket('bg');
+    registerVoiceOutputCandidate(bg);
+
+    releaseVoiceOutput(c); // primary disconnects
+    // a (last-focused survivor) inherits output, NOT the newer background tab —
+    // claim recency wins over connection order.
     expect(getVoiceOutputSocket()).toBe(a);
   });
 
