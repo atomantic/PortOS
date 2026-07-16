@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
-import { useNavigate, useParams, Link } from 'react-router-dom';
+import { useNavigate, useParams, useLocation, Link } from 'react-router-dom';
 import { Plus, Sparkles, Trash2, Clock, Pause, Play, ThumbsUp, ThumbsDown, ExternalLink } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Drawer from '../components/Drawer';
@@ -102,6 +102,7 @@ const labelCls = 'block text-xs font-medium text-gray-400 mb-1';
 
 export default function CreativeCommissions() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { id } = useParams();
   const [commissions, setCommissions] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -167,7 +168,10 @@ export default function CreativeCommissions() {
       })
       .catch(() => {}); // stale/deleted id → the not-found fallback handles it
     return () => { cancelled = true; };
-  }, [id, creating]);
+    // `location.key` is in the deps so clicking the run's notification while its
+    // drawer is ALREADY open (a same-pathname push, where id/creating don't
+    // change) still re-runs the refetch and pulls in the just-fired run.
+  }, [id, creating, location.key]);
 
   const closeDrawer = useCallback(() => navigate('/creative-commission'), [navigate]);
 
