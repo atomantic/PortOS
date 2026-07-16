@@ -109,7 +109,7 @@ describe('migration 190 — seed songbook songs', () => {
 
   it('seeds the SHIPPED reference records against a real repo layout shape', async () => {
     // Sanity-pin the shipped seed file: three instrument variants of the same
-    // public-domain song, no originInstanceId, stable ids.
+    // public-domain song, stable ids, and a FIXED originInstanceId sentinel.
     const shipped = JSON.parse(readFileSync(new URL('../../data.reference/brain/songs.json', import.meta.url), 'utf-8'));
     const ids = Object.keys(shipped.records);
     expect(ids.sort()).toEqual(['song-seed-hotrs-guitar', 'song-seed-hotrs-piano', 'song-seed-hotrs-ukulele']);
@@ -117,7 +117,13 @@ describe('migration 190 — seed songbook songs', () => {
       const rec = shipped.records[id];
       expect(rec.title).toBe('House of the Rising Sun');
       expect(rec.artist).toBe('Traditional');
-      expect(rec.originInstanceId).toBeUndefined(); // boot backfill stamps it
+      // Seed records MUST ship a fixed originInstanceId: boot backfill stamps
+      // a per-install id onto records missing one, which would make the same
+      // seed hash differently on every peer — permanently defeating the brain
+      // reconcile checksum's cheap convergence check and forcing full snapshot
+      // exchanges every sync cycle. A fixed sentinel keeps all installs
+      // byte-identical. Any future seeded brain record needs the same.
+      expect(rec.originInstanceId).toBe('seed');
       expect(rec.attachments).toEqual([]);
       expect(rec.content.format).toBe('tab');
       expect(rec.content.text).toContain('There is a house in New Orleans');
