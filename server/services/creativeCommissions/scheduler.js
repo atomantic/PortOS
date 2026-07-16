@@ -199,6 +199,18 @@ export async function runScheduledCommission(commissionId) {
 
     const directive = buildCommissionDirective(commission);
     const gen = commission.generation || {};
+    // Fan the commission's single LLM pin onto BOTH CD cognitive stages
+    // (treatment + plan) as the project's `modelOverrides`, so the scheduled
+    // fire is processed by the provider/model the user chose rather than the
+    // install default. An unset pin yields `{}` → each stage inherits the global
+    // AI Assignment (createProject.normalizeModelOverrides drops empty stages).
+    // Evaluation is deliberately left inheriting the default: it's a vision API
+    // call, not a CoS agent, and pinning it to a CLI/TUI agent provider would
+    // trip agentBridge's harness-boundary guard.
+    const pin = commission.assignment?.providerId
+      ? { providerId: commission.assignment.providerId, ...(commission.assignment.model ? { model: commission.assignment.model } : {}) }
+      : null;
+    const modelOverrides = pin ? { treatment: pin, plan: pin } : {};
     // createProject prefixes "Creative Director: " (19 chars) before a
     // mediaCollections name capped at 80, so cap our derived name at 61 — a long
     // commission name would otherwise fail the collection create on every run.
@@ -215,6 +227,7 @@ export async function runScheduledCommission(commissionId) {
       targetDurationSeconds: gen.targetDurationSeconds || 10,
       styleSpec: commission.brief?.styleSpec || '',
       directive,
+      modelOverrides,
     });
 
     const run = await recordCommissionRun(commissionId, {

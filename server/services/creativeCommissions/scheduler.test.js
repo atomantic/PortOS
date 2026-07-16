@@ -141,6 +141,9 @@ describe('runScheduledCommission gates', () => {
     expect(createProjectMock).toHaveBeenCalledWith(expect.objectContaining({
       aspectRatio: '16:9', quality: 'standard', modelId: 'ltx-default', targetDurationSeconds: 10,
       directive: expect.objectContaining({ goal: expect.stringContaining('surreal') }),
+      // An unset LLM assignment leaves modelOverrides empty → the CD stages
+      // inherit the install's default AI Assignment (pre-#2657 behavior).
+      modelOverrides: {},
     }));
     expect(advanceMock).toHaveBeenCalledWith('cd-xyz');
     expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({ status: 'started', projectId: 'cd-xyz' }));
@@ -150,6 +153,28 @@ describe('runScheduledCommission gates', () => {
     // The planner's cos action is accounted by completeAgent on completion — the
     // fire handler must NOT pre-charge (that would double-count).
     expect(recordUsageMock).not.toHaveBeenCalled();
+  });
+
+  it('fans the LLM assignment pin onto both CD cognitive stages (treatment + plan)', async () => {
+    getCommissionMock.mockResolvedValue(videoCommission({
+      assignment: { providerId: 'claude-tui', model: 'sonnet' },
+    }));
+    await runScheduledCommission('commission-1');
+    const pin = { providerId: 'claude-tui', model: 'sonnet' };
+    expect(createProjectMock).toHaveBeenCalledWith(expect.objectContaining({
+      modelOverrides: { treatment: pin, plan: pin },
+    }));
+  });
+
+  it('omits the model from the pin when only a provider is chosen', async () => {
+    getCommissionMock.mockResolvedValue(videoCommission({
+      assignment: { providerId: 'claude-tui', model: null },
+    }));
+    await runScheduledCommission('commission-1');
+    const pin = { providerId: 'claude-tui' };
+    expect(createProjectMock).toHaveBeenCalledWith(expect.objectContaining({
+      modelOverrides: { treatment: pin, plan: pin },
+    }));
   });
 
   it('does NOT surface when the fire is skipped (nothing was generated)', async () => {

@@ -114,6 +114,21 @@ export const creativeCommissionGenerationUpdateSchema = z.object({
   targetDurationSeconds: z.number().int().min(5).max(600).optional(),
 });
 
+// The LLM provider/model that PROCESSES the commission — i.e. the Creative
+// Director cognitive stages (treatment + production plan) the scheduled fire
+// runs as CoS agent tasks. `providerId`/`model` are the same shape the CD
+// project carries as `modelOverrides.{treatment,plan}` (a `{ providerId, model }`
+// pin); the scheduler fans this single pin onto both cognitive stages at fire
+// time. Both keys nullable/optional — an unset `providerId` means "inherit the
+// install's default AI Assignment" (preserving the pre-#2657 system-default
+// behavior). The picker only shows agent-harness (CLI/TUI) providers because an
+// API-type provider injected into an agent task trips the harness-boundary guard
+// (see agentBridge.js). Bounded to 120 chars like the CD project pin.
+export const creativeCommissionAssignmentSchema = z.object({
+  providerId: z.string().trim().max(120).nullable().optional(),
+  model: z.string().trim().max(120).nullable().optional(),
+});
+
 export const creativeCommissionCreateSchema = z.object({
   name: z.string().trim().min(1).max(COMMISSION_NAME_MAX),
   enabled: z.boolean().default(true),
@@ -121,6 +136,9 @@ export const creativeCommissionCreateSchema = z.object({
   brief: creativeCommissionBriefSchema,
   schedule: creativeCommissionScheduleSchema,
   generation: creativeCommissionGenerationSchema.optional(),
+  // Optional LLM provider/model pin for the CD cognitive stages. Absent → the
+  // install default AI Assignment processes the commission.
+  assignment: creativeCommissionAssignmentSchema.optional(),
   // How many recent feedback reactions the directive builder folds into the next
   // run's prompt (Phase 2 populates `feedback`; kept here so the field is stable
   // and editable from creation). 0 disables conditioning.
@@ -175,5 +193,8 @@ export const creativeCommissionUpdateSchema = z.object({
   brief: creativeCommissionBriefUpdateSchema.optional(),
   schedule: creativeCommissionScheduleSchema.optional(),
   generation: creativeCommissionGenerationUpdateSchema.optional(),
+  // Whole-object replace on the service side (a clear sends `{ providerId: null,
+  // model: null }`), so no separate no-defaults update variant is needed.
+  assignment: creativeCommissionAssignmentSchema.optional(),
   feedbackWindow: z.number().int().min(0).max(50).optional(),
 }).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });

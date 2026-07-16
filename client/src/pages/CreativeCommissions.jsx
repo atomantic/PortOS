@@ -14,15 +14,17 @@
 
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useNavigate, useParams, useLocation, Link } from 'react-router-dom';
-import { Plus, Sparkles, Trash2, Clock, Pause, Play, ThumbsUp, ThumbsDown, ExternalLink } from 'lucide-react';
+import { Plus, Sparkles, Trash2, Clock, Cpu, Pause, Play, ThumbsUp, ThumbsDown, ExternalLink } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Drawer from '../components/Drawer';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { timeAgo } from '../utils/formatters';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
+import { isProcessProvider } from '../utils/providers';
+import ProviderModelSelector from '../components/ProviderModelSelector';
 import {
   listCommissions, getCommission, createCommission, updateCommission, deleteCommission,
-  submitCommissionFeedback,
+  submitCommissionFeedback, getProviders,
 } from '../services/api';
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -35,6 +37,14 @@ function describeSchedule(schedule) {
   if (kind === 'WEEKLY') return `Weekly · ${WEEKDAYS[weekday] ?? '—'} at ${atLocalTime || '—'}`;
   if (kind === 'DAILY') return `Daily${weekdaysOnly ? ' (weekdays)' : ''} at ${atLocalTime || '—'}`;
   return kind || 'No schedule';
+}
+
+// Compact "who processes this" summary for the list card. Unset → the install
+// default assignment; set → the pinned provider (and model, when chosen).
+function describeAssignment(assignment) {
+  const providerId = assignment?.providerId;
+  if (!providerId) return 'Install default AI';
+  return assignment.model ? `${providerId} · ${assignment.model}` : providerId;
 }
 
 // A blank form is just the editable projection of an empty record.
@@ -62,6 +72,12 @@ function toForm(c) {
       quality: c.generation?.quality || 'standard',
       aspectRatio: c.generation?.aspectRatio || '16:9',
       targetDurationSeconds: c.generation?.targetDurationSeconds || 10,
+    },
+    // Which AI provider/model processes the commission's CD stages. Empty
+    // providerId → the install's default AI Assignment.
+    assignment: {
+      providerId: c.assignment?.providerId || '',
+      model: c.assignment?.model || '',
     },
     // How many recent reactions steer the next run (0 disables conditioning).
     feedbackWindow: Number.isInteger(c.feedbackWindow) ? c.feedbackWindow : 5,
@@ -92,6 +108,13 @@ function toPayload(form) {
       quality: form.generation.quality,
       aspectRatio: form.generation.aspectRatio,
       targetDurationSeconds: Number(form.generation.targetDurationSeconds),
+    },
+    // Send the full pin every save; a provider-less choice clears the model too
+    // (the server drops a dangling model, but keeping the payload clean avoids a
+    // pointless round-trip through the sanitizer's normalization).
+    assignment: {
+      providerId: form.assignment.providerId || null,
+      model: form.assignment.providerId ? (form.assignment.model || null) : null,
     },
     feedbackWindow: Number(form.feedbackWindow),
   };
@@ -315,6 +338,9 @@ export default function CreativeCommissions() {
                 </div>
                 <div className="flex items-center gap-3 mt-1 text-xs text-gray-500">
                   <span className="flex items-center gap-1"><Clock className="w-3 h-3" /> {describeSchedule(c.schedule)}</span>
+                  <span className="flex items-center gap-1" title="AI provider that writes the treatment & plan">
+                    <Cpu className="w-3 h-3" /> {describeAssignment(c.assignment)}
+                  </span>
                   {Array.isArray(c.runs) && c.runs.length > 0 && (
                     <span>Last run {timeAgo(c.runs[c.runs.length - 1].ranAt)}</span>
                   )}
@@ -572,6 +598,19 @@ function CommissionForm({ form, patchForm, runs, feedback, onRate, saving, onSav
         </div>
       </section>
 
+      {/* AI provider & model — who processes this commission */}
+      <section className="space-y-2 border-t border-port-border pt-4">
+        <h3 className="text-sm font-semibold text-gray-200">AI provider &amp; model</h3>
+        <p className="text-xs text-gray-500">
+          Which AI writes the treatment and production plan each time this commission runs. Leave on the
+          default to use your install&apos;s configured Creative Director assignment.
+        </p>
+        <AssignmentPicker
+          assignment={form.assignment}
+          onChange={(next) => patchForm(['assignment'], next)}
+        />
+      </section>
+
       {/* Feedback conditioning */}
       <section className="space-y-2 border-t border-port-border pt-4">
         <h3 className="text-sm font-semibold text-gray-200">Feedback conditioning</h3>
@@ -641,6 +680,49 @@ function CommissionForm({ form, patchForm, runs, feedback, onRate, saving, onSav
         <button onClick={onCancel} className="text-gray-400 hover:text-gray-200 px-4 py-2 text-sm">Cancel</button>
       </div>
     </div>
+  );
+}
+
+// AI provider/model picker for the commission's CD cognitive stages (treatment +
+// plan). Mirrors SeriesLlmPicker: fetches the provider list, drives the shared
+// ProviderModelSelector, and reports changes up to form state via `onChange`.
+// Only agent-harness (CLI/TUI) providers are offered — an API-type provider
+// injected into a CoS agent task trips the server's harness-boundary guard. The
+// empty option names the actual active provider so an unset pin makes it clear
+// what will process the run, rather than an opaque "default".
+function AssignmentPicker({ assignment, onChange }) {
+  const [providers, setProviders] = useState([]);
+  const [activeProviderId, setActiveProviderId] = useState(null);
+
+  useEffect(() => {
+    getProviders({ silent: true })
+      .then((data) => {
+        setProviders((data?.providers || []).filter(isProcessProvider));
+        setActiveProviderId(data?.activeProvider || null);
+      })
+      .catch(() => { /* dropdowns fall back to the "default provider" option */ });
+  }, []);
+
+  const providerLabel = (pid) => providers.find((p) => p.id === pid)?.name || pid || 'auto-resolved';
+  const availableModels = useMemo(() => {
+    const p = providers.find((x) => x.id === assignment.providerId);
+    return p?.models || [];
+  }, [providers, assignment.providerId]);
+
+  return (
+    <ProviderModelSelector
+      providers={providers}
+      selectedProviderId={assignment.providerId || ''}
+      selectedModel={assignment.model || ''}
+      availableModels={availableModels}
+      onProviderChange={(id) => onChange({ providerId: id || '', model: '' })}
+      onModelChange={(model) => onChange({ ...assignment, model: model || '' })}
+      label="Provider"
+      modelDisabled={availableModels.length === 0}
+      alwaysShowModel
+      emptyProviderOption={`Install default (${providerLabel(activeProviderId)})`}
+      emptyModelOption="Default model"
+    />
   );
 }
 
