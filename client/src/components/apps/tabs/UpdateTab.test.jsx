@@ -176,3 +176,41 @@ describe('UpdateTab reconcile flow', () => {
     expect(mockToast.loading).not.toHaveBeenCalled();
   });
 });
+
+describe('UpdateTab — active CoS agent suppression', () => {
+  beforeEach(() => {
+    handlers.clear();
+    mockCheckHealth.mockReset().mockResolvedValue({ version: '2.24.0', uptime: 120 });
+    mockExecutePortosUpdate.mockReset();
+    mockToast.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('suppresses the reconcile prompt and shows a paused notice while agents are live', async () => {
+    mockGetUpdateStatus.mockReset().mockResolvedValue({
+      ...OUT_OF_SYNC_STATUS,
+      activeCosAgents: 2,
+    });
+    render(<UpdateTab />);
+
+    // The paused notice appears in place of the reconcile action.
+    await screen.findByText(/Update paused — CoS agents running/i);
+    expect(screen.getByText(/2 CoS agents are currently running/i)).toBeTruthy();
+    // The reconcile button must be gone — a restart would sever the agents.
+    expect(screen.queryByRole('button', { name: 'Reconcile Now' })).toBeNull();
+  });
+
+  it('shows the reconcile button again once no agents are running', async () => {
+    mockGetUpdateStatus.mockReset().mockResolvedValue({
+      ...OUT_OF_SYNC_STATUS,
+      activeCosAgents: 0,
+    });
+    render(<UpdateTab />);
+
+    await screen.findByRole('button', { name: 'Reconcile Now' });
+    expect(screen.queryByText(/Update paused/i)).toBeNull();
+  });
+});

@@ -18,9 +18,15 @@ vi.mock('../services/updateChecker.js', () => ({
 vi.mock('../services/updateExecutor.js', () => ({
   executeUpdate: vi.fn().mockResolvedValue({ success: true, version: '1.26.0' })
 }));
+// getActiveAgentIds reads live-process maps; mock it so tests control the
+// "are CoS agents running?" signal without spawning real processes.
+vi.mock('../services/agentState.js', () => ({
+  getActiveAgentIds: vi.fn().mockReturnValue([])
+}));
 
 import * as updateChecker from '../services/updateChecker.js';
 import { executeUpdate } from '../services/updateExecutor.js';
+import { getActiveAgentIds } from '../services/agentState.js';
 import updateRoutes from './update.js';
 
 const makeApp = () => {
@@ -47,6 +53,7 @@ describe('POST /api/update/execute — reconcile gating (issue #1779)', () => {
     vi.clearAllMocks();
     updateChecker.setUpdateInProgress.mockResolvedValue(true);
     executeUpdate.mockResolvedValue({ success: true, version: '1.26.0' });
+    getActiveAgentIds.mockReturnValue([]);
   });
 
   it('rejects reconcile when the install is already in sync (even with a cached release)', async () => {
@@ -126,5 +133,65 @@ describe('POST /api/update/execute — reconcile gating (issue #1779)', () => {
     expect(res.status).toBe(200);
     expect(res.body.tag).toBe('v1.27.0');
     expect(executeUpdate).toHaveBeenCalledWith('v1.27.0', expect.any(Function), { forceCleanWorkspaces: undefined });
+  });
+});
+
+describe('POST /api/update/execute — active CoS agent gating', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    updateChecker.setUpdateInProgress.mockResolvedValue(true);
+    updateChecker.getUpdateStatus.mockResolvedValue(baseStatus());
+    executeUpdate.mockResolvedValue({ success: true, version: '1.26.0' });
+    getActiveAgentIds.mockReturnValue([]);
+  });
+
+  it('rejects a normal update with 409 AGENTS_ACTIVE while an agent is live (no restart)', async () => {
+    getActiveAgentIds.mockReturnValue(['agent-1']);
+    const res = await request(makeApp()).post('/api/update/execute').send({});
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('AGENTS_ACTIVE');
+    expect(executeUpdate).not.toHaveBeenCalled();
+    // Guard runs before the in-progress lock is acquired.
+    expect(updateChecker.setUpdateInProgress).not.toHaveBeenCalled();
+  });
+
+  it('rejects a reconcile with 409 AGENTS_ACTIVE while agents are live', async () => {
+    updateChecker.getUpdateStatus.mockResolvedValue(baseStatus({ installState: { outOfSync: true } }));
+    getActiveAgentIds.mockReturnValue(['agent-1', 'agent-2']);
+    const res = await request(makeApp()).post('/api/update/execute').send({ reconcile: true });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('AGENTS_ACTIVE');
+    // Pluralized message names both agents.
+    expect(res.body.error).toMatch(/2 CoS agents are running/);
+    expect(executeUpdate).not.toHaveBeenCalled();
+  });
+
+  it('proceeds normally when no agents are running', async () => {
+    getActiveAgentIds.mockReturnValue([]);
+    const res = await request(makeApp()).post('/api/update/execute').send({});
+    expect(res.status).toBe(200);
+    expect(executeUpdate).toHaveBeenCalled();
+  });
+});
+
+describe('GET /api/update/status — activeCosAgents', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    updateChecker.clearStaleUpdateInProgress.mockResolvedValue(false);
+    updateChecker.getUpdateStatus.mockResolvedValue(baseStatus());
+    getActiveAgentIds.mockReturnValue([]);
+  });
+
+  it('reports the live agent count so the UI can suppress update actions', async () => {
+    getActiveAgentIds.mockReturnValue(['agent-1', 'agent-2', 'agent-3']);
+    const res = await request(makeApp()).get('/api/update/status');
+    expect(res.status).toBe(200);
+    expect(res.body.activeCosAgents).toBe(3);
+  });
+
+  it('reports 0 when no agents are running', async () => {
+    const res = await request(makeApp()).get('/api/update/status');
+    expect(res.status).toBe(200);
+    expect(res.body.activeCosAgents).toBe(0);
   });
 });

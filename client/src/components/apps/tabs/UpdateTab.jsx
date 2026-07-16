@@ -234,6 +234,15 @@ export default function UpdateTab() {
 
   useAutoRefetch(pollHealth, 2000, { enabled: polling, pollOnly: true });
 
+  // While CoS agents are live, updates/reconcile are blocked server-side (a
+  // restart would sever them). Poll the status so the block clears promptly once
+  // the last agent finishes, without the user manually re-checking. No-op when
+  // no agents are running or an update is already underway.
+  useAutoRefetch(fetchStatus, 4000, {
+    enabled: (status?.activeCosAgents || 0) > 0 && !updating && !polling,
+    pollOnly: true
+  });
+
   const handleCheck = async () => {
     setChecking(true);
     const result = await api.checkForUpdate().catch(() => null);
@@ -359,6 +368,13 @@ export default function UpdateTab() {
   // `git pull`, no ./update.sh). Distinct from "a new release is available".
   const installState = status?.installState;
   const outOfSync = !!installState?.outOfSync;
+
+  // Live CoS agents make a restart destructive — updating/reconciling pm2-restarts
+  // PortOS and severs any in-flight agent. When agents are running we suppress the
+  // reconcile prompt and the update actions (the server also hard-rejects with 409
+  // AGENTS_ACTIVE) and show a notice instead.
+  const activeCosAgents = status?.activeCosAgents || 0;
+  const agentsActive = activeCosAgents > 0;
   const installIssues = [];
   if (installState?.runningStaleCode) {
     installIssues.push('Running code is older than what’s checked out — a restart/update is required.');
@@ -430,8 +446,19 @@ export default function UpdateTab() {
         </div>
       )}
 
+      {/* CoS agents live — updating/reconciling would restart PortOS and sever
+          them, so the reconcile prompt and update actions below are suppressed. */}
+      {agentsActive && (outOfSync || hasUpdate) && (
+        <Banner tone="warning" icon={AlertTriangle} size="md" title="Update paused — CoS agents running">
+          {activeCosAgents} CoS agent{activeCosAgents === 1 ? ' is' : 's are'} currently running.
+          Updating or reconciling restarts PortOS, which would sever {activeCosAgents === 1 ? 'it' : 'them'} mid-task.
+          Pause or wait for the agent{activeCosAgents === 1 ? '' : 's'} to finish — this notice clears automatically,
+          then you can update.
+        </Banner>
+      )}
+
       {/* Install out of sync (issue #1779) — distinct from "new release available" */}
-      {outOfSync && (
+      {outOfSync && !agentsActive && (
         <div className="p-4 rounded-lg border border-port-warning/50 bg-port-warning/5">
           <div className="flex items-start gap-2">
             <AlertTriangle size={18} className="text-port-warning shrink-0 mt-0.5" />
@@ -524,8 +551,8 @@ export default function UpdateTab() {
         </div>
       )}
 
-      {/* Update Actions */}
-      {hasUpdate && (
+      {/* Update Actions — suppressed while CoS agents are live (see notice above) */}
+      {hasUpdate && !agentsActive && (
         <div className="flex flex-wrap gap-2">
           {isFork ? (
             <>

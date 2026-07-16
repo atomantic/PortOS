@@ -5,6 +5,7 @@ import { validateRequest } from '../lib/validation.js';
 import { UPSTREAM_FULL_NAME } from '../lib/gitRemote.js';
 import * as updateChecker from '../services/updateChecker.js';
 import { executeUpdate } from '../services/updateExecutor.js';
+import { getActiveAgentIds } from '../services/agentState.js';
 
 const router = Router();
 
@@ -24,11 +25,15 @@ const executeSchema = z.object({
   reconcile: z.boolean().optional()
 });
 
-// GET /api/update/status — returns update state (also clears stale locks)
+// GET /api/update/status — returns update state (also clears stale locks).
+// `activeCosAgents` counts live CoS agent processes (direct + runner spawns) so
+// the UI can suppress the reconcile/update actions while an agent is in flight —
+// updating restarts PortOS and would sever those live processes (issue: don't
+// restart out from under a running agent).
 router.get('/status', asyncHandler(async (req, res) => {
   await updateChecker.clearStaleUpdateInProgress();
   const status = await updateChecker.getUpdateStatus();
-  res.json(status);
+  res.json({ ...status, activeCosAgents: getActiveAgentIds().length });
 }));
 
 // POST /api/update/check — triggers manual check
@@ -109,6 +114,25 @@ router.post('/sync-fork', asyncHandler(async (req, res) => {
 // POST /api/update/execute — kicks off update
 router.post('/execute', asyncHandler(async (req, res) => {
   const { acknowledgeFork, reconcile } = validateRequest(executeSchema, req.body || {});
+
+  // Never restart PortOS out from under a live CoS agent. Both a normal update
+  // and a reconcile run update.sh, which pm2-restarts THIS server process and
+  // severs any in-flight agent (each agent's PTY/child process is a child of it).
+  // getActiveAgentIds() reads the in-memory live-process maps (direct + runner
+  // spawns), so it reflects exactly what a restart would kill — a stale persisted
+  // `status: 'running'` on disk can't spuriously block, and a paused agent (its
+  // process already stopped) correctly doesn't. Gate here so it covers reconcile,
+  // normal update, and both fork variants, which all funnel through /execute.
+  const liveAgents = getActiveAgentIds();
+  if (liveAgents.length > 0) {
+    const n = liveAgents.length;
+    throw new ServerError(
+      `${n} CoS agent${n === 1 ? ' is' : 's are'} running — updating would restart PortOS and ` +
+      `sever ${n === 1 ? 'it' : 'them'}. Pause or wait for the agent${n === 1 ? '' : 's'} to finish, then update.`,
+      { status: 409, code: 'AGENTS_ACTIVE' }
+    );
+  }
+
   const status = await updateChecker.getUpdateStatus();
 
   // Two distinct entry points:
