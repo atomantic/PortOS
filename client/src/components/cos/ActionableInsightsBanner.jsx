@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAutoRefetch } from '../../hooks/useAutoRefetch';
 import toast from '../ui/Toast';
@@ -89,7 +89,7 @@ const PRIORITY_STYLES = {
   }
 };
 
-export default function ActionableInsightsBanner({ onTaskUnblocked }) {
+export default function ActionableInsightsBanner({ onTaskUnblocked, refreshKey = 0 }) {
   const [dismissed, setDismissed] = useState([]);
   const [expanded, setExpanded] = useState({});
   const navigate = useNavigate();
@@ -100,6 +100,21 @@ export default function ActionableInsightsBanner({ onTaskUnblocked }) {
     () => api.getCosActionableInsights({ silent: true }),
     60_000,
   );
+
+  // Insights (blocked count, approvals, etc.) are derived server-side from the
+  // task list, so a task-list mutation in the parent must re-derive them here —
+  // otherwise deleting a blocked task leaves a stale "N blocked tasks" alert up
+  // until the 60s poll or a manual dismiss. The parent bumps `refreshKey` on
+  // every task mutation; skip the initial mount since the hook fetches then.
+  // `refetch` is stable, so this only fires on a real key change.
+  const didMountRef = useRef(false);
+  useEffect(() => {
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      return;
+    }
+    refetch();
+  }, [refreshKey, refetch]);
 
   const handleDismiss = (type) => {
     setDismissed(prev => [...prev, type]);

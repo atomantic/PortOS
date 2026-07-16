@@ -85,6 +85,12 @@ export default function ChiefOfStaff() {
   );
   const [activeAgentMeta, setActiveAgentMeta] = useState(null);
   const [learningSummary, setLearningSummary] = useState(null);
+  // Bumped on every task-list mutation so the ActionableInsightsBanner (a
+  // decoupled sibling that owns its own insights fetch) re-derives "N blocked
+  // tasks" etc. immediately instead of lingering until its 60s poll. This covers
+  // only the TasksTab mutation path; socket/health-driven insight changes still
+  // rely on the banner's own poll.
+  const [insightsRefreshKey, setInsightsRefreshKey] = useState(0);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
   const tabsRef = useRef(null);
@@ -148,6 +154,16 @@ export default function ChiefOfStaff() {
     const runningAgent = agentsData.find(a => a.status === 'running');
     setActiveAgentMeta(runningAgent?.metadata || null);
   }, [deriveAgentState]);
+
+  // Task-mutation refresh: refetch the task list AND signal the insights banner
+  // to re-derive. Deleting a blocked task, for example, must drop it from both
+  // the list and the banner's "N blocked tasks" alert — the banner owns its own
+  // fetch, so bumping the signal is how the delete reaches it. The background
+  // 30s poll calls fetchData directly (not this), so it doesn't over-refetch.
+  const refreshTasks = useCallback(() => {
+    setInsightsRefreshKey(v => v + 1);
+    return fetchData();
+  }, [fetchData]);
 
   // Redirect unknown tab IDs to the default tab — `activeTab !== tab` only
   // when the param failed validation and fell back.
@@ -856,9 +872,9 @@ export default function ChiefOfStaff() {
           <div role="tabpanel" id="tabpanel-tasks" aria-labelledby="tab-tasks">
             {/* Tasks-only widgets live under the tab nav so they don't stretch above
                 tabs that don't surface this data. */}
-            <ActionableInsightsBanner onTaskUnblocked={handleTaskUnblocked} />
+            <ActionableInsightsBanner onTaskUnblocked={handleTaskUnblocked} refreshKey={insightsRefreshKey} />
             <QuickSummary />
-            <TasksTab tasks={tasks} onRefresh={fetchData} providers={providers} apps={apps} />
+            <TasksTab tasks={tasks} onRefresh={refreshTasks} providers={providers} apps={apps} />
           </div>
         )}
         {activeTab === 'agents' && (
