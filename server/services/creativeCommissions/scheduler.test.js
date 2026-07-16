@@ -333,8 +333,18 @@ describe('runCommissionNow (manual "Run Now")', () => {
     createProjectMock.mockRejectedValueOnce(new Error('collection create failed'));
     getCommissionMock.mockResolvedValue(videoCommission());
     const outcome = await runCommissionNow('commission-1');
-    expect(outcome).toMatchObject({ status: 'failed', error: 'collection create failed' });
+    expect(outcome).toMatchObject({ status: 'failed', error: 'collection create failed', projectId: null });
     expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({ status: 'failed', error: 'collection create failed', trigger: 'manual' }));
+  });
+
+  it('reports the minted project id when the fire throws AFTER createProject succeeded', async () => {
+    // Without the id, the caller sees a bare failure, can't find the orphaned
+    // CD project, and a retry mints a duplicate.
+    advanceMock.mockRejectedValueOnce(new Error('advance kick failed'));
+    getCommissionMock.mockResolvedValue(videoCommission());
+    const outcome = await runCommissionNow('commission-1');
+    expect(outcome).toMatchObject({ status: 'failed', error: 'advance kick failed', projectId: 'cd-xyz' });
+    expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({ status: 'failed', projectId: 'cd-xyz', trigger: 'manual' }));
   });
 
   it('propagates NOT_FOUND for an unknown commission (route maps it to 404)', async () => {

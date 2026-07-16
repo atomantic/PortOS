@@ -275,8 +275,13 @@ export default function CreativeCommissions() {
     setRunningIds((prev) => new Set(prev).add(commission.id));
     try {
       const result = await runCommissionNow(commission.id, { silent: true });
+      // Merge only the run-history fields the response is authoritative for —
+      // replacing the whole record would clobber a concurrent optimistic local
+      // mutation (e.g. a Pause click while the run was in flight) with the
+      // server re-read that predates it.
       if (result?.commission?.id) {
-        setCommissions((prev) => prev.map((c) => (c.id === result.commission.id ? result.commission : c)));
+        const fresh = result.commission;
+        setCommissions((prev) => prev.map((c) => (c.id === fresh.id ? { ...c, runs: fresh.runs, feedback: fresh.feedback } : c)));
       }
       if (result?.status === 'started') toast.success('Run started — output will appear in run history');
       else if (result?.status === 'skipped') toast.error(`Run skipped: ${result.reason}`);

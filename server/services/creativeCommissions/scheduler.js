@@ -180,6 +180,11 @@ export async function runCommissionNow(commissionId) {
  */
 async function fireCommission(commission, trigger) {
   const commissionId = commission.id;
+  // Hoisted so a throw AFTER createProject succeeded (e.g. the advance kick)
+  // still reports the minted project on the failed run/outcome — otherwise a
+  // manual caller sees a bare failure, can't find the orphaned CD project, and
+  // a retry mints a duplicate.
+  let startedProjectId = null;
   const skip = async (reason) => {
     const run = await recordCommissionRun(commissionId, { status: 'skipped', reason, trigger }).catch(() => null);
     return { status: 'skipped', reason, run };
@@ -279,6 +284,7 @@ async function fireCommission(commission, trigger) {
       modelOverrides,
     });
 
+    startedProjectId = project.id;
     const run = await recordCommissionRun(commissionId, {
       status: 'started',
       trigger,
@@ -300,7 +306,7 @@ async function fireCommission(commission, trigger) {
   } catch (err) {
     console.error(`❌ Creative commission ${commissionId} ${trigger} fire failed: ${err?.message || err}`);
     const error = err?.message || String(err);
-    const run = await recordCommissionRun(commissionId, { status: 'failed', error, trigger }).catch(() => null);
-    return { status: 'failed', error, run };
+    const run = await recordCommissionRun(commissionId, { status: 'failed', error, trigger, projectId: startedProjectId }).catch(() => null);
+    return { status: 'failed', error, projectId: startedProjectId, run };
   }
 }
