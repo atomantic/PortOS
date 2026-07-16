@@ -62,6 +62,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `usePreviewRoute` | URL-driven `[preview, setPreview]` via `?preview=<filename>`. | Any page hosting `<MediaPreview>` — gives the preview a deep-link. |
 | `useImageGenQueue` | Work-scoped live queue of in-flight image renders. | Pages that show per-work image-gen queue state. |
 | `useImageRenderSettings` | Load the pipeline image-gen config once (`getSettings → readPipelineImageSettings`), failing open to `PIPELINE_IMAGE_DEFAULTS`; returns `{ imageCfg }`. | A single-image render slot that needs the render config and doesn't already load the full settings blob. |
+| `useUserTimezone` | Resolve the user's configured IANA timezone (`settings.timezone`) once, falling back to the browser zone then UTC; returns the tz string. | A date-scoped surface that must derive "today" the same way the server does (POST launcher/history day keys, #2681). |
 | `useSingleImageRender` | Queue-one-render / wait-for-completion jobId lifecycle: builds opts from `imageCfg`, calls `buildPrompt`, POSTs `generateImage`, tracks the `jobId` head, and runs a once-per-`(key, filename)` completion guard before `onComplete`. | Single-image render slots driven by `EntryThumbSlot`/`MediaJobThumb` (style probe, characters step). Completion SSE stays in the thumb. |
 
 ## Sockets & lifecycle

@@ -18,6 +18,13 @@ vi.mock('../lib/fileUtils.js', () => ({
   }),
 }));
 
+// getUserTimezone (via ../lib/timezone.js) reads getSettings() for the local-day
+// boundary (issue #2681). Pin it to UTC so "today" is the UTC day regardless of
+// the runner's own system timezone — matching these tests' UTC-today assumptions.
+vi.mock('../services/settings.js', () => ({
+  getSettings: () => Promise.resolve({ timezone: 'UTC' }),
+}));
+
 import { getPostProgress, getPostStats, getUnifiedActivityStreak } from './meatspacePost.js';
 import { getTrainingStats } from './meatspacePostTraining.js';
 import { postProgressQuerySchema } from '../lib/postValidation.js';

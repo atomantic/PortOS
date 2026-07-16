@@ -25,6 +25,7 @@ grep -i "what you want to do" client/src/utils/README.md
 | `formatters` | Date/time/duration/byte/word formatters (`formatBytes`, `formatCompactCount`, `timeAgo`, `formatTimecode`, `formatDurationMs`, `formatDateShort`, `parseTimeoutMs`, `formatCooldown`, `parseSizeGb`, `recommendedRamGb`, …) plus timeout-input bounds and `getAppName`. Do not re-define formatters inside components. |
 | `cronHelpers` | Cron preset list, `isCronExpression` detection, and `describeCron` human-readable rendering. |
 | `timeWindow` | Time-of-day window math (`isInTimeWindow`, `timeStringToMinutes`) and morning-layout auto-switch helpers (`pickActiveLayoutId`, `recordManualLayoutPick`). |
+| `timezone` | Timezone day-key helpers (`dayKeyInTimezone`, `todayKeyInTimezone`) — browser mirror of the server's `todayInTimezone`, so date-scoped POST surfaces derive "today" in the user's configured timezone and agree with the server (#2681). |
 
 ## General pure helpers
 
