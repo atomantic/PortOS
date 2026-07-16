@@ -21,7 +21,8 @@
       "notes": "Arpeggiated 6/8 — the classic pattern. Traditional song, public domain.",
       "attachments": [],
       "createdAt": "2026-07-15T00:00:00.000Z",
-      "updatedAt": "2026-07-15T00:00:00.000Z"
+      "updatedAt": "2026-07-15T00:00:00.000Z",
+      "originInstanceId": "seed"
     },
     "song-seed-hotrs-piano": {
       "title": "House of the Rising Sun",
@@ -44,7 +45,8 @@
       "notes": "Roll the chords in 6/8; melody sits on top of Am–C–D–F. Traditional song, public domain.",
       "attachments": [],
       "createdAt": "2026-07-15T00:00:00.000Z",
-      "updatedAt": "2026-07-15T00:00:00.000Z"
+      "updatedAt": "2026-07-15T00:00:00.000Z",
+      "originInstanceId": "seed"
     },
     "song-seed-hotrs-ukulele": {
       "title": "House of the Rising Sun",
@@ -67,7 +69,8 @@
       "notes": "Same shapes as guitar — Am, C, D, F, E are all first-position on uke. Traditional song, public domain.",
       "attachments": [],
       "createdAt": "2026-07-15T00:00:00.000Z",
-      "updatedAt": "2026-07-15T00:00:00.000Z"
+      "updatedAt": "2026-07-15T00:00:00.000Z",
+      "originInstanceId": "seed"
     }
   }
 }
