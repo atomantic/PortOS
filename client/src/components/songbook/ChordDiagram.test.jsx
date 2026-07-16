@@ -52,4 +52,19 @@ describe('ChordDiagram', () => {
     expect(container.querySelector('svg')).toBeNull();
     expect(container.textContent).toContain('no diagram');
   });
+
+  it('renders one labeled voicing per segment for dash-joined chords (Am-Am7)', () => {
+    const { container } = render(<ChordDiagram name="Am-Am7" instrument="guitar" />);
+    expect(container.querySelectorAll('svg')).toHaveLength(2);
+    expect(container.textContent).toContain('Am');
+    expect(container.textContent).toContain('Am7');
+    expect(container.textContent).not.toContain('no diagram');
+  });
+
+  it('dash-joined chords render piano chip rows per segment too', () => {
+    const { container } = render(<ChordDiagram name="E-Em7" instrument="piano" />);
+    // E → E G# B; Em7 → E G B D — both segments produce note chips.
+    expect(container.textContent).toContain('G#');
+    expect(container.textContent).toContain('D');
+  });
 });

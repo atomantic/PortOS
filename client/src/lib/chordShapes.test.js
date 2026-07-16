@@ -166,6 +166,11 @@ describe('getChordVoicing — piano', () => {
     expect(notes('Cadd9')).toEqual(['C', 'E', 'G', 'D']);
     expect(notes('C6')).toEqual(['C', 'E', 'G', 'A']);
     expect(notes('D9')).toEqual(['D', 'F#', 'A', 'C', 'E']);
+    // dim7 / m6 pinned by exact pitches (not just non-null): the uke-solver
+    // constraint test derives its expected tones from the same interval table,
+    // so these two rows need an independent pin to avoid circular coverage.
+    expect(notes('Cdim7')).toEqual(['C', 'Eb', 'Gb', 'A']); // bbb7 → enharmonic A
+    expect(notes('Cm6')).toEqual(['C', 'Eb', 'G', 'A']);
   });
 
   it('spells sharps and flats letter-accurately from the root', () => {
