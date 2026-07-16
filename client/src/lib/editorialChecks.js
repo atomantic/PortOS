@@ -253,7 +253,9 @@ export function findingManuscriptLink(seriesId, comment) {
 
 const FINDING_SEVERITY_RANK = Object.freeze({ high: 0, medium: 1, low: 2 });
 const FINDING_STATUS_RANK = Object.freeze({ open: 0, accepted: 1, dismissed: 2 });
-const severityRank = (s) => (s in FINDING_SEVERITY_RANK ? FINDING_SEVERITY_RANK[s] : 2);
+/** Sort rank for a finding severity (high=0, medium=1, low/unknown=2) — the
+ *  canonical order the triage view + any findings list sort by. */
+export const severityRank = (s) => (s in FINDING_SEVERITY_RANK ? FINDING_SEVERITY_RANK[s] : 2);
 const statusRank = (s) => (s in FINDING_STATUS_RANK ? FINDING_STATUS_RANK[s] : 99);
 const normSeverity = (c) => (c?.severity in FINDING_SEVERITY_RANK ? c.severity : 'low');
 const normStatus = (c) => (c?.status === 'accepted' || c?.status === 'dismissed' ? c.status : 'open');
