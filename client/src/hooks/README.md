@@ -106,6 +106,8 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useSwipeNav` | Horizontal swipe prev/next. | Mobile swipe between siblings. |
 | `useValidTab` | Resolve the active tab from the `:tab` URL param against a TABS list, falling back to a default on invalid/missing. | Any tabbed page whose tab lives in the URL — don't re-roll the `new Set(TABS.map(...))` guard. |
 | `useAsyncAction` | `running` state + toast-on-error. | Buttons that await an async action. |
+| `useAutoscroll` | rAF autoscroll for a scrollable container: advances `scrollTop` by `pxPerSec`, auto-stops at the bottom, pauses on user wheel/touchmove, live speed changes via ref. Returns `{ playing, toggle, stop, pxPerSec, setPxPerSec }`. | SongBook play view; any teleprompter-style surface. |
+| `useWakeLock` | Holds a screen wake lock (`navigator.wakeLock`) while `active` is true; releases on unmount/inactive, re-acquires on visibilitychange; no-op where unsupported. | Hands-free surfaces that must keep the screen on (SongBook autoscroll). |
 
 ## Storage & persistence
 

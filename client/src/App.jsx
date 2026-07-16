@@ -59,6 +59,9 @@ const Authors = lazyWithReload(() => import('./pages/Authors'));
 const Music = lazyWithReload(() => import('./pages/Music'));
 const Catalog = lazyWithReload(() => import('./pages/Catalog'));
 const Rounds = lazyWithReload(() => import('./pages/Rounds'));
+const SongBook = lazyWithReload(() => import('./pages/SongBook'));
+const SongBookImport = lazyWithReload(() => import('./pages/SongBookImport'));
+const SongBookViewer = lazyWithReload(() => import('./pages/SongBookViewer'));
 const RoundEditor = lazyWithReload(() => import('./pages/RoundEditor'));
 const RoundsGuide = lazyWithReload(() => import('./pages/RoundsGuide'));
 const CatalogIngest = lazyWithReload(() => import('./pages/CatalogIngest'));
@@ -356,6 +359,11 @@ export default function App() {
           <Route path="rounds" element={<Rounds />} />
           <Route path="rounds/guide" element={<RoundsGuide />} />
           <Route path="rounds/:id" element={<RoundEditor />} />
+          {/* SongBook: index + import are plain scrolling pages; the viewer
+              (/songbook/:id) is full-bleed (see Layout.jsx isFullWidth). */}
+          <Route path="songbook" element={<SongBook />} />
+          <Route path="songbook/import" element={<SongBookImport />} />
+          <Route path="songbook/:id" element={<SongBookViewer />} />
           <Route path="catalog" element={<Catalog />} />
           <Route path="catalog/ingest" element={<CatalogIngest />} />
           <Route path="catalog/:type/:id" element={<CatalogIngredient />} />

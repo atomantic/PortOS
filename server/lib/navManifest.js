@@ -67,6 +67,8 @@ export const NAV_COMMANDS = [
   { id: 'nav.brain.memory', path: '/brain/memory', label: 'Memory', section: 'Brain', aliases: ['brain-memory', 'memory'] },
   { id: 'nav.brain.notes', path: '/brain/notes', label: 'Notes', section: 'Brain', aliases: ['brain-notes', 'notes'] },
   { id: 'nav.rapid-reader', path: '/rapid-reader', label: 'Rapid Reader', section: 'Brain', aliases: ['rapid-reader', 'speed-reader', 'rsvp', 'spritz'], keywords: ['speed reading', 'rapid reading', 'rsvp', 'spritz', 'word per minute', 'wpm', 'focal'] },
+  // No 'songs'/'song' aliases — those already resolve to nav.create.rounds (first-declared wins).
+  { id: 'nav.brain.songbook', path: '/songbook', label: 'SongBook', section: 'Brain', aliases: ['songbook', 'song-book', 'tabs', 'chords', 'guitar-tabs'], keywords: ['guitar', 'tab', 'tablature', 'chord chart', 'lyrics', 'sheet music', 'repertoire', 'autoscroll'] },
   { id: 'nav.brain.trust', path: '/brain/trust', label: 'Trust', section: 'Brain', aliases: ['brain-trust'] },
 
   { id: 'nav.calendar.agenda', path: '/calendar/agenda', label: 'Agenda', section: 'Calendar', aliases: ['calendar', 'agenda'] },

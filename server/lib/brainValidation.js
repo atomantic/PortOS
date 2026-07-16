@@ -548,3 +548,73 @@ export const brainDigestRunSchema = z.object({
   providerOverride: z.string().optional(),
   modelOverride: z.string().optional()
 });
+
+// =============================================================================
+// SONGBOOK SCHEMAS (Brain entity type `songs` — guitar tabs / chord sheets)
+// =============================================================================
+
+// Learning stage for a repertoire song
+export const songStageEnum = z.enum(['new', 'learning', 'learned', 'memorized']);
+
+// Instrument the sheet is written for
+export const songInstrumentEnum = z.enum(['guitar', 'piano', 'ukulele', 'bass', 'voice', 'other']);
+
+// Content notation format (drives the client-side parser/renderer)
+export const songContentFormatEnum = z.enum(['chordpro', 'tab', 'plain']);
+
+// Attachment metadata — synced in the record; the BYTES are machine-local
+// under data/brain/songbook/ (peers lacking the file show "not on this machine").
+export const songAttachmentSchema = z.object({
+  filename: z.string().min(1).max(300),
+  label: z.string().max(300).optional().default(''),
+  mime: z.string().max(100),
+  size: z.number().int().min(0),
+  sha256: z.string().length(64)
+});
+
+// Create/Update Song input schema
+export const songInputSchema = z.object({
+  title: z.string().trim().min(1).max(300),
+  artist: z.string().trim().max(300).optional().default(''),
+  instrument: songInstrumentEnum.optional().default('guitar'),
+  stage: songStageEnum.optional().default('new'),
+  tags: z.array(z.string().trim().min(1).max(50)).max(50).optional().default([]),
+  key: z.string().trim().max(20).optional().default(''),
+  capo: z.number().int().min(0).max(12).optional().default(0),
+  tuning: z.string().trim().max(40).optional().default(''),
+  sourceUrl: z.string().trim().max(2000).optional().default(''),
+  content: z.object({
+    format: songContentFormatEnum.optional().default('tab'),
+    text: z.string().max(200000).optional().default('')
+  }).optional().default({ format: 'tab', text: '' }),
+  scrollDurationSec: z.number().int().min(15).max(3600).nullable().optional().default(null),
+  notes: z.string().max(5000).optional().default('')
+});
+
+// Full Song record — input plus server-managed fields. `attachments` is
+// mutated ONLY by the attachment endpoints (PUT strips client-supplied values);
+// id/createdAt/updatedAt/originInstanceId are stamped by brainStorage.
+export const songRecordSchema = songInputSchema.extend({
+  id: z.string().guid(),
+  attachments: z.array(songAttachmentSchema).optional().default([]),
+  originInstanceId: z.string().optional(),
+  createdAt: z.string().datetime(),
+  updatedAt: z.string().datetime()
+});
+
+// PATCH /api/brain/songbook/:id/stage — cheap chip-flip path
+export const songStagePatchSchema = z.object({
+  stage: songStageEnum
+});
+
+// POST /api/brain/songbook/import/url
+export const songImportUrlSchema = z.object({
+  url: z.string().url().max(2000)
+});
+
+// POST /api/brain/songbook/:id/attachments — base64 upload body
+export const songAttachmentUploadSchema = z.object({
+  filename: z.string().min(1).max(300),
+  data: z.string().min(1),
+  label: z.string().max(300).optional().default('')
+});

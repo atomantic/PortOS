@@ -9,6 +9,7 @@
 
 // === Default-exporting hooks (re-exported as named) ===
 export { default as useAnchorReveal } from './useAnchorReveal.js';
+export { default as useAutoscroll } from './useAutoscroll.js';
 export { default as useCityAudio } from './useCityAudio.js';
 export { default as useAutoSizeTextarea } from './useAutoSizeTextarea.js';
 export { default as useChartColors } from './useChartColors.js';
@@ -52,6 +53,7 @@ export { default as useUniverseExpand } from './useUniverseExpand.js';
 export { default as useUniverseGallery } from './useUniverseGallery.js';
 export { default as useUniverseRender } from './useUniverseRender.js';
 export { default as useVideoDownload } from './useVideoDownload.js';
+export { default as useWakeLock } from './useWakeLock.js';
 export { default as useYoutubeTrackImport } from './useYoutubeTrackImport.js';
 export { default as useReferenceAudioImport } from './useReferenceAudioImport.js';
 export { default as useMidiTranscription } from './useMidiTranscription.js';

@@ -105,6 +105,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiWritersRoom.js` | Writers Room (folders + works + drafts, live continuation + render-preview reservation, scene-image attach). |
 | `apiSharing.js` | Share buckets + federation sync. |
 | `apiRounds.js` | Rounds workbench CRUD (a cappella round writing + arranging voice layers + learning tracking). |
+| `apiSongbook.js` | SongBook repertoire tracker (`/songbook` — Brain `songs` entity): song CRUD + stage PATCH, URL import draft, and attachments (base64 upload, present-flag list, raw serve URL via `songAttachmentUrl`). |
 | `apiPeerSync.js` | Per-record peer sync subscriptions (universe + series → other PortOS instances over Tailnet). |
 | `apiSyncReview.js` | Sync hygiene: duplicate-record detection + smart merge (universe/series) and the non-blocking edit-conflict journal (list/resolve). Surfaced in Sharing → Duplicates / Conflicts. |
 

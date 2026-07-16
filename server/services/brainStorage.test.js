@@ -238,6 +238,32 @@ describe('memory recency ordering', () => {
   });
 });
 
+describe('songs entity enrollment (SongBook)', () => {
+  it('lists songs in BRAIN_ENTITY_TYPES so sync/GC/backfill all cover it', () => {
+    expect(brainStorage.BRAIN_ENTITY_TYPES).toContain('songs');
+  });
+
+  it('round-trips create/getAll/getById/remove through the generic entity API', async () => {
+    const created = await brainStorage.create('songs', {
+      title: 'Example Song',
+      artist: 'The Placeholders',
+      stage: 'new',
+      attachments: [],
+    });
+    expect(created.id).toBeDefined();
+    expect(created.originInstanceId).toBe('local-instance');
+
+    const all = await brainStorage.getAll('songs');
+    expect(all.find((s) => s.id === created.id)).toMatchObject({ title: 'Example Song' });
+
+    expect(await brainStorage.remove('songs', created.id)).toBe(true);
+    expect(await brainStorage.getById('songs', created.id)).toBeNull();
+    // Tombstone retained in place (not hard-deleted) for LWW convergence.
+    const raw = await rawRecord('songs', created.id);
+    expect(raw._deleted).toBe(true);
+  });
+});
+
 // Read the raw stored record (including tombstones) by bypassing the read filter.
 async function rawRecord(type, id) {
   const { readFile } = await import('fs/promises');
