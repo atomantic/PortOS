@@ -27,6 +27,7 @@ const HourlyActivityWidget  = lazyWithReload(() => import('./builtins/HourlyActi
 const FeedsWidget           = lazyWithReload(() => import('./builtins/FeedsWidget'));
 const MeatSpaceStreakWidget = lazyWithReload(() => import('./builtins/MeatSpaceStreakWidget'));
 const AutoFixMetricsWidget  = lazyWithReload(() => import('./builtins/AutoFixMetricsWidget'));
+const DailyDriverWidget     = lazyWithReload(() => import('./builtins/DailyDriverWidget'));
 
 // Each entry: { id, label, Component, width, defaultH?, gate?, module? }.
 // `gate(state) => bool` skips the widget when it has nothing useful to show.
@@ -44,6 +45,9 @@ const AutoFixMetricsWidget  = lazyWithReload(() => import('./builtins/AutoFixMet
 // widget's top border. Several widgets carry this by default; the rest are
 // label-free so the dashboard doesn't turn into a wall of HUD chrome.
 export const WIDGETS = [
+  // Daily Driver self-hides once the day is handled — gated on the per-day
+  // first-visit/handled state so a handled day reserves no grid cell (#2666).
+  { id: 'daily-driver',      label: 'Daily Driver',          Component: DailyDriverWidget,      width: 'third',   defaultH: 6, gate: (s) => !!s.dailyDriver && !s.dailyDriver.handledToday },
   { id: 'quick-brain',       label: 'Quick Brain Capture',   Component: QuickBrainCapture,      width: 'half',    defaultH: 3 },
   { id: 'quick-idea',        label: 'Quick Idea (Catalog)',  Component: QuickIdeaCapture,       width: 'half',    defaultH: 4 },
   { id: 'quick-image',       label: 'Quick Image Prompt',    Component: QuickImagePrompt,       width: 'half',    defaultH: 6 },

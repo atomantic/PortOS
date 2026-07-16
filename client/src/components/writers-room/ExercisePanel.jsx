@@ -68,7 +68,7 @@ export default function ExercisePanel({ activeWork, onClose }) {
       prompt: prompt.trim(),
       durationSeconds: duration,
       startingWords,
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(`Failed to start: ${err.message}`);
       return null;
     });
@@ -88,14 +88,14 @@ export default function ExercisePanel({ activeWork, onClose }) {
       const result = await finishWritersRoomExercise(active.id, {
         endingWords: startingWords + wordsAdded,
         appendedText: text || null,
-      }).catch((err) => {
+      }, { silent: true }).catch((err) => {
         toast.error(`Finish failed: ${err.message}`);
         return null;
       });
       if (!result) return;
       toast.success(`Logged ${wordsAdded} words`);
     } else {
-      const result = await discardWritersRoomExercise(active.id).catch((err) => {
+      const result = await discardWritersRoomExercise(active.id, { silent: true }).catch((err) => {
         toast.error(`Discard failed: ${err.message}`);
         return null;
       });

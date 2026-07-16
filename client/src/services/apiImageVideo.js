@@ -28,18 +28,21 @@ export const getActiveImageJob = () => request('/image-gen/active');
 // cancelImageGen({ all: true }) cancels every queued/running image job.
 // cancelImageGen({ jobId }) cancels a specific job. Plain cancelImageGen()
 // cancels the most-recent queued/running job (legacy behavior).
-export const cancelImageGen = (opts = {}) => request('/image-gen/cancel', {
+export const cancelImageGen = (opts = {}, options = {}) => request('/image-gen/cancel', {
   method: 'POST',
   body: JSON.stringify(opts),
+  ...options,
 });
-export const deleteImage = (filename) => request(`/image-gen/${encodeURIComponent(filename)}`, { method: 'DELETE' });
-export const setImageHidden = (filename, hidden) => request(`/image-gen/${encodeURIComponent(filename)}/visibility`, {
+export const deleteImage = (filename, options = {}) => request(`/image-gen/${encodeURIComponent(filename)}`, { method: 'DELETE', ...options });
+export const setImageHidden = (filename, hidden, options = {}) => request(`/image-gen/${encodeURIComponent(filename)}/visibility`, {
   method: 'POST',
   body: JSON.stringify({ hidden }),
+  ...options,
 });
-export const cleanGalleryImage = (filename) => request(`/image-gen/${encodeURIComponent(filename)}/clean`, {
+export const cleanGalleryImage = (filename, options = {}) => request(`/image-gen/${encodeURIComponent(filename)}/clean`, {
   method: 'POST',
   body: JSON.stringify({}),
+  ...options,
 });
 // Visible-watermark removal — erases the Gemini / Nano-Banana bottom-right ✦
 // via a CPU-only localized inpaint. Synchronous (like Clean): returns the new
@@ -137,16 +140,18 @@ export const cancelVideoGen = () => request('/video-gen/cancel', { method: 'POST
 // poll doesn't double-toast on every navigation.
 export const getActiveVideoJob = () => request('/video-gen/active', { silent: true });
 export const listVideoHistory = () => request('/video-gen/history');
-export const deleteVideoHistoryItem = (id) => request(`/video-gen/history/${encodeURIComponent(id)}`, { method: 'DELETE' });
-export const setVideoHidden = (id, hidden) => request(`/video-gen/history/${encodeURIComponent(id)}/visibility`, {
+export const deleteVideoHistoryItem = (id, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}`, { method: 'DELETE', ...options });
+export const setVideoHidden = (id, hidden, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/visibility`, {
   method: 'POST',
   body: JSON.stringify({ hidden }),
+  ...options,
 });
-export const extractLastFrame = (id) => request(`/video-gen/last-frame/${encodeURIComponent(id)}`, { method: 'POST' });
-export const upscaleVideo = (id) => request(`/video-gen/upscale/${encodeURIComponent(id)}`, { method: 'POST' });
-export const stitchVideos = (videoIds) => request('/video-gen/stitch', {
+export const extractLastFrame = (id, options = {}) => request(`/video-gen/last-frame/${encodeURIComponent(id)}`, { method: 'POST', ...options });
+export const upscaleVideo = (id, options = {}) => request(`/video-gen/upscale/${encodeURIComponent(id)}`, { method: 'POST', ...options });
+export const stitchVideos = (videoIds, options = {}) => request('/video-gen/stitch', {
   method: 'POST',
   body: JSON.stringify({ videoIds }),
+  ...options,
 });
 
 // Build a FormData payload, skipping null/undefined/empty fields. Arrays are
@@ -182,19 +187,23 @@ export async function generateVideo(fields) {
 // Video timeline projects (non-linear editor)
 export const listTimelineProjects = () => request('/video-timeline/projects');
 export const getTimelineProject = (id) => request(`/video-timeline/projects/${encodeURIComponent(id)}`);
-export const createTimelineProject = (name) => request('/video-timeline/projects', {
+export const createTimelineProject = (name, options = {}) => request('/video-timeline/projects', {
   method: 'POST',
   body: JSON.stringify({ name }),
+  ...options,
 });
-export const updateTimelineProject = (id, patch) => request(`/video-timeline/projects/${encodeURIComponent(id)}`, {
+export const updateTimelineProject = (id, patch, options = {}) => request(`/video-timeline/projects/${encodeURIComponent(id)}`, {
   method: 'PATCH',
   body: JSON.stringify(patch),
+  ...options,
 });
-export const deleteTimelineProject = (id) => request(`/video-timeline/projects/${encodeURIComponent(id)}`, {
+export const deleteTimelineProject = (id, options = {}) => request(`/video-timeline/projects/${encodeURIComponent(id)}`, {
   method: 'DELETE',
+  ...options,
 });
-export const renderTimelineProject = (id) => request(`/video-timeline/projects/${encodeURIComponent(id)}/render`, {
+export const renderTimelineProject = (id, options = {}) => request(`/video-timeline/projects/${encodeURIComponent(id)}/render`, {
   method: 'POST',
+  ...options,
 });
 export const cancelTimelineRender = (jobId) => request(`/video-timeline/${encodeURIComponent(jobId)}/cancel`, {
   method: 'POST',
@@ -204,17 +213,20 @@ export const cancelTimelineRender = (jobId) => request(`/video-timeline/${encode
 // and videos. An item key is "<kind>:<ref>" (e.g. "image:foo.png" or
 // "video:<uuid>"); cover keys use the same format.
 export const listMediaCollections = ({ silent = false } = {}) => request('/media/collections', { silent });
-export const getMediaCollection = (id) => request(`/media/collections/${encodeURIComponent(id)}`);
-export const createMediaCollection = ({ name, description = '' }) => request('/media/collections', {
+export const getMediaCollection = (id, options = {}) => request(`/media/collections/${encodeURIComponent(id)}`, options);
+export const createMediaCollection = ({ name, description = '' }, options = {}) => request('/media/collections', {
   method: 'POST',
   body: JSON.stringify({ name, description }),
+  ...options,
 });
-export const updateMediaCollection = (id, patch) => request(`/media/collections/${encodeURIComponent(id)}`, {
+export const updateMediaCollection = (id, patch, options = {}) => request(`/media/collections/${encodeURIComponent(id)}`, {
   method: 'PATCH',
   body: JSON.stringify(patch),
+  ...options,
 });
-export const deleteMediaCollection = (id) => request(`/media/collections/${encodeURIComponent(id)}`, {
+export const deleteMediaCollection = (id, options = {}) => request(`/media/collections/${encodeURIComponent(id)}`, {
   method: 'DELETE',
+  ...options,
 });
 export const addMediaCollectionItem = (id, { kind, ref }, { silent = false } = {}) => request(`/media/collections/${encodeURIComponent(id)}/items`, {
   method: 'POST',
@@ -233,9 +245,10 @@ export const removeMediaCollectionItem = (id, key, { silent = false } = {}) => r
 // PATCH partial-merges; the entry is removed entirely when both fields end
 // up empty — `entry` in the response is `null` to signal that.
 export const listMediaAnnotations = () => request('/media/annotations');
-export const setMediaAnnotation = (key, patch) => request(`/media/annotations/${encodeURIComponent(key)}`, {
+export const setMediaAnnotation = (key, patch, options = {}) => request(`/media/annotations/${encodeURIComponent(key)}`, {
   method: 'PATCH',
   body: JSON.stringify(patch),
+  ...options,
 });
 
 // Media sketches — freehand strokes over a generated image ("image:<ref>",
@@ -261,8 +274,8 @@ export const createBlankSketch = ({ silent = false } = {}) =>
 
 // Models management (HF cache + LoRAs)
 export const listCachedModels = () => request('/image-video/models');
-export const deleteCachedModel = (dirName) => request(`/image-video/models/hf/${encodeURIComponent(dirName)}`, { method: 'DELETE' });
-export const deleteLora = (filename) => request(`/image-video/models/lora/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+export const deleteCachedModel = (dirName, options = {}) => request(`/image-video/models/hf/${encodeURIComponent(dirName)}`, { method: 'DELETE', ...options });
+export const deleteLora = (filename, options = {}) => request(`/image-video/models/lora/${encodeURIComponent(filename)}`, { method: 'DELETE', ...options });
 
 // Media-model REGISTRY (the catalog of pickable image/video base models,
 // distinct from listCachedModels which reports on-disk HF cache usage). Returns

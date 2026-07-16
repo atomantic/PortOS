@@ -29,7 +29,7 @@ export default function QuickBrainCapture() {
 
     if (isUrl) {
       const url = normalizeUrl(text, { allowGit: true });
-      const result = await api.createBrainLink({ url }).catch(err => {
+      const result = await api.createBrainLink({ url }, { silent: true }).catch(err => {
         if (err.message?.includes('already exists')) {
           toast.error('This URL is already saved');
         } else {

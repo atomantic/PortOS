@@ -188,7 +188,7 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
     let payload = basePayload;
     if (needsCanonInPayload) {
       if (selectedId) {
-        const fresh = await getUniverse(selectedId).catch(() => null);
+        const fresh = await getUniverse(selectedId, { silent: true }).catch(() => null);
         if (!fresh) {
           setSaving(false);
           toast.error('Save failed: could not fetch latest canon — please try again');
@@ -211,8 +211,8 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
       }
     }
     const result = selectedId
-      ? await updateUniverse(selectedId, payload).catch((error) => { toast.error(`Save failed: ${error.message}`); return null; })
-      : await createUniverse(payload).catch((error) => { toast.error(`Save failed: ${error.message}`); return null; });
+      ? await updateUniverse(selectedId, payload, { silent: true }).catch((error) => { toast.error(`Save failed: ${error.message}`); return null; })
+      : await createUniverse(payload, { silent: true }).catch((error) => { toast.error(`Save failed: ${error.message}`); return null; });
     setSaving(false);
     if (!result) return null;
     if (needsCanonInPayload) {
@@ -237,7 +237,7 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
       return;
     }
     setSaving(true);
-    const result = await createUniverse({ ...createEmptyUniverseDraft(), name })
+    const result = await createUniverse({ ...createEmptyUniverseDraft(), name }, { silent: true })
       .catch((error) => { toast.error(`Create failed: ${error.message}`); return null; });
     setSaving(false);
     if (!result) return;
@@ -292,7 +292,7 @@ export default function useUniverseDraft({ selectedId, goToWorld }) {
       else nextLocked[field] = true;
       const next = { ...current, locked: nextLocked };
       if (selectedId && next.name?.trim()) {
-        updateUniverse(selectedId, { locked: nextLocked })
+        updateUniverse(selectedId, { locked: nextLocked }, { silent: true })
           .catch((error) => toast.error(`Lock save failed: ${error.message}`));
       }
       return next;

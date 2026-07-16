@@ -328,7 +328,7 @@ export default function UniverseBuilder() {
     };
     setDraft(nextDraft);
     if (selectedId && nextDraft.name?.trim()) {
-      const updated = await updateUniverse(selectedId, { categories: nextDraft.categories })
+      const updated = await updateUniverse(selectedId, { categories: nextDraft.categories }, { silent: true })
         .catch((e) => { toast.error(`Auto-save after generate failed: ${e.message}`); return null; });
       if (updated) {
         setWorlds((prev) => upsertByIdPrepend(prev, updated));

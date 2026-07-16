@@ -132,7 +132,7 @@ export default function LinksTab({ onRefresh }) {
     if (tags.length) payload.tags = tags;
 
     setSending(true);
-    const result = await api.createBrainLink(payload).catch(err => {
+    const result = await api.createBrainLink(payload, { silent: true }).catch(err => {
       if (err.message?.includes('already exists')) {
         toast.error('This URL is already saved');
       } else {
@@ -205,7 +205,7 @@ export default function LinksTab({ onRefresh }) {
       toast.error('Please enter a valid URL');
       return false;
     }
-    const result = await api.createBrainLink({ url, bucketId, bucketOrder: nextBucketOrder(bucketId) }).catch(err => {
+    const result = await api.createBrainLink({ url, bucketId, bucketOrder: nextBucketOrder(bucketId) }, { silent: true }).catch(err => {
       if (err.message?.includes('already exists')) {
         toast.error('This URL is already saved');
       } else {
@@ -247,7 +247,7 @@ export default function LinksTab({ onRefresh }) {
       tags: editForm.tags ? editForm.tags.split(',').map(t => t.trim()).filter(Boolean) : []
     };
 
-    const result = await api.updateBrainLink(linkId, updates).catch(err => {
+    const result = await api.updateBrainLink(linkId, updates, { silent: true }).catch(err => {
       if (err.message?.includes('already exists')) {
         toast.error('Another link already uses this URL');
       } else {

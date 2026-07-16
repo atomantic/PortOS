@@ -130,7 +130,7 @@ function VariantRow({
 
   const handleGenerate = async () => {
     if (jobId || !universeId || !entry?.id) return;
-    const queued = await renderCharacterReferenceSheet(universeId, entry.id, { variant: variant.id })
+    const queued = await renderCharacterReferenceSheet(universeId, entry.id, { variant: variant.id }, { silent: true })
       .catch((err) => { toast.error(err.message || 'Sheet render failed to start'); return null; });
     if (!queued?.jobId) return;
     pollAbortRef.current?.abort();

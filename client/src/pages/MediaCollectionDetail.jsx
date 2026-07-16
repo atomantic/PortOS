@@ -83,7 +83,7 @@ export default function MediaCollectionDetail() {
       return;
     }
     const [c, cols, images, videos] = await Promise.all([
-      getMediaCollection(id).catch((err) => {
+      getMediaCollection(id, { silent: true }).catch((err) => {
         toast.error(err.message || 'Collection not found');
         return null;
       }),
@@ -129,7 +129,7 @@ export default function MediaCollectionDetail() {
   const handleRename = async () => {
     const trimmed = nameDraft.trim();
     if (!trimmed || trimmed === collection.name) { setEditingName(false); return; }
-    const updated = await updateMediaCollection(collection.id, { name: trimmed }).catch((err) => {
+    const updated = await updateMediaCollection(collection.id, { name: trimmed }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Rename failed');
       return null;
     });
@@ -141,7 +141,7 @@ export default function MediaCollectionDetail() {
 
   const handleSetCover = async (item) => {
     const next = collection.coverKey === item.key ? null : item.key;
-    const updated = await updateMediaCollection(collection.id, { coverKey: next }).catch((err) => {
+    const updated = await updateMediaCollection(collection.id, { coverKey: next }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to set cover');
       return null;
     });
@@ -160,8 +160,8 @@ export default function MediaCollectionDetail() {
   // hold a dangling ref until the next mutation rewrites the file.
   const handleDelete = async (item) => {
     const ok = await (item.kind === 'image'
-      ? deleteImage(item.filename)
-      : deleteVideoHistoryItem(item.id)
+      ? deleteImage(item.filename, { silent: true })
+      : deleteVideoHistoryItem(item.id, { silent: true })
     ).catch((err) => {
       toast.error(err.message || 'Delete failed');
       return null;

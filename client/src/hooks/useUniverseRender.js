@@ -88,7 +88,7 @@ export default function useUniverseRender({
       extraStyle: renderOpts.extraStyle?.trim() || undefined,
       stylePresetId: renderOpts.stylePreset?.id || undefined,
       loras,
-    }).catch((error) => { toast.error(`Render failed: ${error.message}`); return null; });
+    }, { silent: true }).catch((error) => { toast.error(`Render failed: ${error.message}`); return null; });
     setRendering(false);
     if (!result) return;
 

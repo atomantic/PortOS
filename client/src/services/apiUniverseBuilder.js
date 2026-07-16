@@ -19,9 +19,10 @@ export const WORLD_INFLUENCES_PER_LIST_MAX = 30;
 export const listUniverses = (options = {}) => request('/universe-builder', options);
 export const getUniverse = (id, options = {}) => request(`/universe-builder/${encodeURIComponent(id)}`, options);
 
-export const createUniverse = (data) => request('/universe-builder', {
+export const createUniverse = (data, options = {}) => request('/universe-builder', {
   method: 'POST',
   body: JSON.stringify(data),
+  ...options,
 });
 
 export const updateUniverse = (id, patch, options = {}) => request(`/universe-builder/${encodeURIComponent(id)}`, {
@@ -44,7 +45,7 @@ export const expandUniverse = ({
   logline, premise, styleNotes,
   locked,
   providerId, model,
-} = {}) => request('/universe-builder/expand', {
+} = {}, options = {}) => request('/universe-builder/expand', {
   method: 'POST',
   body: JSON.stringify({
     starterPrompt, influences,
@@ -53,6 +54,7 @@ export const expandUniverse = ({
     locked,
     providerId, model,
   }),
+  ...options,
 });
 
 // Vision-to-prose: turn reference image(s) into an image-gen-ready prose
@@ -187,9 +189,10 @@ export const mergeInfluencesWithLocks = (locked, fresh, fallback) => {
   };
 };
 
-export const renderWorld = (id, options) => request(`/universe-builder/${encodeURIComponent(id)}/render`, {
+export const renderWorld = (id, options, reqOptions = {}) => request(`/universe-builder/${encodeURIComponent(id)}/render`, {
   method: 'POST',
   body: JSON.stringify(options || {}),
+  ...reqOptions,
 });
 
 export const listWorldRuns = (id) => request(`/universe-builder/${encodeURIComponent(id)}/runs`);
@@ -199,26 +202,29 @@ export const listWorldRuns = (id) => request(`/universe-builder/${encodeURICompo
 // Extract characters/settings/objects from a prose corpus into the universe's
 // canon arrays. The corpus is usually an issue's prose stage output but can
 // be anything text-shaped.
-export const extractUniverseCanon = (universeId, { corpus, kinds, parallel, providerOverride } = {}) =>
+export const extractUniverseCanon = (universeId, { corpus, kinds, parallel, providerOverride } = {}, options = {}) =>
   request(`/universe-builder/${encodeURIComponent(universeId)}/extract-canon`, {
     method: 'POST',
     body: JSON.stringify({ corpus, kinds, parallel, providerOverride }),
+    ...options,
   });
 
-export const refineUniverseCharacter = (universeId, entryId, { providerId, model } = {}) =>
+export const refineUniverseCharacter = (universeId, entryId, { providerId, model } = {}, options = {}) =>
   request(`/universe-builder/${encodeURIComponent(universeId)}/characters/${encodeURIComponent(entryId)}/refine`, {
     method: 'POST',
     body: JSON.stringify({ providerId, model }),
+    ...options,
   });
 
 // One LLM call fills BLANK extended character fields (pronouns / age / stats /
 // motivations / colorPalette / expressions / hand gestures / ...). No-clobber
 // on populated fields. Locked characters return `{ locked: true }` instead of
 // a 4xx — the UI surfaces this as a "Locked" badge.
-export const expandUniverseCharacter = (universeId, entryId, { providerId, model } = {}) =>
+export const expandUniverseCharacter = (universeId, entryId, { providerId, model } = {}, options = {}) =>
   request(`/universe-builder/${encodeURIComponent(universeId)}/characters/${encodeURIComponent(entryId)}/expand`, {
     method: 'POST',
     body: JSON.stringify({ providerId, model }),
+    ...options,
   });
 
 // Catalog of every registered reference-sheet variant. The panel iterates
@@ -234,10 +240,11 @@ export const fetchReferenceSheetVariants = (options = {}) =>
 // for everything else). Returns `{ jobId, generationId, variant, ... }`.
 export const renderCharacterReferenceSheet = (universeId, entryId, {
   variant, overridePrompt, overrideNegativePrompt, modelId,
-} = {}) =>
+} = {}, options = {}) =>
   request(`/universe-builder/${encodeURIComponent(universeId)}/characters/${encodeURIComponent(entryId)}/render-reference-sheet`, {
     method: 'POST',
     body: JSON.stringify({ variant, overridePrompt, overrideNegativePrompt, modelId }),
+    ...options,
   });
 
 // Delete the character's reference sheet of the given variant. Variant
@@ -252,10 +259,11 @@ export const deleteCharacterReferenceSheet = (universeId, entryId, { variant, ..
 
 // Cast-wide differentiate — single LLM call rewrites every character so the
 // whole cast has no visually-colliding pairs.
-export const differentiateUniverseCast = (universeId, { providerId, model } = {}) =>
+export const differentiateUniverseCast = (universeId, { providerId, model } = {}, options = {}) =>
   request(`/universe-builder/${encodeURIComponent(universeId)}/characters/differentiate-cast`, {
     method: 'POST',
     body: JSON.stringify({ providerId, model }),
+    ...options,
   });
 
 // Cross-reference: where each canon entry appears across the universe's
@@ -275,18 +283,20 @@ export const getUniverseSeriesNames = (universeId) =>
 // protected from AI rewrite paths (refine returns 409; differentiate skips
 // them at apply time; re-extract appends evidence only). `kind` must be
 // 'character' | 'setting' | 'object' (the singular BIBLE_KIND values).
-export const setUniverseCanonLock = (universeId, kind, entryId, locked) =>
+export const setUniverseCanonLock = (universeId, kind, entryId, locked, options = {}) =>
   request(`/universe-builder/${encodeURIComponent(universeId)}/canon/${encodeURIComponent(kind)}/${encodeURIComponent(entryId)}/lock`, {
     method: 'PATCH',
     body: JSON.stringify({ locked }),
+    ...options,
   });
 
 // Bulk lock/unlock every canon entry of a single kind. Returns
 // `{ universe, kind, locked, changed, total }`.
-export const setUniverseCanonLockAll = (universeId, kind, locked) =>
+export const setUniverseCanonLockAll = (universeId, kind, locked, options = {}) =>
   request(`/universe-builder/${encodeURIComponent(universeId)}/canon/${encodeURIComponent(kind)}/lock-all`, {
     method: 'PATCH',
     body: JSON.stringify({ locked }),
+    ...options,
   });
 
 // Bulk lock/unlock variations across one bucket (`category`) or every bucket

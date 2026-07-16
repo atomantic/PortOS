@@ -103,7 +103,7 @@ export function useMediaAnnotations() {
       else next[key] = nextEntry;
       return next;
     });
-    const res = await setMediaAnnotation(key, patch).catch((err) => {
+    const res = await setMediaAnnotation(key, patch, { silent: true }).catch((err) => {
       toast.error(err?.message || 'Failed to save annotation');
       setAnnotations((prev) => {
         const reverted = { ...prev };

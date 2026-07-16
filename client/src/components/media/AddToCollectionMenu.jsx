@@ -36,11 +36,11 @@ export default function AddToCollectionMenu({ item, size = 'sm' }) {
     const inIt = collection.items.some((it) => `${it.kind}:${it.ref}` === itemKey);
     setBusyId(collection.id);
     const updated = inIt
-      ? await removeMediaCollectionItem(collection.id, itemKey).catch((err) => {
+      ? await removeMediaCollectionItem(collection.id, itemKey, { silent: true }).catch((err) => {
         toast.error(err.message || 'Remove failed');
         return null;
       })
-      : await addMediaCollectionItem(collection.id, { kind: item.kind, ref: itemRef }).catch((err) => {
+      : await addMediaCollectionItem(collection.id, { kind: item.kind, ref: itemRef }, { silent: true }).catch((err) => {
         toast.error(err.message || 'Add failed');
         return null;
       });
@@ -74,7 +74,7 @@ export default function AddToCollectionMenu({ item, size = 'sm' }) {
     // separately from the create itself so the user knows the collection
     // exists even if the auto-add failed.
     let addError = null;
-    const withItem = await addMediaCollectionItem(created.id, { kind: item.kind, ref: itemRef }).catch((err) => {
+    const withItem = await addMediaCollectionItem(created.id, { kind: item.kind, ref: itemRef }, { silent: true }).catch((err) => {
       addError = err;
       return created;
     });

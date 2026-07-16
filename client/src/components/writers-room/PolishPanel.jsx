@@ -82,7 +82,7 @@ export default function PolishPanel({ work, dirty, onBodyChanged }) {
     if (running || starting) return;
     if (dirty) { toast.error('Save your draft first — polish runs on the saved version'); return; }
     setStarting(true);
-    const res = await startWritersRoomPolish(work.id, { cycles }).catch((err) => {
+    const res = await startWritersRoomPolish(work.id, { cycles }, { silent: true }).catch((err) => {
       if (mountedRef.current) toast.error(`Could not start polish: ${err.message}`);
       return null;
     });
@@ -100,7 +100,7 @@ export default function PolishPanel({ work, dirty, onBodyChanged }) {
   const revert = async (snapshotId) => {
     if (running) { toast.error('Wait for the current run to finish before reverting'); return; }
     setReverting(snapshotId);
-    const ok = await revertWritersRoomPolishSnapshot(work.id, snapshotId).catch((err) => {
+    const ok = await revertWritersRoomPolishSnapshot(work.id, snapshotId, { silent: true }).catch((err) => {
       if (mountedRef.current) toast.error(`Revert failed: ${err.message}`);
       return null;
     });
