@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { EventEmitter } from 'events';
 
 // eventScheduler is mocked so no real timers arm and isValidCron is deterministic.
 const scheduleMock = vi.fn();
@@ -14,10 +15,12 @@ vi.mock('../../lib/timezone.js', () => ({ getUserTimezone: async () => 'UTC' }))
 const listCommissionsMock = vi.fn();
 const getCommissionMock = vi.fn();
 const recordRunMock = vi.fn(async () => ({}));
+const commissionEvents = new EventEmitter();
 vi.mock('./store.js', () => ({
   listCommissions: (...a) => listCommissionsMock(...a),
   getCommission: (...a) => getCommissionMock(...a),
   recordCommissionRun: (...a) => recordRunMock(...a),
+  commissionEvents,
 }));
 
 // CD graph + autonomy/budget mocks (dynamic-imported inside the fire handler).
@@ -99,6 +102,15 @@ describe('startCommissionScheduler (no cold-boot generation)', () => {
     listCommissionsMock.mockResolvedValueOnce([]);
     await syncCommissionSchedules();
     expect(cancelMock).toHaveBeenCalledWith('creative-commission-commission-1');
+  });
+
+  it('re-arms crons when the store emits commission:changed (any writer path)', async () => {
+    listCommissionsMock.mockResolvedValue([videoCommission()]);
+    // Emitting the store event should trigger a re-sync without the route calling in.
+    commissionEvents.emit('commission:changed', { id: 'commission-1', action: 'create' });
+    await vi.waitFor(() => expect(scheduleMock).toHaveBeenCalledWith(expect.objectContaining({
+      id: 'creative-commission-commission-1',
+    })));
   });
 });
 

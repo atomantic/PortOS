@@ -36,14 +36,8 @@ function describeSchedule(schedule) {
   return kind || 'No schedule';
 }
 
-const blankForm = () => ({
-  name: '',
-  enabled: true,
-  targetAbility: 'video',
-  brief: { intent: '', genre: '', styleSpec: '' },
-  schedule: { kind: 'DAILY', atLocalTime: '02:00', weekday: 0, weekdaysOnly: false, cron: '' },
-  generation: { quality: 'standard', aspectRatio: '16:9', targetDurationSeconds: 10 },
-});
+// A blank form is just the editable projection of an empty record.
+const blankForm = () => toForm({});
 
 // Map a stored record → editable form state (fills gaps so inputs stay controlled).
 function toForm(c) {
@@ -113,7 +107,12 @@ export default function CreativeCommissions() {
 
   const drawerOpen = id != null; // '/new' or an id
   const creating = id === 'new';
-  const editing = drawerOpen && !creating ? commissions.find((c) => c.id === id) : null;
+  // Memoized so the O(n) lookup (and the sync effect that depends on it) only
+  // recomputes when the list or target id changes — not on every keystroke.
+  const editing = useMemo(
+    () => (drawerOpen && !creating ? commissions.find((c) => c.id === id) || null : null),
+    [drawerOpen, creating, commissions, id],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -293,7 +292,7 @@ export default function CreativeCommissions() {
       )}
 
       <Drawer
-        open={drawerOpen && (creating || !!editing)}
+        open={creating || !!editing}
         onClose={closeDrawer}
         title={creating ? 'New Commission' : 'Edit Commission'}
         subtitle={!creating && editing ? editing.name : undefined}
@@ -315,6 +314,8 @@ export default function CreativeCommissions() {
 }
 
 function CommissionForm({ form, patchForm, runs, saving, onSave, onCancel }) {
+  // Newest-first, memoized so the copy+reverse doesn't run on every keystroke.
+  const orderedRuns = useMemo(() => [...runs].reverse(), [runs]);
   return (
     <div className="space-y-5">
       {/* Identity */}
@@ -499,7 +500,7 @@ function CommissionForm({ form, patchForm, runs, saving, onSave, onCancel }) {
         <section className="space-y-2 border-t border-port-border pt-4">
           <h3 className="text-sm font-semibold text-gray-200">Run history</h3>
           <div className="space-y-1 max-h-52 overflow-y-auto">
-            {[...runs].reverse().map((r) => (
+            {orderedRuns.map((r) => (
               <div key={r.id} className="flex items-center justify-between text-xs bg-port-bg border border-port-border rounded px-2 py-1.5">
                 <span className="text-gray-400">{timeAgo(r.ranAt)}</span>
                 <span className={

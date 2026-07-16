@@ -1,8 +1,10 @@
 /**
  * Creative Commission routes — REST CRUD for the Autonomous Creation Engine
  * (#2657, Phase 1). A commission is a standing, recurring creative brief the
- * scheduler fires on a cadence. After any mutation we re-sync the scheduler so a
- * newly enabled/edited/deleted commission's cron takes effect immediately.
+ * scheduler fires on a cadence. The scheduler re-arms crons off the store's
+ * `commission:changed` event (emitted by every create/update/delete), so the
+ * route stays decoupled from the scheduler graph and non-REST writers re-sync
+ * too — the same seam seriesAutopilotScheduler uses for `settings:updated`.
  *
  * No try/catch — errors bubble to the centralized error middleware. Service
  * errors carry a `code` mapped to an HTTP status via createServiceErrorMapper.
@@ -18,7 +20,6 @@ import {
   paginateArray,
 } from '../lib/validation.js';
 import * as svc from '../services/creativeCommissions/store.js';
-import { syncCommissionSchedules } from '../services/creativeCommissions/scheduler.js';
 
 const router = Router();
 
@@ -27,13 +28,6 @@ const SERVICE_ERROR_STATUS = {
   [svc.ERR_VALIDATION]: 400,
 };
 const mapServiceError = createServiceErrorMapper(SERVICE_ERROR_STATUS);
-
-// Fire-and-forget scheduler re-sync after a mutation — the HTTP response doesn't
-// wait on it, and a re-sync failure must not fail the request.
-function resyncScheduler() {
-  syncCommissionSchedules().catch((err) =>
-    console.error(`❌ Creative commission schedule re-sync failed: ${err.message}`));
-}
 
 router.get('/', asyncHandler(async (req, res) => {
   const items = await svc.listCommissions();
@@ -44,7 +38,6 @@ router.get('/', asyncHandler(async (req, res) => {
 router.post('/', asyncHandler(async (req, res) => {
   const body = validateRequest(creativeCommissionCreateSchema, req.body ?? {});
   const created = await svc.createCommission(body).catch((err) => { throw mapServiceError(err); });
-  resyncScheduler();
   res.status(201).json(created);
 }));
 
@@ -56,13 +49,11 @@ router.get('/:id', asyncHandler(async (req, res) => {
 router.patch('/:id', asyncHandler(async (req, res) => {
   const body = validateRequest(creativeCommissionUpdateSchema, req.body ?? {});
   const rec = await svc.updateCommission(req.params.id, body).catch((err) => { throw mapServiceError(err); });
-  resyncScheduler();
   res.json(rec);
 }));
 
 router.delete('/:id', asyncHandler(async (req, res) => {
   const r = await svc.deleteCommission(req.params.id).catch((err) => { throw mapServiceError(err); });
-  resyncScheduler();
   res.json(r);
 }));
 
