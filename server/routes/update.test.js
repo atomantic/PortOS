@@ -18,10 +18,14 @@ vi.mock('../services/updateChecker.js', () => ({
 vi.mock('../services/updateExecutor.js', () => ({
   executeUpdate: vi.fn().mockResolvedValue({ success: true, version: '1.26.0' })
 }));
-// getActiveAgentIds reads live-process maps; mock it so tests control the
-// "are CoS agents running?" signal without spawning real processes.
+// getActiveAgentIds reads live-process maps and spawningTasks holds in-flight
+// spawns; mock both so tests control the "are CoS agents running?" signal
+// without spawning real processes. spawningTasks is a real Set the tests mutate
+// (hoisted so the mock factory, which is hoisted above imports, can reference it).
+const { mockSpawningTasks } = vi.hoisted(() => ({ mockSpawningTasks: new Set() }));
 vi.mock('../services/agentState.js', () => ({
-  getActiveAgentIds: vi.fn().mockReturnValue([])
+  getActiveAgentIds: vi.fn().mockReturnValue([]),
+  spawningTasks: mockSpawningTasks
 }));
 
 import * as updateChecker from '../services/updateChecker.js';
@@ -139,6 +143,7 @@ describe('POST /api/update/execute — reconcile gating (issue #1779)', () => {
 describe('POST /api/update/execute — active CoS agent gating', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockSpawningTasks.clear();
     updateChecker.setUpdateInProgress.mockResolvedValue(true);
     updateChecker.getUpdateStatus.mockResolvedValue(baseStatus());
     executeUpdate.mockResolvedValue({ success: true, version: '1.26.0' });
@@ -153,6 +158,17 @@ describe('POST /api/update/execute — active CoS agent gating', () => {
     expect(executeUpdate).not.toHaveBeenCalled();
     // Guard runs before the in-progress lock is acquired.
     expect(updateChecker.setUpdateInProgress).not.toHaveBeenCalled();
+  });
+
+  it('rejects when a task is mid-spawn (in spawningTasks) even before it registers a process', async () => {
+    // No live process yet — the agent has launched but not yet populated the
+    // process maps; a restart would still sever it. spawningTasks closes that gap.
+    getActiveAgentIds.mockReturnValue([]);
+    mockSpawningTasks.add('task-42');
+    const res = await request(makeApp()).post('/api/update/execute').send({});
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('AGENTS_ACTIVE');
+    expect(executeUpdate).not.toHaveBeenCalled();
   });
 
   it('rejects a reconcile with 409 AGENTS_ACTIVE while agents are live', async () => {
@@ -177,6 +193,7 @@ describe('POST /api/update/execute — active CoS agent gating', () => {
 describe('GET /api/update/status — activeCosAgents', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockSpawningTasks.clear();
     updateChecker.clearStaleUpdateInProgress.mockResolvedValue(false);
     updateChecker.getUpdateStatus.mockResolvedValue(baseStatus());
     getActiveAgentIds.mockReturnValue([]);
@@ -187,6 +204,14 @@ describe('GET /api/update/status — activeCosAgents', () => {
     const res = await request(makeApp()).get('/api/update/status');
     expect(res.status).toBe(200);
     expect(res.body.activeCosAgents).toBe(3);
+  });
+
+  it('counts an in-flight spawn when no process is registered yet', async () => {
+    getActiveAgentIds.mockReturnValue([]);
+    mockSpawningTasks.add('task-1');
+    const res = await request(makeApp()).get('/api/update/status');
+    expect(res.status).toBe(200);
+    expect(res.body.activeCosAgents).toBe(1);
   });
 
   it('reports 0 when no agents are running', async () => {

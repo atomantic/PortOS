@@ -5,9 +5,27 @@ import { validateRequest } from '../lib/validation.js';
 import { UPSTREAM_FULL_NAME } from '../lib/gitRemote.js';
 import * as updateChecker from '../services/updateChecker.js';
 import { executeUpdate } from '../services/updateExecutor.js';
-import { getActiveAgentIds } from '../services/agentState.js';
+import { getActiveAgentIds, spawningTasks } from '../services/agentState.js';
 
 const router = Router();
+
+// Count CoS agents a PortOS restart (update.sh → pm2 restart) would disrupt:
+// live processes (direct + runner spawns) PLUS any task mid-spawn. During a
+// spawn the task sits in `spawningTasks` while its child process is created and
+// only THEN registered in the process maps (`withSpawnDedupGuard` holds the set
+// across the whole launch) — so an agent that has already spawned a process but
+// not yet registered it is invisible to getActiveAgentIds() alone. Counting
+// spawningTasks closes that launch window. Use `live || spawning` (not a sum):
+// during the brief overlap where a launching agent is in BOTH a process map and
+// spawningTasks, a sum would double-count it. This still can't close the
+// sub-millisecond window where a NEW spawn begins after this read but before
+// update.sh execs — full spawn/update mutual-exclusion is disproportionate for a
+// single-user install where updating is a deliberate, rare action, and the
+// orphan reaper handles any agent the restart does catch.
+function countActiveCosAgents() {
+  const live = getActiveAgentIds().length;
+  return live || spawningTasks.size;
+}
 
 const ignoreSchema = z.object({
   version: z.string().min(1, 'version is required')
@@ -33,7 +51,7 @@ const executeSchema = z.object({
 router.get('/status', asyncHandler(async (req, res) => {
   await updateChecker.clearStaleUpdateInProgress();
   const status = await updateChecker.getUpdateStatus();
-  res.json({ ...status, activeCosAgents: getActiveAgentIds().length });
+  res.json({ ...status, activeCosAgents: countActiveCosAgents() });
 }));
 
 // POST /api/update/check — triggers manual check
@@ -118,14 +136,13 @@ router.post('/execute', asyncHandler(async (req, res) => {
   // Never restart PortOS out from under a live CoS agent. Both a normal update
   // and a reconcile run update.sh, which pm2-restarts THIS server process and
   // severs any in-flight agent (each agent's PTY/child process is a child of it).
-  // getActiveAgentIds() reads the in-memory live-process maps (direct + runner
-  // spawns), so it reflects exactly what a restart would kill — a stale persisted
-  // `status: 'running'` on disk can't spuriously block, and a paused agent (its
-  // process already stopped) correctly doesn't. Gate here so it covers reconcile,
-  // normal update, and both fork variants, which all funnel through /execute.
-  const liveAgents = getActiveAgentIds();
-  if (liveAgents.length > 0) {
-    const n = liveAgents.length;
+  // countActiveCosAgents() reflects exactly what a restart would kill — live
+  // processes plus in-flight spawns — so a stale persisted `status: 'running'`
+  // on disk can't spuriously block, and a paused agent (its process already
+  // stopped) correctly doesn't. Gate here so it covers reconcile, normal update,
+  // and both fork variants, which all funnel through /execute.
+  const n = countActiveCosAgents();
+  if (n > 0) {
     throw new ServerError(
       `${n} CoS agent${n === 1 ? ' is' : 's are'} running — updating would restart PortOS and ` +
       `sever ${n === 1 ? 'it' : 'them'}. Pause or wait for the agent${n === 1 ? '' : 's'} to finish, then update.`,

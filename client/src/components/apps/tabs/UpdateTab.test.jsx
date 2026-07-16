@@ -214,6 +214,44 @@ describe('UpdateTab — active CoS agent suppression', () => {
     expect(screen.queryByText(/Update paused/i)).toBeNull();
   });
 
+  it('keeps safe non-restart actions (Ignore) available while agents run, hides Update Now', async () => {
+    // P2: only restart-triggering buttons are suppressed. A non-fork install with
+    // an available update and a live agent should hide "Update Now" (restarts)
+    // but still offer "Ignore" (no restart).
+    mockGetUpdateStatus.mockReset().mockResolvedValue({
+      currentVersion: '2.24.0',
+      updateAvailable: true,
+      latestRelease: { version: '2.25.0' },
+      remoteInfo: { isFork: false, hasOrigin: true, fullName: 'atomantic/PortOS' },
+      activeCosAgents: 1,
+    });
+    render(<UpdateTab />);
+
+    await screen.findByText(/Update paused — CoS agents running/i);
+    expect(screen.queryByRole('button', { name: 'Update Now' })).toBeNull();
+    // Ignore is safe (no restart) and must remain available.
+    expect(screen.getByRole('button', { name: /Ignore v2\.25\.0/i })).toBeTruthy();
+  });
+
+  it('keeps Sync Fork Only available while agents run (it does not restart), hides fork update buttons', async () => {
+    mockGetUpdateStatus.mockReset().mockResolvedValue({
+      currentVersion: '2.24.0',
+      updateAvailable: true,
+      latestRelease: { version: '2.25.0' },
+      remoteInfo: { isFork: true, hasOrigin: true, fullName: 'alice/PortOS' },
+      upstream: { fullName: 'atomantic/PortOS' },
+      activeCosAgents: 1,
+    });
+    render(<UpdateTab />);
+
+    await screen.findByText(/Update paused — CoS agents running/i);
+    // Restart-triggering fork actions hidden.
+    expect(screen.queryByRole('button', { name: 'Sync Fork & Update' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Update from Fork As-Is' })).toBeNull();
+    // Sync Fork Only only runs `gh repo sync` — no restart — so it stays.
+    expect(screen.getByRole('button', { name: 'Sync Fork Only' })).toBeTruthy();
+  });
+
   it('auto-clears the paused notice when the last agent finishes (4s status poll)', async () => {
     // Pins the notice's "this notice clears automatically" claim: while agents
     // are live the tab polls status every 4s (useAutoRefetch), so when the last

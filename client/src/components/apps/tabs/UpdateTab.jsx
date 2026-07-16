@@ -551,20 +551,25 @@ export default function UpdateTab() {
         </div>
       )}
 
-      {/* Update Actions — suppressed while CoS agents are live (see notice above) */}
-      {hasUpdate && !agentsActive && (
+      {/* Update Actions. Only the restart-triggering buttons (Sync Fork & Update,
+          Update from Fork As-Is, Update Now — all call runUpdate → update.sh →
+          pm2 restart) are suppressed while CoS agents are live; the safe actions
+          (Sync Fork Only = gh repo sync only, Ignore = no restart) stay available. */}
+      {hasUpdate && (
         <div className="flex flex-wrap gap-2">
           {isFork ? (
             <>
-              <button
-                onClick={handleSyncForkAndUpdate}
-                disabled={updating || polling || syncingFork}
-                className="px-4 py-2 bg-port-accent text-white rounded-lg text-sm flex items-center gap-2 hover:bg-port-accent/80 disabled:opacity-50"
-                title={`Fast-forwards ${remote?.fullName} main from ${upstreamName} via gh repo sync, then runs the local update. Refuses to overwrite divergent fork commits.`}
-              >
-                <GitFork size={14} className={syncingFork ? 'animate-pulse' : ''} />
-                {syncingFork ? 'Syncing fork...' : updating ? 'Updating...' : polling ? 'Restarting...' : 'Sync Fork & Update'}
-              </button>
+              {!agentsActive && (
+                <button
+                  onClick={handleSyncForkAndUpdate}
+                  disabled={updating || polling || syncingFork}
+                  className="px-4 py-2 bg-port-accent text-white rounded-lg text-sm flex items-center gap-2 hover:bg-port-accent/80 disabled:opacity-50"
+                  title={`Fast-forwards ${remote?.fullName} main from ${upstreamName} via gh repo sync, then runs the local update. Refuses to overwrite divergent fork commits.`}
+                >
+                  <GitFork size={14} className={syncingFork ? 'animate-pulse' : ''} />
+                  {syncingFork ? 'Syncing fork...' : updating ? 'Updating...' : polling ? 'Restarting...' : 'Sync Fork & Update'}
+                </button>
+              )}
               <button
                 onClick={handleSyncForkOnly}
                 disabled={updating || polling || syncingFork}
@@ -574,25 +579,29 @@ export default function UpdateTab() {
                 <GitFork size={14} />
                 Sync Fork Only
               </button>
-              <button
-                onClick={handleUpdateFromForkAsIs}
-                disabled={updating || polling || syncingFork}
-                className="px-4 py-2 bg-port-border text-gray-400 rounded-lg text-sm flex items-center gap-2 hover:bg-port-border/80 hover:text-white disabled:opacity-50"
-                title="Skip the fork sync and pull from your fork's origin as-is. Use this if you already merged upstream into your fork via your own workflow."
-              >
-                <Download size={14} className={updating ? 'animate-bounce' : ''} />
-                Update from Fork As-Is
-              </button>
+              {!agentsActive && (
+                <button
+                  onClick={handleUpdateFromForkAsIs}
+                  disabled={updating || polling || syncingFork}
+                  className="px-4 py-2 bg-port-border text-gray-400 rounded-lg text-sm flex items-center gap-2 hover:bg-port-border/80 hover:text-white disabled:opacity-50"
+                  title="Skip the fork sync and pull from your fork's origin as-is. Use this if you already merged upstream into your fork via your own workflow."
+                >
+                  <Download size={14} className={updating ? 'animate-bounce' : ''} />
+                  Update from Fork As-Is
+                </button>
+              )}
             </>
           ) : (
-            <button
-              onClick={handleUpdate}
-              disabled={updating || polling}
-              className="px-4 py-2 bg-port-accent text-white rounded-lg text-sm flex items-center gap-2 hover:bg-port-accent/80 disabled:opacity-50"
-            >
-              <Download size={14} className={updating ? 'animate-bounce' : ''} />
-              {updating ? 'Updating...' : polling ? 'Restarting...' : 'Update Now'}
-            </button>
+            !agentsActive && (
+              <button
+                onClick={handleUpdate}
+                disabled={updating || polling}
+                className="px-4 py-2 bg-port-accent text-white rounded-lg text-sm flex items-center gap-2 hover:bg-port-accent/80 disabled:opacity-50"
+              >
+                <Download size={14} className={updating ? 'animate-bounce' : ''} />
+                {updating ? 'Updating...' : polling ? 'Restarting...' : 'Update Now'}
+              </button>
+            )
           )}
           {release && (
             <button
