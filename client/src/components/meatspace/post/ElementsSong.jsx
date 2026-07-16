@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { ChevronLeft, ChevronRight, BookOpen, Zap, Target, Check, X, SkipForward, Loader, Search, Eye, BarChart3, Gauge, Layers, RotateCw } from 'lucide-react';
 import { submitMemoryPractice, getMemoryMastery, getMemoryItem } from '../../../services/api';
 import { RapidReaderModal } from '../../RapidReader';
@@ -734,6 +734,24 @@ function ElementFlashMode({ item, mastery, onBack, onComplete }) {
 
   useEffect(() => { inputRef.current?.focus(); }, [idx]);
 
+  const next = useCallback(() => {
+    setIdx(prev => prev + 1);
+    setAnswer('');
+    setShowResult(null);
+  }, []);
+
+  // While a result is showing the answer input is unmounted, so its Enter
+  // handler is gone — bind a window listener so a second Enter/Return advances
+  // to the next question (mirrors the "Next" button) instead of doing nothing.
+  useEffect(() => {
+    if (!showResult) return undefined;
+    const onKeyDown = (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); next(); }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [showResult, next]);
+
   if (idx >= questions.length) {
     const correct = results.filter(r => r.correct).length;
     const pct = Math.round((correct / results.length) * 100);
@@ -787,12 +805,6 @@ function ElementFlashMode({ item, mastery, onBack, onComplete }) {
     const isCorrect = !skipped && answer.trim().toLowerCase() === q.expected.toLowerCase();
     setResults(prev => [...prev, { correct: isCorrect, expected: q.expected, answered: answer.trim(), element: q.element }]);
     setShowResult(isCorrect ? 'correct' : 'wrong');
-  }
-
-  function next() {
-    setIdx(prev => prev + 1);
-    setAnswer('');
-    setShowResult(null);
   }
 
   return (
