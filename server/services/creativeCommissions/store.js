@@ -104,6 +104,16 @@ export function sanitizeCommission(raw) {
   const brief = raw.brief && typeof raw.brief === 'object' ? raw.brief : {};
   const schedule = raw.schedule && typeof raw.schedule === 'object' ? raw.schedule : {};
   const generation = raw.generation && typeof raw.generation === 'object' ? raw.generation : {};
+  const assignment = raw.assignment && typeof raw.assignment === 'object' && !Array.isArray(raw.assignment)
+    ? raw.assignment : {};
+  // The LLM pin that processes the commission (CD treatment + plan stages). A
+  // model without a provider can't be resolved (the runtime keys on the provider
+  // first), so a provider-less pin drops the model too — matching
+  // normalizeModelOverrides so a stored assignment can't carry a dangling model.
+  const assignmentProviderId = isStr(assignment.providerId) && assignment.providerId.trim()
+    ? assignment.providerId.trim() : null;
+  const assignmentModel = assignmentProviderId && isStr(assignment.model) && assignment.model.trim()
+    ? assignment.model.trim() : null;
   return {
     id: raw.id,
     name: isStr(raw.name) ? raw.name : 'Untitled Commission',
@@ -130,6 +140,12 @@ export function sanitizeCommission(raw) {
       quality: isStr(generation.quality) ? generation.quality : 'standard',
       aspectRatio: isStr(generation.aspectRatio) ? generation.aspectRatio : '16:9',
       targetDurationSeconds: Number.isInteger(generation.targetDurationSeconds) ? generation.targetDurationSeconds : 10,
+    },
+    // Which AI provider/model processes this commission's CD cognitive stages.
+    // `providerId: null` = inherit the install's default AI Assignment.
+    assignment: {
+      providerId: assignmentProviderId,
+      model: assignmentModel,
     },
     // Phase 2: deep-sanitize each reaction (drop ratingless/malformed entries)
     // and cap history. Phase 1 records carry an empty array, so this is a no-op
@@ -316,6 +332,11 @@ export async function updateCommission(id, patch) {
       } : current.brief,
       schedule: patch.schedule ? { ...current.schedule, ...patch.schedule } : current.schedule,
       generation: patch.generation ? { ...current.generation, ...patch.generation } : current.generation,
+      // Whole-object replace (not a deep merge): the client always sends the full
+      // { providerId, model } pin, and a clear sends both null. Merging would keep
+      // a stale `model` when the provider is cleared. sanitizeCommission then drops
+      // a provider-less model, so the stored pin can never dangle.
+      assignment: patch.assignment ? patch.assignment : current.assignment,
       id,
       createdAt: current.createdAt,
       updatedAt: new Date().toISOString(),

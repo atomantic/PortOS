@@ -66,6 +66,21 @@ describe('sanitizeCommission', () => {
     expect(rec.runs).toHaveLength(50);
     expect(rec.runs[0].id).toBe('run-30');
   });
+
+  it('defaults the LLM assignment to unset (install default)', () => {
+    const rec = sanitizeCommission({ id: 'c1' });
+    expect(rec.assignment).toEqual({ providerId: null, model: null });
+  });
+
+  it('normalizes and trims a set assignment pin', () => {
+    const rec = sanitizeCommission({ id: 'c1', assignment: { providerId: '  claude-tui  ', model: '  sonnet  ' } });
+    expect(rec.assignment).toEqual({ providerId: 'claude-tui', model: 'sonnet' });
+  });
+
+  it('drops a provider-less model so the pin can never dangle', () => {
+    const rec = sanitizeCommission({ id: 'c1', assignment: { model: 'sonnet' } });
+    expect(rec.assignment).toEqual({ providerId: null, model: null });
+  });
 });
 
 describe('assertValidSchedule', () => {
@@ -103,6 +118,22 @@ describe('updateCommission', () => {
     expect(updated.brief.intent).toBe('new intent');
     expect(updated.brief.styleSpec).toBe('flat'); // preserved
     expect(updated.createdAt).toBe(created.createdAt);
+  });
+
+  it('replaces the assignment pin on patch and clears it with a null provider', async () => {
+    const created = await createCommission(validInput());
+    const pinned = await updateCommission(created.id, { assignment: { providerId: 'claude-tui', model: 'sonnet' } });
+    expect(pinned.assignment).toEqual({ providerId: 'claude-tui', model: 'sonnet' });
+    // A clear (null provider) resets to the install default and drops the model.
+    const cleared = await updateCommission(created.id, { assignment: { providerId: null, model: null } });
+    expect(cleared.assignment).toEqual({ providerId: null, model: null });
+  });
+
+  it('preserves the assignment pin when a patch omits it', async () => {
+    const created = await createCommission(validInput());
+    await updateCommission(created.id, { assignment: { providerId: 'claude-tui', model: 'sonnet' } });
+    const updated = await updateCommission(created.id, { name: 'Renamed' });
+    expect(updated.assignment).toEqual({ providerId: 'claude-tui', model: 'sonnet' });
   });
 
   it('preserves brief.constraints when a partial brief patch omits them', async () => {

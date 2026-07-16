@@ -38,6 +38,13 @@ vi.mock('../creativeDirector/local.js', () => ({ createProject: (...a) => create
 vi.mock('../creativeDirector/planAdvance.js', () => ({ advanceAfterPlanStepSettled: (...a) => advanceMock(...a) }));
 vi.mock('../videoGen/local.js', () => ({ defaultVideoModelId: () => 'ltx-default' }));
 
+// Provider resolution for the fire-time pin guard (dynamic-imported inside the
+// fire handler). Default: an agent-capable (tui) provider, so a pinned
+// commission fans its override onto both stages. Tests override per-case.
+const getProviderByIdMock = vi.fn(async (id) => ({ id, type: 'tui' }));
+vi.mock('../providers.js', () => ({ getProviderById: (...a) => getProviderByIdMock(...a) }));
+vi.mock('../../lib/aiToolkit/constants.js', () => ({ PROVIDER_TYPES: { CLI: 'cli', TUI: 'tui', API: 'api' } }));
+
 const loadStateMock = vi.fn(async () => ({ config: {} }));
 vi.mock('../cosState.js', () => ({ loadState: (...a) => loadStateMock(...a) }));
 const creativeModeMock = vi.fn(() => 'execute');
@@ -141,6 +148,9 @@ describe('runScheduledCommission gates', () => {
     expect(createProjectMock).toHaveBeenCalledWith(expect.objectContaining({
       aspectRatio: '16:9', quality: 'standard', modelId: 'ltx-default', targetDurationSeconds: 10,
       directive: expect.objectContaining({ goal: expect.stringContaining('surreal') }),
+      // An unset LLM assignment leaves modelOverrides empty → the CD stages
+      // inherit the install's default AI Assignment (pre-#2657 behavior).
+      modelOverrides: {},
     }));
     expect(advanceMock).toHaveBeenCalledWith('cd-xyz');
     expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({ status: 'started', projectId: 'cd-xyz' }));
@@ -150,6 +160,63 @@ describe('runScheduledCommission gates', () => {
     // The planner's cos action is accounted by completeAgent on completion — the
     // fire handler must NOT pre-charge (that would double-count).
     expect(recordUsageMock).not.toHaveBeenCalled();
+  });
+
+  it('fans the LLM assignment pin onto both CD cognitive stages (treatment + plan)', async () => {
+    getCommissionMock.mockResolvedValue(videoCommission({
+      assignment: { providerId: 'claude-tui', model: 'sonnet' },
+    }));
+    await runScheduledCommission('commission-1');
+    const pin = { providerId: 'claude-tui', model: 'sonnet' };
+    expect(createProjectMock).toHaveBeenCalledWith(expect.objectContaining({
+      modelOverrides: { treatment: pin, plan: pin },
+    }));
+  });
+
+  it('omits the model from the pin when only a provider is chosen', async () => {
+    getCommissionMock.mockResolvedValue(videoCommission({
+      assignment: { providerId: 'claude-tui', model: null },
+    }));
+    await runScheduledCommission('commission-1');
+    const pin = { providerId: 'claude-tui' };
+    expect(createProjectMock).toHaveBeenCalledWith(expect.objectContaining({
+      modelOverrides: { treatment: pin, plan: pin },
+    }));
+  });
+
+  it('drops a pin to a non-agent (api) provider and still generates on the default', async () => {
+    // A CoS treatment/plan task only accepts a cli/tui provider; an api pin
+    // would be rejected by the harness-boundary guard mid-fire. The guard drops
+    // it so the run proceeds on the install default instead of stalling.
+    getProviderByIdMock.mockResolvedValueOnce({ id: 'gpt-4o', type: 'api' });
+    getCommissionMock.mockResolvedValue(videoCommission({
+      assignment: { providerId: 'gpt-4o', model: 'gpt-4o' },
+    }));
+    await runScheduledCommission('commission-1');
+    expect(createProjectMock).toHaveBeenCalledWith(expect.objectContaining({ modelOverrides: {} }));
+    // The commission still fires (falls back to default), it doesn't skip.
+    expect(advanceMock).toHaveBeenCalledWith('cd-xyz');
+  });
+
+  it('drops a pin to a removed/unresolvable provider (fails open to the default)', async () => {
+    getProviderByIdMock.mockResolvedValueOnce(null);
+    getCommissionMock.mockResolvedValue(videoCommission({
+      assignment: { providerId: 'ghost-provider', model: null },
+    }));
+    await runScheduledCommission('commission-1');
+    expect(createProjectMock).toHaveBeenCalledWith(expect.objectContaining({ modelOverrides: {} }));
+  });
+
+  it('drops a pin to a DISABLED agent provider (respects the provider disable control)', async () => {
+    // The agent runner honors an explicit task pin without re-checking `enabled`,
+    // so a commission pinned to a provider the user later disabled would keep
+    // launching through it. The guard drops the pin and falls back to the default.
+    getProviderByIdMock.mockResolvedValueOnce({ id: 'claude-tui', type: 'tui', enabled: false });
+    getCommissionMock.mockResolvedValue(videoCommission({
+      assignment: { providerId: 'claude-tui', model: 'sonnet' },
+    }));
+    await runScheduledCommission('commission-1');
+    expect(createProjectMock).toHaveBeenCalledWith(expect.objectContaining({ modelOverrides: {} }));
   });
 
   it('does NOT surface when the fire is skipped (nothing was generated)', async () => {
