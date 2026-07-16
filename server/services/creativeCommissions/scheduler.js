@@ -31,6 +31,7 @@ import { commissionToCron, buildCommissionDirective } from './directive.js';
 const eventId = (commissionId) => `creative-commission-${commissionId}`;
 const registered = new Set();
 let lastSignature = null;
+let syncTail = Promise.resolve(); // serializes concurrent re-syncs (see syncCommissionSchedules)
 
 function triggerResync() {
   syncCommissionSchedules().catch((err) =>
@@ -69,23 +70,41 @@ function signatureOf(active, fallbackTz) {
 }
 
 function registerSchedule(entry, timezone) {
-  schedule({
-    id: eventId(entry.id),
-    type: 'cron',
-    cron: entry.cron,
-    timezone: entry.timezone || timezone,
-    handler: () => runScheduledCommission(entry.id),
-    metadata: { source: 'creativeCommissionScheduler', commissionId: entry.id },
-  });
-  registered.add(entry.id);
+  // Resilient: a bad stored cron/timezone (e.g. a hand-edited record) throws in
+  // eventScheduler.schedule → Intl.DateTimeFormat; swallow it per-entry so one
+  // bad commission can't abort the whole sync loop and strand the others.
+  try {
+    schedule({
+      id: eventId(entry.id),
+      type: 'cron',
+      cron: entry.cron,
+      timezone: entry.timezone || timezone,
+      handler: () => runScheduledCommission(entry.id),
+      metadata: { source: 'creativeCommissionScheduler', commissionId: entry.id },
+    });
+    registered.add(entry.id);
+  } catch (err) {
+    console.error(`❌ Creative commission ${entry.id} cron registration failed: ${err.message}`);
+  }
 }
 
 /**
  * (Re)sync the registered crons to the current commission set. Idempotent and
  * safe at boot and after every store mutation. The signature guard makes an
  * unrelated re-sync a cheap no-op.
+ *
+ * Serialized on a single tail promise: a settings save and a commission
+ * mutation can fire concurrently, and two syncs with different snapshots
+ * interleaving their mutations of `registered`/`lastSignature` could cancel a
+ * still-enabled commission's cron. Chaining guarantees each sync sees a
+ * consistent view (a re-entrancy guard, fine under the single-user model).
  */
-export async function syncCommissionSchedules(commissions) {
+export function syncCommissionSchedules(commissions) {
+  syncTail = syncTail.then(() => doSyncCommissionSchedules(commissions), () => doSyncCommissionSchedules(commissions));
+  return syncTail;
+}
+
+async function doSyncCommissionSchedules(commissions) {
   const list = commissions || await listCommissions().catch(() => []);
   const active = activeCommissions(list);
   const timezone = await getUserTimezone().catch(() => 'UTC');
@@ -121,6 +140,7 @@ export function stopCommissionScheduler() {
  * each plan step through the gated `dispatchCreativeTool`).
  */
 export async function runScheduledCommission(commissionId) {
+  let charged = false;
   try {
     const commission = await getCommission(commissionId).catch(() => null);
     if (!commission || commission.enabled === false) return;
@@ -131,7 +151,7 @@ export async function runScheduledCommission(commissionId) {
     // Gate on creative autonomy mode + daily cos budget BEFORE spawning anything
     // (the planner is itself an LLM call) — honors "off ⇒ no generation" and the
     // no-cold-LLM policy.
-    const [{ loadState }, { getCreativeAutonomyMode }, { getDomainBudgetStatus }] = await Promise.all([
+    const [{ loadState }, { getCreativeAutonomyMode }, { getDomainBudgetStatus, recordDomainUsage }] = await Promise.all([
       import('../cosState.js'),
       import('../../lib/domainAutonomy.js'),
       import('../domainUsage.js'),
@@ -155,6 +175,16 @@ export async function runScheduledCommission(commissionId) {
       return;
     }
 
+    // Charge the planner action against the shared daily cos budget on admission.
+    // The planner LLM call is enqueued via task:ready and bypasses
+    // dequeueNextTask's allowance check, so without this two commissions firing
+    // in the same tick could each observe the same remaining budget and overrun
+    // the user's cap. Charging here narrows that window (refunded below if the
+    // spawn fails). Not a hard reservation — the deeper fix is a shared
+    // admission gate at the planner boundary (tracked on #2657).
+    await recordDomainUsage('cos', { actions: 1 }).catch(() => {});
+    charged = true;
+
     const [{ createProject }, { advanceAfterPlanStepSettled }, { defaultVideoModelId }] = await Promise.all([
       import('../creativeDirector/local.js'),
       import('../creativeDirector/planAdvance.js'),
@@ -163,8 +193,16 @@ export async function runScheduledCommission(commissionId) {
 
     const directive = buildCommissionDirective(commission);
     const gen = commission.generation || {};
+    // createProject prefixes "Creative Director: " (19 chars) before a
+    // mediaCollections name capped at 80, so cap our derived name at 61 — a long
+    // commission name would otherwise fail the collection create on every run.
+    const dateSuffix = ` — ${new Date().toISOString().slice(0, 10)}`; // 13 chars
+    const maxBase = 61 - dateSuffix.length;
+    const baseName = commission.name.length > maxBase
+      ? `${commission.name.slice(0, maxBase - 1)}…`
+      : commission.name;
     const project = await createProject({
-      name: `${commission.name} — ${new Date().toISOString().slice(0, 10)}`,
+      name: `${baseName}${dateSuffix}`,
       aspectRatio: gen.aspectRatio || '16:9',
       quality: gen.quality || 'standard',
       modelId: gen.model || defaultVideoModelId(),
@@ -184,6 +222,11 @@ export async function runScheduledCommission(commissionId) {
     await advanceAfterPlanStepSettled(project.id);
   } catch (err) {
     console.error(`❌ Creative commission ${commissionId} fire failed: ${err?.message || err}`);
+    // Refund the reserved planner action — the spawn threw, so it never ran.
+    if (charged) {
+      const { recordDomainUsage } = await import('../domainUsage.js').catch(() => ({}));
+      await recordDomainUsage?.('cos', { actions: -1 }).catch(() => {});
+    }
     await recordCommissionRun(commissionId, { status: 'failed', error: err?.message || String(err) }).catch(() => {});
   }
 }

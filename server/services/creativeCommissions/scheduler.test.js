@@ -38,7 +38,11 @@ vi.mock('../cosState.js', () => ({ loadState: (...a) => loadStateMock(...a) }));
 const creativeModeMock = vi.fn(() => 'execute');
 vi.mock('../../lib/domainAutonomy.js', () => ({ getCreativeAutonomyMode: (...a) => creativeModeMock(...a) }));
 const budgetMock = vi.fn(async () => ({ withinBudget: true }));
-vi.mock('../domainUsage.js', () => ({ getDomainBudgetStatus: (...a) => budgetMock(...a) }));
+const recordUsageMock = vi.fn(async () => {});
+vi.mock('../domainUsage.js', () => ({
+  getDomainBudgetStatus: (...a) => budgetMock(...a),
+  recordDomainUsage: (...a) => recordUsageMock(...a),
+}));
 
 const {
   activeCommissions,
@@ -135,6 +139,24 @@ describe('runScheduledCommission gates', () => {
     }));
     expect(advanceMock).toHaveBeenCalledWith('cd-xyz');
     expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({ status: 'started', projectId: 'cd-xyz' }));
+    // Reserves the planner action against the cos budget on admission.
+    expect(recordUsageMock).toHaveBeenCalledWith('cos', { actions: 1 });
+  });
+
+  it('caps the derived project name so createCollection (80-char limit) never fails', async () => {
+    getCommissionMock.mockResolvedValue(videoCommission({ name: 'X'.repeat(200) }));
+    await runScheduledCommission('commission-1');
+    const { name } = createProjectMock.mock.calls[0][0];
+    // "Creative Director: " (19) + name must be ≤ 80 → name ≤ 61.
+    expect(name.length).toBeLessThanOrEqual(61);
+    expect(name.endsWith(new Date().toISOString().slice(0, 10))).toBe(true);
+  });
+
+  it('does not charge the budget when a gate skips the fire', async () => {
+    creativeModeMock.mockReturnValue('off');
+    getCommissionMock.mockResolvedValue(videoCommission());
+    await runScheduledCommission('commission-1');
+    expect(recordUsageMock).not.toHaveBeenCalled();
   });
 
   it('skips generation (records skipped) when creative autonomy is off', async () => {
