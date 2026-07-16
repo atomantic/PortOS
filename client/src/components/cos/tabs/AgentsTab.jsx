@@ -1,15 +1,22 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
-import { Trash2, Search, X, ChevronDown } from 'lucide-react';
+import { Trash2, Search, X, ChevronDown, MessageSquare } from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import AgentCard from './AgentCard';
 import ResumeAgentModal from './ResumeAgentModal';
 import InlineConfirmRow from '../../ui/InlineConfirmRow';
 
+const needsAgentFeedback = (agent) => {
+  const isSystemAgent = agent.taskId?.startsWith('sys-') || agent.id?.startsWith('sys-');
+  return !isSystemAgent && !agent.feedback?.rating;
+};
+
 export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, apps }) {
   const [resumingAgent, setResumingAgent] = useState(null);
   const [durations, setDurations] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [feedbackFilter, setFeedbackFilter] = useState('all');
+  const [feedbackUpdates, setFeedbackUpdates] = useState({});
   const [confirmingClear, setConfirmingClear] = useState(false);
 
   // Date-based lazy loading for completed agents
@@ -91,6 +98,16 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
     setResumingAgent(agent);
   };
 
+  const handleFeedbackChange = useCallback((updatedAgent) => {
+    if (updatedAgent?.id && updatedAgent.feedback) {
+      setFeedbackUpdates(prev => ({ ...prev, [updatedAgent.id]: updatedAgent.feedback }));
+      setLoadedAgents(prev => prev.map(agent =>
+        agent.id === updatedAgent.id ? { ...agent, feedback: updatedAgent.feedback } : agent
+      ));
+    }
+    onRefresh();
+  }, [onRefresh]);
+
   const handleResumeSubmit = async ({ description, context, model, provider, app, type = 'user', screenshots }) => {
     const result = await api.addCosTask({
       description,
@@ -130,16 +147,18 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
   const allCompleted = useMemo(() => {
     const seen = new Set();
     const merged = [];
+    const addAgent = (agent) => {
+      if (seen.has(agent.id)) return;
+      seen.add(agent.id);
+      const feedback = feedbackUpdates[agent.id];
+      merged.push(feedback ? { ...agent, feedback } : agent);
+    };
     // Recent state-based agents first (freshest data)
-    for (const a of recentCompleted) {
-      if (!seen.has(a.id)) { seen.add(a.id); merged.push(a); }
-    }
+    for (const agent of recentCompleted) addAgent(agent);
     // Then disk-loaded agents
-    for (const a of loadedAgents) {
-      if (!seen.has(a.id)) { seen.add(a.id); merged.push(a); }
-    }
+    for (const agent of loadedAgents) addAgent(agent);
     return merged.sort((a, b) => new Date(b.completedAt || 0) - new Date(a.completedAt || 0));
-  }, [recentCompleted, loadedAgents]);
+  }, [recentCompleted, loadedAgents, feedbackUpdates]);
 
   const totalCount = useMemo(() => {
     const indexTotal = dateBuckets.reduce((sum, d) => sum + d.count, 0);
@@ -152,15 +171,21 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
 
   const filteredCompleted = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return allCompleted;
     return allCompleted.filter(a => {
+      if (feedbackFilter === 'needs-feedback' && !needsAgentFeedback(a)) return false;
+      if (!q) return true;
       const description = (a.metadata?.taskDescription || '').toLowerCase();
       const model = (a.metadata?.model || '').toLowerCase();
       const id = (a.id || '').toLowerCase();
       const error = (a.result?.error || '').toLowerCase();
       return description.includes(q) || model.includes(q) || id.includes(q) || error.includes(q);
     });
-  }, [allCompleted, searchQuery]);
+  }, [allCompleted, feedbackFilter, searchQuery]);
+
+  const needsFeedbackCount = useMemo(
+    () => allCompleted.filter(needsAgentFeedback).length,
+    [allCompleted]
+  );
 
   const hasMoreDates = dateBuckets.some(d => !loadedDates.has(d.date));
   const remainingCount = dateBuckets
@@ -214,7 +239,7 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
                 paused
                 onDelete={handleDelete}
                 onResume={handleResumeClick}
-                onFeedbackChange={onRefresh}
+                onFeedbackChange={handleFeedbackChange}
               />
             ))}
           </div>
@@ -253,12 +278,46 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
               onCancel={() => setConfirmingClear(false)}
             />
           )}
+          <div className="flex items-center gap-2 mb-3" aria-label="Completed agent filters">
+            <button
+              type="button"
+              onClick={() => setFeedbackFilter('all')}
+              aria-pressed={feedbackFilter === 'all'}
+              className={`px-3 py-1.5 min-h-[36px] rounded-lg text-xs transition-colors ${
+                feedbackFilter === 'all'
+                  ? 'bg-port-accent text-white'
+                  : 'bg-port-card border border-port-border text-gray-400 hover:text-white'
+              }`}
+            >
+              All loaded
+            </button>
+            <button
+              type="button"
+              onClick={() => setFeedbackFilter('needs-feedback')}
+              disabled={needsFeedbackCount === 0 && feedbackFilter !== 'needs-feedback'}
+              aria-label={`Needs feedback: ${needsFeedbackCount}`}
+              aria-pressed={feedbackFilter === 'needs-feedback'}
+              className={`flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] rounded-lg text-xs transition-colors disabled:opacity-50 ${
+                feedbackFilter === 'needs-feedback'
+                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                  : 'bg-port-card border border-port-border text-gray-400 hover:text-white'
+              }`}
+            >
+              <MessageSquare size={14} aria-hidden="true" />
+              Needs feedback
+              <span className="font-mono">{needsFeedbackCount}</span>
+            </button>
+            <span className="hidden sm:inline text-xs text-gray-600 ml-auto">
+              Review completed work after its notification expires.
+            </span>
+          </div>
           {/* Search */}
           <div className="flex gap-2 mb-3">
             <div className="relative flex-1">
               <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" aria-hidden="true" />
               <input
                 type="text"
+                aria-label="Search completed agents"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder="Search loaded agents..."
@@ -275,15 +334,27 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
               </button>
             )}
           </div>
-          {searchQuery && (
+          {(searchQuery || feedbackFilter !== 'all') && (
             <div className="text-xs text-gray-500 mb-2">
-              {filteredCompleted.length} of {allCompleted.length} loaded agents match
+              {filteredCompleted.length} of {allCompleted.length} loaded agents shown
             </div>
           )}
           <div className="space-y-2">
             {filteredCompleted.map(agent => (
-              <AgentCard key={agent.id} agent={agent} completed onDelete={handleDelete} onResume={handleResumeClick} onFeedbackChange={onRefresh} />
+              <AgentCard key={agent.id} agent={agent} completed onDelete={handleDelete} onResume={handleResumeClick} onFeedbackChange={handleFeedbackChange} />
             ))}
+            {filteredCompleted.length === 0 && (feedbackFilter !== 'all' || searchQuery) && (
+              <div className="bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
+                {feedbackFilter === 'needs-feedback' && !searchQuery
+                  ? 'All loaded agent runs have feedback.'
+                  : `No loaded agents match "${searchQuery}"`}
+                {hasMoreDates && (
+                  <div className="mt-2 text-xs">
+                    {remainingCount} agents in older dates not yet loaded
+                  </div>
+                )}
+              </div>
+            )}
             {!searchQuery && hasMoreDates && (
               <button
                 onClick={handleLoadMore}
@@ -299,16 +370,6 @@ export default function AgentsTab({ agents, onRefresh, liveOutputs, providers, a
                   </>
                 )}
               </button>
-            )}
-            {searchQuery && filteredCompleted.length === 0 && (
-              <div className="bg-port-card border border-port-border rounded-lg p-6 text-center text-gray-500">
-                No loaded agents match "{searchQuery}"
-                {hasMoreDates && (
-                  <div className="mt-2 text-xs">
-                    {remainingCount} agents in older dates not yet loaded
-                  </div>
-                )}
-              </div>
             )}
           </div>
         </div>
