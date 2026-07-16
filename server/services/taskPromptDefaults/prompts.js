@@ -524,7 +524,7 @@ Run steps 1–5 in order.
    - Its number is NOT in the in-flight set.
    - It has NO assignees (an assignee means another machine/human already claimed it).
    - It does NOT carry any of these blocking labels: \`in-progress\`, \`blocked\`, \`needs-input\`, \`future\`, \`wontfix\`, \`question\`, \`discussion\`.
-   - It is NOT a tracking/umbrella **epic** — recognized by an \`epic\` label OR a title ending in "(epic)". An epic needs per-slice partial-ship (each slice its own PR, \`Refs\` not \`Closes\`), so leave it for a human or \`/claim --issues\` to split — don't claim it wholesale here. **The bare \`plan\` label is NOT a skip signal.** \`do-replan --issues\` (and \`/do:replan --issues\`) labels EVERY migrated backlog item \`plan\` — atomic bug-fixes included — so \`plan\` marks the *claimable* queue exactly as \`/do:next --issues\` treats it (it is that flow's required candidate label). Skipping all \`plan\` issues would discard the entire actionable backlog and falsely report an empty queue.
+   - It is NOT a tracking/umbrella **epic** — recognized by an \`epic\` label, a title ending in "(epic)", OR a title beginning with an \`[epic]\` bracket or \`Epic:\` tag (e.g. "[Epic] …" / "Epic: …", case-insensitive). An epic needs per-slice partial-ship (each slice its own PR, \`Refs\` not \`Closes\`), so leave it for a human or \`/claim --issues\` to split — don't claim it wholesale here. **The bare \`plan\` label is NOT a skip signal.** \`do-replan --issues\` (and \`/do:replan --issues\`) labels EVERY migrated backlog item \`plan\` — atomic bug-fixes included — so \`plan\` marks the *claimable* queue exactly as \`/do:next --issues\` treats it (it is that flow's required candidate label). Skipping all \`plan\` issues would discard the entire actionable backlog and falsely report an empty queue.
 5. **If no eligible issue exists**, exit cleanly — an empty actionable queue is a healthy state, not a failure.
 
 Capture the issue number as \`NUM\`, its title, and its full body — you'll reuse them in the PR and the \`Closes #<num>\` trailer.
@@ -652,7 +652,7 @@ Run steps 1–5 in order.
    - Its number (\`iid\`) is NOT in the in-flight set.
    - It has NO assignees (an assignee means another machine/human already claimed it).
    - It does NOT carry any of these blocking labels: \`in-progress\`, \`blocked\`, \`needs-input\`, \`future\`, \`wontfix\`, \`question\`, \`discussion\`.
-   - It is NOT a tracking/umbrella **epic** — recognized by an \`epic\` label OR a title ending in "(epic)". Leave epics for a human to split. **The bare \`plan\` label is NOT a skip signal** — it marks the claimable queue, not a blocker.
+   - It is NOT a tracking/umbrella **epic** — recognized by an \`epic\` label, a title ending in "(epic)", OR a title beginning with an \`[epic]\` bracket or \`Epic:\` tag (e.g. "[Epic] …" / "Epic: …", case-insensitive). Leave epics for a human to split. **The bare \`plan\` label is NOT a skip signal** — it marks the claimable queue, not a blocker.
 5. **If no eligible issue exists**, exit cleanly — an empty actionable queue is a healthy state, not a failure.
 
 Capture the issue number (GitLab \`iid\`) as \`NUM\`, its title, and its full description — you'll reuse them in the MR and the \`Closes #<num>\` line.
