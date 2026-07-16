@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Stub config + tts + timezone before importing the module — the pure-function
 // branches need no mocks but speakProactive integration does.
@@ -26,6 +26,7 @@ const {
   speakProactive,
   MAX_PROACTIVE_TEXT_LEN,
 } = await import('./proactiveSpeech.js');
+const { registerVoiceOutputCandidate, __resetVoiceOutput } = await import('./voiceOutput.js');
 
 describe('parseHHMM', () => {
   it.each([
@@ -139,10 +140,17 @@ describe('shouldSpeak — decision matrix', () => {
 });
 
 describe('speakProactive', () => {
+  // emitVoiceOutput routes proactive audio to the single registered recipient
+  // tab (it no longer broadcasts via io.emit), so register a fake connected
+  // socket and assert on ITS emit. io.emit must never be called.
   const makeIo = () => {
     const emit = vi.fn();
-    return { io: { emit }, emit };
+    const socketEmit = vi.fn();
+    registerVoiceOutputCandidate({ id: 'recipient', connected: true, emit: socketEmit });
+    return { io: { emit }, emit, socketEmit };
   };
+
+  beforeEach(() => __resetVoiceOutput());
 
   it('returns no-io when io missing', async () => {
     const r = await speakProactive({ io: null, text: 'hi' });
@@ -162,29 +170,30 @@ describe('speakProactive', () => {
   // bypass that. The same bound must hold at the function boundary so a
   // runaway caller can't trigger multi-minute synthesis.
   it('rejects text longer than MAX_PROACTIVE_TEXT_LEN', async () => {
-    const { io, emit } = makeIo();
+    const { io, socketEmit } = makeIo();
     const oversized = 'x'.repeat(MAX_PROACTIVE_TEXT_LEN + 1);
     const r = await speakProactive({ io, text: oversized });
     expect(r.ok).toBe(false);
     expect(r.reason).toBe('too-long');
     expect(r.chars).toBe(oversized.length);
     expect(r.maxChars).toBe(MAX_PROACTIVE_TEXT_LEN);
-    expect(emit).not.toHaveBeenCalled();
+    expect(socketEmit).not.toHaveBeenCalled();
   });
 
   it('accepts text exactly at MAX_PROACTIVE_TEXT_LEN', async () => {
-    const { io, emit } = makeIo();
+    const { io, socketEmit } = makeIo();
     const r = await speakProactive({ io, text: 'x'.repeat(MAX_PROACTIVE_TEXT_LEN) });
     expect(r.ok).toBe(true);
-    expect(emit).toHaveBeenCalledTimes(1);
+    expect(socketEmit).toHaveBeenCalledTimes(1);
   });
 
-  it('emits voice:speak with audio when allowed', async () => {
-    const { io, emit } = makeIo();
+  it('routes voice:speak with audio to the recipient tab (never io.emit)', async () => {
+    const { io, emit, socketEmit } = makeIo();
     const r = await speakProactive({ io, text: 'Heads up — meeting in five.' });
     expect(r.ok).toBe(true);
-    expect(emit).toHaveBeenCalledTimes(1);
-    const [event, payload] = emit.mock.calls[0];
+    expect(emit).not.toHaveBeenCalled(); // no broadcast
+    expect(socketEmit).toHaveBeenCalledTimes(1);
+    const [event, payload] = socketEmit.mock.calls[0];
     expect(event).toBe('voice:speak');
     expect(payload.sentence).toBe('Heads up — meeting in five.');
     expect(payload.wav).toBeInstanceOf(Buffer);
@@ -219,11 +228,11 @@ describe('speakProactive', () => {
       enabled: true,
       llm: { proactive: { enabled: false } },
     });
-    const { io, emit } = makeIo();
+    const { io, socketEmit } = makeIo();
     const r = await speakProactive({ io, text: 'hi' });
     expect(r.ok).toBe(false);
     expect(r.reason).toBe('proactive-disabled');
-    expect(emit).not.toHaveBeenCalled();
+    expect(socketEmit).not.toHaveBeenCalled();
   });
 
   // Avoidable-overhead guard: when quiet hours are off the decision can't
@@ -266,10 +275,10 @@ describe('speakProactive', () => {
       llm: { proactive: { enabled: true, quietHours: { enabled: true, start: '22:00', end: '07:00' } } },
     });
     getLocalParts.mockReturnValueOnce({ hour: 23, minute: 30 });
-    const { io, emit } = makeIo();
+    const { io, socketEmit } = makeIo();
     const r = await speakProactive({ io, text: 'late night ping' });
     expect(r.ok).toBe(false);
     expect(r.reason).toBe('quiet-hours');
-    expect(emit).not.toHaveBeenCalled();
+    expect(socketEmit).not.toHaveBeenCalled();
   });
 });

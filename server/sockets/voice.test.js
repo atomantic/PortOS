@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Force the enabled-gate open so the validation tests below deterministically
 // exercise the size/text guards (ensureEnabled runs BEFORE every guard; with
@@ -13,6 +13,11 @@ vi.mock(import('../services/voice/config.js'), async (importOriginal) => {
 });
 
 const { truncateOnWordBoundary, registerVoiceHandlers } = await import('./voice.js');
+const {
+  getVoiceOutputSocket,
+  emitVoiceOutput,
+  __resetVoiceOutput,
+} = await import('../services/voice/voiceOutput.js');
 
 // Minimal fake socket: records on() handlers so tests can fire inbound events,
 // and captures emit() calls. No real Socket.IO needed — the voice:ui:index /
@@ -190,5 +195,43 @@ describe('voice:text validation', () => {
     const errors = socket.emitted.filter((e) => e.event === 'voice:error');
     expect(errors).toHaveLength(1);
     expect(errors[0].payload).toEqual({ stage: 'text', message: 'text is required' });
+  });
+});
+
+describe('voice:output single-recipient wiring', () => {
+  beforeEach(() => __resetVoiceOutput());
+
+  it('registers the voice:output:claim handler and a candidate on connect', () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    expect(socket.has('voice:output:claim')).toBe(true);
+    // Registered as the sole candidate → lazily eligible to receive output.
+    expect(getVoiceOutputSocket()).toBe(socket);
+  });
+
+  it('claiming routes proactive output to the claiming tab, not another', () => {
+    const a = makeFakeSocket();
+    const b = makeFakeSocket();
+    registerVoiceHandlers(a);
+    registerVoiceHandlers(b);
+    // b is the active tab and claims output.
+    b.fire('voice:output:claim');
+
+    const io = { emit: () => { throw new Error('must not broadcast'); } };
+    emitVoiceOutput(io, 'voice:speak', { sentence: 'ping' });
+    expect(a.emitted.filter((e) => e.event === 'voice:speak')).toHaveLength(0);
+    expect(b.emitted.filter((e) => e.event === 'voice:speak')).toHaveLength(1);
+  });
+
+  it('disconnecting the primary promotes another live tab', () => {
+    const a = makeFakeSocket();
+    const b = makeFakeSocket();
+    registerVoiceHandlers(a);
+    registerVoiceHandlers(b);
+    a.fire('voice:output:claim');
+    expect(getVoiceOutputSocket()).toBe(a);
+
+    a.fire('disconnect');
+    expect(getVoiceOutputSocket()).toBe(b);
   });
 });

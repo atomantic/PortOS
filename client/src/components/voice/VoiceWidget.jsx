@@ -1,13 +1,13 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Mic, MicOff, Brain, Volume2, Square, Trash2, ChevronDown, ChevronUp, Send, Infinity as InfinityIcon, NotebookPen, X, EyeOff, Monitor, MonitorOff } from 'lucide-react';
+import { Mic, MicOff, Brain, Volume2, VolumeX, Square, Trash2, ChevronDown, ChevronUp, Send, Infinity as InfinityIcon, NotebookPen, X, EyeOff, Monitor, MonitorOff } from 'lucide-react';
 import {
   startCapture, stopCapture, interrupt, resetConversation, sendText, onVoiceEvent, isCapturing,
   startContinuous, stopContinuous, isContinuous, whenPlaybackDrained, getVadLevel,
   webSpeechSupported, startWebSpeechCapture, stopWebSpeechCapture, isWebSpeechCapturing,
   onProactiveSpeech, captureScreenForVision, sendScreenshotResult,
   enableVisionCapture, disableVisionCapture, isVisionCaptureEnabled, onVisionCaptureEnded,
-  speakSynthesized,
+  speakSynthesized, onVoiceOutputPrimary, claimVoiceOutput,
 } from '../../services/voiceClient';
 import { resolveTurn, buildRouterSystemPrompt, TIER } from '../../services/voiceFastPath';
 import { warmNano } from '../../services/browserLlm';
@@ -94,6 +94,11 @@ export default function VoiceWidget() {
   // ui_describe_visually ("what's on this chart?"). Must be enabled from a click
   // (user gesture) — getDisplayMedia can't run from the server-initiated turn.
   const [visionEnabled, setVisionEnabled] = useState(false);
+  // Whether THIS tab is the current recipient of proactive voice output. The
+  // server routes server-initiated speech (reminders/briefings) to a single
+  // tab; this reflects (and lets the user claim) that role so the same line
+  // doesn't play on every open tab/machine at once.
+  const [isVoiceOutputTab, setIsVoiceOutputTab] = useState(false);
   const scrollRef = useRef(null);
   const useWebSpeech = sttEngine === 'web-speech' && webSpeechSupported;
 
@@ -323,6 +328,11 @@ export default function VoiceWidget() {
     const off = onVisionCaptureEnded(() => setVisionEnabled(false));
     return () => { off(); disableVisionCapture(); };
   }, []);
+
+  // Track whether this tab currently owns proactive voice output. Subscribing
+  // fires immediately with the current value, so the indicator is correct on
+  // mount without waiting for the next handoff.
+  useEffect(() => onVoiceOutputPrimary(setIsVoiceOutputTab), []);
 
   // Auto-scroll to bottom on new content
   useEffect(() => {
@@ -801,6 +811,20 @@ export default function VoiceWidget() {
           >
             {visionEnabled ? <Monitor size={12} /> : <MonitorOff size={12} />}
             {visionEnabled ? 'vision' : 'no vision'}
+          </button>
+          <button
+            onClick={() => { if (!isVoiceOutputTab) claimVoiceOutput(); }}
+            disabled={isVoiceOutputTab}
+            aria-pressed={isVoiceOutputTab}
+            title={isVoiceOutputTab
+              ? 'This tab plays the assistant\'s proactive speech (reminders, briefings). Only one tab speaks at a time.'
+              : 'Proactive speech plays on another tab. Click to make this tab the speaker.'}
+            className={`flex items-center gap-1 px-2 py-1 rounded-full text-[10px] font-medium ${isVoiceOutputTab
+              ? 'text-port-success bg-port-success/10'
+              : 'text-gray-400 hover:text-white hover:bg-port-border/70'}`}
+          >
+            {isVoiceOutputTab ? <Volume2 size={12} /> : <VolumeX size={12} />}
+            {isVoiceOutputTab ? 'speaker' : 'muted'}
           </button>
           {history.length > 0 && (
             <button

@@ -6,6 +6,7 @@
 // Both emit 'voice:turn' over Socket.IO and play incoming TTS via Web Audio.
 
 import socket from './socket';
+import { subscribeVisibility } from '../hooks/useVisibilityEvent.js';
 
 let stream = null;
 let recorder = null;
@@ -364,6 +365,56 @@ export const onProactiveSpeech = (handler) => {
   return () => proactiveListeners.delete(handler);
 };
 
+// ─── Voice-output ownership (single-recipient proactive speech) ────────────
+// Proactive server-pushed lines (voice:speak) must play on exactly ONE tab —
+// otherwise every open tab and every federated machine speaks the same reminder
+// at once. The server routes voice:speak to a single designated "primary" tab;
+// the tab the user is actively looking at claims that role. We claim on focus,
+// on becoming visible, and on (re)connect while visible — so audio follows the
+// user's attention — and expose an explicit claim() for a "speak on this tab"
+// button. The server confirms ownership with voice:output:primary and tells the
+// displaced tab via voice:output:detached.
+let isVoiceOutputPrimary = false;
+const voiceOutputPrimaryListeners = new Set();
+
+const notifyVoiceOutputPrimary = () => {
+  for (const fn of voiceOutputPrimaryListeners) fn(isVoiceOutputPrimary);
+};
+
+export const claimVoiceOutput = () => {
+  if (socket.connected) socket.emit('voice:output:claim');
+};
+
+// Subscribe to voice-output ownership changes. Fires immediately with the
+// current value so a late subscriber (widget mount) reflects state without
+// waiting for the next handoff. Returns an unsubscribe function.
+export const onVoiceOutputPrimary = (handler) => {
+  voiceOutputPrimaryListeners.add(handler);
+  handler(isVoiceOutputPrimary);
+  return () => voiceOutputPrimaryListeners.delete(handler);
+};
+
+socket.on('voice:output:primary', () => {
+  if (isVoiceOutputPrimary) return;
+  isVoiceOutputPrimary = true;
+  notifyVoiceOutputPrimary();
+});
+socket.on('voice:output:detached', () => {
+  if (!isVoiceOutputPrimary) return;
+  isVoiceOutputPrimary = false;
+  notifyVoiceOutputPrimary();
+});
+
+// Claim on focus / visibility so proactive audio follows the active tab. Reuse
+// the shared visibility singleton (one document-level listener for the whole
+// app) rather than adding another `visibilitychange` handler. `focus` has no
+// shared singleton, so it stays a direct listener. Guard for non-browser
+// (test/SSR) contexts.
+if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+  window.addEventListener('focus', claimVoiceOutput);
+  subscribeVisibility((state) => { if (state === 'visible') claimVoiceOutput(); });
+}
+
 // voice:transcript marks the start of a new turn's outputs — any pending
 // rejection from a previous cancellation should be lifted now so this turn's
 // TTS chunks actually play.
@@ -445,6 +496,15 @@ export const setDictation = (enabled, date) => {
 socket.on('connect', () => {
   if (lastDictationRequest.enabled) {
     socket.emit('voice:dictation:set', lastDictationRequest);
+  }
+  // On (re)connect, re-claim voice output if this tab is the one the user is
+  // looking at — otherwise a reconnect could leave audio pointed at a stale
+  // primary. Only a visible+focused tab claims so a backgrounded reconnect
+  // doesn't steal output from the foreground tab.
+  if (typeof document !== 'undefined'
+    && document.visibilityState === 'visible'
+    && (document.hasFocus?.() ?? true)) {
+    claimVoiceOutput();
   }
 });
 
