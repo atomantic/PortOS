@@ -207,10 +207,31 @@ export async function runScheduledCommission(commissionId) {
     // Evaluation is deliberately left inheriting the default: it's a vision API
     // call, not a CoS agent, and pinning it to a CLI/TUI agent provider would
     // trip agentBridge's harness-boundary guard.
-    const pin = commission.assignment?.providerId
-      ? { providerId: commission.assignment.providerId, ...(commission.assignment.model ? { model: commission.assignment.model } : {}) }
-      : null;
-    const modelOverrides = pin ? { treatment: pin, plan: pin } : {};
+    //
+    // Guard the pin at fire time: treatment/plan run as CoS agent tasks, which
+    // only accept an agent-harness (cli/tui) provider — an api-type or removed
+    // provider trips agentBridge's harness-boundary guard and the task never
+    // processes (the run would record `started` but silently produce nothing).
+    // The UI only offers agent-harness providers, but a direct REST write or a
+    // provider whose type later changed to `api` could slip a bad pin past it.
+    // Resolve the provider now and DROP an unusable pin (falling back to the
+    // install default) so the commission still generates rather than stalling.
+    // Fail open: an unresolvable provider (toolkit hiccup) also falls back.
+    let modelOverrides = {};
+    if (commission.assignment?.providerId) {
+      const [{ getProviderById }, { PROVIDER_TYPES }] = await Promise.all([
+        import('../providers.js'),
+        import('../../lib/aiToolkit/constants.js'),
+      ]);
+      const provider = await getProviderById(commission.assignment.providerId).catch(() => null);
+      const agentCapable = provider?.type === PROVIDER_TYPES.CLI || provider?.type === PROVIDER_TYPES.TUI;
+      if (agentCapable) {
+        const pin = { providerId: commission.assignment.providerId, ...(commission.assignment.model ? { model: commission.assignment.model } : {}) };
+        modelOverrides = { treatment: pin, plan: pin };
+      } else {
+        console.warn(`⚠️ Creative commission ${commissionId} pins non-agent provider '${commission.assignment.providerId}' (${provider?.type || 'missing'}) — falling back to the default CD assignment`);
+      }
+    }
     // createProject prefixes "Creative Director: " (19 chars) before a
     // mediaCollections name capped at 80, so cap our derived name at 61 — a long
     // commission name would otherwise fail the collection create on every run.

@@ -687,23 +687,23 @@ function CommissionForm({ form, patchForm, runs, feedback, onRate, saving, onSav
 // plan). Mirrors SeriesLlmPicker: fetches the provider list, drives the shared
 // ProviderModelSelector, and reports changes up to form state via `onChange`.
 // Only agent-harness (CLI/TUI) providers are offered — an API-type provider
-// injected into a CoS agent task trips the server's harness-boundary guard. The
-// empty option names the actual active provider so an unset pin makes it clear
-// what will process the run, rather than an opaque "default".
+// injected into a CoS agent task trips the server's harness-boundary guard.
+//
+// The empty option deliberately does NOT name a specific provider: an unset pin
+// resolves at fire time to `settings.creativeDirector.{treatment,plan}` (falling
+// back to the active provider only when those stages are themselves unassigned),
+// so naming the registry's active provider here would misreport the processor on
+// installs that assign the CD stages separately. Label it neutrally; the section
+// helper text points the user at their Creative Director assignment.
 function AssignmentPicker({ assignment, onChange }) {
   const [providers, setProviders] = useState([]);
-  const [activeProviderId, setActiveProviderId] = useState(null);
 
   useEffect(() => {
     getProviders({ silent: true })
-      .then((data) => {
-        setProviders((data?.providers || []).filter(isProcessProvider));
-        setActiveProviderId(data?.activeProvider || null);
-      })
-      .catch(() => { /* dropdowns fall back to the "default provider" option */ });
+      .then((data) => setProviders((data?.providers || []).filter(isProcessProvider)))
+      .catch(() => { /* dropdowns fall back to the "install default" option */ });
   }, []);
 
-  const providerLabel = (pid) => providers.find((p) => p.id === pid)?.name || pid || 'auto-resolved';
   const availableModels = useMemo(() => {
     const p = providers.find((x) => x.id === assignment.providerId);
     return p?.models || [];
@@ -720,7 +720,7 @@ function AssignmentPicker({ assignment, onChange }) {
       label="Provider"
       modelDisabled={availableModels.length === 0}
       alwaysShowModel
-      emptyProviderOption={`Install default (${providerLabel(activeProviderId)})`}
+      emptyProviderOption="Install default (Creative Director assignment)"
       emptyModelOption="Default model"
     />
   );

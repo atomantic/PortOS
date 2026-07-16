@@ -38,6 +38,13 @@ vi.mock('../creativeDirector/local.js', () => ({ createProject: (...a) => create
 vi.mock('../creativeDirector/planAdvance.js', () => ({ advanceAfterPlanStepSettled: (...a) => advanceMock(...a) }));
 vi.mock('../videoGen/local.js', () => ({ defaultVideoModelId: () => 'ltx-default' }));
 
+// Provider resolution for the fire-time pin guard (dynamic-imported inside the
+// fire handler). Default: an agent-capable (tui) provider, so a pinned
+// commission fans its override onto both stages. Tests override per-case.
+const getProviderByIdMock = vi.fn(async (id) => ({ id, type: 'tui' }));
+vi.mock('../providers.js', () => ({ getProviderById: (...a) => getProviderByIdMock(...a) }));
+vi.mock('../../lib/aiToolkit/constants.js', () => ({ PROVIDER_TYPES: { CLI: 'cli', TUI: 'tui', API: 'api' } }));
+
 const loadStateMock = vi.fn(async () => ({ config: {} }));
 vi.mock('../cosState.js', () => ({ loadState: (...a) => loadStateMock(...a) }));
 const creativeModeMock = vi.fn(() => 'execute');
@@ -175,6 +182,29 @@ describe('runScheduledCommission gates', () => {
     expect(createProjectMock).toHaveBeenCalledWith(expect.objectContaining({
       modelOverrides: { treatment: pin, plan: pin },
     }));
+  });
+
+  it('drops a pin to a non-agent (api) provider and still generates on the default', async () => {
+    // A CoS treatment/plan task only accepts a cli/tui provider; an api pin
+    // would be rejected by the harness-boundary guard mid-fire. The guard drops
+    // it so the run proceeds on the install default instead of stalling.
+    getProviderByIdMock.mockResolvedValueOnce({ id: 'gpt-4o', type: 'api' });
+    getCommissionMock.mockResolvedValue(videoCommission({
+      assignment: { providerId: 'gpt-4o', model: 'gpt-4o' },
+    }));
+    await runScheduledCommission('commission-1');
+    expect(createProjectMock).toHaveBeenCalledWith(expect.objectContaining({ modelOverrides: {} }));
+    // The commission still fires (falls back to default), it doesn't skip.
+    expect(advanceMock).toHaveBeenCalledWith('cd-xyz');
+  });
+
+  it('drops a pin to a removed/unresolvable provider (fails open to the default)', async () => {
+    getProviderByIdMock.mockResolvedValueOnce(null);
+    getCommissionMock.mockResolvedValue(videoCommission({
+      assignment: { providerId: 'ghost-provider', model: null },
+    }));
+    await runScheduledCommission('commission-1');
+    expect(createProjectMock).toHaveBeenCalledWith(expect.objectContaining({ modelOverrides: {} }));
   });
 
   it('does NOT surface when the fire is skipped (nothing was generated)', async () => {
