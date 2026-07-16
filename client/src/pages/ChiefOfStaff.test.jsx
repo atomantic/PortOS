@@ -16,7 +16,12 @@ const api = vi.hoisted(() => ({
   getCosActionableInsights: vi.fn(),
   getCosBudgetUsage: vi.fn(),
   forceCosEvaluate: vi.fn(),
+  forceHealthCheck: vi.fn(),
   updateCosConfig: vi.fn(),
+  // HealthTab (rendered by the manual "Run Check" test) + its ProviderStatusCard.
+  getCosTodayActivity: vi.fn(),
+  getCosLearning: vi.fn(),
+  getProviderStatuses: vi.fn(),
 }));
 const toast = vi.hoisted(() => ({ success: vi.fn(), error: vi.fn() }));
 const socketStub = vi.hoisted(() => ({ connected: false, on: vi.fn(), off: vi.fn(), emit: vi.fn() }));
@@ -61,6 +66,10 @@ beforeEach(() => {
   api.getApps.mockResolvedValue([]);
   api.getCosLearningSummary.mockResolvedValue(null);
   api.getCosActionableInsights.mockResolvedValue({ insights: [] });
+  api.forceHealthCheck.mockResolvedValue({ metrics: { timestamp: 1 }, issues: [] });
+  api.getCosTodayActivity.mockResolvedValue({ isRunning: false, stats: { completed: 0 } });
+  api.getCosLearning.mockResolvedValue(null);
+  api.getProviderStatuses.mockResolvedValue({ providers: {} });
   api.getCosBudgetUsage.mockResolvedValue({ usage: {} });
 });
 
@@ -104,16 +113,27 @@ describe('ChiefOfStaff handleForceEvaluate', () => {
   });
 });
 
-// #2654: the banner is now prop-driven, and paths that don't go through
-// fetchData (socket-driven health checks / task changes) must still refresh the
-// server-derived insight counts so the banner doesn't lag until the 30s poll.
+// #2654: the banner is now prop-driven. The manual "Run Check" button updates
+// `health` locally (keeping its own status message), so it must re-pull insights
+// to refresh the banner's health-issue count. But the SOCKET `cos:health:check`
+// handler must NOT re-pull insights: the /cos/actionable-insights endpoint runs a
+// health check that re-emits that same socket event, so a socket-driven refresh
+// would be an unbounded feedback loop (regression guard for the review finding).
 describe('ChiefOfStaff insight freshness (#2654)', () => {
   const getSocketHandler = (event) => {
     const entry = socketStub.on.mock.calls.find(([evt]) => evt === event);
     return entry?.[1];
   };
 
-  it('refreshes actionable insights when a socket health-check arrives', async () => {
+  const renderAt = (tab) => render(
+    <MemoryRouter initialEntries={[`/cos/${tab}`]}>
+      <Routes>
+        <Route path="/cos/:tab" element={<ChiefOfStaff />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  it('does NOT re-fetch insights on a socket health-check (no feedback loop)', async () => {
     renderConfigTab();
     // The initial fetchData pulls insights once; wait for it before firing.
     await waitFor(() => expect(api.getCosActionableInsights).toHaveBeenCalled());
@@ -122,29 +142,29 @@ describe('ChiefOfStaff insight freshness (#2654)', () => {
     const handleHealthCheck = getSocketHandler('cos:health:check');
     expect(handleHealthCheck).toBeTypeOf('function');
     // Empty issues avoids the >0 branch's setTimeout(setSpeaking) so no state
-    // update escapes act; refreshInsights fires unconditionally either way.
+    // update escapes act.
     await act(async () => {
       handleHealthCheck({ metrics: { timestamp: 1 }, issues: [] });
     });
+    // Give any (buggy) async refresh a tick to fire before asserting it didn't.
+    await act(async () => { await Promise.resolve(); });
 
-    // Health doesn't call fetchData (that would clobber its status message) — it
-    // re-pulls just insights, so the call count must advance past the initial.
-    await waitFor(() =>
-      expect(api.getCosActionableInsights.mock.calls.length).toBeGreaterThan(before),
-    );
+    // A socket-driven re-fetch here would loop against the health-checking
+    // endpoint — the count must stay put; the poll refreshes the banner instead.
+    expect(api.getCosActionableInsights.mock.calls.length).toBe(before);
   });
 
-  it('refreshes actionable insights on a socket task change', async () => {
-    renderConfigTab();
+  it('re-fetches insights when the manual "Run Check" button runs a health check', async () => {
+    renderAt('health');
     await waitFor(() => expect(api.getCosActionableInsights).toHaveBeenCalled());
     const before = api.getCosActionableInsights.mock.calls.length;
 
-    const handleTasksUserChanged = getSocketHandler('cos:tasks:user:changed');
-    expect(handleTasksUserChanged).toBeTypeOf('function');
-    await act(async () => {
-      handleTasksUserChanged({ tasks: [], grouped: {} });
-    });
+    const button = await screen.findByRole('button', { name: /Run Check/i });
+    fireEvent.click(button);
 
+    // The manual path awaits forceHealthCheck, sets health locally, then calls
+    // refreshInsights() — a one-shot, loop-free insights re-pull.
+    await waitFor(() => expect(api.forceHealthCheck).toHaveBeenCalledWith({ silent: true }));
     await waitFor(() =>
       expect(api.getCosActionableInsights.mock.calls.length).toBeGreaterThan(before),
     );

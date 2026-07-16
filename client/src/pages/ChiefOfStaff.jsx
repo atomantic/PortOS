@@ -162,12 +162,18 @@ export default function ChiefOfStaff() {
     setActiveAgentMeta(runningAgent?.metadata || null);
   }, [deriveAgentState]);
 
-  // Targeted insights-only refresh for parent state changes that DON'T route
-  // through fetchData — health checks and socket-driven task changes update
-  // `health`/`tasks` locally (to keep their own status messaging / avoid a full
-  // refetch) rather than calling fetchData. The banner's server-derived counts
-  // (blocked, health issues) would otherwise lag those until the 30s poll, so we
-  // re-pull just insights here. Same last-good/silent semantics as fetchData.
+  // Targeted insights-only refresh for the manual "Run health check" button,
+  // which updates `health` locally (to keep its own status messaging) rather
+  // than calling fetchData — so the banner's server-derived "N health issues"
+  // count would otherwise lag until the 30s poll. Same last-good/silent
+  // semantics as fetchData.
+  //
+  // IMPORTANT: never wire this to the `cos:health:check` SOCKET handler. The
+  // /cos/actionable-insights endpoint itself runs a health check
+  // (cos.runHealthCheck → cosEvents 'health:check' → socket 'cos:health:check'),
+  // so a socket-driven refreshInsights would re-emit the very event that
+  // triggered it — an unbounded health-check/request/socket feedback loop.
+  // Daemon-driven health checks refresh the banner on the next fetchData poll.
   const refreshInsights = useCallback(async () => {
     const insightsData = await api.getCosActionableInsights({ silent: true }).catch(() => null);
     if (insightsData?.insights) setInsights(insightsData.insights);
@@ -212,9 +218,6 @@ export default function ChiefOfStaff() {
 
     const handleTasksUserChanged = (data) => {
       setTasks(prev => ({ ...prev, user: data }));
-      // Socket-driven task changes (daemon status flips, blocks/unblocks) don't
-      // go through fetchData, so refresh the banner's blocked/approval counts.
-      refreshInsights();
     };
     socket.on('cos:tasks:user:changed', handleTasksUserChanged);
 
@@ -276,9 +279,9 @@ export default function ChiefOfStaff() {
 
     const handleHealthCheck = (data) => {
       setHealth({ lastCheck: data.metrics?.timestamp, issues: data.issues });
-      // Health feeds the banner's "N health issues" insight; refresh it so a
-      // newly-found (or cleared) issue reflects immediately, not on the 30s poll.
-      refreshInsights();
+      // Do NOT refreshInsights() here — the insights endpoint runs a health
+      // check that re-emits this very socket event (see refreshInsights above),
+      // which would loop. The banner's health count refreshes on the next poll.
       if (data.issues?.length > 0) {
         setAgentState('investigating');
         setStatusMessage(`Health check: ${data.issues.length} issue${data.issues.length > 1 ? 's' : ''} found`);
@@ -327,7 +330,7 @@ export default function ChiefOfStaff() {
       socket.off('cos:log', handleCosLog);
       socket.off('apps:changed', handleAppsChanged);
     };
-  }, [socket, fetchData, refreshInsights]);
+  }, [socket, fetchData]);
 
   const handleStart = async () => {
     const result = await api.startCos({ silent: true }).catch(err => {
