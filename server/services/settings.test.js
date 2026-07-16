@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // settings.js persists via the shared atomicWrite helper and reads via
 // tryReadFile (both from server/lib/fileUtils.js). Mock just those two and
@@ -13,8 +13,11 @@ vi.mock('../lib/fileUtils.js', async (importActual) => {
   };
 });
 
+import { writeFileSync, mkdtempSync, rmSync } from 'fs';
+import { join as joinPath } from 'path';
+import { tmpdir } from 'os';
 import { atomicWrite, tryReadFile } from '../lib/fileUtils.js';
-import { getSettings, updateSettings, updateSettingsWith, reloadSettings, settingsEvents, __resetSettingsCache } from './settings.js';
+import { getSettings, updateSettings, updateSettingsWith, reloadSettings, settingsEvents, __resetSettingsCache, readSettingsStrict } from './settings.js';
 
 describe('settings.js', () => {
   beforeEach(() => {
@@ -54,6 +57,20 @@ describe('settings.js', () => {
 
       const result = await getSettings();
       expect(result).toEqual({});
+    });
+
+    it('does not cache a corrupt read, so a repaired file is picked up next call (#2684)', async () => {
+      // A malformed settings.json must NOT poison the cache with {} — otherwise
+      // verifyPassword() and every other consumer stay stranded on empty settings
+      // (rejecting the correct password) until a save or restart.
+      tryReadFile.mockResolvedValueOnce('{ truncated');
+      const first = await getSettings();
+      expect(first).toEqual({});
+
+      // File repaired: the next read must reflect it, proving {} was not cached.
+      tryReadFile.mockResolvedValue(JSON.stringify({ secrets: { auth: { enabled: true, passwordHash: 'h', salt: 's' } } }));
+      const second = await getSettings();
+      expect(second.secrets.auth.enabled).toBe(true);
     });
 
     it('should handle complex nested settings', async () => {
@@ -500,6 +517,109 @@ describe('settings.js', () => {
       expect(result).toEqual({ theme: 'dark' });
       // Confirm no prototype pollution — a fresh object must not see `polluted`.
       expect({}.polluted).toBeUndefined();
+    });
+  });
+
+  // Strict read for the auth gate (#2684): distinguishes absent (auth off) from
+  // present-but-corrupt (fail closed), which loadRaw()/getSettings() collapse to {}.
+  // Content comes through the mocked tryReadFile; the absent-vs-unreadable split
+  // uses a real access() probe, so those two cases drive a real temp file.
+  describe('readSettingsStrict', () => {
+    let dir;
+    beforeEach(() => { dir = mkdtempSync(joinPath(tmpdir(), 'portos-strict-')); });
+    afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
+
+    it('reports absent (not corrupt) when the file does not exist', async () => {
+      // tryReadFile null + a path that isn't there → access() throws → absent.
+      tryReadFile.mockResolvedValue(null);
+      const res = await readSettingsStrict(joinPath(dir, 'nope.json'));
+      expect(res).toEqual({ present: false, corrupt: false, settings: {} });
+    });
+
+    it('flags a present-but-unreadable file as corrupt (fail-closed signal)', async () => {
+      // tryReadFile null (read failed) but the file EXISTS → access() succeeds → corrupt.
+      const p = joinPath(dir, 'settings.json');
+      writeFileSync(p, '{}');
+      tryReadFile.mockResolvedValue(null);
+      const res = await readSettingsStrict(p);
+      expect(res).toEqual({ present: true, corrupt: true, settings: {} });
+    });
+
+    it('fails closed when access() errors for a non-ENOENT reason (only ENOENT is absent)', async () => {
+      // A path whose parent component is a FILE, not a directory, makes access()
+      // throw ENOTDIR (not ENOENT) — we cannot confirm the file is absent, so it
+      // must classify as corrupt (fail closed), never as an absent fresh install.
+      const notADir = joinPath(dir, 'iamafile');
+      writeFileSync(notADir, 'x');
+      tryReadFile.mockResolvedValue(null);
+      const res = await readSettingsStrict(joinPath(notADir, 'settings.json'));
+      expect(res.present).toBe(true);
+      expect(res.corrupt).toBe(true);
+    });
+
+    it('parses a clean settings file', async () => {
+      tryReadFile.mockResolvedValue(JSON.stringify({ secrets: { auth: { enabled: true, passwordHash: 'h', salt: 's' } } }));
+      const res = await readSettingsStrict(joinPath(dir, 'settings.json'));
+      expect(res.present).toBe(true);
+      expect(res.corrupt).toBe(false);
+      expect(res.settings.secrets.auth.enabled).toBe(true);
+    });
+
+    it('flags present-but-malformed content as corrupt', async () => {
+      tryReadFile.mockResolvedValue('{ this is not valid json');
+      const res = await readSettingsStrict(joinPath(dir, 'settings.json'));
+      expect(res).toEqual({ present: true, corrupt: true, settings: {} });
+    });
+
+    it('flags empty content as corrupt', async () => {
+      tryReadFile.mockResolvedValue('');
+      const res = await readSettingsStrict(joinPath(dir, 'settings.json'));
+      expect(res.corrupt).toBe(true);
+    });
+
+    it('flags a valid-JSON but non-object root as corrupt', async () => {
+      tryReadFile.mockResolvedValue('[1,2,3]');
+      const res = await readSettingsStrict(joinPath(dir, 'settings.json'));
+      expect(res.corrupt).toBe(true);
+    });
+  });
+
+  // reloadSettings must not broadcast a corrupt file as `{}` (#2684) — that path
+  // (backup restore of a malformed snapshot) is what would prime the auth cache
+  // to disabled and fail open.
+  describe('reloadSettings corruption handling', () => {
+    it('emits settings:invalidated (not settings:updated) and drops the cache on a corrupt file', async () => {
+      const onUpdated = vi.fn();
+      const onInvalidated = vi.fn();
+      settingsEvents.on('settings:updated', onUpdated);
+      settingsEvents.on('settings:invalidated', onInvalidated);
+
+      tryReadFile.mockResolvedValue('{ truncated');
+      const result = await reloadSettings();
+
+      expect(result).toEqual({});
+      expect(onInvalidated).toHaveBeenCalledTimes(1);
+      expect(onUpdated).not.toHaveBeenCalled();
+
+      // Cache was dropped: a subsequent clean read is picked up (not a stale {}).
+      tryReadFile.mockResolvedValue(JSON.stringify({ theme: 'dark' }));
+      expect(await getSettings()).toEqual({ theme: 'dark' });
+
+      settingsEvents.off('settings:updated', onUpdated);
+      settingsEvents.off('settings:invalidated', onInvalidated);
+    });
+
+    it('emits settings:updated with the parsed settings on a clean reload', async () => {
+      const onUpdated = vi.fn();
+      settingsEvents.on('settings:updated', onUpdated);
+
+      tryReadFile.mockResolvedValue(JSON.stringify({ theme: 'light' }));
+      const result = await reloadSettings();
+
+      expect(result).toEqual({ theme: 'light' });
+      expect(onUpdated).toHaveBeenCalledWith({ theme: 'light' });
+
+      settingsEvents.off('settings:updated', onUpdated);
     });
   });
 });
