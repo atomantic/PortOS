@@ -139,8 +139,9 @@ describe('runScheduledCommission gates', () => {
     }));
     expect(advanceMock).toHaveBeenCalledWith('cd-xyz');
     expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({ status: 'started', projectId: 'cd-xyz' }));
-    // Reserves the planner action against the cos budget on admission.
-    expect(recordUsageMock).toHaveBeenCalledWith('cos', { actions: 1 });
+    // The planner's cos action is accounted by completeAgent on completion — the
+    // fire handler must NOT pre-charge (that would double-count).
+    expect(recordUsageMock).not.toHaveBeenCalled();
   });
 
   it('caps the derived project name so createCollection (80-char limit) never fails', async () => {
@@ -152,11 +153,20 @@ describe('runScheduledCommission gates', () => {
     expect(name.endsWith(new Date().toISOString().slice(0, 10))).toBe(true);
   });
 
-  it('does not charge the budget when a gate skips the fire', async () => {
-    creativeModeMock.mockReturnValue('off');
+  it('fails closed (skips) when the autonomy/config read is unavailable', async () => {
+    loadStateMock.mockRejectedValueOnce(new Error('cos state read failed'));
     getCommissionMock.mockResolvedValue(videoCommission());
     await runScheduledCommission('commission-1');
-    expect(recordUsageMock).not.toHaveBeenCalled();
+    expect(createProjectMock).not.toHaveBeenCalled();
+    expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({ status: 'skipped', reason: 'governance-unavailable' }));
+  });
+
+  it('fails closed (skips) when the budget read is unavailable', async () => {
+    budgetMock.mockRejectedValueOnce(new Error('budget read failed'));
+    getCommissionMock.mockResolvedValue(videoCommission());
+    await runScheduledCommission('commission-1');
+    expect(createProjectMock).not.toHaveBeenCalled();
+    expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({ status: 'skipped', reason: 'budget-unavailable' }));
   });
 
   it('skips generation (records skipped) when creative autonomy is off', async () => {

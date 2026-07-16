@@ -347,7 +347,9 @@ export default function App() {
           <Route path="creative-director/:id" element={<CreativeDirectorOverviewRedirect />} />
           <Route path="creative-director/:id/:tab" element={<CreativeDirectorDetail />} />
           <Route path="creative-commission" element={<CreativeCommissions />} />
-          <Route path="creative-commission/new" element={<CreativeCommissions />} />
+          {/* `:id` matches the literal `new` (create mode) too — a separate
+              static `new` route would render with no :id param and leave the
+              drawer closed, since React Router ranks the static segment higher. */}
           <Route path="creative-commission/:id" element={<CreativeCommissions />} />
           <Route path="image-gen" element={<RedirectWithSearch to="/media/image" />} />
           <Route path="video-gen" element={<RedirectWithSearch to="/media/video" />} />
