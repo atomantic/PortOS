@@ -86,11 +86,15 @@ export function renderFeedbackDigest(feedback, windowSize = 5) {
   // first) can't eat the whole digest and truncate away the newer dislikes + the
   // steering instruction. Each group gets an equal share of the digest budget
   // (minus the fixed steering sentence); the final clamp is then a no-op safety net.
+  // Render each group NEWEST-first before clamping: `likes`/`dislikes` are
+  // collected oldest→newest, and `clamp` keeps the prefix, so clamping the
+  // chronological join would drop the user's LATEST reaction in a long group.
+  // Reversing puts the newest notes first, so the truncation sheds the oldest.
   const STEER = 'Steer toward the likes and away from the dislikes.';
   const groupBudget = Math.max(0, Math.floor((MAX_DIGEST_LEN - STEER.length - 40) / 2));
   const parts = [];
-  if (likes.length) parts.push(`Recent likes: ${clamp(likes.join('; '), groupBudget)}.`);
-  if (dislikes.length) parts.push(`Recent dislikes: ${clamp(dislikes.join('; '), groupBudget)}.`);
+  if (likes.length) parts.push(`Recent likes: ${clamp([...likes].reverse().join('; '), groupBudget)}.`);
+  if (dislikes.length) parts.push(`Recent dislikes: ${clamp([...dislikes].reverse().join('; '), groupBudget)}.`);
   parts.push(STEER);
   return clamp(parts.join(' '), MAX_DIGEST_LEN);
 }

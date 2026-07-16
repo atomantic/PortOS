@@ -629,7 +629,12 @@ function RunFeedback({ runId, current, onRate }) {
   // discarded on close/save (the drawer Save doesn't carry feedback). A note
   // can't be saved before a rating exists — a rating is required — so this is a
   // no-op until the run has been thumbed at least once.
-  const persistNoteEdit = async () => {
+  const persistNoteEdit = async (e) => {
+    // Don't autosave when focus is moving to a rating button — the thumb's own
+    // click will save the (edited) note under the NEW vote. Autosaving here would
+    // fire submit(oldRating) + setBusy(true), disabling the thumb before its
+    // click lands, so the newly clicked vote would be silently dropped.
+    if (e?.relatedTarget?.hasAttribute?.('data-commission-rate')) return;
     if (busy || !rating) return;
     if (note.trim() === (current?.note || '')) return; // unchanged
     await submit(rating);
@@ -641,6 +646,7 @@ function RunFeedback({ runId, current, onRate }) {
         type="button"
         disabled={busy}
         onClick={() => submit('up')}
+        data-commission-rate
         aria-label="Like this result"
         aria-pressed={isUp}
         title="Like — steer future runs toward this"
@@ -652,6 +658,7 @@ function RunFeedback({ runId, current, onRate }) {
         type="button"
         disabled={busy}
         onClick={() => submit('down')}
+        data-commission-rate
         aria-label="Dislike this result"
         aria-pressed={isDown}
         title="Dislike — steer future runs away from this"

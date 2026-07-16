@@ -329,9 +329,20 @@ export async function updateCommission(id, patch) {
 }
 
 export async function deleteCommission(id) {
-  const current = await commissionStore().readRaw(id);
-  if (!current) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
-  await commissionStore().deleteRaw(id);
+  const store = commissionStore();
+  // Serialize the read+delete on the SAME per-id write queue as
+  // update/recordRun/submitFeedback. Otherwise an in-flight feedback write (its
+  // own queued read→writeRaw) could interleave with a delete that runs outside
+  // the queue: feedback reads the row, delete hard-deletes it, feedback's
+  // writeRaw then upserts the stale record and resurrects the commission. With
+  // delete on the tail, a feedback write queued after it finds no row and 404s.
+  const existed = await store.queueRecordWrite(id, async () => {
+    const current = await store.readRaw(id);
+    if (!current) return false;
+    await store.deleteRaw(id);
+    return true;
+  });
+  if (!existed) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
   commissionEvents.emit('commission:changed', { id, action: 'delete' });
   return { id, deleted: true };
 }
