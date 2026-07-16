@@ -113,6 +113,72 @@ describe('SongBookViewer', () => {
     expect(screen.queryByRole('link', { name: /Sheet music/ })).toBeNull();
   });
 
+  describe('instrument-view toggle (#2656)', () => {
+    // Sheet with a tab staff so the non-guitar collapse note is observable.
+    const TAB_SHEET = `[Chorus]
+C  G  Am  F
+Nonsense words here
+e|--3--2--|
+B|--0-----|`;
+
+    it('defaults to the song instrument (guitar) and shows the chords-used strip', async () => {
+      renderPage();
+      expect(await screen.findByText('Chorus')).toBeTruthy();
+      const select = screen.getByRole('combobox', { name: 'Instrument view' });
+      expect(select.value).toBe('guitar');
+      expect(screen.getByText('Chords used')).toBeTruthy();
+    });
+
+    it('defaults to the song instrument for piano songs and collapses guitar tab', async () => {
+      api.getSong.mockResolvedValue(song({ instrument: 'piano', content: { format: 'tab', text: TAB_SHEET } }));
+      renderPage();
+      expect(await screen.findByText('Chorus')).toBeTruthy();
+      expect(screen.getByRole('combobox', { name: 'Instrument view' }).value).toBe('piano');
+      expect(screen.getByText(/guitar tab — switch to Guitar view/)).toBeTruthy();
+      expect(screen.queryByText('e|--3--2--|')).toBeNull();
+    });
+
+    it('maps non-diagram instruments (bass/voice/other) to the guitar view', async () => {
+      api.getSong.mockResolvedValue(song({ instrument: 'bass' }));
+      renderPage();
+      expect(await screen.findByText('Chorus')).toBeTruthy();
+      expect(screen.getByRole('combobox', { name: 'Instrument view' }).value).toBe('guitar');
+    });
+
+    it('honors a ?view= deep link over the song instrument', async () => {
+      api.getSong.mockResolvedValue(song({ content: { format: 'tab', text: TAB_SHEET } }));
+      renderPage('/songbook/abc?view=ukulele');
+      expect(await screen.findByText('Chorus')).toBeTruthy();
+      expect(screen.getByRole('combobox', { name: 'Instrument view' }).value).toBe('ukulele');
+      expect(screen.getByText(/guitar tab — switch to Guitar view/)).toBeTruthy();
+    });
+
+    it('switching the view swaps the diagrams without any record write', async () => {
+      api.getSong.mockResolvedValue(song({ content: { format: 'tab', text: TAB_SHEET } }));
+      renderPage();
+      expect(await screen.findByText('Chorus')).toBeTruthy();
+      expect(screen.getByText('e|--3--2--|')).toBeTruthy();
+      fireEvent.change(screen.getByRole('combobox', { name: 'Instrument view' }), { target: { value: 'piano' } });
+      // Tab staff collapses; a chord popover now shows piano chips.
+      expect(screen.getByText(/guitar tab — switch to Guitar view/)).toBeTruthy();
+      fireEvent.click(screen.getAllByRole('button', { name: 'Am' })[0]);
+      const dialog = screen.getByRole('dialog', { name: 'Am chord voicing' });
+      expect(dialog.querySelector('svg')).toBeNull(); // piano chips, not a fretbox
+      expect(api.updateSong).not.toHaveBeenCalled();
+    });
+
+    it('diagrams follow transposed chord names', async () => {
+      api.getSong.mockResolvedValue(song());
+      renderPage();
+      expect(await screen.findByText('Chorus')).toBeTruthy();
+      fireEvent.click(screen.getByLabelText('Transpose up'));
+      fireEvent.click(screen.getByLabelText('Transpose up'));
+      // C G Am F +2 → D A Bm G; the popover opens for the transposed name.
+      fireEvent.click(screen.getAllByRole('button', { name: 'Bm' })[0]);
+      expect(screen.getByRole('dialog', { name: 'Bm chord voicing' })).toBeTruthy();
+    });
+  });
+
   it('renders the edit form in ?mode=edit and saves the whole content object', async () => {
     api.updateSong.mockImplementation((id, patch) => Promise.resolve(song({ ...patch })));
     renderPage('/songbook/abc?mode=edit');
