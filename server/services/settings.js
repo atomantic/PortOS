@@ -104,8 +104,13 @@ export const readSettingsStrict = async (filePath = SETTINGS_FILE) => {
     try {
       await access(filePath);
       return { present: true, corrupt: true, settings: {} };   // exists but unreadable
-    } catch {
-      return { present: false, corrupt: false, settings: {} };  // ENOENT — genuinely absent
+    } catch (err) {
+      // Only ENOENT proves the file is genuinely absent (fresh install → auth
+      // off). Any OTHER access() failure — EACCES because the parent directory
+      // lacks search permission, ENOTDIR, EIO — means we could NOT confirm
+      // absence, so it must fail closed (corrupt), not be mistaken for absent.
+      if (err?.code === 'ENOENT') return { present: false, corrupt: false, settings: {} };
+      return { present: true, corrupt: true, settings: {} };
     }
   }
   // Present and read. safeJSONParse returns null for malformed/empty input; a

@@ -545,6 +545,18 @@ describe('settings.js', () => {
       expect(res).toEqual({ present: true, corrupt: true, settings: {} });
     });
 
+    it('fails closed when access() errors for a non-ENOENT reason (only ENOENT is absent)', async () => {
+      // A path whose parent component is a FILE, not a directory, makes access()
+      // throw ENOTDIR (not ENOENT) — we cannot confirm the file is absent, so it
+      // must classify as corrupt (fail closed), never as an absent fresh install.
+      const notADir = joinPath(dir, 'iamafile');
+      writeFileSync(notADir, 'x');
+      tryReadFile.mockResolvedValue(null);
+      const res = await readSettingsStrict(joinPath(notADir, 'settings.json'));
+      expect(res.present).toBe(true);
+      expect(res.corrupt).toBe(true);
+    });
+
     it('parses a clean settings file', async () => {
       tryReadFile.mockResolvedValue(JSON.stringify({ secrets: { auth: { enabled: true, passwordHash: 'h', salt: 's' } } }));
       const res = await readSettingsStrict(joinPath(dir, 'settings.json'));
