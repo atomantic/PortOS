@@ -91,7 +91,11 @@ export function renderFeedbackDigest(feedback, windowSize = 5) {
   // chronological join would drop the user's LATEST reaction in a long group.
   // Reversing puts the newest notes first, so the truncation sheds the oldest.
   const STEER = 'Steer toward the likes and away from the dislikes.';
-  const groupBudget = Math.max(0, Math.floor((MAX_DIGEST_LEN - STEER.length - 40) / 2));
+  // Split the budget only across the groups that are actually present — a
+  // one-sided window (only likes or only dislikes) gets the WHOLE budget rather
+  // than reserving half for an absent group and truncating real feedback.
+  const groupsPresent = (likes.length ? 1 : 0) + (dislikes.length ? 1 : 0);
+  const groupBudget = Math.max(0, Math.floor((MAX_DIGEST_LEN - STEER.length - 40) / groupsPresent));
   const parts = [];
   if (likes.length) parts.push(`Recent likes: ${clamp([...likes].reverse().join('; '), groupBudget)}.`);
   if (dislikes.length) parts.push(`Recent dislikes: ${clamp([...dislikes].reverse().join('; '), groupBudget)}.`);

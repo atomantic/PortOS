@@ -68,6 +68,22 @@ describe('renderFeedbackDigest', () => {
     expect(renderFeedbackDigest([{ rating: 'up', note: 'x' }], 0)).toBe('');
   });
 
+  it('gives a one-sided window the whole budget (does not reserve half for the absent group)', () => {
+    // 3 × 300-char likes = ~900 chars — fits the full digest budget but would
+    // overrun a half-budget (~730), truncating the newest like. With no dislikes,
+    // the likes group must get the whole budget so all three survive.
+    const feedback = [
+      { rating: 'up', note: 'A'.repeat(300) },
+      { rating: 'up', note: 'B'.repeat(300) },
+      { rating: 'up', note: 'C'.repeat(300) },
+    ];
+    const digest = renderFeedbackDigest(feedback, 3);
+    // newest-first: C should be present (it's the latest), and all three fit.
+    expect(digest).toContain('C'.repeat(300));
+    expect(digest).toContain('A'.repeat(300));
+    expect(digest).not.toContain('Recent dislikes');
+  });
+
   it('keeps recent dislikes even when many long likes precede them (per-group budget)', () => {
     const feedback = [
       ...Array.from({ length: 5 }, () => ({ rating: 'up', note: 'L'.repeat(300) })),

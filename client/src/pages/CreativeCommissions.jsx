@@ -13,8 +13,8 @@
  */
 
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
-import { Plus, Sparkles, Trash2, Clock, Pause, Play, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { useNavigate, useParams, Link } from 'react-router-dom';
+import { Plus, Sparkles, Trash2, Clock, Pause, Play, ThumbsUp, ThumbsDown, ExternalLink } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Drawer from '../components/Drawer';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
@@ -605,7 +605,18 @@ function CommissionForm({ form, patchForm, runs, feedback, onRate, saving, onSav
                     {r.status}{r.reason ? ` · ${r.reason}` : ''}{r.error ? ` · ${r.error}` : ''}
                   </span>
                 </div>
-                {/* Rate/annotate a run that actually produced output. */}
+                {/* Open the generated output so the user can inspect what they're
+                    rating, then rate/annotate the run below. */}
+                {r.projectId && (
+                  <div className="mt-1">
+                    <Link
+                      to={`/creative-director/${encodeURIComponent(r.projectId)}`}
+                      className="text-port-accent hover:text-blue-400 inline-flex items-center gap-1"
+                    >
+                      <ExternalLink className="w-3 h-3" /> View output
+                    </Link>
+                  </div>
+                )}
                 {r.projectId && onRate && (
                   <RunFeedback runId={r.id} current={feedbackByRun[r.id]} onRate={onRate} />
                 )}
