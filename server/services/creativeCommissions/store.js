@@ -8,19 +8,34 @@
  * one record per commission. Commissions are MACHINE-LOCAL and NOT federated in
  * Phase 1 — the same rationale as `seriesAutopilotScheduler`'s settings-based
  * schedules: a schedule that federated across sync peers would double-run on
- * every machine. Federation (with a per-peer "home" gate) is Phase 2 work.
+ * every machine. Federation is Phase 2 work, and it must split this record: the
+ * brief/feedback CAN federate, but the `schedule` field (+ a future "home peer"
+ * pointer) MUST stay machine-local, or the whole double-run avoidance breaks.
+ * seriesAutopilot already proved this shape out (local schedule → federated
+ * series); Phase 2 will decompose the monolithic local record accordingly.
  *
  * The record shape is stable/forward-looking: `feedback[]` + `feedbackWindow`
  * exist now (Phase 1 leaves feedback empty) so Phase 2 only needs the rate
  * surface, not a schema change.
+ *
+ * Mutations emit `commission:changed` on `commissionEvents` so the scheduler
+ * re-arms crons off the DATA changing (any writer), not off the three REST
+ * handlers that happen to change it today — mirroring seriesAutopilot's
+ * `settings:updated` seam and keeping the HTTP route decoupled from the
+ * scheduler graph.
  */
 
 import { join } from 'path';
 import { randomUUID } from 'crypto';
+import { EventEmitter } from 'events';
 import { PATHS } from '../../lib/fileUtils.js';
 import { createCollectionStore } from '../../lib/collectionStore.js';
 import { isValidCron } from '../eventScheduler.js';
 import { commissionToCron } from './directive.js';
+
+// Emits `commission:changed` on any create/update/delete (not on run-record
+// appends, which don't affect scheduling). The scheduler subscribes to re-sync.
+export const commissionEvents = new EventEmitter();
 
 export const TYPE = 'creative-commissions';
 export const COMMISSIONS_SCHEMA_VERSION = 1;
@@ -134,9 +149,12 @@ export async function createCommission(input) {
   const store = commissionStore();
   const now = new Date().toISOString();
   const id = `commission-${randomUUID()}`;
-  const record = sanitizeCommission({ ...input, id, createdAt: now, updatedAt: now, runs: [], feedback: [] });
+  // sanitizeCommission defaults runs/feedback to [] and the create schema carries
+  // neither key, so no explicit empties are needed here.
+  const record = sanitizeCommission({ ...input, id, createdAt: now, updatedAt: now });
   await ensureTypeIndex(store);
   await store.saveOne(id, record);
+  commissionEvents.emit('commission:changed', { id, action: 'create' });
   return record;
 }
 
@@ -144,8 +162,7 @@ export async function updateCommission(id, patch) {
   const store = commissionStore();
   const current = await store.loadOne(id);
   if (!current) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
-  const nextSchedule = patch.schedule ?? current.schedule;
-  if (patch.schedule) assertValidSchedule(nextSchedule);
+  if (patch.schedule) assertValidSchedule(patch.schedule);
   const merged = sanitizeCommission({
     ...current,
     ...patch,
@@ -159,6 +176,7 @@ export async function updateCommission(id, patch) {
     updatedAt: new Date().toISOString(),
   });
   await store.saveOne(id, merged);
+  commissionEvents.emit('commission:changed', { id, action: 'update' });
   return merged;
 }
 
@@ -167,6 +185,7 @@ export async function deleteCommission(id) {
   const current = await store.loadOne(id);
   if (!current) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
   await store.deleteOne(id);
+  commissionEvents.emit('commission:changed', { id, action: 'delete' });
   return { id, deleted: true };
 }
 

@@ -3,8 +3,9 @@ import express from 'express';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
-// Service + scheduler are mocked so the route test asserts exact call args
-// without touching the collectionStore or arming real crons.
+// The store service is mocked so the route test asserts exact call args without
+// touching the collectionStore. Scheduler re-sync is now event-driven off the
+// store (not called by the route), so the route no longer imports the scheduler.
 const svc = {
   ERR_NOT_FOUND: 'NOT_FOUND',
   ERR_VALIDATION: 'VALIDATION_ERROR',
@@ -15,8 +16,6 @@ const svc = {
   deleteCommission: vi.fn(),
 };
 vi.mock('../services/creativeCommissions/store.js', () => svc);
-const syncMock = vi.fn(() => Promise.resolve());
-vi.mock('../services/creativeCommissions/scheduler.js', () => ({ syncCommissionSchedules: syncMock }));
 
 const routes = (await import('./creativeCommissions.js')).default;
 
@@ -46,7 +45,7 @@ describe('GET /api/creative-commission', () => {
 });
 
 describe('POST /api/creative-commission', () => {
-  it('validates + creates + re-syncs the scheduler', async () => {
+  it('validates and creates', async () => {
     svc.createCommission.mockResolvedValue({ id: 'commission-1', name: 'Nightly Surreal' });
     const res = await request(buildApp()).post('/api/creative-commission').send(validBody());
     expect(res.status).toBe(201);
@@ -56,7 +55,6 @@ describe('POST /api/creative-commission', () => {
       brief: expect.objectContaining({ intent: 'something surreal, dreamlike' }),
       schedule: expect.objectContaining({ kind: 'DAILY', atLocalTime: '02:00' }),
     }));
-    expect(syncMock).toHaveBeenCalledTimes(1);
   });
 
   it('rejects a body missing the brief with 400 (service not called)', async () => {
@@ -93,12 +91,11 @@ describe('GET /api/creative-commission/:id', () => {
 });
 
 describe('PATCH /api/creative-commission/:id', () => {
-  it('updates + re-syncs', async () => {
+  it('updates the commission', async () => {
     svc.updateCommission.mockResolvedValue({ id: 'commission-1', enabled: false });
     const res = await request(buildApp()).patch('/api/creative-commission/commission-1').send({ enabled: false });
     expect(res.status).toBe(200);
     expect(svc.updateCommission).toHaveBeenCalledWith('commission-1', { enabled: false });
-    expect(syncMock).toHaveBeenCalledTimes(1);
   });
 
   it('rejects an empty patch with 400', async () => {
@@ -109,11 +106,10 @@ describe('PATCH /api/creative-commission/:id', () => {
 });
 
 describe('DELETE /api/creative-commission/:id', () => {
-  it('deletes + re-syncs', async () => {
+  it('deletes the commission', async () => {
     svc.deleteCommission.mockResolvedValue({ id: 'commission-1', deleted: true });
     const res = await request(buildApp()).delete('/api/creative-commission/commission-1');
     expect(res.status).toBe(200);
     expect(svc.deleteCommission).toHaveBeenCalledWith('commission-1');
-    expect(syncMock).toHaveBeenCalledTimes(1);
   });
 });

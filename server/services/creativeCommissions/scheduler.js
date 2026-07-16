@@ -24,12 +24,21 @@
 
 import { schedule, cancel, isValidCron } from '../eventScheduler.js';
 import { getUserTimezone } from '../../lib/timezone.js';
-import { listCommissions, recordCommissionRun } from './store.js';
+import { listCommissions, getCommission, recordCommissionRun, commissionEvents } from './store.js';
 import { commissionToCron, buildCommissionDirective } from './directive.js';
 
 const eventId = (commissionId) => `creative-commission-${commissionId}`;
 const registered = new Set();
 let lastSignature = null;
+
+// Re-arm crons whenever a commission is created/updated/deleted through ANY
+// writer, not just the REST route — mirrors seriesAutopilotScheduler's
+// `settings:updated` subscription. The signature guard makes an unrelated
+// change a cheap no-op.
+commissionEvents.on('commission:changed', () => {
+  syncCommissionSchedules().catch((err) =>
+    console.error(`❌ Creative commission schedule re-sync failed: ${err.message}`));
+});
 
 /**
  * Enabled commissions whose schedule composes into a cron the scheduler honors.
@@ -49,7 +58,7 @@ export function activeCommissions(commissions) {
 function signatureOf(active, fallbackTz) {
   return JSON.stringify({
     tz: fallbackTz || null,
-    s: active.map((e) => [e.id, e.cron, e.timezone ?? null]),
+    s: active.map((e) => [e.id, e.cron, e.timezone]),
   });
 }
 
@@ -107,7 +116,6 @@ export function stopCommissionScheduler() {
  */
 export async function runScheduledCommission(commissionId) {
   try {
-    const { getCommission } = await import('./store.js');
     const commission = await getCommission(commissionId).catch(() => null);
     if (!commission || commission.enabled === false) return;
 
