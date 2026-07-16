@@ -31,16 +31,32 @@ const MAX_ORPHAN_RETRIES = 3;
 const ORPHAN_RETRY_COOLDOWN_MS = 30 * 60 * 1000;
 
 /**
+ * Map a failed runner-op result (`{ error?, status? }`) to a ServerError.
+ * A genuine runner 404 — the agent is gone / the runner restarted out of sync
+ * with `runnerAgents` — preserves the missing-agent contract (404 NOT_FOUND);
+ * any other runner/RPC failure is a 500 operational error under `failCode`.
+ */
+function runnerFailureError(result, fallbackMessage, failCode) {
+  const notFound = result?.status === 404;
+  return new ServerError(result?.error || fallbackMessage, {
+    status: notFound ? 404 : 500,
+    code: notFound ? 'NOT_FOUND' : failCode,
+  });
+}
+
+/**
  * Shared runner-mode termination path for terminateAgent and killAgent.
  * Calls runnerFn, marks the task blocked, and cleans up. Returns the runner
- * result shape (`{ success, error? }`) — callers decide whether a failure
- * throws (killAgent, whose route surfaces status) or is returned for internal
- * orchestration to inspect (terminateAgent, whose route is fire-and-forget).
+ * result shape (`{ success, error?, status? }`) — callers decide whether a
+ * failure throws (killAgent, whose route surfaces status) or is returned for
+ * internal orchestration to inspect (terminateAgent, whose route is
+ * fire-and-forget). The runner's HTTP `status` is preserved on failure so
+ * killAgent can distinguish a genuine 404 from a 5xx infra error.
  */
 async function terminateRunnerAgent(agentId, runnerFn, errorMessage, blockedReason) {
   const agentInfo = runnerAgents.get(agentId);
   if (agentInfo?.initializationTimeout) clearTimeout(agentInfo.initializationTimeout);
-  const result = await runnerFn(agentId).catch(err => ({ success: false, error: err.message }));
+  const result = await runnerFn(agentId).catch(err => ({ success: false, error: err.message, status: err.status }));
   if (result.success) {
     // Drain + drop this agent's runner output batcher before the terminal
     // record so pending ~250ms-batched output lands first, and the Map entry
@@ -117,13 +133,10 @@ export async function pauseAgent(agentId, reason = null) {
     const agentInfo = runnerAgents.get(agentId);
     if (agentInfo?.initializationTimeout) clearTimeout(agentInfo.initializationTimeout);
     pausedAgents.set(agentId, { pausedAt, reason });
-    const result = await pauseAgentViaRunner(agentId, reason).catch(err => ({ success: false, error: err.message }));
+    const result = await pauseAgentViaRunner(agentId, reason).catch(err => ({ success: false, error: err.message, status: err.status }));
     if (!result.success) {
       pausedAgents.delete(agentId);
-      throw new ServerError(result.error || 'Failed to pause runner agent', {
-        status: 500,
-        code: 'AGENT_PAUSE_FAILED',
-      });
+      throw runnerFailureError(result, 'Failed to pause runner agent', 'AGENT_PAUSE_FAILED');
     }
     // Persist failure must roll back the in-memory flag too, or the maps drift
     // (pausedAgents set, runnerAgents never deleted) until the next restart.
@@ -286,15 +299,12 @@ export async function killAgent(agentId) {
   // Check if agent is in runner mode
   if (runnerAgents.has(agentId)) {
     const result = await terminateRunnerAgent(agentId, killAgentViaRunner, 'Agent force killed by user (SIGKILL)', 'Force killed by user');
-    // The agent was present in runnerAgents, so a failure here is an
-    // operational runner-RPC error (not a missing agent) — surface it as a
-    // 500 so the kill route renders the standard envelope instead of the old
-    // result-shape 404 string-match (issue #2534).
+    // Surface a runner failure to the kill route as a ServerError instead of
+    // the old result-shape 404 string-match (issue #2534): a genuine runner
+    // 404 (agent gone / runner out of sync) stays NOT_FOUND, any other
+    // runner-RPC failure is a 500 AGENT_KILL_FAILED.
     if (!result.success) {
-      throw new ServerError(result.error || 'Failed to kill runner agent', {
-        status: 500,
-        code: 'AGENT_KILL_FAILED',
-      });
+      throw runnerFailureError(result, 'Failed to kill runner agent', 'AGENT_KILL_FAILED');
     }
     return result;
   }

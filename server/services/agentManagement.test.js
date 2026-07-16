@@ -431,6 +431,27 @@ describe('pauseAgent — runner branch', () => {
     // runnerAgents must still contain the agent (not prematurely deleted)
     expect(runnerAgents.has('runner-agent-2')).toBe(true);
   });
+
+  it('runner 404: a genuine runner-side 404 stays NOT_FOUND (not remapped to 500)', async () => {
+    runnerAgents.set('runner-agent-3', {
+      taskId: 'task-r3',
+      task: { id: 'task-r3', taskType: 'user', description: 'Runner task 3', metadata: {} },
+      workspacePath: '/repo/worktree-r3'
+    });
+    // pauseAgentViaRunner rejects with a status-carrying Error (runner restarted
+    // out of sync with runnerAgents), which must be preserved as a 404.
+    pauseAgentViaRunner.mockRejectedValue(
+      Object.assign(new Error('Agent not found'), { status: 404 }),
+    );
+
+    await expect(pauseAgent('runner-agent-3', 'test-pause')).rejects.toMatchObject({
+      message: 'Agent not found',
+      status: 404,
+      code: 'NOT_FOUND',
+    });
+    expect(pausedAgents.has('runner-agent-3')).toBe(false);
+    expect(runnerAgents.has('runner-agent-3')).toBe(true);
+  });
 });
 
 // ─── pauseAgent — TUI branch ─────────────────────────────────────────────────
