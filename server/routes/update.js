@@ -5,8 +5,40 @@ import { validateRequest } from '../lib/validation.js';
 import { UPSTREAM_FULL_NAME } from '../lib/gitRemote.js';
 import * as updateChecker from '../services/updateChecker.js';
 import { executeUpdate } from '../services/updateExecutor.js';
+import { getActiveAgentIds, spawningTasks } from '../services/agentState.js';
 
 const router = Router();
+
+// Count CoS agents a PortOS restart (update.sh → pm2 restart) would disrupt:
+// live processes (direct + runner spawns) PLUS any task mid-spawn. During a
+// spawn the task sits in `spawningTasks` while its child process is created and
+// only THEN registered in the process maps (`withSpawnDedupGuard` holds the set
+// across the whole launch) — so an agent that has already spawned a process but
+// not yet registered it is invisible to getActiveAgentIds() alone. Summing both
+// includes every distinct in-flight task in the count (a live agent plus two
+// spawning tasks reads as 3, not 1). It can transiently over-report by 1 during
+// the sub-second overlap where a single launching agent sits in BOTH sets, but
+// the guard only needs `> 0` and the count is a near-exact upper bound shown in
+// an advisory notice — an occasional +1 mid-launch is preferable to dropping
+// the spawning tasks entirely.
+//
+// This still can't close the window where a NEW spawn begins AFTER a caller
+// reads this but before update.sh's pm2 restart. The route's post-lock re-check
+// below narrows it; fully closing it needs every CoS spawn engine to consult
+// updateInProgress (tracked in PLAN.md) — the orphan reaper bounds the residual.
+function countActiveCosAgents() {
+  return getActiveAgentIds().length + spawningTasks.size;
+}
+
+// The 409 the update flow raises when a restart would sever a live/spawning
+// agent — shared by the fast-fail pre-check and the post-lock re-check.
+function agentsActiveError(n) {
+  return new ServerError(
+    `${n} CoS agent${n === 1 ? ' is' : 's are'} running — updating would restart PortOS and ` +
+    `sever ${n === 1 ? 'it' : 'them'}. Pause or wait for the agent${n === 1 ? '' : 's'} to finish, then update.`,
+    { status: 409, code: 'AGENTS_ACTIVE' }
+  );
+}
 
 const ignoreSchema = z.object({
   version: z.string().min(1, 'version is required')
@@ -24,11 +56,15 @@ const executeSchema = z.object({
   reconcile: z.boolean().optional()
 });
 
-// GET /api/update/status — returns update state (also clears stale locks)
+// GET /api/update/status — returns update state (also clears stale locks).
+// `activeCosAgents` counts live CoS agent processes (direct + runner spawns) so
+// the UI can suppress the reconcile/update actions while an agent is in flight —
+// updating restarts PortOS and would sever those live processes (issue: don't
+// restart out from under a running agent).
 router.get('/status', asyncHandler(async (req, res) => {
   await updateChecker.clearStaleUpdateInProgress();
   const status = await updateChecker.getUpdateStatus();
-  res.json(status);
+  res.json({ ...status, activeCosAgents: countActiveCosAgents() });
 }));
 
 // POST /api/update/check — triggers manual check
@@ -109,6 +145,20 @@ router.post('/sync-fork', asyncHandler(async (req, res) => {
 // POST /api/update/execute — kicks off update
 router.post('/execute', asyncHandler(async (req, res) => {
   const { acknowledgeFork, reconcile } = validateRequest(executeSchema, req.body || {});
+
+  // Never restart PortOS out from under a live CoS agent. Both a normal update
+  // and a reconcile run update.sh, which pm2-restarts THIS server process and
+  // severs any in-flight agent (each agent's PTY/child process is a child of it).
+  // countActiveCosAgents() reflects exactly what a restart would kill — live
+  // processes plus in-flight spawns — so a stale persisted `status: 'running'`
+  // on disk can't spuriously block, and a paused agent (its process already
+  // stopped) correctly doesn't. Fast-fail here so it covers reconcile, normal
+  // update, and both fork variants (all funnel through /execute) before doing
+  // the git/fork work below; a second re-check after the lock closes the window
+  // an agent could start in during that work.
+  const preCheck = countActiveCosAgents();
+  if (preCheck > 0) throw agentsActiveError(preCheck);
+
   const status = await updateChecker.getUpdateStatus();
 
   // Two distinct entry points:
@@ -163,6 +213,17 @@ router.post('/execute', asyncHandler(async (req, res) => {
   const acquired = await updateChecker.setUpdateInProgress(true);
   if (!acquired) {
     throw new ServerError('Update already in progress', { status: 409, code: 'UPDATE_IN_PROGRESS' });
+  }
+
+  // Re-check after acquiring the lock: an agent (e.g. a scheduled/autopilot
+  // spawn) may have started live during the git/fork awaits between the
+  // fast-fail pre-check and here. If so, release the lock and reject rather than
+  // restart out from under it. A spawn that begins AFTER this, during update.sh
+  // itself, is the residual the PLAN.md spawn-engine gate will close.
+  const postLock = countActiveCosAgents();
+  if (postLock > 0) {
+    await updateChecker.setUpdateInProgress(false);
+    throw agentsActiveError(postLock);
   }
 
   const io = req.app.get('io');

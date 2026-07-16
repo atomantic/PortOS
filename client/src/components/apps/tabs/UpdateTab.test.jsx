@@ -176,3 +176,140 @@ describe('UpdateTab reconcile flow', () => {
     expect(mockToast.loading).not.toHaveBeenCalled();
   });
 });
+
+describe('UpdateTab — active CoS agent suppression', () => {
+  beforeEach(() => {
+    handlers.clear();
+    mockCheckHealth.mockReset().mockResolvedValue({ version: '2.24.0', uptime: 120 });
+    mockExecutePortosUpdate.mockReset();
+    mockToast.mockClear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('suppresses the reconcile prompt and shows a paused notice while agents are live', async () => {
+    mockGetUpdateStatus.mockReset().mockResolvedValue({
+      ...OUT_OF_SYNC_STATUS,
+      activeCosAgents: 2,
+    });
+    render(<UpdateTab />);
+
+    // The paused notice appears in place of the reconcile action.
+    await screen.findByText(/Update paused — CoS agents running/i);
+    expect(screen.getByText(/2 CoS agents are currently running/i)).toBeTruthy();
+    // The reconcile button must be gone — a restart would sever the agents.
+    expect(screen.queryByRole('button', { name: 'Reconcile Now' })).toBeNull();
+  });
+
+  it('shows the reconcile button again once no agents are running', async () => {
+    mockGetUpdateStatus.mockReset().mockResolvedValue({
+      ...OUT_OF_SYNC_STATUS,
+      activeCosAgents: 0,
+    });
+    render(<UpdateTab />);
+
+    await screen.findByRole('button', { name: 'Reconcile Now' });
+    expect(screen.queryByText(/Update paused/i)).toBeNull();
+  });
+
+  it('keeps safe non-restart actions (Ignore) available while agents run, hides Update Now', async () => {
+    // P2: only restart-triggering buttons are suppressed. A non-fork install with
+    // an available update and a live agent should hide "Update Now" (restarts)
+    // but still offer "Ignore" (no restart).
+    mockGetUpdateStatus.mockReset().mockResolvedValue({
+      currentVersion: '2.24.0',
+      updateAvailable: true,
+      latestRelease: { version: '2.25.0' },
+      remoteInfo: { isFork: false, hasOrigin: true, fullName: 'atomantic/PortOS' },
+      activeCosAgents: 1,
+    });
+    render(<UpdateTab />);
+
+    await screen.findByText(/Update paused — CoS agents running/i);
+    expect(screen.queryByRole('button', { name: 'Update Now' })).toBeNull();
+    // Ignore is safe (no restart) and must remain available.
+    expect(screen.getByRole('button', { name: /Ignore v2\.25\.0/i })).toBeTruthy();
+  });
+
+  it('keeps Sync Fork Only available while agents run (it does not restart), hides fork update buttons', async () => {
+    mockGetUpdateStatus.mockReset().mockResolvedValue({
+      currentVersion: '2.24.0',
+      updateAvailable: true,
+      latestRelease: { version: '2.25.0' },
+      remoteInfo: { isFork: true, hasOrigin: true, fullName: 'alice/PortOS' },
+      upstream: { fullName: 'atomantic/PortOS' },
+      activeCosAgents: 1,
+    });
+    render(<UpdateTab />);
+
+    await screen.findByText(/Update paused — CoS agents running/i);
+    // Restart-triggering fork actions hidden.
+    expect(screen.queryByRole('button', { name: 'Sync Fork & Update' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Update from Fork As-Is' })).toBeNull();
+    // Sync Fork Only only runs `gh repo sync` — no restart — so it stays.
+    expect(screen.getByRole('button', { name: 'Sync Fork Only' })).toBeTruthy();
+  });
+
+  it('suppresses restart buttons when an agent starts while the update surface is showing (4s poll)', async () => {
+    // Codex P2: tab loads with 0 agents and an available update, then a scheduled
+    // task (or another browser tab) starts an agent. The poll — enabled whenever
+    // there's an actionable update surface — picks it up and suppresses "Update
+    // Now" instead of leaving a button that 409s on click.
+    let agentCount = 0;
+    mockGetUpdateStatus.mockReset().mockImplementation(async () => ({
+      currentVersion: '2.24.0',
+      updateAvailable: true,
+      latestRelease: { version: '2.25.0' },
+      remoteInfo: { isFork: false, hasOrigin: true, fullName: 'atomantic/PortOS' },
+      activeCosAgents: agentCount,
+    }));
+    vi.useFakeTimers();
+    render(<UpdateTab />);
+
+    // Initially updatable — button present, no notice.
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByRole('button', { name: 'Update Now' })).toBeTruthy();
+    expect(screen.queryByText(/Update paused/i)).toBeNull();
+
+    // An agent starts; the next poll observes it.
+    agentCount = 1;
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+    vi.useRealTimers();
+
+    expect(screen.queryByRole('button', { name: 'Update Now' })).toBeNull();
+    expect(screen.getByText(/Update paused — CoS agents running/i)).toBeTruthy();
+  });
+
+  it('auto-clears the paused notice when the last agent finishes (4s status poll)', async () => {
+    // Pins the notice's "this notice clears automatically" claim: while agents
+    // are live the tab polls status every 4s (useAutoRefetch), so when the last
+    // agent finishes the block lifts without the user re-checking.
+    // Fake timers must be active BEFORE render so they own the poll interval the
+    // effect schedules; and we drive re-renders with advanceTimersByTimeAsync
+    // (flushes microtasks) instead of findBy/waitFor, which use real timers and
+    // would hang against fake ones.
+    let agentCount = 1;
+    mockGetUpdateStatus.mockReset().mockImplementation(async () => ({
+      ...OUT_OF_SYNC_STATUS,
+      activeCosAgents: agentCount,
+    }));
+    vi.useFakeTimers();
+    render(<UpdateTab />);
+
+    // Flush the on-mount status fetch → blocked while the one agent runs.
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByText(/Update paused — CoS agents running/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Reconcile Now' })).toBeNull();
+
+    // The agent finishes; the next 4s poll observes activeCosAgents: 0.
+    agentCount = 0;
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+    vi.useRealTimers();
+
+    // Notice cleared, reconcile action restored — no manual re-check needed.
+    expect(screen.queryByText(/Update paused/i)).toBeNull();
+    expect(screen.getByRole('button', { name: 'Reconcile Now' })).toBeTruthy();
+  });
+});
