@@ -4,71 +4,82 @@ const enc = encodeURIComponent;
 
 // Folders
 export const listWritersRoomFolders = () => request('/writers-room/folders');
-export const createWritersRoomFolder = (data) => request('/writers-room/folders', {
+export const createWritersRoomFolder = (data, options = {}) => request('/writers-room/folders', {
   method: 'POST',
   body: JSON.stringify(data),
+  ...options,
 });
-export const deleteWritersRoomFolder = (id) => request(`/writers-room/folders/${enc(id)}`, {
+export const deleteWritersRoomFolder = (id, options = {}) => request(`/writers-room/folders/${enc(id)}`, {
   method: 'DELETE',
+  ...options,
 });
 
 // Works
 export const listWritersRoomWorks = () => request('/writers-room/works');
-export const createWritersRoomWork = (data) => request('/writers-room/works', {
+export const createWritersRoomWork = (data, options = {}) => request('/writers-room/works', {
   method: 'POST',
   body: JSON.stringify(data),
+  ...options,
 });
 export const getWritersRoomWork = (id) => request(`/writers-room/works/${enc(id)}`);
-export const updateWritersRoomWork = (id, patch) => request(`/writers-room/works/${enc(id)}`, {
+export const updateWritersRoomWork = (id, patch, options = {}) => request(`/writers-room/works/${enc(id)}`, {
   method: 'PATCH',
   body: JSON.stringify(patch),
+  ...options,
 });
-export const deleteWritersRoomWork = (id) => request(`/writers-room/works/${enc(id)}`, {
+export const deleteWritersRoomWork = (id, options = {}) => request(`/writers-room/works/${enc(id)}`, {
   method: 'DELETE',
+  ...options,
 });
 
 // Pipeline bridge: create a pipeline series + first issue from this work
 // (transfers prose, bibles, and the latest script-analysis scenes). Idempotent
 // — if the work is already linked, returns the existing series + issue
 // (reused=true) unless { force: true } is passed.
-export const promoteWritersRoomWorkToPipeline = (id, { force } = {}) =>
+export const promoteWritersRoomWorkToPipeline = (id, { force } = {}, options = {}) =>
   request(`/writers-room/works/${enc(id)}/promote-to-pipeline`, {
     method: 'POST',
     body: JSON.stringify({ force }),
+    ...options,
   });
 
 // Drafts
-export const saveWritersRoomDraft = (id, body) => request(`/writers-room/works/${enc(id)}/draft`, {
+export const saveWritersRoomDraft = (id, body, options = {}) => request(`/writers-room/works/${enc(id)}/draft`, {
   method: 'PUT',
   body: JSON.stringify({ body }),
+  ...options,
 });
-export const snapshotWritersRoomDraft = (id, label) => request(`/writers-room/works/${enc(id)}/versions`, {
+export const snapshotWritersRoomDraft = (id, label, options = {}) => request(`/writers-room/works/${enc(id)}/versions`, {
   method: 'POST',
   body: JSON.stringify(label ? { label } : {}),
+  ...options,
 });
-export const setWritersRoomActiveDraft = (id, draftId) => request(`/writers-room/works/${enc(id)}/versions/${enc(draftId)}`, {
+export const setWritersRoomActiveDraft = (id, draftId, options = {}) => request(`/writers-room/works/${enc(id)}/versions/${enc(draftId)}`, {
   method: 'PATCH',
+  ...options,
 });
 
 // Analysis (AI passes — evaluate / format / script)
 export const listWritersRoomAnalyses = (workId) =>
   request(`/writers-room/works/${enc(workId)}/analysis`);
-export const runWritersRoomAnalysis = (workId, data) =>
+export const runWritersRoomAnalysis = (workId, data, options = {}) =>
   request(`/writers-room/works/${enc(workId)}/analysis`, {
     method: 'POST',
     body: JSON.stringify(data),
+    ...options,
   });
-export const getWritersRoomAnalysis = (workId, analysisId) =>
-  request(`/writers-room/works/${enc(workId)}/analysis/${enc(analysisId)}`);
+export const getWritersRoomAnalysis = (workId, analysisId, options = {}) =>
+  request(`/writers-room/works/${enc(workId)}/analysis/${enc(analysisId)}`, options);
 
 // Polish loop (#2173): autonomous cuts → revise → keep/revert, multi-pass.
 // startWritersRoomPolish returns { runId, alreadyRunning, sseUrl }; subscribe to
 // the sseUrl with useSseProgress for live per-cycle progress. Snapshots are the
 // immutable revert points (the keep/revert gate + the manual revert control).
-export const startWritersRoomPolish = (workId, opts = {}) =>
+export const startWritersRoomPolish = (workId, opts = {}, options = {}) =>
   request(`/writers-room/works/${enc(workId)}/polish/start`, {
     method: 'POST',
     body: JSON.stringify(opts),
+    ...options,
   });
 export const cancelWritersRoomPolish = (workId) =>
   request(`/writers-room/works/${enc(workId)}/polish/cancel`, { method: 'POST' });
@@ -78,10 +89,11 @@ export const listWritersRoomPolishSnapshots = (workId) =>
   request(`/writers-room/works/${enc(workId)}/polish/snapshots`);
 export const getWritersRoomPolishSnapshot = (workId, snapshotId) =>
   request(`/writers-room/works/${enc(workId)}/polish/snapshots/${enc(snapshotId)}`);
-export const revertWritersRoomPolishSnapshot = (workId, snapshotId) =>
+export const revertWritersRoomPolishSnapshot = (workId, snapshotId, options = {}) =>
   request(`/writers-room/works/${enc(workId)}/polish/revert`, {
     method: 'POST',
     body: JSON.stringify({ snapshotId }),
+    ...options,
   });
 
 // Live continuation (Phase 5): opt-in, debounced Creative Director feedback
@@ -149,57 +161,66 @@ export const getWritersRoomSyncedReview = (workId, options) =>
 // Characters (editable bible — separate from immutable analysis snapshots)
 export const listWritersRoomCharacters = (workId) =>
   request(`/writers-room/works/${enc(workId)}/characters`);
-export const createWritersRoomCharacter = (workId, data) =>
+export const createWritersRoomCharacter = (workId, data, options = {}) =>
   request(`/writers-room/works/${enc(workId)}/characters`, {
     method: 'POST',
     body: JSON.stringify(data),
+    ...options,
   });
-export const updateWritersRoomCharacter = (workId, characterId, patch) =>
+export const updateWritersRoomCharacter = (workId, characterId, patch, options = {}) =>
   request(`/writers-room/works/${enc(workId)}/characters/${enc(characterId)}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
+    ...options,
   });
-export const deleteWritersRoomCharacter = (workId, characterId) =>
+export const deleteWritersRoomCharacter = (workId, characterId, options = {}) =>
   request(`/writers-room/works/${enc(workId)}/characters/${enc(characterId)}`, {
     method: 'DELETE',
+    ...options,
   });
 
 // Places / world bible (editable, persists across analysis runs, drives
 // scene image gen via slugline match in SceneCard)
 export const listWritersRoomPlaces = (workId) =>
   request(`/writers-room/works/${enc(workId)}/places`);
-export const createWritersRoomPlace = (workId, data) =>
+export const createWritersRoomPlace = (workId, data, options = {}) =>
   request(`/writers-room/works/${enc(workId)}/places`, {
     method: 'POST',
     body: JSON.stringify(data),
+    ...options,
   });
-export const updateWritersRoomPlace = (workId, placeId, patch) =>
+export const updateWritersRoomPlace = (workId, placeId, patch, options = {}) =>
   request(`/writers-room/works/${enc(workId)}/places/${enc(placeId)}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
+    ...options,
   });
-export const deleteWritersRoomPlace = (workId, placeId) =>
+export const deleteWritersRoomPlace = (workId, placeId, options = {}) =>
   request(`/writers-room/works/${enc(workId)}/places/${enc(placeId)}`, {
     method: 'DELETE',
+    ...options,
   });
 
 // Objects bible (editable; recurring symbolic / physical items extracted by
 // the Adapt+Objects pass — letters, hats, keepsakes, McGuffins).
 export const listWritersRoomObjects = (workId) =>
   request(`/writers-room/works/${enc(workId)}/objects`);
-export const createWritersRoomObject = (workId, data) =>
+export const createWritersRoomObject = (workId, data, options = {}) =>
   request(`/writers-room/works/${enc(workId)}/objects`, {
     method: 'POST',
     body: JSON.stringify(data),
+    ...options,
   });
-export const updateWritersRoomObject = (workId, objectId, patch) =>
+export const updateWritersRoomObject = (workId, objectId, patch, options = {}) =>
   request(`/writers-room/works/${enc(workId)}/objects/${enc(objectId)}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
+    ...options,
   });
-export const deleteWritersRoomObject = (workId, objectId) =>
+export const deleteWritersRoomObject = (workId, objectId, options = {}) =>
   request(`/writers-room/works/${enc(workId)}/objects/${enc(objectId)}`, {
     method: 'DELETE',
+    ...options,
   });
 
 // Exercises
@@ -207,14 +228,17 @@ export const listWritersRoomExercises = (workId) => {
   const qs = workId ? `?workId=${enc(workId)}` : '';
   return request(`/writers-room/exercises${qs}`);
 };
-export const createWritersRoomExercise = (data) => request('/writers-room/exercises', {
+export const createWritersRoomExercise = (data, options = {}) => request('/writers-room/exercises', {
   method: 'POST',
   body: JSON.stringify(data),
+  ...options,
 });
-export const finishWritersRoomExercise = (id, data) => request(`/writers-room/exercises/${enc(id)}/finish`, {
+export const finishWritersRoomExercise = (id, data, options = {}) => request(`/writers-room/exercises/${enc(id)}/finish`, {
   method: 'POST',
   body: JSON.stringify(data || {}),
+  ...options,
 });
-export const discardWritersRoomExercise = (id) => request(`/writers-room/exercises/${enc(id)}/discard`, {
+export const discardWritersRoomExercise = (id, options = {}) => request(`/writers-room/exercises/${enc(id)}/discard`, {
   method: 'POST',
+  ...options,
 });

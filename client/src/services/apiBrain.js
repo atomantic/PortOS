@@ -192,9 +192,10 @@ export const getBrainLinks = (options = {}) => {
   return request(`/brain/links?${params}`);
 };
 export const getBrainLink = (id) => request(`/brain/links/${id}`);
-export const createBrainLink = (data) => request('/brain/links', {
+export const createBrainLink = (data, options = {}) => request('/brain/links', {
   method: 'POST',
-  body: JSON.stringify(data)
+  body: JSON.stringify(data),
+  ...options
 });
 export const updateBrainLink = (id, data, options = {}) => request(`/brain/links/${id}`, {
   method: 'PUT',
@@ -247,12 +248,12 @@ export const getBrainJournalEntry = (date) =>
 // Brain - Graph. Bounded by design: no `focus` returns an overview of the
 // most-connected nodes; a `focus` returns that node's neighborhood. The full
 // graph is never returned (it crashes the browser at scale).
-export const getBrainGraph = ({ focus, limit } = {}) => {
+export const getBrainGraph = ({ focus, limit } = {}, options = {}) => {
   const params = new URLSearchParams();
   if (focus) params.set('focus', focus);
   if (limit) params.set('limit', limit);
   const qs = params.toString();
-  return request(`/brain/graph${qs ? `?${qs}` : ''}`);
+  return request(`/brain/graph${qs ? `?${qs}` : ''}`, options);
 };
 // Lightweight {id,label,brainType} list of every node, for the search box.
 export const getBrainGraphSearchIndex = () => request('/brain/graph/search-index');
@@ -277,24 +278,24 @@ export const listDailyLogs = (options = {}) => {
   return request(`/brain/daily-log?${params}`);
 };
 export const getDailyLog = (date = 'today') => request(`/brain/daily-log/${encodeURIComponent(date)}`);
-export const appendDailyLog = (date, text, source = 'text') => request(
+export const appendDailyLog = (date, text, source = 'text', options = {}) => request(
   `/brain/daily-log/${encodeURIComponent(date)}/append`,
-  { method: 'POST', body: JSON.stringify({ text, source }) }
+  { method: 'POST', body: JSON.stringify({ text, source }), ...options }
 );
-export const updateDailyLog = (date, content) => request(
+export const updateDailyLog = (date, content, options = {}) => request(
   `/brain/daily-log/${encodeURIComponent(date)}`,
-  { method: 'PUT', body: JSON.stringify({ content }) }
+  { method: 'PUT', body: JSON.stringify({ content }), ...options }
 );
-export const deleteDailyLog = (date) => request(
+export const deleteDailyLog = (date, options = {}) => request(
   `/brain/daily-log/${encodeURIComponent(date)}`,
-  { method: 'DELETE' }
+  { method: 'DELETE', ...options }
 );
 export const getDailyLogSettings = () => request('/brain/daily-log/settings');
 export const updateDailyLogSettings = (settings) => request('/brain/daily-log/settings', {
   method: 'PUT',
   body: JSON.stringify(settings)
 });
-export const syncDailyLogsToObsidian = () => request('/brain/daily-log/sync-obsidian', { method: 'POST' });
+export const syncDailyLogsToObsidian = (options = {}) => request('/brain/daily-log/sync-obsidian', { method: 'POST', ...options });
 
 // Brain - Daily Log - Activity Digest (auto-drafts, #2155)
 export const getActivityDigestSettings = () => request('/brain/daily-log/digest-settings');
@@ -302,7 +303,7 @@ export const updateActivityDigestSettings = (settings) => request('/brain/daily-
   method: 'PUT',
   body: JSON.stringify(settings)
 });
-export const draftActivityDigest = (date = 'today') => request(
+export const draftActivityDigest = (date = 'today', options = {}) => request(
   `/brain/daily-log/${encodeURIComponent(date)}/draft`,
-  { method: 'POST' }
+  { method: 'POST', ...options }
 );

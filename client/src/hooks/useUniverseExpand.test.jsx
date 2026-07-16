@@ -87,7 +87,7 @@ describe('useUniverseExpand', () => {
       preservedVariations: {
         heroes: [{ label: 'Locked Hero', prompt: 'Keep me', locked: true }],
       },
-    }));
+    }), { silent: true });
     expect(props.setCanonDirty).toHaveBeenCalledWith(true);
     expect(props.pendingCanonAdditionsRef.current.characters).toEqual([{ name: 'New Character' }]);
     expect(props.setDraft).toHaveBeenCalled();

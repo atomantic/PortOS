@@ -166,7 +166,7 @@ export default function BrainGraph() {
   // neighborhood) and reconcile the breadcrumb trail.
   const loadView = useCallback(async (targetFocusId, { trail } = {}) => {
     setSubLoading(true);
-    const data = await api.getBrainGraph(targetFocusId ? { focus: targetFocusId } : {}).catch(() => null);
+    const data = await api.getBrainGraph(targetFocusId ? { focus: targetFocusId } : {}, { silent: true }).catch(() => null);
     setSubLoading(false);
     if (!data || data.notFound) {
       toast.error('Could not load those connections');

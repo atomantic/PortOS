@@ -205,8 +205,8 @@ function ObjectEditor({ workId, object, onSaved, onDeleted, onCancel }) {
     };
     for (const f of OBJECT_FIELDS) payload[f.key] = draft[f.key];
     const result = await (isCreate
-      ? createWritersRoomObject(workId, payload)
-      : updateWritersRoomObject(workId, object.id, payload)
+      ? createWritersRoomObject(workId, payload, { silent: true })
+      : updateWritersRoomObject(workId, object.id, payload, { silent: true })
     ).catch((err) => {
       toast.error(`Save failed: ${err.message}`);
       return null;
@@ -220,7 +220,7 @@ function ObjectEditor({ workId, object, onSaved, onDeleted, onCancel }) {
   const remove = async () => {
     if (!object) return;
     setSaving(true);
-    const ok = await deleteWritersRoomObject(workId, object.id).then(() => true).catch((err) => {
+    const ok = await deleteWritersRoomObject(workId, object.id, { silent: true }).then(() => true).catch((err) => {
       toast.error(`Delete failed: ${err.message}`);
       return false;
     });

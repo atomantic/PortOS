@@ -220,7 +220,7 @@ export default function useImageGenQueue() {
         ? { ...q, status: 'canceling', _prevStatus: q.status }
         : q
     )));
-    const err = await cancelImageGen({ jobId }).then(() => null).catch((e) => e);
+    const err = await cancelImageGen({ jobId }, { silent: true }).then(() => null).catch((e) => e);
     if (err) {
       toast.error(`Cancel failed: ${err.message || err}`);
       patch((prev) => prev.map((q) => {
@@ -250,7 +250,7 @@ export default function useImageGenQueue() {
         ? { ...q, status: 'canceling', _prevStatus: q.status }
         : q
     )));
-    const err = await cancelImageGen({ all: true }).then(() => null).catch((e) => e);
+    const err = await cancelImageGen({ all: true }, { silent: true }).then(() => null).catch((e) => e);
     if (err) {
       toast.error(`Cancel all failed: ${err.message || err}`);
       patch((prev) => prev.map((q) => {

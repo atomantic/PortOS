@@ -55,7 +55,7 @@ export default function InterviewTab({ onRefresh }) {
     setAnalyzing(true);
     setAnalysisResult(null);
 
-    const result = await api.analyzeAssessment(content.trim(), selectedProviderId, selectedModel)
+    const result = await api.analyzeAssessment(content.trim(), selectedProviderId, selectedModel, { silent: true })
       .catch((err) => ({ error: err.message }));
 
     if (result.error) {

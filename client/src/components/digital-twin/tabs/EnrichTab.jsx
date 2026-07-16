@@ -99,7 +99,8 @@ export default function EnrichTab({ onRefresh }) {
     const result = await api.analyzeWritingSamples(
       validSamples,
       selectedProvider.providerId,
-      selectedProvider.model
+      selectedProvider.model,
+      { silent: true }
     ).catch(e => ({ error: e.message }));
 
     if (result.error) {
@@ -124,13 +125,13 @@ export default function EnrichTab({ onRefresh }) {
         title: 'Writing Style',
         category: 'core',
         content: writingAnalysis.suggestedContent
-      }).catch(async () => {
-        const docs = await api.getDigitalTwinDocuments();
+      }, { silent: true }).catch(async () => {
+        const docs = await api.getDigitalTwinDocuments({ silent: true });
         const existing = docs.find(d => d.filename === 'WRITING_STYLE.md');
         if (existing) {
           return api.updateDigitalTwinDocument(existing.id, {
             content: writingAnalysis.suggestedContent
-          });
+          }, { silent: true });
         }
       });
       toast.success('Writing style saved');
@@ -204,7 +205,7 @@ export default function EnrichTab({ onRefresh }) {
       payload.answer = answer.trim();
     }
 
-    const result = await api.submitSoulEnrichAnswer(payload).catch(() => null);
+    const result = await api.submitSoulEnrichAnswer(payload, { silent: true }).catch(() => null);
     if (!result) {
       toast.error('Failed to save response. Please try again.');
       setSubmitting(false);

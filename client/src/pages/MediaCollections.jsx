@@ -80,7 +80,7 @@ export default function MediaCollections() {
     const trimmed = name.trim();
     if (!trimmed) return;
     setCreating(true);
-    const created = await createMediaCollection({ name: trimmed }).catch((err) => {
+    const created = await createMediaCollection({ name: trimmed }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to create');
       return null;
     });
@@ -94,7 +94,7 @@ export default function MediaCollections() {
 
   const handleDelete = async (collection) => {
     setCollections((prev) => prev.filter((c) => c.id !== collection.id));
-    await deleteMediaCollection(collection.id).catch((err) => {
+    await deleteMediaCollection(collection.id, { silent: true }).catch((err) => {
       toast.error(err.message || 'Delete failed');
       refresh();
     });

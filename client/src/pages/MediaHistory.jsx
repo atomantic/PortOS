@@ -103,7 +103,7 @@ export default function MediaHistory() {
     if (selected.length < 2) return;
     setStitching(true);
     try {
-      await stitchVideos(selected);
+      await stitchVideos(selected, { silent: true });
       toast.success(`Stitched ${selected.length} videos`);
       setStitchMode(false);
       setSelected([]);
@@ -118,8 +118,8 @@ export default function MediaHistory() {
   const handleDelete = async (item) => {
     try {
       await (item.kind === 'image'
-        ? deleteImage(item.filename)
-        : deleteVideoHistoryItem(item.id));
+        ? deleteImage(item.filename, { silent: true })
+        : deleteVideoHistoryItem(item.id, { silent: true }));
       setItems((all) => all.filter((x) => x.key !== item.key));
     } catch (err) {
       toast.error(err.message || 'Delete failed');
@@ -144,7 +144,7 @@ export default function MediaHistory() {
     if (upscalingId) return;
     setUpscalingId(item.id);
     toast.loading('Upscaling 2× — typically 10-30s…');
-    const result = await upscaleVideo(item.id).catch((err) => {
+    const result = await upscaleVideo(item.id, { silent: true }).catch((err) => {
       toast.error(err.message || 'Upscale failed');
       return null;
     });
