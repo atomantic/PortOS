@@ -104,7 +104,7 @@ export default function CollectionPickerShell({
     if (collectionsProp !== undefined) return undefined;
     if (!open) return undefined;
     let cancelled = false;
-    loadItems().then(
+    loadItems({ silent: true }).then(
       (data) => {
         if (cancelled) return;
         const list = Array.isArray(data) ? data : [];
@@ -159,7 +159,7 @@ export default function CollectionPickerShell({
     const name = newName.trim();
     if (!name) return;
     setCreating(true);
-    const created = await createItem({ name }).catch((err) => {
+    const created = await createItem({ name }, { silent: true }).catch((err) => {
       toast.error(err?.message || 'Create failed');
       return null;
     });

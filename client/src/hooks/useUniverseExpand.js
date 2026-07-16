@@ -82,7 +82,7 @@ export default function useUniverseExpand({
       preservedCompositeSheets,
       providerId: draft.llm?.provider || undefined,
       model: draft.llm?.model || undefined,
-    }).catch((error) => { toast.error(`Expansion failed: ${error.message}`); return null; });
+    }, { silent: true }).catch((error) => { toast.error(`Expansion failed: ${error.message}`); return null; });
     setExpanding(false);
     if (!result) return;
 
@@ -160,8 +160,8 @@ export default function useUniverseExpand({
         llm: expandedDraft.llm || {},
       };
       const saved = await (selectedId
-        ? updateUniverse(selectedId, payload)
-        : createUniverse(payload))
+        ? updateUniverse(selectedId, payload, { silent: true })
+        : createUniverse(payload, { silent: true }))
         .catch((error) => { toast.error(`Auto-save after expand failed: ${error.message}`); return null; })
         .finally(() => setSaving(false));
       if (saved) {
@@ -211,7 +211,7 @@ export default function useUniverseExpand({
         locked: next.locked || {},
         llm: next.llm || {},
       };
-      const updated = await updateUniverse(selectedId, refinePayload)
+      const updated = await updateUniverse(selectedId, refinePayload, { silent: true })
         .catch((error) => { toast.error(`Auto-save after refine failed: ${error.message}`); return null; });
       if (updated) {
         setWorlds((previous) => upsertByIdPrepend(previous, updated));

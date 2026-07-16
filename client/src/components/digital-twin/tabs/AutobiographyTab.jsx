@@ -96,7 +96,7 @@ export default function AutobiographyTab({ onRefresh }) {
   };
 
   const startWriting = async () => {
-    const prompt = await api.getAutobiographyPrompt().catch((err) => {
+    const prompt = await api.getAutobiographyPrompt(undefined, { silent: true }).catch((err) => {
       toast.error(err.message);
       return null;
     });
@@ -126,7 +126,7 @@ export default function AutobiographyTab({ onRefresh }) {
     const opts = parentStoryId
       ? { parentStoryId, customPromptText: currentPrompt.text }
       : {};
-    const result = await api.saveAutobiographyStory(currentPrompt.id, storyContent.trim(), opts)
+    const result = await api.saveAutobiographyStory(currentPrompt.id, storyContent.trim(), opts, { silent: true })
       .catch((err) => { toast.error(err.message); return null; });
 
     if (result) {
@@ -146,7 +146,7 @@ export default function AutobiographyTab({ onRefresh }) {
 
   const handleGenerateFollowUps = async (storyId) => {
     setGeneratingFollowUps(true);
-    const result = await api.generateAutobiographyFollowUps(storyId)
+    const result = await api.generateAutobiographyFollowUps(storyId, undefined, { silent: true })
       .catch((err) => { toast.error(err.message); return null; });
 
     if (result?.followUps) {
@@ -192,7 +192,7 @@ export default function AutobiographyTab({ onRefresh }) {
 
   const handleUpdateStory = async (storyId) => {
     if (!editContent.trim()) return;
-    const result = await api.updateAutobiographyStory(storyId, editContent.trim())
+    const result = await api.updateAutobiographyStory(storyId, editContent.trim(), { silent: true })
       .catch((err) => { toast.error(err.message); return null; });
     if (result) {
       toast.success('Story updated');
@@ -203,7 +203,7 @@ export default function AutobiographyTab({ onRefresh }) {
   };
 
   const handleDeleteStory = async (storyId) => {
-    const result = await api.deleteAutobiographyStory(storyId)
+    const result = await api.deleteAutobiographyStory(storyId, { silent: true })
       .catch((err) => { toast.error(err.message); return null; });
     if (result) {
       toast.success('Story deleted');
@@ -212,7 +212,7 @@ export default function AutobiographyTab({ onRefresh }) {
   };
 
   const handleConfigUpdate = async (updates) => {
-    const result = await api.updateAutobiographyConfig(updates)
+    const result = await api.updateAutobiographyConfig(updates, { silent: true })
       .catch((err) => { toast.error(err.message); return null; });
     if (result) {
       setConfig(result);

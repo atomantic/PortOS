@@ -398,7 +398,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     if (savingRef.current) return;
     savingRef.current = true;
     setSaving(true);
-    const updated = await saveWritersRoomDraft(work.id, body).catch((err) => {
+    const updated = await saveWritersRoomDraft(work.id, body, { silent: true }).catch((err) => {
       if (mountedRef.current) toast.error(`Save failed: ${err.message}`);
       return null;
     });
@@ -430,7 +430,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
       toast('Save before snapshotting', { icon: '⚠️' });
       return;
     }
-    const updated = await snapshotWritersRoomDraft(work.id).catch((err) => {
+    const updated = await snapshotWritersRoomDraft(work.id, undefined, { silent: true }).catch((err) => {
       if (mountedRef.current) toast.error(`Snapshot failed: ${err.message}`);
       return null;
     });
@@ -445,7 +445,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
       return;
     }
     setPromoting(true);
-    const result = await promoteWritersRoomWorkToPipeline(work.id).catch((err) => {
+    const result = await promoteWritersRoomWorkToPipeline(work.id, {}, { silent: true }).catch((err) => {
       if (mountedRef.current) toast.error(err.message || 'Promote failed');
       return null;
     });
@@ -471,7 +471,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
 
   const commitTitle = async () => {
     if (title === work.title) return;
-    const updated = await updateWritersRoomWork(work.id, { title }).catch((err) => {
+    const updated = await updateWritersRoomWork(work.id, { title }, { silent: true }).catch((err) => {
       if (mountedRef.current) toast.error(`Title save failed: ${err.message}`);
       return null;
     });
@@ -481,7 +481,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   };
 
   const commitImageStyle = async (next) => {
-    const updated = await updateWritersRoomWork(work.id, { imageStyle: next }).catch((err) => {
+    const updated = await updateWritersRoomWork(work.id, { imageStyle: next }, { silent: true }).catch((err) => {
       if (mountedRef.current) toast.error(`Style save failed: ${err.message}`);
       return null;
     });
@@ -503,7 +503,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     const updated = await updateWritersRoomWork(work.id, {
       voiceExemplars: clean(voiceExemplars),
       voiceAntiExemplars: clean(voiceAntiExemplars),
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       if (mountedRef.current) toast.error(`Voice save failed: ${err.message}`);
       return null;
     });
@@ -591,7 +591,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     // Optimistic flip; the PATCH returns the persisted liveMode (with defaults
     // filled in for a first opt-in) which we fold back through onChange.
     setLiveMode((prev) => ({ ...(prev || {}), enabled: nextEnabled }));
-    const updated = await updateWritersRoomWork(work.id, { liveMode: { enabled: nextEnabled } }).catch((err) => {
+    const updated = await updateWritersRoomWork(work.id, { liveMode: { enabled: nextEnabled } }, { silent: true }).catch((err) => {
       if (mountedRef.current) {
         toast.error(`Live mode save failed: ${err.message}`);
         setLiveMode(work.liveMode || null);
@@ -607,7 +607,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   const commitStatus = async (next) => {
     if (next === status) return;
     setStatus(next);
-    const updated = await updateWritersRoomWork(work.id, { status: next }).catch((err) => {
+    const updated = await updateWritersRoomWork(work.id, { status: next }, { silent: true }).catch((err) => {
       if (mountedRef.current) {
         toast.error(`Status save failed: ${err.message}`);
         setStatus(work.status);
@@ -623,7 +623,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
       toast('Save or snapshot before switching versions', { icon: '⚠️' });
       return;
     }
-    const updated = await setWritersRoomActiveDraft(work.id, draftId).catch((err) => {
+    const updated = await setWritersRoomActiveDraft(work.id, draftId, { silent: true }).catch((err) => {
       if (mountedRef.current) toast.error(`Switch failed: ${err.message}`);
       return null;
     });
@@ -640,7 +640,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
     if (runningKind) return false;
     setRunningKind(kind);
     setRunStartedAt(Date.now());
-    const snapshot = await runWritersRoomAnalysis(work.id, { kind }).catch((err) => {
+    const snapshot = await runWritersRoomAnalysis(work.id, { kind }, { silent: true }).catch((err) => {
       if (mountedRef.current) toast.error(`${ANALYSIS_LABELS[kind] || kind} failed: ${err.message}`);
       return null;
     });

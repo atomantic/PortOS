@@ -132,7 +132,7 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
       payload.answer = answer.trim();
     }
 
-    const result = await api.submitSoulEnrichAnswer(payload).catch(() => null);
+    const result = await api.submitSoulEnrichAnswer(payload, { silent: true }).catch(() => null);
     if (!result) {
       toast.error('Failed to save response. Please try again.');
       setSubmitting(false);

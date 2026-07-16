@@ -208,8 +208,8 @@ function CharacterEditor({ workId, character, onSaved, onDeleted, onCancel }) {
         : draft[f.key];
     }
     const result = await (isCreate
-      ? createWritersRoomCharacter(workId, payload)
-      : updateWritersRoomCharacter(workId, character.id, payload)
+      ? createWritersRoomCharacter(workId, payload, { silent: true })
+      : updateWritersRoomCharacter(workId, character.id, payload, { silent: true })
     ).catch((err) => {
       toast.error(`Save failed: ${err.message}`);
       return null;
@@ -223,7 +223,7 @@ function CharacterEditor({ workId, character, onSaved, onDeleted, onCancel }) {
   const remove = async () => {
     if (!character) return;
     setSaving(true);
-    const ok = await deleteWritersRoomCharacter(workId, character.id).then(() => true).catch((err) => {
+    const ok = await deleteWritersRoomCharacter(workId, character.id, { silent: true }).then(() => true).catch((err) => {
       toast.error(`Delete failed: ${err.message}`);
       return false;
     });

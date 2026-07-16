@@ -108,7 +108,8 @@ export default function ListEnrichment({
       categoryId,
       validItems,
       selectedProvider.providerId,
-      selectedProvider.model
+      selectedProvider.model,
+      { silent: true }
     ).catch(e => ({ error: e.message }));
 
     if (result.error) {
@@ -131,7 +132,8 @@ export default function ListEnrichment({
     const result = await api.saveEnrichmentList(
       categoryId,
       documentContent,
-      getValidItems()
+      getValidItems(),
+      { silent: true }
     ).catch(e => ({ error: e.message }));
 
     if (result.error) {

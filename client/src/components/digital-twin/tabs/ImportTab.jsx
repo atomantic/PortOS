@@ -85,7 +85,8 @@ export default function ImportTab() {
       selectedSource.id,
       fileContent,
       selectedProvider.providerId,
-      selectedProvider.model
+      selectedProvider.model,
+      { silent: true }
     ).catch(e => ({ error: e.message }));
 
     if (result.error) {
@@ -103,7 +104,8 @@ export default function ImportTab() {
 
     const result = await api.saveDigitalTwinImport(
       selectedSource.id,
-      suggestedDoc
+      suggestedDoc,
+      { silent: true }
     ).catch(e => ({ error: e.message }));
 
     if (result.error) {

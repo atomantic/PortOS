@@ -132,7 +132,7 @@ export default function useMediaPreviewActions({ onCleanComplete = null } = {}) 
   // filename. Toast handles the error path; the caller doesn't need to.
   const handleContinue = useCallback(async (item) => {
     if (!item?.id) return;
-    const { filename } = await extractLastFrame(item.id).catch((err) => {
+    const { filename } = await extractLastFrame(item.id, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to extract last frame');
       return {};
     });
@@ -151,7 +151,7 @@ export default function useMediaPreviewActions({ onCleanComplete = null } = {}) 
   // the user the clean succeeded server-side.
   const handleClean = useCallback(async (img) => {
     if (!img?.filename) throw new Error('Missing filename');
-    const cleaned = await cleanGalleryImage(img.filename).catch((err) => {
+    const cleaned = await cleanGalleryImage(img.filename, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to clean image');
       throw err;
     });

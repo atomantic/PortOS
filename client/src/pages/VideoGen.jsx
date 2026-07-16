@@ -410,13 +410,13 @@ export default function VideoGen() {
   const [preview, setPreview] = usePreviewRoute(previewItems);
 
   const handleDeleteHistory = async (item) => {
-    await deleteVideoHistoryItem(item.id).catch((err) => toast.error(err.message || 'Delete failed'));
+    await deleteVideoHistoryItem(item.id, { silent: true }).catch((err) => toast.error(err.message || 'Delete failed'));
     setHistory((h) => h.filter((v) => v.id !== item.id));
   };
   const handleToggleHistoryHidden = async (item) => {
     const nextHidden = !item.hidden;
     setHistory((h) => h.map((v) => (v.id === item.id ? { ...v, hidden: nextHidden } : v)));
-    const result = await setVideoHidden(item.id, nextHidden).catch((err) => {
+    const result = await setVideoHidden(item.id, nextHidden, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to update visibility');
       setHistory((h) => h.map((v) => (v.id === item.id ? { ...v, hidden: !nextHidden } : v)));
       return null;
@@ -433,7 +433,7 @@ export default function VideoGen() {
     if (upscalingId) return;
     setUpscalingId(item.id);
     toast.loading('Upscaling 2× — typically 10-30s…');
-    const result = await upscaleVideo(item.id).catch((err) => {
+    const result = await upscaleVideo(item.id, { silent: true }).catch((err) => {
       toast.error(err.message || 'Upscale failed');
       return null;
     });
@@ -445,7 +445,7 @@ export default function VideoGen() {
   };
 
   const handleContinueHistory = async (item) => {
-    const { filename } = await extractLastFrame(item.id).catch((err) => {
+    const { filename } = await extractLastFrame(item.id, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to extract last frame');
       return {};
     });
@@ -1087,7 +1087,7 @@ export default function VideoGen() {
       return;
     }
     setExtendingFrame(true);
-    const res = await extractLastFrame(videoId).catch((err) => {
+    const res = await extractLastFrame(videoId, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to extract last frame');
       return null;
     });

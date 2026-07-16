@@ -42,7 +42,8 @@ export default function PersonalityMap({ traits, confidence, providers, onAnalyz
     const result = await api.analyzeDigitalTwinTraits(
       selectedProvider.providerId,
       selectedProvider.model,
-      true
+      true,
+      { silent: true }
     ).catch(e => ({ error: e.message }));
 
     if (result.error) {
