@@ -40,7 +40,8 @@ by `/do:replan --issues`:
   (`server/lib/brainValidation.js` `songStageEnum`).
 - [ ] Link songs to existing Rounds/Tracks/MIDI records — a cross-links field on
   the `songs` record + UI in `client/src/pages/SongBookViewer.jsx`.
-- [ ] Chord diagrams / fretboard rendering and MIDI/score preview embedding in
-  the SongBook viewer (`client/src/components/songbook/TabSheetView.jsx`).
+- [ ] MIDI/score preview embedding in the SongBook viewer
+  (`client/src/components/songbook/TabSheetView.jsx`). (Chord diagrams /
+  fretboard rendering shipped with the instrument-view toggle, issue #2656.)
 - [ ] Brain memory-bridge/graph enrollment for `songs` records (nav/⌘K already
   works via the nav manifest; this is the knowledge-graph side).

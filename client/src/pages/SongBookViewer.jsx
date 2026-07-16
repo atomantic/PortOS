@@ -9,9 +9,11 @@
  * - PLAY (default): the rendered sheet (TabSheetView) with an
  *   Ultimate-Guitar-style controls bar — autoscroll play/pause + speed,
  *   transpose ± (render-time transposeText, never mutates stored text; offset
- *   persisted per song via safeStorage), font size ±, stage select, capo/key/
- *   tuning badges, source link — plus the attachments section (synced meta,
- *   machine-local bytes → "not on this machine" when absent).
+ *   persisted per song via safeStorage), font size ±, an instrument-view
+ *   toggle (?view=guitar|ukulele|piano — chord diagrams only, render-only,
+ *   defaults to the song's instrument), stage select, capo/key/tuning badges,
+ *   source link — plus the attachments section (synced meta, machine-local
+ *   bytes → "not on this machine" when absent).
  * - EDIT (?mode=edit): metadata form + font-mono content textarea with format
  *   select and live preview. Saves are explicit (single PUT). The whole
  *   `content` object is always sent — the server fills nested content
@@ -31,10 +33,11 @@ import toast from '../components/ui/Toast';
 import PageHeader from '../components/PageHeader';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import AutoSizeTextarea from '../components/ui/AutoSizeTextarea';
+import TabPills from '../components/ui/TabPills';
 import TabSheetView from '../components/songbook/TabSheetView';
 import {
   SONG_STAGES, SONG_STAGE_COLORS, INSTRUMENTS, SONG_FORMATS,
-  inputClass, labelClass, btnClass,
+  inputClass, labelClass, btnClass, instrumentLabel,
 } from '../components/songbook/constants';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
@@ -43,6 +46,7 @@ import useKeyboardShortcuts from '../hooks/useKeyboardShortcuts';
 import useAutoscroll from '../hooks/useAutoscroll';
 import useWakeLock from '../hooks/useWakeLock';
 import { transposeText } from '../lib/tabNotation.js';
+import { VOICING_INSTRUMENTS, toVoicingInstrument } from '../lib/chordShapes.js';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage.js';
 import { formatBytes } from '../utils/formatters';
 import { isHttpUrl } from '../utils/urlNormalize';
@@ -84,6 +88,9 @@ const toDraft = (song) => ({
 
 const parseTags = (raw) => raw.split(',').map((t) => t.trim()).filter(Boolean);
 
+// Instrument-view toggle tabs (chord-diagram rendering — never mutates the record).
+const VIEW_TABS = VOICING_INSTRUMENTS.map((viewId) => ({ id: viewId, label: instrumentLabel(viewId) }));
+
 // 44px minimum touch targets on the controls bar (mobile-friendly).
 const ctrlBtnClass = 'flex items-center justify-center min-w-[44px] min-h-[44px] rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50';
 
@@ -95,6 +102,15 @@ export default function SongBookViewer() {
   const editing = mode === 'edit';
 
   const [song, setSong] = useState(null);
+  // URL-backed instrument view (?view=guitar|ukulele|piano). Render-only —
+  // never PUT back to the record. Defaults to the song's own instrument
+  // (bass/voice/other map to guitar), so the param stays off the URL for the
+  // song's natural view and deep links like ?view=piano stay shareable.
+  const [instrumentView, setInstrumentView] = useDrawerTab(
+    'view',
+    toVoicingInstrument(song?.instrument),
+    VOICING_INSTRUMENTS,
+  );
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [loadError, setLoadError] = useState(false);
@@ -522,6 +538,18 @@ export default function SongBookViewer() {
               </button>
             </div>
 
+            {/* Instrument view (chord diagrams) — render-only, URL-backed */}
+            <TabPills
+              variant="pills"
+              size="sm"
+              tabs={VIEW_TABS}
+              activeTab={instrumentView}
+              onChange={setInstrumentView}
+              ariaLabel="Instrument view"
+              mobileDropdown
+              mobileSelectId="song-instrument-view"
+            />
+
             {/* Stage */}
             <div>
               <label htmlFor="song-stage" className="sr-only">Learning stage</label>
@@ -561,6 +589,8 @@ export default function SongBookViewer() {
                 format={song?.content?.format || 'tab'}
                 fontSizeRem={fontSize}
                 className="max-w-4xl"
+                instrumentView={instrumentView}
+                showChordStrip
               />
             ) : (
               <p className="text-sm text-gray-500">
