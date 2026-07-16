@@ -64,7 +64,7 @@ export default function CaptionModelPicker({ onChange }) {
       captionModel: picked ? picked.id : null,
     };
     try {
-      await updateSettings({ loraTraining: nextLoraTraining });
+      await updateSettings({ loraTraining: nextLoraTraining }, { silent: true });
       loraTrainingRef.current = nextLoraTraining;
     } catch {
       toast.error('Could not save caption-model preference');

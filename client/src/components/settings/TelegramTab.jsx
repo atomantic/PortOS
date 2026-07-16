@@ -35,7 +35,7 @@ export function TelegramTab() {
 
   useEffect(() => {
     Promise.all([
-      getSettings(),
+      getSettings({ silent: true }),
       getTelegramStatus().catch(() => null)
     ]).then(([settings, status]) => {
       if (status) {
@@ -51,7 +51,7 @@ export function TelegramTab() {
   const handleMethodChange = async (newMethod) => {
     setSwitching(true);
     try {
-      const status = await updateTelegramMethod(newMethod);
+      const status = await updateTelegramMethod(newMethod, { silent: true });
       setMethod(newMethod);
       setTgStatus(status);
       toast.success(newMethod === 'mcp-bridge'
@@ -71,7 +71,7 @@ export function TelegramTab() {
     }
     setTgSaving(true);
     try {
-      const status = await updateTelegramConfig({ token: tgToken, chatId: tgChatId });
+      const status = await updateTelegramConfig({ token: tgToken, chatId: tgChatId }, { silent: true });
       setTgStatus(status);
       toast.success(tgChatId
         ? 'Telegram connected — check your chat for a test message'
@@ -86,7 +86,7 @@ export function TelegramTab() {
   const handleTelegramTest = async () => {
     setTgTesting(true);
     try {
-      await testTelegram();
+      await testTelegram(undefined, { silent: true });
       toast.success('Test message sent');
     } catch (err) {
       toast.error(err.message || 'Failed to send test message');
@@ -98,7 +98,7 @@ export function TelegramTab() {
   const handleTelegramDisconnect = async () => {
     setTgDisconnecting(true);
     try {
-      await deleteTelegramConfig();
+      await deleteTelegramConfig({ silent: true });
       setTgStatus(null);
       setTgToken('');
       setTgChatId('');
@@ -116,7 +116,7 @@ export function TelegramTab() {
       ? tgForwardTypes.filter(t => t !== type)
       : [...tgForwardTypes, type];
     setTgForwardTypes(updated);
-    updateTelegramForwardTypes(updated).catch(() => toast.error('Failed to update forward types'));
+    updateTelegramForwardTypes(updated, { silent: true }).catch(() => toast.error('Failed to update forward types'));
   };
 
   if (loading) {

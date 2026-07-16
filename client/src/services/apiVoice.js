@@ -5,10 +5,10 @@ import api from './apiCore';
 // useAsyncAction). Without it the user sees a stacked toast for every
 // failure — and the Memory Management panel polls every 5s.
 export const getVoiceStatus = (options) => api.get('/voice/status', options);
-export const getVoiceConfig = () => api.get('/voice/config');
-export const updateVoiceConfig = (patch) => api.put('/voice/config', patch);
-export const listVoices = (engine) => api.get(`/voice/voices${engine ? `?engine=${engine}` : ''}`);
-export const fetchPiperVoice = (voice) => api.post('/voice/piper/fetch', { voice });
+export const getVoiceConfig = (options) => api.get('/voice/config', options);
+export const updateVoiceConfig = (patch, options) => api.put('/voice/config', patch, options);
+export const listVoices = (engine, options) => api.get(`/voice/voices${engine ? `?engine=${engine}` : ''}`, options);
+export const fetchPiperVoice = (voice, options) => api.post('/voice/piper/fetch', { voice }, options);
 
 // Returns the raw WAV bytes of the test utterance. Optional `voice` and
 // `engine` overrides let the voice-picker preview audition a voice from a
