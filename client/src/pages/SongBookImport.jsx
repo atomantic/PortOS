@@ -15,6 +15,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { toVoicingInstrument } from '../lib/chordShapes.js';
 import { useNavigate, Link } from 'react-router-dom';
 import { ListMusic, ArrowLeft, ClipboardPaste, Eraser, Wand2, Globe, FileText, Save } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -262,7 +263,11 @@ export default function SongBookImport() {
         <div className="mb-4">
           <div className="text-xs text-gray-400 mb-1">Preview</div>
           <div className="bg-port-card border border-port-border rounded-lg p-3 max-h-[50vh] overflow-y-auto overflow-x-auto">
-            <TabSheetView text={contentText} format={contentFormat} />
+            <TabSheetView
+              text={contentText}
+              format={contentFormat}
+              instrumentView={toVoicingInstrument(instrument)}
+            />
           </div>
         </div>
       )}

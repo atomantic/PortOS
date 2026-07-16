@@ -482,7 +482,12 @@ export default function SongBookViewer() {
             <div>
               <div className="text-xs text-gray-400 mb-1">Preview</div>
               <div className="bg-port-card border border-port-border rounded-lg p-3 overflow-x-auto">
-                <TabSheetView text={draft.text} format={draft.format} fontSizeRem={fontSize} />
+                <TabSheetView
+                  text={draft.text}
+                  format={draft.format}
+                  fontSizeRem={fontSize}
+                  instrumentView={toVoicingInstrument(draft.instrument)}
+                />
               </div>
             </div>
           </div>
