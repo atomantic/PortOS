@@ -87,16 +87,14 @@ export default function SongBookImport() {
 
   const applyMetaDefaults = useCallback((meta) => {
     // Prefill untouched fields; a field still holding the PREVIOUS auto-fill
-    // counts as untouched, so importing song B after song A refreshes it.
+    // counts as untouched, so importing song B after song A refreshes it —
+    // including CLEARING it when B carries no metadata (otherwise A's title
+    // silently saves onto B's content). Genuine user edits are never touched.
     const prev = { ...autoFilledRef.current };
-    if (meta?.title) {
-      autoFilledRef.current.title = meta.title;
-      setTitle((cur) => (!cur || cur === prev.title ? meta.title : cur));
-    }
-    if (meta?.artist) {
-      autoFilledRef.current.artist = meta.artist;
-      setArtist((cur) => (!cur || cur === prev.artist ? meta.artist : cur));
-    }
+    const next = { title: meta?.title || '', artist: meta?.artist || '' };
+    autoFilledRef.current = next;
+    setTitle((cur) => (!cur || cur === prev.title ? next.title : cur));
+    setArtist((cur) => (!cur || cur === prev.artist ? next.artist : cur));
   }, []);
 
   const onPasteButton = useCallback(async () => {
@@ -252,7 +250,7 @@ export default function SongBookImport() {
         <div className="mb-4">
           <div className="text-xs text-gray-400 mb-1">Preview</div>
           <div className="bg-port-card border border-port-border rounded-lg p-3 max-h-[50vh] overflow-y-auto overflow-x-auto">
-            <TabSheetView text={contentText} />
+            <TabSheetView text={contentText} format={contentFormat} />
           </div>
         </div>
       )}

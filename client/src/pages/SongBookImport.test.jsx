@@ -59,6 +59,29 @@ describe('SongBookImport', () => {
     expect('capo' in body).toBe(false); // 13 is outside 0..12 — dropped, POST can't 400
   });
 
+  it('a second meta-less import clears a stale auto-fill but never a user edit', async () => {
+    renderPage();
+    const textarea = screen.getByLabelText('Pasted tab content');
+    const title = screen.getByLabelText('Title');
+
+    // Song A auto-fills the title from its ChordPro directive on blur.
+    fireEvent.change(textarea, { target: { value: '{title: First Song}\nC G' } });
+    fireEvent.blur(textarea);
+    await waitFor(() => expect(title.value).toBe('First Song'));
+
+    // Song B has NO metadata — the stale auto-fill must clear, not silently
+    // save First Song's title onto B's content.
+    fireEvent.change(textarea, { target: { value: 'D A\nDifferent invented line' } });
+    fireEvent.blur(textarea);
+    await waitFor(() => expect(title.value).toBe(''));
+
+    // A user-typed title survives a later meta-less import.
+    fireEvent.change(title, { target: { value: 'My Own Name' } });
+    fireEvent.change(textarea, { target: { value: 'E B\nThird invented line' } });
+    fireEvent.blur(textarea);
+    expect(title.value).toBe('My Own Name');
+  });
+
   it('sends an in-range pasted capo through unchanged', async () => {
     renderPage();
     fireEvent.change(screen.getByLabelText('Pasted tab content'), {

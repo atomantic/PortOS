@@ -61,8 +61,15 @@ const ChordLyricLine = ({ line }) => (
   </div>
 );
 
-function TabSheetView({ text, fontSizeRem = 0.875, className = '' }) {
-  const { lines } = useMemo(() => parseTabSheet(text), [text]);
+function TabSheetView({ text, format = 'tab', fontSizeRem = 0.875, className = '' }) {
+  const plain = format === 'plain';
+  const { lines } = useMemo(
+    // 'plain' is the explicit opt-out of notation parsing: render every line
+    // verbatim (no section headings, no chord highlighting) so the stored
+    // format selector has an observable effect.
+    () => (plain ? { lines: [] } : parseTabSheet(text)),
+    [text, plain],
+  );
 
   // Group consecutive tabstaff lines into one horizontally-scrollable block so
   // the six strings of a staff scroll together.
@@ -75,6 +82,17 @@ function TabSheetView({ text, fontSizeRem = 0.875, className = '' }) {
     }
     return out;
   }, [lines]);
+
+  if (plain) {
+    return (
+      <div
+        className={`font-mono text-gray-200 whitespace-pre-wrap ${className}`}
+        style={{ fontSize: `${fontSizeRem}rem`, lineHeight: 1.5 }}
+      >
+        {text}
+      </div>
+    );
+  }
 
   return (
     <div className={`font-mono text-gray-200 ${className}`} style={{ fontSize: `${fontSizeRem}rem`, lineHeight: 1.5 }}>
@@ -103,6 +121,10 @@ function TabSheetView({ text, fontSizeRem = 0.875, className = '' }) {
             return <ChordLyricLine key={bi} line={line} />;
           case 'blank':
             return <div key={bi}>{' '}</div>;
+          case 'directive':
+            // ChordPro meta plumbing ({title:}/{key:}/{capo:}) — the values
+            // surface in the viewer's badges/fields, not as raw text.
+            return null;
           case 'lyric':
           case 'text':
           default:
