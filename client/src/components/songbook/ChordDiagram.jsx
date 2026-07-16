@@ -163,7 +163,9 @@ function ChordDiagram({ name, instrument, size = 'md' }) {
     return <SingleChordDiagram name={parts[0] ?? name} instrument={instrument} size={size} />;
   }
   return (
-    <span className="inline-flex items-start gap-2">
+    // flex-wrap: multi-segment renders live inside the fixed-width popover —
+    // segments stack instead of painting past its border (or offscreen).
+    <span className="inline-flex flex-wrap items-start gap-2">
       {parts.map((part, i) => (
         <span key={`${part}-${i}`} className="inline-flex flex-col items-center gap-0.5">
           <span className="text-[9px] text-gray-500 font-mono leading-tight">{part}</span>
