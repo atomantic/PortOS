@@ -214,6 +214,21 @@ describe('submitCommissionFeedback', () => {
     expect(directive.goal).toContain('Recent dislikes: less horror.');
   });
 
+  it('re-rating a run REPLACES its prior reaction (no contradictory stacking)', async () => {
+    const created = await createCommission(validInput());
+    await recordCommissionRun(created.id, { id: 'run-A', status: 'started', projectId: 'cd-1' });
+    await submitCommissionFeedback(created.id, { runId: 'run-A', rating: 'up', note: 'first take' });
+    const updated = await submitCommissionFeedback(created.id, { runId: 'run-A', rating: 'down', note: 'changed my mind' });
+    // Exactly one reaction for the run — the latest — not two.
+    const forRun = updated.feedback.filter((f) => f.runId === 'run-A');
+    expect(forRun).toHaveLength(1);
+    expect(forRun[0]).toMatchObject({ rating: 'down', note: 'changed my mind' });
+    // And the digest reflects only the latest vote, not both.
+    const directive = buildCommissionDirective(await getCommission(created.id));
+    expect(directive.goal).toContain('Recent dislikes: changed my mind.');
+    expect(directive.goal).not.toContain('first take');
+  });
+
   it('rejects a reaction referencing a run not on the commission (VALIDATION)', async () => {
     const created = await createCommission(validInput());
     await expect(

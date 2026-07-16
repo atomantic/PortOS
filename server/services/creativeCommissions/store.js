@@ -399,7 +399,15 @@ export async function submitCommissionFeedback(id, input) {
       at: new Date().toISOString(),
     });
     if (!entry) throw makeErr('Invalid feedback: a non-zero rating (up/down) is required', ERR_VALIDATION);
-    const feedback = [...(current.feedback || []), entry].slice(-MAX_PERSISTED_FEEDBACK);
+    // UPSERT by runId, don't append: re-rating a run must REPLACE its prior
+    // reaction, not stack a second one. The UI shows only the latest reaction per
+    // run, but `renderFeedbackDigest` consumes every entry — so a stacked
+    // like-then-dislike for the same run would fold BOTH a "like" and a "dislike"
+    // for one output into the next directive, and repeated votes would each burn a
+    // `feedbackWindow` slot. Dropping the prior same-runId entry keeps one reaction
+    // per run and moves the re-rated run to the most-recent position.
+    const prior = (current.feedback || []).filter((f) => !f.runId || f.runId !== entry.runId);
+    const feedback = [...prior, entry].slice(-MAX_PERSISTED_FEEDBACK);
     const next = { ...current, feedback, updatedAt: new Date().toISOString() };
     await store.writeRaw(id, next);
     return { record: next };

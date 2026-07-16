@@ -111,4 +111,21 @@ describe('buildCommissionDirective', () => {
     const directive = buildCommissionDirective({ targetAbility: 'video', brief: { intent: 'x' } });
     expect(directive.constraints).toEqual({});
   });
+
+  it('clamps the goal so a large feedback window + long notes stay under the CD 5000-char cap', () => {
+    // 50 reactions × 1000-char notes would blow well past the CD directive goal
+    // limit; the scheduler feeds this goal straight into createProject without the
+    // route's validation, so the builder must bound it itself.
+    const feedback = Array.from({ length: 50 }, (_, i) => ({
+      rating: i % 2 === 0 ? 'up' : 'down',
+      note: 'z'.repeat(1000),
+    }));
+    const directive = buildCommissionDirective({
+      targetAbility: 'video',
+      brief: { intent: 'surreal' },
+      feedback,
+      feedbackWindow: 50,
+    });
+    expect(directive.goal.length).toBeLessThanOrEqual(4500);
+  });
 });

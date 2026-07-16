@@ -12,7 +12,7 @@
  * rule. Mutations update local state directly (no full refetch).
  */
 
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Plus, Sparkles, Trash2, Clock, Pause, Play, ThumbsUp, ThumbsDown } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -127,10 +127,24 @@ export default function CreativeCommissions() {
     return () => { cancelled = true; };
   }, []);
 
-  // Sync the form to the deep-linked record whenever the drawer target changes.
+  // Sync the form to the deep-linked record — but ONLY when the drawer TARGET
+  // changes (a new id / the create form / a first populate after load), never on
+  // every `editing` object-identity change. `handleRate`/`toggleEnabled` swap the
+  // record in local state, which changes `editing`'s reference; re-running
+  // `setForm(toForm(editing))` on that would silently discard any unsaved edits
+  // the user typed in the drawer. Keying on the last-synced id fixes that: an
+  // in-place update of the same id is a no-op here, while closing the drawer
+  // (id → null) resets the guard so reopening the same id re-syncs to the freshest
+  // persisted values.
+  const syncedTargetRef = useRef(null);
   useEffect(() => {
-    if (creating) setForm(blankForm());
-    else if (editing) setForm(toForm(editing));
+    if (creating) {
+      if (syncedTargetRef.current !== 'new') { setForm(blankForm()); syncedTargetRef.current = 'new'; }
+    } else if (editing) {
+      if (syncedTargetRef.current !== editing.id) { setForm(toForm(editing)); syncedTargetRef.current = editing.id; }
+    } else {
+      syncedTargetRef.current = null; // drawer closed / target not yet loaded
+    }
   }, [id, creating, editing]);
 
   const closeDrawer = useCallback(() => navigate('/creative-commission'), [navigate]);
