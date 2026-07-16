@@ -387,6 +387,22 @@ export const exportInputSchema = z.object({
   includeDisabled: z.boolean().optional().default(false)
 });
 
+// Live Avatar Bio — length preset shared by the deterministic build and the
+// optional LLM polish. Kept in sync with AVATAR_BIO_LENGTHS in the service.
+export const avatarBioLengthEnum = z.enum(['blurb', 'persona', 'knowledge']);
+
+// Optional length query for the deterministic GET (defaults to 'persona').
+export const avatarBioQuerySchema = z.object({
+  length: avatarBioLengthEnum.optional().default('persona')
+});
+
+// LLM-polish input — explicit user-triggered provider call.
+export const avatarBioPolishInputSchema = z.object({
+  providerId: z.string().min(1),
+  model: z.string().min(1),
+  length: avatarBioLengthEnum.optional().default('persona')
+});
+
 // Settings update input
 export const settingsUpdateInputSchema = partialWithoutDefaults(soulSettingsSchema);
 

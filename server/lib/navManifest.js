@@ -124,6 +124,7 @@ export const NAV_COMMANDS = [
   { id: 'nav.twin.appearance', path: '/digital-twin/appearance', label: 'Appearance', section: 'Identity', aliases: ['twin-appearance', 'appearance', 'photo'], keywords: ['image', 'photo', 'vision', 'face', 'identity', 'presentation', 'look', 'avatar'] },
   { id: 'nav.ask', path: '/ask', label: 'Ask Yourself', section: 'Identity', aliases: ['ask', 'ask-yourself', 'twin-chat'], keywords: ['chat', 'twin', 'conversation', 'advise', 'draft'] },
   { id: 'nav.twin.autobiography', path: '/digital-twin/autobiography', label: 'Autobiography', section: 'Identity', aliases: ['twin-autobiography', 'autobiography'] },
+  { id: 'nav.twin.avatar-bio', path: '/digital-twin/avatar-bio', label: 'Avatar Bio', section: 'Identity', aliases: ['avatar-bio', 'twin-avatar-bio', 'avatar', 'live-avatar'], keywords: ['heygen', 'tavus', 'simli', 'elevenlabs', 'persona', 'bio', 'voice', 'live avatar', 'who i am', 'how i speak', 'what i know'] },
   { id: 'nav.character', path: '/character', label: 'Character', section: 'Identity', aliases: ['character'] },
   { id: 'nav.twin.documents', path: '/digital-twin/documents', label: 'Documents', section: 'Identity', aliases: ['twin-documents'] },
   { id: 'nav.twin.enrich', path: '/digital-twin/enrich', label: 'Enrich', section: 'Identity', aliases: ['twin-enrich'] },

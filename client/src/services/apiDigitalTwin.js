@@ -77,6 +77,17 @@ export const exportDigitalTwin = (format, documentIds = null, includeDisabled = 
   body: JSON.stringify({ format, documentIds, includeDisabled })
 });
 
+// Digital Twin - Live Avatar Bio. GET is deterministic (no LLM, safe on load);
+// polish is an explicit provider call that rewrites the draft into first-person.
+export const getAvatarBio = (length = 'persona', options = {}) =>
+  request(`/digital-twin/avatar-bio?length=${encodeURIComponent(length)}`, options);
+export const polishAvatarBio = (providerId, model, length = 'persona', options = {}) =>
+  request('/digital-twin/avatar-bio/polish', {
+    method: 'POST',
+    body: JSON.stringify({ providerId, model, length }),
+    ...options
+  });
+
 // Legacy Export (portable identity bundle) — #901 Phase 1 server foundation:
 // `GET /api/legacy-export/preview` + `POST /api/legacy-export`. The preview is
 // cheap enough to call on page load; the bundle build streams a zip attachment.
