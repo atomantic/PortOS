@@ -144,6 +144,22 @@ export function todayInTimezone(timezone) {
   return `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`
 }
 
+/**
+ * Today's `YYYY-MM-DD` in the USER's configured timezone — the resolve-tz-then-
+ * derive-today combination that every per-day feature keying off the local day
+ * needs (POST daily status/streaks in meatspacePost.js & meatspacePostTraining.js,
+ * the Daily Driver). Kept here (in lib) so both the scored-session service and the
+ * training-log service share ONE day boundary without importing each other (they
+ * already have a mutual dependency; this avoids adding to it). The process runs
+ * `TZ=UTC`, so deriving the day from a bare `new Date().toISOString()` would use
+ * the server's UTC day and misfile activity around the local/UTC midnight boundary
+ * for non-UTC users (issue #2681).
+ * @returns {Promise<string>}
+ */
+export async function userLocalToday() {
+  return todayInTimezone(await getUserTimezone())
+}
+
 // ---------------------------------------------------------------------------
 // HH:MM time-window primitives
 //

@@ -26,25 +26,22 @@ import { applySessionToReviewSchedule, getDueReviews, getRetentionReport } from 
 import { getAllTrainingEntries } from './meatspacePostTraining.js';
 import { getMorseProgress, MAX_KOCH_LEVEL } from './meatspacePostMorse.js';
 import { computePostStreaks, computeUnifiedStreak, ymdToUTC, ymdShift } from '../lib/postStreak.js';
-import { getUserTimezone, todayInTimezone } from '../lib/timezone.js';
+import { userLocalToday as localToday } from '../lib/timezone.js';
 
 // Re-export the shared streak helper so existing importers of
 // `computePostStreaks` from this module keep working after it moved to
 // server/lib/postStreak.js (single implementation — see that file).
 export { computePostStreaks };
 
-// Today's `YYYY-MM-DD` in the USER's configured timezone (not the server's UTC
-// day). The process runs `TZ=UTC`, so a bare `new Date().toISOString()` day
-// derivation misfiles POSTs around the local/UTC midnight boundary — a scored
-// session completed the previous local evening reads as "done today," or a
-// just-completed local-day session reads as incomplete (issue #2681). Both the
-// session `date` stamp (write side) and the `completedToday`/`todayScore`/streak
-// derivations (read side) key off this so they agree on the user's local day,
-// mirroring the Daily Driver's tz-correct first-visit/handled markers (#2666).
-async function localToday() {
-  const tz = await getUserTimezone();
-  return todayInTimezone(tz);
-}
+// `localToday()` = today's `YYYY-MM-DD` in the USER's configured timezone (shared
+// helper in server/lib/timezone.js). The process runs `TZ=UTC`, so a bare
+// `new Date().toISOString()` day derivation misfiles POSTs around the local/UTC
+// midnight boundary — a scored session completed the previous local evening reads
+// as "done today," or a just-completed local-day session reads as incomplete
+// (issue #2681). Both the session `date` stamp (write side) and the
+// `completedToday`/`todayScore`/streak derivations (read side) key off this so
+// they agree on the user's local day, mirroring the Daily Driver's tz-correct
+// first-visit/handled markers (#2666).
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const SESSIONS_FILE = join(MEATSPACE_DIR, 'post-sessions.json');

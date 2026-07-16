@@ -8,6 +8,7 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { userLocalToday } from '../lib/timezone.js';
 import { getUnifiedActivityStreak } from './meatspacePost.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
@@ -30,10 +31,16 @@ async function saveTrainingLog(data) {
 export async function submitTrainingEntry(entry) {
   const data = await loadTrainingLog();
   const now = new Date().toISOString();
+  // Stamp the entry's day in the user's local timezone (issue #2681). Training
+  // entries feed the SHARED unified streak (getUnifiedActivityStreak), which now
+  // compares against the user's local `today` — a bare UTC-day stamp here would
+  // date a local-evening practice on tomorrow's UTC day and drop it from today's
+  // streak. `timestamp` stays the full UTC ISO instant for exact ordering.
+  const todayLocal = await userLocalToday();
 
   const record = {
     id: randomUUID(),
-    date: now.split('T')[0],
+    date: todayLocal,
     timestamp: now,
     module: entry.module,
     drillType: entry.drillType,

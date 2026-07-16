@@ -15,10 +15,12 @@ vi.mock('../lib/fileUtils.js', () => ({
 
 // getUserTimezone (via ../lib/timezone.js) reads getSettings() to derive the
 // user's local day (issue #2681). Mock settings so the day-boundary is
-// controllable. Default `{}` = no configured timezone, so getUserTimezone falls
-// back to the process timezone (the suite runs TZ=UTC) and every existing
-// UTC-today assertion holds unchanged; tz-specific tests set settingsState.current.
-const settingsState = vi.hoisted(() => ({ current: {} }));
+// controllable. Default `{ timezone: 'UTC' }` pins the boundary to the UTC day
+// regardless of the runner's own system timezone — so every existing UTC-today
+// assertion holds deterministically (an unpinned `{}` would fall back to the
+// runner's system tz and break these suites off a non-UTC CI runner). tz-specific
+// tests set settingsState.current to a real IANA zone.
+const settingsState = vi.hoisted(() => ({ current: { timezone: 'UTC' } }));
 vi.mock('../services/settings.js', () => ({
   getSettings: () => Promise.resolve(settingsState.current),
 }));
@@ -1312,7 +1314,7 @@ describe('getPostStats — byModule averaging, days window cutoff, empty-window 
 
 describe('getPostStats / submitPostSession — timezone-correct day boundary (issue #2681)', () => {
   beforeEach(() => { vi.clearAllMocks(); });
-  afterEach(() => { vi.useRealTimers(); settingsState.current = {}; });
+  afterEach(() => { vi.useRealTimers(); settingsState.current = { timezone: 'UTC' }; });
 
   function mockSessions(sessions) {
     readJSONFile.mockImplementation((path, defaultValue) => {
