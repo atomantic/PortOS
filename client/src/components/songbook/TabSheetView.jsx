@@ -162,7 +162,10 @@ function TabSheetView({
     width: POPOVER_WIDTH,
     position: 'below',
     anchorRef: anchorElRef,
-    contentDeps: [popover?.name, instrumentView],
+    // popover?.key: tapping a DIFFERENT occurrence of the same chord swaps
+    // the anchor element without changing name/view — the key forces a
+    // re-measure so the dialog moves to the newly-tapped token.
+    contentDeps: [popover?.key, popover?.name, instrumentView],
   });
   // Tabstaff blocks explicitly expanded while in a non-guitar view.
   const [expandedStaffs, setExpandedStaffs] = useState(() => new Set());
@@ -244,11 +247,19 @@ function TabSheetView({
 
       {blocks.map((block, bi) => {
         if (block.type === 'tabstaff') {
-          // Tab staffs are guitar-specific — collapse them in other views.
-          if (instrumentView !== 'guitar' && !expandedStaffs.has(bi)) {
+          // Collapse staffs that don't belong to the active view: a ≥5-line
+          // staff is guitar tab (collapsed outside Guitar view); a ≤4-line
+          // staff is plausibly ukulele/bass tab, so the Ukulele view keeps it
+          // — a uke song's own native tab must not hide under a "guitar tab"
+          // note. Piano has no tablature, so Piano view collapses every staff.
+          const looksGuitar = block.lines.length >= 5;
+          const collapse = instrumentView === 'piano'
+            ? true
+            : instrumentView === 'ukulele' && looksGuitar;
+          if (collapse && !expandedStaffs.has(bi)) {
             return (
               <div key={bi} className="my-1 flex items-center gap-2 text-xs text-gray-500 italic font-sans">
-                <span>guitar tab — switch to Guitar view</span>
+                <span>{looksGuitar ? 'guitar tab — switch to Guitar view' : 'tablature — switch to Guitar or Ukulele view'}</span>
                 <button
                   type="button"
                   onClick={() => setExpandedStaffs((prev) => new Set(prev).add(bi))}
@@ -319,7 +330,10 @@ function TabSheetView({
           ref={popoverRef}
           role="dialog"
           aria-label={`${popover.name} chord voicing`}
-          className="fixed z-50 bg-port-card border border-port-border rounded-lg shadow-xl p-3 font-sans"
+          // max-h + overflow: a many-segment dash-joined token wraps voicings
+          // into rows that can exceed a short/mobile viewport — the popover
+          // scrolls internally instead of stranding lower diagrams offscreen.
+          className="fixed z-50 bg-port-card border border-port-border rounded-lg shadow-xl p-3 font-sans max-h-[min(60vh,480px)] overflow-y-auto"
           style={popoverStyle ?? { visibility: 'hidden', left: 0, top: 0, width: POPOVER_WIDTH }}
         >
           <div className="flex items-center justify-between gap-2 mb-1.5">

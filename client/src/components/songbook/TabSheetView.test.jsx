@@ -154,13 +154,26 @@ describe('TabSheetView', () => {
       expect(screen.queryByText(/switch to Guitar view/)).toBeNull();
     });
 
-    it('collapses staff blocks to a note with an inline expand in other views', () => {
+    it('piano view collapses every staff (piano has no tablature) with an inline expand', () => {
       render(<TabSheetView text={SAMPLE} instrumentView="piano" />);
       expect(screen.queryByText('e|--3--2--|')).toBeNull();
-      expect(screen.getByText(/guitar tab — switch to Guitar view/)).toBeTruthy();
+      // The 2-line SAMPLE staff isn't identifiably guitar — generic label.
+      expect(screen.getByText(/tablature — switch to Guitar or Ukulele view/)).toBeTruthy();
       fireEvent.click(screen.getByRole('button', { name: 'show' }));
       expect(screen.getByText('e|--3--2--|')).toBeTruthy();
       expect(screen.getByText('B|--0-----|')).toBeTruthy();
+    });
+
+    const SIX_LINE_STAFF = ['e|--0--|', 'B|--1--|', 'G|--0--|', 'D|--2--|', 'A|--3--|', 'E|-----|'].join('\n');
+    const FOUR_LINE_STAFF = ['A|--0--|', 'E|--0--|', 'C|--0--|', 'G|--2--|'].join('\n');
+
+    it('ukulele view collapses guitar staffs (≥5 lines) but keeps ≤4-line staffs — a uke song\'s own tab stays visible', () => {
+      render(<TabSheetView text={`${SIX_LINE_STAFF}\n\n${FOUR_LINE_STAFF}`} instrumentView="ukulele" />);
+      // Guitar staff collapsed with the guitar-specific label…
+      expect(screen.queryByText('D|--2--|')).toBeNull();
+      expect(screen.getByText(/guitar tab — switch to Guitar view/)).toBeTruthy();
+      // …while the 4-line (plausibly ukulele) staff renders in place.
+      expect(screen.getByText('G|--2--|')).toBeTruthy();
     });
   });
 });
