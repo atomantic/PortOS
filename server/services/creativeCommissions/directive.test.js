@@ -68,6 +68,17 @@ describe('renderFeedbackDigest', () => {
     expect(renderFeedbackDigest([{ rating: 'up', note: 'x' }], 0)).toBe('');
   });
 
+  it('keeps recent dislikes even when many long likes precede them (per-group budget)', () => {
+    const feedback = [
+      ...Array.from({ length: 5 }, () => ({ rating: 'up', note: 'L'.repeat(300) })),
+      { rating: 'down', note: 'newer dislike wins' },
+    ];
+    const digest = renderFeedbackDigest(feedback, 6);
+    expect(digest).toContain('Recent likes:');
+    expect(digest).toContain('Recent dislikes: newer dislike wins.');
+    expect(digest).toContain('Steer toward the likes');
+  });
+
   it('treats numeric ratings as up (>0) / down (<0)', () => {
     const digest = renderFeedbackDigest([{ rating: 1, note: 'plus' }, { rating: -1, note: 'minus' }]);
     expect(digest).toContain('Recent likes: plus.');

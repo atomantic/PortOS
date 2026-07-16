@@ -623,6 +623,18 @@ function RunFeedback({ runId, current, onRate }) {
     finally { setBusy(false); }
   };
 
+  // Persist a note edit WITHOUT requiring another vote: once the run is rated,
+  // editing the note and blurring (or pressing Enter) re-saves it under the
+  // existing rating. Without this, a typed-but-not-re-voted note is silently
+  // discarded on close/save (the drawer Save doesn't carry feedback). A note
+  // can't be saved before a rating exists — a rating is required — so this is a
+  // no-op until the run has been thumbed at least once.
+  const persistNoteEdit = async () => {
+    if (busy || !rating) return;
+    if (note.trim() === (current?.note || '')) return; // unchanged
+    await submit(rating);
+  };
+
   return (
     <div className="mt-1.5 flex items-center gap-1.5">
       <button
@@ -651,9 +663,11 @@ function RunFeedback({ runId, current, onRate }) {
         className="flex-1 min-w-0 bg-port-card border border-port-border rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-port-accent"
         value={note}
         maxLength={1000}
-        placeholder="note (e.g. less horror, more Magritte)"
+        placeholder={rating ? 'note (Enter to save)' : 'note — rate first, then add a note'}
         aria-label={`Feedback note for run ${runId}`}
         onChange={(e) => setNote(e.target.value)}
+        onBlur={persistNoteEdit}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }}
       />
     </div>
   );

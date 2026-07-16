@@ -82,10 +82,16 @@ export function renderFeedbackDigest(feedback, windowSize = 5) {
     else if (down) dislikes.push('(disliked, no note)');
   }
   if (likes.length === 0 && dislikes.length === 0) return '';
+  // Budget the likes and dislikes SEPARATELY so a run of long likes (emitted
+  // first) can't eat the whole digest and truncate away the newer dislikes + the
+  // steering instruction. Each group gets an equal share of the digest budget
+  // (minus the fixed steering sentence); the final clamp is then a no-op safety net.
+  const STEER = 'Steer toward the likes and away from the dislikes.';
+  const groupBudget = Math.max(0, Math.floor((MAX_DIGEST_LEN - STEER.length - 40) / 2));
   const parts = [];
-  if (likes.length) parts.push(`Recent likes: ${likes.join('; ')}.`);
-  if (dislikes.length) parts.push(`Recent dislikes: ${dislikes.join('; ')}.`);
-  parts.push('Steer toward the likes and away from the dislikes.');
+  if (likes.length) parts.push(`Recent likes: ${clamp(likes.join('; '), groupBudget)}.`);
+  if (dislikes.length) parts.push(`Recent dislikes: ${clamp(dislikes.join('; '), groupBudget)}.`);
+  parts.push(STEER);
   return clamp(parts.join(' '), MAX_DIGEST_LEN);
 }
 
