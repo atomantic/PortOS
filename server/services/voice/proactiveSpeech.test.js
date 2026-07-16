@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Stub config + tts + timezone before importing the module — the pure-function
 // branches need no mocks but speakProactive integration does.
@@ -26,6 +26,7 @@ const {
   speakProactive,
   MAX_PROACTIVE_TEXT_LEN,
 } = await import('./proactiveSpeech.js');
+const { registerVoiceOutputCandidate, __resetVoiceOutput } = await import('./voiceOutput.js');
 
 describe('parseHHMM', () => {
   it.each([
@@ -139,10 +140,17 @@ describe('shouldSpeak — decision matrix', () => {
 });
 
 describe('speakProactive', () => {
+  // emitVoiceOutput routes proactive audio to the single registered recipient
+  // tab (it no longer broadcasts via io.emit), so register a fake connected
+  // socket and assert on ITS emit. io.emit must never be called.
   const makeIo = () => {
     const emit = vi.fn();
-    return { io: { emit }, emit };
+    const socketEmit = vi.fn();
+    registerVoiceOutputCandidate({ id: 'recipient', connected: true, emit: socketEmit });
+    return { io: { emit }, emit, socketEmit };
   };
+
+  beforeEach(() => __resetVoiceOutput());
 
   it('returns no-io when io missing', async () => {
     const r = await speakProactive({ io: null, text: 'hi' });
@@ -162,30 +170,35 @@ describe('speakProactive', () => {
   // bypass that. The same bound must hold at the function boundary so a
   // runaway caller can't trigger multi-minute synthesis.
   it('rejects text longer than MAX_PROACTIVE_TEXT_LEN', async () => {
-    const { io, emit } = makeIo();
+    const { io, socketEmit } = makeIo();
     const oversized = 'x'.repeat(MAX_PROACTIVE_TEXT_LEN + 1);
     const r = await speakProactive({ io, text: oversized });
     expect(r.ok).toBe(false);
     expect(r.reason).toBe('too-long');
     expect(r.chars).toBe(oversized.length);
     expect(r.maxChars).toBe(MAX_PROACTIVE_TEXT_LEN);
-    expect(emit).not.toHaveBeenCalled();
+    expect(socketEmit).not.toHaveBeenCalled();
   });
+
+  // The recipient socket may also receive a voice:output:primary notification
+  // (lazy promotion), so filter to the voice:speak call specifically.
+  const speakCalls = (socketEmit) => socketEmit.mock.calls.filter((c) => c[0] === 'voice:speak');
 
   it('accepts text exactly at MAX_PROACTIVE_TEXT_LEN', async () => {
-    const { io, emit } = makeIo();
+    const { io, socketEmit } = makeIo();
     const r = await speakProactive({ io, text: 'x'.repeat(MAX_PROACTIVE_TEXT_LEN) });
     expect(r.ok).toBe(true);
-    expect(emit).toHaveBeenCalledTimes(1);
+    expect(speakCalls(socketEmit)).toHaveLength(1);
   });
 
-  it('emits voice:speak with audio when allowed', async () => {
-    const { io, emit } = makeIo();
+  it('routes voice:speak with audio to the recipient tab (never io.emit)', async () => {
+    const { io, emit, socketEmit } = makeIo();
     const r = await speakProactive({ io, text: 'Heads up — meeting in five.' });
     expect(r.ok).toBe(true);
-    expect(emit).toHaveBeenCalledTimes(1);
-    const [event, payload] = emit.mock.calls[0];
-    expect(event).toBe('voice:speak');
+    expect(emit).not.toHaveBeenCalled(); // no broadcast
+    const speaks = speakCalls(socketEmit);
+    expect(speaks).toHaveLength(1);
+    const [, payload] = speaks[0];
     expect(payload.sentence).toBe('Heads up — meeting in five.');
     expect(payload.wav).toBeInstanceOf(Buffer);
     expect(payload.priority).toBe('normal');
@@ -193,9 +206,10 @@ describe('speakProactive', () => {
   });
 
   it('registers the spoken sentence in every registered echo buffer', async () => {
-    // Proactive lines play through laptop speakers and can bleed back into
-    // the mic. Without registering in the per-socket echo buffers, the next
-    // user turn would forward the bot's own utterance to the LLM as input.
+    // Proactive lines play through the recipient's speakers and can bleed back
+    // into the mic of any same-machine listening tab, so the line is remembered
+    // in every socket's echo buffer — the next user turn then drops the bot's
+    // own utterance instead of forwarding it to the LLM.
     const { registerEchoBuffer, unregisterEchoBuffer, isEchoOfRecentTts } = await import('./echo.js');
     const recent = [];
     registerEchoBuffer(recent);
@@ -219,11 +233,11 @@ describe('speakProactive', () => {
       enabled: true,
       llm: { proactive: { enabled: false } },
     });
-    const { io, emit } = makeIo();
+    const { io, socketEmit } = makeIo();
     const r = await speakProactive({ io, text: 'hi' });
     expect(r.ok).toBe(false);
     expect(r.reason).toBe('proactive-disabled');
-    expect(emit).not.toHaveBeenCalled();
+    expect(socketEmit).not.toHaveBeenCalled();
   });
 
   // Avoidable-overhead guard: when quiet hours are off the decision can't
@@ -266,10 +280,10 @@ describe('speakProactive', () => {
       llm: { proactive: { enabled: true, quietHours: { enabled: true, start: '22:00', end: '07:00' } } },
     });
     getLocalParts.mockReturnValueOnce({ hour: 23, minute: 30 });
-    const { io, emit } = makeIo();
+    const { io, socketEmit } = makeIo();
     const r = await speakProactive({ io, text: 'late night ping' });
     expect(r.ok).toBe(false);
     expect(r.reason).toBe('quiet-hours');
-    expect(emit).not.toHaveBeenCalled();
+    expect(socketEmit).not.toHaveBeenCalled();
   });
 });

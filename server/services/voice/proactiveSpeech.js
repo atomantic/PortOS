@@ -18,6 +18,7 @@
 import { synthesize } from './tts.js';
 import { getVoiceConfig } from './config.js';
 import { rememberTtsForAllSockets } from './echo.js';
+import { emitVoiceOutput } from './voiceOutput.js';
 import { getUserTimezone, getLocalParts, isWithinTimeWindow } from '../../lib/timezone.js';
 
 // HH:MM helpers live in server/lib/timezone.js (single source of truth shared
@@ -73,8 +74,11 @@ export const shouldSpeak = (cfg, nowMinutes, { solicited = false } = {}) => {
   return { ok: true };
 };
 
-// Speak a line to every connected client. `io` is the Socket.IO server
-// passed from socket.js (no global stash so tests can inject a fake).
+// Speak a line to the single designated voice-output tab. `io` is the Socket.IO
+// server passed from socket.js (no global stash so tests can inject a fake).
+// Proactive audio is NOT broadcast — `emitVoiceOutput` (voiceOutput.js) routes
+// it to the one tab currently claiming output, so a reminder/briefing plays on
+// exactly one browser tab / machine instead of all of them at once.
 //
 // `priority` is informational for now — clients can decide whether to
 // surface a toast for high-priority lines or just speak. Reserved field;
@@ -107,14 +111,12 @@ export const speakProactive = async ({ io, text, priority = 'normal', source = '
   }
 
   const { wav, latencyMs } = await synthesize(trimmed);
-  // Mirror the per-turn `state.recentTts` write so a proactive line bleeding
-  // from speakers back into the mic gets dropped as echo on the next turn.
-  rememberTtsForAllSockets(trimmed);
   // `voice:speak` is the proactive-speech channel — distinct from per-turn
   // `voice:tts:audio` so the client can render a different visual cue
   // (subtle pill instead of full conversation entry) and skip recording
-  // it as part of the dialogue history.
-  io.emit('voice:speak', {
+  // it as part of the dialogue history. Routed to the single voice-output tab
+  // (not io.emit) so it doesn't play on every connected tab/machine at once.
+  const delivery = emitVoiceOutput(io, 'voice:speak', {
     sentence: trimmed,
     wav,
     latencyMs,
@@ -122,6 +124,24 @@ export const speakProactive = async ({ io, text, priority = 'normal', source = '
     source,
     ts: Date.now(),
   });
-  console.log(`🔔 voice: proactive sent (${priority}) "${trimmed.slice(0, 80)}" (${latencyMs}ms synth)`);
+  // Mirror the per-turn `state.recentTts` write so a proactive line bleeding
+  // from speakers back into the mic gets dropped as echo on the next turn — but
+  // ONLY on the recipient tab. Only that tab plays the audio, so only its mic
+  // can echo it; recording it on other connected devices would falsely suppress
+  // their legitimate speech (they never heard the line).
+  if (delivery.socket) rememberTtsForSocket(delivery.socket, trimmed);
+  // Mirror the per-turn `state.recentTts` write so a proactive line bleeding
+  // from speakers back into the mic gets dropped as echo on the next turn.
+  // Deliberately remembered on EVERY socket, not just the recipient: only the
+  // recipient tab plays the audio, but a *sibling tab on the same machine* that
+  // is hands-free listening hears it through the shared speakers/mic, and must
+  // also suppress it or the bot answers its own voice in a feedback loop. The
+  // cost is that a different device speaking a 4+ word phrase closely matching
+  // the line within the 8s window could be falsely dropped — a rare, transient
+  // miss, strictly safer than re-opening the feedback loop echo suppression
+  // exists to prevent.
+  rememberTtsForAllSockets(trimmed);
+  const dest = delivery.broadcast ? 'broadcast' : (delivery.socketId ?? 'none');
+  console.log(`🔔 voice: proactive sent (${priority}) → ${dest} "${trimmed.slice(0, 80)}" (${latencyMs}ms synth)`);
   return { ok: true, latencyMs };
 };
