@@ -116,7 +116,7 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
     scenesRef.current = nextScenes;
     const updated = await updatePipelineIssue(issue.id, {
       stages: { storyboards: { status: nextScenes.length ? 'edited' : 'empty', scenes: nextScenes } },
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Save failed');
       return null;
     });

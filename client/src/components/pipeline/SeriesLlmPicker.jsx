@@ -32,7 +32,7 @@ export default function SeriesLlmPicker({ series, onSeriesUpdate, disabled = fal
   }, [providers, activeProviderId, series.llm?.provider]);
 
   const saveLlm = async (next) => {
-    const updated = await updatePipelineSeries(series.id, { llm: next }).catch((err) => {
+    const updated = await updatePipelineSeries(series.id, { llm: next }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to save provider choice');
       return null;
     });

@@ -243,7 +243,7 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
     setRefiningCharacterId(entryId);
     const providerId = series.llm?.provider || undefined;
     const model = series.llm?.model || undefined;
-    const result = await refineUniverseCharacter(universe.id, entryId, { providerId, model })
+    const result = await refineUniverseCharacter(universe.id, entryId, { providerId, model }, { silent: true })
       .catch((err) => { toast.error(err.message || 'Refine failed'); return null; });
     if (mountedRef.current) setRefiningCharacterId(null);
     if (!result || !mountedRef.current) return;
@@ -381,7 +381,7 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
       negativePrompt: styled.negativePrompt || undefined,
       ...(universeRun ? { universeRun } : {}),
     };
-    const queued = await generateImage(payload)
+    const queued = await generateImage(payload, { silent: true })
       .catch((err) => { toast.error(err.message || 'Render failed'); return null; });
     if (!queued?.jobId || !mountedRef.current) return;
     setRenderingJobs((prev) => ({ ...prev, [entry.id]: queued.jobId }));
@@ -412,7 +412,7 @@ export default function NounsStage({ issue, series, onStageUpdate }) {
       prompt: styled.prompt,
       negativePrompt: styled.negativePrompt || undefined,
       ...(universeRun ? { universeRun } : {}),
-    }).catch((err) => { toast.error(err.message || 'Clean plate render failed'); return null; });
+    }, { silent: true }).catch((err) => { toast.error(err.message || 'Clean plate render failed'); return null; });
     if (!queued?.jobId || !mountedRef.current) return;
     setRenderingJobs((prev) => ({ ...prev, [entry.id]: queued.jobId }));
     toast.success(`Rendering clean plate for ${entry.name}`);

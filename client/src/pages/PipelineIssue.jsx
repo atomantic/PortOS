@@ -110,7 +110,7 @@ export default function PipelineIssue() {
       .then((iss) => {
         if (canceled) return iss;
         setIssue(iss);
-        return getPipelineSeries(iss.seriesId);
+        return getPipelineSeries(iss.seriesId, { silent: true });
       })
       .then((s) => { if (!canceled && s) setSeries(s); })
       .catch((err) => {
