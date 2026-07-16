@@ -384,6 +384,10 @@ export async function recordCommissionRun(id, runEntry) {
       id: runEntry.id || `run-${randomUUID()}`,
       ranAt: runEntry.ranAt || new Date().toISOString(),
       status: runEntry.status || 'started',
+      // 'manual' = a user-initiated "Run Now" fire; anything else is a scheduled
+      // cron tick. Pre-trigger runs (persisted without the field) read as
+      // scheduled, which is what they were.
+      trigger: runEntry.trigger === 'manual' ? 'manual' : 'schedule',
       projectId: runEntry.projectId || null,
       promptUsed: isStr(runEntry.promptUsed) ? runEntry.promptUsed : null,
       reason: isStr(runEntry.reason) ? runEntry.reason : null,

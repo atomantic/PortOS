@@ -14,7 +14,7 @@
 
 import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useNavigate, useParams, useLocation, Link } from 'react-router-dom';
-import { Plus, Sparkles, Trash2, Clock, Cpu, Pause, Play, ThumbsUp, ThumbsDown, ExternalLink } from 'lucide-react';
+import { Plus, Sparkles, Trash2, Clock, Cpu, Pause, Play, ThumbsUp, ThumbsDown, ExternalLink, Zap } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Drawer from '../components/Drawer';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
@@ -24,7 +24,7 @@ import { isProcessProvider } from '../utils/providers';
 import ProviderModelSelector from '../components/ProviderModelSelector';
 import {
   listCommissions, getCommission, createCommission, updateCommission, deleteCommission,
-  submitCommissionFeedback, getProviders,
+  submitCommissionFeedback, runCommissionNow, getProviders,
 } from '../services/api';
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -131,6 +131,7 @@ export default function CreativeCommissions() {
   const [loading, setLoading] = useState(true);
   const [form, setForm] = useState(blankForm());
   const [saving, setSaving] = useState(false);
+  const [runningIds, setRunningIds] = useState(() => new Set()); // per-card "Run Now" in flight
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const drawerOpen = id != null; // '/new' or an id
@@ -265,6 +266,28 @@ export default function CreativeCommissions() {
     }
   }, [editing]);
 
+  // Fire a commission immediately, outside its schedule — the "does this
+  // actually work" test button. Runs the same gated path as a cron tick, so a
+  // skip (autonomy off, over budget) is itself the test result and is toasted
+  // with its reason. The response carries the refreshed record (new run
+  // appended), which we swap into local state so run history updates reactively.
+  const handleRunNow = async (commission) => {
+    setRunningIds((prev) => new Set(prev).add(commission.id));
+    try {
+      const result = await runCommissionNow(commission.id, { silent: true });
+      if (result?.commission?.id) {
+        setCommissions((prev) => prev.map((c) => (c.id === result.commission.id ? result.commission : c)));
+      }
+      if (result?.status === 'started') toast.success('Run started — output will appear in run history');
+      else if (result?.status === 'skipped') toast.error(`Run skipped: ${result.reason}`);
+      else toast.error(`Run failed: ${result?.error || 'unknown error'}`);
+    } catch (err) {
+      toast.error(err?.message || 'Run failed');
+    } finally {
+      setRunningIds((prev) => { const next = new Set(prev); next.delete(commission.id); return next; });
+    }
+  };
+
   const toggleEnabled = async (commission) => {
     const next = !commission.enabled;
     setCommissions((prev) => prev.map((c) => (c.id === commission.id ? { ...c, enabled: next } : c)));
@@ -345,6 +368,15 @@ export default function CreativeCommissions() {
                     <span>Last run {timeAgo(c.runs[c.runs.length - 1].ranAt)}</span>
                   )}
                 </div>
+              </button>
+              <button
+                onClick={() => handleRunNow(c)}
+                disabled={runningIds.has(c.id)}
+                title="Run now (ignores schedule)"
+                aria-label={`Run commission ${c.name} now`}
+                className="p-2 text-gray-400 hover:text-port-accent disabled:opacity-50"
+              >
+                <Zap className={`w-4 h-4 ${runningIds.has(c.id) ? 'animate-pulse text-port-accent' : ''}`} />
               </button>
               <button
                 onClick={() => toggleEnabled(c)}
@@ -639,7 +671,13 @@ function CommissionForm({ form, patchForm, runs, feedback, onRate, saving, onSav
             {orderedRuns.map((r) => (
               <div key={r.id} className="text-xs bg-port-bg border border-port-border rounded px-2 py-1.5">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-gray-400">{timeAgo(r.ranAt)}</span>
+                  <span className="text-gray-400">
+                    {timeAgo(r.ranAt)}
+                    {/* Runs persisted before the trigger field exist only from cron ticks — no badge. */}
+                    {r.trigger === 'manual' && (
+                      <span className="ml-1.5 text-[10px] uppercase px-1 py-0.5 rounded bg-port-accent/20 text-port-accent">manual</span>
+                    )}
+                  </span>
                   <span className={
                     r.status === 'started' ? 'text-port-accent'
                       : r.status === 'skipped' ? 'text-port-warning'

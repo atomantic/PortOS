@@ -18,6 +18,13 @@ const svc = {
 };
 vi.mock('../services/creativeCommissions/store.js', () => svc);
 
+// The scheduler is lazy-imported only by the /run handler; mocked so the manual
+// fire path is asserted without dragging the eventScheduler/settings graph in.
+const runNowMock = vi.fn();
+vi.mock('../services/creativeCommissions/scheduler.js', () => ({
+  runCommissionNow: (...a) => runNowMock(...a),
+}));
+
 const routes = (await import('./creativeCommissions.js')).default;
 
 const buildApp = () => {
@@ -110,6 +117,35 @@ describe('PATCH /api/creative-commission/:id', () => {
     const res = await request(buildApp()).patch('/api/creative-commission/commission-1').send({});
     expect(res.status).toBe(400);
     expect(svc.updateCommission).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/creative-commission/:id/run', () => {
+  it('fires the manual run and returns the outcome plus the refreshed record (202)', async () => {
+    runNowMock.mockResolvedValue({ status: 'started', projectId: 'cd-xyz', run: { id: 'run-1' } });
+    svc.getCommission.mockResolvedValue({ id: 'commission-1', runs: [{ id: 'run-1' }] });
+    const res = await request(buildApp()).post('/api/creative-commission/commission-1/run');
+    expect(res.status).toBe(202);
+    expect(runNowMock).toHaveBeenCalledWith('commission-1');
+    expect(res.body).toMatchObject({
+      status: 'started',
+      projectId: 'cd-xyz',
+      commission: { id: 'commission-1' },
+    });
+  });
+
+  it('returns a skipped outcome verbatim (the gate result IS the test result)', async () => {
+    runNowMock.mockResolvedValue({ status: 'skipped', reason: 'autonomy-off', run: { id: 'run-1' } });
+    svc.getCommission.mockResolvedValue({ id: 'commission-1' });
+    const res = await request(buildApp()).post('/api/creative-commission/commission-1/run');
+    expect(res.status).toBe(202);
+    expect(res.body).toMatchObject({ status: 'skipped', reason: 'autonomy-off' });
+  });
+
+  it('maps a service NOT_FOUND to 404', async () => {
+    runNowMock.mockRejectedValue(Object.assign(new Error('gone'), { code: 'NOT_FOUND' }));
+    const res = await request(buildApp()).post('/api/creative-commission/missing/run');
+    expect(res.status).toBe(404);
   });
 });
 

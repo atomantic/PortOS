@@ -180,6 +180,15 @@ describe('recordCommissionRun', () => {
     expect(after.runs[0]).toMatchObject({ status: 'started', projectId: 'cd-1', promptUsed: 'g' });
     expect(after.runs[0].id).toMatch(/^run-/);
   });
+
+  it('persists a manual trigger and defaults everything else to schedule', async () => {
+    const created = await createCommission(validInput());
+    await recordCommissionRun(created.id, { status: 'started', trigger: 'manual' });
+    await recordCommissionRun(created.id, { status: 'started' });
+    await recordCommissionRun(created.id, { status: 'started', trigger: 'bogus' });
+    const after = await getCommission(created.id);
+    expect(after.runs.map((r) => r.trigger)).toEqual(['manual', 'schedule', 'schedule']);
+  });
 });
 
 describe('deleteCommission', () => {

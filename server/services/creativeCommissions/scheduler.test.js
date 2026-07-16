@@ -62,6 +62,7 @@ const {
   startCommissionScheduler,
   stopCommissionScheduler,
   runScheduledCommission,
+  runCommissionNow,
 } = await import('./scheduler.js');
 
 const videoCommission = (over = {}) => ({
@@ -279,5 +280,65 @@ describe('runScheduledCommission gates', () => {
     await runScheduledCommission('commission-1');
     expect(createProjectMock).not.toHaveBeenCalled();
     expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({ status: 'skipped', reason: 'unsupported-ability' }));
+  });
+
+  it('tags scheduled runs with trigger "schedule"', async () => {
+    getCommissionMock.mockResolvedValue(videoCommission());
+    await runScheduledCommission('commission-1');
+    expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({ status: 'started', trigger: 'schedule' }));
+  });
+});
+
+describe('runCommissionNow (manual "Run Now")', () => {
+  it('fires through the CD pipeline, tags the run manual, and returns a started outcome', async () => {
+    recordRunMock.mockResolvedValue({ id: 'run-1', status: 'started' });
+    getCommissionMock.mockResolvedValue(videoCommission());
+    const outcome = await runCommissionNow('commission-1');
+    expect(outcome).toMatchObject({ status: 'started', projectId: 'cd-xyz' });
+    expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({ status: 'started', trigger: 'manual' }));
+    expect(advanceMock).toHaveBeenCalledWith('cd-xyz');
+    expect(surfaceMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('fires even a PAUSED commission (a test run before enabling)', async () => {
+    getCommissionMock.mockResolvedValue(videoCommission({ enabled: false }));
+    const outcome = await runCommissionNow('commission-1');
+    expect(outcome.status).toBe('started');
+    expect(createProjectMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('fires a commission whose schedule is not (yet) derivable to a cron', async () => {
+    getCommissionMock.mockResolvedValue(videoCommission({ schedule: { kind: 'DAILY' } }));
+    const outcome = await runCommissionNow('commission-1');
+    expect(outcome.status).toBe('started');
+  });
+
+  it('keeps the autonomy gate and reports the skip as the test outcome', async () => {
+    creativeModeMock.mockReturnValue('off');
+    getCommissionMock.mockResolvedValue(videoCommission());
+    const outcome = await runCommissionNow('commission-1');
+    expect(outcome).toMatchObject({ status: 'skipped', reason: 'autonomy-off' });
+    expect(createProjectMock).not.toHaveBeenCalled();
+    expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({ status: 'skipped', reason: 'autonomy-off', trigger: 'manual' }));
+  });
+
+  it('keeps the budget gate and reports the skip', async () => {
+    budgetMock.mockResolvedValue({ withinBudget: false });
+    getCommissionMock.mockResolvedValue(videoCommission());
+    const outcome = await runCommissionNow('commission-1');
+    expect(outcome).toMatchObject({ status: 'skipped', reason: 'budget' });
+  });
+
+  it('returns a failed outcome (recorded on run history) when the fire throws', async () => {
+    createProjectMock.mockRejectedValueOnce(new Error('collection create failed'));
+    getCommissionMock.mockResolvedValue(videoCommission());
+    const outcome = await runCommissionNow('commission-1');
+    expect(outcome).toMatchObject({ status: 'failed', error: 'collection create failed' });
+    expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({ status: 'failed', error: 'collection create failed', trigger: 'manual' }));
+  });
+
+  it('propagates NOT_FOUND for an unknown commission (route maps it to 404)', async () => {
+    getCommissionMock.mockRejectedValue(Object.assign(new Error('gone'), { code: 'NOT_FOUND' }));
+    await expect(runCommissionNow('missing')).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 });

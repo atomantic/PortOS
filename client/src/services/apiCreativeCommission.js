@@ -31,6 +31,16 @@ export const deleteCommission = (id, options = {}) =>
     ...options,
   });
 
+// Fire a commission immediately, outside its schedule ("Run Now" — the test
+// button). Resolves to the fire outcome `{ status, reason?, error?, run,
+// projectId?, commission }` — `commission` is the refreshed record (new run
+// appended) for reactive state.
+export const runCommissionNow = (id, options = {}) =>
+  request(`/creative-commission/${encodeURIComponent(id)}/run`, {
+    method: 'POST',
+    ...options,
+  });
+
 // Rate/annotate a specific run's output (#2657, Phase 2). `feedback` is
 // `{ runId, rating: 'up'|'down'|number, note?, tags? }`. Resolves to the full
 // updated commission (with the new reaction in `feedback[]`) for reactive state.

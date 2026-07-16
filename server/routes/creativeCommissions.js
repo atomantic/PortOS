@@ -53,6 +53,19 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   res.json(rec);
 }));
 
+// Fire a commission immediately, outside its schedule ("Run Now" — the test
+// button). Runs the same gated fire path as a cron tick, so the outcome reports
+// exactly what the schedule would do (started / skipped + reason / failed).
+// Lazy-imported so the route module stays off the scheduler graph for every
+// other endpoint. 202: generation continues asynchronously after the response.
+// The refreshed record rides along so the client updates run history reactively.
+router.post('/:id/run', asyncHandler(async (req, res) => {
+  const { runCommissionNow } = await import('../services/creativeCommissions/scheduler.js');
+  const outcome = await runCommissionNow(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const commission = await svc.getCommission(req.params.id).catch(() => null);
+  res.status(202).json({ ...outcome, commission });
+}));
+
 // Rate/annotate a specific run's output (#2657, Phase 2). The reaction is folded
 // into the next scheduled fire's directive via buildCommissionDirective. Returns
 // the full updated commission so the client updates its feedback state reactively.

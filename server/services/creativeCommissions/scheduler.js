@@ -134,20 +134,57 @@ export function stopCommissionScheduler() {
 }
 
 /**
- * The fire handler. Runs outside the Express request lifecycle, so the whole
- * body is wrapped — a throw here would crash Node. Re-reads the commission and
- * the creative autonomy config every fire; gates on execute-mode + budget; then
- * mints a directive-driven CD project and nudges the advance loop (which runs
- * each plan step through the gated `dispatchCreativeTool`).
+ * A scheduled cron tick. Runs outside the Express request lifecycle — every
+ * throwable path is contained (getCommission is caught here, everything else
+ * inside fireCommission), so a fire can't crash Node. Skips silently when the
+ * commission vanished, was paused, or its schedule became invalid since
+ * registration.
  */
 export async function runScheduledCommission(commissionId) {
+  const commission = await getCommission(commissionId).catch(() => null);
+  if (!commission || commission.enabled === false) return;
+
+  const cron = commissionToCron(commission.schedule);
+  if (!cron || !isValidCron(cron)) return; // schedule became invalid since registration
+
+  await fireCommission(commission, 'schedule');
+}
+
+/**
+ * A user-initiated "Run Now" fire (the route's test button). Runs the SAME
+ * gated fire path as a cron tick — so it's an end-to-end test of exactly what
+ * the schedule will do — but deliberately skips the `enabled` and cron-validity
+ * guards: a paused or half-configured commission is still testable. The
+ * autonomy/budget gates stay: the downstream plan steps are gated on them in
+ * `dispatchCreativeTool` anyway, so bypassing them here would only strand a
+ * dead project — a skipped outcome with the reason is the honest test result.
+ *
+ * Throws ERR_NOT_FOUND (→404 via the route's error mapper) for an unknown id;
+ * every other failure is recorded on the run history and returned as an outcome.
+ */
+export async function runCommissionNow(commissionId) {
+  const commission = await getCommission(commissionId);
+  return fireCommission(commission, 'manual');
+}
+
+/**
+ * The shared fire core. Never throws (callers may be outside the Express
+ * request lifecycle — a throw would crash Node). Re-reads the creative autonomy
+ * config every fire; gates on execute-mode + budget; then mints a
+ * directive-driven CD project and nudges the advance loop (which runs each plan
+ * step through the gated `dispatchCreativeTool`). Every path records a run
+ * (tagged with its trigger) and returns an outcome:
+ *   { status: 'started', projectId, run }
+ *   { status: 'skipped', reason, run }
+ *   { status: 'failed',  error, run }
+ */
+async function fireCommission(commission, trigger) {
+  const commissionId = commission.id;
+  const skip = async (reason) => {
+    const run = await recordCommissionRun(commissionId, { status: 'skipped', reason, trigger }).catch(() => null);
+    return { status: 'skipped', reason, run };
+  };
   try {
-    const commission = await getCommission(commissionId).catch(() => null);
-    if (!commission || commission.enabled === false) return;
-
-    const cron = commissionToCron(commission.schedule);
-    if (!cron || !isValidCron(cron)) return; // schedule became invalid since registration
-
     // Gate on creative autonomy mode + daily cos budget BEFORE spawning anything
     // (the planner is itself an LLM call) — honors "off ⇒ no generation" and the
     // no-cold-LLM policy. Both reads FAIL CLOSED: if governance state can't be
@@ -158,31 +195,16 @@ export async function runScheduledCommission(commissionId) {
       import('../domainUsage.js'),
     ]);
     const state = await loadState().catch(() => null);
-    if (!state) {
-      await recordCommissionRun(commissionId, { status: 'skipped', reason: 'governance-unavailable' }).catch(() => {});
-      return;
-    }
+    if (!state) return skip('governance-unavailable');
     const mode = getCreativeAutonomyMode(state.config);
-    if (mode !== 'execute') {
-      await recordCommissionRun(commissionId, { status: 'skipped', reason: `autonomy-${mode}` }).catch(() => {});
-      return;
-    }
+    if (mode !== 'execute') return skip(`autonomy-${mode}`);
     const budget = await getDomainBudgetStatus('cos').catch(() => null);
-    if (!budget) {
-      await recordCommissionRun(commissionId, { status: 'skipped', reason: 'budget-unavailable' }).catch(() => {});
-      return;
-    }
-    if (!budget.withinBudget) {
-      await recordCommissionRun(commissionId, { status: 'skipped', reason: 'budget' }).catch(() => {});
-      return;
-    }
+    if (!budget) return skip('budget-unavailable');
+    if (!budget.withinBudget) return skip('budget');
 
     // Phase 1 supports video only. A non-video commission can't be created via
     // the UI (schema restricts the enum), but a hand-edited record is possible.
-    if (commission.targetAbility !== 'video') {
-      await recordCommissionRun(commissionId, { status: 'skipped', reason: 'unsupported-ability' }).catch(() => {});
-      return;
-    }
+    if (commission.targetAbility !== 'video') return skip('unsupported-ability');
 
     // NOTE: we deliberately do NOT pre-charge the cos budget here. The planner
     // spawns as a normal CoS agent (a `cd-` task) and is accounted by
@@ -259,6 +281,7 @@ export async function runScheduledCommission(commissionId) {
 
     const run = await recordCommissionRun(commissionId, {
       status: 'started',
+      trigger,
       projectId: project.id,
       promptUsed: directive.goal,
     }).catch(() => null);
@@ -273,8 +296,11 @@ export async function runScheduledCommission(commissionId) {
     // Kick the planner → plan → execute loop. Fire-and-forget within this
     // try/catch (already outside the request lifecycle).
     await advanceAfterPlanStepSettled(project.id);
+    return { status: 'started', projectId: project.id, run };
   } catch (err) {
-    console.error(`❌ Creative commission ${commissionId} fire failed: ${err?.message || err}`);
-    await recordCommissionRun(commissionId, { status: 'failed', error: err?.message || String(err) }).catch(() => {});
+    console.error(`❌ Creative commission ${commissionId} ${trigger} fire failed: ${err?.message || err}`);
+    const error = err?.message || String(err);
+    const run = await recordCommissionRun(commissionId, { status: 'failed', error, trigger }).catch(() => null);
+    return { status: 'failed', error, run };
   }
 }
