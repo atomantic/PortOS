@@ -853,6 +853,18 @@ export const ATTACHMENT_ALLOWED_EXTENSIONS = new Set([
 ]);
 
 /**
+ * Curated allowlist for SongBook attachments (sheet-music PDFs, scans, MIDI,
+ * practice audio). Deliberately NOT a superset of ATTACHMENT_ALLOWED_EXTENSIONS
+ * — code/archive/config types make no sense on a song record, while MIDI and
+ * audio (which the CoS attachment set excludes) are core sheet-music formats.
+ */
+export const SONGBOOK_ATTACHMENT_EXTENSIONS = new Set([
+  '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg',
+  '.txt', '.md',
+  '.mid', '.midi', '.mp3', '.wav', '.m4a', '.ogg',
+]);
+
+/**
  * Look up the MIME type for a file extension (including the leading dot, e.g.
  * ".png"). Returns 'application/octet-stream' for unknown extensions.
  *
@@ -955,6 +967,88 @@ export async function importFileToDir(tempPath, originalName, destDir) {
  */
 export async function importFileToUploads(tempPath, originalName) {
   return importFileToDir(tempPath, originalName, PATHS.uploads);
+}
+
+/**
+ * Persist a base64-encoded upload into `dir` with the shared attachment
+ * pipeline: extension allowlist → base64 decode → size cap → ensureDir →
+ * `<uuid8>-<sanitized-name>` naming → containment guard → write.
+ *
+ * Throws ServerError with the exact status/code/message contract the
+ * attachment routes established (`INVALID_FILE_TYPE`, `FILE_TOO_LARGE`,
+ * `INVALID_FILENAME` — all 400), so refactored routes keep their pinned
+ * responses. Consolidates `routes/attachments.js` and
+ * `routes/brainSongbook.js` (uploads.js has a different shape — see PLAN.md).
+ *
+ * @param {string} dir - Destination directory (created if missing).
+ * @param {{ filename: string, data: string }} upload - Original filename +
+ *   base64 payload (validated as present by the calling route).
+ * @param {{ allowedExtensions: Set<string>, maxBytes: number }} opts
+ * @returns {Promise<{ id: string, filename: string, filePath: string,
+ *   buffer: Buffer, size: number, mime: string }>} `id` is the full UUID whose
+ *   first 8 chars prefix `filename`.
+ */
+export async function saveBase64Upload(dir, { filename, data }, { allowedExtensions, maxBytes }) {
+  const ext = getFileExtension(filename);
+  if (!ext || !allowedExtensions.has(ext)) {
+    const allowedList = [...allowedExtensions].join(', ');
+    throw new ServerError(`File type not allowed. Supported: ${allowedList}`, { status: 400, code: 'INVALID_FILE_TYPE' });
+  }
+
+  const buffer = Buffer.from(data, 'base64');
+  if (buffer.length > maxBytes) {
+    throw new ServerError(`File exceeds maximum size of ${maxBytes / 1024 / 1024}MB`, { status: 400, code: 'FILE_TOO_LARGE' });
+  }
+
+  await ensureDir(dir);
+
+  // Unique uuid prefix avoids collisions; sanitize kills traversal characters.
+  const id = randomUUID();
+  const fname = `${id.slice(0, 8)}-${sanitizeFilename(filename)}`;
+  const filePath = join(dir, fname);
+  // Double-check the path is within the destination dir (defense in depth).
+  if (!isPathInsideDir(dir, filePath)) {
+    throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
+  }
+
+  await writeFile(filePath, buffer);
+
+  return { id, filename: fname, filePath, buffer, size: buffer.length, mime: getMimeType(getFileExtension(fname)) };
+}
+
+/**
+ * Serve a machine-local file from `dir` by user-supplied filename with the
+ * shared safety pipeline: sanitize → containment guard (400
+ * `INVALID_FILENAME`) → existence check (404, message/code parametrized via
+ * `missingError` so routes keep their contracts) → `X-Content-Type-Options:
+ * nosniff` → attachment disposition for RISKY_MIME_TYPES → `res.sendFile`.
+ *
+ * Mirrors the exact serving behavior of `routes/attachments.js`.
+ *
+ * @param {import('express').Response} res
+ * @param {string} dir - The containing directory.
+ * @param {string} filename - Raw user-supplied filename.
+ * @param {{ missingError?: { message: string, code: string } }} [opts]
+ */
+export async function serveLocalFile(res, dir, filename, { missingError } = {}) {
+  const safeFilename = sanitizeFilename(filename);
+  const filePath = resolvePath(dir, safeFilename);
+
+  if (!isPathInsideDir(dir, filePath)) {
+    throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
+  }
+
+  if (!(await pathExists(filePath))) {
+    const { message = 'Attachment not found', code = 'NOT_FOUND' } = missingError || {};
+    throw new ServerError(message, { status: 404, code });
+  }
+
+  const mimeType = getMimeType(getFileExtension(safeFilename));
+  res.set('X-Content-Type-Options', 'nosniff');
+  if (RISKY_MIME_TYPES.has(mimeType)) {
+    res.set('Content-Disposition', `attachment; filename="${safeFilename}"`);
+  }
+  res.type(mimeType).sendFile(filePath);
 }
 
 /**

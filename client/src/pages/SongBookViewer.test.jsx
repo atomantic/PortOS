@@ -6,7 +6,6 @@ import { MemoryRouter, Routes, Route } from 'react-router-dom';
 const api = vi.hoisted(() => ({
   getSong: vi.fn(),
   updateSong: vi.fn(),
-  patchSongStage: vi.fn(),
   deleteSong: vi.fn(),
   listSongAttachments: vi.fn(),
   uploadSongAttachment: vi.fn(),
@@ -35,7 +34,6 @@ const song = (extra = {}) => ({
   tuning: '',
   sourceUrl: '',
   content: { format: 'tab', text: SHEET },
-  scrollDurationSec: null,
   notes: '',
   attachments: [],
   createdAt: '2026-01-01T00:00:00.000Z',
@@ -53,7 +51,6 @@ describe('SongBookViewer', () => {
   beforeEach(() => {
     api.getSong.mockReset().mockResolvedValue(song());
     api.listSongAttachments.mockReset().mockResolvedValue([]);
-    api.patchSongStage.mockReset();
     api.updateSong.mockReset();
     api.deleteSong.mockReset();
     globalThis.localStorage?.clear?.();
@@ -80,12 +77,12 @@ describe('SongBookViewer', () => {
     expect(screen.getByText('Back to SongBook')).toBeTruthy();
   });
 
-  it('flips the stage via patchSongStage and merges the server record', async () => {
-    api.patchSongStage.mockResolvedValue(song({ stage: 'learned' }));
+  it('flips the stage via a partial updateSong and merges the server record', async () => {
+    api.updateSong.mockResolvedValue(song({ stage: 'learned' }));
     renderPage();
     const select = await screen.findByLabelText('Learning stage');
     fireEvent.change(select, { target: { value: 'learned' } });
-    expect(api.patchSongStage).toHaveBeenCalledWith('abc', 'learned');
+    expect(api.updateSong).toHaveBeenCalledWith('abc', { stage: 'learned' });
     await waitFor(() => expect(screen.getByLabelText('Learning stage').value).toBe('learned'));
   });
 

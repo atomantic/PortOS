@@ -289,6 +289,15 @@ describe('normalizePastedTab', () => {
     expect(normalizePastedTab('&amp;lt;')).toBe('&lt;');
   });
 
+  it('leaves out-of-range numeric entities untouched instead of throwing (mirrors decodeXmlEntities)', () => {
+    expect(normalizePastedTab('&#x110000; ok')).toBe('&#x110000; ok');
+    expect(normalizePastedTab('&#1114112; ok')).toBe('&#1114112; ok');
+  });
+
+  it('leaves unknown named entities untouched', () => {
+    expect(normalizePastedTab('&bogus; C G')).toBe('&bogus; C G');
+  });
+
   it('expands tabs to 8-column stops', () => {
     expect(normalizePastedTab('C\tG')).toBe('C       G');
     expect(normalizePastedTab('Am7\tD')).toBe('Am7     D');

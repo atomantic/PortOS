@@ -43,6 +43,7 @@ import ScoreSheet from '../components/songs/ScoreSheet';
 import PianoRoll, { layerColor } from '../components/songs/PianoRoll';
 import RoundStack from '../components/songs/RoundStack';
 import { scoreHasMusic, parseScore } from '../lib/scoreNotation';
+import { isHttpUrl } from '../utils/urlNormalize';
 import { createMultiScorePlayer, DEFAULT_BPM } from '../lib/scorePlayback';
 import { harmonyPartOrder } from '../lib/songCraft';
 
@@ -64,10 +65,6 @@ const tiktokVideoId = (url) => {
   return m ? m[1] : null;
 };
 const tiktokEmbedSrc = (id) => `https://www.tiktok.com/player/v1/${id}`;
-// Only http(s) URLs are safe to render as a clickable link — reject
-// javascript:/data: and other schemes so a stored reference can't smuggle a
-// script into an href.
-const isHttpUrl = (url) => /^https?:\/\//i.test(url || '');
 
 // In-session-only id for a freshly-added section/layer, used purely as a React
 // key until the row is saved. Counter-based (not Math.random, which is

@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import { parseTabSheet } from '../../lib/tabNotation.js';
 
 /**
@@ -61,7 +61,7 @@ const ChordLyricLine = ({ line }) => (
   </div>
 );
 
-export default function TabSheetView({ text, fontSizeRem = 0.875, className = '' }) {
+function TabSheetView({ text, fontSizeRem = 0.875, className = '' }) {
   const { lines } = useMemo(() => parseTabSheet(text), [text]);
 
   // Group consecutive tabstaff lines into one horizontally-scrollable block so
@@ -112,3 +112,7 @@ export default function TabSheetView({ text, fontSizeRem = 0.875, className = ''
     </div>
   );
 }
+
+// Props are all primitives, so memo makes re-renders of a host page (stage
+// flips, autoscroll ticks) skip the full sheet re-render.
+export default memo(TabSheetView);

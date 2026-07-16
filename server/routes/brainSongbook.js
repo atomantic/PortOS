@@ -14,24 +14,22 @@
  */
 
 import { Router } from 'express';
-import { writeFile, unlink } from 'fs/promises';
+import { unlink } from 'fs/promises';
 import { join, resolve } from 'path';
 import { createHash } from 'crypto';
-import { v4 as uuidv4 } from '../lib/uuid.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { partialWithoutDefaults } from '../lib/zodCompat.js';
 import {
   songInputSchema,
-  songStagePatchSchema,
   songImportUrlSchema,
   songAttachmentUploadSchema,
 } from '../lib/brainValidation.js';
 import * as brainStorage from '../services/brainStorage.js';
 import { importSongFromUrl } from '../services/brainSongbookImport.js';
 import {
-  ensureDir, pathExists, PATHS, RISKY_MIME_TYPES,
-  sanitizeFilename, getFileExtension, getMimeType, ATTACHMENT_ALLOWED_EXTENSIONS, isPathInsideDir,
+  pathExists, PATHS, sanitizeFilename, isPathInsideDir,
+  SONGBOOK_ATTACHMENT_EXTENSIONS, saveBase64Upload, serveLocalFile,
 } from '../lib/fileUtils.js';
 
 const router = Router();
@@ -39,25 +37,20 @@ const router = Router();
 // Max attachment size: 50MB (matches routes/attachments.js — sheet-music PDFs)
 const MAX_ATTACHMENT_SIZE = 50 * 1024 * 1024;
 
-// The shared attachment allowlist plus MIDI — sheet music commonly ships as
-// .mid/.midi, which the CoS attachment set deliberately excludes.
-const SONG_ATTACHMENT_EXTENSIONS = new Set([...ATTACHMENT_ALLOWED_EXTENSIONS, '.mid', '.midi']);
-
 // Read lazily (not captured at module load) so test PATHS mocks with
 // per-suite temp roots resolve correctly.
 const songbookDir = () => PATHS.brainSongbook;
 
-const isAllowedExtension = (filename) => {
-  const ext = getFileExtension(filename);
-  return !!ext && SONG_ATTACHMENT_EXTENSIONS.has(ext);
-};
-
-async function getSongOr404(id) {
-  const song = await brainStorage.getById('songs', id);
+// 404 unless the storage layer returned a record (or a truthy delete result).
+function requireSong(song) {
   if (!song) {
     throw new ServerError('Song not found', { status: 404, code: 'NOT_FOUND' });
   }
   return song;
+}
+
+async function getSongOr404(id) {
+  return requireSong(await brainStorage.getById('songs', id));
 }
 
 // Locate an attachment's meta on a song + its vetted local filepath. Throws
@@ -115,19 +108,7 @@ router.put('/:id', asyncHandler(async (req, res) => {
   // has no `attachments` key, so Zod's unknown-key stripping drops any
   // client-supplied attachments — the record's server-managed list survives.
   const data = validateRequest(partialWithoutDefaults(songInputSchema), req.body);
-  const song = await brainStorage.update('songs', req.params.id, data);
-  if (!song) {
-    throw new ServerError('Song not found', { status: 404, code: 'NOT_FOUND' });
-  }
-  res.json(song);
-}));
-
-router.patch('/:id/stage', asyncHandler(async (req, res) => {
-  const { stage } = validateRequest(songStagePatchSchema, req.body);
-  const song = await brainStorage.update('songs', req.params.id, { stage });
-  if (!song) {
-    throw new ServerError('Song not found', { status: 404, code: 'NOT_FOUND' });
-  }
+  const song = requireSong(await brainStorage.update('songs', req.params.id, data));
   res.json(song);
 }));
 
@@ -135,10 +116,7 @@ router.delete('/:id', asyncHandler(async (req, res) => {
   // Tombstone delete (brainStorage.remove) so the deletion federates. Local
   // attachment bytes are left in place — peers may still hold the meta, and
   // orphaned bytes are harmless machine-local files.
-  const deleted = await brainStorage.remove('songs', req.params.id);
-  if (!deleted) {
-    throw new ServerError('Song not found', { status: 404, code: 'NOT_FOUND' });
-  }
+  requireSong(await brainStorage.remove('songs', req.params.id));
   res.json({ id: req.params.id });
 }));
 
@@ -151,39 +129,23 @@ router.post('/:id/attachments', asyncHandler(async (req, res) => {
   const song = await getSongOr404(req.params.id);
   const { filename, data, label } = validateRequest(songAttachmentUploadSchema, req.body);
 
-  if (!isAllowedExtension(filename)) {
-    const allowedList = [...SONG_ATTACHMENT_EXTENSIONS].join(', ');
-    throw new ServerError(`File type not allowed. Supported: ${allowedList}`, { status: 400, code: 'INVALID_FILE_TYPE' });
-  }
-
-  const buffer = Buffer.from(data, 'base64');
-  if (buffer.length > MAX_ATTACHMENT_SIZE) {
-    throw new ServerError(`File exceeds maximum size of ${MAX_ATTACHMENT_SIZE / 1024 / 1024}MB`, { status: 400, code: 'FILE_TOO_LARGE' });
-  }
-
-  await ensureDir(songbookDir());
-
-  // Unique uuid prefix avoids collisions; sanitize kills traversal characters.
-  const fname = `${uuidv4().slice(0, 8)}-${sanitizeFilename(filename)}`;
-  const filepath = join(songbookDir(), fname);
-  if (!isPathInsideDir(songbookDir(), filepath)) {
-    throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
-  }
-
-  await writeFile(filepath, buffer);
+  const saved = await saveBase64Upload(songbookDir(), { filename, data }, {
+    allowedExtensions: SONGBOOK_ATTACHMENT_EXTENSIONS,
+    maxBytes: MAX_ATTACHMENT_SIZE,
+  });
 
   const attachment = {
-    filename: fname,
+    filename: saved.filename,
     label,
-    mime: getMimeType(getFileExtension(fname)),
-    size: buffer.length,
-    sha256: createHash('sha256').update(buffer).digest('hex'),
+    mime: saved.mime,
+    size: saved.size,
+    sha256: createHash('sha256').update(saved.buffer).digest('hex'),
   };
   await brainStorage.update('songs', song.id, {
     attachments: [...(Array.isArray(song.attachments) ? song.attachments : []), attachment],
   });
 
-  console.log(`🎸 Song attachment saved: ${fname} (${buffer.length} bytes)`);
+  console.log(`🎸 Song attachment saved: ${saved.filename} (${saved.size} bytes)`);
   res.status(201).json({ attachment });
 }));
 
@@ -198,22 +160,15 @@ router.get('/:id/attachments', asyncHandler(async (req, res) => {
   res.json(attachments);
 }));
 
-// GET /:id/attachments/:filename — serve the local bytes
+// GET /:id/attachments/:filename — serve the local bytes. resolveAttachment
+// runs first so a filename not on the record 404s even when a file exists;
+// the shared server then handles the meta-synced-but-bytes-absent case.
 router.get('/:id/attachments/:filename', asyncHandler(async (req, res) => {
   const song = await getSongOr404(req.params.id);
-  const { safeFilename, filepath } = resolveAttachment(song, req.params.filename);
-
-  if (!(await pathExists(filepath))) {
-    // Meta is synced but the bytes never landed on this machine.
-    throw new ServerError('Attachment file is not on this machine', { status: 404, code: 'NOT_ON_THIS_MACHINE' });
-  }
-
-  const mimeType = getMimeType(getFileExtension(safeFilename));
-  res.set('X-Content-Type-Options', 'nosniff');
-  if (RISKY_MIME_TYPES.has(mimeType)) {
-    res.set('Content-Disposition', `attachment; filename="${safeFilename}"`);
-  }
-  res.type(mimeType).sendFile(filepath);
+  resolveAttachment(song, req.params.filename);
+  await serveLocalFile(res, songbookDir(), req.params.filename, {
+    missingError: { message: 'Attachment file is not on this machine', code: 'NOT_ON_THIS_MACHINE' },
+  });
 }));
 
 // DELETE /:id/attachments/:filename — remove meta from record + local bytes

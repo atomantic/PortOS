@@ -17,31 +17,17 @@
 import { fetchPublicText } from '../lib/safeUrlFetch.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 import { ServerError } from '../lib/errorHandler.js';
+import { decodeXmlEntities } from '../lib/xmlEntities.js';
+import { htmlToText } from '../lib/htmlToText.js';
 
 // Matches songInputSchema's content.text max — clamp instead of failing the
 // draft so an oversized page still yields something editable.
 const MAX_CONTENT_CHARS = 200000;
 
-const NAMED_ENTITIES = { lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
-
-// Guarded String.fromCodePoint — out-of-range numeric entities decode to ''
-// instead of throwing (the parser must never throw on hostile/garbled HTML).
-const safeCodePoint = (n) =>
-  (Number.isInteger(n) && n >= 0 && n <= 0x10ffff ? String.fromCodePoint(n) : '');
-
-/**
- * Decode the HTML entities that matter for tab pages (named basics + numeric).
- * `&amp;` decodes LAST so double-encoded sequences ("&amp;lt;") don't
- * double-decode into markup.
- */
-export function decodeHtmlEntities(str) {
-  if (typeof str !== 'string') return '';
-  return str
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => safeCodePoint(parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_, dec) => safeCodePoint(Number(dec)))
-    .replace(/&(lt|gt|quot|apos|nbsp);/gi, (_, name) => NAMED_ENTITIES[name.toLowerCase()])
-    .replace(/&amp;/gi, '&');
-}
+// Shared entity decoder (single-pass, double-decode-safe, out-of-range numeric
+// refs left untouched — never throws on hostile/garbled HTML). `&nbsp;` is the
+// one non-predefined entity tab pages routinely carry.
+const decodeEntities = (str) => decodeXmlEntities(str, { nbsp: ' ' });
 
 /**
  * Strip Ultimate-Guitar chord/tab markers ([ch]C[/ch], [tab]...[/tab]) from
@@ -68,7 +54,7 @@ export function extractUltimateGuitarStore(html) {
   if (typeof html !== 'string') return null;
   const match = /<div[^>]*class="[^"]*js-store[^"]*"[^>]*data-content="([^"]*)"/i.exec(html);
   if (!match) return null;
-  const parsed = safeJSONParse(decodeHtmlEntities(match[1]), null);
+  const parsed = safeJSONParse(decodeEntities(match[1]), null);
   // Observed shape nests under a top-level `store` key; tolerate both.
   const data = parsed?.store?.page?.data ?? parsed?.page?.data;
   const content = data?.tab_view?.wiki_tab?.content;
@@ -95,22 +81,8 @@ export function extractLargestPre(html) {
   for (let m = re.exec(html); m; m = re.exec(html)) {
     if (m[1].length > largest.length) largest = m[1];
   }
-  const text = normalizeSheetText(decodeHtmlEntities(largest.replace(/<[^>]+>/g, '')));
+  const text = normalizeSheetText(decodeEntities(largest.replace(/<[^>]+>/g, '')));
   return text.length >= MIN_PRE_CHARS ? text : null;
-}
-
-/**
- * Last-resort extractor: strip scripts/styles/tags to plain text. Always
- * returns a string (possibly empty).
- */
-export function stripHtmlToText(html) {
-  if (typeof html !== 'string') return '';
-  const text = html
-    .replace(/<(script|style|head|noscript)\b[\s\S]*?<\/\1>/gi, '')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/(p|div|li|tr|h[1-6])>/gi, '\n')
-    .replace(/<[^>]+>/g, '');
-  return normalizeSheetText(decodeHtmlEntities(text));
 }
 
 // Strip "(ver 2)" suffixes and trailing sheet-type keywords from a <title>-derived song name.
@@ -129,7 +101,7 @@ const cleanTitlePart = (s) => {
  */
 export function parseTitleArtist(html) {
   const match = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(typeof html === 'string' ? html : '');
-  const raw = decodeHtmlEntities(match?.[1] ?? '').split(/[|@]/)[0].replace(/\s+/g, ' ').trim();
+  const raw = decodeEntities(match?.[1] ?? '').split(/[|@]/)[0].replace(/\s+/g, ' ').trim();
   if (!raw) return { title: '', artist: '' };
   const by = /^(.+?)\s+by\s+(.+)$/i.exec(raw);
   if (by) return { title: cleanTitlePart(by[1]), artist: by[2].trim() };
@@ -165,10 +137,12 @@ export function buildDraftFromHtml(html, url) {
     };
   }
 
+  // Last resort: shared strip-tags plain text (space runs preserved — the
+  // default htmlToText options — in case the page held aligned sheet text).
   return {
     title: fallback.title,
     artist: fallback.artist,
-    content: { format: 'plain', text: stripHtmlToText(html).slice(0, MAX_CONTENT_CHARS) },
+    content: { format: 'plain', text: htmlToText(html).slice(0, MAX_CONTENT_CHARS) },
     sourceUrl: url,
   };
 }

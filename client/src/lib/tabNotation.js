@@ -248,14 +248,25 @@ export const parseTabSheet = (text) => {
 // Paste normalization
 // ---------------------------------------------------------------------------
 
-const NAMED_ENTITIES = { lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+// Mirrors server/lib/xmlEntities.js `decodeXmlEntities` (with `nbsp` as the
+// one extra entity) — keep the two in sync. Single-pass scan is double-decode-
+// safe: `&amp;lt;` decodes to `&lt;`, never `<`. Out-of-range numeric code
+// points are left untouched (String.fromCodePoint would throw a RangeError,
+// and this module must never throw on pasted garbage).
+const NAMED_ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+
+const ENTITY_RE = /&(#x[0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g;
 
 const decodeEntities = (s) =>
-  s
-    .replace(/&(lt|gt|quot|apos|nbsp);/gi, (_, name) => NAMED_ENTITIES[name.toLowerCase()])
-    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
-    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(Number(dec)))
-    .replace(/&amp;/gi, '&');
+  s.replace(ENTITY_RE, (match, code) => {
+    if (code[0] === '#') {
+      const cp = code[1] === 'x' || code[1] === 'X'
+        ? parseInt(code.slice(2), 16)
+        : parseInt(code.slice(1), 10);
+      return cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : match;
+    }
+    return NAMED_ENTITIES[code] ?? match;
+  });
 
 // Expand tabs to 8-column stops (what <pre> renders), preserving alignment.
 const detabLine = (line) => {

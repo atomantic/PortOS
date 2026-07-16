@@ -562,17 +562,10 @@ export const songInstrumentEnum = z.enum(['guitar', 'piano', 'ukulele', 'bass', 
 // Content notation format (drives the client-side parser/renderer)
 export const songContentFormatEnum = z.enum(['chordpro', 'tab', 'plain']);
 
-// Attachment metadata — synced in the record; the BYTES are machine-local
-// under data/brain/songbook/ (peers lacking the file show "not on this machine").
-export const songAttachmentSchema = z.object({
-  filename: z.string().min(1).max(300),
-  label: z.string().max(300).optional().default(''),
-  mime: z.string().max(100),
-  size: z.number().int().min(0),
-  sha256: z.string().length(64)
-});
-
-// Create/Update Song input schema
+// Create/Update Song input schema. Attachment metadata ({ filename, label,
+// mime, size, sha256 }) is server-managed — synced in the record, mutated only
+// by the attachment endpoints, never client-suppliable (no schema key here, so
+// Zod's unknown-key stripping drops it).
 export const songInputSchema = z.object({
   title: z.string().trim().min(1).max(300),
   artist: z.string().trim().max(300).optional().default(''),
@@ -587,24 +580,7 @@ export const songInputSchema = z.object({
     format: songContentFormatEnum.optional().default('tab'),
     text: z.string().max(200000).optional().default('')
   }).optional().default({ format: 'tab', text: '' }),
-  scrollDurationSec: z.number().int().min(15).max(3600).nullable().optional().default(null),
   notes: z.string().max(5000).optional().default('')
-});
-
-// Full Song record — input plus server-managed fields. `attachments` is
-// mutated ONLY by the attachment endpoints (PUT strips client-supplied values);
-// id/createdAt/updatedAt/originInstanceId are stamped by brainStorage.
-export const songRecordSchema = songInputSchema.extend({
-  id: z.string().guid(),
-  attachments: z.array(songAttachmentSchema).optional().default([]),
-  originInstanceId: z.string().optional(),
-  createdAt: z.string().datetime(),
-  updatedAt: z.string().datetime()
-});
-
-// PATCH /api/brain/songbook/:id/stage — cheap chip-flip path
-export const songStagePatchSchema = z.object({
-  stage: songStageEnum
 });
 
 // POST /api/brain/songbook/import/url
