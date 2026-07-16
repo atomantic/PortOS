@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { parseTabSheet } from '../../lib/tabNotation.js';
+import usePopoverPosition from '../../hooks/usePopoverPosition.js';
 import ChordDiagram from './ChordDiagram.jsx';
 
 /**
@@ -35,7 +36,6 @@ import ChordDiagram from './ChordDiagram.jsx';
  */
 
 const POPOVER_WIDTH = 172;
-const POPOVER_EST_HEIGHT = 200;
 
 // Split a chords line into plain/chord segments using the parser's col offsets.
 const chordLineSegments = (text, chords) => {
@@ -80,7 +80,10 @@ const ChordToken = ({ name, tokenKey, expanded, onTap }) => (
     onClick={(e) => onTap(name, tokenKey, e.currentTarget)}
     aria-expanded={expanded}
     aria-haspopup="dialog"
-    className="inline align-baseline text-port-accent font-semibold rounded px-1 -mx-1 py-2 hover:bg-port-accent/10 focus-visible:outline focus-visible:outline-1 focus-visible:outline-port-accent"
+    // font-mono is explicit (not inherited): PortOS themes set --port-font-ui
+    // directly on every <button>, which would render chord names proportional
+    // and break the sheet's column alignment.
+    className="inline align-baseline font-mono text-port-accent font-semibold rounded px-1 -mx-1 py-2 hover:bg-port-accent/10 focus-visible:outline focus-visible:outline-1 focus-visible:outline-port-accent"
   >
     {name}
   </button>
@@ -148,9 +151,19 @@ function TabSheetView({
   }, [lines, showChordStrip]);
   const [stripOpen, setStripOpen] = useState(true);
 
-  // Chord popover: { name, key, x, y, above } in viewport (fixed) coords.
+  // Chord popover: { name, key }; placement is owned by usePopoverPosition,
+  // which re-measures on open and reflows (rAF-coalesced, capture-phase) on
+  // ancestor scroll/resize — so autoscroll can't detach the dialog from its
+  // trigger, and the measured height replaces any estimate.
   const [popover, setPopover] = useState(null);
-  const popoverRef = useRef(null);
+  const anchorElRef = useRef(null);
+  const { popoverRef, style: popoverStyle } = usePopoverPosition({
+    open: !!popover,
+    width: POPOVER_WIDTH,
+    position: 'below',
+    anchorRef: anchorElRef,
+    contentDeps: [popover?.name, instrumentView],
+  });
   // Tabstaff blocks explicitly expanded while in a non-guitar view.
   const [expandedStaffs, setExpandedStaffs] = useState(() => new Set());
 
@@ -163,14 +176,8 @@ function TabSheetView({
   const onChordTap = useCallback((name, key, el) => {
     setPopover((prev) => {
       if (prev?.key === key) return null; // tap again to close
-      const rect = el.getBoundingClientRect();
-      const x = Math.max(
-        8,
-        Math.min(rect.left + rect.width / 2 - POPOVER_WIDTH / 2, window.innerWidth - POPOVER_WIDTH - 8),
-      );
-      // Open below unless the viewport bottom is too close (then flip above).
-      const above = window.innerHeight - rect.bottom < POPOVER_EST_HEIGHT && rect.top > POPOVER_EST_HEIGHT;
-      return { name, key, x, y: above ? rect.top - 6 : rect.bottom + 6, above };
+      anchorElRef.current = el;
+      return { name, key };
     });
   }, []);
 
@@ -313,12 +320,7 @@ function TabSheetView({
           role="dialog"
           aria-label={`${popover.name} chord voicing`}
           className="fixed z-50 bg-port-card border border-port-border rounded-lg shadow-xl p-3 font-sans"
-          style={{
-            left: popover.x,
-            top: popover.y,
-            width: POPOVER_WIDTH,
-            transform: popover.above ? 'translateY(-100%)' : undefined,
-          }}
+          style={popoverStyle ?? { visibility: 'hidden', left: 0, top: 0, width: POPOVER_WIDTH }}
         >
           <div className="flex items-center justify-between gap-2 mb-1.5">
             <span className="text-sm font-mono font-semibold text-port-accent">{popover.name}</span>
