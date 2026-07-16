@@ -104,6 +104,37 @@ describe('migration 192 — normalize POST dates to the user local timezone', ()
     expect(readJson(trainingPath).entries[0].date).toBe('2026-07-15');
   });
 
+  it('preserves the exact instant of a legacy practice entry (full-ISO date, no timestamp) before rewriting date', async () => {
+    // A legacy memory-practice entry's only instant is the full ISO in `date`;
+    // the migration must stash it in `timestamp` before overwriting `date`.
+    writeJson(settingsPath, { timezone: 'America/Los_Angeles' });
+    writeJson(trainingPath, {
+      entries: [{ id: 't1', date: '2026-07-16T05:00:00.000Z', memoryItemId: 'm1' }],
+    });
+    const result = await migration.up({ rootDir });
+    expect(result.updated).toBe(1);
+    const entry = readJson(trainingPath).entries[0];
+    expect(entry.date).toBe('2026-07-15');
+    expect(entry.timestamp).toBe('2026-07-16T05:00:00.000Z');
+  });
+
+  it('does not overwrite an existing timestamp/startedAt when normalizing date', async () => {
+    writeJson(settingsPath, { timezone: 'America/Los_Angeles' });
+    writeJson(sessionsPath, {
+      sessions: [{
+        id: 's1', date: '2026-07-16',
+        startedAt: '2026-07-16T05:00:00.000Z',
+        completedAt: '2026-07-16T05:30:00.000Z',
+      }],
+    });
+    await migration.up({ rootDir });
+    const s = readJson(sessionsPath).sessions[0];
+    expect(s.date).toBe('2026-07-15');
+    expect(s.startedAt).toBe('2026-07-16T05:00:00.000Z'); // untouched
+    expect(s.completedAt).toBe('2026-07-16T05:30:00.000Z'); // untouched
+    expect(s.timestamp).toBeUndefined(); // not added — instant already preserved
+  });
+
   it('leaves a record with no recoverable instant untouched', async () => {
     // Bare date-only, no completedAt/startedAt/timestamp — no way to know the
     // local day, so it must be preserved rather than guessed.

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeft, ChevronRight, Flame, Trophy } from 'lucide-react';
 import {
@@ -7,7 +7,7 @@ import {
 import { getPostSessions, getPostStats } from '../../../services/api';
 import useChartColors from '../../../hooks/useChartColors.js';
 import useUserTimezone from '../../../hooks/useUserTimezone.js';
-import { dayKeyInTimezone } from '../../../utils/timezone.js';
+import { todayKeyInTimezone, shiftDayKey } from '../../../utils/timezone.js';
 import { DRILL_TO_DOMAIN, DRILL_LABELS, domainLabel } from './constants';
 
 const RANGES = [
@@ -41,17 +41,25 @@ export default function PostHistory({ onBack }) {
   const [sessions, setSessions] = useState([]);
   const [stats, setStats] = useState(null);
   const [range, setRange] = useState(30);
+  // Generation guard: `timezone` resolves async (browser zone → configured zone),
+  // so mount fires one load with the browser-derived floor and a second once the
+  // configured tz arrives. Without ordering protection the first (stale) response
+  // can land last and overwrite the correctly-filtered sessions (issue #2681 r4).
+  const loadGenRef = useRef(0);
 
   const loadData = useCallback(async () => {
-    // Floor the window at the local day `range` days back (configured tz), so it
-    // lines up with the server's local-day session dates rather than a UTC bound.
+    const gen = ++loadGenRef.current;
+    // Floor the window at the local day `range` CALENDAR days back (configured tz),
+    // via DST-safe day-string math — so it lines up with the server's DST-safe,
+    // local-day session window rather than a UTC / elapsed-hours bound.
     const from = range > 0
-      ? dayKeyInTimezone(timezone, new Date(Date.now() - range * 86400000))
+      ? shiftDayKey(todayKeyInTimezone(timezone), -range)
       : undefined;
     const [s, st] = await Promise.all([
       getPostSessions(from).catch(err => { console.warn('⚠️ Failed to load POST sessions: ' + err.message); return []; }),
       getPostStats(range).catch(err => { console.warn('⚠️ Failed to load POST stats: ' + err.message); return null; })
     ]);
+    if (gen !== loadGenRef.current) return; // a newer load superseded this one
     setSessions((s || []).slice().reverse());
     setStats(st);
   }, [range, timezone]);

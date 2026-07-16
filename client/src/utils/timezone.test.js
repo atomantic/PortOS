@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { dayKeyInTimezone, todayKeyInTimezone } from './timezone.js';
+import { dayKeyInTimezone, todayKeyInTimezone, shiftDayKey, isValidTimezone } from './timezone.js';
 
 describe('dayKeyInTimezone', () => {
   it('returns the local day for an instant whose UTC day is ahead of the local day', () => {
@@ -33,5 +33,36 @@ describe('dayKeyInTimezone', () => {
 describe('todayKeyInTimezone', () => {
   it('returns today as a YYYY-MM-DD string in the given timezone', () => {
     expect(todayKeyInTimezone('UTC')).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+});
+
+describe('shiftDayKey', () => {
+  it('shifts by whole calendar days', () => {
+    expect(shiftDayKey('2026-07-15', -7)).toBe('2026-07-08');
+    expect(shiftDayKey('2026-07-15', 1)).toBe('2026-07-16');
+    expect(shiftDayKey('2026-07-15', 0)).toBe('2026-07-15');
+  });
+
+  it('crosses month/year boundaries correctly', () => {
+    expect(shiftDayKey('2026-01-01', -1)).toBe('2025-12-31');
+    expect(shiftDayKey('2026-03-01', -1)).toBe('2026-02-28');
+  });
+
+  it('is DST-safe: a 7-day shift across US spring-forward stays a whole day count', () => {
+    // 2026 US DST begins 2026-03-08. Elapsed-hours math would drift here; calendar
+    // day math does not — 7 days before the 15th is the 8th, exactly.
+    expect(shiftDayKey('2026-03-15', -7)).toBe('2026-03-08');
+  });
+});
+
+describe('isValidTimezone', () => {
+  it('accepts real IANA zones', () => {
+    expect(isValidTimezone('America/Los_Angeles')).toBe(true);
+    expect(isValidTimezone('UTC')).toBe(true);
+  });
+  it('rejects invalid/empty values', () => {
+    expect(isValidTimezone('Not/A_Zone')).toBe(false);
+    expect(isValidTimezone('')).toBe(false);
+    expect(isValidTimezone(undefined)).toBe(false);
   });
 });

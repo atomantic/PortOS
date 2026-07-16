@@ -34,3 +34,36 @@ export function dayKeyInTimezone(timezone, date = new Date()) {
 export function todayKeyInTimezone(timezone) {
   return dayKeyInTimezone(timezone, new Date());
 }
+
+/**
+ * Shift a `YYYY-MM-DD` day key by whole CALENDAR days — the browser mirror of the
+ * server's `ymdShift` (server/lib/postStreak.js). Day arithmetic goes through UTC
+ * midnight so it never drifts across a DST transition: subtracting
+ * `range * 86400000` ms from a wall-clock instant counts elapsed HOURS and, across
+ * a spring-forward, lands on the wrong calendar day (issue #2681 r4). Use this for
+ * window floors so the client matches the server's DST-safe day windows.
+ * @param {string} dayKey - `YYYY-MM-DD`
+ * @param {number} deltaDays - signed day offset
+ * @returns {string}
+ */
+export function shiftDayKey(dayKey, deltaDays) {
+  const [y, m, d] = String(dayKey).split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d) + deltaDays * 86400000).toISOString().split('T')[0];
+}
+
+/**
+ * True when `timezone` is a usable IANA zone. Lets callers apply the SERVER's
+ * fallback (UTC) for an invalid configured value instead of silently drifting to
+ * the browser zone (issue #2681 r4).
+ * @param {string} timezone
+ * @returns {boolean}
+ */
+export function isValidTimezone(timezone) {
+  if (!timezone) return false;
+  try {
+    new Intl.DateTimeFormat('en-CA', { timeZone: timezone });
+    return true;
+  } catch {
+    return false;
+  }
+}

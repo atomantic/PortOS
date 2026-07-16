@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getSettings } from '../services/api';
+import { isValidTimezone } from '../utils/timezone.js';
 
 /**
  * Resolve the user's CONFIGURED IANA timezone (`settings.timezone`) once on
@@ -28,7 +29,14 @@ export default function useUserTimezone() {
 
   useEffect(() => {
     getSettings({ silent: true })
-      .then((s) => { if (s?.timezone) setTimezone(s.timezone); })
+      .then((s) => {
+        const tz = s?.timezone;
+        if (!tz) return; // unconfigured: keep the browser zone (self-heal seeds it)
+        // A hand-edited/invalid configured tz makes the server fall back to its
+        // process timezone (UTC under TZ=UTC). Match that instead of letting
+        // dayKeyInTimezone silently drift to the browser zone (issue #2681 r4).
+        setTimezone(isValidTimezone(tz) ? tz : 'UTC');
+      })
       .catch(() => {});
   }, []);
 

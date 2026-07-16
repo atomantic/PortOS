@@ -126,6 +126,14 @@ async function normalizeFile(path, arrayKey, instantOf, timezone) {
     if (!instant) continue; // no recoverable time — leave the stored date as-is
     const localDay = localDayFor(instant, timezone);
     if (localDay && rec.date !== localDay) {
+      // Preserve the exact instant before overwriting `date` with the day key.
+      // A legacy memory-practice entry's ONLY instant is the full ISO in `date`
+      // (the old writer added no `timestamp`); replacing it with a bare day would
+      // irreversibly discard that time. Stash it in `timestamp` when the record
+      // carries no other instant field (issue #2681 r4).
+      if (!rec.timestamp && !rec.startedAt && !rec.completedAt) {
+        rec.timestamp = instant;
+      }
       rec.date = localDay;
       updated += 1;
     }
