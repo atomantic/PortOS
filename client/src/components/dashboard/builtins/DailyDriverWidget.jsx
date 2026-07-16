@@ -29,10 +29,19 @@ export default function DailyDriverWidget({ dashboardState }) {
   const [post, setPost] = useState(null);
   const [topRec, setTopRec] = useState(null);
   const [goals, setGoals] = useState([]);
+  // Sentinel: distinguish "goals failed to load" from "no goals exist" so a
+  // transient fetch failure doesn't show the "Define your goals" CTA to a user
+  // who already has goals (CLAUDE.md "absent/failed vs legitimately-empty").
+  const [goalsFailed, setGoalsFailed] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [dismissing, setDismissing] = useState(false);
 
   const refetchDashboard = dashboardState?.refetch;
+  // The first landing of the local day (recorded server-side by the dashboard's
+  // getDailyDriverState GET). Drives the card's greeting; visibility itself is
+  // gated on !handledToday (registry) so the card persists across same-day
+  // reloads until the user handles it, rather than vanishing on a refresh.
+  const firstVisitToday = !!dashboardState?.dailyDriver?.firstVisitToday;
 
   const fetchData = useCallback(async () => {
     const [stats, recs, goalsData] = await Promise.all([
@@ -42,7 +51,14 @@ export default function DailyDriverWidget({ dashboardState }) {
     ]);
     setPost(stats);
     setTopRec(recs?.recommendations?.[0] || null);
-    setGoals((goalsData?.goals || []).filter((g) => g.status === 'active'));
+    // `goalsData?.goals` present ⇒ authoritative list; null ⇒ fetch failed.
+    if (Array.isArray(goalsData?.goals)) {
+      setGoals(goalsData.goals.filter((g) => g.status === 'active'));
+      setGoalsFailed(false);
+    } else {
+      setGoals([]);
+      setGoalsFailed(true);
+    }
     setLoaded(true);
   }, []);
 
@@ -74,6 +90,11 @@ export default function DailyDriverWidget({ dashboardState }) {
       <div className="flex items-center gap-2 mb-3">
         <Sparkles size={16} className="text-port-accent" />
         <h3 className="text-sm font-semibold text-white">Daily Driver</h3>
+        {firstVisitToday && (
+          <span className="px-2 py-0.5 bg-port-accent/15 text-port-accent text-xs rounded-full">
+            New day
+          </span>
+        )}
         <button
           type="button"
           onClick={handleDismiss}
@@ -112,8 +133,14 @@ export default function DailyDriverWidget({ dashboardState }) {
           )}
         </Link>
 
-        {/* ② Goal next-actions, or empty-state nudge */}
-        {goals.length === 0 ? (
+        {/* ② Goal next-actions, empty-state nudge, or (on fetch failure) a
+            neutral unavailable row — NOT the empty-state, which would wrongly
+            tell a user with goals to "define" them. */}
+        {goalsFailed ? (
+          <div className="p-2 rounded-lg border border-port-border text-xs text-gray-500">
+            Goals unavailable right now — reopen the dashboard to retry.
+          </div>
+        ) : goals.length === 0 ? (
           <Link
             to="/goals/list"
             className="flex items-center gap-2 p-2 rounded-lg border border-dashed border-port-border hover:border-port-accent transition-colors"

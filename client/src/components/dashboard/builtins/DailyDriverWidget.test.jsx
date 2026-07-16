@@ -47,6 +47,23 @@ describe('DailyDriverWidget', () => {
     expect(link.getAttribute('href')).toBe('/goals/list');
   });
 
+  it('shows an unavailable row (not the empty-state) when the goals fetch fails', async () => {
+    mocks.getGoals.mockRejectedValue(new Error('network'));
+    renderWidget();
+    expect(await screen.findByText(/Goals unavailable right now/)).toBeTruthy();
+    // Must NOT wrongly prompt a user (who may have goals) to define them.
+    expect(screen.queryByText('Define your goals')).toBeNull();
+  });
+
+  it('renders a "New day" badge only on the first visit of the day', async () => {
+    const { unmount } = renderWidget({ dailyDriver: { firstVisitToday: true } });
+    expect(await screen.findByText('New day')).toBeTruthy();
+    unmount();
+    renderWidget({ dailyDriver: { firstVisitToday: false } });
+    await screen.findByText('Daily POST');
+    expect(screen.queryByText('New day')).toBeNull();
+  });
+
   it('renders goal next-action rows with registry-derived deep-links', async () => {
     mocks.getGoals.mockResolvedValue({
       goals: [
