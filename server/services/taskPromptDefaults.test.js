@@ -84,6 +84,28 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(v9).not.toBe(current);
   });
 
+  // claim-issue v6 / claim-issue-gitlab v5: Phase 1 epic skip also recognizes a
+  // leading bracketed `[epic]` title tag (the "[Epic] …" convention), fixing the
+  // perpetual-swarm churn where a `[Epic]`-titled issue with no `epic` label
+  // read as actionable forever. Pins the version-bump pairing + preserved
+  // outgoing defaults for cross-install auto-upgrade.
+  it.each([
+    ['claim-issue', 6],
+    ['claim-issue-gitlab', 5],
+  ])('%s v%d recognizes an "[epic]"/"Epic:" title prefix, preserving the outgoing default', (key, version) => {
+    const current = DEFAULT_TASK_PROMPTS[key];
+    expect(current).toContain('beginning with an `[epic]` bracket or `Epic:` tag');
+    expect(PROMPT_VERSIONS[key]).toBe(version);
+
+    const previous = PREVIOUS_DEFAULT_PROMPTS[key];
+    const outgoing = previous[previous.length - 1];
+    // The outgoing default only knew the `epic` label + "(epic)" suffix; it is
+    // preserved verbatim so installs holding it are recognized and upgraded.
+    expect(outgoing).not.toContain('beginning with an `[epic]` bracket');
+    expect(outgoing).toContain('a title ending in "(epic)"');
+    expect(outgoing).not.toBe(current);
+  });
+
   // NOTE: PROMPT_VERSIONS keys are SCHEDULE keys, not always prompt keys —
   // code-reviewer-a/b version a pipeline whose stages use the
   // code-reviewer-review / code-reviewer-implement prompt bodies — so there is

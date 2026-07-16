@@ -14,6 +14,7 @@ vi.mock('child_process', async (importOriginal) => {
 import { spawn } from 'child_process';
 import {
   isActionableIssue,
+  titleMarksEpic,
   issueNumberFromRef,
   detectActionableWork,
   detectGithubIssues,
@@ -71,9 +72,17 @@ describe('perpetualWork', () => {
       expect(isActionableIssue({ ...base, labels: [{ name: 'needs-input' }] })).toBe(false);
     });
 
-    it('rejects an epic by label or by "(epic)" title', () => {
+    it('rejects an epic by label, by "(epic)" title suffix, or by "[epic]" title prefix', () => {
       expect(isActionableIssue({ ...base, labels: [{ name: 'epic' }] })).toBe(false);
       expect(isActionableIssue({ ...base, title: 'Big rollup (epic)' })).toBe(false);
+      // The non-convergence case: an epic titled "[Epic] …" with NO `epic`
+      // label kept reading as actionable, so the drain re-spawned a claim agent
+      // that always skips it — never parking.
+      expect(isActionableIssue({
+        ...base,
+        labels: [{ name: 'enhancement' }, { name: 'roadmap' }],
+        title: '[Epic] Redesign the billing dashboard'
+      })).toBe(false);
     });
 
     it('accepts a plan-labelled issue (plan is the claimable queue, not a skip)', () => {
@@ -87,6 +96,36 @@ describe('perpetualWork', () => {
     it('rejects malformed issues', () => {
       expect(isActionableIssue(null)).toBe(false);
       expect(isActionableIssue({ title: 'no number' })).toBe(false);
+    });
+  });
+
+  describe('titleMarksEpic', () => {
+    it.each([
+      'Big rollup (epic)',
+      'Big rollup (EPIC)',
+      '[Epic] Redesign the billing dashboard',
+      '[EPIC] all caps prefix',
+      '[epic] lower prefix',
+      '[Epic: theme] with a colon',
+      '[ epic ] padded brackets',
+      'Epic: Redesign the nav',         // unbracketed colon tag
+      'EPIC: all caps colon'
+    ])('recognizes %j as an epic', (title) => {
+      expect(titleMarksEpic(title)).toBe(true);
+    });
+
+    it.each([
+      'Fix the login bug',
+      '[epicenter] telemetry module',  // `\b` guard: "epicenter" starts with "epic" but is a different word
+      'Epicurean recipe importer',     // "epic" as a substring, no bracket/paren tag
+      'Add an epic-scale test (not a tag)',
+      'Epic rework of the nav',        // bare adjective — no bracket/colon terminator, not a tag
+      '[epic vision that never closes', // unclosed bracket, no colon terminator
+      '',
+      null,
+      undefined
+    ])('does not flag %j as an epic', (title) => {
+      expect(titleMarksEpic(title)).toBe(false);
     });
   });
 
@@ -160,6 +199,31 @@ describe('perpetualWork', () => {
       expect(out.total).toBe(5);
       expect(out.inFlightCount).toBe(1);
       expect(out.filteredCount).toBe(2);
+    });
+
+    it('converges (0 actionable) on a queue whose only unblocked issue is a "[Epic]"-prefixed one with no epic label', async () => {
+      // Regression for the perpetual-swarm churn: every open issue is either
+      // needs-input/blocked OR a "[Epic] …" umbrella with no `epic` label. The
+      // claim agent skips the epic; the detector MUST too, or the drain
+      // re-spawns a no-op agent every tick and never parks.
+      routeSpawn({
+        'gh issue': { stdout: JSON.stringify([
+          { number: 1, title: '[Epic] Redesign the billing dashboard', assignees: [], labels: [{ name: 'enhancement' }, { name: 'roadmap' }] },
+          { number: 2, title: 'Add a dark-mode toggle', assignees: [], labels: [{ name: 'needs-input' }] },
+          { number: 3, title: 'Document the export API', assignees: [], labels: [{ name: 'needs-input' }] },
+          { number: 4, title: 'Record the onboarding walkthrough', assignees: [], labels: [{ name: 'needs-input' }] },
+          { number: 5, title: 'Wire up the metrics pipeline', assignees: [], labels: [{ name: 'blocked' }] },
+          { number: 6, title: 'Calibrate the ranking weights', assignees: [], labels: [{ name: 'needs-input' }] },
+          { number: 7, title: 'Cache the aggregate query', assignees: [], labels: [{ name: 'needs-input' }] }
+        ]) },
+        'git branch': { stdout: 'main\n' },
+        'gh pr': { stdout: '' }
+      });
+      const out = await detectGithubIssues(app, { issueAuthorFilter: 'any' });
+      expect(out).toMatchObject({ actionable: false, count: 0, reason: 'no-actionable-issues' });
+      expect(out.total).toBe(7);
+      expect(out.inFlightCount).toBe(0);
+      expect(out.filteredCount).toBe(7); // the epic (#1) + 6 needs-input/blocked
     });
 
     it('reports the open/in-flight breakdown when nothing is claimable (the "40 open but parked" case)', async () => {

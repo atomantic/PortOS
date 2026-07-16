@@ -123,6 +123,28 @@ async function inFlightIssueNumbers(repoPath, forge = 'github') {
 }
 
 /**
+ * Recognize a tracking/umbrella EPIC from its title alone — the programmatic
+ * half of the claim-issue prompt's Phase 1 epic skip. An epic needs a human to
+ * split it per-slice, so the claim agent always skips one; the detector MUST
+ * skip it too or a perpetual drain re-picks it every tick and never parks.
+ * Matches the epic-title conventions the prompt names and the agent honors:
+ *   - a trailing `(epic)` tag  — e.g. "Redesign nav (epic)"
+ *   - a leading `[epic]` bracket or `Epic:` colon tag — e.g. "[Epic] Billing
+ *     revamp", "[epic: theme] …", "Epic: Redesign nav" (case-insensitive)
+ * The leading-tag branch is what closes the real-world non-convergence bug: an
+ * epic titled "[Epic] …" that carries NO `epic` label kept reading as actionable
+ * (label check missed it, and it doesn't END in "(epic)"), so the drain spawned
+ * a claim agent that correctly skipped it, completed with nothing shipped, and
+ * re-fired back-to-back. The `\b` + `[:\]]` terminator keeps a bare adjective
+ * ("Epic rework of nav") and near-words ("[epicenter] …") from matching — only a
+ * real bracketed/colon-delimited `epic` tag counts.
+ */
+export function titleMarksEpic(title) {
+  const t = (title || '').trim().toLowerCase();
+  return t.endsWith('(epic)') || /^\[?\s*epic\b\s*[:\]]/.test(t);
+}
+
+/**
  * Decide whether a single GitHub issue (as returned by `gh issue list --json`)
  * is autonomously claimable. Mirrors the claim-issue prompt's Phase 1 step 4
  * predicate: no in-flight claim ref, no assignees, no blocking label, not an
@@ -137,7 +159,7 @@ export function isActionableIssue(issue, inFlight = new Set()) {
     .map((s) => s.toLowerCase());
   if (labels.some((l) => NON_ACTIONABLE_ISSUE_LABELS.has(l))) return false;
   if (labels.includes('epic')) return false;
-  if ((issue.title || '').trim().toLowerCase().endsWith('(epic)')) return false;
+  if (titleMarksEpic(issue.title)) return false;
   return true;
 }
 

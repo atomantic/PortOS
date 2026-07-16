@@ -45,3 +45,23 @@ by `/do:replan --issues`:
   fretboard rendering shipped with the instrument-view toggle, issue #2656.)
 - [ ] Brain memory-bridge/graph enrollment for `songs` records (nav/⌘K already
   works via the nav manifest; this is the knowledge-graph side).
+
+### CoS perpetual-drain follow-ups
+
+- [ ] Close the Phase-1/Phase-3 convergence gap in the claim-issue flow. The
+  perpetual work-detector (`server/services/perpetualWork.js` `isActionableIssue`)
+  can only evaluate the claim prompt Phase 1 skip-list (labels/assignees/epic/
+  in-flight). But the claim-issue prompt Phase 3 ("Verify still valid",
+  `server/services/taskPromptDefaults/prompts.js` ~lines 552-561) releases an
+  issue for reasons the detector cannot see — already-fixed/superseded, a stale
+  reference to code that no longer exists, or >5 unrelated files (too big).
+  Only the "too ambiguous/large" branch tags `needs-input` (which the detector
+  catches); the other three release WITHOUT any converging label, so the
+  detector keeps reporting them actionable and the perpetual drain re-spawns a
+  no-op agent every tick (same churn class as the `[Epic]`-prefix bug fixed in
+  this PR, but body/comment-driven so unfixable in the detector). Fix by making
+  every Phase-3 release also apply a converging label the detector skips (e.g.
+  `needs-input` for stale/ambiguous, or close+comment for already-fixed) so the
+  drain parks. Prompt change → PROMPT_VERSIONS bump for claim-issue +
+  claim-issue-gitlab (+ jira) with outgoing defaults preserved. Surfaced while
+  diagnosing a managed-app perpetual-drain churn.
