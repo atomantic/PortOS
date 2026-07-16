@@ -148,8 +148,14 @@ upload endpoint.
   `"voice"`; a typed one sends `"text"`. It is **not** a free-form app-identity tag.
 - `GET /api/brain/daily-log/:date` — read a day's log.
 
-(The `daily_log_append` / `daily_log_read` palette actions wrap this same path —
-either surface works.)
+The palette `daily_log_append` / `daily_log_read` actions cover the same feature but
+are **not** interchangeable with these routes — pick per your need:
+
+- `daily_log_append` (palette) always tags the entry `source: "voice"` and returns a
+  voice-tool result shape (`{ ok, date, summary, … }`). Use it for dictated captures.
+- The direct `POST …/append` route honors the `source` you send and returns
+  `{ date, entry }`. Use it for a **typed** entry (`source: "text"`) or when you need
+  the structured `entry` back.
 
 ## 5. MeatSpace POST training & testing
 
