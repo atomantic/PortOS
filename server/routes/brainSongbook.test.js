@@ -66,7 +66,6 @@ const baseSong = (overrides = {}) => ({
   tuning: '',
   sourceUrl: '',
   content: { format: 'tab', text: 'e|--0--|' },
-  scrollDurationSec: null,
   notes: '',
   attachments: [],
   createdAt: '2026-07-01T00:00:00.000Z',
@@ -126,7 +125,6 @@ describe('Brain SongBook routes', () => {
         stage: 'new',
         capo: 0,
         content: { format: 'tab', text: '' },
-        scrollDurationSec: null,
         attachments: [],
       }));
     });
@@ -155,14 +153,23 @@ describe('Brain SongBook routes', () => {
   });
 
   describe('PUT /api/brain/songbook/:id', () => {
-    it('updates only the sent fields (no default injection)', async () => {
+    it('updates only the sent fields (no default injection) — the stage-flip path', async () => {
       brainStorage.update.mockResolvedValue(baseSong({ stage: 'learning' }));
       const res = await request(app)
         .put(`/api/brain/songbook/${SONG_ID}`)
         .send({ stage: 'learning' });
       expect(res.status).toBe(200);
+      expect(res.body.stage).toBe('learning');
       // Exactly the sent field — an omitted title/capo/etc. must not reset to defaults.
       expect(brainStorage.update).toHaveBeenCalledWith('songs', SONG_ID, { stage: 'learning' });
+    });
+
+    it('400s on an invalid stage', async () => {
+      const res = await request(app)
+        .put(`/api/brain/songbook/${SONG_ID}`)
+        .send({ stage: 'perfected' });
+      expect(res.status).toBe(400);
+      expect(brainStorage.update).not.toHaveBeenCalled();
     });
 
     it('strips client-supplied attachments', async () => {
@@ -178,34 +185,6 @@ describe('Brain SongBook routes', () => {
       const res = await request(app)
         .put(`/api/brain/songbook/${SONG_ID}`)
         .send({ title: 'X' });
-      expect(res.status).toBe(404);
-    });
-  });
-
-  describe('PATCH /api/brain/songbook/:id/stage', () => {
-    it('flips the stage', async () => {
-      brainStorage.update.mockResolvedValue(baseSong({ stage: 'memorized' }));
-      const res = await request(app)
-        .patch(`/api/brain/songbook/${SONG_ID}/stage`)
-        .send({ stage: 'memorized' });
-      expect(res.status).toBe(200);
-      expect(res.body.stage).toBe('memorized');
-      expect(brainStorage.update).toHaveBeenCalledWith('songs', SONG_ID, { stage: 'memorized' });
-    });
-
-    it('400s on an invalid stage', async () => {
-      const res = await request(app)
-        .patch(`/api/brain/songbook/${SONG_ID}/stage`)
-        .send({ stage: 'perfected' });
-      expect(res.status).toBe(400);
-      expect(brainStorage.update).not.toHaveBeenCalled();
-    });
-
-    it('404s when the song is missing', async () => {
-      brainStorage.update.mockResolvedValue(null);
-      const res = await request(app)
-        .patch(`/api/brain/songbook/${SONG_ID}/stage`)
-        .send({ stage: 'learning' });
       expect(res.status).toBe(404);
     });
   });

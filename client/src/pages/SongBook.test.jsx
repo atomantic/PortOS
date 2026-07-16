@@ -7,7 +7,7 @@ const api = vi.hoisted(() => ({
   listSongs: vi.fn(),
   createSong: vi.fn(),
   deleteSong: vi.fn(),
-  patchSongStage: vi.fn(),
+  updateSong: vi.fn(),
 }));
 vi.mock('../services/api', () => api);
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
@@ -43,7 +43,7 @@ const renderPage = (path = '/songbook') => render(
 describe('SongBook index', () => {
   beforeEach(() => {
     api.listSongs.mockReset().mockResolvedValue({ songs: [song('s1', 'Example Song')] });
-    api.patchSongStage.mockReset();
+    api.updateSong.mockReset();
     api.deleteSong.mockReset();
     api.createSong.mockReset();
   });
@@ -54,13 +54,13 @@ describe('SongBook index', () => {
     expect(screen.getByText('The Placeholders')).toBeTruthy();
   });
 
-  it('flips a song stage via patchSongStage and updates local state reactively', async () => {
-    api.patchSongStage.mockResolvedValue(song('s1', 'Example Song', { stage: 'learning' }));
+  it('flips a song stage via a partial updateSong and updates local state reactively', async () => {
+    api.updateSong.mockResolvedValue(song('s1', 'Example Song', { stage: 'learning' }));
     renderPage();
     const select = await screen.findByLabelText('Stage for Example Song');
     expect(select.value).toBe('new');
     fireEvent.change(select, { target: { value: 'learning' } });
-    expect(api.patchSongStage).toHaveBeenCalledWith('s1', 'learning');
+    expect(api.updateSong).toHaveBeenCalledWith('s1', { stage: 'learning' });
     await waitFor(() => expect(screen.getByLabelText('Stage for Example Song').value).toBe('learning'));
     // Reactive local-state update — no refetch of the list.
     expect(api.listSongs).toHaveBeenCalledTimes(1);

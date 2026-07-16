@@ -7,8 +7,8 @@
  * the play/edit viewer lives at /songbook/:id and import at /songbook/import.
  *
  * Filters live in URL search params (?stage=&instrument=&tag=&q=) so a
- * filtered view is linkable (Catalog.jsx pattern). Stage flips PATCH the cheap
- * /stage endpoint and update local state reactively — no refetch.
+ * filtered view is linkable (Catalog.jsx pattern). Stage flips PUT just the
+ * stage field and update local state reactively — no refetch.
  */
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
@@ -21,10 +21,10 @@ import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { timeAgo } from '../utils/formatters';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
-import { listSongs, createSong, deleteSong, patchSongStage } from '../services/api';
-import { SONG_STAGES, SONG_STAGE_COLORS, INSTRUMENTS } from '../components/songbook/constants';
-
-const capitalize = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
+import { listSongs, createSong, deleteSong, updateSong } from '../services/api';
+import {
+  SONG_STAGES, SONG_STAGE_COLORS, INSTRUMENTS, instrumentLabel, inputClass, labelClass,
+} from '../components/songbook/constants';
 
 export default function SongBook() {
   const navigate = useNavigate();
@@ -70,10 +70,11 @@ export default function SongBook() {
       .catch((err) => toast.error(err?.message || 'Failed to delete song')),
   ), [confirmDelete]);
 
-  // Stage flip: PATCH then merge the server record into local state. No custom
-  // catch toast — the request helper owns the error toast (single layer).
+  // Stage flip: PUT just the stage (defaults-free partial) then merge the
+  // server record into local state. No custom catch toast — the request
+  // helper owns the error toast (single layer).
   const onStageChange = useCallback((id, stage) => {
-    patchSongStage(id, stage)
+    updateSong(id, { stage })
       .then((updated) => setSongs((prev) => prev.map((s) => (s.id === id ? { ...s, ...updated } : s))))
       .catch(() => {});
   }, []);
@@ -115,14 +116,14 @@ export default function SongBook() {
         className="bg-port-card border border-port-border rounded-lg p-4 mb-4 flex flex-col sm:flex-row gap-3 sm:items-end"
       >
         <div className="flex-1">
-          <label htmlFor="song-title" className="block text-xs text-gray-400 mb-1">Title</label>
+          <label htmlFor="song-title" className={labelClass}>Title</label>
           <input
             id="song-title"
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
             placeholder="e.g. Example Song"
-            className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:border-port-accent focus:outline-none"
+            className={inputClass}
           />
         </div>
         <button
@@ -164,7 +165,7 @@ export default function SongBook() {
           className={selectClass}
         >
           <option value="">All instruments</option>
-          {INSTRUMENTS.map((i) => <option key={i} value={i}>{capitalize(i)}</option>)}
+          {INSTRUMENTS.map((i) => <option key={i.id} value={i.id}>{i.label}</option>)}
         </select>
         {tagFilter && (
           <button
@@ -205,7 +206,7 @@ export default function SongBook() {
                 <div className="text-white font-medium truncate" title={song.title}>{song.title}</div>
                 <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-500 mt-1">
                   {song.artist && <span className="text-gray-400">{song.artist}</span>}
-                  {song.instrument && <span>{capitalize(song.instrument)}</span>}
+                  {song.instrument && <span>{instrumentLabel(song.instrument)}</span>}
                   {song.updatedAt && <span>Edited {timeAgo(song.updatedAt)}</span>}
                 </div>
                 {Array.isArray(song.tags) && song.tags.length > 0 && (

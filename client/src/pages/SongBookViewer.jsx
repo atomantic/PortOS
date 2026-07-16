@@ -22,7 +22,7 @@
  */
 
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { useParams, useNavigate, useSearchParams, Link } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   ListMusic, ArrowLeft, Save, Trash2, Pencil, Eye, Play, Pause, Plus, Minus,
   ExternalLink, Paperclip, Upload, FileX2,
@@ -32,22 +32,25 @@ import PageHeader from '../components/PageHeader';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import AutoSizeTextarea from '../components/ui/AutoSizeTextarea';
 import TabSheetView from '../components/songbook/TabSheetView';
-import { SONG_STAGES, SONG_STAGE_COLORS, INSTRUMENTS, SONG_FORMATS } from '../components/songbook/constants';
+import {
+  SONG_STAGES, SONG_STAGE_COLORS, INSTRUMENTS, SONG_FORMATS,
+  inputClass, labelClass, btnClass,
+} from '../components/songbook/constants';
 import { useAsyncAction } from '../hooks/useAsyncAction';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
+import useDrawerTab from '../hooks/useDrawerTab';
 import useKeyboardShortcuts from '../hooks/useKeyboardShortcuts';
 import useAutoscroll from '../hooks/useAutoscroll';
 import useWakeLock from '../hooks/useWakeLock';
 import { transposeText } from '../lib/tabNotation.js';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage.js';
 import { formatBytes } from '../utils/formatters';
+import { isHttpUrl } from '../utils/urlNormalize';
 import { readFileAsBase64, ATTACHMENT_MAX_FILE_SIZE } from '../utils/fileUpload';
 import {
-  getSong, updateSong, patchSongStage, deleteSong,
+  getSong, updateSong, deleteSong,
   listSongAttachments, uploadSongAttachment, deleteSongAttachment, songAttachmentUrl,
 } from '../services/api';
-
-const capitalize = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
 const TRANSPOSE_MIN = -11;
 const TRANSPOSE_MAX = 11;
@@ -75,28 +78,15 @@ const toDraft = (song) => ({
 
 const parseTags = (raw) => raw.split(',').map((t) => t.trim()).filter(Boolean);
 
-// Only http(s) URLs are safe to render as a clickable link — reject
-// javascript:/data: schemes so a stored sourceUrl can't smuggle a script.
-const isHttpUrl = (url) => /^https?:\/\//i.test(url || '');
-
-const inputClass = 'w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:border-port-accent focus:outline-none';
-const labelClass = 'block text-xs text-gray-400 mb-1';
 // 44px minimum touch targets on the controls bar (mobile-friendly).
 const ctrlBtnClass = 'flex items-center justify-center min-w-[44px] min-h-[44px] rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50';
 
 export default function SongBookViewer() {
   const { id } = useParams();
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const editing = searchParams.get('mode') === 'edit';
-  const setMode = useCallback((mode) => {
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev);
-      if (mode === 'edit') next.set('mode', 'edit');
-      else next.delete('mode');
-      return next;
-    }, { replace: true });
-  }, [setSearchParams]);
+  // URL-backed mode (default 'play' omitted from the URL, replace-history writes).
+  const [mode, setMode] = useDrawerTab('mode', 'play', ['play', 'edit']);
+  const editing = mode === 'edit';
 
   const [song, setSong] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -171,15 +161,19 @@ export default function SongBookViewer() {
     '0': scrollToTop,
   });
 
-  const renderedText = useMemo(() => {
-    const text = song?.content?.text || '';
-    return transpose ? transposeText(text, transpose) : text;
-  }, [song, transpose]);
+  // Keyed on the content STRING (not the song object) so unrelated record
+  // updates (stage flips, attachment meta) don't re-run the transpose pass.
+  const contentText = song?.content?.text || '';
+  const renderedText = useMemo(
+    () => (transpose ? transposeText(contentText, transpose) : contentText),
+    [contentText, transpose],
+  );
 
   // --- Mutations
   const onStageChange = useCallback((stage) => {
-    // Helper toast owns the error UI (no custom catch toast → no silent).
-    patchSongStage(id, stage)
+    // PUT just the stage (defaults-free partial). Helper toast owns the error
+    // UI (no custom catch toast → no silent).
+    updateSong(id, { stage })
       .then((updated) => {
         setSong(updated);
         setDraft((prev) => (prev ? { ...prev, stage: updated.stage } : prev));
@@ -273,7 +267,7 @@ export default function SongBookViewer() {
         subtitle={song.artist || undefined}
         actions={(
           <>
-            <Link to="/songbook" className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50">
+            <Link to="/songbook" className={btnClass}>
               <ArrowLeft size={15} />
               <span className="hidden sm:inline">All songs</span>
             </Link>
@@ -291,7 +285,7 @@ export default function SongBookViewer() {
                 <button
                   type="button"
                   onClick={() => setMode('play')}
-                  className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50"
+                  className={btnClass}
                 >
                   <Eye size={15} />
                   View
@@ -301,7 +295,7 @@ export default function SongBookViewer() {
               <button
                 type="button"
                 onClick={() => setMode('edit')}
-                className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50"
+                className={btnClass}
               >
                 <Pencil size={15} />
                 Edit
@@ -344,7 +338,7 @@ export default function SongBookViewer() {
             <div>
               <label htmlFor="song-edit-instrument" className={labelClass}>Instrument</label>
               <select id="song-edit-instrument" value={draft.instrument} onChange={(e) => setDraft({ ...draft, instrument: e.target.value })} className={inputClass}>
-                {INSTRUMENTS.map((i) => <option key={i} value={i}>{capitalize(i)}</option>)}
+                {INSTRUMENTS.map((i) => <option key={i.id} value={i.id}>{i.label}</option>)}
               </select>
             </div>
             <div>

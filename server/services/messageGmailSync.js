@@ -7,7 +7,7 @@ import { gmail } from '@googleapis/gmail';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import crypto from 'crypto';
 import { getAuthenticatedClient } from './googleAuth.js';
-import { decodeXmlEntities } from '../lib/xmlEntities.js';
+import { htmlToText as sharedHtmlToText } from '../lib/htmlToText.js';
 
 function makeExternalId(gmailId) {
   return 'api-gmail-' + crypto.createHash('md5').update(gmailId).digest('hex').slice(0, 12);
@@ -25,25 +25,13 @@ function decodeBase64Url(str) {
 }
 
 /**
- * Convert HTML to readable plain text by stripping style/script/head blocks, then tags.
+ * Convert HTML to readable plain text via the shared strip-tags pipeline.
+ * Mail-specific options: `&zwnj;` decodes to nothing, `</p>` keeps a blank
+ * line between paragraphs, and space/tab runs collapse (email HTML is
+ * whitespace-noisy and carries no meaningful column alignment).
  */
 function htmlToText(html) {
-  const stripped = html
-    .replace(/<head\b[^>]*>[\s\S]*?<\/head>/gi, '')
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, '')
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, '')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n\n')
-    .replace(/<\/div>/gi, '\n')
-    .replace(/<\/tr>/gi, '\n')
-    .replace(/<\/li>/gi, '\n')
-    .replace(/<[^>]*>/g, '');
-  // Shared decoder handles the named + numeric entities; `&nbsp;`/`&zwnj;` are
-  // mail-specific so they're passed as extra entities (space / zero-width strip).
-  return decodeXmlEntities(stripped, { nbsp: ' ', zwnj: '' })
-    .replace(/\n{3,}/g, '\n\n')
-    .replace(/[ \t]+/g, ' ')
-    .trim();
+  return sharedHtmlToText(html, { extraEntities: { zwnj: '' }, paragraphBreak: '\n\n', collapseSpaces: true });
 }
 
 /**

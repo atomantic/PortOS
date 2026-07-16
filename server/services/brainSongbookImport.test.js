@@ -12,11 +12,9 @@ vi.mock('../lib/safeUrlFetch.js', () => ({
 
 import { fetchPublicText } from '../lib/safeUrlFetch.js';
 import {
-  decodeHtmlEntities,
   stripUgMarkers,
   extractUltimateGuitarStore,
   extractLargestPre,
-  stripHtmlToText,
   parseTitleArtist,
   buildDraftFromHtml,
   importSongFromUrl,
@@ -42,24 +40,6 @@ const UG_STORE = {
     },
   },
 };
-
-describe('decodeHtmlEntities', () => {
-  it('decodes named, decimal, and hex entities', () => {
-    expect(decodeHtmlEntities('&lt;b&gt; &quot;hi&quot; &#39;x&#39; &#x41;')).toBe('<b> "hi" \'x\' A');
-  });
-
-  it('decodes &amp; last so double-encoded text stays literal', () => {
-    expect(decodeHtmlEntities('&amp;lt;')).toBe('&lt;');
-  });
-
-  it('never throws on out-of-range numeric entities', () => {
-    expect(decodeHtmlEntities('&#x110000; ok')).toBe(' ok');
-  });
-
-  it('returns "" for non-strings', () => {
-    expect(decodeHtmlEntities(null)).toBe('');
-  });
-});
 
 describe('stripUgMarkers', () => {
   it('strips [ch]/[tab] markers but keeps the sheet text', () => {
@@ -113,6 +93,16 @@ describe('extractLargestPre', () => {
     expect(result).toContain('G & D strings');
   });
 
+  it('decodes named, decimal, and hex entities without double-decoding', () => {
+    const html = '<pre>&lt;b&gt; &quot;hi&quot; &#39;x&#39; &#x41; &amp;lt; and padding</pre>';
+    expect(extractLargestPre(html)).toBe('<b> "hi" \'x\' A &lt; and padding');
+  });
+
+  it('leaves out-of-range numeric entities untouched (never throws)', () => {
+    const html = '<pre>&#x110000; still a long enough sheet</pre>';
+    expect(extractLargestPre(html)).toBe('&#x110000; still a long enough sheet');
+  });
+
   it('strips inner markup tags', () => {
     const html = '<pre><span class="chord">Am</span> example lyric line here</pre>';
     expect(extractLargestPre(html)).toBe('Am example lyric line here');
@@ -124,16 +114,6 @@ describe('extractLargestPre', () => {
 
   it('returns null with no <pre> at all', () => {
     expect(extractLargestPre('<p>hello</p>')).toBeNull();
-  });
-});
-
-describe('stripHtmlToText', () => {
-  it('drops scripts/styles and converts block ends to newlines', () => {
-    const html = '<html><head><style>.x{}</style></head><body>' +
-      '<script>var a = 1;</script><p>Verse one line</p><p>Verse two line</p></body></html>';
-    const text = stripHtmlToText(html);
-    expect(text).toBe('Verse one line\nVerse two line');
-    expect(text).not.toContain('var a');
   });
 });
 
@@ -184,11 +164,12 @@ describe('buildDraftFromHtml', () => {
   });
 
   it('falls back to plain tag-stripped text when nothing else matches', () => {
-    const html = '<html><head><title>Example Song - The Placeholders</title></head>' +
-      '<body><p>Just some lyric text on a plain page</p></body></html>';
+    const html = '<html><head><title>Example Song - The Placeholders</title><style>.x{}</style></head>' +
+      '<body><script>var a = 1;</script><p>Just some lyric text on a plain page</p></body></html>';
     const draft = buildDraftFromHtml(html, URL);
     expect(draft.content.format).toBe('plain');
     expect(draft.content.text).toBe('Just some lyric text on a plain page');
+    expect(draft.content.text).not.toContain('var a');
   });
 });
 

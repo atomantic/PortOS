@@ -4,13 +4,12 @@
  */
 
 import { Router } from 'express';
-import { writeFile, unlink, readdir, stat } from 'fs/promises';
+import { unlink, readdir, stat } from 'fs/promises';
 import { join, resolve } from 'path';
-import { v4 as uuidv4 } from '../lib/uuid.js';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import {
-  ensureDir, pathExists, PATHS, RISKY_MIME_TYPES,
-  sanitizeFilename, getFileExtension, getMimeType, ATTACHMENT_ALLOWED_EXTENSIONS, isPathInsideDir,
+  pathExists, PATHS, sanitizeFilename, getFileExtension, getMimeType,
+  ATTACHMENT_ALLOWED_EXTENSIONS, isPathInsideDir, saveBase64Upload, serveLocalFile,
 } from '../lib/fileUtils.js';
 
 const ATTACHMENTS_DIR = PATHS.cosAttachments;
@@ -19,15 +18,6 @@ const router = Router();
 
 // Max file size: 50MB (larger than screenshots to accommodate documents)
 const MAX_FILE_SIZE = 50 * 1024 * 1024;
-
-/**
- * Validate file extension is allowed for attachments.
- * Uses the strict ATTACHMENT_ALLOWED_EXTENSIONS allowlist from fileUtils.
- */
-function isAllowedExtension(filename) {
-  const ext = getFileExtension(filename);
-  return ext && ATTACHMENT_ALLOWED_EXTENSIONS.has(ext);
-}
 
 // POST /api/attachments - Upload a file attachment (base64)
 router.post('/', asyncHandler(async (req, res) => {
@@ -41,76 +31,28 @@ router.post('/', asyncHandler(async (req, res) => {
     throw new ServerError('filename is required', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
-  // Validate extension
-  if (!isAllowedExtension(filename)) {
-    const allowedList = [...ATTACHMENT_ALLOWED_EXTENSIONS].join(', ');
-    throw new ServerError(`File type not allowed. Supported: ${allowedList}`, { status: 400, code: 'INVALID_FILE_TYPE' });
-  }
+  // Shared pipeline: allowlist → decode → size cap → `<uuid8>-name` → write.
+  const saved = await saveBase64Upload(ATTACHMENTS_DIR, { filename, data }, {
+    allowedExtensions: ATTACHMENT_ALLOWED_EXTENSIONS,
+    maxBytes: MAX_FILE_SIZE,
+  });
 
-  // Decode base64 and validate size
-  const buffer = Buffer.from(data, 'base64');
-  if (buffer.length > MAX_FILE_SIZE) {
-    throw new ServerError(`File exceeds maximum size of ${MAX_FILE_SIZE / 1024 / 1024}MB`, { status: 400, code: 'FILE_TOO_LARGE' });
-  }
-
-  // Ensure attachments directory exists (ensureDir is idempotent — mkdir
-  // recursive — so no existence pre-check is needed on this upload path).
-  await ensureDir(ATTACHMENTS_DIR);
-
-  const id = uuidv4();
-  const safeName = sanitizeFilename(filename);
-  const ext = getFileExtension(safeName);
-  // Create unique filename with UUID prefix to avoid collisions
-  const fname = `${id.slice(0, 8)}-${safeName}`;
-  const filepath = join(ATTACHMENTS_DIR, fname);
-
-  // Double-check path is within attachments directory (defense in depth)
-  if (!isPathInsideDir(ATTACHMENTS_DIR, filepath)) {
-    throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
-  }
-
-  await writeFile(filepath, buffer);
-
-  const mimeType = getMimeType(ext);
-
-  console.log(`📎 Attachment saved: ${fname} (${buffer.length} bytes, ${mimeType})`);
+  console.log(`📎 Attachment saved: ${saved.filename} (${saved.size} bytes, ${saved.mime})`);
 
   res.json({
-    id,
-    filename: fname,
+    id: saved.id,
+    filename: saved.filename,
     originalName: filename,
     // API-relative URL only — never the absolute FS path (leaks install layout).
-    path: `/api/attachments/${encodeURIComponent(fname)}`,
-    size: buffer.length,
-    mimeType
+    path: `/api/attachments/${encodeURIComponent(saved.filename)}`,
+    size: saved.size,
+    mimeType: saved.mime
   });
 }));
 
 // GET /api/attachments/:filename - Serve an attachment
 router.get('/:filename', asyncHandler(async (req, res) => {
-  const { filename } = req.params;
-  // Sanitize filename to prevent path traversal
-  const safeFilename = sanitizeFilename(filename);
-  const filepath = resolve(ATTACHMENTS_DIR, safeFilename);
-
-  // Verify the resolved path is within attachments directory
-  if (!isPathInsideDir(ATTACHMENTS_DIR, filepath)) {
-    throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
-  }
-
-  if (!(await pathExists(filepath))) {
-    throw new ServerError('Attachment not found', { status: 404, code: 'NOT_FOUND' });
-  }
-
-  const ext = getFileExtension(safeFilename);
-  const mimeType = getMimeType(ext);
-
-  res.set('X-Content-Type-Options', 'nosniff');
-  if (RISKY_MIME_TYPES.has(mimeType)) {
-    res.set('Content-Disposition', `attachment; filename="${safeFilename}"`);
-  }
-
-  res.type(mimeType).sendFile(filepath);
+  await serveLocalFile(res, ATTACHMENTS_DIR, req.params.filename);
 }));
 
 // DELETE /api/attachments/:filename - Delete an attachment

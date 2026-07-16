@@ -15,20 +15,21 @@
  */
 
 import { useMemo, useState, useCallback } from 'react';
-import { useNavigate, useSearchParams, Link } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { ListMusic, ArrowLeft, ClipboardPaste, Eraser, Wand2, Globe, FileText, Save } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
 import TabSheetView from '../components/songbook/TabSheetView';
-import { SONG_STAGES, INSTRUMENTS } from '../components/songbook/constants';
+import {
+  SONG_STAGES, INSTRUMENTS, inputClass, labelClass, btnClass,
+} from '../components/songbook/constants';
 import { useAsyncAction } from '../hooks/useAsyncAction';
+import useDrawerTab from '../hooks/useDrawerTab';
 import { createSong, importSongFromUrl } from '../services/api';
 import { normalizePastedTab, detectFormat, parseTabSheet } from '../lib/tabNotation.js';
 import { readClipboard } from '../lib/clipboard.js';
 import { isUrl, normalizeUrl } from '../utils/urlNormalize';
-
-const capitalize = (s) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
 // Invented placeholder sheet — demonstrates sections, chord lines, and a tab
 // staff without any real song data (privacy convention).
@@ -59,23 +60,10 @@ const TABS = [
   { id: 'url', label: 'From URL', icon: Globe },
 ];
 
-const inputClass = 'w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:border-port-accent focus:outline-none';
-const labelClass = 'block text-xs text-gray-400 mb-1';
-const btnClass = 'flex items-center gap-1.5 px-3 py-2 text-sm rounded-lg border border-port-border text-gray-300 hover:text-white hover:bg-port-border/50 disabled:opacity-50';
-
 export default function SongBookImport() {
   const navigate = useNavigate();
-  const [searchParams, setSearchParams] = useSearchParams();
-  const rawTab = searchParams.get('tab');
-  const tab = TABS.some((t) => t.id === rawTab) ? rawTab : 'paste';
-  const setTab = useCallback((next) => {
-    setSearchParams((prev) => {
-      const p = new URLSearchParams(prev);
-      if (next === 'paste') p.delete('tab');
-      else p.set('tab', next);
-      return p;
-    }, { replace: true });
-  }, [setSearchParams]);
+  // URL-backed tab state (default omitted from the URL, replace-history writes).
+  const [tab, setTab] = useDrawerTab('tab', 'paste', ['paste', 'url']);
 
   // Paste tab state
   const [pasted, setPasted] = useState('');
@@ -107,6 +95,8 @@ export default function SongBookImport() {
     applyMetaDefaults(parseTabSheet(clean).meta);
   }, [applyMetaDefaults]);
 
+  // Error mapping lives in the .catch alone — it swallows every rejection, so
+  // a useAsyncAction errorMessage layer could never fire (single toast layer).
   const [fetchUrl, fetching] = useAsyncAction(async () => {
     const normalizedUrl = normalizeUrl(url);
     if (!normalizedUrl || !isUrl(normalizedUrl)) { toast.error('Enter a valid URL'); return null; }
@@ -119,13 +109,17 @@ export default function SongBookImport() {
     setFetched(draft);
     applyMetaDefaults(draft);
     return draft;
-  }, { errorMessage: 'Import failed' });
+  });
 
   // The active tab's content → what Save will store.
   const contentText = tab === 'url' ? (fetched?.content?.text || '') : normalized;
-  const contentFormat = tab === 'url'
-    ? (fetched?.content?.format || detectFormat(contentText))
-    : detectFormat(normalized);
+  const fetchedFormat = fetched?.content?.format;
+  // Memoized on its real inputs so detectFormat (a full line-classifier pass)
+  // doesn't re-run on every unrelated keystroke (title/artist/tags).
+  const contentFormat = useMemo(
+    () => (tab === 'url' && fetchedFormat) || detectFormat(contentText),
+    [tab, fetchedFormat, contentText],
+  );
 
   const [save, saving] = useAsyncAction(async () => {
     const name = title.trim();
@@ -261,7 +255,7 @@ export default function SongBookImport() {
         <div>
           <label htmlFor="import-instrument" className={labelClass}>Instrument</label>
           <select id="import-instrument" value={instrument} onChange={(e) => setInstrument(e.target.value)} className={inputClass}>
-            {INSTRUMENTS.map((i) => <option key={i} value={i}>{capitalize(i)}</option>)}
+            {INSTRUMENTS.map((i) => <option key={i.id} value={i.id}>{i.label}</option>)}
           </select>
         </div>
         <div>

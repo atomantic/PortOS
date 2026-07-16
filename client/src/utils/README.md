@@ -33,7 +33,7 @@ grep -i "what you want to do" client/src/utils/README.md
 | `coalesce` | Trailing-edge coalescer: wraps a function so rapid calls collapse into one deferred invocation. |
 | `easing` | `smoothstep` interpolation easing curve. |
 | `hashString` | Deterministic string → 32-bit hash (stable colors, keys, seeds). |
-| `urlNormalize` | `isUrl` detection and `normalizeUrl` (optional git/`requireDot` modes). |
+| `urlNormalize` | `isUrl` detection, `normalizeUrl` (optional git/`requireDot` modes), and `isHttpUrl` (explicit http(s) only — safe-href check). |
 | `platform` | `isMac` detection and `modKey` (⌘/Ctrl) for keyboard-shortcut display. |
 | `navWorkingSet` | Recent/pinned nav persistence (`recordVisit`, `togglePin`, `isPinned`) plus `resolveRecentNavEntries` for mapping stored deep links back to their longest matching nav-manifest entry. |
 | `providers` | AI-provider type predicates and helpers (`isCliProvider`, `isApiProvider`, `isCodexProvider`, `filterSelectableModels`, `getProviderTimeout`, configured-default sentinels, and the claude/codex thinking-effort levels — `effortLevelsForProvider`, mirror of server `providerModels.js`). |

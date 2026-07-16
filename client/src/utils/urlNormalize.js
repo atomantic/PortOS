@@ -15,6 +15,16 @@ const URL_SCHEME_PATTERN = /^(https?:\/\/|git@)/i;
 const DOMAIN_PATTERN = /^\S+\.\S+$/;
 
 /**
+ * True when a stored/user value is an explicit http(s) URL — the only scheme
+ * safe to render as a clickable link (rejects javascript:/data: so a stored
+ * URL can't smuggle a script into an href).
+ *
+ * @param {string} url
+ * @returns {boolean}
+ */
+export const isHttpUrl = (url) => /^https?:\/\//i.test(url || '');
+
+/**
  * Detect whether a raw string should be treated as a URL/link rather than
  * free text. Mirrors QuickBrainCapture's detection: an explicit scheme
  * (http/https/git@) OR a domain-like single token (`foo.bar`).

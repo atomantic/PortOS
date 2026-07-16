@@ -27,12 +27,10 @@ export const getSong = (id, options) => request(`/brain/songbook/${enc(id)}`, op
 export const createSong = (body = {}, options) =>
   request('/brain/songbook', { method: 'POST', body: JSON.stringify(body), ...options });
 
+// Defaults-free partial PUT — also the stage chip-flip path
+// (`updateSong(id, { stage })`).
 export const updateSong = (id, patch, options) =>
   request(`/brain/songbook/${enc(id)}`, { method: 'PUT', body: JSON.stringify(patch), ...options });
-
-// Cheap chip-flip path — PATCH only the learning stage.
-export const patchSongStage = (id, stage, options) =>
-  request(`/brain/songbook/${enc(id)}/stage`, { method: 'PATCH', body: JSON.stringify({ stage }), ...options });
 
 export const deleteSong = (id, options) =>
   request(`/brain/songbook/${enc(id)}`, { method: 'DELETE', ...options });

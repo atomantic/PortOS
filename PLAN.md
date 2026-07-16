@@ -15,3 +15,29 @@ This file no longer tracks individual tasks (so it stops generating merge
 conflicts as work proceeds). Speculative ideas now live as `future`-labeled
 issues rather than a list here, so they can each be promoted, refined, or closed
 independently.
+
+### SongBook follow-ups
+
+Deferred from the SongBook feature's post-review cleanup (see
+`docs/plans/2026-07-15-songbook.md`) — to be promoted to labeled GitHub issues
+by `/do:replan --issues`:
+
+- [ ] "Fit to duration" autoscroll preset: re-add an optional `scrollDurationSec`
+  field to `songInputSchema` (`server/lib/brainValidation.js`) plus a preset
+  button in `client/src/pages/SongBookViewer.jsx` that computes `pxPerSec` from
+  the scroll container's `scrollHeight / scrollDurationSec`. Dropped from v1 as
+  speculative — no UI consumed the field.
+- [ ] Consolidate `server/routes/uploads.js` onto the shared `saveBase64Upload`
+  / `serveLocalFile` helpers in `server/lib/fileUtils.js` (added for
+  `routes/attachments.js` + `routes/brainSongbook.js`). Left out of the SongBook
+  pass because uploads.js has a different response shape and uses the full
+  `EXTENSION_MIME_MAP` rather than an allowlist.
+- [ ] SongBook practice/spaced-rep integration (SM-2 style, cf.
+  `meatspacePostMemory`) — the `stage` field on `songs` records is manual in v1
+  (`server/lib/brainValidation.js` `songStageEnum`).
+- [ ] Link songs to existing Rounds/Tracks/MIDI records — a cross-links field on
+  the `songs` record + UI in `client/src/pages/SongBookViewer.jsx`.
+- [ ] Chord diagrams / fretboard rendering and MIDI/score preview embedding in
+  the SongBook viewer (`client/src/components/songbook/TabSheetView.jsx`).
+- [ ] Brain memory-bridge/graph enrollment for `songs` records (nav/⌘K already
+  works via the nav manifest; this is the knowledge-graph side).
