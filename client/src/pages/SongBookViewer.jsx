@@ -136,7 +136,10 @@ export default function SongBookViewer() {
         if (!cancelled && !attachmentsMutatedRef.current) setAttachments(Array.isArray(list) ? list : []);
       })
       .catch(() => {
-        if (!cancelled && !attachmentsMutatedRef.current) setAttachments([]);
+        // Presence lookup failed — don't render "no attachments" over synced
+        // metadata that exists. Fall back to the record's own list with
+        // presence unknown (no "not on this machine" pill either way).
+        if (!cancelled && !attachmentsMutatedRef.current) setAttachments('failed');
       });
     return () => { cancelled = true; };
   }, [id, retryKey]);
@@ -168,6 +171,11 @@ export default function SongBookViewer() {
   // --- Autoscroll + wake lock
   const scrollRef = useRef(null);
   const { playing, toggle, stop, pxPerSec, setPxPerSec } = useAutoscroll(scrollRef);
+
+  // Presence lookup failed → show the record's own synced metadata with
+  // presence unknown (rendered as plain links; only an explicit present:false
+  // gets the "not on this machine" pill), never a false "No attachments".
+  const shownAttachments = attachments === 'failed' ? (song?.attachments || []) : (attachments || []);
   useWakeLock(playing);
 
   const scrollToTop = useCallback(() => {
@@ -342,7 +350,10 @@ export default function SongBookViewer() {
             ) : (
               <button
                 type="button"
-                onClick={() => setMode('edit')}
+                // Explicitly stop autoscroll before the play-mode scroll node
+                // unmounts (the detached-element bottom check would also stop
+                // it, but deterministic beats incidental).
+                onClick={() => { stop(); setMode('edit'); }}
                 className={btnClass}
               >
                 <Pencil size={15} />
@@ -592,13 +603,13 @@ export default function SongBookViewer() {
               </div>
               {attachments === null ? (
                 <p className="text-xs text-gray-500">Loading attachments…</p>
-              ) : attachments.length === 0 ? (
+              ) : shownAttachments.length === 0 ? (
                 <p className="text-xs text-gray-500">No attachments — upload sheet-music PDFs, images, or MIDI files.</p>
               ) : (
                 <ul className="space-y-1">
-                  {attachments.map((att) => (
+                  {shownAttachments.map((att) => (
                     <li key={att.filename} className="flex items-center gap-3 px-3 py-2 bg-port-card border border-port-border rounded-lg text-sm">
-                      {att.present ? (
+                      {att.present !== false ? (
                         <a
                           href={songAttachmentUrl(id, att.filename)}
                           target="_blank"

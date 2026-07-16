@@ -98,13 +98,15 @@ describe('migration 190 — seed songbook songs', () => {
     expect(empty.reason).toBe('no-seeds');
   });
 
-  it('treats an unreadable live file as an empty store', async () => {
+  it('NEVER writes over an unreadable live file — corrupt user data beats seeds', async () => {
     writeSeed();
     mkdirSync(liveDir, { recursive: true });
     writeFileSync(join(liveDir, 'songs.json'), '{not json');
     const result = await migration.up({ rootDir });
-    expect(result.added).toBe(2);
-    expect(Object.keys(readLive().records)).toHaveLength(2);
+    expect(result.reason).toBe('live-store-unreadable');
+    expect(result.added).toBeUndefined();
+    // The corrupt file is byte-for-byte untouched (recoverable by the user).
+    expect(readFileSync(join(liveDir, 'songs.json'), 'utf-8')).toBe('{not json');
   });
 
   it('seeds the SHIPPED reference records against a real repo layout shape', async () => {

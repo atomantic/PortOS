@@ -82,6 +82,31 @@ describe('SongBookImport', () => {
     expect(title.value).toBe('My Own Name');
   });
 
+  it('switching tabs re-applies the active draft metadata to auto-filled fields', async () => {
+    api.importSongFromUrl.mockResolvedValue({
+      draft: { title: 'Url Song', artist: 'Url Artist', content: { format: 'tab', text: 'C G' }, sourceUrl: 'https://example.com/t' },
+    });
+    renderPage();
+    const title = screen.getByLabelText('Title');
+
+    // Paste tab fills from ChordPro meta.
+    const textarea = screen.getByLabelText('Pasted tab content');
+    fireEvent.change(textarea, { target: { value: '{title: Paste Song}\nC G' } });
+    fireEvent.blur(textarea);
+    await waitFor(() => expect(title.value).toBe('Paste Song'));
+
+    // Fetch on the URL tab — its meta takes over while that tab is active.
+    fireEvent.click(screen.getByRole('tab', { name: 'From URL' }));
+    fireEvent.change(screen.getByLabelText('Tab / chord-sheet URL'), { target: { value: 'https://example.com/t' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Fetch' }));
+    await waitFor(() => expect(title.value).toBe('Url Song'));
+
+    // Back to paste — Save would submit the PASTED content, so the auto-fill
+    // must follow it back instead of keeping the URL song's metadata.
+    fireEvent.click(screen.getByRole('tab', { name: 'Paste' }));
+    await waitFor(() => expect(title.value).toBe('Paste Song'));
+  });
+
   it('sends an in-range pasted capo through unchanged', async () => {
     renderPage();
     fireEvent.change(screen.getByLabelText('Pasted tab content'), {
