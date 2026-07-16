@@ -31,6 +31,7 @@ vi.mock('../services/brainStorage.js', () => ({
   getById: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
+  updateWith: vi.fn(),
   remove: vi.fn(),
 }));
 
@@ -52,6 +53,21 @@ const buildApp = () => {
   app.use('/api/brain/songbook', songbookRoutes);
   app.use(errorMiddleware);
   return app;
+};
+
+// Mirror updateWith's contract against a given "fresh" record: run the
+// route's fn, capture the partial updates it produced, and return the merged
+// record (or null when the record is gone). `seen.updates` lets tests assert
+// exactly what the route asked to persist.
+const mockUpdateWith = (freshSong) => {
+  const seen = { updates: null };
+  brainStorage.updateWith.mockImplementation(async (type, id, fn) => {
+    if (!freshSong) return null;
+    const updates = await fn({ ...freshSong });
+    seen.updates = updates;
+    return updates ? { ...freshSong, ...updates } : null;
+  });
+  return seen;
 };
 
 const baseSong = (overrides = {}) => ({
@@ -154,14 +170,38 @@ describe('Brain SongBook routes', () => {
 
   describe('PUT /api/brain/songbook/:id', () => {
     it('updates only the sent fields (no default injection) — the stage-flip path', async () => {
-      brainStorage.update.mockResolvedValue(baseSong({ stage: 'learning' }));
+      const stored = baseSong({ capo: 5, key: 'Em', content: { format: 'chordpro', text: '{t: Example Song}' } });
+      const seen = mockUpdateWith(stored);
       const res = await request(app)
         .put(`/api/brain/songbook/${SONG_ID}`)
         .send({ stage: 'learning' });
       expect(res.status).toBe(200);
       expect(res.body.stage).toBe('learning');
-      // Exactly the sent field — an omitted title/capo/etc. must not reset to defaults.
-      expect(brainStorage.update).toHaveBeenCalledWith('songs', SONG_ID, { stage: 'learning' });
+      // Exactly the sent field — an omitted title/capo/content/etc. must not reset to defaults.
+      expect(seen.updates).toEqual({ stage: 'learning' });
+      expect(res.body.capo).toBe(5);
+      expect(res.body.content).toEqual({ format: 'chordpro', text: '{t: Example Song}' });
+    });
+
+    it('deep-merges a partial content: { text } preserves the stored format', async () => {
+      const stored = baseSong({ content: { format: 'chordpro', text: '{t: Old}' } });
+      const seen = mockUpdateWith(stored);
+      const res = await request(app)
+        .put(`/api/brain/songbook/${SONG_ID}`)
+        .send({ content: { text: 'new text' } });
+      expect(res.status).toBe(200);
+      expect(seen.updates.content).toEqual({ format: 'chordpro', text: 'new text' });
+      expect(res.body.content).toEqual({ format: 'chordpro', text: 'new text' });
+    });
+
+    it('deep-merges a partial content: { format } preserves the stored text', async () => {
+      const stored = baseSong({ content: { format: 'chordpro', text: '{t: Keep me}' } });
+      const seen = mockUpdateWith(stored);
+      const res = await request(app)
+        .put(`/api/brain/songbook/${SONG_ID}`)
+        .send({ content: { format: 'plain' } });
+      expect(res.status).toBe(200);
+      expect(seen.updates.content).toEqual({ format: 'plain', text: '{t: Keep me}' });
     });
 
     it('400s on an invalid stage', async () => {
@@ -169,19 +209,19 @@ describe('Brain SongBook routes', () => {
         .put(`/api/brain/songbook/${SONG_ID}`)
         .send({ stage: 'perfected' });
       expect(res.status).toBe(400);
-      expect(brainStorage.update).not.toHaveBeenCalled();
+      expect(brainStorage.updateWith).not.toHaveBeenCalled();
     });
 
     it('strips client-supplied attachments', async () => {
-      brainStorage.update.mockResolvedValue(baseSong());
+      const seen = mockUpdateWith(baseSong());
       await request(app)
         .put(`/api/brain/songbook/${SONG_ID}`)
         .send({ title: 'New Title', attachments: [{ filename: 'forged.pdf', mime: 'application/pdf', size: 1, sha256: 'x'.repeat(64) }] });
-      expect(brainStorage.update).toHaveBeenCalledWith('songs', SONG_ID, { title: 'New Title' });
+      expect(seen.updates).toEqual({ title: 'New Title' });
     });
 
     it('404s when the song is missing', async () => {
-      brainStorage.update.mockResolvedValue(null);
+      brainStorage.updateWith.mockResolvedValue(null);
       const res = await request(app)
         .put(`/api/brain/songbook/${SONG_ID}`)
         .send({ title: 'X' });
@@ -243,7 +283,7 @@ describe('Brain SongBook routes', () => {
     it('writes bytes, hashes them, and appends meta to the record', async () => {
       const song = baseSong();
       brainStorage.getById.mockResolvedValue(song);
-      brainStorage.update.mockImplementation(async (type, id, fields) => ({ ...song, ...fields }));
+      const seen = mockUpdateWith(song);
 
       const payload = Buffer.from('invented sheet music');
       const res = await request(app)
@@ -263,15 +303,31 @@ describe('Brain SongBook routes', () => {
       expect(existsSync(filepath)).toBe(true);
       expect(readFileSync(filepath, 'utf-8')).toBe('invented sheet music');
 
-      // Meta appended via the entity store (federates with the record)
-      expect(brainStorage.update).toHaveBeenCalledWith('songs', SONG_ID, {
-        attachments: [attachment],
-      });
+      // Meta appended via the locked read-modify-write (federates with the record)
+      expect(brainStorage.updateWith).toHaveBeenCalledWith('songs', SONG_ID, expect.any(Function));
+      expect(seen.updates).toEqual({ attachments: [attachment] });
+    });
+
+    it('appends meta computed from the FRESH record, not the pre-read snapshot', async () => {
+      // The route reads the song (empty attachments), but by the time updateWith
+      // runs, a concurrent writer added one — the append must keep it.
+      brainStorage.getById.mockResolvedValue(baseSong({ attachments: [] }));
+      const concurrent = { filename: 'aaaaaaaa-concurrent.pdf', label: '', mime: 'application/pdf', size: 3, sha256: 'a'.repeat(64) };
+      const seen = mockUpdateWith(baseSong({ attachments: [concurrent] }));
+
+      const res = await request(app)
+        .post(`/api/brain/songbook/${SONG_ID}/attachments`)
+        .send({ filename: 'sheet.txt', data: Buffer.from('x').toString('base64') });
+
+      expect(res.status).toBe(201);
+      expect(seen.updates.attachments).toHaveLength(2);
+      expect(seen.updates.attachments[0]).toEqual(concurrent);
+      expect(seen.updates.attachments[1].filename).toMatch(/-sheet\.txt$/);
     });
 
     it('accepts MIDI files (songbook-specific allowlist extension)', async () => {
       brainStorage.getById.mockResolvedValue(baseSong());
-      brainStorage.update.mockImplementation(async (type, id, fields) => ({ ...baseSong(), ...fields }));
+      mockUpdateWith(baseSong());
       const res = await request(app)
         .post(`/api/brain/songbook/${SONG_ID}/attachments`)
         .send({ filename: 'melody.mid', data: Buffer.from('MThd').toString('base64') });
@@ -285,11 +341,23 @@ describe('Brain SongBook routes', () => {
         .post(`/api/brain/songbook/${SONG_ID}/attachments`)
         .send({ filename: 'app.exe', data: Buffer.from('nope').toString('base64') });
       expect(res.status).toBe(400);
-      expect(brainStorage.update).not.toHaveBeenCalled();
+      expect(brainStorage.updateWith).not.toHaveBeenCalled();
     });
 
     it('404s when the song is missing', async () => {
       brainStorage.getById.mockResolvedValue(null);
+      const res = await request(app)
+        .post(`/api/brain/songbook/${SONG_ID}/attachments`)
+        .send({ filename: 'sheet.txt', data: Buffer.from('x').toString('base64') });
+      expect(res.status).toBe(404);
+    });
+
+    it('404s (not 201) when the song is tombstoned mid-request', async () => {
+      // getById saw the song, but by the time the locked write runs it's gone —
+      // updateWith returns null and the route must 404, never 201 a meta that
+      // was never persisted.
+      brainStorage.getById.mockResolvedValue(baseSong());
+      brainStorage.updateWith.mockResolvedValue(null);
       const res = await request(app)
         .post(`/api/brain/songbook/${SONG_ID}/attachments`)
         .send({ filename: 'sheet.txt', data: Buffer.from('x').toString('base64') });
@@ -357,20 +425,39 @@ describe('Brain SongBook routes', () => {
       const meta = { filename: 'ffffffff-gone.txt', label: '', mime: 'text/plain', size: 9, sha256: 'f'.repeat(64) };
       const song = baseSong({ attachments: [meta] });
       brainStorage.getById.mockResolvedValue(song);
-      brainStorage.update.mockImplementation(async (type, id, fields) => ({ ...song, ...fields }));
+      const seen = mockUpdateWith(song);
 
       const res = await request(app).delete(`/api/brain/songbook/${SONG_ID}/attachments/ffffffff-gone.txt`);
       expect(res.status).toBe(200);
       expect(res.body).toMatchObject({ success: true, filename: 'ffffffff-gone.txt', attachments: [] });
-      expect(brainStorage.update).toHaveBeenCalledWith('songs', SONG_ID, { attachments: [] });
+      expect(seen.updates).toEqual({ attachments: [] });
       expect(existsSync(filepath)).toBe(false);
+    });
+
+    it('filters from the FRESH record, preserving a concurrently-added meta', async () => {
+      const target = { filename: 'ffffffff-gone.txt', label: '', mime: 'text/plain', size: 9, sha256: 'f'.repeat(64) };
+      const concurrent = { filename: 'bbbbbbbb-new.pdf', label: '', mime: 'application/pdf', size: 4, sha256: 'b'.repeat(64) };
+      brainStorage.getById.mockResolvedValue(baseSong({ attachments: [target] }));
+      const seen = mockUpdateWith(baseSong({ attachments: [target, concurrent] }));
+
+      const res = await request(app).delete(`/api/brain/songbook/${SONG_ID}/attachments/ffffffff-gone.txt`);
+      expect(res.status).toBe(200);
+      expect(seen.updates).toEqual({ attachments: [concurrent] });
     });
 
     it('404s for a meta not on the record', async () => {
       brainStorage.getById.mockResolvedValue(baseSong({ attachments: [] }));
       const res = await request(app).delete(`/api/brain/songbook/${SONG_ID}/attachments/nope.txt`);
       expect(res.status).toBe(404);
-      expect(brainStorage.update).not.toHaveBeenCalled();
+      expect(brainStorage.updateWith).not.toHaveBeenCalled();
+    });
+
+    it('404s (not 500) when the song is tombstoned mid-request', async () => {
+      const meta = { filename: 'ffffffff-gone.txt', label: '', mime: 'text/plain', size: 9, sha256: 'f'.repeat(64) };
+      brainStorage.getById.mockResolvedValue(baseSong({ attachments: [meta] }));
+      brainStorage.updateWith.mockResolvedValue(null);
+      const res = await request(app).delete(`/api/brain/songbook/${SONG_ID}/attachments/ffffffff-gone.txt`);
+      expect(res.status).toBe(404);
     });
   });
 });

@@ -32,6 +32,9 @@ by `/do:replan --issues`:
   `routes/attachments.js` + `routes/brainSongbook.js`). Left out of the SongBook
   pass because uploads.js has a different response shape and uses the full
   `EXTENSION_MIME_MAP` rather than an allowlist.
+  Also fix while there: `routes/attachments.js`'s 50MB cap is unreachable —
+  base64 ×4/3 inflation exceeds the 55mb express.json body limit above ~41MB
+  (same latent mismatch fixed in `routes/brainSongbook.js`, which now caps at 40MB).
 - [ ] SongBook practice/spaced-rep integration (SM-2 style, cf.
   `meatspacePostMemory`) — the `stage` field on `songs` records is manual in v1
   (`server/lib/brainValidation.js` `songStageEnum`).

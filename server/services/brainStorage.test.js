@@ -238,6 +238,64 @@ describe('memory recency ordering', () => {
   });
 });
 
+describe('updateWith (locked read-modify-write)', () => {
+  it('applies fn against the fresh record — two sequential array appends both land', async () => {
+    const created = await brainStorage.create('songs', { title: 'RMW Song', attachments: [] });
+    const append = (meta) => brainStorage.updateWith('songs', created.id, (fresh) => ({
+      attachments: [...fresh.attachments, meta],
+    }));
+
+    await append({ filename: 'a.pdf' });
+    const second = await append({ filename: 'b.pdf' });
+    expect(second.attachments.map((a) => a.filename)).toEqual(['a.pdf', 'b.pdf']);
+
+    brainStorage.invalidateAllCaches();
+    const stored = await brainStorage.getById('songs', created.id);
+    expect(stored.attachments.map((a) => a.filename)).toEqual(['a.pdf', 'b.pdf']);
+  });
+
+  it('serializes concurrent updateWith calls so neither clobbers the other', async () => {
+    const created = await brainStorage.create('songs', { title: 'Concurrent Song', attachments: [] });
+    const append = (meta) => brainStorage.updateWith('songs', created.id, (fresh) => ({
+      attachments: [...fresh.attachments, meta],
+    }));
+
+    // Fire both without awaiting in between — the store write lock must make
+    // the second fn see the first's write (the race the snapshot+update()
+    // pattern loses).
+    await Promise.all([append({ filename: 'x.pdf' }), append({ filename: 'y.pdf' })]);
+
+    brainStorage.invalidateAllCaches();
+    const stored = await brainStorage.getById('songs', created.id);
+    expect(stored.attachments.map((a) => a.filename).sort()).toEqual(['x.pdf', 'y.pdf']);
+  });
+
+  it('mirrors update() semantics: immutable fields preserved, updatedAt stamped', async () => {
+    const created = await brainStorage.create('songs', { title: 'Stamp Song' });
+    const updated = await brainStorage.updateWith('songs', created.id, () => ({ title: 'Renamed' }));
+    expect(updated.title).toBe('Renamed');
+    expect(updated.originInstanceId).toBe(created.originInstanceId);
+    expect(updated.createdAt).toBe(created.createdAt);
+    expect(updated.updatedAt >= created.updatedAt).toBe(true);
+  });
+
+  it('returns null for a missing or tombstoned record without calling through', async () => {
+    expect(await brainStorage.updateWith('songs', 'no-such-id', () => ({ title: 'x' }))).toBeNull();
+    const created = await brainStorage.create('songs', { title: 'Gone Song' });
+    await brainStorage.remove('songs', created.id);
+    expect(await brainStorage.updateWith('songs', created.id, () => ({ title: 'x' }))).toBeNull();
+  });
+
+  it('aborts without writing when fn returns null', async () => {
+    const created = await brainStorage.create('songs', { title: 'Abort Song' });
+    expect(await brainStorage.updateWith('songs', created.id, () => null)).toBeNull();
+    brainStorage.invalidateAllCaches();
+    const stored = await brainStorage.getById('songs', created.id);
+    expect(stored.title).toBe('Abort Song');
+    expect(stored.updatedAt).toBe(created.updatedAt); // no write happened
+  });
+});
+
 describe('songs entity enrollment (SongBook)', () => {
   it('lists songs in BRAIN_ENTITY_TYPES so sync/GC/backfill all cover it', () => {
     expect(brainStorage.BRAIN_ENTITY_TYPES).toContain('songs');

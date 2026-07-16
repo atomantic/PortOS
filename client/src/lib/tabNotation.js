@@ -55,6 +55,17 @@ const isChordToken = (token) => token.length > 0 && token.length <= 12 && CHORD_
 // tokens that fail the density gate anyway.
 const isAmbiguousChordToken = (token) => /^[A-G]$/.test(token);
 
+// Dash-joined chord changes ("Am-Am7", "E-Em7") — chord sheets write these
+// for a quick change inside one bar. Valid only when every dash-separated
+// part is a chord token AND at least one part is unambiguous, so hyphenated
+// lyric fragments ("A-round") and letter runs ("A-B-C") stay words.
+const isDashChordToken = (token) => {
+  if (token.length > 25 || !token.includes('-')) return false;
+  const parts = token.split('-');
+  if (parts.length < 2) return false;
+  return parts.every(isChordToken) && parts.some((p) => !isAmbiguousChordToken(p));
+};
+
 // Rhythm/bar noise commonly interleaved on chord lines — ignored by the
 // density calculation rather than counted against it.
 const FILLER_TOKEN_RE = /^(?:\|+|\/+|%|-+|\.+|,|[([]?x\d{1,2}[)\]]?)$/i;
@@ -65,6 +76,7 @@ const chordTokenInfo = (token, col) => {
   if (isChordToken(token)) return { kind: 'chord', name: token, col };
   const paren = /^\((.+)\)$/.exec(token);
   if (paren && isChordToken(paren[1])) return { kind: 'chord', name: paren[1], col: col + 1 };
+  if (isDashChordToken(token)) return { kind: 'chord', name: token, col };
   if (FILLER_TOKEN_RE.test(token)) return { kind: 'filler' };
   return { kind: 'other' };
 };
@@ -120,7 +132,7 @@ const parseChordLyric = (line) => {
   let m;
   while ((m = re.exec(line))) {
     bare += line.slice(last, m.index);
-    if (isChordToken(m[1])) chords.push({ name: m[1], col: bare.length });
+    if (isChordToken(m[1]) || isDashChordToken(m[1])) chords.push({ name: m[1], col: bare.length });
     else bare += m[0];
     last = m.index + m[0].length;
   }
@@ -178,7 +190,9 @@ const classifyLine = (raw) => {
   if (GENERIC_DIRECTIVE_RE.test(line)) return { type: 'text', text: line, chordpro: true };
 
   const bracket = BRACKET_SECTION_RE.exec(line);
-  if (bracket && !isChordToken(bracket[1].trim())) {
+  // A whole-line bracketed chord — plain ([Am]) or dash-joined ([Am-Am7]) — is
+  // ChordPro inline notation, not a section header.
+  if (bracket && !isChordToken(bracket[1].trim()) && !isDashChordToken(bracket[1].trim())) {
     return { type: 'section', text: line, label: bracket[1].trim() };
   }
 
@@ -281,9 +295,10 @@ const detabLine = (line) => {
 
 // Clean up pasted content: CRLF/CR → LF, <br>/<p>/<div> boundaries → newlines,
 // strip real HTML tags (a tag must start with a letter, so tab harmonics like
-// e|--<7>--| survive), decode common entities, expand tabs, trim trailing
-// whitespace per line, collapse runs of 3+ blank lines to 2, and trim
-// leading/trailing blank lines.
+// e|--<7>--| survive), decode common entities, map Unicode accidentals
+// (♯ → #, ♭ → b) so 'F♯m' classifies and transposes like 'F#m', expand tabs,
+// trim trailing whitespace per line, collapse runs of 3+ blank lines to 2, and
+// trim leading/trailing blank lines.
 export const normalizePastedTab = (text) => {
   if (typeof text !== 'string' || !text) return '';
   const cleaned = decodeEntities(
@@ -293,6 +308,8 @@ export const normalizePastedTab = (text) => {
       .replace(/<\/?[A-Za-z][A-Za-z0-9-]*(?:\s[^>]*)?\/?>/g, ''),
   );
   return cleaned
+    .replace(/♯/g, '#')
+    .replace(/♭/g, 'b')
     .split('\n')
     .map((line) => detabLine(line).replace(/\s+$/, ''))
     .join('\n')
@@ -328,6 +345,9 @@ export const transposeChordName = (name, n) => {
   const raw = String(name ?? '');
   if (!Number.isFinite(n)) return raw;
   if (/^N\.?C\.?$/.test(raw)) return raw;
+  if (isDashChordToken(raw)) {
+    return raw.split('-').map((part) => transposeChordName(part, n)).join('-');
+  }
   if (!isChordToken(raw)) return raw;
   const m = /^([A-G])([#b]?)(.*)$/.exec(raw);
   if (!m) return raw;
@@ -346,7 +366,7 @@ export const transposeChordName = (name, n) => {
 };
 
 const transposeToken = (token, n) => {
-  if (isChordToken(token)) return transposeChordName(token, n);
+  if (isChordToken(token) || isDashChordToken(token)) return transposeChordName(token, n);
   const paren = /^\((.+)\)$/.exec(token);
   if (paren && isChordToken(paren[1])) return `(${transposeChordName(paren[1], n)})`;
   return token;
@@ -381,7 +401,9 @@ export const transposeText = (text, n) => {
       if (c.type === 'chords') return transposeChordLine(raw, Math.trunc(n));
       if (c.type === 'chordlyric') {
         return raw.replace(/\[([^\]]*)\]/g, (all, inner) =>
-          isChordToken(inner) ? `[${transposeChordName(inner, n)}]` : all,
+          isChordToken(inner) || isDashChordToken(inner)
+            ? `[${transposeChordName(inner, n)}]`
+            : all,
         );
       }
       return raw;

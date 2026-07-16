@@ -562,6 +562,13 @@ export const songInstrumentEnum = z.enum(['guitar', 'piano', 'ukulele', 'bass', 
 // Content notation format (drives the client-side parser/renderer)
 export const songContentFormatEnum = z.enum(['chordpro', 'tab', 'plain']);
 
+// Nested content object — named so the update schema below can rebuild it
+// defaults-free (partialWithoutDefaults only strips TOP-LEVEL field defaults).
+const songContentSchema = z.object({
+  format: songContentFormatEnum.optional().default('tab'),
+  text: z.string().max(200000).optional().default('')
+});
+
 // Create/Update Song input schema. Attachment metadata ({ filename, label,
 // mime, size, sha256 }) is server-managed — synced in the record, mutated only
 // by the attachment endpoints, never client-suppliable (no schema key here, so
@@ -576,11 +583,19 @@ export const songInputSchema = z.object({
   capo: z.number().int().min(0).max(12).optional().default(0),
   tuning: z.string().trim().max(40).optional().default(''),
   sourceUrl: z.string().trim().max(2000).optional().default(''),
-  content: z.object({
-    format: songContentFormatEnum.optional().default('tab'),
-    text: z.string().max(200000).optional().default('')
-  }).optional().default({ format: 'tab', text: '' }),
+  content: songContentSchema.optional().default({ format: 'tab', text: '' }),
   notes: z.string().max(5000).optional().default('')
+});
+
+// PUT /api/brain/songbook/:id — defaults-free partial. partialWithoutDefaults
+// only strips top-level defaults (see the zodCompat docstring): a
+// present-but-partial `content` object would still inflate its inner defaults
+// — `{ content: { text } }` resetting format to 'tab', `{ content: { format } }`
+// wiping the whole text (and the wipe federates). The nested content field is
+// rebuilt defaults-free too; the route deep-merges `data.content` over the
+// stored song's content so an omitted inner key preserves the stored value.
+export const songUpdateSchema = partialWithoutDefaults(songInputSchema).extend({
+  content: partialWithoutDefaults(songContentSchema).optional()
 });
 
 // POST /api/brain/songbook/import/url

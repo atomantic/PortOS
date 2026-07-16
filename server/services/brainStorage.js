@@ -329,6 +329,55 @@ export async function update(type, id, updates) {
 }
 
 /**
+ * Locked read-modify-write update.
+ *
+ * `update(type, id, partial)` merges a partial the CALLER computed — usually
+ * from a record snapshot read OUTSIDE the store write lock. When the partial
+ * is derived from the current record (append to / filter an array field like
+ * `attachments`), a concurrent writer landing between the snapshot read and
+ * the update silently gets clobbered (and the clobber wins LWW federation).
+ *
+ * `updateWith` closes that window: INSIDE withStoreWriteLock it re-reads the
+ * fresh record, calls `fn({ id, ...record })` → a partial-updates object (or
+ * null/undefined to abort without writing), then merges/persists with exactly
+ * `update()`'s semantics — immutable originInstanceId/createdAt, fresh
+ * updatedAt stamp, cache write-through, `${type}:upserted` event, and a sync
+ * log append. Returns the updated `{ id, ...record }`, or null when the record
+ * is missing/tombstoned or fn aborted.
+ */
+export async function updateWith(type, id, fn) {
+  return withStoreWriteLock(async () => {
+    const data = await loadJsonStore(type);
+
+    // A tombstoned record is gone — treat it as not-found rather than reviving it.
+    if (!data.records[id] || isTombstone(data.records[id])) {
+      return null;
+    }
+
+    const updates = await fn({ id, ...data.records[id] });
+    if (!updates) return null;
+
+    const record = {
+      ...data.records[id],
+      ...updates,
+      // Preserve immutable fields — originInstanceId tracks the creating instance
+      originInstanceId: data.records[id].originInstanceId,
+      createdAt: data.records[id].createdAt,
+      updatedAt: now()
+    };
+
+    data.records[id] = record;
+    await saveJsonStore(type, data);
+    brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
+    await brainSyncLog.appendChange('update', type, id, record, record.originInstanceId)
+      .catch(err => console.error(`⚠️ Sync log append failed for update ${type}/${id}: ${err.message}`));
+
+    console.log(`🧠 Updated ${type} record: ${id}`);
+    return { id, ...record };
+  });
+}
+
+/**
  * Upsert a record under a CALLER-PROVIDED id (full replace, create-if-missing).
  *
  * `create()` mints a uuid, which is wrong for stores whose identity is a natural

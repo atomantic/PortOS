@@ -41,6 +41,9 @@ import {
   detectImageFormat,
   EXTENSION_MIME_MAP,
   ATTACHMENT_ALLOWED_EXTENSIONS,
+  SONGBOOK_ATTACHMENT_EXTENSIONS,
+  saveBase64Upload,
+  serveLocalFile,
 } from './fileUtils.js';
 import { copyFileSync, existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
@@ -1151,5 +1154,93 @@ describe('detectImageFormat', () => {
   it('returns null for a non-Buffer input', () => {
     expect(detectImageFormat('AAAA')).toBeNull();
     expect(detectImageFormat(null)).toBeNull();
+  });
+});
+
+describe('saveBase64Upload (shared attachment upload pipeline)', () => {
+  let dir;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'save-b64-test-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const opts = { allowedExtensions: SONGBOOK_ATTACHMENT_EXTENSIONS, maxBytes: 10 };
+  const b64 = (s) => Buffer.from(s).toString('base64');
+
+  it('persists within the cap and returns the uuid-prefixed name, buffer, size, and mime', async () => {
+    const saved = await saveBase64Upload(dir, { filename: 'sheet.txt', data: b64('ten bytes!') }, opts);
+    expect(saved.filename).toMatch(/^[0-9a-f]{8}-sheet\.txt$/);
+    expect(saved.size).toBe(10);
+    expect(saved.mime).toBe('text/plain');
+    expect(saved.buffer.toString('utf-8')).toBe('ten bytes!');
+    expect(existsSync(saved.filePath)).toBe(true);
+    expect(saved.filePath.startsWith(dir)).toBe(true);
+  });
+
+  it('rejects a payload over maxBytes with a 400 FILE_TOO_LARGE', async () => {
+    await expect(saveBase64Upload(dir, { filename: 'big.txt', data: b64('eleven bytes') }, opts))
+      .rejects.toMatchObject({ status: 400, code: 'FILE_TOO_LARGE' });
+  });
+
+  it('rejects an extension outside the allowlist with a 400 INVALID_FILE_TYPE', async () => {
+    await expect(saveBase64Upload(dir, { filename: 'app.exe', data: b64('x') }, opts))
+      .rejects.toMatchObject({ status: 400, code: 'INVALID_FILE_TYPE' });
+  });
+
+  it('rejects a traversal-shaped filename ("../x") with a 400', async () => {
+    await expect(saveBase64Upload(dir, { filename: '../x', data: b64('x') }, opts))
+      .rejects.toMatchObject({ status: 400 });
+  });
+
+  it('sanitizes a traversal filename with an allowed extension to a basename inside the dir', async () => {
+    const saved = await saveBase64Upload(dir, { filename: '../../evil.txt', data: b64('x') }, opts);
+    expect(saved.filename).toMatch(/^[0-9a-f]{8}-evil\.txt$/); // directory parts stripped
+    expect(saved.filePath.startsWith(dir)).toBe(true);
+    expect(existsSync(saved.filePath)).toBe(true);
+  });
+});
+
+describe('serveLocalFile (shared attachment serving pipeline)', () => {
+  let dir;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'serve-local-test-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const mockRes = () => ({
+    headers: {},
+    set(name, value) { this.headers[name] = value; return this; },
+    type: vi.fn(function type() { return this; }),
+    sendFile: vi.fn(),
+  });
+
+  it('serves a benign MIME inline with nosniff and no attachment disposition', async () => {
+    writeFileSync(join(dir, 'safe.txt'), 'hello');
+    const res = mockRes();
+    await serveLocalFile(res, dir, 'safe.txt');
+    expect(res.headers['X-Content-Type-Options']).toBe('nosniff');
+    expect(res.headers['Content-Disposition']).toBeUndefined();
+    expect(res.sendFile).toHaveBeenCalledWith(join(dir, 'safe.txt'));
+  });
+
+  it('forces Content-Disposition: attachment for a risky MIME (svg)', async () => {
+    writeFileSync(join(dir, 'sheet.svg'), '<svg/>');
+    const res = mockRes();
+    await serveLocalFile(res, dir, 'sheet.svg');
+    expect(res.headers['X-Content-Type-Options']).toBe('nosniff');
+    expect(res.headers['Content-Disposition']).toBe('attachment; filename="sheet.svg"');
+    expect(res.sendFile).toHaveBeenCalledWith(join(dir, 'sheet.svg'));
+  });
+
+  it('404s with the parametrized missingError for absent bytes', async () => {
+    const res = mockRes();
+    await expect(serveLocalFile(res, dir, 'nope.txt', {
+      missingError: { message: 'Attachment file is not on this machine', code: 'NOT_ON_THIS_MACHINE' },
+    })).rejects.toMatchObject({ status: 404, code: 'NOT_ON_THIS_MACHINE' });
+    expect(res.sendFile).not.toHaveBeenCalled();
   });
 });
