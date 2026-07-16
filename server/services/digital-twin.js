@@ -88,6 +88,13 @@ export {
 } from './digital-twin-export.js';
 
 export {
+  buildAvatarBio,
+  polishAvatarBio,
+  AVATAR_BIO_LENGTHS,
+  DEFAULT_AVATAR_BIO_LENGTH
+} from './digital-twin-avatar-bio.js';
+
+export {
   getDigitalTwinForPrompt,
   getSoulForPrompt
 } from './digital-twin-context.js';
