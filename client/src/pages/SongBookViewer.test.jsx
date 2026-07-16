@@ -115,11 +115,18 @@ describe('SongBookViewer', () => {
 
   describe('instrument-view toggle (#2656)', () => {
     // Sheet with a tab staff so the non-guitar collapse note is observable.
+    // Six staff lines: identifiably GUITAR tab, so non-guitar views collapse
+    // it under the guitar-specific label (a ≤4-line staff would stay visible
+    // in ukulele view — pinned in TabSheetView.test.jsx).
     const TAB_SHEET = `[Chorus]
 C  G  Am  F
 Nonsense words here
 e|--3--2--|
-B|--0-----|`;
+B|--0-----|
+G|--0-----|
+D|--0-----|
+A|--2-----|
+E|--3-----|`;
 
     it('defaults to the song instrument (guitar) and shows the chords-used strip', async () => {
       renderPage();
