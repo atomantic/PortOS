@@ -121,20 +121,7 @@ const isCrossOrigin = (req) => {
 // allows the small public set above; gates the rest behind a valid token in
 // the cookie or Authorization: Bearer header.
 export const authGate = async (req, res, next) => {
-  let enabled;
-  try {
-    enabled = await isAuthEnabled();
-  } catch {
-    // Fail closed: if the auth state can't be read (e.g. a transient
-    // settings-read failure on the cold path before isAuthEnabled's cache is
-    // primed), assume auth is ON so no gated route slips through — but do NOT
-    // 500 the whole request here. Fall through to the public-path checks below
-    // so the intentionally pre-auth endpoints (/api/system/health discovery,
-    // the login UI) stay reachable. This is what makes the health route's
-    // documented fail-closed `authRequired: true` actually observable — its own
-    // isAuthEnabled().catch(() => true) never runs if the gate rejects first.
-    enabled = true;
-  }
+  const enabled = await isAuthEnabled();
   if (!enabled) return next();
   // CSRF guard runs FIRST, before isPublicPath — public endpoints like
   // /api/auth/logout still mutate state (clear the cookie + revoke the

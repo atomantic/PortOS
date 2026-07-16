@@ -43,11 +43,11 @@ router.get('/health', asyncHandler(async (req, res) => {
   const [self, version, authRequired] = await Promise.all([
     getSelf().catch(() => null),
     getCurrentVersion(),
-    // Fail closed: if the auth state can't be read, tell the client a password
-    // may be required so it prompts rather than silently sending unauthenticated
-    // requests that would 401. This endpoint stays public (PUBLIC_API_PATHS) so a
-    // companion client can read identity before it holds any credential.
-    isAuthEnabled().catch(() => true)
+    // Whether the optional password gate is on, so a companion client knows to
+    // prompt for a password without a second round-trip to /api/auth/status.
+    // This endpoint stays public (PUBLIC_API_PATHS) so the client can read
+    // identity before it holds any credential.
+    isAuthEnabled()
   ]);
   const hostname = os.hostname();
   res.json({

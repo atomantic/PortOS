@@ -55,7 +55,7 @@ any credential.
 | `instanceId` | Stable per-install UUID (`crypto.randomUUID()`, persisted in `data/instances.json`). The identity key the app stores per connection; survives hostname changes. `null` before the self-identity is first created. |
 | `name` | User-set display name for the instance (`self.name`), falling back to `hostname` when unset. This is what to show in the instance list. |
 | `hostname` | OS hostname of the machine. |
-| `authRequired` | `true` when the password gate is on — the app must obtain a password and send it on subsequent requests. `false` when off — no credential needed. Lets the app decide whether to prompt **without** a second round-trip to `/api/auth/status`. Fails **closed** (reports `true`) if the auth state can't be read. |
+| `authRequired` | `true` when the password gate is on — the app must obtain a password and send it on subsequent requests. `false` when off — no credential needed. Lets the app decide whether to prompt **without** a second round-trip to `/api/auth/status`. Mirrors the server's `isAuthEnabled()`; the app should still handle a `401` on a gated request as the authoritative signal to (re)prompt. |
 | `scheme` | `"http"` or `"https"` — the scheme `:5555` serves, decided once at boot. Use it to build request URLs and label the connection's security. |
 | `version` | PortOS release the instance is running — useful for compatibility gating. |
 

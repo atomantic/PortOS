@@ -63,26 +63,6 @@ describe('authGate middleware', () => {
     expect(result.called).toBe(true);
   });
 
-  it('fails closed but keeps public discovery paths reachable when the auth-state read throws', async () => {
-    // Simulate isAuthEnabled() rejecting on the cold path (e.g. a transient
-    // settings read failure before its cache is primed). The gate must not
-    // 500 the request: public paths stay reachable (so /api/system/health
-    // discovery works pre-auth) while gated routes fail closed as if auth is on.
-    const auth = await import('../services/auth.js');
-    const spy = vi.spyOn(auth, 'isAuthEnabled').mockRejectedValue(new Error('settings unreadable'));
-    const { authGate } = await import('./authGate.js');
-
-    const health = await runGate(authGate, { path: '/api/system/health', headers: {} });
-    expect(health.called).toBe(true);
-
-    const gated = await runGate(authGate, { path: '/api/cos', headers: {} });
-    expect(gated.called).toBe(false);
-    expect(gated.res.statusCode).toBe(401);
-    expect(gated.res.body).toEqual({ error: 'Authentication required', code: 'AUTH_REQUIRED' });
-
-    spy.mockRestore();
-  });
-
   it('blocks /api routes with no token', async () => {
     const auth = await import('../services/auth.js');
     await auth.setPassword({ newPassword: 'correct-horse' });
