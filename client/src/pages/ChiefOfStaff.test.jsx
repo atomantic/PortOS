@@ -169,4 +169,32 @@ describe('ChiefOfStaff insight freshness (#2654)', () => {
       expect(api.getCosActionableInsights.mock.calls.length).toBeGreaterThan(before),
     );
   });
+
+  it('does not let a stale fetchData health read clobber a fresher one', async () => {
+    // The insights call inside fetchData triggers a fresh server health check
+    // whose socket emit can update `health` before fetchData's own getCosHealth
+    // read (which sees the pre-check state) resolves. fetchData must keep the
+    // newer health by lastCheck instead of overwriting it with the stale read.
+    api.getCosHealth.mockResolvedValue({
+      lastCheck: '2026-01-01T00:00:02Z',
+      issues: [{ type: 'error', category: 'memory', message: 'FRESH_ISSUE' }],
+    });
+    renderAt('health');
+    // Initial fetchData paints the fresh issue.
+    expect(await screen.findByText('FRESH_ISSUE')).toBeInTheDocument();
+
+    // Next fetchData (apps:changed) reads a STALE, older, issue-free health.
+    api.getCosHealth.mockResolvedValue({ lastCheck: '2026-01-01T00:00:01Z', issues: [] });
+    const handleAppsChanged = getSocketHandler('apps:changed');
+    expect(handleAppsChanged).toBeTypeOf('function');
+    await act(async () => {
+      handleAppsChanged();
+      await Promise.resolve();
+    });
+
+    // The guard keeps the fresher health — the issue must NOT disappear.
+    await waitFor(() => expect(api.getApps.mock.calls.length).toBeGreaterThan(1));
+    expect(screen.getByText('FRESH_ISSUE')).toBeInTheDocument();
+    expect(screen.queryByText('All Systems Healthy')).not.toBeInTheDocument();
+  });
 });
