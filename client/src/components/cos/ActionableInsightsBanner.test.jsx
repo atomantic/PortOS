@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { insightProvenance } from './ActionableInsightsBanner';
 
@@ -30,65 +30,86 @@ describe('ActionableInsightsBanner insightProvenance', () => {
   });
 });
 
-// Regression: deleting a blocked task from the tasks page used to leave the
-// "N blocked tasks" alert bar up until the 60s poll or a manual dismiss, because
-// the banner owns its own insights fetch (decoupled from the task list). The
-// parent now bumps `refreshKey` on every task mutation so the banner
-// re-derives immediately. These tests pin that bridge.
-const api = vi.hoisted(() => ({ getCosActionableInsights: vi.fn() }));
+// The banner is now presentational (#2654): ChiefOfStaff.fetchData owns the
+// actionable-insights fetch and passes the result down as `insights`, so every
+// parent trigger that refetches CoS data refreshes the banner for free. These
+// tests pin the prop-driven render, the null/empty gating, and the unblock path
+// calling `onRefresh` up instead of owning its own poll.
+const api = vi.hoisted(() => ({ updateCosTask: vi.fn() }));
 vi.mock('../../services/api', () => api);
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
 const ActionableInsightsBanner = (await import('./ActionableInsightsBanner')).default;
 
-const renderBanner = (refreshKey) =>
+const renderBanner = (props) =>
   render(
     <MemoryRouter>
-      <ActionableInsightsBanner refreshKey={refreshKey} />
+      <ActionableInsightsBanner {...props} />
     </MemoryRouter>,
   );
 
-describe('ActionableInsightsBanner refreshKey', () => {
+describe('ActionableInsightsBanner (presentational)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    api.getCosActionableInsights.mockResolvedValue({
+  });
+
+  it('renders nothing before the first parent fetch resolves (null insights)', () => {
+    const { container } = renderBanner({ insights: null });
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('renders nothing when insights is a legitimately-empty array', () => {
+    // Empty (all-clear) must render nothing — distinct from null (not-yet-fetched)
+    // but visually identical, and never re-hitting the API to find that out.
+    const { container } = renderBanner({ insights: [] });
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('renders the primary insight passed as a prop (no fetch of its own)', () => {
+    renderBanner({
       insights: [
-        { type: 'blocked', priority: 'warning', icon: 'AlertTriangle', title: '2 blocked tasks', description: 'blocked', tasks: [] },
+        { type: 'approval', priority: 'high', icon: 'AlertCircle', title: '3 approvals waiting', action: { label: 'Review', route: '/cos/tasks' } },
       ],
     });
+    expect(screen.getByText('3 approvals waiting')).toBeInTheDocument();
+    // The banner never calls the API directly anymore — the parent owns fetching.
+    expect(api.updateCosTask).not.toHaveBeenCalled();
   });
 
-  it('refetches insights when refreshKey changes (a task was deleted)', async () => {
-    const { rerender } = renderBanner(0);
-    // Mount must fetch exactly once — the hook's own immediate fetch. The
-    // refreshKey effect skips mount (the didMountRef guard), so a second fetch
-    // here would mean the guard was dropped and every mount double-fetches
-    // /cos/actionable-insights in production. Pinning the count catches that.
-    await waitFor(() => expect(api.getCosActionableInsights).toHaveBeenCalledTimes(1));
-
-    rerender(
-      <MemoryRouter>
-        <ActionableInsightsBanner refreshKey={1} />
-      </MemoryRouter>,
-    );
-
-    // Key changed → exactly one more fetch (the refetch), not zero, not two.
-    await waitFor(() => expect(api.getCosActionableInsights).toHaveBeenCalledTimes(2));
+  it('hides insights the user dismisses', () => {
+    renderBanner({
+      insights: [
+        { type: 'approval', priority: 'high', icon: 'AlertCircle', title: '3 approvals waiting', action: { label: 'Review', route: '/cos/tasks' } },
+      ],
+    });
+    fireEvent.click(screen.getByTitle('Dismiss'));
+    expect(screen.queryByText('3 approvals waiting')).not.toBeInTheDocument();
   });
 
-  it('does not refetch when re-rendered without a key change', async () => {
-    const { rerender } = renderBanner(3);
-    await waitFor(() => expect(api.getCosActionableInsights).toHaveBeenCalled());
-    const before = api.getCosActionableInsights.mock.calls.length;
+  it('unblocks a task and calls onRefresh + onTaskUnblocked up (no self-poll)', async () => {
+    api.updateCosTask.mockResolvedValue({ id: 't1' });
+    const onRefresh = vi.fn();
+    const onTaskUnblocked = vi.fn();
+    renderBanner({
+      insights: [
+        {
+          type: 'blocked', priority: 'warning', icon: 'AlertTriangle', title: '1 blocked task',
+          action: {}, tasks: [{ id: 't1', description: 'stuck task', taskType: 'user' }],
+        },
+      ],
+      onRefresh,
+      onTaskUnblocked,
+    });
+    // Expand to reveal the per-task Unblock button, then click it.
+    fireEvent.click(screen.getByText('View Tasks'));
+    fireEvent.click(screen.getByText('Unblock'));
 
-    // Same key → the refetch effect's deps are unchanged, so no extra fetch.
-    rerender(
-      <MemoryRouter>
-        <ActionableInsightsBanner refreshKey={3} />
-      </MemoryRouter>,
+    await waitFor(() =>
+      expect(api.updateCosTask).toHaveBeenCalledWith('t1', { status: 'pending', type: 'user' }, { silent: true }),
     );
-    await new Promise((r) => setTimeout(r, 0));
-
-    expect(api.getCosActionableInsights.mock.calls.length).toBe(before);
+    // The parent refetch (fetchData re-pulls insights) is how the unblocked task
+    // drops out of the banner — the banner no longer owns a refetch.
+    await waitFor(() => expect(onRefresh).toHaveBeenCalledTimes(1));
+    expect(onTaskUnblocked).toHaveBeenCalledWith('t1');
   });
 });
