@@ -455,6 +455,28 @@ async function ensureSchemaImpl() {
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS idx_human_activity_dedupe ON human_activity_events (source, dedupe_key)`,
     `CREATE INDEX IF NOT EXISTS idx_human_activity_happened ON human_activity_events (happened_at)`,
+    // Creative Commissions (#2657, Autonomous Creation Engine — Phase 1). A
+    // standing, recurring creative brief that fires on a schedule and drives the
+    // Creative Director directive pipeline unattended. One row per commission:
+    // the full sanitized record (brief / schedule / generation / feedback /
+    // runs[]) in `data` JSONB, with id / name / enabled / created_at / updated_at
+    // mirrored into columns for the scheduler's "arm every enabled commission"
+    // query. INTENTIONALLY MACHINE-LOCAL — never federated (a synced schedule
+    // would double-run on every peer, same rationale as seriesAutopilotScheduler),
+    // so there is NO sync_sequence and NO deleted/deleted_at tombstone: deletes
+    // are hard deletes, mirroring tribe_people (ADR
+    // docs/decisions/2026-06-26-tribe-and-universe-runs-local.md). Adding a sync
+    // hook here is a conscious act — Phase 2 must split the machine-local schedule
+    // from the federatable brief/feedback first.
+    `CREATE TABLE IF NOT EXISTS creative_commissions (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL DEFAULT '',
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      data JSONB NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_creative_commissions_enabled ON creative_commissions (enabled)`,
   ];
   for (const sql of upgrades) {
     await pool.query(sql);

@@ -9,8 +9,9 @@ const makeMemStore = () => ({
   saveOne: async (id, rec) => { records.set(id, rec); },
   saveOneNow: async (id, rec) => { records.set(id, rec); },
   deleteOne: async (id) => { records.delete(id); },
+  deleteOneNow: async (id) => { records.delete(id); },
   saveTypeIndex: async () => {},
-  queueRecordWrite: async (_id, fn) => fn(),
+  verifySchemaVersion: async () => ({ ok: true }),
 });
 vi.mock('../../lib/collectionStore.js', () => ({ createCollectionStore: () => makeMemStore() }));
 vi.mock('../../lib/fileUtils.js', () => ({ PATHS: { data: '/tmp/portos-test-data' } }));
