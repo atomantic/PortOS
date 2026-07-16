@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { parseTabSheet } from '../../lib/tabNotation.js';
+import { splitJoinedChords } from '../../lib/chordShapes.js';
 import usePopoverPosition from '../../hooks/usePopoverPosition.js';
 import ChordDiagram from './ChordDiagram.jsx';
 
@@ -135,15 +136,20 @@ function TabSheetView({
   }, [lines]);
 
   // Unique chord names in order of first appearance (chords-used strip).
+  // Dash-joined quick changes split into their segments FIRST, so "Am-Am7"
+  // plus a standalone "Am" contributes Am and Am7 exactly once each (and an
+  // N.C. segment can't ride a joined token past the filter).
   const usedChords = useMemo(() => {
     if (!showChordStrip) return [];
     const seen = new Set();
     const out = [];
     for (const line of lines) {
       for (const { name } of line.chords || []) {
-        if (name && !/^N\.?C\.?$/.test(name) && !seen.has(name)) {
-          seen.add(name);
-          out.push(name);
+        for (const part of splitJoinedChords(name)) {
+          if (part && !/^N\.?C\.?$/.test(part) && !seen.has(part)) {
+            seen.add(part);
+            out.push(part);
+          }
         }
       }
     }
