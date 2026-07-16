@@ -6,7 +6,7 @@ import {
   isEchoOfRecentTts,
   registerEchoBuffer,
   unregisterEchoBuffer,
-  rememberTtsForAllSockets,
+  rememberTtsForSocket,
   MIN_SHARED_TRIGRAMS,
 } from './echo.js';
 
@@ -124,34 +124,43 @@ describe('isEchoOfRecentTts', () => {
 });
 
 describe('echo buffer registry (proactive-speech echo suppression)', () => {
-  it('fans out a sentence to every registered buffer', () => {
+  it('remembers a sentence only in the recipient socket buffer, not others', () => {
+    const sockA = { id: 'a' };
+    const sockB = { id: 'b' };
     const a = [];
     const b = [];
-    registerEchoBuffer(a);
-    registerEchoBuffer(b);
+    registerEchoBuffer(sockA, a);
+    registerEchoBuffer(sockB, b);
     try {
-      rememberTtsForAllSockets('proactive briefing sentence', { now: 5000 });
+      // Proactive audio plays on sockA only — remember only in its buffer, so a
+      // matching turn from sockB's device isn't falsely dropped as an echo.
+      rememberTtsForSocket(sockA, 'proactive briefing sentence', { now: 5000 });
       expect(a).toHaveLength(1);
-      expect(b).toHaveLength(1);
       expect(a[0].text).toBe('proactive briefing sentence');
+      expect(b).toHaveLength(0);
     } finally {
-      unregisterEchoBuffer(a);
-      unregisterEchoBuffer(b);
+      unregisterEchoBuffer(sockA);
+      unregisterEchoBuffer(sockB);
     }
   });
 
-  it('stops writing to a buffer after it is unregistered', () => {
+  it('stops writing to a buffer after its socket is unregistered', () => {
+    const sock = { id: 'a' };
     const a = [];
-    registerEchoBuffer(a);
-    unregisterEchoBuffer(a);
-    rememberTtsForAllSockets('proactive briefing sentence', { now: 5000 });
+    registerEchoBuffer(sock, a);
+    unregisterEchoBuffer(sock);
+    rememberTtsForSocket(sock, 'proactive briefing sentence', { now: 5000 });
     expect(a).toEqual([]);
   });
 
-  it('ignores non-array registrations', () => {
+  it('is a no-op for an unregistered socket', () => {
+    expect(() => rememberTtsForSocket({ id: 'ghost' }, 'hi', { now: 5000 })).not.toThrow();
+  });
+
+  it('ignores registrations with a missing socket or non-array buffer', () => {
     // No throw; nothing observable to assert beyond "doesn't crash".
-    expect(() => registerEchoBuffer(null)).not.toThrow();
-    expect(() => registerEchoBuffer(undefined)).not.toThrow();
-    expect(() => registerEchoBuffer({})).not.toThrow();
+    expect(() => registerEchoBuffer(null, [])).not.toThrow();
+    expect(() => registerEchoBuffer({ id: 'x' }, null)).not.toThrow();
+    expect(() => registerEchoBuffer({ id: 'x' }, {})).not.toThrow();
   });
 });

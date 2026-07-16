@@ -413,6 +413,17 @@ socket.on('voice:output:detached', () => {
   isVoiceOutputPrimary = false;
   notifyVoiceOutputPrimary();
 });
+// A disconnect ends this socket's ownership — the server released it and, on
+// reconnect, this tab gets a fresh socket with no claim (it only re-announces
+// availability, and re-claims only if focused). Clear the flag so the widget
+// doesn't keep showing "speaker" while output is routed to another tab. The
+// server's voice:output:detached can't reach an already-disconnected socket, so
+// this local reset is the only signal.
+socket.on('disconnect', () => {
+  if (!isVoiceOutputPrimary) return;
+  isVoiceOutputPrimary = false;
+  notifyVoiceOutputPrimary();
+});
 
 // Claim on focus / visibility so proactive audio follows the active tab. Reuse
 // the shared visibility singleton (one document-level listener for the whole

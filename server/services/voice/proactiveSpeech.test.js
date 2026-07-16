@@ -27,6 +27,7 @@ const {
   MAX_PROACTIVE_TEXT_LEN,
 } = await import('./proactiveSpeech.js');
 const { registerVoiceOutputCandidate, __resetVoiceOutput } = await import('./voiceOutput.js');
+const { registerEchoBuffer } = await import('./echo.js');
 
 describe('parseHHMM', () => {
   it.each([
@@ -146,8 +147,11 @@ describe('speakProactive', () => {
   const makeIo = () => {
     const emit = vi.fn();
     const socketEmit = vi.fn();
-    registerVoiceOutputCandidate({ id: 'recipient', connected: true, emit: socketEmit });
-    return { io: { emit }, emit, socketEmit };
+    const recipient = { id: 'recipient', connected: true, emit: socketEmit };
+    const recent = [];
+    registerVoiceOutputCandidate(recipient);
+    registerEchoBuffer(recipient, recent);
+    return { io: { emit }, emit, socketEmit, recipient, recent };
   };
 
   beforeEach(() => __resetVoiceOutput());
@@ -205,25 +209,20 @@ describe('speakProactive', () => {
     expect(payload.source).toBe('cos');
   });
 
-  it('registers the spoken sentence in every registered echo buffer', async () => {
-    // Proactive lines play through laptop speakers and can bleed back into
-    // the mic. Without registering in the per-socket echo buffers, the next
-    // user turn would forward the bot's own utterance to the LLM as input.
-    const { registerEchoBuffer, unregisterEchoBuffer, isEchoOfRecentTts } = await import('./echo.js');
-    const recent = [];
-    registerEchoBuffer(recent);
-    try {
-      const { io } = makeIo();
-      const sentence = 'The meeting starts at three pm in the conference room';
-      const r = await speakProactive({ io, text: sentence });
-      expect(r.ok).toBe(true);
-      expect(recent).toHaveLength(1);
-      // And the buffer is wired into the echo detector — a transcript that
-      // looks like the proactive line would be flagged as echo.
-      expect(isEchoOfRecentTts('the meeting starts at three pm', recent)).toBe(true);
-    } finally {
-      unregisterEchoBuffer(recent);
-    }
+  it('registers the spoken sentence in the recipient tab echo buffer only', async () => {
+    // Proactive lines play through the recipient's speakers and can bleed back
+    // into its mic. The line is remembered in that one tab's echo buffer so its
+    // next user turn drops the bot's own utterance instead of forwarding it to
+    // the LLM — but NOT in other devices' buffers (they never heard it).
+    const { isEchoOfRecentTts } = await import('./echo.js');
+    const { io, recent } = makeIo();
+    const sentence = 'The meeting starts at three pm in the conference room';
+    const r = await speakProactive({ io, text: sentence });
+    expect(r.ok).toBe(true);
+    expect(recent).toHaveLength(1);
+    // And the buffer is wired into the echo detector — a transcript that
+    // looks like the proactive line would be flagged as echo.
+    expect(isEchoOfRecentTts('the meeting starts at three pm', recent)).toBe(true);
   });
 
   it('suppresses when proactive disabled', async () => {

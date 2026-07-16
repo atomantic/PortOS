@@ -113,7 +113,7 @@ export const emitVoiceOutput = (io, event, payload) => {
   const target = getVoiceOutputSocket();
   if (target) {
     target.emit(event, payload);
-    return { delivered: true, socketId: target.id ?? null };
+    return { delivered: true, socket: target, socketId: target.id ?? null };
   }
   return { delivered: false };
 };

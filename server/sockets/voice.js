@@ -91,7 +91,7 @@ export const registerVoiceHandlers = (socket) => {
     // without needing a per-socket context.
     recentTts: [],
   };
-  registerEchoBuffer(state.recentTts);
+  registerEchoBuffer(socket, state.recentTts);
 
   const pushHistory = (role, content) => {
     if (!content) return;
@@ -369,6 +369,6 @@ export const registerVoiceHandlers = (socket) => {
     const textWaiters = Array.from(state.uiTextWaiters.values());
     state.uiTextWaiters.clear();
     textWaiters.forEach((resolve) => resolve(null));
-    unregisterEchoBuffer(state.recentTts);
+    unregisterEchoBuffer(socket);
   });
 };

@@ -17,7 +17,7 @@
 
 import { synthesize } from './tts.js';
 import { getVoiceConfig } from './config.js';
-import { rememberTtsForAllSockets } from './echo.js';
+import { rememberTtsForSocket } from './echo.js';
 import { emitVoiceOutput } from './voiceOutput.js';
 import { getUserTimezone, getLocalParts, isWithinTimeWindow } from '../../lib/timezone.js';
 
@@ -111,9 +111,6 @@ export const speakProactive = async ({ io, text, priority = 'normal', source = '
   }
 
   const { wav, latencyMs } = await synthesize(trimmed);
-  // Mirror the per-turn `state.recentTts` write so a proactive line bleeding
-  // from speakers back into the mic gets dropped as echo on the next turn.
-  rememberTtsForAllSockets(trimmed);
   // `voice:speak` is the proactive-speech channel — distinct from per-turn
   // `voice:tts:audio` so the client can render a different visual cue
   // (subtle pill instead of full conversation entry) and skip recording
@@ -127,6 +124,12 @@ export const speakProactive = async ({ io, text, priority = 'normal', source = '
     source,
     ts: Date.now(),
   });
+  // Mirror the per-turn `state.recentTts` write so a proactive line bleeding
+  // from speakers back into the mic gets dropped as echo on the next turn — but
+  // ONLY on the recipient tab. Only that tab plays the audio, so only its mic
+  // can echo it; recording it on other connected devices would falsely suppress
+  // their legitimate speech (they never heard the line).
+  if (delivery.socket) rememberTtsForSocket(delivery.socket, trimmed);
   const dest = delivery.socketId ?? 'none';
   console.log(`🔔 voice: proactive sent (${priority}) → ${dest} "${trimmed.slice(0, 80)}" (${latencyMs}ms synth)`);
   return { ok: true, latencyMs };
