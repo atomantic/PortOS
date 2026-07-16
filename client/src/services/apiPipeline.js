@@ -986,6 +986,29 @@ export const cancelPipelineSeriesReview = (seriesId, options = {}) =>
 export const pipelineSeriesReviewSseUrl = (seriesId) =>
   `/api/pipeline/series/${encodeURIComponent(seriesId)}/review/progress`;
 
+// Fix the reviewed findings where best patched (anchored per-finding
+// manuscriptFix loop, cos-execute-gated server-side). { runId, alreadyRunning,
+// sseUrl } — subscribe via pipelineSeriesFixSseUrl, re-fetch the verdict on
+// `complete`. Optional { commentIds } scopes the fix to specific findings.
+export const startPipelineSeriesFix = (seriesId, opts = {}, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/review/fix`, {
+    method: 'POST',
+    body: JSON.stringify(opts),
+    ...options,
+  });
+
+export const getPipelineSeriesFixStatus = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/review/fix/status`, options);
+
+export const cancelPipelineSeriesFix = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/review/fix/cancel`, {
+    method: 'POST',
+    ...options,
+  });
+
+export const pipelineSeriesFixSseUrl = (seriesId) =>
+  `/api/pipeline/series/${encodeURIComponent(seriesId)}/review/fix/progress`;
+
 // ---- Canon descriptive-integrity (production readiness) ----
 // Read-only: which canon nouns appear where they'd be drawn but lack a
 // description (blocking visual production).

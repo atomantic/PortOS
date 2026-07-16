@@ -41,6 +41,7 @@ import { getDomainMode } from '../../lib/domainAutonomy.js';
 import { readReadinessGate, mergeSeverityWeights } from '../../lib/editorial/index.js';
 import { loadState } from '../cosState.js';
 import { getSettings } from '../settings.js';
+import { getDomainBudgetStatus, recordDomainUsage } from '../domainUsage.js';
 import { getSeries } from './series.js';
 import { listIssues } from './issues.js';
 import { judgeFoundation, DEFAULT_FOUNDATION_THRESHOLD } from './foundationJudge.js';
@@ -48,6 +49,7 @@ import { runEditorialChecks } from './editorial/checkRunner.js';
 import { getSeriesHealth, isOpenFinding, DEFAULT_READINESS_GATE } from './editorialScore.js';
 import { checkSeriesCanonReadiness } from './canonReadiness.js';
 import { getReview, seedReviewFromFindings } from './manuscriptReview.js';
+import { generateManuscriptFix, acceptManuscriptFix } from './manuscriptFix.js';
 
 // The stage whose provider/model pins the free-text-feedback routing call, so a
 // user observation about the manuscript is judged on the SAME provider the arc
@@ -79,16 +81,19 @@ const SEVERITY_RANK = { high: 0, medium: 1, low: 2 };
 /**
  * The single 'ready' | 'issues' verdict. A series is only "ready to move
  * forward" when the editorial-health readiness gate is clean AND the foundation
- * clears the quality threshold AND every drawn noun is described (canon ready).
- * Any of those failing → 'issues'. Pure.
+ * clears the quality threshold AND every drawn noun is described (canon ready)
+ * AND no requested editorial check errored out (an unevaluated check means the
+ * review is incomplete — it must never read as 'ready'). Any of those failing →
+ * 'issues'. Pure.
  */
-export function computeReviewVerdict({ health, foundation, canon, threshold = DEFAULT_FOUNDATION_THRESHOLD } = {}) {
+export function computeReviewVerdict({ health, foundation, canon, threshold = DEFAULT_FOUNDATION_THRESHOLD, checksErrored = 0 } = {}) {
   const healthReady = health?.ready === true;
   const foundationReady = !foundation || !Number.isFinite(foundation.weightedScore)
     ? true
     : foundation.weightedScore >= threshold;
   const canonReady = canon?.ready !== false;
-  return healthReady && foundationReady && canonReady ? 'ready' : 'issues';
+  const checksClean = !(Number(checksErrored) > 0);
+  return healthReady && foundationReady && canonReady && checksClean ? 'ready' : 'issues';
 }
 
 /**
@@ -263,7 +268,13 @@ export async function runSeriesReview(seriesId, {
     signal,
     onProgress,
   }).catch((err) => { console.error(`⚠️ series-review editorial checks failed — series=${seriesId.slice(0, 12)} ${err.message}`); return { findings: [], perCheck: [], canceled: false }; });
-  onProgress({ type: 'step:complete', kind: 'editorialChecks', findingCount: checks?.findings?.length ?? 0 });
+  // A check that threw (e.g. an unavailable LLM provider) is caught internally by
+  // the runner and surfaced in perCheck as `{ checkId, error }` — that dimension
+  // was never evaluated, so it must block a 'ready' verdict (P2).
+  const erroredCheckIds = (Array.isArray(checks?.perCheck) ? checks.perCheck : [])
+    .filter((p) => p && p.error).map((p) => p.checkId);
+  const checksErrored = erroredCheckIds.length;
+  onProgress({ type: 'step:complete', kind: 'editorialChecks', findingCount: checks?.findings?.length ?? 0, errored: checksErrored });
   if (aborted() || checks?.canceled) return null;
 
   // 4. Canon readiness (deterministic — no LLM).
@@ -283,7 +294,7 @@ export async function runSeriesReview(seriesId, {
   const threshold = Number.isFinite(settings?.pipelineEditorialChecks?.foundationThreshold)
     ? settings.pipelineEditorialChecks.foundationThreshold
     : DEFAULT_FOUNDATION_THRESHOLD;
-  const verdict = computeReviewVerdict({ health, foundation, canon, threshold });
+  const verdict = computeReviewVerdict({ health, foundation, canon, threshold, checksErrored });
 
   const result = {
     seriesId,
@@ -302,6 +313,10 @@ export async function runSeriesReview(seriesId, {
       : null,
     findings,
     findingCount: findings.length,
+    // Requested checks that errored out this run (never evaluated) — surfaced so
+    // the UI can warn that a 'ready'-looking review is actually incomplete (P2).
+    checksErrored,
+    erroredCheckIds,
     hadFeedback: !!(feedback && String(feedback).trim()),
   };
   await saveSnapshot(result);
@@ -334,14 +349,79 @@ export async function getSeriesReview(seriesId) {
 }
 
 /**
- * Whether the autopilot-driven fix path can run right now, from the cos-domain
- * autonomy mode. `off` → review is read-only, fixing disabled (graceful
- * degrade); `dry-run`/`execute` → fixing available.
+ * Whether the fix path can run right now, from the cos-domain autonomy mode.
+ * Only `execute` applies fixes: `off` disables fixing (review stays read-only),
+ * and `dry-run` is a plan-only preview that performs NO writes — so it must NOT
+ * report the fix as available (P3), or the UI would claim "fixes complete" after
+ * a no-op. The client renders a mode-specific reason for both non-execute cases.
  */
 export async function getFixAvailability() {
   const state = await loadState().catch(() => ({ config: {} }));
   const mode = getDomainMode(state?.config, 'cos');
-  return { mode, canFix: mode !== 'off' };
+  return { mode, canFix: mode === 'execute' };
+}
+
+// ---------------------------------------------------------------------------
+// Fix path (P1) — patch findings where best patched via the EXISTING per-finding
+// manuscriptFix machinery, in a simple bulk loop.
+//
+// This deliberately does NOT start Series Autopilot: the autopilot's editorial
+// step only auto-resolves manuscript-COMPLETENESS findings, so the editorial-
+// CHECK findings this review surfaces stay open, the editorial-health gate
+// pauses on them, and the revision cycle is never reached — a full-autopilot run
+// can't actually fix the findings the review flagged. Looping
+// generateManuscriptFix → acceptManuscriptFix over each open finding patches it
+// at its anchor (the finding's `anchorQuote`/issue/stage), which is precisely
+// "fix where best patched." It is not a second orchestrator — it reuses the
+// per-finding fixers under the same cos-domain gate + budget the autopilot uses.
+// ---------------------------------------------------------------------------
+
+/**
+ * Bulk-fix a series' open findings through the anchored per-finding fixer. Fails
+ * closed on the cos autonomy gate (only `execute` writes) + the daily budget.
+ * Findings whose fix can't be anchored are skipped (never mis-applied). Emits
+ * progress via `onProgress`. Returns `{ fixed, skipped, total }` or, when gated
+ * off, `{ rejected: true, mode | reason }`.
+ */
+export async function runSeriesFix(seriesId, { commentIds, providerOverride, modelOverride, signal, onProgress = () => {} } = {}) {
+  assertValidSeriesId(seriesId);
+  // Autonomy gate — mirror the autopilot start route (fail closed).
+  const { mode } = await getFixAvailability();
+  if (mode !== 'execute') return { rejected: true, mode };
+  const budget = await getDomainBudgetStatus('cos');
+  if (!budget.withinBudget) return { rejected: true, reason: `daily cos ${budget.exceeded} budget reached` };
+
+  const review = await getReview(seriesId).catch(() => ({ comments: [] }));
+  let open = collectReviewFindings(review.comments);
+  if (Array.isArray(commentIds) && commentIds.length) {
+    const wanted = new Set(commentIds);
+    open = open.filter((f) => wanted.has(f.commentId));
+  }
+
+  let fixed = 0;
+  let skipped = 0;
+  let budgetStopped = false;
+  for (const f of open) {
+    if (signal?.aborted) break;
+    // Re-check the budget before each fix (each generate is one cos action).
+    const b = await getDomainBudgetStatus('cos');
+    if (!b.withinBudget) { budgetStopped = true; break; }
+    onProgress({ type: 'fix:start', commentId: f.commentId, severity: f.severity, issueNumber: f.issueNumber });
+    const gen = await generateManuscriptFix(seriesId, { commentId: f.commentId, providerOverride, modelOverride })
+      .catch((err) => { console.error(`⚠️ series-fix generate failed — comment=${String(f.commentId).slice(0, 12)} ${err.message}`); return null; });
+    await recordDomainUsage('cos', { actions: 1 });
+    const fix = gen?.fix;
+    const hasEdits = fix && ((Array.isArray(fix.edits) && fix.edits.length > 0) || (fix.find && typeof fix.replace === 'string'));
+    if (!hasEdits) { skipped += 1; onProgress({ type: 'fix:skip', commentId: f.commentId, reason: 'no anchored fix' }); continue; }
+    // acceptManuscriptFix throws when the anchor can't be located — treat as a
+    // skip (never a mis-applied edit).
+    const applied = await acceptManuscriptFix(seriesId, { commentId: f.commentId, find: fix.find, replace: fix.replace, edits: fix.edits })
+      .catch((err) => { console.error(`⚠️ series-fix apply failed — comment=${String(f.commentId).slice(0, 12)} ${err.message}`); return null; });
+    if (applied) { fixed += 1; onProgress({ type: 'fix:done', commentId: f.commentId }); }
+    else { skipped += 1; onProgress({ type: 'fix:skip', commentId: f.commentId, reason: 'could not anchor' }); }
+  }
+  console.log(`🔧 series fix — series=${seriesId.slice(0, 12)} fixed=${fixed} skipped=${skipped}/${open.length}${budgetStopped ? ' (budget-stopped)' : ''}`);
+  return { fixed, skipped, total: open.length, budgetStopped };
 }
 
 // ---------------------------------------------------------------------------
@@ -380,4 +460,43 @@ export const attachClient = (seriesId, res) => runner.attachClient(seriesId, res
 export const isSeriesReviewActive = (seriesId) => runner.isActive(seriesId);
 export const cancelSeriesReview = (seriesId) => runner.cancel(seriesId);
 
-export const __testing = { runs: runner.runs };
+// Separate runner instance for the fix pass, so a review and a fix are tracked
+// independently per series (distinct keys are the same seriesId, but distinct
+// runner maps — a review SSE and a fix SSE never collide).
+const fixRunner = createSseRunner({ logLabel: 'series fix' });
+
+export function startSeriesFixRun(seriesId, options = {}) {
+  return fixRunner.start(seriesId, async ({ runId, signal, record, broadcast }) => {
+    broadcast({ type: 'start', runId });
+    const result = await runSeriesFix(seriesId, {
+      commentIds: options.commentIds,
+      providerOverride: options.providerOverride,
+      modelOverride: options.modelOverride,
+      signal,
+      onProgress: (event) => broadcast({ ...event, runId }),
+    });
+    if (result?.rejected) {
+      broadcast({ type: 'rejected', runId, mode: result.mode || null, reason: result.reason || null, rejectedAt: nowIso() });
+      return;
+    }
+    if (record.cancelRequested) {
+      broadcast({ type: 'canceled', runId, canceledAt: nowIso() });
+      return;
+    }
+    broadcast({
+      type: 'complete',
+      runId,
+      fixed: result.fixed,
+      skipped: result.skipped,
+      total: result.total,
+      budgetStopped: result.budgetStopped === true,
+      completedAt: nowIso(),
+    });
+  });
+}
+
+export const attachFixClient = (seriesId, res) => fixRunner.attachClient(seriesId, res);
+export const isSeriesFixActive = (seriesId) => fixRunner.isActive(seriesId);
+export const cancelSeriesFix = (seriesId) => fixRunner.cancel(seriesId);
+
+export const __testing = { runs: runner.runs, fixRuns: fixRunner.runs };

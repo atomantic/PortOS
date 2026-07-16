@@ -276,6 +276,45 @@ router.post('/series/:id/review/cancel', asyncHandler(async (req, res) => {
   res.json({ canceled: seriesReview.cancelSeriesReview(req.params.id) });
 }));
 
+// Fix the reviewed findings where best patched, via the anchored per-finding
+// manuscriptFix machinery (NOT a second orchestrator). Fails closed on the
+// cos-domain gate + budget inside the service; progress streams over SSE.
+// Optional `commentIds` scopes the fix to specific findings (else all open).
+const seriesFixRunSchema = z.object({
+  commentIds: z.array(z.string().min(1).max(120)).max(500).optional(),
+  providerId: z.string().trim().max(80).optional(),
+  model: z.string().trim().max(200).optional(),
+});
+
+router.post('/series/:id/review/fix', asyncHandler(async (req, res) => {
+  const body = validateRequest(seriesFixRunSchema, req.body ?? {});
+  await seriesSvc.getSeries(req.params.id).catch((err) => { throw mapServiceError(err); });
+  const result = seriesReview.startSeriesFixRun(req.params.id, {
+    commentIds: body.commentIds,
+    providerOverride: body.providerId,
+    modelOverride: body.model,
+  });
+  res.json({
+    ...result,
+    sseUrl: `/api/pipeline/series/${req.params.id}/review/fix/progress`,
+  });
+}));
+
+router.get('/series/:id/review/fix/progress', (req, res) => {
+  const attached = seriesReview.attachFixClient(req.params.id, res);
+  if (!attached) {
+    throw new ServerError('No active series fix for this series', { status: 404 });
+  }
+});
+
+router.get('/series/:id/review/fix/status', (req, res) => {
+  res.json({ active: seriesReview.isSeriesFixActive(req.params.id) });
+});
+
+router.post('/series/:id/review/fix/cancel', asyncHandler(async (req, res) => {
+  res.json({ canceled: seriesReview.cancelSeriesFix(req.params.id) });
+}));
+
 // ---------------------------------------------------------------------------
 // Editorial checks (#1284) — registry-driven editorial review.
 // ---------------------------------------------------------------------------

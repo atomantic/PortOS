@@ -60,12 +60,17 @@ vi.mock('../../services/pipeline/editorialScore.js', async (importOriginal) => (
 // param-validation + series-resolve wiring without running the composed passes.
 const startSeriesReviewRun = vi.fn(() => ({ runId: 'rev-1', alreadyRunning: false }));
 const getSeriesReview = vi.fn(async () => ({ review: { seriesId: 'ser-1', verdict: 'issues', findings: [] }, fix: { mode: 'execute', canFix: true } }));
+const startSeriesFixRun = vi.fn(() => ({ runId: 'fix-1', alreadyRunning: false }));
 vi.mock('../../services/pipeline/seriesReview.js', () => ({
   startSeriesReviewRun: (...a) => startSeriesReviewRun(...a),
   getSeriesReview: (...a) => getSeriesReview(...a),
   attachClient: vi.fn(() => false),
   isSeriesReviewActive: vi.fn(() => false),
   cancelSeriesReview: vi.fn(() => true),
+  startSeriesFixRun: (...a) => startSeriesFixRun(...a),
+  attachFixClient: vi.fn(() => false),
+  isSeriesFixActive: vi.fn(() => false),
+  cancelSeriesFix: vi.fn(() => true),
 }));
 
 const editorialRoutes = (await import('./editorial.js')).default;
@@ -83,6 +88,7 @@ beforeEach(() => {
   getVoiceFingerprint.mockClear();
   startSeriesReviewRun.mockClear();
   getSeriesReview.mockClear();
+  startSeriesFixRun.mockClear();
 });
 
 describe('Holistic "Review this series" (#2664)', () => {
@@ -127,6 +133,22 @@ describe('Holistic "Review this series" (#2664)', () => {
     const res = await request(app).get('/api/pipeline/series/ser-1/review/status');
     expect(res.status).toBe(200);
     expect(res.body.active).toBe(false);
+  });
+
+  it('POST /series/:id/review/fix starts the fix run and returns its SSE url', async () => {
+    const res = await request(app)
+      .post('/api/pipeline/series/ser-1/review/fix')
+      .send({ commentIds: ['mrc-1', 'mrc-2'] });
+    expect(res.status).toBe(200);
+    expect(res.body.runId).toBe('fix-1');
+    expect(res.body.sseUrl).toBe('/api/pipeline/series/ser-1/review/fix/progress');
+    expect(startSeriesFixRun).toHaveBeenCalledWith('ser-1', expect.objectContaining({ commentIds: ['mrc-1', 'mrc-2'] }));
+  });
+
+  it('POST /series/:id/review/fix 404s for a missing series (no fix started)', async () => {
+    const res = await request(app).post('/api/pipeline/series/missing/review/fix').send({});
+    expect(res.status).toBe(404);
+    expect(startSeriesFixRun).not.toHaveBeenCalled();
   });
 });
 

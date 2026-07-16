@@ -13,8 +13,9 @@ import {
   getPipelineSeriesReviewStatus,
   cancelPipelineSeriesReview,
   pipelineSeriesReviewSseUrl,
-  startPipelineAutopilot,
-  pipelineAutopilotSseUrl,
+  startPipelineSeriesFix,
+  getPipelineSeriesFixStatus,
+  pipelineSeriesFixSseUrl,
   getPipelineSeries,
   listPipelineIssues,
 } from '../../services/api';
@@ -26,8 +27,8 @@ const SEVERITY_STYLES = {
 };
 
 const RUN_ENDED = new Set(['complete', 'canceled', 'error']);
-// The autopilot fix run also has a terminal `paused` state (budget / findings).
-const FIX_RUN_ENDED = new Set(['complete', 'canceled', 'error', 'paused']);
+// The fix run's terminal frames: `rejected` = the cos gate/budget refused it.
+const FIX_RUN_ENDED = new Set(['complete', 'canceled', 'error', 'rejected']);
 
 // One-line label for a review SSE frame (mirrors AutopilotPanel's frameLabel,
 // scoped to this flow's steps).
@@ -53,15 +54,16 @@ function reviewFrameLabel(f) {
   }
 }
 
-// Compact label for the autopilot fix run (the fix path reuses the autopilot
-// orchestrator's SSE; we only need a terse "still working" line here).
+// Compact label for the per-finding fix run.
 function fixFrameLabel(f) {
   if (!f) return 'Working…';
   switch (f.type) {
     case 'start': return 'Starting fixes…';
-    case 'step:start': return 'Fixing…';
-    case 'paused': return `Paused — ${f.reason || 'needs review'}`;
-    case 'complete': return 'Fixes complete';
+    case 'fix:start': return `Fixing ${f.issueNumber != null ? `#${f.issueNumber} ` : ''}finding…`;
+    case 'fix:done': return 'Applied a fix…';
+    case 'fix:skip': return 'Skipped an unanchorable finding…';
+    case 'complete': return `Fixed ${f.fixed ?? 0} of ${f.total ?? 0}`;
+    case 'rejected': return 'Fixing unavailable';
     case 'canceled': return 'Fixing canceled';
     case 'error': return `Fixing failed — ${f.error}`;
     default: return 'Fixing…';
@@ -113,7 +115,7 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
     pipelineSeriesReviewSseUrl, [seriesId], { enabled: reviewing },
   );
   const { latest: fixLatest } = usePipelineProgress(
-    pipelineAutopilotSseUrl, [seriesId], { enabled: fixing },
+    pipelineSeriesFixSseUrl, [seriesId], { enabled: fixing },
   );
 
   const loadVerdict = useCallback(async () => {
@@ -131,6 +133,9 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
     loadVerdict();
     getPipelineSeriesReviewStatus(seriesId, { silent: true })
       .then((s) => { if (!canceled && s?.active) setReviewing(true); })
+      .catch(() => null);
+    getPipelineSeriesFixStatus(seriesId, { silent: true })
+      .then((s) => { if (!canceled && s?.active) { setConfirmDismissed(true); setFixing(true); } })
       .catch(() => null);
     return () => { canceled = true; };
   }, [seriesId, loadVerdict]);
@@ -150,18 +155,30 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
     }
   }, [reviewing, reviewLatest, loadVerdict]);
 
-  // Fix run ended — refresh series + issues, re-run nothing (the user re-reviews
-  // when ready).
+  // Fix run ended — refresh series + issues. The applied fixes changed the
+  // manuscript + accepted the findings, so the stored verdict is now stale;
+  // clear it so the panel returns to the review action and the user re-reviews
+  // to confirm (a fresh review is an explicit LLM action, never auto-fired).
   useEffect(() => {
     if (!fixing || !fixLatest || !FIX_RUN_ENDED.has(fixLatest.type)) return;
     if (fixRunIdRef.current && fixLatest.runId && fixLatest.runId !== fixRunIdRef.current) return;
     setFixing(false);
-    getPipelineSeries(seriesId, { silent: true }).then((s) => { if (s) onSeriesUpdateRef.current?.(s); }).catch(() => null);
-    listPipelineIssues(seriesId, { silent: true }).then((is) => onIssuesUpdateRef.current?.(Array.isArray(is) ? is : [])).catch(() => null);
-    if (fixLatest.type === 'complete') toast.success('Fixes complete — re-review when ready');
-    else if (fixLatest.type === 'paused') toast.warning(`Fixing paused — ${fixLatest.reason || 'needs review'}`);
-    else if (fixLatest.type === 'canceled') toast.success('Fixing canceled');
-    else toast.error(fixLatest.error || 'Fixing failed');
+    if (fixLatest.type === 'complete') {
+      getPipelineSeries(seriesId, { silent: true }).then((s) => { if (s) onSeriesUpdateRef.current?.(s); }).catch(() => null);
+      listPipelineIssues(seriesId, { silent: true }).then((is) => onIssuesUpdateRef.current?.(Array.isArray(is) ? is : [])).catch(() => null);
+      setReview(null);
+      setConfirmDismissed(false);
+      const fixed = fixLatest.fixed ?? 0;
+      toast.success(`Fixed ${fixed} of ${fixLatest.total ?? 0} — re-review to confirm${fixLatest.budgetStopped ? ' (stopped: daily budget reached)' : ''}`);
+    } else if (fixLatest.type === 'rejected') {
+      toast.error(fixLatest.mode === 'dry-run'
+        ? 'Fixing is preview-only right now (CoS auto-run is in dry-run) — set it to execute to apply fixes.'
+        : (fixLatest.reason || 'Autonomous fixing is disabled — set the CoS auto-run domain to execute.'));
+    } else if (fixLatest.type === 'canceled') {
+      toast.success('Fixing canceled');
+    } else {
+      toast.error(fixLatest.error || 'Fixing failed');
+    }
   }, [fixing, fixLatest, seriesId]);
 
   const runReview = useCallback(async () => {
@@ -184,23 +201,18 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
 
   const startFix = useCallback(async () => {
     setFixStarting(true);
-    // Reuse the existing autopilot orchestrator's revision cycle — no second
-    // orchestrator. It reuses the cos-domain autonomy gate + budget + SSE.
-    // Scope to editorial fixing: includeVisual:false so "Fix these issues" never
-    // silently kicks off comic-art / teaser rendering (large unexpected spend) —
-    // it iterates the story, not the visual production run.
-    const res = await startPipelineAutopilot(seriesId, { revisionEnabled: true, includeVisual: false }, { silent: true })
-      .catch((err) => {
-        // cos domain off → 409; degrade gracefully (review still works read-only).
-        toast.error(err?.message || 'Autonomous fixing is disabled — set the CoS auto-run domain to dry-run or execute.');
-        return null;
-      });
+    // Patch each open finding at its anchor via the per-finding manuscriptFix
+    // machinery (server-side, cos-execute-gated + budgeted). Not the autopilot —
+    // that only auto-resolves completeness findings, so it can't fix the
+    // editorial-check findings this review surfaced.
+    const res = await startPipelineSeriesFix(seriesId, {}, { silent: true })
+      .catch((err) => { toast.error(err?.message || 'Could not start fixing'); return null; });
     setFixStarting(false);
     if (!res) return;
     fixRunIdRef.current = res.runId || null;
     setConfirmDismissed(true);
     setFixing(true);
-    toast.success('Fixing started — iterating the weakest issues');
+    toast.success('Fixing started — patching findings at their anchors');
   }, [seriesId]);
 
   if (!seriesId) return null;
@@ -305,6 +317,15 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
             ) : null}
           </div>
 
+          {/* Incomplete-review warning — a requested check errored, so this
+              verdict is not trustworthy as "ready" (P2). */}
+          {review.checksErrored > 0 ? (
+            <p className="text-[11px] text-port-warning flex items-center gap-1.5">
+              <AlertTriangle size={12} />
+              {review.checksErrored} editorial check(s) errored (e.g. a provider was unavailable) — this review is incomplete; re-run before trusting it.
+            </p>
+          ) : null}
+
           {/* Findings grouped by where they'd be patched */}
           {groups.length ? (
             <div className="space-y-2">
@@ -357,7 +378,7 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
                   type="button"
                   onClick={startFix}
                   disabled={fixStarting || !canFix}
-                  title={canFix ? 'Iterate the weakest issues via the autopilot revision cycle' : 'Autonomous fixing is disabled — set the CoS auto-run domain to dry-run or execute'}
+                  title={canFix ? 'Patch each finding at its anchor via the per-finding manuscript fixer' : 'Auto-fixing needs the CoS auto-run domain set to execute'}
                   className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium text-port-accent border border-port-border bg-port-bg hover:border-port-accent/40 disabled:opacity-40"
                 >
                   {fixStarting ? <Loader2 size={12} className="animate-spin" /> : <Wrench size={12} />} Fix these issues
@@ -365,7 +386,9 @@ export default function SeriesReviewPanel({ series, onSeriesUpdate, onIssuesUpda
               </div>
               {!canFix ? (
                 <p className="w-full text-[11px] text-gray-500 mt-1">
-                  Auto-fixing is off (CoS auto-run domain is disabled). You can still open each finding above and fix it manually.
+                  {fixAvail?.mode === 'dry-run'
+                    ? 'Auto-fixing is preview-only right now (CoS auto-run is in dry-run — it makes no changes). Set it to execute, or open each finding above and fix it manually.'
+                    : 'Auto-fixing is off (CoS auto-run domain is disabled). You can still open each finding above and fix it manually.'}
                 </p>
               ) : null}
             </div>
