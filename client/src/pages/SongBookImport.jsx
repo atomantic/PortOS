@@ -14,7 +14,7 @@
  * createSong → navigate to the new song's viewer.
  */
 
-import { useMemo, useState, useCallback } from 'react';
+import { useMemo, useRef, useState, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { ListMusic, ArrowLeft, ClipboardPaste, Eraser, Wand2, Globe, FileText, Save } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -81,10 +81,22 @@ export default function SongBookImport() {
   const [stage, setStage] = useState('new');
   const [tags, setTags] = useState('');
 
+  // Last values WE auto-filled — so a second import can replace a stale
+  // auto-fill (still equal to what we set) without clobbering user edits.
+  const autoFilledRef = useRef({ title: '', artist: '' });
+
   const applyMetaDefaults = useCallback((meta) => {
-    // Prefill only untouched fields — never clobber what the user typed.
-    if (meta?.title) setTitle((cur) => cur || meta.title);
-    if (meta?.artist) setArtist((cur) => cur || meta.artist);
+    // Prefill untouched fields; a field still holding the PREVIOUS auto-fill
+    // counts as untouched, so importing song B after song A refreshes it.
+    const prev = { ...autoFilledRef.current };
+    if (meta?.title) {
+      autoFilledRef.current.title = meta.title;
+      setTitle((cur) => (!cur || cur === prev.title ? meta.title : cur));
+    }
+    if (meta?.artist) {
+      autoFilledRef.current.artist = meta.artist;
+      setArtist((cur) => (!cur || cur === prev.artist ? meta.artist : cur));
+    }
   }, []);
 
   const onPasteButton = useCallback(async () => {
