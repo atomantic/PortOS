@@ -199,6 +199,28 @@ describe('ChiefOfStaff insight freshness (#2654)', () => {
     expect(screen.queryByText('All Systems Healthy')).not.toBeInTheDocument();
   });
 
+  it('does not let a timestamp-less health read clobber a fresher timestamped one', async () => {
+    api.getCosHealth.mockResolvedValue({
+      lastCheck: '2026-01-01T00:00:02Z',
+      issues: [{ type: 'error', category: 'memory', message: 'FRESH_ISSUE' }],
+    });
+    renderAt('health');
+    expect(await screen.findByText('FRESH_ISSUE')).toBeInTheDocument();
+
+    // A read with no (parseable) lastCheck must not overwrite the timestamped,
+    // fresher health — Date.parse('') is NaN, which must NOT win the guard.
+    api.getCosHealth.mockResolvedValue({ issues: [] });
+    const handleAppsChanged = getSocketHandler('apps:changed');
+    await act(async () => {
+      handleAppsChanged();
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(api.getApps.mock.calls.length).toBeGreaterThan(1));
+    expect(screen.getByText('FRESH_ISSUE')).toBeInTheDocument();
+    expect(screen.queryByText('All Systems Healthy')).not.toBeInTheDocument();
+  });
+
   it('preserves last-good health when a fetchData health read fails (null)', async () => {
     api.getCosHealth.mockResolvedValue({
       lastCheck: '2026-01-01T00:00:02Z',
