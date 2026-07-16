@@ -395,7 +395,7 @@ export function VoiceTab() {
                 if (v && v.downloaded === false) {
                   setDownloadingVoice(val);
                   fetchPiperVoice(val, { silent: true })
-                    .then(() => listVoices('piper'))
+                    .then(() => listVoices('piper', { silent: true }))
                     .then((fresh) => setVoiceList(fresh))
                     .catch((err) => toast.error(`Voice download failed: ${err.message}`))
                     .finally(() => setDownloadingVoice(null));
