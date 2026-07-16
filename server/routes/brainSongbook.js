@@ -19,9 +19,9 @@ import { join, resolve } from 'path';
 import { createHash } from 'crypto';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
-import { partialWithoutDefaults } from '../lib/zodCompat.js';
 import {
   songInputSchema,
+  songUpdateSchema,
   songImportUrlSchema,
   songAttachmentUploadSchema,
 } from '../lib/brainValidation.js';
@@ -34,8 +34,12 @@ import {
 
 const router = Router();
 
-// Max attachment size: 50MB (matches routes/attachments.js — sheet-music PDFs)
-const MAX_ATTACHMENT_SIZE = 50 * 1024 * 1024;
+// Max attachment size: 40MB. Uploads arrive base64-encoded in a JSON body
+// (×4/3 inflation), and the express.json limit is 55mb — so anything above
+// ~41MB raw can never reach this route. 40MB keeps the advertised cap
+// reachable. (routes/attachments.js still claims 50MB with the same latent
+// mismatch — tracked in PLAN.md's uploads-consolidation follow-up.)
+const MAX_ATTACHMENT_SIZE = 40 * 1024 * 1024;
 
 // Read lazily (not captured at module load) so test PATHS mocks with
 // per-suite temp roots resolve correctly.
@@ -103,12 +107,18 @@ router.post('/', asyncHandler(async (req, res) => {
 }));
 
 router.put('/:id', asyncHandler(async (req, res) => {
-  // partialWithoutDefaults (not .partial()) so an omitted field is genuinely
-  // absent instead of resetting to its default (see zodCompat.js). The schema
-  // has no `attachments` key, so Zod's unknown-key stripping drops any
-  // client-supplied attachments — the record's server-managed list survives.
-  const data = validateRequest(partialWithoutDefaults(songInputSchema), req.body);
-  const song = requireSong(await brainStorage.update('songs', req.params.id, data));
+  // songUpdateSchema is defaults-free down to the nested `content` object, so
+  // an omitted field (or omitted content.format/text) is genuinely absent
+  // instead of resetting to its default (see brainValidation.js / zodCompat.js).
+  // The schema has no `attachments` key, so Zod's unknown-key stripping drops
+  // any client-supplied attachments — the record's server-managed list survives.
+  // A partial `content` deep-merges over the stored song's content inside the
+  // store write lock (updateWith), so `{ content: { text } }` keeps the stored
+  // format and `{ content: { format } }` keeps the stored text.
+  const data = validateRequest(songUpdateSchema, req.body);
+  const song = requireSong(await brainStorage.updateWith('songs', req.params.id, (fresh) => (
+    data.content ? { ...data, content: { ...fresh.content, ...data.content } } : data
+  )));
   res.json(song);
 }));
 
@@ -141,9 +151,13 @@ router.post('/:id/attachments', asyncHandler(async (req, res) => {
     size: saved.size,
     sha256: createHash('sha256').update(saved.buffer).digest('hex'),
   };
-  await brainStorage.update('songs', song.id, {
-    attachments: [...(Array.isArray(song.attachments) ? song.attachments : []), attachment],
-  });
+  // Append against the FRESH record inside the store write lock (updateWith) —
+  // a concurrent upload/delete or a peer-sync apply landing between the read
+  // above and this write would otherwise be clobbered (and win LWW). requireSong
+  // 404s the mid-request tombstone race instead of 201-ing meta never persisted.
+  requireSong(await brainStorage.updateWith('songs', song.id, (fresh) => ({
+    attachments: [...(Array.isArray(fresh.attachments) ? fresh.attachments : []), attachment],
+  })));
 
   console.log(`🎸 Song attachment saved: ${saved.filename} (${saved.size} bytes)`);
   res.status(201).json({ attachment });
@@ -176,9 +190,13 @@ router.delete('/:id/attachments/:filename', asyncHandler(async (req, res) => {
   const song = await getSongOr404(req.params.id);
   const { safeFilename, filepath } = resolveAttachment(song, req.params.filename);
 
-  const updated = await brainStorage.update('songs', song.id, {
-    attachments: song.attachments.filter((a) => a.filename !== safeFilename),
-  });
+  // Filter against the FRESH record inside the store write lock (updateWith) so
+  // a concurrent upload/peer-sync apply isn't clobbered; requireSong 404s the
+  // mid-request tombstone race instead of TypeError-ing on a null record.
+  const updated = requireSong(await brainStorage.updateWith('songs', song.id, (fresh) => ({
+    attachments: (Array.isArray(fresh.attachments) ? fresh.attachments : [])
+      .filter((a) => a.filename !== safeFilename),
+  })));
 
   // Bytes may legitimately be absent on this machine (meta synced from a peer).
   if (await pathExists(filepath)) {

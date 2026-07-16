@@ -77,6 +77,20 @@ describe('SongBookViewer', () => {
     expect(screen.getByText('Back to SongBook')).toBeTruthy();
   });
 
+  it('shows a retryable load-error state (not "not found") for a non-404 failure', async () => {
+    api.getSong.mockRejectedValueOnce(Object.assign(new Error('boom'), { status: 500 }));
+    api.listSongAttachments.mockRejectedValue(new Error('boom'));
+    renderPage();
+    expect(await screen.findByText("Couldn't load this song")).toBeTruthy();
+    expect(screen.queryByText('Song not found')).toBeNull();
+
+    // Retry re-runs the load; the next attempt succeeds and renders the song.
+    api.getSong.mockResolvedValue(song());
+    api.listSongAttachments.mockResolvedValue([]);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText('Example Song')).toBeTruthy();
+  });
+
   it('flips the stage via a partial updateSong and merges the server record', async () => {
     api.updateSong.mockResolvedValue(song({ stage: 'learned' }));
     renderPage();

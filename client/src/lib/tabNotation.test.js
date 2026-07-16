@@ -98,6 +98,21 @@ describe('parseTabSheet — line classification', () => {
     expect(types('C Am F G repeat')).toEqual(['chords']); // 4/5 = 80%
   });
 
+  it('classifies dash-joined chord changes as chords with the joined token as name', () => {
+    const am = parseTabSheet('Am-Am7').lines[0];
+    expect(am.type).toBe('chords');
+    expect(am.chords).toEqual([{ name: 'Am-Am7', col: 0 }]);
+    const e = parseTabSheet('E-Em7').lines[0];
+    expect(e.type).toBe('chords');
+    expect(e.chords).toEqual([{ name: 'E-Em7', col: 0 }]);
+  });
+
+  it('keeps hyphenated lyric fragments and bare letter runs as text', () => {
+    expect(types('A-round the corner')).toEqual(['text']);
+    // Every dash part is an ambiguous bare root — stays a word, not a chord.
+    expect(types('A-B')).toEqual(['text']);
+  });
+
   it('promotes only the line directly under a chords line to lyric', () => {
     const sheet = 'C   G\nFirst invented line\nSecond invented line';
     expect(types(sheet)).toEqual(['chords', 'lyric', 'text']);
@@ -298,6 +313,15 @@ describe('normalizePastedTab', () => {
     expect(normalizePastedTab('&bogus; C G')).toBe('&bogus; C G');
   });
 
+  it('maps Unicode accidentals to ASCII so mixed lines classify and transpose', () => {
+    expect(normalizePastedTab('F♯m   B♭')).toBe('F#m   Bb');
+    // After normalize, the line classifies as chords and transposes; the raw
+    // parser (no normalize) would treat 'F♯m' as a word and leave it behind.
+    const normalized = normalizePastedTab('F♯m   A');
+    expect(parseTabSheet(normalized).lines[0].type).toBe('chords');
+    expect(transposeText(normalized, 2)).toBe('G#m   B');
+  });
+
   it('expands tabs to 8-column stops', () => {
     expect(normalizePastedTab('C\tG')).toBe('C       G');
     expect(normalizePastedTab('Am7\tD')).toBe('Am7     D');
@@ -365,6 +389,14 @@ describe('transposeChordName', () => {
     expect(transposeChordName('G', 1)).toBe('Ab');
   });
 
+  it('transposes each part of a dash-joined chord change', () => {
+    expect(transposeChordName('Am-Am7', 2)).toBe('Bm-Bm7');
+    expect(transposeChordName('E-Em7', 2)).toBe('F#-F#m7');
+    // Not a dash chord (all-ambiguous / lyric fragment) → untouched.
+    expect(transposeChordName('A-B', 2)).toBe('A-B');
+    expect(transposeChordName('A-round', 2)).toBe('A-round');
+  });
+
   it('passes through N.C. and non-chords unchanged', () => {
     expect(transposeChordName('N.C.', 5)).toBe('N.C.');
     expect(transposeChordName('hello', 3)).toBe('hello');
@@ -411,6 +443,18 @@ describe('transposeText', () => {
 
   it('transposes chordlyric bracket chords in place', () => {
     expect(transposeText('[C]Hum a [G]made-up [Am]tune', 2)).toBe('[D]Hum a [A]made-up [Bm]tune');
+  });
+
+  it('transposes dash-joined chord lines and keeps non-chord dash words', () => {
+    expect(transposeText('Am-Am7\nE-Em7', 2)).toBe('Bm-Bm7\nF#-F#m7');
+    expect(transposeText('A-round the corner', 2)).toBe('A-round the corner');
+    expect(transposeText('A-B', 2)).toBe('A-B');
+  });
+
+  it('transposes inline ChordPro dash chords — mid-lyric and whole-line', () => {
+    expect(transposeText('[Am-Am7]la la', 2)).toBe('[Bm-Bm7]la la');
+    // A whole-line [Am-Am7] is inline chord notation, not a section header.
+    expect(transposeText('[Am-Am7]', 2)).toBe('[Bm-Bm7]');
   });
 
   it('leaves non-chord brackets alone on chordlyric lines', () => {

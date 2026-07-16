@@ -46,11 +46,17 @@ import { transposeText } from '../lib/tabNotation.js';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage.js';
 import { formatBytes } from '../utils/formatters';
 import { isHttpUrl } from '../utils/urlNormalize';
-import { readFileAsBase64, ATTACHMENT_MAX_FILE_SIZE } from '../utils/fileUpload';
+import { readFileAsBase64 } from '../utils/fileUpload';
 import {
   getSong, updateSong, deleteSong,
   listSongAttachments, uploadSongAttachment, deleteSongAttachment, songAttachmentUrl,
 } from '../services/api';
+
+// Mirrors MAX_ATTACHMENT_SIZE in server/routes/brainSongbook.js — 40MB, the
+// largest raw payload that survives base64 ×4/3 inflation under the server's
+// 55mb express.json limit. Deliberately NOT utils/fileUpload's
+// ATTACHMENT_MAX_FILE_SIZE (50MB) — other surfaces still use that cap.
+const SONGBOOK_MAX_FILE_SIZE = 40 * 1024 * 1024;
 
 const TRANSPOSE_MIN = -11;
 const TRANSPOSE_MAX = 11;
@@ -91,9 +97,15 @@ export default function SongBookViewer() {
   const [song, setSong] = useState(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  // Bump to re-run the load effect (the Retry button on a non-404 failure).
+  const [retryKey, setRetryKey] = useState(0);
   const [draft, setDraft] = useState(null);
   // null = not fetched yet, [] = fetched-and-empty (sentinel convention).
   const [attachments, setAttachments] = useState(null);
+  // Once any attachment mutation has run, the (slow) initial list response is
+  // stale — it must not clobber the optimistic upload/delete state.
+  const attachmentsMutatedRef = useRef(false);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   useEffect(() => {
@@ -101,7 +113,9 @@ export default function SongBookViewer() {
     setSong(null);
     setDraft(null);
     setAttachments(null);
+    attachmentsMutatedRef.current = false;
     setNotFound(false);
+    setLoadError(false);
     setLoading(true);
     getSong(id, { silent: true })
       .then((s) => {
@@ -109,13 +123,23 @@ export default function SongBookViewer() {
         setSong(s);
         setDraft(toDraft(s));
       })
-      .catch(() => { if (!cancelled) setNotFound(true); })
+      .catch((err) => {
+        if (cancelled) return;
+        // Only a genuine 404 means "not found" — anything else (network blip,
+        // 5xx) gets a retryable load-error state instead of a lying fallback.
+        if (err?.status === 404) setNotFound(true);
+        else setLoadError(true);
+      })
       .finally(() => { if (!cancelled) setLoading(false); });
     listSongAttachments(id, { silent: true })
-      .then((list) => { if (!cancelled) setAttachments(Array.isArray(list) ? list : []); })
-      .catch(() => { if (!cancelled) setAttachments([]); });
+      .then((list) => {
+        if (!cancelled && !attachmentsMutatedRef.current) setAttachments(Array.isArray(list) ? list : []);
+      })
+      .catch(() => {
+        if (!cancelled && !attachmentsMutatedRef.current) setAttachments([]);
+      });
     return () => { cancelled = true; };
-  }, [id]);
+  }, [id, retryKey]);
 
   // --- Transpose: render-time only, persisted per song via safeStorage.
   const [transpose, setTransposeState] = useState(0);
@@ -215,13 +239,14 @@ export default function SongBookViewer() {
   const fileInputRef = useRef(null);
   const [uploadFiles, uploading] = useAsyncAction(async (files) => {
     for (const file of Array.from(files)) {
-      if (file.size > ATTACHMENT_MAX_FILE_SIZE) {
-        toast.error(`"${file.name}" exceeds ${Math.round(ATTACHMENT_MAX_FILE_SIZE / 1024 / 1024)}MB limit`);
+      if (file.size > SONGBOOK_MAX_FILE_SIZE) {
+        toast.error(`"${file.name}" exceeds ${Math.round(SONGBOOK_MAX_FILE_SIZE / 1024 / 1024)}MB limit`);
         continue;
       }
       const data = await readFileAsBase64(file);
       const res = await uploadSongAttachment(id, { filename: file.name, data }, { silent: true });
       if (res?.attachment) {
+        attachmentsMutatedRef.current = true;
         setAttachments((prev) => [...(prev || []), { ...res.attachment, present: true }]);
       }
     }
@@ -230,6 +255,7 @@ export default function SongBookViewer() {
   const onDeleteAttachment = useCallback((filename) => confirmDelete(() =>
     deleteSongAttachment(id, filename, { silent: true })
       .then((res) => {
+        attachmentsMutatedRef.current = true;
         // Server returns the updated meta list; carry over local present flags.
         setAttachments((prev) => (res?.attachments || []).map((meta) => ({
           ...meta,
@@ -249,6 +275,28 @@ export default function SongBookViewer() {
         <Link to="/songbook" className="px-4 py-2 rounded-lg text-sm bg-port-accent/10 text-port-accent hover:bg-port-accent/20">
           Back to SongBook
         </Link>
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex flex-col h-full items-center justify-center text-center p-6">
+        <ListMusic size={32} className="text-gray-600 mb-3" />
+        <h2 className="text-white font-semibold mb-1">Couldn't load this song</h2>
+        <p className="text-gray-400 text-sm mb-4">Something went wrong fetching it — the song may still exist.</p>
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setRetryKey((k) => k + 1)}
+            className="px-4 py-2 rounded-lg text-sm bg-port-accent text-white hover:bg-port-accent/90"
+          >
+            Retry
+          </button>
+          <Link to="/songbook" className="px-4 py-2 rounded-lg text-sm bg-port-accent/10 text-port-accent hover:bg-port-accent/20">
+            Back to SongBook
+          </Link>
+        </div>
       </div>
     );
   }

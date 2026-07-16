@@ -1,0 +1,72 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { MemoryRouter, Routes, Route } from 'react-router-dom';
+
+// Mock the api barrel (RoundEditor.test.jsx harness style).
+const api = vi.hoisted(() => ({
+  createSong: vi.fn(),
+  importSongFromUrl: vi.fn(),
+}));
+vi.mock('../services/api', () => api);
+vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+
+const clipboard = vi.hoisted(() => ({ readClipboard: vi.fn() }));
+vi.mock('../lib/clipboard.js', () => clipboard);
+
+import SongBookImport from './SongBookImport.jsx';
+
+const renderPage = (path = '/songbook/import') => render(
+  <MemoryRouter initialEntries={[path]}>
+    <Routes><Route path="/songbook/import" element={<SongBookImport />} /></Routes>
+  </MemoryRouter>,
+);
+
+// All fixture content is invented (privacy convention).
+describe('SongBookImport', () => {
+  beforeEach(() => {
+    api.createSong.mockReset().mockResolvedValue({ id: 'new-song-1' });
+    api.importSongFromUrl.mockReset();
+    clipboard.readClipboard.mockReset();
+  });
+
+  it('paste button stores the RAW clipboard text — normalization runs exactly once', async () => {
+    // Pre-normalizing before setPasted would double entity-decode:
+    // &amp;lt; → &lt; (first pass) → < (memo's second pass), turning
+    // entity-encoded markup into tags that get stripped.
+    clipboard.readClipboard.mockResolvedValue('&amp;lt; C   G   Am');
+    renderPage();
+    fireEvent.click(screen.getByRole('button', { name: 'Paste' }));
+    const textarea = await screen.findByLabelText('Pasted tab content');
+    await waitFor(() => expect(textarea.value).toBe('&amp;lt; C   G   Am'));
+
+    // Save sends the single-pass-normalized text (&amp;lt; → &lt;, not <).
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Example Song' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save song' }));
+    await waitFor(() => expect(api.createSong).toHaveBeenCalled());
+    const [body] = api.createSong.mock.calls[0];
+    expect(body.content.text).toBe('&lt; C   G   Am');
+  });
+
+  it('clamps ChordPro meta before sending: out-of-range capo dropped, long key sliced to 20', async () => {
+    const sheet = '{key: ThisKeyNameIsWayTooLongForTheSchema}\n{capo: 13}\nC   G   Am\nInvented lyric line';
+    renderPage();
+    fireEvent.change(screen.getByLabelText('Pasted tab content'), { target: { value: sheet } });
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Example Song' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save song' }));
+    await waitFor(() => expect(api.createSong).toHaveBeenCalled());
+    const [body] = api.createSong.mock.calls[0];
+    expect(body.key).toBe('ThisKeyNameIsWayTooL'); // sliced at songInputSchema's 20-char max
+    expect('capo' in body).toBe(false); // 13 is outside 0..12 — dropped, POST can't 400
+  });
+
+  it('sends an in-range pasted capo through unchanged', async () => {
+    renderPage();
+    fireEvent.change(screen.getByLabelText('Pasted tab content'), {
+      target: { value: '{capo: 3}\nC   G   Am' },
+    });
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Example Song' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save song' }));
+    await waitFor(() => expect(api.createSong).toHaveBeenCalled());
+    expect(api.createSong.mock.calls[0][0].capo).toBe(3);
+  });
+});

@@ -58,9 +58,15 @@ export function extractUltimateGuitarStore(html) {
   // Observed shape nests under a top-level `store` key; tolerate both.
   const data = parsed?.store?.page?.data ?? parsed?.page?.data;
   const content = data?.tab_view?.wiki_tab?.content;
-  if (typeof content !== 'string' || !content.trim()) return null;
+  if (typeof content !== 'string') return null;
+  // Gate on the POST-strip text, not the raw content — marker-only content
+  // ("[tab][/tab]") strips to nothing and must fall through to the next
+  // extractor (a real <pre> on the page) instead of short-circuiting the
+  // cascade into an empty draft / 422.
+  const text = normalizeSheetText(stripUgMarkers(content));
+  if (!text) return null;
   return {
-    text: normalizeSheetText(stripUgMarkers(content)),
+    text,
     title: typeof data?.tab?.song_name === 'string' ? data.tab.song_name.trim() : '',
     artist: typeof data?.tab?.artist_name === 'string' ? data.tab.artist_name.trim() : '',
   };
@@ -154,6 +160,9 @@ export function buildDraftFromHtml(html, url) {
 export async function importSongFromUrl(url) {
   const html = await fetchPublicText(url, {
     timeoutMs: 20000,
+    // Cap the page at 4MB (streamed — bounds peak memory): tab pages are text;
+    // anything bigger is not a chord sheet.
+    maxBytes: 4 * 1024 * 1024,
     headers: { 'User-Agent': 'Mozilla/5.0 (compatible; PortOS-SongBook/1.0)' },
   });
   if (html === null) {

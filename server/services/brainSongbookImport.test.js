@@ -82,6 +82,11 @@ describe('extractUltimateGuitarStore', () => {
     const empty = { store: { page: { data: { tab_view: { wiki_tab: { content: '   ' } } } } } };
     expect(extractUltimateGuitarStore(buildUgHtml(empty))).toBeNull();
   });
+
+  it('returns null when content is marker-only and strips to nothing', () => {
+    const markerOnly = { store: { page: { data: { tab_view: { wiki_tab: { content: '[tab][/tab]' } } } } } };
+    expect(extractUltimateGuitarStore(buildUgHtml(markerOnly))).toBeNull();
+  });
 });
 
 describe('extractLargestPre', () => {
@@ -161,6 +166,16 @@ describe('buildDraftFromHtml', () => {
     const draft = buildDraftFromHtml(html, URL);
     expect(draft.content.format).toBe('tab');
     expect(draft.content.text).toContain('example progression sheet');
+  });
+
+  it('falls through marker-only UG content to a real <pre> on the page', () => {
+    // The js-store gate must key on the POST-strip text: "[tab][/tab]" strips
+    // to nothing, so the cascade continues to the <pre> instead of 422-ing.
+    const markerOnly = { store: { page: { data: { tab_view: { wiki_tab: { content: '[tab][/tab]' } } } } } };
+    const html = buildUgHtml(markerOnly).replace('</body>', '<pre>e|--0--2--3--| example tab staff</pre></body>');
+    const draft = buildDraftFromHtml(html, URL);
+    expect(draft.content.format).toBe('tab');
+    expect(draft.content.text).toContain('e|--0--2--3--|');
   });
 
   it('falls back to plain tag-stripped text when nothing else matches', () => {

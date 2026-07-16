@@ -225,6 +225,34 @@ const streamRes = (chunks, { headers = {}, ok = true, status = 200 } = {}) => {
   };
 };
 
+describe('fetchPublicText — opt-in maxBytes cap', () => {
+  const enc = (s) => new TextEncoder().encode(s);
+
+  it('returns the streamed text when within the cap', async () => {
+    fetchMock.mockResolvedValue(streamRes([enc('hel'), enc('lo')]));
+    expect(await fetchPublicText('https://example.com/page', { maxBytes: 1024 })).toBe('hello');
+  });
+
+  it('returns null when the declared Content-Length exceeds the cap', async () => {
+    fetchMock.mockResolvedValue(res({ text: 'x', headers: { 'content-length': String(99 * 1024 * 1024) } }));
+    expect(await fetchPublicText('https://example.com/page', { maxBytes: 1024 })).toBeNull();
+  });
+
+  it('aborts a no-Content-Length body that exceeds the cap (bounds peak memory)', async () => {
+    const r = streamRes([new Uint8Array(600), new Uint8Array(600)]); // 1200 > cap
+    fetchMock.mockResolvedValue(r);
+    expect(await fetchPublicText('https://example.com/page', { maxBytes: 1024 })).toBeNull();
+    expect(r.body._cancel).toHaveBeenCalled();
+  });
+
+  it('keeps the uncapped res.text() path when maxBytes is not passed', async () => {
+    // A response with NO readable stream still works without maxBytes —
+    // proving existing callers see no behavior change.
+    fetchMock.mockResolvedValue(res({ text: 'plain body' }));
+    expect(await fetchPublicText('https://example.com/page')).toBe('plain body');
+  });
+});
+
 describe('fetchPublicBinary', () => {
   it('returns the buffer + content-type from a non-streaming response (fallback)', async () => {
     const bytes = new Uint8Array([1, 2, 3]).buffer;

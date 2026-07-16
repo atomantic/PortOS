@@ -90,9 +90,11 @@ export default function SongBookImport() {
   const onPasteButton = useCallback(async () => {
     const text = await readClipboard();
     if (text == null) { toast.error('Clipboard unavailable — paste into the box instead'); return; }
-    const clean = normalizePastedTab(text);
-    setPasted(clean);
-    applyMetaDefaults(parseTabSheet(clean).meta);
+    // Store the RAW clipboard text — the `normalized` memo runs the single
+    // normalize pass. Pre-normalizing here would double entity-decode
+    // (&amp;lt; → &lt; → <) and strip entity-encoded markup as if it were tags.
+    setPasted(text);
+    applyMetaDefaults(parseTabSheet(normalizePastedTab(text)).meta);
   }, [applyMetaDefaults]);
 
   // Error mapping lives in the .catch alone — it swallows every rejection, so
@@ -135,8 +137,12 @@ export default function SongBookImport() {
     };
     if (tab === 'url' && fetched?.sourceUrl) body.sourceUrl = fetched.sourceUrl;
     if (tab === 'paste') {
-      if (pasteMeta.key) body.key = pasteMeta.key;
-      if (Number.isInteger(pasteMeta.capo)) body.capo = pasteMeta.capo;
+      // Clamp ChordPro meta to songInputSchema's bounds — a pasted {capo: 13}
+      // or an over-long {key:} must not 400 the POST with no form field to fix.
+      if (pasteMeta.key) body.key = String(pasteMeta.key).slice(0, 20);
+      if (Number.isInteger(pasteMeta.capo) && pasteMeta.capo >= 0 && pasteMeta.capo <= 12) {
+        body.capo = pasteMeta.capo;
+      }
     }
     const song = await createSong(body, { silent: true });
     if (song?.id) navigate(`/songbook/${song.id}`);
