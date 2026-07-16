@@ -171,6 +171,20 @@ describe('POST /api/update/execute — active CoS agent gating', () => {
     expect(executeUpdate).not.toHaveBeenCalled();
   });
 
+  it('re-checks after acquiring the lock and releases it if an agent started during the git/fork awaits', async () => {
+    // Pre-check sees no agents (call 1), but one goes live during getUpdateStatus/
+    // fork-gate (call 2 at the post-lock re-check) — the update must abort and
+    // release the in-progress lock instead of restarting out from under it.
+    getActiveAgentIds.mockReturnValueOnce([]).mockReturnValueOnce(['agent-late']);
+    const res = await request(makeApp()).post('/api/update/execute').send({});
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('AGENTS_ACTIVE');
+    expect(executeUpdate).not.toHaveBeenCalled();
+    // Lock was acquired then released (true, then false), leaving no stuck lock.
+    expect(updateChecker.setUpdateInProgress).toHaveBeenNthCalledWith(1, true);
+    expect(updateChecker.setUpdateInProgress).toHaveBeenCalledWith(false);
+  });
+
   it('rejects a reconcile with 409 AGENTS_ACTIVE while agents are live', async () => {
     updateChecker.getUpdateStatus.mockResolvedValue(baseStatus({ installState: { outOfSync: true } }));
     getActiveAgentIds.mockReturnValue(['agent-1', 'agent-2']);
@@ -212,6 +226,15 @@ describe('GET /api/update/status — activeCosAgents', () => {
     const res = await request(makeApp()).get('/api/update/status');
     expect(res.status).toBe(200);
     expect(res.body.activeCosAgents).toBe(1);
+  });
+
+  it('sums distinct live and spawning agents (a live agent plus two spawns → 3)', async () => {
+    getActiveAgentIds.mockReturnValue(['agent-1']);
+    mockSpawningTasks.add('task-1');
+    mockSpawningTasks.add('task-2');
+    const res = await request(makeApp()).get('/api/update/status');
+    expect(res.status).toBe(200);
+    expect(res.body.activeCosAgents).toBe(3);
   });
 
   it('reports 0 when no agents are running', async () => {

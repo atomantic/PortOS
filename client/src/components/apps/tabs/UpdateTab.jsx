@@ -234,12 +234,16 @@ export default function UpdateTab() {
 
   useAutoRefetch(pollHealth, 2000, { enabled: polling, pollOnly: true });
 
-  // While CoS agents are live, updates/reconcile are blocked server-side (a
-  // restart would sever them). Poll the status so the block clears promptly once
-  // the last agent finishes, without the user manually re-checking. No-op when
-  // no agents are running or an update is already underway.
+  // Keep the status fresh while there's an update/reconcile surface on screen,
+  // so the agent block appears AND clears without a manual re-check: if an agent
+  // starts (from a schedule or another tab) while the buttons are showing, the
+  // next poll suppresses them; when the last agent finishes, it restores them.
+  // Gated to only run when there's something actionable (agents live, or an
+  // update/reconcile is available) and no update is already underway.
   useAutoRefetch(fetchStatus, 4000, {
-    enabled: (status?.activeCosAgents || 0) > 0 && !updating && !polling,
+    enabled: ((status?.activeCosAgents || 0) > 0 ||
+      !!status?.installState?.outOfSync ||
+      !!status?.updateAvailable) && !updating && !polling,
     pollOnly: true
   });
 

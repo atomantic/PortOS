@@ -252,6 +252,36 @@ describe('UpdateTab — active CoS agent suppression', () => {
     expect(screen.getByRole('button', { name: 'Sync Fork Only' })).toBeTruthy();
   });
 
+  it('suppresses restart buttons when an agent starts while the update surface is showing (4s poll)', async () => {
+    // Codex P2: tab loads with 0 agents and an available update, then a scheduled
+    // task (or another browser tab) starts an agent. The poll — enabled whenever
+    // there's an actionable update surface — picks it up and suppresses "Update
+    // Now" instead of leaving a button that 409s on click.
+    let agentCount = 0;
+    mockGetUpdateStatus.mockReset().mockImplementation(async () => ({
+      currentVersion: '2.24.0',
+      updateAvailable: true,
+      latestRelease: { version: '2.25.0' },
+      remoteInfo: { isFork: false, hasOrigin: true, fullName: 'atomantic/PortOS' },
+      activeCosAgents: agentCount,
+    }));
+    vi.useFakeTimers();
+    render(<UpdateTab />);
+
+    // Initially updatable — button present, no notice.
+    await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+    expect(screen.getByRole('button', { name: 'Update Now' })).toBeTruthy();
+    expect(screen.queryByText(/Update paused/i)).toBeNull();
+
+    // An agent starts; the next poll observes it.
+    agentCount = 1;
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+    vi.useRealTimers();
+
+    expect(screen.queryByRole('button', { name: 'Update Now' })).toBeNull();
+    expect(screen.getByText(/Update paused — CoS agents running/i)).toBeTruthy();
+  });
+
   it('auto-clears the paused notice when the last agent finishes (4s status poll)', async () => {
     // Pins the notice's "this notice clears automatically" claim: while agents
     // are live the tab polls status every 4s (useAutoRefetch), so when the last
