@@ -14,7 +14,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Plus, Sparkles, Trash2, Clock, Pause, Play } from 'lucide-react';
+import { Plus, Sparkles, Trash2, Clock, Pause, Play, ThumbsUp, ThumbsDown } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import Drawer from '../components/Drawer';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
@@ -22,6 +22,7 @@ import { timeAgo } from '../utils/formatters';
 import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import {
   listCommissions, createCommission, updateCommission, deleteCommission,
+  submitCommissionFeedback,
 } from '../services/api';
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -62,6 +63,8 @@ function toForm(c) {
       aspectRatio: c.generation?.aspectRatio || '16:9',
       targetDurationSeconds: c.generation?.targetDurationSeconds || 10,
     },
+    // How many recent reactions steer the next run (0 disables conditioning).
+    feedbackWindow: Number.isInteger(c.feedbackWindow) ? c.feedbackWindow : 5,
   };
 }
 
@@ -90,6 +93,7 @@ function toPayload(form) {
       aspectRatio: form.generation.aspectRatio,
       targetDurationSeconds: Number(form.generation.targetDurationSeconds),
     },
+    feedbackWindow: Number(form.feedbackWindow),
   };
 }
 
@@ -173,6 +177,22 @@ export default function CreativeCommissions() {
       toast.error(err?.message || 'Delete failed');
     }
   };
+
+  // Rate/annotate a specific run's output (#2657, Phase 2). The reaction folds
+  // into the next scheduled run's directive. Reactive: swap the returned record
+  // into local state so the run immediately reflects its rating.
+  const handleRate = useCallback(async (runId, rating, note) => {
+    if (!editing) return;
+    try {
+      const updated = await submitCommissionFeedback(
+        editing.id, { runId, rating, note: note || '' }, { silent: true },
+      );
+      setCommissions((prev) => prev.map((c) => (c.id === updated.id ? updated : c)));
+      toast.success('Feedback saved — it steers the next run');
+    } catch (err) {
+      toast.error(err?.message || 'Failed to save feedback');
+    }
+  }, [editing]);
 
   const toggleEnabled = async (commission) => {
     const next = !commission.enabled;
@@ -304,6 +324,8 @@ export default function CreativeCommissions() {
           form={form}
           patchForm={patchForm}
           runs={editing?.runs || []}
+          feedback={editing?.feedback || []}
+          onRate={editing ? handleRate : null}
           saving={saving}
           onSave={handleSave}
           onCancel={closeDrawer}
@@ -313,9 +335,16 @@ export default function CreativeCommissions() {
   );
 }
 
-function CommissionForm({ form, patchForm, runs, saving, onSave, onCancel }) {
+function CommissionForm({ form, patchForm, runs, feedback, onRate, saving, onSave, onCancel }) {
   // Newest-first, memoized so the copy+reverse doesn't run on every keystroke.
   const orderedRuns = useMemo(() => [...runs].reverse(), [runs]);
+  // Latest reaction per run (last write wins), so the run row reflects the most
+  // recent rating the user gave it.
+  const feedbackByRun = useMemo(() => {
+    const map = {};
+    for (const f of feedback || []) { if (f?.runId) map[f.runId] = f; }
+    return map;
+  }, [feedback]);
   return (
     <div className="space-y-5">
       {/* Identity */}
@@ -495,21 +524,47 @@ function CommissionForm({ form, patchForm, runs, saving, onSave, onCancel }) {
         </div>
       </section>
 
+      {/* Feedback conditioning */}
+      <section className="space-y-2 border-t border-port-border pt-4">
+        <h3 className="text-sm font-semibold text-gray-200">Feedback conditioning</h3>
+        <div className="flex items-center gap-3">
+          <label className={`${labelCls} mb-0`} htmlFor="commission-feedback-window">Recent reactions to steer by</label>
+          <input
+            id="commission-feedback-window"
+            type="number"
+            min={0}
+            max={50}
+            className={`${inputCls} w-20`}
+            value={form.feedbackWindow}
+            onChange={(e) => patchForm(['feedbackWindow'], e.target.value)}
+          />
+        </div>
+        <p className="text-xs text-gray-500">
+          The last N ratings + notes are folded into the next run&apos;s brief. 0 disables conditioning.
+        </p>
+      </section>
+
       {/* Run history (edit only) */}
       {runs.length > 0 && (
         <section className="space-y-2 border-t border-port-border pt-4">
           <h3 className="text-sm font-semibold text-gray-200">Run history</h3>
-          <div className="space-y-1 max-h-52 overflow-y-auto">
+          <div className="space-y-1 max-h-72 overflow-y-auto">
             {orderedRuns.map((r) => (
-              <div key={r.id} className="flex items-center justify-between text-xs bg-port-bg border border-port-border rounded px-2 py-1.5">
-                <span className="text-gray-400">{timeAgo(r.ranAt)}</span>
-                <span className={
-                  r.status === 'started' ? 'text-port-accent'
-                    : r.status === 'skipped' ? 'text-port-warning'
-                      : r.status === 'failed' ? 'text-port-error' : 'text-gray-400'
-                }>
-                  {r.status}{r.reason ? ` · ${r.reason}` : ''}{r.error ? ` · ${r.error}` : ''}
-                </span>
+              <div key={r.id} className="text-xs bg-port-bg border border-port-border rounded px-2 py-1.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-gray-400">{timeAgo(r.ranAt)}</span>
+                  <span className={
+                    r.status === 'started' ? 'text-port-accent'
+                      : r.status === 'skipped' ? 'text-port-warning'
+                        : r.status === 'failed' ? 'text-port-error' : 'text-gray-400'
+                  }>
+                    {r.status}{r.reason ? ` · ${r.reason}` : ''}{r.error ? ` · ${r.error}` : ''}
+                  </span>
+                </div>
+                {/* Rate/annotate a run that actually produced output. */}
+                {r.projectId && onRate && (
+                  <RunFeedback runId={r.id} current={feedbackByRun[r.id]} onRate={onRate} />
+                )}
               </div>
             ))}
           </div>
@@ -526,6 +581,58 @@ function CommissionForm({ form, patchForm, runs, saving, onSave, onCancel }) {
         </button>
         <button onClick={onCancel} className="text-gray-400 hover:text-gray-200 px-4 py-2 text-sm">Cancel</button>
       </div>
+    </div>
+  );
+}
+
+// Per-run rate/annotate control (#2657, Phase 2). Thumbs submit immediately,
+// carrying whatever note is in the field; the current rating (if any) is shown
+// highlighted. Note state is local so typing doesn't re-render the whole form.
+function RunFeedback({ runId, current, onRate }) {
+  const [note, setNote] = useState(current?.note || '');
+  const [busy, setBusy] = useState(false);
+  const rating = current?.rating;
+  const isUp = rating === 'up' || (typeof rating === 'number' && rating > 0);
+  const isDown = rating === 'down' || (typeof rating === 'number' && rating < 0);
+
+  const submit = async (value) => {
+    setBusy(true);
+    try { await onRate(runId, value, note.trim()); }
+    finally { setBusy(false); }
+  };
+
+  return (
+    <div className="mt-1.5 flex items-center gap-1.5">
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => submit('up')}
+        aria-label="Like this result"
+        aria-pressed={isUp}
+        title="Like — steer future runs toward this"
+        className={`p-1 rounded disabled:opacity-50 ${isUp ? 'text-port-success' : 'text-gray-500 hover:text-gray-300'}`}
+      >
+        <ThumbsUp className="w-3.5 h-3.5" />
+      </button>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => submit('down')}
+        aria-label="Dislike this result"
+        aria-pressed={isDown}
+        title="Dislike — steer future runs away from this"
+        className={`p-1 rounded disabled:opacity-50 ${isDown ? 'text-port-error' : 'text-gray-500 hover:text-gray-300'}`}
+      >
+        <ThumbsDown className="w-3.5 h-3.5" />
+      </button>
+      <input
+        className="flex-1 min-w-0 bg-port-card border border-port-border rounded px-2 py-1 text-xs text-gray-200 focus:outline-none focus:border-port-accent"
+        value={note}
+        maxLength={1000}
+        placeholder="note (e.g. less horror, more Magritte)"
+        aria-label={`Feedback note for run ${runId}`}
+        onChange={(e) => setNote(e.target.value)}
+      />
     </div>
   );
 }

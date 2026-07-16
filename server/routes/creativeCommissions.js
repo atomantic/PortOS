@@ -16,6 +16,7 @@ import {
   validateRequest,
   creativeCommissionCreateSchema,
   creativeCommissionUpdateSchema,
+  commissionFeedbackSchema,
   isPaginationRequested,
   paginateArray,
 } from '../lib/validation.js';
@@ -50,6 +51,15 @@ router.patch('/:id', asyncHandler(async (req, res) => {
   const body = validateRequest(creativeCommissionUpdateSchema, req.body ?? {});
   const rec = await svc.updateCommission(req.params.id, body).catch((err) => { throw mapServiceError(err); });
   res.json(rec);
+}));
+
+// Rate/annotate a specific run's output (#2657, Phase 2). The reaction is folded
+// into the next scheduled fire's directive via buildCommissionDirective. Returns
+// the full updated commission so the client updates its feedback state reactively.
+router.post('/:id/feedback', asyncHandler(async (req, res) => {
+  const body = validateRequest(commissionFeedbackSchema, req.body ?? {});
+  const rec = await svc.submitCommissionFeedback(req.params.id, body).catch((err) => { throw mapServiceError(err); });
+  res.status(201).json(rec);
 }));
 
 router.delete('/:id', asyncHandler(async (req, res) => {

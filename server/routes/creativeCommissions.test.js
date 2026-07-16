@@ -14,6 +14,7 @@ const svc = {
   createCommission: vi.fn(),
   updateCommission: vi.fn(),
   deleteCommission: vi.fn(),
+  submitCommissionFeedback: vi.fn(),
 };
 vi.mock('../services/creativeCommissions/store.js', () => svc);
 
@@ -109,6 +110,43 @@ describe('PATCH /api/creative-commission/:id', () => {
     const res = await request(buildApp()).patch('/api/creative-commission/commission-1').send({});
     expect(res.status).toBe(400);
     expect(svc.updateCommission).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /api/creative-commission/:id/feedback', () => {
+  it('validates and forwards the reaction to the service', async () => {
+    svc.submitCommissionFeedback.mockResolvedValue({ id: 'commission-1', feedback: [{ runId: 'run-A', rating: 'up' }] });
+    const res = await request(buildApp())
+      .post('/api/creative-commission/commission-1/feedback')
+      .send({ runId: 'run-A', rating: 'up', note: 'more Magritte' });
+    expect(res.status).toBe(201);
+    expect(svc.submitCommissionFeedback).toHaveBeenCalledWith('commission-1', expect.objectContaining({
+      runId: 'run-A', rating: 'up', note: 'more Magritte',
+    }));
+  });
+
+  it('rejects a body missing runId with 400 (service not called)', async () => {
+    const res = await request(buildApp())
+      .post('/api/creative-commission/commission-1/feedback')
+      .send({ rating: 'up' });
+    expect(res.status).toBe(400);
+    expect(svc.submitCommissionFeedback).not.toHaveBeenCalled();
+  });
+
+  it('rejects a zero numeric rating with 400 (meaningless)', async () => {
+    const res = await request(buildApp())
+      .post('/api/creative-commission/commission-1/feedback')
+      .send({ runId: 'run-A', rating: 0 });
+    expect(res.status).toBe(400);
+    expect(svc.submitCommissionFeedback).not.toHaveBeenCalled();
+  });
+
+  it('maps a service NOT_FOUND to 404', async () => {
+    svc.submitCommissionFeedback.mockRejectedValue(Object.assign(new Error('gone'), { code: 'NOT_FOUND' }));
+    const res = await request(buildApp())
+      .post('/api/creative-commission/missing/feedback')
+      .send({ runId: 'run-A', rating: 'down' });
+    expect(res.status).toBe(404);
   });
 });
 
