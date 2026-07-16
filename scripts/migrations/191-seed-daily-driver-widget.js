@@ -12,12 +12,11 @@
  *   are not touched. Re-runs detect the widget is already present and skip.
  *   Mirrors migration 145.
  *
- * The DEFAULT_LAYOUTS geometry pins daily-driver full-width at the top and
- * shifts the other Morning Review widgets down — but an existing persisted
- * layout still has those widgets at their old (top) positions, so the preferred
- * top slot collides. Per the migration-145 convention we do NOT rewrite the
- * user's existing positions; instead the collision fallback appends
- * daily-driver on a fresh row below everything (still present, still gated).
+ * The DEFAULT_LAYOUTS geometry places daily-driver full-width in a fresh row
+ * BELOW the Morning Review scan quadrants (so a gated-off slot leaves only
+ * trailing space, never a gap at the top). This migration mirrors that: it
+ * appends daily-driver on a fresh row below everything already in the persisted
+ * grid, never rewriting the user's existing positions (migration-145 convention).
  */
 
 import { readLayoutsDoc, writeLayoutsDoc } from './_lib.js';
@@ -27,40 +26,18 @@ const WIDGET_W = 12;
 const WIDGET_H = 6;
 
 // Mirror of the geometry in `server/services/dashboardLayouts.js`
-// DEFAULT_LAYOUTS `morning-review` layout — edits here must match that file or
-// fresh installs + migrated installs diverge.
-const PREFERRED_SLOTS = {
-  'morning-review': { x: 0, y: 0, w: WIDGET_W, h: WIDGET_H },
-};
-const TARGET_LAYOUT_IDS = Object.keys(PREFERRED_SLOTS);
+// DEFAULT_LAYOUTS `morning-review` layout — daily-driver sits full-width in a
+// fresh row BELOW the scan quadrants. Edits here must match that file or fresh
+// installs + migrated installs diverge.
+const TARGET_LAYOUT_IDS = ['morning-review'];
 
-function rectsOverlap(a, b) {
-  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
-}
-
-function collidesWith(grid, candidate) {
-  for (const item of grid) {
-    if (rectsOverlap(item, candidate)) return true;
-  }
-  return false;
-}
-
-function pickGridEntry(grid, layoutId) {
-  const preferred = PREFERRED_SLOTS[layoutId];
-  if (preferred) {
-    const candidate = { id: WIDGET_ID, x: preferred.x, y: preferred.y, w: preferred.w, h: preferred.h };
-    if (!collidesWith(grid, candidate)) return candidate;
-  }
-  // Fall back to a clean row below everything else if the preferred slot is
-  // occupied (an existing persisted layout keeps its old widget positions).
+// Always append daily-driver on a fresh row below everything already in the
+// grid (never at the top). A gated-off widget's slot is dropped without
+// compacting the rows above it, so a bottom slot means the driver's absence
+// leaves only harmless trailing space — matching the DEFAULT_LAYOUTS placement.
+function pickGridEntry(grid) {
   const bottom = grid.reduce((max, it) => Math.max(max, (it.y ?? 0) + (it.h ?? 0)), 0);
-  return {
-    id: WIDGET_ID,
-    x: 0,
-    y: bottom,
-    w: preferred?.w ?? WIDGET_W,
-    h: preferred?.h ?? WIDGET_H,
-  };
+  return { id: WIDGET_ID, x: 0, y: bottom, w: WIDGET_W, h: WIDGET_H };
 }
 
 function applyToLayout(layout) {
@@ -80,7 +57,7 @@ function applyToLayout(layout) {
   const existingGrid = Array.isArray(layout.grid) ? layout.grid : [];
   const hasGridEntry = existingGrid.some((it) => it?.id === WIDGET_ID);
   if (!hasGridEntry) {
-    layout.grid = [...existingGrid, pickGridEntry(existingGrid, layout.id)];
+    layout.grid = [...existingGrid, pickGridEntry(existingGrid)];
     changed = true;
   } else if (!Array.isArray(layout.grid)) {
     layout.grid = existingGrid;

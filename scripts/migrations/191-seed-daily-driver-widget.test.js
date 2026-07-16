@@ -29,7 +29,7 @@ describe('migration 191 — seed daily-driver widget into the morning-review lay
     expect(existsSync(layoutsPath)).toBe(false);
   });
 
-  it('inserts daily-driver at the top when the preferred slot is free', async () => {
+  it('appends daily-driver full-width in a fresh row below existing content', async () => {
     writeJson(layoutsPath, {
       activeLayoutId: 'default',
       layouts: [
@@ -41,7 +41,8 @@ describe('migration 191 — seed daily-driver widget into the morning-review lay
     const after = readJson(layoutsPath);
     const layout = after.layouts.find((l) => l.id === 'morning-review');
     expect(layout.widgets).toContain('daily-driver');
-    expect(layout.grid.find((g) => g.id === 'daily-driver')).toEqual({ id: 'daily-driver', x: 0, y: 0, w: 12, h: 6 });
+    // Below the existing review-hub (y:8 h:4 → bottom 12).
+    expect(layout.grid.find((g) => g.id === 'daily-driver')).toEqual({ id: 'daily-driver', x: 0, y: 12, w: 12, h: 6 });
   });
 
   it('appends below existing items when the preferred top slot is occupied', async () => {

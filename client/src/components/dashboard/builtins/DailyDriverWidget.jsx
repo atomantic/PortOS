@@ -61,6 +61,11 @@ export default function DailyDriverWidget({ dashboardState }) {
 
   if (!loaded) return null;
 
+  // `completedToday`/`streak` come straight from getPostStats — the same source
+  // the standalone DailyPostWidget uses — so the driver's POST row always agrees
+  // with it. (getPostStats derives "today" from the server's UTC day, a
+  // subsystem-wide property of meatspacePost, not this widget; a timezone-aware
+  // POST day boundary is a separate POST-service change, out of scope here.)
   const completedToday = !!post?.completedToday;
   const streak = post?.currentStreak ?? 0;
 
