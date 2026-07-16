@@ -15,6 +15,7 @@
  * can fall back to an LLM-assisted fix instead of corrupting the file.
  */
 import { join } from 'path';
+import { readdir } from 'fs/promises';
 import { tryReadFile } from './fileUtils.js';
 
 // Vite resolves its config from any of these (TS variants included). Order
@@ -96,8 +97,49 @@ export function hostIsAllowed(parsed, hostname) {
 
 // Common locations a vite config sits in relative to an app's repo root. Many
 // PortOS-managed apps are monorepos whose Vite client lives under `client/`
-// (PortOS itself does), so the repo root alone misses them.
-const VITE_CONFIG_SUBDIRS = ['', 'client', 'frontend', 'web', 'app', 'ui', 'apps/web', 'packages/client'];
+// (PortOS itself does), so the repo root alone misses them. This is only a
+// fast-path ordering hint — `findViteConfig` falls back to a bounded recursive
+// scan (`discoverViteConfig`) so a config in an unlisted subdir (e.g. `admin/`)
+// is still found instead of reporting a false "no vite.config" warning.
+const VITE_CONFIG_SUBDIRS = ['', 'client', 'frontend', 'web', 'app', 'ui', 'admin', 'apps/web', 'packages/client'];
+
+// Directories that never hold an app's own vite config but are expensive to walk
+// (or would surface a dependency's config). Skipped by the recursive fallback.
+const VITE_SCAN_IGNORE_DIRS = new Set([
+  'node_modules', '.git', '.hg', '.svn', 'dist', 'build', 'out', 'coverage',
+  '.next', '.nuxt', '.cache', '.turbo', '.vite', 'tmp', 'temp', 'vendor', '.venv'
+]);
+
+/**
+ * Breadth-first scan for a vite config under `root`, skipping heavy/vendor dirs.
+ * Breadth-first so the shallowest (most likely the app's own) config wins, and
+ * bounded by `maxDepth` so a deep monorepo can't turn this into a full-tree walk.
+ * Returns the same `{ path, filename, dir }` shape as `findViteConfig` (content
+ * read by the caller), or `null` when nothing is found within the depth budget.
+ */
+async function discoverViteConfig(root, { maxDepth = 3 } = {}) {
+  let level = [root];
+  for (let depth = 0; depth <= maxDepth && level.length; depth++) {
+    const next = [];
+    for (const dir of level) {
+      const entries = await readdir(dir, { withFileTypes: true }).catch(() => null);
+      if (!entries) continue;
+      // Match a config file at this level before descending, so shallower wins.
+      for (const filename of VITE_CONFIG_FILENAMES) {
+        if (entries.some((e) => e.isFile() && e.name === filename)) {
+          return { path: join(dir, filename), filename, dir };
+        }
+      }
+      for (const e of entries) {
+        if (e.isDirectory() && !e.name.startsWith('.') && !VITE_SCAN_IGNORE_DIRS.has(e.name)) {
+          next.push(join(dir, e.name));
+        }
+      }
+    }
+    level = next;
+  }
+  return null;
+}
 
 /**
  * Locate an app's vite config on disk. Returns `{ path, filename, content, dir }`
@@ -121,6 +163,16 @@ export async function findViteConfig(repoPath, { extraDirs = [] } = {}) {
       const path = join(dir, filename);
       const content = await tryReadFile(path);
       if (content != null) return { path, filename, content, dir };
+    }
+  }
+  // Fast-path subdirs missed it — fall back to a bounded recursive scan so a
+  // config in an unlisted subdir (critical-mass keeps its Vite client in
+  // `admin/`) is still detected instead of a false "no vite.config" warning.
+  if (repoPath) {
+    const found = await discoverViteConfig(repoPath);
+    if (found) {
+      const content = await tryReadFile(found.path);
+      if (content != null) return { ...found, content };
     }
   }
   return null;

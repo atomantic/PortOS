@@ -1,8 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, mkdir, writeFile, rm } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import {
   parseAllowedHosts,
   hostIsAllowed,
-  rewriteAllowedHosts
+  rewriteAllowedHosts,
+  findViteConfig,
+  checkViteHost
 } from './viteAllowedHosts.js';
 
 describe('parseAllowedHosts', () => {
@@ -154,5 +159,62 @@ export default defineConfig(({ mode }) => ({
   it('bails when it cannot find a config object', () => {
     const out = rewriteAllowedHosts('const x = 1; module.exports = x;');
     expect(out.ok).toBe(false);
+  });
+});
+
+describe('findViteConfig', () => {
+  let repo;
+  const ALLOW_ALL = `import { defineConfig } from 'vite';
+export default defineConfig({ server: { allowedHosts: true } });`;
+
+  beforeEach(async () => {
+    repo = await mkdtemp(join(tmpdir(), 'vite-cfg-'));
+  });
+  afterEach(async () => {
+    await rm(repo, { recursive: true, force: true });
+  });
+
+  it('finds a config at the repo root', async () => {
+    await writeFile(join(repo, 'vite.config.js'), ALLOW_ALL);
+    const cfg = await findViteConfig(repo);
+    expect(cfg?.filename).toBe('vite.config.js');
+    expect(cfg?.dir).toBe(repo);
+  });
+
+  it('finds a config in an unlisted subdir via recursive fallback (critical-mass admin/)', async () => {
+    // `admin` is the critical-mass Vite client dir — the false-negative that
+    // produced a bogus "no vite.config was found" warning.
+    await mkdir(join(repo, 'admin'), { recursive: true });
+    await writeFile(join(repo, 'admin', 'vite.config.js'), ALLOW_ALL);
+    const cfg = await findViteConfig(repo);
+    expect(cfg?.path).toBe(join(repo, 'admin', 'vite.config.js'));
+  });
+
+  it('finds a config nested two levels deep', async () => {
+    await mkdir(join(repo, 'packages', 'dashboard'), { recursive: true });
+    await writeFile(join(repo, 'packages', 'dashboard', 'vite.config.ts'), ALLOW_ALL);
+    const cfg = await findViteConfig(repo);
+    expect(cfg?.path).toBe(join(repo, 'packages', 'dashboard', 'vite.config.ts'));
+  });
+
+  it('ignores configs inside node_modules', async () => {
+    await mkdir(join(repo, 'node_modules', 'some-dep'), { recursive: true });
+    await writeFile(join(repo, 'node_modules', 'some-dep', 'vite.config.js'), ALLOW_ALL);
+    const cfg = await findViteConfig(repo);
+    expect(cfg).toBeNull();
+  });
+
+  it('returns null when no config exists', async () => {
+    const cfg = await findViteConfig(repo);
+    expect(cfg).toBeNull();
+  });
+
+  it('reports host allowed for an admin/ config that allows all hosts', async () => {
+    await mkdir(join(repo, 'admin'), { recursive: true });
+    await writeFile(join(repo, 'admin', 'vite.config.js'), ALLOW_ALL);
+    const status = await checkViteHost(repo, 'void.taile8179.ts.net');
+    expect(status.hasViteConfig).toBe(true);
+    expect(status.allowsAll).toBe(true);
+    expect(status.hostAllowed).toBe(true);
   });
 });
