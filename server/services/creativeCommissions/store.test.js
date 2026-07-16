@@ -1,0 +1,127 @@
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+// In-memory collectionStore so CRUD is exercised without touching the filesystem.
+const records = new Map();
+const makeMemStore = () => ({
+  loadAll: async () => [...records.values()],
+  loadOne: async (id) => records.get(id) || null,
+  saveOne: async (id, rec) => { records.set(id, rec); },
+  saveOneNow: async (id, rec) => { records.set(id, rec); },
+  deleteOne: async (id) => { records.delete(id); },
+  saveTypeIndex: async () => {},
+  queueRecordWrite: async (_id, fn) => fn(),
+});
+vi.mock('../../lib/collectionStore.js', () => ({ createCollectionStore: () => makeMemStore() }));
+vi.mock('../../lib/fileUtils.js', () => ({ PATHS: { data: '/tmp/portos-test-data' } }));
+
+const {
+  sanitizeCommission,
+  assertValidSchedule,
+  createCommission,
+  updateCommission,
+  deleteCommission,
+  getCommission,
+  recordCommissionRun,
+  ERR_VALIDATION,
+  ERR_NOT_FOUND,
+} = await import('./store.js');
+
+beforeEach(() => records.clear());
+
+const validInput = () => ({
+  name: 'Nightly Surreal',
+  enabled: true,
+  targetAbility: 'video',
+  brief: { intent: 'surreal', styleSpec: 'flat', constraints: { universeId: 'u-1' }, seedRefs: [] },
+  schedule: { kind: 'DAILY', atLocalTime: '02:00', timezone: null },
+  generation: { quality: 'high', aspectRatio: '9:16', targetDurationSeconds: 20 },
+  feedbackWindow: 3,
+});
+
+describe('sanitizeCommission', () => {
+  it('drops a null / id-less record', () => {
+    expect(sanitizeCommission(null)).toBeNull();
+    expect(sanitizeCommission({ name: 'no id' })).toBeNull();
+  });
+
+  it('normalizes a partial record to the canonical shape', () => {
+    const rec = sanitizeCommission({ id: 'c1' });
+    expect(rec.name).toBe('Untitled Commission');
+    expect(rec.enabled).toBe(true);
+    expect(rec.targetAbility).toBe('video');
+    expect(rec.brief).toMatchObject({ intent: '', styleSpec: '', seedRefs: [] });
+    expect(rec.generation).toMatchObject({ quality: 'standard', aspectRatio: '16:9', targetDurationSeconds: 10 });
+    expect(rec.runs).toEqual([]);
+    expect(rec.feedback).toEqual([]);
+  });
+
+  it('caps runs to the last MAX_PERSISTED_RUNS', () => {
+    const runs = Array.from({ length: 80 }, (_, i) => ({ id: `run-${i}` }));
+    const rec = sanitizeCommission({ id: 'c1', runs });
+    expect(rec.runs).toHaveLength(50);
+    expect(rec.runs[0].id).toBe('run-30');
+  });
+});
+
+describe('assertValidSchedule', () => {
+  it('returns the derived cron for a valid schedule', () => {
+    expect(assertValidSchedule({ kind: 'DAILY', atLocalTime: '02:00' })).toBe('0 2 * * *');
+  });
+
+  it('throws ERR_VALIDATION for an underivable/invalid schedule', () => {
+    expect(() => assertValidSchedule({ kind: 'DAILY' })).toThrow();
+    try { assertValidSchedule({ kind: 'CUSTOM', cron: 'not a cron' }); }
+    catch (e) { expect(e.code).toBe(ERR_VALIDATION); }
+  });
+});
+
+describe('createCommission', () => {
+  it('mints an id, sanitizes, and persists', async () => {
+    const rec = await createCommission(validInput());
+    expect(rec.id).toMatch(/^commission-/);
+    expect(rec.name).toBe('Nightly Surreal');
+    expect(rec.generation.quality).toBe('high');
+    expect(rec.brief.constraints).toEqual({ universeId: 'u-1' });
+    expect(records.get(rec.id)).toEqual(rec);
+  });
+
+  it('rejects an invalid schedule before persisting', async () => {
+    await expect(createCommission({ ...validInput(), schedule: { kind: 'DAILY' } })).rejects.toThrow();
+    expect(records.size).toBe(0);
+  });
+});
+
+describe('updateCommission', () => {
+  it('deep-merges a partial brief without wiping other fields', async () => {
+    const created = await createCommission(validInput());
+    const updated = await updateCommission(created.id, { brief: { intent: 'new intent' } });
+    expect(updated.brief.intent).toBe('new intent');
+    expect(updated.brief.styleSpec).toBe('flat'); // preserved
+    expect(updated.createdAt).toBe(created.createdAt);
+  });
+
+  it('throws NOT_FOUND for an unknown id', async () => {
+    try { await updateCommission('nope', { enabled: false }); }
+    catch (e) { expect(e.code).toBe(ERR_NOT_FOUND); }
+  });
+});
+
+describe('recordCommissionRun', () => {
+  it('appends a run and caps history', async () => {
+    const created = await createCommission(validInput());
+    await recordCommissionRun(created.id, { status: 'started', projectId: 'cd-1', promptUsed: 'g' });
+    const after = await getCommission(created.id);
+    expect(after.runs).toHaveLength(1);
+    expect(after.runs[0]).toMatchObject({ status: 'started', projectId: 'cd-1', promptUsed: 'g' });
+    expect(after.runs[0].id).toMatch(/^run-/);
+  });
+});
+
+describe('deleteCommission', () => {
+  it('removes the record', async () => {
+    const created = await createCommission(validInput());
+    const r = await deleteCommission(created.id);
+    expect(r).toEqual({ id: created.id, deleted: true });
+    expect(records.has(created.id)).toBe(false);
+  });
+});

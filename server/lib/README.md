@@ -30,6 +30,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `brainValidation.js` | Brain/memory route schemas (search, ingest, edit). |
 | `catalogValidation.js` | Creative ingredients catalog route schemas (scraps, ingredients, links, relations, tags, revisions, sync envelope). |
 | `cosValidation.js` | Chief-of-Staff task/job/loop/learning schemas, the Review-Loop reviewer vocabulary + helpers (`normalizeReviewers`/`buildReviewWithArgs`), the Code-Review settings slice, and the task-metadata sanitizer. |
+| `creativeCommissionValidation.js` | Creative Commission (Autonomous Creation Engine) create/update + brief/schedule/generation schemas. |
 | `creativeDirectorValidation.js` | Creative Director project/treatment/scene + Create-Suite importer schemas. |
 | `digitalTwinValidation.js` | Digital twin document/category schemas. |
 | `genomeValidation.js` | Genome upload + search schemas. |

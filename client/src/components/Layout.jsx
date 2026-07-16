@@ -218,6 +218,7 @@ const navItems = [
     children: [
       { to: '/authors', label: 'Authors', icon: FilePen },
       { to: '/catalog', label: 'Catalog', icon: Sparkles },
+      { to: '/creative-commission', label: 'Creative Commissions', icon: CalendarClock },
       { to: '/creative-director', label: 'Creative Director', icon: Clapperboard },
       { to: '/pipeline/editorial-checks', label: 'Editorial Checks', icon: ListChecks },
       { to: '/importer', label: 'Importer', icon: FileInput },

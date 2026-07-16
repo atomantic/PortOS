@@ -70,6 +70,7 @@ const VideoTimeline = lazyWithReload(() => import('./pages/VideoTimeline'));
 const VideoTimelineEditor = lazyWithReload(() => import('./pages/VideoTimelineEditor'));
 const CreativeDirector = lazyWithReload(() => import('./pages/CreativeDirector'));
 const CreativeDirectorDetail = lazyWithReload(() => import('./pages/CreativeDirectorDetail'));
+const CreativeCommissions = lazyWithReload(() => import('./pages/CreativeCommissions'));
 const MusicVideo = lazyWithReload(() => import('./pages/MusicVideo'));
 const MoodBoards = lazyWithReload(() => import('./pages/MoodBoards'));
 const MoodBoardDetail = lazyWithReload(() => import('./pages/MoodBoardDetail'));
@@ -345,6 +346,9 @@ export default function App() {
           <Route path="creative-director" element={<CreativeDirector />} />
           <Route path="creative-director/:id" element={<CreativeDirectorOverviewRedirect />} />
           <Route path="creative-director/:id/:tab" element={<CreativeDirectorDetail />} />
+          <Route path="creative-commission" element={<CreativeCommissions />} />
+          <Route path="creative-commission/new" element={<CreativeCommissions />} />
+          <Route path="creative-commission/:id" element={<CreativeCommissions />} />
           <Route path="image-gen" element={<RedirectWithSearch to="/media/image" />} />
           <Route path="video-gen" element={<RedirectWithSearch to="/media/video" />} />
           <Route path="media-history" element={<RedirectWithSearch to="/media/history" />} />

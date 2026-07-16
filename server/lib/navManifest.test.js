@@ -314,6 +314,7 @@ const NAV_COVERAGE_OPT_OUT = new Map([
   ['/login', 'auth gate — surfaced only when settings.secrets.auth is enabled, reached via 401 redirect'],
   ['/songbook/import', 'import-song form, reached via the "Import" button on /songbook'],
   ['/universes/new', 'create-mode sentinel for the Universe Builder editor'],
+  ['/creative-commission/new', 'create-mode sentinel for the Creative Commission drawer'],
 ]);
 
 // Element wrappers that forward to another route rather than render a page. A
