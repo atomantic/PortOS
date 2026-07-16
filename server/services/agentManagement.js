@@ -32,43 +32,38 @@ const ORPHAN_RETRY_COOLDOWN_MS = 30 * 60 * 1000;
 
 /**
  * Shared runner-mode termination path for terminateAgent and killAgent.
- * Calls runnerFn, marks the task blocked, and cleans up.
+ * Calls runnerFn, marks the task blocked, and cleans up. Returns the runner
+ * result shape (`{ success, error? }`) — callers decide whether a failure
+ * throws (killAgent, whose route surfaces status) or is returned for internal
+ * orchestration to inspect (terminateAgent, whose route is fire-and-forget).
  */
 async function terminateRunnerAgent(agentId, runnerFn, errorMessage, blockedReason) {
   const agentInfo = runnerAgents.get(agentId);
   if (agentInfo?.initializationTimeout) clearTimeout(agentInfo.initializationTimeout);
   const result = await runnerFn(agentId).catch(err => ({ success: false, error: err.message }));
-  // The agent is present in runnerAgents, so a failure here is an operational
-  // runner-RPC error (not a missing agent) — surface it as a 500 ServerError
-  // so the route renders the standard envelope instead of string-matching the
-  // result shape into a misleading 404.
-  if (!result.success) {
-    throw new ServerError(result.error || 'Failed to terminate runner agent', {
-      status: 500,
-      code: 'AGENT_TERMINATE_FAILED',
-    });
+  if (result.success) {
+    // Drain + drop this agent's runner output batcher before the terminal
+    // record so pending ~250ms-batched output lands first, and the Map entry
+    // doesn't leak if the runner never emits a later completion event. Dynamic
+    // import avoids a static cycle (subAgentSpawner statically re-exports this
+    // module). flushRunnerOutputBatcher is a no-op if no batcher exists.
+    const { flushRunnerOutputBatcher } = await import('./subAgentSpawner.js');
+    await flushRunnerOutputBatcher(agentId);
+    await completeAgent(agentId, { success: false, error: errorMessage });
+    const task = agentInfo?.task;
+    if (task) {
+      await updateTask(task.id, {
+        status: 'blocked',
+        metadata: {
+          ...task.metadata,
+          blockedReason,
+          blockedCategory: 'user-terminated',
+          blockedAt: new Date().toISOString()
+        }
+      }, task.taskType || 'user');
+    }
+    runnerAgents.delete(agentId);
   }
-  // Drain + drop this agent's runner output batcher before the terminal
-  // record so pending ~250ms-batched output lands first, and the Map entry
-  // doesn't leak if the runner never emits a later completion event. Dynamic
-  // import avoids a static cycle (subAgentSpawner statically re-exports this
-  // module). flushRunnerOutputBatcher is a no-op if no batcher exists.
-  const { flushRunnerOutputBatcher } = await import('./subAgentSpawner.js');
-  await flushRunnerOutputBatcher(agentId);
-  await completeAgent(agentId, { success: false, error: errorMessage });
-  const task = agentInfo?.task;
-  if (task) {
-    await updateTask(task.id, {
-      status: 'blocked',
-      metadata: {
-        ...task.metadata,
-        blockedReason,
-        blockedCategory: 'user-terminated',
-        blockedAt: new Date().toISOString()
-      }
-    }, task.taskType || 'user');
-  }
-  runnerAgents.delete(agentId);
   return result;
 }
 
@@ -197,8 +192,14 @@ export async function terminateAgent(agentId) {
   // Direct mode
   const agent = activeAgents.get(agentId);
 
+  // terminateAgent stays result-shaped (not a throw): its route path is
+  // fire-and-forget (cosAgentLifecycle emits `agent:terminate` and returns
+  // `{ success: true }` before termination runs), and its other callers are
+  // internal orchestration (the event handler, killAllAgents' bulk sweep) that
+  // inspect the result rather than a thrown ServerError. Only pauseAgent and
+  // killAgent — whose routes surface an HTTP status — throw (issue #2534).
   if (!agent) {
-    throw new ServerError('Agent not found or not running', { status: 404, code: 'NOT_FOUND' });
+    return { success: false, error: 'Agent not found or not running' };
   }
 
   // Track as user-terminated so the close handler doesn't re-queue
@@ -284,7 +285,18 @@ export function getActiveAgents() {
 export async function killAgent(agentId) {
   // Check if agent is in runner mode
   if (runnerAgents.has(agentId)) {
-    return terminateRunnerAgent(agentId, killAgentViaRunner, 'Agent force killed by user (SIGKILL)', 'Force killed by user');
+    const result = await terminateRunnerAgent(agentId, killAgentViaRunner, 'Agent force killed by user (SIGKILL)', 'Force killed by user');
+    // The agent was present in runnerAgents, so a failure here is an
+    // operational runner-RPC error (not a missing agent) — surface it as a
+    // 500 so the kill route renders the standard envelope instead of the old
+    // result-shape 404 string-match (issue #2534).
+    if (!result.success) {
+      throw new ServerError(result.error || 'Failed to kill runner agent', {
+        status: 500,
+        code: 'AGENT_KILL_FAILED',
+      });
+    }
+    return result;
   }
 
   // Direct mode
@@ -425,10 +437,7 @@ export async function killAllAgents() {
   const directIds = Array.from(activeAgents.keys());
   const runnerIds = Array.from(runnerAgents.keys());
 
-  // Best-effort bulk cleanup: terminateAgent now throws (404/500) on a missing
-  // or failed agent, so use allSettled — one agent that has already exited must
-  // not abort termination of the rest.
-  await Promise.allSettled([...directIds, ...runnerIds].map(agentId => terminateAgent(agentId)));
+  await Promise.all([...directIds, ...runnerIds].map(agentId => terminateAgent(agentId)));
   return { killed: directIds.length + runnerIds.length };
 }
 

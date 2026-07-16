@@ -221,12 +221,7 @@ async function runInitSpawner() {
   });
 
   cosEvents.on('agent:terminate', async (agentId) => {
-    // terminateAgent throws (404/500) when the agent is already gone or the
-    // runner call fails; this runs outside the request lifecycle, so swallow
-    // and log rather than letting the rejection escape the event handler.
-    await terminateAgent(agentId).catch((err) => {
-      emitLog('error', `❌ Failed to terminate agent ${agentId}: ${err.message}`, { agentId });
-    });
+    await terminateAgent(agentId);
   });
 
   // Clean up orphaned agents after a short delay (let other services finish init).
