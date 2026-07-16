@@ -85,12 +85,12 @@ export default function ChiefOfStaff() {
   );
   const [activeAgentMeta, setActiveAgentMeta] = useState(null);
   const [learningSummary, setLearningSummary] = useState(null);
-  // Bumped on every task-list mutation so the ActionableInsightsBanner (a
-  // decoupled sibling that owns its own insights fetch) re-derives "N blocked
-  // tasks" etc. immediately instead of lingering until its 60s poll. This covers
-  // only the TasksTab mutation path; socket/health-driven insight changes still
-  // rely on the banner's own poll.
-  const [insightsRefreshKey, setInsightsRefreshKey] = useState(0);
+  // Actionable insights (blocked/approval/health counts) are fetched here in
+  // fetchData and passed to ActionableInsightsBanner as a prop, so every trigger
+  // that refetches CoS data — task mutations, socket-driven changes, health
+  // checks, the 30s poll — refreshes the banner without a separate signal. null
+  // until the first fetch resolves; preserved across transient fetch failures.
+  const [insights, setInsights] = useState(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
   const tabsRef = useRef(null);
@@ -126,14 +126,17 @@ export default function ChiefOfStaff() {
   }, []);
 
   const fetchData = useCallback(async () => {
-    const [statusData, tasksData, agentsData, healthData, providersData, appsData, learningSummaryData] = await Promise.all([
+    const [statusData, tasksData, agentsData, healthData, providersData, appsData, learningSummaryData, insightsData] = await Promise.all([
       api.getCosStatus().catch(() => null),
       api.getCosTasks().catch(() => ({ user: null, cos: null })),
       api.getCosAgents().catch(() => []),
       api.getCosHealth().catch(() => null),
       api.getProviders().catch(() => ({ providers: [] })),
       api.getApps().catch(() => []),
-      api.getCosLearningSummary().catch(() => null)
+      api.getCosLearningSummary().catch(() => null),
+      // `silent: true` keeps transient poll blips quiet, matching the banner's
+      // retired 60s poll; `.catch(() => null)` → preserve last-good below.
+      api.getCosActionableInsights({ silent: true }).catch(() => null)
     ]);
     setStatus(statusData);
     setTasks(tasksData);
@@ -143,6 +146,10 @@ export default function ChiefOfStaff() {
     // Filter out PortOS Autofixer (it's part of PortOS project)
     setApps(appsData.filter(a => a.id !== 'portos-autofixer'));
     setLearningSummary(learningSummaryData);
+    // Apply a real insights payload (including a legitimately-empty []); a null
+    // from a failed/transient fetch preserves the last-good array so the banner
+    // doesn't flicker empty on a blip.
+    if (insightsData?.insights) setInsights(insightsData.insights);
     setLoading(false);
 
     const newState = deriveAgentState(statusData, agentsData, healthData);
@@ -155,15 +162,16 @@ export default function ChiefOfStaff() {
     setActiveAgentMeta(runningAgent?.metadata || null);
   }, [deriveAgentState]);
 
-  // Task-mutation refresh: refetch the task list AND signal the insights banner
-  // to re-derive. Deleting a blocked task, for example, must drop it from both
-  // the list and the banner's "N blocked tasks" alert — the banner owns its own
-  // fetch, so bumping the signal is how the delete reaches it. The background
-  // 30s poll calls fetchData directly (not this), so it doesn't over-refetch.
-  const refreshTasks = useCallback(() => {
-    setInsightsRefreshKey(v => v + 1);
-    return fetchData();
-  }, [fetchData]);
+  // Targeted insights-only refresh for parent state changes that DON'T route
+  // through fetchData — health checks and socket-driven task changes update
+  // `health`/`tasks` locally (to keep their own status messaging / avoid a full
+  // refetch) rather than calling fetchData. The banner's server-derived counts
+  // (blocked, health issues) would otherwise lag those until the 30s poll, so we
+  // re-pull just insights here. Same last-good/silent semantics as fetchData.
+  const refreshInsights = useCallback(async () => {
+    const insightsData = await api.getCosActionableInsights({ silent: true }).catch(() => null);
+    if (insightsData?.insights) setInsights(insightsData.insights);
+  }, []);
 
   // Redirect unknown tab IDs to the default tab — `activeTab !== tab` only
   // when the param failed validation and fell back.
@@ -204,6 +212,9 @@ export default function ChiefOfStaff() {
 
     const handleTasksUserChanged = (data) => {
       setTasks(prev => ({ ...prev, user: data }));
+      // Socket-driven task changes (daemon status flips, blocks/unblocks) don't
+      // go through fetchData, so refresh the banner's blocked/approval counts.
+      refreshInsights();
     };
     socket.on('cos:tasks:user:changed', handleTasksUserChanged);
 
@@ -265,6 +276,9 @@ export default function ChiefOfStaff() {
 
     const handleHealthCheck = (data) => {
       setHealth({ lastCheck: data.metrics?.timestamp, issues: data.issues });
+      // Health feeds the banner's "N health issues" insight; refresh it so a
+      // newly-found (or cleared) issue reflects immediately, not on the 30s poll.
+      refreshInsights();
       if (data.issues?.length > 0) {
         setAgentState('investigating');
         setStatusMessage(`Health check: ${data.issues.length} issue${data.issues.length > 1 ? 's' : ''} found`);
@@ -313,7 +327,7 @@ export default function ChiefOfStaff() {
       socket.off('cos:log', handleCosLog);
       socket.off('apps:changed', handleAppsChanged);
     };
-  }, [socket, fetchData]);
+  }, [socket, fetchData, refreshInsights]);
 
   const handleStart = async () => {
     const result = await api.startCos({ silent: true }).catch(err => {
@@ -398,6 +412,9 @@ export default function ChiefOfStaff() {
     setSpeaking(false);
     if (result) {
       setHealth({ lastCheck: result.metrics?.timestamp, issues: result.issues });
+      // Refresh the banner's health-issue count without a full fetchData (which
+      // would clobber the health-specific status message set below).
+      refreshInsights();
       toast.success('Health check complete');
       if (result.issues?.length > 0) {
         setStatusMessage(`Health: ${result.issues.length} issue${result.issues.length > 1 ? 's' : ''} detected`);
@@ -872,9 +889,9 @@ export default function ChiefOfStaff() {
           <div role="tabpanel" id="tabpanel-tasks" aria-labelledby="tab-tasks">
             {/* Tasks-only widgets live under the tab nav so they don't stretch above
                 tabs that don't surface this data. */}
-            <ActionableInsightsBanner onTaskUnblocked={handleTaskUnblocked} refreshKey={insightsRefreshKey} />
+            <ActionableInsightsBanner insights={insights} onTaskUnblocked={handleTaskUnblocked} onRefresh={fetchData} />
             <QuickSummary />
-            <TasksTab tasks={tasks} onRefresh={refreshTasks} providers={providers} apps={apps} />
+            <TasksTab tasks={tasks} onRefresh={fetchData} providers={providers} apps={apps} />
           </div>
         )}
         {activeTab === 'agents' && (

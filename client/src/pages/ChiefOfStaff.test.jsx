@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
 // Regression coverage for #2519 — the page-level Force Evaluate handler must
@@ -13,6 +13,7 @@ const api = vi.hoisted(() => ({
   getProviders: vi.fn(),
   getApps: vi.fn(),
   getCosLearningSummary: vi.fn(),
+  getCosActionableInsights: vi.fn(),
   getCosBudgetUsage: vi.fn(),
   forceCosEvaluate: vi.fn(),
   updateCosConfig: vi.fn(),
@@ -59,6 +60,7 @@ beforeEach(() => {
   api.getProviders.mockResolvedValue({ providers: [] });
   api.getApps.mockResolvedValue([]);
   api.getCosLearningSummary.mockResolvedValue(null);
+  api.getCosActionableInsights.mockResolvedValue({ insights: [] });
   api.getCosBudgetUsage.mockResolvedValue({ usage: {} });
 });
 
@@ -99,5 +101,52 @@ describe('ChiefOfStaff handleForceEvaluate', () => {
     await waitFor(() => expect(screen.queryAllByText('Evaluating tasks...').length).toBeGreaterThan(0));
     // Must pass { silent: true } so the custom catch is the only error toast.
     expect(api.forceCosEvaluate).toHaveBeenCalledWith({ silent: true });
+  });
+});
+
+// #2654: the banner is now prop-driven, and paths that don't go through
+// fetchData (socket-driven health checks / task changes) must still refresh the
+// server-derived insight counts so the banner doesn't lag until the 30s poll.
+describe('ChiefOfStaff insight freshness (#2654)', () => {
+  const getSocketHandler = (event) => {
+    const entry = socketStub.on.mock.calls.find(([evt]) => evt === event);
+    return entry?.[1];
+  };
+
+  it('refreshes actionable insights when a socket health-check arrives', async () => {
+    renderConfigTab();
+    // The initial fetchData pulls insights once; wait for it before firing.
+    await waitFor(() => expect(api.getCosActionableInsights).toHaveBeenCalled());
+    const before = api.getCosActionableInsights.mock.calls.length;
+
+    const handleHealthCheck = getSocketHandler('cos:health:check');
+    expect(handleHealthCheck).toBeTypeOf('function');
+    // Empty issues avoids the >0 branch's setTimeout(setSpeaking) so no state
+    // update escapes act; refreshInsights fires unconditionally either way.
+    await act(async () => {
+      handleHealthCheck({ metrics: { timestamp: 1 }, issues: [] });
+    });
+
+    // Health doesn't call fetchData (that would clobber its status message) — it
+    // re-pulls just insights, so the call count must advance past the initial.
+    await waitFor(() =>
+      expect(api.getCosActionableInsights.mock.calls.length).toBeGreaterThan(before),
+    );
+  });
+
+  it('refreshes actionable insights on a socket task change', async () => {
+    renderConfigTab();
+    await waitFor(() => expect(api.getCosActionableInsights).toHaveBeenCalled());
+    const before = api.getCosActionableInsights.mock.calls.length;
+
+    const handleTasksUserChanged = getSocketHandler('cos:tasks:user:changed');
+    expect(handleTasksUserChanged).toBeTypeOf('function');
+    await act(async () => {
+      handleTasksUserChanged({ tasks: [], grouped: {} });
+    });
+
+    await waitFor(() =>
+      expect(api.getCosActionableInsights.mock.calls.length).toBeGreaterThan(before),
+    );
   });
 });
