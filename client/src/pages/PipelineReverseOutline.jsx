@@ -41,8 +41,8 @@ export default function PipelineReverseOutline() {
     let canceled = false;
     setLoading(true);
     Promise.all([
-      getPipelineSeries(seriesId),
-      getReverseOutline(seriesId),
+      getPipelineSeries(seriesId, { silent: true }),
+      getReverseOutline(seriesId, { silent: true }),
       getReverseOutlineStatus(seriesId).catch(() => ({ active: false })),
     ])
       .then(([s, o, status]) => {
