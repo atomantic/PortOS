@@ -55,10 +55,17 @@ async function resolveTimezone(rootDir) {
       new Intl.DateTimeFormat('en-CA', { timeZone: tz });
       return tz;
     } catch {
-      // Invalid configured tz — fall through to the process default.
+      // Invalid configured tz — fall through to the guaranteed fallback below.
     }
   }
-  return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  // Fall back to UTC, NOT the host's system timezone. The runtime server always
+  // runs under `TZ=UTC` (ecosystem.config.cjs), so getUserTimezone()'s own
+  // fallback for an unconfigured install resolves to UTC — and this migration
+  // must match it. `npm run update` can execute this migration OUTSIDE PM2 (where
+  // the host tz would otherwise leak in via Intl's system default) and then
+  // restart under TZ=UTC; keying off the host tz here would permanently rewrite
+  // UTC-dated history that the UTC runtime then reads as local (issue #2681 r3).
+  return 'UTC';
 }
 
 // `YYYY-MM-DD` for a UTC instant, evaluated in `timezone`. `en-CA` formats

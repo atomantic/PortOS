@@ -6,6 +6,8 @@ import { FormField } from '../../ui/FormField';
 import { isApiProvider } from '../../../utils/providers';
 import { DOMAINS, DRILL_TO_DOMAIN, DRILL_LABELS, computeDomainAverages, computeGoalProgress } from './constants';
 import { streakGlyph } from '../../../lib/streakGlyph.js';
+import useUserTimezone from '../../../hooks/useUserTimezone.js';
+import { todayKeyInTimezone } from '../../../utils/timezone.js';
 
 // Canonical domain visiting order for interleaved "Full POST" composition
 // (issue #2100): alternate domains — math → cognitive → memory → verbal — so a
@@ -67,6 +69,11 @@ export function buildCleanTags(tags) {
 }
 
 export default function PostSessionLauncher({ config, recentSessions, stats, statsWeek, onStart, onViewHistory, onViewConfig, onViewMemory, onViewMorse }) {
+  // Resolve "today" in the user's CONFIGURED timezone so client-side day matching
+  // (completed-today, today's minutes) agrees with the server, which stamps and
+  // windows POST records on the configured local day (issue #2681). Deriving it
+  // from `new Date().toISOString()` (UTC) would disagree near local/UTC midnight.
+  const timezone = useUserTimezone();
   const [tags, setTags] = useState({ sleep: '', caffeine: '', stress: '' });
   const [mode, setMode] = useState('test'); // 'test' | 'train'
   const [providers, setProviders] = useState([]);
@@ -117,19 +124,19 @@ export default function PostSessionLauncher({ config, recentSessions, stats, sta
     getPostProgress(1, { silent: true })
       .then(p => {
         if (cancelled) return;
-        const t = new Date().toISOString().split('T')[0];
+        const t = todayKeyInTimezone(timezone);
         const todayBucket = (p?.series?.byDay || []).find(d => d.date === t);
         setTodayMinutesTotal(todayBucket ? todayBucket.minutes : 0);
       })
       .catch(() => { if (!cancelled) setTodayMinutesTotal(null); });
     return () => { cancelled = true; };
-  }, [config?.goals?.dailyMinutes]);
+  }, [config?.goals?.dailyMinutes, timezone]);
 
   if (!config) {
     return <div className="text-gray-500">Loading configuration...</div>;
   }
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = todayKeyInTimezone(timezone);
   const todaySession = recentSessions?.find(s => s.date === today);
   const lastThree = (recentSessions || []).slice(-3).reverse();
 

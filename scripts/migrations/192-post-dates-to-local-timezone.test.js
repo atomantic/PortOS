@@ -126,23 +126,17 @@ describe('migration 192 — normalize POST dates to the user local timezone', ()
     expect(readJson(sessionsPath)).toEqual(afterFirst);
   });
 
-  it('falls back to the process timezone when none is configured', async () => {
-    // No settings file → resolves to the runner's own system timezone. Assert the
-    // outcome relative to THAT tz so the test is deterministic on any runner: a
-    // UTC runner short-circuits (no rewrite); a non-UTC runner re-derives the day.
-    const sysTz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-    const instant = '2026-07-16T05:00:00.000Z';
-    writeJson(sessionsPath, { sessions: [{ id: 's1', date: '2026-07-16', completedAt: instant }] });
+  it('falls back to UTC (never the host tz) when none is configured, so it is a no-op on any runner', async () => {
+    // No settings file → resolves to UTC, matching the runtime's own TZ=UTC
+    // fallback. This must hold regardless of the runner's system timezone: the
+    // migration can run outside PM2 (via `npm run update`) on a non-UTC host, and
+    // keying off the host tz would rewrite history the UTC runtime reads as local.
+    writeJson(sessionsPath, {
+      sessions: [{ id: 's1', date: '2026-07-16', startedAt: '2026-07-16T05:00:00.000Z' }],
+    });
     const result = await migration.up({ rootDir });
-    if (sysTz === 'UTC' || sysTz === 'Etc/UTC') {
-      expect(result).toEqual({ updated: 0, reason: 'utc-timezone' });
-      expect(readJson(sessionsPath).sessions[0].date).toBe('2026-07-16');
-    } else {
-      const expected = new Intl.DateTimeFormat('en-CA', {
-        timeZone: sysTz, year: 'numeric', month: '2-digit', day: '2-digit',
-      }).format(new Date(instant));
-      expect(readJson(sessionsPath).sessions[0].date).toBe(expected);
-    }
+    expect(result).toEqual({ updated: 0, reason: 'utc-timezone' });
+    expect(readJson(sessionsPath).sessions[0].date).toBe('2026-07-16');
   });
 
   it('skips a malformed data file without throwing', async () => {

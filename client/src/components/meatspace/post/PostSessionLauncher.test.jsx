@@ -10,6 +10,8 @@ vi.mock('../../../services/api', () => ({
   getPostRecommendations: vi.fn().mockResolvedValue({ recommendations: [] }),
   getMorseProgress: vi.fn().mockResolvedValue({ settings: { wpm: 18, farnsworthWpm: 12 } }),
   getPostProgress: vi.fn().mockResolvedValue({ series: { byDay: [] } }),
+  // useUserTimezone (via the today day key) reads getSettings; pin to UTC.
+  getSettings: vi.fn().mockResolvedValue({ timezone: 'UTC' }),
 }));
 
 import PostSessionLauncher, { buildCleanTags, cognitiveSummary, interleaveByDomain } from './PostSessionLauncher';

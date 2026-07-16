@@ -6,6 +6,8 @@ import {
 } from 'recharts';
 import { getPostSessions, getPostStats } from '../../../services/api';
 import useChartColors from '../../../hooks/useChartColors.js';
+import useUserTimezone from '../../../hooks/useUserTimezone.js';
+import { dayKeyInTimezone } from '../../../utils/timezone.js';
 import { DRILL_TO_DOMAIN, DRILL_LABELS, domainLabel } from './constants';
 
 const RANGES = [
@@ -33,13 +35,18 @@ const scoreColorClass = (score) =>
 export default function PostHistory({ onBack }) {
   const navigate = useNavigate();
   const chartColors = useChartColors();
+  // Configured-timezone day key for the range floor, so the window agrees with
+  // the server's local-day-stamped session dates (issue #2681).
+  const timezone = useUserTimezone();
   const [sessions, setSessions] = useState([]);
   const [stats, setStats] = useState(null);
   const [range, setRange] = useState(30);
 
   const loadData = useCallback(async () => {
+    // Floor the window at the local day `range` days back (configured tz), so it
+    // lines up with the server's local-day session dates rather than a UTC bound.
     const from = range > 0
-      ? new Date(Date.now() - range * 86400000).toISOString().split('T')[0]
+      ? dayKeyInTimezone(timezone, new Date(Date.now() - range * 86400000))
       : undefined;
     const [s, st] = await Promise.all([
       getPostSessions(from).catch(err => { console.warn('⚠️ Failed to load POST sessions: ' + err.message); return []; }),
@@ -47,7 +54,7 @@ export default function PostHistory({ onBack }) {
     ]);
     setSessions((s || []).slice().reverse());
     setStats(st);
-  }, [range]);
+  }, [range, timezone]);
 
   useEffect(() => {
     loadData();
