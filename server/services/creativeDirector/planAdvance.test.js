@@ -12,9 +12,30 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ---- pure derivation (no mocks needed) -------------------------------------
-import { deriveNextPlanAction } from './planAdvance.js';
+import { deriveNextPlanAction, lastRenderedVideoJobId } from './planAdvance.js';
 
 const step = (id, over = {}) => ({ stepId: id, toolName: 't', args: {}, dependsOn: [], status: 'pending', ...over });
+
+describe('lastRenderedVideoJobId (pure)', () => {
+  const vstep = (id, over = {}) => step(id, { toolName: 'media_enqueueVideoJob', status: 'done', ...over });
+  it('returns the jobId of the last done video-render step', () => {
+    const plan = { steps: [
+      vstep('r1', { result: { jobId: 'v1' } }),
+      step('mid', { toolName: 'pipeline_createSeries', status: 'done' }),
+      vstep('r2', { result: { jobId: 'v2' } }),
+    ] };
+    expect(lastRenderedVideoJobId(plan)).toBe('v2'); // last wins
+  });
+  it('ignores non-done video steps and non-video steps', () => {
+    expect(lastRenderedVideoJobId({ steps: [vstep('r1', { status: 'failed', result: { jobId: 'v1' } })] })).toBeNull();
+    expect(lastRenderedVideoJobId({ steps: [step('x', { toolName: 'media_enqueueImageJob', status: 'done', result: { jobId: 'i1' } })] })).toBeNull();
+  });
+  it('returns null for a video step with no jobId, empty, or missing plan', () => {
+    expect(lastRenderedVideoJobId({ steps: [vstep('r1', { result: {} })] })).toBeNull();
+    expect(lastRenderedVideoJobId({ steps: [] })).toBeNull();
+    expect(lastRenderedVideoJobId(null)).toBeNull();
+  });
+});
 
 describe('deriveNextPlanAction (pure)', () => {
   it('empty plan → { type: empty }', () => {
@@ -200,6 +221,25 @@ describe('advanceAfterPlanStepSettled — executor', () => {
     const p = read();
     expect(p.plan.steps.map((s) => s.status)).toEqual(['done', 'done']);
     expect(p.status).toBe('complete');
+  });
+
+  it('promotes the last done video-render step to finalVideoId on completion', async () => {
+    const read = makeStore(planProject([
+      step('render', { toolName: 'media_enqueueVideoJob', status: 'done', result: { jobId: 'vid-42' } }),
+    ]));
+    await advanceAfterPlanStepSettled('cd-1');
+    const p = read();
+    expect(p.status).toBe('complete');
+    expect(p.finalVideoId).toBe('vid-42'); // overview now has an artifact to show
+  });
+
+  it('does not overwrite an existing finalVideoId on re-entry', async () => {
+    const read = makeStore(planProject([
+      step('render', { toolName: 'media_enqueueVideoJob', status: 'done', result: { jobId: 'vid-new' } }),
+    ], { status: 'complete', finalVideoId: 'vid-original' }));
+    await advanceAfterPlanStepSettled('cd-1');
+    expect(read().finalVideoId).toBe('vid-original');
+    expect(mockUpdateProject).not.toHaveBeenCalled(); // already complete + set → no redundant write
   });
 
   it('records a run per step and stores an id-only result summary', async () => {

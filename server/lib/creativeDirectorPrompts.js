@@ -94,9 +94,22 @@ function buildPlanView(project, toolSpecs) {
     parametersJson: JSON.stringify(s?.function?.parameters ?? {}),
   }));
   const currentSteps = Array.isArray(project.plan?.steps) ? project.plan.steps : [];
+  // Resolved render geometry for the LOCKED preset. Surfaced so the planner's
+  // media_enqueueVideoJob steps don't guess an aspectRatio/dimensions — the
+  // server forces these onto every video render (see media.js
+  // enforceVideoRenderPreset). `width`/`height` degrade to 0 on an unknown ratio.
+  const aspect = resolveAspectDimensions(project.aspectRatio, { width: 0, height: 0 });
+  const render = {
+    aspectRatio: project.aspectRatio,
+    quality: project.quality,
+    width: aspect.width,
+    height: aspect.height,
+    targetDurationSeconds: project.targetDurationSeconds,
+  };
   return {
     project: buildProjectView(project),
     apiUrl: PORTOS_API_URL,
+    render,
     directive: {
       goal: directive.goal || '',
       hasDeliverables: deliverables.length > 0,

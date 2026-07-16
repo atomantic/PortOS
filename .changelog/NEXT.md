@@ -1,6 +1,9 @@
 # Unreleased
 
-## CoS self-learning reliability
+## Creative Director
+
+- **Commissioned videos now honor the project's locked aspect ratio** — a scheduled Creative Commission (e.g. a daily 9:16 clip) whose plan renders through `media_enqueueVideoJob` was rendering at the video worker's default 768×512 landscape box: the planner authored an `aspectRatio` string the worker doesn't read, and the project's locked preset was never resolved into the `width`/`height` the renderer actually consumes. The server now deterministically forces every directive-plan video render onto the project's locked aspect/quality/duration preset (the planner keeps ownership of prompt/style), and the `cd-plan` prompt documents the locked settings so the plan preview stays honest.
+- **A completed video commission no longer looks like it "did nothing"** — the directive-plan flow marked the project `complete` but never promoted the rendered clip to `finalVideoId`, so the Creative Director overview showed "Final video: not yet rendered" even though the render had landed in the media library. Plan completion now promotes the last rendered video to the project's final video (and backfills it on re-entry for already-complete projects).
 
 - **[issue-2620] Layered Intelligence stops re-proposing finished work** — completed plan items stay recognized as done, and proposal outcomes now distinguish merged, rejected, and abandoned instead of counting every closed issue as merged.
 - **[issue-2617] Task learning forgives fixed problems** — scheduling, model-routing, and self-diagnostics decisions now weigh recent runs instead of lifetime totals, so a task type recovers as soon as it starts succeeding again.

@@ -70,6 +70,10 @@ vi.mock('../pipeline/visualStages.js', () => ({
   refineComicPageRender: vi.fn(async () => ({ jobId: 'pgr1', variant: 'proof', pageIndex: 0 })),
 }));
 vi.mock('../mediaJobQueue/index.js', () => ({ enqueueJob: vi.fn(() => ({ jobId: 'mj1' })) }));
+// media_enqueueVideoJob reconciles render geometry against the project's locked
+// preset via a dynamic import of the CD project store — mock it so the video
+// preset-enforcement path is observable without a DB.
+vi.mock('../creativeDirector/local.js', () => ({ getProject: vi.fn(async () => null) }));
 vi.mock('../catalogDB.js', () => ({ listIngredients: vi.fn(async () => ({ items: [] })) }));
 vi.mock('../creativeDirector/autoCast.js', () => ({ suggestCastForBrief: vi.fn(async () => []) }));
 
@@ -81,6 +85,7 @@ import { generateStage } from '../pipeline/textStages.js';
 import { startSeriesAutopilot } from '../pipeline/seriesAutopilot.js';
 import { renderComicCover, renderVolumeCover, renderComicPage, refineComicPageRender } from '../pipeline/visualStages.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
+import { getProject } from '../creativeDirector/local.js';
 import {
   CREATIVE_TOOLS,
   getToolSpecs,
@@ -233,6 +238,39 @@ describe('budget charging', () => {
     await dispatchCreativeTool('media_enqueueImageJob', { params: { prompt: 'p' } }, { projectId: 'p1' });
     expect(recordDomainUsage).toHaveBeenCalledWith('cos', { actions: 1 });
     expect(enqueueJob).toHaveBeenCalledWith({ kind: 'image', params: { prompt: 'p' }, owner: 'creative-director:p1' });
+  });
+
+  it('forces a video render onto the project LOCKED aspect preset, dropping the planner-guessed aspectRatio', async () => {
+    setMode('execute');
+    // Project is locked to 9:16; the planner (wrongly) emitted a 16:9 string and
+    // no width/height — the exact shape that produced a 768×512 landscape render.
+    getProject.mockResolvedValueOnce({
+      id: 'p1', aspectRatio: '9:16', quality: 'high', targetDurationSeconds: 10,
+    });
+    await dispatchCreativeTool(
+      'media_enqueueVideoJob',
+      { params: { prompt: 'a surreal hallway', aspectRatio: '16:9', durationSeconds: 6 } },
+      { projectId: 'p1' },
+    );
+    const enqueued = enqueueJob.mock.calls.at(-1)[0];
+    expect(enqueued.kind).toBe('video');
+    // 9:16 preset → 432×768 (portrait), NOT the worker's 768×512 default.
+    expect(enqueued.params.width).toBe(432);
+    expect(enqueued.params.height).toBe(768);
+    // The worker-ignored aspectRatio key is stripped so it can't mislead.
+    expect(enqueued.params).not.toHaveProperty('aspectRatio');
+    // Creative content the planner owns is preserved.
+    expect(enqueued.params.prompt).toBe('a surreal hallway');
+    // A shorter per-beat duration wins for numFrames (6s × 30fps → 180, /8-rounded).
+    expect(enqueued.params.numFrames).toBe(184);
+    expect(enqueued.params.fps).toBe(30); // high quality
+  });
+
+  it('leaves video params untouched when there is no owning project (bare enqueue)', async () => {
+    setMode('execute');
+    // No projectId → the preset reconciliation short-circuits before any project read.
+    await dispatchCreativeTool('media_enqueueVideoJob', { params: { prompt: 'p', width: 640 } }, {});
+    expect(enqueueJob).toHaveBeenCalledWith({ kind: 'video', params: { prompt: 'p', width: 640 }, owner: 'creative' });
   });
 
   it('does not charge a free tool', async () => {
