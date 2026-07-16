@@ -11,6 +11,8 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { getMemoryStats } from '../lib/memoryStats.js';
 import { formatBytes } from '../lib/fileUtils.js';
 import { getSettings, updateSettingsWith } from '../services/settings.js';
+import { isAuthEnabled } from '../services/auth.js';
+import { getHttpsEnabledAtBoot } from '../lib/httpsState.js';
 
 // Defaults are tuned for a real dev machine: memory routinely sits in the
 // 75-85% band on a host with a couple of LLMs loaded, and big SSDs commonly
@@ -38,17 +40,31 @@ async function loadThresholds() {
 const router = Router();
 
 router.get('/health', asyncHandler(async (req, res) => {
-  const [self, version] = await Promise.all([
+  const [self, version, authRequired] = await Promise.all([
     getSelf().catch(() => null),
-    getCurrentVersion()
+    getCurrentVersion(),
+    // Whether the optional password gate is on, so a companion client knows to
+    // prompt for a password without a second round-trip to /api/auth/status.
+    // This endpoint stays public (PUBLIC_API_PATHS) so the client can read
+    // identity before it holds any credential.
+    isAuthEnabled()
   ]);
+  const hostname = os.hostname();
   res.json({
     status: 'ok',
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
     version,
-    hostname: os.hostname(),
-    instanceId: self?.instanceId ?? null
+    hostname,
+    instanceId: self?.instanceId ?? null,
+    // Companion-app (PortDeck) instance-identity fields — pre-auth so a native
+    // client can identify/label a PortOS instance across the tailnet and decide
+    // whether to prompt for a password before it has credentials. Additive and
+    // non-sensitive (name/hostname/instanceId are within the tailnet trust model).
+    // See docs/COMPANION_APP_API.md.
+    name: self?.name ?? hostname,
+    authRequired,
+    scheme: getHttpsEnabledAtBoot().value ? 'https' : 'http'
   });
 }));
 
