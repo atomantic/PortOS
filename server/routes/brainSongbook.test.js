@@ -109,6 +109,15 @@ describe('Brain SongBook routes', () => {
       expect(res.body.songs).toHaveLength(1);
       expect(brainStorage.getAll).toHaveBeenCalledWith('songs');
     });
+
+    it('projects out content.text — the index is metadata-only, text comes from GET /:id', async () => {
+      const song = baseSong();
+      song.content = { format: 'chordpro', text: 'x'.repeat(5000) };
+      brainStorage.getAll.mockResolvedValue([song]);
+      const res = await request(app).get('/api/brain/songbook');
+      expect(res.body.songs[0].content).toEqual({ format: 'chordpro' });
+      expect(res.body.songs[0].title).toBe(song.title);
+    });
   });
 
   describe('GET /api/brain/songbook/:id', () => {

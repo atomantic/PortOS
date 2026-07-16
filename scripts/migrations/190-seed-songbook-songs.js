@@ -11,23 +11,31 @@
  * Idempotent and non-destructive: a seed id already present in the live store
  * — a user-edited copy, a synced copy from a peer, or a tombstone from a
  * deliberate delete — is NEVER overwritten (so a deleted seed stays deleted).
- * The file is written only when at least one record was added. The seeds carry
- * no originInstanceId; brainStorage's boot-time backfill stamps it, exactly as
- * it does for the setup-data copy path.
+ * The file is written only when at least one record was added, and NEVER when
+ * the existing file is unreadable (corrupt JSON is possibly-recoverable user
+ * data — seeds are not worth destroying it). The seeds carry a fixed
+ * originInstanceId ('seed') so every install holds byte-identical records and
+ * the brain reconcile checksum converges across peers.
  */
 
 import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
 
-// tryReadFile convention: missing/unreadable → fallback (the migration runner
-// executes before the service layer is wired, so no server/lib imports here).
-async function readJsonOr(path, fallback) {
-  const raw = await readFile(path, 'utf-8').catch(() => null);
-  if (raw == null) return fallback;
+// Tagged read: 'missing' (ENOENT — safe to treat as an empty store) is NOT the
+// same as 'invalid' (file exists but won't parse — possibly recoverable user
+// data that a write here would irreversibly destroy). The migration runner
+// executes before the service layer is wired, so no server/lib imports here.
+async function readJsonTagged(path) {
+  let raw;
   try {
-    return JSON.parse(raw);
-  } catch {
-    return fallback;
+    raw = await readFile(path, 'utf-8');
+  } catch (err) {
+    return err?.code === 'ENOENT' ? { state: 'missing' } : { state: 'invalid', error: err?.message };
+  }
+  try {
+    return { state: 'ok', doc: JSON.parse(raw) };
+  } catch (err) {
+    return { state: 'invalid', error: err?.message };
   }
 }
 
@@ -35,7 +43,8 @@ export async function up({ rootDir }) {
   const seedPath = join(rootDir, 'data.reference', 'brain', 'songs.json');
   const livePath = join(rootDir, 'data', 'brain', 'songs.json');
 
-  const seed = await readJsonOr(seedPath, null);
+  const seedRead = await readJsonTagged(seedPath);
+  const seed = seedRead.state === 'ok' ? seedRead.doc : null;
   const seedRecords = seed?.records && typeof seed.records === 'object' ? seed.records : {};
   const seedIds = Object.keys(seedRecords);
   if (seedIds.length === 0) {
@@ -43,7 +52,15 @@ export async function up({ rootDir }) {
     return { ok: true, reason: 'no-seeds' };
   }
 
-  const live = await readJsonOr(livePath, { records: {} });
+  const liveRead = await readJsonTagged(livePath);
+  if (liveRead.state === 'invalid') {
+    // The live store exists but won't parse — writing seeds over it would turn
+    // a recoverable corrupt file into permanent data loss. Leave it untouched;
+    // the seeds are cosmetic starter content, not worth risking user data.
+    console.error(`❌ songbook-seed: data/brain/songs.json exists but is unreadable (${liveRead.error}) — leaving it untouched; repair or remove it to receive the starter songs.`);
+    return { ok: true, reason: 'live-store-unreadable' };
+  }
+  const live = liveRead.state === 'ok' ? liveRead.doc : { records: {} };
   if (!live.records || typeof live.records !== 'object') live.records = {};
 
   let added = 0;

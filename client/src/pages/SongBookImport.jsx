@@ -14,7 +14,7 @@
  * createSong → navigate to the new song's viewer.
  */
 
-import { useMemo, useRef, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { ListMusic, ArrowLeft, ClipboardPaste, Eraser, Wand2, Globe, FileText, Save } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -126,6 +126,18 @@ export default function SongBookImport() {
   // The active tab's content → what Save will store.
   const contentText = tab === 'url' ? (fetched?.content?.text || '') : normalized;
   const fetchedFormat = fetched?.content?.format;
+
+  // Switching tabs switches WHICH draft Save submits — re-apply that draft's
+  // metadata so auto-filled title/artist follow the active source instead of
+  // saving tab A's metadata onto tab B's content. Refs keep the effect keyed
+  // on the tab alone (meta changes apply at their own paste/fetch sites).
+  const activeMetaRef = useRef({});
+  activeMetaRef.current = tab === 'url'
+    ? { title: fetched?.title, artist: fetched?.artist }
+    : { title: pasteMeta?.title, artist: pasteMeta?.artist };
+  useEffect(() => {
+    applyMetaDefaults(activeMetaRef.current);
+  }, [tab, applyMetaDefaults]);
   // Memoized on its real inputs so detectFormat (a full line-classifier pass)
   // doesn't re-run on every unrelated keystroke (title/artist/tags).
   const contentFormat = useMemo(
