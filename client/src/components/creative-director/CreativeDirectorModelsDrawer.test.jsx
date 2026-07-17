@@ -163,6 +163,8 @@ describe('CreativeDirectorModelsDrawer', () => {
         // The ollama-backed Claude CLI fronting a text-only Ollama model whose id
         // is also in the real `ollama` provider's list.
         { providerId: 'claude-ollama', backend: 'cli', id: 'llama3.2:latest', vision: true },
+        // Vision on LM Studio only — must not make the same id vision on Ollama.
+        { providerId: 'lmstudio', backend: 'lmstudio', id: 'qwen2.5vl:latest', vision: true },
       ],
     });
     renderDrawer({ id: 'cd-1', name: 'Demo', modelOverrides: {} });
@@ -190,6 +192,27 @@ describe('CreativeDirectorModelsDrawer', () => {
     ).map((o) => o.value);
     expect(optionValues).toContain('qwen2.5vl:latest');
     expect(optionValues).not.toContain('llama3.2:latest');
+  });
+
+  // A cloud/custom API provider's list is never vision-filtered, so an empty one
+  // means "no models configured", NOT "no VLM installed" — telling the user to
+  // install a local VLM would be the wrong remediation.
+  it('does not tell a cloud provider to install a local VLM', async () => {
+    getAiAssignments.mockResolvedValue({
+      ...ASSIGNMENTS,
+      providers: [
+        ...ASSIGNMENTS.providers,
+        { id: 'my-cloud-vlm', name: 'My Cloud VLM', type: 'api', enabled: true, defaultModel: null, models: [] },
+      ],
+    });
+    renderDrawer({ id: 'cd-1', name: 'Demo', modelOverrides: {} });
+    await waitFor(() => expect(screen.getByLabelText('Scene evaluation provider')).toBeTruthy());
+
+    fireEvent.change(screen.getByLabelText('Scene evaluation provider'), { target: { value: 'my-cloud-vlm' } });
+
+    expect(screen.queryByText(/No vision-capable models found/i)).toBeNull();
+    // The free-text fallback stays usable for a cloud provider with no list.
+    expect(screen.getByLabelText('Scene evaluation model')).toBeTruthy();
   });
 
   it('warns instead of showing a bare text box when a vision provider has no VLM', async () => {

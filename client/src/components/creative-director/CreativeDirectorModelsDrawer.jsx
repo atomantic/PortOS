@@ -11,6 +11,7 @@ import {
   assignmentProviderOptions,
   assignmentModelOptions,
   assignmentDefaultModel,
+  localBackendForProvider,
 } from '../../utils/providers.js';
 
 // Creative Director provider/model pins, at either of two scopes:
@@ -74,7 +75,7 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
   // assignments fetch, so `loading===false` with the scan still in flight is the
   // normal first render, and asserting "none found" there would flash the exact
   // empty-picker bug this drawer was fixed for.
-  const { ids: visionModelIds, loaded: visionLoaded } = useVisionModelIds(open);
+  const { idsByBackend: visionIdsByBackend, loaded: visionLoaded } = useVisionModelIds(open);
 
   const seed = useCallback((next) => { setDrafts(next); setBaseline(next); }, []);
 
@@ -214,17 +215,23 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
             const entry = entryById[assignmentIdFor(stage.key)];
             const draft = drafts[stage.key] || { providerId: '', model: '' };
             const providerOptions = assignmentProviderOptions(entry, providers);
-            const modelOptions = assignmentModelOptions(entry, providers, draft.providerId, visionModelIds);
+            const modelOptions = assignmentModelOptions(entry, providers, draft.providerId, visionIdsByBackend);
             const pinned = !!draft.providerId;
+            // Both hints below are about the LOCAL capability scan, so they only
+            // apply when the pinned provider is an Ollama / LM Studio backend. A
+            // cloud API provider's list is never vision-filtered, so an empty one
+            // just means no models are configured on it — "install a VLM" would
+            // be the wrong remediation, and the free-text input still works.
+            const visionLocal = entry?.modelFilter === 'vision'
+              && !!localBackendForProvider(providers.find((p) => p.id === draft.providerId));
             // A vision stage's options are only trustworthy once the capability
             // scan has settled — until then `modelOptions` is regex-only, which
             // is exactly the stale answer that hid the user's VLMs.
-            const visionPending = entry?.modelFilter === 'vision' && !visionLoaded;
-            // A vision stage on a local backend with nothing to offer means no
-            // VLM is installed — say so instead of showing a bare text box that
-            // reads as a broken dropdown.
-            const noVisionModels = pinned && entry?.modelFilter === 'vision'
-              && !visionPending && modelOptions.length === 0;
+            const visionPending = visionLocal && !visionLoaded;
+            // A local backend with nothing left to offer means no VLM is
+            // installed — say so instead of showing a bare text box that reads
+            // as a broken dropdown.
+            const noVisionModels = pinned && visionLocal && !visionPending && modelOptions.length === 0;
             return (
               <section key={stage.key} className="bg-port-bg border border-port-border rounded-lg p-3 space-y-2">
                 <div className="flex items-center gap-2">
@@ -249,7 +256,7 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
                         // Vision-filtered stages (scene evaluation) seed the first
                         // eligible VLM when the provider's default is text-only.
                         const nextDefault = providerId
-                          ? assignmentDefaultModel(entry, providers, providerId, visionModelIds)
+                          ? assignmentDefaultModel(entry, providers, providerId, visionIdsByBackend)
                           : '';
                         // Seed the provider's default model on switch; clearing the
                         // provider clears the model too.
