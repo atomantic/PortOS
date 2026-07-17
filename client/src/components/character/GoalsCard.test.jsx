@@ -158,15 +158,13 @@ describe('GoalsCard — populated', () => {
       .toBeInTheDocument();
   });
 
-  it('reads goals once from the tree endpoint, silently, and never writes them back', async () => {
+  it('reads once from the tree endpoint, silently', async () => {
     await renderCard([goal()]);
-    // Surface, don't duplicate: a read-only mirror calls the read endpoint exactly once and
-    // owns no write path at all.
+    // Surface, don't duplicate: a read-only mirror hits the read endpoint exactly once.
     //
     // The TREE endpoint specifically: getGoals() hands back whatever urgency was last
-    // WRITTEN, which decays as yearsRemaining falls, so ranking off it would let the sheet
-    // order goals differently from the /goals page it links to. Only getGoalsTree()
-    // re-derives urgency from current longevity.
+    // WRITTEN, so ranking off it would let the sheet show urgency that contradicts the
+    // /goals page it links to. Only getGoalsTree() re-derives it.
     expect(getGoalsTree).toHaveBeenCalledTimes(1);
     // silent — the card renders its own error message, so request() must not toast it too.
     expect(getGoalsTree).toHaveBeenCalledWith({ silent: true });
