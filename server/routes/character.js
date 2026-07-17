@@ -45,9 +45,15 @@ const addEventSchema = z.object({
 
 // `?skills=0` / `?metrics=0` opt out of each derived registry's domain fan-out, for consumers
 // that only read the persisted fields plus the age level — notably the CyberCity HUD, which
-// polls this route every 15s and renders only `level`. They gate independently (a caller may
-// well want the metrics grid without the skill curve), and both default to ON so an unaware
-// caller — or an older client bundle that predates the flag — still gets the full sheet.
+// polls this route every 15s and renders only `level`. Both default to ON, so an unaware
+// caller still gets the full sheet.
+//
+// `metrics` defaults to whatever `skills` says rather than to ON. `?skills=0` predates the
+// metrics grid (#2676) and has only ever meant one thing — "give me the cheap sheet, skip the
+// domain fan-out" — so a caller that predates the flag (a browser holding a stale bundle
+// across an update, or any external script) must not silently start paying a NEW fan-out it
+// has no way to ask about. An explicit `?metrics=` always wins, so the two stay independently
+// gateable: `?skills=0&metrics=1` gets the grid without the skill curve.
 const flagEnum = z.enum(['0', '1', 'false', 'true']).optional();
 const getCharacterQuerySchema = z.object({
   skills: flagEnum,
@@ -62,7 +68,7 @@ router.get('/', asyncHandler(async (req, res) => {
   const { skills, metrics } = validateRequest(getCharacterQuerySchema, req.query);
   res.json(await characterService.getCharacter({
     withSkills: isEnabled(skills),
-    withMetrics: isEnabled(metrics),
+    withMetrics: isEnabled(metrics ?? skills),
   }));
 }));
 

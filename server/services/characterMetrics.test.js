@@ -220,6 +220,12 @@ describe('getCharacterMetrics — populated domains', () => {
     expect(media.label).not.toMatch(/render/i);
     expect(media.hint).not.toMatch(/render/i);
   });
+
+  it('does not claim the memory tile counts only BRAIN captures', async () => {
+    // countMemories({}) filters on `status: 'active'` only — agent/CoS/API memories are all in
+    // the tally, not just the `sourceAppId: 'brain'` ones.
+    expect(byId(await getCharacterMetrics(), 'memoryCount').hint).not.toMatch(/brain/i);
+  });
 });
 
 describe('getCharacterMetrics — goalCompletionRate', () => {
@@ -365,7 +371,7 @@ describe('getCharacterMetrics — stat-read failure (must NOT collapse into a fa
   it('keeps id/label/unit/hint on an unavailable metric so the UI can still name it', async () => {
     vi.mocked(countMemories).mockImplementation(fail('memory backend'));
     expect(byId(await getCharacterMetrics(), 'memoryCount')).toMatchObject({
-      id: 'memoryCount', label: 'Memories', unit: 'count', hint: 'Captured in Brain',
+      id: 'memoryCount', label: 'Memories', unit: 'count', hint: 'Active memories across PortOS',
     });
   });
 

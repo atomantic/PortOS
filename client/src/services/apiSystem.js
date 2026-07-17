@@ -9,8 +9,16 @@ export const getAlertsSummary = (options) => request('/alerts/summary', options)
 // the polling CyberCity XP HUD badge). Both default on, so a caller that wants the whole
 // sheet just calls getCharacter().
 export const getCharacter = ({ skills = true, metrics = true, ...options } = {}) => {
-  const off = [!skills && 'skills=0', !metrics && 'metrics=0'].filter(Boolean);
-  return request(`/character${off.length ? `?${off.join('&')}` : ''}`, options);
+  const params = new URLSearchParams();
+  if (!skills) params.set('skills', '0');
+  if (!metrics) params.set('metrics', '0');
+  // `metrics=1` must go on the wire EXPLICITLY when skills are off, because the server infers
+  // an absent `metrics` from `skills` (back-compat: a bare `?skills=0` predates the metrics
+  // grid and means "cheap sheet"). Without this, `{ skills: false }` would silently drop the
+  // metrics this wrapper's own default promises.
+  else if (!skills) params.set('metrics', '1');
+  const query = params.toString();
+  return request(`/character${query ? `?${query}` : ''}`, options);
 };
 
 // Health

@@ -6,11 +6,12 @@ vi.mock('./apiCore.js', () => ({
 
 let request;
 let patchSettingsSlice;
+let getCharacter;
 
 beforeEach(async () => {
   vi.resetModules();
   ({ request } = await import('./apiCore.js'));
-  ({ patchSettingsSlice } = await import('./apiSystem.js'));
+  ({ patchSettingsSlice, getCharacter } = await import('./apiSystem.js'));
   request.mockReset();
 });
 
@@ -135,5 +136,40 @@ describe('patchSettingsSlice', () => {
     const putCall = request.mock.calls.find(([, opts]) => opts?.method === 'PUT');
     const body = JSON.parse(putCall[1].body);
     expect(body).toEqual({ imageGen: { local: { pythonPath: '/x' } } });
+  });
+});
+
+// The character query builder encodes a non-obvious server rule: an ABSENT `metrics` is
+// inferred from `skills` (back-compat — a bare `?skills=0` predates the metrics grid and has
+// only ever meant "cheap sheet"). So this wrapper must put `metrics` on the wire explicitly
+// whenever inference would contradict its own documented defaults.
+describe('getCharacter query building (#2676)', () => {
+  const pathOf = () => request.mock.calls[0][0];
+
+  it('sends no query at all when the caller wants the whole sheet', () => {
+    getCharacter();
+    expect(pathOf()).toBe('/character');
+  });
+
+  it('sends both flags off for the cheap path', () => {
+    getCharacter({ skills: false, metrics: false });
+    expect(pathOf()).toBe('/character?skills=0&metrics=0');
+  });
+
+  it('sends metrics=1 explicitly when skills are off but metrics are wanted', () => {
+    // Without the explicit `1` the server would infer metrics=false from `skills=0` and
+    // silently drop the metrics this wrapper's `metrics = true` default promises.
+    getCharacter({ skills: false });
+    expect(pathOf()).toBe('/character?skills=0&metrics=1');
+  });
+
+  it('sends only metrics=0 when metrics alone are declined', () => {
+    getCharacter({ metrics: false });
+    expect(pathOf()).toBe('/character?metrics=0');
+  });
+
+  it('forwards request options without leaking the flags into them', () => {
+    getCharacter({ skills: false, metrics: false, silent: true });
+    expect(request.mock.calls[0][1]).toEqual({ silent: true });
   });
 });
