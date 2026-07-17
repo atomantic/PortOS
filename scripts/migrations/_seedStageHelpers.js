@@ -65,12 +65,19 @@ export function normalizeStageSpec(spec) {
  * with an `N added` summary. Behaviour-identical to the hand-rolled
  * `for (const stageKey of STAGES)` loops it replaces.
  *
+ * The returned object also carries the normalized `stages` list. The runner only
+ * ever looks for `up()` (`scripts/run-migrations.js`) and ignores everything else,
+ * so exposing it costs nothing at runtime — it lets `_seedStageTestHelpers.js`
+ * assert against the stage list the migration *actually* seeds rather than a list
+ * hand-copied into the test (which would go stale silently when a stage is added).
+ *
  * @param {Array<string | { stageKey: string, filename?: string }>} stageSpecs
- * @returns {{ up: (ctx: { rootDir: string }) => Promise<void> }}
+ * @returns {{ up: (ctx: { rootDir: string }) => Promise<void>, stages: Array<{ stageKey: string, filename: string }> }}
  */
 export function makeSeedMigrations(stageSpecs) {
   const stages = stageSpecs.map(normalizeStageSpec);
   return {
+    stages,
     async up({ rootDir }) {
       const stagesDir = join(rootDir, 'data', 'prompts', 'stages');
       await mkdir(stagesDir, { recursive: true });
