@@ -310,6 +310,7 @@ const APP_JSX = path.join(REPO_ROOT, 'client/src/App.jsx');
 // not from ⌘K / voice / the sidebar.
 const NAV_COVERAGE_OPT_OUT = new Map([
   ['/apps/create', 'create-app form, reached via the "New App" button on /apps'],
+  ['/creative-commission/new', 'create-commission drawer, reached via the "New Commission" button on /creative-commission'],
   ['/feature-agents/create', 'create-agent form, reached via the "New Agent" button'],
   ['/login', 'auth gate — surfaced only when settings.secrets.auth is enabled, reached via 401 redirect'],
   ['/songbook/import', 'import-song form, reached via the "Import" button on /songbook'],
