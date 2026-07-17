@@ -160,6 +160,24 @@ describe.skipIf(!dbReady)('Writers Room DB adapter round-trip', () => {
     expect(await db.listWorkIds({ includeDeleted: true })).toEqual(expect.arrayContaining(['wr-work-1', 'wr-work-2']));
   });
 
+  it('countWorks counts the live set without rebuilding any manifest', async () => {
+    // The cheap tally the character skill registry reads (#2729) instead of
+    // listWorks().length — which runs the drafts query and reassembles every
+    // manifest. Pin the two together so they can never disagree.
+    expect(await db.countWorks()).toBe(0);
+
+    await db.writeWork(manifest('wr-work-1'));
+    await db.writeWork(manifest('wr-work-2'));
+    expect(await db.countWorks()).toBe(2);
+    expect(await db.countWorks()).toBe((await db.listWorks()).length);
+
+    // A tombstoned work is retained for federation but must NOT be counted.
+    await db.deleteWork('wr-work-2');
+    expect(await db.listWorkIds({ includeDeleted: true })).toHaveLength(2);
+    expect(await db.countWorks()).toBe(1);
+    expect(await db.countWorks()).toBe((await db.listWorks()).length);
+  });
+
   it('mergeWorksFromSync inserts a remote work and LWW-resolves a later edit', async () => {
     const insert = await db.mergeWorksFromSync([manifest('wr-work-1', { title: 'Remote', updatedAt: '2026-02-01T00:00:00.000Z' })]);
     expect(insert).toEqual({ applied: true, count: 1 });

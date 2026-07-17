@@ -38,8 +38,8 @@
  * reporting failure, `readSkill` already classifies it correctly.
  */
 
-import { listUniverses } from './universeBuilder.js';
-import { listWorks } from './writersRoom/local.js';
+import { countUniverses } from './universeBuilder.js';
+import { countWorks } from './writersRoom/local.js';
 import { getCatalogStats } from './catalogDB.js';
 import { getPostSessions } from './meatspacePost.js';
 import { getAllTrainingEntries } from './meatspacePostTraining.js';
@@ -102,16 +102,17 @@ export const SKILLS = [
     // omitting it would leave a writing-only user stuck at level 0 in the very skill named
     // for their work.
     //
-    // listUniverses()/listWorks() materialize every record (and the universe-run history) for
-    // a `.length` — cheap count helpers are tracked in #2729. Bounded for now: the CyberCity
-    // poll passes `?skills=0`, so this only runs on an explicit /character read.
+    // All four reads are tallies, never listings (#2729): countUniverses/countWorks are
+    // COUNT(*)s that exclude tombstones exactly as listUniverses()/listWorks() filter them,
+    // so this no longer materializes every universe record, the universe-run history, or
+    // every work's rebuilt manifest just to read a `.length`.
     compute: async () => {
-      const [universes, works, catalog] = await Promise.all([
-        listUniverses(),
-        listWorks(),
+      const [universeCount, workCount, catalog] = await Promise.all([
+        countUniverses(),
+        countWorks(),
         getCatalogStats(),
       ]);
-      return universes.length + works.length + catalog.total + catalog.scraps;
+      return universeCount + workCount + catalog.total + catalog.scraps;
     },
   },
   {

@@ -51,6 +51,41 @@ export async function listRaw() {
 }
 
 /**
+ * Cheap live-universe tally (#2729) — the count listUniverses().length used to
+ * pay for by materializing every JSONB record AND the whole run history.
+ *
+ * Reads the `deleted` MIRROR COLUMN, not the JSONB flag listUniverses filters
+ * on. Those cannot disagree: every write path derives both from the same
+ * `record` in the same statement with the same predicate — `writeRaw` above and
+ * the one-time file import (`scripts/migrateUniversesToDB.js`) each bind
+ * `record.deleted === true` into the column, and the sanitizer the service
+ * filters on (`sanitizeSoftDeleteFields`, lib/syncWire.js) computes
+ * `raw?.deleted === true` off the same field. There is no third writer, and no
+ * UPDATE that touches `deleted` without rewriting `data`. So the column is an
+ * exact mirror, and `WHERE deleted = FALSE` also hits the `idx_universes_live`
+ * partial index that exists for precisely this "live set" scan.
+ *
+ * Deliberately does NOT filter `ephemeral` — listUniverses() counts ephemeral
+ * universes too (it filters ONLY on `deleted`), so filtering here would
+ * undercount.
+ *
+ * Known boundary: a row whose `data` can't survive `sanitizeTemplate` (blank
+ * `name`, non-string `id`) is dropped by listUniverses's `.filter(Boolean)` but
+ * still counted here. Unreachable through the service — create/update/sync all
+ * sanitize before writing — and only a corrupt legacy record imported verbatim
+ * could hit it. Replicating the sanitizer's drop rules in SQL would couple this
+ * count to sanitizeTemplate's internals and silently drift when they change;
+ * a ±1 on an already-corrupt record is not worth that. The file backend's
+ * counterpart (store.js) has the same semantics, so the two agree.
+ */
+export async function countUniverses({ includeDeleted = false } = {}) {
+  const { rows } = includeDeleted
+    ? await query(`SELECT COUNT(*) AS count FROM universes`)
+    : await query(`SELECT COUNT(*) AS count FROM universes WHERE deleted = FALSE`);
+  return parseInt(rows[0].count, 10);
+}
+
+/**
  * Upsert one record. `data` is written verbatim (lossless); the typed mirror
  * columns are bind-sanitized so a hand-edited/legacy record with a malformed
  * timestamp or missing field can't make the write throw (which, during the boot

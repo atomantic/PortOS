@@ -95,6 +95,24 @@ function makeFileBackend() {
     const entries = await readdir(wrWorksDir(), { withFileTypes: true });
     return entries.filter((e) => e.isDirectory() && WORK_ID_RE.test(e.name)).map((e) => e.name);
   };
+  // The live-work set, shared by listWorks + countWorks below so the listing and
+  // the tally can't disagree about which works exist.
+  //
+  // Tolerate a corrupted manifest per work (drop it) so one bad work doesn't 500
+  // the whole library — the pre-#1017 file behavior. Re-throw anything else
+  // (permission errors, EIO): masking those would hide a real outage behind a
+  // plausible-looking short count.
+  const loadLiveManifests = async () => {
+    const ids = await listWorkIds();
+    const manifests = await Promise.all(ids.map((id) => loadManifest(id).catch((err) => {
+      if (err?.code === 'CORRUPTED_MANIFEST') {
+        console.warn(`⚠️ wr: dropped work ${id} from listing — corrupted manifest`);
+        return null;
+      }
+      throw err;
+    })));
+    return manifests.filter((m) => m != null && m.deleted !== true);
+  };
 
   // Shared LWW merge for a body-less record array (folders/exercises) — mirrors
   // mergeWorksFromSync below minus the per-work manifest file. Loads the array
@@ -209,21 +227,14 @@ function makeFileBackend() {
       const manifests = await Promise.all(ids.map((id) => loadManifest(id).catch(() => null)));
       return ids.filter((_, i) => manifests[i] && manifests[i].deleted !== true);
     },
-    listWorks: async () => {
-      const ids = await listWorkIds();
-      // Tolerate a corrupted manifest per work (drop it from the listing) so one
-      // bad work doesn't 500 the whole library — the pre-#1017 file behavior.
-      // Re-throw anything else (permission errors, EIO) — masking those would
-      // hide a real outage.
-      const manifests = await Promise.all(ids.map((id) => loadManifest(id).catch((err) => {
-        if (err?.code === 'CORRUPTED_MANIFEST') {
-          console.warn(`⚠️ wr: dropped work ${id} from listing — corrupted manifest`);
-          return null;
-        }
-        throw err;
-      })));
-      return manifests.filter((m) => m != null && m.deleted !== true);
-    },
+    listWorks: loadLiveManifests,
+    // No cheap count on the file layout — `deleted` lives inside each manifest,
+    // so the live set can only be known by reading them. Counting the shared
+    // live-set reader makes agreement with listWorks structural rather than a
+    // duplicated filter that could drift. The file backend is a dev/test escape
+    // hatch (never a deployment mode), so its cost here is not worth splitting
+    // the two readers apart to shave.
+    countWorks: async () => (await loadLiveManifests()).length,
     writeWork: async (manifest) => { await saveManifest(manifest.id, manifest); return manifest; },
     deleteWork: async (id) => {
       // Soft-delete tombstone (#1565) so the deletion federates — mirror the PG
@@ -327,6 +338,7 @@ export function writersRoomStore() {
     readWork: async (id, opts) => (await getBackend()).readWork(id, opts),
     listWorkIds: async (opts) => (await getBackend()).listWorkIds(opts),
     listWorks: async () => (await getBackend()).listWorks(),
+    countWorks: async () => (await getBackend()).countWorks(),
     writeWork: async (manifest) => (await getBackend()).writeWork(manifest),
     deleteWork: async (id) => (await getBackend()).deleteWork(id),
     mergeWorksFromSync: async (remoteWorks, opts) => (await getBackend()).mergeWorksFromSync(remoteWorks, opts),

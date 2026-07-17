@@ -4,8 +4,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // interesting states — populated, empty, and read-failure — without any of the real
 // dependency graphs (Postgres, the universe store, the meatspace files) loading.
 const stats = vi.hoisted(() => ({
-  universes: [],
-  works: [],
+  universes: 0,
+  works: 0,
   catalog: { total: 0, scraps: 0 },
   sessions: [],
   training: [],
@@ -19,8 +19,8 @@ const stats = vi.hoisted(() => ({
 // unreachable Postgres or an unreadable data file.
 const fail = (name) => () => Promise.reject(new Error(`${name} unavailable`));
 
-vi.mock('./universeBuilder.js', () => ({ listUniverses: vi.fn(async () => stats.universes) }));
-vi.mock('./writersRoom/local.js', () => ({ listWorks: vi.fn(async () => stats.works) }));
+vi.mock('./universeBuilder.js', () => ({ countUniverses: vi.fn(async () => stats.universes) }));
+vi.mock('./writersRoom/local.js', () => ({ countWorks: vi.fn(async () => stats.works) }));
 vi.mock('./catalogDB.js', () => ({ getCatalogStats: vi.fn(async () => stats.catalog) }));
 vi.mock('./meatspacePost.js', () => ({ getPostSessions: vi.fn(async () => stats.sessions) }));
 vi.mock('./meatspacePostTraining.js', () => ({ getAllTrainingEntries: vi.fn(async () => stats.training) }));
@@ -30,20 +30,20 @@ vi.mock('./memoryBackend.js', () => ({ countMemories: vi.fn(async () => stats.me
 vi.mock('./mediaAssetIndex/db.js', () => ({ countAssets: vi.fn(async () => stats.assets) }));
 
 import { getCharacterSkills, levelFromValue, SKILLS, MAX_SKILL_LEVEL } from './characterSkills.js';
-import { listUniverses } from './universeBuilder.js';
+import { countUniverses } from './universeBuilder.js';
 import { getCatalogStats } from './catalogDB.js';
 import { getLoggingStats } from './meatspaceLoggingStats.js';
 import { countMemories } from './memoryBackend.js';
 import { countAssets } from './mediaAssetIndex/db.js';
-import { listWorks } from './writersRoom/local.js';
+import { countWorks } from './writersRoom/local.js';
 
 const rows = (list) => Array.from({ length: list }, (_, i) => ({ id: `r${i}` }));
 
 // Restore every stat to the "brand new install" baseline between tests so a test that
 // populates one domain can't leak into the next one's empty-domain assertions.
 beforeEach(() => {
-  stats.universes = [];
-  stats.works = [];
+  stats.universes = 0;
+  stats.works = 0;
   stats.catalog = { total: 0, scraps: 0 };
   stats.sessions = [];
   stats.training = [];
@@ -51,8 +51,8 @@ beforeEach(() => {
   stats.goals = { goals: [] };
   stats.memories = 0;
   stats.assets = 0;
-  vi.mocked(listUniverses).mockImplementation(async () => stats.universes);
-  vi.mocked(listWorks).mockImplementation(async () => stats.works);
+  vi.mocked(countUniverses).mockImplementation(async () => stats.universes);
+  vi.mocked(countWorks).mockImplementation(async () => stats.works);
   vi.mocked(getCatalogStats).mockImplementation(async () => stats.catalog);
   vi.mocked(getLoggingStats).mockImplementation(async () => stats.logging);
   vi.mocked(countMemories).mockImplementation(async () => stats.memories);
@@ -156,8 +156,8 @@ describe('getCharacterSkills — empty domains', () => {
 
 describe('getCharacterSkills — populated domains', () => {
   it('derives Wordsmith from universes + Writers Room works + catalog ingredients + scraps', async () => {
-    stats.universes = rows(3);
-    stats.works = rows(2);
+    stats.universes = 3;
+    stats.works = 2;
     stats.catalog = { total: 8, scraps: 2 }; // 3 + 2 + 8 + 2 = 15, scale 2 → 15/2+1 = 8.5 → 3
     const wordsmith = byId(await getCharacterSkills(), 'wordsmith');
     expect(wordsmith.value).toBe(15);
@@ -168,7 +168,7 @@ describe('getCharacterSkills — populated domains', () => {
   it('levels Wordsmith for a Writers-Room-only user with no universes or catalog', async () => {
     // The skill is named for Create AND Writers Room; a writing-only user was stuck at 0
     // while their work went uncounted.
-    stats.works = rows(7);
+    stats.works = 7;
     const wordsmith = byId(await getCharacterSkills(), 'wordsmith');
     expect(wordsmith.value).toBe(7);
     expect(wordsmith.level).toBe(levelFromValue(7, 2));
@@ -266,7 +266,7 @@ describe('getCharacterSkills — stat-read failure (must NOT collapse into a fak
   });
 
   it('never rejects, even when every domain is unreadable', async () => {
-    vi.mocked(listUniverses).mockImplementation(fail('universe store'));
+    vi.mocked(countUniverses).mockImplementation(fail('universe store'));
     vi.mocked(getCatalogStats).mockImplementation(fail('catalog'));
     vi.mocked(getLoggingStats).mockImplementation(fail('logging stats'));
     vi.mocked(countMemories).mockImplementation(fail('memory backend'));
@@ -280,7 +280,7 @@ describe('getCharacterSkills — stat-read failure (must NOT collapse into a fak
   it('marks a partially-failed multi-read skill unavailable rather than under-counting', async () => {
     // Wordsmith reads two stores. If only the catalog is down, reporting just the
     // universe count would silently understate the skill — "can't tell" is the honest answer.
-    stats.universes = rows(3);
+    stats.universes = 3;
     vi.mocked(getCatalogStats).mockImplementation(fail('catalog'));
 
     expect(byId(await getCharacterSkills(), 'wordsmith')).toMatchObject({
