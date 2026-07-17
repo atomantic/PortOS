@@ -42,10 +42,19 @@ const addEventSchema = z.object({
   diceNotation: z.string().regex(/^\d+d\d+([+-]\d+)?$/).optional()
 });
 
+// `?skills=0` opts out of the six-domain skill fan-out for consumers that only read the
+// persisted fields plus the age level — notably the CyberCity HUD, which polls this route
+// every 15s and renders only `level`. Defaults to including them, so an unaware caller
+// (or an older client bundle) still gets the full sheet.
+const getCharacterQuerySchema = z.object({
+  skills: z.enum(['0', '1', 'false', 'true']).optional(),
+});
+
 // GET /api/character - Get character sheet
 router.get('/', asyncHandler(async (req, res) => {
-  const character = await characterService.getCharacter();
-  res.json(character);
+  const { skills } = validateRequest(getCharacterQuerySchema, req.query);
+  const withSkills = skills !== '0' && skills !== 'false';
+  res.json(await characterService.getCharacter({ withSkills }));
 }));
 
 // PUT /api/character - Update character name/class

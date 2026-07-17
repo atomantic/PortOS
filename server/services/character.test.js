@@ -118,6 +118,28 @@ describe('getCharacter age-based level', () => {
   });
 });
 
+describe('stripDerivedFields', () => {
+  it('removes every derived field and leaves persisted ones untouched', () => {
+    const stripped = characterService.stripDerivedFields({
+      name: 'Gandalf', xp: 5000, hp: 15, events: [],
+      level: 99, ageYears: 999, skills: [{ id: 'stale' }],
+    });
+    expect(stripped).toEqual({ name: 'Gandalf', xp: 5000, hp: 15, events: [] });
+  });
+
+  it('copies rather than mutating its input', () => {
+    // saveCharacter/getWireCharacter/dataSync all pass records their callers still hold.
+    const original = { name: 'Gandalf', level: 99, skills: [] };
+    const stripped = characterService.stripDerivedFields(original);
+    expect(original.level).toBe(99);
+    expect(stripped.level).toBeUndefined();
+  });
+
+  it('is a no-op on a record that carries no derived fields', () => {
+    expect(characterService.stripDerivedFields({ name: 'Gandalf' })).toEqual({ name: 'Gandalf' });
+  });
+});
+
 describe('getWireCharacter federation projection', () => {
   beforeEach(() => {
     store.value = { name: 'Gandalf', class: 'Wizard', xp: 5000, hp: 15, maxHp: 15 };

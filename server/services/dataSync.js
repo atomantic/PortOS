@@ -275,11 +275,10 @@ async function applyCharacterRemote(remoteData) {
 
   const local = await readJSONFile(CHARACTER_FILE, null);
   if (!local) {
-    // No local character — accept remote entirely, but strip a legacy persisted `level`
-    // (an older peer still sends it): level is age-derived on read now (#2673), so a stored
-    // value would be stale and would re-propagate in our own snapshot.
-    const { level: _staleLevel, ...accepted } = remoteData;
-    await atomicWrite(CHARACTER_FILE, accepted);
+    // No local character — accept remote entirely, but strip every derived field (an older
+    // peer still sends `level`): they're derived on read now (#2673/#2674), so a stored value
+    // would be stale and would re-propagate in our own snapshot.
+    await atomicWrite(CHARACTER_FILE, characterService.stripDerivedFields(remoteData));
     console.log(`🔄 Character sync: accepted remote character`);
     return { applied: true, count: 1 };
   }
@@ -318,11 +317,13 @@ async function applyCharacterRemote(remoteData) {
     syncedTaskIds: mergedTasks,
     updatedAt: remoteTs > localTs ? remoteTs : localTs
   };
-  // Drop any legacy persisted `level` (carried through `...local`) — it's derived on read now.
-  delete merged.level;
+  // Drop every derived field (level/ageYears/skills) that `...local` may have carried in from
+  // a legacy or hand-edited file — they're all derived on read now. Routed through the
+  // service's shared helper so a newly-derived field can't be forgotten at this site.
+  const persisted = characterService.stripDerivedFields(merged);
 
   if (eventsChanged || remoteTs > localTs) {
-    await atomicWrite(CHARACTER_FILE, merged);
+    await atomicWrite(CHARACTER_FILE, persisted);
     console.log(`🔄 Character sync: merged ${mergedEvents.length} events`);
     return { applied: true, count: mergedEvents.length };
   }

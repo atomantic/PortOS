@@ -3,8 +3,11 @@ import { request } from './apiCore.js';
 // Alerts
 export const getAlertsSummary = (options) => request('/alerts/summary', options);
 
-// Character sheet (D&D-style XP / level / HP — powers the CyberCity XP HUD badge)
-export const getCharacter = (options) => request('/character', options);
+// Character sheet (age-based level / XP / HP / usage-derived skills).
+// `skills: false` skips the server's six-domain skill fan-out — pass it from callers that
+// only read the persisted fields or the level (e.g. the polling CyberCity XP HUD badge).
+export const getCharacter = ({ skills = true, ...options } = {}) =>
+  request(`/character${skills ? '' : '?skills=0'}`, options);
 
 // Health
 export const checkHealth = (options) => request('/system/health', options);
