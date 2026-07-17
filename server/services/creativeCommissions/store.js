@@ -16,17 +16,21 @@
  * (`createRecordWriteQueue`, identical to universeBuilder), and delegates only
  * plain leaf I/O to the selected backend.
  *
- * Commissions are MACHINE-LOCAL and NOT federated in Phase 1 — the same rationale
- * as `seriesAutopilotScheduler`'s settings-based schedules: a schedule that
+ * The COMMISSION stays MACHINE-LOCAL and NOT federated — the same rationale as
+ * `seriesAutopilotScheduler`'s settings-based schedules: a schedule that
  * federated across sync peers would double-run on every machine. The DB row
  * carries no sync cursor/tombstone (deletes are hard deletes, mirroring tribe).
- * Federation is Phase 2 work, and it must split this record: the brief/feedback
- * CAN federate, but the `schedule` field (+ a future "home peer" pointer) MUST
- * stay machine-local, or the whole double-run avoidance breaks.
  *
- * The record shape is stable/forward-looking: `feedback[]` + `feedbackWindow`
- * exist now (Phase 1 leaves feedback empty) so Phase 2 only needs the rate
- * surface, not a schema change.
+ * FEEDBACK, by contrast, IS federated as of #2686 (split-record federation): the
+ * taste reactions live in their own `commissionFeedback` record kind (see
+ * ./feedbackStore.js) so a 👍/👎 rated on machine A conditions the SAME
+ * commission's next run on machine B, while the `schedule` (+ future home-peer
+ * pointer) stays local. The commission's `feedback[]` field is now a READ-THROUGH
+ * VIEW hydrated from the federated store on read (listCommissions/getCommission);
+ * `submitCommissionFeedback` writes the federated store, not this row. Legacy
+ * inline reactions (Phase 2 storage) are split into the federated store lazily on
+ * read and by `backfillAllCommissionFeedback()` at boot. `feedbackWindow` stays
+ * on the machine-local record (a per-machine directive-tuning knob).
  *
  * Mutations emit `commission:changed` on `commissionEvents` so the scheduler
  * re-arms crons off the DATA changing (any writer), not off the three REST
@@ -44,6 +48,12 @@ import { createPgFileFacade, resolvePgBackend, isFileBackend } from '../../lib/p
 import { createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
 import { isValidCron } from '../eventScheduler.js';
 import { commissionToCron } from './directive.js';
+import {
+  recordFeedback,
+  listFeedbackForCommission,
+  listFeedbackByCommissionIds,
+  backfillInlineFeedback,
+} from './feedbackStore.js';
 
 // Emits `commission:changed` on any create/update/delete (not on run-record
 // appends, which don't affect scheduling). The scheduler subscribes to re-sync.
@@ -279,15 +289,49 @@ export function assertValidSchedule(schedule) {
   return cron;
 }
 
+/**
+ * Persist `feedback: []` on the machine-local commission after its legacy inline
+ * reactions have been split into the federated store — WITHOUT bumping
+ * `updatedAt` (the storage migration doesn't change scheduling, so it must not
+ * re-arm crons or win an LWW it has no business in). Serialized on the per-id
+ * queue like every other RMW here.
+ */
+async function clearInlineFeedback(id) {
+  const store = commissionStore();
+  await store.queueRecordWrite(id, async () => {
+    const currentRaw = await store.readRaw(id);
+    if (!currentRaw) return;
+    const current = sanitizeCommission(currentRaw);
+    if (current.feedback.length === 0) return;
+    await store.writeRaw(id, { ...current, feedback: [] });
+  });
+}
+
 export async function listCommissions() {
   const raw = await commissionStore().listRaw();
-  return raw.map(sanitizeCommission).filter(Boolean);
+  const recs = raw.map(sanitizeCommission).filter(Boolean);
+  // Hydrate the federated feedback view (read-through) in ONE pass — feedback is
+  // no longer stored inline on the machine-local commission (#2686). Read-only:
+  // any un-migrated legacy inline feedback is split lazily by getCommission /
+  // backfillAllCommissionFeedback, not on this hot list path.
+  const byId = await listFeedbackByCommissionIds(recs.map((r) => r.id)).catch(() => new Map());
+  for (const r of recs) r.feedback = byId.get(r.id) || [];
+  return recs;
 }
 
 export async function getCommission(id) {
   const raw = await commissionStore().readRaw(id);
   const rec = raw ? sanitizeCommission(raw) : null;
   if (!rec) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
+  // Lazily migrate any legacy inline feedback (Phase 2 storage) into the
+  // federated store, then clear it — so the scheduler's pre-fire read and the
+  // route GET always see the federated feedback even before the boot backfill
+  // runs. Idempotent (deterministic ids, never-clobber upsert).
+  if (rec.feedback.length > 0) {
+    await backfillInlineFeedback(id, rec.feedback).catch(() => {});
+    await clearInlineFeedback(id).catch(() => {});
+  }
+  rec.feedback = await listFeedbackForCommission(id).catch(() => []);
   return rec;
 }
 
@@ -419,35 +463,48 @@ export async function recordCommissionRun(id, runEntry) {
  * recordCommissionRun, which also stays silent).
  */
 export async function submitCommissionFeedback(id, input) {
-  const store = commissionStore();
-  const result = await store.queueRecordWrite(id, async () => {
-    const currentRaw = await store.readRaw(id);
-    if (!currentRaw) return { notFound: true };
-    const current = sanitizeCommission(currentRaw);
-    // The UI always rates a specific run; reject a runId that isn't on the record
-    // so feedback can't dangle against a non-existent run.
-    if (input?.runId && !current.runs.some((r) => r.id === input.runId)) {
-      throw makeErr(`Run not found on commission: ${input.runId}`, ERR_VALIDATION);
-    }
-    const entry = sanitizeFeedbackEntry({
-      ...input,
-      id: `feedback-${randomUUID()}`,
-      at: new Date().toISOString(),
-    });
-    if (!entry) throw makeErr('Invalid feedback: a non-zero rating (up/down) is required', ERR_VALIDATION);
-    // UPSERT by runId, don't append: re-rating a run must REPLACE its prior
-    // reaction, not stack a second one. The UI shows only the latest reaction per
-    // run, but `renderFeedbackDigest` consumes every entry — so a stacked
-    // like-then-dislike for the same run would fold BOTH a "like" and a "dislike"
-    // for one output into the next directive, and repeated votes would each burn a
-    // `feedbackWindow` slot. Dropping the prior same-runId entry keeps one reaction
-    // per run and moves the re-rated run to the most-recent position.
-    const prior = (current.feedback || []).filter((f) => !f.runId || f.runId !== entry.runId);
-    const feedback = [...prior, entry].slice(-MAX_PERSISTED_FEEDBACK);
-    const next = { ...current, feedback, updatedAt: new Date().toISOString() };
-    await store.writeRaw(id, next);
-    return { record: next };
+  // getCommission validates existence (→404), hydrates the federated feedback
+  // view, and lazily splits any legacy inline reactions into the federated store.
+  const commission = await getCommission(id);
+  // The UI always rates a specific run; reject a runId that isn't on the record
+  // so feedback can't dangle against a non-existent run.
+  if (input?.runId && !commission.runs.some((r) => r.id === input.runId)) {
+    throw makeErr(`Run not found on commission: ${input.runId}`, ERR_VALIDATION);
+  }
+  // Write to the FEDERATED feedback store (#2686): one record per reaction,
+  // deterministic id per run so a re-rating LWW-updates in place (one reaction
+  // per run) and the change propagates to every sync peer — the machine-local
+  // commission no longer carries feedback inline.
+  const rec = await recordFeedback({
+    commissionId: id,
+    runId: input?.runId ?? null,
+    rating: input?.rating,
+    note: input?.note,
+    tags: input?.tags,
   });
-  if (result?.notFound) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
-  return result.record;
+  if (!rec) throw makeErr('Invalid feedback: a non-zero rating (up/down) is required', ERR_VALIDATION);
+  commission.feedback = await listFeedbackForCommission(id).catch(() => []);
+  return commission;
+}
+
+/**
+ * Boot-time backfill (#2686 split-record migration): move every commission's
+ * legacy INLINE feedback into the federated store and clear the inline array.
+ * Idempotent — after the first pass commissions carry `feedback: []`, so a
+ * re-run is a no-op. Invoked from server boot after the DB is ready (the
+ * scripts/migrations runner executes before the pool is up, so the data move
+ * can't live there — see migration 194's registration stub).
+ */
+export async function backfillAllCommissionFeedback() {
+  const raw = await commissionStore().listRaw();
+  let migrated = 0;
+  for (const r of raw) {
+    const rec = sanitizeCommission(r);
+    if (!rec || rec.feedback.length === 0) continue;
+    await backfillInlineFeedback(rec.id, rec.feedback).catch(() => {});
+    await clearInlineFeedback(rec.id).catch(() => {});
+    migrated += 1;
+  }
+  if (migrated > 0) console.log(`🎯 Commission feedback: split ${migrated} commission(s)' inline reactions into the federated store (#2686)`);
+  return { migrated };
 }

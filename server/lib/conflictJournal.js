@@ -360,6 +360,10 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // is what the Conflicts UI offers for restore. `writersRoomFolder` matches the
   // record kind.
   writersRoomFolder: ['name', 'parentId', 'sortOrder'],
+  // A commissionFeedback (#2686) is one taste reaction — the user-authored fields
+  // the Conflicts UI may restore are the rating + its note/tags. `commissionId`/
+  // `runId` are structural keys (they address the reaction) and are excluded.
+  commissionFeedback: ['rating', 'note', 'tags'],
   // Writers Room exercises (#1645): the user-authored sprint fields the merge can
   // restore through `restoreExercise` — the appended prose + the sprint config.
   // Server-owned / structural fields are excluded (`id`/`createdAt`/`startedAt`/

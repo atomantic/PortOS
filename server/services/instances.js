@@ -280,6 +280,7 @@ const DEFAULT_SYNC_CATEGORIES = {
   writersRoomFolders: false,
   writersRoomExercises: false,
   musicVideoProjects: false,
+  commissionFeedback: false,
   catalog: false
 };
 
@@ -317,6 +318,7 @@ const PER_RECORD_CATEGORY_KINDS = Object.freeze([
   ['writersRoomFolders', 'writersRoomFolder'],
   ['writersRoomExercises', 'writersRoomExercise'],
   ['musicVideoProjects', 'musicVideoProject'],
+  ['commissionFeedback', 'commissionFeedback'],
 ]);
 
 export async function addPeer({ address, port = DEFAULT_PEER_PORT, name, host, auth }) {

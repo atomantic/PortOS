@@ -2,18 +2,26 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { creativeCommissionUpdateSchema } from '../../lib/creativeCommissionValidation.js';
 
 // In-memory collectionStore so CRUD is exercised without touching the filesystem.
+// Keyed by collection `type` so the machine-local commission store and the
+// federated commissionFeedback store (#2686) don't share one map — `records` is
+// the commission map the assertions reach into directly.
 const records = new Map();
-const makeMemStore = () => ({
-  loadAll: async () => [...records.values()],
-  loadOne: async (id) => records.get(id) || null,
-  saveOne: async (id, rec) => { records.set(id, rec); },
-  saveOneNow: async (id, rec) => { records.set(id, rec); },
-  deleteOne: async (id) => { records.delete(id); },
-  deleteOneNow: async (id) => { records.delete(id); },
-  saveTypeIndex: async () => {},
-  verifySchemaVersion: async () => ({ ok: true }),
-});
-vi.mock('../../lib/collectionStore.js', () => ({ createCollectionStore: () => makeMemStore() }));
+const feedbackRecords = new Map();
+const mapForType = (type) => (type === 'commission-feedback' ? feedbackRecords : records);
+const makeMemStore = (type) => {
+  const store = mapForType(type);
+  return {
+    loadAll: async () => [...store.values()],
+    loadOne: async (id) => store.get(id) || null,
+    saveOne: async (id, rec) => { store.set(id, rec); },
+    saveOneNow: async (id, rec) => { store.set(id, rec); },
+    deleteOne: async (id) => { store.delete(id); },
+    deleteOneNow: async (id) => { store.delete(id); },
+    saveTypeIndex: async () => {},
+    verifySchemaVersion: async () => ({ ok: true }),
+  };
+};
+vi.mock('../../lib/collectionStore.js', () => ({ createCollectionStore: ({ type }) => makeMemStore(type) }));
 vi.mock('../../lib/fileUtils.js', () => ({ PATHS: { data: '/tmp/portos-test-data' } }));
 
 const {
@@ -31,7 +39,7 @@ const {
 } = await import('./store.js');
 const { buildCommissionDirective } = await import('./directive.js');
 
-beforeEach(() => records.clear());
+beforeEach(() => { records.clear(); feedbackRecords.clear(); });
 
 const validInput = () => ({
   name: 'Nightly Surreal',
@@ -242,7 +250,9 @@ describe('submitCommissionFeedback', () => {
     const updated = await submitCommissionFeedback(created.id, { runId: 'run-A', rating: 'up', note: 'more Magritte' });
     expect(updated.feedback).toHaveLength(1);
     expect(updated.feedback[0]).toMatchObject({ runId: 'run-A', rating: 'up', note: 'more Magritte' });
-    expect(updated.feedback[0].id).toMatch(/^feedback-/);
+    // Feedback now lives in the federated commissionFeedback store (#2686), keyed
+    // by a deterministic per-run id so a re-rating LWW-updates in place.
+    expect(updated.feedback[0].id).toMatch(/^cfeedback-/);
   });
 
   it('closes the loop: the reaction folds into the next directive', async () => {

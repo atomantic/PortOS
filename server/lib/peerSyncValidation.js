@@ -15,7 +15,7 @@ import { catalogSyncIngredientSchema, catalogSyncRefSchema } from './catalogVali
 // subscriptions target another PortOS instance over Tailnet.
 export const peerSubscribeSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject']),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback']),
   recordId: z.string().trim().min(1).max(120),
 }).strict();
 
@@ -256,6 +256,12 @@ const musicVideoProjectPushSchema = z.object({
   ...peerSyncPushBase,
   ...linkedTrackField,
 }).strict();
+// Creative Commission feedback (#2686) — a body-less reaction record, no assets;
+// the sender always ships `assetManifest: []` (base still requires the field).
+const commissionFeedbackPushSchema = z.object({
+  kind: z.literal('commissionFeedback'),
+  ...peerSyncPushBase,
+}).strict();
 export const peerSyncPushSchema = z.discriminatedUnion('kind', [
   universePushSchema,
   seriesPushSchema,
@@ -270,13 +276,14 @@ export const peerSyncPushSchema = z.discriminatedUnion('kind', [
   writersRoomFolderPushSchema,
   writersRoomExercisePushSchema,
   musicVideoProjectPushSchema,
+  commissionFeedbackPushSchema,
 ]);
 
 // Manual sync action schemas — used by POST /sync-record, /sync-now, /pull-metadata.
 
 export const peerSyncRecordSchema = z.object({
   peerId: z.string().trim().min(1).max(120),
-  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject']),
+  recordKind: z.enum(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback']),
   recordId: z.string().trim().min(1).max(200),
 }).strict();
 

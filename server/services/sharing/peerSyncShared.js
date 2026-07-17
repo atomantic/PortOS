@@ -16,7 +16,7 @@ import { PATHS, atomicWrite, readJSONFile, ensureDir } from '../../lib/fileUtils
 import { getPeers } from '../instances.js';
 
 
-export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject']);
+export const PEER_SUBSCRIBABLE_KINDS = Object.freeze(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback']);
 
 /**
  * Cross-cutting event bus for the peer-sync receiver. The asset-pull worker
@@ -101,6 +101,7 @@ export const KIND_TO_CATEGORY = Object.freeze({
   writersRoomFolder: 'writersRoomFolders',
   writersRoomExercise: 'writersRoomExercises',
   musicVideoProject: 'musicVideoProjects',
+  commissionFeedback: 'commissionFeedback',
 });
 
 export function peerAllowsOutbound(peer) {

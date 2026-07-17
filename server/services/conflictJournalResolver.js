@@ -39,6 +39,7 @@ import { updateProject } from './creativeDirector/local.js';
 import { updateProject as updateMusicVideoProject } from './musicVideo/projects.js';
 import { restoreBoard } from './moodBoard/index.js';
 import { updateWork, restoreFolder, restoreExercise } from './writersRoom/local.js';
+import { restoreCommissionFeedback } from './creativeCommissions/feedbackStore.js';
 
 export const ERR_NOT_FOUND = 'CONFLICT_JOURNAL_NOT_FOUND';
 export const ERR_VALIDATION = 'CONFLICT_JOURNAL_VALIDATION';
@@ -162,6 +163,13 @@ async function applyToRecord(kind, recordId, patch, { replace = false } = {}) {
     // and stamps updatedAt so the restored sprint wins the next LWW. A
     // missing/tombstoned exercise 404s (→ ERR_TARGET_GONE).
     await restoreExercise(recordId, patch).catch(translateGone);
+  } else if (kind === 'commissionFeedback') {
+    // restoreCommissionFeedback merges the snapshot's rating/note/tags, un-tombstones,
+    // and bumps updatedAt so the restore wins the next LWW and re-pushes. It returns
+    // null (not throw) for a missing record — translate that to ERR_TARGET_GONE so
+    // the route serves a clean 409 (#2686).
+    const restored = await restoreCommissionFeedback(recordId, patch).catch(translateGone);
+    if (!restored) throw makeErr(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
   } else {
     throw makeErr(`Unsupported conflict kind: ${kind}`, ERR_VALIDATION);
   }

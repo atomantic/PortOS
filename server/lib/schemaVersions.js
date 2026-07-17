@@ -401,6 +401,15 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // it federates via its own channels / a follow-up. The FIRST incompatible
   // project-shape change MUST bump this to 2.
   musicVideoProjects: 1,
+  // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
+  // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
+  // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).
+  // The taste reactions federate (so a 👍/👎 carries across a user's machines and
+  // conditions the same commission's next run) while the parent commission stays
+  // machine-local (a synced schedule would double-run). Body-less whole-record
+  // LWW with soft-delete tombstones — the merge never propagates a hard delete.
+  // The FIRST incompatible reaction-shape change MUST bump this to 2.
+  commissionFeedback: 1,
   // v1 = standalone media-library federation (#1566). NOT a record kind — it's
   // the wire contract for the library-level asset manifest a full-sync peer
   // advertises at GET /api/peer-sync/library-manifest. The receiver-pull sweep
@@ -501,6 +510,7 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
   writersRoomFolder: Object.freeze(['writersRoomFolders']),
   writersRoomExercise: Object.freeze(['writersRoomExercises']),
   musicVideoProject: Object.freeze(['musicVideoProjects']),
+  commissionFeedback: Object.freeze(['commissionFeedback']),
 });
 
 /**
