@@ -197,7 +197,10 @@ export default function TasteTab({ onRefresh }) {
   };
 
   const handleResetSection = async (sectionId) => {
-    await api.resetTasteSection(sectionId).catch(() => null);
+    // request() owns the failure toast; bail before the success toast so a
+    // failed reset doesn't report "Section reset" on top of that error.
+    const ok = await api.resetTasteSection(sectionId).then(() => true).catch(() => false);
+    if (!ok) return;
     toast.success('Section reset');
     await loadProfile();
     setReviewSection(null);
