@@ -86,7 +86,7 @@ export default function TextStagePanel({
       // Only send when there's a real choice to make — omitting it lets the
       // server fall back to the conventional forward source (unchanged behavior).
       ...(availableSources.length ? { sourceStageIds: selectedSources } : {}),
-    }),
+    }, { silent: true }),
     { errorMessage: `Failed to generate ${stageId}` },
   );
   const generating = localGenerating || serverGenerating;

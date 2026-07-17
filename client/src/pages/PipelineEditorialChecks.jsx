@@ -187,9 +187,10 @@ export default function PipelineEditorialChecks() {
     setHiddenCheckIds((s) => (s.size ? new Set() : s));
     if (!id) { setComments([]); return; }
     setLoadingFindings(true);
-    // getPipelineManuscriptReview has no silent option, so request() already
-    // toasts on failure — just clear + swallow here (single-layer toast). Guard
-    // every state write on the series still being current (stale-response race).
+    // Deliberately NOT silent: this caller owns no error UI of its own, so we
+    // let request()'s default toast be the single layer and just clear +
+    // swallow here. Guard every state write on the series still being current
+    // (stale-response race).
     getPipelineManuscriptReview(id)
       .then((review) => { if (activeSeriesRef.current === id) setComments(Array.isArray(review?.comments) ? review.comments : []); })
       .catch(() => { if (activeSeriesRef.current === id) setComments([]); })

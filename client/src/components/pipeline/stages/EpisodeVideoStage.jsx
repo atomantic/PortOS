@@ -171,7 +171,7 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
       // its own default (videoGen.defaultModelId → registry default).
       if (modelId) payload.modelId = modelId;
       if (force) payload.force = true;
-      return generatePipelineVisualImage(issue.id, 'episodeVideo', payload).catch((err) => {
+      return generatePipelineVisualImage(issue.id, 'episodeVideo', payload, { silent: true }).catch((err) => {
         // Re-throw with a force-aware fallback so useAsyncAction's toaster
         // surfaces the right verb (start vs restart) if the server didn't
         // include a message.
