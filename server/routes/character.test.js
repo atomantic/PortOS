@@ -108,8 +108,16 @@ describe('PUT /api/character', () => {
     expect(characterService.updateCharacterFields).toHaveBeenCalledWith({ name: 'Radagast' });
   });
 
-  it('rejects an empty name instead of clearing it', async () => {
-    const res = await request(makeApp()).put('/api/character').send({ name: '' });
+  it('accepts an empty name/class to clear it back to the placeholder (#2677)', async () => {
+    // '' is the "unset" state the human-centered page renders as "Your name" / "Add a title",
+    // so clearing must be an accepted update, not a 400 — the field is no longer `.min(1)`.
+    const res = await request(makeApp()).put('/api/character').send({ name: '', class: '' });
+    expect(res.status).toBe(200);
+    expect(characterService.updateCharacterFields).toHaveBeenCalledWith({ name: '', class: '' });
+  });
+
+  it('still enforces the max length on name/class', async () => {
+    const res = await request(makeApp()).put('/api/character').send({ name: 'x'.repeat(101) });
     expect(res.status).toBe(400);
     expect(characterService.updateCharacterFields).not.toHaveBeenCalled();
   });

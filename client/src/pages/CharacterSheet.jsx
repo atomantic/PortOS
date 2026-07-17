@@ -319,10 +319,14 @@ export default function CharacterSheet() {
       setNameVal(char.name || '');
       return;
     }
-    if (!(nameVal.trim() && nameVal.trim() !== char.name)) return;
+    // Save on any real change, INCLUDING clearing back to '' (which returns the sheet to the
+    // "Your name" placeholder). Only a no-op — the trimmed value equal to what's persisted —
+    // skips the PUT. Compare against `char.name || ''` so a blank→blank edit doesn't churn.
+    const nextName = nameVal.trim();
+    if (nextName === (char.name || '')) return;
     setNameSaving(true);
     try {
-      const data = await charPut({ name: nameVal.trim() });
+      const data = await charPut({ name: nextName });
       setChar(data);
     } catch (err) {
       toast.error(err.message || 'Failed to save name');
@@ -345,8 +349,11 @@ export default function CharacterSheet() {
 
   const handleClassSave = async () => {
     try {
-      if (classVal.trim() && classVal !== char.class) {
-        const data = await charPut({ class: classVal.trim() });
+      // Save on any real change, including clearing back to '' (restores the "Add a title"
+      // placeholder); only a no-op skips the PUT.
+      const nextClass = classVal.trim();
+      if (nextClass !== (char.class || '')) {
+        const data = await charPut({ class: nextClass });
         setChar(data);
       }
     } catch (err) { toast.error(err.message || 'Failed to save class'); }
