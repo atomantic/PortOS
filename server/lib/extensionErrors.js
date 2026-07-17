@@ -14,12 +14,10 @@
  * throttle gate rather than filtering at the Review Hub on read.
  *
  * Detection is provenance-first: an extension URL scheme in the script source
- * or the stack is proof the frame is not ours. Message matching is the
- * fallback for stackless rejections (`reject('Failed to connect to MetaMask')`
- * carries no frames at all) and is deliberately kept to a short list of
- * vendor/runtime strings PortOS provably never emits — a message pattern is a
- * blunt instrument that can hide a real bug, so each addition must be verified
- * absent from our own source first.
+ * or the stack is proof the frame is not ours, and that covers every case
+ * observed in practice. Message matching only backstops stackless rejections
+ * (`reject('Failed to connect to MetaMask')` carries no frames at all); see
+ * EXTENSION_MESSAGE_RE below for the bar a new pattern has to clear.
  *
  * This module is MIRRORED at client/src/lib/extensionErrors.js. This server
  * copy is authoritative; parity is enforced by extensionErrors.mirror.test.js.
