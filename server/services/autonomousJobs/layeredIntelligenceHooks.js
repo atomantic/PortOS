@@ -53,6 +53,8 @@ import {
   resolveJiraBlockKey,
   applyJiraBlockingLabel,
   computeOutcomesReport,
+  computeSelfEvalSummary,
+  readLiTaskMetrics,
   hasPlannedWorkListing
 } from '../layeredIntelligence.js'
 import { recordFiledProposal, listOutcomes, reconcileOutcomes } from '../layeredIntelligenceOutcomes.js'
@@ -311,10 +313,14 @@ export async function buildTaskInput({ app } = {}) {
   // AND an outcomes-capable tracker (forge / jira / plan — #2435 taught the plan
   // parse to read a checked `- [x]` item as closed). A failed tracker read skips
   // reconciliation (never mark closed on a blind read).
+  // `null` (not `[]`) until the outcomes pipeline actually runs this cycle: selfEval
+  // reads this too, and "the outcomes source is off" must not reach it looking like
+  // "this app has never had a proposal merged" (#2700).
+  let outcomes = null
   let outcomesReport = ''
   if (config.sources?.outcomes && outcomesTrackerSupported(filer)) {
     if (!trackerReadFailed) await reconcileOutcomes({ appId: app.id, existingIssues })
-    const outcomes = await listOutcomes({ appId: app.id })
+    outcomes = await listOutcomes({ appId: app.id })
     // The low-merge-rate warning cites the plannedWork block by name — only let it
     // do that when a real BACKLOG LISTING was gathered. The source is
     // per-app-toggleable, yields nothing on an unresolvable tracker, and renders a
@@ -326,7 +332,21 @@ export async function buildTaskInput({ app } = {}) {
     })
   }
 
-  const prompt = buildPrompt({ app, config, sources, openIssues, isPortos, outcomesReport }) + buildCompletionContract()
+  // Self-evaluation (#2700): the loop's deterministic pre-filing check on its own
+  // reasoning — no LLM call, just a read of the record it already keeps. Note
+  // `existingIssues` is passed as null on a FAILED tracker read: readIssues returns
+  // `[]` in that case, which would otherwise tell selfEval "you have filed nothing"
+  // and license a duplicate re-file off a blind read.
+  let selfEvalReport = ''
+  if (config.sources?.selfEval) {
+    selfEvalReport = computeSelfEvalSummary({
+      outcomes,
+      existingIssues: trackerReadFailed ? null : existingIssues,
+      liTaskStats: await readLiTaskMetrics()
+    })
+  }
+
+  const prompt = buildPrompt({ app, config, sources, openIssues, isPortos, outcomesReport, selfEvalReport }) + buildCompletionContract()
   // Option A: surface the fully-resolved LI agent provider/model (from
   // resolveLiAgentProvider — per-app override, else the resolved schedule pin) so
   // the generator pins the AGENT to it. Resolving the pin HERE (not delegating it

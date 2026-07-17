@@ -56,6 +56,11 @@ vi.mock('../layeredIntelligence.js', () => ({
   resolveJiraBlockKey: vi.fn(() => null),
   applyJiraBlockingLabel: vi.fn().mockResolvedValue({ success: true }),
   computeOutcomesReport: vi.fn(() => ''),
+  // selfEval (#2700). The summary's own semantics (signal sentinels, confidence,
+  // degraded guidance) are unit-tested in layeredIntelligence.test.js; these are
+  // spies so the hook's WIRING can be asserted — which inputs it feeds in.
+  computeSelfEvalSummary: vi.fn(() => 'LI self-evaluation:\n- Reasoning confidence: low'),
+  readLiTaskMetrics: vi.fn().mockResolvedValue({ read: true, metrics: null }),
   // The predicate's own semantics (listing vs. either sentinel) are unit-tested in
   // layeredIntelligence.test.js; here it's a spy so the hook's WIRING can be
   // asserted — that the gathered plannedWork string is what gets classified.
@@ -281,6 +286,57 @@ describe('buildTaskInput', () => {
     expect(reconcileOutcomes).toHaveBeenCalledWith(expect.objectContaining({ appId: 'app-1' }));
     expect(listOutcomes).toHaveBeenCalledWith(expect.objectContaining({ appId: 'app-1' }));
     expect(li.buildPrompt).toHaveBeenCalledWith(expect.objectContaining({ outcomesReport: expect.stringContaining('Total filed: 1') }));
+  });
+
+  it('skips selfEval when the source toggle is off (#2700)', async () => {
+    li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: {} });
+    await buildTaskInput({ app: APP });
+    expect(li.computeSelfEvalSummary).not.toHaveBeenCalled();
+    expect(li.readLiTaskMetrics).not.toHaveBeenCalled();
+    expect(li.buildPrompt).toHaveBeenCalledWith(expect.objectContaining({ selfEvalReport: '' }));
+  });
+
+  it('folds the selfEval summary into the prompt when enabled (#2700)', async () => {
+    li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { selfEval: true } });
+    li.computeSelfEvalSummary.mockReturnValue('LI self-evaluation:\n- Reasoning confidence: high');
+    await buildTaskInput({ app: APP });
+    expect(li.readLiTaskMetrics).toHaveBeenCalled();
+    expect(li.buildPrompt).toHaveBeenCalledWith(expect.objectContaining({
+      selfEvalReport: expect.stringContaining('Reasoning confidence: high')
+    }));
+  });
+
+  it('passes outcomes to selfEval as null (not []) when the outcomes source is off (#2700)', async () => {
+    // The sentinel that keeps "we never gathered outcomes" from reaching the
+    // reasoner as "this app has never had a proposal merged".
+    li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { selfEval: true } });
+    await buildTaskInput({ app: APP });
+    expect(li.computeSelfEvalSummary).toHaveBeenCalledWith(expect.objectContaining({ outcomes: null }));
+  });
+
+  it('passes the gathered outcomes to selfEval when both sources are on (#2700)', async () => {
+    li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { outcomes: true, selfEval: true } });
+    listOutcomes.mockResolvedValue([{ slug: 's', outcome: 'merged', scope: 'app-improvement' }]);
+    await buildTaskInput({ app: APP });
+    expect(li.computeSelfEvalSummary).toHaveBeenCalledWith(expect.objectContaining({
+      outcomes: [{ slug: 's', outcome: 'merged', scope: 'app-improvement' }]
+    }));
+  });
+
+  it('passes existingIssues to selfEval, and null when the tracker read failed (#2700)', async () => {
+    li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { selfEval: true } });
+    li.listForgeIssues.mockResolvedValue({ ok: true, issues: [{ slug: 'a', state: 'open' }] });
+    await buildTaskInput({ app: APP });
+    expect(li.computeSelfEvalSummary).toHaveBeenCalledWith(expect.objectContaining({
+      existingIssues: [{ slug: 'a', state: 'open' }]
+    }));
+
+    // A blown read yields `[]` from readIssues — which must NOT reach selfEval as
+    // "you have filed nothing", or it licenses a duplicate re-file off a blind read.
+    li.computeSelfEvalSummary.mockClear();
+    li.listForgeIssues.mockResolvedValue({ ok: false, issues: [] });
+    await buildTaskInput({ app: APP });
+    expect(li.computeSelfEvalSummary).toHaveBeenCalledWith(expect.objectContaining({ existingIssues: null }));
   });
 
   it('runs the feedback loop on a plan tracker when outcomes is enabled (#2435)', async () => {
