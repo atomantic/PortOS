@@ -1,6 +1,7 @@
 import { Plus, Trash2, Brain } from 'lucide-react';
 import Banner from '../ui/Banner';
 import ProviderModelSelector from '../ProviderModelSelector';
+import LayeredIntelligenceOutcomes from './LayeredIntelligenceOutcomes';
 import { filterSelectableModels } from '../../utils/providers';
 import { timeAgo } from '../../utils/formatters';
 import { formatLiReason, liReasonTone } from '../../utils/layeredIntelligenceReasons';
@@ -215,7 +216,7 @@ export function buildLayeredIntelligenceScheduleUpdate(baseline, current) {
  * with a partial update. `sources` updates merge one level deep here so a single
  * toggle doesn't wipe the others.
  */
-export default function LayeredIntelligenceTab({ li, onChange, providers, isPortos, loaded, error = false, onRetry }) {
+export default function LayeredIntelligenceTab({ appId, li, onChange, providers, isPortos, loaded, error = false, onRetry }) {
   if (!loaded) {
     return <div className="text-sm text-gray-500">Loading Layered Intelligence config…</div>;
   }
@@ -272,6 +273,8 @@ export default function LayeredIntelligenceTab({ li, onChange, providers, isPort
           <span className={LAST_RUN_TONE_CLASS[lastRun.tone] || 'text-gray-400'}>{lastRun.text}.</span>
         </div>
       )}
+
+      <LayeredIntelligenceOutcomes appId={appId} />
 
       <label className="flex items-center gap-2 cursor-pointer">
         <input
