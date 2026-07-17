@@ -106,7 +106,7 @@ export default function PipelineIssue() {
 
   useEffect(() => {
     let canceled = false;
-    getPipelineIssue(issueId)
+    getPipelineIssue(issueId, { silent: true })
       .then((iss) => {
         if (canceled) return iss;
         setIssue(iss);
