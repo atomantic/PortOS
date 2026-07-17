@@ -295,8 +295,11 @@ export async function buildTaskInput({ app } = {}) {
 
   // Independent reads (app source set vs the tracker's open-issue list) — overlap
   // them so the non-parked path pays one round-trip, not two.
+  // The resolved tracker coords flow into gatherSources so the plannedWork source
+  // (#2698) can read the app's committed backlog off the SAME tracker the loop
+  // files to — gatherSources has no other way to know where work lives.
   const [sources, issuesRead] = await Promise.all([
-    gatherSources(app, config),
+    gatherSources(app, config, { tracker: { filer, forgeCli, cwd, jira } }),
     readIssues({ filer, forgeCli, cwd, jira, config })
   ])
   const { openIssues, existingIssues, trackerReadFailed } = issuesRead
