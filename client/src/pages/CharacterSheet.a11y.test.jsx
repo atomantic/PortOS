@@ -13,6 +13,9 @@ const put = vi.fn();
 vi.mock('../services/api', () => ({
   default: { get: (...a) => get(...a), post: vi.fn(), put: (...a) => put(...a) },
   generateAvatar: vi.fn(() => Promise.resolve({})),
+  // The sheet's GoalsCard fetches goals itself (#2675); stubbed empty so this suite stays
+  // scoped to the name-edit control.
+  getGoals: vi.fn(() => Promise.resolve({ goals: [] })),
 }));
 
 vi.mock('../services/socket', () => ({

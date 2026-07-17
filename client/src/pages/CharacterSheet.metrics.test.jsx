@@ -12,6 +12,9 @@ const get = vi.fn();
 vi.mock('../services/api', () => ({
   default: { get: (...a) => get(...a), post: vi.fn(), put: vi.fn() },
   generateAvatar: vi.fn(() => Promise.resolve({})),
+  // The sheet's GoalsCard fetches goals itself (#2675); stubbed empty so this suite stays
+  // scoped to the metrics grid. GoalsCard's own states are covered in CharacterSheet.goals.test.jsx.
+  getGoals: vi.fn(() => Promise.resolve({ goals: [] })),
 }));
 
 vi.mock('../services/socket', () => ({
