@@ -38,6 +38,8 @@ import {
   LI_SCHEDULED_TASK_TYPE,
   SELF_EVAL_MAX_SUPPRESSED_LISTED,
   describeSuppressedIssue,
+  suppressedIssueSlug,
+  rejectionReasonBySlug,
   LI_DEGRADED_SUCCESS_THRESHOLD,
   LI_DEGRADED_MIN_SAMPLE,
   PROPOSAL_OUTCOMES,
@@ -684,6 +686,49 @@ describe('summarizeOutcomeStats', () => {
   });
 });
 
+describe('suppressedIssueSlug + rejectionReasonBySlug (#2689 feedback loop)', () => {
+  it('recovers a normalized slug from a forge body marker, a bare plan row, or nothing', () => {
+    expect(suppressedIssueSlug({ body: '<!-- lil-slug: Add-Telemetry -->' })).toBe('add-telemetry');
+    expect(suppressedIssueSlug({ slug: 'Fix Thing' })).toBe('fix-thing');
+    expect(suppressedIssueSlug({ title: 'no marker here' })).toBe(null);
+    expect(suppressedIssueSlug({})).toBe(null);
+  });
+
+  it('indexes only resolved, diagnosed, non-merged records — merged/unclassified contribute nothing', () => {
+    const map = rejectionReasonBySlug([
+      { slug: 'a', outcome: 'rejected', rejectionReason: 'scope-mismatch' },
+      { slug: 'b', outcome: 'abandoned', rejectionReason: 'unknown-reason' },
+      { slug: 'c', outcome: 'merged', rejectionReason: 'scope-mismatch' }, // merged: not a rejection
+      { slug: 'd', outcome: 'rejected', rejectionReason: null },            // unclassified: nothing to say
+      { slug: 'e', outcome: null, rejectionReason: 'duplicate' }            // unresolved
+    ]);
+    expect(map.get('a')).toBe('scope-mismatch');
+    expect(map.get('b')).toBe('unknown-reason');
+    expect(map.has('c')).toBe(false);
+    expect(map.has('d')).toBe(false);
+    expect(map.has('e')).toBe(false);
+  });
+
+  it('keeps the first diagnosed record per slug and tolerates non-array input', () => {
+    const map = rejectionReasonBySlug([
+      { slug: 'dup', outcome: 'rejected', rejectionReason: 'duplicate' },
+      { slug: 'dup', outcome: 'rejected', rejectionReason: 'quality-issue' }
+    ]);
+    expect(map.get('dup')).toBe('duplicate');
+    expect(rejectionReasonBySlug(null).size).toBe(0);
+    expect(rejectionReasonBySlug(undefined).size).toBe(0);
+  });
+
+  it('describeSuppressedIssue appends the glossed reason only when the slug is diagnosed', () => {
+    const reasons = new Map([['add-telemetry', 'scope-mismatch']]);
+    expect(describeSuppressedIssue({ number: 12, title: 'Add telemetry', body: '<!-- lil-slug: add-telemetry -->' }, reasons))
+      .toBe("#12 [add-telemetry] Add telemetry — previously closed: outside the app's scope");
+    // Unmatched slug or no lookup → unchanged output (back-compat).
+    expect(describeSuppressedIssue({ slug: 'other' }, reasons)).toBe('[other]');
+    expect(describeSuppressedIssue({ slug: 'add-telemetry' })).toBe('[add-telemetry]');
+  });
+});
+
 describe('computeSelfEvalSummary (#2700)', () => {
   const liMetrics = (over = {}) => ({
     read: true,
@@ -774,6 +819,41 @@ describe('computeSelfEvalSummary (#2700)', () => {
     expect(report).toContain('Recently closed (do NOT re-propose):');
     expect(report).toContain('#12 [add-telemetry] Add telemetry');
     expect(report).toContain('[fix-thing]');
+  });
+
+  it('annotates each named suppressed proposal with WHY it was closed (#2689 feedback loop)', () => {
+    const now = Date.now();
+    const recent = new Date(now - 5 * 24 * 60 * 60 * 1000).toISOString();
+    const report = computeSelfEvalSummary({
+      // The reconciled outcome store carries the rejection diagnosis per slug.
+      outcomes: [
+        { appId: 'a', slug: 'add-telemetry', outcome: 'rejected', rejectionReason: 'scope-mismatch' },
+        { appId: 'a', slug: 'fix-thing', outcome: 'abandoned', rejectionReason: 'duplicate' }
+      ],
+      existingIssues: [
+        { number: 12, title: 'Add telemetry', body: '<!-- lil-slug: add-telemetry -->', state: 'closed', closedAt: recent },
+        { slug: 'fix-thing', state: 'closed' }
+      ],
+      now
+    });
+    // The reasoner sees the specific failure pattern, not merely a slug to route around.
+    expect(report).toContain("#12 [add-telemetry] Add telemetry — previously closed: outside the app's scope");
+    expect(report).toContain('[fix-thing] — previously closed: already tracked elsewhere (duplicate)');
+  });
+
+  it('leaves an undiagnosed suppressed proposal unannotated', () => {
+    const now = Date.now();
+    const recent = new Date(now - 5 * 24 * 60 * 60 * 1000).toISOString();
+    const report = computeSelfEvalSummary({
+      // No outcomes gathered this run — the line renders exactly as before.
+      outcomes: null,
+      existingIssues: [
+        { number: 12, title: 'Add telemetry', body: '<!-- lil-slug: add-telemetry -->', state: 'closed', closedAt: recent }
+      ],
+      now
+    });
+    expect(report).toContain('#12 [add-telemetry] Add telemetry');
+    expect(report).not.toContain('previously closed:');
   });
 
   it('caps the named list and counts the remainder', () => {
