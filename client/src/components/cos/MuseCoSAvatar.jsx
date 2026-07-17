@@ -6,6 +6,8 @@ import { SkeletonUtils } from 'three-stdlib';
 import {
   AGENT_STATES,
   MUSE_STATE_ANIMATIONS,
+  MUSE_STATE_SEQUENCES,
+  MUSE_IN_PLACE_SUFFIX,
   MUSE_ANIMATION_FALLBACK,
   MUSE_SPEAKING_GESTURE,
   MUSE_ROOT_MOTION_CLIPS,
@@ -13,15 +15,18 @@ import {
 import CoSAvatarOrbitControls from './CoSAvatarOrbitControls';
 import CoSAvatarFrame from './CoSAvatarFrame';
 import CoSBackgroundCamera from './CoSBackgroundCamera';
+import { withInPlaceClips, inPlaceClipName } from '../../utils/animationClips';
 
 const MODEL_URL = '/api/avatar/model.glb';
 const FADE = 0.35; // crossfade seconds between state loops
 
-// Loaded avatar wrapped in a holographic material treatment. When the GLB
-// ships animation clips (the bundled RobotExpressive default does), an
-// AnimationMixer drives the skeleton per CoS state and `speaking`; otherwise it
-// falls back to the fully-procedural rotation/glow so static GLBs still render.
-function GLBAvatar({ color, state, speaking }) {
+// Loaded avatar rendered with its own textures/materials. When the GLB ships
+// animation clips (the bundled RobotExpressive default does), an AnimationMixer
+// drives the skeleton per CoS state and `speaking`; otherwise it falls back to
+// the gentle procedural float so static GLBs still render. The per-state color
+// lives entirely in the surrounding lights/halo/glow/sparkles (see Scene) — the
+// model itself keeps its real colors rather than being tinted.
+function GLBAvatar({ state, speaking }) {
   const gltf = useGLTF(MODEL_URL);
   const ref = useRef();
 
@@ -30,44 +35,28 @@ function GLBAvatar({ color, state, speaking }) {
   // leaves the mixer driving bones the rendered mesh no longer references, so
   // nothing would move — the reason clips were previously ignored.
   const scene = useMemo(() => SkeletonUtils.clone(gltf.scene), [gltf.scene]);
-  const { actions, names, mixer } = useAnimations(gltf.animations, scene);
+  // Append the treadmill (in-place) variants of the root-motion clips so the
+  // coding montage can run/walk without drifting. Memoized on the source clips.
+  const animations = useMemo(
+    () => withInPlaceClips(gltf.animations, MUSE_ROOT_MOTION_CLIPS, MUSE_IN_PLACE_SUFFIX),
+    [gltf.animations]
+  );
+  const { actions, names, mixer } = useAnimations(animations, scene);
   const hasClips = names.length > 0;
 
-  // Materials to pulse each frame (collected once so we don't traverse the
-  // whole scene graph on every frame).
-  const matsRef = useRef([]);
-
-  // Apply the holographic material + fit the model to the viewport ONCE per
-  // scene. Keyed on [scene] only — NOT color — because the fit is an absolute
-  // `setScalar`, so re-measuring the already-scaled scene on a color change
-  // would reset it toward native size (the avatar would pop between two sizes
-  // on every state transition) and re-allocating materials each time would
-  // leak GPU resources. Replacing the material does NOT affect skinning — the
-  // skeleton drives deformation regardless of the bound material, so clips
-  // still animate the body. The per-state emissive hue is handled separately
-  // below so this heavy pass runs just once.
+  // Fit the model to the viewport ONCE per scene (absolute `setScalar`, so it
+  // must not re-run on state changes or the avatar would pop between sizes).
+  // Keep the GLB's original materials so the model renders in full texture and
+  // color — we only flip a couple of per-mesh flags. Frustum culling is
+  // disabled because animated poses (arms out, jump, running) can exceed the
+  // bind-pose bounding box and would otherwise blink the avatar out mid-clip.
   useEffect(() => {
-    const mats = [];
     scene.traverse((obj) => {
       if (!obj.isMesh) return;
       obj.castShadow = false;
       obj.receiveShadow = false;
-      // Animated poses (arms out, jump) can exceed the bind-pose bounding box;
-      // disable frustum culling so the avatar never blinks out mid-clip.
       obj.frustumCulled = false;
-      const material = new THREE.MeshStandardMaterial({
-        color: '#120820',
-        emissiveIntensity: 0.55,
-        metalness: 0.55,
-        roughness: 0.35,
-        transparent: true,
-        opacity: 0.94,
-        side: THREE.FrontSide,
-      });
-      obj.material = material;
-      mats.push(material);
     });
-    matsRef.current = mats;
 
     // Fit bounding box into a fixed height so different models render consistently.
     const box = new THREE.Box3().setFromObject(scene);
@@ -81,25 +70,22 @@ function GLBAvatar({ color, state, speaking }) {
       -center.y * scale + 0.05,
       -center.z * scale
     );
-    return () => { for (const m of mats) m.dispose(); };
   }, [scene]);
 
-  // Recolor the emissive hue in place when the CoS state changes — mutate the
-  // materials created above rather than re-allocating them (see the fit effect).
-  useEffect(() => {
-    for (const m of matsRef.current) m.emissive.set(color);
-  }, [color]);
-
   // --- Animation driving -------------------------------------------------
-  // The base loop we should return to when idle (updated by the state effect),
-  // plus a flag so a state change mid-gesture defers the crossfade to the
-  // gesture's finish handler instead of fighting it.
+  // A state resolves to EITHER a single looping base clip (desiredBaseRef) or a
+  // montage that cycles clips (sequenceRef). `gestureActiveRef` defers and
+  // restores around the one-shot speaking gesture so a state change mid-gesture
+  // still lands on the latest state.
   const activeRef = useRef(null);          // currently-playing action
   const desiredBaseRef = useRef(null);     // { name, timeScale, once } to rest on
+  const sequenceRef = useRef(null);        // { steps, index } | null when looping
   const gestureActiveRef = useRef(false);
   const speakingRef = useRef(false);
 
-  // Crossfade the currently-active action to `clipName`.
+  // Crossfade the currently-active action to `clipName`. `once` → play a single
+  // LoopOnce and clamp; `reps` → a finite LoopRepeat that fires `finished` after
+  // N cycles (used to advance a montage); neither → an infinite base loop.
   const fadeTo = useCallback((clipName, opts = {}) => {
     const next = actions[clipName];
     if (!next) return;
@@ -108,13 +94,42 @@ function GLBAvatar({ color, state, speaking }) {
     next.enabled = true;
     next.setEffectiveTimeScale(opts.timeScale ?? 1);
     next.setEffectiveWeight(1);
-    next.setLoop(opts.once ? THREE.LoopOnce : THREE.LoopRepeat, opts.once ? 1 : Infinity);
-    next.clampWhenFinished = !!opts.once;
+    if (opts.once || opts.reps) {
+      // Finite: one shot (`once`) or N reps of a montage step. Clamp on the last
+      // frame so it holds its (near-neutral) end pose through the crossfade to
+      // the next action instead of snapping toward the bind pose.
+      next.setLoop(opts.once ? THREE.LoopOnce : THREE.LoopRepeat, opts.once ? 1 : opts.reps);
+      next.clampWhenFinished = true;
+    } else {
+      next.setLoop(THREE.LoopRepeat, Infinity);
+      next.clampWhenFinished = false;
+    }
     next.fadeIn(dur).play();
     const prev = activeRef.current;
     if (prev && prev !== next) prev.fadeOut(dur);
     activeRef.current = next;
   }, [actions]);
+
+  // Play montage step `index` (wraps). `index` is always ≥ 0 at every call site
+  // (0, the current index, or current+1), so a plain modulo is enough. Steps
+  // were pre-filtered to present clips.
+  const playSequenceStep = useCallback((index, duration) => {
+    const seq = sequenceRef.current;
+    if (!seq || !seq.steps.length) return;
+    const i = index % seq.steps.length;
+    seq.index = i;
+    const step = seq.steps[i];
+    fadeTo(step.clip, { timeScale: step.timeScale, reps: step.reps ?? 1, duration });
+  }, [fadeTo]);
+
+  // Resume the current state's motion — the montage from `fromIndex`, or the
+  // single base loop. Both the state effect and the gesture-finish handler need
+  // this exact "sequence vs base loop" decision, so it lives in one place.
+  const resumeMotion = useCallback((fromIndex, duration) => {
+    if (sequenceRef.current) { playSequenceStep(fromIndex, duration); return; }
+    const rest = desiredBaseRef.current;
+    if (rest?.name) fadeTo(rest.name, { timeScale: rest.timeScale, once: rest.once, duration });
+  }, [fadeTo, playSequenceStep]);
 
   // Resolve the base loop clip for the current state (guarded against a GLB
   // that lacks the mapped clip).
@@ -129,38 +144,62 @@ function GLBAvatar({ color, state, speaking }) {
     return names.find((n) => !MUSE_ROOT_MOTION_CLIPS.includes(n)) || names[0];
   }, [hasClips, names, baseCfg.clip]);
 
-  // Play / crossfade the base state loop.
+  // Resolve the montage steps for the current state against the loaded clips.
+  // The step's clip is auto-routed to its in-place variant if it's a root-motion
+  // clip — so the sequence data names real GLB clips (`Running`) and the
+  // fixed-frame no-drift guarantee is enforced here, not by a naming convention.
+  // A state needs ≥2 resolvable steps to run as a montage; otherwise it falls
+  // back to its single base loop (so a GLB missing the sequence clips — or the
+  // in-place variant — still animates). Kept as a memo so the state effect's
+  // dependency is stable.
+  const sequenceSteps = useMemo(() => {
+    if (!hasClips) return null;
+    const def = MUSE_STATE_SEQUENCES[state];
+    if (!Array.isArray(def)) return null;
+    const steps = def
+      .map((s) => ({ ...s, clip: inPlaceClipName(s.clip, MUSE_ROOT_MOTION_CLIPS, MUSE_IN_PLACE_SUFFIX) }))
+      .filter((s) => names.includes(s.clip));
+    return steps.length >= 2 ? steps : null;
+  }, [hasClips, names, state]);
+
+  // Start / crossfade to the current state's motion (montage or base loop).
   useEffect(() => {
     if (!baseClip) return;
     desiredBaseRef.current = { name: baseClip, timeScale: baseCfg.timeScale, once: baseCfg.once };
+    sequenceRef.current = sequenceSteps ? { steps: sequenceSteps, index: 0 } : null;
     // Mid-gesture: don't crossfade now — the gesture's finish handler restores
-    // to whatever desiredBaseRef points at, so the latest state still wins.
+    // to whatever the refs point at, so the latest state still wins.
     if (gestureActiveRef.current) return;
-    fadeTo(baseClip, { timeScale: baseCfg.timeScale, once: baseCfg.once });
-  }, [fadeTo, baseClip, baseCfg.timeScale, baseCfg.once]);
+    resumeMotion(0);
+  }, [resumeMotion, baseClip, baseCfg.timeScale, baseCfg.once, sequenceSteps]);
 
-  // Persistent listener: when the one-shot speaking gesture finishes, hand
-  // control back to whatever base loop the current state wants (read live from
-  // desiredBaseRef, so a state change mid-gesture still lands correctly). Kept
-  // separate from the trigger effect below so that `speaking` flipping back to
-  // false mid-gesture can't tear down the restore path — the gesture always
-  // returns to a base loop instead of freezing on its end pose.
+  // Persistent `finished` listener with two jobs: (1) when the one-shot speaking
+  // gesture finishes, hand control back to the live base loop / montage (read
+  // from the refs so a state change mid-gesture still lands correctly); (2) when
+  // a finite montage step finishes, advance to the next step. Non-sequence base
+  // loops are infinite (never fire) and the clamped `sleeping` pose is ignored.
   useEffect(() => {
     if (!hasClips) return;
     const gesture = actions[MUSE_SPEAKING_GESTURE];
     const onFinished = (e) => {
-      if (!gestureActiveRef.current) return;
-      if (gesture && e.action !== gesture) return; // ignore base clips finishing
-      gestureActiveRef.current = false;
-      const rest = desiredBaseRef.current;
-      if (rest?.name) fadeTo(rest.name, { timeScale: rest.timeScale, once: rest.once, duration: 0.25 });
+      if (gestureActiveRef.current) {
+        if (gesture && e.action !== gesture) return; // ignore body clips finishing
+        gestureActiveRef.current = false;
+        resumeMotion(sequenceRef.current?.index ?? 0, 0.25); // back to montage / base loop
+        return;
+      }
+      // Advance the montage when the active step completes its reps.
+      if (sequenceRef.current && e.action === activeRef.current) {
+        playSequenceStep(sequenceRef.current.index + 1);
+      }
     };
     mixer.addEventListener('finished', onFinished);
     return () => mixer.removeEventListener('finished', onFinished);
-  }, [fadeTo, hasClips, actions, mixer]);
+  }, [resumeMotion, playSequenceStep, hasClips, actions, mixer]);
 
   // Speaking overlay: on the false→true edge, crossfade to the gesture once.
-  // The persistent listener above returns to the base loop when it finishes.
+  // The persistent listener above returns to the base loop / montage when it
+  // finishes.
   useEffect(() => {
     if (!hasClips) return;
     const was = speakingRef.current;
@@ -168,15 +207,17 @@ function GLBAvatar({ color, state, speaking }) {
     if (!speaking || was) return; // only fire on the rising edge
 
     const gesture = actions[MUSE_SPEAKING_GESTURE];
+    if (!gesture) return;
+    // Skip if a non-montage state is already resting on the gesture clip.
     const base = desiredBaseRef.current;
-    if (!gesture || (base && gesture === actions[base.name])) return;
+    if (!sequenceRef.current && base && gesture === actions[base.name]) return;
 
     gestureActiveRef.current = true;
     fadeTo(MUSE_SPEAKING_GESTURE, { once: true, duration: 0.2 });
   }, [fadeTo, speaking, hasClips, actions]);
 
-  // Subtle container sway + holographic emissive pulse. The clip drives the
-  // body; this only adds the gentle float/glow that reads as "holographic".
+  // Subtle container float. The clip drives the body; this only adds the gentle
+  // sway/head-bob so the avatar never feels frozen between clip transitions.
   useFrame(({ clock }) => {
     const t = clock.getElapsedTime();
     if (ref.current) {
@@ -190,16 +231,6 @@ function GLBAvatar({ color, state, speaking }) {
         ? Math.sin(t * 10) * 0.03
         : Math.sin(t * 0.3) * 0.02;
     }
-
-    const intensity =
-      state === 'sleeping' ? 0.2 :
-      state === 'thinking' ? 0.6 + Math.sin(t * 3) * 0.3 :
-      state === 'coding' ? 0.75 + Math.sin(t * 8) * 0.3 :
-      state === 'investigating' ? 0.7 + Math.sin(t * 5) * 0.25 :
-      state === 'ideating' ? 0.8 + Math.sin(t * 4) * 0.4 :
-      0.55;
-    const mats = matsRef.current;
-    for (let i = 0; i < mats.length; i++) mats[i].emissiveIntensity = intensity;
   });
 
   return (
@@ -257,11 +288,16 @@ function Scene({ state, speaking, background }) {
     <>
       <CoSBackgroundCamera enabled={background} z={3.3} />
 
-      <ambientLight intensity={0.25} />
-      <pointLight position={[2, 3, 4]} intensity={0.6} color={color} />
-      <pointLight position={[-2, 1, 3]} intensity={0.3} color="#f472b6" />
+      {/* Neutral, even lighting so the model renders in its own full texture
+          and color. The per-state hue lives in the accent point light + halo /
+          ground glow / sparkles below rather than being painted onto the model. */}
+      <ambientLight intensity={0.7} />
+      <hemisphereLight intensity={0.55} color="#ffffff" groundColor="#3a3a52" />
+      <directionalLight position={[3, 5, 4]} intensity={1.1} />
+      <pointLight position={[2, 3, 4]} intensity={0.45} color={color} />
+      <pointLight position={[-2, 1, 3]} intensity={0.25} color="#f472b6" />
       <Halo color={color} state={state} />
-      <GLBAvatar color={color} state={state} speaking={speaking} />
+      <GLBAvatar state={state} speaking={speaking} />
       <StateEffects color={color} state={state} />
       <GroundGlow color={color} />
 
