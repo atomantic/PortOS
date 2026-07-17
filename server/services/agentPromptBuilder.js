@@ -724,8 +724,11 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // all commit/push/PR completion guidance in favor of the sentinel-only contract.
   const discardWorktree = isTruthyMetaFn(task.metadata?.discardWorktree);
   // No-code / API-action task (e.g. Creative Director agents): deliverable is an
-  // HTTP PATCH, not a commit — suppress the /do:push completion workflow.
-  const noCodeOutput = isTruthyMetaFn(task.metadata?.noCodeOutput);
+  // HTTP PATCH, not a commit — suppress the /do:push completion workflow. Also
+  // derive from a CD task's own `creativeDirector` marker so tasks queued as
+  // `pending` BEFORE this flag existed (persisted across an upgrade) are still
+  // recognized without a metadata migration.
+  const noCodeOutput = isTruthyMetaFn(task.metadata?.noCodeOutput) || !!task.metadata?.creativeDirector;
   const isWorktreeOnExistingBranch = worktreeInfo?.existingBranch === true;
   const worktreeSection = worktreeInfo ? `
 ## Git Worktree Context
@@ -1062,8 +1065,10 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   const discardWorktree = isTruthyMetaFn(task.metadata?.discardWorktree);
   // A no-code / API-action task (e.g. a Creative Director plan/treatment/evaluate
   // agent): its deliverable is an HTTP PATCH, not a commit — suppress the
-  // /do:push completion workflow (see buildActionOutputCompletionSection).
-  const noCodeOutput = isTruthyMetaFn(task.metadata?.noCodeOutput);
+  // /do:push completion workflow (see buildActionOutputCompletionSection). Also
+  // derive from a CD task's `creativeDirector` marker so pre-upgrade `pending`
+  // tasks (queued before this flag existed) are recognized without a migration.
+  const noCodeOutput = isTruthyMetaFn(task.metadata?.noCodeOutput) || !!task.metadata?.creativeDirector;
   const isReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
   const isWorktreeOnExistingBranch = worktreeInfo?.existingBranch === true;
   // Ordered reviewer list + flags for the Review Loop (task metadata wins; else

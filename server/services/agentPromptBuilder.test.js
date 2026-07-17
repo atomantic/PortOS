@@ -130,6 +130,19 @@ describe('no-code / API-action task completion (CD agents must NOT be told to /d
     expect(prompt).not.toMatch(/## Completion Workflow/);
   });
 
+  it('recognizes a legacy CD task by its creativeDirector marker (pre-upgrade pending, no explicit flag)', () => {
+    // A CD task queued before the noCodeOutput flag existed carries only the
+    // creativeDirector marker — it must STILL skip the /do:push workflow.
+    const legacyCdTask = makeTask({
+      metadata: { context: 'PATCH the plan', creativeDirector: { projectId: 'p', kind: 'plan' }, openPR: false },
+    });
+    const prompt = buildLightContextPrompt(legacyCdTask, '/repo', null, isTruthyMeta, {
+      providerId: 'claude-code-tui', providerCommand: 'claude',
+    });
+    expect(prompt).toMatch(/## Completion \(No Code Output\)/);
+    expect(prompt).not.toMatch(/## Completion Workflow/);
+  });
+
   it('a normal code task on the same provider still gets the /do:push Completion Workflow', () => {
     const prompt = buildLightContextPrompt(
       makeTask({ metadata: { openPR: false } }), '/repo', null, isTruthyMeta,
