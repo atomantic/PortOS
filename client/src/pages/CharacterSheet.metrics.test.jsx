@@ -77,6 +77,11 @@ describe('formatMetricValue', () => {
     expect(formatMetricValue({ unit: 'count', value: 3400000 })).toBe('3.4M');
   });
 
+  it('leaves a long day count literal rather than abbreviating it to a nonsense unit', () => {
+    // A multi-year health-logging streak is reachable; "1.2Kd" is not a duration anyone reads.
+    expect(formatMetricValue({ unit: 'days', value: 1200 })).toBe('1200d');
+  });
+
   it('renders a real 0 as "0", never as a dash', () => {
     // The dash is reserved for the two null states; a genuine zero is a real answer.
     expect(formatMetricValue({ unit: 'count', value: 0 })).toBe('0');

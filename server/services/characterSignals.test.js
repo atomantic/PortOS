@@ -126,24 +126,37 @@ describe('createSignalContext — failures propagate, they are not classified', 
     await expect(read('memoryCount')).rejects.toThrow('sync boom');
   });
 
-  it('never leaves an unhandled rejection behind when a failed signal goes unawaited', async () => {
-    // The memoized promise must settle to a discriminated result rather than reject: a cached
-    // rejected promise nobody awaits would take the process down under Node's default policy.
+  it('re-throws a cached failure to a consumer that reads it AFTER it already settled', async () => {
+    // The two registries do not read in lockstep — a metric can reach a signal a skill already
+    // resolved (and failed on) ticks earlier. A settled rejected promise must still reject for
+    // that late reader rather than resolving undefined.
+    vi.mocked(countMemories).mockImplementation(async () => { throw new Error('down'); });
+
+    const read = createSignalContext();
+    await expect(read('memoryCount')).rejects.toThrow('down');
+    await new Promise((resolve) => setTimeout(resolve, 5)); // let it fully settle
+
+    await expect(read('memoryCount')).rejects.toThrow('down');
+  });
+
+  it('raises no unhandled rejection when every consumer handles the failure', async () => {
+    // The realistic shape: both registries read a downed signal and each classifies it. Node's
+    // default policy kills the process on an unhandled rejection, so a shared cached rejection
+    // fanning out to several awaiters must not produce one.
     const unhandled = vi.fn();
     process.on('unhandledRejection', unhandled);
     vi.mocked(countMemories).mockImplementation(async () => { throw new Error('down'); });
 
     const read = createSignalContext();
-    read('memoryCount').catch(() => {});   // one consumer handles it
-    read('memoryCount');                   // a second reads it and drops the promise on the floor
+    await Promise.all([
+      read('memoryCount').catch(() => 'skill-classified-it'),
+      read('memoryCount').catch(() => 'metric-classified-it'),
+    ]);
 
-    // Let the microtask queue drain and the rejection surface if it is going to.
     await new Promise((resolve) => setTimeout(resolve, 10));
     process.off('unhandledRejection', unhandled);
 
-    // The dropped derived promise is the caller's problem, but the CACHED one must never be
-    // the source of an unhandled rejection.
-    expect(unhandled.mock.calls.filter(([err]) => err?.message === 'down').length).toBeLessThanOrEqual(1);
+    expect(unhandled.mock.calls.filter(([err]) => err?.message === 'down')).toHaveLength(0);
   });
 });
 
