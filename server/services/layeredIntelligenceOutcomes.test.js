@@ -52,6 +52,33 @@ describe('sanitizeOutcomeRecord', () => {
     expect(unresolved.outcomeAt).toBeNull();
     expect(unresolved.outcomeReason).toBeNull();
   });
+
+  describe('rejectionReason (#2689)', () => {
+    const sanitize = (over) => sanitizeOutcomeRecord({ appId: 'a', slug: 's', ...over });
+
+    it('keeps a valid taxonomy token on a non-merged record', () => {
+      expect(sanitize({ outcome: 'rejected', rejectionReason: 'duplicate' }).rejectionReason).toBe('duplicate');
+      expect(sanitize({ outcome: 'abandoned', rejectionReason: 'unknown-reason' }).rejectionReason).toBe('unknown-reason');
+    });
+
+    it('strips a rejection reason from a merged or unresolved record', () => {
+      // A merged proposal has no rejection to explain; a stray token would inflate
+      // the rejection tally.
+      expect(sanitize({ outcome: 'merged', rejectionReason: 'duplicate' }).rejectionReason).toBeNull();
+      expect(sanitize({ outcome: null, rejectionReason: 'duplicate' }).rejectionReason).toBeNull();
+    });
+
+    it('coerces an unrecognized token to null (unclassified), NOT to unknown-reason', () => {
+      // null re-classifies on the next reconcile; laundering it into the sentinel
+      // would freeze a bogus "we looked and found nothing" in place.
+      expect(sanitize({ outcome: 'rejected', rejectionReason: 'bogus' }).rejectionReason).toBeNull();
+      expect(sanitize({ outcome: 'rejected', rejectionReason: 42 }).rejectionReason).toBeNull();
+    });
+
+    it('defaults a pre-taxonomy record to null rather than inventing a reason', () => {
+      expect(sanitize({ outcome: 'rejected' }).rejectionReason).toBeNull();
+    });
+  });
 });
 
 describe('recordFiledProposal + listOutcomes', () => {
@@ -187,6 +214,85 @@ describe('reconcileOutcomes', () => {
   it('is a no-op with no existing issues', async () => {
     await recordFiledProposal({ appId: 'app-1', slug: 's', scope: 'app-improvement' }, store);
     expect(await reconcileOutcomes({ appId: 'app-1', existingIssues: [] }, store)).toBe(0);
+  });
+
+  describe('rejection classification (#2689)', () => {
+    const rowsBySlug = async () =>
+      Object.fromEntries((await listOutcomes({ appId: 'app-1' }, store)).map(r => [r.slug, r]));
+
+    it('classifies each non-merged proposal from the tracker state it already has', async () => {
+      await recordFiledProposal({ appId: 'app-1', slug: 'merged-one' }, store);
+      await recordFiledProposal({ appId: 'app-1', slug: 'declined' }, store);
+      await recordFiledProposal({ appId: 'app-1', slug: 'dupe' }, store);
+      await recordFiledProposal({ appId: 'app-1', slug: 'labelled' }, store);
+      await recordFiledProposal({ appId: 'app-1', slug: 'mystery' }, store);
+
+      await reconcileOutcomes({
+        appId: 'app-1',
+        existingIssues: [
+          { slug: 'merged-one', state: 'closed', stateReason: 'completed' },
+          { slug: 'declined', state: 'closed', stateReason: 'not_planned' },
+          { slug: 'dupe', state: 'closed', stateReason: 'duplicate' },
+          { slug: 'labelled', state: 'closed', stateReason: 'not_planned', labels: ['out-of-scope'] },
+          { slug: 'mystery', state: 'closed', stateReason: 'reopened' }
+        ]
+      }, store);
+
+      const rows = await rowsBySlug();
+      // A merged proposal is never given a rejection reason — the load-bearing case
+      // for jira/plan, whose trackers report no stateReason at all.
+      expect(rows['merged-one'].rejectionReason).toBeNull();
+      expect(rows['declined'].rejectionReason).toBe('user-rejected');
+      expect(rows['dupe'].rejectionReason).toBe('duplicate');
+      // A label outranks the generic not_planned.
+      expect(rows['labelled'].rejectionReason).toBe('scope-mismatch');
+      // No signal ⇒ the explicit sentinel, never a fabricated diagnosis.
+      expect(rows['mystery'].rejectionReason).toBe('unknown-reason');
+    });
+
+    it('backfills a record resolved before the taxonomy existed', async () => {
+      // Pre-#2689 installs hold resolved records with no rejectionReason. The
+      // outcome is unchanged, so only the classification diff can trigger the
+      // rewrite that fills them in.
+      await recordFiledProposal({ appId: 'app-1', slug: 'legacy' }, store);
+      const legacy = (await listOutcomes({ appId: 'app-1' }, store))[0];
+      await store.saveOne('app-1--legacy', {
+        ...legacy, outcome: 'rejected', outcomeAt: '2026-07-01T00:00:00Z', outcomeReason: 'not_planned'
+      });
+      expect((await rowsBySlug())['legacy'].rejectionReason).toBeNull();
+
+      const updated = await reconcileOutcomes({
+        appId: 'app-1',
+        existingIssues: [{ slug: 'legacy', state: 'closed', stateReason: 'not_planned', closedAt: '2026-07-01T00:00:00Z' }]
+      }, store);
+      expect(updated).toBe(1);
+      const row = (await rowsBySlug())['legacy'];
+      expect(row.rejectionReason).toBe('user-rejected');
+      expect(row.outcome).toBe('rejected');
+      // Backfilling the diagnosis must not disturb the retention clock.
+      expect(row.outcomeAt).toBe('2026-07-01T00:00:00Z');
+    });
+
+    it('re-diagnoses an unknown-reason record once the issue is finally labelled', async () => {
+      await recordFiledProposal({ appId: 'app-1', slug: 'mystery' }, store);
+      const closed = { slug: 'mystery', state: 'closed', stateReason: 'reopened', closedAt: '2026-07-01T00:00:00Z' };
+      await reconcileOutcomes({ appId: 'app-1', existingIssues: [closed] }, store);
+      expect((await rowsBySlug())['mystery'].rejectionReason).toBe('unknown-reason');
+
+      const updated = await reconcileOutcomes({
+        appId: 'app-1',
+        existingIssues: [{ ...closed, labels: ['duplicate'] }]
+      }, store);
+      expect(updated).toBe(1);
+      expect((await rowsBySlug())['mystery'].rejectionReason).toBe('duplicate');
+    });
+
+    it('does not churn a settled record whose classification is unchanged', async () => {
+      await recordFiledProposal({ appId: 'app-1', slug: 's' }, store);
+      const issue = { slug: 's', state: 'closed', stateReason: 'not_planned', closedAt: '2026-07-01T00:00:00Z' };
+      expect(await reconcileOutcomes({ appId: 'app-1', existingIssues: [issue] }, store)).toBe(1);
+      expect(await reconcileOutcomes({ appId: 'app-1', existingIssues: [issue] }, store)).toBe(0);
+    });
   });
 });
 

@@ -30,6 +30,7 @@ import { validateCommand } from '../lib/commandSecurity.js';
 import { getSettings } from './settings.js';
 import { createTicket, searchIssues, addLabels, escapeJql } from './jira.js';
 import { computeWindowedStats, computeEffectiveSuccessRate, extractTaskType } from './taskLearning/store.js';
+import { formatRejectionReasons } from './layeredIntelligenceRejections.js';
 
 // Tracker labels + slug marker. The slug is the stable dedup key the reasoner
 // chooses; it is embedded in each filed issue body so a later run (or the
@@ -604,9 +605,11 @@ export function computeOutcomesReport({ outcomes = [], hasPlannedWork = false } 
     .map(([s, v]) => `- ${s}: ${v.filed} filed, ${v.merged} merged (${v.filed ? Math.round((v.merged / v.filed) * 100) : 0}%)`)
     .join('\n');
 
-  const reasons = [...new Set(filed
-    .filter(o => o.outcome === 'rejected' && o.outcomeReason)
-    .map(o => o.outcomeReason))].slice(0, 5);
+  // Structured diagnosis of every non-merged proposal (#2689), replacing the raw
+  // tracker string this used to echo ('not_planned' merely restated the outcome).
+  // '' when nothing has been closed unmerged — distinct from "closed, reason
+  // unknown", which the line reports explicitly.
+  const rejectionReasons = formatRejectionReasons(filed, 5);
 
   // Low-merge-rate alarm (#2698). `rawMergeRate` is measured over RESOLVED
   // proposals only and is null when none have resolved — see summarizeOutcomeStats
@@ -641,7 +644,7 @@ export function computeOutcomesReport({ outcomes = [], hasPlannedWork = false } 
     'By scope:',
     scopeLines || '- (none)',
     '',
-    `Common rejection reasons: ${reasons.length ? reasons.join('; ') : 'none'}`,
+    `Why non-merged proposals were closed: ${rejectionReasons || 'nothing has been closed unmerged yet'}`,
     ...lowMergeWarning
   ].join('\n');
 }
@@ -717,20 +720,22 @@ export function computeSelfEvalSummary({
   if (!Array.isArray(outcomes)) {
     lines.push('- Proposal merge rate: UNAVAILABLE — no outcome history was gathered this run (the outcomes source is off, or this tracker cannot report outcomes). You cannot see how your past proposals fared; do not assume they went well.');
   } else {
-    const { total, merged, rejected, resolved, rawMergeRate, filed } = summarizeOutcomeStats(outcomes);
+    const { total, merged, resolved, rawMergeRate, filed } = summarizeOutcomeStats(outcomes);
     if (total === 0) {
       lines.push('- Proposal merge rate: no proposals filed yet for this app — you have no track record here to calibrate against.');
     } else if (rawMergeRate === null) {
       lines.push(`- Proposal merge rate: ${total} filed, none resolved yet — rate unknown. Awaiting triage is NOT rejection; do not read this as failure.`);
     } else {
       mergeSignal = resolved >= LOW_MERGE_RATE_MIN_SAMPLE;
-      const reasons = [...new Set(filed
-        .filter(o => o.outcome === 'rejected' && o.outcomeReason)
-        .map(o => o.outcomeReason))].slice(0, 3);
+      // Same structured diagnosis as computeOutcomesReport (#2689) — one helper, so
+      // the two blocks can never disagree about why proposals were closed. Gated on
+      // the formatted string, not on `rejected`, because an `abandoned` proposal is
+      // also a non-merge worth explaining.
+      const reasons = formatRejectionReasons(filed, 3);
       lines.push(
         `- Proposal merge rate: ${merged} of ${resolved} resolved proposals merged (${Math.round(rawMergeRate)}%)`
         + `${resolved < LOW_MERGE_RATE_MIN_SAMPLE ? ' — too small a sample to read a rate from yet' : ''}.`
-        + (rejected > 0 && reasons.length ? ` Recurring rejection reasons: ${reasons.join('; ')}.` : '')
+        + (reasons ? ` Why the rest were closed: ${reasons}.` : '')
       );
     }
   }

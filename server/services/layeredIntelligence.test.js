@@ -589,11 +589,11 @@ describe('computeOutcomesReport', () => {
     expect(computeOutcomesReport({})).toBe('');
   });
 
-  it('summarizes totals, per-scope merge rates, and rejection reasons', () => {
+  it('summarizes totals, per-scope merge rates, and classified rejection reasons', () => {
     const outcomes = [
       { scope: 'app-data-gap', outcome: 'merged' },
       { scope: 'app-data-gap', outcome: 'merged' },
-      { scope: 'app-improvement', outcome: 'rejected', outcomeReason: 'too complex' },
+      { scope: 'app-improvement', outcome: 'rejected', rejectionReason: 'duplicate' },
       { scope: 'app-improvement', outcome: null }
     ];
     const report = computeOutcomesReport({ outcomes });
@@ -603,7 +603,23 @@ describe('computeOutcomesReport', () => {
     expect(report).toContain('Still open: 1 (25%)');
     expect(report).toContain('app-data-gap: 2 filed, 2 merged (100%)');
     expect(report).toContain('app-improvement: 2 filed, 0 merged (0%)');
-    expect(report).toContain('Common rejection reasons: too complex');
+    // The taxonomy gloss (#2689), not the raw tracker string this used to echo.
+    expect(report).toContain('Why non-merged proposals were closed: already tracked elsewhere (duplicate) (1)');
+  });
+
+  it('reports an undiagnosed rejection history as the data gap it is (#2689)', () => {
+    const report = computeOutcomesReport({
+      outcomes: [
+        { scope: 'app-improvement', outcome: 'merged' },
+        { scope: 'app-improvement', outcome: 'rejected', rejectionReason: 'unknown-reason' }
+      ]
+    });
+    expect(report).toContain('Why non-merged proposals were closed: 1 of 1 closed with no recorded reason');
+  });
+
+  it('says nothing has been closed unmerged rather than implying no reasons exist (#2689)', () => {
+    const report = computeOutcomesReport({ outcomes: [{ scope: 'app-improvement', outcome: 'merged' }] });
+    expect(report).toContain('Why non-merged proposals were closed: nothing has been closed unmerged yet');
   });
 
   it('reports abandoned distinctly and excludes it from the merged numerator (#2620)', () => {
@@ -682,17 +698,26 @@ describe('computeSelfEvalSummary (#2700)', () => {
     expect(report).not.toContain('0%');
   });
 
-  it('reports a real merge rate with its recurring rejection reasons', () => {
+  it('reports a real merge rate with its classified rejection reasons', () => {
     const outcomes = [
       { outcome: 'merged' },
-      { outcome: 'rejected', outcomeReason: 'NOT_PLANNED' },
-      { outcome: 'rejected', outcomeReason: 'NOT_PLANNED' },
-      { outcome: 'rejected', outcomeReason: 'too vague' }
+      { outcome: 'rejected', rejectionReason: 'user-rejected' },
+      { outcome: 'rejected', rejectionReason: 'user-rejected' },
+      { outcome: 'abandoned', rejectionReason: 'duplicate' }
     ];
     const report = computeSelfEvalSummary({ outcomes });
     expect(report).toContain('1 of 4 resolved proposals merged (25%)');
-    // De-duplicated reasons.
-    expect(report).toContain('Recurring rejection reasons: NOT_PLANNED; too vague');
+    // Tallied by taxonomy token and glossed, commonest first — and an `abandoned`
+    // proposal is explained too, not just a `rejected` one (#2689).
+    expect(report).toContain(
+      'Why the rest were closed: the user declined it (closed as not planned) (2); already tracked elsewhere (duplicate) (1)'
+    );
+  });
+
+  it('omits the rejection clause when every resolved proposal merged (#2689)', () => {
+    const report = computeSelfEvalSummary({ outcomes: [{ outcome: 'merged' }, { outcome: 'merged' }] });
+    expect(report).toContain('2 of 2 resolved proposals merged (100%)');
+    expect(report).not.toContain('Why the rest were closed');
   });
 
   it('flags a below-floor sample as unreadable rather than as evidence', () => {
