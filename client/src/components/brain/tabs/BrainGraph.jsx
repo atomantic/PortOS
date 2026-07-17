@@ -425,7 +425,9 @@ export default function BrainGraph() {
             Overview
           </button>
           {focusTrail.map((entry, i) => (
-            <span key={entry.id} className="flex items-center gap-1 min-w-0">
+            // shrink-0 so a deep trail scrolls the row instead of flex-shrinking
+            // every label into an unreadable sliver on a narrow screen.
+            <span key={entry.id} className="flex items-center gap-1 shrink-0">
               <ChevronRight size={12} className="text-gray-600 shrink-0" />
               <span className={`px-1 truncate max-w-[140px] ${i === focusTrail.length - 1 ? 'text-white font-medium' : 'text-gray-500'}`}>
                 {entry.label}
@@ -559,10 +561,15 @@ export default function BrainGraph() {
             type filters above already carry the same colour→label mapping; the
             edge colours are only here, so it stays reachable rather than
             hidden). Unchanged at `sm` and up. */}
-        <div className="absolute bottom-3 left-3 z-10 flex flex-col items-start gap-1.5">
+        {/* pointer-events-none on the WRAPPER, not just the panel: it covers a
+            corner of the canvas, and as a hit-testable box it would swallow the
+            orbit drags the panel alone used to let through (pointer-events is
+            inherited, so the panel needs no declaration of its own; the toggle
+            opts back in). */}
+        <div className="absolute bottom-3 left-3 z-10 flex flex-col items-start gap-1.5 pointer-events-none">
           <div
             data-testid="graph-legend"
-            className={`${legendOpen ? 'block' : 'hidden'} sm:block bg-port-bg/90 border border-port-border rounded-lg p-3 text-xs space-y-1.5 pointer-events-none`}
+            className={`${legendOpen ? 'block' : 'hidden'} sm:block bg-port-bg/90 border border-port-border rounded-lg p-3 text-xs space-y-1.5`}
           >
             {BRAIN_TYPES.map(t => (
               <div key={t} className="flex items-center gap-2">
@@ -588,7 +595,7 @@ export default function BrainGraph() {
           <button
             onClick={() => setLegendOpen(o => !o)}
             aria-expanded={legendOpen}
-            className="sm:hidden flex items-center gap-1.5 px-2.5 py-1.5 min-h-[32px] text-[11px] bg-port-bg/90 border border-port-border text-gray-400 hover:text-white rounded-lg transition-colors"
+            className="sm:hidden pointer-events-auto flex items-center gap-1.5 px-2.5 py-1.5 min-h-[32px] text-[11px] bg-port-bg/90 border border-port-border text-gray-400 hover:text-white rounded-lg transition-colors"
           >
             <Info size={12} />
             Legend

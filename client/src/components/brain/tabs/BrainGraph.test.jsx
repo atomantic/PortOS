@@ -71,6 +71,16 @@ describe('legend disclosure', () => {
     expect(screen.getByTestId('graph-legend')).not.toHaveClass('hidden');
   });
 
+  it('does not swallow the canvas drags underneath it', async () => {
+    await renderGraph();
+    // The legend's wrapper covers a corner of the canvas. It must not be
+    // hit-testable, or it eats the orbit drags that pass through the panel —
+    // pointer-events is inherited, so the wrapper carries the opt-out and only
+    // the toggle opts back in.
+    expect(screen.getByTestId('graph-legend').parentElement).toHaveClass('pointer-events-none');
+    expect(screen.getByRole('button', { name: /legend/i })).toHaveClass('pointer-events-auto');
+  });
+
   it('keeps the edge-colour key reachable — it appears nowhere else in the tab', async () => {
     await renderGraph();
     // The type colours are duplicated by the filter row, but similar/shared
