@@ -6,12 +6,18 @@ import { tmpdir, homedir } from 'os';
 import { createHash } from 'crypto';
 import * as fsPromises from 'fs/promises';
 // Mock fs/promises so the `ensureDir` regression test can force `mkdir` to
-// throw a spurious Windows error. `mkdir` defaults to delegating to the real
-// implementation (so every other test in this file is unaffected); individual
-// tests override it with `mockRejectedValueOnce`.
+// throw a spurious Windows error, and the readJSONFileStrict tests can force a
+// specific `readFile` errno (EACCES can't be provoked portably — chmod 000 is a
+// no-op for root, which is how the container CI runs). Both default to delegating
+// to the real implementation (so every other test in this file is unaffected);
+// individual tests override with `mockRejectedValueOnce`.
 vi.mock('fs/promises', async (importOriginal) => {
   const actual = await importOriginal();
-  return { ...actual, mkdir: vi.fn((...args) => actual.mkdir(...args)) };
+  return {
+    ...actual,
+    mkdir: vi.fn((...args) => actual.mkdir(...args)),
+    readFile: vi.fn((...args) => actual.readFile(...args)),
+  };
 });
 import {
   assertSafeFilename,
@@ -25,6 +31,7 @@ import {
   safeJSONLParse,
   createCachedStore,
   readJSONFile,
+  readJSONFileStrict,
   readJSONLFile,
   appendJSONLine,
   readJSONLines,
@@ -301,6 +308,207 @@ describe('fileUtils', () => {
 
       const result = await readJSONFile(filePath, {}, { allowArray: false });
       expect(result).toEqual({});
+    });
+
+    it('returns the caller’s array default for garbage, not a manufactured []', async () => {
+      // The noisy-output extraction used to manufacture a literal '[]' from text
+      // holding no array, so a non-empty array default was silently replaced by an
+      // empty one. The documented contract is "default value if the file is
+      // invalid" — every in-tree caller passes `[]`, where the two agree.
+      const filePath = join(testDir, 'garbage.json');
+      await writeFile(filePath, 'not json at all');
+
+      expect(await readJSONFile(filePath, ['fallback'])).toEqual(['fallback']);
+    });
+
+    it('still extracts an array out of noisy output (pm2 jlist with ANSI codes)', async () => {
+      // Real ANSI output leads with ESC, not '[' — the extraction is deliberately
+      // skipped for text already starting with '[' (it would be self-defeating on a
+      // genuine JSON array), so `\x1b` here is load-bearing, not decoration.
+      const filePath = join(testDir, 'noisy.json');
+      await writeFile(filePath, '\x1b[31mwarn\x1b[0m [{"pid":1}]');
+
+      expect(await readJSONFile(filePath, [])).toEqual([{ pid: 1 }]);
+    });
+  });
+
+  // #2726: `readJSONFile` collapses "absent", "unreadable", and "corrupt" into the
+  // same default, so a caller counting records can't tell a real empty from a failed
+  // read and reports a fake 0. These pin the distinction the strict variant restores.
+  describe('readJSONFileStrict', () => {
+    const testDir = join(tmpdir(), 'fileutils-strict-test-' + Date.now());
+    let warnSpy;
+
+    beforeEach(async () => {
+      await mkdir(testDir, { recursive: true });
+      warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(async () => {
+      warnSpy.mockRestore();
+      await rm(testDir, { recursive: true, force: true });
+    });
+
+    const eacces = () => Object.assign(new Error('permission denied'), { code: 'EACCES' });
+
+    it('reports ENOENT as a TRUSTWORTHY empty — absent is not a failure', async () => {
+      const result = await readJSONFileStrict(join(testDir, 'never-written.json'), { sessions: [] });
+      expect(result).toEqual({ ok: true, value: { sessions: [] } });
+    });
+
+    it('does not log for a genuinely absent file', async () => {
+      await readJSONFileStrict(join(testDir, 'never-written.json'), []);
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it('reports EACCES as NOT ok — an unreadable file is not an empty one', async () => {
+      const filePath = join(testDir, 'locked.json');
+      await writeFile(filePath, '{"sessions": [{"id": "s1"}]}');
+      fsPromises.readFile.mockRejectedValueOnce(eacces());
+
+      const result = await readJSONFileStrict(filePath, { sessions: [] });
+      // `value` still carries the default so an ok-indifferent caller behaves as
+      // before; `ok: false` is what makes the failure legible.
+      expect(result).toEqual({ ok: false, value: { sessions: [] } });
+    });
+
+    it('reports a real non-ENOENT errno as NOT ok (reading a directory → EISDIR)', async () => {
+      // Unmocked, no synthetic errno: proves the classification keys off "not
+      // ENOENT" rather than a hard-coded list the real world can step outside of.
+      const result = await readJSONFileStrict(testDir, []);
+      expect(result.ok).toBe(false);
+    });
+
+    it('reports malformed JSON as NOT ok — corrupt bytes are not an empty collection', async () => {
+      const filePath = join(testDir, 'corrupt.json');
+      await writeFile(filePath, '{"incomplete":');
+
+      expect(await readJSONFileStrict(filePath, { fallback: true }))
+        .toEqual({ ok: false, value: { fallback: true } });
+    });
+
+    it('reports a truncated (empty) file as NOT ok', async () => {
+      const filePath = join(testDir, 'empty.json');
+      await writeFile(filePath, '');
+
+      expect((await readJSONFileStrict(filePath, [])).ok).toBe(false);
+    });
+
+    it('reports a parsed file as ok with its value', async () => {
+      const filePath = join(testDir, 'valid.json');
+      await writeFile(filePath, '{"sessions": [{"id": "s1"}]}');
+
+      expect(await readJSONFileStrict(filePath, { sessions: [] }))
+        .toEqual({ ok: true, value: { sessions: [{ id: 's1' }] } });
+    });
+
+    it('reports a legitimately empty collection as ok — the whole point', async () => {
+      const filePath = join(testDir, 'empty-list.json');
+      await writeFile(filePath, '[]');
+
+      expect(await readJSONFileStrict(filePath, ['fallback'])).toEqual({ ok: true, value: [] });
+    });
+
+    it('distinguishes a file that legitimately CONTAINS the default from a failed read', async () => {
+      const filePath = join(testDir, 'same-as-default.json');
+      await writeFile(filePath, '{"sessions":[]}');
+
+      // Both return the same `value`; only `ok` tells them apart — which is why the
+      // parse sentinel can't be an in-band marker like null.
+      expect(await readJSONFileStrict(filePath, { sessions: [] })).toEqual({ ok: true, value: { sessions: [] } });
+      fsPromises.readFile.mockRejectedValueOnce(eacces());
+      expect(await readJSONFileStrict(filePath, { sessions: [] })).toEqual({ ok: false, value: { sessions: [] } });
+    });
+
+    it('keeps readJSONFile’s noisy-output extraction for array defaults', async () => {
+      // safeJSONParse keys extraction off `Array.isArray(defaultValue)`, and the
+      // strict path passes a non-array sentinel as its fallback — so this pins that
+      // the extraction still runs against the caller's real default (pm2 jlist).
+      const filePath = join(testDir, 'noisy.json');
+      await writeFile(filePath, '\x1b[31mwarning\x1b[0m [{"id":1}]');
+
+      expect(await readJSONFileStrict(filePath, [])).toEqual({ ok: true, value: [{ id: 1 }] });
+    });
+
+    it('does NOT manufacture a trustworthy empty from noise holding no array', async () => {
+      // extractJSONArray returns a literal '[]' when it finds nothing, which parses
+      // cleanly — an array-defaulted strict read would otherwise report corrupt bytes
+      // as `ok: true, value: []`, silently un-stricting itself.
+      const filePath = join(testDir, 'garbage.json');
+      await writeFile(filePath, 'not json at all');
+
+      expect(await readJSONFileStrict(filePath, [])).toEqual({ ok: false, value: [] });
+    });
+
+    it('honours allowArray: false', async () => {
+      const filePath = join(testDir, 'array.json');
+      await writeFile(filePath, '[1, 2, 3]');
+
+      expect(await readJSONFileStrict(filePath, {}, { allowArray: false }))
+        .toEqual({ ok: false, value: {} });
+    });
+
+    it('stays silent when logError is false', async () => {
+      const filePath = join(testDir, 'corrupt.json');
+      await writeFile(filePath, '{"incomplete":');
+      await readJSONFileStrict(filePath, {}, { logError: false });
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  // The `strict` option is the same classification, surfaced as a throw — the shape
+  // the Character signal readers need, since a rejection is how every DB-backed
+  // getter already reports failure (#2726).
+  describe('readJSONFile with { strict: true }', () => {
+    const testDir = join(tmpdir(), 'fileutils-strictopt-test-' + Date.now());
+    let warnSpy;
+
+    beforeEach(async () => {
+      await mkdir(testDir, { recursive: true });
+      warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    });
+
+    afterEach(async () => {
+      warnSpy.mockRestore();
+      await rm(testDir, { recursive: true, force: true });
+    });
+
+    it('returns the default for an absent file — strict does not mean paranoid', async () => {
+      const result = await readJSONFile(join(testDir, 'never-written.json'), { sessions: [] }, { strict: true });
+      expect(result).toEqual({ sessions: [] });
+    });
+
+    it('throws for an unreadable file instead of returning a fake empty', async () => {
+      const filePath = join(testDir, 'locked.json');
+      await writeFile(filePath, '{"sessions": []}');
+      fsPromises.readFile.mockRejectedValueOnce(Object.assign(new Error('permission denied'), { code: 'EACCES' }));
+
+      await expect(readJSONFile(filePath, { sessions: [] }, { strict: true }))
+        .rejects.toThrow(/Unreadable JSON file/);
+    });
+
+    it('throws for corrupt JSON', async () => {
+      const filePath = join(testDir, 'corrupt.json');
+      await writeFile(filePath, 'not json at all');
+
+      await expect(readJSONFile(filePath, [], { strict: true })).rejects.toThrow(/Unreadable JSON file/);
+    });
+
+    it('returns the parsed value when the read succeeds', async () => {
+      const filePath = join(testDir, 'valid.json');
+      await writeFile(filePath, '{"sessions":[{"id":"s1"}]}');
+
+      expect(await readJSONFile(filePath, { sessions: [] }, { strict: true }))
+        .toEqual({ sessions: [{ id: 's1' }] });
+    });
+
+    it('leaves every existing (non-strict) caller swallowing exactly as before', async () => {
+      const filePath = join(testDir, 'corrupt.json');
+      await writeFile(filePath, '{"incomplete":');
+
+      expect(await readJSONFile(filePath, { fallback: true })).toEqual({ fallback: true });
+      fsPromises.readFile.mockRejectedValueOnce(Object.assign(new Error('nope'), { code: 'EACCES' }));
+      expect(await readJSONFile(filePath, { fallback: true })).toEqual({ fallback: true });
     });
   });
 

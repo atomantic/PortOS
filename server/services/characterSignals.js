@@ -22,13 +22,15 @@
  * downed Postgres is hit once per request rather than once per skill AND once per metric
  * that reads it.
  *
- * **Known gap (#2726).** Only the DB-backed readers (`universeCount`, `workCount`,
- * `catalogStats`, `memoryCount`, `assetCount`) actually reject on failure. `postSessions`,
- * `postTraining`, `loggingStats`, and `goals` bottom out in `readJSONFile`, which returns its
- * default on *every* read error — so an unreadable file is indistinguishable here from an
- * empty one. Documented at length in `characterSkills.js`; the strict-read variants that
- * close it are tracked in #2726. Nothing here changes when they land — the moment a getter
- * starts rejecting, both registries already classify it correctly.
+ * **Every reader must be able to report failure (#2726).** That propagation is only worth
+ * anything if the readers actually reject when they can't read. The DB-backed ones always
+ * did (a failed `query()` throws), but the file-backed four bottom out in `readJSONFile`,
+ * which returns its default on *every* read error — so an unreadable file arrived here
+ * indistinguishable from an empty one and scored a real-looking 0. They now pass
+ * `{ strict: true }`, which throws on a present-but-unreadable/corrupt file while still
+ * treating a genuinely absent one (ENOENT) as the trustworthy empty it is. This is the ONLY
+ * place that opts in: every other caller of those getters keeps the swallow-and-default
+ * behavior, which is correct for a UI that should degrade rather than break.
  */
 
 import { countUniverses } from './universeBuilder.js';
@@ -50,20 +52,24 @@ import { userLocalToday } from '../lib/timezone.js';
  * All nine are tallies or already-aggregated summaries, never listings: `countUniverses` /
  * `countWorks` / `countMemories` / `countAssets` are `COUNT(*)`s (#2729), so no consumer can
  * accidentally materialize every record just to read a `.length`.
+ *
+ * The file-backed readers pass `{ strict: true }` — see the header. Keep it on any reader
+ * added here whose source can swallow a read error, or the signal silently becomes a lie
+ * the consumers have no way to detect.
  */
 export const SIGNAL_READERS = {
   universeCount: () => countUniverses(),
   workCount: () => countWorks(),
   catalogStats: () => getCatalogStats(),
-  postSessions: () => getPostSessions(),
-  postTraining: () => getAllTrainingEntries(),
+  postSessions: () => getPostSessions(undefined, undefined, { strict: true }),
+  postTraining: () => getAllTrainingEntries({ strict: true }),
   // Today's `YYYY-MM-DD` in the USER's configured timezone — the same day boundary
   // meatspacePost.js anchors its streaks to. Deriving "today" from the server's local clock
   // instead would let the Character sheet's POST streak disagree with the Progress page's by
   // a day for any user whose configured timezone isn't the server's.
   postToday: () => userLocalToday(),
-  loggingStats: () => getLoggingStats(),
-  goals: () => getGoals(),
+  loggingStats: () => getLoggingStats({ strict: true }),
+  goals: () => getGoals({ strict: true }),
   memoryCount: () => countMemories({}),
   assetCount: () => countAssets(),
 };

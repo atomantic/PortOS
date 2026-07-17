@@ -192,15 +192,27 @@ export async function updatePostConfig(updates) {
 // SESSIONS
 // =============================================================================
 
-async function loadSessions() {
-  const raw = await readJSONFile(SESSIONS_FILE, { sessions: [] }, { allowArray: false });
+/**
+ * @param {{ strict?: boolean }} [options] - `strict: true` throws when
+ *   post-sessions.json is present-but-unreadable/corrupt instead of falling back to
+ *   an empty session list. Off by default: every existing caller wants the fallback
+ *   (an unreadable file shouldn't break a drill you're mid-way through). Callers
+ *   that COUNT sessions opt in — a fake 0 there is a lie, not a default (#2726).
+ */
+async function loadSessions({ strict = false } = {}) {
+  const raw = await readJSONFile(SESSIONS_FILE, { sessions: [] }, { allowArray: false, strict });
+  // Under strict, a file that parsed to a non-countable shape is as untrustworthy as
+  // one that failed to parse — validate rather than silently substituting an empty.
+  if (strict && (!isPlainObject(raw) || !Array.isArray(raw.sessions))) {
+    throw new Error(`POST sessions malformed: ${SESSIONS_FILE}`);
+  }
   const data = isPlainObject(raw) ? raw : { sessions: [] };
   if (!Array.isArray(data.sessions)) data.sessions = [];
   return data;
 }
 
-export async function getPostSessions(from, to) {
-  const data = await loadSessions();
+export async function getPostSessions(from, to, options) {
+  const data = await loadSessions(options);
   let sessions = data.sessions;
   if (from) sessions = sessions.filter(s => s.date >= from);
   if (to) sessions = sessions.filter(s => s.date <= to);

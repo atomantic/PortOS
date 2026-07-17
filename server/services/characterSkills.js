@@ -25,22 +25,10 @@
  * the metrics grid (#2676) — which derive from the same nine signals — cost ONE read per
  * signal per request, not one per consumer.
  *
- * **Known gap in that guarantee (#2726).** `readSkill` honours whatever a domain
- * reports, but it can only *detect* a failure the getter actually surfaces — by
- * rejecting, or by resolving something non-countable. Today only the DB-backed
- * getters do that:
- *
- *   - reports failure  → `wordsmith`, `archivist`, `auteur` (a failed `query()` throws)
- *   - SWALLOWS failure → `mentalist`, `vitalist`, `strategist`
- *
- * The swallowing three bottom out in `readJSONFile`, which returns its default on
- * *every* read error and not just ENOENT — so a corrupt or unreadable
- * `post-sessions.json` is indistinguishable here from "no sessions yet" and reports a
- * real-looking level 0. Closing it needs strict-read variants threaded through the
- * shared file getters (the `readVideoHistoryStrict` `{ ok, list }` precedent in
- * `mediaAssetIndex/db.js`), which is a wider change than this registry — tracked in
- * #2726. Nothing here needs to change when it lands: the moment a getter starts
- * reporting failure, `readSkill` already classifies it correctly.
+ * That guarantee holds for all six domains, DB- and file-backed alike: `readSkill` can only
+ * classify a failure the getter actually surfaces, so the file-backed signals read strictly
+ * (#2726) and reject on a present-but-unreadable file rather than returning the empty
+ * default that would score as a real level 0. See `characterSignals.js`.
  */
 
 import { createSignalContext } from './characterSignals.js';
