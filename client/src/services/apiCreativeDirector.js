@@ -1,35 +1,41 @@
 import { request } from './apiCore.js';
 
-export const listCreativeDirectorProjects = () => request('/creative-director');
+export const listCreativeDirectorProjects = (options = {}) => request('/creative-director', options);
 // Pass `{ slim: true }` to receive only the fields a polling consumer needs
 // (status / per-scene status / finalVideoId / failureReason / updatedAt) —
 // drops the `runs[]` history and the full treatment text. Useful
 // for 4s-poll surfaces like the Pipeline EpisodeVideoStage.
 export const getCreativeDirectorProject = (id, { slim = false } = {}) =>
   request(`/creative-director/${encodeURIComponent(id)}${slim ? '?slim=1' : ''}`);
-export const createCreativeDirectorProject = (data) => request('/creative-director', {
+export const createCreativeDirectorProject = (data, options = {}) => request('/creative-director', {
   method: 'POST',
   body: JSON.stringify(data),
+  ...options,
 });
 export const updateCreativeDirectorProject = (id, patch, options = {}) => request(`/creative-director/${encodeURIComponent(id)}`, {
   method: 'PATCH',
   body: JSON.stringify(patch),
   ...options,
 });
-export const deleteCreativeDirectorProject = (id) => request(`/creative-director/${encodeURIComponent(id)}`, {
+export const deleteCreativeDirectorProject = (id, options = {}) => request(`/creative-director/${encodeURIComponent(id)}`, {
   method: 'DELETE',
+  ...options,
 });
-export const startCreativeDirectorProject = (id) => request(`/creative-director/${encodeURIComponent(id)}/start`, {
+export const startCreativeDirectorProject = (id, options = {}) => request(`/creative-director/${encodeURIComponent(id)}/start`, {
   method: 'POST',
+  ...options,
 });
-export const pauseCreativeDirectorProject = (id) => request(`/creative-director/${encodeURIComponent(id)}/pause`, {
+export const pauseCreativeDirectorProject = (id, options = {}) => request(`/creative-director/${encodeURIComponent(id)}/pause`, {
   method: 'POST',
+  ...options,
 });
-export const resumeCreativeDirectorProject = (id) => request(`/creative-director/${encodeURIComponent(id)}/resume`, {
+export const resumeCreativeDirectorProject = (id, options = {}) => request(`/creative-director/${encodeURIComponent(id)}/resume`, {
   method: 'POST',
+  ...options,
 });
-export const createSmokeTestCreativeDirectorProject = () => request('/creative-director/smoke-test', {
+export const createSmokeTestCreativeDirectorProject = (options = {}) => request('/creative-director/smoke-test', {
   method: 'POST',
+  ...options,
 });
 // Creative tool catalog (CDO Phase 4, #2186) — `{ tools: [{ id, description,
 // costClass, longRunning, destructive }], mode, budget }`. The Plan board
@@ -40,14 +46,16 @@ export const getCreativeToolCatalog = (options = {}) => request('/creative-direc
 // Attach/replace a directive on an existing project ("convert to directive").
 // Clears any prior plan so the planner re-derives one; returns the updated
 // project for reactive state swap.
-export const setCreativeDirectorDirective = (id, directive) => request(`/creative-director/${encodeURIComponent(id)}/directive`, {
+export const setCreativeDirectorDirective = (id, directive, options = {}) => request(`/creative-director/${encodeURIComponent(id)}/directive`, {
   method: 'POST',
   body: JSON.stringify(directive),
+  ...options,
 });
 // Request a fresh plan (drops the current plan, re-runs the planner). Blocked-step
 // triage "re-plan" action.
-export const replanCreativeDirectorProject = (id) => request(`/creative-director/${encodeURIComponent(id)}/replan`, {
+export const replanCreativeDirectorProject = (id, options = {}) => request(`/creative-director/${encodeURIComponent(id)}/replan`, {
   method: 'POST',
+  ...options,
 });
 // Blocked-step triage: `skip` a step or `retry` (reset a blocked/failed step to
 // pending — also the "approve" affordance for a gate-blocked step). Returns the

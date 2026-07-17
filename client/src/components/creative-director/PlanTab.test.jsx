@@ -147,7 +147,7 @@ describe('blocked-step triage', () => {
     renderTab(blockedProject(), onProjectUpdate);
     await waitFor(() => expect(getCreativeToolCatalog).toHaveBeenCalled());
     fireEvent.click(screen.getByRole('button', { name: /Request re-plan/i }));
-    await waitFor(() => expect(replanCreativeDirectorProject).toHaveBeenCalledWith('cd-1'));
+    await waitFor(() => expect(replanCreativeDirectorProject).toHaveBeenCalledWith('cd-1', { silent: true }));
     await waitFor(() => expect(onProjectUpdate).toHaveBeenCalledWith({ id: 'cd-1', status: 'planning', plan: null }));
   });
 

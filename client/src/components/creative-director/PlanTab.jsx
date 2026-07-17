@@ -88,7 +88,7 @@ export default function PlanTab({ project, onProjectUpdate }) {
       goal: draft.goal.trim(),
       deliverables: draft.deliverables || [],
       constraints: draft.constraints || {},
-    }).catch((e) => { toast.error(e.message || 'Failed to save directive'); return null; });
+    }, { silent: true }).catch((e) => { toast.error(e.message || 'Failed to save directive'); return null; });
     setSavingDirective(false);
     if (!updated) return;
     onProjectUpdate?.(updated);
@@ -109,7 +109,7 @@ export default function PlanTab({ project, onProjectUpdate }) {
 
   const handleReplan = async () => {
     setReplanning(true);
-    const updated = await replanCreativeDirectorProject(project.id)
+    const updated = await replanCreativeDirectorProject(project.id, { silent: true })
       .catch((e) => { toast.error(e.message || 'Failed to re-plan'); return null; });
     setReplanning(false);
     if (!updated) return;
