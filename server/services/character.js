@@ -6,6 +6,9 @@
  * (see #2673, epic #2672). `xp` survives only as a cumulative stat — it no longer
  * drives level. HP/damage/rest mechanics are retained for backward-compat with a
  * flat maxHp (no longer scaled off level).
+ *
+ * `skills` are likewise derived on read, from each domain's existing stats
+ * (see `characterSkills.js`, #2674).
  */
 
 import crypto from 'crypto';
@@ -14,6 +17,7 @@ import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js
 import * as jiraService from './jira.js';
 import * as cosService from './cos.js';
 import { getBirthDate } from './meatspace.js';
+import { getCharacterSkills } from './characterSkills.js';
 
 const CHARACTER_FILE = path.join(PATHS.data, 'character.json');
 
@@ -22,8 +26,9 @@ const CHARACTER_FILE = path.join(PATHS.data, 'character.json');
 const DEFAULT_MAX_HP = 15;
 
 // Derived fields getCharacter() attaches on read; they are stripped before persisting so a
-// stale age-level never lands on disk or in the federated snapshot.
-const DERIVED_FIELDS = ['level', 'ageYears'];
+// stale age-level (or a per-machine usage-derived skill set) never lands on disk or in the
+// federated snapshot. `skills` is per-machine by design — see characterSkills.js (#2674).
+const DERIVED_FIELDS = ['level', 'ageYears', 'skills'];
 
 // Pure: fractional years lived since birthDate (whole years + progress toward the next
 // birthday), or null when birthDate is unset/invalid/future. Uses **calendar** birthdays,
@@ -119,16 +124,32 @@ async function loadRawCharacter() {
   return character;
 }
 
-// Attach the age-derived read-only fields (`ageYears`, `level`) to a raw record. `level` is
-// null when no birthDate is set, so callers can render a "set your birth date" prompt.
+// Attach the derived read-only fields to a raw record: `ageYears`/`level` from the canonical
+// birthDate (#2673), and the per-domain `skills` from each domain's existing stats (#2674).
+// `level` is null when no birthDate is set, so callers can render a "set your birth date"
+// prompt. Neither is ever persisted — see DERIVED_FIELDS / saveCharacter.
 async function enrichCharacter(raw) {
-  const { birthDate } = await getBirthDate().catch(() => ({ birthDate: null }));
+  const [{ birthDate }, skills] = await Promise.all([
+    getBirthDate().catch(() => ({ birthDate: null })),
+    getCharacterSkills(),
+  ]);
   const ageYears = ageYearsFromBirthDate(birthDate);
-  return { ...raw, ageYears, level: levelFromAge(ageYears) };
+  return { ...raw, ageYears, level: levelFromAge(ageYears), skills };
 }
 
 export async function getCharacter() {
   return enrichCharacter(await loadRawCharacter());
+}
+
+// Apply a partial patch of human-authored fields (name/class/avatarPath). Reads the RAW
+// record so the derived fan-out runs once — on the enriched record saveCharacter returns —
+// rather than once here and once again on save.
+export async function updateCharacterFields(patch = {}) {
+  const character = await loadRawCharacter();
+  for (const [key, value] of Object.entries(patch)) {
+    if (value !== undefined) character[key] = value;
+  }
+  return saveCharacter(character);
 }
 
 // Federation wire projection: the persisted record plus a backward-compatible integer `level`
@@ -161,9 +182,7 @@ export async function saveCharacter(data) {
 // avatar-generation route fold persistence in (it already knows the character
 // context) instead of forcing a second `PUT /api/character` round-trip.
 export async function setAvatar(avatarPath) {
-  const character = await getCharacter();
-  character.avatarPath = avatarPath;
-  await saveCharacter(character);
+  const character = await updateCharacterFields({ avatarPath });
   console.log(`🖼️ Character avatar set → ${avatarPath}`);
   return character;
 }
@@ -186,7 +205,7 @@ export function rollDice(notation) {
 }
 
 export async function addXP(amount, source, description) {
-  const character = await getCharacter();
+  const character = await loadRawCharacter();
   character.xp += amount;
 
   character.events.push(createEvent('xp', description || `Gained ${amount} XP from ${source}`, { xp: amount }));
@@ -198,7 +217,7 @@ export async function addXP(amount, source, description) {
 }
 
 export async function takeDamage(diceNotation, description) {
-  const character = await getCharacter();
+  const character = await loadRawCharacter();
   const roll = rollDice(diceNotation);
 
   character.hp = Math.max(0, character.hp - roll.total);
@@ -213,7 +232,7 @@ export async function takeDamage(diceNotation, description) {
 }
 
 export async function takeRest(type) {
-  const character = await getCharacter();
+  const character = await loadRawCharacter();
   const oldHp = character.hp;
 
   if (type === 'long') {
@@ -232,7 +251,7 @@ export async function takeRest(type) {
 }
 
 export async function addEvent(event) {
-  const character = await getCharacter();
+  const character = await loadRawCharacter();
   let roll = null;
 
   if (event.xp) {
@@ -261,7 +280,7 @@ export async function addEvent(event) {
 const delay = ms => new Promise(r => setTimeout(r, ms));
 
 export async function syncJiraXP() {
-  const character = await getCharacter();
+  const character = await loadRawCharacter();
   const config = await jiraService.getInstances();
   const instances = config.instances || {};
   let totalXP = 0;
@@ -307,7 +326,7 @@ export async function syncJiraXP() {
 }
 
 export async function syncTaskXP() {
-  const character = await getCharacter();
+  const character = await loadRawCharacter();
   const { user: userTasks, cos: cosTasks } = await cosService.getAllTasks();
   let totalXP = 0;
   let taskCount = 0;

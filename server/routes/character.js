@@ -1,6 +1,9 @@
 /**
  * Character Sheet Routes
- * D&D-style character sheet with XP, HP, damage, rests, and event tracking.
+ *
+ * `GET /` returns the persisted record plus the fields derived on read: the
+ * age-based `level`/`ageYears` (#2673) and the per-domain `skills` (#2674).
+ * The XP/HP/damage/rest/event endpoints are retained for backward-compat.
  */
 
 import { Router } from 'express';
@@ -48,12 +51,7 @@ router.get('/', asyncHandler(async (req, res) => {
 // PUT /api/character - Update character name/class
 router.put('/', asyncHandler(async (req, res) => {
   const data = validateRequest(updateCharacterSchema, req.body);
-  const character = await characterService.getCharacter();
-  if (data.name) character.name = data.name;
-  if (data.class) character.class = data.class;
-  if (data.avatarPath) character.avatarPath = data.avatarPath;
-  const updated = await characterService.saveCharacter(character);
-  res.json(updated);
+  res.json(await characterService.updateCharacterFields(data));
 }));
 
 // POST /api/character/xp - Add XP manually
