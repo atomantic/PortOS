@@ -69,6 +69,13 @@ export async function listRaw() {
  * universes too (it filters ONLY on `deleted`), so filtering here would
  * undercount.
  *
+ * `deleted = FALSE` (not `IS NOT TRUE`) is intentional on both counts: it is the
+ * form the partial index can serve, and it matches every sibling live-set query
+ * (tribe.js, catalogRefResolver.js, catalogDB/shared.js). The column is nullable
+ * (`BOOLEAN DEFAULT FALSE`), so the two forms differ on a NULL — but neither
+ * writer can produce one (both always bind a boolean; a column-omitting INSERT
+ * takes the FALSE default), so the distinction is unreachable.
+ *
  * Known boundary: a row whose `data` can't survive `sanitizeTemplate` (blank
  * `name`, non-string `id`) is dropped by listUniverses's `.filter(Boolean)` but
  * still counted here. Unreachable through the service — create/update/sync all
