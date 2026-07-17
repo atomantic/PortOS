@@ -825,6 +825,8 @@ describe('spawnTuiAgent runtime', () => {
 
   // ── 1c. claude waits for bracketed-paste mode (input ready) before pasting ───
   const claudeTuiConfig = { command: 'claude', args: [], commandLine: 'claude', promptDelayMs: 100, idleTimeoutMs: 50 };
+  // Antigravity (agy) gets the SAME positive input-ready gate as claude (#2705).
+  const agyTuiConfig = { command: 'agy', args: [], commandLine: 'agy', promptDelayMs: 100, idleTimeoutMs: 50 };
   const pasteCount = () => vi.mocked(shellService.writeToSession).mock.calls
     .filter(([, d]) => typeof d === 'string' && d.includes('\x1b[200~')).length;
   // The launch shell turns bracketed-paste OFF to run the command, then claude
@@ -899,6 +901,53 @@ describe('spawnTuiAgent runtime', () => {
     runSpawn({ tuiConfig: claudeTuiConfig });
     await flushMicrotasks();
     await capturedOnData(Buffer.from('some startup noise but no input box ever appears\n'));
+    await flushMicrotasks();
+
+    // Advance past TUI_INPUT_READY_DEADLINE_MS (45s).
+    await vi.advanceTimersByTimeAsync(46000);
+    vi.useRealTimers();
+    await completeDone;
+
+    expect(pasteCount()).toBe(0);
+    expect(agentLifecycle.finalizeAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: 'agent-1', success: false, completionReason: 'tui-not-ready' })
+    );
+  });
+
+  // ── 1c-bis. Antigravity (agy) uses the SAME positive input-ready gate (#2705) ─
+  // agy's TUI emits the bracketed-paste-mode toggle exactly like claude, so it
+  // must gate the paste on paste-mode-re-enabled rather than blind-pasting on the
+  // idle heuristic (which fired into agy's still-initializing banner and left the
+  // agent sitting at an empty prompt until it was reaped). Without the fix agy
+  // took the idle-heuristic path and WOULD have pasted after ~2s of banner idle;
+  // asserting pasteCount()===0 there is what discriminates the fix.
+  it('agy input-ready: does NOT paste on the startup banner, only once paste mode is re-enabled', async () => {
+    runSpawn({ tuiConfig: agyTuiConfig });
+    await flushMicrotasks();
+
+    // Startup banner (and the shell turning paste mode OFF to run the command).
+    await capturedOnData(Buffer.from(`${PASTE_OFF}Antigravity CLI 1.1.3\nGemini 3.5 Flash (Medium)\n`));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(2000);
+    await flushMicrotasks();
+    expect(pasteCount()).toBe(0); // banner / paste-mode-off is not "input ready"
+
+    // agy re-enables bracketed-paste mode → input box live, safe to paste.
+    await capturedOnData(Buffer.from(PASTE_ON));
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(400);
+    await flushMicrotasks();
+    expect(pasteCount()).toBe(1);
+  });
+
+  it('agy tui-not-ready: an agy TUI that never signals input-ready fails fast instead of idle-reaping', async () => {
+    let resolveComplete;
+    const completeDone = new Promise((r) => { resolveComplete = r; });
+    vi.mocked(agentLifecycle.finalizeAgent).mockImplementation(async () => { resolveComplete(); });
+
+    runSpawn({ tuiConfig: agyTuiConfig });
+    await flushMicrotasks();
+    await capturedOnData(Buffer.from('some agy startup noise but no input box ever appears\n'));
     await flushMicrotasks();
 
     // Advance past TUI_INPUT_READY_DEADLINE_MS (45s).

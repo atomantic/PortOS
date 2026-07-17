@@ -478,6 +478,34 @@ export async function isPidAlive(pid) {
  * - Creates investigation task after max retries exceeded
  * - Triggers evaluation to spawn new agents
  */
+
+/**
+ * Settle a Creative Director run tied to an orphaned/reaped agent (issue #2705).
+ *
+ * A CD plan/treatment agent that dies without issuing its completion PATCH leaves
+ * its `runs[]` row stuck `running`. `maybeEnqueuePlan`'s guard then treats that
+ * non-terminal run as "a worker is already on it" and refuses to re-dispatch — so
+ * the project wedges in `planning` until the NEXT server restart runs boot
+ * recovery (`recoverInFlightProjects`). Reaping the run here — mirroring recovery's
+ * reap — lets the project advance without a restart (the orphan-task retry then
+ * re-dispatches the plan). No-op for non-CD tasks; the `creativeDirector/local.js`
+ * import is deferred so non-CD orphans pay nothing. Exported for unit testing.
+ *
+ * @param {object|null} task - the orphaned agent's task record.
+ * @returns {Promise<boolean>} true if a CD run was settled, false for a non-CD task.
+ */
+export async function settleOrphanedCreativeDirectorRun(task) {
+  const cd = task?.metadata?.creativeDirector;
+  if (!cd?.projectId || !cd?.runId) return false;
+  const { updateRun } = await import('./creativeDirector/local.js');
+  await updateRun(cd.projectId, cd.runId, {
+    status: 'failed',
+    completedAt: new Date().toISOString(),
+    failureReason: 'agent process terminated unexpectedly (orphaned)',
+  }).catch((err) => console.log(`⚠️ CD orphan settle: run ${cd.runId?.slice(0, 8)} of ${cd.projectId} failed: ${err.message}`));
+  return true;
+}
+
 export async function cleanupOrphanedAgents() {
   const { getAgents, completeAgent: markComplete, evaluateTasks, getTaskById: getTask } = await import('./cos.js');
   const agents = await getAgents();
@@ -543,6 +571,13 @@ export async function cleanupOrphanedAgents() {
   // agent's own worktree is safe and stays.
   for (const { agentId } of orphanedTaskIds) {
     await cleanupAgentWorktree(agentId, false);
+  }
+
+  // Settle any Creative Director run tied to an orphaned agent (issue #2705)
+  // BEFORE the retry below, so the project can advance without a server restart.
+  for (const { taskId } of orphanedTaskIds) {
+    const task = await getTask(taskId).catch(() => null);
+    await settleOrphanedCreativeDirectorRun(task);
   }
 
   // Handle orphaned tasks - reset for retry or create investigation task

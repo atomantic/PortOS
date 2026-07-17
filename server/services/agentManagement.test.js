@@ -74,13 +74,41 @@ vi.mock('./agentLifecycle.js', () => ({
   syncRunnerAgents: vi.fn().mockResolvedValue(0)
 }));
 vi.mock('./worktreeManager.js', () => ({ cleanupOrphanedWorktrees: vi.fn() }));
+vi.mock('./creativeDirector/local.js', () => ({ updateRun: vi.fn().mockResolvedValue(undefined) }));
 
-import { handleOrphanedTask, pauseAgent } from './agentManagement.js';
+import { handleOrphanedTask, pauseAgent, settleOrphanedCreativeDirectorRun } from './agentManagement.js';
+import { updateRun } from './creativeDirector/local.js';
 import { updateTask, addTask, getTaskById } from './cos.js';
 import { updateAgent } from './cosAgents.js';
 import { pauseAgentViaRunner } from './cosRunnerClient.js';
 import * as shellService from './shell.js';
 import { activeAgents, runnerAgents, pausedAgents } from './agentState.js';
+
+describe('settleOrphanedCreativeDirectorRun — reap a dead CD agent run (#2705)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('marks the orphaned CD plan agent run failed with an orphan reason', async () => {
+    const task = {
+      id: 'cd-cd-p1-plan-abc',
+      metadata: { creativeDirector: { projectId: 'cd-p1', runId: 'run-abc', kind: 'plan', sceneId: null } },
+    };
+    const settled = await settleOrphanedCreativeDirectorRun(task);
+    expect(settled).toBe(true);
+    expect(updateRun).toHaveBeenCalledWith(
+      'cd-p1',
+      'run-abc',
+      expect.objectContaining({ status: 'failed', failureReason: expect.stringContaining('orphaned') }),
+    );
+  });
+
+  it('is a no-op (no updateRun) for a non-CD task or a CD task missing projectId/runId', async () => {
+    expect(await settleOrphanedCreativeDirectorRun({ id: 't', metadata: {} })).toBe(false);
+    expect(await settleOrphanedCreativeDirectorRun(null)).toBe(false);
+    // metadata present but incomplete — must not settle a run it can't identify.
+    expect(await settleOrphanedCreativeDirectorRun({ metadata: { creativeDirector: { projectId: 'cd-p1' } } })).toBe(false);
+    expect(updateRun).not.toHaveBeenCalled();
+  });
+});
 
 describe('handleOrphanedTask — duplicate-investigation guard', () => {
   beforeEach(() => {
