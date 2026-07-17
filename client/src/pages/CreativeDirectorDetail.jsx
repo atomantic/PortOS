@@ -162,9 +162,9 @@ export default function CreativeDirectorDetail() {
       : kind === 'start' ? (project?.treatment ? 'rendering' : 'planning')
       : null;
     try {
-      if (kind === 'start') await startCreativeDirectorProject(id);
-      else if (kind === 'pause') await pauseCreativeDirectorProject(id);
-      else if (kind === 'resume') await resumeCreativeDirectorProject(id);
+      if (kind === 'start') await startCreativeDirectorProject(id, { silent: true });
+      else if (kind === 'pause') await pauseCreativeDirectorProject(id, { silent: true });
+      else if (kind === 'resume') await resumeCreativeDirectorProject(id, { silent: true });
       toast.success(successMessages[kind] || kind);
       if (optimisticStatus) setProject((p) => p ? { ...p, status: optimisticStatus } : p);
     } catch (err) {

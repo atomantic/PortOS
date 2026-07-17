@@ -67,7 +67,7 @@ export default function OverviewTab({ project, onProjectUpdate, onAsyncWorkQueue
     setSaving(true);
     savingRef.current = true;
     const requestProjectId = project.id;
-    updateCreativeDirectorProject(requestProjectId, { disableAudio: next })
+    updateCreativeDirectorProject(requestProjectId, { disableAudio: next }, { silent: true })
       .then(() => {
         if (projectIdRef.current === requestProjectId) {
           onProjectUpdate?.({ disableAudio: next });
