@@ -34,6 +34,14 @@ vi.mock('../../lib/pythonSetup.js', () => ({
 const unindexImage = vi.fn(async () => {});
 vi.mock('../mediaAssetIndex/index.js', () => ({ unindexImage }));
 
+// Real fs/promises, except tests can make unlink fail to simulate an
+// EACCES/EBUSY gallery (which deleteImage swallows, leaving the file on disk).
+let unlinkImpl = null;
+vi.mock('fs/promises', async () => {
+  const actual = await vi.importActual('fs/promises');
+  return { ...actual, unlink: async (...args) => (unlinkImpl ? unlinkImpl(...args) : actual.unlink(...args)) };
+});
+
 let tmpRoot;
 let priorRegistryEnv;
 let deleteImage;
@@ -55,6 +63,7 @@ afterAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  unlinkImpl = null;
   rmSync(imagesDir, { recursive: true, force: true });
 });
 
@@ -86,6 +95,21 @@ describe('deleteImage → media asset index delete hook', () => {
     await expect(deleteImage('img-2.png')).resolves.toEqual({ ok: true });
     expect(existsSync(join(imagesDir, 'img-2.png'))).toBe(false);
     expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('db down'));
+    errSpy.mockRestore();
+  });
+
+  it('keeps the index row when the file survives the delete (no undercount)', async () => {
+    // deleteImage swallows unlink errors, so an EACCES/EBUSY gallery leaves the
+    // image on disk and still listed by listGallery(). Unindexing it here would
+    // swap the overcount this issue fixed for an undercount of a LIVE image.
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    unlinkImpl = async () => { throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }); };
+    seedImage('img-3.png');
+
+    await expect(deleteImage('img-3.png')).resolves.toEqual({ ok: true });
+    expect(existsSync(join(imagesDir, 'img-3.png'))).toBe(true);
+    expect(unindexImage).not.toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('survived delete'));
     errSpy.mockRestore();
   });
 });

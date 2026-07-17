@@ -998,9 +998,19 @@ export async function deleteImage(filename) {
   // between. Non-fatal + dynamically imported: a broken index must never fail
   // the user's delete, and this keeps the pg stack out of this module's static
   // graph (the mirror of how the index dynamically imports the media stack).
-  await import('../mediaAssetIndex/index.js')
-    .then((m) => m.unindexImage(filename))
-    .catch((err) => console.error(`❌ Media index image delete hook: ${err.message}`));
+  //
+  // Gated on the PNG actually being GONE. The unlink above swallows its error,
+  // so an EACCES/EBUSY/EIO failure leaves the image on disk and still listed by
+  // listGallery() — unindexing it there would swap this bug for its mirror and
+  // UNDERcount a live image. Failed-to-delete is not deleted (the absent-vs-empty
+  // sentinel rule): leave the row for the next reconcile, which reads disk.
+  if (existsSync(join(PATHS.images, filename))) {
+    console.error(`❌ Image file survived delete, keeping its index row: ${filename}`);
+  } else {
+    await import('../mediaAssetIndex/index.js')
+      .then((m) => m.unindexImage(filename))
+      .catch((err) => console.error(`❌ Media index image delete hook: ${err.message}`));
+  }
   console.log(`🗑️ Deleted image: ${filename}`);
   return { ok: true };
 }
