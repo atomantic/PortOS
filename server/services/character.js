@@ -120,8 +120,9 @@ export function createDefaultCharacter() {
     // Empty = unset. The human-centered Character page (#2677) renders "Your name" / "Add a
     // title" placeholders for an empty name/class, so a fresh install starts blank rather than
     // presenting the old generic "Adventurer" / "Developer" identity (epic #2672). Existing
-    // installs whose character.json still carries those legacy defaults are cleared by
-    // migration 198.
+    // installs keep whatever name/class is already persisted — it's the user's own data, edited
+    // inline; deliberately NOT migrated, since character.json carries no "was this the untouched
+    // seed?" provenance and a text-only match would erase a user who genuinely chose either word.
     name: '',
     class: '',
     xp: 0,

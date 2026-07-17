@@ -80,9 +80,8 @@ describe('human-centered framing', () => {
   });
 
   it('falls back to human-centered placeholders for an unnamed person', async () => {
-    // The server seeds an empty name/class on a fresh install (createDefaultCharacter), and
-    // migration 198 clears the legacy 'Adventurer'/'Developer' defaults on existing installs —
-    // so the page only ever sees an empty value for "unset" and renders the placeholder.
+    // The server seeds an empty name/class on a fresh install (createDefaultCharacter), so the
+    // page renders the placeholder for an unset (empty) value.
     await renderChar({ name: '', class: '' });
     expect(screen.getByText('Your name')).toBeInTheDocument();
     expect(screen.getByText('Add a title')).toBeInTheDocument();
