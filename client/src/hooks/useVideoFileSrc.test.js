@@ -98,6 +98,30 @@ describe('useVideoFileSrc', () => {
     await waitFor(() => expect(result.current.src).toBe('/data/videos/scene-1.mp4'));
   });
 
+  it('recovers a transiently-failed lookup via retry()', async () => {
+    // The regression: a settled failure used to be permanent, so a 5xx blip
+    // stranded a timeline final on the reconstructed URL that cannot exist for
+    // it — and ScenePreview's Retry only re-requested that same wrong URL.
+    listVideoHistory.mockRejectedValueOnce(new Error('transient 503'));
+    const { result } = renderHook(() => useVideoFileSrc('final-1'));
+    await waitFor(() => expect(result.current.resolving).toBe(false));
+    expect(result.current.src).toBeNull();
+
+    act(() => { result.current.retry(); });
+    expect(result.current.resolving).toBe(true); // synchronously re-armed
+    await waitFor(() => expect(result.current.resolving).toBe(false));
+    expect(result.current.src).toBe('/data/videos/timeline-abcd1234-1700000000000.mp4');
+    expect(listVideoHistory).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps retry() stable across renders', async () => {
+    const { result, rerender } = renderHook(() => useVideoFileSrc('final-1'));
+    await waitFor(() => expect(result.current.resolving).toBe(false));
+    const first = result.current.retry;
+    rerender();
+    expect(result.current.retry).toBe(first);
+  });
+
   it('requests silently — the caller owns the failure UI', async () => {
     const { result } = renderHook(() => useVideoFileSrc('final-1'));
     await waitFor(() => expect(result.current.resolving).toBe(false));

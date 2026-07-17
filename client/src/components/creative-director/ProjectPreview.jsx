@@ -45,7 +45,7 @@ export default function ProjectPreview({ project, to }) {
   // `timeline-*.mp4` behind a UUID), so resolve the real file before playing.
   // `enabled` keeps the grid light: this fires only once the user presses play,
   // never for the N cards sitting idle on the page.
-  const { src: resolvedSrc, resolving } = useVideoFileSrc(preview.jobId, {
+  const { src: resolvedSrc, resolving, retry: retryResolve } = useVideoFileSrc(preview.jobId, {
     enabled: playing && preview.kind === 'video',
   });
 
@@ -63,6 +63,7 @@ export default function ProjectPreview({ project, to }) {
       <ScenePreview
         jobId={preview.jobId}
         src={resolvedSrc}
+        onRetry={retryResolve}
         label={`${project?.name || 'Project'} — ${preview.label}`}
         aspectClass={aspectClass}
         autoPlay
@@ -85,11 +86,12 @@ export default function ProjectPreview({ project, to }) {
             src={preview.poster}
             alt={`${preview.label} — ${project?.name || 'project'}`}
             loading="lazy"
-            // A stitched final has no generated thumbnail today (#2702 leaves
-            // that out of scope), so a 404 here is expected, not exceptional —
-            // degrade to the placeholder rather than a broken-image icon. The
-            // play affordance stays either way: the mp4 can be fine even when
-            // its poster isn't.
+            // Every render path DOES write a `<jobId>.jpg` thumbnail — clips via
+            // videoGen, stitched finals via the timeline renderer — so a 404 here
+            // means the poster was deleted out from under us (history prune), not
+            // that this project type lacks one. Degrade to the placeholder rather
+            // than a broken-image icon; the play affordance stays either way,
+            // since the mp4 can be fine even when its poster isn't.
             onError={() => setPosterMissing(true)}
             className="w-full h-full object-cover"
           />

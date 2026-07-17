@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { listVideoHistory } from '../services/apiImageVideo.js';
 
 /**
@@ -31,15 +31,16 @@ import { listVideoHistory } from '../services/apiImageVideo.js';
  * so a card resolves only once the user actually presses play.
  */
 export function useVideoFileSrc(jobId, { enabled = true } = {}) {
-  // Keyed by the id it was resolved FOR, so `resolving` can be derived
+  // Keyed by the id + attempt it was resolved FOR, so `resolving` can be derived
   // synchronously rather than set from an effect. An effect-set flag would
   // still be false for the first render after `enabled` flips true (effects run
   // after commit) — long enough for a caller gating autoplay to mount a player
   // against the unresolved fallback path, fire a doomed request, and flash
   // "media missing" before the real src lands.
-  const [resolved, setResolved] = useState({ jobId: null, src: null });
+  const [attempt, setAttempt] = useState(0);
+  const [resolved, setResolved] = useState({ jobId: null, attempt: -1, src: null });
   const active = Boolean(enabled && jobId);
-  const settled = resolved.jobId === jobId;
+  const settled = resolved.jobId === jobId && resolved.attempt === attempt;
   const resolving = active && !settled;
 
   useEffect(() => {
@@ -48,18 +49,25 @@ export function useVideoFileSrc(jobId, { enabled = true } = {}) {
     // Silent: a failed lookup is not a user-facing error — ScenePreview's
     // reconstruction fallback (and its own missing-media UI) covers it, so a
     // toast here would be noise on a page that already degrades gracefully.
-    // Both paths settle on THIS jobId so `resolving` can never latch on.
+    // Both paths settle on THIS jobId+attempt so `resolving` can never latch on.
     listVideoHistory({ silent: true })
       .then((entries) => {
         if (cancelled) return;
         const list = Array.isArray(entries) ? entries : [];
         const entry = list.find((e) => e?.id === jobId);
         const filename = typeof entry?.filename === 'string' ? entry.filename.trim() : '';
-        setResolved({ jobId, src: filename ? `/data/videos/${filename}` : null });
+        setResolved({ jobId, attempt, src: filename ? `/data/videos/${filename}` : null });
       })
-      .catch(() => { if (!cancelled) setResolved({ jobId, src: null }); });
+      .catch(() => { if (!cancelled) setResolved({ jobId, attempt, src: null }); });
     return () => { cancelled = true; };
-  }, [jobId, active, settled]);
+  }, [jobId, active, settled, attempt]);
 
-  return { src: settled ? resolved.src : null, resolving };
+  // Redo a settled lookup. A transient 5xx on the history call would otherwise
+  // strand a timeline final forever: `src` stays null, the caller falls back to
+  // the reconstructed `<jobId>.mp4` that cannot exist for it, and ScenePreview's
+  // own Retry only re-requests that same wrong URL. Wire this to that Retry
+  // (`<ScenePreview onRetry={retry}>`) so one button recovers both layers.
+  const retry = useCallback(() => setAttempt((a) => a + 1), []);
+
+  return { src: settled ? resolved.src : null, resolving, retry };
 }
