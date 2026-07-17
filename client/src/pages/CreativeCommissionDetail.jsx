@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { useNavigate, useParams, useLocation, Link } from 'react-router-dom';
+import { useNavigate, useParams, useLocation, useSearchParams, Link } from 'react-router-dom';
 import { ArrowLeft, Sparkles, Clock, Cpu, Zap, Pause, Play, Trash2 } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
@@ -33,9 +33,16 @@ export default function CreativeCommissionDetail() {
   const navigate = useNavigate();
   const location = useLocation();
   const { id } = useParams();
+  const [searchParams] = useSearchParams();
+  // The run this page was deep-linked to (a scheduled-run notification carries
+  // `?run=<runId>`), so the gallery can focus that render rather than whatever is
+  // newest by the time the user opens it.
+  const focusRunId = searchParams.get('run');
   const [commission, setCommission] = useState(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+  const [reloadNonce, setReloadNonce] = useState(0);
   const [form, setForm] = useState(() => toForm({}));
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
@@ -45,7 +52,8 @@ export default function CreativeCommissionDetail() {
 
   // Load (and refresh) the deep-linked commission. `location.key` is a dep so a
   // notification deep link to THIS already-open page (a same-path push) still
-  // refetches and pulls in a just-fired run.
+  // refetches and pulls in a just-fired run. `reloadNonce` lets the error-state
+  // Retry button re-run the load.
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -54,11 +62,19 @@ export default function CreativeCommissionDetail() {
         if (cancelled) return;
         setCommission(fresh);
         setNotFound(false);
+        setLoadError(null);
       })
-      .catch(() => { if (!cancelled) setNotFound(true); })
+      .catch((err) => {
+        if (cancelled) return;
+        // Only a real 404 means the commission is gone. A transient failure
+        // (network, 5xx, auth) must NOT be misreported as "deleted" — surface it
+        // as a retryable error instead (absent-vs-unreachable, per CLAUDE.md).
+        if (err?.status === 404) { setNotFound(true); setLoadError(null); }
+        else setLoadError(err?.message || 'Failed to load commission');
+      })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [id, location.key]);
+  }, [id, location.key, reloadNonce]);
 
   // Sync the form to the loaded record ONLY when the target id first resolves —
   // never on the in-place record swaps that rating / Run Now / save trigger, or
@@ -175,17 +191,39 @@ export default function CreativeCommissionDetail() {
     }
   };
 
-  if (loading) {
+  if (loading && !commission) {
     return <div className="max-w-6xl mx-auto text-gray-500 text-sm">Loading…</div>;
   }
 
-  if (notFound || !commission) {
+  if (notFound) {
     return (
       <div className="max-w-6xl mx-auto text-center py-16">
         <p className="text-gray-300 mb-3">That commission no longer exists.</p>
         <Link to="/creative-commission" className="inline-flex items-center gap-2 bg-port-accent text-white px-3 py-1.5 rounded text-sm">
           <ArrowLeft className="w-4 h-4" /> Back to commissions
         </Link>
+      </div>
+    );
+  }
+
+  // A transient load failure (network / 5xx / auth) with no cached record — offer
+  // a retry rather than claiming the commission was deleted.
+  if (!commission) {
+    return (
+      <div className="max-w-6xl mx-auto text-center py-16">
+        <p className="text-gray-300 mb-1">Couldn’t load this commission.</p>
+        <p className="text-gray-500 text-sm mb-4">{loadError || 'Please try again.'}</p>
+        <div className="flex items-center justify-center gap-2">
+          <button
+            onClick={() => setReloadNonce((n) => n + 1)}
+            className="inline-flex items-center gap-2 bg-port-accent text-white px-3 py-1.5 rounded text-sm"
+          >
+            Retry
+          </button>
+          <Link to="/creative-commission" className="inline-flex items-center gap-2 text-gray-400 hover:text-gray-200 px-3 py-1.5 text-sm">
+            <ArrowLeft className="w-4 h-4" /> Back to commissions
+          </Link>
+        </div>
       </div>
     );
   }
@@ -267,6 +305,7 @@ export default function CreativeCommissionDetail() {
           feedback={commission.feedback}
           projectsById={projectsById}
           projectsLoading={projectsLoading}
+          focusRunId={focusRunId}
           onRate={handleRate}
         />
       </section>

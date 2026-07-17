@@ -15,7 +15,7 @@
  * degrades to a status-only card — the "View output" link still works.
  */
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ExternalLink, Film, ThumbsUp, ThumbsDown } from 'lucide-react';
 import ProjectPreview from '../creative-director/ProjectPreview.jsx';
@@ -28,7 +28,7 @@ const STATUS_CLASS = {
   failed: 'text-port-error',
 };
 
-export default function RenderHistory({ runs, feedback, projectsById, projectsLoading, onRate }) {
+export default function RenderHistory({ runs, feedback, projectsById, projectsLoading, focusRunId, onRate }) {
   // Newest-first, memoized so the copy+reverse doesn't run on every render.
   const orderedRuns = useMemo(() => [...(runs || [])].reverse(), [runs]);
   // Latest reaction per run (last write wins), so the run reflects its most
@@ -38,6 +38,16 @@ export default function RenderHistory({ runs, feedback, projectsById, projectsLo
     for (const f of feedback || []) { if (f?.runId) map[f.runId] = f; }
     return map;
   }, [feedback]);
+
+  // Scroll the deep-linked run (`?run=<id>` from a scheduled-run notification)
+  // into view once its card has rendered. Keyed on the run set too, so a card
+  // that only appears after the run list loads still gets focused.
+  const hasFocusRun = !!focusRunId && orderedRuns.some((r) => r.id === focusRunId);
+  useEffect(() => {
+    if (!hasFocusRun) return;
+    const el = document.getElementById(`commission-run-${focusRunId}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [hasFocusRun, focusRunId]);
 
   if (orderedRuns.length === 0) {
     return (
@@ -55,8 +65,13 @@ export default function RenderHistory({ runs, feedback, projectsById, projectsLo
     <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
       {orderedRuns.map((r) => {
         const project = r.projectId ? projectsById.get(r.projectId) : null;
+        const focused = r.id === focusRunId;
         return (
-          <div key={r.id} className="bg-port-card border border-port-border rounded-lg overflow-hidden flex flex-col">
+          <div
+            key={r.id}
+            id={`commission-run-${r.id}`}
+            className={`bg-port-card border rounded-lg overflow-hidden flex flex-col ${focused ? 'border-port-accent ring-1 ring-port-accent' : 'border-port-border'}`}
+          >
             {/* Produced-media preview (or a status-only placeholder). */}
             {project ? (
               <ProjectPreview project={project} to={`/creative-director/${encodeURIComponent(r.projectId)}`} />
