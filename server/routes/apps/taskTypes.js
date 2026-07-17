@@ -97,6 +97,13 @@ router.get('/:id/layered-intelligence/outcomes', loadApp, asyncHandler(async (re
   // that has filed real proposals reads as "nothing filed yet", and records left
   // from when it was on look permanently open. Same absent-vs-empty discipline the
   // rest of this feature keeps.
+  //
+  // LIMITATION (deferred, #2745): `tracked` reflects only the outcomes SOURCE
+  // toggle, not whether the LI task is actually scheduled. If the source is on but
+  // the task is disabled, the loop never reconciles, so proposals closed afterward
+  // sit as pending without a stale warning. Modeling that needs the per-app
+  // task-enabled state (which getEffectiveConfig.enabled no longer authoritatively
+  // carries post-#2322), so it rides with the other freshness work in the follow-up.
   const config = await appsService.getAppLayeredIntelligenceConfig(app.id);
   const tracked = !!config?.sources?.outcomes;
   const { read, outcomes } = await listOutcomesResult({ appId: app.id });

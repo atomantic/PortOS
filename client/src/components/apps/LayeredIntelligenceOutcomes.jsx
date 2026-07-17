@@ -89,8 +89,11 @@ export default function LayeredIntelligenceOutcomes({ appId }) {
       <div className="space-y-2">
         {heading}
         {tracked ? (
+          // "tracked" only means the store is being written now; proposals filed
+          // BEFORE outcomes were enabled aren't backfilled, so scope the claim to
+          // "tracked" rather than asserting nothing was ever filed.
           <p className="text-xs text-gray-500">
-            No proposals filed yet. Once the loop files improvement issues, their outcomes (merge rate + why any were rejected) appear here.
+            No tracked proposals yet. Once the loop files improvement issues, their outcomes (merge rate + why any were rejected) appear here.
           </p>
         ) : (
           // The store is only written while the outcomes source is on, so an empty

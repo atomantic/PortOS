@@ -64,7 +64,7 @@ describe('LayeredIntelligenceOutcomes', () => {
     }));
     render(<LayeredIntelligenceOutcomes appId="app-001" />);
 
-    expect(await screen.findByText(/No proposals filed yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/No tracked proposals yet/)).toBeInTheDocument();
   });
 
   it('distinguishes tracking-off from an empty history when nothing is recorded', async () => {
