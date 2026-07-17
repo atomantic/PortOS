@@ -179,6 +179,13 @@ describe('diffXp', () => {
     expect(d.leveledUp).toBe(true);
   });
 
+  it('reports a birthday level-up even when XP did not change', () => {
+    // A birthday almost never coincides with an XP gain — leveledUp must not depend on gained.
+    const d = diffXp({ xp: 150, level: 41 }, { xp: 150, level: 42 });
+    expect(d.gained).toBe(0);
+    expect(d.leveledUp).toBe(true);
+  });
+
   it('does not burst on the first poll (no prior snapshot)', () => {
     expect(diffXp(null, { xp: 500, level: 2 })).toEqual({ gained: 0, leveledUp: false });
     expect(diffXp(undefined, { xp: 500 })).toEqual({ gained: 0, leveledUp: false });

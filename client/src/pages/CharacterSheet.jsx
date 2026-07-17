@@ -18,18 +18,6 @@ const charGet = (options = {}) => api.get('/character', { silent: true, ...optio
 const charPost = (path, body, options = {}) => api.post(`/character${path}`, body, { silent: true, ...options });
 const charPut = (body, options = {}) => api.put('/character', body, { silent: true, ...options });
 
-// D&D 5e XP thresholds (must match server)
-const XP_THRESHOLDS = [
-  0, 300, 900, 2700, 6500, 14000, 23000, 34000, 48000, 64000,
-  85000, 100000, 120000, 140000, 165000, 195000, 225000, 265000, 305000, 355000
-];
-function xpForNextLevel(level) {
-  return level >= 20 ? XP_THRESHOLDS[19] : XP_THRESHOLDS[level];
-}
-function xpForCurrentLevel(level) {
-  return level <= 1 ? 0 : XP_THRESHOLDS[level - 1];
-}
-
 const EVENT_ICONS = {
   damage: Sword,
   xp: Star,
@@ -296,10 +284,12 @@ export default function CharacterSheet() {
   }
 
   const hpPct = Math.max(0, Math.min(100, (char.hp / char.maxHp) * 100));
-  const nextLevelXP = xpForNextLevel(char.level);
-  const currentLevelXP = xpForCurrentLevel(char.level);
-  const levelRange = nextLevelXP - currentLevelXP;
-  const xpPct = char.level >= 20 ? 100 : Math.max(0, Math.min(100, ((char.xp - currentLevelXP) / levelRange) * 100));
+  // Level is age-derived now (#2673) — it no longer maps to an XP threshold, so the old
+  // "XP toward next level" bar is gone. XP survives as a plain cumulative stat here; the
+  // birthday-progress bar lives on the CyberCity HUD badge (full page reframe is Slice 5).
+  const birthdayPct = Number.isFinite(char.ageYears)
+    ? Math.round((char.ageYears - Math.floor(char.ageYears)) * 100)
+    : 0;
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -421,7 +411,7 @@ export default function CharacterSheet() {
             <div className="flex-shrink-0 flex items-center gap-3">
               <div className="relative w-20 h-20 flex items-center justify-center rounded-full border-2 border-port-accent bg-port-bg">
                 <div className="text-center">
-                  <div className="text-2xl font-bold text-port-accent">{char.level}</div>
+                  <div className="text-2xl font-bold text-port-accent">{char.level ?? '—'}</div>
                   <div className="text-[10px] uppercase tracking-wider text-gray-500">Level</div>
                 </div>
               </div>
@@ -447,24 +437,30 @@ export default function CharacterSheet() {
             </div>
           </div>
 
-          {/* XP Bar */}
-          <div className="mt-3">
-            <div className="flex items-center justify-between mb-1">
-              <div className="flex items-center gap-1.5 text-sm font-medium text-gray-300">
-                <Sparkles className="w-4 h-4 text-port-warning" />
-                XP
-              </div>
-              <span className="text-sm text-gray-400">
-                {char.xp} / {nextLevelXP}
-              </span>
+          {/* XP — a cumulative stat now (no longer a level-progress bar; level is age-based) */}
+          <div className="mt-3 flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-sm font-medium text-gray-300">
+              <Sparkles className="w-4 h-4 text-port-warning" />
+              XP
             </div>
-            <div className="h-3 bg-port-bg rounded-full overflow-hidden border border-port-border">
-              <div
-                className="h-full rounded-full transition-all duration-500 ease-out bg-port-warning"
-                style={{ width: `${xpPct}%` }}
-              />
-            </div>
+            <span className="text-sm text-gray-400">{char.xp}</span>
           </div>
+
+          {/* Progress toward the next birthday (fractional part of the current year of life) */}
+          {char.level != null && (
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-1">
+                <div className="text-sm font-medium text-gray-300">Next birthday</div>
+                <span className="text-sm text-gray-400">{birthdayPct}%</span>
+              </div>
+              <div className="h-3 bg-port-bg rounded-full overflow-hidden border border-port-border">
+                <div
+                  className="h-full rounded-full transition-all duration-500 ease-out bg-port-accent"
+                  style={{ width: `${birthdayPct}%` }}
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Quick Actions */}

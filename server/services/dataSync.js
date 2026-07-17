@@ -272,8 +272,11 @@ async function applyCharacterRemote(remoteData) {
 
   const local = await readJSONFile(CHARACTER_FILE, null);
   if (!local) {
-    // No local character — accept remote entirely
-    await atomicWrite(CHARACTER_FILE, remoteData);
+    // No local character — accept remote entirely, but strip a legacy persisted `level`
+    // (an older peer still sends it): level is age-derived on read now (#2673), so a stored
+    // value would be stale and would re-propagate in our own snapshot.
+    const { level: _staleLevel, ...accepted } = remoteData;
+    await atomicWrite(CHARACTER_FILE, accepted);
     console.log(`🔄 Character sync: accepted remote character`);
     return { applied: true, count: 1 };
   }

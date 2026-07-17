@@ -115,8 +115,10 @@ export function diffXp(prev, next) {
   const gained = Math.max(0, nextXp - prevXp);
   // Level is decoupled from XP now: a level-up burst fires only on a real age-level increase
   // (a birthday), never when an XP gain crosses a legacy threshold. When level is unknown
-  // (no birthDate on either snapshot) there is no level-up to celebrate.
+  // (no birthDate on either snapshot) there is no level-up to celebrate. This is independent
+  // of `gained` — a birthday almost never coincides with an XP gain, so gating it on XP would
+  // mean the celebration never fires. The badge decides to burst on `gained > 0 || leveledUp`.
   const leveledUp = prevLevel != null && nextLevel != null && nextLevel > prevLevel;
 
-  return { gained, leveledUp: gained > 0 && leveledUp };
+  return { gained, leveledUp };
 }

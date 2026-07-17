@@ -27,7 +27,9 @@ export default function CityXpBadge({ character }) {
     if (!character) return;
 
     const { gained, leveledUp } = diffXp(prev, character);
-    if (gained <= 0) return;
+    // Fire on an XP gain (cyan) OR a birthday age-level tick (amber) — a birthday rarely
+    // coincides with an XP gain, so it must be able to burst on its own.
+    if (gained <= 0 && !leveledUp) return;
 
     setBurst(b => ({ kind: leveledUp ? 'levelup' : 'gain', seq: b.seq + 1, gained }));
     clearTimeout(burstTimerRef.current);
@@ -48,16 +50,17 @@ export default function CityXpBadge({ character }) {
   const gaining = burst.kind !== null;
   const barColor = leveling ? '#f59e0b' : '#06b6d4';
   const pct = Math.round(view.progress * 100);
-  // No birthDate set → level is null; show a prompt instead of NaN. The badge still links
-  // to /character where the birth date can be set (Slice 5 owns the inline prompt UI).
+  // No birthDate set → level is null; show a prompt instead of NaN, and send the click to the
+  // age editor (where the birth-date field actually lives) rather than the character sheet.
   const levelLabel = view.hasBirthDate ? `LV ${view.level}` : 'LV —';
+  const target = view.hasBirthDate ? '/character' : '/meatspace/age';
 
   return (
     <div className="absolute bottom-16 right-3 pointer-events-auto">
       <button
         type="button"
-        onClick={() => navigate('/character')}
-        title="Open character sheet"
+        onClick={() => navigate(target)}
+        title={view.hasBirthDate ? 'Open character sheet' : 'Set your birth date'}
         className={`relative block w-40 sm:w-48 bg-black/85 backdrop-blur-sm border rounded-lg px-3 py-2.5 overflow-hidden text-left transition-all duration-300 hover:bg-cyan-500/10 ${
           leveling
             ? 'border-amber-400/70 shadow-[0_0_16px_rgba(245,158,11,0.5)]'

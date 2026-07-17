@@ -52,6 +52,16 @@ describe('ageYearsFromBirthDate', () => {
     expect(characterService.ageYearsFromBirthDate('not-a-date', now)).toBeNull();
     expect(characterService.ageYearsFromBirthDate('2030-01-01', now)).toBeNull();
   });
+
+  it('uses calendar birthdays — does not tick the level up a day early', () => {
+    // The day BEFORE the 26th birthday: still 25 (a 365.25-day average would round to 26).
+    const dayBefore = characterService.ageYearsFromBirthDate('2000-07-17', new Date('2026-07-16T00:00:00Z'));
+    expect(Math.floor(dayBefore)).toBe(25);
+    // On the birthday: ticks to 26 with ~0 progress.
+    const onBirthday = characterService.ageYearsFromBirthDate('2000-07-17', new Date('2026-07-17T00:00:00Z'));
+    expect(Math.floor(onBirthday)).toBe(26);
+    expect(onBirthday - 26).toBeLessThan(0.01);
+  });
 });
 
 describe('levelFromAge', () => {

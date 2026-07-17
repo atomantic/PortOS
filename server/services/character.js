@@ -21,20 +21,40 @@ const CHARACTER_FILE = path.join(PATHS.data, 'character.json');
 // damage/rest mechanics survive for backward-compat against a flat maxHp.
 const DEFAULT_MAX_HP = 15;
 
-const MS_PER_YEAR = 365.25 * 24 * 60 * 60 * 1000;
-
 // Derived fields getCharacter() attaches on read; they are stripped before persisting so a
 // stale age-level never lands on disk or in the federated snapshot.
 const DERIVED_FIELDS = ['level', 'ageYears'];
 
-// Pure: fractional years lived since birthDate, or null when birthDate is unset/invalid.
+// Pure: fractional years lived since birthDate (whole years + progress toward the next
+// birthday), or null when birthDate is unset/invalid/future. Uses **calendar** birthdays,
+// not a fixed 365.25-day average — averaging would tick the level up to a day early across
+// leap years. UTC components are used on both sides so the tick lands on the birthday's UTC
+// date regardless of the server's local timezone.
 export function ageYearsFromBirthDate(birthDate, now = new Date()) {
   if (!birthDate) return null;
   const birth = new Date(birthDate);
-  if (Number.isNaN(birth.getTime())) return null;
-  const years = (now.getTime() - birth.getTime()) / MS_PER_YEAR;
-  if (!Number.isFinite(years) || years < 0) return null;
-  return Math.round(years * 100) / 100;
+  if (Number.isNaN(birth.getTime()) || birth.getTime() > now.getTime()) return null;
+
+  // Completed calendar years = how many birthdays have passed.
+  let years = now.getUTCFullYear() - birth.getUTCFullYear();
+  const lastBirthday = new Date(birth);
+  lastBirthday.setUTCFullYear(birth.getUTCFullYear() + years);
+  if (lastBirthday.getTime() > now.getTime()) {
+    years -= 1;
+    lastBirthday.setUTCFullYear(lastBirthday.getUTCFullYear() - 1);
+  }
+  if (years < 0) return null;
+
+  // Fraction of the way from the last birthday to the next (progress toward next birthday).
+  const nextBirthday = new Date(lastBirthday);
+  nextBirthday.setUTCFullYear(lastBirthday.getUTCFullYear() + 1);
+  const span = nextBirthday.getTime() - lastBirthday.getTime();
+  // frac ∈ [0, 1): now is always ≥ lastBirthday and < nextBirthday. Do NOT round the sum —
+  // rounding e.g. 25.997 to 25.99→26.00 would push floor(ageYears) to the wrong level a day
+  // early. levelFromAge() floors this, and display consumers round the fractional part.
+  const frac = span > 0 ? Math.min(0.999999, Math.max(0, (now.getTime() - lastBirthday.getTime()) / span)) : 0;
+
+  return years + frac;
 }
 
 // Pure: age-based level = whole years lived. null when age is unknown.
