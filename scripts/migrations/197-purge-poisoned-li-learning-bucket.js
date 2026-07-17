@@ -33,12 +33,24 @@
  *   execution-health signal from its confidence math). Inventing a success rate to
  *   replace it would be the same sin in the opposite direction.
  *
+ *   Reuses `removeTaskTypeFromLearningData` rather than hand-rolling the removal.
+ *   The bucket is not the only place the fabricated failures landed — they were also
+ *   folded into `totals`, `byModelTier`, `routingAccuracy`, `errorPatterns`,
+ *   `failureSignatures`, and `correlationWindow`. Deleting only `byTaskType` would
+ *   leave the global success rate (the CoS Learning card) and routing still skewed
+ *   while reporting success, and a second hand-written unwind here would drift from
+ *   the runtime's as aggregates are added.
+ *
+ *   Environmental failures are deliberately PRESERVED. `shouldDivertToEnvironmental`
+ *   routes rate-limit/auth/network events to their own ledger and never into
+ *   `byTaskType`, so they are recorded from real errors and are true regardless of
+ *   this bug — unlike `resetTaskTypeLearning`, which purges them because a
+ *   user-initiated reset means "forget this type entirely". This migration repairs
+ *   mis-recorded data; it must not destroy a genuine outage history.
+ *
  *   Scoped to `self-improve:layered-intelligence` — the ONLY registered
- *   programmatic-I/O task type (taskTypeHooks.js `HOOK_MODULES`), so no other
- *   bucket was affected by the bug and none are touched here. Environmental-failure
- *   entries keyed to the type are purged alongside it via the existing
- *   `purgeEnvironmentalFailuresForType` helper, so the ledger can't keep pointing at
- *   failures whose bucket is gone.
+ *   programmatic-I/O task type (taskTypeHooks.js `HOOK_MODULES`), so no other bucket
+ *   was affected by the bug and none are touched here.
  *
  *   No-op by construction on installs that never ran LI (the common case) — the
  *   file is only rewritten when the bucket is actually present.
@@ -47,7 +59,7 @@
 import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 
-import { purgeEnvironmentalFailuresForType } from '../../server/services/taskLearning/metrics.js';
+import { removeTaskTypeFromLearningData } from '../../server/services/taskLearning/metrics.js';
 
 const LEARNING_REL = 'data/cos/learning.json';
 
@@ -91,14 +103,14 @@ export default {
       return { purged: 0 };
     }
 
-    const completed = byTaskType[LI_BUCKET]?.completed || 0;
-    delete byTaskType[LI_BUCKET];
-    // Keep the environmental-failure ledger consistent with the bucket we just
-    // dropped — reuses the runtime helper rather than re-encoding its shape here.
-    purgeEnvironmentalFailuresForType(data, LI_BUCKET);
+    // Unwinds the bucket AND its contribution to every other aggregate (totals,
+    // byModelTier, routingAccuracy, errorPatterns, failureSignatures,
+    // correlationWindow). The environmental ledger is intentionally left alone.
+    const previous = removeTaskTypeFromLearningData(data, LI_BUCKET);
+    const purged = previous?.completed || 0;
 
     await writeFile(path, JSON.stringify(data, null, 2) + '\n');
-    console.log(`🧹 LI learning: purged ${completed} mis-recorded layered-intelligence run(s) (#2700)`);
-    return { purged: completed };
+    console.log(`🧹 LI learning: purged ${purged} mis-recorded layered-intelligence run(s) (#2700)`);
+    return { purged };
   },
 };
