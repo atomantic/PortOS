@@ -162,6 +162,31 @@ describe('useAIStatusNotifications — silent-op error coalescing', () => {
     expect(errs[0].opts?.id).toMatch(/^ai-silent-error::prov-1::/);
   });
 
+  it('keeps the coalesced toast alive across staggered same-window failures until the window lapses after the LAST one', () => {
+    renderHook(() => useAIStatusNotifications());
+
+    act(() => {
+      emit({ id: 's1', phase: 'error', silent: true, providerId: 'prov-1', providerName: 'Example Provider', message: 'first' });
+    });
+    // Second failure 3.5s later — still inside the 4s rolling window.
+    act(() => { vi.advanceTimersByTime(3500); });
+    act(() => {
+      emit({ id: 's2', phase: 'error', silent: true, providerId: 'prov-1', providerName: 'Example Provider', message: 'second' });
+    });
+    const coalescedId = errorCalls()[0].opts?.id;
+
+    // Coalesced toasts render with duration: Infinity, so Toast schedules no
+    // auto-dismiss of its own. Advance to t=6 (where a stale per-add 6s timer
+    // from the t=0 toast would have fired) — the toast must still be alive.
+    act(() => { vi.advanceTimersByTime(2500); });
+    expect(dismissCalls().some(c => c.id === coalescedId)).toBe(false);
+
+    // The window is measured from the LAST failure (t=3.5), so it lapses at
+    // t=7.5; advance past it and the hook dismisses exactly this window's toast.
+    act(() => { vi.advanceTimersByTime(2000); });
+    expect(dismissCalls().filter(c => c.id === coalescedId)).toHaveLength(1);
+  });
+
   it('starts a fresh coalescing window after the previous one lapses', () => {
     renderHook(() => useAIStatusNotifications());
 

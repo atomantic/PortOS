@@ -69,29 +69,40 @@ export function useAIStatusNotifications() {
       const reason = event.message || `${providerLabel} background AI call failed`;
       const entry = silentErrorsRef.current.get(key);
 
+      // The hook owns the coalesced toast's whole lifetime: render it with
+      // `duration: Infinity` so Toast schedules NO auto-dismiss timer of its own
+      // (it never cancels those, and each update's stale timer would otherwise
+      // dismiss the toast mid-window), and dismiss it ourselves once the rolling
+      // window lapses — SILENT_ERROR_WINDOW_MS after the LAST failure, since the
+      // timer is reset on every update below.
+      const armWindowExpiry = (k, toastId) =>
+        setTimeout(() => {
+          toast.dismiss(toastId);
+          silentErrorsRef.current.delete(k);
+        }, SILENT_ERROR_WINDOW_MS);
+
       if (!entry) {
-        // Fresh window. Give the toast a window-unique id: Toast schedules an
-        // independent auto-dismiss timer per add() and never cancels it, so a
-        // stable per-provider id would let a lapsed window's pending dismissal
-        // remove the NEXT window's toast a second or two after it appeared.
+        // Fresh window. Give the toast a window-unique id so that even if a
+        // dismissal ever races a brand-new window (e.g. rapid lapse/re-open),
+        // it can only ever target its own window's toast, never a successor's.
         windowSeqRef.current += 1;
         const toastId = `ai-silent-error::${key}::${windowSeqRef.current}`;
         const fresh = { toastId, count: 1, firstReason: reason, timer: undefined };
-        fresh.timer = setTimeout(() => silentErrorsRef.current.delete(key), SILENT_ERROR_WINDOW_MS);
+        fresh.timer = armWindowExpiry(key, toastId);
         silentErrorsRef.current.set(key, fresh);
-        toast.error(reason, { id: toastId, duration: 6000, icon: '✕' });
+        toast.error(reason, { id: toastId, duration: Infinity, icon: '✕' });
         return;
       }
 
       entry.count += 1;
       if (entry.timer) clearTimeout(entry.timer);
-      entry.timer = setTimeout(() => silentErrorsRef.current.delete(key), SILENT_ERROR_WINDOW_MS);
+      entry.timer = armWindowExpiry(key, entry.toastId);
       // Retain the first real reason — the count alone doesn't tell the user
       // whether it was an expired key, a timeout, or a bad response, and these
       // events can all land before the browser paints, so the counted toast is
       // often the only one the user ever sees.
       toast.error(`${providerLabel} failed on ${entry.count} background AI calls — ${entry.firstReason}`, {
-        id: entry.toastId, duration: 6000, icon: '✕'
+        id: entry.toastId, duration: Infinity, icon: '✕'
       });
     };
 
@@ -174,6 +185,9 @@ export function useAIStatusNotifications() {
       opsRef.current.clear();
       for (const e of silentErrorsRef.current.values()) {
         if (e.timer) clearTimeout(e.timer);
+        // These toasts render with duration: Infinity, so nothing else will
+        // dismiss them once we drop their window timer — clear them explicitly.
+        toast.dismiss(e.toastId);
       }
       silentErrorsRef.current.clear();
     };
