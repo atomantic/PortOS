@@ -57,10 +57,16 @@ const EXACT_RATES = {
   'gemini-2.5-pro': [1.25, 10.0],
   'gemini-2.5-flash': [0.3, 2.5],
   'gemini-2.5-flash-lite': [0.1, 0.4],
-  // Cerebras — open-weights models on an OpenAI-compatible host. Listed exactly
-  // (not via the `/gpt/i` family rule) because that rule would otherwise bill
-  // `gpt-oss-120b` at OpenAI GPT-5.4's $2.50/$15.00 — off by ~10-20x.
-  'gpt-oss-120b': [0.35, 0.75],
+  // Open-weights rate anchor, not a matchable id — reached only via the
+  // `/gpt-oss/i` family rule and the `cerebras` provider default below, so it
+  // always reports as approximate. `gpt-oss-*` is open-weights: unlike the
+  // vendor-locked ids above, the model id does NOT identify the host, and rates
+  // differ per host — so no bare `gpt-oss` id may claim `matched: 'exact'` (that
+  // suppresses the UI's `~` marker). Cerebras's published rate is the anchor
+  // because Cerebras is the only gpt-oss host PortOS ships; it is a far better
+  // estimate for any host than the `/gpt/i` rule's $2.50/$15.00 GPT-5.4 rates,
+  // which is where these ids landed before (~10-20x too high).
+  'gpt-oss-120b (cerebras)': [0.35, 0.75],
 };
 
 // Exact keys sorted longest-first for the substring pass in
@@ -85,9 +91,9 @@ const FAMILY_RULES = [
   { test: /haiku/i, rateModel: 'claude-haiku-4-5' },
   { test: /codex/i, rateModel: 'gpt-5.3-codex' },
   // `gpt-oss-*` is open-weights and hosted cheaply everywhere — it must win over
-  // the proprietary `/gpt/i` rule below, which would bill it at ~10-20x. Sizes
-  // other than the exact-listed 120b land here.
-  { test: /gpt-oss/i, rateModel: 'gpt-oss-120b' },
+  // the proprietary `/gpt/i` rule below, which would bill it at ~10-20x. Every
+  // size/host lands here (never `exact`) since the id alone can't price it.
+  { test: /gpt-oss/i, rateModel: 'gpt-oss-120b (cerebras)' },
   { test: /gpt/i, rateModel: 'gpt-5.4' },
   { test: /grok-build/i, rateModel: 'grok-build-0.1' },
   { test: /grok-4\.20/i, rateModel: 'grok-4.3' },
@@ -104,7 +110,7 @@ const PROVIDER_DEFAULT_RULES = [
   // Cerebras hosts a small, uniformly cheap catalog; its flagship's rates are a
   // far better estimate for an unrecognized id (e.g. a preview model picked up
   // by "Refresh models") than the generic $3/$15 fallback.
-  { test: /cerebras/i, rateModel: 'gpt-oss-120b' },
+  { test: /cerebras/i, rateModel: 'gpt-oss-120b (cerebras)' },
 ];
 
 // Legacy blended estimate (the old flat usage.js rate) — the last resort for a
