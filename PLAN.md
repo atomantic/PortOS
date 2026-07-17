@@ -122,6 +122,36 @@ by `/do:replan --issues`:
   claim-issue-gitlab (+ jira) with outgoing defaults preserved. Surfaced while
   diagnosing a managed-app perpetual-drain churn.
 
+### Programmatic-I/O task-learning follow-ups (#2727)
+
+- [ ] Give task-learning a "don't record this run at all" channel, and route
+  pre-evaluation hook aborts through it. `resolveProgrammaticIoVerdict`
+  (`server/services/agentLifecycle.js`) returns the undeclared sentinel (null) when
+  an output hook bails before it ever looks at the agent's output (`no-app` /
+  `app-not-found` — e.g. the app was deleted mid-run). But null means "fall back to
+  the exit code" in `buildTaskTelemetryContext`
+  (`server/services/taskLearning/metrics.js` ~line 197), so an exit-0 run still
+  banks a success for the type. Neither available answer is right: `false` blames
+  the model for a user deleting an app and poisons the #2329 failure-signature
+  window with a non-failure; `null` overcounts successes. The honest answer is to
+  not record the run — which needs a skip path through `recordTaskCompletion`
+  (`taskLearning/metrics.js`) that today always writes. Raised by the codex
+  reviewer on #2727 and deferred: the fix is a change to the learning write
+  contract shared by every task type, too broad to ride along with #2727. Rare
+  edge (app deleted mid-run), so the overcount is low-volume.
+
+- [ ] Decide whether a reasoner envelope whose supplied fields are individually
+  invalid should count as malformed output.
+  `layeredIntelligenceHooks.js#processTaskOutput` now rejects a non-envelope
+  payload and a *supplied-but-invalid `proposal`* as `unparseable-response`, but a
+  wrong-typed non-deliverable field (`{"analysis": 7}`) still reads as a legitimate
+  `no-proposal` success. Closing that fully means re-litigating
+  `validateReasonerResponse`'s documented contract
+  (`server/services/layeredIntelligence.js` ~line 398: "invalid pieces dropped,
+  never throws"), which is deliberately lenient and shared with other callers —
+  out of scope for #2727. Raised by the codex reviewer; low value (analysis text
+  isn't the deliverable) so it may be a won't-fix.
+
 ### Series review ("Review this series", #2664) follow-ups
 
 - [ ] **Parallelize the foundation judge + canon readiness with the editorial-checks pass in `runSeriesReview`** (`server/services/pipeline/seriesReview.js`). Today foundation (a full LLM round-trip) runs to completion before `runEditorialChecks` even starts, and canon sits idle until checks finish; only the seed→read chain (feedback-seed → checks-seed → health/getReview) is a real ordering constraint. `judgeFoundation` writes only its own snapshot and `checkSeriesCanonReadiness` is store-independent, so both can be kicked off at function entry and awaited just before `computeReviewVerdict`. Deferred from the /simplify pass because it changes the SSE progress-frame ordering (foundation/canon `step:*` frames would interleave with `check:*` frames) — needs the progress emits moved to kickoff/settle and a quick UX check that the interleaved stream still reads cleanly. Largest wall-clock win (~the foundation-judge duration).
