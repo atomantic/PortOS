@@ -75,9 +75,15 @@ const REJECTION_REASON_LABELS = {
   [UNKNOWN_REJECTION_REASON]: 'closed with no recorded reason'
 };
 
-/** Render one token as prose for the reasoner. Unknown tokens pass through. */
+/**
+ * Render one token as prose for the reasoner. An unglossed token passes through;
+ * a nullish (unclassified) input renders as '' — mapping it onto the sentinel
+ * would invert this module's central rule by dressing "not classified" up as
+ * "classified, and we found nothing".
+ */
 export function formatRejectionReason(reason) {
-  return REJECTION_REASON_LABELS[reason] || reason || UNKNOWN_REJECTION_REASON;
+  if (!reason) return '';
+  return REJECTION_REASON_LABELS[reason] || reason;
 }
 
 // Normalize a tracker token (label name or stateReason) for matching: lowercased,
@@ -151,30 +157,40 @@ export function classifyRejection({ outcome = null, stateReason = null, labels =
 }
 
 /**
- * Tally rejection reasons across an outcome list.
+ * Tally rejection reasons across every non-merged RESOLVED proposal. A pending
+ * proposal is awaiting triage, not rejected, and a merged one has nothing to
+ * explain — neither is counted.
  *
- * Counts only non-merged RESOLVED records: a pending proposal is awaiting triage,
- * not rejected. Records with no stored classification (`null` — merged, or written
- * before the taxonomy existed) are counted in neither bucket; they are unclassified
- * data, not a measured gap, and folding them into `unknown` would overstate the gap
- * this metric exists to track.
+ * Returns `{ entries, unknown, unclassified, diagnosed, total }`:
+ *   - `entries`      — `[{ reason, count }]` of REAL diagnoses only, commonest first.
+ *   - `unknown`      — classified as `unknown-reason`: we looked and no signal
+ *                      explained it. A MEASURED gap.
+ *   - `unclassified` — no valid diagnosis stored at all: written before the taxonomy
+ *                      existed, or reconcile hasn't reached it yet. An UNMEASURED
+ *                      gap — a different fact from `unknown`, with a different
+ *                      remedy (reconcile it vs. enrich the signals).
+ *   - `diagnosed`    — records carrying a real diagnosis (sum of `entries`).
+ *   - `total`        — every non-merged resolved proposal: the full population being
+ *                      diagnosed. `total === 0` means, and only means, "nothing has
+ *                      been closed unmerged".
  *
- * Returns `{ entries, unknown, diagnosed, total }`:
- *   - `entries`  — `[{ reason, count }]` of REAL diagnoses only, commonest first.
- *   - `unknown`  — records classified as `unknown-reason` (the data gap).
- *   - `diagnosed`— records carrying a real diagnosis (sum of `entries`).
- *   - `total`    — `diagnosed + unknown`, i.e. every classified record.
- * `unknown` is kept OUT of `entries` so it can't crowd real diagnoses out of a
- * caller's top-N list — it is the measure of missing data, not a finding.
+ * The three buckets stay apart for the same reason the record field is three-valued:
+ * collapsing them would either fabricate a diagnosis or hide the data gap this
+ * metric exists to track. `unknown`/`unclassified` stay OUT of `entries` so they
+ * can't crowd real diagnoses out of a caller's top-N list — they measure missing
+ * data, they are not findings.
  */
 export function summarizeRejectionReasons(outcomes = []) {
   const counts = new Map();
   let unknown = 0;
+  let unclassified = 0;
   for (const o of Array.isArray(outcomes) ? outcomes : []) {
     if (!o || (o.outcome !== 'rejected' && o.outcome !== 'abandoned')) continue;
     const reason = o.rejectionReason;
     if (reason === UNKNOWN_REJECTION_REASON) { unknown += 1; continue; }
-    if (!REJECTION_REASONS.includes(reason)) continue;
+    // Absent OR unrecognized (hand-edited, or a token from a newer version): both
+    // mean we hold no valid diagnosis for a proposal that demonstrably didn't merge.
+    if (!REJECTION_REASONS.includes(reason)) { unclassified += 1; continue; }
     counts.set(reason, (counts.get(reason) || 0) + 1);
   }
   const entries = [...counts.entries()]
@@ -183,26 +199,31 @@ export function summarizeRejectionReasons(outcomes = []) {
     .sort((a, b) => b[1] - a[1] || REJECTION_REASONS.indexOf(a[0]) - REJECTION_REASONS.indexOf(b[0]))
     .map(([reason, count]) => ({ reason, count }));
   const diagnosed = entries.reduce((n, e) => n + e.count, 0);
-  return { entries, unknown, diagnosed, total: diagnosed + unknown };
+  return { entries, unknown, unclassified, diagnosed, total: diagnosed + unknown + unclassified };
 }
 
 /**
  * Render a tally as one prompt line: the commonest `limit` diagnoses, glossed,
- * plus the undiagnosed share when there is one.
+ * followed by whichever gaps are non-zero.
  *
- * Returns '' when NOTHING is classified, so the caller omits the line rather than
- * emitting "rejection reasons: none" — which reads as "nothing was ever rejected"
- * when the truth may be "we don't know why anything was".
+ * Returns '' ONLY when nothing has been closed unmerged, so a caller may safely read
+ * '' as "there is nothing to explain". It must never fall silent merely because the
+ * closures are undiagnosed: a report that says "Rejected: 2" and then "nothing has
+ * been closed unmerged yet" is a self-contradiction, and staying quiet about a gap
+ * is exactly the blindness this taxonomy exists to remove.
  */
 export function formatRejectionReasons(outcomes = [], limit = 3) {
-  const { entries, unknown, total } = summarizeRejectionReasons(outcomes);
+  const { entries, unknown, unclassified, total } = summarizeRejectionReasons(outcomes);
   if (total === 0) return '';
   const listed = entries
     .slice(0, limit)
     .map(({ reason, count }) => `${formatRejectionReason(reason)} (${count})`)
     .join('; ');
-  // Always name the gap: a run that can only say "3 of 3 closed with no recorded
-  // reason" is reporting a real, actionable fact about its own blind spot.
-  const gap = unknown ? `${unknown} of ${total} closed with no recorded reason` : '';
-  return [listed, gap].filter(Boolean).join(' — ');
+  // Name every gap: "3 of 3 closed with no recorded reason" is a real, actionable
+  // fact about the loop's own blind spot, and the honest line when it's all we have.
+  const gaps = [
+    unknown ? `${unknown} of ${total} closed with no recorded reason` : '',
+    unclassified ? `${unclassified} of ${total} not yet classified` : ''
+  ];
+  return [listed, ...gaps].filter(Boolean).join(' — ');
 }
