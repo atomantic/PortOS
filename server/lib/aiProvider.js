@@ -213,7 +213,7 @@ async function postChatCompletion(provider, model, prompt, { temperature, max_to
  * so the beam's thickness can track tokens/sec.
  */
 export async function callProviderAISimple(provider, model, prompt, options = {}) {
-  const { temperature = 0.3, max_tokens = 1000, op, opLabel, appId, workspacePath } = options;
+  const { temperature = 0.3, max_tokens = 1000, op, opLabel, appId, workspacePath, background } = options;
   if (provider.type !== 'api') {
     return { error: 'This operation requires an API-based provider' };
   }
@@ -232,7 +232,13 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
     model,
     appId,
     workspacePath,
-    silent: !op
+    silent: !op,
+    // `background` marks an UNATTENDED fan-out job (e.g. the scheduled multi-goal
+    // check-in) so the client coalesces its per-provider error toasts. It is the
+    // caller's explicit provenance signal — NOT inferred from `!op`, because
+    // user-triggered actions (generateGoalPhases/decomposeGoal/checkInGoal) are
+    // also op-less/silent and must keep toasting individually.
+    background: !!background
   });
 
   const doneLabel = effectiveLabel.replace(/…$/, '');

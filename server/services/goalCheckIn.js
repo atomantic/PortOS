@@ -68,9 +68,12 @@ export async function runGoalCheckIn() {
     return { goal, expectedProgress, actualProgress, status, attendanceRate, prompt };
   });
 
-  // Parallelize LLM calls
+  // Parallelize LLM calls. `background: true` marks these as an unattended
+  // fan-out (this runs from a scheduled job — see autonomousJobs/scriptHandlers.js)
+  // so the client coalesces per-provider error toasts: a systematically-failing
+  // provider yields one notification, not one red toast per goal.
   const llmResults = await Promise.all(
-    checkInData.map(d => callProviderAISimple(provider, provider.defaultModel, d.prompt))
+    checkInData.map(d => callProviderAISimple(provider, provider.defaultModel, d.prompt, { background: true }))
   );
 
   const results = [];

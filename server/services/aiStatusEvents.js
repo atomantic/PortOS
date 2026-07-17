@@ -40,6 +40,12 @@ const ICONS = {
  * @param {string} [init.model]
  * @param {string} [init.appId]         — managed-app id this call works on behalf of
  * @param {string} [init.workspacePath] — CoS-agent workspace this call works on behalf of
+ * @param {boolean} [init.background]    — this call is part of an UNATTENDED job (a
+ *   scheduled/autopilot task the user isn't watching), NOT merely display-silent.
+ *   Distinct from `silent` (which only suppresses the start toast — user-triggered
+ *   op-less actions are silent too). The client coalesces per-provider error toasts
+ *   for background ops so a systematically-failing provider in a fan-out job (e.g.
+ *   the multi-goal check-in) yields one notification instead of N stacked toasts.
  *
  * `appId`/`workspacePath` let the CyberCity AI Core aim its activity beam at the
  * originating building; ops with neither get the generic radial beam. Token counts
@@ -56,7 +62,8 @@ export function startAIOp(init) {
     model: init.model,
     appId: init.appId,
     workspacePath: init.workspacePath,
-    silent: !!init.silent
+    silent: !!init.silent,
+    background: !!init.background
   };
 
   emit('start', base, init.label || `Calling ${init.providerName || init.providerId || 'AI'}…`);
