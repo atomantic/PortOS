@@ -2,6 +2,9 @@ import { Link } from 'react-router-dom';
 import { useState, useEffect, useRef } from 'react';
 import { Sparkles, Loader2 } from 'lucide-react';
 import { updateCreativeDirectorProject, applyCreativeDirectorAutoCast } from '../../services/apiCreativeDirector.js';
+import { selectProjectPreview, previewAspectClass } from '../../lib/creativeDirectorPreview.js';
+import MediaImage from '../MediaImage.jsx';
+import ScenePreview from './ScenePreview.jsx';
 import toast from '../ui/Toast';
 
 export default function OverviewTab({ project, onProjectUpdate, onAsyncWorkQueued }) {
@@ -156,8 +159,44 @@ export default function OverviewTab({ project, onProjectUpdate, onAsyncWorkQueue
     ? <Link to={`/media/history?selected=${project.finalVideoId}`} className="text-port-accent">{project.finalVideoId}</Link>
     : <span className="text-port-text-muted">not yet rendered</span>;
 
+  // Inline render of the produced media (#2702). The final cut is the only thing
+  // this section claims to show — a mid-production scene render deliberately
+  // does NOT surface here (the Segments tab already previews those, and framing
+  // one as the deliverable would misrepresent an unfinished project). A
+  // directive plan that emits images rather than video shows its produced image
+  // instead. When nothing is produced the section is omitted entirely, so the
+  // configuration stays above the fold and the "not yet rendered" copy on the
+  // Final video field remains the single honest signal.
+  const preview = selectProjectPreview(project);
+  const aspectClass = previewAspectClass(project.aspectRatio);
+  const inlineImage = !project.finalVideoId && preview.kind === 'image' ? preview : null;
+
   return (
     <div className="space-y-4 max-w-3xl">
+      {(project.finalVideoId || inlineImage) && (
+        <section className="bg-port-card border border-port-border rounded p-4 space-y-2">
+          <h2 className="text-sm font-semibold text-port-text-muted uppercase tracking-wide">
+            {project.finalVideoId ? 'Final video' : inlineImage.label}
+          </h2>
+          <div className={`${aspectClass} rounded overflow-hidden bg-port-bg max-h-[60vh] mx-auto`}>
+            {project.finalVideoId
+              ? <ScenePreview jobId={project.finalVideoId} label="Final video" aspectClass={aspectClass} />
+              : (
+                <MediaImage
+                  src={inlineImage.src}
+                  alt={`${inlineImage.label} — ${project.name || 'project'}`}
+                  className="w-full h-full object-contain"
+                />
+              )}
+          </div>
+          {project.finalVideoId && (
+            <Link to={`/media/history?selected=${project.finalVideoId}`} className="text-port-accent text-xs">
+              Open in Media History
+            </Link>
+          )}
+        </section>
+      )}
+
       <section className="bg-port-card border border-port-border rounded p-4 space-y-2">
         <h2 className="text-sm font-semibold text-port-text-muted uppercase tracking-wide">Configuration</h2>
         <Field label="Aspect ratio" value={project.aspectRatio} />

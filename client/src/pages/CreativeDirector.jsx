@@ -19,6 +19,7 @@ import PageHeader from '../components/PageHeader';
 import Drawer from '../components/Drawer';
 import DirectiveComposer from '../components/creative-director/DirectiveComposer.jsx';
 import CreativeDirectorModelsDrawer from '../components/creative-director/CreativeDirectorModelsDrawer.jsx';
+import ProjectPreview from '../components/creative-director/ProjectPreview.jsx';
 
 const ASPECT_RATIOS = ['16:9', '9:16', '1:1'];
 const QUALITIES = ['draft', 'standard', 'high'];
@@ -423,6 +424,7 @@ export default function CreativeDirector() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           {projects.map((p) => (
             <div key={p.id} className="bg-port-card border border-port-border rounded p-3 flex flex-col gap-2">
+              <ProjectPreview project={p} to={`/creative-director/${p.id}/overview`} />
               <div className="flex items-start justify-between gap-2">
                 <Link to={`/creative-director/${p.id}/overview`} className="flex-1 min-w-0">
                   <div className="font-medium truncate">{p.name}</div>
