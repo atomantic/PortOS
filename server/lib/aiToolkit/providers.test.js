@@ -548,7 +548,7 @@ describe('Provider Service', () => {
       expect(active.id).toBe('antigravity-cli');
       expect(legacy).toBeNull();
       expect(antigravity.command).toBe('agy');
-      expect(antigravity.args).toEqual(['--print', '--dangerously-skip-permissions']);
+      expect(antigravity.args).toEqual(['--dangerously-skip-permissions', '--print']);
       expect(antigravity.defaultModel).toBe('antigravity-configured-default');
       expect(antigravity.contextWindow).toBe(1048576);
       expect(antigravity.envVars).toEqual({ KEEP_ME: '1' });

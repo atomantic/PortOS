@@ -33,7 +33,8 @@ import { tokenize as bm25Tokenize, STOP_WORDS } from '../lib/bm25.js';
 import { VALID_MODES as STORAGE_VALID_MODES } from './askConversations.js';
 import { resolveCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand } from '../lib/providerModels.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
-import { isGrokCommand, ensureGrokHeadlessArgs, prepareGrokPromptFile } from '../lib/grok.js';
+import { isGrokCommand, ensureGrokHeadlessArgs } from '../lib/grok.js';
+import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
 
@@ -583,9 +584,10 @@ async function* streamCompletion(provider, model, prompt, signal) {
   } else if (cliModel) {
     args.push('--model', cliModel);
   }
-  // Grok's /dev/stdin sentinel is fed via stdin on POSIX; on Windows it's
-  // rewritten to a temp file (writePromptToStdin=false). No-op otherwise.
-  const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup: cleanupPromptFile } = prepareGrokPromptFile(args, prompt);
+  // Deliver the prompt per provider convention: antigravity gets it as the
+  // --print VALUE (agy doesn't read stdin); grok's /dev/stdin sentinel via stdin
+  // (POSIX) / temp file (Windows); everyone else via stdin (writePromptToStdin).
+  const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup: cleanupPromptFile } = prepareCliPrompt(provider.command, args, prompt);
   const childEnv = (() => { const e = { ...process.env, ...provider.envVars }; delete e.CLAUDECODE; return e; })();
   // Resolve a bare npm-installed CLI (a .cmd/.bat shim on Windows) to its real
   // path and wrap it as `cmd.exe /c <path>` so spawn() under shell:false can

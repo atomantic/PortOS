@@ -8,8 +8,7 @@ import { join } from 'path';
 import { atomicWrite, ensureDir, tryReadFile } from '../lib/fileUtils.js';
 import { hasModelFlag, extractBakedModel } from '../lib/providerModels.js';
 import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
-import { buildCliArgs } from '../lib/cliProviderArgs.js';
-import { prepareGrokPromptFile } from '../lib/grok.js';
+import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn } from '../lib/bufferedSpawn.js';
@@ -200,14 +199,17 @@ export async function executeCliRun({ runId, provider, prompt, workspacePath, on
     killProcessTree(childProcess);
   };
 
-  // Build provider-specific args for stdin-based prompt delivery
+  // Build provider-specific args for prompt delivery
   const builtArgs = buildCliArgs(provider);
-  // Grok reads its prompt from `--prompt-file`; on POSIX that's /dev/stdin (fed
-  // by the stdin write below), on Windows a real temp file (no /dev/stdin). This
-  // rewrites the argv + tells us whether to still write stdin. No-op for every
-  // other provider. cleanupPromptFile removes any temp file after the run.
-  const { args, useStdin, cleanup: cleanupPromptFile } = prepareGrokPromptFile(builtArgs, prompt);
-  console.log(`🚀 Executing CLI: ${provider.command} (${prompt.length} chars via ${useStdin ? 'stdin' : 'prompt-file'})`);
+  // Rewrite the argv for prompt delivery and learn whether to still write stdin:
+  //   - Antigravity (`agy`): prompt spliced in as the --print VALUE (agy doesn't
+  //     read stdin) → useStdin=false.
+  //   - Grok: `--prompt-file /dev/stdin` on POSIX (fed by the stdin write below),
+  //     rewritten to a temp file on Windows → useStdin=false.
+  //   - Every other provider: unchanged, prompt over stdin → useStdin=true.
+  // cleanupPromptFile removes any temp file after the run (no-op otherwise).
+  const { args, useStdin, cleanup: cleanupPromptFile } = prepareCliPrompt(provider.command, builtArgs, prompt);
+  console.log(`🚀 Executing CLI: ${provider.command} (${prompt.length} chars via ${useStdin ? 'stdin' : 'argv'})`);
 
   // Prepend the pm2 shim (agentGuardEnv) onto the final PATH so an unrestricted
   // agent can't `pm2 kill` the shared daemon. See server/lib/agentGuard.

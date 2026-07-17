@@ -18,8 +18,8 @@
  */
 
 import { resolveCliModel, hasModelFlag, resolveBedrockCliModel, prefixOpencodeModel, isOpencodeCommand, buildCodexStartupArgs } from './providerModels.js';
-import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from './antigravity.js';
-import { isGrokCommand, ensureGrokHeadlessArgs } from './grok.js';
+import { ensureAntigravityPrintArgs, isAntigravityCliProvider, isAntigravityCommand, prepareAntigravityPrompt } from './antigravity.js';
+import { isGrokCommand, ensureGrokHeadlessArgs, prepareGrokPromptFile } from './grok.js';
 
 /**
  * Build CLI args based on provider type. Each CLI provider has different
@@ -123,6 +123,31 @@ export function buildCliArgs(provider) {
     args.push('--model', model);
   }
   return args;
+}
+
+/**
+ * Spawn-time prompt delivery dispatcher. Every CLI spawn site runs the built
+ * argv + prompt through this right before spawning, then honors the returned
+ * `useStdin` flag (write the prompt to stdin only when true) and calls
+ * `cleanup()` after the run. Returns `{ args, useStdin, cleanup }`.
+ *
+ *   - Antigravity (`agy`): the prompt is spliced in as the VALUE of --print
+ *     (agy does NOT read stdin) → `useStdin: false`.
+ *   - Grok on Windows: the `/dev/stdin` prompt-file is rewritten to a temp file
+ *     → `useStdin: false` with a real `cleanup`.
+ *   - Every other provider (Claude Code `-p -`, Codex `exec -`, OpenCode `run`):
+ *     unchanged, prompt delivered over stdin → `useStdin: true`.
+ *
+ * @param {string} command - provider.command (e.g. 'agy', 'claude', 'grok')
+ * @param {string[]} args - argv as built by buildCliArgs
+ * @param {string} prompt - the full prompt text
+ * @returns {{ args: string[], useStdin: boolean, cleanup: () => void }}
+ */
+export function prepareCliPrompt(command, args, prompt) {
+  if (isAntigravityCommand(command)) {
+    return prepareAntigravityPrompt(args, prompt);
+  }
+  return prepareGrokPromptFile(args, prompt);
 }
 
 // Strip dangling/empty `--model` / `-m` tokens (no value follows, or the

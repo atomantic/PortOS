@@ -209,7 +209,7 @@ describe('buildCliSpawnConfig', () => {
     const config = buildCliSpawnConfig({ id: 'antigravity-cli', command: 'agy', args: [] }, 'antigravity-configured-default');
 
     expect(config.command).toBe('agy');
-    expect(config.args).toEqual(['--print', '--dangerously-skip-permissions']);
+    expect(config.args).toEqual(['--dangerously-skip-permissions', '--print']);
   });
 
   it('runs `opencode run -m ollama/<model>` for a headless OpenCode Ollama agent', () => {

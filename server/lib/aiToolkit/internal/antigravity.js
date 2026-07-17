@@ -11,8 +11,14 @@ export const LEGACY_GEMINI_CLI_ID = 'gemini-cli';
 export const LEGACY_GEMINI_TUI_ID = 'gemini-tui';
 export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
 
+// Match by normalized binary basename so a path- or `.exe`-configured provider
+// (`/opt/homebrew/bin/agy`, `agy.exe`) is still recognized. Inlined (not the
+// shared commandBasename) to keep the vendored toolkit self-contained. Keep in
+// sync with server/lib/antigravity.js#isAntigravityCommand.
 export function isAntigravityCommand(command) {
-  return command === 'agy' || command === 'antigravity';
+  if (typeof command !== 'string' || command === '') return false;
+  const base = command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '');
+  return base === 'agy' || base === 'antigravity';
 }
 
 export function isAntigravityCliProvider(provider) {
@@ -39,14 +45,19 @@ export function stripAntigravityUnsupportedArgs(args = []) {
   return out;
 }
 
+// `agy --print`/`-p`/`--prompt` takes the prompt as the flag's VALUE and does
+// NOT read stdin. So the print flag must be the FINAL token (a marker); the host
+// runner splices the prompt in right after it at spawn time. Keep in sync with
+// server/lib/antigravity.js#ensureAntigravityPrintArgs — the host overrides the
+// runner (setCliRunner), so the prompt injection itself lives host-side.
+const ANTIGRAVITY_PRINT_FLAGS = ['--print', '-p', '--prompt'];
+
 export function ensureAntigravityPrintArgs(args = []) {
-  const out = stripAntigravityUnsupportedArgs(args);
-  if (!out.some((arg) => arg === '--print' || arg === '-p' || arg === '--prompt')) {
-    out.unshift('--print');
-  }
+  const out = stripAntigravityUnsupportedArgs(args).filter((arg) => !ANTIGRAVITY_PRINT_FLAGS.includes(arg));
   if (!out.includes('--dangerously-skip-permissions') && !out.includes('--sandbox')) {
     out.push('--dangerously-skip-permissions');
   }
+  out.push('--print');
   return out;
 }
 
