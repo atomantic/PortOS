@@ -145,7 +145,7 @@ export function runSeedStageMigrationTests({ migration, stages, prefix }) {
     // Tuned entry preserved verbatim; the remaining entries still get added.
     expect(installed.stages[specs[0].stageKey]).toEqual(tuned);
     // Empty for a single-stage migration — the tuned-entry assertion above is the
-    // whole point there. Most of the ~59 makeSeedMigration(s) migrations this
+    // whole point there. Most of the ~56 makeSeedMigration(s) migrations this
     // helper could cover are single-stage, so don't read this loop as coverage.
     for (const { stageKey } of specs.slice(1)) {
       expect(config.stages[stageKey], `data.reference stage-config missing entry: ${stageKey}`).toBeTruthy();

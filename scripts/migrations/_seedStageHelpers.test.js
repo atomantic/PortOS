@@ -39,10 +39,20 @@ describe('makeSeedMigration', () => {
     vi.restoreAllMocks();
   });
 
-  it('returns an object exposing only an async up() (no down — runner has no rollback)', () => {
+  it('returns an object exposing up() and the normalized stages list (no down — runner has no rollback)', () => {
     const migration = makeSeedMigration(STAGE_KEY);
     expect(typeof migration.up).toBe('function');
-    expect(migration.down).toBeUndefined();
+    // Pin the whole surface rather than spot-checking `down`: this subsumes the
+    // no-rollback assertion and catches any future accidental addition.
+    expect(Object.keys(migration).sort()).toEqual(['stages', 'up']);
+    expect(migration.stages).toEqual([{ stageKey: STAGE_KEY, filename: FILENAME }]);
+  });
+
+  it('freezes the exposed stages so a consumer cannot mutate what up() seeds', () => {
+    // `stages` is the same array `up()` closes over on an ESM module-cached
+    // singleton — mutating it would silently change what the migration seeds.
+    const migration = makeSeedMigration(STAGE_KEY);
+    expect(Object.isFrozen(migration.stages)).toBe(true);
   });
 
   it('seeds the .md template and merges the stage-config entry on a fresh install', async () => {
