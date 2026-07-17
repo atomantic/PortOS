@@ -69,6 +69,12 @@ async function buildTaskRecord(project, kind, scene, context) {
         ...assignment,
         useWorktree: false,
         readOnly: false,
+        // A CD agent's deliverable is the HTTP PATCH its prompt describes (write
+        // the plan / update the scene), not a code change — so it must NOT be told
+        // to run /do:push/open a PR at the end (there is nothing to push, and it
+        // just loads that skill for no reason). Routes the prompt builder to the
+        // no-code completion section (agentPromptBuilder#buildActionOutputCompletionSection).
+        noCodeOutput: true,
       },
       approvalRequired: false,
       autoApproved: true,
