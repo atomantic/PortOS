@@ -131,7 +131,7 @@ export default function InboxTab({ accounts }) {
   const handleEvaluate = async () => {
     setEvaluating(true);
     const data = selectedAccount ? { accountId: selectedAccount } : {};
-    const result = await api.evaluateMessages(data).catch((err) => {
+    const result = await api.evaluateMessages(data, { silent: true }).catch((err) => {
       toast.error(err?.message || 'Evaluation failed');
       return null;
     });
