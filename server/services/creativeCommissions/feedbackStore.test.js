@@ -145,4 +145,14 @@ describe('backfillInlineFeedback', () => {
     expect(await backfillInlineFeedback('c1', [])).toBe(false);
     expect(await backfillInlineFeedback('c1', null)).toBe(false);
   });
+
+  it('is idempotent for a run-LESS legacy reaction (stable id from the legacy id, no duplicate on retry)', async () => {
+    const legacy = [{ id: 'feedback-old-uuid', rating: 'up', note: 'legacy', at: '2026-01-01T00:00:00.000Z' }];
+    expect(await backfillInlineFeedback('c1', legacy)).toBe(true);
+    const idsAfterFirst = [...feedbackRecords.keys()];
+    expect(idsAfterFirst).toHaveLength(1);
+    // A retry (e.g. clearInlineFeedback failed the first time) must not duplicate it.
+    expect(await backfillInlineFeedback('c1', legacy)).toBe(false);
+    expect([...feedbackRecords.keys()]).toEqual(idsAfterFirst);
+  });
 });

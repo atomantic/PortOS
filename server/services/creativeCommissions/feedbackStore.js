@@ -341,7 +341,18 @@ export async function backfillInlineFeedback(commissionId, inlineFeedback) {
   let wrote = 0;
   for (const entry of inlineFeedback) {
     if (!entry || typeof entry !== 'object') continue;
-    const id = deterministicFeedbackId(entry.runId) || (isStr(entry.id) && CFEEDBACK_ID_RE.test(entry.id) ? entry.id : `cfeedback-${randomUUID()}`);
+    // Derive a STABLE id so re-migrating the same legacy reaction is idempotent —
+    // even a run-LESS one — so a retry after a failed clearInlineFeedback can't
+    // duplicate it: prefer the deterministic per-run id; else the entry's own id
+    // (a valid federated id verbatim, or a legacy `feedback-<uuid>` remapped into
+    // the `cfeedback-` namespace); only a truly id-less+run-less entry (which
+    // sanitizeFeedbackEntry never produces — it always mints an id) falls to random.
+    let id = deterministicFeedbackId(entry.runId);
+    if (!id) {
+      if (isStr(entry.id) && CFEEDBACK_ID_RE.test(entry.id)) id = entry.id;
+      else if (isStr(entry.id) && entry.id) id = `cfeedback-${entry.id.replace(/[^0-9a-z-]/gi, '-')}`;
+      else id = `cfeedback-${randomUUID()}`;
+    }
     const at = isStr(entry.at) ? entry.at : new Date().toISOString();
     const record = sanitizeCommissionFeedbackForSync({
       id, commissionId, runId: entry.runId ?? null, rating: entry.rating,
