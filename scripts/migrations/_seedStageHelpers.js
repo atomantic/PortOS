@@ -2,7 +2,7 @@
  * Shared scaffolding for first-shipment "seed a pipeline stage" migrations (#1838).
  *
  * Companion to `./_lib.js` (hash-driven prompt-*replace*) — this one covers the
- * *seed-a-brand-new-stage* family: ~44 near-identical migrations (e.g.
+ * *seed-a-brand-new-stage* family: ~56 near-identical migrations (e.g.
  * `130-editorial-character-consistency-stage.js`) that each
  *   1) copy a `.md` template from `data.reference/prompts/stages/` into
  *      `data/prompts/stages/` when missing (never clobbering a customized file), and
@@ -75,7 +75,9 @@ export function normalizeStageSpec(spec) {
  * @returns {{ up: (ctx: { rootDir: string }) => Promise<void>, stages: Array<{ stageKey: string, filename: string }> }}
  */
 export function makeSeedMigrations(stageSpecs) {
-  const stages = stageSpecs.map(normalizeStageSpec);
+  // Frozen because `up()` closes over this same array on an ESM module-cached
+  // singleton — a consumer mutating it would silently change what gets seeded.
+  const stages = Object.freeze(stageSpecs.map(normalizeStageSpec));
   return {
     stages,
     async up({ rootDir }) {
