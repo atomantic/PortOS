@@ -141,7 +141,7 @@ export default function PipelineIssue() {
       providerId: series?.llm?.provider || undefined,
       model: series?.llm?.model || undefined,
       ...opts,
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to start auto-run');
       return null;
     });
@@ -154,7 +154,7 @@ export default function PipelineIssue() {
   };
 
   const handleCancelAutoRun = async () => {
-    await cancelPipelineAutoRunText(issueId).catch((err) => {
+    await cancelPipelineAutoRunText(issueId, { silent: true }).catch((err) => {
       toast.error(err.message || 'Cancel failed');
     });
   };

@@ -73,9 +73,10 @@ export const PIPELINE_STAGE_STATUS_COLOR = Object.freeze({
 // (e.g. an optional join that should fail quietly) — see CLAUDE.md.
 export const listPipelineSeries = (options = {}) => request('/pipeline/series', options);
 export const getPipelineSeries = (id, options = {}) => request(`/pipeline/series/${encodeURIComponent(id)}`, options);
-export const createPipelineSeries = (data) => request('/pipeline/series', {
+export const createPipelineSeries = (data, options = {}) => request('/pipeline/series', {
   method: 'POST',
   body: JSON.stringify(data),
+  ...options,
 });
 export const updatePipelineSeries = (id, patch, requestOptions = {}) => request(`/pipeline/series/${encodeURIComponent(id)}`, {
   method: 'PATCH',
@@ -89,8 +90,9 @@ export const setPipelineArcFieldLock = (id, field, locked, requestOptions = {}) 
     body: JSON.stringify({ locked }),
     ...requestOptions,
   });
-export const deletePipelineSeries = (id) => request(`/pipeline/series/${encodeURIComponent(id)}`, {
+export const deletePipelineSeries = (id, options = {}) => request(`/pipeline/series/${encodeURIComponent(id)}`, {
   method: 'DELETE',
+  ...options,
 });
 
 // `requestOptions` flows to apiCore.request — pass `{ silent: true }` when the
@@ -135,10 +137,11 @@ export const SERIES_AUTHOR_MAX = 120;
 export const listPipelineIssues = (seriesId, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/issues`, options);
 
-export const createPipelineIssue = (seriesId, data) =>
+export const createPipelineIssue = (seriesId, data, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/issues`, {
     method: 'POST',
     body: JSON.stringify(data),
+    ...options,
   });
 
 export const getPipelineIssue = (id) => request(`/pipeline/issues/${encodeURIComponent(id)}`);
@@ -150,20 +153,22 @@ export const updatePipelineIssue = (id, patch, requestOptions = {}) =>
     ...requestOptions,
   });
 
-export const deletePipelineIssue = (id) =>
-  request(`/pipeline/issues/${encodeURIComponent(id)}`, { method: 'DELETE' });
+export const deletePipelineIssue = (id, options = {}) =>
+  request(`/pipeline/issues/${encodeURIComponent(id)}`, { method: 'DELETE', ...options });
 
 // ---- Stage operations ----
-export const generatePipelineStage = (issueId, stageId, opts = {}) =>
+export const generatePipelineStage = (issueId, stageId, opts = {}, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/${encodeURIComponent(stageId)}/generate`, {
     method: 'POST',
     body: JSON.stringify(opts),
+    ...options,
   });
 
-export const generatePipelineVisualImage = (issueId, stageId, opts) =>
+export const generatePipelineVisualImage = (issueId, stageId, opts, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/${encodeURIComponent(stageId)}/visual`, {
     method: 'POST',
     body: JSON.stringify(opts),
+    ...options,
   });
 
 // Restore a prior `runHistory` snapshot as the active text-stage state. The
@@ -181,19 +186,21 @@ export const restorePipelineStageVersion = (issueId, stageId, runId, options = {
 // Auto-fill the storyboards stage's scenes[] from the issue's prose or
 // teleplay text stage. `from` defaults server-side to 'teleplay'. Pass
 // `force: true` to replace existing hand-curated scenes.
-export const extractPipelineStoryboardScenes = (issueId, { from, providerOverride, modelOverride, force } = {}) =>
+export const extractPipelineStoryboardScenes = (issueId, { from, providerOverride, modelOverride, force } = {}, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/storyboards/extract-scenes`, {
     method: 'POST',
     body: JSON.stringify({ from, providerOverride, modelOverride, force }),
+    ...options,
   });
 
 // Auto-fill the comicPages stage's pages[] by deterministically parsing the
 // issue's stages.comicScript.output (Marvel/DC-format markdown). Pass
 // `force: true` to replace existing hand-curated pages.
-export const extractPipelineComicPages = (issueId, { force } = {}) =>
+export const extractPipelineComicPages = (issueId, { force } = {}, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/comicPages/extract-pages`, {
     method: 'POST',
     body: JSON.stringify({ force }),
+    ...options,
   });
 
 // Run canon extraction (characters/places/objects) against an issue's prose,
@@ -230,10 +237,11 @@ export const describePipelineCanonFromProse = (issueId, stageId, { providerOverr
 // for cloud image models (Codex / Google), draft-quality for local models.
 // Server persists the returned jobId on stages.comicPages.pages[pageIndex].
 // Returns { jobId, mode, prompt, pageIndex, issue, stage }.
-export const generatePipelineComicPage = (issueId, pageIndex, opts = {}) =>
+export const generatePipelineComicPage = (issueId, pageIndex, opts = {}, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/comicPages/pages/${encodeURIComponent(pageIndex)}/render`, {
     method: 'POST',
     body: JSON.stringify(opts),
+    ...options,
   });
 
 // AI prompt-refine + image-to-image re-render for a small correction to an
@@ -244,10 +252,11 @@ export const generatePipelineComicPage = (issueId, pageIndex, opts = {}) =>
 // to force a variant; absent → server refines the final render when present,
 // else the proof. Returns { jobId, mode, prompt, pageIndex, variant, changes,
 // runId, providerId, issue, stage }.
-export const refinePipelineComicPageRender = (issueId, pageIndex, opts = {}) =>
+export const refinePipelineComicPageRender = (issueId, pageIndex, opts = {}, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/comicPages/pages/${encodeURIComponent(pageIndex)}/refine-render`, {
     method: 'POST',
     body: JSON.stringify(opts),
+    ...options,
   });
 
 // Render the issue's front cover. Pass `coverScript` to render a not-yet-
@@ -338,10 +347,11 @@ export const proseExportPdfUrl = (seriesId) =>
 // Patch one comic page's raw markdown — the server re-parses panels from the
 // edited rawText so subsequent renders still get a structured prompt.
 // Returns { issue, stage, page }.
-export const updatePipelineComicPage = (issueId, pageIndex, { rawText } = {}) =>
+export const updatePipelineComicPage = (issueId, pageIndex, { rawText } = {}, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/comicPages/pages/${encodeURIComponent(pageIndex)}`, {
     method: 'PATCH',
     body: JSON.stringify({ rawText }),
+    ...options,
   });
 
 // Render a single storyboard scene as a video clip (one t2v call against
@@ -350,19 +360,21 @@ export const updatePipelineComicPage = (issueId, pageIndex, { rawText } = {}) =>
 // committing the whole episode render.
 // Server persists the resulting jobId on stages.storyboards.scenes[index]
 // .sceneVideoJobId. Returns { jobId, prompt, sceneIndex, issue, stage }.
-export const generatePipelineSceneVideo = (issueId, sceneIndex, opts = {}) =>
+export const generatePipelineSceneVideo = (issueId, sceneIndex, opts = {}, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/storyboards/scenes/${encodeURIComponent(sceneIndex)}/video`, {
     method: 'POST',
     body: JSON.stringify(opts),
+    ...options,
   });
 
 // Render the start-frame image for a single shot inside a storyboard scene.
 // Server persists the resulting jobId on
 // stages.storyboards.scenes[sceneIndex].shots[shotIndex].startFrameJobId.
-export const generatePipelineShotStartFrame = (issueId, sceneIndex, shotIndex, opts = {}) =>
+export const generatePipelineShotStartFrame = (issueId, sceneIndex, shotIndex, opts = {}, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/storyboards/scenes/${encodeURIComponent(sceneIndex)}/shots/${encodeURIComponent(shotIndex)}/render`, {
     method: 'POST',
     body: JSON.stringify(opts),
+    ...options,
   });
 
 // LLM-driven refinement of a single comic panel's description into a
@@ -370,122 +382,136 @@ export const generatePipelineShotStartFrame = (issueId, sceneIndex, shotIndex, o
 // stage with neighboring-panel continuity context. Server persists the
 // refined description on the panel and returns { panel, page, issue,
 // stage, runId, changes, providerId }.
-export const refinePipelineComicPanelPrompt = (issueId, pageIndex, panelIndex, opts = {}) =>
+export const refinePipelineComicPanelPrompt = (issueId, pageIndex, panelIndex, opts = {}, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/comicPages/pages/${encodeURIComponent(pageIndex)}/panels/${encodeURIComponent(panelIndex)}/refine-prompt`, {
     method: 'POST',
     body: JSON.stringify(opts),
+    ...options,
   });
 
 // LLM-driven refinement of a single storyboard scene's description into a
 // richer image-gen prompt. Mirror of refinePipelineComicPanelPrompt.
-export const refinePipelineSceneImagePrompt = (issueId, sceneIndex, opts = {}) =>
+export const refinePipelineSceneImagePrompt = (issueId, sceneIndex, opts = {}, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/storyboards/scenes/${encodeURIComponent(sceneIndex)}/refine-prompt`, {
     method: 'POST',
     body: JSON.stringify(opts),
+    ...options,
   });
 
 // Non-destructive N-candidate variant of the panel refine: returns
 // `count` alternative image-gen prompts WITHOUT mutating the panel
 // description (issue #904). Resolves to { candidates, requested, pageIndex,
 // panelIndex } where each candidate is { prompt, changes, runId, ... }.
-export const generatePipelineComicPanelImagePrompts = (issueId, pageIndex, panelIndex, opts = {}) =>
+export const generatePipelineComicPanelImagePrompts = (issueId, pageIndex, panelIndex, opts = {}, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/comicPages/pages/${encodeURIComponent(pageIndex)}/panels/${encodeURIComponent(panelIndex)}/image-prompts`, {
     method: 'POST',
     body: JSON.stringify(opts),
+    ...options,
   });
 
 // Non-destructive N-candidate variant for a storyboard scene (issue #904).
 // Resolves to { candidates, requested, sceneIndex }.
-export const generatePipelineSceneImagePrompts = (issueId, sceneIndex, opts = {}) =>
+export const generatePipelineSceneImagePrompts = (issueId, sceneIndex, opts = {}, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/storyboards/scenes/${encodeURIComponent(sceneIndex)}/image-prompts`, {
     method: 'POST',
     body: JSON.stringify(opts),
+    ...options,
   });
 
 // ---- Seasons (Phase 2 of Story Arc Planning) ----
 export const listPipelineSeasons = (seriesId) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons`);
 
-export const createPipelineSeason = (seriesId, data) =>
+export const createPipelineSeason = (seriesId, data, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons`, {
     method: 'POST',
     body: JSON.stringify(data),
+    ...options,
   });
 
-export const updatePipelineSeason = (seriesId, seasonId, patch) =>
+export const updatePipelineSeason = (seriesId, seasonId, patch, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
+    ...options,
   });
 
 // Body: { reassignTo: <seasonId> | null }. Omitting reassignTo un-groups
 // every child issue.
-export const deletePipelineSeason = (seriesId, seasonId, { reassignTo } = {}) =>
+export const deletePipelineSeason = (seriesId, seasonId, { reassignTo } = {}, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}`, {
     method: 'DELETE',
     body: JSON.stringify({ reassignTo: reassignTo ?? null }),
+    ...options,
   });
 
 // ---- Arc planning (Phase 3) ----
 // Returns { arc, seasons, runId, providerId, model, committed, series }.
 // commit:true persists arc + seasons to the series in one shot.
-export const generatePipelineArcOverview = (seriesId, { providerOverride, modelOverride, commit } = {}) =>
+export const generatePipelineArcOverview = (seriesId, { providerOverride, modelOverride, commit } = {}, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/arc/generate`, {
     method: 'POST',
     body: JSON.stringify({ providerOverride, modelOverride, commit }),
+    ...options,
   });
 
 // Returns { season, episodes, runId, providerId, model, committed, createdIssues }.
 // commit:true creates one issue per episode with seasonId + arcPosition set.
-export const generatePipelineSeasonEpisodes = (seriesId, seasonId, { providerOverride, modelOverride, commit } = {}) =>
+export const generatePipelineSeasonEpisodes = (seriesId, seasonId, { providerOverride, modelOverride, commit } = {}, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}/episodes/generate`, {
     method: 'POST',
     body: JSON.stringify({ providerOverride, modelOverride, commit }),
+    ...options,
   });
 
 // Returns { issues, runId, providerId, model }. Empty issues[] = clean.
-export const verifyPipelineArc = (seriesId, { providerOverride, modelOverride } = {}) =>
+export const verifyPipelineArc = (seriesId, { providerOverride, modelOverride } = {}, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/arc/verify`, {
     method: 'POST',
     body: JSON.stringify({ providerOverride, modelOverride }),
+    ...options,
   });
 
 // Deep verify pass for a single volume / season. Complements verifyPipelineArc:
 // the arc pass is cross-volume + synopsis-depth; this pass is volume-scoped
 // and goes to beat depth for issues whose stages.idea.output is populated.
 // Returns { issues, runId, providerId, model, seasonId }. Empty issues[] = clean.
-export const verifyPipelineVolume = (seriesId, seasonId, { providerOverride, modelOverride } = {}) =>
+export const verifyPipelineVolume = (seriesId, seasonId, { providerOverride, modelOverride } = {}, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}/verify`, {
     method: 'POST',
     body: JSON.stringify({ providerOverride, modelOverride }),
+    ...options,
   });
 
 // Auto-resolve verification findings — server runs an LLM pass that rewrites
 // the arc + volume/season outlines to address every finding, then persists.
 // Pass `findings: [...]` to resolve only that subset; omit to re-verify and
 // resolve everything. Returns { series, applied, notes, findings, runId, ... }.
-export const resolvePipelineArcIssues = (seriesId, { findings, providerOverride, modelOverride } = {}) =>
+export const resolvePipelineArcIssues = (seriesId, { findings, providerOverride, modelOverride } = {}, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/arc/resolve-issues`, {
     method: 'POST',
     body: JSON.stringify({ findings, providerOverride, modelOverride }),
+    ...options,
   });
 
 // Back-derive arc + bible + a single-volume restructure from the series' EXISTING
 // issue manuscripts. Read-only preview the UI shows for review/edit. Returns
 // { arc, volume, bible, issues, derivedSeasons, runId, providerId, model }.
-export const derivePipelineArcFromManuscript = (seriesId, { providerOverride, modelOverride } = {}) =>
+export const derivePipelineArcFromManuscript = (seriesId, { providerOverride, modelOverride } = {}, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/arc/derive-from-manuscript`, {
     method: 'POST',
     body: JSON.stringify({ providerOverride, modelOverride }),
+    ...options,
   });
 
 // Apply the (edited) derive preview — writes bible, collapses to one volume,
 // reassigns issues, seeds per-issue synopses. No LLM re-run. Pass the confirmed
 // { arc, bible, volume, issues } proposal. Returns { series, volumeId, issueCount }.
-export const commitPipelineArcFromManuscript = (seriesId, proposal = {}) =>
+export const commitPipelineArcFromManuscript = (seriesId, proposal = {}, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/arc/derive-from-manuscript/commit`, {
     method: 'POST',
     body: JSON.stringify(proposal),
+    ...options,
   });
 
 // Manuscript-completeness ("finish the draft") editor pass — reads the actual
@@ -494,10 +520,11 @@ export const commitPipelineArcFromManuscript = (seriesId, proposal = {}) =>
 // `mode`: 'merge' (default) leaves prior comments as-is and appends new
 // findings; 'fresh' also auto-dismisses open comments this pass no longer finds
 // (accepted/dismissed untouched, dismissed still suppress resurfacing).
-export const analyzePipelineManuscriptCompleteness = (seriesId, { providerOverride, modelOverride, mode } = {}) =>
+export const analyzePipelineManuscriptCompleteness = (seriesId, { providerOverride, modelOverride, mode } = {}, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/completeness`, {
     method: 'POST',
     body: JSON.stringify({ providerOverride, modelOverride, mode }),
+    ...options,
   });
 
 // Streamed completeness review backing the "generate edits for every finding"
@@ -505,15 +532,17 @@ export const analyzePipelineManuscriptCompleteness = (seriesId, { providerOverri
 // seeded comment lands with its `fix` pre-attached. Returns { runId,
 // alreadyRunning, sseUrl } — subscribe via pipelineManuscriptCompletenessSseUrl
 // to stream per-chunk progress, then re-fetch the review on `complete`.
-export const startPipelineManuscriptCompleteness = (seriesId, { providerOverride, modelOverride, mode } = {}) =>
+export const startPipelineManuscriptCompleteness = (seriesId, { providerOverride, modelOverride, mode } = {}, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/completeness/stream`, {
     method: 'POST',
     body: JSON.stringify({ providerOverride, modelOverride, mode }),
+    ...options,
   });
 
-export const cancelPipelineManuscriptCompleteness = (seriesId) =>
+export const cancelPipelineManuscriptCompleteness = (seriesId, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/completeness/cancel`, {
     method: 'POST',
+    ...options,
   });
 
 // { active: boolean } — lets a (re)mounting editor re-attach to an in-flight run.
@@ -527,12 +556,12 @@ export const pipelineManuscriptCompletenessSseUrl = (seriesId) =>
 // Full series manuscript in one format. `type` (comicScript|teleplay|prose)
 // selects the format; omit to get the series' primary/source format. Returns
 // { sections, viewType, primaryStageId, pinnedPrimary, availableTypes }.
-export const getPipelineManuscript = (seriesId, type) =>
-  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript${type ? `?type=${encodeURIComponent(type)}` : ''}`);
+export const getPipelineManuscript = (seriesId, type, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript${type ? `?type=${encodeURIComponent(type)}` : ''}`, options);
 
 // The persisted "finish the draft" comment set ({ schemaVersion, comments }).
-export const getPipelineManuscriptReview = (seriesId) =>
-  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/review`);
+export const getPipelineManuscriptReview = (seriesId, options = {}) =>
+  request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/review`, options);
 
 // Resolve a finding by its comment id alone (series-agnostic deep-link, #1608).
 // Finder semantics: resolves `{ seriesId, comment }` when a series owns the id,
@@ -623,30 +652,34 @@ export const applyPipelineManuscriptCuts = (seriesId, { commentIds, allowTypes, 
 // 'skip-existing' (default) or 'regenerate-all'. Returns
 // { runId, alreadyRunning, sseUrl } — subscribe via pipelineVolumeBeatsSseUrl
 // to stream per-issue progress.
-export const startPipelineVolumeBeats = (seriesId, seasonId, { mode, providerOverride, modelOverride } = {}) =>
+export const startPipelineVolumeBeats = (seriesId, seasonId, { mode, providerOverride, modelOverride } = {}, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}/generate-beats`, {
     method: 'POST',
     body: JSON.stringify({ mode, providerOverride, modelOverride }),
+    ...options,
   });
 
-export const cancelPipelineVolumeBeats = (seriesId, seasonId) =>
+export const cancelPipelineVolumeBeats = (seriesId, seasonId, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}/generate-beats/cancel`, {
     method: 'POST',
+    ...options,
   });
 
 export const pipelineVolumeBeatsSseUrl = (seriesId, seasonId) =>
   `/api/pipeline/series/${encodeURIComponent(seriesId)}/seasons/${encodeURIComponent(seasonId)}/generate-beats/progress`;
 
 // ---- Auto-run text chain ----
-export const startPipelineAutoRunText = (issueId, opts = {}) =>
+export const startPipelineAutoRunText = (issueId, opts = {}, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/auto-run-text`, {
     method: 'POST',
     body: JSON.stringify(opts),
+    ...options,
   });
 
-export const cancelPipelineAutoRunText = (issueId) =>
+export const cancelPipelineAutoRunText = (issueId, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/auto-run-text/cancel`, {
     method: 'POST',
+    ...options,
   });
 
 export const pipelineAutoRunSseUrl = (issueId) =>
@@ -1055,33 +1088,36 @@ export const narratePipelineProse = (text, voiceId, options = {}) =>
 // Pass { force: true } to replace existing lines wholesale (server defaults
 // to a 409 when lines[] is already populated so a stray click can't wipe
 // manual edits).
-export const extractPipelineAudioLines = (issueId, { force } = {}) =>
+export const extractPipelineAudioLines = (issueId, { force } = {}, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/audio/extract-lines`, {
     method: 'POST',
     body: JSON.stringify({ force }),
+    ...options,
   });
 
 // Render one VO line. Voice resolution priority (server-side): explicit
 // voiceId body param > line.voiceIdOverride > character.voiceId > system
 // default. Returns { issue, stage, lineIdx, filename, engine, voiceId }.
-export const renderPipelineAudioLine = (issueId, lineIdx, { voiceId } = {}) =>
+export const renderPipelineAudioLine = (issueId, lineIdx, { voiceId } = {}, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/audio/lines/${encodeURIComponent(lineIdx)}/render`, {
     method: 'POST',
     body: JSON.stringify({ voiceId }),
+    ...options,
   });
 
 // Per-line edit (text or voice override). Narrow patch shape — the server
 // merges against the freshest persisted record inside the per-issue write
 // queue so two simultaneous blurs against different lines can't clobber.
-export const patchPipelineAudioLine = (issueId, lineIdx, patch) =>
+export const patchPipelineAudioLine = (issueId, lineIdx, patch, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/audio/lines/${encodeURIComponent(lineIdx)}`, {
     method: 'PATCH',
     body: JSON.stringify(patch),
+    ...options,
   });
 
 // ---- Music library (Phase 4c) ----
-export const listPipelineMusicLibrary = () =>
-  request('/pipeline/audio/music-library');
+export const listPipelineMusicLibrary = (options = {}) =>
+  request('/pipeline/audio/music-library', options);
 
 // request() now detects FormData bodies and lets the browser set the multipart
 // boundary automatically — no need to bypass it. Accept `options` so callers
@@ -1092,23 +1128,26 @@ export const uploadPipelineMusicTrack = (issueId, file, { label } = {}, options 
     { method: 'POST', body: buildFormData({ track: file, label }), ...options },
   );
 
-export const attachPipelineMusicTrack = (issueId, { trackFilename, label } = {}) =>
+export const attachPipelineMusicTrack = (issueId, { trackFilename, label } = {}, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/audio/music/attach`, {
     method: 'POST',
     body: JSON.stringify({ trackFilename, label }),
+    ...options,
   });
 
-export const detachPipelineMusicTrack = (issueId) =>
+export const detachPipelineMusicTrack = (issueId, options = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(issueId)}/stages/audio/music`, {
     method: 'DELETE',
+    ...options,
   });
 
 // Library deletes do NOT auto-purge issue references — by design, so the
 // user sees the broken playback and re-picks rather than the library
 // silently rewriting issue state.
-export const deletePipelineMusicTrack = (filename) =>
+export const deletePipelineMusicTrack = (filename, options = {}) =>
   request(`/pipeline/audio/music-library/${encodeURIComponent(filename)}`, {
     method: 'DELETE',
+    ...options,
   });
 
 // ---- Local-OSS music generation (Phase 4c.2) ----

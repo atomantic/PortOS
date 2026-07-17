@@ -135,7 +135,7 @@ export default function PipelineManuscriptEditor() {
     let canceled = false;
     Promise.all([
       getPipelineSeries(seriesId, { silent: true }),
-      getPipelineManuscript(seriesId),
+      getPipelineManuscript(seriesId, undefined, { silent: true }),
       getPipelineManuscriptReview(seriesId).catch(() => ({ comments: [] })),
     ])
       .then(([s, manuscript, review]) => {
@@ -223,7 +223,7 @@ export default function PipelineManuscriptEditor() {
 
   const [runEditorialReview, reviewing] = useAsyncAction(
     async (mode = 'merge') => {
-      const result = await analyzePipelineManuscriptCompleteness(seriesId, { providerOverride, modelOverride, mode });
+      const result = await analyzePipelineManuscriptCompleteness(seriesId, { providerOverride, modelOverride, mode }, { silent: true });
       const next = Array.isArray(result?.review?.comments) ? result.review.comments : [];
       setComments(next);
       setReviewMeta({ chunked: !!result?.chunked, chunkCount: result?.chunkCount || 1 });
@@ -258,7 +258,7 @@ export default function PipelineManuscriptEditor() {
   // claim success — show a neutral "stream ended, notes refreshed" message
   // instead of a green "complete", since the run may have failed server-side.
   const reloadReviewAfterRun = (meta = null, { recovered = false } = {}) =>
-    getPipelineManuscriptReview(seriesId)
+    getPipelineManuscriptReview(seriesId, { silent: true })
       .then((review) => {
         const next = Array.isArray(review?.comments) ? review.comments : [];
         setComments(next);
@@ -308,7 +308,7 @@ export default function PipelineManuscriptEditor() {
     setReviewStarting(true);
     const result = await startPipelineManuscriptCompleteness(seriesId, {
       providerOverride, modelOverride, mode,
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to start editorial review');
       return null;
     });
@@ -318,7 +318,7 @@ export default function PipelineManuscriptEditor() {
   };
 
   const cancelGenerateEditsReview = async () => {
-    await cancelPipelineManuscriptCompleteness(seriesId).catch((err) => {
+    await cancelPipelineManuscriptCompleteness(seriesId, { silent: true }).catch((err) => {
       toast.error(err.message || 'Cancel failed');
     });
   };
@@ -350,7 +350,7 @@ export default function PipelineManuscriptEditor() {
   const changeView = async (type) => {
     if (type === viewType || switching) return;
     setSwitching(true);
-    const manuscript = await getPipelineManuscript(seriesId, type).catch((err) => {
+    const manuscript = await getPipelineManuscript(seriesId, type, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to load that format');
       return null;
     });

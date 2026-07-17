@@ -45,7 +45,7 @@ export default function IdeaStage(props) {
       seedInput: augmented,
       providerId: series?.llm?.provider || undefined,
       model: series?.llm?.model || undefined,
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Refinement failed');
       return null;
     });
