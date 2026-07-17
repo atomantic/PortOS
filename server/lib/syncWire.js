@@ -203,6 +203,21 @@ export function sanitizeRecordForWire(kind, record) {
       }
       return { ...rest, ...sanitizeSoftDeleteFields(record) };
     }
+    case 'creativeCommission': {
+      // The commission BRIEF federates (#2686) so a synced reaction attaches to
+      // the SAME commission on every peer — but `schedule`, `runs`, and
+      // `assignment` are MACHINE-LOCAL and MUST NOT transit: a federated schedule
+      // would double-run on every peer (the whole reason the commission was
+      // machine-local pre-#2686), `runs` is per-machine execution history, and
+      // `assignment` pins a provider/model that may not exist on the peer. Strip
+      // all three from the wire; the receiver carries its OWN values forward on
+      // merge (preserveLocalCommissionFields). `feedback` also never rides here —
+      // it federates as its own `commissionFeedback` record kind. Whole-record LWW
+      // over what remains (id/name/enabled/targetAbility/brief/generation/
+      // feedbackWindow), hashed in full by contentHashForRecord.
+      const { deleted: _d, deletedAt: _da, schedule: _s, runs: _r, assignment: _a, feedback: _f, ...rest } = record;
+      return { ...rest, ...sanitizeSoftDeleteFields(record) };
+    }
     default:
       return null;
   }

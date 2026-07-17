@@ -527,6 +527,7 @@ const SYNC_CATEGORY_META = [
   { key: 'writersRoomFolders', label: 'Writers Room Folders', icon: FolderTree, description: 'Writers Room library folders: names + nesting (PostgreSQL)' },
   { key: 'writersRoomExercises', label: 'Writers Room Sprints', icon: Timer, description: 'Writers Room writing-sprint sessions + appended prose (PostgreSQL)' },
   { key: 'musicVideoProjects', label: 'Music Video', icon: Video, description: 'Music Video projects: director board + beat-aligned scenes (PostgreSQL)' },
+  { key: 'creativeCommissions', label: 'Commissions', icon: Target, description: 'Creative Commission briefs (name + intent + genre + generation settings) — the schedule + run history stay machine-local (PostgreSQL)' },
   { key: 'commissionFeedback', label: 'Commission Feedback', icon: Target, description: 'Creative Commission taste reactions that steer the next run — the schedule stays machine-local (PostgreSQL)' },
   { key: 'catalog', label: 'Catalog', icon: Library, description: 'Creative ingredients catalog: orphan ingredients + ref links (PostgreSQL)' }
 ];
@@ -534,7 +535,7 @@ const SYNC_CATEGORY_META = [
 // Snapshot categories — exclude the per-record / delta-based categories that
 // have no 60s snapshot checksum: brain + memory (delta), catalog + authors/music
 // (PostgreSQL, per-record peer-push only — no snapshot loop).
-const NON_SNAPSHOT_KEYS = new Set(['brain', 'memory', 'catalog', 'authors', 'artists', 'albums', 'tracks', 'creativeDirectorProjects', 'moodBoards', 'writersRoomWorks', 'writersRoomFolders', 'writersRoomExercises', 'musicVideoProjects', 'commissionFeedback']);
+const NON_SNAPSHOT_KEYS = new Set(['brain', 'memory', 'catalog', 'authors', 'artists', 'albums', 'tracks', 'creativeDirectorProjects', 'moodBoards', 'writersRoomWorks', 'writersRoomFolders', 'writersRoomExercises', 'musicVideoProjects', 'commissionFeedback', 'creativeCommissions']);
 const SNAPSHOT_CATEGORIES = SYNC_CATEGORY_META.filter(m => !NON_SNAPSHOT_KEYS.has(m.key));
 
 // Indicator backed by REAL coverage diffing (record IDs vs confirmed pushes),

@@ -410,6 +410,15 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // LWW with soft-delete tombstones — the merge never propagates a hard delete.
   // The FIRST incompatible reaction-shape change MUST bump this to 2.
   commissionFeedback: 1,
+  // v1 = Creative Commission BRIEF federation (PostgreSQL `creative_commissions`)
+  // via the per-record peer-sync push pipeline (record kind `creativeCommission`,
+  // sync category `creativeCommissions`, #2686). The brief/identity federates so a
+  // synced reaction attaches to the SAME commission on every peer, while
+  // `schedule`/`runs`/`assignment` stay MACHINE-LOCAL (stripped from the wire —
+  // see syncWire's `creativeCommission` case) so only the owning machine fires the
+  // cron (no double-run). Soft-delete tombstones; the FIRST incompatible
+  // brief-shape change MUST bump this to 2.
+  creativeCommissions: 1,
   // v1 = standalone media-library federation (#1566). NOT a record kind — it's
   // the wire contract for the library-level asset manifest a full-sync peer
   // advertises at GET /api/peer-sync/library-manifest. The receiver-pull sweep
@@ -511,6 +520,7 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
   writersRoomExercise: Object.freeze(['writersRoomExercises']),
   musicVideoProject: Object.freeze(['musicVideoProjects']),
   commissionFeedback: Object.freeze(['commissionFeedback']),
+  creativeCommission: Object.freeze(['creativeCommissions']),
 });
 
 /**

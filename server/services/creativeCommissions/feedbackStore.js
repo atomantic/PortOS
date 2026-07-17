@@ -47,6 +47,13 @@ import {
 
 export const TYPE = 'commission-feedback';
 export const FEEDBACK_SCHEMA_VERSION = 1;
+// Per-commission cap on LIVE reactions — preserves the pre-#2686 inline
+// MAX_PERSISTED_FEEDBACK bound so a long-lived nightly commission's feedback
+// table can't grow without limit. Enforced sync-safely: the oldest excess
+// reactions are TOMBSTONED (not array-dropped), so the cap propagates to peers
+// via the normal tombstone path (the directive only ever reads the last
+// `feedbackWindow` reactions anyway, so aging out the oldest is invisible).
+export const MAX_LIVE_FEEDBACK_PER_COMMISSION = 100;
 
 const isStr = (v) => typeof v === 'string';
 const notDeleted = (r) => r && r.deleted !== true;
@@ -172,10 +179,35 @@ export async function recordFeedback({ commissionId, runId = null, rating, note 
     return record;
   });
   if (!result) return null;
-  // Push to every subscribed peer so the reaction (and later its tombstone)
-  // propagates without waiting for a reconnect — mirrors writersRoomFolder.
+  // Subscribe every peer to this new record id, AND emit an update. autoSubscribe
+  // only pushes to peers whose subscription is newly created — so a RE-RATING
+  // (same deterministic id, already subscribed) would push NOTHING and peers keep
+  // the stale reaction. emitRecordUpdated pushes the revised record to every
+  // existing subscription, so a changed rating/note actually propagates.
   autoSubscribeRecordToAllPeers(COMMISSION_FEEDBACK_KIND, id).catch(() => {});
+  emitRecordUpdated(COMMISSION_FEEDBACK_KIND, id);
+  // Enforce the per-commission live cap sync-safely (tombstone the oldest excess).
+  await enforceFeedbackCap(commissionId).catch(() => {});
   return result;
+}
+
+/**
+ * Keep a commission's LIVE reactions at or below MAX_LIVE_FEEDBACK_PER_COMMISSION
+ * by TOMBSTONING the oldest excess (a re-rating reuses its run's id, so only
+ * distinct newly-rated runs grow the count). Tombstoning — not array removal —
+ * keeps the cap sync-safe: the removal federates via the normal tombstone path
+ * instead of a peer resurrecting the aged-out reaction on the next sync.
+ */
+async function enforceFeedbackCap(commissionId) {
+  const live = (await feedbackStore().listRawByCommission(commissionId))
+    .map(sanitizeCommissionFeedbackForSync)
+    .filter(Boolean)
+    .sort((a, b) => String(a.at).localeCompare(String(b.at)));
+  const excess = live.length - MAX_LIVE_FEEDBACK_PER_COMMISSION;
+  if (excess <= 0) return;
+  for (const rec of live.slice(0, excess)) {
+    await deleteCommissionFeedback(rec.id).catch(() => {});
+  }
 }
 
 /**

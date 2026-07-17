@@ -40,6 +40,7 @@ import { updateProject as updateMusicVideoProject } from './musicVideo/projects.
 import { restoreBoard } from './moodBoard/index.js';
 import { updateWork, restoreFolder, restoreExercise } from './writersRoom/local.js';
 import { restoreCommissionFeedback } from './creativeCommissions/feedbackStore.js';
+import { restoreCommission } from './creativeCommissions/store.js';
 
 export const ERR_NOT_FOUND = 'CONFLICT_JOURNAL_NOT_FOUND';
 export const ERR_VALIDATION = 'CONFLICT_JOURNAL_VALIDATION';
@@ -169,6 +170,12 @@ async function applyToRecord(kind, recordId, patch, { replace = false } = {}) {
     // null (not throw) for a missing record — translate that to ERR_TARGET_GONE so
     // the route serves a clean 409 (#2686).
     const restored = await restoreCommissionFeedback(recordId, patch).catch(translateGone);
+    if (!restored) throw makeErr(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
+  } else if (kind === 'creativeCommission') {
+    // restoreCommission merges the snapshot's brief fields, un-tombstones, and
+    // bumps updatedAt so the restore wins the next LWW. Machine-local schedule/
+    // runs/assignment are kept as-is. Returns null for a missing record (#2686).
+    const restored = await restoreCommission(recordId, patch).catch(translateGone);
     if (!restored) throw makeErr(`The ${kind} this conflict targets no longer exists — discard the entry.`, ERR_TARGET_GONE);
   } else {
     throw makeErr(`Unsupported conflict kind: ${kind}`, ERR_VALIDATION);

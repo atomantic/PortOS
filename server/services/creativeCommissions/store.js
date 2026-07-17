@@ -47,6 +47,15 @@ import { createCollectionStore } from '../../lib/collectionStore.js';
 import { createPgFileFacade, resolvePgBackend, isFileBackend } from '../../lib/pgFileFacade.js';
 import { createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
 import { isValidCron } from '../eventScheduler.js';
+import { compareNewerWins } from '../../lib/lwwTimestamp.js';
+import {
+  contentHashForRecord,
+  setSyncBaseHash,
+  deleteSyncBaseHash,
+  flushBaseHashes,
+  maybeJournalBeforeOverwrite,
+} from '../../lib/conflictJournal.js';
+import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import { commissionToCron } from './directive.js';
 import {
   recordFeedback,
@@ -167,7 +176,58 @@ export function sanitizeCommission(raw) {
     runs: Array.isArray(raw.runs) ? raw.runs.slice(-MAX_PERSISTED_RUNS) : [],
     createdAt: isStr(raw.createdAt) ? raw.createdAt : now,
     updatedAt: isStr(raw.updatedAt) ? raw.updatedAt : (isStr(raw.createdAt) ? raw.createdAt : now),
+    // Soft-delete tombstone trio (#2686). The commission BRIEF federates so it
+    // exists on every peer (letting a synced reaction attach to the same
+    // commission); a delete must therefore propagate as a tombstone, not a hard
+    // delete the LWW merge would never carry. `schedule`/`runs`/`assignment` stay
+    // machine-local (stripped from the wire — see syncWire's `creativeCommission`
+    // case + preserveLocalCommissionFields), so only the OWNING machine fires the
+    // cron (no double-run). Pre-#2686 records carry neither field → live.
+    deleted: raw.deleted === true,
+    deletedAt: raw.deleted === true && isStr(raw.deletedAt) ? raw.deletedAt : null,
   };
+}
+
+// The peer-sync record kind + id shape for the federated commission brief (#2686).
+export const CREATIVE_COMMISSION_KIND = 'creativeCommission';
+export const COMMISSION_ID_RE = /^commission-[0-9a-z-]+$/i;
+
+/**
+ * Normalize a raw commission into the canonical wire/stored shape for a sync
+ * round-trip (drop-on-floor for a non-object / bad id). Reuses sanitizeCommission
+ * (which now normalizes the soft-delete trio) — the machine-local fields
+ * (schedule/runs/assignment) are stripped from the actual WIRE form by syncWire's
+ * `creativeCommission` case, and carried forward from the local copy on merge by
+ * preserveLocalCommissionFields, so they never transit or reset a peer's schedule.
+ */
+export function sanitizeCommissionForSync(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  if (!isStr(raw.id) || !COMMISSION_ID_RE.test(raw.id)) return null;
+  return sanitizeCommission(raw);
+}
+
+/** Re-attach the receiver's local-only schedule/runs/assignment onto a winning remote. */
+function preserveLocalCommissionFields(remote, local) {
+  if (!local) return remote;
+  return { ...remote, schedule: local.schedule, runs: local.runs, assignment: local.assignment };
+}
+
+/**
+ * LWW merge decision for one incoming commission (mirrors mergeWorkRecord): the
+ * remote is sanitized here (drop-on-floor → null), a missing local inserts it,
+ * else newer `updatedAt` wins. When the remote wins, the receiver's own
+ * machine-local schedule/runs/assignment are carried forward (the wire form never
+ * carried them), so a peer's brief edit can't reset this machine's schedule.
+ */
+export function mergeCommissionRecord(local, remoteRaw) {
+  const remote = sanitizeCommissionForSync(remoteRaw);
+  if (!remote) return { next: null, inserted: false, remoteWins: false, changed: false };
+  if (!local) return { next: remote, inserted: true, remoteWins: true, changed: true };
+  const localKey = sanitizeCommission(local)?.updatedAt ?? local.updatedAt;
+  const remoteWins = compareNewerWins(remote.updatedAt, localKey);
+  const next = remoteWins ? preserveLocalCommissionFields(remote, sanitizeCommission(local)) : local;
+  const changed = JSON.stringify(next) !== JSON.stringify(local);
+  return { next, inserted: false, remoteWins, changed };
 }
 
 // --- File backend (dev/test escape hatch): wraps collectionStore ---
@@ -186,12 +246,26 @@ function makeFileBackend(dir) {
     stamped = true;
     await cs.saveTypeIndex({}).catch(() => { stamped = false; });
   };
+  const live = (r) => r && r.deleted !== true;
   return {
     name: 'file',
-    listRaw: () => cs.loadAll(),
-    readRaw: (id) => cs.loadOne(id),
+    listRaw: async ({ includeDeleted = false } = {}) =>
+      (await cs.loadAll()).filter((r) => includeDeleted || live(r)),
+    readRaw: async (id, { includeDeleted = false } = {}) => {
+      const rec = await cs.loadOne(id);
+      if (!rec) return null;
+      return includeDeleted || live(rec) ? rec : null;
+    },
+    listIds: async ({ includeDeleted = false } = {}) =>
+      (await cs.loadAll()).filter((r) => includeDeleted || live(r)).map((r) => r.id),
     writeRaw: async (id, record) => { await ensureTypeIndex(); await cs.saveOneNow(id, record); return record; },
     deleteRaw: (id) => cs.deleteOneNow(id),
+    pruneTombstoned: async (olderThanMs) => {
+      if (!Number.isFinite(olderThanMs)) return { pruned: 0, ids: [] };
+      const stale = (await cs.loadAll()).filter((r) => r?.deleted === true && isStr(r.deletedAt) && Date.parse(r.deletedAt) < olderThanMs);
+      for (const r of stale) await cs.deleteOneNow(r.id);
+      return { pruned: stale.length, ids: stale.map((r) => r.id) };
+    },
     verify: () => cs.verifySchemaVersion(),
   };
 }
@@ -204,8 +278,10 @@ function makePgBackend(db) {
     name: 'postgres',
     listRaw: db.listRaw,
     readRaw: db.readRaw,
+    listIds: db.listIds,
     writeRaw: db.writeRaw,
     deleteRaw: db.deleteRaw,
+    pruneTombstoned: db.pruneTombstoned,
   };
 }
 
@@ -243,10 +319,12 @@ function createFacade(dir) {
     dir,
     type: TYPE,
     getBackendName,
-    listRaw: async () => (await getBackend()).listRaw(),
-    readRaw: async (id) => (await getBackend()).readRaw(id),
+    listRaw: async (opts) => (await getBackend()).listRaw(opts),
+    readRaw: async (id, opts) => (await getBackend()).readRaw(id, opts),
+    listIds: async (opts) => (await getBackend()).listIds(opts),
     writeRaw: async (id, record) => (await getBackend()).writeRaw(id, record),
     deleteRaw: async (id) => (await getBackend()).deleteRaw(id),
+    pruneTombstoned: async (olderThanMs) => (await getBackend()).pruneTombstoned(olderThanMs),
     queueRecordWrite,
     // Under PG, report ok WITHOUT forcing backend selection (the early boot
     // verifier runs before the dbReady gate); under the file escape hatch, read
@@ -360,6 +438,12 @@ export async function createCommission(input) {
   const record = sanitizeCommission({ ...input, id, createdAt: now, updatedAt: now });
   await commissionStore().writeRaw(id, record);
   commissionEvents.emit('commission:changed', { id, action: 'create' });
+  // Federate the commission BRIEF (#2686) so it exists on every peer and a synced
+  // reaction can attach to the same commission. The schedule/runs/assignment stay
+  // machine-local (stripped from the wire), so the peer holds the brief but never
+  // fires the cron.
+  autoSubscribeRecordToAllPeers(CREATIVE_COMMISSION_KIND, id).catch(() => {});
+  emitRecordUpdated(CREATIVE_COMMISSION_KIND, id);
   return record;
 }
 
@@ -406,25 +490,34 @@ export async function updateCommission(id, patch) {
   });
   if (!merged) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
   commissionEvents.emit('commission:changed', { id, action: 'update' });
+  // Push the brief change to subscribed peers (the schedule/runs/assignment are
+  // stripped from the wire, so only the brief travels).
+  emitRecordUpdated(CREATIVE_COMMISSION_KIND, id);
   return merged;
 }
 
 export async function deleteCommission(id) {
   const store = commissionStore();
-  // Serialize the read+delete on the SAME per-id write queue as
-  // update/recordRun/submitFeedback. Otherwise an in-flight feedback write (its
-  // own queued read→writeRaw) could interleave with a delete that runs outside
-  // the queue: feedback reads the row, delete hard-deletes it, feedback's
-  // writeRaw then upserts the stale record and resurrects the commission. With
-  // delete on the tail, a feedback write queued after it finds no row and 404s.
+  // SOFT-delete (tombstone) now that the commission BRIEF federates (#2686): a
+  // hard delete would never propagate (the LWW merge only adds/updates), so an
+  // out-of-date peer would resurrect the commission on the next sync. Tombstone
+  // instead — the deletion rides the same push path and the peer converges.
+  // Serialized on the SAME per-id write queue as update/recordRun/submitFeedback
+  // so an in-flight feedback/run write can't interleave and resurrect a live row.
   const existed = await store.queueRecordWrite(id, async () => {
-    const current = await store.readRaw(id);
-    if (!current) return false;
-    await store.deleteRaw(id);
+    const currentRaw = await store.readRaw(id);
+    if (!currentRaw) return false;
+    const current = sanitizeCommission(currentRaw);
+    if (current.deleted) return false;
+    const now = new Date().toISOString();
+    await store.writeRaw(id, { ...current, deleted: true, deletedAt: now, updatedAt: now });
     return true;
   });
   if (!existed) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
+  // Re-sync schedules (the scheduler cancels the now-tombstoned commission's cron)
+  // and push the tombstone to peers.
   commissionEvents.emit('commission:changed', { id, action: 'delete' });
+  emitRecordDeleted(CREATIVE_COMMISSION_KIND, id);
   return { id, deleted: true };
 }
 
@@ -526,4 +619,96 @@ export async function backfillAllCommissionFeedback() {
   }
   if (migrated > 0) console.log(`🎯 Commission feedback: split ${migrated} commission(s)' inline reactions into the federated store (#2686)`);
   return { migrated };
+}
+
+// ---------- commission BRIEF federation facades (#2686) ----------
+// The peer-sync layer imports these exactly as it imports writersRoom/sync.js.
+// The commission record federates (so a synced reaction attaches to the same
+// commission on every peer) while schedule/runs/assignment stay machine-local
+// (stripped from the wire by syncWire, carried forward on merge).
+
+/** One commission's sanitized record (tombstone surfaced), or null. */
+export async function getCommissionForSync(id) {
+  const raw = await commissionStore().readRaw(id, { includeDeleted: true });
+  return raw ? sanitizeCommissionForSync(raw) : null;
+}
+
+/** Every LIVE commission as `{ id, updatedAt }` for full-sync coverage compare. */
+export async function listCommissionsForSync() {
+  const raw = await commissionStore().listRaw();
+  return raw.map(sanitizeCommissionForSync).filter(Boolean).map((r) => ({ id: r.id, updatedAt: r.updatedAt }));
+}
+
+/** Every commission id — live only by default, or all (incl. tombstones) for the sweep. */
+export async function listCommissionIdsForSync(options = {}) {
+  return commissionStore().listIds(options);
+}
+
+/**
+ * Merge an incoming batch of commission records from a peer (LWW, tombstone-aware).
+ * Serialized per-id on the same write queue as the REST writers so a user edit
+ * can't clobber the merge. Journals the about-to-be-overwritten local version
+ * when the remote wins, seeds the conflict-journal base hash, and re-syncs the
+ * scheduler (a merged brief/tombstone can change what's armed). Mirrors
+ * writersRoom's `mergeBodylessFromSync`, minus the PG row lock.
+ */
+export async function mergeCommissionsFromSync(remoteRecords, { source = { via: 'sync', peerId: null } } = {}) {
+  if (!Array.isArray(remoteRecords)) return { applied: false, count: 0 };
+  const store = commissionStore();
+  let changed = 0;
+  for (const remote of remoteRecords) {
+    const id = remote?.id;
+    if (!isStr(id) || !COMMISSION_ID_RE.test(id)) continue;
+    const applied = await store.queueRecordWrite(id, async () => {
+      const local = await store.readRaw(id, { includeDeleted: true });
+      const { next, inserted, remoteWins, changed: didChange } = mergeCommissionRecord(local, remote);
+      if (!next) return false;
+      if (!inserted && (!remoteWins || !didChange)) return false;
+      if (!inserted) {
+        await maybeJournalBeforeOverwrite({ kind: CREATIVE_COMMISSION_KIND, id: next.id, local, remote: next, source });
+      }
+      await store.writeRaw(id, next);
+      await setSyncBaseHash(CREATIVE_COMMISSION_KIND, next.id, contentHashForRecord(CREATIVE_COMMISSION_KIND, next));
+      return true;
+    });
+    if (applied) changed += 1;
+  }
+  await flushBaseHashes();
+  if (changed > 0) commissionEvents.emit('commission:changed', { action: 'merge' });
+  return changed === 0 ? { applied: false, count: 0 } : { applied: true, count: changed };
+}
+
+/** Hard-remove tombstoned commissions older than the cutoff; evicts each base hash. */
+export async function pruneTombstonedCommissions(olderThanMs) {
+  const result = await commissionStore().pruneTombstoned(olderThanMs);
+  for (const id of result.ids || []) await deleteSyncBaseHash(CREATIVE_COMMISSION_KIND, id).catch(() => {});
+  return result;
+}
+
+/**
+ * Restore a tombstoned/edited commission from a conflict-journal snapshot. Merges
+ * the RESTORABLE brief fields, un-tombstones, bumps updatedAt so the restore wins
+ * the next LWW and re-pushes. Returns null for a missing record (→ ERR_TARGET_GONE).
+ */
+export async function restoreCommission(id, patch) {
+  const store = commissionStore();
+  const result = await store.queueRecordWrite(id, async () => {
+    const currentRaw = await store.readRaw(id, { includeDeleted: true });
+    if (!currentRaw) return null;
+    const current = sanitizeCommission(currentRaw);
+    const next = sanitizeCommission({
+      ...current,
+      ...(patch && typeof patch === 'object' ? patch : {}),
+      id, createdAt: current.createdAt,
+      // Never let a snapshot restore resurrect the machine-local fields — keep ours.
+      schedule: current.schedule, runs: current.runs, assignment: current.assignment,
+      deleted: false, deletedAt: null, updatedAt: new Date().toISOString(),
+    });
+    await store.writeRaw(id, next);
+    return next;
+  });
+  if (!result) return null;
+  commissionEvents.emit('commission:changed', { id, action: 'restore' });
+  emitRecordUpdated(CREATIVE_COMMISSION_KIND, id);
+  return result;
 }

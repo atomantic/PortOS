@@ -474,9 +474,16 @@ async function ensureSchemaImpl() {
       enabled BOOLEAN NOT NULL DEFAULT TRUE,
       data JSONB NOT NULL,
       created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW()
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ
     )`,
     `CREATE INDEX IF NOT EXISTS idx_creative_commissions_enabled ON creative_commissions (enabled)`,
+    // The commission BRIEF federates as of #2686 (record kind `creativeCommission`,
+    // schedule/runs/assignment stay machine-local) — a delete must tombstone so it
+    // propagates. Idempotent upgrade for installs predating the split.
+    `ALTER TABLE creative_commissions ADD COLUMN IF NOT EXISTS deleted BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE creative_commissions ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`,
     // Creative Commission FEEDBACK — the split-record federation half (#2686).
     // Unlike the machine-local commission above, taste reactions FEDERATE so a
     // 👍/👎 rated on one machine conditions the same commission's next run on

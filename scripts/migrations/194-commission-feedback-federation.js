@@ -23,10 +23,18 @@
  * `data/migrations.applied.json` so the migration ledger and `git log` show when
  * commission feedback began federating. No-op + idempotent: nothing to do here.
  *
- * NOTE (schema-version bump): this change adds `commissionFeedback: 1` to
- * `PORTOS_SCHEMA_VERSIONS` (server/lib/schemaVersions.js). No storage-layout
- * migration is needed for that (it's a brand-new record kind, not a reshape of an
- * existing on-disk store).
+ * The commission BRIEF also federates now (record kind `creativeCommission`,
+ * category `creativeCommissions`) so a synced reaction attaches to the same
+ * commission on every peer — the `schedule`/`runs`/`assignment` stay
+ * machine-local (stripped from the wire). That needs soft-delete tombstone
+ * columns (`deleted`/`deleted_at`) on the existing `creative_commissions` table;
+ * the idempotent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` lives in ensureSchema
+ * (server/lib/db.js) and runs at boot for installs predating the split.
+ *
+ * NOTE (schema-version bumps): this change adds `commissionFeedback: 1` AND
+ * `creativeCommissions: 1` to `PORTOS_SCHEMA_VERSIONS` (server/lib/schemaVersions.js).
+ * No storage-layout migration is needed for either (a brand-new record kind and an
+ * additive tombstone-column upgrade, not a reshape of an existing on-disk store).
  */
 
 export default {

@@ -364,6 +364,10 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // the Conflicts UI may restore are the rating + its note/tags. `commissionId`/
   // `runId` are structural keys (they address the reaction) and are excluded.
   commissionFeedback: ['rating', 'note', 'tags'],
+  // A creativeCommission (#2686) restores its federated BRIEF fields; the
+  // machine-local schedule/runs/assignment are never in a snapshot (stripped from
+  // the wire) so they're excluded.
+  creativeCommission: ['name', 'enabled', 'targetAbility', 'brief', 'generation', 'feedbackWindow'],
   // Writers Room exercises (#1645): the user-authored sprint fields the merge can
   // restore through `restoreExercise` — the appended prose + the sprint config.
   // Server-owned / structural fields are excluded (`id`/`createdAt`/`startedAt`/

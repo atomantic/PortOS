@@ -23,6 +23,19 @@ const makeMemStore = (type) => {
 };
 vi.mock('../../lib/collectionStore.js', () => ({ createCollectionStore: ({ type }) => makeMemStore(type) }));
 vi.mock('../../lib/fileUtils.js', () => ({ PATHS: { data: '/tmp/portos-test-data' } }));
+// Keep the federation side-effects (peer push, conflict-journal disk I/O) inert
+// so the store unit tests stay deterministic and offline.
+vi.mock('../sharing/recordEvents.js', () => ({
+  emitRecordUpdated: vi.fn(), emitRecordDeleted: vi.fn(),
+  autoSubscribeRecordToAllPeers: vi.fn(() => Promise.resolve()),
+}));
+vi.mock('../../lib/conflictJournal.js', () => ({
+  contentHashForRecord: vi.fn(() => 'hash'),
+  setSyncBaseHash: vi.fn(() => Promise.resolve()),
+  deleteSyncBaseHash: vi.fn(() => Promise.resolve()),
+  flushBaseHashes: vi.fn(() => Promise.resolve()),
+  maybeJournalBeforeOverwrite: vi.fn(() => Promise.resolve()),
+}));
 
 const {
   sanitizeCommission,
@@ -36,6 +49,10 @@ const {
   recordCommissionRun,
   submitCommissionFeedback,
   backfillAllCommissionFeedback,
+  sanitizeCommissionForSync,
+  mergeCommissionRecord,
+  getCommissionForSync,
+  mergeCommissionsFromSync,
   ERR_VALIDATION,
   ERR_NOT_FOUND,
 } = await import('./store.js');
@@ -202,11 +219,22 @@ describe('recordCommissionRun', () => {
 });
 
 describe('deleteCommission', () => {
-  it('removes the record', async () => {
+  it('SOFT-deletes (tombstones) the record so the deletion federates (#2686)', async () => {
     const created = await createCommission(validInput());
     const r = await deleteCommission(created.id);
     expect(r).toEqual({ id: created.id, deleted: true });
-    expect(records.has(created.id)).toBe(false);
+    // The row survives as a tombstone (LWW never propagates a hard delete), but
+    // it's excluded from live reads.
+    expect(records.get(created.id)).toMatchObject({ deleted: true });
+    expect(typeof records.get(created.id).deletedAt).toBe('string');
+    await expect(getCommission(created.id)).rejects.toMatchObject({ code: ERR_NOT_FOUND });
+    expect((await listCommissions()).some((c) => c.id === created.id)).toBe(false);
+  });
+
+  it('a second delete of an already-tombstoned commission 404s', async () => {
+    const created = await createCommission(validInput());
+    await deleteCommission(created.id);
+    await expect(deleteCommission(created.id)).rejects.toMatchObject({ code: ERR_NOT_FOUND });
   });
 });
 
@@ -242,6 +270,57 @@ describe('sanitizeCommission (feedback)', () => {
     expect(rec.feedback).toHaveLength(100); // MAX_PERSISTED_FEEDBACK
     // The ratingless entry is filtered before capping.
     expect(rec.feedback.every((f) => f.rating === 'up' || f.rating === 'down')).toBe(true);
+  });
+});
+
+describe('commission BRIEF federation (#2686)', () => {
+  it('sanitizeCommissionForSync normalizes the soft-delete trio and drops a bad id', () => {
+    expect(sanitizeCommissionForSync({ id: 'not-a-commission' })).toBeNull();
+    const rec = sanitizeCommissionForSync({ id: 'commission-x', name: 'Nightly' });
+    expect(rec).toMatchObject({ id: 'commission-x', deleted: false, deletedAt: null });
+  });
+
+  it('mergeCommissionRecord inserts a remote and preserves LOCAL schedule/runs/assignment on a remote win', () => {
+    const local = sanitizeCommission({
+      id: 'commission-x', name: 'Local', updatedAt: '2026-01-01T00:00:00.000Z',
+      schedule: { kind: 'DAILY', atLocalTime: '02:00' }, runs: [{ id: 'run-1', status: 'ok' }],
+      assignment: { providerId: 'claude', model: 'opus' },
+    });
+    // Remote is the WIRE form (schedule/runs/assignment stripped) with a newer brief.
+    const remote = { id: 'commission-x', name: 'Renamed on peer', brief: { intent: 'surreal' }, updatedAt: '2026-06-06T00:00:00.000Z' };
+    const { next, remoteWins } = mergeCommissionRecord(local, remote);
+    expect(remoteWins).toBe(true);
+    expect(next.name).toBe('Renamed on peer');
+    expect(next.brief.intent).toBe('surreal');
+    // Machine-local fields carried forward from LOCAL, not reset by the remote.
+    expect(next.schedule.atLocalTime).toBe('02:00');
+    expect(next.runs).toHaveLength(1);
+    expect(next.assignment.providerId).toBe('claude');
+  });
+
+  it('a stale remote loses to a newer local (no clobber)', () => {
+    const local = sanitizeCommission({ id: 'commission-x', name: 'Newer', updatedAt: '2026-09-09T00:00:00.000Z' });
+    const remote = { id: 'commission-x', name: 'Older', updatedAt: '2020-01-01T00:00:00.000Z' };
+    const { next, remoteWins } = mergeCommissionRecord(local, remote);
+    expect(remoteWins).toBe(false);
+    expect(next.name).toBe('Newer');
+  });
+
+  it('mergeCommissionsFromSync inserts a remote commission the peer can now attach feedback to', async () => {
+    const remote = { id: 'commission-peer', name: 'From peer A', brief: { intent: 'dreamlike' }, updatedAt: '2026-05-05T00:00:00.000Z' };
+    const res = await mergeCommissionsFromSync([remote], { source: { via: 'sync', peerId: 'peer-a' } });
+    expect(res).toEqual({ applied: true, count: 1 });
+    const got = await getCommission('commission-peer');
+    expect(got.name).toBe('From peer A');
+    // Inserted with no schedule → the receiver won't fire it (no double-run).
+    expect(got.schedule.atLocalTime).toBeNull();
+  });
+
+  it('getCommissionForSync surfaces a tombstone after delete', async () => {
+    const created = await createCommission(validInput());
+    await deleteCommission(created.id);
+    const wire = await getCommissionForSync(created.id);
+    expect(wire).toMatchObject({ id: created.id, deleted: true });
   });
 });
 

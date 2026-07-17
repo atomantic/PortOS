@@ -39,6 +39,7 @@ import { listProjects as listMusicVideoProjects } from '../musicVideo/projects.j
 import { listBoards } from '../moodBoard/index.js';
 import { listWorksForSync, listFoldersForSync, listExercisesForSync } from '../writersRoom/sync.js';
 import { listCommissionFeedbackForSync } from '../creativeCommissions/feedbackStore.js';
+import { listCommissionsForSync } from '../creativeCommissions/store.js';
 import { initCursor, removeCursor as removeTombstoneCursor } from './peerTombstoneCursors.js';
 import {
   PEER_SUBSCRIBABLE_KINDS,
@@ -395,6 +396,10 @@ async function listRecordsForKind(recordKind) {
     // Live feedback reactions as { id, updatedAt } (#2686) — same coverage-compare
     // reason as folders. Body-less, so no asset manifest backfill.
     records = await listCommissionFeedbackForSync().catch(() => []);
+  } else if (recordKind === 'creativeCommission') {
+    // Live commission briefs as { id, updatedAt } (#2686). Body-less on the wire
+    // (schedule/runs/assignment stripped), so no asset manifest backfill.
+    records = await listCommissionsForSync().catch(() => []);
   }
   return records.filter(r => r?.ephemeral !== true && isNonEmptyStr(r?.id));
 }

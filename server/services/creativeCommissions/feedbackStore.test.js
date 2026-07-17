@@ -68,6 +68,21 @@ describe('recordFeedback + hydration', () => {
     expect(await recordFeedback({ commissionId: 'c1', runId: 'run-A', rating: 0 })).toBeNull();
   });
 
+  it('caps live reactions per commission by tombstoning the oldest excess (sync-safe bound)', async () => {
+    const { MAX_LIVE_FEEDBACK_PER_COMMISSION } = await import('./feedbackStore.js');
+    const N = MAX_LIVE_FEEDBACK_PER_COMMISSION + 3;
+    for (let i = 0; i < N; i++) {
+      await recordFeedback({ commissionId: 'c1', runId: `run-${String(i).padStart(4, '0')}`, rating: 'up', at: new Date(2026, 0, 1, 0, i).toISOString() });
+    }
+    const live = await listFeedbackForCommission('c1');
+    expect(live).toHaveLength(MAX_LIVE_FEEDBACK_PER_COMMISSION);
+    // The 3 oldest runs were tombstoned (not array-dropped) — their rows survive with deleted:true.
+    expect(live.some((f) => f.runId === 'run-0000')).toBe(false);
+    expect(feedbackRecords.get('cfeedback-run-0000')).toMatchObject({ deleted: true });
+    // The newest survives.
+    expect(live.some((f) => f.runId === `run-${String(N - 1).padStart(4, '0')}`)).toBe(true);
+  });
+
   it('hydrates only the requested commission and orders oldest-first', async () => {
     await recordFeedback({ commissionId: 'c1', runId: 'run-A', rating: 'up', note: 'a' });
     await recordFeedback({ commissionId: 'c2', runId: 'run-B', rating: 'down', note: 'b' });

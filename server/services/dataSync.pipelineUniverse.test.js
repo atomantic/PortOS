@@ -1128,6 +1128,10 @@ describe('dataSync — per-category schema gate (cross-key isolation)', () => {
       // file-snapshot category). Gated at applyIncomingPush via
       // compareSchemaVersions / RECORD_KIND_SCHEMA_CATEGORIES.commissionFeedback.
       'commissionFeedback',
+      // Creative Commission brief (#2686) → per-record peer-push only (no 60s
+      // file-snapshot category). Gated at applyIncomingPush via
+      // compareSchemaVersions / RECORD_KIND_SCHEMA_CATEGORIES.creativeCommission.
+      'creativeCommissions',
       // Standalone media library (#1566) → its own receiver-pull endpoint
       // (GET /api/peer-sync/library-manifest), NOT the file-snapshot transfer.
       // Versioned for the manifest envelope and gated by syncMediaLibraryFromPeer's
