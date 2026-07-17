@@ -18,6 +18,24 @@
  * `layeredIntelligence.js` (which formats the reports) and
  * `layeredIntelligenceOutcomes.js` (which persists the classification) can use it
  * without an import cycle.
+ *
+ * KNOWN LIMITATION — label-only closures on trackers with no close reason.
+ * Classification runs only on an outcome `deriveOutcome` already called non-merged,
+ * and that fallback maps a closed issue with NO `stateReason` to `merged` (glab and
+ * jira never report one, and their ordinary close IS a merge). So a GitLab issue
+ * closed with a bare `wontfix` label reads as merged and is never classified — its
+ * label signal is wasted, and it inflates the merge rate.
+ *
+ * Fixing it is NOT as simple as letting labels override the merged fallback: the
+ * map below mixes labels that state a FINAL DISPOSITION (`wontfix`, `duplicate`,
+ * `declined`, `out-of-scope` — the issue is over, and this is why) with labels that
+ * describe a STATE THE ISSUE PASSED THROUGH (`blocked`, `needs-input`, `invalid`,
+ * `conflict`). Only the first group can justify overriding `merged`; a stale
+ * `blocked` label left on a genuinely completed GitLab issue would otherwise flip it
+ * to rejected and corrupt the merge rate in the opposite direction — worse than the
+ * gap it closes. The fix therefore needs a disposition/state split here plus a
+ * change to `deriveOutcome`'s merge-rate semantics (#2620's territory), so it is
+ * deliberately left to a follow-up rather than bolted on. Tracked on #2689.
  */
 
 // The rejection-reason vocabulary. Stored on the outcome record and rendered into

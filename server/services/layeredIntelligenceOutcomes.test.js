@@ -287,6 +287,24 @@ describe('reconcileOutcomes', () => {
       expect((await rowsBySlug())['mystery'].rejectionReason).toBe('duplicate');
     });
 
+    it('leaves a label-only closure on a reason-less tracker unclassified (known limitation)', async () => {
+      // glab/jira never report a stateReason, so deriveOutcome reads a bare close as
+      // `merged` and classification never runs — the `wontfix` signal is wasted.
+      // Pinned so the gap is explicit, not accidental. Letting labels override the
+      // merged fallback is NOT a safe fix: a stale `blocked` label on a genuinely
+      // completed issue would flip it to rejected and corrupt the merge rate the
+      // other way. Needs a disposition/state label split + a deriveOutcome change
+      // (#2620's semantics) — see the module header.
+      await recordFiledProposal({ appId: 'app-1', slug: 'glab-wontfix' }, store);
+      await reconcileOutcomes({
+        appId: 'app-1',
+        existingIssues: [{ slug: 'glab-wontfix', state: 'closed', stateReason: null, labels: ['wontfix'], closedAt: '2026-07-01T00:00:00Z' }]
+      }, store);
+      const row = (await rowsBySlug())['glab-wontfix'];
+      expect(row.outcome).toBe('merged');
+      expect(row.rejectionReason).toBeNull();
+    });
+
     it('clears a stale rejection reason when a proposal is reopened and then merged', async () => {
       // rejected → reopened → closed completed. The write side must drop the old
       // diagnosis, not just rely on the sanitizer stripping it on read.
