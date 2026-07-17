@@ -175,6 +175,13 @@ async function postChatCompletion(provider, model, prompt, { temperature, max_to
   if (typeof content !== 'string') {
     return { error: 'Provider returned a malformed (non-JSON or unexpected) response body' };
   }
+  // An empty/whitespace-only completion is unusable output, not a successful call —
+  // same class as the malformed body above. Classifying it here keeps the `ai:status`
+  // stream honest (a call that produced nothing must not report "done") and gives
+  // callers a single "the provider failed" signal to test: `result.error`.
+  if (!content.trim()) {
+    return { error: 'Provider returned an empty completion' };
+  }
   // OpenAI-compatible bodies report token counts under `usage`; surface the completion
   // token count so the AI Core landmark can size its activity beam by output volume
   // (tokens/sec). Absent on some providers — callers treat a missing count as "unknown".

@@ -51,6 +51,29 @@ const SECTION_COLORS = {
 const NO_API_PROVIDER_TOAST = 'No API provider configured — open AI Providers to add one (e.g. LM Studio, OpenAI).';
 const NO_API_PROVIDER_TITLE = 'Configure an AI provider to enable';
 
+// "Go deeper" came back with no question. Each `reason` names the precondition that
+// was actually missing, so only a genuine lack of identity context points the user at
+// their documents (#2733) — the other reasons aren't about documents at all.
+const NO_QUESTION_TOAST = {
+  'no-context': 'No personalized question available — try completing more identity documents',
+  'no-provider': NO_API_PROVIDER_TOAST,
+  'unknown-section': 'This section doesn\'t support personalized questions.'
+};
+const NO_QUESTION_FALLBACK_TOAST = 'No personalized question available right now.';
+
+export const noQuestionToast = (reason) => NO_QUESTION_TOAST[reason] || NO_QUESTION_FALLBACK_TOAST;
+
+/**
+ * Whether "Go deeper" must report a failed request itself.
+ *
+ * A provider failure (502 `AI_PROVIDER_ERROR`) is already announced by the `ai:status`
+ * error toast with the provider's real reason, so that toast is the single voice for it.
+ * Everything else — validation, 500, network drop — has no other reporter (the request
+ * is sent `{ silent: true }`), so this component is its single voice. Exactly one layer
+ * speaks either way (#2733, #2669).
+ */
+export const shouldReportGoDeeperError = (err) => err?.code !== 'AI_PROVIDER_ERROR';
+
 export default function TasteTab({ onRefresh }) {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -161,31 +184,30 @@ export default function TasteTab({ onRefresh }) {
       return;
     }
     setLoadingPersonalized(true);
-    // Sentinel: `undefined` = the request itself failed (validation/500/network)
-    // and request() already toasted the true reason, so the hint below must not
-    // fire on top of it and misattribute the cause. `null` = the endpoint 200'd
-    // with an empty body, which is the genuine "nothing to ask" case.
-    //
-    // Caveat: a *provider* failure (timeout, upstream 401, empty completion)
-    // also arrives as 200-null, because generatePersonalizedTasteQuestion
-    // returns null on result.error and the route bare-res.json()s it — so the
-    // hint can still misattribute that one. Fixing it needs a server-side
-    // signal that separates "provider failed" from "nothing to ask"; tracked
-    // separately (#2733), since ai:status already toasts provider errors
-    // and a naive throw would just re-create the double toast.
-    const question = await api.getPersonalizedTasteQuestion(
+    // Sentinel: `undefined` = the request failed and has already been reported (see
+    // shouldReportGoDeeperError). A 200 always resolves to `{ question, reason }`, so a
+    // missing question names its own cause instead of being guessed at here (#2733).
+    // The request is silenced so that reporting stays a single layer's job.
+    const result = await api.getPersonalizedTasteQuestion(
       activeSection,
       selectedProvider.providerId,
-      selectedProvider.model
-    ).catch(() => undefined);
+      selectedProvider.model,
+      { silent: true }
+    ).catch((err) => {
+      if (shouldReportGoDeeperError(err)) {
+        toast.error(err?.message || 'Failed to generate a personalized question');
+      }
+      return undefined;
+    });
 
-    if (question === undefined) {
+    if (result === undefined) {
       setLoadingPersonalized(false);
       return;
     }
 
+    const { question, reason } = result || {};
     if (!question) {
-      toast('No personalized question available — try completing more identity documents', { icon: '⚠️' });
+      toast(noQuestionToast(reason), { icon: '⚠️' });
       setLoadingPersonalized(false);
       return;
     }

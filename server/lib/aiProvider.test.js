@@ -1,5 +1,18 @@
-import { describe, it, expect } from 'vitest';
-import { stripCodeFences, parseLLMJSON } from './aiProvider.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { stripCodeFences, parseLLMJSON, callProviderAISimple } from './aiProvider.js';
+
+// `statusOp` is hoisted with the mock factories so the ai:status spy is in scope
+// when vitest lifts vi.mock above the imports.
+const { statusOp } = vi.hoisted(() => ({
+  statusOp: { update: vi.fn(), complete: vi.fn(), error: vi.fn() },
+}));
+
+vi.mock('../services/providers.js', () => ({ getAllProviders: vi.fn() }));
+vi.mock('../services/aiStatusEvents.js', () => ({ startAIOp: vi.fn(() => statusOp) }));
+vi.mock('../services/ollamaManager.js', () => ({
+  ensureProviderReady: vi.fn(),
+  isOllamaProvider: vi.fn(() => false),
+}));
 
 describe('aiProvider pure helpers', () => {
   describe('stripCodeFences', () => {
@@ -66,5 +79,52 @@ describe('aiProvider pure helpers', () => {
       expect(parseLLMJSON('```\nnull\n```')).toBeNull();
       expect(parseLLMJSON('"hello"')).toBe('hello');
     });
+  });
+});
+
+describe('callProviderAISimple completion classification', () => {
+  // Keyless so the endpoint guard (which only gates API-key calls) stays out of the way.
+  const provider = { id: 'provider-1', name: 'Example Provider', type: 'api', endpoint: 'https://api.example.com/v1' };
+
+  const respondWith = (body) => vi.stubGlobal('fetch', vi.fn(async () => ({
+    ok: true,
+    status: 200,
+    text: async () => JSON.stringify(body),
+  })));
+
+  const call = () => callProviderAISimple(provider, 'model-1', 'a prompt', { op: 'test-op', opLabel: 'Testing' });
+
+  beforeEach(() => {
+    statusOp.update.mockClear();
+    statusOp.complete.mockClear();
+    statusOp.error.mockClear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('classifies a whitespace-only completion as a provider error, not a successful call', async () => {
+    respondWith({ choices: [{ message: { content: '   \n  ' } }] });
+
+    const result = await call();
+
+    expect(result.error).toMatch(/empty completion/i);
+    expect(result.text).toBeUndefined();
+    // `ai:status` phase error is the single voice for provider failures, so a call
+    // that produced nothing usable must reach it rather than reporting "done" (#2733).
+    expect(statusOp.error).toHaveBeenCalledTimes(1);
+    expect(statusOp.complete).not.toHaveBeenCalled();
+  });
+
+  it('reports a usable completion as success', async () => {
+    respondWith({ choices: [{ message: { content: 'a real answer' } }] });
+
+    const result = await call();
+
+    expect(result).toMatchObject({ text: 'a real answer' });
+    expect(result.error).toBeUndefined();
+    expect(statusOp.complete).toHaveBeenCalledTimes(1);
+    expect(statusOp.error).not.toHaveBeenCalled();
   });
 });
