@@ -55,7 +55,11 @@ vi.mock('../layeredIntelligence.js', () => ({
   fileProposalToJira: vi.fn().mockResolvedValue({ success: true, key: 'PROJ-1' }),
   resolveJiraBlockKey: vi.fn(() => null),
   applyJiraBlockingLabel: vi.fn().mockResolvedValue({ success: true }),
-  computeOutcomesReport: vi.fn(() => '')
+  computeOutcomesReport: vi.fn(() => ''),
+  // The predicate's own semantics (listing vs. either sentinel) are unit-tested in
+  // layeredIntelligence.test.js; here it's a spy so the hook's WIRING can be
+  // asserted — that the gathered plannedWork string is what gets classified.
+  hasPlannedWorkListing: vi.fn((s) => typeof s === 'string' && !!s.trim())
 }));
 
 // Outcome-store I/O (#2428) — spies so the hook's feedback-loop wiring can be
@@ -244,16 +248,19 @@ describe('buildTaskInput', () => {
     }));
   });
 
-  it('tells computeOutcomesReport whether a plannedWork block exists to cite (#2698)', async () => {
+  it('classifies the gathered plannedWork string and tells computeOutcomesReport (#2698)', async () => {
     li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { outcomes: true } });
     li.gatherSources.mockResolvedValue({ goals: 'g', plannedWork: '1 item(s):\n- #3 Ship X' });
+    li.hasPlannedWorkListing.mockReturnValue(true);
     await buildTaskInput({ app: APP });
+    // The gathered string — not some other value — is what gets classified.
+    expect(li.hasPlannedWorkListing).toHaveBeenCalledWith('1 item(s):\n- #3 Ship X');
     expect(li.computeOutcomesReport).toHaveBeenCalledWith(expect.objectContaining({ hasPlannedWork: true }));
 
-    // Source off / unresolvable tracker → the warning must not cite a block the
-    // prompt doesn't contain.
+    // A sentinel (empty/unreadable tracker) or an absent source is NOT a listing:
+    // the warning must not tell the reasoner to go review a backlog that isn't there.
     li.computeOutcomesReport.mockClear();
-    li.gatherSources.mockResolvedValue({ goals: 'g' });
+    li.hasPlannedWorkListing.mockReturnValue(false);
     await buildTaskInput({ app: APP });
     expect(li.computeOutcomesReport).toHaveBeenCalledWith(expect.objectContaining({ hasPlannedWork: false }));
   });

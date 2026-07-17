@@ -63,6 +63,10 @@ export const PLANNED_WORK_GUIDANCE = 'Cross-reference your proposal against the 
 // is legible to the reasoner as a real answer rather than a missing source.
 export const PLANNED_WORK_NONE = 'No actively-planned work is currently tracked for this app. (The tracker was read successfully — this is a real "nothing is planned", not a failed read.)';
 
+// Stable opening of the failed-read marker, so `hasPlannedWorkListing` can tell a
+// sentinel from a real backlog listing without re-deriving the whole sentence.
+export const PLANNED_WORK_UNAVAILABLE_PREFIX = 'Planned work could NOT be read';
+
 // Jira labels can't contain spaces, and a ':' is unsafe on some Jira versions,
 // so the Jira pause label swaps the ':' for a '-'. The base LI_LABEL is already
 // Jira-safe (kebab, no colon) and is reused verbatim across all trackers.
@@ -545,15 +549,18 @@ export function computeOutcomesReport({ outcomes = [], hasPlannedWork = false } 
   // alarming an app whose first proposal is simply still in flight. The sample
   // floor is the same idea one step further out: 0-of-1 is not evidence of a rate.
   const resolved = merged + rejected + abandoned;
-  const resolvedMergeRate = resolved > 0 ? Math.round((merged / resolved) * 100) : null;
+  // Compare the RAW ratio and round only for display: rounding first would let
+  // 10-of-51 (19.6%) round up to 20 and suppress a warning the threshold says
+  // should fire.
+  const rawMergeRate = resolved > 0 ? (merged / resolved) * 100 : null;
   const lowMergeWarning = (
-    resolvedMergeRate !== null
+    rawMergeRate !== null
     && resolved >= LOW_MERGE_RATE_MIN_SAMPLE
-    && resolvedMergeRate < LOW_MERGE_RATE_THRESHOLD
+    && rawMergeRate < LOW_MERGE_RATE_THRESHOLD
   )
     ? [
       '',
-      `WARNING: your merge rate is critically low — only ${merged} of ${resolved} resolved proposals (${resolvedMergeRate}%) were merged.`,
+      `WARNING: your merge rate is critically low — only ${merged} of ${resolved} resolved proposals (${Math.round(rawMergeRate)}%) were merged.`,
       // Only point at the plannedWork block when one was actually gathered — the
       // source is per-app-toggleable and yields nothing on an unresolvable
       // tracker, and citing a section that isn't in the prompt is just noise.
@@ -691,7 +698,23 @@ function runCli(cmd, args, options = {}) {
  * CLAUDE.md exists to prevent.
  */
 export function plannedWorkUnavailable(why) {
-  return `Planned work could NOT be read (${why}). Do NOT treat this as "nothing is planned" — this app may well have a committed backlog that simply could not be listed this run. Be conservative: prefer proposal: null over filing work that might already be in scope.`;
+  return `${PLANNED_WORK_UNAVAILABLE_PREFIX} (${why}). Do NOT treat this as "nothing is planned" — this app may well have a committed backlog that simply could not be listed this run. Be conservative: prefer proposal: null over filing work that might already be in scope.`;
+}
+
+/**
+ * Whether a gathered plannedWork string is an actual LISTING of committed work —
+ * i.e. something the reasoner can be told to go read — as opposed to one of the
+ * two sentinels ("nothing is planned" / "could not be read"). Both sentinels are
+ * meaningful in the prompt and still render, but neither is a backlog: telling
+ * the reasoner its proposals "may be overlapping with committed work — review the
+ * plannedWork source above" directly beneath a block stating no planned work
+ * exists is a contradiction that just biases it toward filing nothing.
+ */
+export function hasPlannedWorkListing(plannedWork) {
+  if (typeof plannedWork !== 'string') return false;
+  const text = plannedWork.trim();
+  if (!text || text === PLANNED_WORK_NONE) return false;
+  return !text.startsWith(PLANNED_WORK_UNAVAILABLE_PREFIX);
 }
 
 /**

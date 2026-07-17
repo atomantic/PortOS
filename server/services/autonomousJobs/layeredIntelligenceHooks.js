@@ -52,7 +52,8 @@ import {
   fileProposalToJira,
   resolveJiraBlockKey,
   applyJiraBlockingLabel,
-  computeOutcomesReport
+  computeOutcomesReport,
+  hasPlannedWorkListing
 } from '../layeredIntelligence.js'
 import { recordFiledProposal, listOutcomes, reconcileOutcomes } from '../layeredIntelligenceOutcomes.js'
 
@@ -315,11 +316,13 @@ export async function buildTaskInput({ app } = {}) {
     if (!trackerReadFailed) await reconcileOutcomes({ appId: app.id, existingIssues })
     const outcomes = await listOutcomes({ appId: app.id })
     // The low-merge-rate warning cites the plannedWork block by name — only let it
-    // do that when one was actually gathered (the source is per-app-toggleable and
-    // yields nothing on an unresolvable tracker).
+    // do that when a real BACKLOG LISTING was gathered. The source is
+    // per-app-toggleable, yields nothing on an unresolvable tracker, and renders a
+    // sentinel (not a listing) when the tracker is empty or unreadable — none of
+    // which are something the reasoner can go review.
     outcomesReport = computeOutcomesReport({
       outcomes,
-      hasPlannedWork: typeof sources.plannedWork === 'string' && !!sources.plannedWork.trim()
+      hasPlannedWork: hasPlannedWorkListing(sources.plannedWork)
     })
   }
 

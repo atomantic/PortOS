@@ -66,6 +66,8 @@ import {
   PLANNED_WORK_MAX_ITEMS,
   PLANNED_WORK_NONE,
   PLANNED_WORK_GUIDANCE,
+  PLANNED_WORK_UNAVAILABLE_PREFIX,
+  hasPlannedWorkListing,
   LOW_MERGE_RATE_THRESHOLD,
   LOW_MERGE_RATE_MIN_SAMPLE
 } from './layeredIntelligence.js';
@@ -1441,6 +1443,31 @@ describe('plannedWorkUnavailable', () => {
   });
 });
 
+describe('hasPlannedWorkListing', () => {
+  it('is true only for a real backlog listing', () => {
+    expect(hasPlannedWorkListing('2 item(s) of actively-planned work:\n- #3 Ship X')).toBe(true);
+  });
+
+  it('is false for BOTH sentinels — neither is a backlog to go review', () => {
+    // "nothing is planned" and "could not be read" both render in the prompt and
+    // both mean something, but telling the reasoner "review the plannedWork source
+    // — you may be overlapping committed work" under either is a contradiction.
+    expect(hasPlannedWorkListing(PLANNED_WORK_NONE)).toBe(false);
+    expect(hasPlannedWorkListing(plannedWorkUnavailable('the gh issue list failed'))).toBe(false);
+  });
+
+  it('is false for an absent / blank / non-string source', () => {
+    expect(hasPlannedWorkListing(undefined)).toBe(false);
+    expect(hasPlannedWorkListing(null)).toBe(false);
+    expect(hasPlannedWorkListing('   ')).toBe(false);
+    expect(hasPlannedWorkListing(['#3'])).toBe(false);
+  });
+
+  it('tracks the sentinels through their constructors (no drifting copy of the text)', () => {
+    expect(plannedWorkUnavailable('x').startsWith(PLANNED_WORK_UNAVAILABLE_PREFIX)).toBe(true);
+  });
+});
+
 describe('plannedWorkJql', () => {
   it('filters to not-Done plan-labeled tickets and orders by priority', () => {
     const jql = plannedWorkJql('PROJ');
@@ -1716,6 +1743,17 @@ describe('computeOutcomesReport low-merge-rate warning (#2698)', () => {
     const below = computeOutcomesReport({ outcomes: [filed('merged'), ...rejected(5)] });
     expect(below).toContain('WARNING');
     expect(LOW_MERGE_RATE_THRESHOLD).toBe(20);
+  });
+
+  it('compares the RAW rate — a sub-threshold rate that rounds up still warns', () => {
+    // 10 merged of 51 resolved = 19.6% — genuinely below 20, but rounds to 20.
+    // Rounding before the comparison would suppress the warning entirely.
+    const report = computeOutcomesReport({
+      outcomes: [...Array.from({ length: 10 }, () => filed('merged')), ...rejected(41)]
+    });
+    expect(report).toContain('WARNING');
+    // ...while the DISPLAYED figure is still the friendly rounded one.
+    expect(report).toContain('10 of 51 resolved proposals (20%)');
   });
 
   it('does NOT cite a plannedWork block that is not in the prompt', () => {
