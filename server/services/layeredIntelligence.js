@@ -29,7 +29,7 @@ import { fetchPublicText } from '../lib/safeUrlFetch.js';
 import { validateCommand } from '../lib/commandSecurity.js';
 import { getSettings } from './settings.js';
 import { createTicket, searchIssues, addLabels, escapeJql } from './jira.js';
-import { computeWindowedStats, computeEffectiveSuccessRate } from './taskLearning/store.js';
+import { computeWindowedStats, computeEffectiveSuccessRate, extractTaskType } from './taskLearning/store.js';
 
 // Tracker labels + slug marker. The slug is the stable dedup key the reasoner
 // chooses; it is embedded in each filed issue body so a later run (or the
@@ -124,11 +124,25 @@ export const LOW_MERGE_RATE_THRESHOLD = 20;
 // it stops proposing. A rate needs a sample before it means anything.
 export const LOW_MERGE_RATE_MIN_SAMPLE = 4;
 
-// The `learning.json` byTaskType key the LI loop's own agent runs land under —
-// LI's scheduled task type (see taskSchedule.js SELF_IMPROVEMENT_TASK_TYPES).
-// This is the bucket computeSelfEvalSummary reads to judge whether the LI
-// machinery ITSELF is healthy, as opposed to how its proposals fare downstream.
-export const LI_TASK_TYPE = 'layered-intelligence';
+// LI's SCHEDULE name (taskSchedule.js SELF_IMPROVEMENT_TASK_TYPES) — also the key
+// the type-failure ledger uses. NOT the key its runs are recorded under.
+export const LI_SCHEDULED_TASK_TYPE = 'layered-intelligence';
+
+// The `learning.json` byTaskType key LI's own agent runs actually land under — the
+// bucket computeSelfEvalSummary reads to judge whether the LI machinery ITSELF is
+// healthy (as opposed to how its proposals fare downstream once filed).
+//
+// DERIVED, never restated: a scheduled LI task is generated with
+// `metadata.analysisType = 'layered-intelligence'` (cosTaskGenerator's
+// generateSelfImprovementTaskForType), and extractTaskType's FIRST branch turns any
+// task carrying an analysisType into `self-improve:<type>` — so these runs are
+// recorded under `self-improve:layered-intelligence`, not the bare schedule name.
+// The bare name IS correct in two OTHER stores (the schedule map and the
+// type-failure ledger), which makes this an easy and silent thing to get wrong:
+// guessing it would leave the execution-health signal permanently reading "no LI
+// runs recorded yet". Building the key with the same function the WRITER uses means
+// it cannot drift out of sync with however task types are keyed later.
+export const LI_TASK_TYPE = extractTaskType({ metadata: { analysisType: LI_SCHEDULED_TASK_TYPE } });
 
 // LI-task success rate (%) below which selfEval reports the loop's own execution
 // as DEGRADED (#2700) — a separate failure mode from a low merge rate: the merge
@@ -724,7 +738,11 @@ export function computeSelfEvalSummary({
   } else if (!liTaskStats.metrics) {
     lines.push('- LI execution health: no LI runs recorded yet — this loop has no execution history.');
   } else {
-    const { successRate, source, windowedCompleted } = computeEffectiveSuccessRate(liTaskStats.metrics);
+    // Forward the clock seam: computeEffectiveSuccessRate age-filters the recent
+    // ring, so without `now` this branch would read the real wall clock while the
+    // suppression-window branch above uses the injected one — the same summary
+    // reasoning against two different "nows", and a non-pure "pure" function.
+    const { successRate, source, windowedCompleted } = computeEffectiveSuccessRate(liTaskStats.metrics, { now });
     const sample = source === 'windowed' ? windowedCompleted : (liTaskStats.metrics.completed || 0);
     if (successRate === null) {
       lines.push('- LI execution health: no completed LI runs recorded yet — success rate unknown.');
