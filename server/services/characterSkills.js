@@ -39,6 +39,7 @@
  */
 
 import { listUniverses } from './universeBuilder.js';
+import { listWorks } from './writersRoom/local.js';
 import { getCatalogStats } from './catalogDB.js';
 import { getPostSessions } from './meatspacePost.js';
 import { getAllTrainingEntries } from './meatspacePostTraining.js';
@@ -96,11 +97,21 @@ export const SKILLS = [
     // Worldbuilding is slow, high-effort work — a handful of records is already
     // real engagement, so the first level comes cheap.
     scale: 2,
-    // Universes authored + catalog ingredients + captured scraps: the three
-    // things Create/Writers Room actually produces.
+    // Everything Create/Writers Room actually produces: universes authored, catalog
+    // ingredients, captured scraps, and Writers Room works. Writers Room is its own store, so
+    // omitting it would leave a writing-only user stuck at level 0 in the very skill named
+    // for their work.
+    //
+    // listUniverses()/listWorks() materialize every record (and the universe-run history) for
+    // a `.length` — cheap count helpers are tracked in #2729. Bounded for now: the CyberCity
+    // poll passes `?skills=0`, so this only runs on an explicit /character read.
     compute: async () => {
-      const [universes, catalog] = await Promise.all([listUniverses(), getCatalogStats()]);
-      return universes.length + catalog.total + catalog.scraps;
+      const [universes, works, catalog] = await Promise.all([
+        listUniverses(),
+        listWorks(),
+        getCatalogStats(),
+      ]);
+      return universes.length + works.length + catalog.total + catalog.scraps;
     },
   },
   {
