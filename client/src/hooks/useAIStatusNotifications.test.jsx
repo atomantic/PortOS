@@ -108,6 +108,30 @@ describe('useAIStatusNotifications — silent-op error coalescing', () => {
     expect(provA[provA.length - 1].message).toBe('Provider A failed on 2 background AI calls');
   });
 
+  it('does NOT coalesce a silent op that already surfaced its own (slow-call) toast — it updates that toast in place', () => {
+    renderHook(() => useAIStatusNotifications());
+
+    act(() => {
+      emit({ id: 'slow-op', phase: 'start', silent: true, providerId: 'prov-1', providerName: 'Example Provider', message: 'Calling…' });
+    });
+    // Cross the slow-call threshold so the deferred toast opens under id 'slow-op'.
+    act(() => { vi.advanceTimersByTime(3000); });
+    const loadingCall = toastCalls.find(c => c.type === 'loading');
+    expect(loadingCall?.opts?.id).toBe('slow-op');
+
+    act(() => {
+      emit({ id: 'slow-op', phase: 'error', silent: true, providerId: 'prov-1', providerName: 'Example Provider', message: 'HTTP 401 Unauthorized' });
+    });
+
+    const errs = errorCalls();
+    expect(errs).toHaveLength(1);
+    // Updates the already-visible spinner in place (id === op id), NOT the
+    // provider-keyed coalescing toast — otherwise the Infinity-duration loading
+    // toast would be orphaned and spin forever.
+    expect(errs[0].opts?.id).toBe('slow-op');
+    expect(errs[0].message).toBe('HTTP 401 Unauthorized');
+  });
+
   it('starts a fresh coalescing window after the previous one lapses', () => {
     renderHook(() => useAIStatusNotifications());
 

@@ -135,11 +135,14 @@ export function useAIStatusNotifications() {
       if (event.phase === 'error') {
         if (state.slowTimer) clearTimeout(state.slowTimer);
         opsRef.current.delete(event.id);
-        // User-triggered ops toast immediately, individually, with the real
-        // reason — failures the user is waiting on matter and must not be
-        // aggregated away. Silent-op failures (unattended background jobs) are
-        // coalesced per-provider so a systematic failure yields one toast, not N.
-        if (state.silent || event.silent) {
+        // Coalesce ONLY silent ops that never surfaced their own toast — the
+        // fast-fail fan-out case an unattended job produces. A silent op that
+        // already opened a loading toast (a slow call whose spinner the user is
+        // now watching, id === event.id) must update THAT toast in place, or the
+        // Infinity-duration loading toast is orphaned and spins forever. A
+        // user-triggered op always toasts immediately, individually, with the
+        // real reason — that's load-bearing and must not be aggregated away.
+        if ((state.silent || event.silent) && !state.opened) {
           coalesceSilentError(event);
         } else {
           toast.error(event.message || 'AI call failed', { id: event.id, duration: 6000, icon: '✕' });
