@@ -43,22 +43,23 @@
 // old records fail the sanitizer's membership check and re-classify (which is the
 // designed self-heal, but it discards history — prefer adding over renaming).
 //
-// Only the tokens marked (live) are reachable from the tracker-state signals the
-// reconciler has today. The rest are declared now because they are the vocabulary
-// this taxonomy is meant to express, and because the sanitizer must already accept
-// them: a later PR that classifies from closing comments or from the implementing
-// PR's checks can then persist them WITHOUT a record-shape migration. Every
-// unreachable token is populated today only by an explicit tracker label.
+// Only the tokens marked (live) are reachable from the signals the reconciler has
+// today. The rest are declared now because they are the vocabulary this taxonomy
+// is meant to express, and because the sanitizer must already accept them: a later
+// PR that classifies from the implementing PR's checks can then persist them
+// WITHOUT a record-shape migration.
 export const REJECTION_REASONS = [
   // (live) stateReason `duplicate`, or a duplicate/dupe label.
   'duplicate',
   // (live) GitHub's "closed as not planned", or a wontfix/declined label — a human
   // looked at it and said no.
   'user-rejected',
-  // Label-only today. Needs closing-comment analysis to fire on its own.
+  // (live) An explicit tracker label, OR the deterministic closing-comment keyword
+  // pass (#2748) — a human who declined in prose without applying a matching label.
   'scope-mismatch',
   'missing-context',
   'quality-issue',
+  // Label-only today.
   'environment-blocker',
   // Label-only today. These are properties of the PR that IMPLEMENTS a proposal,
   // and LI tracks proposals as issues — it has no PR handle to read checks from.
@@ -159,6 +160,81 @@ const STATE_REASON_REASONS = new Map(Object.entries({
   'duplicate': 'duplicate'
 }));
 
+// Closing-comment keyword pass (#2748). Some closures state their rationale only in
+// prose — a human declines in a comment without applying a matching label or (on
+// glab/jira) any close reason at all. This is a DETERMINISTIC keyword/heuristic
+// scan of that prose, NOT an LLM call: it adds no provider round-trip (the
+// "no cold-bootstrap LLM" policy) and no tracker fetch beyond the comment text the
+// reconciler already read.
+//
+// It is deliberately a LAST-RESORT signal, weaker than a label or a close reason:
+// classifyRejection consults it only when both of those miss. Free text is noisier
+// than a label a human deliberately applied, so it must never override one. Groups
+// are ordered and the FIRST group with any match wins, so the order below is the
+// tiebreak when one comment trips more than one bucket — most-specific intent
+// (scope) before the vaguer quality catch-all. Patterns are conservative: a miss
+// (→ null → the honest `unknown-reason`) is the correct failure, better than a
+// confident wrong diagnosis feeding the reasoner a fabricated pattern.
+const CLOSING_COMMENT_PATTERNS = [
+  {
+    reason: 'scope-mismatch',
+    patterns: [
+      /\bout[\s-]?of[\s-]?scope\b/,
+      /\b(?:outside|beyond|not in|not within) (?:the |our |its )?scope\b/,
+      /\bnot (?:in|within) scope\b/,
+      /\bdoes ?n[o']?t (?:fit|belong)\b/,
+      /\bwo ?n[o']?t fit\b/,
+      /\bnot (?:aligned|a (?:good )?fit)\b/,
+      /\bnot something (?:we|this app|the app)\b/
+    ]
+  },
+  {
+    reason: 'missing-context',
+    patterns: [
+      /\b(?:need|needs|needing|require[sd]?) (?:more|additional|further) (?:info|information|context|detail|details|clarification)\b/,
+      /\b(?:not enough|insufficient|lack(?:s|ing)? (?:of )?) (?:info|information|context|detail|details)\b/,
+      /\b(?:cannot|can'?t|could ?n'?t|couldn'?t|unable to) reproduce\b/,
+      /\bunder[\s-]?specified\b/,
+      /\bplease clarify\b/,
+      /\bmore (?:details|information|context) (?:needed|required)\b/,
+      /\btoo vague\b/,
+      /\bunclear\b/
+    ]
+  },
+  {
+    reason: 'quality-issue',
+    patterns: [
+      /\blow[\s-]?quality\b/,
+      /\bpoorly (?:written|specified|thought|scoped)\b/,
+      /\bmalformed\b/,
+      /\bdoes ?n[o']?t make sense\b/,
+      /\bnot actionable\b/,
+      /\bhallucinat/,
+      /\b(?:nonsense|incoherent|gibberish)\b/,
+      /\bspam\b/
+    ]
+  }
+];
+
+/**
+ * Classify a rejection rationale from the closing comment's TEXT. Pure, total,
+ * deterministic: same string always yields the same token. Returns a
+ * REJECTION_REASONS token, or null when no keyword matched (a nullish/blank comment
+ * included) so the caller can fall through to the honest `unknown-reason`.
+ */
+export function classifyClosingComment(text) {
+  if (typeof text !== 'string' || !text.trim()) return null;
+  // Lowercase + collapse whitespace so a rationale split across newlines still
+  // matches multi-word patterns.
+  const normalized = text.toLowerCase().replace(/\s+/g, ' ');
+  for (const { reason, patterns } of CLOSING_COMMENT_PATTERNS) {
+    for (const re of patterns) {
+      if (re.test(normalized)) return reason;
+    }
+  }
+  return null;
+}
+
 /**
  * Classify WHY a filed proposal ended up not merged.
  *
@@ -173,9 +249,14 @@ const STATE_REASON_REASONS = new Map(Object.entries({
  *     asks for — "how much of our rejection history is undiagnosed" — so it must
  *     never be silently dressed up as a real reason.
  *
+ * Signal precedence (most authoritative first): a human-applied label, then the
+ * tracker's close reason, then the deterministic closing-comment keyword pass
+ * (#2748). Explicit signals a human/agent deliberately set outrank a prose
+ * heuristic, so the comment scan only decides an otherwise-undiagnosed close.
+ *
  * Deterministic and total: same inputs always yield the same token.
  */
-export function classifyRejection({ outcome = null, stateReason = null, labels = [] } = {}) {
+export function classifyRejection({ outcome = null, stateReason = null, labels = [], closingComment = null } = {}) {
   // Only a resolved, non-merged proposal has a rejection to explain.
   if (outcome !== 'rejected' && outcome !== 'abandoned') return null;
 
@@ -186,7 +267,16 @@ export function classifyRejection({ outcome = null, stateReason = null, labels =
     if (hit) return hit;
   }
 
-  return STATE_REASON_REASONS.get(normalizeToken(stateReason)) || UNKNOWN_REJECTION_REASON;
+  // The tracker's own close reason (GitHub only) outranks free-text prose.
+  const stateHit = STATE_REASON_REASONS.get(normalizeToken(stateReason));
+  if (stateHit) return stateHit;
+
+  // Last resort before the honest unknown: scan the closing-comment prose for a
+  // rationale a human stated without a matching label/close reason.
+  const commentHit = classifyClosingComment(closingComment);
+  if (commentHit) return commentHit;
+
+  return UNKNOWN_REJECTION_REASON;
 }
 
 /**

@@ -287,6 +287,42 @@ describe('reconcileOutcomes', () => {
       expect((await rowsBySlug())['mystery'].rejectionReason).toBe('duplicate');
     });
 
+    it('lets a real close reason outrank a conflicting closing comment (#2748)', async () => {
+      // The comment scan is the WEAKEST signal: an explicit not_planned close reason
+      // must still win over prose that would otherwise say scope-mismatch.
+      await recordFiledProposal({ appId: 'app-1', slug: 'prose-scope' }, store);
+      const updated = await reconcileOutcomes({
+        appId: 'app-1',
+        existingIssues: [{
+          slug: 'prose-scope',
+          state: 'closed',
+          stateReason: 'not_planned',
+          closingComment: 'Appreciate it, but this is out of scope for the app.',
+          closedAt: '2026-07-01T00:00:00Z'
+        }]
+      }, store);
+      expect(updated).toBe(1);
+      expect((await rowsBySlug())['prose-scope'].rejectionReason).toBe('user-rejected');
+    });
+
+    it('lets the closing comment diagnose a close that carries no other signal (#2748)', async () => {
+      await recordFiledProposal({ appId: 'app-1', slug: 'prose-only' }, store);
+      const updated = await reconcileOutcomes({
+        appId: 'app-1',
+        existingIssues: [{
+          slug: 'prose-only',
+          state: 'closed',
+          // reopened ⇒ deriveOutcome abandons it; no stateReason/label the classifier
+          // recognizes, so the comment is the sole diagnostic signal.
+          stateReason: 'reopened',
+          closingComment: "Closing — can't reproduce and the report is too vague.",
+          closedAt: '2026-07-01T00:00:00Z'
+        }]
+      }, store);
+      expect(updated).toBe(1);
+      expect((await rowsBySlug())['prose-only'].rejectionReason).toBe('missing-context');
+    });
+
     it('leaves a label-only closure on a reason-less tracker unclassified (known limitation)', async () => {
       // glab/jira never report a stateReason, so deriveOutcome reads a bare close as
       // `merged` and classification never runs — the `wontfix` signal is wasted.
