@@ -116,9 +116,18 @@ describe('ChiefOfStaff handleForceEvaluate', () => {
 // The Learning stat card's skipped-count label used to sit in a `flex` row
 // beside the success-rate value. Flex items default to min-width:auto, so on a
 // narrow (mobile) card the label could not shrink below its min-content width
-// and rendered outside the card's border. jsdom does no layout, so these guards
-// pin the containment contract that keeps it inside: the label is its own block
-// under the value (not a flex sibling), and it truncates.
+// and rendered outside the card's border (measured: 26px past it at 390px).
+//
+// jsdom does no layout, so these guards pin the *structure* that keeps it in.
+// All three legs are load-bearing — drop any one and the label spills again:
+//   1. the label is its own block under the value, not a flex-row sibling;
+//   2. the label truncates (its width is unbounded);
+//   3. the text column keeps `min-w-0` — truncate implies white-space:nowrap,
+//      which makes the label's min-content its FULL width, so a column at
+//      min-width:auto still can't shrink below it.
+// Plus two value-side branches that are easy to break while "tidying": the
+// value must NOT truncate (it would clip "No data"), and must use `!= null`
+// (truthiness would render a real 0% as the empty state).
 describe('ChiefOfStaff Learning card skipped label', () => {
   const summaryWithSkipped = {
     overallSuccessRate: 84,
