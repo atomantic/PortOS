@@ -84,11 +84,12 @@ afterEach(() => {
 });
 
 describe('readStore', () => {
-  it('returns null when file does not exist', async () => {
-    existsResult = false;
+  it('returns null when the store is absent (readFile ENOENT, no placeholder)', async () => {
+    readFileMock.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+    existsResult = false; // no `.icloud` placeholder shadowing the path
     const result = await store.readStore();
     expect(result).toBeNull();
-    expect(readFileMock).not.toHaveBeenCalled();
+    expect(console.warn).not.toHaveBeenCalled(); // a missing store is normal, not warn-worthy
   });
 
   it('returns parsed data on success', async () => {
@@ -182,9 +183,10 @@ describe('mlArrayIfEnabled', () => {
     });
 
     it('returns null (no throw) when the store is genuinely absent, even under strict', async () => {
-      existsResult = false; // ENOENT: never written by either device → trustworthy empty
+      // ENOENT + no placeholder shadow: never written by either device → trustworthy empty.
+      readFileMock.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      existsResult = false;
       await expect(store.mlArrayIfEnabled('goals', { strict: true })).resolves.toBeNull();
-      expect(readFileMock).not.toHaveBeenCalled();
     });
 
     it('throws when enabled but the store read fails (EACCES) under strict', async () => {
@@ -218,16 +220,19 @@ describe('mlArrayIfEnabled', () => {
     });
 
     it('throws under strict when a legacy .icloud placeholder shadows an offloaded store', async () => {
-      // Real path absent but the `.MortalLoom.json.icloud` placeholder present: the
-      // store exists, just offloaded. Must not read as trustworthy-absent.
-      existsQueue.push(false, true);
+      // readFile reports ENOENT (real path offloaded) but the `.MortalLoom.json.icloud`
+      // placeholder is present: the store exists, just evicted. Must not read as
+      // trustworthy-absent — the read is attempted first, then the placeholder probe
+      // reclassifies it as unreadable.
+      readFileMock.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      existsResult = true; // the placeholder existsSync probe returns true
       await expect(store.mlArrayIfEnabled('goals', { strict: true }))
         .rejects.toThrow(/unreadable/i);
-      expect(readFileMock).not.toHaveBeenCalled();
     });
 
     it('non-strict treats a placeholder-shadowed store as null (fall through)', async () => {
-      existsQueue.push(false, true);
+      readFileMock.mockRejectedValue(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
+      existsResult = true;
       await expect(store.mlArrayIfEnabled('goals')).resolves.toBeNull();
     });
 

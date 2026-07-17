@@ -339,30 +339,34 @@ async function readEnabledStore() {
  * `ok: false` into an explicit `unavailable`.
  */
 async function readStoreAtPathResult(path) {
-  if (!existsSync(path)) {
-    // A legacy `.MortalLoom.json.icloud` placeholder shadowing the real path
-    // means the store EXISTS but is offloaded under macOS's older rename-based
-    // eviction (the same case updateStore's overwrite guard checks). Classifying
-    // that as "absent" would let a strict read fall through to an empty local
-    // mirror and score a fake 0 (codex #2742 review). Report it present-but-
-    // unreadable instead. The read side never blocks on `brctl` to materialize it
-    // (that stays updateStore's job) — it just refuses to report a trustworthy
-    // empty for a store it has not actually read.
-    if (existsSync(icloudPlaceholderPath(path))) return { present: true, ok: false, store: null };
-    return { present: false, ok: true, store: null };
-  }
+  // Attempt the read directly and classify from the error code rather than gating
+  // on `existsSync` first (codex #2742 review): `existsSync` swallows its errno —
+  // an un-traversable parent dir (EACCES) or an EIO returns `false`, which the old
+  // guard could not tell from a genuine ENOENT and reported as trustworthy-absent,
+  // letting a strict read fall through and score a fake 0. Reading first also
+  // closes the existsSync→readFile TOCTOU where iCloud offloads the file between
+  // the check and the read. `readFile`'s ENOENT is the ONLY genuine "absent".
   let unreadable = false;
   const raw = await withTransientRetry(() => readFile(path, 'utf-8')).catch((err) => {
-    // existsSync→readFile race: file disappeared between the two calls.
-    // Treat as "absent" silently — no warning noise, no failure.
-    if (err.code === 'ENOENT') return null;
+    if (err.code === 'ENOENT') {
+      // Genuinely absent — UNLESS a legacy `.MortalLoom.json.icloud` placeholder
+      // shadows the real path, which means the store EXISTS but is offloaded under
+      // macOS's older rename-based eviction (the case updateStore's overwrite
+      // guard also checks). Treat that as present-but-unreadable so a strict read
+      // refuses to report a trustworthy empty for a store it has not actually
+      // read. This also covers an offload that races in after the read began.
+      // Silent either way — a missing store is normal, not warn-worthy. The read
+      // side never blocks on `brctl` to materialize (that stays updateStore's job).
+      if (existsSync(icloudPlaceholderPath(path))) unreadable = true;
+      return null;
+    }
+    // Any other error (EACCES/EIO/EAGAIN/EDEADLK/unknown errno) is a store we could
+    // not read — never a trustworthy empty.
     console.warn(`⚠️ MortalLoom store unavailable (${err.code || err.errno || 'unknown'}): ${path}`);
     unreadable = true;
     return null;
   });
   if (raw === null || raw === undefined) {
-    // null + !unreadable is the ENOENT race → absent; null + unreadable is a
-    // real read failure that already warned above.
     return unreadable
       ? { present: true, ok: false, store: null }
       : { present: false, ok: true, store: null };
