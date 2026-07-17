@@ -337,6 +337,15 @@ export async function buildTaskInput({ app } = {}) {
   // `existingIssues` is passed as null on a FAILED tracker read: readIssues returns
   // `[]` in that case, which would otherwise tell selfEval "you have filed nothing"
   // and license a duplicate re-file off a blind read.
+  //
+  // Scope: `trackerReadFailed` is only ever set by the forge and jira branches. The
+  // `plan` branch cannot distinguish an unreadable PLAN.md from an absent one, so it
+  // reports `[]` either way — but for a plan tracker that is honest rather than
+  // blind: the downstream isProposalDuplicate guard reads the same empty list, so
+  // selfEval's "nothing is currently suppressed" correctly describes what filing
+  // will actually do. Do NOT "fix" this by marking a missing PLAN.md as a failed
+  // read: an app with no PLAN.md yet genuinely has nothing filed, and suppressing
+  // its proposals would park the loop on every such app permanently.
   let selfEvalReport = ''
   if (config.sources?.selfEval) {
     selfEvalReport = computeSelfEvalSummary({
