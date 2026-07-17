@@ -152,6 +152,17 @@ vi.mock('../writersRoom/sync.js', async (importOriginal) => ({
   listFoldersForSync: vi.fn().mockResolvedValue([]),
   listExercisesForSync: vi.fn().mockResolvedValue([]),
 }));
+// #2686: commissionFeedback is a per-record store peerSync's getFullSyncCoverageForPeer
+// iterates via PEER_SUBSCRIBABLE_KINDS. Mock the lister so the zero-records
+// coverage assertions don't read the real (dev-Postgres) backend.
+vi.mock('../creativeCommissions/feedbackStore.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  listCommissionFeedbackForSync: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('../creativeCommissions/store.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  listCommissionsForSync: vi.fn().mockResolvedValue([]),
+}));
 
 vi.mock('../../lib/peerHttpClient.js', async () => ({
   peerFetch: vi.fn(),
@@ -233,6 +244,8 @@ import { listAuthors } from '../authors/index.js';
 import { listProjects as listCreativeDirectorProjects } from '../creativeDirector/local.js';
 import { listBoards } from '../moodBoard/index.js';
 import { listWorksForSync, listFoldersForSync, listExercisesForSync } from '../writersRoom/sync.js';
+import { listCommissionFeedbackForSync } from '../creativeCommissions/feedbackStore.js';
+import { listCommissionsForSync } from '../creativeCommissions/store.js';
 import { peerFetch } from '../../lib/peerHttpClient.js';
 import { reconcileMediaAssets } from '../mediaAssetIndex/index.js';
 import { getBackendName } from '../memoryBackend.js';
@@ -341,6 +354,8 @@ beforeEach(async () => {
   vi.mocked(listWorksForSync).mockReset().mockResolvedValue([]);
   vi.mocked(listFoldersForSync).mockReset().mockResolvedValue([]);
   vi.mocked(listExercisesForSync).mockReset().mockResolvedValue([]);
+  vi.mocked(listCommissionFeedbackForSync).mockReset().mockResolvedValue([]);
+  vi.mocked(listCommissionsForSync).mockReset().mockResolvedValue([]);
   // Catalog bundle defaults: non-postgres backend (no bundle), empty DB read,
   // no-op apply. The catalog-bundle suite overrides these per-test.
   vi.mocked(getBackendName).mockReset().mockReturnValue('file');
@@ -387,7 +402,7 @@ describe('peerSync', () => {
       // caught — this list is canonical and its order can affect iteration
       // elsewhere (e.g. syncNow's per-kind backfill). Issues piggyback on series
       // subscriptions; direct issue subs are intentionally rejected (Stage 2).
-      expect(PEER_SUBSCRIBABLE_KINDS).toEqual(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject']);
+      expect(PEER_SUBSCRIBABLE_KINDS).toEqual(['universe', 'series', 'mediaCollection', 'author', 'artist', 'album', 'track', 'creativeDirectorProject', 'moodBoard', 'writersRoomWork', 'writersRoomFolder', 'writersRoomExercise', 'musicVideoProject', 'commissionFeedback', 'creativeCommission']);
     });
   });
 

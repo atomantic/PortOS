@@ -212,7 +212,7 @@ import { verifyCollectionVersions } from './lib/collectionStore.js';
 import { conflictJournalStore } from './lib/conflictJournal.js';
 import { universeStore } from './services/universeBuilder.js';
 import { seriesStore } from './services/pipeline/series.js';
-import { commissionStore } from './services/creativeCommissions/store.js';
+import { commissionStore, backfillAllCommissionFeedback } from './services/creativeCommissions/store.js';
 import { issueStore } from './services/pipeline/issues.js';
 import { storyBuilderStore } from './services/storyBuilder.js';
 import { writersRoomStore } from './services/writersRoom/store.js';
@@ -648,6 +648,12 @@ startSeriesAutopilotScheduler().catch(err => console.error(`❌ Series Autopilot
 // Commission. Boot only ARMS timers; nothing fires until a cadence elapses, and
 // each fire gates on creative autonomy `execute` + the daily cos budget (so an
 // `off`/`dry-run` install generates nothing). Sanctioned scheduled-automation.
+// Split any legacy INLINE commission feedback into the federated commissionFeedback
+// store (#2686) BEFORE arming the scheduler, so a fire reads the federated view.
+// Pure data movement (no LLM), idempotent, best-effort. The scripts/migrations
+// runner executes before the DB pool is up, so the data move lives here (see the
+// migration 194 registration stub); the table itself is created by ensureSchema.
+backfillAllCommissionFeedback().catch(err => console.error(`❌ Commission feedback backfill failed: ${err.message}`));
 startCommissionScheduler().catch(err => console.error(`❌ Creative Commission scheduler init failed: ${err.message}`));
 // Initialize CyberCity snapshot scheduler — records periodic city-state frames
 // for the historical timeline scrubber (issue #877).

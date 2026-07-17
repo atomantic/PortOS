@@ -40,6 +40,8 @@ import {
   getExerciseForSync,
   mergeExercisesFromSync,
 } from '../writersRoom/sync.js';
+import { getCommissionFeedbackForSync, mergeCommissionFeedbackFromSync } from '../creativeCommissions/feedbackStore.js';
+import { getCommissionForSync, mergeCommissionsFromSync } from '../creativeCommissions/store.js';
 import {
   ackDeletesUpTo,
 } from './peerTombstoneCursors.js';
@@ -318,6 +320,10 @@ export async function applyIncomingPush(payload) {
     // gates whether a PRESENT-but-different local draft body may be overwritten —
     // a stale push that lost the LWW must NOT clobber newer local prose.
     workMergeApplied = mergeResult?.applied === true;
+  } else if (kind === 'commissionFeedback') {
+    await mergeCommissionFeedbackFromSync([record], { source });
+  } else if (kind === 'creativeCommission') {
+    await mergeCommissionsFromSync([record], { source });
   } else if (kind === 'writersRoomFolder') {
     await mergeFoldersFromSync([record], { source });
   } else if (kind === 'writersRoomExercise') {
@@ -657,6 +663,18 @@ async function classifyLocalRecord(recordKind, recordId) {
     // No ping-pong risk: lastPushedHash + LWW same-`updatedAt` no-op merge prevent it.
     const p = await getMusicVideoProject(recordId, { includeDeleted: true }).catch(() => null);
     return p ? 'syncable' : 'missing';
+  }
+  if (recordKind === 'commissionFeedback') {
+    // Body-less, no `ephemeral` concept (#2686) — a found reaction (live or
+    // tombstoned) is always 'syncable'. Same no-ping-pong guards as folders.
+    const fb = await getCommissionFeedbackForSync(recordId).catch(() => null);
+    return fb ? 'syncable' : 'missing';
+  }
+  if (recordKind === 'creativeCommission') {
+    // The commission brief (#2686) — no `ephemeral` concept; a found commission
+    // (live or tombstoned) is always 'syncable'.
+    const c = await getCommissionForSync(recordId).catch(() => null);
+    return c ? 'syncable' : 'missing';
   }
   return 'missing';
 }
