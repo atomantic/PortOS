@@ -30,6 +30,12 @@ import {
   buildPrompt,
   deriveOutcome,
   computeOutcomesReport,
+  computeSelfEvalSummary,
+  summarizeOutcomeStats,
+  readLiTaskMetrics,
+  LI_TASK_TYPE,
+  LI_DEGRADED_SUCCESS_THRESHOLD,
+  LI_DEGRADED_MIN_SAMPLE,
   PROPOSAL_OUTCOMES,
   extractPlanSlugs,
   appendProposalToPlan,
@@ -102,6 +108,11 @@ describe('defaultLayeredIntelligenceConfig', () => {
   it('defaults the outcomes feedback source on for PortOS, off for managed apps', () => {
     expect(defaultLayeredIntelligenceConfig(false).sources.outcomes).toBe(false);
     expect(defaultLayeredIntelligenceConfig(true).sources.outcomes).toBe(true);
+  });
+
+  it('defaults the selfEval source on for PortOS, off for managed apps (#2700)', () => {
+    expect(defaultLayeredIntelligenceConfig(false).sources.selfEval).toBe(false);
+    expect(defaultLayeredIntelligenceConfig(true).sources.selfEval).toBe(true);
   });
 
   it('defaults cosMetrics on for PortOS, off for managed apps (it is a PortOS-side agent-perf metric)', () => {
@@ -487,6 +498,26 @@ describe('buildPrompt', () => {
     expect(withReport).toContain('calibrate your proposal');
   });
 
+  it('injects the selfEval block only when non-empty (#2700)', () => {
+    const base = { app, isPortos: false, config: { allowedScopes: ['app-improvement'], rules: '' } };
+    expect(buildPrompt(base)).not.toContain('liSelfEval');
+    expect(buildPrompt({ ...base, selfEvalReport: '   ' })).not.toContain('liSelfEval');
+    const withReport = buildPrompt({ ...base, selfEvalReport: 'LI self-evaluation:\n- Reasoning confidence: low' });
+    expect(withReport).toContain('### liSelfEval');
+    expect(withReport).toContain('Reasoning confidence: low');
+    expect(withReport).toContain('Filing nothing (proposal: null) is a legitimate');
+  });
+
+  it('renders selfEval and outcomes as independent blocks (either can stand alone)', () => {
+    const base = { app, isPortos: false, config: { allowedScopes: ['app-improvement'], rules: '' } };
+    const selfOnly = buildPrompt({ ...base, selfEvalReport: 'self-eval body' });
+    expect(selfOnly).toContain('### liSelfEval');
+    expect(selfOnly).not.toContain('### liOutcomes');
+    const both = buildPrompt({ ...base, outcomesReport: 'outcomes body', selfEvalReport: 'self-eval body' });
+    expect(both).toContain('### liOutcomes');
+    expect(both).toContain('### liSelfEval');
+  });
+
   it('frames the mission around the app\'s own goals and performance', () => {
     const out = buildPrompt({ app, isPortos: false, config: { allowedScopes: ['app-improvement'], rules: '' } });
     expect(out).toContain('its OWN goals and purpose');
@@ -587,6 +618,214 @@ describe('computeOutcomesReport', () => {
 
   it('exposes the recognized outcome set', () => {
     expect(PROPOSAL_OUTCOMES).toEqual(['merged', 'rejected', 'abandoned']);
+  });
+});
+
+describe('summarizeOutcomeStats', () => {
+  it('reports a null merge rate (not 0) when nothing has resolved yet', () => {
+    const stats = summarizeOutcomeStats([{ outcome: null }, { outcome: null }]);
+    expect(stats.total).toBe(2);
+    expect(stats.pending).toBe(2);
+    expect(stats.resolved).toBe(0);
+    // The sentinel that keeps "awaiting triage" from reading as "all rejected".
+    expect(stats.rawMergeRate).toBeNull();
+  });
+
+  it('measures the merge rate over resolved proposals only, unrounded', () => {
+    const stats = summarizeOutcomeStats([
+      { outcome: 'merged' },
+      { outcome: 'rejected' },
+      { outcome: 'abandoned' },
+      { outcome: null }
+    ]);
+    expect(stats.resolved).toBe(3);
+    expect(stats.pending).toBe(1);
+    expect(stats.rawMergeRate).toBeCloseTo(33.33, 1);
+  });
+
+  it('tolerates a non-array / junk input', () => {
+    expect(summarizeOutcomeStats(null).total).toBe(0);
+    expect(summarizeOutcomeStats([null, 'x', { outcome: 'merged' }]).total).toBe(1);
+  });
+});
+
+describe('computeSelfEvalSummary (#2700)', () => {
+  const liMetrics = (over = {}) => ({
+    read: true,
+    metrics: { completed: 10, succeeded: 8, failed: 2, successRate: 80, recentOutcomes: [], ...over }
+  });
+
+  it('reports every signal as explicitly unavailable — and low confidence — with no data', () => {
+    const report = computeSelfEvalSummary();
+    expect(report).toContain('Reasoning confidence: low (0 of 3 self-signals available)');
+    expect(report).toContain('Proposal merge rate: UNAVAILABLE');
+    expect(report).toContain('Your already-filed proposals: UNKNOWN');
+    expect(report).toContain('LI execution health: UNAVAILABLE');
+    expect(report).toContain('GUIDANCE — low self-confidence');
+    // A blind run must never be told it has a 0% rate.
+    expect(report).not.toContain('(0%)');
+  });
+
+  it('distinguishes "outcomes not gathered" from "gathered, none filed"', () => {
+    expect(computeSelfEvalSummary({ outcomes: null })).toContain('Proposal merge rate: UNAVAILABLE');
+    expect(computeSelfEvalSummary({ outcomes: [] })).toContain('no proposals filed yet for this app');
+  });
+
+  it('does not read filed-but-unresolved proposals as a 0% merge rate', () => {
+    const report = computeSelfEvalSummary({ outcomes: [{ outcome: null }, { outcome: null }] });
+    expect(report).toContain('2 filed, none resolved yet — rate unknown');
+    expect(report).toContain('Awaiting triage is NOT rejection');
+    expect(report).not.toContain('0%');
+  });
+
+  it('reports a real merge rate with its recurring rejection reasons', () => {
+    const outcomes = [
+      { outcome: 'merged' },
+      { outcome: 'rejected', outcomeReason: 'NOT_PLANNED' },
+      { outcome: 'rejected', outcomeReason: 'NOT_PLANNED' },
+      { outcome: 'rejected', outcomeReason: 'too vague' }
+    ];
+    const report = computeSelfEvalSummary({ outcomes });
+    expect(report).toContain('1 of 4 resolved proposals merged (25%)');
+    // De-duplicated reasons.
+    expect(report).toContain('Recurring rejection reasons: NOT_PLANNED; too vague');
+  });
+
+  it('flags a below-floor sample as unreadable rather than as evidence', () => {
+    const report = computeSelfEvalSummary({ outcomes: [{ outcome: 'rejected' }] });
+    expect(report).toContain('too small a sample to read a rate from yet');
+    // One rejection is not a merge-rate signal → confidence must not count it.
+    expect(report).toContain('Reasoning confidence: low');
+  });
+
+  it('counts open and still-suppressed closed proposals so the loop does not re-file', () => {
+    const now = Date.now();
+    const report = computeSelfEvalSummary({
+      existingIssues: [
+        { slug: 'a', state: 'open' },
+        { slug: 'b', state: 'open' },
+        { slug: 'c', state: 'closed', closedAt: new Date(now - 5 * 24 * 60 * 60 * 1000).toISOString() },
+        // Closed long ago → out of the window → re-proposable, so NOT counted.
+        { slug: 'd', state: 'closed', closedAt: new Date(now - 90 * 24 * 60 * 60 * 1000).toISOString() }
+      ],
+      now
+    });
+    expect(report).toContain('2 open, plus 1 closed but still within the 30-day suppression window');
+    expect(report).toContain('deterministically suppressed');
+  });
+
+  it('says so plainly when nothing is suppressed', () => {
+    const report = computeSelfEvalSummary({ existingIssues: [] });
+    expect(report).toContain('0 open');
+    expect(report).toContain('Nothing is currently suppressed');
+  });
+
+  it('treats a failed tracker read (null) as unknown, never as "nothing filed"', () => {
+    const report = computeSelfEvalSummary({ existingIssues: null });
+    expect(report).toContain('Your already-filed proposals: UNKNOWN');
+    expect(report).toContain('may be about to re-file something that already exists');
+    expect(report).not.toContain('0 open');
+  });
+
+  it('distinguishes an unreadable learning store from a loop that has never run', () => {
+    expect(computeSelfEvalSummary({ liTaskStats: { read: false, metrics: null } }))
+      .toContain('LI execution health: UNAVAILABLE');
+    expect(computeSelfEvalSummary({ liTaskStats: { read: true, metrics: null } }))
+      .toContain('no LI runs recorded yet');
+  });
+
+  it('adds degraded-execution guidance when LI run success is under the threshold', () => {
+    const report = computeSelfEvalSummary({
+      liTaskStats: liMetrics({ completed: 9, succeeded: 3, failed: 6, successRate: 33 })
+    });
+    expect(report).toContain('33% of 9 lifetime LI runs succeeded — DEGRADED');
+    expect(report).toContain('GUIDANCE — your own execution is degraded');
+    expect(report).toContain('the problem may be THIS LOOP, not the app');
+    expect(report).toContain('do not mark anything trivial+safe for hand-off');
+  });
+
+  it('does not fire the degraded warning on a healthy loop', () => {
+    const report = computeSelfEvalSummary({ liTaskStats: liMetrics() });
+    expect(report).toContain('80% of 10 lifetime LI runs succeeded');
+    expect(report).not.toContain('DEGRADED');
+    expect(report).not.toContain('execution is degraded');
+  });
+
+  it('does not fire the degraded warning below the sample floor', () => {
+    const report = computeSelfEvalSummary({
+      liTaskStats: liMetrics({ completed: 1, succeeded: 0, failed: 1, successRate: 0 })
+    });
+    expect(report).toContain('too small a sample to judge');
+    expect(report).not.toContain('DEGRADED');
+  });
+
+  it('rates confidence high with all three signals, and drops guidance', () => {
+    const outcomes = Array.from({ length: 6 }, () => ({ outcome: 'merged' }));
+    const report = computeSelfEvalSummary({
+      outcomes,
+      existingIssues: [{ slug: 'a', state: 'open' }],
+      liTaskStats: liMetrics()
+    });
+    expect(report).toContain('Reasoning confidence: high (3 of 3 self-signals available)');
+    expect(report).not.toContain('GUIDANCE — low self-confidence');
+  });
+
+  it('rates a well-measured 0% merge rate as HIGH confidence in a bad result, not low', () => {
+    // Confidence rates the EVIDENCE, not the news. A loop with solid evidence that
+    // it is failing should act decisively, not hedge as if it were flying blind.
+    const outcomes = Array.from({ length: 8 }, () => ({ outcome: 'rejected', outcomeReason: 'NOT_PLANNED' }));
+    const report = computeSelfEvalSummary({
+      outcomes,
+      existingIssues: [{ slug: 'a', state: 'open' }],
+      liTaskStats: liMetrics()
+    });
+    expect(report).toContain('0 of 8 resolved proposals merged (0%)');
+    expect(report).toContain('Reasoning confidence: high');
+    expect(report).not.toContain('GUIDANCE — low self-confidence');
+  });
+
+  it('rates confidence medium with two of three signals', () => {
+    const report = computeSelfEvalSummary({
+      outcomes: Array.from({ length: 5 }, () => ({ outcome: 'merged' })),
+      existingIssues: [],
+      liTaskStats: { read: false, metrics: null }
+    });
+    expect(report).toContain('Reasoning confidence: medium (2 of 3 self-signals available)');
+    expect(report).not.toContain('GUIDANCE — low self-confidence');
+  });
+
+  it('exposes the LI task-type key and degraded thresholds', () => {
+    expect(LI_TASK_TYPE).toBe('layered-intelligence');
+    expect(LI_DEGRADED_SUCCESS_THRESHOLD).toBe(50);
+    expect(LI_DEGRADED_MIN_SAMPLE).toBe(4);
+  });
+});
+
+describe('readLiTaskMetrics (#2700)', () => {
+  let dir;
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'lil-selfeval-')); });
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  it('reports read:false when the learning store is missing', async () => {
+    expect(await readLiTaskMetrics({ cosPath: dir })).toEqual({ read: false, metrics: null });
+  });
+
+  it('reports read:false when the store is malformed (no byTaskType map)', async () => {
+    await writeFile(join(dir, 'learning.json'), JSON.stringify({ byTaskType: [] }));
+    expect(await readLiTaskMetrics({ cosPath: dir })).toEqual({ read: false, metrics: null });
+  });
+
+  it('reports read:true with a null bucket when LI has never run (distinct from unreadable)', async () => {
+    await writeFile(join(dir, 'learning.json'), JSON.stringify({ byTaskType: { 'idle-review': { completed: 3 } } }));
+    expect(await readLiTaskMetrics({ cosPath: dir })).toEqual({ read: true, metrics: null });
+  });
+
+  it('returns the layered-intelligence bucket when present', async () => {
+    const bucket = { completed: 4, succeeded: 1, failed: 3, successRate: 25, recentOutcomes: [] };
+    await writeFile(join(dir, 'learning.json'), JSON.stringify({ byTaskType: { [LI_TASK_TYPE]: bucket } }));
+    const stats = await readLiTaskMetrics({ cosPath: dir });
+    expect(stats.read).toBe(true);
+    expect(stats.metrics.successRate).toBe(25);
   });
 });
 

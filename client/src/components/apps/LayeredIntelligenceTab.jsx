@@ -20,7 +20,8 @@ export const LI_SOURCE_FIELDS = [
   { key: 'planMd', label: 'PLAN.md', hint: 'The app\'s open work-plan items' },
   { key: 'openIssues', label: 'Open issues', hint: 'Currently open tracker issues' },
   { key: 'plannedWork', label: 'Planned work', hint: 'The backlog you\'ve already committed to (plan-labeled issues / prioritized Jira backlog / unchecked PLAN.md items), so the loop won\'t propose work that\'s already in scope' },
-  { key: 'outcomes', label: 'Proposal outcomes', hint: 'Past LI proposals + how they fared (merge rate), fed back so the loop calibrates on its own results' }
+  { key: 'outcomes', label: 'Proposal outcomes', hint: 'Past LI proposals + how they fared (merge rate), fed back so the loop calibrates on its own results' },
+  { key: 'selfEval', label: 'Self-evaluation', hint: 'A deterministic check of the loop\'s own record — merge rate, proposals it has already filed, and whether its own runs are succeeding — so it can judge proposal quality before filing instead of only learning from rejections' }
 ];
 
 // The proposal scopes the loop may file. loop-meta / portos-self extend the loop

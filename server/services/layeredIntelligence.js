@@ -29,7 +29,7 @@ import { fetchPublicText } from '../lib/safeUrlFetch.js';
 import { validateCommand } from '../lib/commandSecurity.js';
 import { getSettings } from './settings.js';
 import { createTicket, searchIssues, addLabels, escapeJql } from './jira.js';
-import { computeWindowedStats } from './taskLearning/store.js';
+import { computeWindowedStats, computeEffectiveSuccessRate } from './taskLearning/store.js';
 
 // Tracker labels + slug marker. The slug is the stable dedup key the reasoner
 // chooses; it is embedded in each filed issue body so a later run (or the
@@ -124,6 +124,25 @@ export const LOW_MERGE_RATE_THRESHOLD = 20;
 // it stops proposing. A rate needs a sample before it means anything.
 export const LOW_MERGE_RATE_MIN_SAMPLE = 4;
 
+// The `learning.json` byTaskType key the LI loop's own agent runs land under —
+// LI's scheduled task type (see taskSchedule.js SELF_IMPROVEMENT_TASK_TYPES).
+// This is the bucket computeSelfEvalSummary reads to judge whether the LI
+// machinery ITSELF is healthy, as opposed to how its proposals fare downstream.
+export const LI_TASK_TYPE = 'layered-intelligence';
+
+// LI-task success rate (%) below which selfEval reports the loop's own execution
+// as DEGRADED (#2700) — a separate failure mode from a low merge rate: the merge
+// rate says "the user rejects what I propose", this says "my own runs are
+// failing". Kept at 50 (a coin flip) rather than the merge-rate's 20: a proposal
+// being rejected is normal triage, an LI run outright failing is not.
+export const LI_DEGRADED_SUCCESS_THRESHOLD = 50;
+
+// Minimum recorded LI runs before the degraded-execution signal is allowed to
+// fire, for the same reason as LOW_MERGE_RATE_MIN_SAMPLE: 0-of-1 and 0-of-50 are
+// both "0%", but only the second is evidence. Below the floor the rate is
+// reported as-is but is NOT treated as a confidence signal either way.
+export const LI_DEGRADED_MIN_SAMPLE = 4;
+
 // The resolved outcomes a filed proposal can reach (the feedback loop, #2428).
 // A record with a null outcome is still open/unresolved. All three are
 // auto-derived from the tracker's closed state by deriveOutcome: completed →
@@ -175,6 +194,14 @@ export function defaultLayeredIntelligenceConfig(isPortos = false) {
       // Default ON for the PortOS install (it improves itself), OFF for managed
       // apps — the user opts in per-app via the LI config UI.
       outcomes: isPortos,
+      // The loop's self-awareness signal (#2700): a deterministic read of LI's OWN
+      // record — proposal merge rate, how many of its proposals are already filed
+      // and suppressed, and whether its own agent runs are succeeding — folded back
+      // so the reasoner can judge its proposal quality BEFORE filing rather than
+      // only learning from rejections after. Same PortOS-only default as `outcomes`:
+      // it is built from LI's own history, which only the self-improving install
+      // accumulates meaningfully; managed apps opt in per-app.
+      selfEval: isPortos,
       custom: []
     },
     rules: '',
@@ -505,6 +532,38 @@ export function deriveOutcome(issue) {
 }
 
 /**
+ * Tally a recorded-outcome list into the counts BOTH the outcomes report (#2428)
+ * and the self-eval summary (#2700) reason over. Pure; the single place the
+ * merge-rate math lives so the two blocks can never disagree about LI's record.
+ *
+ * `rawMergeRate` is measured over RESOLVED proposals only and is `null` when
+ * nothing has resolved yet — the sentinel rule: "no proposal has been judged" must
+ * not collapse into the same 0 as "every judged proposal was rejected". Callers
+ * round only for display (rounding before a threshold compare would let 19.6%
+ * read as 20% and suppress a warning that should fire).
+ */
+export function summarizeOutcomeStats(outcomes = []) {
+  const filed = (Array.isArray(outcomes) ? outcomes : []).filter(o => o && typeof o === 'object');
+  const total = filed.length;
+  const count = (name) => filed.filter(o => o.outcome === name).length;
+  const merged = count('merged');
+  const rejected = count('rejected');
+  const abandoned = count('abandoned');
+  const resolved = merged + rejected + abandoned;
+  return {
+    filed,
+    total,
+    merged,
+    rejected,
+    abandoned,
+    // Anything filed but not yet resolved — still awaiting triage, NOT a failure.
+    pending: total - resolved,
+    resolved,
+    rawMergeRate: resolved > 0 ? (merged / resolved) * 100 : null
+  };
+}
+
+/**
  * Format the LI outcome-feedback report (#2428) from this app's recorded
  * proposals + their reconciled outcomes. Pure + side-effect-free: the LI hook
  * loads the outcomes and passes them here, then feeds the string into buildPrompt.
@@ -512,15 +571,10 @@ export function deriveOutcome(issue) {
  * the block entirely rather than injecting an empty section.
  */
 export function computeOutcomesReport({ outcomes = [], hasPlannedWork = false } = {}) {
-  const filed = (Array.isArray(outcomes) ? outcomes : []).filter(o => o && typeof o === 'object');
-  if (filed.length === 0) return '';
-  const total = filed.length;
+  const { filed, total, merged, rejected, abandoned, pending, resolved, rawMergeRate } =
+    summarizeOutcomeStats(outcomes);
+  if (total === 0) return '';
   const pct = (n) => Math.round((n / total) * 100);
-  const count = (name) => filed.filter(o => o.outcome === name).length;
-  const merged = count('merged');
-  const rejected = count('rejected');
-  const abandoned = count('abandoned');
-  const pending = total - merged - rejected - abandoned;
 
   // Per-scope merge rate — the calibration signal the reasoner acts on.
   const scopes = new Map();
@@ -540,19 +594,11 @@ export function computeOutcomesReport({ outcomes = [], hasPlannedWork = false } 
     .filter(o => o.outcome === 'rejected' && o.outcomeReason)
     .map(o => o.outcomeReason))].slice(0, 5);
 
-  // Low-merge-rate alarm (#2698). Measured over RESOLVED proposals only
-  // (merged + rejected + abandoned), NOT over `total`: a still-open proposal has
-  // not failed, it just hasn't been judged yet, and dividing by `total` would let
-  // "filed yesterday, nobody has triaged it" read exactly like "the user threw it
-  // out" — the sentinel rule (pending ≠ rejected). `null` means "no resolved
-  // sample yet", which is distinct from a genuine 0% and stays silent rather than
-  // alarming an app whose first proposal is simply still in flight. The sample
-  // floor is the same idea one step further out: 0-of-1 is not evidence of a rate.
-  const resolved = merged + rejected + abandoned;
-  // Compare the RAW ratio and round only for display: rounding first would let
-  // 10-of-51 (19.6%) round up to 20 and suppress a warning the threshold says
-  // should fire.
-  const rawMergeRate = resolved > 0 ? (merged / resolved) * 100 : null;
+  // Low-merge-rate alarm (#2698). `rawMergeRate` is measured over RESOLVED
+  // proposals only and is null when none have resolved — see summarizeOutcomeStats
+  // for the sentinel rationale (pending ≠ rejected). A null rate stays silent
+  // rather than alarming an app whose first proposal is simply still in flight.
+  // The sample floor is the same idea one step further out: 0-of-1 is not evidence.
   const lowMergeWarning = (
     rawMergeRate !== null
     && resolved >= LOW_MERGE_RATE_MIN_SAMPLE
@@ -587,13 +633,150 @@ export function computeOutcomesReport({ outcomes = [], hasPlannedWork = false } 
 }
 
 /**
+ * Format LI's self-evaluation block (#2700) — the loop's pre-filing quality check
+ * on its OWN reasoning. Pure + side-effect-free and NO LLM call: every line is
+ * derived from data the loop already has, so this never adds a provider round-trip
+ * (the "no cold-bootstrap LLM calls" policy). The hook loads the inputs and feeds
+ * the string to buildPrompt, exactly like computeOutcomesReport.
+ *
+ * Three independent self-signals, each of which is either PRESENT or explicitly
+ * reported ABSENT — never silently defaulted, because "I have no data about myself"
+ * and "the data says I am doing badly" demand opposite responses from the reasoner:
+ *   1. Proposal merge rate      — do the user's triage decisions validate my picks?
+ *   2. Already-filed proposals  — what have I said already that I must not repeat?
+ *   3. LI execution health      — are my own agent runs even succeeding?
+ *
+ * Unlike computeOutcomesReport this ALWAYS returns a block when called: "you are
+ * reasoning with no signal about yourself, hold a higher bar" is the single most
+ * useful thing to tell a cold loop, so an empty-handed run is exactly when the
+ * block matters most.
+ *
+ * @param {Object} args
+ * @param {Array|null} args.outcomes - recorded proposals; `null` = NOT gathered
+ *   (source off / outcomes-incapable tracker), `[]` = gathered and genuinely none.
+ * @param {Array|null} args.existingIssues - LI-labeled tracker issues; `null` = the
+ *   tracker read FAILED or never ran, `[]` = read fine and LI has filed nothing.
+ *   The caller MUST pass null on a failed read: readIssues returns `[]` for a blown
+ *   read, which would otherwise read as "nothing filed" and license a re-file.
+ * @param {{ read: boolean, metrics: Object|null }|null} args.liTaskStats - from
+ *   readLiTaskMetrics. `null`/`read:false` = the learning store was unreadable;
+ *   `read:true, metrics:null` = read fine and LI has simply never run a task.
+ * @param {number} [args.now] - clock seam for the suppression window.
+ * @returns {string} the liSelfEval block body.
+ */
+export function computeSelfEvalSummary({
+  outcomes = null,
+  existingIssues = null,
+  liTaskStats = null,
+  now = Date.now()
+} = {}) {
+  const lines = [];
+
+  // --- Signal 1: does the user actually merge what I propose? -----------------
+  let mergeSignal = false;
+  if (!Array.isArray(outcomes)) {
+    lines.push('- Proposal merge rate: UNAVAILABLE — no outcome history was gathered this run (the outcomes source is off, or this tracker cannot report outcomes). You cannot see how your past proposals fared; do not assume they went well.');
+  } else {
+    const { total, merged, rejected, resolved, rawMergeRate, filed } = summarizeOutcomeStats(outcomes);
+    if (total === 0) {
+      lines.push('- Proposal merge rate: no proposals filed yet for this app — you have no track record here to calibrate against.');
+    } else if (rawMergeRate === null) {
+      lines.push(`- Proposal merge rate: ${total} filed, none resolved yet — rate unknown. Awaiting triage is NOT rejection; do not read this as failure.`);
+    } else {
+      mergeSignal = resolved >= LOW_MERGE_RATE_MIN_SAMPLE;
+      const reasons = [...new Set(filed
+        .filter(o => o.outcome === 'rejected' && o.outcomeReason)
+        .map(o => o.outcomeReason))].slice(0, 3);
+      lines.push(
+        `- Proposal merge rate: ${merged} of ${resolved} resolved proposals merged (${Math.round(rawMergeRate)}%)`
+        + `${resolved < LOW_MERGE_RATE_MIN_SAMPLE ? ' — too small a sample to read a rate from yet' : ''}.`
+        + (rejected > 0 && reasons.length ? ` Recurring rejection reasons: ${reasons.join('; ')}.` : '')
+      );
+    }
+  }
+
+  // --- Signal 2: what have I already said? (dedup awareness) ------------------
+  let trackerSignal = false;
+  if (!Array.isArray(existingIssues)) {
+    lines.push('- Your already-filed proposals: UNKNOWN — the tracker could not be read this run. You may be about to re-file something that already exists; hold a higher bar than usual.');
+  } else {
+    trackerSignal = true;
+    const open = existingIssues.filter(i => (i?.state || '').toLowerCase() === 'open');
+    // Closed but still inside the 30-day suppression window: re-proposing one of
+    // these gets deterministically dropped downstream, so spending the run on it is
+    // a wasted run. Surfaced so the reasoner can route around it BEFORE proposing.
+    const closedSuppressed = existingIssues.filter(i =>
+      (i?.state || '').toLowerCase() !== 'open' && isIssueWithinDedupWindow(i, now));
+    lines.push(
+      `- Your already-filed proposals: ${open.length} open`
+      + `${closedSuppressed.length ? `, plus ${closedSuppressed.length} closed but still within the ${Math.round(CLOSED_SUPPRESSION_MS / DAY)}-day suppression window` : ''}.`
+      + ` ${open.length + closedSuppressed.length
+        ? 'Re-proposing any of these is deterministically suppressed — the run is wasted. Propose something genuinely new.'
+        : 'Nothing is currently suppressed.'}`
+    );
+  }
+
+  // --- Signal 3: is the LI machinery itself healthy? --------------------------
+  let taskSignal = false;
+  let liDegraded = false;
+  if (!liTaskStats?.read) {
+    lines.push('- LI execution health: UNAVAILABLE — the CoS learning store could not be read.');
+  } else if (!liTaskStats.metrics) {
+    lines.push('- LI execution health: no LI runs recorded yet — this loop has no execution history.');
+  } else {
+    const { successRate, source, windowedCompleted } = computeEffectiveSuccessRate(liTaskStats.metrics);
+    const sample = source === 'windowed' ? windowedCompleted : (liTaskStats.metrics.completed || 0);
+    if (successRate === null) {
+      lines.push('- LI execution health: no completed LI runs recorded yet — success rate unknown.');
+    } else {
+      taskSignal = sample >= LI_DEGRADED_MIN_SAMPLE;
+      liDegraded = taskSignal && successRate < LI_DEGRADED_SUCCESS_THRESHOLD;
+      lines.push(
+        `- LI execution health: ${successRate}% of ${sample} ${source} LI runs succeeded`
+        + `${taskSignal ? '' : ' — too small a sample to judge'}${liDegraded ? ' — DEGRADED' : ''}.`
+      );
+    }
+  }
+
+  // --- Confidence: how much do I actually know about myself? ------------------
+  // Purely a count of PRESENT signals — it rates the evidence available to the
+  // reasoner, NOT whether that evidence is flattering. A loop with a well-measured
+  // 0% merge rate has HIGH confidence in a bad result, which is precisely the state
+  // where it should act decisively rather than hedge.
+  const signalCount = [mergeSignal, trackerSignal, taskSignal].filter(Boolean).length;
+  const confidence = signalCount >= 3 ? 'high' : signalCount === 2 ? 'medium' : 'low';
+
+  const guidance = [];
+  if (confidence === 'low') {
+    guidance.push(
+      '',
+      `GUIDANCE — low self-confidence (${signalCount} of 3 self-signals available): you are reasoning about this app with little evidence about your own track record. Do NOT compensate by proposing something speculative or sweeping. Prefer a small, concretely-grounded proposal you can justify from the gathered sources alone, and return proposal: null rather than filing a guess.`
+    );
+  }
+  if (liDegraded) {
+    guidance.push(
+      '',
+      `GUIDANCE — your own execution is degraded (LI run success is under ${LI_DEGRADED_SUCCESS_THRESHOLD}%): the problem may be THIS LOOP, not the app. Favor a narrowly-scoped, low-risk proposal that a coding agent can finish, and do not mark anything trivial+safe for hand-off while your runs are failing this often. A loop-meta proposal that fixes the failure mode may be the highest-value item this run.`
+    );
+  }
+
+  return [
+    'LI self-evaluation (deterministic — computed from this loop\'s own record, not a model\'s opinion):',
+    `- Reasoning confidence: ${confidence} (${signalCount} of 3 self-signals available)`,
+    ...lines,
+    ...guidance
+  ].join('\n');
+}
+
+/**
  * Build the JSON-only reasoning prompt for one app. Deterministic: given the
  * gathered sources, open issues, and config, produces the exact string sent to
  * the model. Meta/self scopes are only offered when the app is PortOS.
  * `outcomesReport` (from computeOutcomesReport) is injected as a `liOutcomes`
- * block with calibration guidance when non-empty (#2428).
+ * block with calibration guidance when non-empty (#2428). `selfEvalReport` (from
+ * computeSelfEvalSummary) is injected as a `liSelfEval` block the same way (#2700).
  */
-export function buildPrompt({ app, config, sources = {}, openIssues = [], isPortos = false, outcomesReport = '' }) {
+export function buildPrompt({ app, config, sources = {}, openIssues = [], isPortos = false, outcomesReport = '', selfEvalReport = '' }) {
   const allowed = (config.allowedScopes || []).filter(s =>
     isScopeAllowed({ scope: s, allowedScopes: config.allowedScopes, isPortos })
   );
@@ -641,6 +824,15 @@ export function buildPrompt({ app, config, sources = {}, openIssues = [], isPort
     ? `\n### liOutcomes\n${outcomesReport.trim()}\n\nUse this data to calibrate your proposal: prefer scopes with higher merge rates, avoid patterns that were repeatedly rejected, and consider that lower-merge scopes may need more justification.\n`
     : '';
 
+  // Self-evaluation (#2700): the loop's own quality check BEFORE it files, so it
+  // can decline instead of learning only from a later rejection. Carries its own
+  // low-confidence / degraded-execution guidance (computeSelfEvalSummary), which is
+  // why no extra instruction sentence is appended here — the block is self-contained
+  // and its guidance is conditional on what the signals actually say.
+  const selfEvalBlock = (typeof selfEvalReport === 'string' && selfEvalReport.trim())
+    ? `\n### liSelfEval\n${selfEvalReport.trim()}\n\nWeigh this against the sources above before you commit to a proposal. Filing nothing (proposal: null) is a legitimate, and sometimes the correct, outcome — a marginal issue costs the user triage time and lowers your merge rate further.\n`
+    : '';
+
   return `You are the Layered Intelligence reasoner for the app "${app.name}". Your job is to evaluate how THIS app is performing against its OWN goals and purpose${isPortos ? '' : ', not how well PortOS\'s tooling manages it'}. Decide the SINGLE highest-value improvement to propose this run (signal, not noise), grounded in the app's own goals and its own performance metrics (user success, KPIs, production telemetry). You never write code; you return structured JSON that a deterministic system files as ONE tracker issue.
 ${handoffNote}${metricsGuidance}
 Rules & guidance from the operator:
@@ -654,7 +846,7 @@ ${openList}
 
 Gathered sources:
 ${sourceBlocks || (plannedWorkBlock ? '(no other sources available — you may propose an app-data-gap to add telemetry)' : '(no sources available — you may propose an app-data-gap to add telemetry)')}
-${plannedWorkBlock}${outcomesBlock}
+${plannedWorkBlock}${outcomesBlock}${selfEvalBlock}
 Respond with JSON only (no markdown fences):
 {
   "analysis": "brief reasoning summary",
@@ -932,6 +1124,33 @@ export async function gatherSources(app, config, { cosPath = PATHS.cos, trustShe
     }
   }
   return out;
+}
+
+/**
+ * Read the LI loop's OWN agent-run metrics out of the CoS learning store (#2700).
+ * Deterministic file read; no LLM call. Feeds computeSelfEvalSummary's execution-
+ * health signal.
+ *
+ * Returns a discriminated result rather than a bare bucket-or-null, because the two
+ * empty cases are NOT the same fact and the reasoner is told them differently:
+ *   `{ read: false, metrics: null }` — the store is missing/unreadable/malformed:
+ *                                      we do not know how LI's runs are going.
+ *   `{ read: true,  metrics: null }` — the store is fine, LI has simply never run.
+ *   `{ read: true,  metrics: {...} }` — real history.
+ * Collapsing these to one `null` would let "cannot read the store" masquerade as
+ * "healthy loop with no history" (or vice versa) — the sentinel rule.
+ */
+export async function readLiTaskMetrics({ cosPath = PATHS.cos } = {}) {
+  const learning = await readJSONFile(join(cosPath, 'learning.json'), null);
+  const byTaskType = learning?.byTaskType;
+  if (!byTaskType || typeof byTaskType !== 'object' || Array.isArray(byTaskType)) {
+    return { read: false, metrics: null };
+  }
+  const bucket = byTaskType[LI_TASK_TYPE];
+  return {
+    read: true,
+    metrics: (bucket && typeof bucket === 'object' && !Array.isArray(bucket)) ? bucket : null
+  };
 }
 
 /**
