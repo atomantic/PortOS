@@ -417,6 +417,21 @@ describe('processTaskOutput', () => {
     }
   });
 
+  it('records unparseable-response when a supplied proposal failed validation (#2727)', async () => {
+    // The reasoner ATTEMPTED a proposal and emitted the wrong shape (no scope/title,
+    // bad slug). That is malformed output, not "I looked and found nothing" — both
+    // used to land on `no-proposal` and count as a successful run.
+    li.validateReasonerResponse.mockReturnValue({ proposal: null, pause: null });
+    const out = await processTaskOutput({ appId: 'app-1', success: true, payload: { analysis: 'x', proposal: { title: '' } } });
+    expect(out).toMatchObject({ action: 'no-op', reason: 'unparseable-response' });
+  });
+
+  it('treats an explicit proposal:null as a legitimate empty answer, not malformed (#2727)', async () => {
+    li.validateReasonerResponse.mockReturnValue({ proposal: null, pause: null });
+    const out = await processTaskOutput({ appId: 'app-1', success: true, payload: { analysis: 'nothing to propose', proposal: null } });
+    expect(out).toMatchObject({ action: 'no-op', reason: 'no-proposal' });
+  });
+
   it('does not touch the tracker when there is no proposal to dedup (#2727)', async () => {
     // readIssues is an unbounded forge call and only the has-a-proposal branch
     // consumes it. Since the #2727 hoist the hook runs while the agent still holds

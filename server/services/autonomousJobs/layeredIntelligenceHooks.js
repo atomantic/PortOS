@@ -481,10 +481,18 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
   const envelope = isEnvelope ? payload : null
   const { proposal, pause } = validateReasonerResponse(envelope)
 
+  // A reasoner that SUPPLIED a non-null proposal which then failed validation
+  // (missing/unknown scope, no title, unnormalizable slug) did not "look and find
+  // nothing" — it tried to propose and emitted the wrong shape. Both used to land
+  // on `no-proposal` → success. `proposal: null` stays the legitimate empty answer.
+  // Narrow on purpose: validateReasonerResponse is documented to drop invalid
+  // pieces leniently, and this only reclassifies the field that IS the deliverable.
+  const proposalAttemptedButInvalid = envelope != null && !proposal && envelope.proposal != null
+
   let filedNumber = null
   let filedKey = null
   let filedAction = 'no-op'
-  let reason = envelope == null ? 'unparseable-response' : 'no-proposal'
+  let reason = envelope == null || proposalAttemptedButInvalid ? 'unparseable-response' : 'no-proposal'
   let handedOff = false
 
   if (proposal) {
