@@ -78,11 +78,25 @@ describe('classifyRejection', () => {
     expect(classifyRejection({ outcome: 'rejected', labels: ['NEEDS_INPUT'] })).toBe('missing-context');
   });
 
-  it('maps the LI blocking label to an environment blocker', () => {
+  it('maps a human-applied blocked label to an environment blocker', () => {
+    expect(classifyRejection({ outcome: 'rejected', labels: ['blocked'] })).toBe('environment-blocker');
+  });
+
+  it("ignores LI's own machine-applied pause label instead of reading it as a diagnosis", () => {
+    // LI stamps `layered-intelligence:blocking` on its own proposals to record that
+    // the loop is paused there. Treating that as evidence would outrank the real
+    // close reason and feed the loop "blocked on the environment" when the user
+    // simply declined — LI corrupting its own feedback signal via its own marker.
     expect(classifyRejection({
       outcome: 'rejected',
+      stateReason: 'not_planned',
       labels: ['layered-intelligence:blocking']
-    })).toBe('environment-blocker');
+    })).toBe('user-rejected');
+    // And with no other signal it is an honest unknown, not a fabricated blocker.
+    expect(classifyRejection({
+      outcome: 'rejected',
+      labels: ['layered-intelligence', 'layered-intelligence:blocking']
+    })).toBe(UNKNOWN_REJECTION_REASON);
   });
 
   it('ignores labels it has no mapping for and falls through to the stateReason', () => {

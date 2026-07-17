@@ -93,10 +93,23 @@ function normalizeToken(value) {
   return typeof value === 'string' ? value.trim().toLowerCase().replace(/[\s_-]+/g, '-') : '';
 }
 
-// Label → reason. Labels are a deliberate human act, so they outrank the generic
-// stateReason: `not_planned` + a `duplicate` label is a duplicate, not a bare
-// user rejection. Keys are normalizeToken'd; add conventions here rather than
-// teaching callers to pre-map.
+// Label → reason. Every key here must be a label a HUMAN applies as a judgement
+// about the issue: that is what earns labels their precedence over the generic
+// stateReason (`not_planned` + a `duplicate` label is a duplicate, not a bare user
+// rejection).
+//
+// Machine-applied labels must NEVER appear in this map, however suggestive they
+// look. LI stamps `layered-intelligence:blocking` on its own proposals to record
+// that the loop is paused there (applyBlockingLabel ← the reasoner's
+// `pause.blockOnIssue`); it is bookkeeping, not a diagnosis of why a proposal
+// failed. Mapping it to `environment-blocker` would outrank a real `not_planned`
+// close and feed the loop "blocked on the environment" when the user simply
+// declined — LI corrupting the very signal this taxonomy exists to produce, via
+// its own marker. Human-applied `blocked` / `environment-blocker` labels below
+// carry that meaning legitimately.
+//
+// Keys are normalizeToken'd; add conventions here rather than teaching callers to
+// pre-map.
 const LABEL_REASONS = new Map(Object.entries({
   'duplicate': 'duplicate',
   'dupe': 'duplicate',
@@ -111,7 +124,6 @@ const LABEL_REASONS = new Map(Object.entries({
   'invalid': 'quality-issue',
   'quality-issue': 'quality-issue',
   'blocked': 'environment-blocker',
-  'layered-intelligence:blocking': 'environment-blocker',
   'environment-blocker': 'environment-blocker',
   'merge-conflict': 'merge-conflict',
   'conflict': 'merge-conflict',
