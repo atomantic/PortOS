@@ -3,11 +3,15 @@ import { request } from './apiCore.js';
 // Alerts
 export const getAlertsSummary = (options) => request('/alerts/summary', options);
 
-// Character sheet (age-based level / XP / HP / usage-derived skills).
-// `skills: false` skips the server's six-domain skill fan-out — pass it from callers that
-// only read the persisted fields or the level (e.g. the polling CyberCity XP HUD badge).
-export const getCharacter = ({ skills = true, ...options } = {}) =>
-  request(`/character${skills ? '' : '?skills=0'}`, options);
+// Character sheet (age-based level / XP / HP / usage-derived skills + metrics grid).
+// `skills: false` / `metrics: false` skip the server's domain stat fan-out for each derived
+// registry — pass them from callers that only read the persisted fields or the level (e.g.
+// the polling CyberCity XP HUD badge). Both default on, so a caller that wants the whole
+// sheet just calls getCharacter().
+export const getCharacter = ({ skills = true, metrics = true, ...options } = {}) => {
+  const off = [!skills && 'skills=0', !metrics && 'metrics=0'].filter(Boolean);
+  return request(`/character${off.length ? `?${off.join('&')}` : ''}`, options);
+};
 
 // Health
 export const checkHealth = (options) => request('/system/health', options);

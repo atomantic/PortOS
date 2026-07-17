@@ -1,11 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Sword, Star, Moon, ScrollText, Shield, Heart,
-  Sparkles, RefreshCw, Dices, X, ChevronDown, Zap, Image
+  Sparkles, RefreshCw, Dices, X, ChevronDown, Zap, Image, Activity
 } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
 import toast from '../components/ui/Toast';
-import { timeAgo } from '../utils/formatters';
+import { timeAgo, formatCompactCount } from '../utils/formatters';
 import api, { generateAvatar } from '../services/api';
 import socket from '../services/socket';
 import { clickableProps } from '../lib/a11yKeyboard.js';
@@ -53,10 +53,10 @@ function SkillsCard({ skills }) {
   if (!skills?.length) return null;
 
   return (
-    <div className="bg-port-card border border-port-border rounded-xl p-4">
+    <section aria-labelledby="character-skills-heading" className="bg-port-card border border-port-border rounded-xl p-4">
       <div className="flex items-center gap-1.5 mb-3">
         <Zap className="w-4 h-4 text-port-accent-2" />
-        <h2 className="text-sm font-medium text-gray-300">Skills</h2>
+        <h2 id="character-skills-heading" className="text-sm font-medium text-gray-300">Skills</h2>
         <span className="text-xs text-gray-500">— earned by using PortOS</span>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
@@ -76,7 +76,70 @@ function SkillsCard({ skills }) {
           </div>
         ))}
       </div>
-    </div>
+    </section>
+  );
+}
+
+// Render one metric's value per its server-declared `unit`. Counts go through the shared
+// formatCompactCount so a 12,400-memory Brain reads "12.4K" instead of overflowing the tile.
+// Only called for tiles with a real numeric value — the null states are handled by the caller.
+//
+// Deliberately page-local rather than hoisted into utils/formatters.js: it defines no new
+// number formatting (it dispatches to the shared formatter), and it is coupled to the metric
+// payload shape that characterMetrics.js owns — so it belongs with the card that renders it,
+// which Slice 5 (#2677) will restyle or relocate wholesale. Exported only for its unit test.
+export function formatMetricValue({ unit, value }) {
+  if (unit === 'percent') return `${value}%`;
+  if (unit === 'days') return `${formatCompactCount(value)}d`;
+  return formatCompactCount(value);
+}
+
+// Engagement metrics derived on read from the same domain signals that power the skills
+// (#2676). Like SkillsCard this is deliberately a plain read-only card — Slice 5 (#2677) owns
+// the page's framing/redesign, so it stays easy to restyle or relocate wholesale.
+//
+// THREE states per tile, never two (mirroring the server's sentinels):
+//   - unavailable   → "Unavailable" and an em dash. The stat could not be read.
+//   - notApplicable → the metric's own emptyLabel ("No goals resolved yet"). No honest number
+//                     exists yet — and 0 is emphatically not it for a ratio.
+//   - a real value  → the number, INCLUDING a real 0.
+// Collapsing any of these into a fake 0 would re-introduce the exact lie the server's
+// sentinels exist to prevent.
+function MetricsCard({ metrics }) {
+  if (!metrics?.length) return null;
+
+  return (
+    <section aria-labelledby="character-metrics-heading" className="bg-port-card border border-port-border rounded-xl p-4">
+      <div className="flex items-center gap-1.5 mb-3">
+        <Activity className="w-4 h-4 text-port-accent" />
+        <h2 id="character-metrics-heading" className="text-sm font-medium text-gray-300">Metrics</h2>
+        <span className="text-xs text-gray-500">— your real activity</span>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+        {metrics.map((metric) => (
+          <div key={metric.id} className="bg-port-bg border border-port-border rounded-lg px-3 py-2">
+            <div
+              className={`text-xl font-semibold truncate ${
+                metric.unavailable || metric.notApplicable ? 'text-gray-600' : 'text-port-accent'
+              }`}
+              title={metric.unavailable ? 'This stat could not be read' : undefined}
+            >
+              {metric.unavailable || metric.notApplicable ? '—' : formatMetricValue(metric)}
+            </div>
+            <div className="text-xs text-gray-300 truncate mt-0.5" title={metric.label}>
+              {metric.label}
+            </div>
+            <div className="text-[11px] text-gray-500 mt-0.5 line-clamp-2">
+              {metric.unavailable
+                ? 'Unavailable'
+                : metric.notApplicable
+                  ? (metric.emptyLabel || 'Not applicable yet')
+                  : metric.hint}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -500,6 +563,11 @@ export default function CharacterSheet() {
             </div>
           )}
         </div>
+
+        {/* Metrics — real engagement stats derived from existing domain signals (#2676).
+            Sits directly under the identity card so the sheet's most concrete information is
+            above the fold. */}
+        <MetricsCard metrics={char.metrics} />
 
         {/* Skills — derived per-domain from real PortOS usage (#2674) */}
         <SkillsCard skills={char.skills} />

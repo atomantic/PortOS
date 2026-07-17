@@ -7,8 +7,10 @@
  * drives level. HP/damage/rest mechanics are retained for backward-compat with a
  * flat maxHp (no longer scaled off level).
  *
- * `skills` are likewise derived on read, from each domain's existing stats
- * (see `characterSkills.js`, #2674).
+ * `skills` (see `characterSkills.js`, #2674) and the `metrics` grid (see
+ * `characterMetrics.js`, #2676) are likewise derived on read, from each domain's existing
+ * stats — both over ONE shared signal context (`characterSignals.js`) so the signals they
+ * have in common are read once per request, not once per registry.
  */
 
 import crypto from 'crypto';
@@ -18,6 +20,8 @@ import * as jiraService from './jira.js';
 import * as cosService from './cos.js';
 import { getBirthDate } from './meatspace.js';
 import { getCharacterSkills } from './characterSkills.js';
+import { getCharacterMetrics } from './characterMetrics.js';
+import { createSignalContext } from './characterSignals.js';
 
 const CHARACTER_FILE = path.join(PATHS.data, 'character.json');
 
@@ -27,8 +31,9 @@ const DEFAULT_MAX_HP = 15;
 
 // Derived fields getCharacter() attaches on read; they are stripped before persisting so a
 // stale age-level (or a per-machine usage-derived skill set) never lands on disk or in the
-// federated snapshot. `skills` is per-machine by design — see characterSkills.js (#2674).
-const DERIVED_FIELDS = ['level', 'ageYears', 'skills'];
+// federated snapshot. `skills` (#2674) and `metrics` (#2676) are per-machine by design — see
+// characterSkills.js / characterMetrics.js.
+const DERIVED_FIELDS = ['level', 'ageYears', 'skills', 'metrics'];
 
 /**
  * Copy `record` without any derived field. The single chokepoint for that rule — used by the
@@ -137,24 +142,34 @@ async function loadRawCharacter() {
 }
 
 // Attach the derived read-only fields to a raw record: `ageYears`/`level` from the canonical
-// birthDate (#2673), and the per-domain `skills` from each domain's existing stats (#2674).
-// `level` is null when no birthDate is set, so callers can render a "set your birth date"
-// prompt. Neither is ever persisted — see DERIVED_FIELDS / saveCharacter.
-// `withSkills: false` skips the skill fan-out (six domain stat reads) for callers that only
-// want the persisted fields plus the age level — deriving skills nobody reads is pure waste.
-// Skipping OMITS the key rather than setting it to [] or null: an absent `skills` means "not
-// computed", which must not be confused with "computed, and every domain is empty".
-async function enrichCharacter(raw, { withSkills = true } = {}) {
-  const [{ birthDate }, skills] = await Promise.all([
+// birthDate (#2673), the per-domain `skills` (#2674), and the `metrics` grid (#2676) — the
+// latter two from each domain's existing stats. `level` is null when no birthDate is set, so
+// callers can render a "set your birth date" prompt. None are ever persisted — see
+// DERIVED_FIELDS / saveCharacter.
+//
+// `withSkills` / `withMetrics: false` skip their registry's fan-out for callers that only
+// want the persisted fields plus the age level (the CyberCity HUD, askService, city
+// snapshots) — deriving stats nobody reads is pure waste. ONE signal context is shared by
+// both registries, so the signals they have in common cost a single read even with both on.
+//
+// Skipping OMITS the key rather than setting it to [] or null: an absent `skills`/`metrics`
+// means "not computed", which must not be confused with "computed, and every domain is
+// empty".
+async function enrichCharacter(raw, { withSkills = true, withMetrics = true } = {}) {
+  const read = withSkills || withMetrics ? createSignalContext() : null;
+  const [{ birthDate }, skills, metrics] = await Promise.all([
     getBirthDate().catch(() => ({ birthDate: null })),
-    withSkills ? getCharacterSkills() : Promise.resolve(undefined),
+    withSkills ? getCharacterSkills(read) : Promise.resolve(undefined),
+    withMetrics ? getCharacterMetrics(read) : Promise.resolve(undefined),
   ]);
   const ageYears = ageYearsFromBirthDate(birthDate);
   const enriched = { ...raw, ageYears, level: levelFromAge(ageYears) };
-  // Drop any stale persisted key when skills weren't computed, so a hand-edited
-  // character.json can't pass its own `skills` off as freshly derived.
+  // Drop any stale persisted key when a registry wasn't computed, so a hand-edited
+  // character.json can't pass its own `skills`/`metrics` off as freshly derived.
   if (withSkills) enriched.skills = skills;
   else delete enriched.skills;
+  if (withMetrics) enriched.metrics = metrics;
+  else delete enriched.metrics;
   return enriched;
 }
 
@@ -187,8 +202,9 @@ export async function getWireCharacter() {
   if (!raw) return null;
   // Strip every derived field a hand-edited or legacy character.json might be carrying before
   // it goes out on the wire: `level` is then re-added below as the legacy xp-derived value,
-  // but `skills`/`ageYears` must never federate at all (skills are per-machine — see
-  // characterSkills.js — and ageYears is a pure function of the peer's own birthDate). Without
+  // but `skills`/`metrics`/`ageYears` must never federate at all (skills and metrics are
+  // per-machine — see characterSkills.js / characterMetrics.js — and ageYears is a pure
+  // function of the peer's own birthDate). Without
   // this, applyCharacterRemote's no-local branch writes the payload verbatim and a stale key
   // would self-propagate across peers.
   return { ...stripDerivedFields(raw), level: legacyLevelFromXp(raw.xp) };
@@ -196,9 +212,9 @@ export async function getWireCharacter() {
 
 export async function saveCharacter(data) {
   await ensureDir(PATHS.data);
-  // Never persist derived fields — level is age-derived on read (#2673), skills are
-  // usage-derived and per-machine (#2674). Stripping them keeps stale values off disk and out
-  // of the federated character snapshot.
+  // Never persist derived fields — level is age-derived on read (#2673); skills (#2674) and
+  // metrics (#2676) are usage-derived and per-machine. Stripping them keeps stale values off
+  // disk and out of the federated character snapshot.
   const persist = stripDerivedFields(data);
   persist.updatedAt = new Date().toISOString();
   await atomicWrite(CHARACTER_FILE, persist);

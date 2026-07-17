@@ -360,8 +360,9 @@ const MODE_DIRECTIVES = {
 };
 
 export async function buildPersonaPreamble() {
-  // Only name/class are read below, so skip the skill fan-out — this runs per /ask question.
-  const character = await getCharacter({ withSkills: false }).catch(() => null);
+  // Only name/class are read below, so skip both derived fan-outs — this runs per /ask
+  // question.
+  const character = await getCharacter({ withSkills: false, withMetrics: false }).catch(() => null);
   // The character sheet is the closest thing to a persona surface today.
   // Autobiography stories carry the voice; we sample the most recent one
   // separately in the source pipeline. Keep this preamble small.
