@@ -10,6 +10,15 @@
  * free to fall. The two are complementary readings of one signal set: `mentalist` says "you
  * have practiced 200 times"; `postStreakDays` says "you have practiced 4 days running".
  *
+ * **A tile must be able to MOVE, and must claim only what its signal carries.** Two traps
+ * worth naming, because both produced a plausible-looking tile that was really a constant or
+ * an overclaim (caught in review):
+ *   - A ratio whose denominator no UI can populate is a decorative constant — see
+ *     `goalCompletionRate`, where an `abandoned` status exists in the enum but nothing writes.
+ *   - A tally is only as specific as its rows — see `mediaAssets`, an unfiltered count over an
+ *     index that deliberately holds downloads and uploads, so it cannot be called "rendered".
+ * When picking a new signal, check what the UI actually records before naming the tile.
+ *
  * **No new reads.** Every `compute()` composes signals from `characterSignals.js`, the same
  * context the skills fan out over — so the six tiles below add ZERO stat reads to
  * `GET /api/character`, and a domain the user has never touched still costs nothing extra.
@@ -26,8 +35,8 @@
  *                           and a real 0 is a legitimate answer ("no memories yet")
  *   - not applicable      — `{ value: null, notApplicable: true }`: the metric is a ratio
  *                           with an empty denominator. There is no honest number, and 0 is
- *                           NOT it — "0% follow-through" is a damning claim to make about
- *                           someone who has simply never resolved a goal.
+ *                           NOT it — "0% of your goals are done" is a lie to tell someone who
+ *                           has never filed one.
  *   - unavailable         — `{ value: null, unavailable: true }`: the stat could not be read.
  * Collapsing any of these into a fake 0 is the exact lie the sentinels exist to prevent.
  * Both non-value states are distinct SYMBOLS rather than in-band `null`s, so a getter that
@@ -111,35 +120,52 @@ export const METRICS = [
     compute: async (read) => read('memoryCount'),
   },
   {
-    id: 'mediaRendered',
-    label: 'Media Rendered',
+    id: 'mediaAssets',
+    label: 'Media Assets',
     unit: 'count',
-    hint: 'Images & videos in the media index',
+    hint: 'Images & videos in your media library',
+    // Deliberately "assets in your library", NOT "media you rendered". `countAssets()` is an
+    // unfiltered COUNT(*) over `media_assets`, which by design holds every on-disk asset:
+    // `reconcileMediaAssets()` upserts everything in the gallery at boot (uploads included),
+    // and `videoDownload.js` routes downloads through the same index on purpose. Labelling it
+    // "Media Rendered" would claim a provenance the row doesn't carry.
+    //
+    // Caveat this tile inherits from the index (NOT introduced here — the `auteur` skill reads
+    // the same source): deletes don't decrement it until the next boot, because `removeAsset`
+    // has no production callers yet ("delete hook, future slice" per mediaAssetIndex/db.js).
+    // So the count can read high between a delete and a restart. Tracked as a follow-up; the
+    // honest label keeps the tile from overstating what it measures in the meantime (#2738).
     compute: async (read) => read('assetCount'),
   },
   {
     id: 'goalCompletionRate',
-    label: 'Goal Follow-Through',
+    label: 'Goal Completion',
     unit: 'percent',
-    hint: 'Of goals you resolved, the share you finished',
-    emptyLabel: 'No goals resolved yet',
-    // Denominator is RESOLVED goals (completed + abandoned), not all goals. Counting `active`
-    // goals as incomplete would make the rate drop the moment you file an ambitious goal and
-    // punish having work in flight — it would measure caution, not follow-through. With no
-    // resolved goals the ratio is undefined, which is NOT 0% (see the header's three states).
+    hint: 'Share of your goals that are done',
+    emptyLabel: 'No goals filed yet',
+    // Denominator is ALL goals, not just "resolved" (completed + abandoned) ones.
+    //
+    // The resolved-only denominator is tempting — it reads as follow-through and doesn't
+    // penalize having ambitious work in flight — but it CANNOT MOVE on this install. The
+    // Goals UI (`client/src/components/digital-twin/tabs/GoalsTab.jsx`) offers exactly two
+    // terminal actions: Complete (writes `status: 'completed'`) and Delete (drops the record
+    // outright). Nothing in the client ever writes `status: 'abandoned'` — it exists in
+    // `goalStatusEnum` and is honored by the API and the CyberCity monuments, but no UI
+    // produces it. So `abandoned` is always 0, `resolved === completed`, and the tile would
+    // read a self-congratulatory constant 100% forever after the first completion.
+    //
+    // A metric that cannot vary is worse than one with a debatable denominator, so this
+    // measures what the UI actually records: of the goals you have filed, how many are done.
+    // If an explicit "abandon" outcome ever ships, an abandoned goal naturally lands in the
+    // denominator here without a change.
     compute: async (read) => {
       const { goals } = await read('goals');
-      // One pass, and the denominator is derived from the SAME predicate set as the numerator
-      // — so adding a third resolved status can't leave the two out of sync.
-      let completed = 0;
-      let resolved = 0;
-      for (const g of goals || []) {
-        if (g?.status !== 'completed' && g?.status !== 'abandoned') continue;
-        resolved += 1;
-        if (g.status === 'completed') completed += 1;
-      }
-      if (resolved === 0) return METRIC_NOT_APPLICABLE;
-      return Math.round((completed / resolved) * 100);
+      const all = goals || [];
+      // No goals at all → there is no rate. That is NOT 0% (see the header's three states):
+      // "0% of your goals are done" is a lie to tell someone who has never filed one.
+      if (all.length === 0) return METRIC_NOT_APPLICABLE;
+      const completed = all.filter((g) => g?.status === 'completed').length;
+      return Math.round((completed / all.length) * 100);
     },
   },
 ];
