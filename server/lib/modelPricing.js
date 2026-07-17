@@ -12,6 +12,7 @@
  *   - https://developers.openai.com/api/docs/pricing
  *   - https://docs.x.ai/docs/pricing
  *   - https://ai.google.dev/gemini-api/docs/pricing
+ *   - https://inference-docs.cerebras.ai/models/openai-oss
  *
  * Model ids arrive in many shapes (full ids, CLI sentinels like `opus`, the
  * `*-configured-default` sentinels from providerModels.js, Bedrock-prefixed
@@ -56,6 +57,10 @@ const EXACT_RATES = {
   'gemini-2.5-pro': [1.25, 10.0],
   'gemini-2.5-flash': [0.3, 2.5],
   'gemini-2.5-flash-lite': [0.1, 0.4],
+  // Cerebras — open-weights models on an OpenAI-compatible host. Listed exactly
+  // (not via the `/gpt/i` family rule) because that rule would otherwise bill
+  // `gpt-oss-120b` at OpenAI GPT-5.4's $2.50/$15.00 — off by ~10-20x.
+  'gpt-oss-120b': [0.35, 0.75],
 };
 
 // Exact keys sorted longest-first for the substring pass in
@@ -79,6 +84,10 @@ const FAMILY_RULES = [
   { test: /sonnet/i, rateModel: 'claude-sonnet-4-5' },
   { test: /haiku/i, rateModel: 'claude-haiku-4-5' },
   { test: /codex/i, rateModel: 'gpt-5.3-codex' },
+  // `gpt-oss-*` is open-weights and hosted cheaply everywhere — it must win over
+  // the proprietary `/gpt/i` rule below, which would bill it at ~10-20x. Sizes
+  // other than the exact-listed 120b land here.
+  { test: /gpt-oss/i, rateModel: 'gpt-oss-120b' },
   { test: /gpt/i, rateModel: 'gpt-5.4' },
   { test: /grok-build/i, rateModel: 'grok-build-0.1' },
   { test: /grok-4\.20/i, rateModel: 'grok-4.3' },
@@ -92,6 +101,10 @@ const PROVIDER_DEFAULT_RULES = [
   { test: /codex|openai/i, rateModel: 'gpt-5.3-codex' },
   { test: /grok|xai/i, rateModel: 'grok-4.5' },
   { test: /antigravity|agy|gemini|google/i, rateModel: 'gemini-3.1-pro-preview' },
+  // Cerebras hosts a small, uniformly cheap catalog; its flagship's rates are a
+  // far better estimate for an unrecognized id (e.g. a preview model picked up
+  // by "Refresh models") than the generic $3/$15 fallback.
+  { test: /cerebras/i, rateModel: 'gpt-oss-120b' },
 ];
 
 // Legacy blended estimate (the old flat usage.js rate) — the last resort for a

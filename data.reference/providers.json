@@ -248,6 +248,23 @@
       "enabled": false,
       "envVars": {}
     },
+    "cerebras": {
+      "id": "cerebras",
+      "name": "Cerebras",
+      "type": "api",
+      "endpoint": "https://api.cerebras.ai/v1",
+      "apiKey": "",
+      "models": ["gpt-oss-120b"],
+      "defaultModel": "gpt-oss-120b",
+      "lightModel": "gpt-oss-120b",
+      "mediumModel": "gpt-oss-120b",
+      "heavyModel": "gpt-oss-120b",
+      "fallbackProvider": null,
+      "timeout": 300000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": []
+    },
     "grok": {
       "id": "grok",
       "name": "xAI Grok",

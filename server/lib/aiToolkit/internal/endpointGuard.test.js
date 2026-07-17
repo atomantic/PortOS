@@ -119,6 +119,9 @@ describe('endpointGuard — assertSecretEndpoint', () => {
   it('does not throw for an allowlisted host with a secret', () => {
     expect(() => assertSecretEndpoint('https://api.openai.com/v1', { hasSecret: true })).not.toThrow();
   });
+  it('does not throw for the Cerebras host with a secret', () => {
+    expect(() => assertSecretEndpoint('https://api.cerebras.ai/v1', { hasSecret: true })).not.toThrow();
+  });
   it('does not throw for loopback with a secret', () => {
     expect(() => assertSecretEndpoint('http://127.0.0.1:1234/v1', { hasSecret: true })).not.toThrow();
   });
