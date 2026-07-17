@@ -392,6 +392,26 @@ describe('processTaskOutput', () => {
     expect(out).toMatchObject({ action: 'no-op', reason: 'unparseable-response' });
   });
 
+  it('records unparseable-response when the payload parsed but is not a reasoner envelope (#2727)', async () => {
+    // A bare string/number/array is JSON that parsed but says nothing. It used to
+    // land on `no-proposal` — the SAME reason a well-formed "nothing to propose"
+    // response gets — so garbage was indistinguishable from a correct empty answer
+    // and got recorded as a successful run.
+    li.validateReasonerResponse.mockReturnValue({ proposal: null, pause: null });
+    for (const payload of ['just some prose', 42, ['a', 'b'], true]) {
+      const out = await processTaskOutput({ appId: 'app-1', success: true, payload });
+      expect(out).toMatchObject({ action: 'no-op', reason: 'unparseable-response' });
+    }
+  });
+
+  it('still records no-proposal for a well-formed envelope that proposes nothing (#2727)', async () => {
+    // The other side of the sentinel: the reasoner answered correctly and simply
+    // had nothing to file. That is a successful run, not malformed output.
+    li.validateReasonerResponse.mockReturnValue({ proposal: null, pause: null });
+    const out = await processTaskOutput({ appId: 'app-1', success: true, payload: { analysis: 'nothing worth proposing', proposal: null } });
+    expect(out).toMatchObject({ action: 'no-op', reason: 'no-proposal' });
+  });
+
   it('files a fresh, in-scope proposal and records the ref', async () => {
     li.validateReasonerResponse.mockReturnValue({
       proposal: { scope: 'app-improvement', slug: 'add-telemetry', title: 'Add telemetry', body: 'do it' },

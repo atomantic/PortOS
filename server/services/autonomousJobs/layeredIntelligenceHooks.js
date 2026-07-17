@@ -460,9 +460,16 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
 
   // The payload IS the reasoner's JSON object (parsed from the sentinel). A null/
   // malformed payload is the "returned nothing usable" case.
-  const { proposal, pause } = validateReasonerResponse(
-    payload && typeof payload === 'object' ? payload : null
-  )
+  //
+  // Sentinel discipline (#2727): resolve the usable ENVELOPE once and key both the
+  // validation and the `reason` below off it. A payload that parsed as JSON but
+  // isn't a reasoner envelope at all (a bare string, a number, an array) used to
+  // reach `reason = 'no-proposal'` — the same reason a well-formed response that
+  // legitimately proposes nothing gets — so "the agent emitted garbage" was
+  // indistinguishable from "the agent correctly had nothing to propose", and the
+  // former was recorded as a successful run.
+  const envelope = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : null
+  const { proposal, pause } = validateReasonerResponse(envelope)
 
   // Re-read issues NOW (not at gather time) so dedup sees the freshest tracker
   // state — the agent may have run for minutes.
@@ -471,7 +478,7 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
   let filedNumber = null
   let filedKey = null
   let filedAction = 'no-op'
-  let reason = payload == null ? 'unparseable-response' : 'no-proposal'
+  let reason = envelope == null ? 'unparseable-response' : 'no-proposal'
   let handedOff = false
 
   if (proposal) {
