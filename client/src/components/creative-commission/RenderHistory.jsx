@@ -28,7 +28,7 @@ const STATUS_CLASS = {
   failed: 'text-port-error',
 };
 
-export default function RenderHistory({ runs, feedback, projectsById, onRate }) {
+export default function RenderHistory({ runs, feedback, projectsById, projectsLoading, onRate }) {
   // Newest-first, memoized so the copy+reverse doesn't run on every render.
   const orderedRuns = useMemo(() => [...(runs || [])].reverse(), [runs]);
   // Latest reaction per run (last write wins), so the run reflects its most
@@ -62,10 +62,12 @@ export default function RenderHistory({ runs, feedback, projectsById, onRate }) 
               <ProjectPreview project={project} to={`/creative-director/${encodeURIComponent(r.projectId)}`} />
             ) : (
               // `project` is null in this branch, so the placeholder falls back to
-              // the default 16:9 box — a status-only card for a pruned/missing render.
+              // the default 16:9 box. Distinguish the transient load window (project
+              // list still fetching) from a genuinely pruned/missing render — a real
+              // render must not flash "unavailable" before the fetch resolves.
               <div className={`${previewAspectClass()} bg-port-bg flex flex-col items-center justify-center gap-1 text-gray-600 text-xs`}>
                 <Film className="w-4 h-4 opacity-50" aria-hidden="true" />
-                <span>{r.projectId ? 'render unavailable' : 'no render'}</span>
+                <span>{r.projectId ? (projectsLoading ? 'loading…' : 'render unavailable') : 'no render'}</span>
               </div>
             )}
 
@@ -92,10 +94,19 @@ export default function RenderHistory({ runs, feedback, projectsById, onRate }) 
                 </Link>
               )}
 
-              {/* Rate/annotate — pushed to the bottom of the card so cards align. */}
+              {/* Rate/annotate — pushed to the bottom of the card so cards align.
+                  Keyed on the persisted reaction's timestamp so an externally-changed
+                  note (a federated rating from another machine, arriving via a refetch)
+                  remounts the control and re-seeds its local note, instead of leaving a
+                  stale empty field that a Save could clobber the peer's note with. */}
               {r.projectId && onRate && (
                 <div className="mt-auto pt-1">
-                  <RunFeedback runId={r.id} current={feedbackByRun[r.id]} onRate={onRate} />
+                  <RunFeedback
+                    key={feedbackByRun[r.id]?.at || 'unrated'}
+                    runId={r.id}
+                    current={feedbackByRun[r.id]}
+                    onRate={onRate}
+                  />
                 </div>
               )}
             </div>

@@ -40,6 +40,7 @@ export default function CreativeCommissionDetail() {
   const [saving, setSaving] = useState(false);
   const [running, setRunning] = useState(false);
   const [projectsById, setProjectsById] = useState(() => new Map());
+  const [projectsLoading, setProjectsLoading] = useState(false);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   // Load (and refresh) the deep-linked commission. `location.key` is a dep so a
@@ -81,9 +82,10 @@ export default function CreativeCommissionDetail() {
   }, [commission]);
 
   useEffect(() => {
-    if (!projectIdsKey) { setProjectsById(new Map()); return; }
+    if (!projectIdsKey) { setProjectsById(new Map()); setProjectsLoading(false); return; }
     const wanted = new Set(projectIdsKey.split(','));
     let cancelled = false;
+    setProjectsLoading(true);
     listCreativeDirectorProjects()
       .then((projects) => {
         if (cancelled) return;
@@ -93,7 +95,8 @@ export default function CreativeCommissionDetail() {
         }
         setProjectsById(map);
       })
-      .catch(() => { /* status-only cards degrade gracefully */ });
+      .catch(() => { /* status-only cards degrade gracefully */ })
+      .finally(() => { if (!cancelled) setProjectsLoading(false); });
     return () => { cancelled = true; };
   }, [projectIdsKey]);
 
@@ -148,7 +151,7 @@ export default function CreativeCommissionDetail() {
         const fresh = result.commission;
         setCommission((prev) => (prev ? { ...prev, runs: fresh.runs, feedback: fresh.feedback } : fresh));
       }
-      if (result?.status === 'started') toast.success('Run started — the render will appear below');
+      if (result?.status === 'started') toast.success('Run started — its render appears below once generation finishes (reload to refresh)');
       else if (result?.status === 'skipped') toast.error(`Run skipped: ${result.reason}`);
       else toast.error(`Run failed: ${result?.error || 'unknown error'}`);
     } catch (e) {
@@ -263,6 +266,7 @@ export default function CreativeCommissionDetail() {
           runs={commission.runs}
           feedback={commission.feedback}
           projectsById={projectsById}
+          projectsLoading={projectsLoading}
           onRate={handleRate}
         />
       </section>
