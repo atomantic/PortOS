@@ -287,6 +287,26 @@ describe('reconcileOutcomes', () => {
       expect((await rowsBySlug())['mystery'].rejectionReason).toBe('duplicate');
     });
 
+    it('clears a stale rejection reason when a proposal is reopened and then merged', async () => {
+      // rejected → reopened → closed completed. The write side must drop the old
+      // diagnosis, not just rely on the sanitizer stripping it on read.
+      await recordFiledProposal({ appId: 'app-1', slug: 'revived' }, store);
+      await reconcileOutcomes({
+        appId: 'app-1',
+        existingIssues: [{ slug: 'revived', state: 'closed', stateReason: 'not_planned', closedAt: '2026-07-01T00:00:00Z' }]
+      }, store);
+      expect((await rowsBySlug())['revived'].rejectionReason).toBe('user-rejected');
+
+      const updated = await reconcileOutcomes({
+        appId: 'app-1',
+        existingIssues: [{ slug: 'revived', state: 'closed', stateReason: 'completed', closedAt: '2026-07-09T00:00:00Z' }]
+      }, store);
+      expect(updated).toBe(1);
+      const row = (await rowsBySlug())['revived'];
+      expect(row.outcome).toBe('merged');
+      expect(row.rejectionReason).toBeNull();
+    });
+
     it('does not churn a settled record whose classification is unchanged', async () => {
       await recordFiledProposal({ appId: 'app-1', slug: 's' }, store);
       const issue = { slug: 's', state: 'closed', stateReason: 'not_planned', closedAt: '2026-07-01T00:00:00Z' };

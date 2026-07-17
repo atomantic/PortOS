@@ -31,6 +31,14 @@ describe('rejection taxonomy', () => {
     }
     expect(formatRejectionReason('some-future-token')).toBe('some-future-token');
   });
+
+  it('renders a nullish (unclassified) input as empty, NOT as the unknown sentinel', () => {
+    // Mapping "not classified" onto "classified, found nothing" would invert the
+    // module's central rule at its most-reused helper.
+    expect(formatRejectionReason(null)).toBe('');
+    expect(formatRejectionReason(undefined)).toBe('');
+    expect(formatRejectionReason('')).toBe('');
+  });
 });
 
 describe('classifyRejection', () => {
@@ -103,20 +111,22 @@ describe('classifyRejection', () => {
 });
 
 describe('summarizeRejectionReasons', () => {
-  it('counts diagnoses and the unknown gap separately', () => {
-    const { entries, unknown, diagnosed, total } = summarizeRejectionReasons([
+  it('counts diagnoses, the unknown gap, and the unclassified gap separately', () => {
+    const { entries, unknown, unclassified, diagnosed, total } = summarizeRejectionReasons([
       rejected('duplicate'),
       rejected('duplicate'),
       rejected('user-rejected'),
-      rejected(UNKNOWN_REJECTION_REASON)
+      rejected(UNKNOWN_REJECTION_REASON),
+      rejected(null)
     ]);
     expect(entries).toEqual([
       { reason: 'duplicate', count: 2 },
       { reason: 'user-rejected', count: 1 }
     ]);
     expect(unknown).toBe(1);
+    expect(unclassified).toBe(1);
     expect(diagnosed).toBe(3);
-    expect(total).toBe(4);
+    expect(total).toBe(5);
   });
 
   it('keeps the unknown sentinel out of entries so it cannot crowd out real diagnoses', () => {
@@ -139,20 +149,25 @@ describe('summarizeRejectionReasons', () => {
     expect(unknown).toBe(0);
   });
 
-  it('counts an unclassified (pre-taxonomy) record in NEITHER bucket', () => {
-    // Reading a null as `unknown` would overstate the very data gap this measures.
-    const { total, unknown, diagnosed } = summarizeRejectionReasons([
+  it('counts a pre-taxonomy record as unclassified, never as unknown', () => {
+    // Reading a null as `unknown` would claim we looked and found nothing, when in
+    // fact we never looked — overstating the measured gap and hiding the real one.
+    const { total, unknown, unclassified, diagnosed } = summarizeRejectionReasons([
       { outcome: 'rejected', rejectionReason: null },
       { outcome: 'rejected', rejectionReason: 'duplicate' }
     ]);
     expect(diagnosed).toBe(1);
     expect(unknown).toBe(0);
-    expect(total).toBe(1);
+    expect(unclassified).toBe(1);
+    // The population is every non-merged resolved proposal, diagnosed or not.
+    expect(total).toBe(2);
   });
 
-  it('drops an unrecognized stored token rather than counting it', () => {
-    const { total } = summarizeRejectionReasons([rejected('not-a-real-token')]);
-    expect(total).toBe(0);
+  it('counts an unrecognized stored token as unclassified, not as a diagnosis', () => {
+    const { total, unclassified, diagnosed } = summarizeRejectionReasons([rejected('not-a-real-token')]);
+    expect(diagnosed).toBe(0);
+    expect(unclassified).toBe(1);
+    expect(total).toBe(1);
   });
 
   it('orders ties by taxonomy order so output does not depend on record order', () => {
@@ -169,10 +184,18 @@ describe('summarizeRejectionReasons', () => {
 });
 
 describe('formatRejectionReasons', () => {
-  it('returns empty when nothing is classified, so the caller omits the line', () => {
-    // '' must not become "reasons: none", which reads as "nothing was rejected".
+  it('returns empty ONLY when nothing was closed unmerged', () => {
     expect(formatRejectionReasons([])).toBe('');
     expect(formatRejectionReasons([{ outcome: 'merged', rejectionReason: null }])).toBe('');
+    expect(formatRejectionReasons([{ outcome: null, rejectionReason: null }])).toBe('');
+  });
+
+  it('never falls silent on a rejection it simply has not classified yet', () => {
+    // The caller reads '' as "nothing to explain" and prints "nothing has been
+    // closed unmerged yet". Returning '' here would contradict the "Rejected: 2"
+    // line printed directly above it.
+    const out = formatRejectionReasons([rejected(null), { outcome: 'abandoned', rejectionReason: null }]);
+    expect(out).toBe('2 of 2 not yet classified');
   });
 
   it('renders glossed diagnoses with counts, commonest first', () => {
@@ -208,5 +231,18 @@ describe('formatRejectionReasons', () => {
     expect(out).toContain('already tracked elsewhere (duplicate) (1)');
     expect(out).toContain('1 of 5 closed with no recorded reason');
     expect(out).not.toContain('quality');
+  });
+
+  it('reports the measured and unmeasured gaps as separate facts', () => {
+    // "we looked and found nothing" and "we never looked" have different remedies,
+    // so the line must not merge them into one number.
+    const out = formatRejectionReasons([
+      rejected('duplicate'),
+      rejected(UNKNOWN_REJECTION_REASON),
+      rejected(null)
+    ]);
+    expect(out).toBe(
+      'already tracked elsewhere (duplicate) (1) — 1 of 3 closed with no recorded reason — 1 of 3 not yet classified'
+    );
   });
 });

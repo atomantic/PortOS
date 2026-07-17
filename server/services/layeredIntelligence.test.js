@@ -622,12 +622,27 @@ describe('computeOutcomesReport', () => {
     expect(report).toContain('Why non-merged proposals were closed: nothing has been closed unmerged yet');
   });
 
+  it('never claims nothing was closed unmerged while reporting rejections (#2689)', () => {
+    // A resolved record that reconcile has not classified yet (a pre-taxonomy
+    // install, or an issue that fell out of the tracker read) must not make the
+    // report contradict its own "Rejected: 2" line two rows above.
+    const report = computeOutcomesReport({
+      outcomes: [
+        { scope: 'app-improvement', outcome: 'rejected' },
+        { scope: 'app-improvement', outcome: 'abandoned' }
+      ]
+    });
+    expect(report).toContain('Rejected: 1 (50%)');
+    expect(report).not.toContain('nothing has been closed unmerged yet');
+    expect(report).toContain('Why non-merged proposals were closed: 2 of 2 not yet classified');
+  });
+
   it('reports abandoned distinctly and excludes it from the merged numerator (#2620)', () => {
     const outcomes = [
       { scope: 'app-improvement', outcome: 'merged' },
       { scope: 'app-improvement', outcome: 'abandoned' },
       { scope: 'app-improvement', outcome: 'abandoned' },
-      { scope: 'app-improvement', outcome: 'rejected', outcomeReason: 'dup' }
+      { scope: 'app-improvement', outcome: 'rejected', rejectionReason: 'duplicate' }
     ];
     const report = computeOutcomesReport({ outcomes });
     expect(report).toContain('Abandoned: 2 (50%)');
@@ -842,7 +857,7 @@ describe('computeSelfEvalSummary (#2700)', () => {
   it('rates a well-measured 0% merge rate as HIGH confidence in a bad result, not low', () => {
     // Confidence rates the EVIDENCE, not the news. A loop with solid evidence that
     // it is failing should act decisively, not hedge as if it were flying blind.
-    const outcomes = Array.from({ length: 8 }, () => ({ outcome: 'rejected', outcomeReason: 'NOT_PLANNED' }));
+    const outcomes = Array.from({ length: 8 }, () => ({ outcome: 'rejected', rejectionReason: 'user-rejected' }));
     const report = computeSelfEvalSummary({
       outcomes,
       existingIssues: [{ slug: 'a', state: 'open' }],
