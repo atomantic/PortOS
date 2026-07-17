@@ -202,7 +202,7 @@ export default function AlcoholTab() {
     if (error) { toast.error(error); return; }
     const parsedOz = Math.round(toOz(parseFloat(buttonForm.oz), buttonVolumeUnit) * 100) / 100;
     const parsedAbv = parseFloat(buttonForm.abv);
-    const result = await api.addCustomDrink({ name: buttonForm.name, oz: parsedOz, abv: parsedAbv }).catch(() => null);
+    const result = await api.addCustomDrink({ name: buttonForm.name, oz: parsedOz, abv: parsedAbv }, { silent: true }).catch(() => null);
     if (!result) { toast.error('Failed to add drink button'); return; }
     setButtonForm({ name: '', oz: '', abv: '' });
     setButtonVolumeUnit('oz');
@@ -222,7 +222,7 @@ export default function AlcoholTab() {
     if (error) { toast.error(error); return; }
     const parsedOz = Math.round(toOz(parseFloat(buttonForm.oz), buttonVolumeUnit) * 100) / 100;
     const parsedAbv = parseFloat(buttonForm.abv);
-    const result = await api.updateCustomDrink(editingButtonIdx, { name: buttonForm.name, oz: parsedOz, abv: parsedAbv }).catch(() => null);
+    const result = await api.updateCustomDrink(editingButtonIdx, { name: buttonForm.name, oz: parsedOz, abv: parsedAbv }, { silent: true }).catch(() => null);
     if (!result) { toast.error('Failed to update drink button'); return; }
     setEditingButtonIdx(null);
     setButtonForm({ name: '', oz: '', abv: '' });
