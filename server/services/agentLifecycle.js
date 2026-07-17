@@ -21,7 +21,7 @@ import { createToolExecution, startExecution, completeExecution, errorExecution 
 import { determineLane, acquire, release } from './executionLanes.js';
 import { analyzeAgentFailure, resolveFailedTaskUpdate, resolveTypeFailureSignal } from './agentErrorAnalysis.js';
 import { createAgentRun, completeAgentRun, checkForTaskCommit } from './agentRunTracking.js';
-import { isProgrammaticIoTaskType } from './taskTypeHooks.js';
+import { isProgrammaticIoTaskType, resolveTaskHookType } from './taskTypeHooks.js';
 import { buildAgentPrompt, getAppWorkspace } from './agentPromptBuilder.js';
 import { isOllamaClaudeProvider, isClaudeCommand, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
@@ -839,7 +839,7 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
   // Judging them purely by exit code instead is also wrong: an exit-0 run whose
   // `.agent-done` sentinel was missing/malformed, or whose hook threw, produced
   // nothing usable and must be recorded as the failure it is (#2727).
-  if (isProgrammaticIoTaskType(task?.metadata?.analysisType)) {
+  if (isProgrammaticIoTaskType(resolveTaskHookType(task))) {
     return resolveProgrammaticIoVerdict({ success, hookResult });
   }
   // Interactive/user tasks declare no machine-checkable criterion; neither does
@@ -856,27 +856,75 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
 }
 
 /**
- * The programmatic-I/O success criterion (#2727): "the sentinel parsed and the
- * output hook accepted it". Pure.
+ * The programmatic-I/O success criterion (#2727): "the agent's structured output
+ * parsed and the output hook accepted it". Pure.
+ *
+ * The question this answers is about the AGENT'S OUTPUT, not about whether the
+ * hook's downstream side effect ultimately landed. So a hook that accepted the
+ * payload and then couldn't reach the tracker (`file-failed`, `tracker-read-failed`)
+ * is NOT a failure of the run: the reasoning was sound and delivered, and a forge
+ * outage is environmental. Blaming the run would tank the type's measured success
+ * rate — and, through the shared classification below, auto-park the whole task
+ * type — every time `gh` has a bad afternoon. Deliberate, not inherited: raised in
+ * review on #2727 and kept.
  *
  * Delegates the accept/reject classification to `resolveTypeFailureSignal`, the
  * same pure decision the #2616 type-level failure ledger uses — so the learning
- * verdict and the ledger can never drift apart on what counts as a bad run
- * (thrown hook, `unparseable-response`), and a new benign reason only has to be
- * taught to one function.
+ * verdict and the ledger can never drift apart on what counts as a bad run, and a
+ * new benign reason only has to be taught to one function.
  *
- * Sentinel discipline: a hook that never ran (type registers no
- * `processTaskOutput`, or no task type resolved) yields NO verdict — null, not
- * `true`. "Nothing evaluated the output" must not collapse into "the output was
- * accepted"; null lets task-learning fall back to the exit code as before.
+ * Sentinel discipline throughout — three distinct answers, never collapsed:
+ *   - `false` — the hook ran and REJECTED the output (threw, or `unparseable-response`).
+ *   - `null`  — NOTHING evaluated the output (no hook ran, it timed out, or it
+ *     returned no structured outcome), so no criterion was declared and
+ *     task-learning falls back to the exit code exactly as before. "Not evaluated"
+ *     must never become "accepted".
+ *   - `true`  — the hook ran and accepted the output.
  *
  * @returns {boolean|null} true = accepted, false = rejected, null = undeclared
  */
 export function resolveProgrammaticIoVerdict({ success, hookResult }) {
+  // An absent/non-boolean exit-code verdict can't be weighed against anything.
+  if (typeof success !== 'boolean') return null;
   if (!hookResult?.ran) return null;
-  const signal = resolveTypeFailureSignal({ success, hookResult });
-  if (signal.record === 'skip') return null;
-  return signal.record === 'success';
+  // A thrown hook rejected the output — it carries no outcome, so classify it
+  // before the outcome-shape guard below.
+  if (hookResult.threw) return false;
+  // Ran, but handed back no structured outcome to read: nothing evaluated the
+  // output, so declare no verdict rather than defaulting to "accepted".
+  if (!hookResult.outcome || typeof hookResult.outcome !== 'object') return null;
+  return resolveTypeFailureSignal({ success, hookResult }).record === 'success';
+}
+
+/**
+ * Hard bound on output-hook dispatch (#2727). The hook is only awaited BEFORE
+ * `completeAgent` so its verdict can be recorded — but `status: 'running'` is what
+ * the CoS concurrency gate counts (`cos.js`, default 3 slots), and that flips in
+ * completeAgent. So an un-bounded hook (it shells out to `gh`/`glab` and can walk
+ * up to 50 embeddings for semantic dedup) would hold a slot for its whole
+ * duration, and a HUNG one would hold it until restart — with the task stuck
+ * `in_progress` and the orphan reaper protecting the zombie rather than reaping
+ * it, because it too filters on `status === 'running'`.
+ *
+ * A timeout resolves to the "no verdict" sentinel, NOT a rejection: a hook we
+ * stopped waiting for told us nothing about the agent's output, so finalize
+ * proceeds and task-learning falls back to the exit code (the pre-#2727
+ * behavior). Generous by design — this is a hang backstop, not a latency budget;
+ * a slow-but-honest hook should still get to return its real verdict.
+ */
+const OUTPUT_HOOK_TIMEOUT_MS = 5 * 60_000;
+
+function withOutputHookTimeout(promise, { agentId, timeoutMs = OUTPUT_HOOK_TIMEOUT_MS }) {
+  let timer;
+  const timeout = new Promise(resolve => {
+    timer = setTimeout(() => {
+      emitLog('error', `⏱️ processTaskOutput hook timed out after ${timeoutMs}ms for ${agentId} — finalizing with no verdict`, { agentId });
+      resolve({ ran: false, timedOut: true });
+    }, timeoutMs);
+    // Never let the backstop itself hold the event loop open.
+    timer.unref?.();
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 /**
@@ -940,11 +988,17 @@ export async function finalizeAgent({
   // (isProgrammaticIoTaskType), so nothing else is reordered. The lane is already
   // released by this point (releaseAgentLane fires earlier, in the spawn paths),
   // and `agent:completed` — which schedules the next dequeue — still fires from
-  // completeAgent below, i.e. AFTER any handoff task the hook enqueues.
-  const hookResult = await dispatchTaskOutputHook({ agentId, task, success, workspacePath }).catch(err => {
-    emitLog('error', `processTaskOutput hook threw for ${agentId} (${task?.taskType}): ${err.message}`, { agentId, error: err.message });
+  // completeAgent below, i.e. AFTER any handoff task the hook enqueues. The cost
+  // of awaiting here is that the agent still counts against the CoS concurrency
+  // gate for the hook's duration, so the dispatch is hard-bounded — see
+  // withOutputHookTimeout.
+  const hookResult = await withOutputHookTimeout(
+    dispatchTaskOutputHook({ agentId, task, success, workspacePath }),
+    { agentId }
+  ).catch(err => {
+    emitLog('error', `❌ processTaskOutput hook threw for ${agentId} (${task?.taskType}): ${err.message}`, { agentId, error: err.message });
     // A thrown hook is a non-success signal for the type ledger (#2616) and a
-    // failed success criterion for task-learning (#2727).
+    // rejected success criterion for task-learning (#2727).
     return { ran: true, threw: true };
   });
 
@@ -1040,10 +1094,9 @@ export async function finalizeAgent({
  * loads its own app/config — finalizeAgent stays domain-agnostic.
  */
 async function dispatchTaskOutputHook({ agentId, task, success, workspacePath }) {
-  // The scheduled task type lives in metadata.analysisType (the top-level
-  // task.taskType is the CoS queue category, e.g. 'internal'). A programmatic-I/O
-  // hook is keyed on the scheduled type.
-  const taskType = task?.metadata?.analysisType || task?.taskType;
+  // Shared resolver with evaluateSuccessCriteria's gate — "runs a hook" and "gets
+  // the programmatic-I/O criterion" must stay the same question (#2727).
+  const taskType = resolveTaskHookType(task);
   if (!taskType) return { ran: false };
   const { getTaskOutputHook } = await import('./taskTypeHooks.js');
   const hook = await getTaskOutputHook(taskType);

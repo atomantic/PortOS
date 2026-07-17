@@ -15,7 +15,7 @@ vi.mock('./agentRunTracking.js', () => ({
   completeAgentRun: vi.fn(),
 }));
 
-import { evaluateSuccessCriteria } from './agentLifecycle.js';
+import { evaluateSuccessCriteria, resolveProgrammaticIoVerdict } from './agentLifecycle.js';
 import { checkForTaskCommit } from './agentRunTracking.js';
 
 describe('evaluateSuccessCriteria (#2344)', () => {
@@ -122,6 +122,70 @@ describe('evaluateSuccessCriteria — programmatic-I/O criterion (#2727)', () =>
     expect(await evaluateSuccessCriteria({
       task: liTask, success: true, hookResult: { ran: true, threw: true }
     })).toBe(false);
+  });
+
+  it('applies the criterion to a task typed on taskType alone, not just metadata.analysisType', async () => {
+    // The criterion gate and the hook-dispatch gate share one resolver
+    // (resolveTaskHookType), so a task shaped with the scheduled type at the top
+    // level can't run a hook AND still get commit-checked (the #2700 bug, one shape
+    // over).
+    const task = { id: 't9', taskType: 'layered-intelligence' };
+    expect(await evaluateSuccessCriteria({
+      task, workspacePath: '/w', success: true, hookResult: { ran: true, threw: true }
+    })).toBe(false);
+    expect(checkForTaskCommit).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * `resolveProgrammaticIoVerdict` is the pure criterion behind the branch above.
+ * Tested directly so the three-way sentinel (accepted / rejected / undeclared) is
+ * pinned without routing every case through evaluateSuccessCriteria.
+ */
+describe('resolveProgrammaticIoVerdict (#2727)', () => {
+  it('rejects a run whose hook threw, and one whose output was unparseable', () => {
+    expect(resolveProgrammaticIoVerdict({ success: true, hookResult: { ran: true, threw: true } })).toBe(false);
+    expect(resolveProgrammaticIoVerdict({
+      success: true, hookResult: { ran: true, outcome: { reason: 'unparseable-response' } }
+    })).toBe(false);
+  });
+
+  it('accepts a run whose hook processed the output', () => {
+    expect(resolveProgrammaticIoVerdict({
+      success: true, hookResult: { ran: true, outcome: { action: 'filed', reason: null } }
+    })).toBe(true);
+  });
+
+  it('declares no verdict when nothing evaluated the output', () => {
+    // No hook ran / no hook result at all / the dispatch timed out — none of these
+    // are a rejection, so task-learning falls back to the exit code.
+    expect(resolveProgrammaticIoVerdict({ success: true, hookResult: { ran: false } })).toBeNull();
+    expect(resolveProgrammaticIoVerdict({ success: true, hookResult: null })).toBeNull();
+    expect(resolveProgrammaticIoVerdict({ success: true, hookResult: { ran: false, timedOut: true } })).toBeNull();
+  });
+
+  it('declares no verdict when the hook ran but handed back no structured outcome', () => {
+    // `ran: true` with a missing/non-object outcome must NOT optional-chain its way
+    // into the success default — nothing evaluated the output.
+    expect(resolveProgrammaticIoVerdict({ success: true, hookResult: { ran: true } })).toBeNull();
+    expect(resolveProgrammaticIoVerdict({ success: true, hookResult: { ran: true, outcome: undefined } })).toBeNull();
+    expect(resolveProgrammaticIoVerdict({ success: true, hookResult: { ran: true, outcome: 'nope' } })).toBeNull();
+  });
+
+  it('declares no verdict when the exit-code result is absent/non-boolean', () => {
+    // "Not supplied" must not silently mean "the run failed".
+    expect(resolveProgrammaticIoVerdict({ hookResult: { ran: true, outcome: { reason: null } } })).toBeNull();
+    expect(resolveProgrammaticIoVerdict({ success: undefined, hookResult: { ran: true, outcome: { reason: null } } })).toBeNull();
+  });
+
+  it('treats a downstream tracker failure as a SUCCESS — the output was accepted', () => {
+    // `file-failed` / `tracker-read-failed` mean the reasoning landed but the forge
+    // was unreachable. That is environmental: blaming the run would tank the type's
+    // success rate (and auto-park it) every time `gh` has a bad afternoon. Raised in
+    // review on #2727 and deliberately kept.
+    for (const reason of ['file-failed', 'tracker-read-failed']) {
+      expect(resolveProgrammaticIoVerdict({ success: true, hookResult: { ran: true, outcome: { reason } } })).toBe(true);
+    }
   });
 
   it('still applies the commit criterion to a NON-programmatic self-improvement task', async () => {
