@@ -31,32 +31,35 @@ import { listVideoHistory } from '../services/apiImageVideo.js';
  * so a card resolves only once the user actually presses play.
  */
 export function useVideoFileSrc(jobId, { enabled = true } = {}) {
-  const [src, setSrc] = useState(null);
-  const [resolving, setResolving] = useState(false);
+  // Keyed by the id it was resolved FOR, so `resolving` can be derived
+  // synchronously rather than set from an effect. An effect-set flag would
+  // still be false for the first render after `enabled` flips true (effects run
+  // after commit) — long enough for a caller gating autoplay to mount a player
+  // against the unresolved fallback path, fire a doomed request, and flash
+  // "media missing" before the real src lands.
+  const [resolved, setResolved] = useState({ jobId: null, src: null });
+  const active = Boolean(enabled && jobId);
+  const settled = resolved.jobId === jobId;
+  const resolving = active && !settled;
 
   useEffect(() => {
-    setSrc(null);
-    if (!enabled || !jobId) {
-      setResolving(false);
-      return undefined;
-    }
-    setResolving(true);
+    if (!active || settled) return undefined;
     let cancelled = false;
     // Silent: a failed lookup is not a user-facing error — ScenePreview's
     // reconstruction fallback (and its own missing-media UI) covers it, so a
     // toast here would be noise on a page that already degrades gracefully.
+    // Both paths settle on THIS jobId so `resolving` can never latch on.
     listVideoHistory({ silent: true })
       .then((entries) => {
         if (cancelled) return;
         const list = Array.isArray(entries) ? entries : [];
         const entry = list.find((e) => e?.id === jobId);
         const filename = typeof entry?.filename === 'string' ? entry.filename.trim() : '';
-        if (filename) setSrc(`/data/videos/${filename}`);
+        setResolved({ jobId, src: filename ? `/data/videos/${filename}` : null });
       })
-      .catch(() => {})
-      .finally(() => { if (!cancelled) setResolving(false); });
+      .catch(() => { if (!cancelled) setResolved({ jobId, src: null }); });
     return () => { cancelled = true; };
-  }, [jobId, enabled]);
+  }, [jobId, active, settled]);
 
-  return { src, resolving };
+  return { src: settled ? resolved.src : null, resolving };
 }
