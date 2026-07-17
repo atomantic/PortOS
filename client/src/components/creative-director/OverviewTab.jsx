@@ -178,10 +178,14 @@ export default function OverviewTab({ project, onProjectUpdate, onAsyncWorkQueue
   // that carries a `jobId`, so that's the discriminator (pinned by a test).
   const inlineImage = !project.finalVideoId && preview.kind === 'image' && preview.jobId ? preview : null;
   // The id→file mismatch: a stitched final is `timeline-*.mp4` behind a UUID.
-  // The idle player is `preload="none"`, so a late resolve can't be raced here.
-  const { src: finalVideoSrc, retry: retryFinalVideo } = useVideoFileSrc(project.finalVideoId, {
-    enabled: Boolean(project.finalVideoId),
-  });
+  // `preload="none"` stops the browser fetching during the lookup, but it does
+  // NOT stop the USER: mounting early would expose the unresolved guess to both
+  // the play control and ScenePreview's open-in-new-tab link, so a click inside
+  // the window 404s. Hold the frame until it settles, as the card does.
+  const { src: finalVideoSrc, resolving: finalVideoResolving, retry: retryFinalVideo } = useVideoFileSrc(
+    project.finalVideoId,
+    { enabled: Boolean(project.finalVideoId) },
+  );
 
   return (
     <div className="space-y-4 max-w-3xl">
@@ -192,7 +196,9 @@ export default function OverviewTab({ project, onProjectUpdate, onAsyncWorkQueue
           </h2>
           <div className={`${aspectClass} ${maxWidthClass} w-full mx-auto rounded overflow-hidden bg-port-bg`}>
             {project.finalVideoId
-              ? <ScenePreview jobId={project.finalVideoId} src={finalVideoSrc} onRetry={retryFinalVideo} label="Final video" aspectClass={aspectClass} />
+              ? (finalVideoResolving
+                ? <div className="w-full h-full flex items-center justify-center text-port-text-muted text-xs">loading…</div>
+                : <ScenePreview jobId={project.finalVideoId} src={finalVideoSrc} onRetry={retryFinalVideo} label="Final video" aspectClass={aspectClass} />)
               : (
                 <MediaImage
                   src={inlineImage.src}

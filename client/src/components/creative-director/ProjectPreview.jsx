@@ -25,19 +25,16 @@ import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
  */
 export default function ProjectPreview({ project, to }) {
   const [playing, setPlaying] = useState(false);
-  const [posterMissing, setPosterMissing] = useState(false);
   const preview = selectProjectPreview(project);
   const aspectClass = previewAspectClass(project?.aspectRatio);
 
   // The card keeps its identity across list updates (the grid keys on project
   // id, and start/pause patch a project in place), so this instance outlives a
   // change of preview target — e.g. a scene render lands, or the stitch
-  // promotes a finalVideoId. Reset the per-asset state when the target moves,
-  // or a 404 recorded against the OLD poster would pin the placeholder on the
-  // new one, and a card left playing would keep showing the previous render.
-  // Mirrors ScenePreview's own `jobId` reset effect.
+  // promotes a finalVideoId. Drop back to the poster when the target moves, or
+  // a card left playing would keep showing the previous render. (MediaImage and
+  // ScenePreview each own the reset of their own load state.)
   useEffect(() => {
-    setPosterMissing(false);
     setPlaying(false);
   }, [preview.jobId, preview.src]);
 
@@ -81,25 +78,28 @@ export default function ProjectPreview({ project, to }) {
             className="w-full h-full object-cover"
           />
         )}
-        {preview.kind === 'video' && !posterMissing && (
-          <img
+        {preview.kind === 'video' && (
+          // Every render path writes a `<jobId>.jpg` thumbnail (clips via
+          // videoGen, stitched finals via the timeline renderer), so a failure
+          // here means the poster isn't loadable right now — a pruned history
+          // entry, or a federated project whose bytes haven't been pulled yet.
+          // MediaImage is the right tool for exactly that: it degrades to a
+          // placeholder instead of a broken-image icon AND auto-recovers on
+          // `peerSync:asset-arrived`, which a bare <img onError> can't do (it
+          // would strand the card on the placeholder until a remount). The play
+          // affordance stays regardless — the mp4 can be fine when its poster
+          // isn't.
+          <MediaImage
             src={preview.poster}
             alt={`${preview.label} — ${project?.name || 'project'}`}
             loading="lazy"
-            // Every render path DOES write a `<jobId>.jpg` thumbnail — clips via
-            // videoGen, stitched finals via the timeline renderer — so a 404 here
-            // means the poster was deleted out from under us (history prune), not
-            // that this project type lacks one. Degrade to the placeholder rather
-            // than a broken-image icon; the play affordance stays either way,
-            // since the mp4 can be fine even when its poster isn't.
-            onError={() => setPosterMissing(true)}
             className="w-full h-full object-cover"
           />
         )}
-        {(preview.kind === 'none' || (preview.kind === 'video' && posterMissing)) && (
+        {preview.kind === 'none' && (
           <div className="w-full h-full flex flex-col items-center justify-center gap-1 text-port-text-muted text-xs">
             <Film className="w-4 h-4 opacity-50" aria-hidden="true" />
-            <span>{preview.kind === 'none' ? 'no render yet' : preview.label}</span>
+            <span>no render yet</span>
           </div>
         )}
       </Link>
