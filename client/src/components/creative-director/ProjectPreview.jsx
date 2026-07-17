@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Play, Film } from 'lucide-react';
 import MediaImage from '../MediaImage.jsx';
@@ -27,6 +27,18 @@ export default function ProjectPreview({ project, to }) {
   const [posterMissing, setPosterMissing] = useState(false);
   const preview = selectProjectPreview(project);
   const aspectClass = previewAspectClass(project?.aspectRatio);
+
+  // The card keeps its identity across list updates (the grid keys on project
+  // id, and start/pause patch a project in place), so this instance outlives a
+  // change of preview target — e.g. a scene render lands, or the stitch
+  // promotes a finalVideoId. Reset the per-asset state when the target moves,
+  // or a 404 recorded against the OLD poster would pin the placeholder on the
+  // new one, and a card left playing would keep showing the previous render.
+  // Mirrors ScenePreview's own `jobId` reset effect.
+  useEffect(() => {
+    setPosterMissing(false);
+    setPlaying(false);
+  }, [preview.jobId, preview.src]);
 
   if (playing) {
     return (
