@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // The bridge memoizes its parsed bridge-map in a module-level variable
 // (loadBridgeMap caches), so each test resets the module registry and
@@ -51,9 +51,16 @@ async function loadBridge() {
   return import('./brainMemoryBridge.js');
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
   bridgeFileContents = null;
+  // The mocked brainEvents emitter is created by the vi.mock factory, which
+  // outlives vi.resetModules() — so each test's initBridge() stacks another
+  // set of listeners on the SAME emitter, and one emit fans out to every
+  // previous test's handlers. Existing tests only assert "not called" so they
+  // never noticed; any call-count assertion does. Reset to one listener per test.
+  const { brainEvents } = await import('./brainStorage.js');
+  brainEvents.removeAllListeners();
 });
 
 describe('brainMemoryBridge — resyncBrainRecord (issue #1080)', () => {
@@ -357,6 +364,78 @@ describe('brainMemoryBridge — entity :upserted/:deleted route through queueRes
 
     expect(deleteMemory).toHaveBeenCalledWith('mem-day', true);
     expect(updateMemory).not.toHaveBeenCalled();
+  });
+});
+
+// The daily-log editor autosaves, so 'journals:upserted' now fires every couple
+// of seconds for the same day. Embedding per event would mean an embedding call
+// per typing pause — and a full LLM summarization per event once the entry
+// outgrows the embedding char budget.
+describe('brainMemoryBridge — journal re-embed debounce (daily-log autosave)', () => {
+  beforeEach(() => { vi.useFakeTimers(); });
+  afterEach(() => { vi.useRealTimers(); });
+
+  const emitSave = async (brainEvents, date, content) => {
+    getJournal.mockResolvedValue({ id: date, date, content });
+    brainEvents.emit('journals:upserted', { entry: { id: date, date, content } });
+  };
+
+  it('coalesces a writing session into one re-embed of the latest content', async () => {
+    const bridge = await loadBridge();
+    const { brainEvents } = await import('./brainStorage.js');
+    bridge.initBridge();
+
+    // 20 autosaves of the same day, 1.5s apart — a normal typing run.
+    for (let i = 0; i < 20; i += 1) {
+      await emitSave(brainEvents, '2026-06-09', `draft ${i}`);
+      await vi.advanceTimersByTimeAsync(1500);
+    }
+    expect(generateMemoryEmbedding).not.toHaveBeenCalled();
+
+    // Settle past the debounce, then drain.
+    await vi.advanceTimersByTimeAsync(31_000);
+    await bridge.flushPendingResync();
+
+    expect(generateMemoryEmbedding).toHaveBeenCalledTimes(1);
+    // Re-read canonical at flush, so it embeds the newest text, not the first.
+    // (createMemory takes the payload plus the embedding vector.)
+    expect(createMemory).toHaveBeenCalledWith(
+      expect.objectContaining({ content: expect.stringContaining('draft 19') }),
+      expect.anything(),
+    );
+  });
+
+  it('re-embeds each day separately rather than collapsing across days', async () => {
+    const bridge = await loadBridge();
+    const { brainEvents } = await import('./brainStorage.js');
+    bridge.initBridge();
+
+    await emitSave(brainEvents, '2026-06-09', 'day one');
+    await emitSave(brainEvents, '2026-06-10', 'day two');
+    await vi.advanceTimersByTimeAsync(31_000);
+    await bridge.flushPendingResync();
+
+    expect(generateMemoryEmbedding).toHaveBeenCalledTimes(2);
+  });
+
+  it('drops a pending re-embed when the day is deleted', async () => {
+    const bridge = await loadBridge();
+    const { brainEvents } = await import('./brainStorage.js');
+    bridge.initBridge();
+    bridgeFileContents = JSON.stringify({ [bridge.bridgeKey('journals', '2026-06-09')]: 'mem-day' });
+
+    await emitSave(brainEvents, '2026-06-09', 'about to be deleted');
+    brainEvents.emit('journals:deleted', { date: '2026-06-09', entry: { id: '2026-06-09' } });
+    // handleJournalDeleted is async; flush microtasks (setImmediate is faked here).
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The pending flush must not resurrect work against a tombstoned day.
+    getJournal.mockResolvedValue(null);
+    await vi.advanceTimersByTimeAsync(31_000);
+    await bridge.flushPendingResync();
+
+    expect(deleteMemory).toHaveBeenCalledWith('mem-day', true);
+    expect(generateMemoryEmbedding).not.toHaveBeenCalled();
   });
 });
 
