@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+/* Viewport is both wide AND tall enough to host a canvas overlay (a legend/key)
+   without blanketing the graph under it. Width alone is the wrong signal: a
+   landscape phone is wider than `sm` but only ~390px tall, so a `sm:`-only rule
+   force-shows the overlay over a floored canvas. Named here rather than written
+   inline as `sm:[@media(min-height:800px)]:` because Tailwind's source scanner
+   does not extract that arbitrary-variant form from JSX — it compiles when fed
+   the candidate directly but is silently absent from the build. */
+@custom-variant roomy-viewport (@media (width >= 40rem) and (min-height: 800px));
+
 @theme {
   --color-port-bg: rgb(var(--port-bg));
   --color-port-card: rgb(var(--port-card));

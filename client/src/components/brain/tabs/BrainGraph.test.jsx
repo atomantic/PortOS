@@ -71,6 +71,17 @@ describe('legend disclosure', () => {
     expect(screen.getByTestId('graph-legend')).not.toHaveClass('hidden');
   });
 
+  it('gates the auto-show on viewport height as well as width', async () => {
+    await renderGraph();
+    // A landscape phone is WIDER than `sm` but only ~390px tall, so a width-only
+    // (`sm:`) gate force-showed the ~200px legend over a floored 240px canvas
+    // while hiding the toggle — un-dismissable, in the exact case this targets.
+    // `roomy-viewport` (index.css) is width AND height; a bare `sm:` regresses it.
+    expect(screen.getByTestId('graph-legend')).toHaveClass('roomy-viewport:block');
+    expect(screen.getByTestId('graph-legend')).not.toHaveClass('sm:block');
+    expect(screen.getByRole('button', { name: /legend/i })).toHaveClass('roomy-viewport:hidden');
+  });
+
   it('does not swallow the canvas drags underneath it', async () => {
     await renderGraph();
     // The legend's wrapper covers a corner of the canvas. It must not be

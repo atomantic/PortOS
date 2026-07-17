@@ -556,11 +556,15 @@ export default function BrainGraph() {
           </button>
         )}
 
-        {/* Legend. Ten rows blanket a phone-sized canvas, so below `sm` it
-            collapses behind a toggle and expands upward from the corner (the
-            type filters above already carry the same colour→label mapping; the
-            edge colours are only here, so it stays reachable rather than
-            hidden). Unchanged at `sm` and up. */}
+        {/* Legend. Its ~200px blankets a short canvas, so it auto-shows only on
+            a `roomy-viewport` (wide AND tall — see index.css); otherwise it
+            collapses behind a toggle and expands upward from the corner. The
+            height half of that variant is what makes a landscape phone work: it
+            is wider than `sm` but only ~390px tall, so a width-only rule
+            force-showed the legend over a floored 240px canvas AND hid the
+            toggle — blanketing the graph with no way out.
+            (The type filters above already duplicate the colour→label mapping,
+            but the edge colours are only here — hence a toggle, not a drop.) */}
         {/* pointer-events-none on the WRAPPER, not just the panel: it covers a
             corner of the canvas, and as a hit-testable box it would swallow the
             orbit drags the panel alone used to let through (pointer-events is
@@ -569,7 +573,7 @@ export default function BrainGraph() {
         <div className="absolute bottom-3 left-3 z-10 flex flex-col items-start gap-1.5 pointer-events-none">
           <div
             data-testid="graph-legend"
-            className={`${legendOpen ? 'block' : 'hidden'} sm:block bg-port-bg/90 border border-port-border rounded-lg p-3 text-xs space-y-1.5`}
+            className={`${legendOpen ? 'block' : 'hidden'} roomy-viewport:block bg-port-bg/90 border border-port-border rounded-lg p-3 text-xs space-y-1.5`}
           >
             {BRAIN_TYPES.map(t => (
               <div key={t} className="flex items-center gap-2">
@@ -595,7 +599,7 @@ export default function BrainGraph() {
           <button
             onClick={() => setLegendOpen(o => !o)}
             aria-expanded={legendOpen}
-            className="sm:hidden pointer-events-auto flex items-center gap-1.5 px-2.5 py-1.5 min-h-[32px] text-[11px] bg-port-bg/90 border border-port-border text-gray-400 hover:text-white rounded-lg transition-colors"
+            className="roomy-viewport:hidden pointer-events-auto flex items-center gap-1.5 px-2.5 py-1.5 min-h-[32px] text-[11px] bg-port-bg/90 border border-port-border text-gray-400 hover:text-white rounded-lg transition-colors"
           >
             <Info size={12} />
             Legend
