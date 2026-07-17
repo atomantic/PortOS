@@ -55,14 +55,25 @@ export default function ScenePreview({ jobId, label, aspectClass = 'aspect-video
   const [missing, setMissing] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const videoRef = useRef(null);
-  // Reset on `src` too, not just `jobId`: a caller resolving the real filename
-  // asynchronously renders once with src=null (the reconstructed guess) and
-  // again once it lands. Without this, an error recorded against the guess
-  // would pin "media missing" over the correct URL that arrived a tick later.
+  // A new target starts over completely.
   useEffect(() => {
     setMissing(false);
     setAttempt(0);
-  }, [jobId, src]);
+  }, [jobId]);
+  // A `src` change for the SAME target clears the error but deliberately keeps
+  // `attempt`. Two reasons this is split from the reset above. (1) A caller
+  // resolving the real filename asynchronously renders once with src=null (the
+  // reconstructed guess) then again once it lands — without clearing `missing`,
+  // an error recorded against the guess would pin "media missing" over the
+  // correct URL that arrived a tick later. (2) But zeroing `attempt` here would
+  // defeat the cache-buster on the exact path it exists for: Retry bumps
+  // `attempt` AND re-arms the caller's lookup, so `src` round-trips
+  // null→resolved on every retry, and a reset would strip `?retry=N` back off
+  // the URL — re-requesting the identical URL whose error response the browser
+  // may still have cached.
+  useEffect(() => {
+    setMissing(false);
+  }, [src]);
 
   // Upgrade the muted autoplay baseline to audible when the browser allows it
   // (mirrors MediaLightbox). Re-runs per `attempt` because the Retry button
