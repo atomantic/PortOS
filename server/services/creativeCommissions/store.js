@@ -29,8 +29,20 @@
  * VIEW hydrated from the federated store on read (listCommissions/getCommission);
  * `submitCommissionFeedback` writes the federated store, not this row. Legacy
  * inline reactions (Phase 2 storage) are split into the federated store lazily on
- * read and by `backfillAllCommissionFeedback()` at boot. `feedbackWindow` stays
- * on the machine-local record (a per-machine directive-tuning knob).
+ * read and by `backfillAllCommissionFeedback()` at boot.
+ *
+ * The commission BRIEF itself also federates (#2686, record kind
+ * `creativeCommission`) so the same commission — and thus the attach point for a
+ * synced reaction — exists on every peer. The federated brief fields are
+ * name / targetAbility / brief / generation / feedbackWindow (feedbackWindow is
+ * part of the brief config, so it carries across machines); `schedule`, `runs`,
+ * `assignment`, and `enabled` stay MACHINE-LOCAL (stripped from the wire, kept by
+ * the receiver on merge, dormant on a fresh insert) so only the machine you
+ * scheduled it on ever fires the cron. The federated LWW key is a brief-scoped
+ * clock (`briefUpdatedAt`) that advances only on a federated-field edit (or a
+ * delete/restore), NOT the general `updatedAt` that machine-local edits and run
+ * appends bump — so a schedule change or a recordCommissionRun can never push a
+ * stale brief or make a real brief edit lose.
  *
  * Mutations emit `commission:changed` on `commissionEvents` so the scheduler
  * re-arms crons off the DATA changing (any writer), not off the three REST
@@ -403,6 +415,24 @@ export function assertValidSchedule(schedule) {
  * re-arm crons or win an LWW it has no business in). Serialized on the per-id
  * queue like every other RMW here.
  */
+/**
+ * Union the federated feedback view with any still-stored legacy INLINE reactions,
+ * deduped by runId (the deterministic `cfeedback-<runId>` key) or, for run-less
+ * reactions, by id. Federated wins on a collision. This keeps reads complete
+ * during the migration window: if `backfillInlineFeedback` migrated only a PREFIX
+ * before throwing (inline retained for retry), neither the list page nor the
+ * scheduler directive silently omits the un-migrated tail. After a full migration
+ * the inline array is empty, so this is just the federated view.
+ */
+function unionInlineFeedback(federated, inline) {
+  if (!Array.isArray(inline) || inline.length === 0) return federated;
+  const seenRun = new Set(federated.filter((f) => f.runId).map((f) => f.runId));
+  const seenId = new Set(federated.map((f) => f.id));
+  const extra = inline.filter((f) => (f?.runId ? !seenRun.has(f.runId) : !seenId.has(f?.id)));
+  if (extra.length === 0) return federated;
+  return [...federated, ...extra].sort((a, b) => String(a.at).localeCompare(String(b.at)));
+}
+
 async function clearInlineFeedback(id) {
   const store = commissionStore();
   await store.queueRecordWrite(id, async () => {
@@ -430,7 +460,7 @@ export async function listCommissions() {
   // array is non-empty) from "not yet migrated" (show the legacy inline so the
   // list page doesn't transiently under-report), without ever double-counting
   // (post-migration the inline array is empty).
-  for (const r of recs) r.feedback = byId.has(r.id) ? byId.get(r.id) : r.feedback;
+  for (const r of recs) r.feedback = unionInlineFeedback(byId.get(r.id) || [], r.feedback);
   return recs;
 }
 
@@ -442,7 +472,8 @@ export async function getCommission(id) {
   // federated store, then clear it — so the scheduler's pre-fire read and the
   // route GET always see the federated feedback even before the boot backfill
   // runs. Idempotent (deterministic ids, never-clobber upsert).
-  if (rec.feedback.length > 0) {
+  const inlineLegacy = rec.feedback;
+  if (inlineLegacy.length > 0) {
     // Clear the inline array ONLY if the split SUCCEEDED. A mid-batch DB failure
     // in backfillInlineFeedback (after ≥1 reaction was federated) must leave the
     // inline array intact so a later read/boot can retry — clearing on a swallowed
@@ -451,10 +482,15 @@ export async function getCommission(id) {
     // idempotent re-run where everything is already federated — clearing is still
     // correct then).
     let split = false;
-    try { await backfillInlineFeedback(id, rec.feedback); split = true; } catch { /* leave inline for retry */ }
+    try { await backfillInlineFeedback(id, inlineLegacy); split = true; } catch { /* leave inline for retry */ }
     if (split) await clearInlineFeedback(id).catch(() => {});
   }
-  rec.feedback = await listFeedbackForCommission(id).catch(() => []);
+  const federated = await listFeedbackForCommission(id).catch(() => []);
+  // Union with the legacy inline reactions so a PARTIAL migration (backfill wrote
+  // a prefix then threw, inline retained for retry) never hides the un-migrated
+  // tail from the scheduler directive or the UI. After a full migration the inline
+  // array is empty, so this is just the federated view (dedup drops the overlap).
+  rec.feedback = unionInlineFeedback(federated, inlineLegacy);
   return rec;
 }
 

@@ -384,6 +384,30 @@ describe('legacy inline feedback → federated split (#2686)', () => {
     expect([...feedbackRecords.values()].some((f) => f.commissionId === 'commission-legacy')).toBe(true);
   });
 
+  it('a PARTIAL migration never hides the un-migrated tail (inline ∪ federated on read)', async () => {
+    // Seed a legacy record with 2 inline reactions, then pre-federate ONLY the
+    // first (simulating a backfill that wrote a prefix then threw, inline retained).
+    records.set('commission-partial', {
+      id: 'commission-partial', name: 'Partial', enabled: true, targetAbility: 'video',
+      brief: {}, schedule: { kind: 'DAILY', atLocalTime: '02:00' }, generation: {},
+      runs: [{ id: 'run-A' }, { id: 'run-B' }],
+      feedback: [
+        { id: 'feedback-a', runId: 'run-A', rating: 'up', note: 'A', at: '2026-01-01T00:00:00.000Z' },
+        { id: 'feedback-b', runId: 'run-B', rating: 'down', note: 'B', at: '2026-01-02T00:00:00.000Z' },
+      ],
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    feedbackRecords.set('cfeedback-run-A', {
+      id: 'cfeedback-run-A', commissionId: 'commission-partial', runId: 'run-A',
+      rating: 'up', note: 'A', at: '2026-01-01T00:00:00.000Z', createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z', deleted: false, deletedAt: null,
+    });
+    // listCommissions must show BOTH reactions (federated run-A ∪ inline run-B), not just run-A.
+    const list = await listCommissions();
+    const rec = list.find((c) => c.id === 'commission-partial');
+    expect(rec.feedback.map((f) => f.runId).sort()).toEqual(['run-A', 'run-B']);
+  });
+
   it('backfillAllCommissionFeedback splits every commission idempotently', async () => {
     seedLegacy();
     const first = await backfillAllCommissionFeedback();
