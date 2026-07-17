@@ -17,8 +17,11 @@ const router = Router();
 
 // Zod schemas for request validation
 const updateCharacterSchema = z.object({
-  name: z.string().min(1).max(100).optional(),
-  class: z.string().min(1).max(100).optional(),
+  // Empty is allowed (not `.min(1)`): '' is the "unset" state the human-centered page renders
+  // as the "Your name" / "Add a title" placeholder (#2677), so the user must be able to clear
+  // a name/title back to blank, not just replace it.
+  name: z.string().max(100).optional(),
+  class: z.string().max(100).optional(),
   avatarPath: z.string().max(500).regex(/^\/data\/images\/[A-Za-z0-9._-]+$/, 'Invalid avatar path').optional()
 });
 

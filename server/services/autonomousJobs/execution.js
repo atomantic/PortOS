@@ -32,7 +32,7 @@ function isScriptJob(job) {
  * @param {Object} job - The script job to execute
  * @returns {Promise<Object>} Result of the script execution
  */
-async function executeScriptJob(job) {
+async function executeScriptJob(job, { manual = false } = {}) {
   if (!isScriptJob(job)) {
     throw new Error(`Job ${job.id} is not a script job`)
   }
@@ -40,7 +40,12 @@ async function executeScriptJob(job) {
   const handler = SCRIPT_HANDLERS[job.scriptHandler]
   console.log(`📜 Executing script job: ${job.name}`)
 
-  const result = await handler()
+  // A scheduled fire is unattended (`background`); a manual "Run now" trigger is
+  // user-initiated (foreground). Pass that provenance to the handler so fan-out
+  // handlers (goal-check-in) can decide whether their per-provider error toasts
+  // coalesce (scheduled) or report individually (manual). Handlers that don't
+  // fan out ignore the context.
+  const result = await handler({ background: !manual })
 
   // Record the job execution
   await recordJobExecution(job.id)
