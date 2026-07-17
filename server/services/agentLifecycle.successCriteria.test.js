@@ -44,7 +44,7 @@ describe('evaluateSuccessCriteria (#2344)', () => {
     expect(checkForTaskCommit).not.toHaveBeenCalled();
   });
 
-  it('returns null for a programmatic-I/O task — its deliverable is the sentinel, not a commit (#2700)', async () => {
+  it('never applies the commit criterion to a programmatic-I/O task (#2700)', async () => {
     // A layered-intelligence run is explicitly told NOT to commit or open a PR: it
     // writes `.agent-done` and its output hook does the filing. Checking for a
     // `[task-<id>]` commit would stamp validationPassed:false on every correct run —
@@ -52,8 +52,76 @@ describe('evaluateSuccessCriteria (#2344)', () => {
     // that recorded successful LI runs as failures and drove the type's success rate
     // to ~0.
     const task = { id: 't1', taskType: 'internal', metadata: { analysisType: 'layered-intelligence', selfImprovement: true } };
-    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w' })).toBeNull();
+    await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true, hookResult: { ran: true, outcome: { action: 'filed' } } });
     expect(checkForTaskCommit).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The programmatic-I/O criterion (#2727): these tasks declare their OWN success
+ * criterion — "the sentinel parsed and the output hook accepted it" — instead of
+ * declaring none and falling through to the runner's exit code, which recorded an
+ * exit-0 run that produced nothing usable as a success.
+ */
+describe('evaluateSuccessCriteria — programmatic-I/O criterion (#2727)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  const liTask = { id: 't1', taskType: 'internal', metadata: { analysisType: 'layered-intelligence' } };
+
+  it('records an exit-0 run with a missing/malformed sentinel as a FAILURE', async () => {
+    // The hook reports `unparseable-response` when the `.agent-done` payload is
+    // absent or unparseable — the run exited clean but produced nothing usable.
+    const hookResult = { ran: true, outcome: { action: 'no-op', reason: 'unparseable-response' } };
+    expect(await evaluateSuccessCriteria({ task: liTask, workspacePath: '/w', success: true, hookResult })).toBe(false);
+  });
+
+  it('records an exit-0 run whose output hook THREW as a FAILURE', async () => {
+    expect(await evaluateSuccessCriteria({
+      task: liTask, workspacePath: '/w', success: true, hookResult: { ran: true, threw: true }
+    })).toBe(false);
+  });
+
+  it('records an exit-0 run whose hook accepted the payload as a SUCCESS — no commit required', async () => {
+    const hookResult = { ran: true, outcome: { app: 'a1', action: 'filed', reason: null } };
+    expect(await evaluateSuccessCriteria({ task: liTask, workspacePath: '/w', success: true, hookResult })).toBe(true);
+    expect(checkForTaskCommit).not.toHaveBeenCalled();
+  });
+
+  it('treats benign hook reasons (no-proposal, duplicate, scope-suppressed) as a SUCCESS', async () => {
+    // The agent did its job; the deterministic step simply had nothing to file.
+    for (const reason of ['no-proposal', 'duplicate', 'semantic-duplicate', 'scope-suppressed', 'tracker-read-failed']) {
+      expect(await evaluateSuccessCriteria({
+        task: liTask, workspacePath: '/w', success: true, hookResult: { ran: true, outcome: { action: 'no-op', reason } }
+      })).toBe(true);
+    }
+  });
+
+  it('records a non-zero exit as a FAILURE regardless of the hook outcome', async () => {
+    expect(await evaluateSuccessCriteria({
+      task: liTask, workspacePath: '/w', success: false, hookResult: { ran: true, outcome: { action: 'no-op', reason: 'agent-failed' } }
+    })).toBe(false);
+  });
+
+  it('declares NO verdict (null) when no hook ran — "not evaluated" must not become "accepted"', async () => {
+    // Sentinel discipline: a registered type whose module exports no
+    // processTaskOutput yields `{ ran: false }`. Nothing judged the output, so the
+    // verdict is undeclared and task-learning falls back to the exit code.
+    expect(await evaluateSuccessCriteria({ task: liTask, workspacePath: '/w', success: true, hookResult: { ran: false } })).toBeNull();
+    expect(await evaluateSuccessCriteria({ task: liTask, workspacePath: '/w', success: true })).toBeNull();
+  });
+
+  it('declares NO verdict for a user-terminated programmatic-I/O run', async () => {
+    expect(await evaluateSuccessCriteria({
+      task: liTask, workspacePath: '/w', success: false, terminatedByUser: true, hookResult: { ran: true, threw: true }
+    })).toBeNull();
+  });
+
+  it('judges the hook result even with no workspace to validate against', async () => {
+    // The commit criterion needs a workspace; the programmatic-I/O criterion does
+    // not — a hook that already ran is a real verdict even if the worktree is gone.
+    expect(await evaluateSuccessCriteria({
+      task: liTask, success: true, hookResult: { ran: true, threw: true }
+    })).toBe(false);
   });
 
   it('still applies the commit criterion to a NON-programmatic self-improvement task', async () => {
