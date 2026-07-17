@@ -16,6 +16,62 @@ conflicts as work proceeds). Speculative ideas now live as `future`-labeled
 issues rather than a list here, so they can each be promoted, refined, or closed
 independently.
 
+### Daily-log autosave follow-ups
+
+Deferred from the daily-log autosave PR. Autosave turned the daily-log save path
+from "a couple of writes a day" into "a write every ~1.5s while typing", which
+amplified several pre-existing inefficiencies on that path. The one that crossed
+a policy line (an LLM summarization call per save once a day's entry outgrows the
+embedding budget) was fixed in that PR by debouncing the journal re-embed
+(`queueJournalResync` in `server/services/brainMemoryBridge.js`). These are the
+rest — each is a perf/cleanup item, none is a correctness bug:
+
+- [ ] Delete the dead `journals:changed` event. `server/services/brainJournal.js`
+  emits it at lines ~259/298/335/356 as `{ records: await rawRecords() }`, and
+  `rawRecords()` (line ~142) rebuilds the entire date→entry map (two full object
+  copies of every journal day) — awaited inline before the save returns, so it
+  adds latency to every autosave. Verified there is **no** `brainEvents.on('journals:changed')`
+  listener anywhere in the repo; `brainMemoryBridge.js:633` documents that it
+  deliberately stopped listening. `brainEvents` is an in-process EventEmitter
+  (`brainStorage.js`) with no cross-install surface, so removal is compat-safe.
+  `server/services/brainJournal.test.js:141` asserts the emit and must be updated.
+  Skipped in the autosave PR as pre-existing dead-code cleanup outside its scope.
+- [ ] Cache the Obsidian sidecar. `loadObsidianLocations()`
+  (`server/services/brainJournal.js:85`) is `ensureDir` + `readJSONFile` with no
+  cache, called from `getEntry`, `putEntry`, and `rawRecords` — ~3 uncached file
+  reads + 3 `mkdir` syscalls per save, now once per autosave. Mirror the
+  write-through cache `brainStorage` already uses (`CACHE_TTL_MS = 2000`). Fixing
+  the item above removes one of the three call sites for free.
+- [ ] Serialize `scheduleObsidianSync` per date (`server/services/brainJournal.js:238`).
+  It rewrites the day's full markdown note fire-and-forget on every save, and its
+  own comment notes Obsidian lives on iCloud where "writes can stall for hundreds
+  of ms" — so at autosave cadence, overlapping writes to one file are possible and
+  last-writer-wins isn't guaranteed to be newest-content. Only affects installs
+  with the "Auto-mirror to Obsidian on every save" toggle on. Consider also
+  re-wording that toggle's label, whose "every save" now means something new.
+- [ ] Close the dictation/autosave overwrite race properly. Today the client
+  *parks* autosave when a voice segment lands while the user has unsaved edits
+  (`voiceConflict` in `client/src/components/brain/tabs/DailyLogTab.jsx`), because
+  `setJournalContent` replaces content wholesale and would drop the segment. The
+  park cannot close the narrow race where a segment lands server-side *after* a
+  PUT is already in flight. Deeper fix: merge the incoming segment into the
+  textarea client-side (the socket payload carries `text`, and the `!dirty` branch
+  already performs exactly that merge — this would delete the flag and its ~6 touch
+  sites), backed by an `updatedAt` precondition on the PUT so the server rejects a
+  stale overwrite instead of the client predicting it. `updatedAt` is already
+  stamped and already kept client-side; no precondition mechanism exists server-side
+  yet (no `If-Match`/`ifMatch` anywhere). Needs real-device validation of caret
+  behavior when the textarea is rewritten under the user — that risk is why it was
+  not done unilaterally in an autosave PR, and it reverses the deliberate existing
+  "save or refresh to see it" product decision.
+- [ ] Extract a `useAutosave` hook when a second consumer appears. The daily log
+  now has ~60 lines of autosave machinery inline (debounce + max-wait ceiling +
+  single-flight + failure-toast dedup + blur/visibility/unmount flush). The only
+  other debounced-save site, `client/src/pages/VideoTimelineEditor.jsx:281`
+  (`saveTimerRef`/`queueSave`), shares only "setTimeout + clearTimeout on cleanup"
+  and diverges on every other requirement — so extraction at N=2 would be ~6 config
+  knobs wrapping ~5 lines. Revisit at a third consumer.
+
 ### SongBook follow-ups
 
 Deferred from the SongBook feature's post-review cleanup (see
