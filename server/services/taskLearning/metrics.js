@@ -592,6 +592,12 @@ export async function resetTaskTypeLearning(taskType) {
   // Purge this type from the environmental buckets FIRST (#2618): an
   // outage-only type has no byTaskType bucket, so the purge must not sit
   // behind the task-type-not-found early return below.
+  //
+  // Deliberately part of the RESET path, not of removeTaskTypeFromLearningData:
+  // this function is "the user says this type is fixed — forget all of it", so
+  // dropping its outage history is intended. A caller repairing mis-recorded
+  // BUCKET data (e.g. migration 197) must not purge outages, which are recorded
+  // from real errors and are true regardless of any bucket-level bug.
   const environmentalRemoved = purgeEnvironmentalFailuresForType(data, taskType);
 
   const metrics = data.byTaskType[taskType];
@@ -604,22 +610,64 @@ export async function resetTaskTypeLearning(taskType) {
     return { reset: false, reason: 'task-type-not-found', taskType };
   }
 
-  // Subtract this task type's contribution from totals
-  data.totals.completed -= metrics.completed;
-  data.totals.succeeded -= metrics.succeeded;
-  data.totals.failed -= metrics.failed;
-  data.totals.totalDurationMs -= metrics.totalDurationMs;
-  if (data.totals.successDurationMs) {
-    data.totals.successDurationMs = Math.max(0, data.totals.successDurationMs - (metrics.successDurationMs || 0));
+  const previousMetrics = removeTaskTypeFromLearningData(data, taskType);
+
+  await saveLearningData(data);
+
+  emitLog('info', `Reset learning data for ${taskType} (was ${metrics.successRate}% success after ${metrics.completed} attempts)`, {
+    taskType,
+    previousSuccessRate: metrics.successRate,
+    previousAttempts: metrics.completed
+  }, '📚 TaskLearning');
+
+  return { reset: true, taskType, previousMetrics };
+  });
+}
+
+/**
+ * Remove one task type's contribution from every learning aggregate, in place.
+ * Pure (mutates `data`, no I/O) so both the runtime reset and offline repairs
+ * (migrations) can share ONE definition of "what a task type contributes to" —
+ * a second, hand-rolled version would silently drift as aggregates are added.
+ *
+ * Unwinds: `totals` (+ recomputed max/ETA), `errorPatterns`, `byModelTier` (via
+ * `routingAccuracy`, which must be read BEFORE it is deleted), `routingAccuracy`,
+ * `byTaskType`, `failureSignatures` (#2619), and `correlationWindow` (#2619).
+ *
+ * Does NOT touch `environmentalFailures` — that is a separate ledger fed only by
+ * real outages, so removing it is a policy decision belonging to the caller (see
+ * `resetTaskTypeLearning`, which purges it; migration 197, which must not).
+ *
+ * @param {Object} data - the loaded learning store, mutated in place
+ * @param {string} taskType - e.g. 'self-improve:layered-intelligence'
+ * @returns {{ completed:number, succeeded:number, failed:number, successRate:number }|null}
+ *   the removed bucket's headline metrics, or null when the type had no bucket.
+ */
+export function removeTaskTypeFromLearningData(data, taskType) {
+  const metrics = data?.byTaskType?.[taskType];
+  if (!metrics) return null;
+
+  // Subtract this task type's contribution from totals. Guarded because this helper
+  // also runs OFFLINE against a raw on-disk store (migrations), where the defaults
+  // loadLearningData applies at runtime haven't been layered on — and an aggregate
+  // this function throws on would block boot rather than repair anything.
+  if (data.totals && typeof data.totals === 'object') {
+    data.totals.completed -= metrics.completed;
+    data.totals.succeeded -= metrics.succeeded;
+    data.totals.failed -= metrics.failed;
+    data.totals.totalDurationMs -= metrics.totalDurationMs;
+    if (data.totals.successDurationMs) {
+      data.totals.successDurationMs = Math.max(0, data.totals.successDurationMs - (metrics.successDurationMs || 0));
+    }
+    // Recalculate max from remaining task types (we can't subtract a max)
+    const remainingTypes = Object.entries(data.byTaskType).filter(([t]) => t !== taskType);
+    data.totals.successMaxDurationMs = remainingTypes.reduce((max, [, m]) => Math.max(max, m.successMaxDurationMs || 0), 0);
+    Object.assign(data.totals, calculateDurationETA(data.totals));
   }
-  // Recalculate max from remaining task types (we can't subtract a max)
-  const remainingTypes = Object.entries(data.byTaskType).filter(([t]) => t !== taskType);
-  data.totals.successMaxDurationMs = remainingTypes.reduce((max, [, m]) => Math.max(max, m.successMaxDurationMs || 0), 0);
-  Object.assign(data.totals, calculateDurationETA(data.totals));
 
   // Clean up error patterns referencing this task type
-  for (const [category, pattern] of Object.entries(data.errorPatterns)) {
-    const taskTypeCount = pattern.taskTypes[taskType] || 0;
+  for (const [category, pattern] of Object.entries(data.errorPatterns || {})) {
+    const taskTypeCount = pattern?.taskTypes?.[taskType] || 0;
     if (taskTypeCount > 0) {
       pattern.count -= taskTypeCount;
       delete pattern.taskTypes[taskType];
@@ -685,25 +733,12 @@ export async function resetTaskTypeLearning(taskType) {
     data.correlationWindow = data.correlationWindow.filter((row) => row?.taskType !== taskType);
   }
 
-  await saveLearningData(data);
-
-  emitLog('info', `Reset learning data for ${taskType} (was ${metrics.successRate}% success after ${metrics.completed} attempts)`, {
-    taskType,
-    previousSuccessRate: metrics.successRate,
-    previousAttempts: metrics.completed
-  }, '📚 TaskLearning');
-
   return {
-    reset: true,
-    taskType,
-    previousMetrics: {
-      completed: metrics.completed,
-      succeeded: metrics.succeeded,
-      failed: metrics.failed,
-      successRate: metrics.successRate
-    }
+    completed: metrics.completed,
+    succeeded: metrics.succeeded,
+    failed: metrics.failed,
+    successRate: metrics.successRate
   };
-  });
 }
 
 /**
