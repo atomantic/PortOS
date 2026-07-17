@@ -205,58 +205,71 @@ describe('getCharacterMetrics — populated domains', () => {
     });
   });
 
-  it('derives memoryCount and mediaRendered from their tallies', async () => {
+  it('derives memoryCount and mediaAssets from their tallies', async () => {
     stats.memories = 250;
     stats.assets = 31;
     const metrics = await getCharacterMetrics();
     expect(byId(metrics, 'memoryCount').value).toBe(250);
-    expect(byId(metrics, 'mediaRendered').value).toBe(31);
+    expect(byId(metrics, 'mediaAssets').value).toBe(31);
+  });
+
+  it('does not claim the media tile counts only RENDERED media', async () => {
+    // countAssets() is an unfiltered COUNT(*) over an index that deliberately holds downloads
+    // and reconciled gallery uploads too, so the tile must not promise provenance it lacks.
+    const media = byId(await getCharacterMetrics(), 'mediaAssets');
+    expect(media.label).not.toMatch(/render/i);
+    expect(media.hint).not.toMatch(/render/i);
   });
 });
 
 describe('getCharacterMetrics — goalCompletionRate', () => {
-  it('is the completed share of RESOLVED goals', async () => {
-    stats.goals = { goals: [goal('completed'), goal('completed'), goal('completed'), goal('abandoned')] };
+  it('is the completed share of ALL goals', async () => {
+    stats.goals = { goals: [goal('completed'), goal('completed'), goal('active'), goal('active')] };
     expect(byId(await getCharacterMetrics(), 'goalCompletionRate')).toMatchObject({
-      value: 75, unit: 'percent', unavailable: false, notApplicable: false,
+      value: 50, unit: 'percent', unavailable: false, notApplicable: false,
     });
   });
 
-  it('does not count ACTIVE goals against you', async () => {
-    // Filing an ambitious goal must not drop your follow-through — the rate would then measure
-    // caution rather than follow-through.
-    stats.goals = { goals: [goal('completed'), goal('active'), goal('active'), goal('active')] };
+  it('MOVES as goals are filed and completed — the reason the denominator is all goals', async () => {
+    // Load-bearing: a resolved-only denominator (completed + abandoned) would be pinned at
+    // 100% forever, because the Goals UI only ever writes `completed` (its other terminal
+    // action deletes the record) and nothing in the client writes `abandoned`.
+    stats.goals = { goals: [goal('completed')] };
     expect(byId(await getCharacterMetrics(), 'goalCompletionRate').value).toBe(100);
+
+    stats.goals = { goals: [goal('completed'), goal('active'), goal('active'), goal('active')] };
+    expect(byId(await getCharacterMetrics(), 'goalCompletionRate').value).toBe(25);
   });
 
-  it('reports NOT APPLICABLE — never 0% — when no goal has been resolved', async () => {
-    // The load-bearing case for the third state: "0% follow-through" is a damning claim to
-    // make about someone who has simply never finished OR abandoned a goal.
+  it('counts an abandoned goal in the denominator if one ever appears', async () => {
+    // `abandoned` is in goalStatusEnum and the API honors it; no UI writes it today. When one
+    // does, it should read as an un-completed goal, not vanish from the rate.
+    stats.goals = { goals: [goal('completed'), goal('abandoned')] };
+    expect(byId(await getCharacterMetrics(), 'goalCompletionRate').value).toBe(50);
+  });
+
+  it('reports a REAL 0% when goals exist but none are done', async () => {
+    // Here 0 is the honest answer and must NOT be suppressed into the not-applicable state.
     stats.goals = { goals: [goal('active'), goal('active')] };
+    expect(byId(await getCharacterMetrics(), 'goalCompletionRate')).toMatchObject({
+      value: 0, notApplicable: false, unavailable: false,
+    });
+  });
+
+  it('reports NOT APPLICABLE — never 0% — on an install with no goals at all', async () => {
+    // The load-bearing case for the third state: "0% of your goals are done" is a lie to tell
+    // someone who has never filed one.
+    stats.goals = { goals: [] };
     const rate = byId(await getCharacterMetrics(), 'goalCompletionRate');
     expect(rate).toMatchObject({ value: null, unavailable: false, notApplicable: true });
     expect(rate.value).not.toBe(0);
     expect(rate.emptyLabel).toBeTruthy();
   });
 
-  it('reports not-applicable on a brand new install with no goals at all', async () => {
-    stats.goals = { goals: [] };
-    expect(byId(await getCharacterMetrics(), 'goalCompletionRate')).toMatchObject({
-      value: null, notApplicable: true, unavailable: false,
-    });
-  });
-
-  it('reports a REAL 0% when every resolved goal was abandoned', async () => {
-    // The mirror of the case above: here 0 is the honest answer and must NOT be suppressed.
-    stats.goals = { goals: [goal('abandoned'), goal('abandoned')] };
-    expect(byId(await getCharacterMetrics(), 'goalCompletionRate')).toMatchObject({
-      value: 0, notApplicable: false, unavailable: false,
-    });
-  });
-
   it('tolerates a goals payload with missing/odd entries', async () => {
+    // Odd entries still count as un-completed goals rather than crashing.
     stats.goals = { goals: [null, undefined, {}, goal('completed')] };
-    expect(byId(await getCharacterMetrics(), 'goalCompletionRate').value).toBe(100);
+    expect(byId(await getCharacterMetrics(), 'goalCompletionRate').value).toBe(25);
   });
 
   it('treats a goals payload with no goals array as not-applicable, not a crash', async () => {

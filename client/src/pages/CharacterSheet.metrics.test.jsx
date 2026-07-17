@@ -126,12 +126,12 @@ describe('MetricsCard rendering', () => {
   it('renders a not-applicable ratio with its own emptyLabel, not 0% and not "Unavailable"', async () => {
     const grid = await renderWithMetrics([
       metric({
-        id: 'goalCompletionRate', label: 'Goal Follow-Through', unit: 'percent',
-        value: null, notApplicable: true, emptyLabel: 'No goals resolved yet',
+        id: 'goalCompletionRate', label: 'Goal Completion', unit: 'percent',
+        value: null, notApplicable: true, emptyLabel: 'No goals filed yet',
       }),
     ]);
 
-    expect(grid.getByText('No goals resolved yet')).toBeInTheDocument();
+    expect(grid.getByText('No goals filed yet')).toBeInTheDocument();
     expect(grid.getByText('—')).toBeInTheDocument();
     expect(grid.queryByText('0%')).not.toBeInTheDocument();
     // Distinct from the unavailable state — the two say different things.
@@ -147,7 +147,7 @@ describe('MetricsCard rendering', () => {
     // One unreachable domain must not take the grid down with it.
     const grid = await renderWithMetrics([
       metric({ value: null, unavailable: true }),
-      metric({ id: 'mediaRendered', label: 'Media Rendered', value: 31, hint: 'Images & videos in the media index' }),
+      metric({ id: 'mediaAssets', label: 'Media Assets', value: 31, hint: 'Images & videos in your media library' }),
     ]);
 
     expect(grid.getByText('Unavailable')).toBeInTheDocument();
