@@ -141,8 +141,12 @@ describe('CreativeDirectorModelsDrawer', () => {
         <CreativeDirectorModelsDrawer open={false} onClose={vi.fn()} project={{ id: 'cd-1', name: 'Demo' }} />
       </MemoryRouter>,
     );
-    await waitFor(() => expect(getAiAssignments).not.toHaveBeenCalled());
+    // Assert directly rather than through waitFor: `render` already flushes
+    // effects inside act(), so both fetches would have fired by now if ungated.
+    // A `waitFor` wrapping a `.not` assertion resolves on its first check and
+    // would pass whether or not the effect ever ran.
     expect(getVisionModels).not.toHaveBeenCalled();
+    expect(getAiAssignments).not.toHaveBeenCalled();
   });
 
   // /vision-models also returns `backend:'cli'` rows, and those are a blanket
