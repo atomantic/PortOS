@@ -71,6 +71,12 @@ describe('useAIStatusNotifications — background-op error coalescing', () => {
 
     // The first failure surfaced the provider's real reason.
     expect(errs[0].message).toBe('HTTP 401 Unauthorized');
+
+    // Coalesced toasts MUST render with duration: Infinity — the hook owns their
+    // lifetime and dismisses them on window-lapse. A finite duration would let
+    // Toast schedule its own (uncancelled) auto-dismiss and remove a live toast
+    // mid-window. Load-bearing; pin it.
+    expect(errs.every(c => c.opts?.duration === Infinity)).toBe(true);
   });
 
   it('keeps user-triggered (non-background) failures immediate, individual, and with the real reason', () => {
@@ -93,6 +99,9 @@ describe('useAIStatusNotifications — background-op error coalescing', () => {
     expect(errs[0].message).toBe('HTTP 500 boom');
     expect(errs[1].opts?.id).toBe('op-user-b');
     expect(errs[1].message).toBe('timeout');
+    // Individual (non-coalesced) toasts use a finite duration and auto-dismiss —
+    // the opposite of the coalesced path's hook-owned Infinity lifetime.
+    expect(errs.every(c => c.opts?.duration === 6000)).toBe(true);
   });
 
   it('does NOT coalesce silent-but-user-triggered ops (op-less goal actions) — they still toast individually', () => {
