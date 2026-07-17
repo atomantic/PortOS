@@ -239,10 +239,11 @@ export const generateTasteSummary = (providerId, model, section) => request('/di
   method: 'POST',
   body: JSON.stringify({ providerId, model, ...(section ? { section } : {}) })
 });
-export const getPersonalizedTasteQuestion = (section, providerId, model) =>
+export const getPersonalizedTasteQuestion = (section, providerId, model, options = {}) =>
   request(`/digital-twin/taste/${section}/personalized-question`, {
     method: 'POST',
-    body: JSON.stringify({ providerId, model })
+    body: JSON.stringify({ providerId, model }),
+    ...options
   });
 export const resetTasteSection = (section) => request(`/digital-twin/taste/${section}`, {
   method: 'DELETE'

@@ -21,6 +21,14 @@ vi.mock('./digital-twin.js', () => ({
   digitalTwinEvents: { emit: vi.fn() },
 }));
 
+// Drive the provider boundary directly so each "Go deeper" outcome is reachable
+// without a live LLM. Re-imported per test because beforeEach resets the module
+// registry, which mints fresh spies for each generation.
+vi.mock('../lib/aiProvider.js', () => ({
+  resolveAPIProvider: vi.fn(),
+  callProviderAISimple: vi.fn(),
+}));
+
 beforeEach(() => {
   vi.resetModules();
 });
@@ -100,5 +108,83 @@ describe('getNextQuestion progress', () => {
     expect(next.progress.current).toBe(1);
     expect(next.progress.coreTotal).toBe(3);
     expect(next.progress.totalAnswered).toBe(0);
+  });
+});
+
+describe('generatePersonalizedTasteQuestion outcomes', () => {
+  const PROVIDER = { id: 'provider-1', name: 'Example Provider', defaultModel: 'model-1' };
+
+  // Identity context is aggregated partly from *other* sections' taste responses, so
+  // answering in `food` is enough to make a `movies` question well-founded.
+  const seedIdentityContext = (taste) =>
+    taste.submitAnswer('food', 'food-core-1', 'Sichuan and Thai, the hotter the better');
+
+  const clearIdentityContext = async (taste) => {
+    for (const sectionId of Object.keys(taste.TASTE_SECTIONS)) {
+      await taste.resetSection(sectionId);
+    }
+  };
+
+  it('reports no-context — the one outcome that is really about missing documents', async () => {
+    const taste = await import('./taste-questionnaire.js');
+    await clearIdentityContext(taste);
+
+    expect(await taste.generatePersonalizedTasteQuestion('movies')).toEqual({
+      question: null,
+      reason: 'no-context',
+    });
+  });
+
+  it('reports unknown-section rather than borrowing the missing-documents reason', async () => {
+    const taste = await import('./taste-questionnaire.js');
+
+    expect(await taste.generatePersonalizedTasteQuestion('not-a-real-section')).toEqual({
+      question: null,
+      reason: 'unknown-section',
+    });
+  });
+
+  it('reports no-provider rather than blaming the user documents that do exist', async () => {
+    const { resolveAPIProvider } = await import('../lib/aiProvider.js');
+    resolveAPIProvider.mockResolvedValue(null);
+    const taste = await import('./taste-questionnaire.js');
+    await seedIdentityContext(taste);
+
+    expect(await taste.generatePersonalizedTasteQuestion('movies')).toEqual({
+      question: null,
+      reason: 'no-provider',
+    });
+  });
+
+  it('throws AI_PROVIDER_ERROR instead of collapsing a provider failure into "nothing to ask"', async () => {
+    const { resolveAPIProvider, callProviderAISimple } = await import('../lib/aiProvider.js');
+    resolveAPIProvider.mockResolvedValue(PROVIDER);
+    callProviderAISimple.mockResolvedValue({ error: 'Provider returned 401: invalid key' });
+    const taste = await import('./taste-questionnaire.js');
+    await seedIdentityContext(taste);
+
+    // Must reject — a 200-null here is exactly what made a provider failure look
+    // like "you haven't written enough identity documents" (#2733).
+    await expect(taste.generatePersonalizedTasteQuestion('movies')).rejects.toMatchObject({
+      code: 'AI_PROVIDER_ERROR',
+      status: 502,
+      message: expect.stringContaining('invalid key'),
+    });
+  });
+
+  it('returns the question with reason null on success', async () => {
+    const { resolveAPIProvider, callProviderAISimple } = await import('../lib/aiProvider.js');
+    resolveAPIProvider.mockResolvedValue(PROVIDER);
+    callProviderAISimple.mockResolvedValue({ text: '  Which film would you rewatch forever?  ' });
+    const taste = await import('./taste-questionnaire.js');
+    await seedIdentityContext(taste);
+
+    const result = await taste.generatePersonalizedTasteQuestion('movies');
+    expect(result.reason).toBeNull();
+    expect(result.question).toMatchObject({
+      text: 'Which film would you rewatch forever?',
+      isPersonalized: true,
+      section: 'movies',
+    });
   });
 });

@@ -12,6 +12,7 @@ import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { atomicWrite, ensureDir, safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { resolveAPIProvider, callProviderAISimple } from '../lib/aiProvider.js';
+import { ServerError } from '../lib/errorHandler.js';
 import { buildPrompt } from './promptService.js';
 import { digitalTwinEvents } from './digital-twin.js';
 
@@ -887,16 +888,29 @@ async function aggregateIdentityContext(sectionId) {
 
 /**
  * Generate a personalized follow-up question for a taste section using LLM.
+ *
+ * Returns `{ question, reason }` — never a bare null. A failed provider call and
+ * a legitimate "there is nothing to ask" are different outcomes and must not
+ * collapse into the same value (#2733):
+ *
+ *   - `{ question, reason: null }`          — success.
+ *   - `{ question: null, reason: <why> }`   — nothing to ask. `reason` names which
+ *     precondition was missing so the caller can explain the right thing instead of
+ *     blaming the user's identity documents for every empty result.
+ *   - throws `ServerError` (`AI_PROVIDER_ERROR`) — the provider call itself failed.
+ *     `callProviderAISimple` has already emitted `ai:status` phase `error` carrying
+ *     the real reason, so that toast is the single voice for this case and the
+ *     client silences `request()`'s own toast. Do not add a second reporter here.
  */
 export async function generatePersonalizedTasteQuestion(sectionId, providerId, model) {
   const config = TASTE_SECTIONS[sectionId];
-  if (!config) return null;
+  if (!config) return { question: null, reason: 'unknown-section' };
 
   const { context, sourcesUsed } = await aggregateIdentityContext(sectionId);
-  if (!context) return null;
+  if (!context) return { question: null, reason: 'no-context' };
 
   const provider = await resolveAPIProvider(providerId);
-  if (!provider) return null;
+  if (!provider) return { question: null, reason: 'no-provider' };
 
   const modelId = model || provider.defaultModel;
 
@@ -931,21 +945,29 @@ Generate exactly ONE question. Do not include any preamble, numbering, or explan
     opLabel: `Crafting a deeper ${config.label} question`
   });
 
-  if (result.error || !result.text?.trim()) {
-    console.log(`🎨 Personalized question generation failed for ${sectionId}: ${result.error || 'empty response'}`);
-    return null;
+  // `result.error` is the one provider-failure signal — an empty completion is
+  // classified as an error by callProviderAISimple, so it arrives here too.
+  if (result.error) {
+    console.log(`🎨 Personalized question generation failed for ${sectionId}: ${result.error}`);
+    throw new ServerError(`Personalized question generation failed: ${result.error}`, {
+      status: 502,
+      code: 'AI_PROVIDER_ERROR'
+    });
   }
 
   const questionId = `${sectionId}-p25-${uuidv4()}`;
   console.log(`🎨 Personalized question generated for ${sectionId} (${sourcesUsed.length} sources)`);
 
   return {
-    questionId,
-    text: result.text.trim(),
-    isPersonalized: true,
-    identityContextUsed: sourcesUsed,
-    section: sectionId,
-    sectionLabel: config.label
+    question: {
+      questionId,
+      text: result.text.trim(),
+      isPersonalized: true,
+      identityContextUsed: sourcesUsed,
+      section: sectionId,
+      sectionLabel: config.label
+    },
+    reason: null
   };
 }
 
