@@ -287,14 +287,33 @@ describe('reconcileOutcomes', () => {
       expect((await rowsBySlug())['mystery'].rejectionReason).toBe('duplicate');
     });
 
-    it('lets a real close reason outrank a conflicting closing comment (#2748)', async () => {
-      // The comment scan is the WEAKEST signal: an explicit not_planned close reason
-      // must still win over prose that would otherwise say scope-mismatch.
-      await recordFiledProposal({ appId: 'app-1', slug: 'prose-scope' }, store);
+    it('lets a specific close reason outrank a conflicting closing comment (#2748)', async () => {
+      // A SPECIFIC close reason (duplicate) wins over prose that would otherwise say
+      // scope-mismatch — free text is the noisier signal.
+      await recordFiledProposal({ appId: 'app-1', slug: 'prose-dupe' }, store);
       const updated = await reconcileOutcomes({
         appId: 'app-1',
         existingIssues: [{
-          slug: 'prose-scope',
+          slug: 'prose-dupe',
+          state: 'closed',
+          stateReason: 'duplicate',
+          closingComment: 'Appreciate it, but this is out of scope for the app.',
+          closedAt: '2026-07-01T00:00:00Z'
+        }]
+      }, store);
+      expect(updated).toBe(1);
+      expect((await rowsBySlug())['prose-dupe'].rejectionReason).toBe('duplicate');
+    });
+
+    it('refines a generic not_planned decline from the closing comment (#2748)', async () => {
+      // The primary reachable case: deriveOutcome hands a GitHub rejection a
+      // not_planned reason (→ rejected, user-rejected), and the comment sharpens
+      // the WHY. The outcome stays rejected, so the merge rate is unaffected.
+      await recordFiledProposal({ appId: 'app-1', slug: 'refine-me' }, store);
+      const updated = await reconcileOutcomes({
+        appId: 'app-1',
+        existingIssues: [{
+          slug: 'refine-me',
           state: 'closed',
           stateReason: 'not_planned',
           closingComment: 'Appreciate it, but this is out of scope for the app.',
@@ -302,7 +321,9 @@ describe('reconcileOutcomes', () => {
         }]
       }, store);
       expect(updated).toBe(1);
-      expect((await rowsBySlug())['prose-scope'].rejectionReason).toBe('user-rejected');
+      const row = (await rowsBySlug())['refine-me'];
+      expect(row.outcome).toBe('rejected');
+      expect(row.rejectionReason).toBe('scope-mismatch');
     });
 
     it('lets the closing comment diagnose a close that carries no other signal (#2748)', async () => {

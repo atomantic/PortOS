@@ -160,6 +160,14 @@ const STATE_REASON_REASONS = new Map(Object.entries({
   'duplicate': 'duplicate'
 }));
 
+// Diagnoses that name only THAT a proposal was declined, not WHY — GitHub's
+// generic `not_planned` close. A specific closing-comment rationale is allowed to
+// refine one of these into a precise taxonomy token (not_planned + "out of scope"
+// → scope-mismatch); a SPECIFIC close reason (duplicate) is never refined. The
+// refinement changes only the reason token, never the OUTCOME (deriveOutcome has
+// already fixed that), so the merge rate the reasoner calibrates on is untouched.
+const GENERIC_REJECTION_REASONS = new Set(['user-rejected']);
+
 // Closing-comment keyword pass (#2748). Some closures state their rationale only in
 // prose — a human declines in a comment without applying a matching label or (on
 // glab/jira) any close reason at all. This is a DETERMINISTIC keyword/heuristic
@@ -249,10 +257,19 @@ export function classifyClosingComment(text) {
  *     asks for — "how much of our rejection history is undiagnosed" — so it must
  *     never be silently dressed up as a real reason.
  *
- * Signal precedence (most authoritative first): a human-applied label, then the
- * tracker's close reason, then the deterministic closing-comment keyword pass
- * (#2748). Explicit signals a human/agent deliberately set outrank a prose
- * heuristic, so the comment scan only decides an otherwise-undiagnosed close.
+ * Signal precedence (most authoritative first):
+ *   1. a human-applied label (the most deliberate signal);
+ *   2. a SPECIFIC tracker close reason (duplicate);
+ *   3. the deterministic closing-comment keyword pass (#2748);
+ *   4. a GENERIC tracker close reason (GitHub `not_planned` → user-rejected: it
+ *      says the proposal was declined, but not why).
+ * The comment sits BELOW a label/specific reason but ABOVE the generic decline, so
+ * a prose rationale REFINES a bare not_planned into a precise token instead of
+ * being shadowed by it — the refinement changes only the reason, never the
+ * outcome deriveOutcome already fixed, so it can't move the merge rate. The comment
+ * NEVER overrides the merged fallback (deriveOutcome runs first and never reaches
+ * here for a merge), so the reasonless-close-reads-as-merged gap the module header
+ * documents is untouched by this pass.
  *
  * Deterministic and total: same inputs always yield the same token.
  */
@@ -260,21 +277,24 @@ export function classifyRejection({ outcome = null, stateReason = null, labels =
   // Only a resolved, non-merged proposal has a rejection to explain.
   if (outcome !== 'rejected' && outcome !== 'abandoned') return null;
 
-  // A human-applied label is the most specific signal available; first match wins
-  // in the tracker's own label order.
+  // 1. A human-applied label is the most specific signal available; first match
+  //    wins in the tracker's own label order.
   for (const label of Array.isArray(labels) ? labels : []) {
     const hit = LABEL_REASONS.get(normalizeToken(label));
     if (hit) return hit;
   }
 
-  // The tracker's own close reason (GitHub only) outranks free-text prose.
+  // 2. A SPECIFIC tracker close reason (duplicate) outranks free-text prose.
   const stateHit = STATE_REASON_REASONS.get(normalizeToken(stateReason));
-  if (stateHit) return stateHit;
+  if (stateHit && !GENERIC_REJECTION_REASONS.has(stateHit)) return stateHit;
 
-  // Last resort before the honest unknown: scan the closing-comment prose for a
-  // rationale a human stated without a matching label/close reason.
+  // 3. The closing-comment keyword pass — refines a generic decline, or diagnoses a
+  //    close whose (abandoned) reason isn't otherwise recognized.
   const commentHit = classifyClosingComment(closingComment);
   if (commentHit) return commentHit;
+
+  // 4. The generic close reason, when the comment named nothing specific.
+  if (stateHit) return stateHit;
 
   return UNKNOWN_REJECTION_REASON;
 }

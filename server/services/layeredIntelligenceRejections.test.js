@@ -134,18 +134,41 @@ describe('classifyRejection', () => {
     })).toBe('missing-context');
   });
 
-  it('lets a label and a close reason both outrank a conflicting closing comment', () => {
-    // Free text is noisier than a deliberately-applied signal, so it must never
-    // override one — it only decides an otherwise-undiagnosed close.
+  it('lets a label and a SPECIFIC close reason outrank a conflicting closing comment', () => {
+    // Free text is noisier than a deliberately-applied signal, so a label and a
+    // specific close reason (duplicate) both win over the comment.
     expect(classifyRejection({
       outcome: 'rejected',
       labels: ['duplicate'],
       closingComment: 'this is out of scope'
     })).toBe('duplicate');
     expect(classifyRejection({
+      outcome: 'abandoned',
+      stateReason: 'duplicate',
+      closingComment: 'low quality proposal'
+    })).toBe('duplicate');
+  });
+
+  it('lets a specific closing comment REFINE the generic not_planned decline (#2748)', () => {
+    // not_planned says the proposal was declined but not WHY. A prose rationale
+    // sharpens that generic decline into a precise taxonomy token — the primary
+    // reachable case, since deriveOutcome hands most GitHub rejections a not_planned
+    // reason. The outcome is unchanged, so this can't move the merge rate.
+    expect(classifyRejection({
       outcome: 'rejected',
       stateReason: 'not_planned',
       closingComment: 'low quality proposal'
+    })).toBe('quality-issue');
+    expect(classifyRejection({
+      outcome: 'rejected',
+      stateReason: 'not_planned',
+      closingComment: 'Appreciate it, but this is out of scope for the app.'
+    })).toBe('scope-mismatch');
+    // With no specific rationale in the comment, the generic decline stands.
+    expect(classifyRejection({
+      outcome: 'rejected',
+      stateReason: 'not_planned',
+      closingComment: 'Closing this out, thanks.'
     })).toBe('user-rejected');
   });
 
