@@ -38,6 +38,13 @@ export default function RunsTab({ project }) {
             </div>
           )}
           {r.error && <div className="text-xs text-port-error mt-1">{r.error}</div>}
+          {/* failureReason is what recovery + orphan-settle write (e.g. "interrupted
+              by restart", "agent process terminated unexpectedly (orphaned)") — a
+              failed run with no `error` used to render blank, so surface it too so a
+              failed run always says WHY (issue #2705). */}
+          {r.failureReason && r.failureReason !== r.error && (
+            <div className="text-xs text-port-error mt-1">{r.failureReason}</div>
+          )}
         </div>
       ))}
     </div>
