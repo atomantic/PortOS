@@ -18,7 +18,7 @@ const toastFn = Object.assign(
     error: (message, opts) => { toastCalls.push({ type: 'error', message, opts }); },
     success: (message, opts) => { toastCalls.push({ type: 'success', message, opts }); },
     loading: (message, opts) => { toastCalls.push({ type: 'loading', message, opts }); },
-    dismiss: () => {},
+    dismiss: (id) => { toastCalls.push({ type: 'dismiss', id }); },
   }
 );
 vi.mock('../components/ui/Toast', () => ({ default: toastFn }));
@@ -30,6 +30,7 @@ function emit(event) {
 }
 
 const errorCalls = () => toastCalls.filter(c => c.type === 'error');
+const dismissCalls = () => toastCalls.filter(c => c.type === 'dismiss');
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -60,10 +61,13 @@ describe('useAIStatusNotifications — silent-op error coalescing', () => {
     const errs = errorCalls();
     const uniqueIds = new Set(errs.map(c => c.opts?.id));
     expect(uniqueIds.size).toBe(1);
-    expect([...uniqueIds][0]).toBe('ai-silent-error::prov-1');
+    expect([...uniqueIds][0]).toMatch(/^ai-silent-error::prov-1::/);
 
+    // The counted toast keeps the first real reason visible — since these
+    // events can all land before a paint, the counted toast is often the only
+    // one the user ever sees, so a bare count would strip the actionable reason.
     const last = errs[errs.length - 1];
-    expect(last.message).toBe('Example Provider failed on 5 background AI calls');
+    expect(last.message).toBe('Example Provider failed on 5 background AI calls — HTTP 401 Unauthorized');
 
     // The first failure surfaced the provider's real reason.
     expect(errs[0].message).toBe('HTTP 401 Unauthorized');
@@ -101,35 +105,61 @@ describe('useAIStatusNotifications — silent-op error coalescing', () => {
     });
 
     const errs = errorCalls();
-    const ids = new Set(errs.map(c => c.opts?.id));
-    expect(ids).toEqual(new Set(['ai-silent-error::prov-a', 'ai-silent-error::prov-b']));
+    // Ids are provider-keyed (with a window-seq suffix): two distinct providers →
+    // two distinct toasts, and prov-a's two failures share one id.
+    const provAIds = new Set(errs.filter(c => /::prov-a::/.test(c.opts?.id)).map(c => c.opts?.id));
+    const provBIds = new Set(errs.filter(c => /::prov-b::/.test(c.opts?.id)).map(c => c.opts?.id));
+    expect(provAIds.size).toBe(1);
+    expect(provBIds.size).toBe(1);
 
-    const provA = errs.filter(c => c.opts?.id === 'ai-silent-error::prov-a');
-    expect(provA[provA.length - 1].message).toBe('Provider A failed on 2 background AI calls');
+    const provA = errs.filter(c => /::prov-a::/.test(c.opts?.id));
+    expect(provA[provA.length - 1].message).toBe('Provider A failed on 2 background AI calls — a fail');
   });
 
-  it('does NOT coalesce a silent op that already surfaced its own (slow-call) toast — it updates that toast in place', () => {
+  it('coalesces SLOW silent failures too — dismisses each orphan-prone spinner, collapses to one counted toast', () => {
+    renderHook(() => useAIStatusNotifications());
+
+    // Two silent ops both cross the 2.5s slow threshold, so each opens its own
+    // Infinity-duration loading spinner (a timeout / unreachable-endpoint burst).
+    act(() => {
+      emit({ id: 'slow-a', phase: 'start', silent: true, providerId: 'prov-1', providerName: 'Example Provider', message: 'Calling…' });
+      emit({ id: 'slow-b', phase: 'start', silent: true, providerId: 'prov-1', providerName: 'Example Provider', message: 'Calling…' });
+    });
+    act(() => { vi.advanceTimersByTime(3000); });
+    expect(toastCalls.filter(c => c.type === 'loading').map(c => c.opts?.id).sort()).toEqual(['slow-a', 'slow-b']);
+
+    act(() => {
+      emit({ id: 'slow-a', phase: 'error', silent: true, providerId: 'prov-1', providerName: 'Example Provider', message: 'endpoint timeout' });
+      emit({ id: 'slow-b', phase: 'error', silent: true, providerId: 'prov-1', providerName: 'Example Provider', message: 'endpoint timeout' });
+    });
+
+    // Both orphan-prone spinners are dismissed by id (else they spin forever)...
+    expect(dismissCalls().map(c => c.id).sort()).toEqual(['slow-a', 'slow-b']);
+    // ...and the two slow failures collapse into ONE provider-keyed counted toast,
+    // not two stacked red toasts — this is the exact flood the issue is about.
+    const errs = errorCalls();
+    const ids = new Set(errs.map(c => c.opts?.id));
+    expect(ids.size).toBe(1);
+    expect(errs[errs.length - 1].message).toBe('Example Provider failed on 2 background AI calls — endpoint timeout');
+  });
+
+  it('gives each fresh window a distinct toast id so a lapsed window cannot dismiss its successor', () => {
     renderHook(() => useAIStatusNotifications());
 
     act(() => {
-      emit({ id: 'slow-op', phase: 'start', silent: true, providerId: 'prov-1', providerName: 'Example Provider', message: 'Calling…' });
+      emit({ id: 'w1', phase: 'error', silent: true, providerId: 'prov-1', providerName: 'Example Provider', message: 'first' });
     });
-    // Cross the slow-call threshold so the deferred toast opens under id 'slow-op'.
-    act(() => { vi.advanceTimersByTime(3000); });
-    const loadingCall = toastCalls.find(c => c.type === 'loading');
-    expect(loadingCall?.opts?.id).toBe('slow-op');
-
+    act(() => { vi.advanceTimersByTime(5000); }); // window lapses
     act(() => {
-      emit({ id: 'slow-op', phase: 'error', silent: true, providerId: 'prov-1', providerName: 'Example Provider', message: 'HTTP 401 Unauthorized' });
+      emit({ id: 'w2', phase: 'error', silent: true, providerId: 'prov-1', providerName: 'Example Provider', message: 'second' });
     });
 
     const errs = errorCalls();
-    expect(errs).toHaveLength(1);
-    // Updates the already-visible spinner in place (id === op id), NOT the
-    // provider-keyed coalescing toast — otherwise the Infinity-duration loading
-    // toast would be orphaned and spin forever.
-    expect(errs[0].opts?.id).toBe('slow-op');
-    expect(errs[0].message).toBe('HTTP 401 Unauthorized');
+    // Same provider, two windows → two DIFFERENT toast ids (Toast never cancels a
+    // prior add()'s auto-dismiss timer, so a reused id would let window 1's
+    // pending dismissal remove window 2's toast).
+    expect(errs[0].opts?.id).not.toBe(errs[errs.length - 1].opts?.id);
+    expect(errs[0].opts?.id).toMatch(/^ai-silent-error::prov-1::/);
   });
 
   it('starts a fresh coalescing window after the previous one lapses', () => {
