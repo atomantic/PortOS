@@ -179,7 +179,7 @@ export default function OverviewTab({ project, onProjectUpdate, onAsyncWorkQueue
   const inlineImage = !project.finalVideoId && preview.kind === 'image' && preview.jobId ? preview : null;
   // The id→file mismatch: a stitched final is `timeline-*.mp4` behind a UUID.
   // The idle player is `preload="none"`, so a late resolve can't be raced here.
-  const { src: finalVideoSrc } = useVideoFileSrc(project.finalVideoId, {
+  const { src: finalVideoSrc, retry: retryFinalVideo } = useVideoFileSrc(project.finalVideoId, {
     enabled: Boolean(project.finalVideoId),
   });
 
@@ -192,7 +192,7 @@ export default function OverviewTab({ project, onProjectUpdate, onAsyncWorkQueue
           </h2>
           <div className={`${aspectClass} ${maxWidthClass} w-full mx-auto rounded overflow-hidden bg-port-bg`}>
             {project.finalVideoId
-              ? <ScenePreview jobId={project.finalVideoId} src={finalVideoSrc} label="Final video" aspectClass={aspectClass} />
+              ? <ScenePreview jobId={project.finalVideoId} src={finalVideoSrc} onRetry={retryFinalVideo} label="Final video" aspectClass={aspectClass} />
               : (
                 <MediaImage
                   src={inlineImage.src}

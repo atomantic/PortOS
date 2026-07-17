@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { videoSrcForJob, videoPosterForJob } from '../../lib/creativeDirectorPreview.js';
 
@@ -30,7 +30,18 @@ import { videoSrcForJob, videoPosterForJob } from '../../lib/creativeDirectorPre
  *                  expressed intent, so a second click on the native controls
  *                  would be redundant. Off by default — the grid must never
  *                  fetch mp4s on its own (`preload="none"` only holds while
- *                  this is false).
+ *                  this is false). Autoplay follows the same mobile contract as
+ *                  MediaLightbox: `muted` is the BASELINE (iOS/Android block
+ *                  unmuted autoplay not fired from a direct gesture — and the
+ *                  card's src resolution is async, so the click's transient
+ *                  activation may well have expired by mount), then the effect
+ *                  below upgrades to audible when allowed and falls back to
+ *                  muted playback rather than a dead paused player.
+ *   onRetry?     — invoked by the Retry button alongside the cache-bust, so a
+ *                  caller whose `src` came from a FAILED async lookup can redo
+ *                  it. Without this, Retry would only re-request the same wrong
+ *                  URL forever (the reconstructed guess) and the video would
+ *                  stay unreachable until a remount/reload.
  *   src?         — explicit video URL, overriding the `<jobId>.mp4` guess below.
  *                  Required whenever the id is NOT the filename stem: the
  *                  timeline renderer (a CD project's stitched final cut) mints
@@ -40,9 +51,10 @@ import { videoSrcForJob, videoPosterForJob } from '../../lib/creativeDirectorPre
  *                  derived from `jobId` — `generateThumbnail` always writes
  *                  `<jobId>.jpg`, on both the clip and timeline paths.
  */
-export default function ScenePreview({ jobId, label, aspectClass = 'aspect-video', autoPlay = false, src = null }) {
+export default function ScenePreview({ jobId, label, aspectClass = 'aspect-video', autoPlay = false, src = null, onRetry = null }) {
   const [missing, setMissing] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const videoRef = useRef(null);
   // Reset on `src` too, not just `jobId`: a caller resolving the real filename
   // asynchronously renders once with src=null (the reconstructed guess) and
   // again once it lands. Without this, an error recorded against the guess
@@ -51,6 +63,21 @@ export default function ScenePreview({ jobId, label, aspectClass = 'aspect-video
     setMissing(false);
     setAttempt(0);
   }, [jobId, src]);
+
+  // Upgrade the muted autoplay baseline to audible when the browser allows it
+  // (mirrors MediaLightbox). Re-runs per `attempt` because the Retry button
+  // remounts the element via `key`. Promise.resolve() normalizes both a real
+  // play() promise and the undefined some environments return.
+  useEffect(() => {
+    if (!autoPlay) return;
+    const v = videoRef.current;
+    if (!v) return;
+    v.muted = false;
+    Promise.resolve(v.play()).catch(() => {
+      v.muted = true;
+      Promise.resolve(v.play()).catch(() => {});
+    });
+  }, [autoPlay, src, jobId, attempt]);
 
   if (!jobId) {
     return <div className={`bg-port-bg ${aspectClass} flex items-center justify-center text-port-text-muted text-xs`}>no render yet</div>;
@@ -64,7 +91,7 @@ export default function ScenePreview({ jobId, label, aspectClass = 'aspect-video
         <span>media missing</span>
         <button
           type="button"
-          onClick={() => { setMissing(false); setAttempt((a) => a + 1); }}
+          onClick={() => { setMissing(false); setAttempt((a) => a + 1); onRetry?.(); }}
           className="px-2 py-0.5 rounded border border-port-border hover:bg-port-card text-port-text"
         >
           Retry
@@ -76,11 +103,13 @@ export default function ScenePreview({ jobId, label, aspectClass = 'aspect-video
     <div className={`relative bg-port-bg ${aspectClass}`}>
       <video
         key={attempt}
+        ref={videoRef}
         src={videoSrc}
         poster={posterSrc}
         controls
         preload={autoPlay ? 'metadata' : 'none'}
         autoPlay={autoPlay}
+        muted={autoPlay}
         playsInline
         aria-label={label}
         onError={() => setMissing(true)}
