@@ -61,11 +61,15 @@ function finiteOrNull(value) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
-// Effective character level: trust a stored, consistent `level`; otherwise derive it from xp
-// (mirrors computeXpView in characterXp.js). Returns null when neither is usable.
+// Effective character level. The level is age-based now (#2673): a finite `level` is the
+// age-derived value; an explicit `null` means the birthDate is unset, so age — the ONLY level
+// source — is unknown and we return null WITHOUT resurrecting an XP-derived level (otherwise
+// XP would silently unlock level trophies/eggs while the HUD shows "LV —"). Only an ABSENT
+// `level` field (a legacy payload that predates age-based level) falls back to XP.
 export function effectiveLevel(character) {
   const lvl = character?.level;
   if (Number.isFinite(lvl) && lvl >= 1) return Math.floor(lvl);
+  if (lvl === null) return null;
   const xp = finiteOrNull(character?.xp);
   if (xp === null) return null;
   return levelFromXP(xp);

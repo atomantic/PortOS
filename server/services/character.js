@@ -116,6 +116,19 @@ export async function getCharacter() {
   return enrichCharacter(await loadRawCharacter());
 }
 
+// Federation wire projection: the persisted record plus a backward-compatible integer `level`
+// for pre-#2673 peers, whose CharacterSheet indexes XP thresholds by `character.level` and
+// NaNs without it. The level is age-derived (or the historical default 1 when birthDate is
+// unset) but NOT persisted; `ageYears` is deliberately excluded so the sync checksum stays
+// stable between birthdays. New peers ignore the remote level (applyCharacterRemote no longer
+// merges it), so this projection is invisible to same-version installs.
+export async function getWireCharacter() {
+  const raw = await readJSONFile(CHARACTER_FILE, null);
+  if (!raw) return null;
+  const { birthDate } = await getBirthDate().catch(() => ({ birthDate: null }));
+  return { ...raw, level: levelFromAge(ageYearsFromBirthDate(birthDate)) ?? 1 };
+}
+
 export async function saveCharacter(data) {
   await ensureDir(PATHS.data);
   // Never persist derived fields — level is age-derived on read (#2673). Stripping them

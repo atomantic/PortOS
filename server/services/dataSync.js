@@ -28,6 +28,7 @@ import { mergeMediaCollectionsFromSync, listCollections, itemKey } from './media
 import { listSyncableSessionsForWire, mergeStorySessionsFromSync } from './storyBuilder.js';
 import { getStoryBuilderMutationEpoch } from './storyBuilderStore/store.js';
 import { sanitizeStateForWire } from '../lib/syncWire.js';
+import * as characterService from './character.js';
 import {
   getDigitalTwinSnapshot,
   applyDigitalTwinRemote,
@@ -262,7 +263,9 @@ async function applyGoalsRemote(remoteData) {
 // --- Category: Character ---
 
 async function getCharacterSnapshot() {
-  const data = await readJSONFile(CHARACTER_FILE, null);
+  // Use the wire projection (persisted record + a backward-compatible `level`) so pre-#2673
+  // peers still get a usable integer level even though `level` is no longer persisted (#2673).
+  const data = await characterService.getWireCharacter();
   if (!data) return { data: null, checksum: 'empty' };
   return { data, checksum: computeChecksum(data) };
 }

@@ -111,6 +111,32 @@ describe('getCharacter age-based level', () => {
   });
 });
 
+describe('getWireCharacter federation projection', () => {
+  beforeEach(() => {
+    store.value = { name: 'Gandalf', class: 'Wizard', xp: 5000, hp: 15, maxHp: 15 };
+    store.birthDate = null;
+  });
+
+  it('adds an age-derived level to the wire payload without persisting it', async () => {
+    const birth = new Date();
+    birth.setFullYear(birth.getFullYear() - 33);
+    birth.setDate(birth.getDate() - 30);
+    store.birthDate = birth.toISOString();
+
+    const wire = await characterService.getWireCharacter();
+    expect(wire.level).toBe(33);
+    // But the persisted record still carries no level.
+    expect(store.value.level).toBeUndefined();
+  });
+
+  it('falls back to the historical default level 1 for backward-compat when birthDate is unset', async () => {
+    store.birthDate = null;
+    const wire = await characterService.getWireCharacter();
+    expect(wire.level).toBe(1); // pre-#2673 peers index XP thresholds by level — never null
+    expect(wire.ageYears).toBeUndefined(); // ageYears excluded so the sync checksum stays stable
+  });
+});
+
 describe('addXP decoupled from level', () => {
   beforeEach(() => {
     store.value = { name: 'Gandalf', class: 'Wizard', xp: 0, hp: 15, maxHp: 15, events: [] };
