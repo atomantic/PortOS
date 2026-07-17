@@ -478,6 +478,78 @@ export async function isPidAlive(pid) {
  * - Creates investigation task after max retries exceeded
  * - Triggers evaluation to spawn new agents
  */
+
+/**
+ * Settle a Creative Director run tied to an orphaned/reaped agent (issue #2705).
+ *
+ * A CD plan/treatment agent that dies without issuing its completion PATCH leaves
+ * its `runs[]` row stuck `running`. `maybeEnqueuePlan`'s guard then treats that
+ * non-terminal run as "a worker is already on it" and refuses to re-dispatch — so
+ * the project wedges in `planning` until the NEXT server restart runs boot
+ * recovery (`recoverInFlightProjects`). This helper reproduces recovery's per-project
+ * reap so the project recovers without a restart. It does THREE things, in the
+ * same order and shape recovery does — this is boot-ordering-critical:
+ *
+ *   1. **Fail the stuck run** so `maybeEnqueuePlan`'s non-terminal-run guard clears.
+ *   2. **Retire the CoS task** (`status:'completed'`), NOT leave it running for
+ *      `handleOrphanedTask` to requeue. This is load-bearing for boot ordering:
+ *      `cleanupOrphanedAgents` runs BEFORE `recoverInFlightProjects` awaits its gate
+ *      (`cos.js` start sequence), and recovery only reaps runs still marked
+ *      `running` — so once we've failed the run in step 1, recovery would no longer
+ *      retire this task. If we left it, `handleOrphanedTask` would requeue a stale
+ *      agent that races recovery's fresh dispatch. Retiring it here makes
+ *      `handleOrphanedTask` skip it (it skips `completed` tasks) — matching exactly
+ *      what recovery's own `updateTask(status:'completed')` reap does. (#2705 review)
+ *   3. **Re-dispatch via the deduped advance loop** (`advanceAfterPlanStepSettled` for
+ *      directive projects, `advanceAfterSceneSettled` otherwise) — the SAME functions
+ *      recovery calls, so the project retries on its own in steady state, and at boot
+ *      the call is idempotent with recovery's advance (both go through the in-memory
+ *      inflight-dedup guards, so no double dispatch). This deliberately does NOT use
+ *      `handleOrphanedTask`/`resetOrphanedTasks`' raw task respawn, which the
+ *      `cdRecoveryDone` gate exists to keep from racing recovery.
+ *
+ * No-op for non-CD tasks; the CD-module imports are deferred so non-CD orphans pay
+ * nothing. Exported for unit testing.
+ *
+ * @param {object|null} task - the orphaned agent's task record.
+ * @returns {Promise<boolean>} true if a CD run was settled, false for a non-CD task.
+ */
+export async function settleOrphanedCreativeDirectorRun(task) {
+  const cd = task?.metadata?.creativeDirector;
+  if (!cd?.projectId || !cd?.runId) return false;
+  const now = new Date().toISOString();
+  const { updateRun, getProject } = await import('./creativeDirector/local.js');
+  // 1. Fail the stuck run (clears the maybeEnqueuePlan non-terminal-run guard).
+  await updateRun(cd.projectId, cd.runId, {
+    status: 'failed',
+    completedAt: now,
+    failureReason: 'agent process terminated unexpectedly (orphaned)',
+  }).catch((err) => console.log(`⚠️ CD orphan settle: run ${cd.runId?.slice(0, 8)} of ${cd.projectId} failed: ${err.message}`));
+  // 2. Retire the task the same way recovery does, so handleOrphanedTask (which
+  //    skips `completed` tasks) can't requeue a stale agent to race recovery.
+  //    CD tasks are internal (agentBridge#persistAndEmit adds them as 'internal').
+  if (task.id) {
+    await updateTask(task.id, {
+      status: 'completed',
+      metadata: { ...task.metadata, orphanedRunSettledAt: now },
+    }, 'internal').catch((err) => console.log(`⚠️ CD orphan settle: retire task ${task.id} failed: ${err.message}`));
+  }
+  // 3. Re-dispatch via the deduped advance loop (fire-and-forget, like recovery).
+  const project = await getProject(cd.projectId).catch(() => null);
+  if (project && project.status !== 'paused' && project.status !== 'failed') {
+    if (project.directive) {
+      const { advanceAfterPlanStepSettled } = await import('./creativeDirector/planAdvance.js');
+      advanceAfterPlanStepSettled(cd.projectId)
+        .catch((e) => console.log(`⚠️ CD orphan settle: plan advance for ${cd.projectId} failed: ${e.message}`));
+    } else {
+      const { advanceAfterSceneSettled } = await import('./creativeDirector/completionHook.js');
+      advanceAfterSceneSettled(cd.projectId)
+        .catch((e) => console.log(`⚠️ CD orphan settle: advance for ${cd.projectId} failed: ${e.message}`));
+    }
+  }
+  return true;
+}
+
 export async function cleanupOrphanedAgents() {
   const { getAgents, completeAgent: markComplete, evaluateTasks, getTaskById: getTask } = await import('./cos.js');
   const agents = await getAgents();
@@ -543,6 +615,13 @@ export async function cleanupOrphanedAgents() {
   // agent's own worktree is safe and stays.
   for (const { agentId } of orphanedTaskIds) {
     await cleanupAgentWorktree(agentId, false);
+  }
+
+  // Settle any Creative Director run tied to an orphaned agent (issue #2705)
+  // BEFORE the retry below, so the project can advance without a server restart.
+  for (const { taskId } of orphanedTaskIds) {
+    const task = await getTask(taskId).catch(() => null);
+    await settleOrphanedCreativeDirectorRun(task);
   }
 
   // Handle orphaned tasks - reset for retry or create investigation task

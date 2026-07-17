@@ -170,7 +170,7 @@ export default function CityHudCompact({
           <StatusDot on={connected} label={connected ? 'Link online' : 'Link offline'} onClass="bg-port-success shadow-[0_0_8px_rgba(34,197,94,0.6)]" offClass="bg-port-error" />
           <StatusDot on={cosStatus?.running} label={cosStatus?.running ? 'CoS running' : 'CoS idle'} onClass="bg-cyan-400 animate-pulse shadow-[0_0_8px_rgba(6,182,212,0.6)]" />
         </div>
-        {character?.level != null && (
+        {character?.level != null ? (
           <button
             type="button"
             onClick={() => navigate('/character')}
@@ -180,7 +180,19 @@ export default function CityHudCompact({
           >
             LV {character.level}
           </button>
-        )}
+        ) : character ? (
+          // Character loaded but no birthDate → level is null (age-based, #2673). Prompt the
+          // user to set it, routing to the age editor where the birth-date field lives.
+          <button
+            type="button"
+            onClick={() => navigate('/meatspace/age')}
+            aria-label="Set your birth date to show your level"
+            title="Set your birth date"
+            className="bg-black/85 backdrop-blur-sm border border-cyan-500/40 rounded-lg px-2.5 min-h-[44px] flex items-center font-pixel text-[11px] text-cyan-300/70 tracking-wider"
+          >
+            LV —
+          </button>
+        ) : null}
       </div>
 
       {/* Focused building detail sheet (issue #2593) — replaces the disclosure sheet while a

@@ -1,6 +1,11 @@
 /**
  * Character Sheet Service
- * D&D 5e-style character tracking XP, HP, level, damage, rests, and events.
+ *
+ * The Character's `level` is **life experience = age**: each year lived is a level
+ * (`level = Math.floor(ageYears)`), derived on read from the canonical `birthDate`
+ * (see #2673, epic #2672). `xp` survives only as a cumulative stat — it no longer
+ * drives level. HP/damage/rest mechanics are retained for backward-compat with a
+ * flat maxHp (no longer scaled off level).
  */
 
 import crypto from 'crypto';
@@ -8,26 +13,68 @@ import path from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import * as jiraService from './jira.js';
 import * as cosService from './cos.js';
+import { getBirthDate } from './meatspace.js';
 
 const CHARACTER_FILE = path.join(PATHS.data, 'character.json');
 
-const BASE_HP = 10;
-const HP_PER_LEVEL = 5;
+// HP is no longer scaled off level (level is now age, which would balloon maxHp). The
+// damage/rest mechanics survive for backward-compat against a flat maxHp.
+const DEFAULT_MAX_HP = 15;
 
-const XP_THRESHOLDS = [
+// Derived fields getCharacter() attaches on read; they are stripped before persisting so a
+// stale age-level never lands on disk or in the federated snapshot.
+const DERIVED_FIELDS = ['level', 'ageYears'];
+
+// Pure: fractional years lived since birthDate (whole years + progress toward the next
+// birthday), or null when birthDate is unset/invalid/future. Uses **calendar** birthdays,
+// not a fixed 365.25-day average — averaging would tick the level up to a day early across
+// leap years. UTC components are used on both sides so the tick lands on the birthday's UTC
+// date regardless of the server's local timezone.
+export function ageYearsFromBirthDate(birthDate, now = new Date()) {
+  if (!birthDate) return null;
+  const birth = new Date(birthDate);
+  if (Number.isNaN(birth.getTime()) || birth.getTime() > now.getTime()) return null;
+
+  // Completed calendar years = how many birthdays have passed.
+  let years = now.getUTCFullYear() - birth.getUTCFullYear();
+  const lastBirthday = new Date(birth);
+  lastBirthday.setUTCFullYear(birth.getUTCFullYear() + years);
+  if (lastBirthday.getTime() > now.getTime()) {
+    years -= 1;
+    lastBirthday.setUTCFullYear(lastBirthday.getUTCFullYear() - 1);
+  }
+  if (years < 0) return null;
+
+  // Fraction of the way from the last birthday to the next (progress toward next birthday).
+  const nextBirthday = new Date(lastBirthday);
+  nextBirthday.setUTCFullYear(lastBirthday.getUTCFullYear() + 1);
+  const span = nextBirthday.getTime() - lastBirthday.getTime();
+  // frac ∈ [0, 1): now is always ≥ lastBirthday and < nextBirthday. Do NOT round the sum —
+  // rounding e.g. 25.997 to 25.99→26.00 would push floor(ageYears) to the wrong level a day
+  // early. levelFromAge() floors this, and display consumers round the fractional part.
+  const frac = span > 0 ? Math.min(0.999999, Math.max(0, (now.getTime() - lastBirthday.getTime()) / span)) : 0;
+
+  return years + frac;
+}
+
+// Pure: age-based level = whole years lived. null when age is unknown.
+export function levelFromAge(ageYears) {
+  return Number.isFinite(ageYears) ? Math.floor(ageYears) : null;
+}
+
+// Legacy pre-#2673 XP→level curve, retained ONLY for the federation wire projection
+// (getWireCharacter) so an older peer — which still levels off XP — receives a level
+// consistent with the shared `xp`. NOT used for the live age-based level.
+const LEGACY_XP_THRESHOLDS = [
   0, 300, 900, 2700, 6500, 14000, 23000, 34000, 48000, 64000,
   85000, 100000, 120000, 140000, 165000, 195000, 225000, 265000, 305000, 355000
 ];
-
-function getLevelFromXP(xp) {
-  for (let i = XP_THRESHOLDS.length - 1; i >= 0; i--) {
-    if (xp >= XP_THRESHOLDS[i]) return i + 1;
+function legacyLevelFromXp(xp) {
+  const safe = Number.isFinite(xp) ? xp : 0;
+  for (let i = LEGACY_XP_THRESHOLDS.length - 1; i >= 0; i--) {
+    if (safe >= LEGACY_XP_THRESHOLDS[i]) return i + 1;
   }
   return 1;
-}
-
-function getMaxHP(level) {
-  return BASE_HP + (level * HP_PER_LEVEL);
 }
 
 function createEvent(type, description, overrides = {}) {
@@ -45,27 +92,14 @@ function createEvent(type, description, overrides = {}) {
   };
 }
 
-function recalcLevel(character) {
-  const oldLevel = character.level;
-  character.level = getLevelFromXP(character.xp);
-  character.maxHp = getMaxHP(character.level);
-  const leveledUp = character.level > oldLevel;
-  if (leveledUp) {
-    character.hp = character.maxHp;
-    console.log(`🎉 Level up! ${oldLevel} -> ${character.level}`);
-  }
-  return leveledUp;
-}
-
 export function createDefaultCharacter() {
   const now = new Date().toISOString();
   return {
     name: 'Adventurer',
     class: 'Developer',
     xp: 0,
-    hp: 15,
-    maxHp: 15,
-    level: 1,
+    hp: DEFAULT_MAX_HP,
+    maxHp: DEFAULT_MAX_HP,
     events: [],
     syncedJiraTickets: [],
     syncedTaskIds: [],
@@ -74,19 +108,53 @@ export function createDefaultCharacter() {
   };
 }
 
-export async function getCharacter() {
+// Read the persisted record (no derived fields), creating the default on first access.
+// Mutating paths build on this so they never re-persist a derived age-level.
+async function loadRawCharacter() {
   const data = await readJSONFile(CHARACTER_FILE, null);
   if (data) return data;
   const character = createDefaultCharacter();
-  await saveCharacter(character);
+  await ensureDir(PATHS.data);
+  await atomicWrite(CHARACTER_FILE, character);
   return character;
+}
+
+// Attach the age-derived read-only fields (`ageYears`, `level`) to a raw record. `level` is
+// null when no birthDate is set, so callers can render a "set your birth date" prompt.
+async function enrichCharacter(raw) {
+  const { birthDate } = await getBirthDate().catch(() => ({ birthDate: null }));
+  const ageYears = ageYearsFromBirthDate(birthDate);
+  return { ...raw, ageYears, level: levelFromAge(ageYears) };
+}
+
+export async function getCharacter() {
+  return enrichCharacter(await loadRawCharacter());
+}
+
+// Federation wire projection: the persisted record plus a backward-compatible integer `level`
+// for pre-#2673 peers, whose CharacterSheet indexes XP thresholds by `character.level` and
+// NaNs without it. The level is the LEGACY xp-derived value (what those peers compute from the
+// same shared `xp`), NOT the age level — deliberately so it stays a pure function of
+// `character.json`: the file-mtime checksum that fingerprints the `character` category then
+// still invalidates correctly, whereas an age/time-derived level would drift out of sync with
+// that checksum on a birthday or a birthDate edit (which touch a different file). It is not
+// persisted, and new peers ignore the remote level (applyCharacterRemote no longer merges it),
+// so this projection is invisible to same-version installs.
+export async function getWireCharacter() {
+  const raw = await readJSONFile(CHARACTER_FILE, null);
+  if (!raw) return null;
+  return { ...raw, level: legacyLevelFromXp(raw.xp) };
 }
 
 export async function saveCharacter(data) {
   await ensureDir(PATHS.data);
-  data.updatedAt = new Date().toISOString();
-  await atomicWrite(CHARACTER_FILE, data);
-  return data;
+  // Never persist derived fields — level is age-derived on read (#2673). Stripping them
+  // keeps a stale level off disk and out of the federated character snapshot.
+  const persist = { ...data };
+  for (const field of DERIVED_FIELDS) delete persist[field];
+  persist.updatedAt = new Date().toISOString();
+  await atomicWrite(CHARACTER_FILE, persist);
+  return enrichCharacter(persist);
 }
 
 // Persist a freshly-rendered avatar path onto the singleton character. Lets the
@@ -120,13 +188,13 @@ export function rollDice(notation) {
 export async function addXP(amount, source, description) {
   const character = await getCharacter();
   character.xp += amount;
-  const leveledUp = recalcLevel(character);
 
   character.events.push(createEvent('xp', description || `Gained ${amount} XP from ${source}`, { xp: amount }));
-  await saveCharacter(character);
+  const saved = await saveCharacter(character);
 
-  console.log(`✨ +${amount} XP (${source}) — total ${character.xp} XP, level ${character.level}`);
-  return { character, leveledUp, newLevel: character.level };
+  console.log(`✨ +${amount} XP (${source}) — total ${saved.xp} XP, level ${saved.level ?? '—'}`);
+  // xp no longer drives level (level is age-derived, #2673) — an XP gain never levels up.
+  return { character: saved, leveledUp: false, newLevel: saved.level };
 }
 
 export async function takeDamage(diceNotation, description) {
@@ -138,10 +206,10 @@ export async function takeDamage(diceNotation, description) {
   character.events.push(createEvent('damage', description || `Took ${roll.total} damage (${diceNotation})`, {
     damage: roll.total, diceNotation, diceRolls: roll.rolls
   }));
-  await saveCharacter(character);
+  const saved = await saveCharacter(character);
 
-  console.log(`💥 ${roll.total} damage (${diceNotation}: [${roll.rolls}]+${roll.modifier}) — ${character.hp}/${character.maxHp} HP`);
-  return { character, roll, totalDamage: roll.total };
+  console.log(`💥 ${roll.total} damage (${diceNotation}: [${roll.rolls}]+${roll.modifier}) — ${saved.hp}/${saved.maxHp} HP`);
+  return { character: saved, roll, totalDamage: roll.total };
 }
 
 export async function takeRest(type) {
@@ -157,10 +225,10 @@ export async function takeRest(type) {
   const hpRecovered = character.hp - oldHp;
 
   character.events.push(createEvent('rest', `${type === 'long' ? 'Long' : 'Short'} rest — recovered ${hpRecovered} HP`, { hpRecovered }));
-  await saveCharacter(character);
+  const saved = await saveCharacter(character);
 
-  console.log(`🛏️ ${type} rest — recovered ${hpRecovered} HP (${character.hp}/${character.maxHp})`);
-  return { character, hpRecovered };
+  console.log(`🛏️ ${type} rest — recovered ${hpRecovered} HP (${saved.hp}/${saved.maxHp})`);
+  return { character: saved, hpRecovered };
 }
 
 export async function addEvent(event) {
@@ -176,8 +244,6 @@ export async function addEvent(event) {
     character.hp = Math.max(0, character.hp - roll.total);
   }
 
-  const leveledUp = recalcLevel(character);
-
   const logEntry = createEvent('custom', event.description, {
     xp: event.xp || 0,
     damage: roll ? roll.total : 0,
@@ -186,10 +252,10 @@ export async function addEvent(event) {
   });
 
   character.events.push(logEntry);
-  await saveCharacter(character);
+  const saved = await saveCharacter(character);
 
   console.log(`📝 Custom event: ${event.description}`);
-  return { character, event: logEntry, leveledUp };
+  return { character: saved, event: logEntry, leveledUp: false };
 }
 
 const delay = ms => new Promise(r => setTimeout(r, ms));
@@ -234,11 +300,10 @@ export async function syncJiraXP() {
     }
   }
 
-  const leveledUp = recalcLevel(character);
-  await saveCharacter(character);
+  const saved = await saveCharacter(character);
 
   console.log(`🎫 Synced ${ticketCount} JIRA tickets for ${totalXP} XP`);
-  return { character, ticketCount, totalXP, leveledUp };
+  return { character: saved, ticketCount, totalXP, leveledUp: false };
 }
 
 export async function syncTaskXP() {
@@ -260,9 +325,8 @@ export async function syncTaskXP() {
     character.events.push(createEvent('xp', `Task: ${task.title || task.description || task.id}`, { xp }));
   }
 
-  const leveledUp = recalcLevel(character);
-  await saveCharacter(character);
+  const saved = await saveCharacter(character);
 
   console.log(`✅ Synced ${taskCount} tasks for ${totalXP} XP`);
-  return { character, taskCount, totalXP, leveledUp };
+  return { character: saved, taskCount, totalXP, leveledUp: false };
 }

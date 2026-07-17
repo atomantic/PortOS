@@ -28,6 +28,7 @@ import { mergeMediaCollectionsFromSync, listCollections, itemKey } from './media
 import { listSyncableSessionsForWire, mergeStorySessionsFromSync } from './storyBuilder.js';
 import { getStoryBuilderMutationEpoch } from './storyBuilderStore/store.js';
 import { sanitizeStateForWire } from '../lib/syncWire.js';
+import * as characterService from './character.js';
 import {
   getDigitalTwinSnapshot,
   applyDigitalTwinRemote,
@@ -262,7 +263,9 @@ async function applyGoalsRemote(remoteData) {
 // --- Category: Character ---
 
 async function getCharacterSnapshot() {
-  const data = await readJSONFile(CHARACTER_FILE, null);
+  // Use the wire projection (persisted record + a backward-compatible `level`) so pre-#2673
+  // peers still get a usable integer level even though `level` is no longer persisted (#2673).
+  const data = await characterService.getWireCharacter();
   if (!data) return { data: null, checksum: 'empty' };
   return { data, checksum: computeChecksum(data) };
 }
@@ -272,8 +275,11 @@ async function applyCharacterRemote(remoteData) {
 
   const local = await readJSONFile(CHARACTER_FILE, null);
   if (!local) {
-    // No local character — accept remote entirely
-    await atomicWrite(CHARACTER_FILE, remoteData);
+    // No local character — accept remote entirely, but strip a legacy persisted `level`
+    // (an older peer still sends it): level is age-derived on read now (#2673), so a stored
+    // value would be stale and would re-propagate in our own snapshot.
+    const { level: _staleLevel, ...accepted } = remoteData;
+    await atomicWrite(CHARACTER_FILE, accepted);
     console.log(`🔄 Character sync: accepted remote character`);
     return { applied: true, count: 1 };
   }
@@ -306,12 +312,14 @@ async function applyCharacterRemote(remoteData) {
     xp: Math.max(local.xp || 0, remoteData.xp || 0),
     hp: scalarSource.hp,
     maxHp: scalarSource.maxHp,
-    level: Math.max(local.level || 1, remoteData.level || 1),
+    // `level` is age-derived on read (#2673), not persisted — never merge a stale peer level.
     events: mergedEvents,
     syncedJiraTickets: mergedTickets,
     syncedTaskIds: mergedTasks,
     updatedAt: remoteTs > localTs ? remoteTs : localTs
   };
+  // Drop any legacy persisted `level` (carried through `...local`) — it's derived on read now.
+  delete merged.level;
 
   if (eventsChanged || remoteTs > localTs) {
     await atomicWrite(CHARACTER_FILE, merged);

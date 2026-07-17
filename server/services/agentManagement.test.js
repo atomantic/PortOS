@@ -74,13 +74,84 @@ vi.mock('./agentLifecycle.js', () => ({
   syncRunnerAgents: vi.fn().mockResolvedValue(0)
 }));
 vi.mock('./worktreeManager.js', () => ({ cleanupOrphanedWorktrees: vi.fn() }));
+vi.mock('./creativeDirector/local.js', () => ({
+  updateRun: vi.fn().mockResolvedValue(undefined),
+  getProject: vi.fn().mockResolvedValue(null),
+}));
+vi.mock('./creativeDirector/planAdvance.js', () => ({ advanceAfterPlanStepSettled: vi.fn().mockResolvedValue(undefined) }));
+vi.mock('./creativeDirector/completionHook.js', () => ({ advanceAfterSceneSettled: vi.fn().mockResolvedValue(undefined) }));
 
-import { handleOrphanedTask, pauseAgent } from './agentManagement.js';
+import { handleOrphanedTask, pauseAgent, settleOrphanedCreativeDirectorRun } from './agentManagement.js';
+import { updateRun, getProject } from './creativeDirector/local.js';
+import { advanceAfterPlanStepSettled } from './creativeDirector/planAdvance.js';
+import { advanceAfterSceneSettled } from './creativeDirector/completionHook.js';
 import { updateTask, addTask, getTaskById } from './cos.js';
 import { updateAgent } from './cosAgents.js';
 import { pauseAgentViaRunner } from './cosRunnerClient.js';
 import * as shellService from './shell.js';
 import { activeAgents, runnerAgents, pausedAgents } from './agentState.js';
+
+describe('settleOrphanedCreativeDirectorRun — reap a dead CD agent run (#2705)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('fails the run AND retires the task (so handleOrphanedTask skips it), then advances the plan', async () => {
+    // Directive project → the deduped plan-advance loop re-dispatches.
+    getProject.mockResolvedValueOnce({ id: 'cd-p1', status: 'planning', directive: { goal: 'x' } });
+    const task = {
+      id: 'cd-cd-p1-plan-abc',
+      metadata: { creativeDirector: { projectId: 'cd-p1', runId: 'run-abc', kind: 'plan', sceneId: null } },
+    };
+    const settled = await settleOrphanedCreativeDirectorRun(task);
+    expect(settled).toBe(true);
+    // (1) run failed with an orphan reason
+    expect(updateRun).toHaveBeenCalledWith(
+      'cd-p1',
+      'run-abc',
+      expect.objectContaining({ status: 'failed', failureReason: expect.stringContaining('orphaned') }),
+    );
+    // (2) task retired to `completed` — the boot-race fix: handleOrphanedTask skips completed tasks
+    expect(updateTask).toHaveBeenCalledWith(
+      'cd-cd-p1-plan-abc',
+      expect.objectContaining({ status: 'completed' }),
+      'internal',
+    );
+    // (3) re-dispatch via the deduped advance loop, not raw task respawn
+    expect(advanceAfterPlanStepSettled).toHaveBeenCalledWith('cd-p1');
+    expect(advanceAfterSceneSettled).not.toHaveBeenCalled();
+  });
+
+  it('uses the scene-advance loop for a legacy (non-directive) project', async () => {
+    getProject.mockResolvedValueOnce({ id: 'cd-p2', status: 'rendering', directive: null });
+    await settleOrphanedCreativeDirectorRun({
+      id: 'cd-cd-p2-evaluate-x',
+      metadata: { creativeDirector: { projectId: 'cd-p2', runId: 'run-xyz', kind: 'evaluate', sceneId: 's1' } },
+    });
+    expect(advanceAfterSceneSettled).toHaveBeenCalledWith('cd-p2');
+    expect(advanceAfterPlanStepSettled).not.toHaveBeenCalled();
+  });
+
+  it('does NOT re-dispatch a paused or failed project', async () => {
+    getProject.mockResolvedValueOnce({ id: 'cd-p3', status: 'paused', directive: { goal: 'x' } });
+    await settleOrphanedCreativeDirectorRun({
+      id: 'cd-cd-p3-plan-z',
+      metadata: { creativeDirector: { projectId: 'cd-p3', runId: 'run-z', kind: 'plan' } },
+    });
+    // still failed the run + retired the task, but no advance for a paused project
+    expect(updateRun).toHaveBeenCalled();
+    expect(updateTask).toHaveBeenCalledWith('cd-cd-p3-plan-z', expect.objectContaining({ status: 'completed' }), 'internal');
+    expect(advanceAfterPlanStepSettled).not.toHaveBeenCalled();
+    expect(advanceAfterSceneSettled).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op (no updateRun/updateTask) for a non-CD task or a CD task missing projectId/runId', async () => {
+    expect(await settleOrphanedCreativeDirectorRun({ id: 't', metadata: {} })).toBe(false);
+    expect(await settleOrphanedCreativeDirectorRun(null)).toBe(false);
+    // metadata present but incomplete — must not settle a run it can't identify.
+    expect(await settleOrphanedCreativeDirectorRun({ metadata: { creativeDirector: { projectId: 'cd-p1' } } })).toBe(false);
+    expect(updateRun).not.toHaveBeenCalled();
+    expect(updateTask).not.toHaveBeenCalled();
+  });
+});
 
 describe('handleOrphanedTask — duplicate-investigation guard', () => {
   beforeEach(() => {

@@ -21,15 +21,26 @@ describe('effectiveLevel', () => {
     expect(effectiveLevel({ level: 3.9 })).toBe(3); // floored
   });
 
-  it('derives level from xp when no usable level', () => {
+  it('derives level from xp only when the level field is ABSENT (legacy payload)', () => {
     expect(effectiveLevel({ xp: 300 })).toBe(2); // 300 xp → level 2
     expect(effectiveLevel({ xp: 0 })).toBe(1);
+  });
+
+  it('returns null for an explicit null level (age unknown) — no XP fallback', () => {
+    // Age-based level (#2673): birthDate unset → level: null. XP must not resurrect a level,
+    // or trophies/eggs would unlock while the HUD shows "LV —".
+    expect(effectiveLevel({ level: null, xp: 999999 })).toBeNull();
+    expect(effectiveLevel({ level: null, xp: 0 })).toBeNull();
+  });
+
+  it('treats age level 0 (birthDate < 1yr ago) as authoritative, not an XP fallback', () => {
+    expect(effectiveLevel({ level: 0, xp: 999999 })).toBe(0);
   });
 
   it('returns null when neither level nor xp is usable', () => {
     expect(effectiveLevel(null)).toBeNull();
     expect(effectiveLevel({})).toBeNull();
-    expect(effectiveLevel({ level: 0, xp: 'nope' })).toBeNull();
+    expect(effectiveLevel({ level: null, xp: 'nope' })).toBeNull();
   });
 });
 
