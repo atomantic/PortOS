@@ -310,6 +310,17 @@ describe('fileUtils', () => {
       expect(result).toEqual({});
     });
 
+    it('returns the array default when an array-defaulted file holds an object root', async () => {
+      // Regression guard: every array-defaulted caller in-tree goes straight to
+      // .filter/.find on the result (services/review.js#getItems,
+      // services/videoGen/local.js, routes/videoGen.js), so handing back a parsed
+      // object root would TypeError a request that used to degrade to an empty list.
+      const filePath = join(testDir, 'object-root.json');
+      await writeFile(filePath, '{"a":1}');
+
+      expect(await readJSONFile(filePath, [])).toEqual([]);
+    });
+
     it('returns the caller’s array default for garbage, not a manufactured []', async () => {
       // The noisy-output extraction used to manufacture a literal '[]' from text
       // holding no array, so a non-empty array default was silently replaced by an
@@ -428,6 +439,15 @@ describe('fileUtils', () => {
       await writeFile(filePath, '\x1b[31mwarning\x1b[0m [{"id":1}]');
 
       expect(await readJSONFileStrict(filePath, [])).toEqual({ ok: true, value: [{ id: 1 }] });
+    });
+
+    it('reports an object root as NOT ok when the caller declared an array default', async () => {
+      // The array default is a declared shape expectation — a strict caller counting
+      // a list must refuse an object it cannot count, rather than trusting it.
+      const filePath = join(testDir, 'object-root.json');
+      await writeFile(filePath, '{"sessions":[1,2]}');
+
+      expect(await readJSONFileStrict(filePath, [])).toEqual({ ok: false, value: [] });
     });
 
     it('does NOT manufacture a trustworthy empty from noise holding no array', async () => {

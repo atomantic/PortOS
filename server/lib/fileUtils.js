@@ -483,6 +483,20 @@ export async function readJSONFileStrict(filePath, defaultValue = null, { allowA
 
   const parsed = safeJSONParse(text, PARSE_FAILED, { allowArray, logError, context: filePath });
   if (parsed === PARSE_FAILED) return { ok: false, value: defaultValue };
+
+  // An array `defaultValue` is the caller declaring "I expect a list" — every such
+  // caller in-tree goes straight to `.filter`/`.find`/`.findIndex` on the result. A
+  // parsed object root therefore isn't a usable read: swallowing callers must still
+  // get their list back (a hand-edited or legacy-shaped file used to degrade to `[]`
+  // here, via the manufactured-'[]' path above, and would now TypeError instead), and
+  // a strict caller must refuse to count a shape it cannot count.
+  if (allowArray && Array.isArray(defaultValue) && !Array.isArray(parsed)) {
+    if (logError) {
+      console.warn(`Expected a JSON array in ${filePath}, got ${parsed === null ? 'null' : typeof parsed}`);
+    }
+    return { ok: false, value: defaultValue };
+  }
+
   return { ok: true, value: parsed };
 }
 
