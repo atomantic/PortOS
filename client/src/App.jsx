@@ -71,6 +71,7 @@ const VideoTimelineEditor = lazyWithReload(() => import('./pages/VideoTimelineEd
 const CreativeDirector = lazyWithReload(() => import('./pages/CreativeDirector'));
 const CreativeDirectorDetail = lazyWithReload(() => import('./pages/CreativeDirectorDetail'));
 const CreativeCommissions = lazyWithReload(() => import('./pages/CreativeCommissions'));
+const CreativeCommissionDetail = lazyWithReload(() => import('./pages/CreativeCommissionDetail'));
 const MusicVideo = lazyWithReload(() => import('./pages/MusicVideo'));
 const MoodBoards = lazyWithReload(() => import('./pages/MoodBoards'));
 const MoodBoardDetail = lazyWithReload(() => import('./pages/MoodBoardDetail'));
@@ -346,11 +347,14 @@ export default function App() {
           <Route path="creative-director" element={<CreativeDirector />} />
           <Route path="creative-director/:id" element={<CreativeDirectorOverviewRedirect />} />
           <Route path="creative-director/:id/:tab" element={<CreativeDirectorDetail />} />
+          {/* Index (list) hosts the create drawer at /new; `:id` is now a routed
+              detail page (editable config + render history), not a sidebar edit
+              drawer. React Router ranks the static `new` segment above `:id`, so
+              the index reads `new` off the pathname while every real id lands on
+              the detail page. */}
           <Route path="creative-commission" element={<CreativeCommissions />} />
-          {/* `:id` matches the literal `new` (create mode) too — a separate
-              static `new` route would render with no :id param and leave the
-              drawer closed, since React Router ranks the static segment higher. */}
-          <Route path="creative-commission/:id" element={<CreativeCommissions />} />
+          <Route path="creative-commission/new" element={<CreativeCommissions />} />
+          <Route path="creative-commission/:id" element={<CreativeCommissionDetail />} />
           <Route path="image-gen" element={<RedirectWithSearch to="/media/image" />} />
           <Route path="video-gen" element={<RedirectWithSearch to="/media/video" />} />
           <Route path="media-history" element={<RedirectWithSearch to="/media/history" />} />
