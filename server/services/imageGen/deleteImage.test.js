@@ -34,12 +34,18 @@ vi.mock('../../lib/pythonSetup.js', () => ({
 const unindexImage = vi.fn(async () => {});
 vi.mock('../mediaAssetIndex/index.js', () => ({ unindexImage }));
 
-// Real fs/promises, except tests can make unlink fail to simulate an
-// EACCES/EBUSY gallery (which deleteImage swallows, leaving the file on disk).
+// Real fs/promises, except tests can make unlink fail (simulating an
+// EACCES/EBUSY gallery, which deleteImage swallows, leaving the file on disk)
+// and make the post-delete stat probe fail (simulating an unreadable dir).
 let unlinkImpl = null;
+let statImpl = null;
 vi.mock('fs/promises', async () => {
   const actual = await vi.importActual('fs/promises');
-  return { ...actual, unlink: async (...args) => (unlinkImpl ? unlinkImpl(...args) : actual.unlink(...args)) };
+  return {
+    ...actual,
+    unlink: async (...args) => (unlinkImpl ? unlinkImpl(...args) : actual.unlink(...args)),
+    stat: async (...args) => (statImpl ? statImpl(...args) : actual.stat(...args)),
+  };
 });
 
 let tmpRoot;
@@ -64,6 +70,7 @@ afterAll(() => {
 beforeEach(() => {
   vi.clearAllMocks();
   unlinkImpl = null;
+  statImpl = null;
   rmSync(imagesDir, { recursive: true, force: true });
 });
 
@@ -109,7 +116,22 @@ describe('deleteImage → media asset index delete hook', () => {
     await expect(deleteImage('img-3.png')).resolves.toEqual({ ok: true });
     expect(existsSync(join(imagesDir, 'img-3.png'))).toBe(true);
     expect(unindexImage).not.toHaveBeenCalled();
-    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('survived delete'));
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('not confirmed gone'));
+    errSpy.mockRestore();
+  });
+
+  it('keeps the index row when the probe itself fails (unknown != absent)', async () => {
+    // An unreadable gallery dir must not read as "the file is gone". existsSync
+    // would return false here and retire a live row; only a definitive ENOENT
+    // may unindex.
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    unlinkImpl = async () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); };
+    statImpl = async () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); };
+    seedImage('img-4.png');
+
+    await expect(deleteImage('img-4.png')).resolves.toEqual({ ok: true });
+    expect(unindexImage).not.toHaveBeenCalled();
+    expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('EACCES'));
     errSpy.mockRestore();
   });
 });
