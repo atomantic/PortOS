@@ -119,6 +119,22 @@ describe('CharacterSheet name editing accessibility', () => {
     );
   });
 
+  it('clears the name to empty on Enter, returning to the placeholder (#2677)', async () => {
+    // The human-centered page renders '' as the "Your name" placeholder, so clearing must be a
+    // real save — not a skipped no-op — or the placeholder state is unreachable once a name is set.
+    renderSheet();
+    fireEvent.click(await findNameTrigger());
+    const input = screen.getByLabelText('Character name');
+    fireEvent.change(input, { target: { value: '' } });
+
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/character', { name: '' }, { silent: true }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /edit your name/i })).toHaveTextContent('Your name'),
+    );
+  });
+
   it('cancels the edit on Escape and restores the original name', async () => {
     renderSheet();
     fireEvent.click(await findNameTrigger());
