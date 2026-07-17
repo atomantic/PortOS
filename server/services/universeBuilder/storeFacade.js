@@ -7,9 +7,9 @@
  * is SYNCHRONOUS — it owns the per-id write queue + the mutation epoch + applies
  * `sanitizeTemplate` on read — and defers backend selection into each method, so
  * this service keeps calling `store()` exactly as it did the collectionStore.
- * Methods used here: loadOne / loadOneRaw / listIds / queueRecordWrite /
- * writeRecord(id, rec) / deleteRecord(id) / loadRuns / appendRun /
- * removeRunsForUniverses. `writeRecord`/`deleteRecord` replace the inline
+ * Methods used here: loadOne / loadOneRaw / listIds / listRaw / countUniverses /
+ * queueRecordWrite / writeRecord(id, rec) / deleteRecord(id) / loadRuns /
+ * appendRun / removeRunsForUniverses. `writeRecord`/`deleteRecord` replace the inline
  * ensureDir+atomicWrite(recordPath) / rm(recordDir) the file layout used, and
  * bump the mutation epoch so dataSync re-sends the universe snapshot to peers
  * (the storage swap stays invisible to federation — see the schema-design doc).

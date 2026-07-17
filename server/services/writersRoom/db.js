@@ -329,6 +329,22 @@ export async function listWorks() {
   return works.rows.map((w) => rowsToManifest(w, draftsByWork.get(w.id) || []));
 }
 
+/**
+ * Cheap live-work tally (#2729) — the count listWorks().length used to pay for
+ * by running the drafts query and rebuilding every work's full manifest.
+ *
+ * `deleted` here is a real column (not a JSONB mirror), and it is the SAME
+ * predicate listWorks() above filters on — so the two agree by construction.
+ * Unlike universeBuilder, no sanitizer sits between the row and the caller on
+ * this path, so there is no drop-on-read case to reconcile.
+ */
+export async function countWorks() {
+  const { rows } = await query(
+    `SELECT COUNT(*) AS count FROM writers_room_works WHERE deleted = FALSE`,
+  );
+  return parseInt(rows[0].count, 10);
+}
+
 // Bind tuple for one draft-version row from a manifest draft entry.
 function draftBinds(workId, draft) {
   return [

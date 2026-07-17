@@ -15,7 +15,7 @@ const local = await import('./local.js');
 const {
   countWords, contentHash, buildSegmentIndex,
   listFolders, createFolder, deleteFolder,
-  listWorks, createWork, getWork, getWorkWithBody, updateWork, deleteWork,
+  listWorks, countWorks, createWork, getWork, getWorkWithBody, updateWork, deleteWork,
   saveDraftBody, snapshotDraft, setActiveDraft, getDraftBody,
   listExercises, createExercise, finishExercise, discardExercise,
   resolveLiveMode, recordLiveModeUsage, recordLiveModeRenderUsage, DEFAULT_LIVE_MODE,
@@ -200,6 +200,24 @@ describe('work CRUD', () => {
     await deleteWork(work.id);
     await expect(getWork(work.id)).rejects.toThrow(/not found/i);
     expect(await listWorks()).toHaveLength(0);
+  });
+
+  it('countWorks excludes tombstones and agrees with listWorks().length', async () => {
+    // countWorks is the cheap tally the character skill registry reads instead of
+    // rebuilding every work's manifest + drafts[] for a `.length` (#2729). Pin it
+    // against listWorks so the two can never disagree — deleteWork soft-deletes
+    // (the tombstone stays on disk so the deletion federates), so a count that
+    // read the work directories alone would keep counting a deleted work forever.
+    expect(await countWorks()).toBe(0);
+
+    await createWork({ title: 'Kept' });
+    const doomed = await createWork({ title: 'Doomed' });
+    expect(await countWorks()).toBe(2);
+    expect(await countWorks()).toBe((await listWorks()).length);
+
+    await deleteWork(doomed.id);
+    expect(await countWorks()).toBe(1);
+    expect(await countWorks()).toBe((await listWorks()).length);
   });
 });
 

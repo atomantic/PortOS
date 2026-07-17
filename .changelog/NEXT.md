@@ -45,6 +45,7 @@
 ## Character Sheet
 
 - `[issue-2673]` **Your Character level is now your age.** The Character's level is reframed as life experience — `level = floor(age in years)`, derived on read from your canonical birth date instead of being ground out of XP thresholds (JIRA tickets + CoS tasks). XP survives as a cumulative stat but no longer drives level, and the CyberCity HUD badge now shows the age-based level with a progress bar toward your next birthday (a friendly "set birth date" prompt when no birth date is set yet). Existing character records keep loading unchanged, and the derived level is excluded from cross-machine sync so peers never fight over a stale value.
+- `[issue-2729]` The Character page loads faster the more you've written. Your Wordsmith skill used to be scored by loading every universe you own (plus their entire render history) and rebuilding every Writers Room work with all its drafts, just to count them — so the page got slower with each world and story you added. It now counts them directly in the database, leaving the score itself unchanged.
 
 ## Creative Commissions
 

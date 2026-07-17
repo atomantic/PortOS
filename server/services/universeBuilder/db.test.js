@@ -104,6 +104,35 @@ describe.skipIf(!dbReady)('universeBuilder DB adapter round-trip', () => {
     expect(all.find((r) => r.id === 'u-1').logline).toBe('x');
   });
 
+  it('countUniverses counts the live set without materializing it', async () => {
+    // The cheap tally the character skill registry reads (#2729). It counts the
+    // `deleted` MIRROR COLUMN, while the service filters listUniverses() on the
+    // JSONB flag — so this pins that the two can't drift: writeRaw derives both
+    // from the same record.deleted in one statement.
+    expect(await db.countUniverses()).toBe(0);
+
+    await db.writeRaw('live', U('live'));
+    await db.writeRaw('dead', U('dead', { deleted: true, deletedAt: '2026-02-02T00:00:00.000Z' }));
+    await db.writeRaw('ghost', U('ghost', { ephemeral: true }));
+
+    // listIds() sees all three; the tombstone must NOT be counted (the exact bug a
+    // naive listIds().length would introduce). Ephemeral universes DO count —
+    // listUniverses filters only on `deleted`, so filtering them here would undercount.
+    expect((await db.listIds())).toHaveLength(3);
+    expect(await db.countUniverses()).toBe(2);
+    // Agrees with the same filter the service applies to the JSONB flag on read.
+    expect(await db.countUniverses())
+      .toBe((await db.listRaw()).filter((r) => r?.deleted !== true).length);
+
+    expect(await db.countUniverses({ includeDeleted: true })).toBe(3);
+    expect(await db.countUniverses({ includeDeleted: true })).toBe((await db.listRaw()).length);
+
+    // Un-deleting through the normal write path rewrites both the column and the
+    // JSONB flag, so the count follows.
+    await db.writeRaw('dead', U('dead'));
+    expect(await db.countUniverses()).toBe(3);
+  });
+
   it('tolerates a malformed timestamp without throwing (falls back)', async () => {
     await db.writeRaw('u-bad', U('u-bad', { updatedAt: 'not-a-date', createdAt: 'nope' }));
     const back = await db.readRaw('u-bad');
