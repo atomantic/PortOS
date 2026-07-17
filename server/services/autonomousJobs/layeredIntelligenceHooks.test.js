@@ -213,6 +213,37 @@ describe('buildTaskInput', () => {
     expect(res.model).toBe('qwen');
   });
 
+  it('threads the resolved tracker coords into gatherSources so plannedWork can read the backlog (#2698)', async () => {
+    // gatherSources has no way to know WHERE the app's work lives — the hook is
+    // the only place the tracker is resolved, so it must hand it over or the
+    // plannedWork source silently no-ops.
+    await buildTaskInput({ app: APP });
+    expect(li.gatherSources).toHaveBeenCalledWith(
+      APP,
+      expect.anything(),
+      { tracker: { filer: 'forge', forgeCli: 'gh', cwd: '/repo', jira: null } }
+    );
+  });
+
+  it('threads jira coords into gatherSources for a jira-tracked app (#2698)', async () => {
+    resolveAppWorkTracker.mockResolvedValue({ resolved: 'jira', forge: null });
+    const jiraApp = { ...APP, jira: { enabled: true, instanceId: 'i1', projectKey: 'PROJ' } };
+    await buildTaskInput({ app: jiraApp });
+    expect(li.gatherSources).toHaveBeenCalledWith(
+      jiraApp,
+      expect.anything(),
+      { tracker: expect.objectContaining({ filer: 'jira', jira: expect.objectContaining({ instanceId: 'i1', projectKey: 'PROJ' }) }) }
+    );
+  });
+
+  it('passes the gathered plannedWork source through to buildPrompt (#2698)', async () => {
+    li.gatherSources.mockResolvedValue({ goals: 'be great', plannedWork: '2 item(s):\n- #3 Ship X' });
+    await buildTaskInput({ app: APP });
+    expect(li.buildPrompt).toHaveBeenCalledWith(expect.objectContaining({
+      sources: expect.objectContaining({ plannedWork: expect.stringContaining('#3 Ship X') })
+    }));
+  });
+
   it('skips the outcomes feedback loop when the source toggle is off', async () => {
     li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: {} });
     await buildTaskInput({ app: APP });

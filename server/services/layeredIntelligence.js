@@ -37,6 +37,32 @@ import { computeWindowedStats } from './taskLearning/store.js';
 export const LI_LABEL = 'layered-intelligence';
 export const LI_BLOCKING_LABEL = 'layered-intelligence:blocking';
 
+// The tracker label marking an issue as work the user has COMMITTED to — the
+// `plannedWork` source's filter (#2698). PortOS's own roadmap "lives entirely in
+// the GitHub issue tracker" as `plan`-labeled issues, and that convention is the
+// default for managed apps too.
+export const PLANNED_WORK_LABEL = 'plan';
+
+// How many planned-work items are surfaced to the reasoner. The point is to give
+// it enough of the committed backlog to spot an overlap, not to reproduce the
+// tracker — the count of the FULL set is always reported alongside, so a
+// truncated list never reads as the whole picture.
+export const PLANNED_WORK_MAX_ITEMS = 15;
+
+// Character bound for the rendered plannedWork block, matching the other
+// file-backed sources' 8000-char ceiling.
+export const PLANNED_WORK_MAX_CHARS = 8000;
+
+// The instruction buildPrompt attaches directly beneath the plannedWork block —
+// the whole point of the source: turn "here is the backlog" into "so do not file
+// against it".
+export const PLANNED_WORK_GUIDANCE = 'Cross-reference your proposal against the user\'s actively-planned work above. If your proposal duplicates or conflicts with an active item, DO NOT file — return proposal: null. Only propose genuinely new work that does NOT overlap with what is already in scope.';
+
+// Rendered when the tracker read SUCCEEDED and the app genuinely has no committed
+// backlog. Says so explicitly rather than omitting the block, so "nothing planned"
+// is legible to the reasoner as a real answer rather than a missing source.
+export const PLANNED_WORK_NONE = 'No actively-planned work is currently tracked for this app. (The tracker was read successfully — this is a real "nothing is planned", not a failed read.)';
+
 // Jira labels can't contain spaces, and a ':' is unsafe on some Jira versions,
 // so the Jira pause label swaps the ':' for a '-'. The base LI_LABEL is already
 // Jira-safe (kebab, no colon) and is reused verbatim across all trackers.
@@ -82,6 +108,11 @@ export const PROPOSAL_COMPLEXITIES = ['trivial', 'moderate', 'complex'];
 // lets the loop enqueue a coding agent instead of only filing the issue.
 export const HANDOFF_COMPLEXITY = 'trivial';
 
+// Merge rate (as a %) below which computeOutcomesReport tells the reasoner its
+// proposals are landing badly and points it at the plannedWork source (#2698).
+// Measured over RESOLVED proposals only — see computeOutcomesReport.
+export const LOW_MERGE_RATE_THRESHOLD = 20;
+
 // The resolved outcomes a filed proposal can reach (the feedback loop, #2428).
 // A record with a null outcome is still open/unresolved. All three are
 // auto-derived from the tracker's closed state by deriveOutcome: completed →
@@ -120,6 +151,14 @@ export function defaultLayeredIntelligenceConfig(isPortos = false) {
       healthReport: true,
       planMd: true,
       openIssues: true,
+      // The backlog the user has ALREADY committed to (#2698): `plan`-labeled
+      // tracker issues / the app's prioritized Jira backlog / PLAN.md's unchecked
+      // items. Open issues alone read as a flat list with no priority context, so
+      // the reasoner had no way to tell "nobody has looked at this" from "the user
+      // already scheduled this" — the top NOT_PLANNED rejection cause. On by
+      // default for every app: cross-referencing against committed work is only
+      // useful if it is there by default.
+      plannedWork: true,
       // The self-feedback signal (#2428): past LI proposals + their tracker
       // outcomes, fed back so the reasoner calibrates on its own merge rate.
       // Default ON for the PortOS install (it improves itself), OFF for managed
@@ -490,6 +529,24 @@ export function computeOutcomesReport({ outcomes = [] } = {}) {
     .filter(o => o.outcome === 'rejected' && o.outcomeReason)
     .map(o => o.outcomeReason))].slice(0, 5);
 
+  // Low-merge-rate alarm (#2698). Measured over RESOLVED proposals only
+  // (merged + rejected + abandoned), NOT over `total`: a still-open proposal has
+  // not failed, it just hasn't been judged yet, and dividing by `total` would let
+  // "filed yesterday, nobody has triaged it" read exactly like "the user threw it
+  // out" — the sentinel rule (pending ≠ rejected). `null` means "no resolved
+  // sample yet", which is distinct from a genuine 0% and stays silent rather than
+  // alarming an app whose first proposal is simply still in flight.
+  const resolved = merged + rejected + abandoned;
+  const resolvedMergeRate = resolved > 0 ? Math.round((merged / resolved) * 100) : null;
+  const lowMergeWarning = (resolvedMergeRate !== null && resolvedMergeRate < LOW_MERGE_RATE_THRESHOLD)
+    ? [
+      '',
+      `WARNING: your merge rate is critically low — only ${merged} of ${resolved} resolved proposals (${resolvedMergeRate}%) were merged.`,
+      'Review the "plannedWork" source above: your proposals may be overlapping with work the user has already committed to.',
+      'Propose only work that is clearly outside that committed backlog — and if you cannot find any, return proposal: null rather than filing something marginal.'
+    ]
+    : [];
+
   return [
     'Recent LI proposals (all still-open, plus outcomes resolved within ~30 days):',
     `- Total filed: ${total}`,
@@ -501,7 +558,8 @@ export function computeOutcomesReport({ outcomes = [] } = {}) {
     'By scope:',
     scopeLines || '- (none)',
     '',
-    `Common rejection reasons: ${reasons.length ? reasons.join('; ') : 'none'}`
+    `Common rejection reasons: ${reasons.length ? reasons.join('; ') : 'none'}`,
+    ...lowMergeWarning
   ].join('\n');
 }
 
@@ -517,7 +575,12 @@ export function buildPrompt({ app, config, sources = {}, openIssues = [], isPort
     isScopeAllowed({ scope: s, allowedScopes: config.allowedScopes, isPortos })
   );
   const scopeLines = allowed.map(s => `  - ${s}`).join('\n');
+  // plannedWork renders as its OWN block (below) rather than inside the generic
+  // source list, so the cross-reference guidance is guaranteed to sit directly
+  // under the committed backlog it refers to instead of drifting to wherever
+  // object key order happens to put it.
   const sourceBlocks = Object.entries(sources)
+    .filter(([k]) => k !== 'plannedWork')
     .filter(([, v]) => typeof v === 'string' && v.trim())
     .map(([k, v]) => `### ${k}\n${v.trim()}`)
     .join('\n\n');
@@ -540,6 +603,15 @@ export function buildPrompt({ app, config, sources = {}, openIssues = [], isPort
     ? '\nHand-off: a proposal you mark BOTH "complexity":"trivial" AND "safe":true may be handed directly to a coding agent to implement now (not just filed). Only mark a proposal trivial+safe when it is small, self-contained, and carries no regression or data-loss risk — when in doubt, use a higher complexity or "safe":false so a human triages it first.\n'
     : '';
 
+  // The committed backlog (#2698) + the instruction to check against it. Emitted
+  // whenever gatherPlannedWork produced ANY string — including its explicit
+  // "could not be read" marker, which must still reach the reasoner: silently
+  // dropping an unavailable read would look identical to "this app has nothing
+  // planned" and license a proposal straight into committed work.
+  const plannedWorkBlock = (typeof sources.plannedWork === 'string' && sources.plannedWork.trim())
+    ? `\n### plannedWork\n${sources.plannedWork.trim()}\n\n${PLANNED_WORK_GUIDANCE}\n`
+    : '';
+
   // Feedback loop (#2428): show the reasoner how its own past proposals fared so
   // it can calibrate scope/merge-rate instead of proposing in a vacuum.
   const outcomesBlock = (typeof outcomesReport === 'string' && outcomesReport.trim())
@@ -559,7 +631,7 @@ ${openList}
 
 Gathered sources:
 ${sourceBlocks || '(no sources available — you may propose an app-data-gap to add telemetry)'}
-${outcomesBlock}
+${plannedWorkBlock}${outcomesBlock}
 Respond with JSON only (no markdown fences):
 {
   "analysis": "brief reasoning summary",
@@ -596,12 +668,140 @@ function runCli(cmd, args, options = {}) {
 }
 
 /**
- * Gather the enabled Layer-1 sources for one app into a `{ key: string }` map.
- * Deterministic reads only (files + CoS metric JSON); NO LLM calls. Missing
- * files degrade to omitted keys, never throws. `openIssues` is gathered
- * separately by the handler (it shells out to the forge).
+ * Why a planned-work read came back empty-handed. Rendered INSTEAD of a listing so
+ * a failed tracker read can never be mistaken for "this app has nothing planned" —
+ * the two are opposite instructions to the reasoner (be conservative vs. the field
+ * is wide open), and collapsing them is exactly the failure the sentinel rule in
+ * CLAUDE.md exists to prevent.
  */
-export async function gatherSources(app, config, { cosPath = PATHS.cos, trustShellSources } = {}) {
+export function plannedWorkUnavailable(why) {
+  return `Planned work could NOT be read (${why}). Do NOT treat this as "nothing is planned" — this app may well have a committed backlog that simply could not be listed this run. Be conservative: prefer proposal: null over filing work that might already be in scope.`;
+}
+
+/**
+ * Render a planned-work item list into the prompt block. Pure.
+ *
+ * Reports the FULL count even when the list is truncated to `maxItems`, so the
+ * reasoner knows it is seeing the top of a larger backlog rather than all of it —
+ * "15 items shown" out of 200 must not read as "there are only 15".
+ */
+export function formatPlannedWork(items, { maxItems = PLANNED_WORK_MAX_ITEMS, maxChars = PLANNED_WORK_MAX_CHARS } = {}) {
+  const list = (Array.isArray(items) ? items : []).filter(i => i && typeof i === 'object' && (i.title || i.number != null));
+  if (list.length === 0) return PLANNED_WORK_NONE;
+  const top = list.slice(0, maxItems);
+  const lines = top.map(i => {
+    const ref = i.number != null ? `#${i.number} ` : '';
+    const meta = [
+      i.priority ? `priority: ${i.priority}` : null,
+      Array.isArray(i.labels) && i.labels.length ? `labels: ${i.labels.join(', ')}` : null
+    ].filter(Boolean).join('; ');
+    return `- ${ref}${(i.title || '').trim()}${meta ? ` (${meta})` : ''}`;
+  });
+  const header = list.length > top.length
+    ? `${list.length} items of actively-planned work the user has already committed to (showing the top ${top.length}):`
+    : `${list.length} item(s) of actively-planned work the user has already committed to:`;
+  return [header, ...lines].join('\n').slice(0, maxChars);
+}
+
+/**
+ * Extract a PLAN.md's UNCHECKED (`- [ ]`) items — the plan tracker's equivalent of
+ * a `plan`-labeled issue. A `- [x]` item is finished work, not committed-and-
+ * pending, so it is excluded: proposing something already done is a different
+ * (and already-handled) problem than proposing something already scheduled.
+ */
+export function extractPlannedPlanItems(planContent) {
+  if (typeof planContent !== 'string') return [];
+  const items = [];
+  const re = /^[ \t]*[-*][ \t]+\[ \][ \t]*(\S.*)$/gm;
+  let m;
+  while ((m = re.exec(planContent))) {
+    const title = m[1].replace(/\s+/g, ' ').trim();
+    if (title) items.push({ number: null, title: title.slice(0, 200), labels: [], priority: null });
+  }
+  return items;
+}
+
+/**
+ * Gather the app's actively-planned work — the backlog the user has ALREADY
+ * committed to — so the reasoner can cross-reference a proposal against it before
+ * filing (#2698). A deterministic tracker read: files + `gh`/`glab`/Jira REST, and
+ * NO LLM call (the no-cold-bootstrap rule).
+ *
+ * Returns a prompt-ready string, or `null` when the source does not apply at all
+ * (unresolvable tracker, or a plan-tracked app with no PLAN.md) — three distinct
+ * states, never collapsed:
+ *   - `null`                     → nothing to say; buildPrompt omits the block
+ *   - `plannedWorkUnavailable()` → the read FAILED; be conservative
+ *   - a listing / PLANNED_WORK_NONE → the read SUCCEEDED and is trustworthy
+ *
+ * Deps are injectable so tests drive every branch without a live tracker.
+ */
+export async function gatherPlannedWork({
+  filer,
+  forgeCli,
+  cwd,
+  jira,
+  listForge = listForgeIssues,
+  listJira = listJiraIssues,
+  readFileFn = tryReadFile
+} = {}) {
+  if (filer === 'forge' && forgeCli && cwd) {
+    const { ok, issues } = await listForge({ cli: forgeCli, cwd, label: PLANNED_WORK_LABEL, state: 'open' });
+    if (!ok) return plannedWorkUnavailable(`the ${forgeCli} issue list failed`);
+    // gh honors --state open, but glab's label list can still surface a closed
+    // issue depending on version — re-filter so a done item never reads as pending.
+    const open = issues.filter(i => i.state === 'open');
+    return formatPlannedWork(open.map(i => ({
+      number: i.number,
+      title: i.title,
+      labels: i.labels || [],
+      priority: extractIssuePriority(i.labels)
+    })));
+  }
+
+  if (filer === 'jira' && jira?.instanceId && jira?.projectKey) {
+    const { ok, issues } = await listJira({
+      instanceId: jira.instanceId,
+      projectKey: jira.projectKey,
+      jql: plannedWorkJql(jira.projectKey),
+      // Jira's priority field is not in searchIssues' default `fields` set — ask
+      // for it explicitly, or every item would report a null priority.
+      searchOptions: { fields: 'summary,status,labels,updated,description,resolutiondate,priority' }
+    });
+    if (!ok) return plannedWorkUnavailable('the Jira search failed');
+    const open = issues.filter(i => i.state === 'open');
+    return formatPlannedWork(open.map(i => ({
+      number: i.number,
+      title: i.title,
+      labels: i.labels || [],
+      // Prefer Jira's real priority field; fall back to a priority-ish label.
+      priority: i.priority || extractIssuePriority(i.labels)
+    })));
+  }
+
+  if (filer === 'plan' && cwd) {
+    const planPath = join(cwd, 'PLAN.md');
+    // No PLAN.md at all is a real "nothing is planned" for a plan-tracked app —
+    // distinguish it from a PLAN.md that EXISTS but could not be read (a genuine
+    // failure), which tryReadFile's null would otherwise conflate.
+    if (!existsSync(planPath)) return PLANNED_WORK_NONE;
+    const content = await readFileFn(planPath);
+    if (typeof content !== 'string') return plannedWorkUnavailable('PLAN.md exists but could not be read');
+    return formatPlannedWork(extractPlannedPlanItems(content));
+  }
+
+  return null;
+}
+
+/**
+ * Gather the enabled Layer-1 sources for one app into a `{ key: string }` map.
+ * Deterministic reads only (files + CoS metric JSON + tracker lists); NO LLM calls.
+ * Missing files degrade to omitted keys, never throws. `openIssues` is gathered
+ * separately by the handler (it shells out to the forge). `tracker`
+ * (`{ filer, forgeCli, cwd, jira }`, resolved by the caller) enables the
+ * plannedWork source — absent, that source is simply skipped.
+ */
+export async function gatherSources(app, config, { cosPath = PATHS.cos, trustShellSources, tracker = null } = {}) {
   const out = {};
   const src = config.sources || {};
   const repo = app.repoPath;
@@ -633,6 +833,13 @@ export async function gatherSources(app, config, { cosPath = PATHS.cos, trustShe
   if (src.healthReport && repo) {
     const health = await tryReadFile(join(repo, 'HEALTH_REPORT.md'));
     if (health) out.healthReport = health.slice(0, 8000);
+  }
+  if (src.plannedWork && tracker) {
+    // The committed backlog (#2698). Unlike the file sources above, an EMPTY or
+    // FAILED result still emits a key — each renders a distinct sentence, and
+    // both are meaningful instructions to the reasoner (see gatherPlannedWork).
+    const planned = await gatherPlannedWork(tracker);
+    if (planned) out.plannedWork = planned.slice(0, PLANNED_WORK_MAX_CHARS);
   }
   if (src.cosMetrics) {
     // This install's own autonomous-agent run stats (per task type), NOT scoped to
@@ -879,18 +1086,56 @@ export function normalizeIssueState(state) {
 }
 
 /**
- * List existing layered-intelligence issues on a forge (open + recently closed)
- * so the handler can feed them to the reasoner and run the dedup guard.
+ * Normalize a forge issue's labels to a plain `string[]`. gh reports objects
+ * (`[{ name, color, … }]`); glab reports bare strings. Anything unrecognized
+ * drops out rather than rendering `[object Object]` into the reasoner's prompt.
+ */
+export function normalizeIssueLabels(raw) {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .map(l => (typeof l === 'string' ? l : l?.name))
+    .filter(l => typeof l === 'string' && l.trim())
+    .map(l => l.trim());
+}
+
+/**
+ * Best-effort priority read from an issue's labels — there is no cross-forge
+ * priority field, so the common label conventions are matched instead:
+ * `priority: high` / `priority/high`, `P0`–`P4`, and a bare
+ * `critical|urgent|high|medium|low` (optionally suffixed `-priority`).
+ *
+ * Returns null when no label looks like a priority. Null means "this issue
+ * carries no priority label", NOT "priority zero" — the renderer omits the field
+ * entirely rather than inventing a default the tracker never asserted.
+ */
+export function extractIssuePriority(labels = []) {
+  const re = /^(?:priority[:/\s-]+(.+)|p([0-4])|(critical|urgent|high|medium|low)(?:[\s-]priority)?)$/i;
+  for (const label of normalizeIssueLabels(labels)) {
+    const m = label.match(re);
+    if (!m) continue;
+    const value = m[1] ?? (m[2] != null ? `p${m[2]}` : m[3]);
+    if (typeof value === 'string' && value.trim()) return value.trim().toLowerCase();
+  }
+  return null;
+}
+
+/**
+ * List issues on a forge. Defaults to the layered-intelligence set (open +
+ * recently closed) for the reasoner + dedup guard; `label`/`state` are
+ * parameterized so the plannedWork source (#2698) can reuse the exact same
+ * parse/normalize path for the `plan`-labeled committed backlog.
  *
  * Returns `{ ok, issues }` — `ok:false` means the tracker read FAILED (CLI error
  * or unparseable output), which is NOT the same as "no existing issues" (`ok:true,
  * issues:[]`). The handler must NOT file when the read failed, or a transient
  * `gh` blip would defeat dedup and file a duplicate (CLAUDE.md sentinel rule).
  */
-export async function listForgeIssues({ cli, cwd, env, exec = runCli } = {}) {
+export async function listForgeIssues({ cli, cwd, env, label = LI_LABEL, state = 'all', exec = runCli } = {}) {
+  // glab lists open issues by default and needs `--all` to widen to every state;
+  // gh takes the state explicitly.
   const args = cli === 'glab'
-    ? ['issue', 'list', '--label', LI_LABEL, '--all', '-P', '100', '-F', 'json']
-    : ['issue', 'list', '--label', LI_LABEL, '--state', 'all', '--limit', '100', '--json', 'number,title,body,state,stateReason,closedAt,url'];
+    ? ['issue', 'list', '--label', label, ...(state === 'all' ? ['--all'] : []), '-P', '100', '-F', 'json']
+    : ['issue', 'list', '--label', label, '--state', state, '--limit', '100', '--json', 'number,title,body,state,stateReason,closedAt,url,labels'];
   const { code, stdout } = await exec(cli, args, { cwd, env });
   if (code !== 0) return { ok: false, issues: [] };
   if (!stdout.trim()) return { ok: true, issues: [] };
@@ -911,6 +1156,7 @@ export async function listForgeIssues({ cli, cwd, env, exec = runCli } = {}) {
       // the overview's proposal links degrade to a plain count rather than a
       // dead href.
       url: i.url || i.web_url || null,
+      labels: normalizeIssueLabels(i.labels),
       slug: extractSlugFromBody(i.body || i.description || '') || extractSlugFromBody(i.title || '')
     }))
   };
@@ -1011,10 +1257,14 @@ export function normalizeJiraState(statusCategory) {
  * failed-vs-empty contract: a thrown search is `ok:false` (do NOT file — a blind
  * dedup would duplicate); an empty result is `ok:true, issues:[]`.
  */
-export async function listJiraIssues({ instanceId, projectKey, search = searchIssues } = {}) {
+export async function listJiraIssues({ instanceId, projectKey, jql, searchOptions, search = searchIssues } = {}) {
   if (!instanceId || !projectKey) return { ok: false, issues: [] };
-  const jql = `project = "${escapeJql(projectKey)}" AND labels = "${LI_LABEL}" ORDER BY updated DESC`;
-  const rows = await search(instanceId, jql).then(r => r, () => null);
+  // `jql` lets the plannedWork source (#2698) reuse this parse path for the
+  // prioritized backlog; absent, it's the layered-intelligence label set.
+  const query = jql || `project = "${escapeJql(projectKey)}" AND labels = "${LI_LABEL}" ORDER BY updated DESC`;
+  const rows = searchOptions
+    ? await search(instanceId, query, searchOptions).then(r => r, () => null)
+    : await search(instanceId, query).then(r => r, () => null);
   if (!Array.isArray(rows)) return { ok: false, issues: [] };
   return {
     ok: true,
@@ -1024,9 +1274,29 @@ export async function listJiraIssues({ instanceId, projectKey, search = searchIs
       body: i.description || '',
       state: normalizeJiraState(i.statusCategory),
       closedAt: i.resolutiondate || null,
+      labels: normalizeIssueLabels(i.labels),
+      // Jira DOES have a real priority field (unlike the forges) — but only when
+      // the caller asked searchIssues for it. Absent → null → the renderer omits
+      // it, rather than a fabricated default.
+      priority: typeof i.priority === 'string' && i.priority.trim() ? i.priority.trim() : null,
       slug: extractSlugFromBody(i.description || '') || extractSlugFromBody(i.summary || '')
     }))
   };
+}
+
+/**
+ * The JQL for a Jira project's committed backlog (#2698): everything not Done,
+ * highest priority first.
+ *
+ * Deliberately NOT `sprint in openSprints()` — the Sprint field only exists on
+ * boards backed by a Scrum board, and JQL referencing an absent field is a hard
+ * 400 rather than an empty result. That would make gatherPlannedWork report
+ * "unavailable" forever on every Kanban/basic project. Priority ordering + the
+ * item cap is the portable equivalent: it works on every project shape and still
+ * surfaces the top of the backlog.
+ */
+export function plannedWorkJql(projectKey) {
+  return `project = "${escapeJql(projectKey)}" AND statusCategory != Done ORDER BY priority DESC, updated DESC`;
 }
 
 /**

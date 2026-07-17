@@ -19,6 +19,7 @@ export const LI_SOURCE_FIELDS = [
   { key: 'healthReport', label: 'Health report', hint: 'Latest health / lint / test summary' },
   { key: 'planMd', label: 'PLAN.md', hint: 'The app\'s open work-plan items' },
   { key: 'openIssues', label: 'Open issues', hint: 'Currently open tracker issues' },
+  { key: 'plannedWork', label: 'Planned work', hint: 'The backlog you\'ve already committed to (plan-labeled issues / prioritized Jira backlog / unchecked PLAN.md items), so the loop won\'t propose work that\'s already in scope' },
   { key: 'outcomes', label: 'Proposal outcomes', hint: 'Past LI proposals + how they fared (merge rate), fed back so the loop calibrates on its own results' }
 ];
 
