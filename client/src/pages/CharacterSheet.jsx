@@ -517,30 +517,19 @@ export default function CharacterSheet() {
               </div>
             </div>
 
-            {/* Level Badge — life experience = age (#2673). When no birthDate is set the level
-                is null, so instead of a "—" badge we prompt the user to set their birth date,
-                deep-linking to the age editor where the field actually lives. */}
-            <div className="flex-shrink-0 flex items-center gap-3">
-              {char.level != null ? (
+            {/* Level Badge — life experience = age (#2673). Rendered only when a birthDate is
+                set; when the level is null the single call-to-action is the birth-date prompt
+                banner below (avoids two adjacent CTAs firing the same navigation). */}
+            {char.level != null && (
+              <div className="flex-shrink-0 flex items-center gap-3">
                 <div className="relative w-20 h-20 flex items-center justify-center rounded-full border-2 border-port-accent bg-port-bg">
                   <div className="text-center">
                     <div className="text-2xl font-bold text-port-accent">{char.level}</div>
                     <div className="text-[10px] uppercase tracking-wider text-gray-500">Level</div>
                   </div>
                 </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => navigate('/meatspace/age')}
-                  aria-label="Set your birth date to show your level"
-                  title="Set your birth date"
-                  className="w-20 h-20 flex flex-col items-center justify-center gap-1 rounded-full border-2 border-dashed border-port-accent/60 bg-port-bg text-port-accent hover:bg-port-accent/10 transition-colors px-1 text-center"
-                >
-                  <Cake className="w-5 h-5" />
-                  <span className="text-[10px] leading-tight">Set birth date</span>
-                </button>
-              )}
-            </div>
+              </div>
+            )}
           </div>
 
           {/* Birth-date prompt — the human-centered level is age (#2673). Until a birth date
