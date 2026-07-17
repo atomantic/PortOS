@@ -85,6 +85,12 @@ export default function ChiefOfStaff() {
   );
   const [activeAgentMeta, setActiveAgentMeta] = useState(null);
   const [learningSummary, setLearningSummary] = useState(null);
+  // Actionable insights (blocked/approval/health counts) are fetched here in
+  // fetchData and passed to ActionableInsightsBanner as a prop, so every trigger
+  // that refetches CoS data — task mutations, socket-driven changes, health
+  // checks, the 30s poll — refreshes the banner without a separate signal. null
+  // until the first fetch resolves; preserved across transient fetch failures.
+  const [insights, setInsights] = useState(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
   const tabsRef = useRef(null);
@@ -120,23 +126,47 @@ export default function ChiefOfStaff() {
   }, []);
 
   const fetchData = useCallback(async () => {
-    const [statusData, tasksData, agentsData, healthData, providersData, appsData, learningSummaryData] = await Promise.all([
+    const [statusData, tasksData, agentsData, healthData, providersData, appsData, learningSummaryData, insightsData] = await Promise.all([
       api.getCosStatus().catch(() => null),
       api.getCosTasks().catch(() => ({ user: null, cos: null })),
       api.getCosAgents().catch(() => []),
       api.getCosHealth().catch(() => null),
       api.getProviders().catch(() => ({ providers: [] })),
       api.getApps().catch(() => []),
-      api.getCosLearningSummary().catch(() => null)
+      api.getCosLearningSummary().catch(() => null),
+      // `silent: true` keeps transient poll blips quiet, matching the banner's
+      // retired 60s poll; `.catch(() => null)` → preserve last-good below.
+      api.getCosActionableInsights({ silent: true }).catch(() => null)
     ]);
     setStatus(statusData);
     setTasks(tasksData);
     setAgents(agentsData);
-    setHealth(healthData);
+    // `getCosHealth` above reads the *pre-check* persisted health, while the
+    // getCosActionableInsights call in this same batch triggers a fresh server
+    // health check (cos.runHealthCheck) that emits `cos:health:check` — the
+    // socket handler's setHealth can land in `prev` before this runs. Don't let
+    // this fetch's older read clobber that fresher result; keep whichever health
+    // check is newer by lastCheck (Date.parse normalizes the ISO timestamps so
+    // the compare never goes lexicographic). A failed read (null) keeps the
+    // last-good health rather than blanking a fresher socket-delivered one.
+    setHealth(prev => {
+      if (!healthData) return prev ?? null;
+      const prevT = Date.parse(prev?.lastCheck ?? '');
+      const newT = Date.parse(healthData.lastCheck ?? '');
+      // Keep prev when it is strictly newer, OR when this read has no comparable
+      // timestamp but prev does — a timestamped health check is fresher than an
+      // untimed read, so an absent/unparseable lastCheck must not clobber it.
+      if (!Number.isNaN(prevT) && (Number.isNaN(newT) || newT < prevT)) return prev;
+      return healthData;
+    });
     setProviders(providersData.providers || []);
     // Filter out PortOS Autofixer (it's part of PortOS project)
     setApps(appsData.filter(a => a.id !== 'portos-autofixer'));
     setLearningSummary(learningSummaryData);
+    // Apply a real insights payload (including a legitimately-empty []); a null
+    // from a failed/transient fetch preserves the last-good array so the banner
+    // doesn't flicker empty on a blip.
+    if (insightsData?.insights) setInsights(insightsData.insights);
     setLoading(false);
 
     const newState = deriveAgentState(statusData, agentsData, healthData);
@@ -148,6 +178,16 @@ export default function ChiefOfStaff() {
     const runningAgent = agentsData.find(a => a.status === 'running');
     setActiveAgentMeta(runningAgent?.metadata || null);
   }, [deriveAgentState]);
+
+  // NOTE: there is deliberately no on-demand "refresh just the banner insights"
+  // path. The /cos/actionable-insights endpoint runs a health check that
+  // AUTO-RESTARTS errored PM2 processes (see server/services/cosHealthMonitor.js)
+  // and re-emits `cos:health:check`. So an on-demand refresh — whether from the
+  // `cos:health:check` socket handler or the manual "Run Check" button — would
+  // either loop (socket) or fire a second, redundant process-restart ~1s after
+  // the button's own check. The banner's server-derived counts refresh only
+  // through fetchData: the 30s poll, task mutations (TasksTab onRefresh), the
+  // unblock-up path, and agent spawn/completion (which already call fetchData).
 
   // Redirect unknown tab IDs to the default tab — `activeTab !== tab` only
   // when the param failed validation and fell back.
@@ -249,6 +289,9 @@ export default function ChiefOfStaff() {
 
     const handleHealthCheck = (data) => {
       setHealth({ lastCheck: data.metrics?.timestamp, issues: data.issues });
+      // Do NOT refresh banner insights here — /cos/actionable-insights runs a
+      // health check that re-emits this very socket event, which would loop
+      // (see the note by the redirect effect). Banner refreshes on the next poll.
       if (data.issues?.length > 0) {
         setAgentState('investigating');
         setStatusMessage(`Health check: ${data.issues.length} issue${data.issues.length > 1 ? 's' : ''} found`);
@@ -328,12 +371,18 @@ export default function ChiefOfStaff() {
   };
 
   const handleForceEvaluate = async () => {
-    await api.forceCosEvaluate({ silent: true }).catch(err => toast.error(err.message));
-    toast.success('Evaluation triggered');
-    setAgentState('thinking');
-    setStatusMessage("Evaluating tasks...");
-    setSpeaking(true);
-    setTimeout(() => setSpeaking(false), 2000);
+    // Only announce success / drive the "thinking" state after the request
+    // actually resolves — a failed evaluate must not flash a success toast.
+    try {
+      await api.forceCosEvaluate({ silent: true });
+      toast.success('Evaluation triggered');
+      setAgentState('thinking');
+      setStatusMessage("Evaluating tasks...");
+      setSpeaking(true);
+      setTimeout(() => setSpeaking(false), 2000);
+    } catch (err) {
+      toast.error(err.message);
+    }
   };
 
   const handleTaskUnblocked = (taskId) => {
@@ -376,6 +425,10 @@ export default function ChiefOfStaff() {
     setSpeaking(false);
     if (result) {
       setHealth({ lastCheck: result.metrics?.timestamp, issues: result.issues });
+      // Do NOT refresh the banner insights here — /cos/actionable-insights runs
+      // a process-restarting health check, so an on-demand refresh would fire a
+      // second restart ~1s after forceHealthCheck's own. The banner's health
+      // count refreshes on the next fetchData poll instead (see the note above).
       toast.success('Health check complete');
       if (result.issues?.length > 0) {
         setStatusMessage(`Health: ${result.issues.length} issue${result.issues.length > 1 ? 's' : ''} detected`);
@@ -538,7 +591,7 @@ export default function ChiefOfStaff() {
       {desktopPanelCollapsed && (
         <button
           onClick={toggleDesktopPanel}
-          className="hidden lg:flex absolute left-0 top-2 z-20 p-1.5 text-gray-500 hover:text-white transition-colors rounded-r-md hover:bg-slate-800/80 bg-slate-900/60 border border-l-0 border-port-accent-2/20"
+          className="hidden lg:flex absolute left-0 top-2 z-20 p-1.5 text-port-text-muted hover:text-port-text transition-colors rounded-r-md hover:bg-port-border/80 bg-port-card/60 border border-l-0 border-port-accent-2/20"
           aria-label="Expand CoS panel"
           title="Expand CoS panel"
         >
@@ -593,10 +646,10 @@ export default function ChiefOfStaff() {
         <>
           <div className="hidden lg:block overflow-hidden min-w-0" />
           {/* Mobile: still show the compact header */}
-          <div className="lg:hidden border-b border-port-accent-2/20 bg-gradient-to-b from-slate-900/80 to-slate-900/40">
+          <div className="lg:hidden border-b border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40">
             <button
               onClick={() => setAgentPanelCollapsed(!agentPanelCollapsed)}
-              className="flex items-center justify-between w-full px-3 py-2 bg-slate-900/60 border-b border-port-accent-2/20 min-h-[40px]"
+              className="flex items-center justify-between w-full px-3 py-2 bg-port-card/60 border-b border-port-accent-2/20 min-h-[40px]"
               aria-expanded={!agentPanelCollapsed}
               aria-controls="cos-agent-panel"
             >
@@ -633,7 +686,7 @@ export default function ChiefOfStaff() {
           </div>
         </>
       ) : (
-        <div className="relative flex flex-col border-b lg:border-b-0 lg:border-r border-port-accent-2/20 bg-gradient-to-b from-slate-900/80 to-slate-900/40 shrink-0 w-full max-w-full overflow-x-hidden lg:h-full lg:overflow-y-auto scrollbar-hide">
+        <div className="relative flex flex-col border-b lg:border-b-0 lg:border-r border-port-accent-2/20 bg-gradient-to-b from-port-card/80 to-port-card/40 shrink-0 w-full max-w-full overflow-x-hidden lg:h-full lg:overflow-y-auto scrollbar-hide">
           {/* Desktop Collapse Button */}
           <button
             onClick={toggleDesktopPanel}
@@ -647,7 +700,7 @@ export default function ChiefOfStaff() {
           {/* Mobile Collapse Toggle Header */}
           <button
             onClick={() => setAgentPanelCollapsed(!agentPanelCollapsed)}
-            className="lg:hidden flex items-center justify-between w-full px-3 py-2 bg-slate-900/60 border-b border-port-accent-2/20 min-h-[40px]"
+            className="lg:hidden flex items-center justify-between w-full px-3 py-2 bg-port-card/60 border-b border-port-accent-2/20 min-h-[40px]"
             aria-expanded={!agentPanelCollapsed}
             aria-controls="cos-agent-panel"
           >
@@ -674,7 +727,7 @@ export default function ChiefOfStaff() {
           {/* Collapsible Content */}
           <div
             id="cos-agent-panel"
-            className={`${agentPanelCollapsed ? 'hidden' : 'flex'} lg:flex min-w-0 relative overflow-hidden ${hasCanvasAvatar ? 'flex-none min-h-[180px] sm:min-h-[190px] md:min-h-[190px] lg:min-h-[min(460px,calc(100vh-1rem))] xl:min-h-[min(620px,calc(100vh-1rem))]' : 'flex-1'}`}
+            className={`${agentPanelCollapsed ? 'hidden' : 'flex'} lg:flex min-w-0 relative overflow-hidden ${hasCanvasAvatar ? 'flex-none min-h-[180px] sm:min-h-[190px] md:min-h-[190px] lg:min-h-dvh-cap lg:[--dvh-cap:460px] lg:[--dvh-inset:1rem] xl:[--dvh-cap:620px]' : 'flex-1'}`}
           >
             {/* Background Effects */}
             <div
@@ -694,14 +747,14 @@ export default function ChiefOfStaff() {
               // + event log without clipping; without this cap the inset-0 canvas
               // grows with the panel on desktop, dragging the framed avatar down
               // into the stats grid below it.
-              <div className="absolute inset-0 lg:bottom-auto lg:h-[min(460px,calc(100vh-1rem))] xl:h-[min(620px,calc(100vh-1rem))] z-[1] -translate-x-16 -translate-y-1 sm:translate-x-0 sm:-translate-y-6 md:-translate-y-8 lg:-translate-y-28 xl:-translate-y-36">
+              <div className="absolute inset-0 lg:bottom-auto lg:h-dvh-cap lg:[--dvh-cap:460px] lg:[--dvh-inset:1rem] xl:[--dvh-cap:620px] z-[1] -translate-x-16 -translate-y-1 sm:translate-x-0 sm:-translate-y-6 md:-translate-y-8 lg:-translate-y-28 xl:-translate-y-36">
                 {renderAvatar(true)}
               </div>
             )}
 
             {/* Avatar UI overlays the full-width canvas stage for 3D styles. */}
             <div className={`${hasCanvasAvatar ? 'absolute inset-y-0 left-0 w-[46%] lg:relative lg:inset-auto lg:w-full lg:flex-none lg:min-h-full p-2 sm:p-3 lg:px-4 lg:py-6' : 'relative flex-1 min-w-0 lg:flex-none lg:min-h-full p-2 lg:px-4 lg:py-6'} min-w-0 flex flex-col items-center z-10`}>
-              <div className="hidden lg:block text-sm font-semibold tracking-widest uppercase text-slate-400 mb-1 font-mono">
+              <div className="hidden lg:block text-sm font-semibold tracking-widest uppercase text-port-text-muted mb-1 font-mono">
                 Digital Assistant
               </div>
               <h1
@@ -850,7 +903,7 @@ export default function ChiefOfStaff() {
           <div role="tabpanel" id="tabpanel-tasks" aria-labelledby="tab-tasks">
             {/* Tasks-only widgets live under the tab nav so they don't stretch above
                 tabs that don't surface this data. */}
-            <ActionableInsightsBanner onTaskUnblocked={handleTaskUnblocked} />
+            <ActionableInsightsBanner insights={insights} onTaskUnblocked={handleTaskUnblocked} onRefresh={fetchData} />
             <QuickSummary />
             <TasksTab tasks={tasks} onRefresh={fetchData} providers={providers} apps={apps} />
           </div>

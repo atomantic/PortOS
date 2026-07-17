@@ -9,6 +9,7 @@
 
 // === Default-exporting hooks (re-exported as named) ===
 export { default as useAnchorReveal } from './useAnchorReveal.js';
+export { default as useAutoscroll } from './useAutoscroll.js';
 export { default as useCityAudio } from './useCityAudio.js';
 export { default as useAutoSizeTextarea } from './useAutoSizeTextarea.js';
 export { default as useChartColors } from './useChartColors.js';
@@ -22,6 +23,7 @@ export { default as useFieldDraft } from './useFieldDraft.js';
 export { default as useFocusTrap } from './useFocusTrap.js';
 export { default as useImageGenQueue } from './useImageGenQueue.js';
 export { default as useImageRenderSettings } from './useImageRenderSettings.js';
+export { default as useUserTimezone } from './useUserTimezone.js';
 export { default as useSingleImageRender } from './useSingleImageRender.js';
 export { default as useSlotInFlight } from './useSlotInFlight.js';
 export { default as useSseJobSlot } from './useSseJobSlot.js';
@@ -46,7 +48,13 @@ export { default as useRowDraft } from './useRowDraft.js';
 export { default as useTheme } from './useTheme.js';
 export { default as useUniverse } from './useUniverse.js';
 export { default as useUniverseAction } from './useUniverseAction.js';
+export { default as useUniverseDraft } from './useUniverseDraft.js';
+export * from './useUniverseDraft.js';
+export { default as useUniverseExpand } from './useUniverseExpand.js';
+export { default as useUniverseGallery } from './useUniverseGallery.js';
+export { default as useUniverseRender } from './useUniverseRender.js';
 export { default as useVideoDownload } from './useVideoDownload.js';
+export { default as useWakeLock } from './useWakeLock.js';
 export { default as useYoutubeTrackImport } from './useYoutubeTrackImport.js';
 export { default as useReferenceAudioImport } from './useReferenceAudioImport.js';
 export { default as useMidiTranscription } from './useMidiTranscription.js';
@@ -95,6 +103,7 @@ export * from './useCatalogTypes.jsx';
 
 // === Sockets & lifecycle ===
 export * from './usePrevious.js';
+export * from './useShellSession.js';
 export * from './useSocket.js';
 export * from './useTimeTick.js';
 export * from './useUpdateChecker.jsx';
@@ -129,6 +138,8 @@ export * from './useAppOverrideActions.js';
 export * from './useCanonPatch.js';
 export * from './useCityData.js';
 export * from './useCityPlayback.js';
+export { default as useCityViewport } from './useCityViewport.js';
+export * from './useCityViewport.js';
 export * from './useDeathClock.js';
 export * from './useGoalDetail.js';
 export * from './usePostSession.js';

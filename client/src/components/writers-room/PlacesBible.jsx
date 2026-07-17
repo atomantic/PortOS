@@ -227,8 +227,8 @@ function PlaceEditor({ workId, place, onSaved, onDeleted, onCancel }) {
       payload[f.key] = draft[f.key];
     }
     const result = await (isCreate
-      ? createWritersRoomPlace(workId, payload)
-      : updateWritersRoomPlace(workId, place.id, payload)
+      ? createWritersRoomPlace(workId, payload, { silent: true })
+      : updateWritersRoomPlace(workId, place.id, payload, { silent: true })
     ).catch((err) => {
       toast.error(`Save failed: ${err.message}`);
       return null;
@@ -242,7 +242,7 @@ function PlaceEditor({ workId, place, onSaved, onDeleted, onCancel }) {
   const remove = async () => {
     if (!place) return;
     setSaving(true);
-    const ok = await deleteWritersRoomPlace(workId, place.id).then(() => true).catch((err) => {
+    const ok = await deleteWritersRoomPlace(workId, place.id, { silent: true }).then(() => true).catch((err) => {
       toast.error(`Delete failed: ${err.message}`);
       return false;
     });

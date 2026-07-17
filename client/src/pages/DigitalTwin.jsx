@@ -14,6 +14,7 @@ import { TABS, getHealthColor, getHealthLabel } from '../components/digital-twin
 const OverviewTab = lazy(() => import('../components/digital-twin/tabs/OverviewTab'));
 const DocumentsTab = lazy(() => import('../components/digital-twin/tabs/DocumentsTab'));
 const TestTab = lazy(() => import('../components/digital-twin/tabs/TestTab'));
+const PersonalityTab = lazy(() => import('../components/digital-twin/tabs/PersonalityTab'));
 const EnrichTab = lazy(() => import('../components/digital-twin/tabs/EnrichTab'));
 const TasteTab = lazy(() => import('../components/digital-twin/tabs/TasteTab'));
 const AccountsTab = lazy(() => import('../components/digital-twin/tabs/AccountsTab'));
@@ -25,6 +26,7 @@ const PersonasTab = lazy(() => import('../components/digital-twin/tabs/PersonasT
 const GoalsTab = lazy(() => import('../components/digital-twin/tabs/GoalsTab'));
 const AutobiographyTab = lazy(() => import('../components/digital-twin/tabs/AutobiographyTab'));
 const ImportTab = lazy(() => import('../components/digital-twin/tabs/ImportTab'));
+const AvatarBioTab = lazy(() => import('../components/digital-twin/tabs/AvatarBioTab'));
 const ExportTab = lazy(() => import('../components/digital-twin/tabs/ExportTab'));
 const LegacyExportTab = lazy(() => import('../components/digital-twin/tabs/LegacyExportTab'));
 const TimeCapsuleTab = lazy(() => import('../components/digital-twin/tabs/TimeCapsuleTab'));
@@ -63,6 +65,8 @@ export default function DigitalTwin() {
         return <DocumentsTab onRefresh={refetch} />;
       case 'test':
         return <TestTab onRefresh={refetch} />;
+      case 'personality':
+        return <PersonalityTab />;
       case 'enrich':
         return <EnrichTab onRefresh={refetch} />;
       case 'taste':
@@ -85,6 +89,8 @@ export default function DigitalTwin() {
         return <AutobiographyTab onRefresh={refetch} />;
       case 'import':
         return <ImportTab onRefresh={refetch} />;
+      case 'avatar-bio':
+        return <AvatarBioTab />;
       case 'export':
         return <ExportTab onRefresh={refetch} />;
       case 'legacy':

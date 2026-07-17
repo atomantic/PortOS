@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Brain, Check, X } from 'lucide-react';
+import { Brain, Check, X, BookOpen, Play } from 'lucide-react';
 import { DRILL_LABELS, nBackBalancedAccuracy } from './constants';
+import { safeReadJsonStorage, safeWriteStorage } from '../../../lib/safeStorage.js';
 
 /**
  * Interactive runner for deterministic cognitive drills (n-back, digit-span,
@@ -22,7 +23,29 @@ export default function PostCognitiveDrillRunner({ drill, drillIndex, drillCount
   }
 
   const shared = { drill, drillIndex, drillCount, onComplete, isTraining };
-  switch (drill.type) {
+  // These drills are timed/stimulus-driven — the stimulus starts flashing the
+  // instant the runner mounts, which is disorienting the first time. Gate the
+  // first-ever encounter of each drill type behind a how-to card so the timers
+  // (and each runner's `startedAtRef`) don't start until the user taps Start.
+  // Keyed by drill.type so each new type in a session re-evaluates cleanly.
+  return (
+    <DrillTutorialGate
+      key={drill.type}
+      drill={drill}
+      isTraining={isTraining}
+      drillIndex={drillIndex}
+      drillCount={drillCount}
+    >
+      {renderCognitiveDrill(shared)}
+    </DrillTutorialGate>
+  );
+}
+
+// Element factory for the actual runner. Returned as `children` to the gate but
+// only mounted (so its timers only arm) once the gate renders it — building the
+// element here is side-effect-free.
+function renderCognitiveDrill(shared) {
+  switch (shared.drill.type) {
     case 'n-back':
       return <NBackRunner {...shared} />;
     case 'digit-span':
@@ -36,8 +59,181 @@ export default function PostCognitiveDrillRunner({ drill, drillIndex, drillCount
     case 'reaction-time':
       return <ReactionTimeRunner {...shared} />;
     default:
-      return <div className="text-port-error text-center py-8">Unsupported cognitive drill: {drill.type}</div>;
+      return <div className="text-port-error text-center py-8">Unsupported cognitive drill: {shared.drill.type}</div>;
   }
+}
+
+// =============================================================================
+// FIRST-RUN TUTORIAL — a how-to card shown the first time each cognitive drill
+// type is encountered, then never again (per-type flag in localStorage).
+// =============================================================================
+
+// One JSON blob keyed by drill type. Reads/writes go through the shared
+// safeStorage helpers so a missing/blocked/corrupt store (SSR, Safari private
+// mode) can never crash the `useState` initializer that reads it — a storage
+// failure just means the tutorial shows again.
+const DRILL_TUTORIAL_SEEN_KEY = 'portos.post.drillTutorialSeen';
+
+function loadSeenTutorials() {
+  const parsed = safeReadJsonStorage(DRILL_TUTORIAL_SEEN_KEY, {});
+  return parsed && typeof parsed === 'object' ? parsed : {};
+}
+
+export function hasSeenDrillTutorial(type) {
+  return loadSeenTutorials()[type] === true;
+}
+
+export function markDrillTutorialSeen(type) {
+  const seen = loadSeenTutorials();
+  if (seen[type]) return;
+  seen[type] = true;
+  safeWriteStorage(DRILL_TUTORIAL_SEEN_KEY, JSON.stringify(seen));
+}
+
+// Per-type how-to content. A pure function of the drill so config-dependent
+// copy (n-back lag, digit-span direction, reaction-time mode) reads correctly.
+// Returns null for types with no tutorial (which skip the gate entirely).
+export function getDrillTutorial(drill) {
+  const cfg = drill?.config || {};
+  switch (drill?.type) {
+    case 'n-back': {
+      const n = cfg.n ?? 2;
+      const step = `${n} step${n !== 1 ? 's' : ''}`;
+      return {
+        goal: `Watch a stream of letters and catch when one repeats from ${step} earlier.`,
+        steps: [
+          'Letters appear one at a time, then vanish.',
+          `Compare each letter to the one ${step} back in the stream.`,
+          'When they match, hit Match right away. If it doesn’t match, do nothing.',
+        ],
+        controls: 'Tap Match, or press Space / Enter.',
+      };
+    }
+    case 'digit-span': {
+      const backward = cfg.direction === 'backward';
+      return {
+        goal: `Memorize a run of digits, then type them ${backward ? 'in reverse' : 'back in order'}.`,
+        steps: [
+          'Digits flash one at a time, then the sequence ends.',
+          `Type the digits ${backward ? 'in reverse order — last shown first' : 'in the order they appeared'}.`,
+          'Each round adds one more digit. Submit with Enter.',
+        ],
+        controls: 'Type the digits and press Enter (or Skip to pass).',
+      };
+    }
+    case 'stroop':
+      return {
+        goal: 'Name the ink color of a word — not what the word says.',
+        steps: [
+          'A color word appears, printed in some ink color.',
+          'Pick the button matching the INK color, ignoring the word itself.',
+          'Move fast, but let the color win over the reading reflex.',
+        ],
+        controls: 'Tap a color, or press its number key (1–4).',
+      };
+    case 'schulte-table':
+      return {
+        goal: 'Find the numbers in ascending order across a shuffled grid.',
+        steps: [
+          'A grid of scrambled numbers appears.',
+          'Tap 1, then 2, then 3… in order.',
+          'Keep your gaze near the center and scan — speed is the point.',
+        ],
+        controls: 'Tap each number in sequence.',
+      };
+    case 'mental-rotation':
+      return {
+        goal: 'Spot the shape that is the same as the target, just rotated.',
+        steps: [
+          'A target shape is shown up top.',
+          'One option below is that shape turned to a new angle; the rest are mirrored or different.',
+          'Pick the pure rotation — not a mirror image.',
+        ],
+        controls: 'Tap an option, or press its number key (1–4).',
+      };
+    case 'reaction-time': {
+      const choice = cfg.mode === 'choice';
+      return {
+        goal: choice ? 'React to the box that lights up — as fast as you can.' : 'React the instant the signal fires.',
+        steps: choice
+          ? [
+            'Wait while the boxes stay dim.',
+            'At a random moment, one box lights up green.',
+            'Press that box’s number immediately — don’t jump early or it counts as a false start.',
+          ]
+          : [
+            'Wait while the circle stays gray.',
+            'At a random moment it turns green and reads “GO!”.',
+            'Press Space (or tap) the instant it does — don’t jump early or it counts as a false start.',
+          ],
+        controls: choice ? 'Number keys, or tap the lit box.' : 'Space / Enter, or tap.',
+      };
+    }
+    default:
+      return null;
+  }
+}
+
+// Holds the runner until the first-run tutorial (if any) is dismissed.
+function DrillTutorialGate({ drill, isTraining, drillIndex, drillCount, children }) {
+  const [showTutorial, setShowTutorial] = useState(
+    () => getDrillTutorial(drill) != null && !hasSeenDrillTutorial(drill.type),
+  );
+  if (!showTutorial) return children;
+  return (
+    <CognitiveDrillTutorial
+      drill={drill}
+      isTraining={isTraining}
+      drillIndex={drillIndex}
+      drillCount={drillCount}
+      onStart={() => { markDrillTutorialSeen(drill.type); setShowTutorial(false); }}
+    />
+  );
+}
+
+function CognitiveDrillTutorial({ drill, isTraining, drillIndex, drillCount, onStart }) {
+  const tut = getDrillTutorial(drill);
+  return (
+    <div className="max-w-lg mx-auto space-y-6">
+      <DrillHeader type={drill.type} isTraining={isTraining} drillIndex={drillIndex} drillCount={drillCount} />
+
+      <div className="rounded-xl border border-rose-500/30 bg-rose-500/5 p-5 space-y-4">
+        <div className="flex items-center gap-2 text-rose-300">
+          <BookOpen size={18} />
+          <h3 className="text-lg font-semibold">{DRILL_LABELS[drill.type] || drill.type}</h3>
+          <span className="ml-auto text-[0.65rem] uppercase tracking-wide text-rose-400/70">How it works</span>
+        </div>
+
+        <p className="text-sm text-gray-300">{tut.goal}</p>
+
+        <ol className="space-y-2">
+          {tut.steps.map((stepText, i) => (
+            <li key={i} className="flex gap-3 text-sm text-gray-300">
+              <span className="flex-shrink-0 w-5 h-5 rounded-full bg-rose-500/20 text-rose-300 text-xs font-semibold flex items-center justify-center">
+                {i + 1}
+              </span>
+              <span>{stepText}</span>
+            </li>
+          ))}
+        </ol>
+
+        <p className="text-xs text-gray-500">
+          <span className="text-gray-400 font-medium">Controls:</span> {tut.controls}
+        </p>
+      </div>
+
+      <button
+        type="button"
+        onClick={onStart}
+        autoFocus
+        className="w-full px-6 py-4 bg-rose-500/20 hover:bg-rose-500/30 text-rose-200 border border-rose-500/40 font-semibold rounded-lg transition-colors flex items-center justify-center gap-2"
+      >
+        <Play size={18} /> Start drill
+      </button>
+
+      <p className="text-center text-xs text-gray-600">You&rsquo;ll only see this the first time for each drill type.</p>
+    </div>
+  );
 }
 
 // Shared header: drill label + position within the session.
@@ -425,8 +621,12 @@ function DigitSpanRunner({ drill, drillIndex, drillCount, onComplete, isTraining
 
       <div className="text-center py-10 min-h-[8rem] flex items-center justify-center">
         {phase === 'show' ? (
-          <div className="text-7xl font-mono font-bold text-white tabular-nums">
-            {shownIdx >= 0 ? digits[shownIdx] : ''}
+          // Reserve the slot with a non-breaking space in the blank gaps so the
+          // digit's line box never collapses — otherwise the flex container
+          // shrinks between flashes and the form below jumps up (issue: digit
+          // flashing shifts layout).
+          <div className="text-7xl font-mono font-bold text-white tabular-nums leading-none">
+            {shownIdx >= 0 ? digits[shownIdx] : ' '}
           </div>
         ) : feedback ? (
           <div className="flex flex-col items-center gap-2">

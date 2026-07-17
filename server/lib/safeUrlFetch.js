@@ -208,31 +208,16 @@ async function fetchGuarded(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers, bloc
 }
 
 /**
- * Fetch a URL's body as text. Returns the string on a 2xx, or null on any
- * failure (network error, non-ok status, blocked redirect). `blockPrivate` opts
- * into the strict block-all-private posture and `throwOnUnsafe: false` returns
- * null (instead of throwing a 400) when the first hop is unsafe — both used by
- * RSS feed fetches.
+ * Read a response body into a Buffer bounded by `maxBytes`, or null when the
+ * body exceeds the cap. The cap is enforced first via Content-Length (cheap
+ * early-out) and then bounds PEAK MEMORY by streaming the body and aborting the
+ * moment accumulated bytes exceed it — so a server that omits or lies about
+ * Content-Length can't stream gigabytes into memory before a post-read check
+ * fires. Falls back to a buffered read only when the response exposes no
+ * stream (e.g. a test double). Shared by fetchPublicBinary and the opt-in
+ * fetchPublicText cap.
  */
-export async function fetchPublicText(url, { timeoutMs, headers, blockPrivate = false, throwOnUnsafe = true } = {}) {
-  const res = await fetchGuarded(url, { timeoutMs, headers, blockPrivate, throwOnUnsafe });
-  if (!res?.ok) return null;
-  return res.text();
-}
-
-/**
- * Fetch a URL's body as a Buffer. Returns `{ buffer, contentType }` on a 2xx
- * within the size cap, or null on any failure. The cap is enforced first via
- * Content-Length (cheap early-out) and then bounds PEAK MEMORY by streaming the
- * body and aborting the moment accumulated bytes exceed it — so a server that
- * omits or lies about Content-Length can't stream gigabytes into memory before a
- * post-read check fires. Falls back to a buffered read only when the response
- * exposes no stream (e.g. a test double).
- */
-export async function fetchPublicBinary(url, { timeoutMs, headers, maxBytes = DEFAULT_MAX_BYTES, blockPrivate = false, throwOnUnsafe = true } = {}) {
-  const res = await fetchGuarded(url, { timeoutMs, headers, blockPrivate, throwOnUnsafe });
-  if (!res?.ok) return null;
-  const contentType = res.headers.get('content-type') || '';
+async function readBodyCapped(res, maxBytes) {
   const declared = Number(res.headers.get('content-length'));
   if (maxBytes && Number.isFinite(declared) && declared > maxBytes) return null;
 
@@ -241,7 +226,7 @@ export async function fetchPublicBinary(url, { timeoutMs, headers, maxBytes = DE
     // buffered read, still capped post-read.
     const buffer = Buffer.from(await res.arrayBuffer());
     if (maxBytes && buffer.byteLength > maxBytes) return null;
-    return { buffer, contentType };
+    return buffer;
   }
 
   const reader = res.body.getReader();
@@ -261,5 +246,36 @@ export async function fetchPublicBinary(url, { timeoutMs, headers, maxBytes = DE
   } finally {
     try { reader.releaseLock(); } catch { /* already released by cancel() */ }
   }
-  return { buffer: Buffer.concat(chunks), contentType };
+  return Buffer.concat(chunks);
+}
+
+/**
+ * Fetch a URL's body as text. Returns the string on a 2xx, or null on any
+ * failure (network error, non-ok status, blocked redirect). `blockPrivate` opts
+ * into the strict block-all-private posture and `throwOnUnsafe: false` returns
+ * null (instead of throwing a 400) when the first hop is unsafe — both used by
+ * RSS feed fetches. `maxBytes` (opt-in — no default, so existing callers keep
+ * the plain `res.text()` behavior) streams the body through the shared cap and
+ * returns null when it's exceeded, bounding peak memory exactly like
+ * fetchPublicBinary.
+ */
+export async function fetchPublicText(url, { timeoutMs, headers, maxBytes, blockPrivate = false, throwOnUnsafe = true } = {}) {
+  const res = await fetchGuarded(url, { timeoutMs, headers, blockPrivate, throwOnUnsafe });
+  if (!res?.ok) return null;
+  if (!maxBytes) return res.text();
+  const buffer = await readBodyCapped(res, maxBytes);
+  return buffer === null ? null : buffer.toString('utf-8');
+}
+
+/**
+ * Fetch a URL's body as a Buffer. Returns `{ buffer, contentType }` on a 2xx
+ * within the size cap, or null on any failure (see readBodyCapped for the
+ * streaming peak-memory bound).
+ */
+export async function fetchPublicBinary(url, { timeoutMs, headers, maxBytes = DEFAULT_MAX_BYTES, blockPrivate = false, throwOnUnsafe = true } = {}) {
+  const res = await fetchGuarded(url, { timeoutMs, headers, blockPrivate, throwOnUnsafe });
+  if (!res?.ok) return null;
+  const contentType = res.headers.get('content-type') || '';
+  const buffer = await readBodyCapped(res, maxBytes);
+  return buffer === null ? null : { buffer, contentType };
 }

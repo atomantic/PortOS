@@ -91,7 +91,7 @@ export default function TestTab({ onRefresh }) {
       context: `Test: ${testName} | Model: ${model}`,
       providerId,
       model
-    }).catch(() => {
+    }, { silent: true }).catch(() => {
       toast.error('Failed to save feedback');
       setFeedbackGiven(prev => { const next = { ...prev }; delete next[key]; return next; });
     });
@@ -188,7 +188,7 @@ export default function TestTab({ onRefresh }) {
 
     setGenerating(true);
     const { providerId, model } = selectedProviders[0];
-    const result = await api.generateSoulTests(providerId, model).catch(e => ({ error: e.message }));
+    const result = await api.generateSoulTests(providerId, model, { silent: true }).catch(e => ({ error: e.message }));
 
     if (result.error) {
       toast.error(result.error);

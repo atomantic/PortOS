@@ -394,7 +394,7 @@ function FloorLightBands({ width, depth, height, color, accentColor, seed, dimMu
   );
 }
 
-export default function Building({ app, position, agentCount, onClick, playSfx, neonBrightness = 1.2, isProximity = false, dimmed = false, dayMix = 0, playback = false, transitionState = null, onExited, rooftops = true, interiorWindows = false }) {
+export default function Building({ app, position, agentCount, onClick, playSfx, neonBrightness = 1.2, isProximity = false, focused = false, dimmed = false, dayMix = 0, playback = false, transitionState = null, onExited, rooftops = true, interiorWindows = false }) {
   const meshRef = useRef();
   const glowRef = useRef();
   const haloRef = useRef();
@@ -689,6 +689,16 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         {displayName}
       </CityLabel>
 
+      {/* Focus selection ring (issue #2593) — a bright accent ring at the base marking the
+          URL-focused borough. Rendered day AND night (unlike the neon glow) so the selected
+          building is unambiguously distinguished in any lighting. */}
+      {focused && (
+        <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.04, 0]}>
+          <ringGeometry args={[Math.max(width, depth) * 0.9 + 0.6, Math.max(width, depth) * 0.9 + 0.95, 48]} />
+          <meshBasicMaterial color={accentColor} transparent opacity={0.95} side={THREE.DoubleSide} />
+        </mesh>
+      )}
+
       {/* Base glow circle - wider and brighter (night only) */}
       {!daytime && (
         <mesh ref={glowRef} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.01, 0]}>
@@ -739,12 +749,12 @@ export default function Building({ app, position, agentCount, onClick, playSfx, 
         />
       )}
 
-      {!dimmed && (hovered || isOnline || app.archived || isProximity) && (
+      {!dimmed && (hovered || isOnline || app.archived || isProximity || focused) && (
         <HolographicPanel
           app={app}
           agentCount={agentCount}
           position={[0, height + 1.8, 0]}
-          expanded={isProximity}
+          expanded={isProximity || focused}
         />
       )}
     </group>

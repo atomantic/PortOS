@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import toast from '../components/ui/Toast';
 import PageSkeleton from '../components/ui/PageSkeleton';
 import { FormField } from '../components/ui/FormField';
+import Modal from '../components/ui/Modal';
 import api from '../services/api';
 
 const TOKEN_LIFETIME_DAYS = 30;
@@ -42,7 +43,7 @@ export default function Jira() {
   const loadInstances = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/jira/instances');
+      const response = await api.get('/jira/instances', { silent: true });
       setInstances(response.instances || {});
     } catch (error) {
       console.error(`❌ Failed to load JIRA instances: ${error.message}`);
@@ -104,7 +105,7 @@ export default function Jira() {
         apiToken: formData.apiToken
       };
 
-      const saved = await api.post('/jira/instances', payload);
+      const saved = await api.post('/jira/instances', payload, { silent: true });
 
       toast.success(`JIRA instance "${payload.name}" saved successfully`);
       setInstances(prev => ({ ...prev, [saved.id]: saved }));
@@ -127,7 +128,7 @@ export default function Jira() {
     setDeleteConfirm(null);
 
     try {
-      await api.delete(`/jira/instances/${instanceId}`);
+      await api.delete(`/jira/instances/${instanceId}`, { silent: true });
       toast.success(`JIRA instance "${instanceId}" deleted`);
       setInstances(prev => {
         const next = { ...prev };
@@ -149,7 +150,7 @@ export default function Jira() {
       setTestingInstance(instanceId);
       setTestResult(null);
 
-      const response = await api.post(`/jira/instances/${instanceId}/test`);
+      const response = await api.post(`/jira/instances/${instanceId}/test`, undefined, { silent: true });
       setTestResult(response);
 
       if (response.success) {
@@ -204,30 +205,34 @@ export default function Jira() {
       </div>
 
       {/* Delete Confirmation Modal */}
-      {deleteConfirm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-800 rounded-lg p-4 sm:p-6 max-w-md w-full">
-            <h3 className="text-lg sm:text-xl font-bold text-white mb-4">Delete JIRA Instance?</h3>
-            <p className="text-gray-300 mb-6 text-sm sm:text-base break-words">
-              Are you sure you want to delete "{deleteConfirm}"? This will not affect existing tickets.
-            </p>
-            <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
-              <button
-                onClick={handleDeleteCancel}
-                className="w-full sm:w-auto px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDeleteConfirm}
-                className="w-full sm:w-auto px-4 py-2 bg-port-error hover:bg-port-error/80 text-white rounded"
-              >
-                Delete
-              </button>
-            </div>
+      <Modal
+        open={!!deleteConfirm}
+        onClose={handleDeleteCancel}
+        size="sm"
+        backdropClassName="bg-black/50"
+        ariaLabelledBy="jira-delete-title"
+      >
+        <div className="bg-gray-800 rounded-lg p-4 sm:p-6">
+          <h3 id="jira-delete-title" className="text-lg sm:text-xl font-bold text-white mb-4">Delete JIRA Instance?</h3>
+          <p className="text-gray-300 mb-6 text-sm sm:text-base break-words">
+            Are you sure you want to delete "{deleteConfirm}"? This will not affect existing tickets.
+          </p>
+          <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
+            <button
+              onClick={handleDeleteCancel}
+              className="w-full sm:w-auto px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleDeleteConfirm}
+              className="w-full sm:w-auto px-4 py-2 bg-port-error hover:bg-port-error/80 text-white rounded"
+            >
+              Delete
+            </button>
           </div>
         </div>
-      )}
+      </Modal>
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6 items-start">
         {editingInstance ? (

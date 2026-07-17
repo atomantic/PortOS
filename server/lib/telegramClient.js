@@ -46,6 +46,16 @@ export function createTelegramBot(token, opts = {}) {
   let polling = false;
   let activePollController = null;
 
+  // EventEmitter/onText handlers may be async and reject. The emitter does not
+  // await listeners, so a rejected promise would surface as an unhandled
+  // rejection (process-killing on Node ≥15). Route every handler invocation
+  // through this wrapper so a throwing handler logs instead of crashing.
+  function runHandler(label, fn, args) {
+    Promise.resolve()
+      .then(() => fn(...args))
+      .catch(err => console.error(`❌ Telegram ${label} handler error: ${err?.message || String(err)}`));
+  }
+
   async function pollLoop() {
     while (polling) {
       activePollController = new AbortController();
@@ -81,7 +91,7 @@ export function createTelegramBot(token, opts = {}) {
           if (msg.text) {
             for (const { regex, fn } of textHandlers) {
               const match = msg.text.match(regex);
-              if (match) fn(msg, match);
+              if (match) runHandler(`onText(${regex})`, fn, [msg, match]);
             }
           }
           emitter.emit('message', msg);
@@ -123,7 +133,8 @@ export function createTelegramBot(token, opts = {}) {
       textHandlers.push({ regex, fn });
     },
     on(event, fn) {
-      emitter.on(event, fn);
+      // Wrap so an async listener that rejects can't leak an unhandled rejection.
+      emitter.on(event, (...args) => runHandler(event, fn, args));
     },
     async stopPolling() {
       polling = false;

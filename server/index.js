@@ -63,7 +63,8 @@ import mediaRoutes from './routes/media.js';
 import calendarRoutes from './routes/calendar.js';
 import messagesRoutes from './routes/messages.js';
 import genomeRoutes from './routes/genome.js';
-import digitalTwinRoutes from './routes/digital-twin.js';
+import digitalTwinRoutes from './routes/digital-twin/index.js';
+import modelPersonalityRoutes from './routes/model-personality.js';
 import socialAccountsRoutes from './routes/socialAccounts.js';
 import lmstudioRoutes from './routes/lmstudio.js';
 import voiceRoutes from './routes/voice.js';
@@ -91,6 +92,7 @@ import { ensureProviderReady as ensureOllamaProviderReady, ensureRunning as ensu
 import searchRoutes from './routes/search.js';
 import paletteRoutes from './routes/palette.js';
 import dashboardLayoutsRoutes from './routes/dashboardLayouts.js';
+import dailyDriverRoutes from './routes/dailyDriver.js';
 import mediaCollectionsRoutes from './routes/mediaCollections.js';
 import mediaAnnotationsRoutes from './routes/mediaAnnotations.js';
 import mediaSketchesRoutes from './routes/mediaSketches.js';
@@ -116,6 +118,7 @@ import videoDownloadRoutes from './routes/videoDownload.js';
 import videoTimelineRoutes from './routes/videoTimeline.js';
 import mediaJobsRoutes from './routes/mediaJobs.js';
 import creativeDirectorRoutes from './routes/creativeDirector.js';
+import creativeCommissionRoutes from './routes/creativeCommissions.js';
 import musicVideoRoutes from './routes/musicVideo.js';
 import moodBoardRoutes from './routes/moodBoard.js';
 import privacyRoutes from './routes/privacy.js';
@@ -176,6 +179,7 @@ import * as cos from './services/cos.js';
 import { startBackupScheduler } from './services/backupScheduler.js';
 import { startPrivacyRecheckScheduler } from './services/privacyRecheckScheduler.js';
 import { startSeriesAutopilotScheduler } from './services/seriesAutopilotScheduler.js';
+import { startCommissionScheduler } from './services/creativeCommissions/scheduler.js';
 import { startCitySnapshotScheduler } from './services/citySnapshotScheduler.js';
 import { startImessageScheduler } from './services/imessageScheduler.js';
 import { startSignalScheduler } from './services/signalScheduler.js';
@@ -208,6 +212,7 @@ import { verifyCollectionVersions } from './lib/collectionStore.js';
 import { conflictJournalStore } from './lib/conflictJournal.js';
 import { universeStore } from './services/universeBuilder.js';
 import { seriesStore } from './services/pipeline/series.js';
+import { commissionStore } from './services/creativeCommissions/store.js';
 import { issueStore } from './services/pipeline/issues.js';
 import { storyBuilderStore } from './services/storyBuilder.js';
 import { writersRoomStore } from './services/writersRoom/store.js';
@@ -278,7 +283,7 @@ await runMigrations({ rootDir: resolveInstallRoot(join(__dirname, '..')) }).catc
 // but DO NOT crash the server. PortOS is single-user (CLAUDE.md "Security
 // Model"); a hard exit on startup is worse than a noisy log the user can act
 // on. Returns per-store statuses for downstream telemetry; we discard them.
-await verifyCollectionVersions([universeStore(), seriesStore(), issueStore(), conflictJournalStore(), storyBuilderStore(), mediaCollectionStore(), loraDatasetStore, liOutcomesStore()]).catch(err => {
+await verifyCollectionVersions([universeStore(), seriesStore(), issueStore(), conflictJournalStore(), storyBuilderStore(), mediaCollectionStore(), loraDatasetStore, liOutcomesStore(), commissionStore()]).catch(err => {
   console.error(`❌ Collection version check failed at startup: ${err?.stack ?? err}`);
 });
 
@@ -462,6 +467,7 @@ app.use('/api/screenshots', screenshotsRoutes);
 app.use('/api/search', searchRoutes);
 app.use('/api/palette', paletteRoutes);
 app.use('/api/dashboard/layouts', dashboardLayoutsRoutes);
+app.use('/api/daily-driver', dailyDriverRoutes);
 app.use('/api/media/collections', mediaCollectionsRoutes);
 app.use('/api/media/annotations', mediaAnnotationsRoutes);
 app.use('/api/media/sketches', mediaSketchesRoutes);
@@ -510,6 +516,7 @@ app.use('/api/meatspace/genome', genomeRoutes);
 app.use('/api/digital-twin/identity', identityRoutes);
 app.use('/api/digital-twin/autobiography', autobiographyRoutes);
 app.use('/api/digital-twin', digitalTwinRoutes);
+app.use('/api/model-personality', modelPersonalityRoutes);
 app.use('/api/lmstudio', lmstudioRoutes);
 app.use('/api/local-llm', localLlmRoutes);
 app.use('/api/code-review', codeReviewRoutes);
@@ -545,6 +552,7 @@ app.use('/api/devtools/video-download', videoDownloadRoutes);
 app.use('/api/video-timeline', videoTimelineRoutes);
 app.use('/api/media-jobs', mediaJobsRoutes);
 app.use('/api/creative-director', creativeDirectorRoutes);
+app.use('/api/creative-commission', creativeCommissionRoutes);
 app.use('/api/music-video', musicVideoRoutes);
 app.use('/api/mood-boards', moodBoardRoutes);
 app.use('/api/privacy', privacyRoutes);
@@ -636,6 +644,11 @@ startPrivacyRecheckScheduler().catch(err => console.error(`❌ Privacy recheck s
 // Autopilot. Each scheduled run still passes through the cos autonomy gate +
 // daily budget (sanctioned scheduled-automation exception) (#2174).
 startSeriesAutopilotScheduler().catch(err => console.error(`❌ Series Autopilot scheduler init failed: ${err.message}`));
+// Autonomous Creation Engine (#2657) — arm a cron per enabled Creative
+// Commission. Boot only ARMS timers; nothing fires until a cadence elapses, and
+// each fire gates on creative autonomy `execute` + the daily cos budget (so an
+// `off`/`dry-run` install generates nothing). Sanctioned scheduled-automation.
+startCommissionScheduler().catch(err => console.error(`❌ Creative Commission scheduler init failed: ${err.message}`));
 // Initialize CyberCity snapshot scheduler — records periodic city-state frames
 // for the historical timeline scrubber (issue #877).
 startCitySnapshotScheduler().catch(err => console.error(`❌ City snapshot scheduler init failed: ${err.message}`));

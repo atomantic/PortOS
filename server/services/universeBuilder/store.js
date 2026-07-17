@@ -31,17 +31,14 @@
 import { join } from 'path';
 import { PATHS } from '../../lib/fileUtils.js';
 import { createCollectionStore } from '../../lib/collectionStore.js';
-import { checkHealth, ensureSchema } from '../../lib/db.js';
+import { createPgFileFacade, resolvePgBackend, isFileBackend } from '../../lib/pgFileFacade.js';
+import { createFileWriteQueue, createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
 import { bumpChangeToken, getChangeToken } from '../changeToken.js';
 
 // TYPE-level (storage layout) schema version stamped on the file backend's
 // data/universes/index.json — preserved so an install on the file escape hatch
 // still passes the boot verifier. (PG has no type-index file; see verify().)
 const TYPE_SCHEMA_VERSION = 5;
-
-function isFileBackend() {
-  return process.env.MEMORY_BACKEND === 'file' || process.env.NODE_ENV === 'test';
-}
 
 // Record-id allowlist — IDENTICAL to the collectionStore idPattern the file
 // backend enforced. The facade must reject the same ids on the PG path so the
@@ -142,71 +139,46 @@ function makePgBackend(db) {
   };
 }
 
-async function pgBackend() {
-  // Self-sufficient like the catalog-user-types backend: the boot DB gate
-  // fail-fasts a required-but-missing DB, but the early universe warm / a sync
-  // pull can call in BEFORE that gate's ensureSchema() runs — so bring the
-  // schema up here (idempotent) and run the one-time file→DB import first.
-  const health = await checkHealth();
-  if (!health.connected) {
-    throw new Error('Universe Builder requires PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file for the unsupported file backend)');
-  }
-  await ensureSchema();
-  const { migrateUniversesToDB } = await import('../../scripts/migrateUniversesToDB.js');
-  await migrateUniversesToDB();
-  const db = await import('./db.js');
-  return makePgBackend(db);
-}
+// Self-sufficient like the catalog-user-types backend: the boot DB gate
+// fail-fasts a required-but-missing DB, but the early universe warm / a sync
+// pull can call in BEFORE that gate's ensureSchema() runs — so resolvePgBackend
+// brings the schema up (idempotent) and runs the one-time file→DB import first.
+const pgBackend = () => resolvePgBackend({
+  requirement: 'Universe Builder requires PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file for the unsupported file backend)',
+  migrate: async () => {
+    const { migrateUniversesToDB } = await import('../../scripts/migrateUniversesToDB.js');
+    await migrateUniversesToDB();
+  },
+  loadDb: () => import('./db.js'),
+  makePg: (db) => makePgBackend(db),
+});
 
 // --- Facade: sync object, queues + epoch + sanitize, async backend delegation ---
 function createFacade({ dir, sanitizeRecord }) {
   let sanitizer = typeof sanitizeRecord === 'function' ? sanitizeRecord : (r) => r;
 
-  // Memoize the backend selection PROMISE (not just the result) so two
-  // concurrent first calls — e.g. the boot warm racing a sync pull — don't both
-  // import the PG module and run the migration twice.
-  let backend = null;
-  let selecting = null;
-  const getBackend = () => {
-    if (backend) return Promise.resolve(backend);
-    if (!selecting) {
-      selecting = (isFileBackend() ? Promise.resolve(makeFileBackend(dir)) : pgBackend())
-        .then((b) => { backend = b; return b; })
-        .finally(() => { selecting = null; });
-    }
-    return selecting;
-  };
+  // Backend selection is memoized (promise, not just result) so two concurrent
+  // first calls — e.g. the boot warm racing a sync pull — don't both import the
+  // PG module and run the migration twice.
+  const { getBackend, getBackendName } = createPgFileFacade({
+    makeFile: () => makeFileBackend(dir),
+    makePg: () => pgBackend(),
+  });
 
   // Per-id write queue — tail-chained per id so two RMW cycles on the SAME id
   // serialize while different ids fan out in parallel. Backend-agnostic so file
   // and PG serialize identically. Mirrors collectionStore's queueRecordWrite.
-  const recordTails = new Map();
-  function queueRecordWrite(id, fn) {
-    assertValidId(id); // parity with collectionStore.queueRecordWrite
-    const prev = recordTails.get(id) || Promise.resolve();
-    const next = prev.then(fn, fn);
-    const silenced = next.catch(() => {});
-    recordTails.set(id, silenced);
-    silenced.finally(() => { if (recordTails.get(id) === silenced) recordTails.delete(id); });
-    return next;
-  }
+  const queueRecordWrite = createRecordWriteQueue(assertValidId);
 
   // Single-tail queue for run-log writes (append / cascade-remove). The runs log
   // is shared cross-record state, so its RMW must serialize against itself.
-  let runTail = Promise.resolve();
-  function queueRunWrite(fn) {
-    const next = runTail.then(fn, fn);
-    const silenced = next.catch(() => {});
-    runTail = silenced;
-    silenced.finally(() => { if (runTail === silenced) runTail = Promise.resolve(); });
-    return next;
-  }
+  const queueRunWrite = createFileWriteQueue();
 
   return {
     dir,
     type: 'universes',
     _setSanitizer: (fn) => { if (typeof fn === 'function') sanitizer = fn; },
-    getBackendName: () => backend?.name ?? null,
+    getBackendName,
 
     // Reads
     listIds: async () => (await getBackend()).listIds(),

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError, createServiceErrorMapper } from '../lib/errorHandler.js';
 import {
   validateRequest,
   storySessionCreateSchema,
@@ -9,6 +9,8 @@ import {
   storyStepRefineSchema,
   storyIssueLockSchema,
   storyIssuesGenerateSchema,
+  isPaginationRequested,
+  paginateArray,
 } from '../lib/validation.js';
 import { STEPS, isValidStepId } from '../lib/storyBuilderSteps.js';
 import {
@@ -36,11 +38,7 @@ const SERVICE_ERROR_STATUS = {
   [ERR_NOT_FOUND]: 404,
   [ERR_VALIDATION]: 400,
 };
-const mapServiceError = (err) => {
-  const status = SERVICE_ERROR_STATUS[err?.code];
-  if (status) return new ServerError(err.message, { status, code: err.code });
-  return err;
-};
+const mapServiceError = createServiceErrorMapper(SERVICE_ERROR_STATUS);
 
 // Echo the step manifest so the client stepper doesn't hardcode the order /
 // labels (single source of truth is server/lib/storyBuilderSteps.js).
@@ -48,8 +46,15 @@ router.get('/steps', (_req, res) => {
   res.json({ steps: STEPS });
 });
 
-router.get('/', asyncHandler(async (_req, res) => {
-  res.json(await listStorySessions());
+// Backward-compatible by default: returns the full sessions array. When a client
+// passes `limit`/`offset`, the response becomes the bounded
+// `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
+router.get('/', asyncHandler(async (req, res) => {
+  const sessions = await listStorySessions();
+  if (!isPaginationRequested(req.query)) {
+    return res.json(sessions);
+  }
+  res.json(paginateArray(sessions, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.post('/', asyncHandler(async (req, res) => {

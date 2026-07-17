@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Calendar,
   Clock,
@@ -42,6 +43,9 @@ const TABS = [
   { id: 'care', label: 'Care Queue', icon: Clock },
   { id: 'focus', label: 'Focus', icon: Heart },
 ];
+
+const TAB_IDS = TABS.map((tab) => tab.id);
+const DEFAULT_TAB = 'circle';
 
 const emptyDraft = () => ({
   id: null,
@@ -648,7 +652,27 @@ export default function Tribe() {
   const [draft, setDraft] = useState(emptyDraft);
   const [query, setQuery] = useState('');
   const [ringFilter, setRingFilter] = useState('all');
-  const [activeTab, setActiveTab] = useState('circle');
+  // Active tab lives in the URL (`?tab=`) so a section is shareable, bookmarkable,
+  // and reload-safe. Unknown/stale values fall back to the default tab. The
+  // default is omitted from the URL to keep `/tribe` clean.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const rawTab = searchParams.get('tab');
+  const activeTab = TAB_IDS.includes(rawTab) ? rawTab : DEFAULT_TAB;
+  // Resolve inside the setSearchParams updater so functional updates (e.g.
+  // startNewRelationship) read the FRESHEST tab from the URL, not the value
+  // captured when a since-superseded async closure was created — otherwise a
+  // create-in-flight + tab switch could clobber the user's current tab.
+  const setActiveTab = (next) => {
+    setSearchParams((prev) => {
+      const prevRaw = prev.get('tab');
+      const prevTab = TAB_IDS.includes(prevRaw) ? prevRaw : DEFAULT_TAB;
+      const resolved = typeof next === 'function' ? next(prevTab) : next;
+      const params = new URLSearchParams(prev);
+      if (resolved === DEFAULT_TAB) params.delete('tab');
+      else params.set('tab', resolved);
+      return params;
+    }, { replace: true });
+  };
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   // Bumped by every "Add / new relationship" trigger so the form can be

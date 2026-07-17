@@ -36,17 +36,30 @@ describe('isAllowedCommand', () => {
       expect(isAllowedCommand('claude.EXE')).toBe(true);
     });
 
-    it('allows C:\\Users\\user\\AppData\\Local\\claude.exe', () => {
-      // On Windows: basename('C:\\...\\claude.exe') → 'claude.exe' with path module
-      // On Unix: basename treats it as one segment — but we still strip the .exe
+    // Deterministic on EVERY OS: a POSIX-style absolute path whose basename is
+    // "claude.exe". path.basename('/opt/tools/claude.exe') === 'claude.exe' on
+    // both win32 and posix, so after the .exe strip the result is 'claude' and
+    // the command is allowed regardless of the host running the test. This
+    // enforces the "strip .exe after basename" contract on all platforms —
+    // it fails concretely (not via typeof) if the .exe stripping regresses.
+    it('allows a full path ending in claude.exe on all OSes (/opt/tools/claude.exe)', () => {
+      expect(isAllowedCommand('/opt/tools/claude.exe')).toBe(true);
+    });
+
+    it('rejects a full path ending in a non-allowed .exe (/opt/tools/bash.exe)', () => {
+      expect(isAllowedCommand('/opt/tools/bash.exe')).toBe(false);
+    });
+
+    // The real Windows backslash form. path.basename is platform-specific:
+    // on win32 it splits on "\\" → 'claude.exe' → strip → 'claude' (allowed);
+    // on posix backslashes are ordinary chars so basename returns the whole
+    // string → 'C:\\...\\claude' after strip → not allowed. Assert the concrete
+    // expected boolean per-platform so a regression in EITHER direction fails
+    // here — never `typeof result === 'boolean'`, which passes for any boolean.
+    it('resolves a Windows backslash .exe path per-platform', () => {
       const windowsPath = 'C:\\Users\\user\\AppData\\Local\\claude.exe';
-      // basename() on POSIX returns the whole string for a Windows path —
-      // the .exe strip still makes it pass IF the full-basename is 'claude.exe'.
-      // Test the logic contract: after strip, the result is 'claude'.
-      const result = isAllowedCommand(windowsPath);
-      // On POSIX, basename('C:\\...\\claude.exe') is the whole string which
-      // won't match 'claude', so we just assert the function doesn't throw.
-      expect(typeof result).toBe('boolean');
+      const expected = process.platform === 'win32';
+      expect(isAllowedCommand(windowsPath)).toBe(expected);
     });
   });
 

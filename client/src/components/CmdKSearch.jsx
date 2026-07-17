@@ -170,12 +170,16 @@ export default function CmdKSearch() {
       return;
     }
     setLoading(true);
+    // Mirror the catalog effect's cancelled guard so a slow in-flight
+    // response for an older query can't overwrite results for a newer one
+    // (or flip loading off) after the user has typed on.
+    let cancelled = false;
     const timer = setTimeout(() => {
       search(query)
-        .then((data) => setSearchResults(data?.sources ?? []))
-        .finally(() => setLoading(false));
+        .then((data) => { if (!cancelled) setSearchResults(data?.sources ?? []); })
+        .finally(() => { if (!cancelled) setLoading(false); });
     }, 300);
-    return () => clearTimeout(timer);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [query]);
 
   useEffect(() => {
@@ -319,7 +323,7 @@ export default function CmdKSearch() {
         key={`${item.kind}:${item.path ?? item.id ?? item.sourceId + ':' + title}`}
         ref={(el) => { resultRefs.current[currentIdx] = el; }}
         onClick={() => dispatchCommand(item)}
-        className={`flex items-start gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors ${
+        className={`flex items-start gap-3 px-3 py-2 min-h-[44px] rounded-lg cursor-pointer transition-colors ${
           isFocused ? 'bg-port-accent/10' : 'hover:bg-white/5'
         }`}
         role="option"

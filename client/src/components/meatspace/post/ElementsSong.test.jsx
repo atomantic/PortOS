@@ -81,3 +81,60 @@ describe('ElementsSong — Flash Cards study mode', () => {
     expect(payload.results.filter((r) => r.correct)).toHaveLength(1);
   });
 });
+
+describe('ElementsSong — Element Flash recall test', () => {
+  it('advances to the next question when Enter is pressed after a result is shown', async () => {
+    render(<ElementsSong item={item} onBack={() => {}} />);
+    await settle();
+
+    fireEvent.click(screen.getByText('Element Flash'));
+    await settle();
+
+    // 2 elements → a 2-question quiz.
+    expect(screen.getByText('1 / 2')).toBeInTheDocument();
+
+    // Answer + submit with Enter from the input → the result is shown and the
+    // input unmounts (replaced by the "Next" button).
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: 'x' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await settle();
+    expect(screen.getByText('Next')).toBeInTheDocument();
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+
+    // A second Enter (now caught by the window listener, since the input is
+    // gone) must advance to question 2 rather than doing nothing.
+    fireEvent.keyDown(window, { key: 'Enter' });
+    await settle();
+    expect(screen.getByText('2 / 2')).toBeInTheDocument();
+    expect(screen.getByRole('textbox')).toBeInTheDocument();
+  });
+
+  it('does not hijack Enter fired from a focused button (no double-advance)', async () => {
+    render(<ElementsSong item={item} onBack={() => {}} />);
+    await settle();
+
+    fireEvent.click(screen.getByText('Element Flash'));
+    await settle();
+    expect(screen.getByText('1 / 2')).toBeInTheDocument();
+
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: 'x' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    await settle();
+
+    // Enter originating from the focused Next button must be ignored by the
+    // window listener — the button's own activation is the single advance, so
+    // the window listener firing too would skip a question. (RTL keyDown does
+    // not trigger the native click, so the guard working = no advance here.)
+    const nextBtn = screen.getByText('Next');
+    fireEvent.keyDown(nextBtn, { key: 'Enter' });
+    await settle();
+    expect(screen.getByText('1 / 2')).toBeInTheDocument();
+
+    // A genuine click on Next still advances exactly once.
+    fireEvent.click(nextBtn);
+    await settle();
+    expect(screen.getByText('2 / 2')).toBeInTheDocument();
+  });
+});

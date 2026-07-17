@@ -136,9 +136,9 @@ export async function init(sendTestMessage = false) {
   console.log(`📱 Telegram: connected as @${botUsername}`);
 
   // Register /start handler (always works, no auth required)
-  bot.onText(/\/start/, (msg) => {
+  bot.onText(/\/start/, async (msg) => {
     const fromChatId = String(msg.chat.id);
-    bot.sendMessage(fromChatId,
+    await bot.sendMessage(fromChatId,
       `Your Chat ID: <code>${fromChatId}</code>\n\n` +
       'Paste this into the PortOS Settings → Telegram → Chat ID field, then click Save & Test.',
       { parse_mode: 'HTML' }
@@ -168,7 +168,7 @@ export async function init(sendTestMessage = false) {
 
   bot.onText(/\/help/, async (msg) => {
     if (!isAuthorized(msg)) return;
-    bot.sendMessage(String(msg.chat.id),
+    await bot.sendMessage(String(msg.chat.id),
       '<b>PortOS Bot Commands</b>\n\n' +
       '/status — System overview\n' +
       '/goals — Active goals with progress\n' +
@@ -195,8 +195,11 @@ export async function init(sendTestMessage = false) {
     await handleCallbackQuery(query);
   });
 
-  // Start health check
-  healthCheckInterval = setInterval(healthCheck, HEALTH_CHECK_INTERVAL_MS);
+  // Start health check. setInterval doesn't await the async callback, so a
+  // rejection would leak as an unhandled rejection — catch it here.
+  healthCheckInterval = setInterval(() => {
+    healthCheck().catch(err => console.error(`📱 Telegram: health check error — ${err?.message || String(err)}`));
+  }, HEALTH_CHECK_INTERVAL_MS);
 
   // Subscribe to notification events
   initNotificationForwarding();
@@ -212,10 +215,12 @@ export async function init(sendTestMessage = false) {
 function isAuthorized(msg) {
   const fromChatId = String(msg.chat.id);
   if (fromChatId !== authorizedChatId) {
+    // Fire-and-forget from a sync guard — catch so the send failure can't leak
+    // an unhandled rejection.
     bot?.sendMessage(fromChatId,
       'This bot is not configured for your chat ID.\n' +
       'If you own this bot, message /start to see your chat ID, then configure it in PortOS Settings.'
-    );
+    ).catch(err => console.error(`📱 Telegram: unauthorized-notice send failed — ${err?.message || String(err)}`));
     return false;
   }
   return true;

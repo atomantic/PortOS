@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Zap, ClipboardPaste, Eraser } from 'lucide-react';
 import RapidReader from '../components/RapidReader';
+import PageHeader from '../components/PageHeader';
 import { readClipboard } from '../lib/clipboard';
 
 const SAMPLE = `Speed reading is a collection of techniques used to scan text quickly while still understanding what you've read. Most people read in chunks of three or four words at a time, which slows them down. Rapid serial visual presentation flashes one word at a time at a fixed location, removing the need to move your eyes. With practice, comprehension stays intact at three to five hundred words per minute, and many readers can push past six hundred for familiar material.`;
@@ -39,17 +40,14 @@ export default function RapidReaderPage() {
   const estSec = Math.round((wordCount * 60) / Math.max(60, wpm));
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <Zap className="w-5 h-5 text-port-accent" />
-        <div>
-          <h1 className="text-xl font-semibold text-white">Rapid Reader</h1>
-          <p className="text-sm text-gray-400">
-            Paste text and read it word-by-word with a highlighted focal letter (Spritz-style RSVP).
-          </p>
-        </div>
-      </div>
+    <div className="flex flex-col h-full min-h-0">
+      <PageHeader
+        icon={Zap}
+        title="Rapid Reader"
+        subtitle="Paste text and read it word-by-word with a highlighted focal letter (Spritz-style RSVP)."
+      />
 
+      <div className="flex-1 overflow-auto p-3 sm:p-4 space-y-6">
       {active ? (
         <div className="space-y-4">
           <RapidReader
@@ -187,6 +185,7 @@ export default function RapidReaderPage() {
           </div>
         </div>
       )}
+      </div>
     </div>
   );
 }

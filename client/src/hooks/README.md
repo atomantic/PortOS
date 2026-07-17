@@ -62,6 +62,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `usePreviewRoute` | URL-driven `[preview, setPreview]` via `?preview=<filename>`. | Any page hosting `<MediaPreview>` — gives the preview a deep-link. |
 | `useImageGenQueue` | Work-scoped live queue of in-flight image renders. | Pages that show per-work image-gen queue state. |
 | `useImageRenderSettings` | Load the pipeline image-gen config once (`getSettings → readPipelineImageSettings`), failing open to `PIPELINE_IMAGE_DEFAULTS`; returns `{ imageCfg }`. | A single-image render slot that needs the render config and doesn't already load the full settings blob. |
+| `useUserTimezone` | Resolve the user's configured IANA timezone (`settings.timezone`) once, falling back to the browser zone then UTC; returns the tz string. | A date-scoped surface that must derive "today" the same way the server does (POST launcher/history day keys, #2681). |
 | `useSingleImageRender` | Queue-one-render / wait-for-completion jobId lifecycle: builds opts from `imageCfg`, calls `buildPrompt`, POSTs `generateImage`, tracks the `jobId` head, and runs a once-per-`(key, filename)` completion guard before `onComplete`. | Single-image render slots driven by `EntryThumbSlot`/`MediaJobThumb` (style probe, characters step). Completion SSE stays in the thumb. |
 
 ## Sockets & lifecycle
@@ -69,6 +70,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | Hook | Purpose | Use when |
 |---|---|---|
 | `useSocket` | Shared socket instance + connection status. | You need to subscribe to a socket event. |
+| `useShellSession` | All Socket.IO `shell:*` session/terminal state + lifecycle for the Shell page: owns the xterm instance, the attach/detach/generation-guard contract (`pendingAttachRef {target,generation}`, `claim`, `userIdleRef`, `mountedRef`), URL sync, and every session action. Returns `{ terminalRef, connected, sessions, activeSessionId, activeSession, interactiveCount, liveRunCount, isLiveRun, emitShellInput, sendCommand, sendCtrlC, sendNavKey, restartSession, stopSession, startNewSession, switchToSession, killOtherSession }` so the route stays presentational. | The Shell page (`pages/Shell.jsx`) — don't re-roll the single-subscriber PTY attach lifecycle. |
 | `useUpdateChecker` | Detect stale client bundle; show reload toast. | Wire once at app root. |
 | `useMounted` | `mountedRef` whose `.current` is true while mounted. | Async deferred work that must abort on unmount. |
 | `usePrevious` | Returns the value from the previous render — snapshot updated in a `useEffect`. | Compare-and-act on prop/state change from inside a `useEffect`. |
@@ -105,6 +107,8 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useSwipeNav` | Horizontal swipe prev/next. | Mobile swipe between siblings. |
 | `useValidTab` | Resolve the active tab from the `:tab` URL param against a TABS list, falling back to a default on invalid/missing. | Any tabbed page whose tab lives in the URL — don't re-roll the `new Set(TABS.map(...))` guard. |
 | `useAsyncAction` | `running` state + toast-on-error. | Buttons that await an async action. |
+| `useAutoscroll` | rAF autoscroll for a scrollable container: advances `scrollTop` by `pxPerSec`, auto-stops at the bottom, pauses on user wheel/touchmove, live speed changes via ref. Returns `{ playing, toggle, stop, pxPerSec, setPxPerSec }`. | SongBook play view; any teleprompter-style surface. |
+| `useWakeLock` | Holds a screen wake lock (`navigator.wakeLock`) while `active` is true; releases on unmount/inactive, re-acquires on visibilitychange; no-op where unsupported. | Hands-free surfaces that must keep the screen on (SongBook autoscroll). |
 
 ## Storage & persistence
 
@@ -133,6 +137,7 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useCityAudio` | CyberCity ambient audio. | CyberCity only. |
 | `useCityData` | CyberCity environment data + physics. | CyberCity only. |
 | `useCityPlayback` | Timeline-scrubber transport: loads the snapshot series, steps a frame index, play/pause/speed. | CyberCity playback (history) mode only. |
+| `useCityViewport` | Classifies the window width into `phone` / `compact` / `desktop` brackets (mirrors Tailwind `sm`/`lg`) so the City HUD can branch between the desktop cockpit and the compact/phone disclosure layout in JS (only one tree mounts). Returns `{ mode, isPhone, isCompact, isDesktop, isCondensed }`. | CyberCity HUD responsive layout only. |
 | `useCitySettings` | CyberCity quality presets + persistence. | CyberCity only. |
 | `useColorMatch` | Drives a song color-match run: counts the singer in with the metronome, walks the notated score in tempo, grades each note against the live mic pitch (#1022 tracker + colorMatch lib), and exposes `{ running, countingIn, noteColors, summary, activeIndex, start, stop }` for the `<ScoreSheet>` + an accuracy readout. Taps the passed recording stream (no second mic); tears down on stop/unmount. | The Song editor's color-match panel. Don't re-wire the metronome + tracker + grading loop by hand. |
 | `useCodeReviewDefaults` | Global Code Review Defaults (Review Loop reviewer chain + per-backend local-LLM model) via a small Provider/hook pair. | TaskAddForm, ScheduleTab, anywhere a default reviewer picker is shown. |
@@ -151,6 +156,10 @@ grep -i "what you want to do" client/src/hooks/README.md
 | `useRenderJobQueue` | Per-entry render-job queue for the Universe Builder — `pendingByEntryId` (entryId → jobId[]), `pendingHeadByEntryId` (first jobId per entry for single-subscription thumbs), `enqueueEntryJobs` (append variation/canon jobs), `clearPendingForEntry` (shift a jobId out, or drop the entry). | Universe Builder render orchestration. Don't re-roll the per-entry pending-jobs reducer. |
 | `useUniverse` | Loads the universe record for a `universeId` with mount/cancel guards; returns `[universe, setUniverse, loading, error]` (setter exposed for optimistic post-mutation updates). | Any surface that loads a linked universe (pipeline stages, etc.) — use instead of re-rolling the getUniverse-on-mount effect. |
 | `useUniverseAction` | LLM-driven universe mutation scaffolding. | Universe Builder action UIs. |
+| `useUniverseDraft` | Universe Builder editable-record lifecycle: initial catalog/provider/image settings load, selected-universe hydration, create/save/delete, saved-draft dirty baseline, pending-canon addition merge ledger, keyed category mutations, and lock persistence. | Universe Builder composition shell; expansion/refinement and rendering consume this hook's draft contract instead of owning persistence themselves. |
+| `useUniverseExpand` | Universe Builder LLM expansion + holistic refine lifecycle, including lock-preserving request payloads, deletion-wins pending-canon auto-save, provider selection, and refine-panel state. | Universe Builder Bible panel; keep provider calls and canon-aware auto-save out of presentation components. |
+| `useUniverseGallery` | Page-level lightbox + gallery-metadata concern for the Universe Builder. Takes `{ draft, runsLength }`; hydrates a filename→sidecar map (prompt/seed/model), derives `previewItems` across variations, composite sheets, style probes, and canon/character-sheet refs (namespaced-key dedupe), and wires `usePreviewRoute` + `useMediaPreviewActions` + `useMediaAnnotations`. Returns `{ previewItems, preview, setPreview, previewActions, openPreviewByFilename, openVariationPreview, annotations, updateAnnotation, bumpGalleryRefresh }`. | Universe Builder image lightbox — don't re-roll the gallery-sidecar/previewItems derivation. |
+| `useUniverseRender` | Universe Builder batch-render settings, scoped render payload compilation, canon-selection defaults, per-entry job queue, and run-list refresh. Returns the shared `runRender`/`handleRender` action used by the Render tab and inline bucket/canon controls. | Universe Builder composition shell and presentational panels; don't fork render payload semantics per tab. |
 | `useUniverseNav` | `goToWorld(id)` → navigate to `/universes/:id`, preserve `location.search`. | Any Universe Builder caller that needs to switch worlds via URL. |
 | `useVoiceUiSync` | Keeps voice server's UI index in sync with current page. | Wire once at root for voice agent support. |
 | `useMoltworldWs` | Moltworld WebSocket feed. | Moltworld surfaces only. |

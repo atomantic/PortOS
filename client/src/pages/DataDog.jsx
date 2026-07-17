@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import toast from '../components/ui/Toast';
 import { FormField } from '../components/ui/FormField';
 import PageSkeleton from '../components/ui/PageSkeleton';
+import Modal from '../components/ui/Modal';
 import api from '../services/api';
 
 const SITE_OPTIONS = [
@@ -39,7 +40,7 @@ export default function DataDog() {
   const loadInstances = async () => {
     try {
       setLoading(true);
-      const response = await api.get('/datadog/instances');
+      const response = await api.get('/datadog/instances', { silent: true });
       setInstances(response.instances || {});
     } catch (error) {
       console.error(`❌ Failed to load DataDog instances: ${error.message}`);
@@ -102,7 +103,7 @@ export default function DataDog() {
         ...(formData.appKey && { appKey: formData.appKey })
       };
 
-      const saved = await api.post('/datadog/instances', payload);
+      const saved = await api.post('/datadog/instances', payload, { silent: true });
 
       toast.success(`DataDog instance "${payload.name}" saved successfully`);
       setInstances(prev => ({ ...prev, [saved.id]: saved }));
@@ -125,7 +126,7 @@ export default function DataDog() {
     setDeleteConfirm(null);
 
     try {
-      await api.delete(`/datadog/instances/${instanceId}`);
+      await api.delete(`/datadog/instances/${instanceId}`, { silent: true });
       toast.success(`DataDog instance "${instanceId}" deleted`);
       setInstances(prev => {
         const next = { ...prev };
@@ -147,7 +148,7 @@ export default function DataDog() {
       setTestingInstance(instanceId);
       setTestResults(prev => ({ ...prev, [instanceId]: null }));
 
-      const response = await api.post(`/datadog/instances/${instanceId}/test`);
+      const response = await api.post(`/datadog/instances/${instanceId}/test`, undefined, { silent: true });
       setTestResults(prev => ({ ...prev, [instanceId]: response }));
 
       if (response.success) {
@@ -201,30 +202,34 @@ export default function DataDog() {
       </div>
 
       {/* Delete Confirmation Modal */}
-      {deleteConfirm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-          <div className="bg-gray-800 rounded-lg p-4 sm:p-6 max-w-md w-full">
-            <h3 className="text-lg sm:text-xl font-bold text-white mb-4">Delete DataDog Instance?</h3>
-            <p className="text-gray-300 mb-6 text-sm sm:text-base break-words">
-              Are you sure you want to delete &quot;{deleteConfirm}&quot;? This will remove the stored keys.
-            </p>
-            <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
-              <button
-                onClick={handleDeleteCancel}
-                className="w-full sm:w-auto px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleDeleteConfirm}
-                className="w-full sm:w-auto px-4 py-2 bg-port-error hover:bg-port-error/80 text-white rounded"
-              >
-                Delete
-              </button>
-            </div>
+      <Modal
+        open={!!deleteConfirm}
+        onClose={handleDeleteCancel}
+        size="sm"
+        backdropClassName="bg-black/50"
+        ariaLabelledBy="datadog-delete-title"
+      >
+        <div className="bg-gray-800 rounded-lg p-4 sm:p-6">
+          <h3 id="datadog-delete-title" className="text-lg sm:text-xl font-bold text-white mb-4">Delete DataDog Instance?</h3>
+          <p className="text-gray-300 mb-6 text-sm sm:text-base break-words">
+            Are you sure you want to delete &quot;{deleteConfirm}&quot;? This will remove the stored keys.
+          </p>
+          <div className="flex flex-col-reverse sm:flex-row gap-2 sm:justify-end">
+            <button
+              onClick={handleDeleteCancel}
+              className="w-full sm:w-auto px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleDeleteConfirm}
+              className="w-full sm:w-auto px-4 py-2 bg-port-error hover:bg-port-error/80 text-white rounded"
+            >
+              Delete
+            </button>
           </div>
         </div>
-      )}
+      </Modal>
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6 items-start">
         {editingInstance ? (

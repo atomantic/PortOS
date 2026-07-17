@@ -6,10 +6,11 @@
  */
 
 import { emitLog } from './cosEvents.js';
-import { addTask, updateTask } from './cos.js';
+import { addTask, updateTask, getAllTasks } from './cos.js';
 import { cosEvents } from './cosEvents.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { redactOutput } from '../lib/commandSecurity.js';
+import { isTruthyMeta } from './agentState.js';
 
 // Max retries before blocking a task
 export const MAX_TASK_RETRIES = 3;
@@ -65,6 +66,19 @@ function snippetAround(text, index) {
  * Error patterns that warrant investigation tasks.
  * Patterns are checked in order — first match wins.
  * Categories help the learning system identify failure trends.
+ *
+ * Provenance (#2642): a pattern may carry a structured `origin`
+ * (`'provider'` | `'runner'`) declaring that a match comes from a genuine
+ * provider/runner signal (an `API Error: NNN` line, a Node error code, a
+ * provider-specific error token) rather than the loose regex sweep over agent
+ * output. When the same regex mixes a structured alternative with a loose
+ * keyword alternative (e.g. `API Error: 429` vs a bare `rate limit`), a
+ * `structuredMarker` sub-pattern gates the promotion: the structured `origin`
+ * is only honored when the marker is present in the matched text; otherwise the
+ * match is treated as `'output-scan'` (see `resolvePatternOrigin`). Patterns
+ * with no `origin` are always `'output-scan'`. Task-learning's environmental
+ * exclusion (metrics.js) diverts only non-`output-scan` failures, so a failing
+ * test whose tail prints "rate limit" is NOT misread as an infra outage.
  */
 export const ERROR_PATTERNS = [
   // ===== API & Authentication Errors =====
@@ -72,6 +86,7 @@ export const ERROR_PATTERNS = [
     pattern: /API Error: 404.*model:\s*(\S+)/i,
     category: 'model-not-found',
     actionable: true,
+    origin: 'provider', // fully structured — requires an `API Error: 404 … model:` line
     escalation: 'Set a valid model id for this task (or clear its model override so the CLI falls back to its own configured default), then approve the retry.',
     extract: (match, output, task, model) => ({
       message: `Model "${match[1]}" not found`,
@@ -84,6 +99,11 @@ export const ERROR_PATTERNS = [
     pattern: /(?:model:\s*)?["']?([A-Za-z0-9._:-]+)["']?\s+model is not supported|model\s+["']?([A-Za-z0-9._:-]+)["']?.*not supported/i,
     category: 'model-not-supported',
     actionable: true,
+    // Intentionally no structured origin (#2642): the matched text is just the
+    // "<model> model is not supported" phrase — a test asserting that string is
+    // indistinguishable from a genuine provider rejection here, so it stays
+    // output-scan. Real provider model rejections still divert via the structured
+    // `API Error: 4NN`/`not_found_error` patterns and `detectTerminalModelError`.
     escalation: 'Pick a model the provider account supports (or clear the override to use the CLI default), then approve the retry.',
     extract: (match, output, task, model) => ({
       message: `Model "${match[1] || match[2] || model || 'configured model'}" is not supported`,
@@ -96,6 +116,8 @@ export const ERROR_PATTERNS = [
     pattern: /API Error: 401|authentication|unauthorized/i,
     category: 'auth-error',
     actionable: true,
+    origin: 'provider',
+    structuredMarker: /API Error:\s*401/i, // loose `authentication`/`unauthorized` in output stays output-scan
     extract: () => ({
       message: 'Authentication failed',
       suggestedFix: 'Check API keys and provider configuration'
@@ -105,6 +127,8 @@ export const ERROR_PATTERNS = [
     pattern: /API Error: 429|rate.?limit|too many requests/i,
     category: 'rate-limit',
     actionable: false, // Transient, retry will handle
+    origin: 'provider',
+    structuredMarker: /API Error:\s*429/i, // a bare `rate limit` / `too many requests` in output stays output-scan
     extract: () => ({
       message: 'Rate limit exceeded',
       suggestedFix: 'Wait and retry - temporary rate limiting'
@@ -115,6 +139,12 @@ export const ERROR_PATTERNS = [
     pattern: /(?:hit your (?:usage )?limit|usage.?limit|quota exceeded|Upgrade to Pro|plan.?limit|daily.?limit|session.?limit|(?:^|\n)\s*(?:\[stderr\]\s*)?Now using extra usage\s*(?:\r?\n|$))/i,
     category: 'usage-limit',
     actionable: true, // Need to switch provider
+    // Promote only the distinctive provider-billing idioms (the matched
+    // alternative, i.e. match[0]) to a structured provider signal; generic
+    // phrasings like "quota exceeded" / "plan limit" / "daily limit" that a task's
+    // own output can print stay output-scan and count as genuine failures (#2642).
+    origin: 'provider',
+    structuredMarker: /hit your (?:usage )?limit|Upgrade to Pro|Now using extra usage/i,
     extract: (match, output) => {
       const timeMatch = output.match(/(?:try again in|resets?)\s+(.+?)(?:\.|·|\n|$)/im);
       const waitTime = timeMatch ? timeMatch[1].trim() : null;
@@ -142,6 +172,8 @@ export const ERROR_PATTERNS = [
     pattern: /API Error: 403|forbidden/i,
     category: 'forbidden',
     actionable: true,
+    origin: 'provider',
+    structuredMarker: /API Error:\s*403/i, // loose `forbidden` in output stays output-scan
     extract: () => ({
       message: 'API access forbidden',
       suggestedFix: 'API key lacks permission for this operation. Check API key permissions and provider configuration.'
@@ -160,6 +192,7 @@ export const ERROR_PATTERNS = [
     pattern: /not_found_error.*model/i,
     category: 'model-not-found',
     actionable: true,
+    origin: 'provider', // structured provider `not_found_error` API token
     extract: (match, output, task, model) => ({
       message: `Model not found in API response`,
       suggestedFix: `The model "${model}" specified for this task doesn't exist. Update provider or task configuration.`,
@@ -319,6 +352,8 @@ export const ERROR_PATTERNS = [
     pattern: /ECONNREFUSED|ETIMEDOUT|network error/i,
     category: 'network-error',
     actionable: false,
+    origin: 'runner',
+    structuredMarker: /ECONNREFUSED|ETIMEDOUT/i, // a bare `network error` in output stays output-scan
     extract: () => ({
       message: 'Network connection failed',
       suggestedFix: 'Check network connectivity and service availability.'
@@ -399,6 +434,8 @@ export const ERROR_PATTERNS = [
     pattern: /(?:claude|anthropic).?(?:error|failed)|overloaded_error/i,
     category: 'claude-error',
     actionable: false,
+    origin: 'provider',
+    structuredMarker: /overloaded_error/i, // loose `claude error`/`anthropic failed` in output stays output-scan
     extract: () => ({
       message: 'Claude API error',
       suggestedFix: 'Claude API returned an error. This is usually transient - retry recommended.'
@@ -466,6 +503,26 @@ function getFailureAnalysisWindow(output) {
 }
 
 /**
+ * Resolve the provenance origin for a matched ERROR_PATTERN (#2642). Returns the
+ * pattern's structured `origin` (`'provider'`/`'runner'`) only when it is
+ * declared AND — if a `structuredMarker` sub-pattern is present — that marker
+ * appears somewhere in the failure window. A pattern with no structured origin,
+ * or a `structuredMarker` that is absent, falls through to `'output-scan'`,
+ * marking the classification as coming solely from the loose regex sweep.
+ *
+ * The marker is tested against the WHOLE analysis window, not just the matched
+ * substring: the main pattern's alternation returns the LEFTMOST match, which
+ * may be a loose alternative (a bare `rate limit`) even when a genuine
+ * `API Error: 429` appears later in the same output — so a real provider signal
+ * anywhere in the window still promotes the classification (#2642 review). Pure.
+ */
+function resolvePatternOrigin(errorDef, analysisOutput) {
+  if (!errorDef.origin) return 'output-scan';
+  if (errorDef.structuredMarker && !errorDef.structuredMarker.test(analysisOutput || '')) return 'output-scan';
+  return errorDef.origin;
+}
+
+/**
  * Analyze agent failure output and categorize the error.
  */
 export function analyzeAgentFailure(output, task, model) {
@@ -474,6 +531,9 @@ export function analyzeAgentFailure(output, task, model) {
     return {
       category: 'startup-failure',
       actionable: false,
+      // Structural runner signal (#2642): inferred from the process producing no
+      // usable output, not from a regex sweep — so it stays environmental-eligible.
+      origin: 'runner',
       message: 'Agent failed to start or produced no output',
       suggestedFix: 'Agent process exited immediately. Check system resources and provider availability.',
       snippet: (output || '').trim(),
@@ -490,6 +550,9 @@ export function analyzeAgentFailure(output, task, model) {
       return {
         category: errorDef.category,
         actionable: errorDef.actionable,
+        // Provenance (#2642): 'provider'/'runner' only when a structured marker
+        // is present in the failure window; a loose keyword match stays 'output-scan'.
+        origin: resolvePatternOrigin(errorDef, analysisOutput),
         // Captured for the human-facing investigation body; redacted at embed time.
         snippet: snippetAround(analysisOutput, match.index ?? 0),
         // Optional category-specific "what to approve" prose (may be undefined).
@@ -512,6 +575,9 @@ export function analyzeAgentFailure(output, task, model) {
   return {
     category: 'unknown',
     actionable: false,
+    // Pure regex/keyword sweep over the output tail (#2642) — never diverted as
+    // environmental (and 'unknown' isn't an environmental category anyway).
+    origin: 'output-scan',
     message: summary,
     details: contextLines.map(l => l.trim()).join('\n'),
     snippet: contextLines.map(l => l.trim()).join(' '),
@@ -520,14 +586,138 @@ export function analyzeAgentFailure(output, task, model) {
   };
 }
 
+// ===== Investigation-task creation guards (#2615) =====
+
+// An investigation in any of these states means the failure cause is already
+// being tracked — a repeat failure with the same fingerprint is the SAME cause,
+// not new work. `completed` is the only terminal status in the task vocabulary
+// (see taskParser.js STATUS_MAP); everything else — including `challenged`,
+// where a task can park for days awaiting user arbitration — stays open, so a
+// fresh task is only allowed once the prior cause was actually dealt with.
+const OPEN_INVESTIGATION_STATUSES = new Set(['pending', 'in_progress', 'challenged', 'blocked']);
+
+// Rolling circuit breaker across ALL fingerprints, mirroring autoFixer.js's
+// tripCircuit: at most INVESTIGATION_CIRCUIT_MAX_CREATIONS investigation tasks
+// per rolling window. A systemic failure storm (provider outage, broken spawn
+// path) fails MANY distinct tasks at once, each minting a distinct fingerprint —
+// the per-fingerprint dedup alone can't stop that fan-out. The window is rolling:
+// stamps older than the window are pruned on every check, so the circuit
+// auto-closes once creations age out (no manual reset needed).
+export const INVESTIGATION_CIRCUIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+export const INVESTIGATION_CIRCUIT_MAX_CREATIONS = 3;
+let investigationCreationStamps = []; // ms timestamps, newest-last
+
+function investigationCircuitOpen(now) {
+  investigationCreationStamps = investigationCreationStamps.filter(t => now - t < INVESTIGATION_CIRCUIT_WINDOW_MS);
+  return investigationCreationStamps.length >= INVESTIGATION_CIRCUIT_MAX_CREATIONS;
+}
+
+// Test hook — the stamp list is module state, so suites reset it between cases.
+export function __resetInvestigationCircuit() {
+  investigationCreationStamps = [];
+}
+
+/**
+ * Durable dedup key for investigation tasks: same failure category against the
+ * same kind of task in the same app is the same cause. Deliberately NOT keyed
+ * on the free-text failure message — for `unknown`-category failures that is a
+ * raw agent-output line that varies per run, which is exactly the dedup hole
+ * that let near-identical investigations pile up (#2615).
+ */
+export function buildInvestigationFingerprint(originalTask, analysis) {
+  const category = analysis?.category || 'unknown';
+  const kind = originalTask?.metadata?.analysisType
+    || originalTask?.metadata?.selfImprovementType
+    || originalTask?.taskType
+    || 'task';
+  const app = originalTask?.metadata?.app || 'none';
+  return `${category}:${kind}:${app}`;
+}
+
+// Stable headline every investigation task ever created starts with — the one
+// signal that exists on BOTH new tasks and pre-#2615 tasks (and on tasks synced
+// from not-yet-upgraded federated peers, which a local migration couldn't fix).
+const INVESTIGATION_HEADLINE_PREFIX = '[Auto] Investigate agent failure';
+
+/**
+ * Is this task an investigation task? Prefers the durable metadata marker;
+ * falls back to the legacy headline shape so investigations persisted before
+ * the marker existed still never spawn meta-investigations.
+ */
+export function isInvestigationTask(task) {
+  if (isTruthyMeta(task?.metadata?.isInvestigation)) return true;
+  return typeof task?.description === 'string'
+    && task.description.trimStart().startsWith(INVESTIGATION_HEADLINE_PREFIX);
+}
+
+// Find an existing investigation task (user or internal queue) still tracking
+// this fingerprint in a non-terminal status.
+async function findOpenInvestigation(fingerprint) {
+  const { user, cos } = await getAllTasks();
+  const tasks = [...(user?.tasks || []), ...(cos?.tasks || [])];
+  return tasks.find(t =>
+    OPEN_INVESTIGATION_STATUSES.has(t.status) &&
+    t.metadata?.investigationFingerprint === fingerprint
+  ) || null;
+}
+
 /**
  * Create an investigation task in COS-TASKS.md for a failed agent.
+ *
+ * Guarded two ways (#2615): a durable fingerprint dedup (one open investigation
+ * per failure cause — returns the existing task when it fires) and a rolling
+ * circuit breaker (returns null when open). See maybeCreateInvestigationTask
+ * for the meta-cascade guard.
+ *
+ * Serialized on a module-level promise tail: a failure storm fires several
+ * concurrent finalize chains, and without the tail two same-fingerprint creates
+ * can both pass the fingerprint scan (and both read a below-cap circuit) before
+ * either addTask lands — the exact TOCTOU the guards exist to close. Each
+ * caller still sees its own result/rejection; the tail itself never poisons.
  */
-export async function createInvestigationTask(agentId, originalTask, errorAnalysis) {
+let investigationCreateTail = Promise.resolve();
+
+export function createInvestigationTask(agentId, originalTask, errorAnalysis) {
+  const run = investigationCreateTail.then(() => doCreateInvestigationTask(agentId, originalTask, errorAnalysis));
+  investigationCreateTail = run.catch(() => {});
+  return run;
+}
+
+async function doCreateInvestigationTask(agentId, originalTask, errorAnalysis) {
   const analysis = errorAnalysis || {};
   const category = analysis.category || 'unknown';
   const rawMessage = analysis.message || 'Agent failed with an unrecognized error';
   const modelAttribution = analysis.affectedModel || analysis.configuredModel || null;
+
+  // Durable-fingerprint dedup: one open investigation per failure cause.
+  const fingerprint = buildInvestigationFingerprint(originalTask, analysis);
+  const existing = await findOpenInvestigation(fingerprint);
+  if (existing) {
+    emitLog('info', `⏭️ Skipping duplicate investigation for ${fingerprint}: ${existing.id} is still ${existing.status}`, {
+      agentId, taskId: originalTask.id, fingerprint, existingTaskId: existing.id, existingStatus: existing.status
+    });
+    // Union this failure's task id into the surviving investigation — both in
+    // metadata AND appended to the human/agent-facing body — so the record
+    // names EVERY task blocked on this cause: resolving it should unblock all
+    // of them, not just the first one mentioned in "What unblocks".
+    const affected = Array.isArray(existing.metadata?.affectedTasks) ? existing.metadata.affectedTasks : [];
+    if (originalTask.id && !affected.includes(originalTask.id)) {
+      await updateTask(existing.id, {
+        description: `${existing.description}\n- Also blocks task \`${originalTask.id}\` (same cause; agent \`${agentId}\`).`,
+        metadata: { affectedTasks: [...affected, originalTask.id] }
+      }, 'internal');
+    }
+    return existing;
+  }
+
+  // Rolling circuit breaker: cap creations per window across all fingerprints.
+  const now = Date.now();
+  if (investigationCircuitOpen(now)) {
+    emitLog('warn', `🔌 Investigation circuit OPEN — ${INVESTIGATION_CIRCUIT_MAX_CREATIONS} investigations created within the last hour; suppressing task for ${fingerprint}`, {
+      agentId, taskId: originalTask.id, fingerprint
+    });
+    return null;
+  }
 
   // Every interpolated free-text field is redacted before it lands in the body —
   // this task is human-facing and may sync across federated peers, so no
@@ -544,7 +734,14 @@ export async function createInvestigationTask(agentId, originalTask, errorAnalys
     || analysis.suggestedFix
     || 'Review the agent output, decide whether to fix the underlying config/code and retry, or close the task.';
 
-  const description = `[Auto] Investigate agent failure: ${message}
+  // The fingerprint rides in the headline so addTask's first-line dedup —
+  // which sees no `metadata.app` on investigation tasks — tracks fingerprint
+  // identity exactly: identical messages from different apps OR different
+  // task kinds/categories can never falsely collapse into one task, and
+  // same-fingerprint repeats are already caught by the scan above. The app
+  // is deliberately NOT passed as `app` to addTask, which would change
+  // workspace routing for the investigation agent.
+  const description = `${INVESTIGATION_HEADLINE_PREFIX} [${fingerprint}]: ${message}
 
 ## What happened
 Agent \`${agentId}\` failed while working on task \`${originalTask.id}\` (${originalDesc}).
@@ -562,13 +759,20 @@ Approving and applying the fix lets the original task \`${originalTask.id}\` be 
     description,
     priority: 'HIGH',
     context: `Auto-generated from agent ${agentId} failure`,
-    approvalRequired: true // Require human approval before auto-fixing
+    approvalRequired: true, // Require human approval before auto-fixing
+    isInvestigation: true, // Meta-cascade guard marker (#2615)
+    investigationFingerprint: fingerprint,
+    affectedTasks: [originalTask.id] // later same-fingerprint failures union in
   }, 'internal');
+
+  // Count only genuine creations against the circuit — addTask's own
+  // description-level dedup returning an existing task is not a new creation.
+  if (!investigationTask.duplicate) investigationCreationStamps.push(now);
 
   emitLog('info', `Created investigation task ${investigationTask.id} for failed agent ${agentId}`, {
     agentId,
     taskId: investigationTask.id,
-    errorCategory: errorAnalysis.category
+    errorCategory: category
   });
 
   cosEvents.emit('investigation:created', {
@@ -592,6 +796,15 @@ export const API_ACCESS_ERROR_CATEGORIES = new Set([
 export async function maybeCreateInvestigationTask(agentId, task, analysis) {
   if (API_ACCESS_ERROR_CATEGORIES.has(analysis?.category)) {
     emitLog('debug', `⏭️ Skipping investigation task for ${task.id}: API access error (${analysis.category})`, { agentId, taskId: task.id, category: analysis.category });
+    return;
+  }
+  // Meta-cascade guard (#2615): a failed investigation task must never spawn an
+  // investigation of the investigation. isInvestigationTask prefers the durable
+  // metadata marker (isTruthyMeta covers the markdown round-trip, where boolean
+  // metadata comes back as the string 'true') and falls back to the legacy
+  // headline shape for tasks persisted before the marker existed.
+  if (isInvestigationTask(task)) {
+    emitLog('info', `⏭️ Skipping meta-investigation for ${task.id}: failed task is itself an investigation`, { agentId, taskId: task.id, category: analysis?.category });
     return;
   }
   await createInvestigationTask(agentId, task, analysis).catch(err => {
@@ -667,6 +880,42 @@ export function resolveFailedTaskDecision(task, errorAnalysis) {
       ...(compaction && { compaction })
     }
   };
+}
+
+/**
+ * Pure decision for the type-LEVEL failure ledger (#2616), distinct from the
+ * per-instance retry decision above. Given a finished run's exit-code success,
+ * whether the user terminated it, and the programmatic-I/O hook result (if any),
+ * decide what signal to feed the per-type consecutive-failure ledger:
+ *
+ *   - `'skip'`    — don't touch the ledger (user-terminated run).
+ *   - `'success'` — reset the type's failure counter.
+ *   - `'failure'` — increment it (with `category`).
+ *
+ * The key case this exists for: a layered-intelligence run that exits 0 but whose
+ * `.agent-done` output was unparseable (`hookResult.outcome.reason ===
+ * 'unparseable-response'`) — or whose hook threw (`hookResult.threw`) — produced
+ * nothing usable, so it's a FAILURE even though the exit code says success. Other
+ * benign hook reasons (no-proposal, duplicate, scope-suppressed) leave the
+ * exit-code verdict intact. Extracted pure so the branching is unit-tested here.
+ *
+ * @returns {{ record: 'skip'|'success'|'failure', category: string|null }}
+ */
+export function resolveTypeFailureSignal({ success, terminatedByUser = false, hookResult = null, errorCategory = null } = {}) {
+  if (terminatedByUser) return { record: 'skip', category: null };
+
+  // An already-failed run keeps its real exit-code category; the hook override
+  // only UPGRADES an exit-0 (`success`) run to a failure (the exit-0-but-
+  // unparseable / thrown-hook case). A hook that throws on top of a run that
+  // already failed for e.g. `rate-limit` must not relabel the cause `hook-error`.
+  if (!success) return { record: 'failure', category: errorCategory || 'unknown' };
+
+  if (hookResult?.ran) {
+    if (hookResult.threw) return { record: 'failure', category: 'hook-error' };
+    if (hookResult.outcome?.reason === 'unparseable-response') return { record: 'failure', category: 'unparseable-response' };
+  }
+
+  return { record: 'success', category: null };
 }
 
 /**

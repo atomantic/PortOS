@@ -13,7 +13,9 @@ import {
   loadDismissedRecommendations,
   saveDismissedRecommendations,
   summarizeFailureSignatures,
-  appendInsight
+  appendInsight,
+  computeEffectiveSuccessRate,
+  isSkipCandidate
 } from './store.js';
 import { computeCorrelationQuality, isCorrelationProven, CORRELATION_QUALITY_THRESHOLD } from './correlationQuality.js';
 
@@ -29,12 +31,16 @@ export async function getLearningInsights() {
     ? Math.round((data.totals.succeeded / data.totals.completed) * 100)
     : 0;
 
-  // Find best and worst performing task types
+  // Find best and worst performing task types on the EFFECTIVE rate (issue
+  // #2617: windowed when the outcome ring has enough samples, else lifetime) —
+  // otherwise a type that recovered from a since-fixed failure burst keeps
+  // ranking "worst" and generating a prompt-improvement warning forever, right
+  // next to the windowed performance/confidence views that call it healthy.
   const taskTypes = Object.entries(data.byTaskType)
-    .map(([type, metrics]) => ({
-      type,
-      ...metrics
-    }))
+    .map(([type, metrics]) => {
+      const { successRate, source: rateSource, windowedCompleted } = computeEffectiveSuccessRate(metrics);
+      return { type, ...metrics, successRate: successRate ?? 0, rateSource, windowedCompleted };
+    })
     .filter(t => t.completed >= 3) // Only include types with enough data
     .sort((a, b) => b.successRate - a.successRate);
 
@@ -55,6 +61,19 @@ export async function getLearningInsights() {
   // Enriched failure signatures (issue #2333): provider/model attribution and
   // success-criteria miss counts the coarse errorPatterns aggregate can't carry.
   const failureSignatures = summarizeFailureSignatures(data.failureSignatures);
+
+  // Environmental/infrastructure failures (issue #2618): rate-limit/auth/billing/
+  // startup-class events tracked apart from the task aggregates — surfaced here
+  // so the Learning UI can show an outage happened without it denting any rate.
+  // `|| {}` tolerates a learning.json that predates the additive key.
+  const environmentalFailures = Object.entries(data.environmentalFailures || {})
+    .map(([category, info]) => ({
+      category,
+      count: info.count,
+      lastOccurred: info.lastOccurred,
+      affectedTypes: Object.keys(info.taskTypes || {})
+    }))
+    .sort((a, b) => b.count - a.count);
 
   // Model tier effectiveness
   const modelEffectiveness = Object.entries(data.byModelTier)
@@ -90,17 +109,22 @@ export async function getLearningInsights() {
       bestPerforming: bestPerforming.map(t => ({
         type: t.type,
         successRate: t.successRate,
+        rateSource: t.rateSource,
+        windowedCompleted: t.windowedCompleted,
         avgDurationMin: Math.round(t.avgDurationMs / 60000),
         completed: t.completed
       })),
       worstPerforming: worstPerforming.map(t => ({
         type: t.type,
         successRate: t.successRate,
+        rateSource: t.rateSource,
+        windowedCompleted: t.windowedCompleted,
         avgDurationMin: Math.round(t.avgDurationMs / 60000),
         completed: t.completed
       })),
       commonErrors,
       failureSignatures,
+      environmentalFailures,
       modelEffectiveness,
       recentUnknownErrors: data.recentUnknownErrors || []
     },
@@ -306,16 +330,22 @@ export async function getLearningSummary() {
   let criticalCount = 0;
   let skippedCount = 0;
 
+  // Health tiers read the EFFECTIVE rate (issue #2617) and the skipped count
+  // uses the shared skip predicate, so this dashboard summary — and the
+  // proactive "task types skipped" alert built on it — reflects what the
+  // scheduler actually does. On lifetime rates alone, a type that recovered
+  // in its recent window would be alerted as "skipped" forever.
   for (const [, metrics] of Object.entries(data.byTaskType)) {
     if (metrics.completed < 3) continue; // Insufficient data
 
-    if (metrics.successRate >= 70) {
+    const { successRate } = computeEffectiveSuccessRate(metrics);
+    if (successRate >= 70) {
       healthyCount++;
-    } else if (metrics.successRate >= 40) {
+    } else if (successRate >= 40) {
       warningCount++;
     } else {
       criticalCount++;
-      if (metrics.completed >= 5 && metrics.successRate < 30) {
+      if (isSkipCandidate(metrics)) {
         skippedCount++;
       }
     }

@@ -76,7 +76,7 @@ export default function EmbeddingsTab() {
     setSaving(true);
     await updateSettings({
       embeddings: { provider, model: model.trim() || null },
-    }).then(() => {
+    }, { silent: true }).then(() => {
       setSaved({ provider, model: model.trim() || '' });
       toast.success('Embeddings settings saved');
     }).catch((err) => {

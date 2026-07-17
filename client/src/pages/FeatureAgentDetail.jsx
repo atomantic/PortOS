@@ -1,4 +1,5 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
+import useMounted from '../hooks/useMounted';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Wand2, ArrowLeft } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -23,19 +24,33 @@ export default function FeatureAgentDetail() {
   const [loading, setLoading] = useState(!isCreate);
   const [apps, setApps] = useState([]);
 
+  // Unmount guard (StrictMode-safe: resets to true on mount) so an async agent
+  // load that resolves after teardown doesn't setState on a dead component.
+  const mountedRef = useMounted();
+  // Monotonic load token: an A→B navigation fires a fresh fetch and bumps this,
+  // so a slow response for A resolving after we've switched to B is ignored
+  // instead of overwriting the displayed agent with the wrong record.
+  const fetchSeqRef = useRef(0);
+
   useEffect(() => {
-    api.getApps().then(data => setApps((data || []).filter(a => !a.archived))).catch(() => {});
+    api.getApps().then(data => { if (mountedRef.current) setApps((data || []).filter(a => !a.archived)); }).catch(() => {});
   }, []);
 
   const fetchAgent = useCallback(() => {
     if (isCreate) return;
+    const seq = ++fetchSeqRef.current;
+    const isCurrent = () => mountedRef.current && seq === fetchSeqRef.current;
     api.getFeatureAgent(id).then(data => {
+      if (!isCurrent()) return;
       setAgent(data);
       setLoading(false);
-    }).catch(() => setLoading(false));
+    }).catch(() => { if (isCurrent()) setLoading(false); });
   }, [id, isCreate]);
 
   useEffect(() => {
+    // On an A→B switch, drop A's record and show the spinner immediately so a
+    // stale agent never flashes under the new id while B is still loading.
+    if (!isCreate) { setAgent(null); setLoading(true); }
     fetchAgent();
     const handler = (data) => { if (data.id === id) fetchAgent(); };
     socket.on('cos:feature-agent:status', handler);
@@ -44,7 +59,7 @@ export default function FeatureAgentDetail() {
       socket.off('cos:feature-agent:status', handler);
       socket.off('cos:feature-agent:run-complete', handler);
     };
-  }, [fetchAgent, id]);
+  }, [fetchAgent, id, isCreate]);
 
   const handleStart = useCallback((agentId) => {
     api.startFeatureAgent(agentId, { silent: true }).then(data => { setAgent(prev => ({ ...prev, ...data })); toast.success('Activated'); }).catch(err => toast.error(err.message || 'Action failed'));

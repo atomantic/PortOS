@@ -770,7 +770,7 @@ export default function ImageGen() {
       }
       return { payload, data: await res.json() };
     }
-    return { payload, data: await generateImage(payload) };
+    return { payload, data: await generateImage(payload, { silent: true }) };
   };
 
   const startLocalGeneration = async () => {
@@ -886,7 +886,7 @@ export default function ImageGen() {
           cleanC2PA, denoise,
         };
         if (seed && Number(seed) >= 0) payload.seed = Number(seed);
-        const data = await generateImage(payload);
+        const data = await generateImage(payload, { silent: true });
         setResult({ ...data, prompt: payload.prompt, negativePrompt: payload.negativePrompt, width: clampedW, height: clampedH, steps: payload.steps, cfgScale });
       }
       toast.success('Image generated');
@@ -925,7 +925,7 @@ export default function ImageGen() {
   const handleToggleHidden = async (img) => {
     const nextHidden = !img.hidden;
     setGallery((g) => g.map((x) => (x.filename === img.filename ? { ...x, hidden: nextHidden } : x)));
-    const result = await setImageHidden(img.filename, nextHidden).catch((err) => {
+    const result = await setImageHidden(img.filename, nextHidden, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to update visibility');
       setGallery((g) => g.map((x) => (x.filename === img.filename ? { ...x, hidden: !nextHidden } : x)));
       return null;
@@ -935,7 +935,7 @@ export default function ImageGen() {
 
   const handleClean = async (img) => {
     if (!img?.filename) throw new Error('Missing filename');
-    const cleaned = await cleanGalleryImage(img.filename).catch((err) => {
+    const cleaned = await cleanGalleryImage(img.filename, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to clean image');
       throw err;
     });

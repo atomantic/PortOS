@@ -23,12 +23,12 @@
 import { execFile, spawn } from 'child_process'
 import { promisify } from 'util'
 import { readFileSync, createWriteStream } from 'fs'
-import { stat, rm } from 'fs/promises'
+import { rm } from 'fs/promises'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { pipeline } from 'stream/promises'
 import { Readable } from 'stream'
-import { PATHS, atomicWrite, ensureDir } from '../lib/fileUtils.js'
+import { PATHS, atomicWrite, ensureDir, pathExists } from '../lib/fileUtils.js'
 import { compareSemver } from '../lib/versionUtils.js'
 import { isBackend, mapModelToBackend } from '../lib/localLlmCatalog.js'
 import { sanitizeOllamaName } from '../lib/localLlmDisk.js'
@@ -94,11 +94,6 @@ const BREW_LOCATIONS = {
 function macAppPath(backend) {
   if (process.platform !== 'darwin') return null
   return backend === 'ollama' ? '/Applications/Ollama.app' : '/Applications/LM Studio.app'
-}
-
-async function pathExists(p) {
-  if (!p) return false
-  return stat(p).then(() => true).catch(() => false)
 }
 
 /**

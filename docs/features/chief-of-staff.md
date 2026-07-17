@@ -21,6 +21,7 @@ Autonomous agent manager that watches task files, spawns sub-agents, and maintai
 6. **Self-Improvement**: Can analyze performance and suggest prompt/config improvements
 7. **Script Generation**: Creates automation scripts for repetitive tasks
 8. **Report Generation**: Daily summaries of completed work
+9. **Durable Agent Feedback**: Completion notifications accept quick ratings, while the Agents tab keeps a filterable queue of loaded runs that still need feedback after a notification expires
 
 ## Task File Format
 

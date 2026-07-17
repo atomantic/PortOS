@@ -1,11 +1,26 @@
 import { describe, it, expect, vi } from 'vitest';
+import os from 'os';
 import express from 'express';
 import { request } from '../lib/testHelper.js';
 import systemHealthRoutes from './systemHealth.js';
 import { listProcesses } from '../services/pm2.js';
+import { getSelf } from '../services/instances.js';
+import { isAuthEnabled } from '../services/auth.js';
 
 vi.mock('../services/pm2.js', () => ({
   listProcesses: vi.fn().mockResolvedValue([])
+}));
+
+// Mock instances + auth directly (rather than through settings) so the pre-auth
+// companion-app identity fields on GET /health are deterministic. Mocking auth.js
+// directly also sidesteps its module-load `settingsEvents.on(...)` side effect,
+// which the partial settings.js mock below does not provide.
+vi.mock('../services/instances.js', () => ({
+  getSelf: vi.fn().mockResolvedValue({ instanceId: 'test-instance-id', name: 'Example Instance' })
+}));
+
+vi.mock('../services/auth.js', () => ({
+  isAuthEnabled: vi.fn().mockResolvedValue(false)
 }));
 
 vi.mock('../services/apps.js', () => ({
@@ -55,6 +70,28 @@ describe('System Health Routes', () => {
     expect(response.status).toBe(200);
     expect(response.body.status).toBe('ok');
     expect(response.body.version).toBeDefined();
+  });
+
+  it('exposes companion-app identity fields (name, instanceId, authRequired, scheme)', async () => {
+    const response = await request(app).get('/api/system/health');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toHaveProperty('name', 'Example Instance');
+    expect(response.body).toHaveProperty('instanceId', 'test-instance-id');
+    expect(response.body).toHaveProperty('authRequired', false);
+    expect(['http', 'https']).toContain(response.body.scheme);
+  });
+
+  it('reports authRequired true when the password gate is on and falls back to hostname for name', async () => {
+    isAuthEnabled.mockResolvedValueOnce(true);
+    getSelf.mockResolvedValueOnce(null);
+
+    const response = await request(app).get('/api/system/health');
+
+    expect(response.status).toBe(200);
+    expect(response.body.authRequired).toBe(true);
+    expect(response.body.name).toBe(os.hostname());
+    expect(response.body.instanceId).toBeNull();
   });
 
   it('should return health details with version', async () => {

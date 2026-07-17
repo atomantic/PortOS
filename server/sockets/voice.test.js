@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Force the enabled-gate open so the validation tests below deterministically
 // exercise the size/text guards (ensureEnabled runs BEFORE every guard; with
@@ -13,6 +13,11 @@ vi.mock(import('../services/voice/config.js'), async (importOriginal) => {
 });
 
 const { truncateOnWordBoundary, registerVoiceHandlers } = await import('./voice.js');
+const {
+  getVoiceOutputSocket,
+  emitVoiceOutput,
+  __resetVoiceOutput,
+} = await import('../services/voice/voiceOutput.js');
 
 // Minimal fake socket: records on() handlers so tests can fire inbound events,
 // and captures emit() calls. No real Socket.IO needed — the voice:ui:index /
@@ -190,5 +195,65 @@ describe('voice:text validation', () => {
     const errors = socket.emitted.filter((e) => e.event === 'voice:error');
     expect(errors).toHaveLength(1);
     expect(errors[0].payload).toEqual({ stage: 'text', message: 'text is required' });
+  });
+});
+
+describe('voice:output single-recipient wiring', () => {
+  beforeEach(() => __resetVoiceOutput());
+
+  it('registers a candidate only after the tab announces voice:output:available', () => {
+    const socket = makeFakeSocket();
+    registerVoiceHandlers(socket);
+    expect(socket.has('voice:output:available')).toBe(true);
+    expect(socket.has('voice:output:claim')).toBe(true);
+    // A bare connection is NOT a candidate — a non-browser socket (e.g. a peer
+    // relay) that never announces must never be elected to receive audio.
+    expect(getVoiceOutputSocket()).toBe(null);
+    // After announcing, it becomes the (sole) lazily-eligible recipient.
+    socket.fire('voice:output:available');
+    expect(getVoiceOutputSocket()).toBe(socket);
+  });
+
+  it('a connection that never announces is never elected primary', () => {
+    const relay = makeFakeSocket(); // stands in for a peer-relay Socket.IO client
+    const tab = makeFakeSocket();
+    registerVoiceHandlers(relay);
+    registerVoiceHandlers(tab);
+    tab.fire('voice:output:available');
+    // Even though the relay connected, output routes to the real tab.
+    const io = { emit: () => { throw new Error('must not broadcast'); } };
+    emitVoiceOutput(io, 'voice:speak', { sentence: 'ping' });
+    expect(relay.emitted.filter((e) => e.event === 'voice:speak')).toHaveLength(0);
+    expect(tab.emitted.filter((e) => e.event === 'voice:speak')).toHaveLength(1);
+  });
+
+  it('claiming routes proactive output to the claiming tab, not another', () => {
+    const a = makeFakeSocket();
+    const b = makeFakeSocket();
+    registerVoiceHandlers(a);
+    registerVoiceHandlers(b);
+    a.fire('voice:output:available');
+    b.fire('voice:output:available');
+    // b is the active tab and claims output.
+    b.fire('voice:output:claim');
+
+    const io = { emit: () => { throw new Error('must not broadcast'); } };
+    emitVoiceOutput(io, 'voice:speak', { sentence: 'ping' });
+    expect(a.emitted.filter((e) => e.event === 'voice:speak')).toHaveLength(0);
+    expect(b.emitted.filter((e) => e.event === 'voice:speak')).toHaveLength(1);
+  });
+
+  it('disconnecting the primary promotes another announced tab', () => {
+    const a = makeFakeSocket();
+    const b = makeFakeSocket();
+    registerVoiceHandlers(a);
+    registerVoiceHandlers(b);
+    a.fire('voice:output:available');
+    b.fire('voice:output:available');
+    a.fire('voice:output:claim');
+    expect(getVoiceOutputSocket()).toBe(a);
+
+    a.fire('disconnect');
+    expect(getVoiceOutputSocket()).toBe(b);
   });
 });

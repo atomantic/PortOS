@@ -12,6 +12,8 @@ When a TLS cert is provisioned (`npm run setup:cert`), `:5555` serves HTTPS inst
 
 This document covers the most commonly used endpoints plus a [complete route-domain index](#route-domain-index). A machine-readable OpenAPI 3.1 spec for the public API surface is served at `GET /api/api-docs/openapi.json` and rendered in the UI at `/api-access`.
 
+Building a native companion client? See [COMPANION_APP_API.md](./COMPANION_APP_API.md) — the stable, pre-auth-discoverable contract (discovery/identity, HTTP Basic auth, instance management, palette actions, daily-log, POST progress, and the iCloud-sync precedent) that the PortDeck app consumes.
+
 ## Security Model
 
 PortOS is designed for personal/developer use on trusted networks. It implements the following security measures:
@@ -488,8 +490,8 @@ Every mounted API prefix (see `server/index.js` for the authoritative list). Dom
 | `/api/datadog`, `/api/jira`, `/api/github`, `/api/telegram` | External integrations |
 | `/api/health` | Health check |
 | `/api/insights` | Cross-domain insights |
-| `/api/instances`, `/api/sync`, `/api/peer-sync`, `/api/sharing` | Federation / peer sync |
-| `/api/mortalloom` | MortalLoom |
+| `/api/instances`, `/api/sync`, `/api/peer-sync`, `/api/sharing` | Federation / peer sync (see [COMPANION_APP_API.md](./COMPANION_APP_API.md)) |
+| `/api/mortalloom` | MortalLoom (iCloud-JSON sync precedent) |
 | `/api/review` | Review queue |
 | `/api/settings` | App settings |
 | `/api/update` | Self-update flow |

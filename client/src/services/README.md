@@ -69,6 +69,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiMemory.js` | Memory CRUD. |
 | `apiNotes.js` | Notes vault. |
 | `apiDigitalTwin.js` | Digital twin status + summary. |
+| `apiModelPersonality.js` | LLM personality self-profile tests: run, history, delete, scorer settings. |
 | `apiGoals.js` | Identity / goals tracking. |
 | `apiHealth.js` | Apple Health. |
 | `apiMeatspace.js` | MeatSpace (genome + location). |
@@ -92,6 +93,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiMedia.js` | Screenshots + media assets. |
 | `apiMediaJobs.js` | Media generation job tracking. |
 | `apiCreativeDirector.js` | Creative Director (video production). |
+| `apiCreativeCommission.js` | Creative Commissions (Autonomous Creation Engine — standing recurring briefs). |
 | `apiMusicVideo.js` | Music Video projects + scene board + audio analysis. |
 | `apiPipeline.js` | Pipeline (issues + stages + canon). |
 | `apiUniverseBuilder.js` | Universe Builder (generate + edit + commit). |
@@ -104,6 +106,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiWritersRoom.js` | Writers Room (folders + works + drafts, live continuation + render-preview reservation, scene-image attach). |
 | `apiSharing.js` | Share buckets + federation sync. |
 | `apiRounds.js` | Rounds workbench CRUD (a cappella round writing + arranging voice layers + learning tracking). |
+| `apiSongbook.js` | SongBook repertoire tracker (`/songbook` — Brain `songs` entity): song CRUD + stage PATCH, URL import draft, and attachments (base64 upload, present-flag list, raw serve URL via `songAttachmentUrl`). |
 | `apiPeerSync.js` | Per-record peer sync subscriptions (universe + series → other PortOS instances over Tailnet). |
 | `apiSyncReview.js` | Sync hygiene: duplicate-record detection + smart merge (universe/series) and the non-blocking edit-conflict journal (list/resolve). Surfaced in Sharing → Duplicates / Conflicts. |
 
@@ -126,6 +129,8 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | File | Purpose |
 |---|---|
 | `voiceClient.js` | Browser-side voice capture + playback (two modes). |
+| `browserLlm.js` | Client for Chrome's on-device "Gemini Nano" (Prompt API): dual-shape detection, availability enum, cached `promptNano()` with timeout. Tier 2 of the voice fast-resolution cascade. |
+| `voiceFastPath.js` | Voice fast-resolution cascade: trigger nav → on-device Nano → server LLM. Decides how each spoken/typed turn is resolved. |
 | `voiceVisibility.js` | Voice UI state manager. |
 | `uiInteract.js` | Execute voice `ui_click` / `ui_fill` / `ui_select` against live DOM. |
 | `domIndex.js` | DOM indexer for voice accessibility mode. |

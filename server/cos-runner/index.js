@@ -17,6 +17,7 @@ import http from 'http';
 import { Server as SocketServer } from 'socket.io';
 import { ensureDir, PATHS } from '../lib/fileUtils.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
+import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { createStreamJsonParser } from './streamJsonParser.js';
 import { loadState, saveState, withState } from './runnerState.js';
@@ -195,7 +196,14 @@ app.post('/spawn', async (req, res) => {
   // output → startup-failure. Mirrors the working "Run Prompt" path
   // (server/services/runner.js); resolved against childEnv so a provider PATH
   // override is honored. See issue #2243.
-  const { command: spawnCommand, args: finalSpawnArgs } = prepareCliSpawn(command, spawnArgs, childEnv);
+  // Deliver the prompt per provider convention BEFORE resolving the spawn shim:
+  //   - Antigravity (`agy`): spliced in as the --print VALUE (agy does not read
+  //     stdin) → useStdin=false. Without this the prompt never reaches the model
+  //     and the trailing --print marker swallows the next flag as its "prompt".
+  //   - Grok on Windows: `/dev/stdin` rewritten to a temp file → useStdin=false.
+  //   - Every other provider: unchanged, prompt over stdin → useStdin=true.
+  const { args: deliveredArgs, useStdin, cleanup: cleanupPromptFile } = prepareCliPrompt(command, spawnArgs, prompt);
+  const { command: spawnCommand, args: finalSpawnArgs } = prepareCliSpawn(command, deliveredArgs, childEnv);
 
   // Spawn the CLI process
   const claudeProcess = spawn(spawnCommand, finalSpawnArgs, {
@@ -225,8 +233,9 @@ app.post('/spawn', async (req, res) => {
     workspacePath: cwd
   });
 
-  // Send prompt via stdin
-  claudeProcess.stdin.write(prompt);
+  // Send prompt via stdin (skipped when the prompt was delivered via argv —
+  // antigravity's --print value, or grok's Windows temp file).
+  if (useStdin) claudeProcess.stdin.write(prompt);
   claudeProcess.stdin.end();
 
   // Handle stdout
@@ -273,6 +282,7 @@ app.post('/spawn', async (req, res) => {
 
   // Handle errors
   claudeProcess.on('error', (err) => {
+    cleanupPromptFile();
     console.error(`❌ Agent ${agentId} spawn error: ${err.message}`);
     emitToServer('agent:error', { agentId, error: err.message });
     activeAgents.delete(agentId);
@@ -280,6 +290,7 @@ app.post('/spawn', async (req, res) => {
 
   // Handle process exit
   claudeProcess.on('close', async (code) => {
+    cleanupPromptFile();
     try {
     const agent = activeAgents.get(agentId);
     // Cancel any pending SIGKILL timer — process already exited.

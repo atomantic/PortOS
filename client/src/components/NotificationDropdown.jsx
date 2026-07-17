@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Bell, X, CheckCheck, Trash2, Brain, ListTodo, AlertTriangle, Code, HelpCircle, BellRing } from 'lucide-react';
+import { Bell, X, CheckCheck, Trash2, Brain, ListTodo, AlertTriangle, Code, HelpCircle, BellRing, Sparkles } from 'lucide-react';
 import { timeAgo } from '../utils/formatters';
 
 const NOTIFICATION_TYPE_CONFIG = {
@@ -38,6 +38,11 @@ const NOTIFICATION_TYPE_CONFIG = {
     icon: BellRing,
     color: 'text-cyan-400',
     bgColor: 'bg-cyan-500/20'
+  },
+  creative_commission: {
+    icon: Sparkles,
+    color: 'text-port-accent',
+    bgColor: 'bg-port-accent/20'
   }
 };
 
@@ -88,7 +93,7 @@ export default function NotificationDropdown({
       {/* Bell button with badge */}
       <button
         onClick={() => setIsOpen(!isOpen)}
-        className="relative inline-flex items-center justify-center min-w-[40px] min-h-[40px] sm:min-w-0 sm:min-h-0 sm:p-2 rounded-lg hover:bg-port-card transition-colors focus:outline-hidden focus:ring-2 focus:ring-port-accent focus:ring-offset-2 focus:ring-offset-port-bg"
+        className="relative inline-flex items-center justify-center min-w-[44px] min-h-[44px] sm:min-w-0 sm:min-h-0 sm:p-2 rounded-lg hover:bg-port-card transition-colors focus:outline-hidden focus:ring-2 focus:ring-port-accent focus:ring-offset-2 focus:ring-offset-port-bg"
         title="Notifications"
         aria-label={`Notifications${unreadCount > 0 ? ` (${unreadCount} unread)` : ''}`}
         aria-expanded={isOpen}
@@ -96,7 +101,7 @@ export default function NotificationDropdown({
       >
         <Bell className={`w-5 h-5 ${unreadCount > 0 ? 'text-yellow-400' : 'text-gray-400'}`} aria-hidden="true" />
         {unreadCount > 0 && (
-          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1" aria-hidden="true">
+          <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-port-warning text-port-on-warning px-1" aria-hidden="true">
             {unreadCount > 9 ? '9+' : unreadCount}
           </span>
         )}
@@ -107,7 +112,7 @@ export default function NotificationDropdown({
         <div
           role="menu"
           aria-label="Notifications menu"
-          className={`absolute w-80 bg-port-card border border-port-border rounded-lg shadow-xl z-50 overflow-hidden ${
+          className={`absolute w-80 max-w-[calc(100vw-2rem)] bg-port-card border border-port-border rounded-lg shadow-xl z-50 overflow-hidden ${
             position === 'bottom'
               ? 'left-0 bottom-full mb-2'  // Opens upward from sidebar footer
               : 'right-0 top-full mt-2'     // Opens downward from header

@@ -1,11 +1,27 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
   ServerError,
   normalizeError,
   emitErrorEvent,
   errorEvents,
-  errorMiddleware
+  errorMiddleware,
+  createServiceErrorMapper,
+  asyncHandler
 } from './errorHandler.js';
+
+// Build a fake Express req/res pair. `res.status()` and `res.json()` are
+// chainable (they return `res`) to mirror Express, and `req.app.get('io')`
+// resolves to whatever io stub the test supplies (or null for the no-io path).
+function makeReqRes(io) {
+  const res = { status: vi.fn(() => res), json: vi.fn(() => res) };
+  const req = { method: 'GET', originalUrl: '/api/thing', app: { get: vi.fn(() => io) } };
+  return { req, res };
+}
+
+// asyncHandler wires the rejection handling onto a `.catch()` microtask and the
+// returned middleware does not itself return that promise — so flush the
+// microtask queue before asserting the response/emit happened.
+const flushMicrotasks = () => new Promise((r) => setImmediate(r));
 
 describe('errorHandler.js', () => {
   describe('ServerError', () => {
@@ -229,6 +245,141 @@ describe('errorHandler.js', () => {
       expect(safeContext).toEqual({ safe: 'visible' });
       expect(safeContext.apiKey).toBeUndefined();
       errorEvents.off('error', listener);
+    });
+  });
+
+  describe('createServiceErrorMapper', () => {
+    const STATUS = { SVC_NOT_FOUND: 404, SVC_VALIDATION: 400 };
+
+    it('maps a recognized code to a ServerError with the mapped status', () => {
+      const map = createServiceErrorMapper(STATUS);
+      const mapped = map(Object.assign(new Error('missing'), { code: 'SVC_NOT_FOUND' }));
+      expect(mapped).toBeInstanceOf(ServerError);
+      expect(mapped.status).toBe(404);
+      expect(mapped.code).toBe('SVC_NOT_FOUND');
+      expect(mapped.message).toBe('missing');
+    });
+
+    it('passes an unrecognized error through untouched', () => {
+      const map = createServiceErrorMapper(STATUS);
+      const original = Object.assign(new Error('boom'), { code: 'SOMETHING_ELSE' });
+      expect(map(original)).toBe(original);
+    });
+
+    it('passes a code-less error through untouched', () => {
+      const map = createServiceErrorMapper(STATUS);
+      const original = new Error('plain');
+      expect(map(original)).toBe(original);
+    });
+
+    it('attaches a non-empty buildContext result as context', () => {
+      const map = createServiceErrorMapper(STATUS, (err) => ({ blockingSeries: err.blockingSeries }));
+      const mapped = map(Object.assign(new Error('busy'), { code: 'SVC_VALIDATION', blockingSeries: ['s1'] }));
+      expect(mapped.context).toEqual({ blockingSeries: ['s1'] });
+    });
+
+    it('omits context when buildContext returns undefined or an empty object', () => {
+      const map = createServiceErrorMapper(STATUS, () => undefined);
+      const mapped = map(Object.assign(new Error('x'), { code: 'SVC_VALIDATION' }));
+      expect(mapped.context).toEqual({});
+
+      const mapEmpty = createServiceErrorMapper(STATUS, () => ({}));
+      const mappedEmpty = mapEmpty(Object.assign(new Error('y'), { code: 'SVC_VALIDATION' }));
+      expect(mappedEmpty.context).toEqual({});
+    });
+  });
+
+  describe('asyncHandler', () => {
+    // `errorEvents` is a Node EventEmitter: emitting 'error' with zero listeners
+    // re-throws the argument (the classic footgun). Production always has
+    // subscribers (autoFixer / socket.js); keep a noop attached so emitErrorEvent
+    // doesn't throw out of asyncHandler's catch during these tests.
+    // Cleanup lives in afterEach (not test bodies) so a failing assertion can't
+    // leak the noop listener, any test-registered listener, or the console.error
+    // spy into sibling tests.
+    let noopErrorListener;
+    let errorSpy;
+    let testListeners;
+    // Register an errorEvents 'error' listener that this describe will remove.
+    const trackListener = (fn) => { testListeners.push(fn); errorEvents.on('error', fn); };
+
+    beforeEach(() => {
+      testListeners = [];
+      noopErrorListener = () => {};
+      errorEvents.on('error', noopErrorListener);
+      errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    });
+    afterEach(() => {
+      errorEvents.off('error', noopErrorListener);
+      for (const fn of testListeners) errorEvents.off('error', fn);
+      errorSpy.mockRestore();
+    });
+
+    it('catches a thrown ServerError, emits, and responds with status + body', async () => {
+      const io = { emit: vi.fn() };
+      const { req, res } = makeReqRes(io);
+      const events = [];
+      trackListener((err, ctx) => events.push({ err, ctx }));
+
+      const handler = asyncHandler(async () => {
+        throw new ServerError('nope', { status: 403, code: 'FORBIDDEN', context: { detail: 'x' } });
+      });
+      await handler(req, res, vi.fn());
+      await flushMicrotasks();
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      const body = res.json.mock.calls[0][0];
+      expect(body.error).toBe('nope');
+      expect(body.code).toBe('FORBIDDEN');
+      expect(body.timestamp).toBeDefined();
+      expect(body.context).toEqual({ detail: 'x' });
+      // Both channels fire: the process-local errorEvents emitter and the io broadcast.
+      expect(events).toHaveLength(1);
+      expect(io.emit).toHaveBeenCalledWith(
+        'error:occurred',
+        expect.objectContaining({ code: 'FORBIDDEN', status: 403, message: 'nope' })
+      );
+    });
+
+    it('normalizes a plain thrown Error to a 500 INTERNAL_ERROR response', async () => {
+      const io = { emit: vi.fn() };
+      const { req, res } = makeReqRes(io);
+
+      const handler = asyncHandler(async () => {
+        throw new Error('kaboom');
+      });
+      await handler(req, res, vi.fn());
+      await flushMicrotasks();
+
+      expect(res.status).toHaveBeenCalledWith(500);
+      const body = res.json.mock.calls[0][0];
+      expect(body.code).toBe('INTERNAL_ERROR');
+      expect(body.error).toBe('kaboom');
+    });
+
+    it('does not touch res when the wrapped handler resolves successfully', async () => {
+      const { req, res } = makeReqRes({ emit: vi.fn() });
+
+      const handler = asyncHandler(async () => 'ok');
+      await handler(req, res, vi.fn());
+      await flushMicrotasks();
+
+      expect(res.status).not.toHaveBeenCalled();
+      expect(res.json).not.toHaveBeenCalled();
+    });
+
+    it('still responds when no io is registered on the app', async () => {
+      const { req, res } = makeReqRes(null);
+
+      const handler = asyncHandler(async () => {
+        throw new ServerError('missing', { status: 404 });
+      });
+      await handler(req, res, vi.fn());
+      await flushMicrotasks();
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      // status→code derivation still runs even without an io channel.
+      expect(res.json.mock.calls[0][0].code).toBe('NOT_FOUND');
     });
   });
 });

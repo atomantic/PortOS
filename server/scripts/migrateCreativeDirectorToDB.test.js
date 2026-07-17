@@ -18,6 +18,13 @@ vi.mock('../lib/fileUtils.js', () => ({
 // Rename can be made to fail per-test via `renameShouldFail`.
 let renameShouldFail = false;
 
+// Marker I/O is delegated to migrationMarker.js; mock it against the same
+// in-memory `files` map (the marker helper has its own unit test).
+vi.mock('../lib/migrationMarker.js', () => ({
+  markerExists: vi.fn(async (name) => (`/fake/data/${name}` in files)),
+  writeMarker: vi.fn(async (name, payload) => { files[`/fake/data/${name}`] = JSON.stringify(payload, null, 2); }),
+}));
+
 vi.mock('fs/promises', () => ({
   readFile: vi.fn(async (path) => {
     if (!(path in files)) {
@@ -27,7 +34,6 @@ vi.mock('fs/promises', () => ({
     }
     return files[path];
   }),
-  writeFile: vi.fn(async (path, content) => { files[path] = content; }),
   rename: vi.fn(async (from, to) => {
     if (renameShouldFail) throw new Error('EACCES: rename failed');
     files[to] = files[from];

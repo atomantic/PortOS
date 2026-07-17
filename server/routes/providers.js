@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { testVision, runVisionTestSuite, checkVisionHealth } from '../services/visionTest.js';
 import { getAllProviderStatuses, getProviderStatus, markProviderAvailable, getTimeUntilRecovery } from '../services/providerStatus.js';
-import { providerSchema, validate } from '../lib/aiToolkit/validation.js';
+import { providerSchema, providerActiveSchema, validate } from '../lib/aiToolkit/validation.js';
 
 /**
  * Sanitize a provider object for client responses.
@@ -53,10 +53,11 @@ export function createPortOSProviderRoutes(aiToolkit) {
   // PUT /active must be defined before PUT /:id to avoid the wildcard
   // catching "active" as a provider ID (which causes 404 "Provider not found")
   router.put('/active', asyncHandler(async (req, res) => {
-    const { id } = req.body;
-    if (!id) {
-      throw new ServerError('Provider ID required', { status: 400 });
+    const validation = validate(providerActiveSchema, req.body);
+    if (!validation.success) {
+      throw new ServerError('Invalid provider data', { status: 400, code: 'VALIDATION_ERROR', context: { details: validation.errors } });
     }
+    const { id } = validation.data;
     const provider = await providerService.setActiveProvider(id);
     if (!provider) {
       throw new ServerError('Provider not found', { status: 404 });

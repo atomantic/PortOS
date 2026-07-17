@@ -1,17 +1,23 @@
 // Per-socket voice handlers.
 // Inbound:  voice:turn | voice:text | voice:interrupt | voice:reset
 //           | voice:dictation:set | voice:ui:index | voice:screenshot:result
-//           | voice:ui:read-response
+//           | voice:ui:read-response | voice:output:available | voice:output:claim
 // Outbound: voice:transcript | voice:llm:delta | voice:llm:done | voice:tts:audio
 //           | voice:tool | voice:dictation | voice:navigate
 //           | voice:ui:click | voice:ui:fill | voice:ui:select | voice:ui:check
 //           | voice:ui:read-request
 //           | voice:dailyLog:appended | voice:error | voice:idle
 //           | voice:screenshot:request
+//           | voice:speak | voice:output:primary | voice:output:detached
 
 import { runTurn } from '../services/voice/pipeline.js';
 import { getVoiceConfig } from '../services/voice/config.js';
 import { registerEchoBuffer, unregisterEchoBuffer } from '../services/voice/echo.js';
+import {
+  registerVoiceOutputCandidate,
+  claimVoiceOutput,
+  releaseVoiceOutput,
+} from '../services/voice/voiceOutput.js';
 import { isIsoDate } from '../services/brainJournal.js';
 
 // Cap by messages (each user utterance + assistant reply is ~2). 24 → ~12 turns.
@@ -325,7 +331,30 @@ export const registerVoiceHandlers = (socket) => {
     }
   });
 
+  // A real browser tab announces itself as a possible recipient of proactive
+  // (server-initiated) voice output on connect. Only sockets that send this are
+  // eligible — registering EVERY connection would make non-playing sockets
+  // (e.g. a federated peer's Socket.IO relay client, which lands on the same
+  // io.on('connection')) eligible, and electing one as primary would silently
+  // route proactive audio into a socket that never plays it. It does NOT become
+  // the sole recipient until it claims output (below). See voiceOutput.js.
+  socket.on('voice:output:available', () => {
+    registerVoiceOutputCandidate(socket);
+  });
+
+  // The user's active tab claims proactive voice output — whichever tab is
+  // focused/visible (or where the user explicitly clicked "speak here") becomes
+  // the single recipient of `voice:speak`. Last claim wins; the previous holder
+  // is notified via voice:output:detached so its UI can reflect the handoff.
+  socket.on('voice:output:claim', () => {
+    claimVoiceOutput(socket);
+  });
+
   socket.on('disconnect', () => {
+    // Drop this tab from the voice-output registry; if it was the sole
+    // recipient, output is promoted to another live tab so proactive audio
+    // keeps exactly one home.
+    releaseVoiceOutput(socket);
     state.ctrl?.abort();
     // Abort any pending UI refresh waiters so their turns don't hang.
     const waiters = state.uiWaiters;

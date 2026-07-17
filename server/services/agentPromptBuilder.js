@@ -6,7 +6,7 @@
  * Also handles JIRA ticket creation and app workspace resolution.
  */
 
-import { join } from 'path';
+import { join, basename } from 'path';
 import { stat } from 'fs/promises';
 import { homedir } from 'os';
 import { getMemorySection } from './memoryRetriever.js';
@@ -222,15 +222,44 @@ export function buildTaskBlock(task, { screenshotsAsList = false } = {}) {
   const targetApp = app && app !== PORTOS_APP_ID ? `**Target App**: ${app}` : '';
   const screenshots = renderFileListField(
     'Screenshots', task.metadata?.screenshots,
-    (s) => `\`${s}\``, (s) => s, screenshotsAsList
+    (s) => `\`${resolveTaskFileRef(s)}\``, (s) => resolveTaskFileRef(s), screenshotsAsList
   );
   const label = (f) => (f?.originalName || f?.filename || f?.path || '').toString();
-  const path = (f) => (f?.path || '').toString();
+  const path = (f) => resolveTaskFileRef((f?.path || '').toString());
   const attachments = renderFileListField(
     'Attachments', task.metadata?.attachments,
     (f) => `\`${path(f)}\` (${label(f)})`, (f) => `${label(f)} (${path(f)})`, screenshotsAsList
   );
   return { description, targetApp, screenshots, attachments };
+}
+
+// Map for API-relative upload URLs → the on-disk root the agent should read.
+const TASK_REF_ROOTS = {
+  '/api/screenshots/': PATHS.screenshots,
+  '/api/attachments/': PATHS.cosAttachments,
+  '/api/uploads/': PATHS.uploads,
+};
+
+/**
+ * Resolve a stored screenshot/attachment reference to an absolute filesystem
+ * path the CoS agent can open with its filesystem tools.
+ *
+ * Uploads now return API-relative URLs (`/api/screenshots/<file>`) instead of
+ * absolute paths (issue #2518 — absolute paths leaked the install layout in the
+ * HTTP response), so tasks created after that change store the relative URL.
+ * Convert those back to an absolute path here, at prompt-build time, where the
+ * absolute path is local-only and never persisted or published. Legacy tasks
+ * that stored an absolute path (or any non-`/api/` value) are passed through
+ * unchanged so existing queues keep rendering the same path.
+ */
+function resolveTaskFileRef(ref) {
+  if (typeof ref !== 'string' || !ref) return ref;
+  for (const [prefix, root] of Object.entries(TASK_REF_ROOTS)) {
+    if (ref.startsWith(prefix)) {
+      return join(root, basename(decodeURIComponent(ref)));
+    }
+  }
+  return ref;
 }
 
 /**

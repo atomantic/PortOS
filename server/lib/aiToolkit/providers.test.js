@@ -548,7 +548,7 @@ describe('Provider Service', () => {
       expect(active.id).toBe('antigravity-cli');
       expect(legacy).toBeNull();
       expect(antigravity.command).toBe('agy');
-      expect(antigravity.args).toEqual(['--print', '--dangerously-skip-permissions']);
+      expect(antigravity.args).toEqual(['--dangerously-skip-permissions', '--print']);
       expect(antigravity.defaultModel).toBe('antigravity-configured-default');
       expect(antigravity.contextWindow).toBe(1048576);
       expect(antigravity.envVars).toEqual({ KEEP_ME: '1' });
@@ -575,6 +575,8 @@ describe('Provider Service', () => {
         type: 'api',
         endpoint: 'https://api.example.com/v1',
         apiKey: 'sk-test',
+        // custom (non-allowlisted) host + secret ⇒ requires explicit opt-in
+        allowCustomEndpoint: true,
       });
 
       const result = await providerService.testProvider(p.id);
@@ -596,6 +598,24 @@ describe('Provider Service', () => {
       expect(result.success).toBe(false);
       expect(typeof result.error).toBe('string');
       expect(result.error).toMatch(/API not reachable/);
+    });
+
+    it('blocks a keyed custom endpoint that has not opted in (SSRF / key exfil guard)', async () => {
+      const spy = vi.fn();
+      vi.stubGlobal('fetch', spy);
+
+      const p = await providerService.createProvider({
+        name: 'Hostile API',
+        type: 'api',
+        endpoint: 'https://evil.example.com/v1',
+        apiKey: 'sk-secret',
+      });
+
+      const result = await providerService.testProvider(p.id);
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/Endpoint blocked/);
+      // key must never leave the box — fetch is not even called
+      expect(spy).not.toHaveBeenCalled();
     });
 
     it('returns failure shape when server responds with non-ok status', async () => {
@@ -739,6 +759,8 @@ describe('Provider Service', () => {
         type: 'api',
         endpoint: 'https://api.generic.com/v1',
         apiKey: 'sk-key',
+        // custom (non-allowlisted) host + secret ⇒ requires explicit opt-in
+        allowCustomEndpoint: true,
       });
 
       const updated = await providerService.refreshProviderModels(p.id);
@@ -757,6 +779,21 @@ describe('Provider Service', () => {
 
       const result = await providerService.refreshProviderModels(p.id);
       expect(result).toBeNull();
+    });
+  });
+
+  describe('reserved-key prototype safety (#2521)', () => {
+    it('does not resolve Object.prototype members as existing providers', async () => {
+      // The providers map is null-prototyped on load, so a keyed lookup for an
+      // inherited member returns "not found" rather than a truthy prototype fn.
+      for (const key of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
+        expect(await providerService.getProviderById(key)).toBeNull();
+        expect(await providerService.setActiveProvider(key)).toBeNull();
+        expect(await providerService.updateProvider(key, { name: 'x' })).toBeNull();
+        expect(await providerService.deleteProvider(key)).toBe(false);
+      }
+      const { activeProvider } = await providerService.getAllProviders();
+      expect(['__proto__', 'constructor', 'toString', 'hasOwnProperty']).not.toContain(activeProvider);
     });
   });
 });

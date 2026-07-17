@@ -207,7 +207,7 @@ export default function MusicVideo() {
   const genVideoScenes = videoLane.genScenes;
 
   useEffect(() => {
-    listMusicVideoProjects()
+    listMusicVideoProjects({ silent: true })
       .then((data) => { setProjects(data || []); setLoading(false); })
       .catch((err) => { toast.error(err?.message || 'Failed to load music video projects'); setLoading(false); });
     listTracks({ silent: true }).then((t) => setTracks(t || [])).catch(() => setTracks([]));
@@ -236,7 +236,7 @@ export default function MusicVideo() {
       toast.error('Finish or cancel the in-progress YouTube import before creating the project');
       return;
     }
-    createMusicVideoProject({ name: form.name.trim(), mode: form.mode, trackId: form.trackId || null })
+    createMusicVideoProject({ name: form.name.trim(), mode: form.mode, trackId: form.trackId || null }, { silent: true })
       .then((proj) => {
         setProjects((prev) => [...prev, proj]);
         selectProject(proj.id);
@@ -254,7 +254,7 @@ export default function MusicVideo() {
       toast.error('Finish or cancel the in-progress YouTube import before deleting this project');
       return;
     }
-    deleteMusicVideoProject(id)
+    deleteMusicVideoProject(id, { silent: true })
       .then(() => {
         setProjects((prev) => prev.filter((p) => p.id !== id));
         if (selectedId === id) navigate('/media/music-video');
@@ -294,7 +294,7 @@ export default function MusicVideo() {
   const handleAnalyze = () => {
     if (!selected) return;
     setAnalyzing(true);
-    analyzeMusicVideoProject(selected.id)
+    analyzeMusicVideoProject(selected.id, { silent: true })
       .then((proj) => { replaceProject(proj); toast.success(`Analyzed — ${proj.audioAnalysis?.bpm ? `${proj.audioAnalysis.bpm} BPM` : 'no tempo detected'}`); })
       .catch((err) => toast.error(err?.message || 'Analysis failed'))
       .finally(() => setAnalyzing(false));
@@ -308,7 +308,7 @@ export default function MusicVideo() {
   const handlePlan = () => {
     if (!selected?.audioAnalysis) return;
     setPlanning(true);
-    planMusicVideoProject(selected.id, { seedPrompts: true })
+    planMusicVideoProject(selected.id, { seedPrompts: true }, { silent: true })
       .then(({ project, scenesAdded, promptsSeeded, promptsSkippedReason }) => {
         replaceProject(project);
         const suffix = promptsSeeded
@@ -448,7 +448,7 @@ export default function MusicVideo() {
   };
 
   const handleAddScene = () => {
-    addMusicVideoScene(selected.id, { prompt: '' })
+    addMusicVideoScene(selected.id, { prompt: '' }, { silent: true })
       .then((scene) => replaceProject({ ...selected, scenes: [...(selected.scenes || []), scene] }))
       .catch((err) => toast.error(err?.message || 'Failed to add scene'));
   };
@@ -469,7 +469,7 @@ export default function MusicVideo() {
   };
 
   const handleDeleteScene = (sceneId) => {
-    deleteMusicVideoScene(selected.id, sceneId)
+    deleteMusicVideoScene(selected.id, sceneId, { silent: true })
       .then((proj) => replaceProject(proj))
       .catch((err) => toast.error(err?.message || 'Failed to delete scene'));
   };
@@ -480,7 +480,7 @@ export default function MusicVideo() {
     if (target < 0 || target >= scenes.length) return;
     const ids = scenes.map((s) => s.sceneId);
     [ids[idx], ids[target]] = [ids[target], ids[idx]];
-    reorderMusicVideoScenes(selected.id, ids)
+    reorderMusicVideoScenes(selected.id, ids, { silent: true })
       .then((proj) => replaceProject(proj))
       .catch((err) => toast.error(err?.message || 'Failed to reorder'));
   };
@@ -813,9 +813,9 @@ export default function MusicVideo() {
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-xs font-mono text-port-text-muted">#{scene.order + 1}</span>
                       <div className="flex items-center gap-1">
-                        <button onClick={() => moveScene(idx, -1)} disabled={idx === 0} className="p-1 disabled:opacity-30" title="Move up"><ArrowUp size={14} /></button>
-                        <button onClick={() => moveScene(idx, 1)} disabled={idx === selected.scenes.length - 1} className="p-1 disabled:opacity-30" title="Move down"><ArrowDown size={14} /></button>
-                        <button onClick={() => handleDeleteScene(scene.sceneId)} className="p-1 text-port-error" title="Delete scene"><Trash2 size={14} /></button>
+                        <button onClick={() => moveScene(idx, -1)} disabled={idx === 0} aria-label="Move up" className="p-1 disabled:opacity-30" title="Move up"><ArrowUp size={14} /></button>
+                        <button onClick={() => moveScene(idx, 1)} disabled={idx === selected.scenes.length - 1} aria-label="Move down" className="p-1 disabled:opacity-30" title="Move down"><ArrowDown size={14} /></button>
+                        <button onClick={() => handleDeleteScene(scene.sceneId)} aria-label="Delete scene" className="p-1 text-port-error" title="Delete scene"><Trash2 size={14} /></button>
                       </div>
                     </div>
                     <textarea

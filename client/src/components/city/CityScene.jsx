@@ -45,20 +45,39 @@ import CityTransitLoop from './CityTransitLoop';
 import CityEnergyOverlay from './CityEnergyOverlay';
 import PlayerController from './PlayerController';
 import CameraTransition from './CameraTransition';
+import CityFocusCamera from './CityFocusCamera';
 import CityPhotoCamera from './CityPhotoCamera';
 import CityDepthOfField from './CityDepthOfField';
+import CityAdaptiveQuality from './CityAdaptiveQuality';
 import { cityDayMix } from './cityConstants';
 import { CityPaletteProvider } from './CityPaletteContext';
 import ErrorBoundary from '../ErrorBoundary';
+import { useVisibilityEvent } from '../../hooks/useVisibilityEvent';
 
 const STARTUP_PARTICLE_DENSITY = 0.49;
 
-export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCameraView, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, introspection, playback = false, photoMode, photoPresetId, photoDof, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds, background, palette }) {
+export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCameraView, cosStatus, reviewCounts, instances, backupStatus, cosTasks, healthMetrics, voiceState, aiActivity, productivityData, activityCalendar, goals, character, chronotype, memoryGraph, inboxDepth, jiraTickets, introspection, playback = false, photoMode, photoPresetId, photoDof, onPhotoCaptureReady, settings, playSfx, keysRef, dimmedAppIds, focusedAppId, hudSafe, background, palette, autoQuality = false, autoStartTier = 'high', autoResetToken = 0, diagnosticsEnabled = false, onAutoTierChange, onAutoDiagnostics }) {
   const [positions, setPositions] = useState(null);
   const [proximityApp, setProximityApp] = useState(null);
   const [transitioning, setTransitioning] = useState(false);
   const [webglLost, setWebglLost] = useState(false);
   const [startupSettled, setStartupSettled] = useState(false);
+  // Visibility-aware frameloop (issue #2592): pause the live City render loop while the
+  // tab is hidden, resume (with a fresh warm-up) when it's shown again. `resumeToken`
+  // bumps on each show so the warm-up effect re-runs and the adaptive budget re-arms.
+  const [documentHidden, setDocumentHidden] = useState(
+    () => typeof document !== 'undefined' && document.visibilityState === 'hidden'
+  );
+  const [resumeToken, setResumeToken] = useState(0);
+  // Bumped whenever the scene warm-up (re)starts — startup, an app-count change, or a
+  // visibility resume — so the adaptive budget re-arms and ignores the 1.2s of artificially
+  // cheap (forced-Low) warm-up frames instead of banking them as headroom/erasing pressure.
+  const [budgetRearmToken, setBudgetRearmToken] = useState(0);
+  useVisibilityEvent(useCallback((state) => {
+    const hidden = state === 'hidden';
+    setDocumentHidden(hidden);
+    if (!hidden) setResumeToken(t => t + 1);
+  }, []));
   const prevExplorationRef = useRef(false);
   const orbitRef = useRef(null);
   const contextCleanupRef = useRef(null);
@@ -78,14 +97,20 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
     }
 
     setStartupSettled(false);
+    setBudgetRearmToken(t => t + 1);
     const timer = window.setTimeout(() => setStartupSettled(true), 1200);
     return () => window.clearTimeout(timer);
-  }, [apps.length, photoMode]);
+  }, [apps.length, photoMode, resumeToken]);
 
   const renderSettings = useMemo(() => {
     if (photoMode || startupSettled) return settings;
+    // During the startup (and post-visibility-resume) warm-up, drop to the cheapest
+    // render path. `effectiveTier: 'low'` also suppresses set dressing + the ray-marched
+    // interior-window shader via cityShowDetail/cityShowInteriorWindows — previously the
+    // clamped particleDensity (0.49) did that implicitly; the explicit tier now owns it.
     return {
       ...settings,
+      effectiveTier: 'low',
       reflectionsEnabled: false,
       particleDensity: Math.min(settings?.particleDensity ?? 1, STARTUP_PARTICLE_DENSITY),
       dpr: [1, 1],
@@ -197,8 +222,10 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
         // Photo mode freezes the scene for a clean still (roadmap 3.6): "demand" stops the
         // frameloop once the camera-fly settles, so particles/streams/weather/pulses pause for a
         // deliberate shot. CityPhotoCamera pumps invalidate() during the fly; capture renders
-        // directly via gl.render(). Live mode keeps the always-on loop the dashboard relies on.
-        frameloop={photoMode ? 'demand' : 'always'}
+        // directly via gl.render(). Live mode keeps the always-on loop the dashboard relies on —
+        // except while the tab is hidden, where "never" halts rendering entirely (issue #2592).
+        // Photo mode always keeps its own demand loop so capture still works in a hidden tab.
+        frameloop={photoMode ? 'demand' : (documentHidden ? 'never' : 'always')}
         onCreated={handleCanvasCreated}
         style={{ background: sceneClearColor, cursor: explorationMode ? 'crosshair' : 'auto', opacity: webglLost ? 0 : 1 }}
         // preserveDrawingBuffer is only needed while taking postcards. Keeping it
@@ -266,6 +293,7 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
         settings={renderSettings}
         proximityAppId={proximityApp?.id}
         dimmedAppIds={dimmedAppIds}
+        focusedAppId={focusedAppId}
         playback={playback}
       />
       <CityDataStreams positions={positions} apps={apps} agentMap={agentMap} />
@@ -319,10 +347,36 @@ export default function CityScene({ apps, agentMap, onBuildingClick, onToggleCam
           touches={{ ONE: THREE.TOUCH.PAN, TWO: THREE.TOUCH.DOLLY_ROTATE }}
         />
       )}
+      {/* Auto quality mode: samples frame times inside the live loop and lifts tier
+          changes back up to the page. Never mounted in photo mode (its demand loop
+          isn't a steady-state signal). Renders nothing. */}
+      {!photoMode && (
+        <CityAdaptiveQuality
+          enabled={autoQuality}
+          startTier={autoStartTier}
+          resumeToken={budgetRearmToken}
+          resetToken={autoResetToken}
+          diagnosticsEnabled={diagnosticsEnabled}
+          onTierChange={onAutoTierChange}
+          onDiagnostics={onAutoDiagnostics}
+        />
+      )}
       <CameraTransition
         active={explorationMode}
         onTransitionComplete={handleTransitionComplete}
       />
+      {/* URL-addressed building focus (issue #2593). Mounted only in the orbital overview (not
+          exploration/photo, which own the camera). Placed AFTER CameraTransition so its per-frame
+          camera write wins during any brief overlap on load. */}
+      {!explorationMode && !photoMode && (
+        <CityFocusCamera
+          focusedAppId={focusedAppId}
+          positions={positions}
+          orbitRef={orbitRef}
+          active={!explorationMode && !photoMode}
+          hudSafe={hudSafe}
+        />
+      )}
       <CityPhotoCamera active={photoMode} presetId={photoPresetId} onReady={onPhotoCaptureReady} composerRef={photoComposerRef} />
       {/* Depth-of-field is photo-mode-only: mounting it here (never in the live dashboard) keeps the
           extra composer render targets off the always-on frameloop. It stays mounted for the whole

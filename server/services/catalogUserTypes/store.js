@@ -29,14 +29,7 @@
  * so the boot registry warm — the first caller — sees migrated types.
  */
 
-import { checkHealth, ensureSchema } from '../../lib/db.js';
-
-let backend = null;
-let selecting = null;
-
-function isFileBackend() {
-  return process.env.MEMORY_BACKEND === 'file' || process.env.NODE_ENV === 'test';
-}
+import { createPgFileFacade, resolvePgBackend } from '../../lib/pgFileFacade.js';
 
 // settings.json-backed implementation (escape hatch / tests). Byte-identical to
 // the behavior the catalog routes + sync had inline before #1001, so nothing
@@ -55,53 +48,41 @@ async function fileBackend() {
   };
 }
 
-async function pgBackend() {
-  // Self-sufficient like the CD backend: the boot DB gate fail-fasts a
-  // required-but-missing DB, but a sync pull or the early registry warm can call
-  // in BEFORE that gate's ensureSchema() runs — so bring the schema up here
-  // (idempotent) and run the one-time settings→DB import before first read.
-  const health = await checkHealth();
-  if (!health.connected) {
-    throw new Error('Catalog user types require PostgreSQL — run `npm run setup:db` (dev/test only: set PGMODE=file in .env for the unsupported file backend)');
-  }
-  await ensureSchema();
-  const { migrateCatalogUserTypesToDB } = await import('../../scripts/migrateCatalogUserTypesToDB.js');
-  await migrateCatalogUserTypesToDB();
-  const db = await import('./db.js');
-  return { name: 'postgres', readUserTypes: db.readUserTypes, writeUserTypes: db.writeUserTypes };
-}
-
-// Memoize the selection PROMISE (not just the result) so two concurrent first
-// calls — e.g. the early boot warm racing a sync pull — don't both import the
-// PG module and run the migration twice. (The migration is marker-gated +
-// ON CONFLICT idempotent anyway, but memoizing keeps it to one round-trip.)
-async function selectBackend() {
-  if (backend) return backend;
-  if (!selecting) {
-    selecting = (isFileBackend() ? fileBackend() : pgBackend())
-      .then((b) => { backend = b; return b; })
-      .finally(() => { selecting = null; });
-  }
-  return selecting;
-}
+// Self-sufficient like the CD backend: the boot DB gate fail-fasts a
+// required-but-missing DB, but a sync pull or the early registry warm can call
+// in BEFORE that gate's ensureSchema() runs — so resolvePgBackend brings the
+// schema up (idempotent) and runs the one-time settings→DB import before first
+// read. Backend selection is promise-memoized so two concurrent first calls
+// don't both import the PG module / run the migration twice.
+const facade = createPgFileFacade({
+  makeFile: () => fileBackend(),
+  makePg: () => resolvePgBackend({
+    requirement: 'Catalog user types require PostgreSQL — run `npm run setup:db` (dev/test only: set PGMODE=file in .env for the unsupported file backend)',
+    migrate: async () => {
+      const { migrateCatalogUserTypesToDB } = await import('../../scripts/migrateCatalogUserTypesToDB.js');
+      await migrateCatalogUserTypesToDB();
+    },
+    loadDb: () => import('./db.js'),
+    makePg: (db) => ({ name: 'postgres', readUserTypes: db.readUserTypes, writeUserTypes: db.writeUserTypes }),
+  }),
+});
 
 /** Active backend name, or null before first call (diagnostics/tests). */
 export function getCatalogUserTypesBackendName() {
-  return backend?.name ?? null;
+  return facade.getBackendName();
 }
 
 /** Reset cached backend selection — test seam only. */
 export function _resetCatalogUserTypesBackend() {
-  backend = null;
-  selecting = null;
+  facade.reset();
 }
 
 /** Full user-type slice (live + tombstones), verbatim. */
 export async function readUserTypes() {
-  return (await selectBackend()).readUserTypes();
+  return (await facade.getBackend()).readUserTypes();
 }
 
 /** Persist the whole user-type slice as the authoritative end state. */
 export async function writeUserTypes(list) {
-  return (await selectBackend()).writeUserTypes(list);
+  return (await facade.getBackend()).writeUserTypes(list);
 }

@@ -82,6 +82,11 @@ export const providerSchema = z.object({
   // local Ollama daemon — the "Claude Ollama" pattern. Drives model refresh to
   // pull tool-use-capable Ollama models instead of the static Anthropic list.
   ollamaBacked: z.boolean().optional(),
+  // Explicit opt-in to attach the provider's API key to an arbitrary
+  // (non-local, non-allowlisted) endpoint. Guards against SSRF / key
+  // exfiltration to a hostile or mistyped host — see
+  // internal/endpointGuard.js. Metadata endpoints stay blocked even when true.
+  allowCustomEndpoint: z.boolean().optional(),
   envVars: z.record(z.string()).optional(),
   secretEnvVars: z.array(z.string()).optional(),
   headlessArgs: z.array(z.string()).optional(),
@@ -91,6 +96,15 @@ export const providerSchema = z.object({
   // bound a busy-but-stuck agent — see DEFAULT_TUI_MAX_RUNTIME_MS). Min 1min,
   // max 12h to cover the longest legitimate multi-hour orchestration.
   tuiMaxRuntimeMs: z.number().int().min(60000).max(43200000).optional()
+});
+
+// PUT /api/providers/active — set the active provider by id. Constrain to the
+// same slug shape createProvider assigns (`providerSchema.id`) so a reserved
+// key like `__proto__` can't reach the `data.providers[id]` lookup in
+// setActiveProvider (which walks the prototype chain and would otherwise treat
+// `__proto__` as an existing provider and persist it as active).
+export const providerActiveSchema = z.object({
+  id: z.string().regex(/^[a-z0-9][a-z0-9-]*$/, 'id must be lowercase alphanumeric with hyphens').max(80)
 });
 
 export const runSchema = z.object({

@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAutoRefetch } from '../../hooks/useAutoRefetch';
 import toast from '../ui/Toast';
 import {
   AlertCircle,
@@ -89,17 +88,17 @@ const PRIORITY_STYLES = {
   }
 };
 
-export default function ActionableInsightsBanner({ onTaskUnblocked }) {
+// `ChiefOfStaff.fetchData` now owns the actionable-insights fetch and passes the
+// result down as `insights`, so this banner is presentational — it holds only
+// dismiss/expand UI state. Every parent trigger that refetches CoS data (task
+// mutations, socket-driven changes, health checks, the 30s poll) refreshes the
+// banner for free, and the unblock path calls `onRefresh` up instead of owning
+// its own poll. `insights` is null until the first parent fetch resolves; the
+// parent preserves the last-good array across transient fetch failures.
+export default function ActionableInsightsBanner({ insights, onTaskUnblocked, onRefresh }) {
   const [dismissed, setDismissed] = useState([]);
   const [expanded, setExpanded] = useState({});
   const navigate = useNavigate();
-
-  // Let errors throw — `useAutoRefetch` preserves the last-good insights on
-  // transient failures. `silent: true` keeps the 60s poll quiet on blips.
-  const { data, loading, refetch } = useAutoRefetch(
-    () => api.getCosActionableInsights({ silent: true }),
-    60_000,
-  );
 
   const handleDismiss = (type) => {
     setDismissed(prev => [...prev, type]);
@@ -123,19 +122,18 @@ export default function ActionableInsightsBanner({ onTaskUnblocked }) {
     });
     if (!result) return;
     toast.success('Task unblocked and moved to pending');
-    // Re-fetch insights so the unblocked task drops out of the banner. The
-    // hook owns `data`, so we can't optimistically splice it here — the
-    // server already persisted the unblock, so a refetch reflects it.
-    refetch();
-    // Notify parent to update task list reactively
+    // Ask the parent to refetch — its fetchData re-pulls insights so the
+    // unblocked task drops out of the banner — and optimistically splice the
+    // task list for instant feedback.
+    onRefresh?.();
     onTaskUnblocked?.(taskId);
   };
 
-  if (loading || !data?.insights) {
+  if (!insights) {
     return null;
   }
 
-  const visibleInsights = data.insights.filter(i => !dismissed.includes(i.type));
+  const visibleInsights = insights.filter(i => !dismissed.includes(i.type));
 
   if (visibleInsights.length === 0) {
     return null;

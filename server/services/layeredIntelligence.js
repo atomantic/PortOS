@@ -25,6 +25,9 @@ import { readFile, writeFile, appendFile, realpath } from 'fs/promises';
 import { existsSync } from 'fs';
 import { DAY, tryReadFile, readJSONFile, safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { bufferedSpawn } from '../lib/bufferedSpawn.js';
+import { fetchPublicText } from '../lib/safeUrlFetch.js';
+import { validateCommand } from '../lib/commandSecurity.js';
+import { getSettings } from './settings.js';
 import { createTicket, searchIssues, addLabels, escapeJql } from './jira.js';
 import { computeWindowedStats } from './taskLearning/store.js';
 
@@ -80,9 +83,11 @@ export const PROPOSAL_COMPLEXITIES = ['trivial', 'moderate', 'complex'];
 export const HANDOFF_COMPLEXITY = 'trivial';
 
 // The resolved outcomes a filed proposal can reach (the feedback loop, #2428).
-// A record with a null outcome is still open/unresolved. `abandoned` is reserved
-// for a superseded proposal — auto-derivation only distinguishes merged/rejected
-// from the tracker's closed state; `abandoned` is set by a user/future path.
+// A record with a null outcome is still open/unresolved. All three are
+// auto-derived from the tracker's closed state by deriveOutcome: completed →
+// merged, not_planned → rejected, and any other PRESENT close reason
+// (duplicate/stale/etc.) → abandoned (#2620); a reason-less close falls back
+// to merged for trackers that report no stateReason.
 export const PROPOSAL_OUTCOMES = ['merged', 'rejected', 'abandoned'];
 
 /**
@@ -204,15 +209,22 @@ export function normalizeSlug(slug) {
 
 /**
  * Whether an existing tracker issue is still within the dedup suppression window:
- * OPEN, or CLOSED within CLOSED_SUPPRESSION_MS. A closed-long-ago (or unknown
- * close time, treated as long ago) issue falls out of the window so its work can
- * be re-proposed. Shared by both the slug dedup and the semantic dedup so the two
- * guards agree on which issues still count.
+ * OPEN, or CLOSED within CLOSED_SUPPRESSION_MS. Only a closed-long-ago issue
+ * falls out of the window so its work can be re-proposed. A closed issue with a
+ * missing/unparseable `closedAt` is PERMANENTLY in-window (suppressed): the main
+ * producer of that shape is a checked `- [x]` PLAN.md item (checkboxes carry no
+ * timestamp), and a completed plan item never needs re-proposal — treating it as
+ * "closed long ago" made the reasoner re-propose every done item on every run
+ * (#2620). A tracker row missing its close time (e.g. a jira Done ticket with no
+ * resolutiondate) is likewise suppressed rather than re-proposed — done work is
+ * never worth re-reasoning. Shared by both the slug dedup and the semantic dedup
+ * so the two guards agree on which issues still count.
  */
 export function isIssueWithinDedupWindow(issue, now = Date.now()) {
   if ((issue?.state || '').toLowerCase() === 'open') return true;
   const closedAt = issue?.closedAt ? Date.parse(issue.closedAt) : NaN;
-  return Number.isFinite(closedAt) && now - closedAt <= CLOSED_SUPPRESSION_MS;
+  if (!Number.isFinite(closedAt)) return true;
+  return now - closedAt <= CLOSED_SUPPRESSION_MS;
 }
 
 /**
@@ -422,17 +434,24 @@ export function trackerSupportsPause(resolved) {
  * Derive a resolved outcome for a filed proposal from its live tracker issue.
  * Pure — the reconciler feeds it a `{ state, stateReason, closedAt }` issue:
  *   - still open (or unknown state)     → null   (unresolved)
+ *   - closed as "completed"             → 'merged'
  *   - closed as "not planned"           → 'rejected'
- *   - closed for any other reason        → 'merged' (the common auto-close-on-merge
- *                                          path; glab/jira report no stateReason)
- * GitHub reports `stateReason` ('completed' | 'not_planned' | 'reopened'); other
- * forges omit it, so a bare closed issue reads as merged.
+ *   - closed with any OTHER reason       → 'abandoned' (duplicate/stale/etc. —
+ *                                          counting these as merged inflated the
+ *                                          merge-rate calibration signal, #2620)
+ *   - closed with NO reason              → 'merged' (graceful fallback: glab/jira
+ *                                          and the plan filer report no stateReason,
+ *                                          and their common close path IS a merge —
+ *                                          absent ≠ other, per the sentinel rule)
+ * GitHub reports `stateReason` ('completed' | 'not_planned' | 'reopened' | …);
+ * other trackers omit it, so a bare closed issue reads as merged.
  */
 export function deriveOutcome(issue) {
   if ((issue?.state || '').toLowerCase() !== 'closed') return null;
   const reason = (issue?.stateReason || '').toLowerCase().replace(/[\s-]+/g, '_');
   if (reason === 'not_planned') return 'rejected';
-  return 'merged';
+  if (reason === '' || reason === 'completed') return 'merged';
+  return 'abandoned';
 }
 
 /**
@@ -582,10 +601,19 @@ function runCli(cmd, args, options = {}) {
  * files degrade to omitted keys, never throws. `openIssues` is gathered
  * separately by the handler (it shells out to the forge).
  */
-export async function gatherSources(app, config, { cosPath = PATHS.cos } = {}) {
+export async function gatherSources(app, config, { cosPath = PATHS.cos, trustShellSources } = {}) {
   const out = {};
   const src = config.sources || {};
   const repo = app.repoPath;
+
+  // Resolve the install-level shell-trust opt-in lazily and once — only when a
+  // `cmd` source is actually present — so apps with no shell sources never read
+  // settings. Injected value (tests) wins; otherwise fall back to settings.json.
+  let trustShell = trustShellSources;
+  const resolveTrustShell = async () => {
+    if (trustShell === undefined) trustShell = await getTrustShellSources();
+    return trustShell;
+  };
 
   if (src.goals && repo) {
     const goals = await tryReadFile(join(repo, 'GOALS.md'));
@@ -650,7 +678,7 @@ export async function gatherSources(app, config, { cosPath = PATHS.cos } = {}) {
       const content = await fetchHttpSource(custom.url);
       if (content) out[key] = content.slice(0, 8000);
     } else if (custom.type === 'cmd' && typeof custom.cmd === 'string' && repo) {
-      const content = await runShellCommand(custom.cmd, { cwd: repo });
+      const content = await runShellCommand(custom.cmd, { cwd: repo, trustShellSources: await resolveTrustShell() });
       if (content) out[key] = content.slice(0, 8000);
     }
   }
@@ -674,31 +702,85 @@ export function customSourceKey(custom) {
  * Fetch an http(s) custom source for the loop's prompt. Deterministic read, no
  * LLM. Rejects any non-http(s) scheme (defense in depth over the Zod refine),
  * bounds the request with a 10s timeout, and returns null on any failure so a
- * dead URL just omits the key rather than throwing. `fetchImpl` is injectable
- * for tests.
+ * dead URL just omits the key rather than throwing.
+ *
+ * SSRF-guarded via `fetchPublicText` (default posture): loopback, link-local,
+ * and the cloud-metadata endpoint (127.0.0.1, 169.254.169.254,
+ * metadata.google.internal, ::1) are blocked so a hand-edited/hostile config
+ * can't exfiltrate them into the reasoner prompt, and redirects are revalidated
+ * against the same gate. LAN/private hosts (Tailscale peers, a home wiki) stay
+ * ALLOWED intentionally — PortOS is a single-user tool where a custom source
+ * legitimately points at the home network, and the URL is operator-configured.
+ * `throwOnUnsafe: false` makes a blocked host omit the key like any other dead
+ * URL instead of bubbling a 400. `fetchText` is injectable for tests.
  */
-export async function fetchHttpSource(url, { timeoutMs = 10_000, fetchImpl = fetch } = {}) {
+export async function fetchHttpSource(url, { timeoutMs = 10_000, fetchText = fetchPublicText } = {}) {
   if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) return null;
-  const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) }).catch(() => null);
-  if (!res || !res.ok) return null;
-  const text = await res.text().catch(() => null);
+  const text = await fetchText(url, { timeoutMs, throwOnUnsafe: false }).catch(() => null);
   return text || null;
 }
 
 /**
- * Run a user-configured shell command for a `cmd` custom source and return its
- * stdout. Deterministic read, no LLM. Runs the full command string through the
- * shell (e.g. `git log --oneline -20 | head`) via the shared `bufferedSpawn`
- * helper — which caps output, kills the whole process tree on timeout (so a
- * hung pipeline grandchild can't linger), and never rejects. Returns null on
- * non-zero exit / timeout / no output so a failing command just omits the key.
- * `exec` is injectable for tests.
+ * THREAT MODEL — a `cmd` custom source is attacker-reachable persistent config.
+ *
+ * The `sources.custom` array lives in each app's stored `layeredIntelligence`
+ * config, written through the validated `PUT /api/apps/:id` route. A `cmd` entry
+ * is executed here on the Layered Intelligence SCHEDULE (Engine-B autonomous job),
+ * with the PortOS process's own privileges and cwd = the app repo. So any path
+ * that can land a string in that config (a hand-edited config, a hostile sync
+ * payload, a future config-writing feature, an XSS-driven same-origin POST) gets
+ * *persistent, unattended* code execution — not a one-shot the operator watched.
+ *
+ * Historically this ran the full command string with `shell: true`, capped only
+ * by length + a 15s timeout. That is arbitrary RCE: `; rm -rf ~`, `$(curl … | sh)`,
+ * pipes to `sh`, etc. all execute. Issue #2515.
+ *
+ * Defense: by default we DENY the shell. The command is parsed and checked
+ * against the shared binary allowlist (`validateCommand` in commandSecurity.js —
+ * same gate the manual command runner uses), which rejects shell metacharacters
+ * (`;|&$(){}` …) and any binary not on the allowlist, then we spawn the base
+ * binary with parsed args and `shell: false` — so no shell ever interprets the
+ * string. A non-allowlisted / metacharacter command is dropped (key omitted) with
+ * a warning, exactly like any other failed source read.
+ *
+ * Escape hatch: an operator who genuinely needs a pipeline (`git log … | head`)
+ * can set the install-level `settings.layeredIntelligence.trustShellSources`
+ * flag, which restores the full `shell: true` behavior for THIS install only.
+ * It is an explicit, install-wide opt-in — off by default — so a fresh install
+ * (or a synced-in app config) can never execute an un-allowlisted command.
+ *
+ * `exec` is injectable for tests; `trustShellSources` is resolved by the caller
+ * (`gatherSources`) from install settings and threaded in.
+ *
+ * Returns null on rejection / non-zero exit / timeout / no output so a failing or
+ * denied command just omits the source key rather than throwing.
  */
-export async function runShellCommand(cmd, { cwd, timeoutMs = 15_000, exec = bufferedSpawn } = {}) {
+export async function runShellCommand(cmd, { cwd, timeoutMs = 15_000, exec = bufferedSpawn, trustShellSources = false } = {}) {
   if (typeof cmd !== 'string' || !cmd.trim()) return null;
-  const { code, stdout } = await exec(cmd, [], { cwd, timeoutMs, shell: true });
+  if (trustShellSources) {
+    // Operator has explicitly opted this install into full-shell custom sources.
+    const { code, stdout } = await exec(cmd, [], { cwd, timeoutMs, shell: true });
+    if (code !== 0) return null;
+    return (stdout || '').trim() || null;
+  }
+  const check = validateCommand(cmd);
+  if (!check.valid) {
+    console.warn(`⚠️ Layered Intelligence: custom cmd source "${cmd}" rejected — ${check.error} (enable settings.layeredIntelligence.trustShellSources to allow arbitrary shell commands)`);
+    return null;
+  }
+  const { code, stdout } = await exec(check.baseCommand, check.args, { cwd, timeoutMs, shell: false });
   if (code !== 0) return null;
   return (stdout || '').trim() || null;
+}
+
+/**
+ * Resolve the install-level "trust shell sources" opt-in from settings.json.
+ * `null`/absent/non-true all read as OFF (the safe default) — only an explicit
+ * `true` unlocks full-shell custom `cmd` sources. Injectable read for tests.
+ */
+export async function getTrustShellSources(read = getSettings) {
+  const settings = await read();
+  return settings?.layeredIntelligence?.trustShellSources === true;
 }
 
 /**
@@ -1047,8 +1129,8 @@ export async function appendProposalToPlan({ repoPath, appName, slug, title, bod
  * checkbox stays `open` (still tracked/suppressed) rather than collapsing to
  * `closed` — a missing checkbox must not silently make an item re-proposable.
  * A `closed` item carries no `closedAt` (PLAN.md checkboxes have no timestamp),
- * which `isIssueWithinDedupWindow` already treats as out-of-window → the item
- * becomes re-proposable, exactly the desired behavior for a completed proposal.
+ * which `isIssueWithinDedupWindow` treats as permanently in-window → a completed
+ * proposal stays suppressed forever instead of being re-reasoned every run (#2620).
  */
 export function extractPlanSlugs(planContent) {
   if (typeof planContent !== 'string') return [];

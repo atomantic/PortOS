@@ -25,6 +25,8 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { userLocalToday } from '../lib/timezone.js';
+import { ymdShift } from '../lib/postStreak.js';
 
 const MEATSPACE_DIR = PATHS.meatspace;
 const MORSE_FILE = join(MEATSPACE_DIR, 'post-morse-progress.json');
@@ -107,14 +109,21 @@ function normalizeItems(items) {
 export async function appendMorseRound(round) {
   return withMorseWriteTail(async () => {
     const data = await loadMorseProgress();
-    const now = new Date().toISOString();
+    const nowDate = new Date();
+    const now = nowDate.toISOString();
+    // Stamp the round's day in the user's local timezone (issue #2681): a Morse
+    // drill completion also writes a training-log entry (submitTrainingEntry, now
+    // local), and Morse trends window on `date` — a UTC-day stamp here would date
+    // the same completion differently and skew the trend window. Derive from the
+    // SAME nowDate used for `timestamp` so a midnight boundary can't split them.
+    const todayLocal = await userLocalToday(nowDate);
     const items = normalizeItems(round.items);
     const correctCount = items.filter((i) => i.correct).length;
     const accuracy = items.length > 0 ? Math.round((correctCount / items.length) * 100) : 0;
 
     const record = {
       id: randomUUID(),
-      date: now.split('T')[0],
+      date: todayLocal,
       timestamp: now,
       mode: MORSE_MODES.includes(round.mode) ? round.mode : 'copy',
       kochLevel: typeof round.kochLevel === 'number' ? clampLevel(round.kochLevel) : (data.kochLevel ?? DEFAULT_KOCH_LEVEL),
@@ -178,9 +187,9 @@ export async function getMorseProgress(days = 30) {
   let rounds = data.rounds;
 
   if (days > 0) {
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - days);
-    const cutoffStr = cutoff.toISOString().split('T')[0];
+    // Window off the user's local today (DST-safe day math) so the cutoff matches
+    // the local-day round dates now stamped above (issue #2681).
+    const cutoffStr = ymdShift(await userLocalToday(), -days);
     rounds = rounds.filter((r) => (r.date || '') >= cutoffStr);
   }
 

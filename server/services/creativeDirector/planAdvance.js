@@ -38,6 +38,28 @@ const AUTOPILOT_TOOL_NAME = 'pipeline_startSeriesAutopilot';
 
 const nowISO = () => new Date().toISOString();
 
+// The registry tool a plan step uses to render a video. Its done result carries
+// `{ jobId }`, and a video history entry's id === its jobId — so the last such
+// step's jobId is the project's final video (see the `complete` branch below).
+const VIDEO_RENDER_TOOL_NAME = 'media_enqueueVideoJob';
+
+/**
+ * The jobId of the LAST done video-render step in a plan (or null). Used to
+ * promote a directive plan's produced video to the project's `finalVideoId` on
+ * completion so the CD overview surfaces it. Pure + last-wins: a multi-render
+ * plan resolves to its final cut in listed order.
+ */
+export function lastRenderedVideoJobId(plan) {
+  const steps = Array.isArray(plan?.steps) ? plan.steps : [];
+  for (let i = steps.length - 1; i >= 0; i -= 1) {
+    const step = steps[i];
+    if (step?.toolName === VIDEO_RENDER_TOOL_NAME && step.status === 'done' && step.result?.jobId) {
+      return step.result.jobId;
+    }
+  }
+  return null;
+}
+
 /**
  * Pure next-step derivation over a plan DAG. Exported + side-effect-free so the
  * ordering/dependency/terminal logic is unit-tested directly against fixtures.
@@ -174,13 +196,24 @@ export async function advanceAfterPlanStepSettled(projectId) {
       // hand-edited/legacy record). Send it through the failure handler.
       return handlePlanStepFailure(projectId, action.steps[0]);
     case 'empty':
-    case 'complete':
-      if (project.status !== 'complete') {
-        await updateProject(projectId, { status: 'complete' })
+    case 'complete': {
+      // Promote the plan's produced video so the CD overview has an artifact to
+      // show. Unlike the legacy scene/stitch flow (stitchRunner sets
+      // finalVideoId), the directive-plan flow historically only flipped status
+      // to `complete` — so a finished video commission looked like it "did
+      // nothing" even though a render landed in the media library. A video
+      // history entry's id === its jobId, so the last done video-render step's
+      // jobId IS the final video id. Null when already set or a video-less plan
+      // (e.g. a comic) — which also keeps a re-entry from re-writing state.
+      const videoId = project.finalVideoId ? null : lastRenderedVideoJobId(project.plan);
+      if (project.status !== 'complete' || videoId) {
+        const patch = { status: 'complete', ...(videoId ? { finalVideoId: videoId } : {}) };
+        await updateProject(projectId, patch)
           .catch((e) => console.log(`⚠️ CD plan complete for ${projectId} failed: ${e.message}`));
-        console.log(`✅ CD plan ${projectId} complete`);
+        console.log(`✅ CD plan ${projectId} complete${videoId ? ` (final video ${videoId})` : ''}`);
       }
       return;
+    }
     case 'run':
       return runPlanStep(project, action.step);
     default:

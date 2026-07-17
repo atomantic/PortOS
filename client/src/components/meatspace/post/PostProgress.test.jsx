@@ -7,6 +7,8 @@ vi.mock('../../../services/api', () => ({
   // PostHistory (the Sessions sub-view) imports these from the same module.
   getPostSessions: vi.fn().mockResolvedValue([]),
   getPostStats: vi.fn().mockResolvedValue(null),
+  // PostHistory's useUserTimezone reads getSettings for its range-floor day key.
+  getSettings: vi.fn().mockResolvedValue({ timezone: 'UTC' }),
 }));
 
 import PostProgress from './PostProgress';

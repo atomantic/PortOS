@@ -143,8 +143,13 @@ export default function TasksTab({ tasks, onRefresh, providers, apps }) {
           <h3 className="text-lg font-semibold text-white">User Tasks (TASKS.md)</h3>
           <button
             onClick={async () => {
-              await api.forceCosEvaluate({ silent: true }).catch(err => toast.error(err.message));
-              toast.success('Evaluation triggered');
+              // Only toast success after the evaluate request resolves.
+              try {
+                await api.forceCosEvaluate({ silent: true });
+                toast.success('Evaluation triggered');
+              } catch (err) {
+                toast.error(err.message);
+              }
             }}
             className="flex items-center gap-1 text-sm bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 px-3 py-1.5 rounded-lg transition-colors"
             aria-label="Run tasks now"

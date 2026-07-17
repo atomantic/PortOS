@@ -54,8 +54,8 @@ export default function PipelineContinuityBible() {
     let canceled = false;
     setLoading(true);
     Promise.all([
-      getPipelineSeries(seriesId),
-      getContinuityBible(seriesId),
+      getPipelineSeries(seriesId, { silent: true }),
+      getContinuityBible(seriesId, { silent: true }),
       getContinuityBibleStatus(seriesId).catch(() => ({ active: false })),
     ])
       .then(([s, l, status]) => {

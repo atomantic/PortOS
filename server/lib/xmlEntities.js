@@ -18,6 +18,9 @@
  * emitted. Unknown entities and out-of-range numeric code points are left
  * untouched rather than dropped or thrown on, so one malformed reference can't
  * corrupt or abort the surrounding parse.
+ *
+ * Mirrored client-side by the private `decodeEntities` in
+ * `client/src/lib/tabNotation.js` (lib stays a leaf) — keep the two in sync.
  */
 
 const NAMED_ENTITIES = {

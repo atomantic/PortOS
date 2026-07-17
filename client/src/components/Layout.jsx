@@ -58,6 +58,7 @@ import {
   Lightbulb,
   GitBranch,
   Link2,
+  ListMusic,
   Database,
   Shield,
   Lock,
@@ -150,12 +151,11 @@ const navItems = [
       { to: '/brain/graph', label: 'Graph', icon: Network },
       { to: '/brain/import', label: 'Import', icon: Upload },
       { to: '/brain/inbox', label: 'Inbox', icon: MessageSquare },
-      { to: '/insights/overview', label: 'Insights', icon: Lightbulb },
       { to: '/brain/links', label: 'Links', icon: Link2 },
       { to: '/brain/memory', label: 'Memory', icon: Database },
       { to: '/brain/notes', label: 'Notes', icon: FileText },
-      { to: '/openclaw', label: 'OpenClaw', icon: MessagesSquare },
       { to: '/rapid-reader', label: 'Rapid Reader', icon: Zap },
+      { to: '/songbook', label: 'SongBook', icon: ListMusic },
       { to: '/timeline', label: 'Timeline', icon: CalendarClock },
       { to: '/tribe', label: 'Tribe', icon: Users },
       { to: '/brain/trust', label: 'Trust', icon: Shield },
@@ -218,6 +218,7 @@ const navItems = [
     children: [
       { to: '/authors', label: 'Authors', icon: FilePen },
       { to: '/catalog', label: 'Catalog', icon: Sparkles },
+      { to: '/creative-commission', label: 'Creative Commissions', icon: CalendarClock },
       { to: '/creative-director', label: 'Creative Director', icon: Clapperboard },
       { to: '/pipeline/editorial-checks', label: 'Editorial Checks', icon: ListChecks },
       { to: '/importer', label: 'Importer', icon: FileInput },
@@ -297,6 +298,7 @@ const navItems = [
       { to: '/settings/general', label: 'General', icon: Settings },
       { to: '/settings/local-llm', label: 'Local LLMs', icon: Cpu },
       { to: '/settings/mortalloom', label: 'MortalLoom', icon: Activity },
+      { to: '/openclaw', label: 'OpenClaw', icon: MessagesSquare },
       { to: '/prompts', label: 'Prompts', icon: FileText },
       { to: '/ai', label: 'Providers', icon: Bot },
       { to: '/settings/security', label: 'Security', icon: Lock },
@@ -320,6 +322,7 @@ const navItems = [
       { to: '/digital-twin/export', label: 'Export', icon: Download },
       { to: '/digital-twin/identity', label: 'Identity', icon: Fingerprint },
       { to: '/digital-twin/import', label: 'Import', icon: Upload },
+      { to: '/insights/overview', label: 'Insights', icon: Lightbulb },
       { to: '/digital-twin/interview', label: 'Interview', icon: MessageSquare },
       { to: '/digital-twin/overview', label: 'Overview', icon: Heart },
       { to: '/privacy/overview', label: 'Privacy', icon: Shield },
@@ -424,7 +427,7 @@ export function SingleNavRow({ item, collapsed, active, badgeCount, pinned, onTo
             <Icon size={20} className="shrink-0" />
             {/* Badge for collapsed state */}
             {showBadge && collapsed && (
-              <span className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] flex items-center justify-center text-[9px] font-bold rounded-full bg-yellow-500 text-black px-0.5">
+              <span className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] flex items-center justify-center text-[9px] font-bold rounded-full bg-port-warning text-port-on-warning px-0.5">
                 {badgeText}
               </span>
             )}
@@ -435,7 +438,7 @@ export function SingleNavRow({ item, collapsed, active, badgeCount, pinned, onTo
         </div>
         {/* Badge for expanded state — sits left of the absolute pin */}
         {showBadge && !collapsed && (
-          <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1 shrink-0 mt-0.5">
+          <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-port-warning text-port-on-warning px-1 shrink-0 mt-0.5">
             {badgeText}
           </span>
         )}
@@ -788,7 +791,7 @@ export default function Layout() {
               <div className="relative">
                 <Icon size={20} className="shrink-0" />
                 {item.showBadge && unreadCount > 0 && collapsed && (
-                  <span className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] flex items-center justify-center text-[9px] font-bold rounded-full bg-yellow-500 text-black px-0.5">
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[14px] h-[14px] flex items-center justify-center text-[9px] font-bold rounded-full bg-port-warning text-port-on-warning px-0.5">
                     {unreadCount > 9 ? '9+' : unreadCount}
                   </span>
                 )}
@@ -798,7 +801,7 @@ export default function Layout() {
               </span>
             </div>
             {!collapsed && item.showBadge && unreadCount > 0 && (
-              <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-yellow-500 text-black px-1 shrink-0">
+              <span className="min-w-[18px] h-[18px] flex items-center justify-center text-[10px] font-bold rounded-full bg-port-warning text-port-on-warning px-1 shrink-0">
                 {unreadCount > 9 ? '9+' : unreadCount}
               </span>
             )}
@@ -1049,8 +1052,8 @@ export default function Layout() {
             onMouseLeave={scheduleCloseFlyout}
             onFocus={cancelCloseFlyout}
             onBlur={scheduleCloseFlyout}
-            style={{ top: flyoutPos.top, left: flyoutPos.left, position: 'fixed', maxHeight: 'calc(100vh - 16px)' }}
-            className="hidden lg:block z-[60] min-w-[220px] max-w-[min(320px,calc(100vw-5rem))] overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-2xl py-1"
+            style={{ top: flyoutPos.top, left: flyoutPos.left, position: 'fixed', '--dvh-inset': '16px' }}
+            className="hidden lg:block z-[60] min-w-[220px] max-w-[min(320px,calc(100vw-5rem))] max-h-dvh-cap overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-2xl py-1"
           >
             <div className="px-3 py-1.5 text-[10px] uppercase text-gray-500 tracking-wider border-b border-port-border mb-1">
               {item.label}
@@ -1169,6 +1172,11 @@ export default function Layout() {
             location.pathname.startsWith('/media') ||
             location.pathname.startsWith('/messages') ||
             location.pathname.startsWith('/local-llm/') ||
+            // OpenClaw lives under the Settings nav group; it's a full-bleed
+            // chat surface (sidebar + message pane) that owns its own internal
+            // scroll, so it needs the bare full-width main like the other
+            // Settings pages (/ai, /prompts, /settings/*).
+            location.pathname === '/openclaw' ||
             location.pathname.startsWith('/pipeline/issues/') ||
             location.pathname.startsWith('/pipeline/series/') ||
             location.pathname.startsWith('/post') ||
@@ -1198,6 +1206,15 @@ export default function Layout() {
             // scroll (PageHeader + a `flex-1 overflow-auto` main); keep it out
             // of the default padded+scrolling main or it double-pads and clips.
             location.pathname === '/tribe' ||
+            // Rapid Reader is a full-bleed brain sub-page: full-width PageHeader
+            // over an internal `flex-1 overflow-auto` scroll region.
+            location.pathname === '/rapid-reader' ||
+            // Timeline (/timeline and /timeline/:date) is a full-bleed brain
+            // sub-page: full-width PageHeader over an internal `flex-1
+            // overflow-auto` scroll region that wraps the centered max-w-4xl
+            // content — keep it out of the default padded main or it double-pads.
+            location.pathname === '/timeline' ||
+            location.pathname.startsWith('/timeline/') ||
             // Only the App DETAIL editor (/apps/:id, /apps/:id/:tab) is
             // full-width and owns its own scroll; the Add App form
             // (/apps/create) is a plain scrolling page and must stay OUT of
@@ -1205,7 +1222,13 @@ export default function Layout() {
             // internal overflow-y-auto container). The trailing (?:\/|$) +
             // create(?:\/|$) lookahead also excludes the trailing-slash URL
             // /apps/create/ (React Router treats it as the same route).
-            /^\/apps\/(?!create(?:\/|$))[^/]+(?:\/|$)/.test(location.pathname);
+            /^\/apps\/(?!create(?:\/|$))[^/]+(?:\/|$)/.test(location.pathname) ||
+            // Every SongBook route — index (/songbook), import (/songbook/import),
+            // and viewer (/songbook/:id) — is full-bleed and owns its own scroll
+            // (flex-col h-full + an internal overflow-auto region; the viewer adds
+            // its autoscroll container). They share the standard bordered
+            // PageHeader bar over that scroll region.
+            location.pathname.startsWith('/songbook');
           return (
             <main id="main-content" className={`flex-1 min-h-0 print:overflow-visible print:min-h-0 ${isFullWidth ? 'relative overflow-hidden' : 'overflow-auto p-4 md:p-6'}`}>
               <Outlet />

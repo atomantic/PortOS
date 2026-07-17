@@ -281,22 +281,25 @@ When PLAN.md is missing, empty, or fully completed, brainstorm and implement a n
 1. Read GOALS.md from {repoPath} for context on the app's goals and priorities.
    If no GOALS.md exists, focus on general improvements.
 2. Skim recent \`.changelog/\` entries and the last 50 \`git log\` entries to avoid re-implementing completed features
-3. Review the codebase structure, recent git log, and any README or docs to understand the app
-4. Identify ONE small, high-impact feature that:
+3. Read REJECTED.md from {repoPath} (if it exists) to understand previously rejected ideas — do NOT re-propose an idea matching a rejected entry
+4. Check the repo's recently closed-unmerged PRs (\`gh pr list --state closed --search "is:unmerged" --limit 20\`, or the forge's equivalent) — a brainstormed feature whose PR the user closed WITHOUT merging was rejected; treat those ideas as rejected too
+5. Review the codebase structure, recent git log, and any README or docs to understand the app
+6. Identify ONE small, high-impact feature that:
    - Aligns with GOALS.md priorities (if available)
    - Is NOT already shipped per recent \`.changelog/\` entries or \`git log\` (avoid re-implementing shipped features)
+   - Does NOT match a REJECTED.md entry or a closed-unmerged automation PR (rejected ideas stay rejected)
    - Saves user time, improves UX, or makes the app more useful
    - Is self-contained and completable in one session
    - Does NOT duplicate existing functionality
-5. Implement the feature:
+7. Implement the feature:
    - Write clean, tested code following existing patterns
    - Run tests to ensure nothing is broken
-6. **Review your changed code for reuse, quality, and efficiency** (DRY, dead code, naming, simpler equivalents, missed edge cases) and fix any findings. Claude Code can run \`/simplify\` for this pass; on other CLIs, do the equivalent diff review by hand.
-7. Add the feature as a checked item in PLAN.md (create the file if needed) **with a slug ID** derived from the feature title (lowercase kebab-case, ≤50 chars, unique against every existing \`[slug]\` in PLAN.md):
+8. **Review your changed code for reuse, quality, and efficiency** (DRY, dead code, naming, simpler equivalents, missed edge cases) and fix any findings. Claude Code can run \`/simplify\` for this pass; on other CLIs, do the equivalent diff review by hand.
+9. Add the feature as a checked item in PLAN.md (create the file if needed) **with a slug ID** derived from the feature title (lowercase kebab-case, ≤50 chars, unique against every existing \`[slug]\` in PLAN.md):
    \`\`\`
    - [x] [<slug-of-feature>] <description of the feature you implemented>
    \`\`\`
-8. Commit with a clear description of the feature and rationale`,
+10. Commit with a clear description of the feature and rationale`,
 
   'plan-task': `[Plan Task: {appName}] Claim and ship next PLAN.md item
 
@@ -521,7 +524,7 @@ Run steps 1–5 in order.
    - Its number is NOT in the in-flight set.
    - It has NO assignees (an assignee means another machine/human already claimed it).
    - It does NOT carry any of these blocking labels: \`in-progress\`, \`blocked\`, \`needs-input\`, \`future\`, \`wontfix\`, \`question\`, \`discussion\`.
-   - It is NOT a tracking/umbrella **epic** — recognized by an \`epic\` label OR a title ending in "(epic)". An epic needs per-slice partial-ship (each slice its own PR, \`Refs\` not \`Closes\`), so leave it for a human or \`/claim --issues\` to split — don't claim it wholesale here. **The bare \`plan\` label is NOT a skip signal.** \`do-replan --issues\` (and \`/do:replan --issues\`) labels EVERY migrated backlog item \`plan\` — atomic bug-fixes included — so \`plan\` marks the *claimable* queue exactly as \`/do:next --issues\` treats it (it is that flow's required candidate label). Skipping all \`plan\` issues would discard the entire actionable backlog and falsely report an empty queue.
+   - It is NOT a tracking/umbrella **epic** — recognized by an \`epic\` label, a title ending in "(epic)", OR a title beginning with an \`[epic]\` bracket or \`Epic:\` tag (e.g. "[Epic] …" / "Epic: …", case-insensitive). An epic needs per-slice partial-ship (each slice its own PR, \`Refs\` not \`Closes\`), so leave it for a human or \`/claim --issues\` to split — don't claim it wholesale here. **The bare \`plan\` label is NOT a skip signal.** \`do-replan --issues\` (and \`/do:replan --issues\`) labels EVERY migrated backlog item \`plan\` — atomic bug-fixes included — so \`plan\` marks the *claimable* queue exactly as \`/do:next --issues\` treats it (it is that flow's required candidate label). Skipping all \`plan\` issues would discard the entire actionable backlog and falsely report an empty queue.
 5. **If no eligible issue exists**, exit cleanly — an empty actionable queue is a healthy state, not a failure.
 
 Capture the issue number as \`NUM\`, its title, and its full body — you'll reuse them in the PR and the \`Closes #<num>\` trailer.
@@ -649,7 +652,7 @@ Run steps 1–5 in order.
    - Its number (\`iid\`) is NOT in the in-flight set.
    - It has NO assignees (an assignee means another machine/human already claimed it).
    - It does NOT carry any of these blocking labels: \`in-progress\`, \`blocked\`, \`needs-input\`, \`future\`, \`wontfix\`, \`question\`, \`discussion\`.
-   - It is NOT a tracking/umbrella **epic** — recognized by an \`epic\` label OR a title ending in "(epic)". Leave epics for a human to split. **The bare \`plan\` label is NOT a skip signal** — it marks the claimable queue, not a blocker.
+   - It is NOT a tracking/umbrella **epic** — recognized by an \`epic\` label, a title ending in "(epic)", OR a title beginning with an \`[epic]\` bracket or \`Epic:\` tag (e.g. "[Epic] …" / "Epic: …", case-insensitive). Leave epics for a human to split. **The bare \`plan\` label is NOT a skip signal** — it marks the claimable queue, not a blocker.
 5. **If no eligible issue exists**, exit cleanly — an empty actionable queue is a healthy state, not a failure.
 
 Capture the issue number (GitLab \`iid\`) as \`NUM\`, its title, and its full description — you'll reuse them in the MR and the \`Closes #<num>\` line.

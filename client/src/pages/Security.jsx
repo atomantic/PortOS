@@ -3,6 +3,7 @@ import { Camera, Mic, MicOff, Video, VideoOff, RefreshCw, Settings, Volume2 } fr
 import api from '../services/api';
 import Banner from '../components/ui/Banner';
 import { FormField } from '../components/ui/FormField';
+import { safeReadStorage, safeReadJsonStorage, safeWriteStorage, safeRemoveStorage } from '../lib/safeStorage';
 
 const MEDIA_CONSTRAINTS_KEY = 'portos-media-constraints';
 
@@ -12,6 +13,7 @@ export default function Security() {
   const audioContextRef = useRef(null);
   const analyserRef = useRef(null);
   const animationFrameRef = useRef(null);
+  const deviceRestartTimerRef = useRef(null);
 
   const [streaming, setStreaming] = useState(false);
   const [videoEnabled, setVideoEnabled] = useState(true);
@@ -27,22 +29,21 @@ export default function Security() {
 
   // Load saved device preferences
   useEffect(() => {
-    const saved = localStorage.getItem(MEDIA_CONSTRAINTS_KEY);
-    if (saved) {
-      try {
-        const { videoDeviceId, audioDeviceId } = JSON.parse(saved);
-        if (videoDeviceId) setSelectedVideo(videoDeviceId);
-        if (audioDeviceId) setSelectedAudio(audioDeviceId);
-      } catch {
-        localStorage.removeItem(MEDIA_CONSTRAINTS_KEY);
-      }
+    const saved = safeReadJsonStorage(MEDIA_CONSTRAINTS_KEY);
+    if (saved && typeof saved === 'object') {
+      const { videoDeviceId, audioDeviceId } = saved;
+      if (videoDeviceId) setSelectedVideo(videoDeviceId);
+      if (audioDeviceId) setSelectedAudio(audioDeviceId);
+    } else if (safeReadStorage(MEDIA_CONSTRAINTS_KEY) !== null) {
+      // Corrupt/unparseable entry — clear it so it stops failing on every load.
+      safeRemoveStorage(MEDIA_CONSTRAINTS_KEY);
     }
   }, []);
 
   // Save device preferences when they change
   useEffect(() => {
     if (selectedVideo || selectedAudio) {
-      localStorage.setItem(MEDIA_CONSTRAINTS_KEY, JSON.stringify({
+      safeWriteStorage(MEDIA_CONSTRAINTS_KEY, JSON.stringify({
         videoDeviceId: selectedVideo,
         audioDeviceId: selectedAudio
       }));
@@ -241,10 +242,22 @@ export default function Security() {
 
     // Restart stream with new device if currently streaming
     if (streaming) {
-      // Small delay to let state update
-      setTimeout(() => startMedia(), 100);
+      // Small delay to let state update. Clear any pending restart first so
+      // rapid device switches don't stack multiple startMedia() calls, and
+      // so an unmount can cancel the last one (see cleanup effect below).
+      if (deviceRestartTimerRef.current) clearTimeout(deviceRestartTimerRef.current);
+      deviceRestartTimerRef.current = setTimeout(() => {
+        deviceRestartTimerRef.current = null;
+        startMedia();
+      }, 100);
     }
   }, [streaming, startMedia]);
+
+  // Cancel any pending device-change restart on unmount so a deferred
+  // startMedia() can't fire into a component that's no longer mounted.
+  useEffect(() => () => {
+    if (deviceRestartTimerRef.current) clearTimeout(deviceRestartTimerRef.current);
+  }, []);
 
   return (
     <div>

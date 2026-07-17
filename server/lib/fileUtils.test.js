@@ -23,6 +23,7 @@ import {
   listDirectoryByExtension,
   safeJSONParse,
   safeJSONLParse,
+  createCachedStore,
   readJSONFile,
   readJSONLFile,
   appendJSONLine,
@@ -32,6 +33,7 @@ import {
   sha256File,
   resolveImageInputPath,
   resolveScreenshot,
+  isPathInsideDir,
   PATHS,
   sanitizeFilename,
   getFileExtension,
@@ -39,6 +41,9 @@ import {
   detectImageFormat,
   EXTENSION_MIME_MAP,
   ATTACHMENT_ALLOWED_EXTENSIONS,
+  SONGBOOK_ATTACHMENT_EXTENSIONS,
+  saveBase64Upload,
+  serveLocalFile,
 } from './fileUtils.js';
 import { copyFileSync, existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
@@ -431,6 +436,34 @@ describe('fileUtils', () => {
       expect(formatDuration(25 * 60 * 60000)).toBe('1d 1h');
       expect(formatDuration(48 * 60 * 60000)).toBe('2d 0h');
       expect(formatDuration(50 * 60 * 60000)).toBe('2d 2h');
+    });
+  });
+
+  describe('isPathInsideDir', () => {
+    it('accepts a file directly inside the directory', () => {
+      expect(isPathInsideDir('/data/uploads', '/data/uploads/foo.png')).toBe(true);
+      expect(isPathInsideDir('/data/uploads', '/data/uploads/sub/foo.png')).toBe(true);
+    });
+
+    it('rejects a traversal that escapes the directory', () => {
+      expect(isPathInsideDir('/data/uploads', '/data/uploads/../etc/passwd')).toBe(false);
+      expect(isPathInsideDir('/data/uploads', '/etc/passwd')).toBe(false);
+    });
+
+    it('rejects a sibling dir whose name merely starts with the root (the trailing-sep bug)', () => {
+      // The old `startsWith(DIR)` check without a trailing separator let
+      // `/data/uploads-evil/x` slip through because the string prefix matched.
+      expect(isPathInsideDir('/data/uploads', '/data/uploads-evil/x.png')).toBe(false);
+    });
+
+    it('rejects the root itself (no trailing separator on the bare root)', () => {
+      expect(isPathInsideDir('/data/uploads', '/data/uploads')).toBe(false);
+    });
+
+    it('returns false for non-string / empty inputs', () => {
+      expect(isPathInsideDir('/data/uploads', '')).toBe(false);
+      expect(isPathInsideDir('', '/data/uploads/foo.png')).toBe(false);
+      expect(isPathInsideDir(null, undefined)).toBe(false);
     });
   });
 
@@ -914,6 +947,71 @@ describe('fileUtils', () => {
 });
 
 // =============================================================================
+// createCachedStore — cached JSON store with serialized writes (#2539)
+// =============================================================================
+
+describe('createCachedStore', () => {
+  let dir;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cached-store-test-'));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('loads the default when the file is absent, then round-trips a save', async () => {
+    const store = createCachedStore(join(dir, 'x.json'), { n: 0 });
+    expect(await store.load()).toEqual({ n: 0 });
+    await store.save({ n: 5 });
+    expect(await store.load()).toEqual({ n: 5 });
+  });
+
+  it('mutate persists the fn result and returns it', async () => {
+    const store = createCachedStore(join(dir, 'x.json'), { n: 0 });
+    const out = await store.mutate((data) => { data.n = 9; });
+    expect(out).toEqual({ n: 9 });
+    // Persisted to disk, not just cache
+    expect(JSON.parse(await readFile(join(dir, 'x.json'), 'utf-8'))).toEqual({ n: 9 });
+  });
+
+  it('serializes concurrent read-modify-write so no update is lost', async () => {
+    const file = join(dir, 'counter.json');
+    const store = createCachedStore(file, { n: 0 }, { ttl: 0 });
+    // ttl:0 forces every load to re-read from disk — the worst case for the
+    // classic load→mutate→save clobber. Without serialization, N concurrent
+    // increments race down to ~1; mutate() must land all N.
+    const N = 25;
+    await Promise.all(
+      Array.from({ length: N }, () => store.mutate(async (data) => {
+        const current = data.n;
+        await Promise.resolve(); // yield — invites interleaving
+        data.n = current + 1;
+      }))
+    );
+    expect((await store.load()).n).toBe(N);
+    expect(JSON.parse(await readFile(file, 'utf-8')).n).toBe(N);
+  });
+
+  it('mutate that returns undefined persists the mutated input', async () => {
+    const store = createCachedStore(join(dir, 'x.json'), { items: [] });
+    await store.mutate((data) => { data.items.push('a'); });
+    await store.mutate((data) => { data.items.push('b'); });
+    expect((await store.load()).items).toEqual(['a', 'b']);
+  });
+
+  it('invalidateCache forces a re-read from disk', async () => {
+    const file = join(dir, 'x.json');
+    const store = createCachedStore(file, { n: 0 });
+    await store.load();
+    await writeFile(file, JSON.stringify({ n: 42 }));
+    store.invalidateCache();
+    expect((await store.load()).n).toBe(42);
+  });
+});
+
+// =============================================================================
 // sanitizeFilename / getFileExtension / getMimeType / allowlists (#1140)
 // =============================================================================
 
@@ -1056,5 +1154,93 @@ describe('detectImageFormat', () => {
   it('returns null for a non-Buffer input', () => {
     expect(detectImageFormat('AAAA')).toBeNull();
     expect(detectImageFormat(null)).toBeNull();
+  });
+});
+
+describe('saveBase64Upload (shared attachment upload pipeline)', () => {
+  let dir;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'save-b64-test-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const opts = { allowedExtensions: SONGBOOK_ATTACHMENT_EXTENSIONS, maxBytes: 10 };
+  const b64 = (s) => Buffer.from(s).toString('base64');
+
+  it('persists within the cap and returns the uuid-prefixed name, buffer, size, and mime', async () => {
+    const saved = await saveBase64Upload(dir, { filename: 'sheet.txt', data: b64('ten bytes!') }, opts);
+    expect(saved.filename).toMatch(/^[0-9a-f]{8}-sheet\.txt$/);
+    expect(saved.size).toBe(10);
+    expect(saved.mime).toBe('text/plain');
+    expect(saved.buffer.toString('utf-8')).toBe('ten bytes!');
+    expect(existsSync(saved.filePath)).toBe(true);
+    expect(saved.filePath.startsWith(dir)).toBe(true);
+  });
+
+  it('rejects a payload over maxBytes with a 400 FILE_TOO_LARGE', async () => {
+    await expect(saveBase64Upload(dir, { filename: 'big.txt', data: b64('eleven bytes') }, opts))
+      .rejects.toMatchObject({ status: 400, code: 'FILE_TOO_LARGE' });
+  });
+
+  it('rejects an extension outside the allowlist with a 400 INVALID_FILE_TYPE', async () => {
+    await expect(saveBase64Upload(dir, { filename: 'app.exe', data: b64('x') }, opts))
+      .rejects.toMatchObject({ status: 400, code: 'INVALID_FILE_TYPE' });
+  });
+
+  it('rejects a traversal-shaped filename ("../x") with a 400', async () => {
+    await expect(saveBase64Upload(dir, { filename: '../x', data: b64('x') }, opts))
+      .rejects.toMatchObject({ status: 400 });
+  });
+
+  it('sanitizes a traversal filename with an allowed extension to a basename inside the dir', async () => {
+    const saved = await saveBase64Upload(dir, { filename: '../../evil.txt', data: b64('x') }, opts);
+    expect(saved.filename).toMatch(/^[0-9a-f]{8}-evil\.txt$/); // directory parts stripped
+    expect(saved.filePath.startsWith(dir)).toBe(true);
+    expect(existsSync(saved.filePath)).toBe(true);
+  });
+});
+
+describe('serveLocalFile (shared attachment serving pipeline)', () => {
+  let dir;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'serve-local-test-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const mockRes = () => ({
+    headers: {},
+    set(name, value) { this.headers[name] = value; return this; },
+    type: vi.fn(function type() { return this; }),
+    sendFile: vi.fn(),
+  });
+
+  it('serves a benign MIME inline with nosniff and no attachment disposition', async () => {
+    writeFileSync(join(dir, 'safe.txt'), 'hello');
+    const res = mockRes();
+    await serveLocalFile(res, dir, 'safe.txt');
+    expect(res.headers['X-Content-Type-Options']).toBe('nosniff');
+    expect(res.headers['Content-Disposition']).toBeUndefined();
+    expect(res.sendFile).toHaveBeenCalledWith(join(dir, 'safe.txt'));
+  });
+
+  it('forces Content-Disposition: attachment for a risky MIME (svg)', async () => {
+    writeFileSync(join(dir, 'sheet.svg'), '<svg/>');
+    const res = mockRes();
+    await serveLocalFile(res, dir, 'sheet.svg');
+    expect(res.headers['X-Content-Type-Options']).toBe('nosniff');
+    expect(res.headers['Content-Disposition']).toBe('attachment; filename="sheet.svg"');
+    expect(res.sendFile).toHaveBeenCalledWith(join(dir, 'sheet.svg'));
+  });
+
+  it('404s with the parametrized missingError for absent bytes', async () => {
+    const res = mockRes();
+    await expect(serveLocalFile(res, dir, 'nope.txt', {
+      missingError: { message: 'Attachment file is not on this machine', code: 'NOT_ON_THIS_MACHINE' },
+    })).rejects.toMatchObject({ status: 404, code: 'NOT_ON_THIS_MACHINE' });
+    expect(res.sendFile).not.toHaveBeenCalled();
   });
 });

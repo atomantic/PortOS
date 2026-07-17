@@ -18,7 +18,7 @@
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { atomicWrite, readJSONFile } from '../../lib/fileUtils.js';
-import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
+import { createKeyedFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { seriesStore, listSeries } from './series.js';
 import { collectManuscriptSections, REPLACEMENT_STRATEGIES, replacementStrategyForCategory } from './arcPlanner.js';
 import { shapeAnchoredEdit, fixFromEdits } from './manuscriptFix.js';
@@ -50,13 +50,7 @@ const reviewPath = (seriesId) => join(seriesStore().recordDir(seriesId), REVIEW_
 
 // Per-series write tail (the review file is distinct per series, so each only
 // serializes against itself). One canonical single-tail queue per series id.
-const reviewQueues = new Map();
-function queueReviewWrite(seriesId, fn) {
-  const key = typeof seriesId === 'string' && seriesId ? seriesId : '__unknown__';
-  let q = reviewQueues.get(key);
-  if (!q) { q = createFileWriteQueue(); reviewQueues.set(key, q); }
-  return q(fn);
-}
+const queueReviewWrite = createKeyedFileWriteQueue();
 
 const emptyReview = () => ({ schemaVersion: SCHEMA_VERSION, comments: [] });
 

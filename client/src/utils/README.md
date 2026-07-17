@@ -25,6 +25,7 @@ grep -i "what you want to do" client/src/utils/README.md
 | `formatters` | Date/time/duration/byte/word formatters (`formatBytes`, `formatCompactCount`, `timeAgo`, `formatTimecode`, `formatDurationMs`, `formatDateShort`, `parseTimeoutMs`, `formatCooldown`, `parseSizeGb`, `recommendedRamGb`, …) plus timeout-input bounds and `getAppName`. Do not re-define formatters inside components. |
 | `cronHelpers` | Cron preset list, `isCronExpression` detection, and `describeCron` human-readable rendering. |
 | `timeWindow` | Time-of-day window math (`isInTimeWindow`, `timeStringToMinutes`) and morning-layout auto-switch helpers (`pickActiveLayoutId`, `recordManualLayoutPick`). |
+| `timezone` | Timezone day-key helpers (`dayKeyInTimezone`, `todayKeyInTimezone`) — browser mirror of the server's `todayInTimezone`, so date-scoped POST surfaces derive "today" in the user's configured timezone and agree with the server (#2681). |
 
 ## General pure helpers
 
@@ -33,7 +34,7 @@ grep -i "what you want to do" client/src/utils/README.md
 | `coalesce` | Trailing-edge coalescer: wraps a function so rapid calls collapse into one deferred invocation. |
 | `easing` | `smoothstep` interpolation easing curve. |
 | `hashString` | Deterministic string → 32-bit hash (stable colors, keys, seeds). |
-| `urlNormalize` | `isUrl` detection and `normalizeUrl` (optional git/`requireDot` modes). |
+| `urlNormalize` | `isUrl` detection, `normalizeUrl` (optional git/`requireDot` modes), and `isHttpUrl` (explicit http(s) only — safe-href check). |
 | `platform` | `isMac` detection and `modKey` (⌘/Ctrl) for keyboard-shortcut display. |
 | `navWorkingSet` | Recent/pinned nav persistence (`recordVisit`, `togglePin`, `isPinned`) plus `resolveRecentNavEntries` for mapping stored deep links back to their longest matching nav-manifest entry. |
 | `providers` | AI-provider type predicates and helpers (`isCliProvider`, `isApiProvider`, `isCodexProvider`, `filterSelectableModels`, `getProviderTimeout`, configured-default sentinels, and the claude/codex thinking-effort levels — `effortLevelsForProvider`, mirror of server `providerModels.js`). |
@@ -44,7 +45,7 @@ grep -i "what you want to do" client/src/utils/README.md
 | Module | Purpose |
 |---|---|
 | `lazyWithReload` | `React.lazy` wrapper that auto-reloads once on a stale-chunk import error (post-deploy hash mismatch). |
-| `staleChunkReload` | Detects stale dynamic-import chunk errors (`isStaleChunkError`) and triggers a one-time reload guard. |
+| `staleChunkReload` | Detects stale dynamic-import chunk errors (`isStaleChunkError`) and triggers a one-time reload guard; `purgeOfflineCaches()` drops the service-worker caches so the recovery reload boots the fresh bundle. |
 
 ## File handling
 
@@ -77,6 +78,8 @@ its tunable constants and placement helpers.
 | `cityEasterEggs` | Unlockable easter eggs from context (date/character/goals) → placements (`computeEasterEggs`). |
 | `cityFederation` | Sync-peer reachability horizon: status color/opacity, bridge state, peer placement (`computeFederationHorizon`). |
 | `cityFilter` | Status-filter definitions and app-filtering result (`computeFilterResult`). |
+| `cityFocusCamera` | Pure camera-framing math for building focus mode: orbital `position`/`target` that frame one borough for a given aspect ratio + HUD safe area (`computeFocusCamera`). |
+| `cityFocusState` | Resolve the `/city/apps/:appId` route param + app list into `{ hasFocus, focusedApp, notFound }`, deferring the not-found flag until apps finish loading (`resolveCityFocus`). |
 | `cityFlowLines` | Inter-building flow-line connections between active/agent nodes (`computeFlowConnections`). |
 | `cityGoalMonuments` | Goal monuments & forest: stall detection, milestone segments, placement (`computeGoalMonuments`, `computeGoalForest`). |
 | `cityHealthTower` | Health-metric tower segments from the latest health entry (`computeHealthTower`). |
@@ -87,6 +90,7 @@ its tunable constants and placement helpers.
 | `cityPhotoMode` | Photo-mode camera presets, the demand-loop fly stepper, postcard stats, and screenshot filename (`getPreset`, `cyclePreset`, `stepFly`). |
 | `cityPlan` | Master town plan: district parcels, shoreline/bay, plaza, transit loop, street network (`PARCELS`, `WORLD`, `computeStreets`, `computeStreetProps`, `isInWater`). |
 | `cityPlayerRig` | Exploration player-rig math: third-person follow camera, boom collision, damping, facing, avatar state (`thirdPersonCamera`, `resolveBoom`, `dampAngle`, `moveFacing`, `avatarState`). |
+| `cityRenderBudget` | Pure Auto-quality render-budget state machine: p75 frame-time windows, hysteresis, cooldown, warm-up/gap rejection (`createRenderBudget`, `recordFrame`, `restartWarmup`, `resetRenderBudget`, `getEffectiveTier`, `QUALITY_TIERS`, `DEFAULT_RENDER_BUDGET_CONFIG`). |
 | `cityRooftops` | Deterministic rooftop fixture kits (antenna/tank/AC/dish) per app name (`computeRooftopKit`). |
 | `cityProductivity` | Productivity monument from streak/velocity tiers (`computeProductivityMonument`). |
 | `citySeasonalDecor` | Season/holiday resolution → seasonal decoration placements (`computeSeasonalDecor`). |

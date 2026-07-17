@@ -127,9 +127,112 @@ export function computeWindowedStats(recentOutcomes, {
   return { windowedCompleted, windowedSucceeded, windowedFailed, windowedSuccessRate };
 }
 
+// Minimum windowed outcomes before the windowed rate is trusted over the
+// lifetime rate (issue #2617). Below this bar the window is too thin to read a
+// trend from, so decisions keep today's lifetime behavior (cold-start parity).
+export const EFFECTIVE_RATE_MIN_WINDOW_SAMPLES = 5;
+
+/**
+ * Effective success rate for DECISION paths (issue #2617). Pure / no I/O.
+ *
+ * Lifetime `successRate` never decays, so a burst of since-fixed failures
+ * permanently depresses it — cooldown/skip/approval decisions built on it keep
+ * punishing a task type long after it recovered. This returns the recency-
+ * windowed rate (`computeWindowedStats` over the bucket's `recentOutcomes`
+ * ring) whenever the window holds at least `minWindowSamples` outcomes, and
+ * falls back to the lifetime rate otherwise — so a type with a thin/empty
+ * window behaves exactly as before, while a type with a healthy recent record
+ * recovers as soon as it starts succeeding again.
+ *
+ * Sentinel discipline: `successRate` is `null` (never a fabricated 0) when the
+ * fallback lifetime rate is itself absent. `source` names which rate was used
+ * (`'windowed'` | `'lifetime'`) so decisions can surface it in reasons/logs.
+ *
+ * @param {Object|null|undefined} metrics - a `byTaskType` bucket
+ * @param {{ minWindowSamples?:number, maxCount?:number, maxAgeMs?:number, now?:number }} [opts]
+ *   - extra keys are forwarded to `computeWindowedStats` (window bounds/clock seam)
+ * @returns {{ successRate:number|null, source:'windowed'|'lifetime', windowedCompleted:number }}
+ */
+export function computeEffectiveSuccessRate(metrics, opts = {}) {
+  const { minWindowSamples = EFFECTIVE_RATE_MIN_WINDOW_SAMPLES } = opts;
+  const { windowedCompleted, windowedSuccessRate } = computeWindowedStats(metrics?.recentOutcomes, opts);
+  if (windowedSuccessRate !== null && windowedCompleted >= minWindowSamples) {
+    return { successRate: windowedSuccessRate, source: 'windowed', windowedCompleted };
+  }
+  return { successRate: metrics?.successRate ?? null, source: 'lifetime', windowedCompleted };
+}
+
+/**
+ * Shared skip predicate (issue #2617): a task type is a skip candidate when it
+ * has ≥5 lifetime completions AND its EFFECTIVE success rate is <30%. Pure.
+ *
+ * This is THE definition of "skipped" — used by the scheduling decision
+ * (`getAdaptiveCooldownMultiplier`'s skip branch mirrors it), the skip list
+ * (`getSkippedTaskTypes`), the rehabilitation/status views, AND the health
+ * summaries (`getPerformanceSummary`, `getLearningSummary`). Keeping every
+ * consumer on one predicate is what stops a dashboard/alert surface from
+ * claiming a type is skipped after the actual decision path stopped skipping
+ * it (or vice versa).
+ */
+export function isSkipCandidate(metrics) {
+  if (!metrics || (metrics.completed ?? 0) < 5) return false;
+  const { successRate } = computeEffectiveSuccessRate(metrics);
+  return successRate !== null && successRate < 30;
+}
+
 /**
  * Default learning data structure
  */
+// Environmental/infrastructure error categories (issue #2618): failures that say
+// nothing about the task or the model — a provider outage, an exhausted quota, a
+// revoked key, a dead network, an agent that never started. These are EXCLUDED
+// from the success-rate aggregates (`byTaskType` / `byModelTier` /
+// `routingAccuracy` / `totals` / the `recentOutcomes` windowed ring / the
+// correlation window) so an hour of provider 529s can't crater a task type's
+// rate, steer routing off a healthy tier, or trip the <30% skip gate. They are
+// instead counted in `data.environmentalFailures[category]` (count +
+// lastOccurred + affected task types) so the events stay visible, and they STILL
+// feed `errorPatterns` / `failureSignatures` — prompt recommendations and
+// diagnostics appropriately consume those.
+//
+// Covers BOTH classifier vocabularies that can stamp `errorAnalysis.category`:
+// agentErrorAnalysis's ERROR_PATTERNS (`rate-limit`, `usage-limit`, `auth-error`,
+// `forbidden`, `billing-error`, `network-error`, `claude-error` —
+// `overloaded_error`, `startup-failure`, `model-not-found`,
+// `model-not-supported`) and agentRunTracking's extractErrorFromOutput (`auth`,
+// `connection`, `rate-limit`). `model-not-available` is the legacy naming for
+// the model-unavailability class (still present in stored learning data /
+// prompt insights).
+//
+// Deliberately EXCLUDES `timeout`, `unknown`, `process-killed`, and the generic
+// `api-error`: each can be genuine task/model signal (a task too big for its
+// tier times out or blows resource limits; an uncategorized or generic API
+// failure may be anything, including a task-induced bad request). Also EXCLUDES
+// the mixed-provenance categories `server-error` and `spawn-error`: their
+// classifier regexes (`/server error|internal error/`, `command not found`)
+// match ordinary task output too — a genuinely failing app test printing
+// "Internal Server Error" must keep denting the rate, not vanish as an
+// "outage". Superset of agentErrorAnalysis's `API_ACCESS_ERROR_CATEGORIES`
+// (auth-error / forbidden / usage-limit — asserted by a cross-check test in
+// agentErrorAnalysis.test.js) but defined here as its own leaf constant:
+// importing agentErrorAnalysis.js would drag the cos.js task-store graph into
+// every taskLearning consumer and suite.
+export const ENVIRONMENTAL_ERROR_CATEGORIES = new Set([
+  'rate-limit',
+  'usage-limit',
+  'auth-error',
+  'auth',
+  'forbidden',
+  'billing-error',
+  'connection',
+  'network-error',
+  'claude-error',
+  'startup-failure',
+  'model-not-available',
+  'model-not-found',
+  'model-not-supported'
+]);
+
 const DEFAULT_LEARNING_DATA = {
   // v2 (issue #2460): each byTaskType bucket carries a bounded `recentOutcomes`
   // ring so the signal LI reads can be recency-windowed (see appendRecentOutcome
@@ -156,6 +259,14 @@ const DEFAULT_LEARNING_DATA = {
   // Routing accuracy: taskType → modelTier → { succeeded, failed }
   // Records which model tiers work/fail for each task type
   routingAccuracy: {},
+
+  // Environmental/infrastructure failures (issue #2618): category →
+  // { count, lastOccurred, taskTypes } for rate-limit/auth/billing/startup-class
+  // failures, which are kept OUT of every success-rate aggregate above so an
+  // outage can't poison routing/skip decisions (see ENVIRONMENTAL_ERROR_CATEGORIES
+  // in metrics.js). Additive: older learning.json files predate this key and load
+  // fine — the recording path initializes it on first use.
+  environmentalFailures: {},
 
   // Rolling correlation-quality window (issue #2344): prediction/outcome pairs
   // measuring how well the enriched failure signals predict actual outcomes.

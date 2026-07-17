@@ -29,7 +29,8 @@ import {
   Drama,
   Mic,
   Camera,
-  Package
+  Package,
+  UserRound
 } from 'lucide-react';
 
 // Main navigation tabs
@@ -37,6 +38,7 @@ export const TABS = [
   { id: 'overview', label: 'Overview', icon: Heart },
   { id: 'documents', label: 'Documents', icon: FileText },
   { id: 'test', label: 'Test', icon: CheckCircle },
+  { id: 'personality', label: 'Personality', icon: Brain },
   { id: 'enrich', label: 'Enrich', icon: Sparkles },
   { id: 'taste', label: 'Taste', icon: Palette },
   { id: 'accounts', label: 'Accounts', icon: Globe },
@@ -48,6 +50,7 @@ export const TABS = [
   { id: 'appearance', label: 'Appearance', icon: Camera },
   { id: 'autobiography', label: 'Autobiography', icon: PenLine },
   { id: 'import', label: 'Import', icon: Upload },
+  { id: 'avatar-bio', label: 'Avatar Bio', icon: UserRound },
   { id: 'export', label: 'Export', icon: Download },
   { id: 'legacy', label: 'Legacy', icon: Package },
   { id: 'time-capsule', label: 'Time Capsule', icon: Archive }

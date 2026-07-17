@@ -21,7 +21,7 @@
 import { join } from 'path';
 import { createHash, randomUUID } from 'crypto';
 import { PATHS, atomicWrite, ensureDir, tryReadFile, safeJSONParse } from '../../lib/fileUtils.js';
-import { createFileWriteQueue } from '../../lib/fileWriteQueue.js';
+import { createKeyedFileWriteQueue } from '../../lib/fileWriteQueue.js';
 import { runStagedLLM, resolveStageContext } from '../../lib/stageRunner.js';
 import { manuscriptContentBudgetChars, estimateTokens } from '../../lib/contextBudget.js';
 import { richCanonDescriptorFragments, flattenCanonDescriptorFragments } from '../../lib/canonPrompt.js';
@@ -82,13 +82,7 @@ const docPath = (issueId) => join(rewritesDir(), `${issueId}.json`);
 
 // ---------- per-issue write tail (single tail per shared file) ----------
 
-const writeQueues = new Map();
-function queueWrite(issueId, fn) {
-  const key = typeof issueId === 'string' && issueId ? issueId : '__unknown__';
-  let q = writeQueues.get(key);
-  if (!q) { q = createFileWriteQueue(); writeQueues.set(key, q); }
-  return q(fn);
-}
+const queueWrite = createKeyedFileWriteQueue();
 
 // ---------- cast ----------
 

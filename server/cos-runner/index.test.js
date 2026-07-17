@@ -22,10 +22,13 @@ describe('cos-runner spawn — Windows CLI shim resolve+wrap (#2243)', () => {
   it('resolves+wraps the agent CLI command before spawning it', () => {
     // The agent spawn (the /spawn handler) must feed its command/args through
     // prepareCliSpawn and spawn WHATEVER it returns — never the bare `command`.
+    // deliveredArgs is spawnArgs after prepareCliPrompt (antigravity --print
+    // value / grok Windows temp-file rewrite); every provider still resolves
+    // through prepareCliSpawn before spawning.
     const call = RUNNER_SRC.match(
-      /const\s*\{\s*command:\s*spawnCommand,\s*args:\s*finalSpawnArgs\s*\}\s*=\s*prepareCliSpawn\(\s*command,\s*spawnArgs,\s*childEnv\s*\)/
+      /const\s*\{\s*command:\s*spawnCommand,\s*args:\s*finalSpawnArgs\s*\}\s*=\s*prepareCliSpawn\(\s*command,\s*deliveredArgs,\s*childEnv\s*\)/
     );
-    expect(call, 'agent spawn must call prepareCliSpawn(command, spawnArgs, childEnv)').not.toBeNull();
+    expect(call, 'agent spawn must call prepareCliSpawn(command, deliveredArgs, childEnv)').not.toBeNull();
     // The resolved pair must be what spawn() actually receives.
     expect(RUNNER_SRC).toMatch(/spawn\(\s*spawnCommand,\s*finalSpawnArgs,/);
   });
@@ -35,10 +38,35 @@ describe('cos-runner spawn — Windows CLI shim resolve+wrap (#2243)', () => {
     // BEFORE the resolve so PATH resolution sees the child's PATH, and is reused
     // as the spawn env — matching the working server/services/runner.js path.
     const childEnvIdx = RUNNER_SRC.indexOf('const childEnv = (() =>');
-    const prepareIdx = RUNNER_SRC.indexOf('prepareCliSpawn(command, spawnArgs, childEnv)');
+    const prepareIdx = RUNNER_SRC.indexOf('prepareCliSpawn(command, deliveredArgs, childEnv)');
     expect(childEnvIdx, 'childEnv must be defined').toBeGreaterThan(-1);
     expect(prepareIdx, 'prepareCliSpawn must run against childEnv').toBeGreaterThan(-1);
     expect(childEnvIdx, 'childEnv must be built before the resolve').toBeLessThan(prepareIdx);
+  });
+});
+
+describe('cos-runner spawn — per-provider prompt delivery (antigravity --print value)', () => {
+  it('imports prepareCliPrompt from the shared cliProviderArgs helper', () => {
+    expect(RUNNER_SRC).toMatch(
+      /import\s*\{[^}]*\bprepareCliPrompt\b[^}]*\}\s*from\s*'\.\.\/lib\/cliProviderArgs\.js';/
+    );
+  });
+
+  it('runs the built argv through prepareCliPrompt before resolving the spawn', () => {
+    // Antigravity (`agy`) takes the prompt as the --print VALUE and does NOT read
+    // stdin; without this the prompt never reaches the model. prepareCliPrompt
+    // rewrites the argv (and returns useStdin=false for agy) before the resolve.
+    const prepareIdx = RUNNER_SRC.indexOf('prepareCliPrompt(command, spawnArgs, prompt)');
+    const resolveIdx = RUNNER_SRC.indexOf('prepareCliSpawn(command, deliveredArgs, childEnv)');
+    expect(prepareIdx, 'must call prepareCliPrompt(command, spawnArgs, prompt)').toBeGreaterThan(-1);
+    expect(resolveIdx, 'must resolve the delivered argv').toBeGreaterThan(-1);
+    expect(prepareIdx, 'prompt delivery runs before the spawn resolve').toBeLessThan(resolveIdx);
+  });
+
+  it('gates the stdin write on useStdin so an argv-delivered prompt is not also piped', () => {
+    // For antigravity (--print value) / grok-on-Windows (temp file) useStdin is
+    // false — writing the prompt to stdin too would be redundant/incorrect.
+    expect(RUNNER_SRC).toMatch(/if\s*\(\s*useStdin\s*\)\s*claudeProcess\.stdin\.write\(prompt\)/);
   });
 });
 

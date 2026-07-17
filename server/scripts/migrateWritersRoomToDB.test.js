@@ -26,12 +26,18 @@ vi.mock('../lib/fileUtils.js', () => ({
   safeJSONParse: vi.fn((content, fallback) => { try { return JSON.parse(content); } catch { return fallback; } }),
 }));
 
+// Marker I/O is delegated to migrationMarker.js; mock it against the same
+// in-memory `files` map (the marker helper has its own unit test).
+vi.mock('../lib/migrationMarker.js', () => ({
+  markerExists: vi.fn(async (name) => (`${DATA}/${name}` in files)),
+  writeMarker: vi.fn(async (name, payload) => { files[`${DATA}/${name}`] = JSON.stringify(payload, null, 2); }),
+}));
+
 vi.mock('fs/promises', () => ({
   readFile: vi.fn(async (path) => {
     if (!(path in files)) { const e = new Error('ENOENT'); e.code = 'ENOENT'; throw e; }
     return files[path];
   }),
-  writeFile: vi.fn(async (path, content) => { files[path] = content; }),
   rename: vi.fn(async (from, to) => { renamed.push([from, to]); files[to] = files[from]; delete files[from]; }),
   readdir: vi.fn(async (path) => {
     if (path === WORKS) return workDirs;

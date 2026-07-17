@@ -1,3 +1,5 @@
+import { createKeyCachedQueue } from './createKeyCachedQueue.js';
+
 /**
  * File Write Queue — single-tail promise chain for serializing writes
  * against a shared JSON state file.
@@ -41,5 +43,67 @@ export function createFileWriteQueue() {
       if (tail === silenced) tail = Promise.resolve();
     });
     return next; // callers see the real resolve/reject
+  };
+}
+
+/**
+ * Per-RECORD write queue — the id-keyed sibling of `createFileWriteQueue`.
+ *
+ * Two read-modify-write cycles on the SAME id serialize (the later one sees the
+ * earlier one's committed result); cycles on DIFFERENT ids fan out in parallel.
+ * This is the queue the PG/file store facades use so their writes serialize
+ * identically to `collectionStore.queueRecordWrite` on either backend. The tail
+ * Map self-prunes so it stays bounded.
+ *
+ * @param {(id: string) => void} [assertId] Optional per-id validator, invoked
+ *   before queueing (throws on a bad id, exactly as the callers' inline guards
+ *   did — so a malformed id rejects synchronously rather than being enqueued).
+ *
+ * Usage:
+ *   const queueRecordWrite = createRecordWriteQueue(assertValidId);
+ *   queueRecordWrite(id, () => saveOneNow(id, record));
+ *
+ * The per-key tail mechanics are `createKeyCachedQueue` — this is a thin wrapper
+ * that adds the optional synchronous id validator (so a malformed id rejects
+ * before it's ever enqueued).
+ */
+export function createRecordWriteQueue(assertId) {
+  const queue = createKeyCachedQueue();
+  return function queueRecordWrite(id, fn) {
+    if (assertId) assertId(id);
+    return queue(id, fn); // callers see the real resolve/reject
+  };
+}
+
+/**
+ * Keyed file-write queue — collapses the per-key `createFileWriteQueue` factory
+ * the pipeline stage stores (editorialScore, reverseOutline, perspectiveRewrite,
+ * manuscriptReview, continuityBible) each rolled by hand:
+ *
+ *   const queues = new Map();
+ *   function queueWrite(id, fn) {
+ *     const key = typeof id === 'string' && id ? id : '__unknown__';
+ *     let q = queues.get(key);
+ *     if (!q) { q = createFileWriteQueue(); queues.set(key, q); }
+ *     return q(fn);
+ *   }
+ *
+ * Each stage keeps ONE JSON state file per key (series/issue), so writes must
+ * serialize per-key while different keys fan out in parallel — exactly
+ * `createKeyCachedQueue`, whose tail Map self-prunes so idle keys don't
+ * accumulate (unlike the hand-rolled Map, which grew unbounded).
+ *
+ * Falsy / non-string keys collapse to a shared `'__unknown__'` tail, matching
+ * the guards the stores used.
+ *
+ * Usage:
+ *   const queueLedgerWrite = createKeyedFileWriteQueue();
+ *   return queueLedgerWrite(seriesId, async () => { ... });
+ */
+export function createKeyedFileWriteQueue() {
+  const queue = createKeyCachedQueue();
+  return function queueKeyedWrite(key, fn) {
+    const safeKey = typeof key === 'string' && key ? key : '__unknown__';
+    return queue(safeKey, fn); // callers see the real resolve/reject
   };
 }

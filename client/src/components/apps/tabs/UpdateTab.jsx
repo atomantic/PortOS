@@ -234,6 +234,19 @@ export default function UpdateTab() {
 
   useAutoRefetch(pollHealth, 2000, { enabled: polling, pollOnly: true });
 
+  // Keep the status fresh while there's an update/reconcile surface on screen,
+  // so the agent block appears AND clears without a manual re-check: if an agent
+  // starts (from a schedule or another tab) while the buttons are showing, the
+  // next poll suppresses them; when the last agent finishes, it restores them.
+  // Gated to only run when there's something actionable (agents live, or an
+  // update/reconcile is available) and no update is already underway.
+  useAutoRefetch(fetchStatus, 4000, {
+    enabled: ((status?.activeCosAgents || 0) > 0 ||
+      !!status?.installState?.outOfSync ||
+      !!status?.updateAvailable) && !updating && !polling,
+    pollOnly: true
+  });
+
   const handleCheck = async () => {
     setChecking(true);
     const result = await api.checkForUpdate().catch(() => null);
@@ -359,6 +372,13 @@ export default function UpdateTab() {
   // `git pull`, no ./update.sh). Distinct from "a new release is available".
   const installState = status?.installState;
   const outOfSync = !!installState?.outOfSync;
+
+  // Live CoS agents make a restart destructive — updating/reconciling pm2-restarts
+  // PortOS and severs any in-flight agent. When agents are running we suppress the
+  // reconcile prompt and the update actions (the server also hard-rejects with 409
+  // AGENTS_ACTIVE) and show a notice instead.
+  const activeCosAgents = status?.activeCosAgents || 0;
+  const agentsActive = activeCosAgents > 0;
   const installIssues = [];
   if (installState?.runningStaleCode) {
     installIssues.push('Running code is older than what’s checked out — a restart/update is required.');
@@ -430,8 +450,19 @@ export default function UpdateTab() {
         </div>
       )}
 
+      {/* CoS agents live — updating/reconciling would restart PortOS and sever
+          them, so the reconcile prompt and update actions below are suppressed. */}
+      {agentsActive && (outOfSync || hasUpdate) && (
+        <Banner tone="warning" icon={AlertTriangle} size="md" title="Update paused — CoS agents running">
+          {activeCosAgents} CoS agent{activeCosAgents === 1 ? ' is' : 's are'} currently running.
+          Updating or reconciling restarts PortOS, which would sever {activeCosAgents === 1 ? 'it' : 'them'} mid-task.
+          Pause or wait for the agent{activeCosAgents === 1 ? '' : 's'} to finish — this notice clears automatically,
+          then you can update.
+        </Banner>
+      )}
+
       {/* Install out of sync (issue #1779) — distinct from "new release available" */}
-      {outOfSync && (
+      {outOfSync && !agentsActive && (
         <div className="p-4 rounded-lg border border-port-warning/50 bg-port-warning/5">
           <div className="flex items-start gap-2">
             <AlertTriangle size={18} className="text-port-warning shrink-0 mt-0.5" />
@@ -524,20 +555,25 @@ export default function UpdateTab() {
         </div>
       )}
 
-      {/* Update Actions */}
+      {/* Update Actions. Only the restart-triggering buttons (Sync Fork & Update,
+          Update from Fork As-Is, Update Now — all call runUpdate → update.sh →
+          pm2 restart) are suppressed while CoS agents are live; the safe actions
+          (Sync Fork Only = gh repo sync only, Ignore = no restart) stay available. */}
       {hasUpdate && (
         <div className="flex flex-wrap gap-2">
           {isFork ? (
             <>
-              <button
-                onClick={handleSyncForkAndUpdate}
-                disabled={updating || polling || syncingFork}
-                className="px-4 py-2 bg-port-accent text-white rounded-lg text-sm flex items-center gap-2 hover:bg-port-accent/80 disabled:opacity-50"
-                title={`Fast-forwards ${remote?.fullName} main from ${upstreamName} via gh repo sync, then runs the local update. Refuses to overwrite divergent fork commits.`}
-              >
-                <GitFork size={14} className={syncingFork ? 'animate-pulse' : ''} />
-                {syncingFork ? 'Syncing fork...' : updating ? 'Updating...' : polling ? 'Restarting...' : 'Sync Fork & Update'}
-              </button>
+              {!agentsActive && (
+                <button
+                  onClick={handleSyncForkAndUpdate}
+                  disabled={updating || polling || syncingFork}
+                  className="px-4 py-2 bg-port-accent text-white rounded-lg text-sm flex items-center gap-2 hover:bg-port-accent/80 disabled:opacity-50"
+                  title={`Fast-forwards ${remote?.fullName} main from ${upstreamName} via gh repo sync, then runs the local update. Refuses to overwrite divergent fork commits.`}
+                >
+                  <GitFork size={14} className={syncingFork ? 'animate-pulse' : ''} />
+                  {syncingFork ? 'Syncing fork...' : updating ? 'Updating...' : polling ? 'Restarting...' : 'Sync Fork & Update'}
+                </button>
+              )}
               <button
                 onClick={handleSyncForkOnly}
                 disabled={updating || polling || syncingFork}
@@ -547,25 +583,29 @@ export default function UpdateTab() {
                 <GitFork size={14} />
                 Sync Fork Only
               </button>
-              <button
-                onClick={handleUpdateFromForkAsIs}
-                disabled={updating || polling || syncingFork}
-                className="px-4 py-2 bg-port-border text-gray-400 rounded-lg text-sm flex items-center gap-2 hover:bg-port-border/80 hover:text-white disabled:opacity-50"
-                title="Skip the fork sync and pull from your fork's origin as-is. Use this if you already merged upstream into your fork via your own workflow."
-              >
-                <Download size={14} className={updating ? 'animate-bounce' : ''} />
-                Update from Fork As-Is
-              </button>
+              {!agentsActive && (
+                <button
+                  onClick={handleUpdateFromForkAsIs}
+                  disabled={updating || polling || syncingFork}
+                  className="px-4 py-2 bg-port-border text-gray-400 rounded-lg text-sm flex items-center gap-2 hover:bg-port-border/80 hover:text-white disabled:opacity-50"
+                  title="Skip the fork sync and pull from your fork's origin as-is. Use this if you already merged upstream into your fork via your own workflow."
+                >
+                  <Download size={14} className={updating ? 'animate-bounce' : ''} />
+                  Update from Fork As-Is
+                </button>
+              )}
             </>
           ) : (
-            <button
-              onClick={handleUpdate}
-              disabled={updating || polling}
-              className="px-4 py-2 bg-port-accent text-white rounded-lg text-sm flex items-center gap-2 hover:bg-port-accent/80 disabled:opacity-50"
-            >
-              <Download size={14} className={updating ? 'animate-bounce' : ''} />
-              {updating ? 'Updating...' : polling ? 'Restarting...' : 'Update Now'}
-            </button>
+            !agentsActive && (
+              <button
+                onClick={handleUpdate}
+                disabled={updating || polling}
+                className="px-4 py-2 bg-port-accent text-white rounded-lg text-sm flex items-center gap-2 hover:bg-port-accent/80 disabled:opacity-50"
+              >
+                <Download size={14} className={updating ? 'animate-bounce' : ''} />
+                {updating ? 'Updating...' : polling ? 'Restarting...' : 'Update Now'}
+              </button>
+            )
           )}
           {release && (
             <button

@@ -49,7 +49,7 @@ export default function AnalysisHistory({ work, activeHash, onApplyFormat }) {
     }
     setExpanded(analysis.id);
     if (details[analysis.id]) return;
-    const full = await getWritersRoomAnalysis(work.id, analysis.id).catch((err) => {
+    const full = await getWritersRoomAnalysis(work.id, analysis.id, { silent: true }).catch((err) => {
       if (mountedRef.current) toast.error(`Failed to load analysis: ${err.message}`);
       return null;
     });

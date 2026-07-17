@@ -14,6 +14,8 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { join } from 'path';
+import { PATHS } from '../lib/fileUtils.js';
 
 // Mock heavy dependencies used by the full (api) prompt path so the API-routing
 // regression test doesn't try to hit the memory DB, digital-twin services, or
@@ -207,6 +209,29 @@ describe('buildLightContextPrompt', () => {
       expect(prompt).toMatch(/### Attachments/);
       expect(prompt).toMatch(/`\/tmp\/attachments\/a-123\.png` \(photo-one\.png\)/);
       expect(prompt).toMatch(/`\/tmp\/attachments\/b-456\.png` \(photo-two\.png\)/);
+    });
+
+    it('resolves API-relative screenshot URLs (#2518) to absolute FS paths so the agent can read them', () => {
+      // Uploads now return `/api/screenshots/<file>` instead of an absolute
+      // path (no install-layout leak in the HTTP response); the prompt builder
+      // must map that back to an on-disk path for the agent's filesystem tools.
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { screenshots: ['/api/screenshots/abcd1234-shot.png'] } }),
+        '/r', null, isTruthyMeta);
+      const abs = join(PATHS.screenshots, 'abcd1234-shot.png');
+      expect(prompt).toContain(`\`${abs}\``);
+      expect(prompt).not.toMatch(/`\/api\/screenshots\//);
+    });
+
+    it('resolves API-relative attachment URLs (#2518) to absolute FS paths for the agent', () => {
+      const prompt = buildLightContextPrompt(
+        makeTask({ metadata: { attachments: [
+          { filename: 'a-123.png', originalName: 'photo-one.png', path: '/api/attachments/a-123.png' },
+        ] } }),
+        '/r', null, isTruthyMeta);
+      const abs = join(PATHS.cosAttachments, 'a-123.png');
+      expect(prompt).toContain(`\`${abs}\` (photo-one.png)`);
+      expect(prompt).not.toMatch(/`\/api\/attachments\//);
     });
 
     it('renders the worktree block with branch + path when worktreeInfo is present', () => {

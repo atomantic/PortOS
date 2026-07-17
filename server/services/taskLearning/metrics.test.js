@@ -10,7 +10,7 @@ vi.mock('./store.js', async (importActual) => {
   return { ...actual, loadLearningData: vi.fn() };
 });
 
-import { buildTaskTelemetryContext, computeLatencySplit, recordFailureSignature, getWindowedStats } from './metrics.js';
+import { buildTaskTelemetryContext, computeLatencySplit, recordFailureSignature, getWindowedStats, recordEnvironmentalFailure, shouldDivertToEnvironmental, ENVIRONMENTAL_ERROR_CATEGORIES } from './metrics.js';
 import { loadLearningData } from './store.js';
 
 // buildTaskTelemetryContext + recordFailureSignature are the pure telemetry
@@ -69,7 +69,7 @@ describe('buildTaskTelemetryContext', () => {
       result: {
         success: false,
         duration: 120000,
-        errorAnalysis: { category: 'test-failure', message: 'Tests failed: 3 assertions' }
+        errorAnalysis: { category: 'test-failure', origin: 'output-scan', message: 'Tests failed: 3 assertions' }
       }
     };
     const ctx = buildTaskTelemetryContext(agent, { taskType: 'internal', description: 'run tests' });
@@ -77,10 +77,40 @@ describe('buildTaskTelemetryContext', () => {
     expect(ctx.success).toBe(false);
     expect(ctx.failureSignature).toEqual({
       category: 'test-failure',
+      origin: 'output-scan',
       messageSnippet: 'Tests failed: 3 assertions',
       failurePosition: 'testing'
     });
     expect(ctx.executionContext.taskType).toBe('internal-task');
+  });
+
+  it('carries a null origin on an errorAnalysis that predates the provenance marker (#2642)', () => {
+    const agent = {
+      ...baseAgent,
+      result: { success: false, duration: 1000, errorAnalysis: { category: 'rate-limit', message: 'Rate limited' } }
+    };
+    const ctx = buildTaskTelemetryContext(agent, { taskType: 'internal' });
+    expect(ctx.failureSignature.origin).toBeNull();
+  });
+
+  it('surfaces a structured provider origin from the errorAnalysis (#2642)', () => {
+    const agent = {
+      ...baseAgent,
+      result: { success: false, duration: 1000, errorAnalysis: { category: 'rate-limit', origin: 'provider', message: 'API Error: 429' } }
+    };
+    const ctx = buildTaskTelemetryContext(agent, { taskType: 'internal' });
+    expect(ctx.failureSignature.origin).toBe('provider');
+  });
+
+  it('preserves a malformed falsy origin instead of collapsing it into the back-compat null (#2642)', () => {
+    // A '' origin must NOT become null (which would divert as legacy) — it stays
+    // '' so the gate's allowlist rejects it and the failure is counted.
+    const agent = {
+      ...baseAgent,
+      result: { success: false, duration: 1000, errorAnalysis: { category: 'rate-limit', origin: '', message: 'x' } }
+    };
+    const ctx = buildTaskTelemetryContext(agent, { taskType: 'internal' });
+    expect(ctx.failureSignature.origin).toBe('');
   });
 
   it('falls back to errorAnalysis.details for the snippet and truncates to 200 chars', () => {
@@ -115,6 +145,7 @@ describe('buildTaskTelemetryContext', () => {
     });
     expect(ctx.failureSignature).toEqual({
       category: null,
+      origin: null,
       messageSnippet: null,
       failurePosition: null
     });
@@ -155,6 +186,7 @@ describe('buildTaskTelemetryContext', () => {
     expect(ctx.executionContext.taskType).toBe('auto-fix'); // classified, not 'unknown'
     expect(ctx.failureSignature).toEqual({
       category: 'tool-error',
+      origin: null,
       messageSnippet: 'ripgrep not found',
       failurePosition: 'diagnosing'
     });
@@ -396,5 +428,106 @@ describe('getWindowedStats (issue #2460)', () => {
     const stats = await getWindowedStats('auto-fix', { maxCount: 3, maxAgeMs: Infinity });
     expect(stats.windowedCompleted).toBe(3);
     expect(stats.windowedSuccessRate).toBe(100);
+  });
+});
+
+describe('ENVIRONMENTAL_ERROR_CATEGORIES (issue #2618)', () => {
+  it('contains exactly the environmental/infrastructure categories from both classifier vocabularies', () => {
+    expect([...ENVIRONMENTAL_ERROR_CATEGORIES].sort()).toEqual([
+      'auth',
+      'auth-error',
+      'billing-error',
+      'claude-error',
+      'connection',
+      'forbidden',
+      'model-not-available',
+      'model-not-found',
+      'model-not-supported',
+      'network-error',
+      'rate-limit',
+      'startup-failure',
+      'usage-limit'
+    ]);
+  });
+
+  it('deliberately excludes categories that can be genuine task/model signal', () => {
+    // timeout / process-killed: a task too big for its tier legitimately times
+    // out or blows resource limits; unknown / api-error: could be anything,
+    // including a task-induced bad request — excluding them from learning would
+    // blind routing to real signal. server-error / spawn-error: their classifier
+    // regexes match ordinary task output ("Internal Server Error" from a failing
+    // app test, "command not found" from a broken build), so treating them as
+    // environmental would hide genuine failures from the rate.
+    expect(ENVIRONMENTAL_ERROR_CATEGORIES.has('timeout')).toBe(false);
+    expect(ENVIRONMENTAL_ERROR_CATEGORIES.has('unknown')).toBe(false);
+    expect(ENVIRONMENTAL_ERROR_CATEGORIES.has('process-killed')).toBe(false);
+    expect(ENVIRONMENTAL_ERROR_CATEGORIES.has('api-error')).toBe(false);
+    expect(ENVIRONMENTAL_ERROR_CATEGORIES.has('server-error')).toBe(false);
+    expect(ENVIRONMENTAL_ERROR_CATEGORIES.has('spawn-error')).toBe(false);
+    expect(ENVIRONMENTAL_ERROR_CATEGORIES.has('test-failure')).toBe(false);
+    expect(ENVIRONMENTAL_ERROR_CATEGORIES.has(null)).toBe(false);
+  });
+});
+
+describe('shouldDivertToEnvironmental (issue #2642)', () => {
+  it('diverts a structured provider/runner environmental failure (current behavior preserved)', () => {
+    // A rate-limit classified from a genuine provider signal is excluded from aggregates.
+    expect(shouldDivertToEnvironmental(false, 'rate-limit', 'provider')).toBe(true);
+    expect(shouldDivertToEnvironmental(false, 'startup-failure', 'runner')).toBe(true);
+  });
+
+  it('does NOT divert an environmental category that came only from the output-text sweep', () => {
+    // "rate limit" printed in ordinary task output → counts as a genuine failure.
+    expect(shouldDivertToEnvironmental(false, 'rate-limit', 'output-scan')).toBe(false);
+    expect(shouldDivertToEnvironmental(false, 'network-error', 'output-scan')).toBe(false);
+  });
+
+  it('preserves category-only behavior for records without a provenance marker (back-compat)', () => {
+    // Older runs / federated peers have no origin — null falls through to divert.
+    expect(shouldDivertToEnvironmental(false, 'rate-limit', null)).toBe(true);
+    expect(shouldDivertToEnvironmental(false, 'auth-error', undefined)).toBe(true);
+  });
+
+  it('never diverts a success or a non-environmental category', () => {
+    expect(shouldDivertToEnvironmental(true, 'rate-limit', 'provider')).toBe(false); // success
+    expect(shouldDivertToEnvironmental(false, 'test-failure', 'provider')).toBe(false); // not environmental
+    expect(shouldDivertToEnvironmental(false, 'unknown', 'output-scan')).toBe(false);
+    expect(shouldDivertToEnvironmental(false, null, null)).toBe(false);
+  });
+
+  it('does NOT divert an unrecognized/future/malformed origin (allowlist, fail-safe)', () => {
+    expect(shouldDivertToEnvironmental(false, 'rate-limit', 'exit-code')).toBe(false);
+    expect(shouldDivertToEnvironmental(false, 'rate-limit', 'PROVIDER')).toBe(false); // case-sensitive
+    expect(shouldDivertToEnvironmental(false, 'rate-limit', '')).toBe(false);
+  });
+});
+
+describe('recordEnvironmentalFailure (issue #2618)', () => {
+  it('initializes the additive key on data that predates it (back-compat)', () => {
+    const data = {}; // old learning.json shape — no environmentalFailures key
+    recordEnvironmentalFailure(data, { category: 'rate-limit', taskType: 'auto-fix' });
+
+    expect(data.environmentalFailures['rate-limit'].count).toBe(1);
+    expect(data.environmentalFailures['rate-limit'].lastOccurred).toEqual(expect.any(String));
+    expect(data.environmentalFailures['rate-limit'].taskTypes).toEqual({ 'auto-fix': 1 });
+  });
+
+  it('accumulates counts and affected task types per category', () => {
+    const data = {};
+    recordEnvironmentalFailure(data, { category: 'rate-limit', taskType: 'auto-fix' });
+    recordEnvironmentalFailure(data, { category: 'rate-limit', taskType: 'auto-fix' });
+    recordEnvironmentalFailure(data, { category: 'rate-limit', taskType: 'user-task' });
+    recordEnvironmentalFailure(data, { category: 'billing-error', taskType: 'user-task' });
+
+    expect(data.environmentalFailures['rate-limit'].count).toBe(3);
+    expect(data.environmentalFailures['rate-limit'].taskTypes).toEqual({ 'auto-fix': 2, 'user-task': 1 });
+    expect(data.environmentalFailures['billing-error'].count).toBe(1);
+  });
+
+  it('is a no-op when the failure carries no category', () => {
+    const data = {};
+    recordEnvironmentalFailure(data, { category: null, taskType: 'auto-fix' });
+    recordEnvironmentalFailure(data, {});
+    expect(data.environmentalFailures).toBeUndefined();
   });
 });

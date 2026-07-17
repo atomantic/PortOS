@@ -36,7 +36,8 @@ export const NOTIFICATION_TYPES = {
   PLAN_QUESTION: 'plan_question',
   AGENT_WARNING: 'agent_warning',
   AUTOPILOT_PAUSED: 'autopilot_paused',
-  DAILY_POST_REMINDER: 'daily_post_reminder'
+  DAILY_POST_REMINDER: 'daily_post_reminder',
+  CREATIVE_COMMISSION: 'creative_commission'
 };
 
 // Priority levels

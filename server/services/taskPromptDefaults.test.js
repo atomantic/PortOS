@@ -66,6 +66,46 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(actual).toEqual(SNAPSHOT.PREVIOUS_DEFAULT_PROMPTS);
   });
 
+  // feature-ideas v10: rejected-ideas ledger consultation (issue #2621).
+  // Pins the version-bump pairing — the prompt change ships WITH its version
+  // bump and the outgoing v9 default preserved for cross-install auto-upgrade.
+  it('feature-ideas v10 consults REJECTED.md and closed-unmerged PRs, preserving the v9 default', () => {
+    const current = DEFAULT_TASK_PROMPTS['feature-ideas'];
+    expect(current).toContain('REJECTED.md');
+    expect(current).toContain('is:unmerged');
+    expect(PROMPT_VERSIONS['feature-ideas']).toBe(10);
+
+    const previous = PREVIOUS_DEFAULT_PROMPTS['feature-ideas'];
+    const v9 = previous[previous.length - 1];
+    // The outgoing v9 default lacked the rejected-ideas consultation and is
+    // preserved verbatim so installs holding it are recognized and upgraded.
+    expect(v9).not.toContain('REJECTED.md');
+    expect(v9).toContain('.changelog/');
+    expect(v9).not.toBe(current);
+  });
+
+  // claim-issue v6 / claim-issue-gitlab v5: Phase 1 epic skip also recognizes a
+  // leading bracketed `[epic]` title tag (the "[Epic] …" convention), fixing the
+  // perpetual-swarm churn where a `[Epic]`-titled issue with no `epic` label
+  // read as actionable forever. Pins the version-bump pairing + preserved
+  // outgoing defaults for cross-install auto-upgrade.
+  it.each([
+    ['claim-issue', 6],
+    ['claim-issue-gitlab', 5],
+  ])('%s v%d recognizes an "[epic]"/"Epic:" title prefix, preserving the outgoing default', (key, version) => {
+    const current = DEFAULT_TASK_PROMPTS[key];
+    expect(current).toContain('beginning with an `[epic]` bracket or `Epic:` tag');
+    expect(PROMPT_VERSIONS[key]).toBe(version);
+
+    const previous = PREVIOUS_DEFAULT_PROMPTS[key];
+    const outgoing = previous[previous.length - 1];
+    // The outgoing default only knew the `epic` label + "(epic)" suffix; it is
+    // preserved verbatim so installs holding it are recognized and upgraded.
+    expect(outgoing).not.toContain('beginning with an `[epic]` bracket');
+    expect(outgoing).toContain('a title ending in "(epic)"');
+    expect(outgoing).not.toBe(current);
+  });
+
   // NOTE: PROMPT_VERSIONS keys are SCHEDULE keys, not always prompt keys —
   // code-reviewer-a/b version a pipeline whose stages use the
   // code-reviewer-review / code-reviewer-implement prompt bodies — so there is

@@ -15,6 +15,7 @@ import { getPeers, DEFAULT_SYNC_CATEGORIES, allSyncCategoriesOn, updatePeer, get
 import { peerBaseUrl } from '../lib/peerUrl.js';
 import { peerAuthHeaders } from '../lib/peerHttpClient.js';
 import * as brainSync from './brainSync.js';
+import { BRAIN_ENTITY_TYPES } from './brainStorage.js';
 import * as brainSyncLog from './brainSyncLog.js';
 import * as brainReconcile from './brainReconcile.js';
 import * as memorySync from './memorySync.js';
@@ -194,10 +195,22 @@ async function syncBrainFromPeer(peer, cursor) {
   //      cache the peer checksum so step 2 short-circuits next cycle.
   // Returns `brainChecksum` so the caller caches the converged value on the
   // cursor (cache key is the peer checksum we reconciled against).
-  let brainChecksum = cursor.brainChecksum ?? null;
+  //
+  // The cached checksum is VERSIONED by this install's entity-type list
+  // (`brainChecksumTypes`): a peer running older code silently skips unknown
+  // types when applying a snapshot, yet still caches the remote checksum. If
+  // that cache survived an upgrade, step 2 would short-circuit against an
+  // unchanged remote and the skipped records (e.g. `songs`) would stay absent
+  // until an unrelated remote mutation happened to change the checksum. A
+  // signature mismatch (or a legacy cursor with no signature) treats the cache
+  // as cold, forcing one full reconcile after any enrollment change.
+  const typesSignature = [...BRAIN_ENTITY_TYPES].sort().join(',');
+  const cachedChecksum =
+    cursor.brainChecksumTypes === typesSignature ? (cursor.brainChecksum ?? null) : null;
+  let brainChecksum = cachedChecksum;
   const remote = await fetchPeer(peer, '/api/brain/reconcile/checksum');
   const remoteChecksum = isNonEmptyStr(remote?.checksum) ? remote.checksum : null;
-  if (remoteChecksum && remoteChecksum !== cursor.brainChecksum) {
+  if (remoteChecksum && remoteChecksum !== cachedChecksum) {
     const localChecksum = await brainReconcile.getBrainChecksum().catch(() => null);
     if (remoteChecksum === localChecksum) {
       // Already converged — record the peer checksum so we skip next cycle.
@@ -216,7 +229,7 @@ async function syncBrainFromPeer(peer, cursor) {
     }
   }
 
-  return { brainSeq, totalApplied, brainChecksum };
+  return { brainSeq, totalApplied, brainChecksum, brainChecksumTypes: typesSignature };
 }
 
 /**
@@ -753,6 +766,11 @@ export async function syncWithPeer(peer) {
         // the prior value so we don't lose the skip-optimization on a blip.
         if (isNonEmptyStr(brainResult.brainChecksum)) {
           cursors[peerId].brainChecksum = brainResult.brainChecksum;
+          // Stamp the entity-type signature the cache is valid for — an
+          // enrollment change (new brain type) invalidates the cached checksum
+          // so the first post-upgrade cycle re-reconciles records that older
+          // code skipped as unknown types.
+          cursors[peerId].brainChecksumTypes = brainResult.brainChecksumTypes;
         }
       }
       if (memoryResult.memorySeq !== (cursor.memorySeq ?? '0')) cursors[peerId].memorySeq = memoryResult.memorySeq;

@@ -14,6 +14,7 @@ import { fileURLToPath } from 'url';
 import { homedir } from 'os';
 import { ServerError } from './errorHandler.js';
 import { resolveInstallRoot } from './dataRoot.js';
+import { createFileWriteQueue } from './fileWriteQueue.js';
 
 // Promisified execFile — shared so callers (e.g. backup's pg_dump probing)
 // don't each re-wrap it. Returns { stdout, stderr }.
@@ -128,6 +129,10 @@ export const PATHS = {
   // archive JSON lives one level up (data/brain/imports/<source>/) and is NOT
   // served — only this assets subtree is.
   brainImportAssets: join(INSTALL_ROOT, 'data/brain/imports/assets'),
+  // SongBook attachment BYTES (PDF sheet music, images, MIDI). Machine-local —
+  // only the metadata syncs inside the brain `songs` record; peers lacking a
+  // file render "not on this machine". Covered by backup via data/brain/.
+  brainSongbook: join(INSTALL_ROOT, 'data/brain/songbook'),
   slashdo: join(CODE_ROOT, 'lib/slashdo')
 };
 
@@ -556,12 +561,22 @@ export async function writeJSONLines(filePath, values) {
  * @param {Object} options
  * @param {number} [options.ttl=2000] - Cache TTL in milliseconds
  * @param {string} [options.context=''] - Context label for error logging
- * @returns {{ load, save, invalidateCache }}
+ * @returns {{ load, save, mutate, invalidateCache }}
+ *
+ * Writes are serialized through a single-tail `createFileWriteQueue` so two
+ * concurrent `save()` calls can't interleave their `atomicWrite` + cache
+ * assignment. For read-modify-write, use `mutate(fn)` — it runs the whole
+ * `load → fn → persist` cycle under the same tail, so a `load` always sees the
+ * previous cycle's committed result and one writer can't clobber the other
+ * (CLAUDE.md: "serialize writes server-side… a single tail per shared file").
+ * A bare `load()` + `save()` pair does NOT get that guarantee; reach for
+ * `mutate()` whenever the new value depends on the current one.
  */
 export function createCachedStore(filePath, defaultValue, { ttl = 2000, context = '' } = {}) {
   let cache = null;
   let cacheTimestamp = 0;
   const dir = dirname(filePath);
+  const queueWrite = createFileWriteQueue();
   // Safe clone for plain JSON defaults (structuredClone requires Node 17+)
   const cloneDefault = () => JSON.parse(JSON.stringify(defaultValue));
 
@@ -580,18 +595,32 @@ export function createCachedStore(filePath, defaultValue, { ttl = 2000, context 
     return cache;
   };
 
-  const save = async (data) => {
+  // Persist `data` and refresh the cache — the shared write body. Callers reach
+  // it via the serialized `save`/`mutate`, never directly.
+  const persist = async (data) => {
     await atomicWrite(filePath, data);
     cache = data;
     cacheTimestamp = Date.now();
+    return data;
   };
+
+  const save = (data) => queueWrite(() => persist(data));
+
+  // Serialized read-modify-write: load the freshest state under the tail, apply
+  // `fn`, then persist. `fn` may mutate the loaded object in place and/or return
+  // the value to write (returning `undefined` persists the mutated input).
+  const mutate = (fn) => queueWrite(async () => {
+    const data = await load();
+    const result = await fn(data);
+    return persist(result === undefined ? data : result);
+  });
 
   const invalidateCache = () => {
     cache = null;
     cacheTimestamp = 0;
   };
 
-  return { load, save, invalidateCache };
+  return { load, save, mutate, invalidateCache };
 }
 
 export const MINUTE = 60 * 1000;
@@ -774,6 +803,8 @@ export const EXTENSION_MIME_MAP = {
   '.wav':  'audio/wav',
   '.ogg':  'audio/ogg',
   '.m4a':  'audio/mp4',
+  '.mid':  'audio/midi',
+  '.midi': 'audio/midi',
   // Video
   '.mp4':  'video/mp4',
   '.webm': 'video/webm',
@@ -819,6 +850,18 @@ export const ATTACHMENT_ALLOWED_EXTENSIONS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.pdf',
   '.js',  '.ts', '.jsx',  '.tsx', '.py',  '.sh',  '.sql', '.html', '.css',
   '.zip', '.tar', '.gz',
+]);
+
+/**
+ * Curated allowlist for SongBook attachments (sheet-music PDFs, scans, MIDI,
+ * practice audio). Deliberately NOT a superset of ATTACHMENT_ALLOWED_EXTENSIONS
+ * — code/archive/config types make no sense on a song record, while MIDI and
+ * audio (which the CoS attachment set excludes) are core sheet-music formats.
+ */
+export const SONGBOOK_ATTACHMENT_EXTENSIONS = new Set([
+  '.pdf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg',
+  '.txt', '.md',
+  '.mid', '.midi', '.mp3', '.wav', '.m4a', '.ogg',
 ]);
 
 /**
@@ -927,6 +970,88 @@ export async function importFileToUploads(tempPath, originalName) {
 }
 
 /**
+ * Persist a base64-encoded upload into `dir` with the shared attachment
+ * pipeline: extension allowlist → base64 decode → size cap → ensureDir →
+ * `<uuid8>-<sanitized-name>` naming → containment guard → write.
+ *
+ * Throws ServerError with the exact status/code/message contract the
+ * attachment routes established (`INVALID_FILE_TYPE`, `FILE_TOO_LARGE`,
+ * `INVALID_FILENAME` — all 400), so refactored routes keep their pinned
+ * responses. Consolidates `routes/attachments.js` and
+ * `routes/brainSongbook.js` (uploads.js has a different shape — see PLAN.md).
+ *
+ * @param {string} dir - Destination directory (created if missing).
+ * @param {{ filename: string, data: string }} upload - Original filename +
+ *   base64 payload (validated as present by the calling route).
+ * @param {{ allowedExtensions: Set<string>, maxBytes: number }} opts
+ * @returns {Promise<{ id: string, filename: string, filePath: string,
+ *   buffer: Buffer, size: number, mime: string }>} `id` is the full UUID whose
+ *   first 8 chars prefix `filename`.
+ */
+export async function saveBase64Upload(dir, { filename, data }, { allowedExtensions, maxBytes }) {
+  const ext = getFileExtension(filename);
+  if (!ext || !allowedExtensions.has(ext)) {
+    const allowedList = [...allowedExtensions].join(', ');
+    throw new ServerError(`File type not allowed. Supported: ${allowedList}`, { status: 400, code: 'INVALID_FILE_TYPE' });
+  }
+
+  const buffer = Buffer.from(data, 'base64');
+  if (buffer.length > maxBytes) {
+    throw new ServerError(`File exceeds maximum size of ${maxBytes / 1024 / 1024}MB`, { status: 400, code: 'FILE_TOO_LARGE' });
+  }
+
+  await ensureDir(dir);
+
+  // Unique uuid prefix avoids collisions; sanitize kills traversal characters.
+  const id = randomUUID();
+  const fname = `${id.slice(0, 8)}-${sanitizeFilename(filename)}`;
+  const filePath = join(dir, fname);
+  // Double-check the path is within the destination dir (defense in depth).
+  if (!isPathInsideDir(dir, filePath)) {
+    throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
+  }
+
+  await writeFile(filePath, buffer);
+
+  return { id, filename: fname, filePath, buffer, size: buffer.length, mime: getMimeType(getFileExtension(fname)) };
+}
+
+/**
+ * Serve a machine-local file from `dir` by user-supplied filename with the
+ * shared safety pipeline: sanitize → containment guard (400
+ * `INVALID_FILENAME`) → existence check (404, message/code parametrized via
+ * `missingError` so routes keep their contracts) → `X-Content-Type-Options:
+ * nosniff` → attachment disposition for RISKY_MIME_TYPES → `res.sendFile`.
+ *
+ * Mirrors the exact serving behavior of `routes/attachments.js`.
+ *
+ * @param {import('express').Response} res
+ * @param {string} dir - The containing directory.
+ * @param {string} filename - Raw user-supplied filename.
+ * @param {{ missingError?: { message: string, code: string } }} [opts]
+ */
+export async function serveLocalFile(res, dir, filename, { missingError } = {}) {
+  const safeFilename = sanitizeFilename(filename);
+  const filePath = resolvePath(dir, safeFilename);
+
+  if (!isPathInsideDir(dir, filePath)) {
+    throw new ServerError('Invalid filename', { status: 400, code: 'INVALID_FILENAME' });
+  }
+
+  if (!(await pathExists(filePath))) {
+    const { message = 'Attachment not found', code = 'NOT_FOUND' } = missingError || {};
+    throw new ServerError(message, { status: 404, code });
+  }
+
+  const mimeType = getMimeType(getFileExtension(safeFilename));
+  res.set('X-Content-Type-Options', 'nosniff');
+  if (RISKY_MIME_TYPES.has(mimeType)) {
+    res.set('Content-Disposition', `attachment; filename="${safeFilename}"`);
+  }
+  res.type(mimeType).sendFile(filePath);
+}
+
+/**
  * Validate a user-supplied filename is a safe basename with one of the
  * allowed extensions — refuses path-traversal, null bytes, separators, and
  * exact `.` / `..`. Throws a 400 ServerError with code VALIDATION_ERROR
@@ -992,6 +1117,30 @@ export function assertSafeFilename(filename, { extensions, subject = 'filename',
   if (!extOk || hasSeparator || isExactTraversal || !isPureBasename) {
     throw new ServerError(`Invalid ${subjectText}`, { status: 400, code: 'VALIDATION_ERROR' });
   }
+}
+
+/**
+ * True when `candidatePath` resolves to a location strictly inside `dir`.
+ *
+ * Uses the same anchored-prefix containment idiom as `makePathResolver`
+ * (`resolvePath(dir) + PATH_SEP`): appending the platform separator to the
+ * resolved root means a sibling directory whose name merely *starts with* the
+ * root (e.g. `/data/uploads-evil` vs `/data/uploads`) can't slip past a bare
+ * `startsWith(root)` check. This is stricter than the `resolvedPath.startsWith(DIR)`
+ * guard the upload/attachment/screenshot routes used before. The root itself is
+ * NOT reported as "inside" (there's no trailing separator on the bare root),
+ * which is the desired behavior for file-containment checks.
+ *
+ * @param {string} dir - the containing directory (absolute or relative)
+ * @param {string} candidatePath - the path to test
+ * @returns {boolean}
+ */
+export function isPathInsideDir(dir, candidatePath) {
+  if (typeof dir !== 'string' || typeof candidatePath !== 'string' || !dir || !candidatePath) {
+    return false;
+  }
+  const rootPrefix = resolvePath(dir) + PATH_SEP;
+  return resolvePath(candidatePath).startsWith(rootPrefix);
 }
 
 /**

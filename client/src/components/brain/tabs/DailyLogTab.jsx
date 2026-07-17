@@ -255,7 +255,7 @@ export default function DailyLogTab() {
 
   const handleSave = async () => {
     setSaving(true);
-    const res = await api.updateDailyLog(date, content).catch(() => null);
+    const res = await api.updateDailyLog(date, content, { silent: true }).catch(() => null);
     setSaving(false);
     if (!res?.entry) {
       toast.error('Save failed');
@@ -269,7 +269,7 @@ export default function DailyLogTab() {
     const text = quickAppend.trim();
     if (!text) return;
     setAppending(true);
-    const res = await api.appendDailyLog(date, text, 'text').catch(() => null);
+    const res = await api.appendDailyLog(date, text, 'text', { silent: true }).catch(() => null);
     setAppending(false);
     if (!res?.entry) {
       toast.error('Append failed');
@@ -312,7 +312,7 @@ export default function DailyLogTab() {
   };
 
   const handleDelete = async () => {
-    const ok = await api.deleteDailyLog(date).then(() => true, () => false);
+    const ok = await api.deleteDailyLog(date, { silent: true }).then(() => true, () => false);
     if (!ok) {
       toast.error('Delete failed');
       return;
@@ -326,7 +326,7 @@ export default function DailyLogTab() {
 
   const handleSyncObsidian = async () => {
     setSyncing(true);
-    const res = await api.syncDailyLogsToObsidian().catch(() => null);
+    const res = await api.syncDailyLogsToObsidian({ silent: true }).catch(() => null);
     setSyncing(false);
     if (res) toast.success(`Synced ${res.synced} entries to Obsidian`);
     else toast.error('Sync failed');
@@ -360,7 +360,7 @@ export default function DailyLogTab() {
       return;
     }
     setDrafting(true);
-    const res = await api.draftActivityDigest(date).catch(() => null);
+    const res = await api.draftActivityDigest(date, { silent: true }).catch(() => null);
     setDrafting(false);
     if (!res) {
       toast.error('Draft failed');

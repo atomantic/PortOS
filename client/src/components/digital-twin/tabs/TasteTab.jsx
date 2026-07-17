@@ -127,7 +127,8 @@ export default function TasteTab({ onRefresh }) {
       activeSection,
       currentQuestion.questionId,
       answer.trim(),
-      meta
+      meta,
+      { silent: true }
     ).catch(() => null);
 
     if (!result) {
@@ -234,7 +235,7 @@ export default function TasteTab({ onRefresh }) {
       context: `Taste section: ${sectionId}`,
       providerId: selectedProvider?.providerId,
       model: selectedProvider?.model
-    }).catch(() => {
+    }, { silent: true }).catch(() => {
       toast.error('Failed to save feedback');
       setSummaryFeedback(prev => { const next = { ...prev }; delete next[sectionId]; return next; });
     });

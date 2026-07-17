@@ -261,7 +261,7 @@ export default function VideoTimelineEditor() {
     const updated = await api.updateTimelineProject(projectId, {
       clips: cleanClips,
       expectedUpdatedAt: project.updatedAt,
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       if (err.code === 'CONFLICT') {
         toast.error('Project was modified elsewhere — reloading');
         refresh();
@@ -428,7 +428,7 @@ export default function VideoTimelineEditor() {
     clearTimeout(saveTimerRef.current);
     const saved = await saveTimeline(clips);
     if (!saved) return;
-    const result = await api.renderTimelineProject(projectId).catch((err) => {
+    const result = await api.renderTimelineProject(projectId, { silent: true }).catch((err) => {
       if (err.code === 'RENDER_IN_PROGRESS') {
         const jobId = err.context?.jobId;
         if (jobId) { setRenderJobId(jobId); toast('Re-attaching to in-flight render'); return null; }
@@ -537,7 +537,7 @@ export default function VideoTimelineEditor() {
               if (trimmed === project.name) return;
               const updated = await api.updateTimelineProject(projectId, {
                 name: trimmed, expectedUpdatedAt: project.updatedAt,
-              }).catch((err) => {
+              }, { silent: true }).catch((err) => {
                 toast.error(`Rename failed: ${err.message}`);
                 setNameDraft(project.name);
                 return null;

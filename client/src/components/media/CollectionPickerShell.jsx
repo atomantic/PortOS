@@ -104,7 +104,7 @@ export default function CollectionPickerShell({
     if (collectionsProp !== undefined) return undefined;
     if (!open) return undefined;
     let cancelled = false;
-    loadItems().then(
+    loadItems({ silent: true }).then(
       (data) => {
         if (cancelled) return;
         const list = Array.isArray(data) ? data : [];
@@ -159,7 +159,7 @@ export default function CollectionPickerShell({
     const name = newName.trim();
     if (!name) return;
     setCreating(true);
-    const created = await createItem({ name }).catch((err) => {
+    const created = await createItem({ name }, { silent: true }).catch((err) => {
       toast.error(err?.message || 'Create failed');
       return null;
     });
@@ -182,12 +182,13 @@ export default function CollectionPickerShell({
     <div
       ref={menuRef}
       role="menu"
-      className="fixed bg-port-card border border-port-border rounded-lg shadow-xl z-[100] p-1.5 flex flex-col"
+      className="fixed bg-port-card border border-port-border rounded-lg shadow-xl z-[100] p-1.5 flex flex-col max-h-dvh-cap"
       style={{
         left: style?.left ?? `${VIEWPORT_PADDING}px`,
         top: style?.top ?? `${VIEWPORT_PADDING}px`,
         width: style?.width ?? `${width}px`,
-        maxHeight: 'min(360px, calc(100vh - 16px))',
+        '--dvh-cap': '360px',
+        '--dvh-inset': '16px',
         visibility: style ? 'visible' : 'hidden',
       }}
       onClick={(e) => e.stopPropagation()}

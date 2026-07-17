@@ -42,6 +42,7 @@ export * from './wrImageDefaults.js';
 // === Graph & sim ===
 export * from './brainGraphFocus.js';
 export * from './graphSimulation.js';
+export * from './goalFeatureMap.js';
 
 // === Generic UI / collection utilities ===
 export * from './a11yKeyboard.js';
@@ -79,6 +80,7 @@ export * from './voiceLabel.js';
 export * from './audioContext.js';
 export * from './cityPlaybackFrame.js';
 export * from './canvasRoll.js';
+export * from './chordShapes.js';
 export * from './colorMatch.js';
 export * from './editorialChecks.js';
 export * from './editorialHealth.js';
@@ -98,6 +100,7 @@ export * from './songPlayback.js';
 export * from './songProgress.js';
 export * from './streakGlyph.js';
 export * from './syncCounts.js';
+export * from './tabNotation.js';
 export * from './terminalTheme.js';
 export * from './tribe.js';
 export * from './tribeCadence.js';

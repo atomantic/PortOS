@@ -59,6 +59,9 @@ const Authors = lazyWithReload(() => import('./pages/Authors'));
 const Music = lazyWithReload(() => import('./pages/Music'));
 const Catalog = lazyWithReload(() => import('./pages/Catalog'));
 const Rounds = lazyWithReload(() => import('./pages/Rounds'));
+const SongBook = lazyWithReload(() => import('./pages/SongBook'));
+const SongBookImport = lazyWithReload(() => import('./pages/SongBookImport'));
+const SongBookViewer = lazyWithReload(() => import('./pages/SongBookViewer'));
 const RoundEditor = lazyWithReload(() => import('./pages/RoundEditor'));
 const RoundsGuide = lazyWithReload(() => import('./pages/RoundsGuide'));
 const CatalogIngest = lazyWithReload(() => import('./pages/CatalogIngest'));
@@ -67,6 +70,7 @@ const VideoTimeline = lazyWithReload(() => import('./pages/VideoTimeline'));
 const VideoTimelineEditor = lazyWithReload(() => import('./pages/VideoTimelineEditor'));
 const CreativeDirector = lazyWithReload(() => import('./pages/CreativeDirector'));
 const CreativeDirectorDetail = lazyWithReload(() => import('./pages/CreativeDirectorDetail'));
+const CreativeCommissions = lazyWithReload(() => import('./pages/CreativeCommissions'));
 const MusicVideo = lazyWithReload(() => import('./pages/MusicVideo'));
 const MoodBoards = lazyWithReload(() => import('./pages/MoodBoards'));
 const MoodBoardDetail = lazyWithReload(() => import('./pages/MoodBoardDetail'));
@@ -298,6 +302,7 @@ export default function App() {
           <Route path="devtools/jira/reports" element={<JiraReports />} />
           <Route path="city" element={<CyberCity />} />
           <Route path="city/settings" element={<CyberCity />} />
+          <Route path="city/apps/:appId" element={<CyberCity />} />
           <Route path="data" element={<DataManager />} />
           <Route path="character" element={<CharacterSheet />} />
           <Route path="ask" element={<Ask />} />
@@ -341,11 +346,16 @@ export default function App() {
           <Route path="creative-director" element={<CreativeDirector />} />
           <Route path="creative-director/:id" element={<CreativeDirectorOverviewRedirect />} />
           <Route path="creative-director/:id/:tab" element={<CreativeDirectorDetail />} />
+          <Route path="creative-commission" element={<CreativeCommissions />} />
+          {/* `:id` matches the literal `new` (create mode) too — a separate
+              static `new` route would render with no :id param and leave the
+              drawer closed, since React Router ranks the static segment higher. */}
+          <Route path="creative-commission/:id" element={<CreativeCommissions />} />
           <Route path="image-gen" element={<RedirectWithSearch to="/media/image" />} />
           <Route path="video-gen" element={<RedirectWithSearch to="/media/video" />} />
           <Route path="media-history" element={<RedirectWithSearch to="/media/history" />} />
           <Route path="media-models" element={<RedirectWithSearch to="/media/models" />} />
-          <Route path="wiki" element={<Navigate to="/wiki/overview" replace />} />
+          <Route path="wiki" element={<RedirectWithSearch to="/wiki/overview" />} />
           <Route path="wiki/:tab" element={<Wiki />} />
           <Route path="rapid-reader" element={<RapidReaderPage />} />
           {/* `/universes` is the universe index (list/table). The editor lives
@@ -355,6 +365,11 @@ export default function App() {
           <Route path="rounds" element={<Rounds />} />
           <Route path="rounds/guide" element={<RoundsGuide />} />
           <Route path="rounds/:id" element={<RoundEditor />} />
+          {/* SongBook: index + import are plain scrolling pages; the viewer
+              (/songbook/:id) is full-bleed (see Layout.jsx isFullWidth). */}
+          <Route path="songbook" element={<SongBook />} />
+          <Route path="songbook/import" element={<SongBookImport />} />
+          <Route path="songbook/:id" element={<SongBookViewer />} />
           <Route path="catalog" element={<Catalog />} />
           <Route path="catalog/ingest" element={<CatalogIngest />} />
           <Route path="catalog/:type/:id" element={<CatalogIngredient />} />

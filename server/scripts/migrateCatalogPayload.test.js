@@ -22,12 +22,12 @@ vi.mock('../lib/db.js', () => ({
   }),
 }));
 
-vi.mock('fs/promises', () => ({
-  readFile: vi.fn(async () => (fsState.marker == null ? Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' })) : JSON.stringify(fsState.marker))),
-  writeFile: vi.fn(async (_p, data) => { fsState.written = JSON.parse(data); }),
+// Marker I/O is delegated to migrationMarker.js; mock it against `fsState`
+// (the marker helper has its own unit test in server/lib/migrationMarker.test.js).
+vi.mock('../lib/migrationMarker.js', () => ({
+  readMarker: vi.fn(async () => fsState.marker),
+  writeMarker: vi.fn(async (_name, payload) => { fsState.written = payload; }),
 }));
-
-vi.mock('../lib/fileUtils.js', () => ({ PATHS: { data: '/tmp/portos-data' } }));
 
 // Inject a synthetic registry with a v1→v2 upgrader (character) plus an all-v1
 // upgrader-less type (idea). Defined inside the factory because vi.mock hoists

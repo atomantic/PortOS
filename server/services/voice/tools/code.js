@@ -75,7 +75,7 @@ export const CODE_TOOLS = [
       // Dynamic import: cos.js is a large module with its own import graph;
       // importing it lazily keeps tools.js load-time light and dodges any
       // cos → voice cycle.
-      const { addTask, isRunning } = await import('../../cos.js');
+      const { addTask, reviveBlockedTask, isRunning } = await import('../../cos.js');
       const provider = typeof codeAgent.provider === 'string' ? codeAgent.provider.trim() : '';
       const model = typeof codeAgent.model === 'string' ? codeAgent.model.trim() : '';
 
@@ -147,6 +147,19 @@ export const CODE_TOOLS = [
       const appSuffix = resolvedAppName ? ` in ${resolvedAppName}` : '';
 
       if (created?.duplicate) {
+        // A blocked twin means "already queued" would be a lie — it will never
+        // run on its own. A repeated voice dispatch is an explicit retry, so
+        // revive it with a fresh retry budget (#2614).
+        if (created.status === 'blocked') {
+          await reviveBlockedTask(created.id, {}, 'user');
+          return {
+            ok: true,
+            taskId: created.id,
+            revived: true,
+            app: resolvedAppId,
+            summary: `That coding task${appSuffix} previously failed and was blocked — I restarted it${running ? '.' : stoppedNote + '.'}`,
+          };
+        }
         return {
           ok: true,
           taskId: created.id,

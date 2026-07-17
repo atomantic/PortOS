@@ -37,7 +37,8 @@
 import { join } from 'path';
 import { PATHS } from '../../../lib/fileUtils.js';
 import { createCollectionStore } from '../../../lib/collectionStore.js';
-import { checkHealth, ensureSchema } from '../../../lib/db.js';
+import { createPgFileFacade, resolvePgBackend, isFileBackend } from '../../../lib/pgFileFacade.js';
+import { createRecordWriteQueue } from '../../../lib/fileWriteQueue.js';
 import { bumpPipelineMutationEpoch } from '../syncEpoch.js';
 
 // TYPE-level (storage layout) schema version stamped on the file backend's
@@ -45,10 +46,6 @@ import { bumpPipelineMutationEpoch } from '../syncEpoch.js';
 // hatch still passes the boot verifier. (PG has no type-index file.)
 const TYPE_SCHEMA_VERSION = 1;
 const ID_PATTERN = /^ser-[A-Za-z0-9-]+$/;
-
-function isFileBackend() {
-  return process.env.MEMORY_BACKEND === 'file' || process.env.NODE_ENV === 'test';
-}
 
 function assertValidId(id) {
   if (typeof id !== 'string' || !ID_PATTERN.test(id)) {
@@ -99,45 +96,27 @@ function makePgBackend(db, sanitizeRecord) {
   };
 }
 
-async function pgBackend(sanitizeRecord) {
-  const health = await checkHealth();
-  if (!health.connected) {
-    throw new Error('Pipeline series require PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file for the unsupported file backend)');
-  }
-  await ensureSchema();
-  const { migrateSeriesToDB } = await import('../../../scripts/migrateSeriesToDB.js');
-  await migrateSeriesToDB();
-  const db = await import('./db.js');
-  return makePgBackend(db, sanitizeRecord);
-}
+const pgBackend = (sanitizeRecord) => resolvePgBackend({
+  requirement: 'Pipeline series require PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file for the unsupported file backend)',
+  migrate: async () => {
+    const { migrateSeriesToDB } = await import('../../../scripts/migrateSeriesToDB.js');
+    await migrateSeriesToDB();
+  },
+  loadDb: () => import('./db.js'),
+  makePg: (db) => makePgBackend(db, sanitizeRecord),
+});
 
 // --- Facade: collectionStore-compatible, queues + epoch + sanitize ---
 function createFacade({ dir, sanitizeRecord }) {
   const sanitizer = typeof sanitizeRecord === 'function' ? sanitizeRecord : (r) => r;
 
-  let backend = null;
-  let selecting = null;
-  const getBackend = () => {
-    if (backend) return Promise.resolve(backend);
-    if (!selecting) {
-      selecting = (isFileBackend() ? Promise.resolve(makeFileBackend(dir, sanitizer)) : pgBackend(sanitizer))
-        .then((b) => { backend = b; return b; })
-        .finally(() => { selecting = null; });
-    }
-    return selecting;
-  };
+  const { getBackend, getBackendName } = createPgFileFacade({
+    makeFile: () => makeFileBackend(dir, sanitizer),
+    makePg: () => pgBackend(sanitizer),
+  });
 
   // Per-id write queue — mirrors collectionStore.queueRecordWrite.
-  const recordTails = new Map();
-  function queueRecordWrite(id, fn) {
-    assertValidId(id);
-    const prev = recordTails.get(id) || Promise.resolve();
-    const next = prev.then(fn, fn);
-    const silenced = next.catch(() => {});
-    recordTails.set(id, silenced);
-    silenced.finally(() => { if (recordTails.get(id) === silenced) recordTails.delete(id); });
-    return next;
-  }
+  const queueRecordWrite = createRecordWriteQueue(assertValidId);
 
   const loadOne = async (id) => {
     if (typeof id !== 'string' || !ID_PATTERN.test(id)) return null;
@@ -163,7 +142,7 @@ function createFacade({ dir, sanitizeRecord }) {
     // recordDir ALWAYS resolves to the on-disk path — the manuscript-review.json
     // sibling is file-primary and lives there regardless of the record backend.
     recordDir: (id) => join(dir, id),
-    getBackendName: () => backend?.name ?? null,
+    getBackendName,
 
     // Reads (sanitized, matching collectionStore.loadOne/loadAll)
     listIds: async () => (await getBackend()).listIds(),

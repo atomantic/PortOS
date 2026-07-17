@@ -509,6 +509,160 @@ describe('TaskLearning - recordTaskCompletion routing accuracy', () => {
   });
 });
 
+describe('TaskLearning - environmental failures (#2618)', () => {
+  let savedData;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    clearLearningCache();
+    savedData = null;
+    atomicWrite.mockImplementation(async (_path, data) => {
+      savedData = data;
+    });
+  });
+
+  const makeFailedAgent = (category, tier = 'heavy') => ({
+    metadata: { modelTier: tier, taskDescription: 'Fix UI' },
+    result: {
+      success: false,
+      duration: 30000,
+      errorAnalysis: { category, message: `provider says ${category}` }
+    }
+  });
+  const task = { description: 'Fix UI', taskType: 'user', metadata: {} };
+
+  it('keeps a rate-limit failure out of every success-rate aggregate and counts it separately', async () => {
+    const baseline = makeLearningData();
+    readFile.mockResolvedValue(JSON.stringify(baseline));
+
+    await recordTaskCompletion(makeFailedAgent('rate-limit'), task);
+
+    // byTaskType untouched — same counters/rate as the baseline, no recency sample.
+    expect(savedData.byTaskType['user-task']).toMatchObject({
+      completed: baseline.byTaskType['user-task'].completed,
+      succeeded: baseline.byTaskType['user-task'].succeeded,
+      failed: baseline.byTaskType['user-task'].failed,
+      successRate: baseline.byTaskType['user-task'].successRate
+    });
+    expect(savedData.byTaskType['user-task'].recentOutcomes).toBeUndefined();
+    // byModelTier untouched — the heavy tier bucket is not even initialized.
+    expect(savedData.byModelTier['heavy']).toBeUndefined();
+    // routingAccuracy untouched.
+    expect(savedData.routingAccuracy?.['user-task']).toBeUndefined();
+    // totals untouched — the overall rate is an aggregate too.
+    expect(savedData.totals).toMatchObject({
+      completed: baseline.totals.completed,
+      succeeded: baseline.totals.succeeded,
+      failed: baseline.totals.failed
+    });
+    // Correlation window untouched — an outage grades no routing prediction.
+    expect(savedData.correlationWindow ?? []).toEqual([]);
+
+    // ...but the event stays visible in the separate environmental record.
+    expect(savedData.environmentalFailures['rate-limit']).toMatchObject({
+      count: 1,
+      taskTypes: { 'user-task': 1 }
+    });
+    expect(savedData.environmentalFailures['rate-limit'].lastOccurred).toEqual(expect.any(String));
+  });
+
+  it('still records errorPatterns and failureSignatures for environmental categories (diagnostics)', async () => {
+    readFile.mockResolvedValue(JSON.stringify(makeLearningData()));
+
+    await recordTaskCompletion(makeFailedAgent('billing-error'), task);
+
+    expect(savedData.errorPatterns['billing-error']).toMatchObject({
+      count: 1,
+      taskTypes: { 'user-task': 1 }
+    });
+    expect(savedData.failureSignatures['billing-error'].count).toBe(1);
+    expect(savedData.failureSignatures['billing-error'].recent[0]).toMatchObject({
+      taskType: 'user-task',
+      messageSnippet: 'provider says billing-error'
+    });
+  });
+
+  it('never creates a byTaskType bucket for a type whose only history is an outage', async () => {
+    readFile.mockResolvedValue(JSON.stringify(makeLearningData()));
+
+    const freshTask = { description: '[auto-fix] investigate the crash', taskType: 'internal', metadata: {} };
+    await recordTaskCompletion(makeFailedAgent('startup-failure'), freshTask);
+
+    expect(savedData.byTaskType['auto-fix']).toBeUndefined();
+    expect(savedData.environmentalFailures['startup-failure'].taskTypes['auto-fix']).toBe(1);
+  });
+
+  it('accumulates environmental counts across completions', async () => {
+    let currentData = JSON.stringify(makeLearningData());
+    readFile.mockImplementation(async () => currentData);
+    atomicWrite.mockImplementation(async (_path, data) => {
+      currentData = JSON.stringify(data);
+      savedData = data;
+    });
+
+    await recordTaskCompletion(makeFailedAgent('rate-limit'), task);
+    await recordTaskCompletion(makeFailedAgent('rate-limit'), task);
+    await recordTaskCompletion(makeFailedAgent('auth'), task);
+
+    expect(savedData.environmentalFailures['rate-limit'].count).toBe(2);
+    expect(savedData.environmentalFailures['auth'].count).toBe(1);
+    expect(savedData.totals.failed).toBe(makeLearningData().totals.failed);
+  });
+
+  it('leaves a timeout failure counting against the aggregates exactly as today', async () => {
+    const baseline = makeLearningData();
+    readFile.mockResolvedValue(JSON.stringify(baseline));
+
+    await recordTaskCompletion(makeFailedAgent('timeout', 'light'), task);
+
+    // timeout is deliberately NOT environmental — it can be genuine task/model signal.
+    expect(savedData.byTaskType['user-task'].failed).toBe(baseline.byTaskType['user-task'].failed + 1);
+    expect(savedData.byModelTier['light'].failed).toBe(1);
+    expect(savedData.routingAccuracy['user-task']['light'].failed).toBe(1);
+    expect(savedData.totals.failed).toBe(baseline.totals.failed + 1);
+    expect(savedData.environmentalFailures).toBeUndefined();
+  });
+
+  it('loads a learning.json without the environmentalFailures key cleanly (back-compat)', async () => {
+    // makeLearningData has no environmentalFailures key — the additive key is
+    // initialized on first environmental recording, and a plain success write
+    // round-trips the file without fabricating one.
+    readFile.mockResolvedValue(JSON.stringify(makeLearningData()));
+
+    const agent = {
+      metadata: { modelTier: 'heavy', taskDescription: 'Fix UI' },
+      result: { success: true, duration: 30000 }
+    };
+    await recordTaskCompletion(agent, task);
+
+    expect(savedData.environmentalFailures).toBeUndefined();
+    expect(savedData.byTaskType['user-task'].succeeded)
+      .toBe(makeLearningData().byTaskType['user-task'].succeeded + 1);
+  });
+
+  it('surfaces environmentalFailures via getLearningInsights, sorted by count', async () => {
+    readFile.mockResolvedValue(JSON.stringify(makeLearningData({
+      environmentalFailures: {
+        'auth': { count: 2, lastOccurred: '2026-07-01T00:00:00.000Z', taskTypes: { 'user-task': 2 } },
+        'rate-limit': { count: 7, lastOccurred: '2026-07-02T00:00:00.000Z', taskTypes: { 'user-task': 4, 'auto-fix': 3 } }
+      }
+    })));
+
+    const insights = await getLearningInsights();
+
+    expect(insights.insights.environmentalFailures).toEqual([
+      { category: 'rate-limit', count: 7, lastOccurred: '2026-07-02T00:00:00.000Z', affectedTypes: ['user-task', 'auto-fix'] },
+      { category: 'auth', count: 2, lastOccurred: '2026-07-01T00:00:00.000Z', affectedTypes: ['user-task'] }
+    ]);
+  });
+
+  it('surfaces an empty environmentalFailures list for a learning.json that predates the key', async () => {
+    readFile.mockResolvedValue(JSON.stringify(makeLearningData()));
+    const insights = await getLearningInsights();
+    expect(insights.insights.environmentalFailures).toEqual([]);
+  });
+});
+
 describe('TaskLearning - getRoutingAccuracy', () => {
   beforeEach(() => {
     vi.clearAllMocks();

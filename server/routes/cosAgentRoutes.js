@@ -60,11 +60,10 @@ router.get('/agents/:id', asyncHandler(async (req, res) => {
 }));
 
 // GET /api/cos/agents/:id/prompt - Read the prompt.txt saved at spawn time
+// The service throws a ServerError (404) when the agent or prompt file is
+// missing — asyncHandler renders the standard envelope.
 router.get('/agents/:id/prompt', asyncHandler(async (req, res) => {
   const result = await cos.getAgentPrompt(req.params.id);
-  if (result.error) {
-    throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
-  }
   res.json(result);
 }));
 
@@ -75,21 +74,19 @@ router.post('/agents/:id/terminate', asyncHandler(async (req, res) => {
 }));
 
 // POST /api/cos/agents/:id/pause - Stop process, preserve task/worktree for later resume
+// pauseAgent throws a ServerError — 404 when the agent is missing, 500 when the
+// runner/persist step fails — so no result-shape string-matching here.
 router.post('/agents/:id/pause', asyncHandler(async (req, res) => {
   const { reason } = validateRequest(pauseBodySchema, req.body ?? {});
   const result = await cos.pauseAgent(req.params.id, reason || null);
-  if (result?.error) {
-    throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
-  }
   res.json(result);
 }));
 
 // POST /api/cos/agents/:id/kill - Force kill agent (immediate SIGKILL)
+// killAgent throws a ServerError — 404 when the agent is missing, 500 when the
+// runner termination fails — so no result-shape string-matching here.
 router.post('/agents/:id/kill', asyncHandler(async (req, res) => {
   const result = await cos.killAgent(req.params.id);
-  if (result?.error) {
-    throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
-  }
   res.json(result);
 }));
 
@@ -107,11 +104,9 @@ router.delete('/agents/completed', asyncHandler(async (req, res) => {
 }));
 
 // DELETE /api/cos/agents/:id - Delete a single agent
+// The service throws a ServerError (404) when the agent doesn't exist.
 router.delete('/agents/:id', asyncHandler(async (req, res) => {
   const result = await cos.deleteAgent(req.params.id);
-  if (result?.error) {
-    throw new ServerError(result.error, { status: 404, code: 'NOT_FOUND' });
-  }
   res.json(result);
 }));
 
@@ -123,14 +118,9 @@ router.post('/agents/:id/feedback', asyncHandler(async (req, res) => {
     throw new ServerError('rating must be positive, negative, or neutral', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
+  // The service throws a ServerError — 404 when the agent is missing, 400
+  // (INVALID_STATE) when it isn't completed — so no result-shape mapping here.
   const result = await cos.submitAgentFeedback(req.params.id, { rating, comment });
-  if (result?.error) {
-    const isNotFound = result.error === 'Agent not found';
-    throw new ServerError(result.error, {
-      status: isNotFound ? 404 : 400,
-      code: isNotFound ? 'NOT_FOUND' : 'INVALID_STATE'
-    });
-  }
   res.json(result);
 }));
 
@@ -146,14 +136,10 @@ router.post('/agents/:id/btw', asyncHandler(async (req, res) => {
     throw new ServerError('message must be 5000 characters or less', { status: 400, code: 'VALIDATION_ERROR' });
   }
 
+  // The service throws a ServerError — 404 when the agent is missing, 400
+  // (INVALID_STATE) for the not-running / not-a-Claude-TUI refusals — so no
+  // result-shape string-matching here.
   const result = await cos.sendBtwToAgent(req.params.id, message.trim());
-  if (result?.error) {
-    const isNotFound = result.error === 'Agent not found';
-    throw new ServerError(result.error, {
-      status: isNotFound ? 404 : 400,
-      code: isNotFound ? 'NOT_FOUND' : 'INVALID_STATE'
-    });
-  }
   res.json(result);
 }));
 

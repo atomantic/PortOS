@@ -32,6 +32,7 @@ import {
   ClipboardPaste
 } from 'lucide-react';
 import AppContextPicker from '../components/AppContextPicker';
+import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 import * as api from '../services/apiOpenClaw';
 import * as coreApi from '../services/api';
 import { formatDateTime } from '../utils/formatters';
@@ -262,6 +263,12 @@ export default function OpenClaw() {
 
   return (
     <div className="flex h-full flex-col">
+      <div className="flex items-center gap-3 border-b border-port-border p-4">
+        <h1 className="text-2xl font-bold text-white">Settings</h1>
+      </div>
+
+      <SettingsTabsHeader activeTab="openclaw" />
+
       <div className="flex flex-col gap-4 border-b border-port-border p-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="flex items-center gap-3">
           <Bot className="h-8 w-8 text-port-accent" />
@@ -287,7 +294,7 @@ export default function OpenClaw() {
         </div>
       </div>
 
-      <div className="grid flex-1 gap-4 overflow-hidden p-4 lg:grid-cols-[320px_minmax(0,1fr)]">
+      <div className="grid min-h-0 flex-1 gap-4 overflow-hidden p-4 lg:grid-cols-[320px_minmax(0,1fr)]">
         <aside className="flex min-h-0 flex-col gap-4">
           <section className="rounded-xl border border-port-border bg-port-card p-4">
             <div className="mb-3 flex items-center gap-2">

@@ -7,6 +7,9 @@ import PostCognitiveDrillRunner, {
   scoreDigitSpanRecall,
   scoreStroopTrial,
   scoreMentalRotationTrial,
+  getDrillTutorial,
+  hasSeenDrillTutorial,
+  markDrillTutorialSeen,
 } from './PostCognitiveDrillRunner';
 
 // Result-assembly tests for PostCognitiveDrillRunner's `finish()` builders.
@@ -285,6 +288,9 @@ function makeSimpleDrill({ count = 1, delayMs = 1000 } = {}) {
 describe('ReactionTimeRunner race-condition guards', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    // These tests exercise the runner directly, so skip the first-run tutorial
+    // gate (which would otherwise hold the runner behind a how-to card).
+    markDrillTutorialSeen('reaction-time');
   });
 
   afterEach(() => {
@@ -395,5 +401,72 @@ describe('ReactionTimeRunner race-condition guards', () => {
     });
     expect(onComplete).toHaveBeenCalledTimes(1);
     expect(onComplete.mock.calls[0][0].questions).toHaveLength(1);
+  });
+});
+
+describe('getDrillTutorial', () => {
+  it('interpolates the n-back lag into the copy (plural)', () => {
+    const t = getDrillTutorial({ type: 'n-back', config: { n: 3 } });
+    expect(t.goal).toContain('3 steps');
+    expect(t.steps.join(' ')).toContain('3 steps');
+  });
+
+  it('uses the singular "step" for a 1-back', () => {
+    const t = getDrillTutorial({ type: 'n-back', config: { n: 1 } });
+    expect(t.goal).toContain('1 step ');
+    expect(t.goal).not.toContain('1 steps');
+  });
+
+  it('gives reversed-recall copy for backward digit-span', () => {
+    expect(getDrillTutorial({ type: 'digit-span', config: { direction: 'backward' } }).goal).toContain('reverse');
+    expect(getDrillTutorial({ type: 'digit-span', config: { direction: 'forward' } }).goal).toContain('order');
+  });
+
+  it('gives choice-mode reaction-time copy that mentions the lit box', () => {
+    const t = getDrillTutorial({ type: 'reaction-time', config: { mode: 'choice' } });
+    expect(t.steps.join(' ')).toMatch(/box/i);
+  });
+
+  it('returns null for an unknown or missing drill type', () => {
+    expect(getDrillTutorial({ type: 'not-a-drill' })).toBeNull();
+    expect(getDrillTutorial(null)).toBeNull();
+  });
+});
+
+// First-run tutorial gate: the timed cognitive drills flash a stimulus the
+// instant they mount, so the first encounter of each type is held behind a
+// how-to card and the runner (and its timers) only start on "Start drill".
+describe('first-run tutorial gate', () => {
+  beforeEach(() => window.localStorage.clear());
+  afterEach(() => window.localStorage.clear());
+
+  const drill = makeSimpleDrill({ count: 1, delayMs: 1000 });
+
+  it('shows the how-to card on the first encounter and does not mount the runner', () => {
+    render(
+      <PostCognitiveDrillRunner drill={drill} drillIndex={0} drillCount={1} onComplete={vi.fn()} isTraining={false} />,
+    );
+    expect(screen.getByRole('button', { name: /start drill/i })).toBeInTheDocument();
+    // Runner is held — its "Wait…" button is absent until Start is tapped.
+    expect(screen.queryByRole('button', { name: /wait for the signal/i })).not.toBeInTheDocument();
+    expect(hasSeenDrillTutorial('reaction-time')).toBe(false);
+  });
+
+  it('mounts the runner and marks the type seen after tapping Start', () => {
+    render(
+      <PostCognitiveDrillRunner drill={drill} drillIndex={0} drillCount={1} onComplete={vi.fn()} isTraining={false} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /start drill/i }));
+    expect(screen.getByRole('button', { name: /wait for the signal/i })).toBeInTheDocument();
+    expect(hasSeenDrillTutorial('reaction-time')).toBe(true);
+  });
+
+  it('skips the card on later encounters of an already-seen type', () => {
+    markDrillTutorialSeen('reaction-time');
+    render(
+      <PostCognitiveDrillRunner drill={drill} drillIndex={0} drillCount={1} onComplete={vi.fn()} isTraining={false} />,
+    );
+    expect(screen.queryByRole('button', { name: /start drill/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /wait for the signal/i })).toBeInTheDocument();
   });
 });

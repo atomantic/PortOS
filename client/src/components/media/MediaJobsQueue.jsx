@@ -58,7 +58,7 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
 
   useAutoRefetch(fetchJobs, 3000, { pollOnly: true });
 
-  const handleCancel = (id) => cancelMediaJob(id)
+  const handleCancel = (id) => cancelMediaJob(id, { silent: true })
     .then(() => {
       // Optimistic update: queued jobs flip to 'canceled' immediately (the
       // worker won't pick them up). For running jobs leave the server status
@@ -93,7 +93,7 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
   // Accepts optional `overrides` so the inline Edit form can patch prompt /
   // negativePrompt / model / dimensions before the re-enqueue. No overrides =
   // same behavior as the plain Retry button.
-  const handleRetry = (id, overrides = null) => retryMediaJob(id, overrides)
+  const handleRetry = (id, overrides = null) => retryMediaJob(id, overrides, { silent: true })
     .then(({ jobId }) => {
       toast.success(`Re-queued as ${jobId.slice(0, 8)}${overrides ? ' (edited)' : ''}`);
       // Optimistic: drop the original failed/canceled row immediately. The
@@ -104,14 +104,14 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
     })
     .catch((err) => toast.error(err?.message || 'Retry failed'));
 
-  const handleRunNow = (id) => runMediaJobNow(id)
+  const handleRunNow = (id) => runMediaJobNow(id, { silent: true })
     .then(() => {
       toast.success('Started in parallel');
       fetchJobs();
     })
     .catch((err) => toast.error(err?.message || 'Run-now failed'));
 
-  const handleDelete = (id) => deleteMediaJob(id)
+  const handleDelete = (id) => deleteMediaJob(id, { silent: true })
     .then(() => {
       setJobs((prev) => prev.filter((j) => j.id !== id));
     })
@@ -121,7 +121,7 @@ export default function MediaJobsQueue({ kind, recentLimit = 10, className = '' 
 
   const handleClearQueued = () => {
     if (!queuedCount) return;
-    cancelQueuedMediaJobs(kind ? { kind } : {})
+    cancelQueuedMediaJobs(kind ? { kind } : {}, { silent: true })
       .then(({ canceled }) => {
         // Optimistic flip: queued → canceled (running jobs stay untouched).
         // The next 3s poll will reconcile if anything raced through.
@@ -356,6 +356,7 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
             <button
               onClick={() => onCancel(job.id)}
               className="flex items-center gap-1 px-2 py-1 bg-port-bg border border-port-border rounded text-xs hover:bg-port-error/20 hover:text-port-error"
+              aria-label="Cancel"
               title="Cancel"
             >
               <X className="w-3 h-3" />

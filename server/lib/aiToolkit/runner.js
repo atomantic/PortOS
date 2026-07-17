@@ -1,5 +1,6 @@
 import { mkdir, readFile, readdir, rm } from 'fs/promises';
 import { atomicWrite } from './internal/atomicWrite.js';
+import { evaluateSecretEndpoint } from './internal/endpointGuard.js';
 import { existsSync } from 'fs';
 import { join, extname, basename, isAbsolute, delimiter } from 'path';
 import { spawn, ChildProcess } from 'child_process';
@@ -18,6 +19,12 @@ const IS_WIN32 = process.platform === 'win32';
 // POSIX shell-script stub alongside a package's `.cmd`/`.bat`/`.ps1` Windows
 // wrappers (for Git Bash/WSL), and that stub is not natively launchable here.
 const WIN_EXECUTABLE_EXTS = ['.exe', '.cmd', '.bat', '.com'];
+
+// Wall-clock ceiling for an API run when neither the caller nor the provider
+// sets one. Mirrors aiProvider's DEFAULT_PROVIDER_TIMEOUT_MS / askService's
+// `provider.timeout || 300000` so a hung upstream can't hold `activeRuns`
+// (and thus the run slot) open forever.
+const DEFAULT_API_RUN_TIMEOUT_MS = 300000;
 
 /**
  * Resolve a bare command name to its full path WITH extension on Windows, so
@@ -498,7 +505,7 @@ export function createRunnerService(config = {}) {
       return runId;
     },
 
-    async executeApiRun({ runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete }) {
+    async executeApiRun({ runId, provider, model, prompt, workspacePath, screenshots, onData, onComplete, timeout }) {
       const runDir = join(RUNS_PATH, runId);
       const outputPath = join(runDir, 'output.txt');
       const metadataPath = join(runDir, 'metadata.json');
@@ -515,6 +522,55 @@ export function createRunnerService(config = {}) {
 
       const controller = new AbortController();
       activeRuns.set(runId, controller);
+
+      // Wall-clock timeout with a single-settlement gate. Without a ceiling a
+      // hung provider (opens the stream then stalls, never responds, or — via
+      // the `ensureProviderReady` hook — never even reaches the abortable
+      // fetch) holds the AbortController in `activeRuns` forever, leaking the
+      // run slot. `markSettled()` ensures exactly one of {timer, response
+      // paths} finalizes the run: whoever wins clears the timer and flips the
+      // flag; the losers no-op. When the timer wins it aborts the fetch/reader
+      // AND independently finalizes the run as a TIMEOUT (so a hung setup hook
+      // that never reaches the fetch is still bounded, and the failure is
+      // classified as a timeout instead of the AbortError's UNKNOWN/HTTP-0).
+      const effectiveTimeout = timeout || provider.timeout || DEFAULT_API_RUN_TIMEOUT_MS;
+      let settled = false;
+      let apiTimeoutHandle = null;
+      const markSettled = () => {
+        if (settled) return false;
+        settled = true;
+        if (apiTimeoutHandle) {
+          clearTimeout(apiTimeoutHandle);
+          apiTimeoutHandle = null;
+        }
+        return true;
+      };
+      const finalizeTimeout = async () => {
+        if (!markSettled()) return;
+        activeRuns.delete(runId);
+        const error = `API execution timed out after ${effectiveTimeout}ms`;
+        try {
+          if (output) await atomicWrite(outputPath, output).catch(() => {});
+          const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
+          metadata.endTime = new Date().toISOString();
+          metadata.duration = Date.now() - startTime;
+          metadata.success = false;
+          metadata.error = error;
+          metadata.errorCategory = ERROR_CATEGORIES.TIMEOUT;
+          metadata.outputSize = Buffer.byteLength(output);
+          await atomicWrite(metadataPath, metadata);
+          safeSettle(() => hooks.onRunFailed?.(metadata, error, output), `Run ${runId} onRunFailed hook`);
+          safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
+        } catch (finalErr) {
+          console.error(`❌ API run ${runId} timeout finalize error: ${finalErr.message}`);
+          safeSettle(() => onComplete?.({ success: false, error, endTime: new Date().toISOString(), duration: Date.now() - startTime, outputSize: Buffer.byteLength(output) }), `Run ${runId} onComplete`);
+        }
+      };
+      apiTimeoutHandle = setTimeout(() => {
+        console.log(`⏱️ API run ${runId} timed out after ${effectiveTimeout}ms`);
+        controller.abort();
+        finalizeTimeout().catch((err) => console.error(`❌ API run ${runId} timeout handler error: ${err.message}`));
+      }, effectiveTimeout);
 
       hooks.onRunStarted?.({ runId, provider: provider.name, model });
 
@@ -542,9 +598,19 @@ export function createRunnerService(config = {}) {
         messageContent = prompt;
       }
 
+      // Never send the API key to an arbitrary/metadata host (SSRF / key
+      // exfiltration). Keyless local-LLM runs are unaffected.
+      const endpointGuard = provider.apiKey
+        ? evaluateSecretEndpoint(provider.endpoint, { allowCustomEndpoint: provider.allowCustomEndpoint === true })
+        : { allowed: true, reason: null };
+
       const ensureProviderReady = hooks.ensureProviderReady || (async () => ({ success: true }));
-      const ready = await ensureProviderReady(provider).catch((err) => ({ success: false, error: err.message }));
-      const response = ready.success
+      const ready = endpointGuard.allowed
+        ? await ensureProviderReady(provider).catch((err) => ({ success: false, error: err.message }))
+        : { success: false, error: `Endpoint blocked: ${endpointGuard.reason}` };
+      const response = !endpointGuard.allowed
+        ? { ok: false, error: `Endpoint blocked: ${endpointGuard.reason}`, status: 0 }
+        : ready.success
         ? await fetch(`${provider.endpoint}/chat/completions`, {
             method: 'POST',
             headers,
@@ -563,16 +629,25 @@ export function createRunnerService(config = {}) {
         : { ok: false, error: `Ollama is not running and PortOS could not start it: ${ready.error || 'unknown error'}`, status: 0 };
 
       if (!response.ok) {
+        // Read the (possibly stalled) error body BEFORE claiming settlement so
+        // the abort timer stays armed through the read — a provider that sends
+        // non-2xx headers then holds the body open is cancelled by the timeout
+        // instead of hanging here forever. `response.text()` consumes the same
+        // signal-bound body, so an abort rejects it (swallowed to the fallback).
+        let responseBody = response.error || '';
+        if (response.text) {
+          responseBody = await response.text().catch(() => response.error || '');
+        }
+
+        // The timeout path may already own this run (an abort surfaces here as
+        // a rejected fetch, or the read above was aborted) — if so it has
+        // finalized as a TIMEOUT; don't double-complete or reclassify.
+        if (!markSettled()) return runId;
         activeRuns.delete(runId);
         const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
         metadata.endTime = new Date().toISOString();
         metadata.duration = Date.now() - startTime;
         metadata.success = false;
-
-        let responseBody = response.error || '';
-        if (response.text) {
-          responseBody = await response.text().catch(() => response.error || '');
-        }
 
         const errorAnalysis = analyzeHttpError({
           status: response.status || 0,
@@ -640,21 +715,45 @@ export function createRunnerService(config = {}) {
           onData?.({ text: reasoning, isReasoning: true });
         }
 
-        await atomicWrite(outputPath, output);
+        // A timeout firing between the last read and here would have finalized
+        // the run already — don't overwrite a TIMEOUT with a spurious success.
+        // Once we claim settlement the outer processStream().catch bails, so
+        // this block owns cleanup end-to-end: release the slot up front and
+        // guarantee onComplete fires even if a persistence write throws (full
+        // disk, rename failure) — otherwise the caller would hang forever.
+        if (!markSettled()) return;
         activeRuns.delete(runId);
+        try {
+          await atomicWrite(outputPath, output);
 
-        const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
-        metadata.endTime = new Date().toISOString();
-        metadata.duration = Date.now() - startTime;
-        metadata.exitCode = 0;
-        metadata.success = true;
-        metadata.outputSize = Buffer.byteLength(output);
-        metadata.hadReasoning = reasoning.length > 0;
-        metadata.usedReasoningAsFallback = usedReasoningAsFallback;
-        await atomicWrite(metadataPath, metadata);
+          const metadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
+          metadata.endTime = new Date().toISOString();
+          metadata.duration = Date.now() - startTime;
+          metadata.exitCode = 0;
+          metadata.success = true;
+          metadata.outputSize = Buffer.byteLength(output);
+          metadata.hadReasoning = reasoning.length > 0;
+          metadata.usedReasoningAsFallback = usedReasoningAsFallback;
+          await atomicWrite(metadataPath, metadata);
 
-        hooks.onRunCompleted?.(metadata, output);
-        onComplete?.(metadata);
+          safeSettle(() => hooks.onRunCompleted?.(metadata, output), `Run ${runId} onRunCompleted hook`);
+          safeSettle(() => onComplete?.(metadata), `Run ${runId} onComplete`);
+        } catch (writeErr) {
+          console.error(`❌ Run ${runId} success finalize error: ${writeErr.message}`);
+          // Build the failure from the stored record so runId/provider/model/
+          // workspace survive, and best-effort persist it so run history is
+          // terminal rather than stuck at `success: null`.
+          const failMetadata = safeJsonParse(await readFile(metadataPath, 'utf-8').catch(() => '{}'));
+          failMetadata.endTime = new Date().toISOString();
+          failMetadata.duration = Date.now() - startTime;
+          failMetadata.success = false;
+          failMetadata.error = `Run finalization failed: ${writeErr.message}`;
+          failMetadata.errorCategory = ERROR_CATEGORIES.UNKNOWN;
+          failMetadata.outputSize = Buffer.byteLength(output);
+          await atomicWrite(metadataPath, failMetadata).catch(() => {});
+          safeSettle(() => hooks.onRunFailed?.(failMetadata, failMetadata.error, output), `Run ${runId} onRunFailed hook`);
+          safeSettle(() => onComplete?.(failMetadata), `Run ${runId} onComplete`);
+        }
       };
 
       processStream().catch(async (err) => {
@@ -662,6 +761,9 @@ export function createRunnerService(config = {}) {
         // unguarded throw from handleProviderError/atomicWrite below would
         // surface as an unhandled rejection and crash the process. Wrap it.
         try {
+          // If the timeout won the race (this catch is the aborted reader
+          // rejecting), it already finalized as a TIMEOUT — bail out.
+          if (!markSettled()) return;
           activeRuns.delete(runId);
 
           if (output) {

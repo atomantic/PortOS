@@ -1,3 +1,4 @@
+import { formatBytes as formatBytesRaw } from '../lib/fileUtils.js'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import { readResponseJson } from '../lib/readResponseJson.js'
 import { LOCAL_LLM_CATEGORIES, isBackend } from '../lib/localLlmCatalog.js'
@@ -221,16 +222,12 @@ function pickGgufFile(model) {
     .sort((a, b) => a.priority - b.priority || (a.size || Number.MAX_SAFE_INTEGER) - (b.size || Number.MAX_SAFE_INTEGER))[0]
 }
 
+// Delegates formatting to the shared fileUtils.formatBytes, but returns `null`
+// (not the shared helper's "0 B") for unknown/zero sizes so callers can fall
+// back to a quant/label string via `formatBytes(x) || fallback`.
 function formatBytes(bytes) {
   if (!Number.isFinite(bytes) || bytes <= 0) return null
-  const units = ['B', 'KB', 'MB', 'GB', 'TB']
-  let value = bytes
-  let idx = 0
-  while (value >= 1024 && idx < units.length - 1) {
-    value /= 1024
-    idx++
-  }
-  return `${value >= 10 || idx === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[idx]}`
+  return formatBytesRaw(bytes)
 }
 
 function extractParams(repoId) {

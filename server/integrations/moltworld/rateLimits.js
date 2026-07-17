@@ -6,6 +6,8 @@
  * Global limit: 60 requests/minute per agent.
  */
 
+import { createBoundedStateMap } from '../../lib/boundedStateMap.js';
+
 export const MOLTWORLD_RATE_LIMITS = {
   join: {
     cooldownMs: 5 * 1000,        // 5 seconds between joins (heartbeat)
@@ -25,9 +27,11 @@ export const MOLTWORLD_RATE_LIMITS = {
 const GLOBAL_WINDOW_MS = 60 * 1000;
 const GLOBAL_MAX_REQUESTS = 60;
 
-// In-memory rate limit tracking per agent ID
-const rateLimitState = new Map();
-const globalRateState = new Map();
+// In-memory rate limit tracking per agent ID. Bounded (TTL + LRU) so a process
+// cycling through many agent ids doesn't leak one entry per id forever — idle
+// state is worthless anyway once its daily counters / sliding window have aged out.
+const rateLimitState = createBoundedStateMap();
+const globalRateState = createBoundedStateMap();
 
 /**
  * Get rate limit state for an agent ID

@@ -7,6 +7,13 @@ vi.mock('../lib/fileUtils.js', () => ({
   readJSONFile: vi.fn(),
 }));
 
+// appendMorseRound / getMorseProgress derive the local day via userLocalToday →
+// getSettings (issue #2681). Pin to UTC so the day-key is the UTC day regardless
+// of the runner's system timezone (matching the UTC-today assertions below).
+vi.mock('../services/settings.js', () => ({
+  getSettings: () => Promise.resolve({ timezone: 'UTC' }),
+}));
+
 import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import {
   appendMorseRound,

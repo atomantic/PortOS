@@ -45,7 +45,7 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
   const submitFolder = async (e) => {
     e.preventDefault();
     if (!folderName.trim()) return;
-    const folder = await createWritersRoomFolder({ name: folderName.trim() }).catch((err) => {
+    const folder = await createWritersRoomFolder({ name: folderName.trim() }, { silent: true }).catch((err) => {
       toast.error(`Failed to create folder: ${err.message}`);
       return null;
     });
@@ -60,7 +60,7 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
     e.preventDefault();
     if (!workTitle.trim()) return;
     const folderId = creatingWork === 'unfiled' ? null : creatingWork;
-    const work = await createWritersRoomWork({ title: workTitle.trim(), kind: workKind, folderId }).catch((err) => {
+    const work = await createWritersRoomWork({ title: workTitle.trim(), kind: workKind, folderId }, { silent: true }).catch((err) => {
       toast.error(`Failed to create work: ${err.message}`);
       return null;
     });
@@ -73,12 +73,12 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
   };
 
   const handleDeleteFolder = (id) => confirmDelete(async () => {
-    await deleteWritersRoomFolder(id).catch((err) => toast.error(`Delete failed: ${err.message}`));
+    await deleteWritersRoomFolder(id, { silent: true }).catch((err) => toast.error(`Delete failed: ${err.message}`));
     onRefresh?.();
   });
 
   const handleDeleteWork = (id) => confirmDelete(async () => {
-    await deleteWritersRoomWork(id).catch((err) => toast.error(`Delete failed: ${err.message}`));
+    await deleteWritersRoomWork(id, { silent: true }).catch((err) => toast.error(`Delete failed: ${err.message}`));
     if (activeWorkId === id) onSelectWork?.(null);
     onRefresh?.();
   });
@@ -100,7 +100,7 @@ export default function LibraryPane({ folders, works, activeWorkId, onSelectWork
     if (!work) return;
     const targetFolderId = over.data.current?.folderId ?? null;
     if (work.folderId === targetFolderId) return;
-    const updated = await updateWritersRoomWork(work.id, { folderId: targetFolderId }).catch((err) => {
+    const updated = await updateWritersRoomWork(work.id, { folderId: targetFolderId }, { silent: true }).catch((err) => {
       toast.error(`Move failed: ${err.message}`);
       return null;
     });

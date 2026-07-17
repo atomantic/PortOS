@@ -9,6 +9,14 @@ tryReadFile: vi.fn().mockResolvedValue(null),
   readJSONFile: vi.fn().mockResolvedValue({ items: [] }),
 }));
 
+// submitPractice stamps the training-log entry's day via userLocalToday →
+// getSettings (issue #2681). Pin it to UTC so the day-key is deterministic
+// regardless of the runner's own system timezone.
+const memorySettingsState = vi.hoisted(() => ({ current: { timezone: 'UTC' } }));
+vi.mock('../services/settings.js', () => ({
+  getSettings: () => Promise.resolve(memorySettingsState.current),
+}));
+
 import { readJSONFile, atomicWrite } from '../lib/fileUtils.js';
 import {
   getMemoryItems,
@@ -421,6 +429,29 @@ describe('submitPractice', () => {
     expect(result.mastery.chunks['verse-1'].correct).toBe(2);
     expect(result.mastery.chunks['verse-1'].attempts).toBe(3);
     expect(result.mastery.chunks['verse-1'].lastPracticed).toBeTruthy();
+  });
+
+  it('stamps the training-log entry date in the user local timezone (issue #2681)', async () => {
+    // 2026-07-16T05:00Z = 2026-07-15 22:00 PDT — UTC day July 16, LA day July 15.
+    // The logged practice must key off the local day so it counts toward today's
+    // unified streak, with the exact instant preserved in `timestamp`.
+    memorySettingsState.current = { timezone: 'America/Los_Angeles' };
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-07-16T05:00:00.000Z'));
+    try {
+      await submitPractice('elements-song', {
+        mode: 'element-flash', chunkId: null,
+        results: [{ correct: true, element: 'H' }], totalMs: 1000,
+      });
+      const trainingWrite = atomicWrite.mock.calls.find(([p]) => String(p).includes('post-training-log'));
+      expect(trainingWrite).toBeTruthy();
+      const entry = trainingWrite[1].entries.at(-1);
+      expect(entry.date).toBe('2026-07-15');
+      expect(entry.timestamp).toBe('2026-07-16T05:00:00.000Z');
+    } finally {
+      vi.useRealTimers();
+      memorySettingsState.current = { timezone: 'UTC' };
+    }
   });
 });
 

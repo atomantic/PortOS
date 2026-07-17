@@ -55,7 +55,7 @@ export default function MediaModels() {
 
   const handleDeleteModel = async (id) => {
     setBusy(id);
-    await deleteCachedModel(id)
+    await deleteCachedModel(id, { silent: true })
       .then(() => {
         toast.success('Model deleted — will re-download on next use');
         setData((d) => ({ ...d, models: d.models.filter((m) => m.id !== id) }));
@@ -66,7 +66,7 @@ export default function MediaModels() {
 
   const handleDeleteLora = async (filename) => {
     setBusy(filename);
-    await deleteLora(filename)
+    await deleteLora(filename, { silent: true })
       .then(() => {
         toast.success('LoRA deleted');
         setData((d) => ({ ...d, loras: d.loras.filter((l) => l.filename !== filename) }));

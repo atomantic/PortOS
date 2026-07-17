@@ -76,7 +76,7 @@ vi.mock('../lib/timezone.js', () => ({
 
 import { readdir, unlink } from 'fs/promises';
 import { tryReadFile as readFile, atomicWrite } from '../lib/fileUtils.js';
-import { getMessages, getMessage, syncAccount, deleteCache, getSyncStatus, refreshMessage, logMessageTouchpoints } from './messageSync.js';
+import { getMessages, getMessage, syncAccount, deleteCache, getSyncStatus, refreshMessage, updateMessageEvaluations, logMessageTouchpoints, aggregatePagedMessages } from './messageSync.js';
 import { autoLogTouchpoints } from './tribe.js';
 import { getAccount, updateSyncStatus } from './messageAccounts.js';
 import { syncGmail } from './messageGmailSync.js';
@@ -249,6 +249,79 @@ describe('getMessages', () => {
     const result = await getMessages({});
     expect(result.messages).toEqual([]);
     expect(result.total).toBe(0);
+  });
+});
+
+// ─── aggregatePagedMessages (bounded multi-account merge, #2540) ───
+
+describe('aggregatePagedMessages', () => {
+  // Build N accounts each with `perAccount` dated messages (newest = highest index).
+  const buildCaches = (n, perAccount) =>
+    Array.from({ length: n }, (_, a) => ({
+      id: `acct-${a}`,
+      cache: {
+        messages: Array.from({ length: perAccount }, (_, i) => ({
+          id: `a${a}-m${i}`,
+          subject: `Acct ${a} Msg ${i}`,
+          date: `2026-01-${String(i + 1).padStart(2, '0')}T00:00:00Z`,
+        })),
+      },
+    }));
+
+  it('returns the global date-sorted page and the exact total across accounts', () => {
+    const caches = buildCaches(3, 5); // 15 messages total
+    const { messages, total } = aggregatePagedMessages(caches, { limit: 4, offset: 0 });
+    expect(total).toBe(15);
+    expect(messages).toHaveLength(4);
+    // Newest date is m4 (2026-01-05) present in all 3 accounts → top of the page.
+    expect(messages[0].date).toBe('2026-01-05T00:00:00Z');
+    // Sorted strictly newest-first.
+    const dates = messages.map((m) => m.date);
+    expect([...dates].sort().reverse()).toEqual(dates);
+  });
+
+  it('matches a full unbounded aggregate for an across-account page (offset+limit)', () => {
+    const caches = buildCaches(4, 8);
+    // Reference: spread everything, global sort, slice — the pre-#2540 behavior.
+    const all = caches.flatMap(({ id, cache }) =>
+      cache.messages.map((m) => ({ ...m, accountId: m.accountId || id })));
+    all.sort((a, b) => new Date(b.date) - new Date(a.date));
+    const ref = all.slice(3, 3 + 5).map((m) => m.id);
+    const { messages, total } = aggregatePagedMessages(caches, { limit: 5, offset: 3 });
+    expect(total).toBe(32);
+    expect(messages.map((m) => m.id)).toEqual(ref);
+  });
+
+  it('stamps accountId from the owning cache when the message lacks one', () => {
+    const caches = [{ id: 'acct-x', cache: { messages: [{ id: 'm1', date: '2026-01-01' }] } }];
+    const { messages } = aggregatePagedMessages(caches, { limit: 10, offset: 0 });
+    expect(messages[0].accountId).toBe('acct-x');
+  });
+
+  it('preserves a message-level accountId over the cache id', () => {
+    const caches = [{ id: 'acct-x', cache: { messages: [{ id: 'm1', date: '2026-01-01', accountId: 'orig' }] } }];
+    const { messages } = aggregatePagedMessages(caches, { limit: 10, offset: 0 });
+    expect(messages[0].accountId).toBe('orig');
+  });
+
+  it('applies the search filter and reports the filtered total', () => {
+    const caches = [
+      { id: 'a', cache: { messages: [
+        { id: 'm1', subject: 'Invoice', date: '2026-01-02' },
+        { id: 'm2', subject: 'Lunch', date: '2026-01-01' },
+      ] } },
+      { id: 'b', cache: { messages: [{ id: 'm3', subject: 'Invoice due', date: '2026-01-03' }] } },
+    ];
+    const { messages, total } = aggregatePagedMessages(caches, { search: 'invoice', limit: 10, offset: 0 });
+    expect(total).toBe(2);
+    expect(messages.map((m) => m.id)).toEqual(['m3', 'm1']);
+  });
+
+  it('returns total but no messages when limit is 0', () => {
+    const caches = buildCaches(2, 3);
+    const { messages, total } = aggregatePagedMessages(caches, { limit: 0, offset: 0 });
+    expect(total).toBe(6);
+    expect(messages).toEqual([]);
   });
 });
 
@@ -593,6 +666,74 @@ describe('refreshMessage', () => {
 
     const original = result.find(m => m.id === 'msg-1');
     expect(original.bodyText).toBe('');
+  });
+});
+
+// ─── Per-account write-tail serialization (#2537) ───
+// These prove the cache mutators (`updateMessageEvaluations`, `refreshMessage`)
+// serialize against each other on the same account so two concurrent load→save
+// regions can't clobber each other. The mock is stateful — reads see the last
+// write — and each op takes a tick, so an UNSERIALIZED implementation would load
+// stale state and lose the other op's update, failing these assertions.
+
+describe('cache mutator serialization (#2537)', () => {
+  const tick = () => new Promise((r) => setTimeout(r, 5));
+
+  // Wire readFile/atomicWrite to a shared in-memory cache so interleaved
+  // load→save regions race exactly as they would on disk.
+  function statefulCache(initial) {
+    let stored = initial;
+    readFile.mockImplementation(async () => {
+      await tick();
+      return JSON.stringify(stored);
+    });
+    atomicWrite.mockImplementation(async (_path, data) => {
+      await tick();
+      stored = data;
+    });
+    return () => stored;
+  }
+
+  it('serializes syncAccount against refreshMessage (both writes survive)', async () => {
+    const getStored = statefulCache({
+      messages: [{ id: 'msg-1', externalId: 'ext-1', from: { name: 'Ada' }, subject: 'Hi', date: '2026-01-01', bodyText: 'old' }],
+    });
+    getAccount.mockResolvedValue({ id: VALID_UUID, name: 'Gmail', type: 'gmail', enabled: true });
+    updateSyncStatus.mockResolvedValue();
+    // Sync appends a brand-new message (ext-2); refresh rewrites msg-1's body.
+    syncGmail.mockResolvedValue([{ id: 'srv-2', externalId: 'ext-2', subject: 'New', date: '2026-01-02', from: { name: 'Bob' } }]);
+    refreshMessageDetail.mockResolvedValue([{ from: 'Ada', date: '2026-01-01', body: 'refreshed body' }]);
+
+    await Promise.all([
+      syncAccount(VALID_UUID, null),
+      refreshMessage(VALID_UUID, 'msg-1'),
+    ]);
+
+    const messages = getStored().messages;
+    // Serialization preserves BOTH: the synced message AND the refreshed body.
+    // An unserialized interleave drops whichever saved first.
+    expect(messages.find((m) => m.externalId === 'ext-2')).toBeTruthy();
+    expect(messages.find((m) => m.id === 'msg-1').bodyText).toBe('refreshed body');
+  });
+
+  it('serializes refreshMessage against updateMessageEvaluations (both writes survive)', async () => {
+    const getStored = statefulCache({
+      messages: [{ id: 'msg-1', from: { name: 'Ada' }, subject: 'Hi', date: '2026-01-01', bodyText: 'old' }],
+    });
+    readdir.mockImplementation(async () => [`${VALID_UUID}.json`]);
+    getAccount.mockResolvedValue({ id: VALID_UUID, type: 'outlook' });
+    refreshMessageDetail.mockResolvedValue([{ from: 'Ada', date: '2026-01-01', body: 'refreshed body' }]);
+
+    // Body refresh and evaluation update both mutate msg-1 concurrently.
+    await Promise.all([
+      refreshMessage(VALID_UUID, 'msg-1'),
+      updateMessageEvaluations({ 'msg-1': { score: 9 } }),
+    ]);
+
+    const msg1 = getStored().messages.find((m) => m.id === 'msg-1');
+    // Serialization preserves BOTH writes; a clobber would drop one of them.
+    expect(msg1.bodyText).toBe('refreshed body');
+    expect(msg1.evaluation).toEqual({ score: 9 });
   });
 });
 

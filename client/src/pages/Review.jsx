@@ -718,10 +718,10 @@ function ReviewItem({ item, config, isEditing, onComplete, onDismiss, onDelete, 
               className="w-full bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-gray-300 focus:outline-none focus:border-port-accent resize-none"
             />
             <div className="flex gap-1">
-              <button onClick={() => onSaveEdit(item.id, editTitle.trim(), editDescription.trim())} className="p-1 text-port-success hover:text-port-success/80" title="Save">
+              <button onClick={() => onSaveEdit(item.id, editTitle.trim(), editDescription.trim())} aria-label="Save" className="p-1 text-port-success hover:text-port-success/80" title="Save">
                 <Check size={16} />
               </button>
-              <button onClick={onCancelEdit} className="p-1 text-gray-500 hover:text-white" title="Cancel">
+              <button onClick={onCancelEdit} aria-label="Cancel" className="p-1 text-gray-500 hover:text-white" title="Cancel">
                 <X size={16} />
               </button>
             </div>

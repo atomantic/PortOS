@@ -20,6 +20,7 @@ import {
 import toast from '../components/ui/Toast';
 import ArcCanvas from '../components/pipeline/ArcCanvas';
 import AutopilotPanel from '../components/pipeline/AutopilotPanel';
+import SeriesReviewPanel from '../components/pipeline/SeriesReviewPanel';
 import CatalogCastPanel from '../components/CatalogCastPanel';
 import TabPills from '../components/ui/TabPills';
 import {
@@ -111,8 +112,8 @@ export default function PipelineSeries() {
   useEffect(() => {
     let canceled = false;
     Promise.all([
-      getPipelineSeries(seriesId),
-      listPipelineIssues(seriesId),
+      getPipelineSeries(seriesId, { silent: true }),
+      listPipelineIssues(seriesId, { silent: true }),
       listUniverses().catch(() => []),
     ])
       .then(([s, is, ws]) => {
@@ -268,6 +269,12 @@ export default function PipelineSeries() {
             </button>
           </header>
 
+          <SeriesReviewPanel
+            series={series}
+            onSeriesUpdate={updateSeriesFromServer}
+            onIssuesUpdate={handleIssuesUpdate}
+          />
+
           <AutopilotPanel
             series={series}
             onSeriesUpdate={updateSeriesFromServer}
@@ -293,7 +300,7 @@ function BibleSidebar({ series, universes, patchSeries, onSeriesUpdate, onFlushP
     // Server reads from disk — flush dirty edits so the LLM sees fresh fields.
     if (onFlushPending) await onFlushPending();
     setGeneratingLogo(true);
-    const result = await generateSeriesTitleLogo(series.id).catch((err) => {
+    const result = await generateSeriesTitleLogo(series.id, undefined, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to design logo');
       return null;
     });

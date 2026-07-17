@@ -1,4 +1,5 @@
 import { join } from 'path';
+import { access } from 'fs/promises';
 import { EventEmitter } from 'events';
 import { safeJSONParse, PATHS, atomicWrite, tryReadFile } from '../lib/fileUtils.js';
 import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
@@ -70,6 +71,57 @@ const loadRaw = async () => {
   return safeJSONParse(raw ?? '{}', {});
 };
 
+/**
+ * Security-sensitive STRICT read of settings.json for the auth gate (#2684).
+ *
+ * The normal loadRaw()/getSettings() path collapses THREE distinct states to
+ * `{}`: an ABSENT file (fresh install — legitimately no settings), a file that
+ * exists but can't be READ (permission / I/O error), and a file that reads but
+ * won't PARSE (truncated / corrupt JSON, or a non-object root). For feature
+ * reads that collapse is fine, but for the auth-enabled decision it fails OPEN:
+ * a corrupt settings.json makes `isAuthEnabled()` compute `false` over `{}` and
+ * silently disables the password gate (see `server/lib/authGate.js`).
+ *
+ * This read preserves the distinction so a security caller can fail CLOSED on
+ * the two failure modes while still treating a genuinely absent file as
+ * "auth off" (the correct default for a fresh install):
+ *   { present: false, corrupt: false } → absent (ENOENT): auth legitimately off
+ *   { present: true,  corrupt: true }  → exists but unreadable/unparseable: fail closed
+ *   { present: true,  corrupt: false } → parsed cleanly into `settings`
+ *
+ * `settings` is always a plain object (`{}` in the two non-clean cases) so
+ * callers can read it unconditionally; they gate their fail-closed behavior on
+ * `corrupt`. The default path is the real SETTINGS_FILE; the optional argument
+ * exists so unit tests can point it at a temp file without touching real data.
+ */
+export const readSettingsStrict = async (filePath = SETTINGS_FILE) => {
+  const raw = await tryReadFile(filePath);
+  if (raw === null) {
+    // tryReadFile collapses BOTH an absent file (ENOENT) and a read failure
+    // (EACCES / EIO / …) to null. Probe with access() to tell them apart: an
+    // ABSENT file is the fresh-install default (auth off), while a file that
+    // EXISTS but couldn't be read is corrupt (fail closed).
+    try {
+      await access(filePath);
+      return { present: true, corrupt: true, settings: {} };   // exists but unreadable
+    } catch (err) {
+      // Only ENOENT proves the file is genuinely absent (fresh install → auth
+      // off). Any OTHER access() failure — EACCES because the parent directory
+      // lacks search permission, ENOTDIR, EIO — means we could NOT confirm
+      // absence, so it must fail closed (corrupt), not be mistaken for absent.
+      if (err?.code === 'ENOENT') return { present: false, corrupt: false, settings: {} };
+      return { present: true, corrupt: true, settings: {} };
+    }
+  }
+  // Present and read. safeJSONParse returns null for malformed/empty input; a
+  // valid-JSON but non-object root (array, string, number) is likewise not a
+  // settings document — either way, treat it as corrupt rather than reading
+  // properties off it.
+  const parsed = safeJSONParse(raw, null);
+  if (!isPlainObject(parsed)) return { present: true, corrupt: true, settings: {} };
+  return { present: true, corrupt: false, settings: parsed };
+};
+
 // Read-side cache. `getSettings()` is called 100+ times across the codebase
 // (many per request), and each call previously did a fresh filesystem read +
 // JSON.parse. Settings is app-wide, rarely-changing data — a textbook memoize.
@@ -113,7 +165,21 @@ export const __resetSettingsCache = () => {
 // since such a write bypasses the save()-emitted event the cache rides on and
 // would otherwise leave every settings consumer serving pre-restore values.
 export const reloadSettings = async () => {
-  const cleaned = stripStoreKeys(await loadRaw());
+  const { corrupt, settings } = await readSettingsStrict();
+  if (corrupt) {
+    // Do NOT broadcast a corrupt on-disk settings.json as `{}` (issue #2684). The
+    // concrete path is a backup restore of a malformed snapshot: backup.js calls
+    // reloadSettings() after installing it. Emitting `settings:updated` with `{}`
+    // would prime the read cache AND the auth enabled-cache to an empty/disabled
+    // state — reopening the gate (FAIL OPEN) and sticking there because the cache
+    // is no longer null. Invalidate instead: drop the read cache and signal
+    // consumers (auth) to drop theirs, so the next read goes to disk and fails
+    // closed / re-reads. Self-heals on the next clean read.
+    settingsCache = null;
+    settingsEvents.emit('settings:invalidated');
+    return {};
+  }
+  const cleaned = stripStoreKeys(settings);
   settingsEvents.emit('settings:updated', cleaned);
   return cleaned;
 };
@@ -159,14 +225,23 @@ const save = async (settings) => {
 
 export const getSettings = async () => {
   if (settingsCache === null) {
-    // stripStoreKeys builds a fresh top-level object over the just-parsed
-    // loadRaw() graph, which nothing else references — safe to cache directly.
-    const loaded = stripStoreKeys(await loadRaw());
+    // Route the cold read through the STRICT reader so a corrupt/unreadable
+    // settings.json does NOT poison the cache with `{}` (issue #2684). Caching a
+    // corrupt-derived empty object would strand every consumer — verifyPassword,
+    // schedulers, feature reads — on empty settings until a save() or restart,
+    // defeating the no-restart self-heal the auth fail-closed path promises. This
+    // covers BOTH failure modes (malformed content and an unreadable-but-present
+    // file); only a genuinely ABSENT file (fresh install) caches `{}`.
+    const { corrupt, settings } = await readSettingsStrict();
+    const loaded = stripStoreKeys(settings);
     // A save()/reloadSettings() may have populated the cache via the
     // settings:updated listener while this cold read was awaiting the disk read.
-    // Only fill if still empty, so an older on-disk snapshot can't clobber that
-    // fresher in-memory value and strand consumers on stale settings.
-    if (settingsCache === null) settingsCache = loaded;
+    // Prefer that fresher in-memory value over our (older) on-disk snapshot.
+    if (settingsCache !== null) return structuredClone(settingsCache);
+    // On a corrupt read, hand back the empty snapshot WITHOUT caching it, so the
+    // very next call re-reads and picks up a repair immediately.
+    if (corrupt) return structuredClone(loaded);
+    settingsCache = loaded;
   }
   // Hand out a private deep copy so a caller mutating nested settings in place
   // can't corrupt the shared cache — matching the prior per-call

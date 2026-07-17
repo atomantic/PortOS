@@ -148,7 +148,7 @@ ${boundaries.irritant ? `- **Pet Peeve**: ${boundaries.irritant}` : ''}
         title: 'Soul',
         category: 'core',
         content
-      });
+      }, { silent: true });
 
       toast.success('Soul document created!');
       onComplete();

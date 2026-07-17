@@ -19,7 +19,7 @@ import { isInternalTaskId } from '../lib/taskParser.js';
 import { ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { createToolExecution, startExecution, completeExecution, errorExecution } from './toolStateMachine.js';
 import { determineLane, acquire, release } from './executionLanes.js';
-import { analyzeAgentFailure, resolveFailedTaskUpdate } from './agentErrorAnalysis.js';
+import { analyzeAgentFailure, resolveFailedTaskUpdate, resolveTypeFailureSignal } from './agentErrorAnalysis.js';
 import { createAgentRun, completeAgentRun, checkForTaskCommit } from './agentRunTracking.js';
 import { buildAgentPrompt, getAppWorkspace } from './agentPromptBuilder.js';
 import { isOllamaClaudeProvider, isClaudeCommand, providerSuppliesGithubToken } from '../lib/providerModels.js';
@@ -34,6 +34,7 @@ import { ensureInstanceId } from './instances.js';
 import { isClaimableBy, buildClaim, buildRelease, getClaimOwner } from './cosTaskClaim.js';
 import { resolveForgeTokenEnv } from './git.js';
 import { runnerAgents, pausedAgents, spawningTasks, useRunner, isTruthyMeta } from './agentState.js';
+import { withSpawnDedupGuard, withMapEntryCleanup, SPAWN_DEDUP_SKIP } from './agentGuards.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 
 // Extracted helpers — these carve the two giant orchestrators
@@ -116,20 +117,42 @@ export async function syncRunnerAgents() {
 
 /**
  * Spawn an agent for a task.
+ *
+ * The entire spawn body runs under `withSpawnDedupGuard` (agentGuards.js),
+ * which owns the whole `spawningTasks` dedup lifecycle: it rejects a
+ * concurrent duplicate (the `has()` check → `SPAWN_DEDUP_SKIP`), acquires the
+ * guard SYNCHRONOUSLY before the first `await` in `runAgentSpawn`, and releases
+ * it in a `finally` so no early `return null` or throw can strand the task id
+ * in the set. Extracting the guard makes the late-delete race it closes
+ * unit-testable against the real helper (issue #2548) instead of a replica.
  */
 export async function spawnAgentForTask(task) {
-  if (spawningTasks.has(task.id)) {
+  const outcome = await withSpawnDedupGuard(spawningTasks, task.id, () => runAgentSpawn(task));
+  if (outcome === SPAWN_DEDUP_SKIP) {
     console.log(`⚠️ Task ${task.id} already being spawned, skipping duplicate`);
     return null;
   }
+  return outcome;
+}
 
-  // Acquire the in-process dedup guard SYNCHRONOUSLY — before any `await` below.
-  // A `task:ready` re-emit for the same task id can land while this call is
-  // suspended at an await (e.g. `ensureInstanceId()` / `getTaskById()`), and
-  // EventEmitter does not serialize async listeners, so a guard taken after an
-  // await would let a second call slip past the `has()` check above and spawn a
-  // duplicate agent (codex review). Every early `return null` below releases it.
-  spawningTasks.add(task.id);
+/**
+ * The guarded spawn body. Runs only inside `withSpawnDedupGuard` above, which
+ * holds the `spawningTasks` guard across this whole function and releases it in
+ * a finally — so this body never needs to touch the dedup set itself; every
+ * early `return null` and any throw is covered by the wrapper's release.
+ */
+async function runAgentSpawn(task) {
+  // Normalize taskType once, up front (issue #2633). Direct `task:ready` emits —
+  // the Creative Director bridge, `dequeueNextTask`, and `spawnPriority0OnDemand` —
+  // publish task records without a `taskType`. Every claim/in_progress `updateTask`
+  // below falls back to `task.taskType || 'user'`, so an internal-file (`sys-*`)
+  // task without taskType would target TASKS.md instead of COS-TASKS.md, miss the
+  // record, and return a truthy `{ error }` object the `if (!updateResult)` check
+  // does not catch. Derive the type from the id here (mirrors the completion path,
+  // ~line 1084) so every write below routes to the correct file.
+  if (task && !task.taskType) {
+    task.taskType = isInternalTaskId(task.id || '') ? 'internal' : 'user';
+  }
 
   // Cross-instance claim guard (issue #1563, acceptance criterion 2). When this
   // task list is shared with a federated peer (full-sync mode, #1561), the peer
@@ -140,21 +163,17 @@ export async function spawnAgentForTask(task) {
   // task; the authoritative acquire-with-fresh-reread happens below, before any
   // spawn setup. No-op for a non-federated install (no claim metadata) and for
   // re-claiming our own task on retry/resume.
-  // Resolve identity defensively: this runs after `spawningTasks.add` but before
-  // the main try/finally, so an uncaught rejection (e.g. cold-start identity
-  // creation failing to write data/instances.json) would exit with the task id
-  // stranded in `spawningTasks`, blocking every future spawn of it until restart
-  // (codex review). Release the guard on failure.
+  // Resolve identity defensively: a cold-start identity failure (e.g. writing
+  // data/instances.json fails) returns null here; the wrapper's finally still
+  // releases the dedup guard, so the task id is never stranded in spawningTasks.
   let instanceId;
   try {
     instanceId = await ensureInstanceId();
   } catch (err) {
-    spawningTasks.delete(task.id);
     emitLog('error', `Failed to resolve instance identity for task ${task.id}: ${err?.message || err}`, { taskId: task.id });
     return null;
   }
   if (!isClaimableBy(task.metadata, instanceId)) {
-    spawningTasks.delete(task.id);
     console.log(`🔒 Task ${task.id} is claimed by instance ${getClaimOwner(task.metadata)} (live lease) — skipping spawn on ${instanceId}`);
     return null;
   }
@@ -162,7 +181,6 @@ export async function spawnAgentForTask(task) {
   // Check total spawn count across all retry types to prevent runaway respawning
   const totalSpawns = Number(task.metadata?.totalSpawnCount) || 0;
   if (totalSpawns >= MAX_TOTAL_SPAWNS) {
-    spawningTasks.delete(task.id);
     console.log(`🚫 Task ${task.id} hit max total spawns (${totalSpawns}/${MAX_TOTAL_SPAWNS}), blocking`);
     await updateTask(task.id, {
       status: 'blocked',
@@ -187,7 +205,6 @@ export async function spawnAgentForTask(task) {
   const laneName = determineLane(task);
   const laneResult = acquire(laneName, agentId, { taskId: task.id });
   if (!laneResult.success) {
-    spawningTasks.delete(task.id);
     emitLog('warn', `Failed to tag lane ${laneName}: ${laneResult.error}`, { taskId: task.id });
     await releaseAppReviewMarker(task.metadata?.app).catch(() => {});
     return null;
@@ -214,7 +231,9 @@ export async function spawnAgentForTask(task) {
   // no-op when the task carries no `metadata.app` or the marker is a real
   // `agent-*` id from a different live agent.
   const cleanupOnError = async (error) => {
-    spawningTasks.delete(task.id);
+    // The spawn-dedup guard is released by withSpawnDedupGuard's finally around
+    // this whole body (see spawnAgentForTask) — cleanupOnError only owns the
+    // lane, tool-execution, claim, and app-review marker releases.
     release(agentId);
     errorExecution(toolExecution.id, { message: error });
     completeExecution(toolExecution.id, { success: false });
@@ -270,10 +289,9 @@ export async function spawnAgentForTask(task) {
   //
   // - `handedOff === false` (pre-spawn): any uncaught throw from
   //   buildAgentPrompt / writeFile / createAgentRun / registerAgent /
-  //   worktree + JIRA provisioning. Release the dedup guard, the
-  //   execution lane, and the tool-execution state; without this, a
-  //   throw mid-setup leaks `spawningTasks` and permanently blocks
-  //   re-spawns of that task id until process restart. Also re-emit
+  //   worktree + JIRA provisioning. cleanupOnError releases the execution
+  //   lane and the tool-execution state (the dedup guard itself is released
+  //   by withSpawnDedupGuard's finally around this whole body). Also re-emit
   //   `job:spawn-failed` for autonomous-job tasks so cos.js can clear
   //   its job-level guard immediately instead of waiting 5 minutes.
   //
@@ -484,6 +502,19 @@ export async function spawnAgentForTask(task) {
         console.error(`❌ Failed to mark task ${task.id} as in_progress: ${err.message}`);
         return null;
       });
+    // Surface a silent `{ error }` miss (issue #2633) — the task id wasn't present
+    // in the file for `task.taskType`, so the claim didn't land. This is EXPECTED
+    // for legitimately-unpersisted autonomous emits: Priority 3 mission tasks
+    // (cos.js `spawnDequeuePriority3Missions`) and Priority 4 idle-review tasks
+    // carry `taskType: 'internal'` but are never written to COS-TASKS.md, so their
+    // in_progress `updateTask` returns `{ error: 'Task not found' }`. Warn-log it
+    // for visibility, but do NOT block the spawn on it — the pre-#2633 behavior
+    // spawned these anyway, and treating the error as fatal would silently kill
+    // every mission / idle-review autonomous spawn. Only a `null` (updateTask
+    // threw) is fatal.
+    if (updateResult?.error) {
+      emitLog('warn', `⚠️ in_progress claim for task ${task.id} returned an error (taskType=${task.taskType}): ${updateResult.error}`, { taskId: task.id, error: updateResult.error });
+    }
     if (!updateResult) {
       await cleanupOnError('Failed to update task status');
       return null;
@@ -517,17 +548,16 @@ export async function spawnAgentForTask(task) {
       worktree: !!worktreeInfo
     });
 
-    // Dedup-window fix: keep the `spawningTasks` guard active across the
-    // actual spawn call, not just up to the in_progress flip. Releasing
-    // between `updateTask` and `spawnViaRunner` / `spawnDirectly` opened a
-    // window where a concurrent `spawnAgentForTask(task)` call (e.g. a
-    // re-fired `task:ready` from a follow-up scheduler tick) saw an empty
-    // set and a task whose registered agent hadn't yet been queued to the
-    // runner, and proceeded to spawn a second agent for the same task id.
-    // The outer finally below releases the guard whether the spawn returns
-    // normally or rejects. release() must NOT run here on the success
-    // path; the lane is released by the agent-completion handler when the
-    // work finishes.
+    // Dedup-window fix: the `spawningTasks` guard stays held across the actual
+    // spawn call, not just up to the in_progress flip — withSpawnDedupGuard
+    // (around this whole body) only releases it once runAgentSpawn settles.
+    // Releasing between `updateTask` and `spawnViaRunner` / `spawnDirectly`
+    // opened a window where a concurrent `spawnAgentForTask(task)` call (e.g. a
+    // re-fired `task:ready` from a follow-up scheduler tick) saw an empty set
+    // and a task whose registered agent hadn't yet been queued to the runner,
+    // and proceeded to spawn a second agent for the same task id. release()
+    // must NOT run here on the success path; the lane is released by the
+    // agent-completion handler when the work finishes.
     handedOff = true;
     if (isTui) {
       return await spawnTuiAgent({
@@ -585,9 +615,9 @@ export async function spawnAgentForTask(task) {
       cosEvents.emit('job:spawn-failed', { jobId: task.metadata.jobId });
     }
     return null;
-  } finally {
-    spawningTasks.delete(task.id);
   }
+  // No finally here: withSpawnDedupGuard (around runAgentSpawn) owns the
+  // spawningTasks release, so it fires whether this body returns or throws.
 }
 
 /**
@@ -912,9 +942,36 @@ export async function finalizeAgent({
   // isolated from the agent's discarded worktree — the payload is the only
   // durable channel out. Errors are caught: a hook failure must not strand the
   // rest of finalize. See taskTypeHooks.js + the design plan.
-  await dispatchTaskOutputHook({ agentId, task, success, workspacePath }).catch(err => {
+  const hookResult = await dispatchTaskOutputHook({ agentId, task, success, workspacePath }).catch(err => {
     emitLog('error', `processTaskOutput hook threw for ${agentId} (${task?.taskType}): ${err.message}`, { agentId, error: err.message });
+    // A thrown hook is a non-success signal for the type ledger (#2616).
+    return { ran: true, threw: true };
   });
+
+  // Type-level consecutive-failure ledger (#2616): feed the per-type
+  // backoff/auto-park in taskSchedule. Only SCHEDULED task types carry
+  // `metadata.analysisType`; user/ad-hoc tasks don't participate. The pure
+  // resolveTypeFailureSignal decides success vs failure vs skip — including the
+  // exit-0-but-unparseable-output case that must count as a failure.
+  const scheduledType = task?.metadata?.analysisType || null;
+  if (scheduledType) {
+    const signal = resolveTypeFailureSignal({
+      success,
+      terminatedByUser,
+      hookResult,
+      errorCategory: errorAnalysis?.category
+    });
+    if (signal.record !== 'skip') {
+      const ledgerAppId = task?.metadata?.app || null;
+      const { recordTaskTypeFailure, recordTaskTypeSuccess } = await import('./taskSchedule.js');
+      const ledgerUpdate = signal.record === 'failure'
+        ? recordTaskTypeFailure(scheduledType, ledgerAppId, { errorCategory: signal.category })
+        : recordTaskTypeSuccess(scheduledType, ledgerAppId);
+      await ledgerUpdate.catch(err => {
+        emitLog('warn', `⚠️ Task-type ledger update failed for ${scheduledType}: ${err.message}`, { taskType: scheduledType, agentId });
+      });
+    }
+  }
 
   await processAgentCompletion(agentId, task, success, outputBuffer);
 }
@@ -930,10 +987,10 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath })
   // task.taskType is the CoS queue category, e.g. 'internal'). A programmatic-I/O
   // hook is keyed on the scheduled type.
   const taskType = task?.metadata?.analysisType || task?.taskType;
-  if (!taskType) return;
+  if (!taskType) return { ran: false };
   const { getTaskOutputHook } = await import('./taskTypeHooks.js');
   const hook = await getTaskOutputHook(taskType);
-  if (!hook) return;
+  if (!hook) return { ran: false };
 
   const cwd = workspacePath || task?.metadata?.repoPath || null;
   let payload = null;
@@ -956,7 +1013,7 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath })
     }
   }
 
-  await hook({
+  const outcome = await hook({
     appId: task?.metadata?.app || null,
     success,
     payload,
@@ -964,6 +1021,10 @@ async function dispatchTaskOutputHook({ agentId, task, success, workspacePath })
     agentId,
     task,
   });
+  // The outcome's `reason` is what lets finalizeAgent count a "completed" run
+  // that produced nothing usable (`unparseable-response`) as a type-level
+  // failure (#2616) — an exit-0 run whose structured output couldn't be parsed.
+  return { ran: true, outcome };
 }
 
 /**
@@ -1067,10 +1128,11 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
 
   const { task, runId, model, executionId, laneName } = agent;
 
-  // try/finally so a throw from any inner step still drops the runnerAgents
-  // entry — otherwise a memory-extraction crash etc. would strand it forever
-  // and no future spawn could reclaim the slot.
-  try {
+  // withMapEntryCleanup drops the runnerAgents entry in a finally even if any
+  // inner completion step throws — otherwise a memory-extraction crash etc.
+  // would strand it forever and no future spawn could reclaim the slot. The
+  // error still propagates to the caller (agentGuards.js, issue #2548).
+  return withMapEntryCleanup(runnerAgents, agentId, async () => {
     // Normalize the agent's task shape — recovered agents (post-restart,
     // via syncRunnerAgents) may lack taskType AND metadata, both of which
     // downstream paths spread / read without a guard.
@@ -1175,7 +1237,5 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     // cleanup completed — without this the runner harness would never see
     // the failure and couldn't requeue or alert.
     if (finalizeError) throw finalizeError;
-  } finally {
-    runnerAgents.delete(agentId);
-  }
+  });
 }

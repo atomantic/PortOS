@@ -17,8 +17,7 @@
  */
 
 import { spawn } from 'child_process';
-import { buildCliArgs } from './cliProviderArgs.js';
-import { prepareGrokPromptFile } from './grok.js';
+import { buildCliArgs, prepareCliPrompt } from './cliProviderArgs.js';
 import { buildOpencodeEnvVars } from './opencodeConfig.js';
 import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn } from './bufferedSpawn.js';
 
@@ -92,9 +91,10 @@ export function runCliProviderPrompt(args = {}) {
   // right --model/-m flag for this provider's CLI convention.
   const effectiveProvider = { ...provider, defaultModel: model ?? provider.defaultModel };
   const builtArgs = [...buildCliArgs(effectiveProvider), ...(Array.isArray(extraArgs) ? extraArgs : [])];
-  // Grok's `--prompt-file /dev/stdin` sentinel is fed via stdin on POSIX; on
-  // Windows it's rewritten to a temp file (useStdin=false). No-op otherwise.
-  const { args: spawnArgs, useStdin, cleanup: cleanupPromptFile } = prepareGrokPromptFile(builtArgs, prompt);
+  // Deliver the prompt per provider convention: antigravity gets it as the
+  // --print VALUE (no stdin); grok's `--prompt-file /dev/stdin` is fed via stdin
+  // on POSIX / a temp file on Windows (useStdin=false); everyone else via stdin.
+  const { args: spawnArgs, useStdin, cleanup: cleanupPromptFile } = prepareCliPrompt(provider.command, builtArgs, prompt);
 
   return new Promise((resolve) => {
     let stdout = '';

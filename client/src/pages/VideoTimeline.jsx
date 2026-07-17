@@ -30,7 +30,7 @@ export default function VideoTimeline() {
     const trimmed = name.trim();
     if (!trimmed) return;
     setCreating(true);
-    const created = await api.createTimelineProject(trimmed).catch((err) => {
+    const created = await api.createTimelineProject(trimmed, { silent: true }).catch((err) => {
       toast.error(`Failed to create: ${err.message}`);
       return null;
     });
@@ -43,7 +43,7 @@ export default function VideoTimeline() {
 
   const handleDelete = async (project) => {
     setProjects((prev) => prev.filter((p) => p.id !== project.id));
-    await api.deleteTimelineProject(project.id).catch((err) => {
+    await api.deleteTimelineProject(project.id, { silent: true }).catch((err) => {
       toast.error(`Failed to delete: ${err.message}`);
       refresh();
     });

@@ -54,8 +54,8 @@ export { runHealthCheck, getHealthStatus };
 // backward compat with `import * as cos` and the cos route handlers. The store
 // emits `tasks:changed`; init() below turns that into tryImmediateSpawn /
 // dequeueNextTask so the spawn-side logic stays here, not in the store.
-import { firstLine, PRIORITY_VALUES, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck } from './cosTaskStore.js';
-export { firstLine, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck };
+import { firstLine, PRIORITY_VALUES, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks } from './cosTaskStore.js';
+export { firstLine, getUserTasks, getCosTasks, getAllTasks, getTasks, getTaskById, addTask, updateTask, reviveBlockedTask, deleteTask, reorderTasks, approveTask, challengeTask, resolveTaskChallenge, resolveTaskChallengeWithRecheck, sweepResolvedFailureTasks };
 import { ensureInstanceId } from './instances.js';
 import { isHeldByOther, buildRenewal, buildClaim, getClaimOwner } from './cosTaskClaim.js';
 
@@ -110,6 +110,13 @@ import {
   registerSingleJobSchedule,
   clearSpawningJob
 } from './cosJobScheduler.js';
+
+// Pure priority/capacity helpers for dequeueNextTask (extracted to cosDequeue.js,
+// issue #2530). The per-cycle capacity tracker + mission/idle tier-eligibility
+// predicates are shared with the scheduler unit tests so they exercise the real
+// guards instead of a local replica. The async tiers stay here as
+// `spawnDequeuePriorityN(ctx)` helpers.
+import { createDequeueCapacity, isMissionTierEligible, isIdleTierEligible } from './cosDequeue.js';
 
 /**
  * Get current CoS status
@@ -271,8 +278,18 @@ export async function start() {
       if (archived > 0) {
         emitLog('info', `📦 Auto-archived ${archived} stale agent(s) from state`);
       }
+      // Reap resolved failure artifacts (stale failure-blocked tasks +
+      // investigations whose origin is gone/completed) via federation-safe
+      // status flip — never deletion (#2619). Bounded per tick by the store.
+      const swept = await sweepResolvedFailureTasks().catch((err) => {
+        console.warn(`⚠️ sweepResolvedFailureTasks failed: ${err?.message || err}`);
+        return { reaped: 0 };
+      });
+      if (swept.reaped > 0) {
+        emitLog('info', `🧹 Auto-expired ${swept.reaped} resolved failure task(s) (${swept.staleBlocks} block(s), ${swept.investigations} investigation(s))`);
+      }
     },
-    metadata: { description: 'CoS health check + orphan cleanup + agent archival' }
+    metadata: { description: 'CoS health check + orphan cleanup + agent archival + failure-artifact reaper' }
   });
 
   // Performance summary (10 min)
@@ -686,67 +703,35 @@ async function tryImmediateSpawn(task) {
   cosEvents.emit('task:ready', { ...task, taskType: 'user' });
 }
 
+// ─── dequeueNextTask priority tiers ────────────────────────────────────────
+//
+// dequeueNextTask (below) is a thin orchestrator that threads a shared `ctx`
+// through the five priority tiers in order. Each tier is a focused async helper
+// that reads/mutates the per-cycle spawn capacity via `ctx.capacity` (the pure
+// tracker from cosDequeue.js) and emits `task:ready` for admitted tasks. This
+// mirrors the established `spawnPriorityN(ctx)` decomposition in
+// cosTaskGenerator.js's evaluateTasks (issue #2530).
+
 /**
- * Event-driven task dequeue — the primary way tasks get spawned.
- *
- * Triggered by: agent:completed, tasks:user:added, tasks:cos:added, status:resumed
- * Fills all available slots using the same priority order as evaluateTasks:
- *   0. On-demand requests
- *   1. User tasks
- *   2. Auto-approved system tasks
- *   3. Mission-driven proactive tasks (if proactiveMode)
- *   4. Idle review task (if idleReviewEnabled)
- * Returns silently when idle — no log noise.
+ * Priority 0 — on-demand task requests (explicit user "Run"). Runs even while
+ * paused. Loads the task schedule onto `ctx` (reused by Priority 2) and drains
+ * the on-demand request queue, generating + persisting a task per request.
  */
-async function dequeueNextTask() {
-  if (!isDaemonRunning()) return;
+async function spawnDequeuePriority0OnDemand(ctx) {
+  const { state, capacity } = ctx;
 
-  // A global pause stops scheduled/autonomous spawning, but NOT explicit user
-  // triggers: on-demand requests (Priority 0) are processed even while paused so
-  // a manual "Run" from an app's automation page still fires. The autonomous
-  // tiers (Priority 1+) are skipped below when paused.
-  const paused = await isPaused();
-
-  const state = await loadState();
-  const runningAgents = Object.values(state.agents).filter(a => a.status === 'running').length;
-  const availableSlots = state.config.maxConcurrentAgents - runningAgents;
-
-  if (availableSlots <= 0) return;
-
-  // This instance's federation id, resolved once per cycle so the priority
-  // tiers below can skip tasks a peer holds a live lease on (#1650). Warm path
-  // is the cheap cached read; only the cold boot creates the identity.
-  const instanceId = await ensureInstanceId();
-
-  const perProjectLimit = state.config.maxConcurrentAgentsPerProject || state.config.maxConcurrentAgents;
-  const agentsByProject = countRunningAgentsByProject(state.agents);
-  const spawnProjectCounts = { ...agentsByProject };
-  let spawned = 0;
-
-  // `ceiling` defaults to the global slot count; autonomous sections pass the
-  // lower `autonomousSpawnCeiling` so the CoS daily action budget (#711) caps them.
-  const canSpawn = (task, ceiling = availableSlots) => {
-    if (spawned >= ceiling) return false;
-    const project = task.metadata?.app || '_self';
-    return (spawnProjectCounts[project] || 0) < perProjectLimit;
-  };
-
-  const trackSpawn = (task) => {
-    const project = task.metadata?.app || '_self';
-    spawnProjectCounts[project] = (spawnProjectCounts[project] || 0) + 1;
-    spawned++;
-  };
-
-  // Priority 0: On-demand task requests
   const taskScheduleMod = await import('./taskSchedule.js');
   const taskSchedule = await taskScheduleMod.loadSchedule();
   const onDemandRequests = await taskScheduleMod.getOnDemandRequests();
+  // Stash the loaded schedule for Priority 2's disabled-analysis-type gate
+  // (avoids a second load).
+  ctx.taskSchedule = taskSchedule;
 
   // Track apps already marked review-started this cycle so multiple on-demand
   // requests for the same app don't each rewrite its activity record.
   const reviewStartedApps = new Set();
   for (const request of onDemandRequests) {
-    if (spawned >= availableSlots) break;
+    if (capacity.spawned >= capacity.availableSlots) break;
 
     if (!isImprovementEnabled(state)) {
       emitLog('warn', `On-demand request dropped — improvement is disabled (Config → Improve)`, { requestId: request.id, taskType: request.taskType });
@@ -783,6 +768,11 @@ async function dequeueNextTask() {
       // detector/reconcile below runs fresh and dispatches on live state (and,
       // if still idle, re-stamps a park reflecting THIS check).
       await taskScheduleMod.resetPerpetualForManualRun(request.taskType, targetApp.id);
+      // A manual "Run" also unparks a failure-parked type (#2616) — clear this
+      // app's consecutive-failure ledger. (Mirrors the sibling
+      // spawnPriority0OnDemand engine in cosTaskGenerator.js; either engine may
+      // drain a given on-demand request, so both must unpark.)
+      await taskScheduleMod.clearTaskTypeFailurePark(request.taskType, targetApp.id);
       // Advance the cooldown eagerly (deduped per app per cycle), but defer
       // binding the active agent until a task is produced — a null result
       // here must not strand `activeAgentId` (issue #978).
@@ -799,6 +789,8 @@ async function dequeueNextTask() {
       emitLog('info', `Processing on-demand improvement: ${request.taskType}`, { requestId: request.id });
       // Same fresh-check guarantee as the app-scoped branch above.
       await taskScheduleMod.resetPerpetualForManualRun(request.taskType);
+      // Manual re-run unparks a failure-parked type (global scope) — #2616.
+      await taskScheduleMod.clearTaskTypeFailurePark(request.taskType);
       await taskScheduleMod.recordExecution(`task:${request.taskType}`);
       await withStateLock(async () => {
         const s = await loadState();
@@ -809,11 +801,21 @@ async function dequeueNextTask() {
       task = await generateSelfImprovementTaskForType(request.taskType, state);
     }
 
-    if (task && canSpawn(task)) {
+    if (task && capacity.canSpawn(task)) {
       const persisted = await addTask(task, 'internal', { raw: true });
       if (!persisted?.duplicate) {
         cosEvents.emit('task:ready', task);
-        trackSpawn(task);
+        capacity.trackSpawn(task);
+      } else if (persisted.status === 'blocked') {
+        // Explicit user Run colliding with a failure-blocked twin (#2614): the
+        // retry path is reviving the existing task, not minting a duplicate —
+        // and without this branch the Run is a silent no-op that strands the
+        // bound on-demand review marker.
+        await reviveBlockedTask(persisted.id, { priority: task.priority, metadata: task.metadata }, 'internal');
+        const revived = { ...task, id: persisted.id };
+        cosEvents.emit('task:ready', revived);
+        capacity.trackSpawn(revived);
+        emitLog('info', `🔁 On-demand ${request.taskType} revived blocked task ${persisted.id}`, { taskId: persisted.id });
       }
     } else if (!task) {
       // Explicit user "Run" produced no task — surface WHY (parked / transient /
@@ -824,17 +826,21 @@ async function dequeueNextTask() {
       await emitOnDemandEmpty({ taskScheduleMod, request, targetApp, taskConfig: taskSchedule.tasks[request.taskType] });
     }
   }
+}
 
-  // Global pause stops every autonomous/scheduled/user tier below; only the
-  // on-demand queue above (explicit user "Run") bypasses it.
-  if (paused) return;
+/**
+ * Priority 1 — pending user tasks. Records `pendingUserTasks` /
+ * `hasPendingUserTasks` on `ctx` for the mission/idle tiers below.
+ */
+async function spawnDequeuePriority1UserTasks(ctx) {
+  const { state, instanceId, capacity } = ctx;
 
-  // Priority 1: User tasks
   const userTaskData = await getUserTasks();
   const pendingUserTasks = userTaskData.grouped?.pending || [];
+  ctx.hasPendingUserTasks = pendingUserTasks.length > 0;
 
   for (const task of pendingUserTasks) {
-    if (spawned >= availableSlots) break;
+    if (capacity.spawned >= capacity.availableSlots) break;
     // A federated peer holds a live lease on this task (#1650) — it's being
     // worked on the other machine. Skip it during candidate selection so it
     // doesn't consume this cycle's spawn slot (the spawn guard would return
@@ -845,14 +851,21 @@ async function dequeueNextTask() {
     }
     if (await blockIfExceedsMaxSpawns(task, 'user')) continue;
     const userTask = { ...task, taskType: 'user' };
-    if (!canSpawn(userTask)) continue;
+    if (!capacity.canSpawn(userTask)) continue;
     cosEvents.emit('task:ready', userTask);
-    trackSpawn(userTask);
+    capacity.trackSpawn(userTask);
   }
+}
 
-  // Priority 2: Auto-approved system tasks — gated by the CoS auto-run domain.
-  // `off`/`dry-run` both stop the unattended spawn; `dry-run` logs what would
-  // have run so the user can see the plan without it executing.
+/**
+ * Priority 2 — auto-approved system tasks, gated by the CoS auto-run domain.
+ * Resolves `ctx.cosAutonomyMode` and `ctx.autonomousSpawnCeiling` (used by the
+ * mission/idle tiers) from the daily CoS budget (#711). `off`/`dry-run` withhold
+ * the unattended spawn; `dry-run` logs what execute mode would have run.
+ */
+async function spawnDequeuePriority2AutoApproved(ctx) {
+  const { state, instanceId, capacity } = ctx;
+
   const cosTaskData = await getCosTasks();
   const autoApproved = cosTaskData.autoApproved || [];
   let cosAutonomyMode = getDomainMode(state.config, 'cos');
@@ -881,13 +894,15 @@ async function dequeueNextTask() {
       }
     }
   }
-  const autonomousSpawnCeiling = Math.min(availableSlots, spawned + autonomousActionsRemaining);
+  const autonomousSpawnCeiling = Math.min(capacity.availableSlots, capacity.spawned + autonomousActionsRemaining);
+  ctx.cosAutonomyMode = cosAutonomyMode;
+  ctx.autonomousSpawnCeiling = autonomousSpawnCeiling;
 
   // Engine-specific gate shared by execute and dry-run: improvement tasks whose
   // task type was disabled after queuing are skipped.
   const isDisabledAnalysisType = (task) => {
     const analysisType = task.metadata?.analysisType || task.metadata?.selfImprovementType;
-    return Boolean(analysisType) && !taskSchedule.tasks[analysisType]?.enabled;
+    return Boolean(analysisType) && !ctx.taskSchedule.tasks[analysisType]?.enabled;
   };
 
   if (cosAutonomyMode !== 'execute') {
@@ -898,9 +913,9 @@ async function dequeueNextTask() {
     if (cosAutonomyMode === 'dry-run') {
       const wouldSpawn = await selectDryRunAutoApproved(autoApproved, {
         availableSlots: autonomousSpawnCeiling,
-        alreadySpawned: spawned,
-        perProjectLimit,
-        spawnProjectCounts,
+        alreadySpawned: capacity.spawned,
+        perProjectLimit: capacity.perProjectLimit,
+        spawnProjectCounts: capacity.spawnProjectCounts,
         isOnCooldown: (appId) => isAppOnCooldown(appId, state.config.appReviewCooldownMs),
         cooldownExempt: isCooldownExemptTask,
         extraSkip: isDisabledAnalysisType,
@@ -912,7 +927,7 @@ async function dequeueNextTask() {
     }
   } else {
     for (const task of autoApproved) {
-      if (spawned >= autonomousSpawnCeiling) break;
+      if (capacity.spawned >= autonomousSpawnCeiling) break;
       // A federated peer holds a live lease on this task (#1650) — skip it
       // during candidate selection so it doesn't consume an autonomous slot
       // the spawn guard would just reject.
@@ -937,60 +952,147 @@ async function dequeueNextTask() {
         if (onCooldown) continue;
       }
       const sysTask = { ...task, taskType: 'internal' };
-      if (!canSpawn(sysTask, autonomousSpawnCeiling)) continue;
+      if (!capacity.canSpawn(sysTask, autonomousSpawnCeiling)) continue;
       cosEvents.emit('task:ready', sysTask);
-      trackSpawn(sysTask);
+      capacity.trackSpawn(sysTask);
     }
   }
+}
 
-  const hasPendingUserTasks = pendingUserTasks.length > 0;
+/**
+ * Priority 3 — mission-driven proactive tasks. Speculative autonomous spawns,
+ * only generated when the shared `isMissionTierEligible` predicate passes (auto-
+ * run in execute, no pending user tasks, proactive mode on, headroom left).
+ */
+async function spawnDequeuePriority3Missions(ctx) {
+  const { state, capacity } = ctx;
 
-  // Priority 3: Mission-driven proactive tasks. These are speculative autonomous
-  // spawns — when CoS auto-run isn't `execute`, skip generating them entirely
-  // (off and dry-run both withhold autonomous spawns; only the concrete already-
-  // queued auto-approved tasks above are surfaced for dry-run).
-  if (spawned < autonomousSpawnCeiling && !hasPendingUserTasks && state.config.proactiveMode && cosAutonomyMode === 'execute') {
-    const missionTasks = await generateMissionTasks({ maxTasks: autonomousSpawnCeiling - spawned }).catch(err => {
-      emitLog('debug', `Mission task generation failed: ${err.message}`);
-      return [];
+  if (!isMissionTierEligible({
+    spawned: capacity.spawned,
+    ceiling: ctx.autonomousSpawnCeiling,
+    hasPendingUserTasks: ctx.hasPendingUserTasks,
+    proactiveMode: state.config.proactiveMode,
+    autonomyMode: ctx.cosAutonomyMode
+  })) return;
+
+  const missionTasks = await generateMissionTasks({ maxTasks: ctx.autonomousSpawnCeiling - capacity.spawned }).catch(err => {
+    emitLog('debug', `Mission task generation failed: ${err.message}`);
+    return [];
+  });
+
+  for (const missionTask of missionTasks) {
+    if (capacity.spawned >= ctx.autonomousSpawnCeiling) break;
+    const cosTask = {
+      id: missionTask.id,
+      description: missionTask.description,
+      priority: missionTask.priority?.toUpperCase() || 'MEDIUM',
+      status: 'pending',
+      metadata: missionTask.metadata,
+      taskType: 'internal',
+      approvalRequired: !missionTask.autoApprove
+    };
+    if (!capacity.canSpawn(cosTask, ctx.autonomousSpawnCeiling)) continue;
+    cosEvents.emit('task:ready', cosTask);
+    capacity.trackSpawn(cosTask);
+    emitLog('info', `Generated mission task: ${missionTask.id}`, {
+      missionId: missionTask.metadata?.missionId
     });
+  }
+}
 
-    for (const missionTask of missionTasks) {
-      if (spawned >= autonomousSpawnCeiling) break;
-      const cosTask = {
-        id: missionTask.id,
-        description: missionTask.description,
-        priority: missionTask.priority?.toUpperCase() || 'MEDIUM',
-        status: 'pending',
-        metadata: missionTask.metadata,
-        taskType: 'internal',
-        approvalRequired: !missionTask.autoApprove
-      };
-      if (!canSpawn(cosTask, autonomousSpawnCeiling)) continue;
-      cosEvents.emit('task:ready', cosTask);
-      trackSpawn(cosTask);
-      emitLog('info', `Generated mission task: ${missionTask.id}`, {
-        missionId: missionTask.metadata?.missionId
-      });
+/**
+ * Priority 4 — idle review task, only when the daemon is completely idle this
+ * cycle (shared `isIdleTierEligible` predicate: nothing spawned, no pending user
+ * tasks, idle review on, auto-run in execute).
+ */
+async function spawnDequeuePriority4IdleReview(ctx) {
+  const { state, capacity } = ctx;
+
+  if (!isIdleTierEligible({
+    spawned: capacity.spawned,
+    hasPendingUserTasks: ctx.hasPendingUserTasks,
+    idleReviewEnabled: state.config.idleReviewEnabled,
+    autonomyMode: ctx.cosAutonomyMode
+  })) return;
+
+  const freshCosTasks = await getCosTasks();
+  const pendingSystemTasks = freshCosTasks.autoApproved?.length || 0;
+  if (pendingSystemTasks === 0) {
+    const idleTask = await generateIdleReviewTask(state);
+    if (idleTask && capacity.canSpawn(idleTask, ctx.autonomousSpawnCeiling)) {
+      cosEvents.emit('task:ready', idleTask);
+      capacity.trackSpawn(idleTask);
     }
   }
+}
 
-  // Priority 4: Idle review task (only when completely idle) — also an autonomous
-  // spawn, so gated by the CoS auto-run domain.
-  if (spawned === 0 && state.config.idleReviewEnabled && !hasPendingUserTasks && cosAutonomyMode === 'execute') {
-    const freshCosTasks = await getCosTasks();
-    const pendingSystemTasks = freshCosTasks.autoApproved?.length || 0;
-    if (pendingSystemTasks === 0) {
-      const idleTask = await generateIdleReviewTask(state);
-      if (idleTask && canSpawn(idleTask, autonomousSpawnCeiling)) {
-        cosEvents.emit('task:ready', idleTask);
-        trackSpawn(idleTask);
-      }
-    }
-  }
+/**
+ * Event-driven task dequeue — the primary way tasks get spawned.
+ *
+ * Triggered by: agent:completed, tasks:user:added, tasks:cos:added, status:resumed
+ * Thin orchestrator: computes per-cycle capacity, then threads a shared `ctx`
+ * through the five priority tiers in order (same order as evaluateTasks):
+ *   0. On-demand requests (bypasses pause)
+ *   1. User tasks
+ *   2. Auto-approved system tasks
+ *   3. Mission-driven proactive tasks (if proactiveMode)
+ *   4. Idle review task (if idleReviewEnabled)
+ * Returns silently when idle — no log noise.
+ */
+async function dequeueNextTask() {
+  if (!isDaemonRunning()) return;
 
-  if (spawned > 0) {
-    emitLog('info', `⚡ Dequeued ${spawned} task(s)`, { spawned, availableSlots });
+  // A global pause stops scheduled/autonomous spawning, but NOT explicit user
+  // triggers: on-demand requests (Priority 0) are processed even while paused so
+  // a manual "Run" from an app's automation page still fires. The autonomous
+  // tiers (Priority 1+) are skipped below when paused.
+  const paused = await isPaused();
+
+  const state = await loadState();
+  const capacity = createDequeueCapacity(state, { agentsByProject: countRunningAgentsByProject(state.agents) });
+  const availableSlots = capacity.availableSlots;
+
+  if (availableSlots <= 0) return;
+
+  // This instance's federation id, resolved once per cycle so the priority
+  // tiers below can skip tasks a peer holds a live lease on (#1650). Warm path
+  // is the cheap cached read; only the cold boot creates the identity.
+  const instanceId = await ensureInstanceId();
+
+  // Shared spawn context threaded through each priority tier. The tiers mutate
+  // the running spawn total + per-project counts through `capacity` (whose
+  // `canSpawn`/`trackSpawn` close over that state), and stash cross-tier values
+  // (taskSchedule, hasPendingUserTasks, cosAutonomyMode, autonomousSpawnCeiling)
+  // on `ctx` as they resolve them.
+  const ctx = {
+    state,
+    instanceId,
+    capacity,
+    hasPendingUserTasks: false,
+    taskSchedule: null,
+    cosAutonomyMode: null,
+    autonomousSpawnCeiling: availableSlots
+  };
+
+  // Priority 0 (on-demand) runs even when paused — an explicit user "Run"
+  // bypasses the global pause.
+  await spawnDequeuePriority0OnDemand(ctx);
+
+  // Global pause stops every autonomous/scheduled/user tier below; only the
+  // on-demand queue above (explicit user "Run") bypasses it.
+  if (paused) return;
+
+  // Priority 1 spends against the global slot cap.
+  await spawnDequeuePriority1UserTasks(ctx);
+
+  // Priorities 2, 3, 4 spend against the lower autonomous ceiling that
+  // Priority 2 resolves onto `ctx.autonomousSpawnCeiling` from the daily budget.
+  await spawnDequeuePriority2AutoApproved(ctx);
+  await spawnDequeuePriority3Missions(ctx);
+  await spawnDequeuePriority4IdleReview(ctx);
+
+  if (capacity.spawned > 0) {
+    emitLog('info', `⚡ Dequeued ${capacity.spawned} task(s)`, { spawned: capacity.spawned, availableSlots });
   }
 }
 
@@ -1136,6 +1238,8 @@ export async function init() {
   //   fire tryImmediateSpawn so the just-added task starts instantly, bypassing
   //   the evaluation interval that's meant for system task generation.
   // - 'approved': a newly approved internal task can now spawn — re-run dequeue.
+  // - 'unblocked': a blocked task flipped back to pending (revive/retry, #2614)
+  //   is newly spawnable exactly like an approval — re-run dequeue.
   cosEvents.on('tasks:changed', (data) => {
     if (!isDaemonRunning() || !data?.action) return;
     if (data.action === 'added') {
@@ -1146,7 +1250,7 @@ export async function init() {
       // first; tryImmediateSpawn then handles the just-added task.
       setImmediate(() => dequeueNextTask());
       if (data.type === 'user' && data.task) setImmediate(() => tryImmediateSpawn(data.task));
-    } else if (data.action === 'approved') {
+    } else if (data.action === 'approved' || data.action === 'unblocked') {
       setImmediate(() => dequeueNextTask());
     }
   });

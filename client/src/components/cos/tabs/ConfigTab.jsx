@@ -49,9 +49,10 @@ function AutonomyControl({ config, onLevelChange }) {
   const currentLevel = detectAutonomyLevel(config);
   const isCustom = currentLevel === null;
 
-  const handleLevelClick = async (level) => {
-    await onLevelChange(level.params);
-    toast.success(`Autonomy level set to ${level.label}`);
+  const handleLevelClick = (level) => {
+    // Success toast is owned by onLevelChange so it only fires once the PUT
+    // resolves — a failed level change must not report success.
+    onLevelChange(level.params, level.label);
   };
 
   // Get the level to show in preview (hovered or current)
@@ -278,11 +279,28 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
     immediateExecution: config?.immediateExecution ?? true
   });
 
-  const handleLevelChange = async (params) => {
-    const updatedData = { ...formData, ...params };
-    setFormData(updatedData);
-    await api.updateCosConfig(params, { silent: true }).catch(err => toast.error(err.message));
-    onUpdate();
+  const handleLevelChange = async (params, label) => {
+    // Optimistically reflect the new params via a functional update. Success toast
+    // / refresh only fire after the request resolves.
+    const revertKeys = Object.fromEntries(Object.keys(params).map(k => [k, formData[k]]));
+    setFormData(prev => ({ ...prev, ...params }));
+    try {
+      await api.updateCosConfig(params, { silent: true });
+      if (label) toast.success(`Autonomy level set to ${label}`);
+      onUpdate();
+    } catch (err) {
+      // Roll back only keys still holding THIS request's optimistic value — a newer
+      // successful level pick (or edit) to the same key must win, so a late-failing
+      // request can't clobber it with the stale value it captured at click time.
+      setFormData(prev => {
+        const next = { ...prev };
+        for (const key of Object.keys(params)) {
+          if (prev[key] === params[key]) next[key] = revertKeys[key];
+        }
+        return next;
+      });
+      toast.error(err.message);
+    }
   };
 
   // Today's per-domain usage for the Domain Budgets readout (#711).
@@ -322,10 +340,16 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
   };
 
   const handleSave = async () => {
-    await api.updateCosConfig(formData, { silent: true }).catch(err => toast.error(err.message));
-    toast.success('Configuration updated');
-    setEditing(false);
-    onUpdate();
+    // Keep the user in edit mode on failure — only close the editor and toast
+    // success once the config PUT actually resolves.
+    try {
+      await api.updateCosConfig(formData, { silent: true });
+      toast.success('Configuration updated');
+      setEditing(false);
+      onUpdate();
+    } catch (err) {
+      toast.error(err.message);
+    }
   };
 
   return (

@@ -13,7 +13,7 @@
 
 import { Router } from 'express';
 import { z } from 'zod';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { asyncHandler, createServiceErrorMapper } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import * as svc from '../services/mediaAnnotations.js';
 
@@ -23,11 +23,7 @@ const SERVICE_ERROR_STATUS = {
   [svc.ERR_VALIDATION]: 400,
 };
 
-const mapServiceError = (err) => {
-  const status = SERVICE_ERROR_STATUS[err?.code];
-  if (status) return new ServerError(err.message, { status, code: err.code });
-  return err;
-};
+const mapServiceError = createServiceErrorMapper(SERVICE_ERROR_STATUS);
 
 const patchSchema = z.object({
   starred: z.boolean().optional(),

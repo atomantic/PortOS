@@ -5,13 +5,67 @@ import { atomicWrite, ensureDir, filterBySearch as genericFilterBySearch, PATHS,
 import { getAccount, updateSyncStatus } from './messageAccounts.js';
 import { getUserTimezone, getLocalParts } from '../lib/timezone.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
+import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 
 const CACHE_DIR = join(PATHS.messages, 'cache');
+// `syncLocks` is a boolean re-entrancy guard that rejects a *duplicate* in-flight
+// sync for an account with a 409 (you never want two full syncs racing).
 const syncLocks = new Map();
+
+// Per-account cache write tail. EVERY load→mutate→saveCache region for an account
+// routes through this single tail so it serializes against the account's sync and
+// against every other mutator (#2537): `syncAccount`, `refreshMessage`, and
+// `updateMessageEvaluations` all share the one `${accountId}.json` cache file, so
+// two that interleave their load/save would clobber each other's writes. The tail
+// makes each one await the previous and re-read the freshest persisted state
+// inside its serialized region — mirroring `issueWriteTail` in pipeline/issues.js.
+const accountWriteQueue = createKeyCachedQueue();
+function queueAccountWrite(accountId, work) {
+  return accountWriteQueue(accountId, work);
+}
 
 const MESSAGE_SEARCH_FIELDS = ['subject', 'from.name', 'from.email', 'bodyText'];
 function filterBySearch(messages, search) {
   return genericFilterBySearch(messages, search, MESSAGE_SEARCH_FIELDS);
+}
+
+/**
+ * Merge per-account caches into ONE date-sorted page (#2540) without spreading
+ * every message across every account into a single giant array first.
+ *
+ * A message can only appear in the global top `(offset + limit)` if it is also
+ * in the top `(offset + limit)` of its OWN account (there can't be more than
+ * `offset+limit` messages globally ahead of it without more than that many
+ * ahead of it within its own account). So each account contributes at most
+ * `offset+limit` heads to the cross-account merge — bounding the spread + sort
+ * to `accounts × (offset+limit)` instead of the full multi-account total. The
+ * per-account filter still walks every message (needed for the exact `total`),
+ * but no whole-inbox intermediate array is built or globally sorted.
+ *
+ * Pure helper (no I/O) so the paging math is unit-testable; the caller loads the
+ * caches.
+ */
+export function aggregatePagedMessages(caches, { search, limit = 50, offset = 0 } = {}) {
+  const safeOffset = Number.isFinite(offset) ? Math.max(0, Math.floor(offset)) : 0;
+  const safeLimit = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 50;
+  const perAccountCap = safeOffset + safeLimit;
+  const byDateDesc = (a, b) => safeDate(b.date) - safeDate(a.date);
+  let total = 0;
+  const heads = [];
+  for (const { id, cache } of caches) {
+    const filtered = filterBySearch(cache.messages, search);
+    total += filtered.length;
+    if (perAccountCap === 0) continue;
+    const top = [...filtered]
+      .sort(byDateDesc)
+      .slice(0, perAccountCap)
+      .map((m) => ({ ...m, accountId: m.accountId || id }));
+    heads.push(...top);
+  }
+  return {
+    messages: heads.sort(byDateDesc).slice(safeOffset, safeOffset + safeLimit),
+    total,
+  };
 }
 
 async function loadCache(accountId) {
@@ -56,16 +110,9 @@ export async function getMessages(options = {}) {
   const caches = await Promise.all(
     accountIds.map(async id => ({ id, cache: await loadCache(id) }))
   );
-  let allMessages = [];
-  for (const { id, cache } of caches) {
-    allMessages.push(...cache.messages.map(m => ({ ...m, accountId: m.accountId || id })));
-  }
-  allMessages = filterBySearch(allMessages, search);
-  allMessages.sort((a, b) => safeDate(b.date) - safeDate(a.date));
-  return {
-    messages: allMessages.slice(offset, offset + limit),
-    total: allMessages.length
-  };
+  // Bound the cross-account merge to `accounts × (offset+limit)` heads instead
+  // of spreading + globally sorting every message across every account (#2540).
+  return aggregatePagedMessages(caches, { search, limit, offset });
 }
 
 export async function deleteCache(accountId) {
@@ -215,7 +262,11 @@ export async function syncAccount(accountId, io, options = {}) {
     return { newMessages: uniqueNew.length, pruned, total: cache.messages.length, status: providerStatus };
   };
 
-  const result = await providerSync().catch(async (error) => {
+  // Serialize the load→mutate→save region against `refreshMessage` /
+  // `updateMessageEvaluations` on the same account (#2537). `syncLocks` already
+  // blocks a second concurrent sync; the tail additionally orders the sync's
+  // write against the other cache mutators so none clobbers the others.
+  const result = await queueAccountWrite(accountId, providerSync).catch(async (error) => {
     console.error(`📧 Sync failed for ${account.name} (${account.type}): ${error.message}`);
     await updateSyncStatus(accountId, 'error').catch(() => {});
     io?.emit('messages:sync:failed', { accountId, error: error.message });
@@ -228,6 +279,11 @@ export async function syncAccount(accountId, io, options = {}) {
 }
 
 export async function refreshMessage(accountId, messageId) {
+  // Serialize the whole load→extract→mutate→save region through the per-account
+  // tail (#2537) so a concurrent sync or evaluation update can't clobber the
+  // refreshed body (and vice versa). The cache is (re)loaded inside the tail so
+  // it merges against the freshest persisted state.
+  return queueAccountWrite(accountId, async () => {
   const cache = await loadCache(accountId);
   const message = cache.messages.find(m => m.id === messageId);
   if (!message) {
@@ -312,6 +368,7 @@ export async function refreshMessage(accountId, messageId) {
 
   await saveCache(accountId, cache);
   return updatedMessages.map(m => ({ ...m, accountId }));
+  });
 }
 
 export async function updateMessageEvaluations(evaluations) {
@@ -322,15 +379,20 @@ export async function updateMessageEvaluations(evaluations) {
     if (!file.endsWith('.json')) continue;
     const accountId = file.replace('.json', '');
     if (!UUID_RE.test(accountId)) continue;
-    const cache = await loadCache(accountId);
-    let changed = false;
-    for (const msg of cache.messages) {
-      if (evaluations[msg.id]) {
-        msg.evaluation = evaluations[msg.id];
-        changed = true;
+    // Serialize each account's load→mutate→save through the per-account tail
+    // (#2537) so a concurrent sync/refresh doesn't clobber the written
+    // evaluations (and vice versa); the cache reloads inside the tail.
+    await queueAccountWrite(accountId, async () => {
+      const cache = await loadCache(accountId);
+      let changed = false;
+      for (const msg of cache.messages) {
+        if (evaluations[msg.id]) {
+          msg.evaluation = evaluations[msg.id];
+          changed = true;
+        }
       }
-    }
-    if (changed) await saveCache(accountId, cache);
+      if (changed) await saveCache(accountId, cache);
+    });
   }
 }
 

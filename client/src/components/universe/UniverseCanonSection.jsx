@@ -247,7 +247,7 @@ export default function UniverseCanonSection({
   }, [onPreview]);
 
   const [runExtract, extracting] = useAsyncAction(
-    () => extractUniverseCanon(universeId, { corpus: extractText.trim() }),
+    () => extractUniverseCanon(universeId, { corpus: extractText.trim() }, { silent: true }),
     { errorMessage: 'Extraction failed' },
   );
 
@@ -281,7 +281,7 @@ export default function UniverseCanonSection({
     const capturedId = universeId;
     const providerId = universe.llm?.provider || undefined;
     const model = universe.llm?.model || undefined;
-    const result = await differentiateUniverseCast(universeId, { providerId, model })
+    const result = await differentiateUniverseCast(universeId, { providerId, model }, { silent: true })
       .catch((err) => { toast.error(err.message || 'Differentiate failed'); return null; });
     if (mountedRef.current) setDifferentiating(false);
     if (!result || !isStillCurrent(capturedId)) return;
@@ -298,7 +298,7 @@ export default function UniverseCanonSection({
     if (bulkLockingKindKey) return;
     setBulkLockingKindKey(kind.key);
     const capturedId = universeId;
-    const result = await setUniverseCanonLockAll(universeId, kind.apiKind, nextLocked)
+    const result = await setUniverseCanonLockAll(universeId, kind.apiKind, nextLocked, { silent: true })
       .catch((err) => { toast.error(err.message || `Bulk ${nextLocked ? 'lock' : 'unlock'} failed`); return null; });
     if (mountedRef.current) setBulkLockingKindKey(null);
     if (!result || !mountedRef.current || currentUniverseIdRef.current !== capturedId) return;
@@ -315,7 +315,7 @@ export default function UniverseCanonSection({
     togglingLockRef.current = entryId;
     setTogglingLockId(entryId);
     const capturedId = universeId;
-    const result = await setUniverseCanonLock(universeId, kind.apiKind, entryId, nextLocked)
+    const result = await setUniverseCanonLock(universeId, kind.apiKind, entryId, nextLocked, { silent: true })
       .catch((err) => { toast.error(err.message || 'Lock toggle failed'); return null; });
     togglingLockRef.current = null;
     if (mountedRef.current) setTogglingLockId(null);
@@ -330,7 +330,7 @@ export default function UniverseCanonSection({
     const capturedId = universeId;
     const providerId = universe.llm?.provider || undefined;
     const model = universe.llm?.model || undefined;
-    const result = await refineUniverseCharacter(universeId, entryId, { providerId, model })
+    const result = await refineUniverseCharacter(universeId, entryId, { providerId, model }, { silent: true })
       .catch((err) => { toast.error(err.message || 'Refine failed'); return null; });
     if (mountedRef.current) setRefiningId(null);
     if (!result || !isStillCurrent(capturedId)) return;
@@ -348,7 +348,7 @@ export default function UniverseCanonSection({
     const capturedId = universeId;
     const providerId = universe.llm?.provider || undefined;
     const model = universe.llm?.model || undefined;
-    const result = await expandUniverseCharacter(universeId, entryId, { providerId, model })
+    const result = await expandUniverseCharacter(universeId, entryId, { providerId, model }, { silent: true })
       .catch((err) => { toast.error(err.message || 'Expand failed'); return null; });
     if (mountedRef.current) setExpandingId(null);
     if (!result || !isStillCurrent(capturedId)) return;
@@ -407,7 +407,7 @@ export default function UniverseCanonSection({
       prompt: styled.prompt,
       negativePrompt: styled.negativePrompt || undefined,
       ...(universeRun ? { universeRun } : {}),
-    }).catch((err) => { toast.error(err.message || 'Render failed'); return null; });
+    }, { silent: true }).catch((err) => { toast.error(err.message || 'Render failed'); return null; });
     if (!queued?.jobId || !mountedRef.current) return;
     setRenderingJobs((prev) => ({ ...prev, [entry.id]: queued.jobId }));
     toast.success(`Rendering reference for ${entry.name}`);
@@ -469,7 +469,7 @@ export default function UniverseCanonSection({
       prompt: styled.prompt,
       negativePrompt: styled.negativePrompt || undefined,
       ...(universeRun ? { universeRun } : {}),
-    }).catch((err) => { toast.error(err.message || 'Clean plate render failed'); return null; });
+    }, { silent: true }).catch((err) => { toast.error(err.message || 'Clean plate render failed'); return null; });
     if (!queued?.jobId || !mountedRef.current) return;
     setRenderingJobs((prev) => ({ ...prev, [entry.id]: queued.jobId }));
     toast.success(`Rendering clean plate for ${entry.name}`);

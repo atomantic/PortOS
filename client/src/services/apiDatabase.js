@@ -1,7 +1,7 @@
 import { request } from './apiCore.js';
 
 // Database
-export const getDatabaseStatus = () => request('/database/status');
+export const getDatabaseStatus = (options) => request('/database/status', options);
 export const switchDatabase = (target, migrate = false) => request('/database/switch', {
   method: 'POST',
   body: JSON.stringify({ target, migrate })

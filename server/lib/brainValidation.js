@@ -541,3 +541,71 @@ export const activityDigestSettingsSchema = z.object({
   runTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'Expected HH:MM (24h)').optional(),
   catchUpDays: z.number().int().min(0).max(30).optional()
 }).strict();
+
+// POST /api/brain/{digest,review}/run — manual trigger with optional provider /
+// model overrides (both absent = use configured defaults).
+export const brainDigestRunSchema = z.object({
+  providerOverride: z.string().optional(),
+  modelOverride: z.string().optional()
+});
+
+// =============================================================================
+// SONGBOOK SCHEMAS (Brain entity type `songs` — guitar tabs / chord sheets)
+// =============================================================================
+
+// Learning stage for a repertoire song
+export const songStageEnum = z.enum(['new', 'learning', 'learned', 'memorized']);
+
+// Instrument the sheet is written for
+export const songInstrumentEnum = z.enum(['guitar', 'piano', 'ukulele', 'bass', 'voice', 'other']);
+
+// Content notation format (drives the client-side parser/renderer)
+export const songContentFormatEnum = z.enum(['chordpro', 'tab', 'plain']);
+
+// Nested content object — named so the update schema below can rebuild it
+// defaults-free (partialWithoutDefaults only strips TOP-LEVEL field defaults).
+const songContentSchema = z.object({
+  format: songContentFormatEnum.optional().default('tab'),
+  text: z.string().max(200000).optional().default('')
+});
+
+// Create/Update Song input schema. Attachment metadata ({ filename, label,
+// mime, size, sha256 }) is server-managed — synced in the record, mutated only
+// by the attachment endpoints, never client-suppliable (no schema key here, so
+// Zod's unknown-key stripping drops it).
+export const songInputSchema = z.object({
+  title: z.string().trim().min(1).max(300),
+  artist: z.string().trim().max(300).optional().default(''),
+  instrument: songInstrumentEnum.optional().default('guitar'),
+  stage: songStageEnum.optional().default('new'),
+  tags: z.array(z.string().trim().min(1).max(50)).max(50).optional().default([]),
+  key: z.string().trim().max(20).optional().default(''),
+  capo: z.number().int().min(0).max(12).optional().default(0),
+  tuning: z.string().trim().max(40).optional().default(''),
+  sourceUrl: z.string().trim().max(2000).optional().default(''),
+  content: songContentSchema.optional().default({ format: 'tab', text: '' }),
+  notes: z.string().max(5000).optional().default('')
+});
+
+// PUT /api/brain/songbook/:id — defaults-free partial. partialWithoutDefaults
+// only strips top-level defaults (see the zodCompat docstring): a
+// present-but-partial `content` object would still inflate its inner defaults
+// — `{ content: { text } }` resetting format to 'tab', `{ content: { format } }`
+// wiping the whole text (and the wipe federates). The nested content field is
+// rebuilt defaults-free too; the route deep-merges `data.content` over the
+// stored song's content so an omitted inner key preserves the stored value.
+export const songUpdateSchema = partialWithoutDefaults(songInputSchema).extend({
+  content: partialWithoutDefaults(songContentSchema).optional()
+});
+
+// POST /api/brain/songbook/import/url
+export const songImportUrlSchema = z.object({
+  url: z.string().url().max(2000)
+});
+
+// POST /api/brain/songbook/:id/attachments — base64 upload body
+export const songAttachmentUploadSchema = z.object({
+  filename: z.string().min(1).max(300),
+  data: z.string().min(1),
+  label: z.string().max(300).optional().default('')
+});

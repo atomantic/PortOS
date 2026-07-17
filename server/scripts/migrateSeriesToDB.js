@@ -30,24 +30,16 @@
  *     retry safe; an already-renamed record is simply skipped on re-read).
  */
 
-import { readFile, writeFile, rename, readdir, stat } from 'fs/promises';
+import { rename, readdir, stat } from 'fs/promises';
 import { join } from 'path';
 import { PATHS, readJSONFile } from '../lib/fileUtils.js';
+import { markerExists, writeMarker } from '../lib/migrationMarker.js';
 import { query } from '../lib/db.js';
 import { mirrorTimestamp } from '../lib/pgTimestamp.js';
 
 const LEGACY_DIRNAME = 'pipeline-series';
 const MARKER_FILENAME = 'pipeline-series.migrated.json';
 const RECORD_RE = /^ser-[A-Za-z0-9-]+$/;
-
-async function markerExists() {
-  const raw = await readFile(join(PATHS.data, MARKER_FILENAME), 'utf-8').catch(() => null);
-  return raw != null;
-}
-
-async function writeMarker(payload) {
-  await writeFile(join(PATHS.data, MARKER_FILENAME), JSON.stringify(payload, null, 2) + '\n', 'utf-8');
-}
 
 // One legacy series record → `pipeline_series` row. Verbatim into `data`; the
 // typed mirror columns are bind-sanitized so a hand-edited/legacy value can't
@@ -77,7 +69,7 @@ async function importRecord(record) {
 }
 
 export async function migrateSeriesToDB() {
-  if (await markerExists()) return { ok: true, reason: 'already-applied', imported: 0 };
+  if (await markerExists(MARKER_FILENAME)) return { ok: true, reason: 'already-applied', imported: 0 };
 
   const legacyDir = join(PATHS.data, LEGACY_DIRNAME);
   const dirStat = await stat(legacyDir).catch(() => null);
@@ -106,7 +98,7 @@ export async function migrateSeriesToDB() {
     await rename(recordPath, `${recordPath}.imported`).catch(() => {});
   }
 
-  await writeMarker({ migratedAt: new Date().toISOString(), imported, skipped, reason: 'imported' });
+  await writeMarker(MARKER_FILENAME, { migratedAt: new Date().toISOString(), imported, skipped, reason: 'imported' });
   console.log(`🎬 pipeline-series→DB import: imported ${imported} series (${skipped} skipped); index.json renamed aside in place (review siblings kept)`);
   return { ok: true, reason: 'imported', imported, skipped };
 }

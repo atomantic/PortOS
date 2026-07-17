@@ -27,9 +27,7 @@
  * ride the pre-DB `scripts/migrations/` file runner.
  */
 
-import { readFile, writeFile } from 'fs/promises';
-import { join } from 'path';
-import { PATHS } from '../lib/fileUtils.js';
+import { readMarker, writeMarker } from '../lib/migrationMarker.js';
 import { query } from '../lib/db.js';
 import { CATALOG_TYPES, currentPayloadSchemaVersion, upgradePayload } from '../lib/catalogTypes.js';
 
@@ -41,18 +39,6 @@ const MARKER_FILENAME = 'catalog-payload.applied.json';
 // row predicate is already per-type, so a single high-water mark is enough to
 // skip the no-op boot scan on an already-migrated install.)
 const targetHighWater = () => Math.max(...CATALOG_TYPES.map((t) => t.payloadSchemaVersion));
-
-async function readMarker() {
-  const path = join(PATHS.data, MARKER_FILENAME);
-  const raw = await readFile(path, 'utf-8').catch(() => null);
-  if (!raw) return null;
-  try { return JSON.parse(raw); } catch { return null; }
-}
-
-async function writeMarker(payload) {
-  const path = join(PATHS.data, MARKER_FILENAME);
-  await writeFile(path, JSON.stringify(payload, null, 2), 'utf-8');
-}
 
 /**
  * Walk one type's below-current rows and apply the upgrader chain. Returns the
@@ -97,7 +83,7 @@ async function migrateType(type) {
  */
 export async function migrateCatalogPayload({ force = false } = {}) {
   const highWater = targetHighWater();
-  const marker = await readMarker();
+  const marker = await readMarker(MARKER_FILENAME);
   if (!force && marker?.highWater >= highWater) {
     return { skipped: true, marker };
   }
@@ -114,7 +100,7 @@ export async function migrateCatalogPayload({ force = false } = {}) {
   }
 
   const payload = { highWater, completedAt: new Date().toISOString(), stats: totals };
-  await writeMarker(payload);
+  await writeMarker(MARKER_FILENAME, payload);
   console.log(`🧬 catalog payload migration: ${totals.upgraded} row(s) upgraded across ${totals.typesWalked} type(s)`);
   return { skipped: false, ...payload };
 }

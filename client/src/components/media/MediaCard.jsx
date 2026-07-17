@@ -203,6 +203,7 @@ export default function MediaCard({
                 type="button"
                 onClick={() => onToggleHidden(item)}
                 className="shrink-0 px-1.5 py-1 bg-port-border hover:bg-port-border/70 text-white text-[10px] rounded flex items-center justify-center"
+                aria-label={item.hidden ? 'Unhide (move out of hidden section)' : 'Hide (move to hidden section)'}
                 title={item.hidden ? 'Unhide (move out of hidden section)' : 'Hide (move to hidden section)'}
               >
                 {item.hidden ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
@@ -213,6 +214,7 @@ export default function MediaCard({
                 type="button"
                 onClick={() => setConfirmingDelete(true)}
                 className="shrink-0 px-1.5 py-1 bg-port-error/20 hover:bg-port-error/40 text-port-error text-[10px] rounded flex items-center justify-center"
+                aria-label="Delete"
                 title="Delete"
               >
                 <Trash2 className="w-3 h-3" />
