@@ -161,11 +161,21 @@ export default function TasteTab({ onRefresh }) {
       return;
     }
     setLoadingPersonalized(true);
+    // Sentinel: the endpoint 200s with a null body when it has nothing to ask
+    // (no identity context / no provider), but rejects on a real failure. Keep
+    // those apart — `undefined` means the request failed and request() already
+    // toasted the true reason, so the "try completing more identity documents"
+    // hint below would both double-toast and misattribute the cause.
     const question = await api.getPersonalizedTasteQuestion(
       activeSection,
       selectedProvider.providerId,
       selectedProvider.model
-    ).catch(() => null);
+    ).catch(() => undefined);
+
+    if (question === undefined) {
+      setLoadingPersonalized(false);
+      return;
+    }
 
     if (!question) {
       toast('No personalized question available — try completing more identity documents', { icon: '⚠️' });

@@ -102,9 +102,13 @@ export default function OverviewTab({ status, settings, onRefresh }) {
 
   const handleSaveSettings = async () => {
     setSaving(true);
-    await api.updateSoulSettings(settingsForm);
-    toast.success('Settings updated');
+    // request() owns the failure toast, but the spinner must clear either way:
+    // an uncaught rejection here left `saving` true, stranding the button
+    // permanently disabled on "Saving..." with no way to retry.
+    const ok = await api.updateSoulSettings(settingsForm).then(() => true).catch(() => false);
     setSaving(false);
+    if (!ok) return;
+    toast.success('Settings updated');
     setShowSettings(false);
     onRefresh();
   };
