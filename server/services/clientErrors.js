@@ -130,8 +130,9 @@ export async function recordClientError(rawPayload) {
   const now = Date.now();
 
   // Before the throttle: an extension error taking the 1/sec slot would drop a
-  // real PortOS error arriving behind it. Before sanitize: MAX_STACK_CHARS
-  // would truncate away the extension frame that proves provenance.
+  // real PortOS error arriving behind it. On the raw payload: MAX_STACK_CHARS
+  // truncation can cut the originating frame off a stack with a long first
+  // line, hiding the proof of provenance.
   // Re-checked here even though current clients filter at the source — a
   // long-lived tab keeps running an old bundle.
   if (isExtensionError(rawPayload)) {

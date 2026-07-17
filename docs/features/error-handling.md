@@ -75,20 +75,26 @@ control and not actionable — the user cannot fix MetaMask by changing PortOS �
 
 Detection is **provenance-first**: an extension URL scheme (`chrome-extension://`,
 `moz-extension://`, `safari-web-extension://`, `webkit-masked-url://`, …) in the script
-`source` or the `stack` proves the frame is not ours. This does the real work — every
-extension error observed so far carries such a frame. A single message pattern
-(`MetaMask`) backstops the one case provenance cannot see: a wallet rejecting with a bare
-string, which carries no frames at all.
+`source` or at the stack's **originating frame** proves the throw site is not ours. This
+does the real work — every extension error observed so far carries such a frame. A single
+message pattern (`MetaMask`) backstops the one case provenance cannot see: a wallet
+rejecting with a bare string, which carries no frames at all.
 
-Four constraints worth preserving when touching this:
+Five constraints worth preserving when touching this:
 
 - **Filter before the throttle, on both ends.** The client reporter and the server
   aggregator each gate on a 1/sec throttle. An extension error that takes the slot drops a
   genuine PortOS error arriving <1s behind it. Filtering early keeps the budget for errors
   we can act on — it is a correctness rule, not an optimization.
-- **Filter before sanitize (server).** `sanitize()` caps the stack at 4000 chars, which can
-  cut off the extension frame that is the only proof of provenance. Detection runs on the
-  raw payload.
+- **Only the originating (top) frame counts — never "any frame in the stack".** An
+  extension that wraps or synchronously invokes our code (a patched `fetch`, an injected
+  provider, a dispatched event) leaves its frames *below* ours, so a genuine PortOS error
+  that merely passed through extension code carries an extension URL in its stack. Matching
+  any frame would silently drop it forever. `originatingFrame()` handles both stack
+  dialects — V8 (`at fn (url:1:1)`, after a `Type: message` line) and Firefox/Safari
+  (`fn@url:1:1`).
+- **Detect on the raw payload (server).** `sanitize()` caps the stack at 4000 chars, so a
+  long first line can push the originating frame past the cut and hide the provenance.
 - **Never match on `url`.** That field is the *page* location, which is ours even when an
   extension throws on top of it. Only `source` / `stack` / `message` are evidence.
 - **Keep the message list near-empty.** Each pattern is a permanent silent-drop rule, and

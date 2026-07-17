@@ -13,10 +13,22 @@ const EXTENSION_MESSAGE_RE = [
   /\bMetaMask\b/i,
 ];
 
+// Only the throw site proves provenance — an extension that wraps or invokes
+// our code leaves its frames below ours. Handles V8 (`at fn (url:1:1)`) and
+// Firefox/Safari (`fn@url:1:1`) stacks.
+function originatingFrame(stack) {
+  for (const raw of stack.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (/^at\s/.test(line) || line.includes('@')) return line;
+  }
+  return '';
+}
+
 /**
  * True when an error report originated from a browser extension rather than
- * PortOS itself. Checks `source` / `stack` / `message`; never `url` (the page
- * location is ours even when an extension throws on top of it).
+ * PortOS itself. Checks `source` / the stack's originating frame / `message`;
+ * never `url` (the page location is ours even when an extension throws on it).
  */
 export function isExtensionError(payload) {
   if (!payload || typeof payload !== 'object') return false;
@@ -27,7 +39,7 @@ export function isExtensionError(payload) {
   const message = str(payload.message);
 
   if (EXTENSION_SCHEME_RE.test(source)) return true;
-  if (EXTENSION_SCHEME_RE.test(stack)) return true;
+  if (EXTENSION_SCHEME_RE.test(originatingFrame(stack))) return true;
   if (EXTENSION_SCHEME_RE.test(message)) return true;
 
   return EXTENSION_MESSAGE_RE.some(re => re.test(message));

@@ -45,12 +45,35 @@ const EXTENSION_MESSAGE_RE = [
 ];
 
 /**
+ * The originating (top) frame of a stack — the throw site.
+ *
+ * Only this frame proves provenance. An extension that wraps or synchronously
+ * invokes our code (a patched `fetch`, an injected provider, a dispatched
+ * event) leaves its frames BELOW ours, so a genuine PortOS error that merely
+ * passed *through* extension code has an extension URL in its stack while
+ * being entirely ours. Matching any frame would silently drop it forever —
+ * the worst failure this module can have.
+ *
+ * Handles both stack dialects: V8 (`    at fn (url:1:1)`, preceded by a
+ * `Type: message` line) and Firefox/Safari (`fn@url:1:1`, no message line).
+ */
+function originatingFrame(stack) {
+  for (const raw of stack.split('\n')) {
+    const line = raw.trim();
+    if (!line) continue;
+    if (/^at\s/.test(line) || line.includes('@')) return line;
+  }
+  return '';
+}
+
+/**
  * True when an error report originated from a browser extension rather than
  * PortOS itself.
  *
- * Checks `source` (the script URL), `stack`, and `message`. Deliberately does
- * NOT check `url` — that is the *page* location (`window.location.href`),
- * which is always ours even when an extension throws on top of it.
+ * Checks `source` (the script URL), the stack's originating frame, and
+ * `message`. Deliberately does NOT check `url` — that is the *page* location
+ * (`window.location.href`), which is always ours even when an extension
+ * throws on top of it.
  *
  * Safe to call on a raw, unsanitized payload; every field is treated as
  * untrusted and non-string values are ignored.
@@ -63,11 +86,12 @@ export function isExtensionError(payload) {
   const stack = str(payload.stack);
   const message = str(payload.message);
 
-  // Provenance: an extension scheme anywhere in the script URL or the stack.
-  // The message is checked too — a failed dynamic import or fetch names the
-  // offending extension URL in its message with no stack attached.
+  // `source` is the script the error came from (an `error` event's `filename`),
+  // so it is already the originating script — no frame extraction needed.
   if (EXTENSION_SCHEME_RE.test(source)) return true;
-  if (EXTENSION_SCHEME_RE.test(stack)) return true;
+  if (EXTENSION_SCHEME_RE.test(originatingFrame(stack))) return true;
+  // A failed dynamic import or fetch names the offending extension URL in its
+  // message with no stack attached.
   if (EXTENSION_SCHEME_RE.test(message)) return true;
 
   return EXTENSION_MESSAGE_RE.some(re => re.test(message));

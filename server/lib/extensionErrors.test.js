@@ -33,6 +33,49 @@ describe('isExtensionError', () => {
       })).toBe(true);
     });
 
+    it('flags a Firefox/Safari-dialect stack (`fn@url`, no `at ` prefix)', () => {
+      expect(isExtensionError({
+        message: 'boom',
+        stack: 'inject@moz-extension://abcd-1234/content.js:1:1\nfoo@https://portos/assets/index.js:2:2',
+      })).toBe(true);
+    });
+  });
+
+  describe('provenance is the ORIGINATING frame, not any frame', () => {
+    // An extension that wraps or synchronously invokes our code (a patched
+    // fetch, an injected provider, a dispatched event) leaves its frames BELOW
+    // ours. Treating any frame as proof would silently drop a real PortOS bug.
+    it('does NOT flag a PortOS error merely invoked from extension code', () => {
+      expect(isExtensionError({
+        message: "Cannot read properties of undefined (reading 'id')",
+        stack: [
+          "TypeError: Cannot read properties of undefined (reading 'id')",
+          '    at renderRow (https://portos/assets/index-abc.js:10:5)',
+          '    at wrappedFetch (chrome-extension://examplewalletextensionid00000000/inpage.js:1:1)',
+        ].join('\n'),
+      })).toBe(false);
+    });
+
+    it('still flags it when the extension frame IS the throw site', () => {
+      expect(isExtensionError({
+        message: "Cannot read properties of null (reading 'ethereum')",
+        stack: [
+          "TypeError: Cannot read properties of null (reading 'ethereum')",
+          '    at inject (chrome-extension://examplewalletextensionid00000000/inpage.js:1:1)',
+          '    at dispatch (https://portos/assets/index-abc.js:10:5)',
+        ].join('\n'),
+      })).toBe(true);
+    });
+
+    it('does not mistake the V8 message line for the originating frame', () => {
+      // The `Type: message` line precedes the frames and must be skipped, or a
+      // message mentioning an extension URL would be read as the throw site.
+      expect(isExtensionError({
+        message: 'boom',
+        stack: 'Error: boom\n    at f (https://portos/assets/index.js:1:1)',
+      })).toBe(false);
+    });
+
     it('flags an extension URL named in the message with no stack', () => {
       expect(isExtensionError({
         message: 'Failed to fetch dynamically imported module: chrome-extension://abc/x.js',

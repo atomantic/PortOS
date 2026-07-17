@@ -21,7 +21,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_PATH = resolve(__dirname, 'extensionErrors.js');
 const CLIENT_PATH = resolve(__dirname, '../../client/src/lib/extensionErrors.js');
 
-const MIRRORED_NAMES = ['EXTENSION_SCHEME_RE', 'EXTENSION_MESSAGE_RE', 'isExtensionError'];
+const MIRRORED_NAMES = ['EXTENSION_SCHEME_RE', 'EXTENSION_MESSAGE_RE', 'originatingFrame', 'isExtensionError'];
 
 describe('extensionErrors server↔client mirror parity', () => {
   const serverSrc = readFileSync(SERVER_PATH, 'utf8');

@@ -216,21 +216,37 @@ describe('recordClientError', () => {
       expect(review.createItem.mock.calls[0][0].title).toContain('Genuine PortOS failure');
     });
 
-    it('still reports an extension frame that sits past the stack truncation limit', async () => {
-      // Detection runs on the RAW payload for this reason — sanitize() caps
-      // the stack at 4000 chars, which would cut off the only proof of
-      // provenance and let the error through as if it were ours.
-      const deepStack = [
-        'TypeError: boom',
-        ...Array.from({ length: 200 }, (_, i) => `    at frame${i} (https://portos/assets/index.js:${i}:1)`),
-        '    at inject (chrome-extension://abcdefghijklmnop/inpage.js:1:1)',
+    it('still detects the frame when truncation would have cut it off', async () => {
+      // Why detection runs on the RAW payload: sanitize() caps the stack at
+      // MAX_STACK_CHARS (4000), so an unusually long first line pushes the
+      // originating frame past the cut and a post-sanitize check would let the
+      // extension error through as if it were ours.
+      const stack = [
+        `TypeError: ${'x'.repeat(5000)}`,
+        '    at inject (chrome-extension://examplewalletextensionid00000000/inpage.js:1:1)',
       ].join('\n');
-      expect(deepStack.length).toBeGreaterThan(4000);
 
-      const result = await recordClientError({ type: 'error', message: 'boom', stack: deepStack });
+      const result = await recordClientError({ type: 'error', message: 'boom', stack });
 
       expect(result.reason).toBe('extension');
       expect(review.createItem).not.toHaveBeenCalled();
+    });
+
+    it('does NOT drop a real PortOS error that merely ran through extension code', async () => {
+      // The extension frame is below ours, so PortOS threw it — it must reach
+      // the Review Hub rather than be silently swallowed.
+      const result = await recordClientError({
+        type: 'error',
+        message: "Cannot read properties of undefined (reading 'id')",
+        stack: [
+          "TypeError: Cannot read properties of undefined (reading 'id')",
+          '    at renderRow (https://portos/assets/index-abc.js:10:5)',
+          '    at wrappedFetch (chrome-extension://examplewalletextensionid00000000/inpage.js:1:1)',
+        ].join('\n'),
+      });
+
+      expect(result.accepted).toBe(true);
+      expect(review.createItem).toHaveBeenCalledTimes(1);
     });
 
     it('does NOT filter `crypto.randomUUID is not a function` — that is our own bug', async () => {
