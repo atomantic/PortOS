@@ -59,8 +59,8 @@ describe('selectTopGoals', () => {
   });
 
   it('sorts un-ranked goals last rather than treating null urgency as 0', () => {
-    // urgency is null until a birth date is set — that is "we don't know", not "plenty of
-    // time". A null must never outrank a real 0.
+    // urgency is null when the service has no horizon to rank against — that is "we don't
+    // know", not "plenty of time". A null must never outrank a real 0.
     const picked = selectTopGoals([
       goal({ id: 'unranked', urgency: null }),
       goal({ id: 'relaxed', urgency: 0 }),

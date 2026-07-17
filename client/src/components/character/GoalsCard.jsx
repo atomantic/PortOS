@@ -20,11 +20,12 @@ export const GOALS_PATH = '/goals/list';
 
 const TOP_N = 4;
 
-// `urgency` is null until the user sets a birth date — the horizon math has no denominator
-// without one. That is NOT the same as urgency 0 ("plenty of time"), so nulls sort last
-// instead of being coerced to a number they don't have: a user with no birth date still gets
-// their goals listed in service order rather than a bogus ranking. Ties keep the service's
-// order because Array#sort is stable.
+// `urgency` is null whenever the goals service has nothing to rank against — no birth date
+// (the horizon math has no denominator without one), or a goal carrying no horizon. That is
+// NOT the same as urgency 0 ("plenty of time"), so nulls sort last instead of being coerced
+// to a number they don't have: a user with no birth date still gets their goals listed in
+// service order rather than a bogus ranking. Ties keep the service's order because Array#sort
+// is stable. Real urgencies are clamped to [0,1] server-side, so -1 can never collide.
 const urgencyRank = (urgency) => (Number.isFinite(urgency) ? urgency : -1);
 
 export function selectTopGoals(goals, limit = TOP_N) {
