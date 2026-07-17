@@ -169,7 +169,9 @@ export const SKILLS = [
  */
 async function readSkill(skill) {
   const raw = await skill.compute().catch((err) => {
-    console.warn(`⚠️ Character skill ${skill.id}: stat read failed — ${err.message}`);
+    // `err?.message ?? err` — a non-Error rejection (a thrown string, a rejected `undefined`)
+    // would otherwise throw *inside* the catch and defeat the per-skill containment below.
+    console.warn(`⚠️ Character skill ${skill.id}: stat read failed — ${err?.message ?? err}`);
     return STAT_UNAVAILABLE;
   });
 

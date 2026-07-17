@@ -30,6 +30,18 @@ const DEFAULT_MAX_HP = 15;
 // federated snapshot. `skills` is per-machine by design — see characterSkills.js (#2674).
 const DERIVED_FIELDS = ['level', 'ageYears', 'skills'];
 
+/**
+ * Copy `record` without any derived field. The single chokepoint for that rule — used by the
+ * persist path (saveCharacter), the federation wire projection (getWireCharacter), and
+ * dataSync's character merge — so adding a derived field to the list above can't be forgotten
+ * at one of the three sites.
+ */
+export function stripDerivedFields(record) {
+  const out = { ...record };
+  for (const field of DERIVED_FIELDS) delete out[field];
+  return out;
+}
+
 // Pure: fractional years lived since birthDate (whole years + progress toward the next
 // birthday), or null when birthDate is unset/invalid/future. Uses **calendar** birthdays,
 // not a fixed 365.25-day average — averaging would tick the level up to a day early across
@@ -179,17 +191,15 @@ export async function getWireCharacter() {
   // characterSkills.js — and ageYears is a pure function of the peer's own birthDate). Without
   // this, applyCharacterRemote's no-local branch writes the payload verbatim and a stale key
   // would self-propagate across peers.
-  const wire = { ...raw };
-  for (const field of DERIVED_FIELDS) delete wire[field];
-  return { ...wire, level: legacyLevelFromXp(raw.xp) };
+  return { ...stripDerivedFields(raw), level: legacyLevelFromXp(raw.xp) };
 }
 
 export async function saveCharacter(data) {
   await ensureDir(PATHS.data);
-  // Never persist derived fields — level is age-derived on read (#2673). Stripping them
-  // keeps a stale level off disk and out of the federated character snapshot.
-  const persist = { ...data };
-  for (const field of DERIVED_FIELDS) delete persist[field];
+  // Never persist derived fields — level is age-derived on read (#2673), skills are
+  // usage-derived and per-machine (#2674). Stripping them keeps stale values off disk and out
+  // of the federated character snapshot.
+  const persist = stripDerivedFields(data);
   persist.updatedAt = new Date().toISOString();
   await atomicWrite(CHARACTER_FILE, persist);
   return enrichCharacter(persist);
