@@ -495,13 +495,13 @@ describe('buildCliArgs — antigravity-cli headless mode', () => {
   it('uses agy print mode and does not pass model flags', () => {
     const provider = { id: 'antigravity-cli', command: 'agy', args: [], defaultModel: 'antigravity-configured-default' };
     const args = buildCliArgs(provider);
-    expect(args).toEqual(['--print', '--dangerously-skip-permissions']);
+    expect(args).toEqual(['--dangerously-skip-permissions', '--print']);
   });
 
   it('strips legacy Gemini flags during invocation', () => {
     const provider = { id: 'antigravity-cli', command: 'agy', args: ['--yolo', '-m', 'gemini-2.5-pro', '--output-format', 'text'], defaultModel: 'antigravity-configured-default' };
     const args = buildCliArgs(provider);
-    expect(args).toEqual(['--print', '--dangerously-skip-permissions']);
+    expect(args).toEqual(['--dangerously-skip-permissions', '--print']);
   });
 });
 

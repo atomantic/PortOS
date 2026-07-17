@@ -7,6 +7,7 @@ import {
   ensureAntigravityPrintArgs,
   ensureAntigravityTuiArgs,
   stripAntigravityUnsupportedArgs,
+  prepareAntigravityPrompt,
 } from './antigravity.js';
 
 describe('antigravity command/provider predicates', () => {
@@ -54,28 +55,66 @@ describe('stripAntigravityUnsupportedArgs', () => {
 });
 
 describe('ensureAntigravityPrintArgs', () => {
-  it('injects --print and --dangerously-skip-permissions for empty args', () => {
-    expect(ensureAntigravityPrintArgs([])).toEqual(['--print', '--dangerously-skip-permissions']);
+  // agy takes the prompt as the VALUE of --print (it does NOT read stdin), so
+  // --print must be the FINAL token and --dangerously-skip-permissions must come
+  // BEFORE it — otherwise agy consumes the flag as the prompt text. That was the
+  // shipped bug: the model received "--dangerously-skip-permissions" as its task.
+  it('puts --print LAST with --dangerously-skip-permissions before it', () => {
+    expect(ensureAntigravityPrintArgs([])).toEqual(['--dangerously-skip-permissions', '--print']);
   });
 
-  it('strips legacy Gemini flags then injects print/skip-permissions', () => {
+  it('never leaves a flag AFTER --print (regression: flag-swallowing)', () => {
+    const args = ensureAntigravityPrintArgs([]);
+    expect(args[args.length - 1]).toBe('--print');
+    expect(args).not.toContain('--print --dangerously-skip-permissions');
+  });
+
+  it('strips legacy Gemini flags then emits skip-permissions + trailing --print', () => {
     expect(ensureAntigravityPrintArgs(['--yolo', '-m', 'gemini-2.5-pro', '--output-format', 'text']))
-      .toEqual(['--print', '--dangerously-skip-permissions']);
+      .toEqual(['--dangerously-skip-permissions', '--print']);
   });
 
-  it('does not duplicate --print when already present (incl. -p / --prompt)', () => {
-    expect(ensureAntigravityPrintArgs(['--print'])).toEqual(['--print', '--dangerously-skip-permissions']);
-    expect(ensureAntigravityPrintArgs(['-p'])).toEqual(['-p', '--dangerously-skip-permissions']);
-    expect(ensureAntigravityPrintArgs(['--prompt'])).toEqual(['--prompt', '--dangerously-skip-permissions']);
+  it('normalizes any pre-baked print flag (--print / -p / --prompt) to a single trailing --print', () => {
+    expect(ensureAntigravityPrintArgs(['--print'])).toEqual(['--dangerously-skip-permissions', '--print']);
+    expect(ensureAntigravityPrintArgs(['-p'])).toEqual(['--dangerously-skip-permissions', '--print']);
+    expect(ensureAntigravityPrintArgs(['--prompt'])).toEqual(['--dangerously-skip-permissions', '--print']);
   });
 
   it('does not add --dangerously-skip-permissions when --sandbox is present', () => {
-    expect(ensureAntigravityPrintArgs(['--sandbox'])).toEqual(['--print', '--sandbox']);
+    expect(ensureAntigravityPrintArgs(['--sandbox'])).toEqual(['--sandbox', '--print']);
   });
 
   it('does not duplicate --dangerously-skip-permissions', () => {
     expect(ensureAntigravityPrintArgs(['--dangerously-skip-permissions']))
-      .toEqual(['--print', '--dangerously-skip-permissions']);
+      .toEqual(['--dangerously-skip-permissions', '--print']);
+  });
+});
+
+describe('prepareAntigravityPrompt', () => {
+  it('splices the prompt in as the VALUE of the trailing --print (no stdin)', () => {
+    const built = ensureAntigravityPrintArgs([]);
+    const { args, useStdin } = prepareAntigravityPrompt(built, 'do the creative work');
+    expect(args).toEqual(['--dangerously-skip-permissions', '--print', 'do the creative work']);
+    expect(useStdin).toBe(false);
+  });
+
+  it('keeps --dangerously-skip-permissions as a real flag, not the prompt', () => {
+    const built = ensureAntigravityPrintArgs([]);
+    const { args } = prepareAntigravityPrompt(built, 'PROMPT');
+    // the flag stays before --print; only PROMPT follows --print
+    expect(args.indexOf('--dangerously-skip-permissions')).toBeLessThan(args.indexOf('--print'));
+    expect(args[args.indexOf('--print') + 1]).toBe('PROMPT');
+  });
+
+  it('appends --print + prompt when no print flag is present', () => {
+    const { args, useStdin } = prepareAntigravityPrompt(['--sandbox'], 'hi');
+    expect(args).toEqual(['--sandbox', '--print', 'hi']);
+    expect(useStdin).toBe(false);
+  });
+
+  it('returns a callable no-op cleanup', () => {
+    const { cleanup } = prepareAntigravityPrompt(['--print'], 'x');
+    expect(() => cleanup()).not.toThrow();
   });
 });
 

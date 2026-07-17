@@ -39,14 +39,19 @@ export function stripAntigravityUnsupportedArgs(args = []) {
   return out;
 }
 
+// `agy --print`/`-p`/`--prompt` takes the prompt as the flag's VALUE and does
+// NOT read stdin. So the print flag must be the FINAL token (a marker); the host
+// runner splices the prompt in right after it at spawn time. Keep in sync with
+// server/lib/antigravity.js#ensureAntigravityPrintArgs — the host overrides the
+// runner (setCliRunner), so the prompt injection itself lives host-side.
+const ANTIGRAVITY_PRINT_FLAGS = ['--print', '-p', '--prompt'];
+
 export function ensureAntigravityPrintArgs(args = []) {
-  const out = stripAntigravityUnsupportedArgs(args);
-  if (!out.some((arg) => arg === '--print' || arg === '-p' || arg === '--prompt')) {
-    out.unshift('--print');
-  }
+  const out = stripAntigravityUnsupportedArgs(args).filter((arg) => !ANTIGRAVITY_PRINT_FLAGS.includes(arg));
   if (!out.includes('--dangerously-skip-permissions') && !out.includes('--sandbox')) {
     out.push('--dangerously-skip-permissions');
   }
+  out.push('--print');
   return out;
 }
 

@@ -27,8 +27,7 @@ import { spawn } from 'child_process';
 import { writeFile, rm, mkdtemp } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { buildCliArgs } from '../lib/cliProviderArgs.js';
-import { prepareGrokPromptFile } from '../lib/grok.js';
+import { buildCliArgs, prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { resolveCliModel, isCodexProvider, buildCodexStartupArgs } from '../lib/providerModels.js';
 import { extractCodexAssistant, extractCodexAssistantTail } from '../lib/codexAssistantExtract.js';
 import { killProcessTree, resolveWindowsExecutable, prepareWindowsSafeSpawn } from '../lib/bufferedSpawn.js';
@@ -122,10 +121,10 @@ export async function describeImageViaCli({
   try {
     await writeFile(join(dir, IMAGE_BASENAME), bytes);
     const { command, args, stdin, cwd } = buildCliVisionInvocation(provider, visionModel, dir, prompt);
-    // Grok reads its prompt from --prompt-file /dev/stdin (fed via stdin on
-    // POSIX); on Windows it's rewritten to a temp file (writePromptToStdin=false).
-    // No-op for every other provider.
-    const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup } = prepareGrokPromptFile(args, stdin);
+    // Deliver the prompt per provider convention: antigravity as the --print
+    // VALUE (agy doesn't read stdin); grok's --prompt-file /dev/stdin via stdin
+    // (POSIX) / temp file (Windows); every other provider via stdin.
+    const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup } = prepareCliPrompt(command, args, stdin);
     cleanupPromptFile = cleanup;
 
     const childEnv = { ...process.env, ...provider?.envVars };

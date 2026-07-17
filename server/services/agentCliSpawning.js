@@ -26,7 +26,8 @@ import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDetection.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
-import { isGrokCommand, ensureGrokHeadlessArgs, prepareGrokPromptFile } from '../lib/grok.js';
+import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
+import { isGrokCommand, ensureGrokHeadlessArgs } from '../lib/grok.js';
 import { resolveCliModel, buildEffortArgs, buildCodexStartupArgs, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { resolveForgeTokenEnv } from './git.js';
@@ -320,7 +321,7 @@ export function buildCliSpawnConfig(provider, model, settingsEnv = {}, { systemP
 
   // Grok Build CLI (`grok`): headless one-shot agent. Reads the combined
   // contract+task prompt from `--prompt-file /dev/stdin` (rewritten to a temp
-  // file on Windows at the spawn site — prepareGrokPromptFile), bypasses approval
+  // file on Windows at the spawn site — via prepareCliPrompt), bypasses approval
   // prompts, and emits plain text (the live-output handler falls through to its
   // default text path, like OpenCode). grok is a non-Claude command, so
   // agentLifecycle keeps the operating contract in the stdin prompt (no
@@ -478,9 +479,10 @@ export async function spawnDirectly({
   // bare name → spawn ENOENT (errno -4058) → startup-failure. Mirrors the
   // working "Run Prompt" path (server/services/runner.js); resolved against
   // childEnv so a provider PATH override is honored. See issue #2243.
-  // Grok's `--prompt-file /dev/stdin` is fed via stdin on POSIX; on Windows it's
-  // rewritten to a temp file (useStdin=false). No-op for every other provider.
-  const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup: cleanupPromptFile } = prepareGrokPromptFile(cliConfig.args, prompt);
+  // Deliver the prompt per provider convention: antigravity as the --print
+  // VALUE (no stdin); grok's `--prompt-file /dev/stdin` via stdin (POSIX) / temp
+  // file (Windows); every other provider via stdin (writePromptToStdin=true).
+  const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup: cleanupPromptFile } = prepareCliPrompt(cliConfig.command, cliConfig.args, prompt);
   const { command: spawnCommand, args: spawnArgs } = prepareCliSpawn(cliConfig.command, deliveredArgs, childEnv);
 
   const claudeProcess = spawn(spawnCommand, spawnArgs, {
