@@ -86,6 +86,21 @@ export async function listAssets({ kind } = {}) {
   return result.rows.map(rowToAsset);
 }
 
+/**
+ * Count index rows. Optional `kind` filter ('image' | 'video').
+ *
+ * Use this over `listAssets().length` when only the tally is wanted: listAssets selects and
+ * JSON-parses the full payload of every rendered image and video, which is a lot of work to
+ * throw away for one number (the character skill registry reads this on every
+ * `GET /api/character`).
+ */
+export async function countAssets({ kind } = {}) {
+  const result = kind
+    ? await query(`SELECT COUNT(*) AS count FROM media_assets WHERE kind = $1`, [kind])
+    : await query(`SELECT COUNT(*) AS count FROM media_assets`);
+  return parseInt(result.rows[0].count, 10);
+}
+
 // Strict video-history reader for reconcile. The live store's loadHistory()
 // (readJSONFile w/ [] default) intentionally collapses a MISSING file AND a
 // corrupt/unreadable one to [] — fine for the live store, but catastrophic for

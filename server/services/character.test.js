@@ -149,10 +149,26 @@ describe('getWireCharacter federation projection', () => {
 
   it('never federates the usage-derived skills', async () => {
     // Skills are per-machine (usage differs across a user's peers), so sending them would let
-    // the least-used peer clobber the most-used one under LWW. getWireCharacter reads
-    // character.json directly, so this holds as long as skills are never persisted.
+    // the least-used peer clobber the most-used one under LWW.
     const wire = await characterService.getWireCharacter();
     expect(wire.skills).toBeUndefined();
+  });
+
+  it('strips a STALE derived field already sitting in character.json', async () => {
+    // The load-bearing case: saveCharacter never writes these, but a hand-edited file (or one
+    // from a peer that did) can carry them. applyCharacterRemote's no-local branch writes the
+    // wire payload verbatim, so anything that survives here self-propagates across peers.
+    store.value = {
+      ...store.value,
+      skills: [{ id: 'stale', level: 99 }],
+      ageYears: 999,
+      level: 99,
+    };
+
+    const wire = await characterService.getWireCharacter();
+    expect(wire.skills).toBeUndefined();
+    expect(wire.ageYears).toBeUndefined();
+    expect(wire.level).toBe(4); // re-derived from xp, NOT the stale 99
   });
 });
 
@@ -190,6 +206,26 @@ describe('getCharacter skills (derived on read, #2674)', () => {
     store.value = { ...store.value, skills: [{ id: 'stale', level: 99 }] };
     const character = await characterService.getCharacter();
     expect(character.skills).toEqual(FAKE_SKILLS);
+  });
+
+  it('skips the skill fan-out entirely when withSkills is false', async () => {
+    const { getCharacterSkills } = await import('./characterSkills.js');
+    vi.mocked(getCharacterSkills).mockClear();
+
+    const character = await characterService.getCharacter({ withSkills: false });
+
+    expect(getCharacterSkills).not.toHaveBeenCalled();
+    // Absent, NOT [] — "not computed" must not read as "computed, every domain empty".
+    expect('skills' in character).toBe(false);
+    expect(character.level).toBeDefined(); // the cheap age level still resolves
+  });
+
+  it('drops a stale persisted skills key even when withSkills is false', async () => {
+    // Otherwise skipping the fan-out would hand the caller a hand-edited file's own `skills`
+    // array dressed up as derived output.
+    store.value = { ...store.value, skills: [{ id: 'stale', level: 99 }] };
+    const character = await characterService.getCharacter({ withSkills: false });
+    expect('skills' in character).toBe(false);
   });
 });
 

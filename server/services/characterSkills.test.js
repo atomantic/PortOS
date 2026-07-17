@@ -11,7 +11,7 @@ const stats = vi.hoisted(() => ({
   logging: { totalLogged: 0 },
   goals: { goals: [] },
   memories: 0,
-  assets: [],
+  assets: 0,
 }));
 
 // A domain "fails" by having its stub reject — the same way a real getter surfaces an
@@ -25,13 +25,14 @@ vi.mock('./meatspacePostTraining.js', () => ({ getAllTrainingEntries: vi.fn(asyn
 vi.mock('./meatspaceLoggingStats.js', () => ({ getLoggingStats: vi.fn(async () => stats.logging) }));
 vi.mock('./identity/goals.js', () => ({ getGoals: vi.fn(async () => stats.goals) }));
 vi.mock('./memoryBackend.js', () => ({ countMemories: vi.fn(async () => stats.memories) }));
-vi.mock('./mediaAssetIndex/db.js', () => ({ listAssets: vi.fn(async () => stats.assets) }));
+vi.mock('./mediaAssetIndex/db.js', () => ({ countAssets: vi.fn(async () => stats.assets) }));
 
 import { getCharacterSkills, levelFromValue, SKILLS, MAX_SKILL_LEVEL } from './characterSkills.js';
 import { listUniverses } from './universeBuilder.js';
 import { getCatalogStats } from './catalogDB.js';
 import { getLoggingStats } from './meatspaceLoggingStats.js';
 import { countMemories } from './memoryBackend.js';
+import { countAssets } from './mediaAssetIndex/db.js';
 
 const rows = (list) => Array.from({ length: list }, (_, i) => ({ id: `r${i}` }));
 
@@ -45,11 +46,12 @@ beforeEach(() => {
   stats.logging = { totalLogged: 0 };
   stats.goals = { goals: [] };
   stats.memories = 0;
-  stats.assets = [];
+  stats.assets = 0;
   vi.mocked(listUniverses).mockImplementation(async () => stats.universes);
   vi.mocked(getCatalogStats).mockImplementation(async () => stats.catalog);
   vi.mocked(getLoggingStats).mockImplementation(async () => stats.logging);
   vi.mocked(countMemories).mockImplementation(async () => stats.memories);
+  vi.mocked(countAssets).mockImplementation(async () => stats.assets);
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 });
 
@@ -193,10 +195,19 @@ describe('getCharacterSkills — populated domains', () => {
   });
 
   it('derives Auteur from the media asset index', async () => {
-    stats.assets = rows(20);
+    stats.assets = 20;
     const auteur = byId(await getCharacterSkills(), 'auteur');
     expect(auteur.value).toBe(20);
     expect(auteur.level).toBe(levelFromValue(20, 5));
+  });
+
+  it('counts media assets without materializing every row', async () => {
+    // countAssets() is a COUNT(*); listAssets() selects and JSON-parses the full payload of
+    // every rendered image and video. GET /api/character is polled every 15s by the CyberCity
+    // HUD, so this must never regress back to `(await listAssets()).length`.
+    vi.mocked(countAssets).mockClear();
+    await getCharacterSkills();
+    expect(countAssets).toHaveBeenCalledTimes(1);
   });
 
   it('leaves untouched domains at 0 while one domain climbs', async () => {
@@ -209,6 +220,13 @@ describe('getCharacterSkills — populated domains', () => {
   });
 });
 
+// NOTE ON WHAT THIS SUITE PROVES: these tests drive failure by making a stubbed getter
+// reject, which exercises readSkill's classification — the registry's own job. It does NOT
+// prove the real wiring can reach `unavailable`: `mentalist`, `vitalist`, and `strategist`
+// bottom out in readJSONFile, which swallows read errors and returns an empty default, so
+// those three can't currently reject at all. That gap is real, documented in the module
+// header, and tracked in #2726 (which owns the strict-read variants and the end-to-end
+// coverage). Do not read a green run here as "every domain reports failures correctly".
 describe('getCharacterSkills — stat-read failure (must NOT collapse into a fake 0)', () => {
   it('marks a skill unavailable with null level/value when its stat read rejects', async () => {
     vi.mocked(countMemories).mockImplementation(fail('memory backend'));

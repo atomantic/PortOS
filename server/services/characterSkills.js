@@ -9,9 +9,8 @@
  *
  * **Derived on read, never persisted.** `getCharacter()` attaches these to its
  * response; `saveCharacter()` strips them (they are in `character.js`'s
- * `DERIVED_FIELDS`), and the federation snapshot projects `character.json`
- * through `getWireCharacter()`, which reads the file directly and never sees
- * them. That is on purpose: usage differs per machine, so federating a
+ * `DERIVED_FIELDS`), and `getWireCharacter()` strips them from the federation
+ * snapshot. That is on purpose: usage differs per machine, so federating a
  * usage-derived value under LWW would let the peer you use *least* overwrite the
  * peer you use *most*.
  *
@@ -20,6 +19,23 @@
  * `{ level: null, value: null, unavailable: true }`. These two states must never
  * collapse: a fake 0 would read as "you have never written anything" when the
  * truth is "we could not tell".
+ *
+ * **Known gap in that guarantee (#2726).** `readSkill` honours whatever a domain
+ * reports, but it can only *detect* a failure the getter actually surfaces — by
+ * rejecting, or by resolving something non-countable. Today only the DB-backed
+ * getters do that:
+ *
+ *   - reports failure  → `wordsmith`, `archivist`, `auteur` (a failed `query()` throws)
+ *   - SWALLOWS failure → `mentalist`, `vitalist`, `strategist`
+ *
+ * The swallowing three bottom out in `readJSONFile`, which returns its default on
+ * *every* read error and not just ENOENT — so a corrupt or unreadable
+ * `post-sessions.json` is indistinguishable here from "no sessions yet" and reports a
+ * real-looking level 0. Closing it needs strict-read variants threaded through the
+ * shared file getters (the `readVideoHistoryStrict` `{ ok, list }` precedent in
+ * `mediaAssetIndex/db.js`), which is a wider change than this registry — tracked in
+ * #2726. Nothing here needs to change when it lands: the moment a getter starts
+ * reporting failure, `readSkill` already classifies it correctly.
  */
 
 import { listUniverses } from './universeBuilder.js';
@@ -29,7 +45,7 @@ import { getAllTrainingEntries } from './meatspacePostTraining.js';
 import { getLoggingStats } from './meatspaceLoggingStats.js';
 import { getGoals } from './identity/goals.js';
 import { countMemories } from './memoryBackend.js';
-import { listAssets } from './mediaAssetIndex/db.js';
+import { countAssets } from './mediaAssetIndex/db.js';
 
 // Skills plateau rather than growing without bound — past this the curve is
 // noise, and an unbounded level would dwarf the age-based character level.
@@ -139,7 +155,7 @@ export const SKILLS = [
     domain: 'media',
     scale: 5,
     // Rendered images + videos in the durable media asset index.
-    compute: async () => (await listAssets()).length,
+    compute: async () => countAssets(),
   },
 ];
 
