@@ -339,7 +339,18 @@ async function readEnabledStore() {
  * `ok: false` into an explicit `unavailable`.
  */
 async function readStoreAtPathResult(path) {
-  if (!existsSync(path)) return { present: false, ok: true, store: null };
+  if (!existsSync(path)) {
+    // A legacy `.MortalLoom.json.icloud` placeholder shadowing the real path
+    // means the store EXISTS but is offloaded under macOS's older rename-based
+    // eviction (the same case updateStore's overwrite guard checks). Classifying
+    // that as "absent" would let a strict read fall through to an empty local
+    // mirror and score a fake 0 (codex #2742 review). Report it present-but-
+    // unreadable instead. The read side never blocks on `brctl` to materialize it
+    // (that stays updateStore's job) — it just refuses to report a trustworthy
+    // empty for a store it has not actually read.
+    if (existsSync(icloudPlaceholderPath(path))) return { present: true, ok: false, store: null };
+    return { present: false, ok: true, store: null };
+  }
   let unreadable = false;
   const raw = await withTransientRetry(() => readFile(path, 'utf-8')).catch((err) => {
     // existsSync→readFile race: file disappeared between the two calls.
@@ -554,8 +565,18 @@ export async function mlArrayIfEnabled(key, { strict = false } = {}) {
   if (strict && enabled && !ok) {
     throw new Error(`MortalLoom store unreadable for key: ${key}`);
   }
-  if (!store || !Array.isArray(store[key])) return null;
-  return store[key];
+  if (!store) return null;
+  const value = store[key];
+  if (Array.isArray(value)) return value;
+  // A key that is PRESENT but not an array (`goals: {}`, `bodyEntries: "bad"`) is
+  // corruption, not the legitimate "no such records" of an omitted key — under
+  // strict it must surface as a failure rather than read as an omitted-key
+  // fall-through and score a fake 0 (codex #2742 review). Non-strict keeps falling
+  // through to the local mirror for both, as before.
+  if (strict && enabled && value !== undefined) {
+    throw new Error(`MortalLoom key ${key} is present but not an array`);
+  }
+  return null;
 }
 
 // === Daily-log composition (alcohol + nicotine records → day-keyed log) ===
@@ -602,7 +623,19 @@ export async function readDailyLogIfEnabled({ strict = false } = {}) {
   if (strict && enabled && !ok) {
     throw new Error('MortalLoom store unreadable for daily log');
   }
-  return store ? buildDailyLogFromMortalLoom(store) : null;
+  if (!store) return null;
+  // The daily log is composed from two arrays; buildDailyLogFromMortalLoom
+  // silently degrades a wrong-typed field to empty (a truthy string iterates as
+  // chars, etc.). Under strict a PRESENT-but-non-array source is corruption, not
+  // an empty day — throw rather than compose a fake-empty log (codex #2742 review).
+  if (strict && enabled) {
+    for (const key of ['alcoholDrinks', 'nicotineEntries']) {
+      if (store[key] !== undefined && !Array.isArray(store[key])) {
+        throw new Error(`MortalLoom ${key} is present but not an array`);
+      }
+    }
+  }
+  return buildDailyLogFromMortalLoom(store);
 }
 
 // === Status / import (used by Settings UI) ===

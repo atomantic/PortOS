@@ -206,6 +206,31 @@ describe('mlArrayIfEnabled', () => {
       await expect(store.mlArrayIfEnabled('goals', { strict: true })).resolves.toBeNull();
     });
 
+    it('throws under strict when the key is PRESENT but not an array (corruption, not omitted)', async () => {
+      readFileMock.mockResolvedValue(JSON.stringify({ goals: { not: 'an array' } }));
+      await expect(store.mlArrayIfEnabled('goals', { strict: true }))
+        .rejects.toThrow(/not an array/i);
+    });
+
+    it('non-strict treats a present-but-non-array key as null (fall through, unchanged)', async () => {
+      readFileMock.mockResolvedValue(JSON.stringify({ goals: { not: 'an array' } }));
+      await expect(store.mlArrayIfEnabled('goals')).resolves.toBeNull();
+    });
+
+    it('throws under strict when a legacy .icloud placeholder shadows an offloaded store', async () => {
+      // Real path absent but the `.MortalLoom.json.icloud` placeholder present: the
+      // store exists, just offloaded. Must not read as trustworthy-absent.
+      existsQueue.push(false, true);
+      await expect(store.mlArrayIfEnabled('goals', { strict: true }))
+        .rejects.toThrow(/unreadable/i);
+      expect(readFileMock).not.toHaveBeenCalled();
+    });
+
+    it('non-strict treats a placeholder-shadowed store as null (fall through)', async () => {
+      existsQueue.push(false, true);
+      await expect(store.mlArrayIfEnabled('goals')).resolves.toBeNull();
+    });
+
     it('non-strict swallows an unreadable store (unchanged): returns null', async () => {
       readFileMock.mockRejectedValue(Object.assign(new Error('denied'), { code: 'EACCES' }));
       await expect(store.mlArrayIfEnabled('goals')).resolves.toBeNull();
@@ -227,6 +252,18 @@ describe('readDailyLogIfEnabled strict (#2742)', () => {
   it('returns a real (empty) daily log when the store is readable but has no records', async () => {
     readFileMock.mockResolvedValue(JSON.stringify({ profile: {} }));
     const result = await store.readDailyLogIfEnabled({ strict: true });
+    expect(result).toEqual({ entries: [], lastEntryDate: null });
+  });
+
+  it('throws under strict when a daily-log source is present but not an array', async () => {
+    // A truthy non-array (e.g. a string) would otherwise degrade to an empty log.
+    readFileMock.mockResolvedValue(JSON.stringify({ alcoholDrinks: 'nope' }));
+    await expect(store.readDailyLogIfEnabled({ strict: true })).rejects.toThrow(/not an array/i);
+  });
+
+  it('non-strict composes an empty log from a wrong-typed source (unchanged)', async () => {
+    readFileMock.mockResolvedValue(JSON.stringify({ alcoholDrinks: 'nope' }));
+    const result = await store.readDailyLogIfEnabled();
     expect(result).toEqual({ entries: [], lastEntryDate: null });
   });
 });
