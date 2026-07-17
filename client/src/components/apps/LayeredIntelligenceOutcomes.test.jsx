@@ -84,15 +84,20 @@ describe('LayeredIntelligenceOutcomes', () => {
     expect(await screen.findByText(/Couldn.t load proposal outcomes/)).toBeInTheDocument();
   });
 
-  it('collapses recent rows past the visible cap to a count', async () => {
+  it('collapses the remainder to a count against the full population, not the fetched slice', async () => {
+    // 9 rows fetched, 30 filed total: the "+N older" must count the true remainder
+    // (30 - 6 rendered = 24), not just what was hidden within the returned slice.
     const many = Array.from({ length: 9 }, (_, i) => ({
       slug: `item-${i}`, scope: 'app-improvement', outcome: 'merged', rejectionReason: null,
       filedAt: `2026-07-0${(i % 9) + 1}T00:00:00.000Z`, outcomeAt: `2026-07-0${(i % 9) + 1}T00:00:00.000Z`
     }));
-    getAppLayeredIntelligenceOutcomes.mockResolvedValue(ready({ recent: many }));
+    getAppLayeredIntelligenceOutcomes.mockResolvedValue(ready({
+      stats: { total: 30, merged: 30, rejected: 0, abandoned: 0, pending: 0, resolved: 30, mergeRate: 100 },
+      recent: many
+    }));
     render(<LayeredIntelligenceOutcomes appId="app-001" />);
 
     await waitFor(() => expect(screen.getByText('item-0')).toBeInTheDocument());
-    expect(screen.getByText('+3 older')).toBeInTheDocument();
+    expect(screen.getByText('+24 older')).toBeInTheDocument();
   });
 });

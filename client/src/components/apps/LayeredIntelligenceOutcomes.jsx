@@ -95,13 +95,15 @@ export default function LayeredIntelligenceOutcomes({ appId }) {
     );
   }
 
-  const counts = { ...stats, pending: stats.pending };
   const mergeRateText = stats.mergeRate == null ? '—' : `${Math.round(stats.mergeRate)}%`;
   const rejectionEntries = Array.isArray(rejections?.entries) ? rejections.entries : [];
   const unknown = rejections?.unknown || 0;
   const unclassified = rejections?.unclassified || 0;
   const visible = Array.isArray(recent) ? recent.slice(0, RECENT_VISIBLE) : [];
-  const hiddenCount = (Array.isArray(recent) ? recent.length : 0) - visible.length;
+  // Count against the FULL population (`stats.total`), not just the fetched slice:
+  // the API caps `recent` at a limit above what we render, so `recent.length` would
+  // undercount the real remainder for an app with a long proposal history.
+  const hiddenCount = Math.max(0, stats.total - visible.length);
 
   return (
     <div className="space-y-3 bg-port-bg border border-port-border rounded-lg px-3 py-3">
@@ -123,7 +125,7 @@ export default function LayeredIntelligenceOutcomes({ appId }) {
           const meta = OUTCOME_META[key];
           return (
             <span key={key} className="flex items-center gap-1">
-              <span className={meta.className}>{counts[key]}</span>
+              <span className={meta.className}>{stats[key]}</span>
               <span className="text-gray-500">{meta.label.toLowerCase()}</span>
             </span>
           );
