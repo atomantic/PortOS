@@ -102,6 +102,26 @@ describe.skipIf(!dbReady)('media asset index DB round-trip', () => {
     await db.removeAsset(key);
   });
 
+  it('a delete-hook removal drops the count immediately, with no reconcile (#2738)', async () => {
+    // The acceptance criterion for the delete hooks, end-to-end against a real
+    // table: index an asset exactly as the completed-hook does (imageToRow /
+    // videoToRow), then remove it by the key the DELETE path derives
+    // (imageMediaKey / videoMediaKey). If those two derivations ever diverge the
+    // DELETE misses and the count stays high — which is the bug #2738 fixed.
+    const { imageToRow, videoToRow, imageMediaKey, videoMediaKey } = await import('./logic.js');
+    const before = await db.countAssets();
+
+    await db.upsertAsset(imageToRow({ filename: `${PFX}del.png`, createdAt: '2026-01-01T00:00:00.000Z' }));
+    await db.upsertAsset(videoToRow({ id: `${PFX}delvid`, filename: `${PFX}delvid.mp4`, createdAt: '2026-01-02T00:00:00.000Z' }));
+    expect(await db.countAssets()).toBe(before + 2);
+
+    await db.removeAsset(imageMediaKey(`${PFX}del.png`));
+    expect(await db.countAssets()).toBe(before + 1);
+    // Keyed by job id, not filename — deleting by the filename must NOT be what works.
+    await db.removeAsset(videoMediaKey(`${PFX}delvid`));
+    expect(await db.countAssets()).toBe(before);
+  });
+
   it('reconcile upserts on-disk assets and prunes stale rows (injected readers)', async () => {
     // Pre-seed a stale row that won't be in the injected "disk" set.
     await db.upsertAsset({ mediaKey: `image:${PFX}stale.png`, kind: 'image', ref: `${PFX}stale.png`, data: { filename: `${PFX}stale.png` }, createdAt: '2026-01-01T00:00:00.000Z' });

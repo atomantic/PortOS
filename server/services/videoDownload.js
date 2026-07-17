@@ -85,8 +85,8 @@ export async function listDownloads() {
 /**
  * Delete a downloaded video. Verifies the id is actually a download (not a
  * generated render) before delegating to the shared deleteHistoryItem, which
- * removes the file, thumbnail, and history entry. The next mediaAssetIndex
- * reconcile prunes its row (identical lifecycle to a deleted generation).
+ * removes the file, thumbnail, history entry, and mediaAssetIndex row
+ * (identical lifecycle to a deleted generation).
  */
 export async function deleteDownload(id) {
   const history = await loadHistory().catch(() => []);

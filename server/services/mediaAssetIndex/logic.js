@@ -18,6 +18,18 @@
 import { itemKey } from '../../lib/mediaItemKey.js';
 import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
 
+// The one place each kind's ref is turned into a media_key. Both the row
+// builders (which WRITE rows) and the delete hooks (which REMOVE them) derive
+// their key here, so an unindex can never miss the row its upsert wrote.
+// Returns null for an unusable ref, so callers can filter/no-op on it.
+const mediaKeyFor = (kind, ref) => (typeof ref === 'string' && ref ? itemKey({ kind, ref }) : null);
+
+/** media_key for a generated image. Its ref is the gallery FILENAME. */
+export const imageMediaKey = (filename) => mediaKeyFor('image', filename);
+
+/** media_key for a generated video. Its ref is the job ID, not the filename. */
+export const videoMediaKey = (id) => mediaKeyFor('video', id);
+
 /**
  * Build an index row for a generated image. `item` is a gallery entry as
  * produced by imageGen listGallery() — `{ filename, createdAt, ...sidecar }` —
@@ -26,10 +38,11 @@ import { mirrorTimestamp } from '../../lib/pgTimestamp.js';
  */
 export function imageToRow(item, { now } = {}) {
   const ref = item?.filename;
-  if (typeof ref !== 'string' || !ref) return null;
+  const mediaKey = imageMediaKey(ref);
+  if (!mediaKey) return null;
   const fallback = now || new Date().toISOString();
   return {
-    mediaKey: itemKey({ kind: 'image', ref }),
+    mediaKey,
     kind: 'image',
     ref,
     data: item,
@@ -45,10 +58,11 @@ export function imageToRow(item, { now } = {}) {
  */
 export function videoToRow(entry, { now } = {}) {
   const ref = entry?.id;
-  if (typeof ref !== 'string' || !ref) return null;
+  const mediaKey = videoMediaKey(ref);
+  if (!mediaKey) return null;
   const fallback = now || new Date().toISOString();
   return {
-    mediaKey: itemKey({ kind: 'video', ref }),
+    mediaKey,
     kind: 'video',
     ref,
     data: entry,
