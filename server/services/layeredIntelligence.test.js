@@ -66,7 +66,8 @@ import {
   PLANNED_WORK_MAX_ITEMS,
   PLANNED_WORK_NONE,
   PLANNED_WORK_GUIDANCE,
-  LOW_MERGE_RATE_THRESHOLD
+  LOW_MERGE_RATE_THRESHOLD,
+  LOW_MERGE_RATE_MIN_SAMPLE
 } from './layeredIntelligence.js';
 
 describe('defaultLayeredIntelligenceConfig', () => {
@@ -1441,15 +1442,24 @@ describe('plannedWorkUnavailable', () => {
 });
 
 describe('plannedWorkJql', () => {
-  it('filters to not-Done and orders by priority', () => {
+  it('filters to not-Done plan-labeled tickets and orders by priority', () => {
     const jql = plannedWorkJql('PROJ');
     expect(jql).toContain('project = "PROJ"');
     expect(jql).toContain('statusCategory != Done');
     expect(jql).toContain('ORDER BY priority DESC');
   });
 
-  it('does NOT reference openSprints (a hard JQL error on non-Scrum projects)', () => {
-    expect(plannedWorkJql('PROJ')).not.toContain('openSprints');
+  it('filters on the plan label — parity with the forge, not "every open ticket"', () => {
+    // Without this the source would return the whole untriaged backlog under a
+    // header claiming the user committed to it, and tell the reasoner to suppress
+    // against essentially the entire tracker.
+    expect(plannedWorkJql('PROJ')).toContain(`labels = "${PLANNED_WORK_LABEL}"`);
+  });
+
+  it('does NOT reference openSprints or filter on priority NAMES (both hard-400 on some projects)', () => {
+    const jql = plannedWorkJql('PROJ');
+    expect(jql).not.toContain('openSprints');
+    expect(jql).not.toContain('priority in');
   });
 
   it('escapes the project key', () => {
@@ -1644,30 +1654,41 @@ describe('buildPrompt plannedWork block (#2698)', () => {
     expect(buildPrompt({ app, config, sources: { goals: 'g' } })).not.toContain('### plannedWork');
     expect(buildPrompt({ app, config, sources: { plannedWork: '   ' } })).not.toContain('### plannedWork');
   });
+
+  it('does not claim "no sources available" while rendering a populated plannedWork block', () => {
+    // plannedWork is excluded from sourceBlocks so its guidance stays anchored —
+    // the empty-sources fallback must not therefore contradict the block below it.
+    const p = buildPrompt({ app, config, sources: { plannedWork: '1 item(s):\n- #3 Ship X' } });
+    expect(p).toContain('- #3 Ship X');
+    expect(p).toContain('(no other sources available');
+    // Still says the plain thing when there is genuinely nothing at all.
+    expect(buildPrompt({ app, config, sources: {} })).toContain('(no sources available');
+  });
 });
 
 describe('computeOutcomesReport low-merge-rate warning (#2698)', () => {
   const filed = (outcome) => ({ scope: 'app-improvement', outcome });
+  const rejected = (n) => Array.from({ length: n }, () => filed('rejected'));
 
   it('warns and points at plannedWork when the resolved merge rate is below the threshold', () => {
-    // 0 of 3 resolved merged → 0% < 20%.
-    const report = computeOutcomesReport({ outcomes: [filed('rejected'), filed('rejected'), filed('abandoned')] });
+    // 0 of 4 resolved merged → 0% < 20%, and 4 clears the sample floor.
+    const report = computeOutcomesReport({ outcomes: [...rejected(3), filed('abandoned')], hasPlannedWork: true });
     expect(report).toContain('WARNING');
     expect(report).toContain('merge rate is critically low');
     expect(report).toContain('plannedWork');
-    expect(report).toContain('0 of 3 resolved proposals (0%)');
+    expect(report).toContain('0 of 4 resolved proposals (0%)');
   });
 
   it('stays silent when the merge rate is healthy', () => {
-    const report = computeOutcomesReport({ outcomes: [filed('merged'), filed('merged'), filed('rejected')] });
+    const report = computeOutcomesReport({ outcomes: [filed('merged'), filed('merged'), filed('rejected'), filed('merged')] });
     expect(report).not.toContain('WARNING');
   });
 
   it('stays silent when NOTHING is resolved yet (pending ≠ rejected)', () => {
-    // Three filed, all still open: 0 merged of 0 resolved. Dividing by `total`
-    // would render 0% and alarm — but nothing has actually failed.
-    const report = computeOutcomesReport({ outcomes: [filed(null), filed(null), filed(null)] });
-    expect(report).toContain('Total filed: 3');
+    // Filed, all still open: 0 merged of 0 resolved. Dividing by `total` would
+    // render 0% and alarm — but nothing has actually failed.
+    const report = computeOutcomesReport({ outcomes: [filed(null), filed(null), filed(null), filed(null), filed(null)] });
+    expect(report).toContain('Total filed: 5');
     expect(report).not.toContain('WARNING');
   });
 
@@ -1677,14 +1698,33 @@ describe('computeOutcomesReport low-merge-rate warning (#2698)', () => {
     expect(report).not.toContain('WARNING');
   });
 
+  it('stays silent below the sample floor — 0-of-1 is not evidence of a rate', () => {
+    // A single early rejection must not tell the loop to stop proposing: it can
+    // never earn a merge if it stops filing.
+    for (let n = 1; n < LOW_MERGE_RATE_MIN_SAMPLE; n += 1) {
+      expect(computeOutcomesReport({ outcomes: rejected(n), hasPlannedWork: true })).not.toContain('WARNING');
+    }
+    expect(computeOutcomesReport({ outcomes: rejected(LOW_MERGE_RATE_MIN_SAMPLE), hasPlannedWork: true })).toContain('WARNING');
+    expect(LOW_MERGE_RATE_MIN_SAMPLE).toBe(4);
+  });
+
   it('fires exactly below the documented threshold', () => {
     // 1 merged of 5 resolved = 20% → NOT below 20 → silent.
-    const at = computeOutcomesReport({ outcomes: [filed('merged'), filed('rejected'), filed('rejected'), filed('rejected'), filed('rejected')] });
+    const at = computeOutcomesReport({ outcomes: [filed('merged'), ...rejected(4)] });
     expect(at).not.toContain('WARNING');
     // 1 merged of 6 resolved = 17% → below → warns.
-    const below = computeOutcomesReport({ outcomes: [filed('merged'), ...Array.from({ length: 5 }, () => filed('rejected'))] });
+    const below = computeOutcomesReport({ outcomes: [filed('merged'), ...rejected(5)] });
     expect(below).toContain('WARNING');
     expect(LOW_MERGE_RATE_THRESHOLD).toBe(20);
+  });
+
+  it('does NOT cite a plannedWork block that is not in the prompt', () => {
+    // The source is per-app-toggleable and yields nothing on an unresolvable
+    // tracker — citing a section that isn't there is just noise.
+    const report = computeOutcomesReport({ outcomes: rejected(5), hasPlannedWork: false });
+    expect(report).toContain('WARNING');
+    expect(report).not.toContain('plannedWork');
+    expect(report).toContain('return proposal: null');
   });
 
   it('still returns "" with no filed history (nothing to calibrate on)', () => {

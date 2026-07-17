@@ -314,7 +314,13 @@ export async function buildTaskInput({ app } = {}) {
   if (config.sources?.outcomes && outcomesTrackerSupported(filer)) {
     if (!trackerReadFailed) await reconcileOutcomes({ appId: app.id, existingIssues })
     const outcomes = await listOutcomes({ appId: app.id })
-    outcomesReport = computeOutcomesReport({ outcomes })
+    // The low-merge-rate warning cites the plannedWork block by name — only let it
+    // do that when one was actually gathered (the source is per-app-toggleable and
+    // yields nothing on an unresolvable tracker).
+    outcomesReport = computeOutcomesReport({
+      outcomes,
+      hasPlannedWork: typeof sources.plannedWork === 'string' && !!sources.plannedWork.trim()
+    })
   }
 
   const prompt = buildPrompt({ app, config, sources, openIssues, isPortos, outcomesReport }) + buildCompletionContract()

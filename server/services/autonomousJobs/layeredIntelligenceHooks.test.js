@@ -244,6 +244,20 @@ describe('buildTaskInput', () => {
     }));
   });
 
+  it('tells computeOutcomesReport whether a plannedWork block exists to cite (#2698)', async () => {
+    li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { outcomes: true } });
+    li.gatherSources.mockResolvedValue({ goals: 'g', plannedWork: '1 item(s):\n- #3 Ship X' });
+    await buildTaskInput({ app: APP });
+    expect(li.computeOutcomesReport).toHaveBeenCalledWith(expect.objectContaining({ hasPlannedWork: true }));
+
+    // Source off / unresolvable tracker → the warning must not cite a block the
+    // prompt doesn't contain.
+    li.computeOutcomesReport.mockClear();
+    li.gatherSources.mockResolvedValue({ goals: 'g' });
+    await buildTaskInput({ app: APP });
+    expect(li.computeOutcomesReport).toHaveBeenCalledWith(expect.objectContaining({ hasPlannedWork: false }));
+  });
+
   it('skips the outcomes feedback loop when the source toggle is off', async () => {
     li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: {} });
     await buildTaskInput({ app: APP });
