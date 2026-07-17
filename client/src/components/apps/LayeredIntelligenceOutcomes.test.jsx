@@ -10,6 +10,7 @@ import { getAppLayeredIntelligenceOutcomes } from '../../services/api';
 
 const ready = (overrides = {}) => ({
   read: true,
+  tracked: true,
   stats: { total: 4, merged: 1, rejected: 1, abandoned: 1, pending: 1, resolved: 3, mergeRate: 100 / 3 },
   rejections: { entries: [{ reason: 'user-rejected', count: 1 }], unknown: 1, unclassified: 0, diagnosed: 1, total: 2 },
   recent: [
@@ -64,6 +65,28 @@ describe('LayeredIntelligenceOutcomes', () => {
     render(<LayeredIntelligenceOutcomes appId="app-001" />);
 
     expect(await screen.findByText(/No proposals filed yet/)).toBeInTheDocument();
+  });
+
+  it('distinguishes tracking-off from an empty history when nothing is recorded', async () => {
+    getAppLayeredIntelligenceOutcomes.mockResolvedValue(ready({
+      tracked: false,
+      stats: { total: 0, merged: 0, rejected: 0, abandoned: 0, pending: 0, resolved: 0, mergeRate: null },
+      rejections: { entries: [], unknown: 0, unclassified: 0, diagnosed: 0, total: 0 },
+      recent: []
+    }));
+    render(<LayeredIntelligenceOutcomes appId="app-001" />);
+
+    expect(await screen.findByText(/Outcome tracking is off for this app/)).toBeInTheDocument();
+    expect(screen.queryByText(/No proposals filed yet/)).not.toBeInTheDocument();
+  });
+
+  it('flags existing records as possibly stale when tracking is currently off', async () => {
+    getAppLayeredIntelligenceOutcomes.mockResolvedValue(ready({ tracked: false }));
+    render(<LayeredIntelligenceOutcomes appId="app-001" />);
+
+    expect(await screen.findByText(/these may be stale/)).toBeInTheDocument();
+    // The data still renders alongside the stale note.
+    expect(screen.getByText('33%')).toBeInTheDocument();
   });
 
   it('surfaces an error (and retries) when the store is unreadable', async () => {

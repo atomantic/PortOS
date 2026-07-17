@@ -90,9 +90,18 @@ router.get('/:id/layered-intelligence', loadApp, asyncHandler(async (req, res) =
 // collapse into an empty history).
 router.get('/:id/layered-intelligence/outcomes', loadApp, asyncHandler(async (req, res) => {
   const app = req.loadedApp;
+  // Outcomes are only RECORDED + reconciled while the app's `outcomes` telemetry
+  // source is enabled (off by default for managed apps — see the effective-config
+  // defaults in layeredIntelligence.js). Surface that so the UI can distinguish
+  // "tracking is off" from a genuinely empty history: without it, a managed app
+  // that has filed real proposals reads as "nothing filed yet", and records left
+  // from when it was on look permanently open. Same absent-vs-empty discipline the
+  // rest of this feature keeps.
+  const config = await appsService.getAppLayeredIntelligenceConfig(app.id);
+  const tracked = !!config?.sources?.outcomes;
   const { read, outcomes } = await listOutcomesResult({ appId: app.id });
   if (!read) {
-    return res.json({ appId: app.id, appName: app.name, read: false, stats: null, rejections: null, recent: [] });
+    return res.json({ appId: app.id, appName: app.name, read: false, tracked, stats: null, rejections: null, recent: [] });
   }
   const { total, merged, rejected, abandoned, pending, resolved, rawMergeRate } = summarizeOutcomeStats(outcomes);
   const rejections = summarizeRejectionReasons(outcomes);
@@ -110,6 +119,7 @@ router.get('/:id/layered-intelligence/outcomes', loadApp, asyncHandler(async (re
     appId: app.id,
     appName: app.name,
     read: true,
+    tracked,
     // `mergeRate` is the raw 0–100 percentage over RESOLVED proposals, or null when
     // none have resolved (still-pending ≠ 0% merged). The client rounds for display.
     stats: { total, merged, rejected, abandoned, pending, resolved, mergeRate: rawMergeRate },

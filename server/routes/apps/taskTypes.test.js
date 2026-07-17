@@ -73,6 +73,7 @@ describe('Apps Task-Type Routes', () => {
   describe('GET /api/apps/:id/layered-intelligence/outcomes', () => {
     it('composes stats + rejection tally + recent list from the store', async () => {
       appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'App' });
+      appsService.getAppLayeredIntelligenceConfig.mockResolvedValue({ sources: { outcomes: true } });
       listOutcomesResult.mockResolvedValue({
         read: true,
         outcomes: [
@@ -95,7 +96,20 @@ describe('Apps Task-Type Routes', () => {
       expect(response.body.rejections.unclassified).toBe(0);
       expect(response.body.recent).toHaveLength(4);
       expect(response.body.recent[0]).toMatchObject({ slug: 'add-metrics', outcome: 'merged' });
+      expect(response.body.tracked).toBe(true);
       expect(listOutcomesResult).toHaveBeenCalledWith({ appId: 'app-001' });
+    });
+
+    it('reports tracked:false when the outcomes source is off (records may be stale)', async () => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'App' });
+      appsService.getAppLayeredIntelligenceConfig.mockResolvedValue({ sources: { outcomes: false } });
+      listOutcomesResult.mockResolvedValue({ read: true, outcomes: [] });
+
+      const response = await request(app).get('/api/apps/app-001/layered-intelligence/outcomes');
+
+      expect(response.status).toBe(200);
+      expect(response.body.read).toBe(true);
+      expect(response.body.tracked).toBe(false);
     });
 
     it('reports read:false when the store is unreadable (not an empty history)', async () => {

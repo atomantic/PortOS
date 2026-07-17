@@ -82,15 +82,24 @@ export default function LayeredIntelligenceOutcomes({ appId }) {
     );
   }
 
-  const { stats, rejections, recent } = state.data;
+  const { stats, rejections, recent, tracked = true } = state.data;
 
   if (!stats || stats.total === 0) {
     return (
       <div className="space-y-2">
         {heading}
-        <p className="text-xs text-gray-500">
-          No proposals filed yet. Once the loop files improvement issues, their outcomes (merge rate + why any were rejected) appear here.
-        </p>
+        {tracked ? (
+          <p className="text-xs text-gray-500">
+            No proposals filed yet. Once the loop files improvement issues, their outcomes (merge rate + why any were rejected) appear here.
+          </p>
+        ) : (
+          // The store is only written while the outcomes source is on, so an empty
+          // history here doesn't mean the loop hasn't filed — it means nothing was
+          // recorded. Say that instead of implying nothing was filed.
+          <p className="text-xs text-gray-500">
+            Outcome tracking is off for this app, so filed proposals aren&apos;t being recorded. Enable the <span className="text-gray-400">Proposal outcomes</span> telemetry source below to start tracking how they fare.
+          </p>
+        )}
       </div>
     );
   }
@@ -108,6 +117,14 @@ export default function LayeredIntelligenceOutcomes({ appId }) {
   return (
     <div className="space-y-3 bg-port-bg border border-port-border rounded-lg px-3 py-3">
       {heading}
+
+      {!tracked && (
+        // Records exist but the source is off now, so nothing new is recorded and
+        // still-open proposals won't be reconciled — flag the data as possibly stale.
+        <p className="text-xs text-port-warning">
+          Outcome tracking is currently off — these may be stale. Re-enable the Proposal outcomes source below to keep them current.
+        </p>
+      )}
 
       <div className="flex items-baseline gap-2">
         <span className="text-2xl font-semibold text-white">{mergeRateText}</span>
