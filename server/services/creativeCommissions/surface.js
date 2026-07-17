@@ -36,7 +36,13 @@
  */
 export async function surfaceCommissionRun(commission, run) {
   if (!commission?.id || !run) return;
-  const link = `/creative-commission/${encodeURIComponent(commission.id)}`;
+  // Scope the deep link to THIS run (`?run=<runId>`) so the detail page focuses
+  // the render this notification announced — the gallery is newest-first, so
+  // without the param a later run would have pushed the announced render down by
+  // the time the user opens it.
+  const link = run.id
+    ? `/creative-commission/${encodeURIComponent(commission.id)}?run=${encodeURIComponent(run.id)}`
+    : `/creative-commission/${encodeURIComponent(commission.id)}`;
   const ability = commission.targetAbility || 'video';
   const name = commission.name || 'Commission';
 

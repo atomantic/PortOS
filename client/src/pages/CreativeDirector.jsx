@@ -73,7 +73,7 @@ export default function CreativeDirector() {
   });
 
   const fetchProjects = useCallback(() => {
-    listCreativeDirectorProjects()
+    listCreativeDirectorProjects({ silent: true })
       .then((data) => { setProjects(data || []); setLoading(false); })
       .catch((err) => {
         toast.error(err?.message || 'Failed to load Creative Director projects');
@@ -134,7 +134,7 @@ export default function CreativeDirector() {
       ...(remixIds.length ? { catalogIngredientIds: remixIds } : {}),
     };
     try {
-      const created = await createCreativeDirectorProject(payload);
+      const created = await createCreativeDirectorProject(payload, { silent: true });
       setProjects((prev) => [...prev, created]);
       setShowForm(false);
       setForm((f) => ({ ...f, name: '', styleSpec: '', userStory: '', startingImageFile: '' }));
@@ -190,7 +190,7 @@ export default function CreativeDirector() {
         deliverables: directiveDraft.deliverables || [],
         constraints: directiveDraft.constraints || {},
       },
-    }).catch((err) => { toast.error(err.message || 'Failed to create directive project'); return null; });
+    }, { silent: true }).catch((err) => { toast.error(err.message || 'Failed to create directive project'); return null; });
     setCreatingDirective(false);
     if (!created) return;
     setProjects((prev) => [created, ...prev]);
@@ -204,7 +204,7 @@ export default function CreativeDirector() {
   // server's authoritative status within 5s if anything diverges.
   const handleStart = async (id) => {
     try {
-      await startCreativeDirectorProject(id);
+      await startCreativeDirectorProject(id, { silent: true });
       setProjects((prev) => prev.map((p) => p.id === id ? { ...p, status: p.treatment ? 'rendering' : 'planning' } : p));
       toast.success('Pipeline started');
     } catch (err) {
@@ -214,7 +214,7 @@ export default function CreativeDirector() {
 
   const handlePause = async (id) => {
     try {
-      await pauseCreativeDirectorProject(id);
+      await pauseCreativeDirectorProject(id, { silent: true });
       setProjects((prev) => prev.map((p) => p.id === id ? { ...p, status: 'paused' } : p));
       toast.success('Paused');
     } catch (err) {
@@ -226,7 +226,7 @@ export default function CreativeDirector() {
     // No confirmation modal yet — destructive but reversible if you re-create.
     // Future: inline two-click confirm pattern.
     try {
-      await deleteCreativeDirectorProject(id);
+      await deleteCreativeDirectorProject(id, { silent: true });
       setProjects((prev) => prev.filter((p) => p.id !== id));
       toast.success('Deleted');
     } catch (err) {
@@ -248,7 +248,7 @@ export default function CreativeDirector() {
           <>
             <button
               onClick={async () => {
-                const created = await createSmokeTestCreativeDirectorProject().catch((e) => {
+                const created = await createSmokeTestCreativeDirectorProject({ silent: true }).catch((e) => {
                   toast.error(e?.message || 'Smoke test failed to start');
                   return null;
                 });

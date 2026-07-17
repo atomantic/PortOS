@@ -288,45 +288,102 @@ export async function isMortalLoomEnabled() {
  * fail window the boot-pin fix guards against (settings rejects transiently
  * between the two calls) is still live in the read path — first call says
  * "enabled", second call fails and the helper returns null even though sync
- * is on. Returns `null` when sync is disabled OR the read fails.
+ * is on.
+ *
+ * Returns an explicit sentinel `{ enabled, ok, store }` (#2742) instead of a
+ * bare store-or-null, because "sync disabled" and "sync enabled but the store
+ * is unreadable" are NOT the same answer and callers that count records must be
+ * able to tell them apart:
+ *  - `{ enabled: false, ok: true,  store: null }` — sync off. Not a failure;
+ *    fall through to the local file as always.
+ *  - `{ enabled: true,  ok: true,  store: null }` — sync on, store genuinely
+ *    absent (never written by either device). A trustworthy empty — fall
+ *    through, same as an ENOENT on a local file.
+ *  - `{ enabled: true,  ok: true,  store: {…} }` — sync on, store read.
+ *  - `{ enabled: true,  ok: false, store: null }` — sync on but the store is
+ *    present-and-unreadable (EACCES/EIO/corrupt JSON/unexpected shape). THIS is
+ *    the case a strict caller must surface as `unavailable` rather than let it
+ *    fall through to a possibly-ENOENT local file and score a fake 0 (the #2726
+ *    fake-0 hole, one layer down — see #2742). `ok` is false ONLY here.
  */
 async function readEnabledStore() {
   const s = await getSettings();
-  if (!s?.mortalloom?.enabled) return null;
+  if (!s?.mortalloom?.enabled) return { enabled: false, ok: true, store: null };
   const path = normalizePath(s.mortalloom.path);
-  if (!path) return null;
-  return readStoreAtPath(path);
+  const { present, ok, store } = await readStoreAtPathResult(path);
+  // `ok` collapses "readable" and "genuinely absent" into the single trustworthy
+  // answer callers act on; only present-but-unreadable is a failure worth a throw.
+  return { enabled: true, ok: ok || !present, store };
 }
 
 /**
- * Read + parse the store at `path`. Returns `null` for:
- *  - file absent (ENOENT or `existsSync` false) — silently
- *  - any other `readFile` failure (EAGAIN/EDEADLK/EACCES/unknown errno/etc.) —
- *    with one warn. The intent is iCloud-ubiquity transients (mid-sync,
- *    downloading, conflict resolution) but the catch is intentionally broad —
- *    read consumers all treat null as "fall through to local data," and the
- *    write side has its own overwrite guard, so suppressing a permission /
- *    unexpected error here just loses the iCloud copy for one cycle, never
- *    truncates the user's data.
- *  - corrupt JSON — `safeJSONParse` falls back to null
- *  - top-level JSON that isn't a plain object (array/string/number/boolean) —
- *    every consumer treats the store as `{ alcoholDrinks: [...], goals: [...],
- *    profile: {...}, … }` so an unexpected shape is just as "unavailable" as
- *    a corrupt file. Returning null keeps callers from misreading an array as
- *    a successful read and reporting empty counts to the UI.
+ * Read + parse the store at `path`, distinguishing absent from unreadable so the
+ * strict read path (#2742) can tell a trustworthy empty from a failure. Returns
+ * `{ present, ok, store }`:
+ *  - `{ present: false, ok: true,  store: null }` — file absent (ENOENT or
+ *    `existsSync` false, incl. the existsSync→readFile race). Silent; a genuinely
+ *    absent store is a trustworthy empty, not a failure.
+ *  - `{ present: true,  ok: false, store: null }` — file present but unreadable:
+ *    any non-ENOENT `readFile` failure (EAGAIN/EDEADLK/EACCES/unknown errno/etc.,
+ *    warned once), corrupt JSON, or a top-level shape that isn't a plain object
+ *    (array/string/number/boolean). Every consumer treats the store as
+ *    `{ alcoholDrinks: [...], goals: [...], profile: {...}, … }`, so an unexpected
+ *    shape is just as unavailable as a corrupt file.
+ *  - `{ present: true,  ok: true,  store: {…} }` — read + parsed successfully.
+ *
+ * The broad "any error → unreadable" catch is intentional: non-strict read
+ * consumers still treat a null store as "fall through to local data," and the
+ * write side has its own overwrite guard, so suppressing a permission /
+ * unexpected error here (for those callers) just loses the iCloud copy for one
+ * cycle, never truncates the user's data. Strict callers are the ones that turn
+ * `ok: false` into an explicit `unavailable`.
  */
-async function readStoreAtPath(path) {
-  if (!existsSync(path)) return null;
+async function readStoreAtPathResult(path) {
+  // Attempt the read directly and classify from the error code rather than gating
+  // on `existsSync` first (codex #2742 review): `existsSync` swallows its errno —
+  // an un-traversable parent dir (EACCES) or an EIO returns `false`, which the old
+  // guard could not tell from a genuine ENOENT and reported as trustworthy-absent,
+  // letting a strict read fall through and score a fake 0. Reading first also
+  // closes the existsSync→readFile TOCTOU where iCloud offloads the file between
+  // the check and the read. `readFile`'s ENOENT is the ONLY genuine "absent".
+  let unreadable = false;
   const raw = await withTransientRetry(() => readFile(path, 'utf-8')).catch((err) => {
-    // existsSync→readFile race: file disappeared between the two calls.
-    // Treat as "absent" silently — no warning noise.
-    if (err.code === 'ENOENT') return null;
+    if (err.code === 'ENOENT') {
+      // Genuinely absent — UNLESS a legacy `.MortalLoom.json.icloud` placeholder
+      // shadows the real path, which means the store EXISTS but is offloaded under
+      // macOS's older rename-based eviction (the case updateStore's overwrite
+      // guard also checks). Treat that as present-but-unreadable so a strict read
+      // refuses to report a trustworthy empty for a store it has not actually
+      // read. This also covers an offload that races in after the read began.
+      // Silent either way — a missing store is normal, not warn-worthy. The read
+      // side never blocks on `brctl` to materialize (that stays updateStore's job).
+      if (existsSync(icloudPlaceholderPath(path))) unreadable = true;
+      return null;
+    }
+    // Any other error (EACCES/EIO/EAGAIN/EDEADLK/unknown errno) is a store we could
+    // not read — never a trustworthy empty.
     console.warn(`⚠️ MortalLoom store unavailable (${err.code || err.errno || 'unknown'}): ${path}`);
+    unreadable = true;
     return null;
   });
-  if (raw === null || raw === undefined) return null;
+  if (raw === null || raw === undefined) {
+    return unreadable
+      ? { present: true, ok: false, store: null }
+      : { present: false, ok: true, store: null };
+  }
   const parsed = safeJSONParse(raw, null, { context: path });
-  return isPlainObject(parsed) ? parsed : null;
+  if (!isPlainObject(parsed)) return { present: true, ok: false, store: null };
+  return { present: true, ok: true, store: parsed };
+}
+
+/**
+ * Store object or `null` — the pre-#2742 shape, kept for callers (readStore,
+ * updateStore) that only need the parsed store and derive their own
+ * absent-vs-unreadable handling (updateStore does its own existsSync +
+ * placeholder check for the overwrite guard).
+ */
+async function readStoreAtPath(path) {
+  return (await readStoreAtPathResult(path)).store;
 }
 
 export async function readStore() {
@@ -429,7 +486,7 @@ export async function mlReplace(key, array) {
 
 /** Returns `store.profile` when MortalLoom sync is enabled, else null. */
 export async function mlGetProfileIfEnabled() {
-  const store = await readEnabledStore();
+  const { store } = await readEnabledStore();
   return (store && typeof store.profile === 'object') ? store.profile : null;
 }
 
@@ -480,7 +537,7 @@ export async function mlUpsertHealthMetricByDate(date, patch) {
  * Return the id of the N-th record in store[key] with the given date (in stored order).
  */
 export async function mlIdAtDateIndex(key, date, index) {
-  const store = await readEnabledStore();
+  const { store } = await readEnabledStore();
   if (!store || !Array.isArray(store[key])) return null;
   const sameDate = store[key].filter(r => r.date === date);
   return sameDate[index]?.id ?? null;
@@ -488,11 +545,42 @@ export async function mlIdAtDateIndex(key, date, index) {
 
 // === Read-side convenience ===
 
-/** Returns an array for `key` from the store when enabled, else null (fall through to local). */
-export async function mlArrayIfEnabled(key) {
-  const store = await readEnabledStore();
-  if (!store || !Array.isArray(store[key])) return null;
-  return store[key];
+/**
+ * Returns an array for `key` from the store when enabled, else null (fall
+ * through to local).
+ *
+ * @param {{ strict?: boolean }} [options] - `strict: true` throws when sync is
+ *   enabled but the store is present-and-unreadable, instead of returning null
+ *   and letting the caller fall through to a local file that may be a genuine
+ *   ENOENT and score a fake 0 (#2742). Off by default so every existing UI read
+ *   keeps the swallow-and-fall-through behavior.
+ *
+ *   Semantic note (the question #2742 flagged): when the store is enabled and
+ *   READABLE but simply has no array for `key` (the user never created records
+ *   of this kind on either device), we return null and fall through to local
+ *   even under strict. The store IS the source of truth and we consulted it
+ *   successfully — a missing key is a legitimate "no such records," and the
+ *   local file is its mirror, so the local read's own strictness (a genuine
+ *   ENOENT there is a trustworthy 0) decides the outcome. Only a store we could
+ *   not READ is a failure.
+ */
+export async function mlArrayIfEnabled(key, { strict = false } = {}) {
+  const { enabled, ok, store } = await readEnabledStore();
+  if (strict && enabled && !ok) {
+    throw new Error(`MortalLoom store unreadable for key: ${key}`);
+  }
+  if (!store) return null;
+  const value = store[key];
+  if (Array.isArray(value)) return value;
+  // A key that is PRESENT but not an array (`goals: {}`, `bodyEntries: "bad"`) is
+  // corruption, not the legitimate "no such records" of an omitted key — under
+  // strict it must surface as a failure rather than read as an omitted-key
+  // fall-through and score a fake 0 (codex #2742 review). Non-strict keeps falling
+  // through to the local mirror for both, as before.
+  if (strict && enabled && value !== undefined) {
+    throw new Error(`MortalLoom key ${key} is present but not an array`);
+  }
+  return null;
 }
 
 // === Daily-log composition (alcohol + nicotine records → day-keyed log) ===
@@ -526,9 +614,32 @@ export function buildDailyLogFromMortalLoom(store) {
   return { entries, lastEntryDate: entries.at(-1)?.date || null };
 }
 
-export async function readDailyLogIfEnabled() {
-  const store = await readEnabledStore();
-  return store ? buildDailyLogFromMortalLoom(store) : null;
+/**
+ * @param {{ strict?: boolean }} [options] - `strict: true` throws when sync is
+ *   enabled but the store is present-and-unreadable, instead of returning null
+ *   and letting the caller fall through to a local daily-log that may be a
+ *   genuine ENOENT and score a fake 0 (#2742). Off by default. A readable store
+ *   with no alcohol/nicotine records still returns a real (empty) daily log, not
+ *   null, so it does not fall through.
+ */
+export async function readDailyLogIfEnabled({ strict = false } = {}) {
+  const { enabled, ok, store } = await readEnabledStore();
+  if (strict && enabled && !ok) {
+    throw new Error('MortalLoom store unreadable for daily log');
+  }
+  if (!store) return null;
+  // The daily log is composed from two arrays; buildDailyLogFromMortalLoom
+  // silently degrades a wrong-typed field to empty (a truthy string iterates as
+  // chars, etc.). Under strict a PRESENT-but-non-array source is corruption, not
+  // an empty day — throw rather than compose a fake-empty log (codex #2742 review).
+  if (strict && enabled) {
+    for (const key of ['alcoholDrinks', 'nicotineEntries']) {
+      if (store[key] !== undefined && !Array.isArray(store[key])) {
+        throw new Error(`MortalLoom ${key} is present but not an array`);
+      }
+    }
+  }
+  return buildDailyLogFromMortalLoom(store);
 }
 
 // === Status / import (used by Settings UI) ===

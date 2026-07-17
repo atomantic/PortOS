@@ -691,6 +691,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
 
           {activeTab === 'intelligence' && (
             <LayeredIntelligenceTab
+              appId={app.id}
               li={liConfig || {}}
               onChange={updateLiConfig}
               providers={liProviders}

@@ -73,7 +73,7 @@ export async function saveBloodTests(data) {
  *   (#2726). Off by default — existing callers keep the empty fallback.
  */
 export async function getBodyHistory({ strict = false } = {}) {
-  const ml = await mlArrayIfEnabled('bodyEntries');
+  const ml = await mlArrayIfEnabled('bodyEntries', { strict });
   if (ml) return ml.map(({ id, ...rest }) => rest).sort(byDate);
   const log = await readJSONFile(DAILY_LOG_FILE, { entries: [] }, { strict });
   if (strict && !Array.isArray(log?.entries)) {
@@ -236,7 +236,7 @@ export async function addWorkout({ date, type, durationMinutes, intensity, notes
  *   pressure readings (#2726).
  */
 export async function getBloodPressureHistory({ strict = false } = {}) {
-  const ml = await mlArrayIfEnabled('healthMetrics');
+  const ml = await mlArrayIfEnabled('healthMetrics', { strict });
   const source = ml ?? (await readJSONFile(HEALTH_METRICS_FILE, { entries: [] }, { strict })).entries;
   if (strict && !Array.isArray(source)) {
     throw new Error(`Health metrics malformed: ${HEALTH_METRICS_FILE}`);

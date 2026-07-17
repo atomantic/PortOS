@@ -108,7 +108,12 @@ export async function loadJSON(filePath, defaultVal, { strict = false } = {}) {
   // MortalLoom.json; birthDate and lifeExpectancy metadata stay in local PortOS.
   let mlGoals = null;
   if (filePath === GOALS_FILE) {
-    mlGoals = await mlArrayIfEnabled('goals');
+    // Forward strict into the ML probe so an enabled-but-unreadable MortalLoom
+    // store throws here rather than returning null and falling through to a local
+    // file that may be a genuine ENOENT and score a fake 0 (#2742). A readable
+    // store with no `goals` key returns null (not a throw) and falls through to
+    // the local mirror below — see mlArrayIfEnabled's semantic note.
+    mlGoals = await mlArrayIfEnabled('goals', { strict });
     if (mlGoals) data.goals = mlGoals.map(normalizeGoal);
   }
   // Strictness gates on the source that actually supplies the counted array, which
