@@ -49,6 +49,13 @@ beforeEach(() => {
   api.getBrainGraph.mockResolvedValue(GRAPH);
   api.getBrainGraphSearchIndex.mockResolvedValue({ nodes: [] });
   api.getEmbeddingsStatus.mockResolvedValue({ missing: 0, total: 2 });
+  // Selecting a node calls its per-type getter and chains `.then` on the
+  // result — a bare vi.fn() returns undefined and throws, so give every getter
+  // a resolved default and let individual tests override the one they assert.
+  for (const getter of [
+    api.getBrainPerson, api.getBrainProject, api.getBrainIdea, api.getBrainAdminItem,
+    api.getBrainMemory, api.getBrainGoal, api.getBrainJournalEntry,
+  ]) getter.mockResolvedValue(null);
 });
 
 // The legend is ten rows tall and sits over the canvas, which blankets a
@@ -99,6 +106,36 @@ describe('legend disclosure', () => {
     for (const label of ['similar', 'shared tag', 'linked']) {
       expect(screen.getByText(label)).toBeInTheDocument();
     }
+  });
+});
+
+describe('detail panel', () => {
+  // Tapping a node needs a WebGL raycast, so reach the panel the way a user on
+  // a phone can: search → focus a node → tap one of its connections. That also
+  // leaves focusId != selectedNode, which is when "Explore" actually renders.
+  const selectConnectedNode = async (user) => {
+    await user.type(screen.getByPlaceholderText(/search memories/i), 'Alpha');
+    await user.click(await screen.findByRole('option', { name: /Alpha/i }));
+    await act(async () => {});
+    await user.click(await screen.findByRole('button', { name: /Beta/ }));
+    await act(async () => {});
+  };
+
+  it('keeps "Explore connections" above the unbounded record body', async () => {
+    const user = userEvent.setup();
+    api.getBrainGraphSearchIndex.mockResolvedValue({
+      nodes: [{ id: 'n1', label: 'Alpha', brainType: 'ideas' }],
+    });
+    // A journal/memory body is unclamped `whitespace-pre-wrap` — it can run for
+    // screens, so the touch stand-in for double-click must precede it.
+    api.getBrainGoal.mockResolvedValue({ content: 'long body '.repeat(400) });
+    await renderGraph();
+    await selectConnectedNode(user);
+
+    const explore = screen.getByRole('button', { name: /explore connections/i });
+    const body = screen.getByText(/long body/);
+    // DOCUMENT_POSITION_FOLLOWING === the body comes after the button.
+    expect(explore.compareDocumentPosition(body) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
 

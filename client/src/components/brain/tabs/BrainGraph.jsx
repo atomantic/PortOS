@@ -641,7 +641,9 @@ export default function BrainGraph() {
       {/* Detail panel */}
       {selectedNode && (
         <div className="bg-port-card border border-port-border rounded-lg p-3 sm:p-4">
-          <div className="flex items-start justify-between gap-2 sm:gap-3 mb-3">
+          {/* Identity + dismiss. The record body is deliberately NOT nested in
+              this row — see the action row below. */}
+          <div className="flex items-start justify-between gap-2 sm:gap-3 mb-2">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-2">
                 <span
@@ -655,38 +657,6 @@ export default function BrainGraph() {
                 )}
               </div>
               <h3 className="text-sm font-medium text-white mb-1">{selectedNode.label}</h3>
-              {fullRecord ? (
-                <div className="space-y-3">
-                  {(fullRecord.description || fullRecord.context || fullRecord.oneLiner || fullRecord.notes || fullRecord.content) && (
-                    <p className="text-sm text-gray-300 whitespace-pre-wrap">
-                      {fullRecord.description || fullRecord.context || fullRecord.oneLiner || fullRecord.notes || fullRecord.content}
-                    </p>
-                  )}
-                  {typeof fullRecord.progress === 'number' && (
-                    <div className="flex items-center gap-2">
-                      <div className="flex-1 h-1.5 bg-port-border rounded-full overflow-hidden">
-                        <div className="h-full bg-port-accent rounded-full" style={{ width: `${Math.min(100, Math.max(0, fullRecord.progress))}%` }} />
-                      </div>
-                      <span className="text-xs text-gray-500">{fullRecord.progress}%</span>
-                    </div>
-                  )}
-                  {fullRecord.tags?.length > 0 && (
-                    <div className="flex flex-wrap gap-1">
-                      {fullRecord.tags.map(tag => (
-                        <span key={tag} className="px-2 py-1 text-xs bg-port-border rounded text-gray-400">{tag}</span>
-                      ))}
-                    </div>
-                  )}
-                  <div className="text-xs text-gray-500 flex flex-wrap gap-3">
-                    {fullRecord.createdAt && <span>Created: {new Date(fullRecord.createdAt).toLocaleDateString()}</span>}
-                    {fullRecord.nextAction && <span>Next: {fullRecord.nextAction}</span>}
-                    {fullRecord.horizon && <span>Horizon: {fullRecord.horizon}</span>}
-                    {fullRecord.targetDate && <span>Target: {fullRecord.targetDate}</span>}
-                  </div>
-                </div>
-              ) : (
-                <p className="text-sm text-gray-300">{selectedNode.summary}</p>
-              )}
             </div>
             <button
               onClick={() => setSelectedNode(null)}
@@ -698,10 +668,12 @@ export default function BrainGraph() {
             </button>
           </div>
 
-          {/* "Explore connections" sits on its own row rather than in a column
-              beside the body: as a fixed ~160px sidebar it squeezed the record
-              text to a sliver on a phone. Full-width on mobile (it's the touch
-              stand-in for double-clicking a node), inline from `sm` up. */}
+          {/* "Explore connections" — the touch stand-in for double-clicking a
+              node, so it has to stay reachable. Its own row rather than a fixed
+              ~160px column beside the body (which squeezed the text to a sliver
+              on a phone), but ABOVE the body rather than after it: a memory's
+              or journal's `notes`/`content` is unbounded and unclamped, so
+              trailing the body could push this several screens down. */}
           {selectedNode.id !== focusId && (
             <button
               onClick={() => focusNode(selectedNode)}
@@ -711,6 +683,42 @@ export default function BrainGraph() {
               Explore connections
             </button>
           )}
+
+          <div className="mb-3">
+            {fullRecord ? (
+              <div className="space-y-3">
+                {(fullRecord.description || fullRecord.context || fullRecord.oneLiner || fullRecord.notes || fullRecord.content) && (
+                  <p className="text-sm text-gray-300 whitespace-pre-wrap">
+                    {fullRecord.description || fullRecord.context || fullRecord.oneLiner || fullRecord.notes || fullRecord.content}
+                  </p>
+                )}
+                {typeof fullRecord.progress === 'number' && (
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 h-1.5 bg-port-border rounded-full overflow-hidden">
+                      <div className="h-full bg-port-accent rounded-full" style={{ width: `${Math.min(100, Math.max(0, fullRecord.progress))}%` }} />
+                    </div>
+                    <span className="text-xs text-gray-500">{fullRecord.progress}%</span>
+                  </div>
+                )}
+                {fullRecord.tags?.length > 0 && (
+                  <div className="flex flex-wrap gap-1">
+                    {fullRecord.tags.map(tag => (
+                      <span key={tag} className="px-2 py-1 text-xs bg-port-border rounded text-gray-400">{tag}</span>
+                    ))}
+                  </div>
+                )}
+                <div className="text-xs text-gray-500 flex flex-wrap gap-3">
+                  {fullRecord.createdAt && <span>Created: {new Date(fullRecord.createdAt).toLocaleDateString()}</span>}
+                  {fullRecord.nextAction && <span>Next: {fullRecord.nextAction}</span>}
+                  {fullRecord.horizon && <span>Horizon: {fullRecord.horizon}</span>}
+                  {fullRecord.targetDate && <span>Target: {fullRecord.targetDate}</span>}
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-gray-300">{selectedNode.summary}</p>
+            )}
+          </div>
+
           {connectedNodes.length > 0 && (
             <div>
               <p className="text-xs text-gray-500 mb-2">{connectedNodes.length} connections</p>
