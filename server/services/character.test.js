@@ -20,11 +20,18 @@ vi.mock('../lib/fileUtils.js', () => ({
   }),
 }));
 
-// character.js eagerly imports the jira/cos/meatspace services at module load; stub them
-// so the unit under test loads without their dependency graphs. meatspace supplies the
-// canonical birthDate that age-based level derives from (#2673).
+// character.js eagerly imports the jira/cos/meatspace/characterSkills services at module
+// load; stub them so the unit under test loads without their dependency graphs. meatspace
+// supplies the canonical birthDate that age-based level derives from (#2673). The skill
+// registry (#2674) fans out to every domain's stats and has its own suite
+// (characterSkills.test.js) — here we only care THAT its output is attached on read and
+// stripped on save, so a single sentinel skill stands in for the real six.
+const FAKE_SKILLS = [{ id: 'wordsmith', label: 'Wordsmith', domain: 'create', level: 2, value: 7, unavailable: false }];
 vi.mock('./jira.js', () => ({}));
 vi.mock('./cos.js', () => ({}));
+vi.mock('./characterSkills.js', () => ({
+  getCharacterSkills: vi.fn(async () => FAKE_SKILLS),
+}));
 vi.mock('./meatspace.js', () => ({
   getBirthDate: vi.fn(async () => ({ birthDate: store.birthDate })),
 }));
@@ -138,6 +145,72 @@ describe('getWireCharacter federation projection', () => {
     store.value = { name: 'New', class: 'Dev', xp: 0, hp: 15, maxHp: 15 };
     const fresh = await characterService.getWireCharacter();
     expect(fresh.level).toBe(1); // 0 xp → level 1, never null
+  });
+
+  it('never federates the usage-derived skills', async () => {
+    // Skills are per-machine (usage differs across a user's peers), so sending them would let
+    // the least-used peer clobber the most-used one under LWW. getWireCharacter reads
+    // character.json directly, so this holds as long as skills are never persisted.
+    const wire = await characterService.getWireCharacter();
+    expect(wire.skills).toBeUndefined();
+  });
+});
+
+describe('getCharacter skills (derived on read, #2674)', () => {
+  beforeEach(() => {
+    store.value = { name: 'Gandalf', class: 'Wizard', xp: 0, hp: 15, maxHp: 15, events: [] };
+    store.birthDate = null;
+  });
+
+  it('attaches the skill registry output on read', async () => {
+    const character = await characterService.getCharacter();
+    expect(character.skills).toEqual(FAKE_SKILLS);
+  });
+
+  it('never persists skills to character.json', async () => {
+    const character = await characterService.getCharacter();
+    expect(character.skills).toBeDefined();
+
+    // Round-trip the enriched record straight back through save — the path a caller takes
+    // when it reads, mutates, and writes — and the derived skills must not survive it.
+    await characterService.saveCharacter(character);
+    expect(store.value.skills).toBeUndefined();
+    expect(store.value.level).toBeUndefined();
+    expect(store.value.ageYears).toBeUndefined();
+  });
+
+  it('re-derives skills on the record that save returns', async () => {
+    const saved = await characterService.saveCharacter(await characterService.getCharacter());
+    expect(saved.skills).toEqual(FAKE_SKILLS);
+  });
+
+  it('keeps a stale persisted skills array from leaking through as truth', async () => {
+    // An older/hand-edited character.json (or a peer that once persisted them) may carry a
+    // stored skills key. The read must overwrite it with freshly-derived values.
+    store.value = { ...store.value, skills: [{ id: 'stale', level: 99 }] };
+    const character = await characterService.getCharacter();
+    expect(character.skills).toEqual(FAKE_SKILLS);
+  });
+});
+
+describe('updateCharacterFields', () => {
+  beforeEach(() => {
+    store.value = { name: 'Gandalf', class: 'Wizard', xp: 0, hp: 15, maxHp: 15, events: [] };
+    store.birthDate = null;
+  });
+
+  it('applies only the provided fields and returns the enriched record', async () => {
+    const updated = await characterService.updateCharacterFields({ name: 'Radagast' });
+    expect(updated.name).toBe('Radagast');
+    expect(updated.class).toBe('Wizard'); // untouched
+    expect(updated.skills).toEqual(FAKE_SKILLS);
+    expect(store.value.name).toBe('Radagast');
+  });
+
+  it('ignores undefined fields rather than writing them over existing values', async () => {
+    await characterService.updateCharacterFields({ name: undefined, class: 'Ranger' });
+    expect(store.value.name).toBe('Gandalf');
+    expect(store.value.class).toBe('Ranger');
   });
 });
 

@@ -42,6 +42,44 @@ function hpColor(pct) {
   return 'bg-port-error';
 }
 
+// Per-domain skills derived on read from each domain's existing stats (#2674). Deliberately
+// a plain read-only card: Slice 5 (#2677) owns the page's framing/redesign, so this stays
+// easy to restyle or relocate wholesale.
+//
+// `unavailable` renders as an explicit "—" rather than a 0: the server distinguishes an
+// untouched domain (a real level 0) from one whose stat could not be read, and collapsing
+// those here would re-introduce the exact lie the server's sentinel exists to prevent.
+function SkillsCard({ skills }) {
+  if (!skills?.length) return null;
+
+  return (
+    <div className="bg-port-card border border-port-border rounded-xl p-4">
+      <div className="flex items-center gap-1.5 mb-3">
+        <Zap className="w-4 h-4 text-port-accent-2" />
+        <h2 className="text-sm font-medium text-gray-300">Skills</h2>
+        <span className="text-xs text-gray-500">— earned by using PortOS</span>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+        {skills.map((skill) => (
+          <div key={skill.id} className="bg-port-bg border border-port-border rounded-lg px-3 py-2">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-sm text-gray-300 truncate">{skill.label}</span>
+              {skill.unavailable ? (
+                <span className="text-sm text-gray-600" title="This domain's stats could not be read">—</span>
+              ) : (
+                <span className="text-sm font-semibold text-port-accent-2">Lv {skill.level}</span>
+              )}
+            </div>
+            <div className="text-xs text-gray-500 mt-0.5">
+              {skill.unavailable ? 'Unavailable' : `${skill.value} logged`}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function CharacterSheet() {
   const [char, setChar] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -462,6 +500,9 @@ export default function CharacterSheet() {
             </div>
           )}
         </div>
+
+        {/* Skills — derived per-domain from real PortOS usage (#2674) */}
+        <SkillsCard skills={char.skills} />
 
         {/* Quick Actions */}
         <div className="bg-port-card border border-port-border rounded-xl p-4">
