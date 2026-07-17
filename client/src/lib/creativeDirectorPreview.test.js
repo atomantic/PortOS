@@ -74,6 +74,16 @@ describe('startingImageSrc', () => {
     expect(startingImageSrc('/data/images/../../secret.png')).toBe('/data/images/secret.png');
   });
 
+  it('strips a query/hash suffix BEFORE taking the basename, like the server helper', () => {
+    // Order matters: basename-first would resolve a slash-bearing suffix as the
+    // filename (`photo.png?source=/other.png` → `other.png`), pointing the
+    // preview at a different asset than `localImageFilename()` ships.
+    expect(startingImageSrc('/data/images/photo.png?source=/other.png')).toBe('/data/images/photo.png');
+    expect(startingImageSrc('photo.png?v=2')).toBe('/data/images/photo.png');
+    expect(startingImageSrc('/data/images/photo.png#frag')).toBe('/data/images/photo.png');
+    expect(startingImageSrc('/data/images/photo.png?a=1#b')).toBe('/data/images/photo.png');
+  });
+
   it('returns null for empty/blank/non-string input', () => {
     expect(startingImageSrc('')).toBeNull();
     expect(startingImageSrc('   ')).toBeNull();

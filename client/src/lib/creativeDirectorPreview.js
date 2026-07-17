@@ -135,7 +135,10 @@ export function startingImageSrc(startingImageFile) {
   if (raw.startsWith(IMAGES_PREFIX)) name = raw.slice(IMAGES_PREFIX.length);
   else if (raw.startsWith('/')) return null; // some other absolute path → not a gallery image
   else name = raw;
-  const base = nonEmptyString(name.split('/').pop());
+  // Strip the query/hash BEFORE taking the basename — exactly as the server's
+  // `assetBasename` does. Reversing the order resolves the wrong asset when a
+  // suffix itself contains a slash (`photo.png?source=/other.png` → `other.png`).
+  const base = nonEmptyString(name.split(/[?#]/)[0].split('/').pop());
   if (!base || base === '.' || base === '..') return null;
   return `${IMAGES_PREFIX}${base}`;
 }
