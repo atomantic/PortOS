@@ -1,11 +1,20 @@
+import { commandBasename } from './providerModels.js';
+
 export const ANTIGRAVITY_CLI_ID = 'antigravity-cli';
 export const ANTIGRAVITY_TUI_ID = 'antigravity-tui';
 export const LEGACY_GEMINI_CLI_ID = 'gemini-cli';
 export const LEGACY_GEMINI_TUI_ID = 'gemini-tui';
 export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
 
+// Match by normalized binary basename (like isGrokCommand/isOpencodeCommand) so
+// a path- or `.exe`-configured provider (`/opt/homebrew/bin/agy`, `agy.exe`) is
+// still recognized. Exact-string matching here would let prepareCliPrompt fall
+// through to stdin delivery for a path-configured agy — losing the prompt AND
+// leaving the trailing `--print` marker dangling (buildCliArgs adds it by
+// provider id, which DOES survive a path command).
 export function isAntigravityCommand(command) {
-  return command === 'agy' || command === 'antigravity';
+  const base = commandBasename(command);
+  return base === 'agy' || base === 'antigravity';
 }
 
 export function isAntigravityCliProvider(provider) {

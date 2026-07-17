@@ -18,6 +18,17 @@ describe('antigravity command/provider predicates', () => {
     expect(isAntigravityCommand(undefined)).toBe(false);
   });
 
+  it('isAntigravityCommand recognizes a path- or .exe-configured agy (prompt-delivery parity with buildCliArgs)', () => {
+    // A provider whose command is an absolute path or Windows .exe must still be
+    // detected, or prepareCliPrompt falls through to stdin and loses the prompt
+    // while the trailing --print marker (added by id) is left dangling.
+    expect(isAntigravityCommand('/opt/homebrew/bin/agy')).toBe(true);
+    expect(isAntigravityCommand('C:\\tools\\agy.exe')).toBe(true);
+    expect(isAntigravityCommand('agy.exe')).toBe(true);
+    expect(isAntigravityCommand('/usr/local/bin/antigravity')).toBe(true);
+    expect(isAntigravityCommand('/usr/local/bin/claude')).toBe(false);
+  });
+
   it('isAntigravityCliProvider matches by id OR command', () => {
     expect(isAntigravityCliProvider({ id: ANTIGRAVITY_CLI_ID })).toBe(true);
     expect(isAntigravityCliProvider({ command: 'agy' })).toBe(true);

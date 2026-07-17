@@ -11,8 +11,14 @@ export const LEGACY_GEMINI_CLI_ID = 'gemini-cli';
 export const LEGACY_GEMINI_TUI_ID = 'gemini-tui';
 export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
 
+// Match by normalized binary basename so a path- or `.exe`-configured provider
+// (`/opt/homebrew/bin/agy`, `agy.exe`) is still recognized. Inlined (not the
+// shared commandBasename) to keep the vendored toolkit self-contained. Keep in
+// sync with server/lib/antigravity.js#isAntigravityCommand.
 export function isAntigravityCommand(command) {
-  return command === 'agy' || command === 'antigravity';
+  if (typeof command !== 'string' || command === '') return false;
+  const base = command.split(/[\\/]/).pop().toLowerCase().replace(/\.exe$/, '');
+  return base === 'agy' || base === 'antigravity';
 }
 
 export function isAntigravityCliProvider(provider) {
