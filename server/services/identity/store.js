@@ -103,13 +103,21 @@ export async function loadJSON(filePath, defaultVal, { strict = false } = {}) {
   // here: a parsed file can never BE null (bare `null` fails validation), so `value`
   // is null exactly when the file was absent, unreadable, or corrupt.
   const { ok, value } = await readJSONFileStrict(filePath, null);
-  if (strict && !ok) throw new Error(`Unreadable identity file: ${filePath}`);
   const data = value ?? structuredClone(defaultVal);
   // When MortalLoom iCloud sync is enabled, the goals array is sourced from
   // MortalLoom.json; birthDate and lifeExpectancy metadata stay in local PortOS.
+  let mlGoals = null;
   if (filePath === GOALS_FILE) {
-    const mlGoals = await mlArrayIfEnabled('goals');
+    mlGoals = await mlArrayIfEnabled('goals');
     if (mlGoals) data.goals = mlGoals.map(normalizeGoal);
+  }
+  // Strictness gates on the source that actually supplies the counted array, which
+  // is why this sits AFTER the MortalLoom probe. On an ML-backed install the local
+  // file contributes only birthDate/lifeExpectancy metadata — failing to read it
+  // costs no goals, so reporting Strategist "unavailable" off it would be a lie in
+  // the opposite direction: the goals were right there and readable.
+  if (strict && !ok && !mlGoals) {
+    throw new Error(`Unreadable identity file: ${filePath}`);
   }
   return data;
 }
