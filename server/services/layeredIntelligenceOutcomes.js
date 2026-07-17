@@ -131,10 +131,32 @@ export async function recordFiledProposal({ appId, slug, tracker = null, issueRe
  * closes. A RESOLVED record expires OUTCOME_RETENTION_MS after its resolution
  * (outcomeAt), not its filing, so a long-open-then-merged proposal isn't dropped
  * the moment it resolves. Returns survivors sorted newest-filed-first. Never throws.
+ *
+ * Prefer `listOutcomesResult` when the caller must be able to tell a FAILED store
+ * read from a genuinely empty history — this wrapper flattens the two together for
+ * back-compat with callers that can't act on the difference anyway.
  */
-export async function listOutcomes({ appId, now = Date.now() } = {}, store = outcomesStore()) {
-  if (!appId) return [];
-  const all = await store.loadAll().catch(() => []);
+export async function listOutcomes(args = {}, store = outcomesStore()) {
+  return (await listOutcomesResult(args, store)).outcomes;
+}
+
+/**
+ * `listOutcomes` with a discriminated read status (#2700):
+ *   `{ read: true,  outcomes: [...] }` — the store was read; the list is the truth
+ *                                        (an empty one means nothing was ever filed).
+ *   `{ read: false, outcomes: [] }`    — the store could NOT be read.
+ *
+ * The distinction is load-bearing for selfEval, which reports LI's merge rate to the
+ * reasoner: a corrupt/unreadable store flattened to `[]` would tell the loop "you
+ * have never filed a proposal" and invite it to re-file work it already filed, on
+ * evidence that doesn't exist. Same sentinel rule as readLiTaskMetrics.
+ */
+export async function listOutcomesResult({ appId, now = Date.now() } = {}, store = outcomesStore()) {
+  // No appId is a caller bug, not a store failure: nothing was asked for, so the
+  // honest answer is an empty (successful) read, not "the store is broken".
+  if (!appId) return { read: true, outcomes: [] };
+  const all = await store.loadAll().catch(() => null);
+  if (!Array.isArray(all)) return { read: false, outcomes: [] };
   const mine = all.filter(r => r && r.appId === appId);
   const kept = [];
   for (const r of mine) {
@@ -147,7 +169,7 @@ export async function listOutcomes({ appId, now = Date.now() } = {}, store = out
     }
     kept.push(r);
   }
-  return kept.sort((a, b) => (Date.parse(b.filedAt) || 0) - (Date.parse(a.filedAt) || 0));
+  return { read: true, outcomes: kept.sort((a, b) => (Date.parse(b.filedAt) || 0) - (Date.parse(a.filedAt) || 0)) };
 }
 
 /**

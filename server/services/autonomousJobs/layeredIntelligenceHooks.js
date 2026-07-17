@@ -57,7 +57,7 @@ import {
   readLiTaskMetrics,
   hasPlannedWorkListing
 } from '../layeredIntelligence.js'
-import { recordFiledProposal, listOutcomes, reconcileOutcomes } from '../layeredIntelligenceOutcomes.js'
+import { recordFiledProposal, listOutcomesResult, reconcileOutcomes } from '../layeredIntelligenceOutcomes.js'
 
 // The outcome feedback loop (#2428) can only reconcile a proposal's fate on a
 // tracker that reports closed-state. All three now qualify: a forge (gh/glab
@@ -320,7 +320,11 @@ export async function buildTaskInput({ app } = {}) {
   let outcomesReport = ''
   if (config.sources?.outcomes && outcomesTrackerSupported(filer)) {
     if (!trackerReadFailed) await reconcileOutcomes({ appId: app.id, existingIssues })
-    outcomes = await listOutcomes({ appId: app.id })
+    // Discriminated read: an unreadable outcome store stays `null` here rather than
+    // collapsing to `[]`, so selfEval reports its merge rate as UNAVAILABLE instead
+    // of telling the reasoner it has never filed a proposal.
+    const outcomesRead = await listOutcomesResult({ appId: app.id })
+    outcomes = outcomesRead.read ? outcomesRead.outcomes : null
     // The low-merge-rate warning cites the plannedWork block by name — only let it
     // do that when a real BACKLOG LISTING was gathered. The source is
     // per-app-toggleable, yields nothing on an unresolvable tracker, and renders a
