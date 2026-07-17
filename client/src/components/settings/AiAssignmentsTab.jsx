@@ -50,7 +50,7 @@ export default function AiAssignmentsTab() {
   // vision-filtered row (Scene evaluation) isn't reduced to an empty list by
   // the client's id regex not knowing a newer VLM family. This table renders a
   // <select> either way (no "none installed" claim), so it needs the map only.
-  const { idsByProvider: visionIdsByProvider } = useVisionModelIds();
+  const { idsByProvider: visionIdsByProvider, loaded: visionLoaded } = useVisionModelIds();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -260,6 +260,11 @@ export default function AiAssignmentsTab() {
               const providerOptions = assignmentProviderOptions(entry, data.providers);
               const modelOptions = assignmentModelOptions(entry, data.providers, draft.providerId, visionIdsByProvider);
               const dirty = !sameDraft(entry, draft);
+              // Choosing a provider seeds its default model; for a vision row
+              // that seed is only correct once the capability scan has settled.
+              // Picking during it leaves a blank model pin, which the evaluator
+              // resolves to the provider's own (possibly text-only) default.
+              const visionUnknown = entry.modelFilter === 'vision' && !visionLoaded;
               return (
                 <tr key={entry.id} className="align-top">
                   <td className="px-3 py-3 text-sm text-gray-300 whitespace-nowrap">
@@ -284,7 +289,8 @@ export default function AiAssignmentsTab() {
                           setDraft(entry.id, { providerId: nextProviderId, model: entry.modelEditable === false ? draft.model : nextDefault });
                         }}
                         aria-label={`Provider for ${entry.label}`}
-                        className="w-full bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white"
+                        disabled={visionUnknown}
+                        className="w-full bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white disabled:opacity-50"
                       >
                         <option value="">Default / unset</option>
                         {providerOptions.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}

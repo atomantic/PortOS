@@ -160,6 +160,23 @@ describe('CreativeDirectorModelsDrawer', () => {
     expect(screen.queryByText(/No vision-capable models found/i)).toBeNull();
   });
 
+  // Picking a provider seeds its default model; during the capability scan that
+  // seed comes from the stale regex answer, so a vision stage would be left on a
+  // blank pin that the evaluator resolves to a possibly text-only default.
+  it('holds the vision provider control until the capability scan settles', async () => {
+    let resolveVision;
+    getVisionModels.mockReturnValue(new Promise((r) => { resolveVision = r; }));
+    renderDrawer({ id: 'cd-1', name: 'Demo', modelOverrides: {} });
+    await waitFor(() => expect(screen.getByLabelText('Scene evaluation provider')).toBeTruthy());
+
+    // Vision stage is held; the non-vision stages stay usable.
+    expect(screen.getByLabelText('Scene evaluation provider').disabled).toBe(true);
+    expect(screen.getByLabelText('Treatment provider').disabled).toBe(false);
+
+    resolveVision({ models: [{ providerId: 'ollama', backend: 'ollama', id: 'gemma4:26b', vision: true }] });
+    await waitFor(() => expect(screen.getByLabelText('Scene evaluation provider').disabled).toBe(false));
+  });
+
   it('does not fetch vision models while closed', async () => {
     // The drawer stays mounted on the page; the endpoint asks Ollama for every
     // installed model's capabilities, so a closed drawer must not pay for it.
@@ -296,6 +313,34 @@ describe('CreativeDirectorModelsDrawer', () => {
       expect(updateAiAssignment.mock.calls[0][1]).toEqual({ providerId: 'agent-a', model: 'a-default' });
       // Untouched stages are not PUT.
       expect(updateAiAssignment.mock.calls.map((c) => c[0])).not.toContain('settings.creativeDirector.plan');
+    });
+
+    // There is no multi-stage transaction: if stage 2's PUT fails after stage 1's
+    // landed, stage 1 must still be recorded as persisted. Otherwise the user can
+    // revert that control to its original value, the retry skips it as "clean",
+    // and the server silently keeps the value they backed out of.
+    it('keeps an already-persisted stage dirty-tracked when a later stage fails', async () => {
+      updateAiAssignment
+        .mockResolvedValueOnce(ASSIGNMENTS)                       // treatment: OK
+        .mockRejectedValueOnce(new Error('boom'));                // plan: fails
+      renderGlobal();
+      await waitFor(() => expect(screen.getByLabelText('Treatment provider')).toBeTruthy());
+
+      fireEvent.change(screen.getByLabelText('Treatment provider'), { target: { value: 'agent-a' } });
+      fireEvent.change(screen.getByLabelText('Production plan provider'), { target: { value: 'agent-a' } });
+      fireEvent.click(screen.getByRole('button', { name: /Save/i }));
+
+      await waitFor(() => expect(updateAiAssignment).toHaveBeenCalledTimes(2));
+      // Treatment persisted, so reverting it is a REAL change again — the retry
+      // must re-PUT it rather than skipping it as unchanged.
+      fireEvent.change(screen.getByLabelText('Treatment provider'), { target: { value: '' } });
+      updateAiAssignment.mockReset();
+      updateAiAssignment.mockResolvedValue(ASSIGNMENTS);
+      fireEvent.click(screen.getByRole('button', { name: /Save/i }));
+
+      await waitFor(() => expect(updateAiAssignment).toHaveBeenCalled());
+      expect(updateAiAssignment.mock.calls.map((c) => c[0]))
+        .toContain('settings.creativeDirector.treatment');
     });
 
     it('does not write the project record', async () => {

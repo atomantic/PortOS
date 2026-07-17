@@ -130,7 +130,12 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
 
   const saveGlobal = async () => {
     // Only PUT stages that actually changed — each call re-derives the whole
-    // assignments payload server-side.
+    // assignments payload server-side. There is no multi-stage transaction, so
+    // each stage's baseline is advanced the moment ITS PUT lands: if a later
+    // stage then fails we bail with the earlier one already recorded as
+    // persisted. Otherwise the user could revert that control to its original
+    // displayed value, the retry would see it as clean and skip it, and the
+    // server would keep the value they just backed out of.
     let latest = null;
     for (const { key, label } of STAGES) {
       const d = drafts[key];
@@ -144,6 +149,7 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
         return null;
       });
       if (!next) return null;
+      setBaseline((prev) => ({ ...prev, [key]: d }));
       latest = next;
     }
     return latest;
@@ -228,6 +234,12 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
             // scan has settled — until then `modelOptions` is regex-only, which
             // is exactly the stale answer that hid the user's VLMs.
             const visionPending = visionLocal && !visionLoaded;
+            // Picking a provider seeds its default model, and for a vision stage
+            // that seed is only correct once we know what's installed — pick
+            // during the scan and the stage is left on a blank pin, which the
+            // evaluator resolves to the provider's own (possibly text-only)
+            // default. Hold the control rather than seeding from a stale answer.
+            const visionUnknown = entry?.modelFilter === 'vision' && !visionLoaded;
             // A local backend with nothing left to offer means no VLM is
             // installed — say so instead of showing a bare text box that reads
             // as a broken dropdown.
@@ -251,6 +263,7 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
                     <select
                       value={draft.providerId}
                       aria-label={`${stage.label} provider`}
+                      disabled={visionUnknown}
                       onChange={(e) => {
                         const providerId = e.target.value;
                         // Vision-filtered stages (scene evaluation) seed the first
