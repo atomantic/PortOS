@@ -263,7 +263,7 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
     if (!repoPath || deleting) return;
     setDeleting(branchName);
     setDeleteConfirm(null);
-    const result = await api.deleteBranch(repoPath, branchName, { local, remote }).catch((err) => {
+    const result = await api.deleteBranch(repoPath, branchName, { local, remote }, { silent: true }).catch((err) => {
       toast.error(`Delete failed: ${err.message}`);
       return null;
     });
@@ -299,7 +299,7 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
     if (!repoPath || merging) return;
     setMerging(branchName);
     setMergeConfirm(null);
-    const result = await api.mergeBranch(repoPath, branchName).catch((err) => {
+    const result = await api.mergeBranch(repoPath, branchName, { silent: true }).catch((err) => {
       toast.error(`Merge failed: ${err.message}`);
       return null;
     });
@@ -313,7 +313,7 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
   const handleCheckoutRemote = async (branchName) => {
     if (!repoPath || checkingOutRemote) return;
     setCheckingOutRemote(branchName);
-    const result = await api.checkoutRemoteBranch(repoPath, branchName).catch((err) => {
+    const result = await api.checkoutRemoteBranch(repoPath, branchName, { silent: true }).catch((err) => {
       toast.error(`Checkout failed: ${err.message}`);
       return null;
     });
@@ -337,7 +337,7 @@ export default function GitTab({ appId: _appId, appName, repoPath }) {
     if (!repoPath || cleaningUp) return;
     setCleaningUp(true);
     setCleanupConfirm(false);
-    const result = await api.cleanupMergedBranches(repoPath).catch((err) => {
+    const result = await api.cleanupMergedBranches(repoPath, { silent: true }).catch((err) => {
       toast.error(`Cleanup failed: ${err.message}`);
       return null;
     });

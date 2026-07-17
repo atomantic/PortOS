@@ -132,7 +132,7 @@ function PromoteBar({ conversationId, turn, goals, onPromoted }) {
 
   const promote = useCallback(async (payload) => {
     setPending(payload.target);
-    const data = await api.promoteAskTurn(conversationId, turn.id, payload).catch((err) => {
+    const data = await api.promoteAskTurn(conversationId, turn.id, payload, { silent: true }).catch((err) => {
       toast.error(err?.message || 'Promote failed');
       return null;
     });
@@ -436,7 +436,7 @@ export default function Ask() {
     // Only mutate local state if the server confirms the delete — otherwise
     // a transient failure would hide a row that's still on disk and would
     // pop back on the next list refresh.
-    const ok = await api.deleteAskConversation(id).then(() => true, (err) => {
+    const ok = await api.deleteAskConversation(id, { silent: true }).then(() => true, (err) => {
       toast.error(err?.message || 'Failed to delete conversation');
       return false;
     });

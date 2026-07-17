@@ -51,7 +51,7 @@ export default function GitHub() {
 
   const handleSync = async () => {
     setSyncing(true);
-    const result = await syncGitHubRepos().catch((err) => {
+    const result = await syncGitHubRepos({ silent: true }).catch((err) => {
       toast.error(`Sync failed: ${err.message}`);
       return null;
     });
@@ -66,7 +66,7 @@ export default function GitHub() {
   const handleToggleNpm = async (fullName, currentValue) => {
     const updated = await updateGitHubRepo(fullName, {
       flags: { npmProject: !currentValue }
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(`Update failed: ${err.message}`);
       return null;
     });
@@ -78,7 +78,7 @@ export default function GitHub() {
   const handleSaveSecret = async () => {
     if (!newSecretName.trim() || !newSecretValue) return;
     setSavingSecret(true);
-    const result = await setGitHubSecret(newSecretName.trim(), newSecretValue).catch((err) => {
+    const result = await setGitHubSecret(newSecretName.trim(), newSecretValue, { silent: true }).catch((err) => {
       toast.error(`Failed to save secret: ${err.message}`);
       return null;
     });
@@ -95,7 +95,7 @@ export default function GitHub() {
 
   const handleSyncSecret = async (name) => {
     setSyncingSecret(name);
-    const result = await syncGitHubSecret(name).catch((err) => {
+    const result = await syncGitHubSecret(name, { silent: true }).catch((err) => {
       toast.error(`Sync failed: ${err.message}`);
       return null;
     });
@@ -114,7 +114,7 @@ export default function GitHub() {
     setArchiveConfirm(null);
     setArchiving(fullName);
     const fn = action === 'archive' ? archiveGitHubRepo : unarchiveGitHubRepo;
-    const updated = await fn(fullName).catch((err) => {
+    const updated = await fn(fullName, { silent: true }).catch((err) => {
       toast.error(`Failed to ${action}: ${err.message}`);
       return null;
     });

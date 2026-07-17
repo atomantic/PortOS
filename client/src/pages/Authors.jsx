@@ -182,7 +182,7 @@ export default function Authors() {
   };
 
   useEffect(() => {
-    listAuthors()
+    listAuthors({ silent: true })
       .then((list) => setAuthors(Array.isArray(list) ? list : []))
       .catch((err) => toast.error(err.message || 'Failed to load authors'))
       .finally(() => setLoading(false));
@@ -226,7 +226,7 @@ export default function Authors() {
     setSaving(true);
     const payload = { ...form, name };
     if (isCreate) {
-      const created = await createAuthor(payload).catch((err) => {
+      const created = await createAuthor(payload, { silent: true }).catch((err) => {
         toast.error(err.message || 'Failed to create author');
         return null;
       });
@@ -236,7 +236,7 @@ export default function Authors() {
       navigate(`/authors/${encodeURIComponent(created.id)}`);
       toast.success(`Created "${created.name}"`);
     } else {
-      const updated = await updateAuthor(authorId, payload).catch((err) => {
+      const updated = await updateAuthor(authorId, payload, { silent: true }).catch((err) => {
         toast.error(err.message || 'Failed to save author');
         return null;
       });
@@ -255,7 +255,7 @@ export default function Authors() {
     setAuthors((prev) => prev.filter((a) => a.id !== selected.id));
     setConfirmDelete(false);
     navigate('/authors');
-    await deleteAuthor(selected.id).catch((err) => {
+    await deleteAuthor(selected.id, { silent: true }).catch((err) => {
       toast.error(err.message || 'Delete failed');
       setAuthors(prior);
     });

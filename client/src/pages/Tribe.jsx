@@ -402,7 +402,7 @@ function MemoryLinksPanel({ personId }) {
 
   const linkMemory = async () => {
     if (!memoryId) return;
-    const result = await api.linkTribeMemory(personId, { memoryId, note }).catch((err) => {
+    const result = await api.linkTribeMemory(personId, { memoryId, note }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to link memory');
       return null;
     });
@@ -413,7 +413,7 @@ function MemoryLinksPanel({ personId }) {
   };
 
   const unlinkMemory = async (id) => {
-    const result = await api.unlinkTribeMemory(personId, id).catch((err) => {
+    const result = await api.unlinkTribeMemory(personId, id, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to unlink memory');
       return null;
     });
@@ -828,11 +828,11 @@ export default function Tribe() {
     const isCreate = !draft.id;
     setSaving(true);
     const saved = draft.id
-      ? await api.updateTribePerson(draft.id, payload).catch((err) => {
+      ? await api.updateTribePerson(draft.id, payload, { silent: true }).catch((err) => {
           toast.error(err.message || 'Failed to save relationship');
           return null;
         })
-      : await api.createTribePerson(payload).catch((err) => {
+      : await api.createTribePerson(payload, { silent: true }).catch((err) => {
           toast.error(err.message || 'Failed to save relationship');
           return null;
         });
@@ -856,7 +856,7 @@ export default function Tribe() {
 
   const deleteDraft = async () => {
     if (!draft.id) return;
-    const result = await api.deleteTribePerson(draft.id).catch((err) => {
+    const result = await api.deleteTribePerson(draft.id, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to delete relationship');
       return null;
     });
@@ -872,7 +872,7 @@ export default function Tribe() {
       channel: contacts.find((contact) => contact.id === id)?.channel || '',
       summary: 'Manual touchpoint',
       source: 'user',
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to log touchpoint');
       return null;
     });

@@ -2,7 +2,9 @@ import { request, API_BASE } from './apiCore.js';
 
 export const listAskConversations = () => request('/ask');
 export const getAskConversation = (id) => request(`/ask/${encodeURIComponent(id)}`);
-export const deleteAskConversation = (id) => request(`/ask/${encodeURIComponent(id)}`, { method: 'DELETE' });
+// `options` lets a caller suppress request()'s auto-toast with `{ silent: true }`
+// when it already renders its own error UI.
+export const deleteAskConversation = (id, options = {}) => request(`/ask/${encodeURIComponent(id)}`, { method: 'DELETE', ...options });
 export const promoteAskConversation = (id, promoted = true) => request(`/ask/${encodeURIComponent(id)}/promote`, {
   method: 'POST',
   body: JSON.stringify({ promoted }),
@@ -13,10 +15,11 @@ export const promoteAskConversation = (id, promoted = true) => request(`/ask/${e
 //   { target: 'brain' }
 //   { target: 'task', priority?: 'LOW'|'MEDIUM'|'HIGH' }
 //   { target: 'goal', goalId: string }
-export const promoteAskTurn = (conversationId, turnId, payload) =>
+export const promoteAskTurn = (conversationId, turnId, payload, options = {}) =>
   request(`/ask/${encodeURIComponent(conversationId)}/turns/${encodeURIComponent(turnId)}/promote`, {
     method: 'POST',
     body: JSON.stringify(payload),
+    ...options,
   });
 
 /**
