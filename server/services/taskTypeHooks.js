@@ -37,9 +37,24 @@ const HOOK_MODULES = {
 };
 
 async function loadHookModule(taskType) {
-  const load = HOOK_MODULES[taskType];
-  if (!load) return null;
-  return load();
+  if (!isProgrammaticIoTaskType(taskType)) return null;
+  return HOOK_MODULES[taskType]();
+}
+
+/**
+ * Whether a task type routes through the programmatic-I/O path — i.e. its real
+ * output is the `.agent-done` sentinel an output hook consumes, NOT a
+ * `[task-<id>]` commit. Synchronous and import-free (a bare registry lookup), so
+ * it is safe to consult from hot paths like the agent finalize chain.
+ *
+ * This is what tells success-criteria validation that the commit criterion does
+ * not apply to these tasks (see evaluateSuccessCriteria): their prompts
+ * explicitly FORBID committing, so checking for a commit would mark every
+ * correct run a failure. `Object.hasOwn` — not a truthiness check — so an
+ * inherited key like 'constructor' can't masquerade as a registered type.
+ */
+export function isProgrammaticIoTaskType(taskType) {
+  return typeof taskType === 'string' && Object.hasOwn(HOOK_MODULES, taskType);
 }
 
 /**

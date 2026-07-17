@@ -44,6 +44,27 @@ describe('evaluateSuccessCriteria (#2344)', () => {
     expect(checkForTaskCommit).not.toHaveBeenCalled();
   });
 
+  it('returns null for a programmatic-I/O task — its deliverable is the sentinel, not a commit (#2700)', async () => {
+    // A layered-intelligence run is explicitly told NOT to commit or open a PR: it
+    // writes `.agent-done` and its output hook does the filing. Checking for a
+    // `[task-<id>]` commit would stamp validationPassed:false on every correct run —
+    // and since a declared verdict OVERRIDES the runner's exit code in task-learning,
+    // that recorded successful LI runs as failures and drove the type's success rate
+    // to ~0.
+    const task = { id: 't1', taskType: 'internal', metadata: { analysisType: 'layered-intelligence', selfImprovement: true } };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w' })).toBeNull();
+    expect(checkForTaskCommit).not.toHaveBeenCalled();
+  });
+
+  it('still applies the commit criterion to a NON-programmatic self-improvement task', async () => {
+    // The exemption is keyed on the taskTypeHooks registry, not on selfImprovement —
+    // an ordinary self-improve task still commits and must still be checked.
+    checkForTaskCommit.mockResolvedValueOnce(true);
+    const task = { id: 't1', taskType: 'internal', metadata: { analysisType: 'ui', selfImprovement: true } };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w' })).toBe(true);
+    expect(checkForTaskCommit).toHaveBeenCalledWith('t1', '/w');
+  });
+
   it('returns the commit-check verdict for an autonomous code task (criterion declared)', async () => {
     checkForTaskCommit.mockResolvedValueOnce(true);
     expect(await evaluateSuccessCriteria({ task: { id: 't1', taskType: 'internal' }, workspacePath: '/w' })).toBe(true);

@@ -36,6 +36,8 @@ import {
   readLiTaskMetrics,
   LI_TASK_TYPE,
   LI_SCHEDULED_TASK_TYPE,
+  SELF_EVAL_MAX_SUPPRESSED_LISTED,
+  describeSuppressedIssue,
   LI_DEGRADED_SUCCESS_THRESHOLD,
   LI_DEGRADED_MIN_SAMPLE,
   PROPOSAL_OUTCOMES,
@@ -714,6 +716,46 @@ describe('computeSelfEvalSummary (#2700)', () => {
     });
     expect(report).toContain('2 open, plus 1 closed but still within the 30-day suppression window');
     expect(report).toContain('deterministically suppressed');
+  });
+
+  it('NAMES the closed-but-suppressed proposals, not just their count', () => {
+    const now = Date.now();
+    const recent = new Date(now - 5 * 24 * 60 * 60 * 1000).toISOString();
+    const report = computeSelfEvalSummary({
+      existingIssues: [
+        { number: 12, title: 'Add telemetry', body: '<!-- lil-slug: add-telemetry -->', state: 'closed', closedAt: recent },
+        // The plan filer's bare shape carries a slug and nothing else.
+        { slug: 'fix-thing', state: 'closed' }
+      ],
+      now
+    });
+    // A closed issue appears nowhere else in the prompt — the reasoner can only
+    // avoid re-proposing it if selfEval names its dedup key.
+    expect(report).toContain('Recently closed (do NOT re-propose):');
+    expect(report).toContain('#12 [add-telemetry] Add telemetry');
+    expect(report).toContain('[fix-thing]');
+  });
+
+  it('caps the named list and counts the remainder', () => {
+    const now = Date.now();
+    const closedAt = new Date(now - 24 * 60 * 60 * 1000).toISOString();
+    const existingIssues = Array.from({ length: SELF_EVAL_MAX_SUPPRESSED_LISTED + 3 }, (_, i) => ({
+      slug: `item-${i}`, state: 'closed', closedAt
+    }));
+    const report = computeSelfEvalSummary({ existingIssues, now });
+    expect(report).toContain('[item-0]');
+    expect(report).toContain('(+3 more)');
+    expect(report).not.toContain(`[item-${SELF_EVAL_MAX_SUPPRESSED_LISTED}]`);
+  });
+
+  it('leaves an unidentifiable suppressed entry to the count rather than a mystery bullet', () => {
+    const now = Date.now();
+    const report = computeSelfEvalSummary({
+      existingIssues: [{ state: 'closed', closedAt: new Date(now - 1000).toISOString() }],
+      now
+    });
+    expect(report).toContain('plus 1 closed but still within the 30-day suppression window');
+    expect(report).not.toContain('Recently closed (do NOT re-propose):');
   });
 
   it('says so plainly when nothing is suppressed', () => {

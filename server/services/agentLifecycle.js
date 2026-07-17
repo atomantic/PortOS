@@ -21,6 +21,7 @@ import { createToolExecution, startExecution, completeExecution, errorExecution 
 import { determineLane, acquire, release } from './executionLanes.js';
 import { analyzeAgentFailure, resolveFailedTaskUpdate, resolveTypeFailureSignal } from './agentErrorAnalysis.js';
 import { createAgentRun, completeAgentRun, checkForTaskCommit } from './agentRunTracking.js';
+import { isProgrammaticIoTaskType } from './taskTypeHooks.js';
 import { buildAgentPrompt, getAppWorkspace } from './agentPromptBuilder.js';
 import { isOllamaClaudeProvider, isClaudeCommand, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
@@ -830,6 +831,15 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
   // validation miss (which would also pollute the correlation window). null =
   // no commit criterion declared for this task shape.
   if (task?.metadata?.pipeline || task?.metadata?.mediaJob) return null;
+  // Programmatic-I/O tasks (taskTypeHooks.js) are the same story one step further:
+  // their deliverable is the `.agent-done` sentinel an output hook consumes, and
+  // their prompts explicitly FORBID committing or opening a PR (the worktree is
+  // discarded). Checking for a `[task-<id>]` commit would therefore mark every
+  // correctly-executed run a failure — and because a declared verdict OVERRIDES the
+  // runner's exit code in task-learning (`outcomeSuccess`), that poisons the type's
+  // success rate to ~0 and, through it, anything reading that rate back. null = no
+  // commit criterion declared for this task shape.
+  if (isProgrammaticIoTaskType(task?.metadata?.analysisType)) return null;
   return await checkForTaskCommit(task.id, workspacePath);
 }
 

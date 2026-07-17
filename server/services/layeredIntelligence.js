@@ -646,6 +646,32 @@ export function computeOutcomesReport({ outcomes = [], hasPlannedWork = false } 
   ].join('\n');
 }
 
+// How many closed-but-still-suppressed proposals selfEval names before it
+// summarizes the rest as a count. The block is a calibration aid, not a backlog
+// dump — an unbounded list would crowd out the sources it exists to be weighed
+// against, and past this many the reasoner has the pattern anyway.
+export const SELF_EVAL_MAX_SUPPRESSED_LISTED = 8;
+
+/**
+ * Identify a suppressed proposal for the prompt: its slug (the actual dedup key the
+ * reasoner must avoid re-using) plus its title for human-readable context. Returns
+ * null when neither is recoverable — an unidentifiable entry is left to the count
+ * rather than rendered as a mystery bullet the reasoner can't act on.
+ *
+ * Shapes vary by tracker: forge/jira rows carry `{ number, title, body }` (the slug
+ * lives in the body marker), while the `plan` filer yields bare `{ slug, state }`.
+ */
+export function describeSuppressedIssue(issue) {
+  const slug = issue?.slug
+    ? normalizeSlug(issue.slug)
+    : (extractSlugFromBody(issue?.body) || extractSlugFromBody(issue?.title));
+  const title = typeof issue?.title === 'string' ? issue.title.trim() : '';
+  if (!slug && !title) return null;
+  const ref = issue?.number ? `#${issue.number} ` : '';
+  if (!slug) return `${ref}${title}`.trim();
+  return `${ref}[${slug}]${title ? ` ${title}` : ''}`.trim();
+}
+
 /**
  * Format LI's self-evaluation block (#2700) — the loop's pre-filing quality check
  * on its OWN reasoning. Pure + side-effect-free and NO LLM call: every line is
@@ -728,6 +754,23 @@ export function computeSelfEvalSummary({
         ? 'Re-proposing any of these is deterministically suppressed — the run is wasted. Propose something genuinely new.'
         : 'Nothing is currently suppressed.'}`
     );
+    // NAME the closed-but-suppressed ones. The open proposals are already listed in
+    // full elsewhere in the prompt, but a closed issue appears NOWHERE else — so
+    // without this the reasoner is told a number it cannot act on and can burn the
+    // whole run re-proposing something the dedup guard silently drops. Capped so a
+    // long tail can't crowd out the sources it is meant to be reasoning about.
+    if (closedSuppressed.length) {
+      const named = closedSuppressed
+        .map(i => describeSuppressedIssue(i))
+        .filter(Boolean)
+        .slice(0, SELF_EVAL_MAX_SUPPRESSED_LISTED);
+      if (named.length) {
+        lines.push(
+          `  Recently closed (do NOT re-propose): ${named.join('; ')}`
+          + `${closedSuppressed.length > named.length ? ` (+${closedSuppressed.length - named.length} more)` : ''}`
+        );
+      }
+    }
   }
 
   // --- Signal 3: is the LI machinery itself healthy? --------------------------
