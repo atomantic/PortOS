@@ -116,7 +116,13 @@ export const METRICS = [
     id: 'memoryCount',
     label: 'Memories',
     unit: 'count',
-    hint: 'Captured in Brain',
+    hint: 'Active memories across PortOS',
+    // "across PortOS", NOT "captured in Brain": the signal is `countMemories({})`, and
+    // `filterMemoryIndex` with no options filters by `status: 'active'` ONLY — so agent-, CoS-
+    // and API-created memories are all in here, not just the Brain-tagged ones
+    // (`sourceAppId: 'brain'`, per brainMemoryBridge.js). The whole store is the more useful
+    // number AND the one that matches the `archivist` skill's reading of the same signal;
+    // narrowing to Brain would undercount the user's memories and make the two disagree.
     compute: async (read) => read('memoryCount'),
   },
   {

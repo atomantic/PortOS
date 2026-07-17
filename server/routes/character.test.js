@@ -40,13 +40,23 @@ describe('GET /api/character', () => {
     expect(characterService.getCharacter).toHaveBeenCalledWith({ withSkills: true, withMetrics: true });
   });
 
-  it('skips the skill fan-out for ?skills=0 and ?skills=false', async () => {
+  it('skips BOTH fan-outs for a legacy ?skills=0 caller that predates the metrics flag', async () => {
+    // Back-compat: `?skills=0` has only ever meant "give me the cheap sheet". A caller that
+    // predates #2676 (a browser on a stale bundle, an external script) has no way to ask for
+    // `metrics=0`, so it must not silently start paying the new fan-out — the CyberCity HUD
+    // issues exactly this request every 15s.
     for (const value of ['0', 'false']) {
       vi.clearAllMocks();
       const res = await request(makeApp()).get(`/api/character?skills=${value}`);
       expect(res.status).toBe(200);
-      expect(characterService.getCharacter).toHaveBeenCalledWith({ withSkills: false, withMetrics: true });
+      expect(characterService.getCharacter).toHaveBeenCalledWith({ withSkills: false, withMetrics: false });
     }
+  });
+
+  it('lets an explicit ?metrics= override the value inherited from ?skills=', async () => {
+    // The inheritance is only a default — the two stay independently gateable.
+    await request(makeApp()).get('/api/character?skills=0&metrics=1');
+    expect(characterService.getCharacter).toHaveBeenCalledWith({ withSkills: false, withMetrics: true });
   });
 
   it('skips the metrics fan-out for ?metrics=0 and ?metrics=false', async () => {
@@ -56,6 +66,11 @@ describe('GET /api/character', () => {
       expect(res.status).toBe(200);
       expect(characterService.getCharacter).toHaveBeenCalledWith({ withSkills: true, withMetrics: false });
     }
+  });
+
+  it('skips only the metrics fan-out when metrics alone is disabled', async () => {
+    await request(makeApp()).get('/api/character?metrics=0');
+    expect(characterService.getCharacter).toHaveBeenCalledWith({ withSkills: true, withMetrics: false });
   });
 
   it('gates the two fan-outs independently', async () => {
