@@ -176,8 +176,19 @@ function hasAncestorCycle(goals, goalId, newParentId) {
 
 // === Service Functions ===
 
-export async function getGoals() {
-  const data = await loadJSON(GOALS_FILE, DEFAULT_GOALS);
+/**
+ * @param {{ strict?: boolean }} [options] - `strict: true` throws when goals.json is
+ *   present-but-unreadable/corrupt rather than reporting it as "no goals filed"
+ *   (#2726). Off by default — every existing caller wants the empty fallback.
+ */
+export async function getGoals(options) {
+  const data = await loadJSON(GOALS_FILE, DEFAULT_GOALS, options);
+  // A goals.json that parsed but carries no goals array is as untrustworthy as one
+  // that failed to parse — validate before the count downstream trusts it. Only
+  // under strict: the non-strict path keeps its existing behavior for this shape.
+  if (options?.strict && !Array.isArray(data?.goals)) {
+    throw new Error(`Goals malformed: ${GOALS_FILE}`);
+  }
   // Lazy migration: backfill parentId, tags, linkedActivities on goals missing them
   let needsSave = false;
   for (const goal of data.goals) {

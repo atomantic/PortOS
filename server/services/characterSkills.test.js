@@ -1,4 +1,32 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
+import { EventEmitter } from 'events';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
+
+// Anchor the real data files the "real read path" suite at the bottom drives at a
+// temp tree. Only that suite reads them — every other test here runs against the
+// stubbed getters below and never touches a file.
+const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'character-skills-test-'));
+const MEATSPACE_DIR = join(TEST_DATA_ROOT, 'meatspace');
+const IDENTITY_DIR = join(TEST_DATA_ROOT, 'digital-twin');
+
+vi.mock('../lib/fileUtils.js', async (importOriginal) =>
+  makePathsProxy(await importOriginal(), {
+    dataRoot: TEST_DATA_ROOT,
+    extraOverrides: () => ({ meatspace: MEATSPACE_DIR, digitalTwin: IDENTITY_DIR }),
+  }));
+
+// MortalLoom gates every health/goals read on settings. Pin it OFF so the loaders
+// deterministically fall through to the local files this suite controls — otherwise
+// a real settings read decides whether the test exercises the file path at all.
+vi.mock('./settings.js', () => ({
+  getSettings: () => Promise.resolve({}),
+  settingsEvents: new EventEmitter(),
+}));
+
+afterAll(() => rmSync(TEST_DATA_ROOT, { recursive: true, force: true }));
 
 // Each domain's stat getter is stubbed so the registry can be driven to its three
 // interesting states — populated, empty, and read-failure — without any of the real
@@ -310,5 +338,127 @@ describe('getCharacterSkills — stat-read failure (must NOT collapse into a fak
     expect(byId(await getCharacterSkills(), 'archivist')).toMatchObject({
       id: 'archivist', label: 'Archivist', domain: 'brain',
     });
+  });
+});
+
+// ============================================================================
+// #2726 — the REAL read path
+//
+// Every failure test above drives a stubbed getter that rejects. That proves
+// "IF a getter reports failure THEN the skill is unavailable" — but it says
+// nothing about whether a getter EVER reports failure, and until #2726 the three
+// file-backed ones could not: they bottomed out in `readJSONFile`, which returns
+// its default on every read error, so an unreadable post-sessions.json scored a
+// real-looking level 0. The stub was a mode the real code could not enter, and
+// the suite passed anyway.
+//
+// These tests close that gap by unmocking the domain modules and driving real
+// files off disk. Each case is asserted as a PAIR — absent vs corrupt — because
+// only the pair is honest: a corrupt-file test alone would also pass if the
+// module graph were throwing for some unrelated reason, and the absent case
+// proves the read genuinely reaches (and trusts) the file.
+// ============================================================================
+describe('the real read path: an unreadable file is unavailable, an absent one is 0 (#2726)', () => {
+  // Load the registry against the REAL file-backed domain modules. The DB-backed
+  // getters stay mocked (they need Postgres); only the file-backed graph is real,
+  // which is exactly the wiring under test.
+  const loadRealRegistry = async () => {
+    vi.doUnmock('./meatspacePost.js');
+    vi.doUnmock('./meatspacePostTraining.js');
+    vi.doUnmock('./meatspaceLoggingStats.js');
+    vi.doUnmock('./identity/goals.js');
+    vi.resetModules();
+    return (await import('./characterSkills.js')).getCharacterSkills();
+  };
+
+  const skillOf = async (id) => byId(await loadRealRegistry(), id);
+
+  beforeEach(() => {
+    // A clean tree per test: no file exists, so every read is a genuine ENOENT.
+    rmSync(MEATSPACE_DIR, { recursive: true, force: true });
+    rmSync(IDENTITY_DIR, { recursive: true, force: true });
+    mkdirSync(MEATSPACE_DIR, { recursive: true });
+    mkdirSync(IDENTITY_DIR, { recursive: true });
+  });
+
+  describe('mentalist (POST sessions + training log)', () => {
+    it('is a real level 0 when the files were never written', async () => {
+      expect(await skillOf('mentalist')).toMatchObject({ level: 0, value: 0, unavailable: false });
+    });
+
+    it('is unavailable when post-sessions.json is corrupt', async () => {
+      writeFileSync(join(MEATSPACE_DIR, 'post-sessions.json'), '{"sessions": [{"id":');
+      expect(await skillOf('mentalist')).toMatchObject({ level: null, value: null, unavailable: true });
+    });
+
+    it('is unavailable when the training log is corrupt', async () => {
+      writeFileSync(join(MEATSPACE_DIR, 'post-training-log.json'), 'not json at all');
+      expect(await skillOf('mentalist')).toMatchObject({ level: null, value: null, unavailable: true });
+    });
+
+    it('counts real sessions off disk — the read reaches the file it claims to', async () => {
+      // Without this, "level 0" above could mean the read never happened at all.
+      writeFileSync(join(MEATSPACE_DIR, 'post-sessions.json'), JSON.stringify({
+        sessions: [{ id: 's1', date: '2026-01-01' }, { id: 's2', date: '2026-01-02' }],
+      }));
+      expect(await skillOf('mentalist')).toMatchObject({ value: 2, unavailable: false });
+    });
+  });
+
+  describe('vitalist (five health domains)', () => {
+    it('is a real level 0 when no health file was ever written', async () => {
+      expect(await skillOf('vitalist')).toMatchObject({ level: 0, value: 0, unavailable: false });
+    });
+
+    // The structurally worst case: all five domains could fail and still produce a
+    // perfectly plausible totalLogged: 0, because getLoggingStats caught each one.
+    it.each([
+      ['daily-log.json', 'alcohol/nicotine/body'],
+      ['workouts.json', 'workouts'],
+      ['health-metrics.json', 'blood pressure'],
+    ])('is unavailable when %s is corrupt (%s)', async (filename) => {
+      writeFileSync(join(MEATSPACE_DIR, filename), '{"entries": [');
+      expect(await skillOf('vitalist')).toMatchObject({ level: null, value: null, unavailable: true });
+    });
+
+    it('counts real health logs off disk', async () => {
+      writeFileSync(join(MEATSPACE_DIR, 'workouts.json'), JSON.stringify({
+        workouts: [{ date: '2026-01-01', type: 'run' }, { date: '2026-01-02', type: 'run' }],
+      }));
+      expect(await skillOf('vitalist')).toMatchObject({ value: 2, unavailable: false });
+    });
+  });
+
+  describe('strategist (goals)', () => {
+    it('is a real level 0 when goals.json was never written', async () => {
+      expect(await skillOf('strategist')).toMatchObject({ level: 0, value: 0, unavailable: false });
+    });
+
+    it('is unavailable when goals.json is corrupt', async () => {
+      writeFileSync(join(IDENTITY_DIR, 'goals.json'), '{"goals": [{"id"');
+      expect(await skillOf('strategist')).toMatchObject({ level: null, value: null, unavailable: true });
+    });
+
+    it('is unavailable when goals.json is truncated to empty', async () => {
+      // A 0-byte file is a partial write, not "no goals" — the pre-#2726 read
+      // reported it as an empty goals list.
+      writeFileSync(join(IDENTITY_DIR, 'goals.json'), '');
+      expect(await skillOf('strategist')).toMatchObject({ level: null, value: null, unavailable: true });
+    });
+
+    it('counts real goal discipline off disk', async () => {
+      writeFileSync(join(IDENTITY_DIR, 'goals.json'), JSON.stringify({
+        goals: [{ id: 'g1', title: 'Example goal', checkIns: [{ id: 'c1' }, { id: 'c2' }], progressHistory: [{ id: 'p1' }] }],
+      }));
+      expect(await skillOf('strategist')).toMatchObject({ value: 3, unavailable: false });
+    });
+  });
+
+  it('contains a failure to its own skill — one corrupt file does not blank the sheet', async () => {
+    writeFileSync(join(MEATSPACE_DIR, 'post-sessions.json'), 'corrupt');
+    const skills = await loadRealRegistry();
+    expect(byId(skills, 'mentalist').unavailable).toBe(true);
+    expect(byId(skills, 'vitalist')).toMatchObject({ level: 0, unavailable: false });
+    expect(byId(skills, 'strategist')).toMatchObject({ level: 0, unavailable: false });
   });
 });

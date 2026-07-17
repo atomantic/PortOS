@@ -1,5 +1,5 @@
 import { join } from 'path';
-import { atomicWrite, PATHS, ensureDir, safeJSONParse, tryReadFile } from '../../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, readJSONFileStrict } from '../../lib/fileUtils.js';
 import { isMortalLoomEnabled, mlArrayIfEnabled, mlReplace } from '../mortalLoomStore.js';
 
 // === Goal normalization defaults ===
@@ -85,9 +85,26 @@ export async function ensureIdentityDir() {
   await ensureDir(IDENTITY_DIR);
 }
 
-export async function loadJSON(filePath, defaultVal) {
-  const raw = await tryReadFile(filePath);
-  const data = raw ? safeJSONParse(raw, structuredClone(defaultVal)) : structuredClone(defaultVal);
+/**
+ * @param {string} filePath
+ * @param {*} defaultVal
+ * @param {{ strict?: boolean }} [options] - `strict: true` throws when `filePath`
+ *   exists but can't be read or parsed, instead of silently returning `defaultVal`.
+ *   Off by default so every existing caller keeps the fallback. Callers that COUNT
+ *   what they load opt in, so an unreadable file can't report as an empty one
+ *   (#2726). A genuinely absent file (never written) still returns `defaultVal`
+ *   under strict — that IS a trustworthy empty.
+ */
+export async function loadJSON(filePath, defaultVal, { strict = false } = {}) {
+  // `readJSONFileStrict` rather than tryReadFile+safeJSONParse: both of those
+  // swallow, so together they can't tell "no goals yet" from "goals.json is
+  // corrupt" — and this is the read the Strategist skill counts. Passing `null` as
+  // its default (rather than `defaultVal`) keeps "the file gave us nothing" legible
+  // here: a parsed file can never BE null (bare `null` fails validation), so `value`
+  // is null exactly when the file was absent, unreadable, or corrupt.
+  const { ok, value } = await readJSONFileStrict(filePath, null);
+  if (strict && !ok) throw new Error(`Unreadable identity file: ${filePath}`);
+  const data = value ?? structuredClone(defaultVal);
   // When MortalLoom iCloud sync is enabled, the goals array is sourced from
   // MortalLoom.json; birthDate and lifeExpectancy metadata stay in local PortOS.
   if (filePath === GOALS_FILE) {

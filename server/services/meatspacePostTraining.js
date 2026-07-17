@@ -15,8 +15,16 @@ import { getUnifiedActivityStreak } from './meatspacePost.js';
 const MEATSPACE_DIR = PATHS.meatspace;
 const TRAINING_LOG_FILE = join(MEATSPACE_DIR, 'post-training-log.json');
 
-async function loadTrainingLog() {
-  const data = await readJSONFile(TRAINING_LOG_FILE, { entries: [] }, { allowArray: false });
+/**
+ * @param {{ strict?: boolean }} [options] - `strict: true` throws when the training
+ *   log is present-but-unreadable/corrupt rather than falling back to an empty log.
+ *   See `loadSessions` in meatspacePost.js for the rationale (#2726).
+ */
+async function loadTrainingLog({ strict = false } = {}) {
+  const data = await readJSONFile(TRAINING_LOG_FILE, { entries: [] }, { allowArray: false, strict });
+  if (strict && !Array.isArray(data?.entries)) {
+    throw new Error(`POST training log malformed: ${TRAINING_LOG_FILE}`);
+  }
   if (!Array.isArray(data.entries)) data.entries = [];
   return data;
 }
@@ -137,8 +145,11 @@ export async function getTrainingEntries(limit = 20) {
  * All training-log entries in chronological (append) order — the raw feed the
  * unified progress aggregation reads (both meatspacePostTraining and
  * meatspacePostMemory practice write to the same `post-training-log.json`).
+ *
+ * @param {{ strict?: boolean }} [options] - `strict: true` throws rather than
+ *   reporting an unreadable log as zero entries (#2726).
  */
-export async function getAllTrainingEntries() {
-  const data = await loadTrainingLog();
+export async function getAllTrainingEntries(options) {
+  const data = await loadTrainingLog(options);
   return data.entries;
 }
