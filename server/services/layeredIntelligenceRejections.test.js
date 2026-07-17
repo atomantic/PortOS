@@ -4,6 +4,7 @@ import {
   REJECTION_REASON_VALUES,
   UNKNOWN_REJECTION_REASON,
   classifyRejection,
+  classifyClosingComment,
   formatRejectionReason,
   formatRejectionReasons,
   summarizeRejectionReasons
@@ -118,9 +119,160 @@ describe('classifyRejection', () => {
     expect(classifyRejection({ outcome: 'rejected', stateReason: 'duplicate', labels: null })).toBe('duplicate');
   });
 
+  it('classifies from the closing comment when no label or close reason fires (#2748)', () => {
+    // The glab/jira gap: a human declines in prose with no matching label and no
+    // close reason at all. The comment scan is what makes the token reachable.
+    expect(classifyRejection({
+      outcome: 'rejected',
+      stateReason: null,
+      labels: [],
+      closingComment: 'Thanks, but this is out of scope for this app.'
+    })).toBe('scope-mismatch');
+    expect(classifyRejection({
+      outcome: 'rejected',
+      closingComment: "Closing — can't reproduce and the report is too vague."
+    })).toBe('missing-context');
+  });
+
+  it('lets a label and a SPECIFIC close reason outrank a conflicting closing comment', () => {
+    // Free text is noisier than a deliberately-applied signal, so a label and a
+    // specific close reason (duplicate) both win over the comment.
+    expect(classifyRejection({
+      outcome: 'rejected',
+      labels: ['duplicate'],
+      closingComment: 'this is out of scope'
+    })).toBe('duplicate');
+    expect(classifyRejection({
+      outcome: 'abandoned',
+      stateReason: 'duplicate',
+      closingComment: 'low quality proposal'
+    })).toBe('duplicate');
+  });
+
+  it('lets a specific closing comment REFINE the generic not_planned decline (#2748)', () => {
+    // not_planned says the proposal was declined but not WHY. A prose rationale
+    // sharpens that generic decline into a precise taxonomy token — the primary
+    // reachable case, since deriveOutcome hands most GitHub rejections a not_planned
+    // reason. The outcome is unchanged, so this can't move the merge rate.
+    expect(classifyRejection({
+      outcome: 'rejected',
+      stateReason: 'not_planned',
+      closingComment: 'low quality proposal'
+    })).toBe('quality-issue');
+    expect(classifyRejection({
+      outcome: 'rejected',
+      stateReason: 'not_planned',
+      closingComment: 'Appreciate it, but this is out of scope for the app.'
+    })).toBe('scope-mismatch');
+    // With no specific rationale in the comment, the generic decline stands.
+    expect(classifyRejection({
+      outcome: 'rejected',
+      stateReason: 'not_planned',
+      closingComment: 'Closing this out, thanks.'
+    })).toBe('user-rejected');
+  });
+
+  it('falls through to the unknown sentinel when the closing comment states no rationale', () => {
+    expect(classifyRejection({
+      outcome: 'rejected',
+      closingComment: 'Closing this one out. Thanks!'
+    })).toBe(UNKNOWN_REJECTION_REASON);
+  });
+
   it('only ever yields a storable token', () => {
     const got = classifyRejection({ outcome: 'rejected', stateReason: 'not_planned' });
     expect(REJECTION_REASON_VALUES).toContain(got);
+    const fromComment = classifyRejection({ outcome: 'rejected', closingComment: 'out of scope' });
+    expect(REJECTION_REASON_VALUES).toContain(fromComment);
+  });
+});
+
+describe('classifyClosingComment', () => {
+  it('returns null for a nullish, non-string, or blank comment', () => {
+    expect(classifyClosingComment(null)).toBeNull();
+    expect(classifyClosingComment(undefined)).toBeNull();
+    expect(classifyClosingComment('')).toBeNull();
+    expect(classifyClosingComment('   \n  ')).toBeNull();
+    expect(classifyClosingComment(42)).toBeNull();
+  });
+
+  it('detects scope-mismatch rationales', () => {
+    for (const text of [
+      'This is out of scope.',
+      'Sorry, this is outside the scope of the project.',
+      "This does n't belong in this app",
+      'Not aligned with where we are taking things.'
+    ]) {
+      expect(classifyClosingComment(text)).toBe('scope-mismatch');
+    }
+  });
+
+  it('detects missing-context rationales', () => {
+    for (const text of [
+      'We need more information before we can act on this.',
+      'Not enough detail to proceed.',
+      "Can't reproduce from what's here.",
+      'This is under-specified — please clarify.',
+      'The description is too vague.',
+      'This lacks information to act on.',
+      'Lacks of context.',
+      'Lacking detail.'
+    ]) {
+      expect(classifyClosingComment(text)).toBe('missing-context');
+    }
+  });
+
+  it('detects quality-issue rationales', () => {
+    for (const text of [
+      'This is a low-quality proposal.',
+      'The suggestion is malformed and does not make sense.',
+      'Reads like a hallucinated feature.',
+      'Not actionable as written.'
+    ]) {
+      expect(classifyClosingComment(text)).toBe('quality-issue');
+    }
+  });
+
+  it('matches "could not reproduce" and its contractions', () => {
+    for (const text of [
+      'We could not reproduce this.',
+      "We couldn't reproduce it.",
+      'Cannot reproduce.',
+      'can not reproduce'
+    ]) {
+      expect(classifyClosingComment(text)).toBe('missing-context');
+    }
+  });
+
+  it('does not misread a "not something we can reproduce" close as a scope mismatch', () => {
+    // The old broad "not something we" scope pattern misfired here. Dropping it
+    // yields the honest null (the negation isn't something a keyword pass can
+    // parse) — which falls through to unknown-reason — never a WRONG scope token.
+    expect(classifyClosingComment('This is not something we can reproduce.')).toBeNull();
+  });
+
+  it('matches across newlines and mixed case', () => {
+    expect(classifyClosingComment('Thanks for the idea!\n\nHowever this is\nOUT OF SCOPE here.'))
+      .toBe('scope-mismatch');
+  });
+
+  it('is deterministic and resolves multi-bucket text by fixed group order', () => {
+    // Trips both scope and quality; scope is the earlier, more-specific group.
+    const text = 'out of scope and honestly low-quality too';
+    expect(classifyClosingComment(text)).toBe('scope-mismatch');
+    expect(classifyClosingComment(text)).toBe('scope-mismatch');
+  });
+
+  it('returns null when no keyword matches, never a fabricated reason', () => {
+    expect(classifyClosingComment('Closing this out, thanks everyone.')).toBeNull();
+    expect(classifyClosingComment('Merged in a follow-up, all good.')).toBeNull();
+  });
+
+  it('only ever yields a storable token or null', () => {
+    for (const text of ['out of scope', 'need more info', 'malformed', 'nothing here']) {
+      const got = classifyClosingComment(text);
+      expect(got === null || REJECTION_REASONS.includes(got)).toBe(true);
+    }
   });
 });
 
