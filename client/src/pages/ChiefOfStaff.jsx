@@ -526,8 +526,10 @@ export default function ChiefOfStaff() {
         <div className="flex-1 min-w-0 text-left">
           <div className="text-[10px] text-gray-500">Learning</div>
           {/* Stacked, not a flex row: as flex items these keep min-width:auto,
-              so on a narrow card the skipped label can't shrink and spills out. */}
-          <div className="text-sm font-bold text-white truncate">
+              so on a narrow card the skipped label can't shrink and spills out.
+              The value itself stays wrappable — `truncate` would clip the
+              (widest) 'No data' to 'No dat…' on a narrow card. */}
+          <div className="text-sm font-bold text-white">
             {learningSummary?.overallSuccessRate != null ? `${learningSummary.overallSuccessRate}%` : 'No data'}
           </div>
           {learningSummary?.skipped > 0 && (

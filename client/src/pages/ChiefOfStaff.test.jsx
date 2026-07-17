@@ -176,6 +176,24 @@ describe('ChiefOfStaff Learning card skipped label', () => {
     }
   });
 
+  it('leaves the value wrappable so "No data" is not clipped', async () => {
+    // `truncate` implies white-space:nowrap. The label needs it (it can be
+    // arbitrarily wide); the value must NOT have it — the widest value,
+    // "No data", is wider than the compact card's ~45px text column and would
+    // render clipped as "No dat…" instead of wrapping.
+    api.getCosLearningSummary.mockResolvedValue({ overallSuccessRate: null, skipped: 0, status: 'unknown', totalCompleted: 0 });
+    renderAt('config');
+
+    // Only the compact card spells the empty state "No data" — the ascii `mini`
+    // card renders an em dash — so scope to the card that actually shows it.
+    const cards = await learningCards();
+    const values = cards.map(c => within(c).queryByText('No data')).filter(Boolean);
+    expect(values.length).toBeGreaterThan(0);
+    for (const value of values) {
+      expect(value.classList.contains('truncate')).toBe(false);
+    }
+  });
+
   it('omits the skipped label entirely when nothing was skipped', async () => {
     api.getCosLearningSummary.mockResolvedValue({ ...summaryWithSkipped, skipped: 0, status: 'good' });
     renderAt('config');
