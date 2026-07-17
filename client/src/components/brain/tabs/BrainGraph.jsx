@@ -1,8 +1,8 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback, memo } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { OrbitControls } from '@react-three/drei';
 import * as THREE from 'three';
-import {AlertTriangle, Zap, RefreshCw, X, ChevronRight, ArrowLeft, Compass} from 'lucide-react';
+import {AlertTriangle, Zap, RefreshCw, X, ChevronRight, ArrowLeft, Compass, Info} from 'lucide-react';
 import toast from '../../ui/Toast';
 import * as api from '../../../services/api';
 import { BRAIN_TYPE_HEX, DESTINATIONS } from '../constants';
@@ -19,6 +19,11 @@ const EDGE_COLORS = {
 };
 
 const BRAIN_TYPES = ['people', 'projects', 'ideas', 'admin', 'memories', 'goals', 'journals'];
+
+// Widest the hover tooltip renders. Single source for both its max-width and
+// the clamp that keeps it inside the viewport — as a CSS class plus a mirrored
+// constant the two silently drift apart.
+const TOOLTIP_WIDTH = 320;
 
 // Per-type API getters for detail panel
 const TYPE_GETTERS = {
@@ -70,7 +75,11 @@ function GraphEdges({ simEdges, selectedId }) {
   );
 }
 
-function GraphScene({ graph, selectedId, adjacentIds, onSelect, onFocus, onHover }) {
+// Memoized: the container's onPointerMove re-renders BrainGraph on every mouse
+// move over the canvas (it tracks the tooltip position), and every prop here is
+// already identity-stable across that render — so without memo each move
+// reconciles a <mesh> per node for nothing.
+const GraphScene = memo(function GraphScene({ graph, selectedId, adjacentIds, onSelect, onFocus, onHover }) {
   const sphereGeo = useMemo(() => new THREE.SphereGeometry(1, 16, 12), []);
 
   const selNode = selectedId ? graph.idMap.get(selectedId) : null;
@@ -120,7 +129,7 @@ function GraphScene({ graph, selectedId, adjacentIds, onSelect, onFocus, onHover
       <OrbitControls enableDamping dampingFactor={0.05} minDistance={10} maxDistance={200} />
     </>
   );
-}
+});
 
 export default function BrainGraph() {
   const [graphData, setGraphData] = useState(null);
@@ -137,6 +146,8 @@ export default function BrainGraph() {
   const [searchValue, setSearchValue] = useState('');
   const [focusTrail, setFocusTrail] = useState([]);
   const [embeddingStatus, setEmbeddingStatus] = useState(null);
+  // Mobile-only: the legend is always shown from `sm` up (CSS, not this flag).
+  const [legendOpen, setLegendOpen] = useState(false);
   const [typeFilters, setTypeFilters] = useState(() =>
     Object.fromEntries(BRAIN_TYPES.map(t => [t, true]))
   );
@@ -192,6 +203,15 @@ export default function BrainGraph() {
   const goToOverview = useCallback(async () => {
     await loadView(null, { trail: [] });
   }, [loadView]);
+
+  // The search index covers every brain record (unbounded, unlike the loaded
+  // view), so keep a stable mapping — rebuilt inline it re-allocated the whole
+  // list on every tooltip-position render and re-ran the combobox's filters.
+  const searchItems = useMemo(() => searchIndex.map(n => ({
+    id: n.id,
+    name: n.label,
+    subtitle: DESTINATIONS[n.brainType]?.label || n.brainType
+  })), [searchIndex]);
 
   // Filter the (already bounded) loaded nodes by type toggles.
   const filteredData = useMemo(() => {
@@ -336,15 +356,15 @@ export default function BrainGraph() {
     <div className="h-full overflow-y-auto p-3 sm:p-4 space-y-3">
       {/* No-embeddings banner */}
       {graphData && !graphData.hasEmbeddings && (
-        <div className="flex items-center justify-between bg-port-warning/10 border border-port-warning/30 rounded-lg px-4 py-2.5">
-          <div className="flex items-center gap-2 text-sm text-port-warning">
-            <AlertTriangle size={16} />
-            No embeddings found. Sync brain data to CoS memory to enable semantic similarity edges.
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 bg-port-warning/10 border border-port-warning/30 rounded-lg px-3 sm:px-4 py-2.5">
+          <div className="flex items-start gap-2 text-sm text-port-warning">
+            <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+            <span>No embeddings found. Sync brain data to CoS memory to enable semantic similarity edges.</span>
           </div>
           <button
             onClick={() => handleSync({ onlyMissing: true })}
             disabled={syncing}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-port-warning/20 text-port-warning border border-port-warning/30 rounded-lg hover:bg-port-warning/30 transition-colors disabled:opacity-50"
+            className="flex items-center justify-center gap-1.5 self-start sm:self-auto shrink-0 px-3 py-1.5 min-h-[36px] text-xs font-medium bg-port-warning/20 text-port-warning border border-port-warning/30 rounded-lg hover:bg-port-warning/30 transition-colors disabled:opacity-50"
           >
             {syncing ? <BrailleSpinner /> : <Zap size={14} />}
             {syncing ? 'Syncing...' : 'Sync Now'}
@@ -356,21 +376,24 @@ export default function BrainGraph() {
           loaded view) and focus its neighborhood. */}
       <div className="flex items-center gap-2">
         <EntityCombobox
-          items={searchIndex.map(n => ({ id: n.id, name: n.label, subtitle: DESTINATIONS[n.brainType]?.label || n.brainType }))}
+          items={searchItems}
           value={searchValue}
           onChange={setSearchValue}
           onPick={(item) => { focusNode({ id: item.id, label: item.name }); setSearchValue(''); }}
           inputId="brain-graph-search"
           noun="memory"
           placeholder="Search memories to explore…"
-          className="flex-1 min-w-[200px]"
+          // min-w-0 (not the default 200px floor) so the field still shrinks
+          // beside the "N missing" button on a ~320px screen instead of
+          // overflowing the row.
+          className="flex-1 min-w-0"
         />
         {missingCount > 0 && (
           <button
             onClick={() => handleSync({ onlyMissing: true })}
             disabled={syncing}
             title={`${missingCount} of ${embeddingStatus?.total ?? '?'} records have no embedding yet — embed just those (fast)`}
-            className="flex items-center gap-1.5 px-3 py-2 min-h-[36px] text-xs whitespace-nowrap bg-port-warning/15 text-port-warning border border-port-warning/30 rounded-lg hover:bg-port-warning/25 transition-colors disabled:opacity-50"
+            className="flex items-center gap-1.5 shrink-0 px-3 py-2 min-h-[36px] text-xs whitespace-nowrap bg-port-warning/15 text-port-warning border border-port-warning/30 rounded-lg hover:bg-port-warning/25 transition-colors disabled:opacity-50"
           >
             {syncing ? <BrailleSpinner /> : <Zap size={14} />}
             {missingCount} missing · Embed
@@ -378,16 +401,18 @@ export default function BrainGraph() {
         )}
       </div>
 
-      {/* Breadcrumb trail + controls bar */}
-      <div className="flex items-center gap-3 bg-port-card border border-port-border rounded-lg px-4 py-2 flex-wrap">
-        {/* Breadcrumb */}
-        <div className="flex items-center gap-1 text-xs min-w-0">
+      {/* Breadcrumb trail + controls bar. Below `sm` this stacks into three
+          rows (trail / filters / stats+actions) — as one flex row the seven
+          type filters shoved the breadcrumb and buttons into a jumble. */}
+      <div className="bg-port-card border border-port-border rounded-lg px-3 sm:px-4 py-2 space-y-2 sm:space-y-0 sm:flex sm:flex-wrap sm:items-center sm:gap-3">
+        {/* Breadcrumb — scrolls sideways rather than wrapping a deep trail */}
+        <div className="flex items-center gap-1 text-xs min-w-0 overflow-x-auto">
           {focusTrail.length > 0 && (
             <button
               onClick={goBack}
               title="Back"
               aria-label="Back"
-              className="flex items-center gap-1 px-2 py-1 text-gray-400 hover:text-white rounded transition-colors"
+              className="flex items-center gap-1 shrink-0 px-2 py-1 text-gray-400 hover:text-white rounded transition-colors"
             >
               <ArrowLeft size={13} />
             </button>
@@ -395,7 +420,7 @@ export default function BrainGraph() {
           <button
             onClick={goToOverview}
             disabled={focusTrail.length === 0}
-            className={`px-1.5 py-1 rounded transition-colors ${focusTrail.length === 0 ? 'text-white font-medium' : 'text-gray-400 hover:text-white'}`}
+            className={`shrink-0 px-1.5 py-1 rounded transition-colors ${focusTrail.length === 0 ? 'text-white font-medium' : 'text-gray-400 hover:text-white'}`}
           >
             Overview
           </button>
@@ -409,12 +434,13 @@ export default function BrainGraph() {
           ))}
         </div>
 
-        {/* Type filter checkboxes */}
-        <div className="flex items-center gap-3 ml-auto">
+        {/* Type filter checkboxes — wrap on mobile (seven of them never fit a
+            phone row) with a taller tap target than the 12px swatch alone. */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 sm:ml-auto">
           {BRAIN_TYPES.map(type => {
             const dest = DESTINATIONS[type];
             return (
-              <label key={type} className="flex items-center gap-1.5 cursor-pointer text-sm">
+              <label key={type} className="flex items-center gap-1.5 cursor-pointer select-none text-sm py-1.5 sm:py-0 min-h-[32px] sm:min-h-0">
                 <input
                   type="checkbox"
                   checked={typeFilters[type]}
@@ -433,29 +459,32 @@ export default function BrainGraph() {
           })}
         </div>
 
-        {/* Stats + re-layout */}
-        <span className="text-sm text-gray-400">
-          {filteredData?.nodes?.length || 0} nodes &middot; {filteredData?.edges?.length || 0} edges
-        </span>
-        <button
-          onClick={() => { setSelectedNode(null); setLayoutKey(k => k + 1); }}
-          className="px-3 py-1.5 min-h-[36px] text-xs bg-port-border text-gray-400 hover:text-white rounded-lg transition-colors"
-        >
-          Re-layout
-        </button>
-        {/* Recovery action (issue #1080): re-embed already-synced records whose
-            memory copy may be stale. Confirmed first — it re-embeds every record
-            and can run for many minutes. The cheaper "Embed missing" above is the
-            usual path; this is the heavy reset. */}
-        <button
-          onClick={() => setConfirmingRefresh(true)}
-          disabled={syncing || confirmingRefresh}
-          title="Re-embed ALL brain records, including ones synced from peers. Slow — use 'Embed missing' for the common case."
-          className="flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] text-xs bg-port-border text-gray-400 hover:text-white rounded-lg transition-colors disabled:opacity-50"
-        >
-          {syncing ? <BrailleSpinner /> : <RefreshCw size={14} />}
-          Refresh all
-        </button>
+        {/* Stats + actions — kept together so they share a row on mobile
+            instead of each wrapping onto a line of their own. */}
+        <div className="flex items-center gap-2 sm:gap-3">
+          <span className="text-xs sm:text-sm text-gray-400 mr-auto sm:mr-0">
+            {filteredData?.nodes?.length || 0} nodes &middot; {filteredData?.edges?.length || 0} edges
+          </span>
+          <button
+            onClick={() => { setSelectedNode(null); setLayoutKey(k => k + 1); }}
+            className="px-3 py-1.5 min-h-[36px] text-xs bg-port-border text-gray-400 hover:text-white rounded-lg transition-colors"
+          >
+            Re-layout
+          </button>
+          {/* Recovery action (issue #1080): re-embed already-synced records whose
+              memory copy may be stale. Confirmed first — it re-embeds every record
+              and can run for many minutes. The cheaper "Embed missing" above is the
+              usual path; this is the heavy reset. */}
+          <button
+            onClick={() => setConfirmingRefresh(true)}
+            disabled={syncing || confirmingRefresh}
+            title="Re-embed ALL brain records, including ones synced from peers. Slow — use 'Embed missing' for the common case."
+            className="flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] text-xs bg-port-border text-gray-400 hover:text-white rounded-lg transition-colors disabled:opacity-50"
+          >
+            {syncing ? <BrailleSpinner /> : <RefreshCw size={14} />}
+            Refresh all
+          </button>
+        </div>
       </div>
 
       {confirmingRefresh && (
@@ -469,10 +498,13 @@ export default function BrainGraph() {
         />
       )}
 
-      {/* 3D Canvas */}
+      {/* 3D Canvas. Viewport-relative rather than a flat 500px: the canvas is a
+          touch-action:none dead zone for page scrolling, so on a phone (and
+          especially in landscape, where 500px overflowed the whole viewport) it
+          has to leave room to scroll past. Caps at the original 500px on
+          desktop, floors at 240px so it stays usable on a short viewport. */}
       <div
-        className="relative bg-port-card border border-port-border rounded-lg overflow-hidden"
-        style={{ height: '500px' }}
+        className="relative bg-port-card border border-port-border rounded-lg overflow-hidden h-[clamp(240px,45vh,500px)]"
         onPointerDown={(e) => { dragStartRef.current = { x: e.clientX, y: e.clientY }; }}
         onPointerMove={(e) => setTooltipPos({ x: e.clientX, y: e.clientY })}
       >
@@ -522,35 +554,61 @@ export default function BrainGraph() {
           </button>
         )}
 
-        {/* Legend */}
-        <div className="absolute bottom-3 left-3 bg-port-bg/90 border border-port-border rounded-lg p-3 text-xs space-y-1.5 pointer-events-none">
-          {BRAIN_TYPES.map(t => (
-            <div key={t} className="flex items-center gap-2">
-              <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: BRAIN_TYPE_HEX[t] }} />
-              <span className="text-gray-400">{DESTINATIONS[t]?.label || t}</span>
-            </div>
-          ))}
-          <div className="border-t border-port-border pt-1.5 mt-1.5 space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="inline-block w-4 h-0 border-t" style={{ borderColor: EDGE_COLORS.similar }} />
-              <span className="text-gray-500">similar</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="inline-block w-4 h-0 border-t" style={{ borderColor: EDGE_COLORS.shared_tag }} />
-              <span className="text-gray-500">shared tag</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="inline-block w-4 h-0 border-t" style={{ borderColor: EDGE_COLORS.linked }} />
-              <span className="text-gray-500">linked</span>
+        {/* Legend. Ten rows blanket a phone-sized canvas, so below `sm` it
+            collapses behind a toggle and expands upward from the corner (the
+            type filters above already carry the same colour→label mapping; the
+            edge colours are only here, so it stays reachable rather than
+            hidden). Unchanged at `sm` and up. */}
+        <div className="absolute bottom-3 left-3 z-10 flex flex-col items-start gap-1.5">
+          <div
+            data-testid="graph-legend"
+            className={`${legendOpen ? 'block' : 'hidden'} sm:block bg-port-bg/90 border border-port-border rounded-lg p-3 text-xs space-y-1.5 pointer-events-none`}
+          >
+            {BRAIN_TYPES.map(t => (
+              <div key={t} className="flex items-center gap-2">
+                <span className="inline-block w-2.5 h-2.5 rounded-full" style={{ backgroundColor: BRAIN_TYPE_HEX[t] }} />
+                <span className="text-gray-400">{DESTINATIONS[t]?.label || t}</span>
+              </div>
+            ))}
+            <div className="border-t border-port-border pt-1.5 mt-1.5 space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="inline-block w-4 h-0 border-t" style={{ borderColor: EDGE_COLORS.similar }} />
+                <span className="text-gray-500">similar</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="inline-block w-4 h-0 border-t" style={{ borderColor: EDGE_COLORS.shared_tag }} />
+                <span className="text-gray-500">shared tag</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="inline-block w-4 h-0 border-t" style={{ borderColor: EDGE_COLORS.linked }} />
+                <span className="text-gray-500">linked</span>
+              </div>
             </div>
           </div>
+          <button
+            onClick={() => setLegendOpen(o => !o)}
+            aria-expanded={legendOpen}
+            className="sm:hidden flex items-center gap-1.5 px-2.5 py-1.5 min-h-[32px] text-[11px] bg-port-bg/90 border border-port-border text-gray-400 hover:text-white rounded-lg transition-colors"
+          >
+            <Info size={12} />
+            Legend
+          </button>
         </div>
 
-        {/* Tooltip */}
+        {/* Hover tooltip. Suppressed on a coarse pointer: there is no hover to
+            preview with — a tap selects the node and the detail panel below
+            already shows the same record — and it would otherwise flash under
+            the user's own finger advertising a double-click touch can't do.
+            Position is clamped so it can't run off the right edge of a narrow
+            window, where `x + 12` alone would clip the label. */}
         {hoveredNode && (
           <div
-            className="fixed z-50 pointer-events-none bg-port-bg border border-port-border rounded-lg px-3 py-2 shadow-lg max-w-xs"
-            style={{ left: tooltipPos.x + 12, top: tooltipPos.y - 12 }}
+            className="fixed z-50 pointer-events-none pointer-coarse:hidden bg-port-bg border border-port-border rounded-lg px-3 py-2 shadow-lg"
+            style={{
+              maxWidth: TOOLTIP_WIDTH,
+              left: Math.max(8, Math.min(tooltipPos.x + 12, window.innerWidth - TOOLTIP_WIDTH - 8)),
+              top: Math.max(8, tooltipPos.y - 12)
+            }}
           >
             <div className="flex items-center gap-2 mb-1">
               <span
@@ -571,8 +629,8 @@ export default function BrainGraph() {
 
       {/* Detail panel */}
       {selectedNode && (
-        <div className="bg-port-card border border-port-border rounded-lg p-4">
-          <div className="flex items-start justify-between gap-3 mb-3">
+        <div className="bg-port-card border border-port-border rounded-lg p-3 sm:p-4">
+          <div className="flex items-start justify-between gap-2 sm:gap-3 mb-3">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-2">
                 <span
@@ -619,26 +677,29 @@ export default function BrainGraph() {
                 <p className="text-sm text-gray-300">{selectedNode.summary}</p>
               )}
             </div>
-            <div className="flex flex-col items-end gap-2 shrink-0">
-              <button
-                onClick={() => setSelectedNode(null)}
-                title="Clear selection (Esc)"
-                aria-label="Clear selection"
-                className="text-gray-500 hover:text-white transition-colors p-1"
-              >
-                &times;
-              </button>
-              {selectedNode.id !== focusId && (
-                <button
-                  onClick={() => focusNode(selectedNode)}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs bg-port-accent/20 text-port-accent border border-port-accent/30 rounded-lg hover:bg-port-accent/30 transition-colors whitespace-nowrap"
-                >
-                  <Compass size={13} />
-                  Explore connections
-                </button>
-              )}
-            </div>
+            <button
+              onClick={() => setSelectedNode(null)}
+              title="Clear selection (Esc)"
+              aria-label="Clear selection"
+              className="shrink-0 text-gray-500 hover:text-white transition-colors p-1"
+            >
+              &times;
+            </button>
           </div>
+
+          {/* "Explore connections" sits on its own row rather than in a column
+              beside the body: as a fixed ~160px sidebar it squeezed the record
+              text to a sliver on a phone. Full-width on mobile (it's the touch
+              stand-in for double-clicking a node), inline from `sm` up. */}
+          {selectedNode.id !== focusId && (
+            <button
+              onClick={() => focusNode(selectedNode)}
+              className="flex items-center justify-center sm:justify-start gap-1.5 w-full sm:w-auto mb-3 px-2.5 py-2 sm:py-1.5 min-h-[36px] text-xs bg-port-accent/20 text-port-accent border border-port-accent/30 rounded-lg hover:bg-port-accent/30 transition-colors whitespace-nowrap"
+            >
+              <Compass size={13} />
+              Explore connections
+            </button>
+          )}
           {connectedNodes.length > 0 && (
             <div>
               <p className="text-xs text-gray-500 mb-2">{connectedNodes.length} connections</p>
