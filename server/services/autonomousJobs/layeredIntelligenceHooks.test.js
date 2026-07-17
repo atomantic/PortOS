@@ -71,13 +71,13 @@ vi.mock('../layeredIntelligence.js', () => ({
 // asserted without touching the real collection store on disk.
 vi.mock('../layeredIntelligenceOutcomes.js', () => ({
   recordFiledProposal: vi.fn().mockResolvedValue(true),
-  listOutcomes: vi.fn().mockResolvedValue([]),
+  listOutcomesResult: vi.fn().mockResolvedValue({ read: true, outcomes: [] }),
   reconcileOutcomes: vi.fn().mockResolvedValue(0)
 }));
 
 import { buildTaskInput, processTaskOutput } from './layeredIntelligenceHooks.js';
 import * as li from '../layeredIntelligence.js';
-import { recordFiledProposal, listOutcomes, reconcileOutcomes } from '../layeredIntelligenceOutcomes.js';
+import { recordFiledProposal, listOutcomesResult, reconcileOutcomes } from '../layeredIntelligenceOutcomes.js';
 import * as apps from '../apps.js';
 import { resolveAppWorkTracker } from '../../lib/workTracker.js';
 import { tryReadFile } from '../../lib/fileUtils.js';
@@ -274,17 +274,17 @@ describe('buildTaskInput', () => {
     li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: {} });
     await buildTaskInput({ app: APP });
     expect(reconcileOutcomes).not.toHaveBeenCalled();
-    expect(listOutcomes).not.toHaveBeenCalled();
+    expect(listOutcomesResult).not.toHaveBeenCalled();
     expect(li.buildPrompt).toHaveBeenCalledWith(expect.objectContaining({ outcomesReport: '' }));
   });
 
   it('reconciles + folds the outcomes report into the prompt when enabled', async () => {
     li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { outcomes: true } });
-    listOutcomes.mockResolvedValue([{ slug: 's', outcome: 'merged', scope: 'app-improvement' }]);
+    listOutcomesResult.mockResolvedValue({ read: true, outcomes: [{ slug: 's', outcome: 'merged', scope: 'app-improvement' }] });
     li.computeOutcomesReport.mockReturnValue('Recent LI proposals:\n- Total filed: 1');
     await buildTaskInput({ app: APP });
     expect(reconcileOutcomes).toHaveBeenCalledWith(expect.objectContaining({ appId: 'app-1' }));
-    expect(listOutcomes).toHaveBeenCalledWith(expect.objectContaining({ appId: 'app-1' }));
+    expect(listOutcomesResult).toHaveBeenCalledWith(expect.objectContaining({ appId: 'app-1' }));
     expect(li.buildPrompt).toHaveBeenCalledWith(expect.objectContaining({ outcomesReport: expect.stringContaining('Total filed: 1') }));
   });
 
@@ -316,11 +316,28 @@ describe('buildTaskInput', () => {
 
   it('passes the gathered outcomes to selfEval when both sources are on (#2700)', async () => {
     li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { outcomes: true, selfEval: true } });
-    listOutcomes.mockResolvedValue([{ slug: 's', outcome: 'merged', scope: 'app-improvement' }]);
+    listOutcomesResult.mockResolvedValue({ read: true, outcomes: [{ slug: 's', outcome: 'merged', scope: 'app-improvement' }] });
     await buildTaskInput({ app: APP });
     expect(li.computeSelfEvalSummary).toHaveBeenCalledWith(expect.objectContaining({
       outcomes: [{ slug: 's', outcome: 'merged', scope: 'app-improvement' }]
     }));
+  });
+
+  it('passes outcomes to selfEval as null when the outcome STORE could not be read (#2700)', async () => {
+    // An unreadable store must not reach the reasoner as "you have never filed a
+    // proposal" — that invites it to re-file work it already filed.
+    li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { outcomes: true, selfEval: true } });
+    listOutcomesResult.mockResolvedValue({ read: false, outcomes: [] });
+    await buildTaskInput({ app: APP });
+    expect(li.computeSelfEvalSummary).toHaveBeenCalledWith(expect.objectContaining({ outcomes: null }));
+  });
+
+  it('distinguishes a read-but-empty outcome store from an unreadable one (#2700)', async () => {
+    li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { outcomes: true, selfEval: true } });
+    listOutcomesResult.mockResolvedValue({ read: true, outcomes: [] });
+    await buildTaskInput({ app: APP });
+    // Read fine, nothing filed → `[]`, NOT the null "unavailable" sentinel.
+    expect(li.computeSelfEvalSummary).toHaveBeenCalledWith(expect.objectContaining({ outcomes: [] }));
   });
 
   it('passes existingIssues to selfEval, and null when the tracker read failed (#2700)', async () => {
@@ -345,14 +362,14 @@ describe('buildTaskInput', () => {
     // The plan branch reads PLAN.md → a checked item reconciles like a forge issue.
     tryReadFile.mockResolvedValue('- [x] [lil-add-metrics] done');
     li.extractPlanSlugs.mockReturnValue([{ slug: 'add-metrics', state: 'closed' }]);
-    listOutcomes.mockResolvedValue([{ slug: 'add-metrics', outcome: 'merged', scope: 'app-improvement' }]);
+    listOutcomesResult.mockResolvedValue({ read: true, outcomes: [{ slug: 'add-metrics', outcome: 'merged', scope: 'app-improvement' }] });
     li.computeOutcomesReport.mockReturnValue('Recent LI proposals:\n- Total filed: 1');
     await buildTaskInput({ app: APP });
     expect(reconcileOutcomes).toHaveBeenCalledWith(expect.objectContaining({
       appId: 'app-1',
       existingIssues: [{ slug: 'add-metrics', state: 'closed' }]
     }));
-    expect(listOutcomes).toHaveBeenCalledWith(expect.objectContaining({ appId: 'app-1' }));
+    expect(listOutcomesResult).toHaveBeenCalledWith(expect.objectContaining({ appId: 'app-1' }));
     expect(li.buildPrompt).toHaveBeenCalledWith(expect.objectContaining({ outcomesReport: expect.stringContaining('Total filed: 1') }));
   });
 });

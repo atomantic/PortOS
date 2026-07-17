@@ -7,6 +7,7 @@ import {
   sanitizeOutcomeRecord,
   recordFiledProposal,
   listOutcomes,
+  listOutcomesResult,
   reconcileOutcomes,
   OUTCOME_RETENTION_MS,
   LI_OUTCOMES_SCHEMA_VERSION
@@ -186,5 +187,40 @@ describe('reconcileOutcomes', () => {
   it('is a no-op with no existing issues', async () => {
     await recordFiledProposal({ appId: 'app-1', slug: 's', scope: 'app-improvement' }, store);
     expect(await reconcileOutcomes({ appId: 'app-1', existingIssues: [] }, store)).toBe(0);
+  });
+});
+
+describe('listOutcomesResult read sentinel (#2700)', () => {
+  it('reports read:true with the records on a successful read', async () => {
+    await recordFiledProposal({ appId: 'app-1', slug: 'add-metrics', tracker: 'github', issueRef: '#42' }, store);
+    const res = await listOutcomesResult({ appId: 'app-1' }, store);
+    expect(res.read).toBe(true);
+    expect(res.outcomes).toHaveLength(1);
+  });
+
+  it('reports read:true with [] when the store is readable but this app filed nothing', async () => {
+    // "Nothing filed" is a real, trustworthy answer — distinct from a failed read.
+    expect(await listOutcomesResult({ appId: 'app-1' }, store)).toEqual({ read: true, outcomes: [] });
+  });
+
+  it('reports read:false when the store read throws — never a fabricated empty history', async () => {
+    const broken = { loadAll: () => Promise.reject(new Error('disk on fire')), deleteOne: () => Promise.resolve() };
+    expect(await listOutcomesResult({ appId: 'app-1' }, broken)).toEqual({ read: false, outcomes: [] });
+  });
+
+  it('reports read:false when the store returns a non-array', async () => {
+    const broken = { loadAll: () => Promise.resolve(null), deleteOne: () => Promise.resolve() };
+    expect(await listOutcomesResult({ appId: 'app-1' }, broken)).toEqual({ read: false, outcomes: [] });
+  });
+
+  it('treats a missing appId as an empty successful read, not a store failure', async () => {
+    expect(await listOutcomesResult({}, store)).toEqual({ read: true, outcomes: [] });
+  });
+
+  it('listOutcomes still flattens to the bare array for back-compat', async () => {
+    await recordFiledProposal({ appId: 'app-1', slug: 'add-metrics', tracker: 'github', issueRef: '#42' }, store);
+    expect(await listOutcomes({ appId: 'app-1' }, store)).toHaveLength(1);
+    const broken = { loadAll: () => Promise.reject(new Error('nope')), deleteOne: () => Promise.resolve() };
+    expect(await listOutcomes({ appId: 'app-1' }, broken)).toEqual([]);
   });
 });
