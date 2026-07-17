@@ -1129,8 +1129,12 @@ export async function spawnTuiAgent({
   // live — the identical signal createInputReadyTracker keys on — but the old
   // blind-paste path fired into agy's still-initializing banner, so the prompt
   // never landed and the agent sat idle at an empty prompt until it was reaped
-  // having done nothing. agy has no folder-trust gate (`needsTrust` stays false,
-  // so the auto-confirm branch below is inert for it); and if agy ever fails to
+  // having done nothing. agy DOES have a first-run folder-trust gate ("Do you
+  // trust the contents of this project?") like claude's — production spawns agy
+  // with `--dangerously-skip-permissions`, which bypasses it; and if it does
+  // appear (agy launched without that flag), its "Yes, I trust this folder"
+  // option matches TUI_TRUST_PROMPT_PATTERN, so the requireInputReady auto-confirm
+  // branch below handles it exactly as it does claude's. If agy ever fails to
   // signal ready, the requireInputReady path fails fast with a surfaced startup
   // error instead of silently idle-reaping.
   const requireInputReady = isClaudeCommand(tuiConfig.command) || isAntigravityCommand(tuiConfig.command);
