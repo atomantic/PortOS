@@ -884,17 +884,27 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
  * @returns {boolean|null} true = accepted, false = rejected, null = undeclared
  */
 export function resolveProgrammaticIoVerdict({ success, hookResult }) {
+  if (!hookResult?.ran) return null;
+  // A thrown hook rejected the output. Classified FIRST: it carries no outcome (so
+  // it must precede the outcome-shape guard), and a rejection shouldn't hinge on
+  // the exit-code guard below.
+  if (hookResult.threw) return false;
   // An absent/non-boolean exit-code verdict can't be weighed against anything.
   if (typeof success !== 'boolean') return null;
-  if (!hookResult?.ran) return null;
-  // A thrown hook rejected the output — it carries no outcome, so classify it
-  // before the outcome-shape guard below.
-  if (hookResult.threw) return false;
   // Ran, but handed back no structured outcome to read: nothing evaluated the
   // output, so declare no verdict rather than defaulting to "accepted".
   if (!hookResult.outcome || typeof hookResult.outcome !== 'object') return null;
+  // Ran, but bailed out BEFORE it ever looked at the output (its app was deleted
+  // mid-run, or the task carries no app). Nothing evaluated the agent's work — and
+  // these paths don't even record a run — so this is "undeclared", not a free
+  // success for the type.
+  if (HOOK_ABORTED_BEFORE_EVALUATION.has(hookResult.outcome.reason)) return null;
   return resolveTypeFailureSignal({ success, hookResult }).record === 'success';
 }
+
+// Output-hook outcomes that mean "the hook returned before validating the agent's
+// output at all" — distinct from both a rejection and an acceptance.
+const HOOK_ABORTED_BEFORE_EVALUATION = new Set(['no-app', 'app-not-found']);
 
 /**
  * Hard bound on output-hook dispatch (#2727). The hook is only awaited BEFORE
@@ -920,12 +930,21 @@ export function resolveProgrammaticIoVerdict({ success, hookResult }) {
  */
 const OUTPUT_HOOK_TIMEOUT_MS = 5 * 60_000;
 
-function withOutputHookTimeout(promise, { agentId, timeoutMs = OUTPUT_HOOK_TIMEOUT_MS }) {
+export function withOutputHookTimeout(promise, { agentId, timeoutMs = OUTPUT_HOOK_TIMEOUT_MS }) {
   let timer;
   const timeout = new Promise(resolve => {
     timer = setTimeout(() => {
-      emitLog('error', `⏱️ processTaskOutput hook timed out after ${timeoutMs}ms for ${agentId} — finalizing with no verdict`, { agentId });
+      // Resolve BEFORE logging, and never let the log throw out of the callback:
+      // this runs outside the request lifecycle, so an uncaught throw here would
+      // crash the process — and a throw before `resolve` would leave the race
+      // permanently unsettled, wedging the exact finalize this timer exists to
+      // rescue.
       resolve({ ran: false, timedOut: true });
+      try {
+        emitLog('error', `⏱️ processTaskOutput hook timed out after ${timeoutMs}ms for ${agentId} — finalizing with no verdict`, { agentId });
+      } catch (err) {
+        console.error(`❌ Failed to log output-hook timeout for ${agentId}: ${err.message}`);
+      }
     }, timeoutMs);
     // Never let the backstop itself hold the event loop open.
     timer.unref?.();
@@ -1067,7 +1086,12 @@ export async function finalizeAgent({
 
   // Type-level consecutive-failure ledger (#2616): feed the per-type
   // backoff/auto-park in taskSchedule. Only SCHEDULED task types carry
-  // `metadata.analysisType`; user/ad-hoc tasks don't participate. The pure
+  // `metadata.analysisType`; user/ad-hoc tasks don't participate — so this gate
+  // deliberately does NOT use resolveTaskHookType (#2727). That resolver falls back
+  // to `task.taskType`, which for an ad-hoc task is the CoS queue category
+  // ('internal', 'user'); ledgering those would invent a failure ledger for a
+  // "task type" that no schedule owns. "Which tasks run a hook" and "which task
+  // types back off" are genuinely different questions. The pure
   // resolveTypeFailureSignal decides success vs failure vs skip — including the
   // exit-0-but-unparseable-output case that must count as a failure.
   const scheduledType = task?.metadata?.analysisType || null;
@@ -1320,9 +1344,11 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
     // Catch + log instead of letting finalizeAgent's throw skip the rest of
     // the cleanup (JIRA push, plan-question notification, pipeline
     // progression, worktree cleanup). The error is still visible via
-    // emitLog + the agent's persisted state (completeAgent runs first
-    // inside finalizeAgent and is the most likely throw point — the
-    // partial-state cases are best-effort by design).
+    // emitLog + the agent's persisted state (completeAgent is the first
+    // STATE WRITE inside finalizeAgent and the most likely throw point —
+    // the output-hook dispatch and success-criteria evaluation now precede
+    // it (#2727) but both carry their own .catch, so neither throws out —
+    // the partial-state cases are best-effort by design).
     let finalizeError = null;
     try {
       await finalizeAgent({

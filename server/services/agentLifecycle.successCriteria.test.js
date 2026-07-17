@@ -6,7 +6,7 @@
  * declared vs declared-and-checked).
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('./agentRunTracking.js', () => ({
   checkForTaskCommit: vi.fn(),
@@ -15,7 +15,7 @@ vi.mock('./agentRunTracking.js', () => ({
   completeAgentRun: vi.fn(),
 }));
 
-import { evaluateSuccessCriteria, resolveProgrammaticIoVerdict } from './agentLifecycle.js';
+import { evaluateSuccessCriteria, resolveProgrammaticIoVerdict, withOutputHookTimeout } from './agentLifecycle.js';
 import { checkForTaskCommit } from './agentRunTracking.js';
 
 describe('evaluateSuccessCriteria (#2344)', () => {
@@ -187,6 +187,56 @@ describe('resolveProgrammaticIoVerdict (#2727)', () => {
       expect(resolveProgrammaticIoVerdict({ success: true, hookResult: { ran: true, outcome: { reason } } })).toBe(true);
     }
   });
+
+  it('declares no verdict when the hook aborted before it could look at the output', () => {
+    // `no-app` / `app-not-found` return before the payload is validated (and before
+    // the hook records anything). Nothing evaluated the agent's output, so this is
+    // the undeclared sentinel — NOT a success, which would bank a free win for the
+    // type every time an app is deleted mid-run.
+    for (const reason of ['no-app', 'app-not-found']) {
+      expect(resolveProgrammaticIoVerdict({
+        success: true, hookResult: { ran: true, outcome: { action: 'no-op', reason } }
+      })).toBeNull();
+    }
+  });
+});
+
+/**
+ * The hard bound that keeps a hung output hook from pinning a CoS concurrency slot
+ * until restart — the mitigation matters enough to pin directly (#2727).
+ */
+describe('withOutputHookTimeout (#2727)', () => {
+  beforeEach(() => vi.useRealTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it('resolves a hung dispatch to the undeclared sentinel rather than hanging finalize', async () => {
+    vi.useFakeTimers();
+    // A hook that never settles — the wedge case.
+    const settled = withOutputHookTimeout(new Promise(() => {}), { agentId: 'a1', timeoutMs: 1000 });
+    await vi.advanceTimersByTimeAsync(1000);
+    // `ran: false` → resolveProgrammaticIoVerdict returns null → task-learning falls
+    // back to the exit code. A timeout is "we never got a verdict", not a rejection.
+    expect(await settled).toEqual({ ran: false, timedOut: true });
+    expect(resolveProgrammaticIoVerdict({ success: true, hookResult: await settled })).toBeNull();
+  });
+
+  it('passes a hook that settles in time straight through, and clears its timer', async () => {
+    vi.useFakeTimers();
+    const outcome = { ran: true, outcome: { action: 'filed', reason: null } };
+    const settled = withOutputHookTimeout(Promise.resolve(outcome), { agentId: 'a1', timeoutMs: 1000 });
+    expect(await settled).toBe(outcome);
+    // Timer cleared on the resolve path — nothing left pending to fire.
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('propagates a hook rejection (finalizeAgent maps it to the thrown-hook verdict)', async () => {
+    await expect(withOutputHookTimeout(Promise.reject(new Error('boom')), { agentId: 'a1', timeoutMs: 1000 }))
+      .rejects.toThrow('boom');
+  });
+});
+
+describe('evaluateSuccessCriteria — commit criterion (#2344)', () => {
+  beforeEach(() => vi.clearAllMocks());
 
   it('still applies the commit criterion to a NON-programmatic self-improvement task', async () => {
     // The exemption is keyed on the taskTypeHooks registry, not on selfImprovement —

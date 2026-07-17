@@ -429,6 +429,10 @@ async function recordRun(app, outcome = {}) {
 }
 
 /** Default hand-off enqueue: an approval-gated internal CoS task for a coding agent. */
+// The documented reasoner response shape. An object carrying none of these keys
+// isn't an answer at all — see the envelope resolution in processTaskOutput.
+const REASONER_ENVELOPE_KEYS = ['analysis', 'proposal', 'pause']
+
 async function defaultEnqueueHandoff(taskData) {
   const { addTask } = await import('../cos.js')
   return addTask(taskData, 'internal')
@@ -463,17 +467,19 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
   //
   // Sentinel discipline (#2727): resolve the usable ENVELOPE once and key both the
   // validation and the `reason` below off it. A payload that parsed as JSON but
-  // isn't a reasoner envelope at all (a bare string, a number, an array) used to
-  // reach `reason = 'no-proposal'` — the same reason a well-formed response that
-  // legitimately proposes nothing gets — so "the agent emitted garbage" was
+  // isn't a reasoner envelope — a bare string/number/array, or an object carrying
+  // none of the documented keys ({}, {"foo":1}) — used to reach
+  // `reason = 'no-proposal'`, the SAME reason a well-formed response that
+  // legitimately proposes nothing gets. So "the agent emitted garbage" was
   // indistinguishable from "the agent correctly had nothing to propose", and the
-  // former was recorded as a successful run.
-  const envelope = payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : null
+  // former was recorded as a successful run. Reachable both ways: the sentinel
+  // envelope only requires `payload` to be an object, and salvageSentinelPayload's
+  // lenient extractor can surface a non-envelope object out of prose.
+  // `Object.hasOwn` — an inherited key must not qualify a junk object as an answer.
+  const isEnvelope = !!payload && typeof payload === 'object' && !Array.isArray(payload)
+    && REASONER_ENVELOPE_KEYS.some(k => Object.hasOwn(payload, k))
+  const envelope = isEnvelope ? payload : null
   const { proposal, pause } = validateReasonerResponse(envelope)
-
-  // Re-read issues NOW (not at gather time) so dedup sees the freshest tracker
-  // state — the agent may have run for minutes.
-  const { existingIssues, trackerReadFailed } = await readIssues({ filer, forgeCli, cwd, jira, config })
 
   let filedNumber = null
   let filedKey = null
@@ -482,6 +488,13 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
   let handedOff = false
 
   if (proposal) {
+    // Re-read issues NOW (not at gather time) so dedup sees the freshest tracker
+    // state — the agent may have run for minutes. Scoped to the has-a-proposal path:
+    // it's an unbounded forge call and only this branch consumes it, so the common
+    // no-proposal/unparseable runs no longer shell out to `gh issue list` (which,
+    // since the #2727 hoist, would hold a CoS concurrency slot and could burn the
+    // finalize timeout on a run whose verdict is already known).
+    const { existingIssues, trackerReadFailed } = await readIssues({ filer, forgeCli, cwd, jira, config })
     const scopeOk = isScopeAllowed({ scope: proposal.scope, allowedScopes: config.allowedScopes, isPortos })
     if (!scopeOk) {
       console.log(`🚫 Layered Intelligence: ${app.name} proposal scope "${proposal.scope}" not allowed — suppressed`)

@@ -393,12 +393,14 @@ describe('processTaskOutput', () => {
   });
 
   it('records unparseable-response when the payload parsed but is not a reasoner envelope (#2727)', async () => {
-    // A bare string/number/array is JSON that parsed but says nothing. It used to
-    // land on `no-proposal` — the SAME reason a well-formed "nothing to propose"
-    // response gets — so garbage was indistinguishable from a correct empty answer
-    // and got recorded as a successful run.
+    // Garbage that still parses as JSON: a bare scalar/array, or an object carrying
+    // none of the documented keys. All of it used to land on `no-proposal` — the
+    // SAME reason a well-formed "nothing to propose" response gets — so garbage was
+    // indistinguishable from a correct empty answer and got recorded as a
+    // successful run. `{}` is reachable: the sentinel envelope only requires
+    // `payload` to be an object.
     li.validateReasonerResponse.mockReturnValue({ proposal: null, pause: null });
-    for (const payload of ['just some prose', 42, ['a', 'b'], true]) {
+    for (const payload of ['just some prose', 42, ['a', 'b'], true, {}, { foo: 1 }]) {
       const out = await processTaskOutput({ appId: 'app-1', success: true, payload });
       expect(out).toMatchObject({ action: 'no-op', reason: 'unparseable-response' });
     }
@@ -406,10 +408,37 @@ describe('processTaskOutput', () => {
 
   it('still records no-proposal for a well-formed envelope that proposes nothing (#2727)', async () => {
     // The other side of the sentinel: the reasoner answered correctly and simply
-    // had nothing to file. That is a successful run, not malformed output.
+    // had nothing to file. That is a successful run, not malformed output. Any ONE
+    // documented key makes it a real answer.
     li.validateReasonerResponse.mockReturnValue({ proposal: null, pause: null });
-    const out = await processTaskOutput({ appId: 'app-1', success: true, payload: { analysis: 'nothing worth proposing', proposal: null } });
-    expect(out).toMatchObject({ action: 'no-op', reason: 'no-proposal' });
+    for (const payload of [{ analysis: 'nothing worth proposing', proposal: null }, { proposal: null }, { analysis: '' }]) {
+      const out = await processTaskOutput({ appId: 'app-1', success: true, payload });
+      expect(out).toMatchObject({ action: 'no-op', reason: 'no-proposal' });
+    }
+  });
+
+  it('does not touch the tracker when there is no proposal to dedup (#2727)', async () => {
+    // readIssues is an unbounded forge call and only the has-a-proposal branch
+    // consumes it. Since the #2727 hoist the hook runs while the agent still holds
+    // a CoS concurrency slot, so the common no-op path must not shell out to `gh`.
+    li.validateReasonerResponse.mockReturnValue({ proposal: null, pause: null });
+    li.listForgeIssues.mockClear();
+    await processTaskOutput({ appId: 'app-1', success: true, payload: { analysis: 'nothing to do', proposal: null } });
+    expect(li.listForgeIssues).not.toHaveBeenCalled();
+    expect(li.fileProposalToForge).not.toHaveBeenCalled();
+  });
+
+  it('still reads the tracker to dedup when there IS a proposal (#2727)', async () => {
+    // The other side of the scoping: the dedup read must still happen on the path
+    // that consumes it, against FRESH tracker state.
+    li.validateReasonerResponse.mockReturnValue({
+      proposal: { scope: 'app-improvement', slug: 'fresh-idea', title: 'Fresh idea', body: 'x' },
+      pause: null
+    });
+    li.listForgeIssues.mockClear();
+    li.fileProposalToForge.mockResolvedValue({ success: true, number: 12 });
+    await processTaskOutput({ appId: 'app-1', success: true, payload: { proposal: { slug: 'fresh-idea' } } });
+    expect(li.listForgeIssues).toHaveBeenCalled();
   });
 
   it('files a fresh, in-scope proposal and records the ref', async () => {
