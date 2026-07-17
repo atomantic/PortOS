@@ -13,9 +13,12 @@ const completedGoals = (n) =>
   Array.from({ length: n }, (_, i) => ({ id: `g-${i}`, status: 'completed' }));
 
 describe('eggContext', () => {
-  it('normalizes level to floored int >= 1, else null', () => {
+  it('normalizes level to a floored nonnegative int, else null', () => {
     expect(eggContext({ character: { level: 7.9 } }).level).toBe(7);
-    expect(eggContext({ character: { level: 0 } }).level).toBeNull();
+    // Age level 0 (birthDate < 1yr ago) is authoritative now (#2673), not null.
+    expect(eggContext({ character: { level: 0 } }).level).toBe(0);
+    // Explicit null (no birthDate) and an absent character both yield null.
+    expect(eggContext({ character: { level: null } }).level).toBeNull();
     expect(eggContext({}).level).toBeNull();
   });
 
