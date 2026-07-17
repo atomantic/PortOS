@@ -192,8 +192,7 @@ const CLOSING_COMMENT_PATTERNS = [
       /\bnot (?:in|within) scope\b/,
       /\bdoes ?n[o']?t (?:fit|belong)\b/,
       /\bwo ?n[o']?t fit\b/,
-      /\bnot (?:aligned|a (?:good )?fit)\b/,
-      /\bnot something (?:we|this app|the app)\b/
+      /\bnot (?:aligned|a (?:good )?fit)\b/
     ]
   },
   {
@@ -201,7 +200,7 @@ const CLOSING_COMMENT_PATTERNS = [
     patterns: [
       /\b(?:need|needs|needing|require[sd]?) (?:more|additional|further) (?:info|information|context|detail|details|clarification)\b/,
       /\b(?:not enough|insufficient|lack(?:s|ing)? (?:of )?) (?:info|information|context|detail|details)\b/,
-      /\b(?:cannot|can'?t|could ?n'?t|couldn'?t|unable to) reproduce\b/,
+      /\b(?:can ?not|cannot|can'?t|could ?not|could ?n'?t|couldn'?t|unable to) reproduce\b/,
       /\bunder[\s-]?specified\b/,
       /\bplease clarify\b/,
       /\bmore (?:details|information|context) (?:needed|required)\b/,

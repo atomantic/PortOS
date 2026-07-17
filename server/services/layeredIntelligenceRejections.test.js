@@ -230,6 +230,24 @@ describe('classifyClosingComment', () => {
     }
   });
 
+  it('matches "could not reproduce" and its contractions', () => {
+    for (const text of [
+      'We could not reproduce this.',
+      "We couldn't reproduce it.",
+      'Cannot reproduce.',
+      'can not reproduce'
+    ]) {
+      expect(classifyClosingComment(text)).toBe('missing-context');
+    }
+  });
+
+  it('does not misread a "not something we can reproduce" close as a scope mismatch', () => {
+    // The old broad "not something we" scope pattern misfired here. Dropping it
+    // yields the honest null (the negation isn't something a keyword pass can
+    // parse) — which falls through to unknown-reason — never a WRONG scope token.
+    expect(classifyClosingComment('This is not something we can reproduce.')).toBeNull();
+  });
+
   it('matches across newlines and mixed case', () => {
     expect(classifyClosingComment('Thanks for the idea!\n\nHowever this is\nOUT OF SCOPE here.'))
       .toBe('scope-mismatch');
