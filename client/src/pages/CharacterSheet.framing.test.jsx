@@ -84,6 +84,16 @@ describe('human-centered framing', () => {
     expect(screen.getByText('Your name')).toBeInTheDocument();
     expect(screen.getByText('Add a title')).toBeInTheDocument();
   });
+
+  it('treats the legacy RPG defaults (fresh install) as unset, showing the human placeholder', async () => {
+    // createDefaultCharacter() ships name:'Adventurer', class:'Developer'; a fresh install must
+    // not present that generic adventurer (epic #2672).
+    await renderChar({ name: 'Adventurer', class: 'Developer' });
+    expect(screen.getByText('Your name')).toBeInTheDocument();
+    expect(screen.getByText('Add a title')).toBeInTheDocument();
+    expect(screen.queryByText('Adventurer')).not.toBeInTheDocument();
+    expect(screen.queryByText('Developer')).not.toBeInTheDocument();
+  });
 });
 
 describe('birth-date prompt', () => {

@@ -44,6 +44,16 @@ function hpColor(pct) {
   return 'bg-port-error';
 }
 
+// createDefaultCharacter() seeds these generic RPG defaults on a fresh install, so the raw
+// record's name/class are 'Adventurer'/'Developer' until the human edits them — which would
+// make the human-centered page still present a generic adventurer (the exact thing epic #2672
+// moves away from). Treat those legacy defaults as "unset" for display + edit-seeding so the
+// human placeholder shows instead. Display-only: the persisted record is untouched (no data /
+// federation change), and a user who genuinely wants either word can just type it back in.
+const LEGACY_DEFAULT_NAME = 'Adventurer';
+const LEGACY_DEFAULT_CLASS = 'Developer';
+const humanValue = (value, legacyDefault) => (value && value !== legacyDefault ? value : '');
+
 // Per-domain skills derived on read from each domain's existing stats (#2674). Deliberately
 // a plain read-only card: Slice 5 (#2677) owns the page's framing/redesign, so this stays
 // easy to restyle or relocate wholesale.
@@ -193,8 +203,8 @@ export default function CharacterSheet() {
         return;
       }
       setChar(data);
-      setNameVal(data.name || '');
-      setClassVal(data.class || '');
+      setNameVal(humanValue(data.name, LEGACY_DEFAULT_NAME));
+      setClassVal(humanValue(data.class, LEGACY_DEFAULT_CLASS));
     } catch (err) {
       setLoadError(err.message || 'Failed to load character data');
     } finally {
@@ -305,7 +315,7 @@ export default function CharacterSheet() {
     // could persist that stale value over the pending save (#2409).
     if (nameSaving) return;
     nameEditingRef.current = true;
-    setNameVal(char.name || '');
+    setNameVal(humanValue(char.name, LEGACY_DEFAULT_NAME));
     setEditingName(true);
   };
 
@@ -316,7 +326,7 @@ export default function CharacterSheet() {
     nameEditingRef.current = false;
     setEditingName(false);
     if (cancel) {
-      setNameVal(char.name || '');
+      setNameVal(humanValue(char.name, LEGACY_DEFAULT_NAME));
       return;
     }
     if (!(nameVal.trim() && nameVal.trim() !== char.name)) return;
@@ -400,6 +410,10 @@ export default function CharacterSheet() {
   const birthdayPct = Number.isFinite(char.ageYears)
     ? Math.round((char.ageYears - Math.floor(char.ageYears)) * 100)
     : 0;
+  // Legacy RPG defaults ('Adventurer'/'Developer') read as unset, so a fresh install shows the
+  // human placeholder rather than a generic adventurer (see humanValue above).
+  const displayName = humanValue(char.name, LEGACY_DEFAULT_NAME);
+  const displayClass = humanValue(char.class, LEGACY_DEFAULT_CLASS);
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
@@ -487,10 +501,10 @@ export default function CharacterSheet() {
                     type="button"
                     onClick={startNameEdit}
                     disabled={nameSaving}
-                    aria-label={`Edit your name (currently ${char.name || 'Your name'})`}
+                    aria-label={`Edit your name (currently ${displayName || 'Your name'})`}
                     className="text-2xl font-bold text-white cursor-pointer hover:text-port-accent transition-colors truncate text-left bg-transparent border-0 p-0 disabled:opacity-60 disabled:cursor-wait"
                   >
-                    {char.name || 'Your name'}
+                    {displayName || 'Your name'}
                   </button>
                 )}
               </div>
@@ -511,7 +525,7 @@ export default function CharacterSheet() {
                     className="text-sm text-gray-400 cursor-pointer hover:text-port-accent transition-colors"
                     title="Click to edit your title"
                   >
-                    {char.class || 'Add a title'}
+                    {displayClass || 'Add a title'}
                   </span>
                 )}
               </div>

@@ -55,7 +55,7 @@ beforeEach(() => {
 });
 
 const findNameTrigger = () =>
-  screen.findByRole('button', { name: /edit character name/i });
+  screen.findByRole('button', { name: /edit your name/i });
 
 describe('CharacterSheet name editing accessibility', () => {
   it('exposes the name as a labeled, keyboard-focusable button', async () => {
@@ -86,7 +86,7 @@ describe('CharacterSheet name editing accessibility', () => {
     await waitFor(() => expect(put).toHaveBeenCalledWith('/character', { name: 'Strider' }, { silent: true }));
     // Back to the button view with the new name.
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /edit character name/i }))
+      expect(screen.getByRole('button', { name: /edit your name/i }))
         .toHaveTextContent('Strider'),
     );
   });
@@ -106,7 +106,7 @@ describe('CharacterSheet name editing accessibility', () => {
 
     // First PUT is now pending; the trigger is back but disabled, so a click
     // (which would seed a stale 'Aragorn' input) is a no-op.
-    const trigger = await screen.findByRole('button', { name: /edit character name/i });
+    const trigger = await screen.findByRole('button', { name: /edit your name/i });
     expect(trigger).toBeDisabled();
     fireEvent.click(trigger);
     expect(screen.queryByLabelText('Character name')).toBeNull();
@@ -115,7 +115,7 @@ describe('CharacterSheet name editing accessibility', () => {
     resolvePut();
     await waitFor(() => expect(put).toHaveBeenCalledTimes(1));
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /edit character name/i })).not.toBeDisabled(),
+      expect(screen.getByRole('button', { name: /edit your name/i })).not.toBeDisabled(),
     );
   });
 
@@ -130,7 +130,7 @@ describe('CharacterSheet name editing accessibility', () => {
 
     // No save fired, and the original name is shown again.
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /edit character name/i }))
+      expect(screen.getByRole('button', { name: /edit your name/i }))
         .toHaveTextContent('Aragorn'),
     );
     expect(put).not.toHaveBeenCalled();
