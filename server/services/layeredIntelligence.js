@@ -113,6 +113,13 @@ export const HANDOFF_COMPLEXITY = 'trivial';
 // Measured over RESOLVED proposals only — see computeOutcomesReport.
 export const LOW_MERGE_RATE_THRESHOLD = 20;
 
+// Minimum RESOLVED proposals before the low-merge-rate alarm is allowed to fire.
+// 0-of-1 and 0-of-50 are both "0%", but only the second is evidence: telling the
+// loop its rate is "critically low" after a single early rejection biases it
+// toward filing nothing, which is self-reinforcing — it can never earn a merge if
+// it stops proposing. A rate needs a sample before it means anything.
+export const LOW_MERGE_RATE_MIN_SAMPLE = 4;
+
 // The resolved outcomes a filed proposal can reach (the feedback loop, #2428).
 // A record with a null outcome is still open/unresolved. All three are
 // auto-derived from the tracker's closed state by deriveOutcome: completed →
@@ -500,7 +507,7 @@ export function deriveOutcome(issue) {
  * Returns '' when there's nothing to report (no filed history) so the caller omits
  * the block entirely rather than injecting an empty section.
  */
-export function computeOutcomesReport({ outcomes = [] } = {}) {
+export function computeOutcomesReport({ outcomes = [], hasPlannedWork = false } = {}) {
   const filed = (Array.isArray(outcomes) ? outcomes : []).filter(o => o && typeof o === 'object');
   if (filed.length === 0) return '';
   const total = filed.length;
@@ -535,15 +542,24 @@ export function computeOutcomesReport({ outcomes = [] } = {}) {
   // "filed yesterday, nobody has triaged it" read exactly like "the user threw it
   // out" — the sentinel rule (pending ≠ rejected). `null` means "no resolved
   // sample yet", which is distinct from a genuine 0% and stays silent rather than
-  // alarming an app whose first proposal is simply still in flight.
+  // alarming an app whose first proposal is simply still in flight. The sample
+  // floor is the same idea one step further out: 0-of-1 is not evidence of a rate.
   const resolved = merged + rejected + abandoned;
   const resolvedMergeRate = resolved > 0 ? Math.round((merged / resolved) * 100) : null;
-  const lowMergeWarning = (resolvedMergeRate !== null && resolvedMergeRate < LOW_MERGE_RATE_THRESHOLD)
+  const lowMergeWarning = (
+    resolvedMergeRate !== null
+    && resolved >= LOW_MERGE_RATE_MIN_SAMPLE
+    && resolvedMergeRate < LOW_MERGE_RATE_THRESHOLD
+  )
     ? [
       '',
       `WARNING: your merge rate is critically low — only ${merged} of ${resolved} resolved proposals (${resolvedMergeRate}%) were merged.`,
-      'Review the "plannedWork" source above: your proposals may be overlapping with work the user has already committed to.',
-      'Propose only work that is clearly outside that committed backlog — and if you cannot find any, return proposal: null rather than filing something marginal.'
+      // Only point at the plannedWork block when one was actually gathered — the
+      // source is per-app-toggleable and yields nothing on an unresolvable
+      // tracker, and citing a section that isn't in the prompt is just noise.
+      hasPlannedWork
+        ? 'Review the "plannedWork" source above: your proposals may be overlapping with work the user has already committed to. Propose only work that is clearly outside that committed backlog — and if you cannot find any, return proposal: null rather than filing something marginal.'
+        : 'Your proposals may be overlapping with work the user has already committed to, or missing what they actually value. Hold a higher bar: return proposal: null rather than filing something marginal.'
     ]
     : [];
 
@@ -630,7 +646,7 @@ Already-open tracked issues (DO NOT duplicate these — reuse their slug only if
 ${openList}
 
 Gathered sources:
-${sourceBlocks || '(no sources available — you may propose an app-data-gap to add telemetry)'}
+${sourceBlocks || (plannedWorkBlock ? '(no other sources available — you may propose an app-data-gap to add telemetry)' : '(no sources available — you may propose an app-data-gap to add telemetry)')}
 ${plannedWorkBlock}${outcomesBlock}
 Respond with JSON only (no markdown fences):
 {
@@ -681,9 +697,11 @@ export function plannedWorkUnavailable(why) {
 /**
  * Render a planned-work item list into the prompt block. Pure.
  *
- * Reports the FULL count even when the list is truncated to `maxItems`, so the
- * reasoner knows it is seeing the top of a larger backlog rather than all of it —
- * "15 items shown" out of 200 must not read as "there are only 15".
+ * Reports the count of everything it was HANDED even when the rendered list is
+ * truncated to `maxItems`, so the reasoner knows it is seeing the top of a larger
+ * backlog rather than all of it — 15 shown out of 100 must not read as "there are
+ * only 15". Note the caller's own read is capped too (the tracker lists cap at
+ * 100), so on a very large backlog this count is itself a floor, not a census.
  */
 export function formatPlannedWork(items, { maxItems = PLANNED_WORK_MAX_ITEMS, maxChars = PLANNED_WORK_MAX_CHARS } = {}) {
   const list = (Array.isArray(items) ? items : []).filter(i => i && typeof i === 'object' && (i.title || i.number != null));
@@ -728,11 +746,12 @@ export function extractPlannedPlanItems(planContent) {
  * NO LLM call (the no-cold-bootstrap rule).
  *
  * Returns a prompt-ready string, or `null` when the source does not apply at all
- * (unresolvable tracker, or a plan-tracked app with no PLAN.md) — three distinct
- * states, never collapsed:
+ * (an unresolvable tracker: no forge CLI, no Jira coords, no repo path) — three
+ * distinct states, never collapsed:
  *   - `null`                     → nothing to say; buildPrompt omits the block
  *   - `plannedWorkUnavailable()` → the read FAILED; be conservative
  *   - a listing / PLANNED_WORK_NONE → the read SUCCEEDED and is trustworthy
+ *     (a plan-tracked app with no PLAN.md at all is a real PLANNED_WORK_NONE)
  *
  * Deps are injectable so tests drive every branch without a live tracker.
  */
@@ -1285,18 +1304,28 @@ export async function listJiraIssues({ instanceId, projectKey, jql, searchOption
 }
 
 /**
- * The JQL for a Jira project's committed backlog (#2698): everything not Done,
- * highest priority first.
+ * The JQL for a Jira project's committed backlog (#2698): `plan`-labeled tickets
+ * that aren't Done, highest priority first.
+ *
+ * The label filter is NOT optional — it is what makes this source mean the same
+ * thing on Jira as on a forge. Without it the query returns every open ticket,
+ * i.e. the untriaged backlog nobody has committed to (plus LI's own past
+ * proposals), which would then render under a header asserting the user
+ * "already committed to" them and instruct the reasoner to suppress against
+ * essentially the whole tracker — and duplicate the `openIssues` source besides.
+ * A project that doesn't use the label reports a truthful "nothing planned"
+ * rather than a backlog-shaped lie.
  *
  * Deliberately NOT `sprint in openSprints()` — the Sprint field only exists on
- * boards backed by a Scrum board, and JQL referencing an absent field is a hard
- * 400 rather than an empty result. That would make gatherPlannedWork report
- * "unavailable" forever on every Kanban/basic project. Priority ordering + the
- * item cap is the portable equivalent: it works on every project shape and still
- * surfaces the top of the backlog.
+ * Scrum-board-backed projects, and JQL referencing an absent field is a hard 400
+ * rather than an empty result, which would make gatherPlannedWork report
+ * "unavailable" forever on every Kanban/basic project. `labels` exists on every
+ * project shape. Priority is an ORDER BY rather than a filter for the same
+ * reason: priority NAMES are scheme-specific (a project can rename or drop
+ * "Highest"), so filtering on them risks the same permanent-400.
  */
 export function plannedWorkJql(projectKey) {
-  return `project = "${escapeJql(projectKey)}" AND statusCategory != Done ORDER BY priority DESC, updated DESC`;
+  return `project = "${escapeJql(projectKey)}" AND labels = "${PLANNED_WORK_LABEL}" AND statusCategory != Done ORDER BY priority DESC, updated DESC`;
 }
 
 /**
