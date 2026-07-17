@@ -4,6 +4,7 @@ import { Play, Film } from 'lucide-react';
 import MediaImage from '../MediaImage.jsx';
 import ScenePreview from './ScenePreview.jsx';
 import { selectProjectPreview, previewAspectClass } from '../../lib/creativeDirectorPreview.js';
+import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 
 /**
  * Compact media preview for a Creative Director list card (#2702) — shows what
@@ -40,10 +41,28 @@ export default function ProjectPreview({ project, to }) {
     setPlaying(false);
   }, [preview.jobId, preview.src]);
 
+  // A video id is not necessarily its filename stem (a stitched final cut is
+  // `timeline-*.mp4` behind a UUID), so resolve the real file before playing.
+  // `enabled` keeps the grid light: this fires only once the user presses play,
+  // never for the N cards sitting idle on the page.
+  const { src: resolvedSrc, resolving } = useVideoFileSrc(preview.jobId, {
+    enabled: playing && preview.kind === 'video',
+  });
+
   if (playing) {
+    // Autoplay races the lookup, so hold the frame until it settles — mounting
+    // early would autoplay the unresolved guess and flash "media missing".
+    if (resolving) {
+      return (
+        <div className={`${aspectClass} rounded overflow-hidden bg-port-bg border border-port-border flex items-center justify-center text-port-text-muted text-xs`}>
+          loading…
+        </div>
+      );
+    }
     return (
       <ScenePreview
         jobId={preview.jobId}
+        src={resolvedSrc}
         label={`${project?.name || 'Project'} — ${preview.label}`}
         aspectClass={aspectClass}
         autoPlay

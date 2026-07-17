@@ -139,7 +139,7 @@ export const cancelVideoGen = () => request('/video-gen/cancel', { method: 'POST
 // resume progress display after a page reload. Silent so a 5xx during status
 // poll doesn't double-toast on every navigation.
 export const getActiveVideoJob = () => request('/video-gen/active', { silent: true });
-export const listVideoHistory = () => request('/video-gen/history');
+export const listVideoHistory = (options = {}) => request('/video-gen/history', options);
 export const deleteVideoHistoryItem = (id, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}`, { method: 'DELETE', ...options });
 export const setVideoHidden = (id, hidden, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/visibility`, {
   method: 'POST',

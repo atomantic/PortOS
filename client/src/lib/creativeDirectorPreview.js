@@ -52,12 +52,34 @@ const ASPECT_CLASSES = Object.freeze({
   '1:1': 'aspect-square',
 });
 
+// Height cap for an inline hero preview, expressed as a MAX-WIDTH per ratio.
+// Capping height directly does not work: a block box is fill-available wide, so
+// `max-h` clamps the box while the aspect-ratio'd player inside still derives
+// its height from the UNCLAMPED width and overflows (a 9:16 preview in a 736px
+// column wants 1308px tall — `overflow-hidden` then crops half the video away).
+// Constraining width instead lets aspect-ratio derive a height that already
+// fits, and makes `mx-auto` actually center. Literals, per the note above.
+const MAX_WIDTH_CLASSES = Object.freeze({
+  '16:9': 'max-w-[calc(60vh*16/9)]',
+  '9:16': 'max-w-[calc(60vh*9/16)]',
+  '1:1': 'max-w-[60vh]',
+});
+
 /**
  * Tailwind aspect class for a project's locked aspect ratio, falling back to
  * `aspect-video` for an unset/legacy/hand-edited value.
  */
 export function previewAspectClass(aspectRatio) {
   return ASPECT_CLASSES[aspectRatio] || 'aspect-video';
+}
+
+/**
+ * Max-width class that keeps an inline preview of `aspectRatio` within ~60vh
+ * tall without distorting or cropping it. Pair with `previewAspectClass` +
+ * `w-full mx-auto`; do NOT also apply a `max-h` (see the note above).
+ */
+export function previewMaxWidthClass(aspectRatio) {
+  return MAX_WIDTH_CLASSES[aspectRatio] || MAX_WIDTH_CLASSES['16:9'];
 }
 
 const nonEmptyString = (v) => (typeof v === 'string' && v.trim() ? v.trim() : null);

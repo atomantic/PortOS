@@ -2,7 +2,8 @@ import { Link } from 'react-router-dom';
 import { useState, useEffect, useRef } from 'react';
 import { Sparkles, Loader2 } from 'lucide-react';
 import { updateCreativeDirectorProject, applyCreativeDirectorAutoCast } from '../../services/apiCreativeDirector.js';
-import { selectProjectPreview, previewAspectClass } from '../../lib/creativeDirectorPreview.js';
+import { selectProjectPreview, previewAspectClass, previewMaxWidthClass } from '../../lib/creativeDirectorPreview.js';
+import { useVideoFileSrc } from '../../hooks/useVideoFileSrc.js';
 import MediaImage from '../MediaImage.jsx';
 import ScenePreview from './ScenePreview.jsx';
 import toast from '../ui/Toast';
@@ -169,7 +170,18 @@ export default function OverviewTab({ project, onProjectUpdate, onAsyncWorkQueue
   // Final video field remains the single honest signal.
   const preview = selectProjectPreview(project);
   const aspectClass = previewAspectClass(project.aspectRatio);
-  const inlineImage = !project.finalVideoId && preview.kind === 'image' ? preview : null;
+  const maxWidthClass = previewMaxWidthClass(project.aspectRatio);
+  // Only a PRODUCED image earns the hero slot. `kind: 'image'` also covers the
+  // `startingImageFile` fallback — an input the user supplied, already shown as
+  // a field below — and promoting that would push Configuration below the fold
+  // to echo a value the page states anyway. The produced-image branch is the one
+  // that carries a `jobId`, so that's the discriminator (pinned by a test).
+  const inlineImage = !project.finalVideoId && preview.kind === 'image' && preview.jobId ? preview : null;
+  // The id→file mismatch: a stitched final is `timeline-*.mp4` behind a UUID.
+  // The idle player is `preload="none"`, so a late resolve can't be raced here.
+  const { src: finalVideoSrc } = useVideoFileSrc(project.finalVideoId, {
+    enabled: Boolean(project.finalVideoId),
+  });
 
   return (
     <div className="space-y-4 max-w-3xl">
@@ -178,9 +190,9 @@ export default function OverviewTab({ project, onProjectUpdate, onAsyncWorkQueue
           <h2 className="text-sm font-semibold text-port-text-muted uppercase tracking-wide">
             {project.finalVideoId ? 'Final video' : inlineImage.label}
           </h2>
-          <div className={`${aspectClass} rounded overflow-hidden bg-port-bg max-h-[60vh] mx-auto`}>
+          <div className={`${aspectClass} ${maxWidthClass} w-full mx-auto rounded overflow-hidden bg-port-bg`}>
             {project.finalVideoId
-              ? <ScenePreview jobId={project.finalVideoId} label="Final video" aspectClass={aspectClass} />
+              ? <ScenePreview jobId={project.finalVideoId} src={finalVideoSrc} label="Final video" aspectClass={aspectClass} />
               : (
                 <MediaImage
                   src={inlineImage.src}
