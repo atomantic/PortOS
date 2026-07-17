@@ -27,17 +27,14 @@ import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import { repoRoot } from './_testHelpers.js';
+import { repoRoot, sampleBody } from './_testHelpers.js';
 import { normalizeStageSpec } from './_seedStageHelpers.js';
 
 const refStagePath = (filename) => join(repoRoot, 'data.reference', 'prompts', 'stages', filename);
 const refConfigPath = () => join(repoRoot, 'data.reference', 'prompts', 'stage-config.json');
 
 /** Live shipped template body, or `null` when the template no longer ships. */
-const shippedBody = (filename) => {
-  const path = refStagePath(filename);
-  return existsSync(path) ? readFileSync(path, 'utf-8') : null;
-};
+const shippedBody = (filename) => (existsSync(refStagePath(filename)) ? sampleBody(filename) : null);
 
 /** Live shipped stage-config, read fresh (never cached across suites). */
 const shippedConfig = () => JSON.parse(readFileSync(refConfigPath(), 'utf-8'));
@@ -47,8 +44,12 @@ const shippedConfig = () => JSON.parse(readFileSync(refConfigPath(), 'utf-8'));
  * and a data.reference drift catch.
  *
  * @param {object} opts
- * @param {{ up: (ctx: { rootDir: string }) => Promise<void> }} opts.migration - the migration's default export
- * @param {Array<string | { stageKey: string, filename?: string }>} opts.stages - the exact stage specs the migration seeds
+ * @param {{ up: (ctx: { rootDir: string }) => Promise<void>, stages: Array<object> }} opts.migration - the migration's default export
+ * @param {Array<string | { stageKey: string, filename?: string }>} opts.stages - the stage specs the caller
+ *   expects the migration to seed. Spelled out in the test for readability, then pinned to
+ *   `migration.stages` by the first case below — so adding a stage to the migration without
+ *   updating the test (or vice versa) fails loudly instead of leaving the suite asserting
+ *   about a stale list.
  * @param {string} opts.prefix - `mkdtempSync` dir name; keep migration-specific (`'migration-189-'`)
  *   so a debugger leaves a recognizable sandbox in the temp dir
  */
@@ -87,6 +88,13 @@ export function runSeedStageMigrationTests({ migration, stages, prefix }) {
     rmSync(rootDir, { recursive: true, force: true });
   });
 
+  it('seeds exactly the stages this suite covers (no drift between test and migration)', () => {
+    // Anchors every case below to the migration's REAL list. Without this, adding
+    // a stage to the migration and forgetting to ship its template would leave the
+    // whole suite green — it would still be asserting about the stale list here.
+    expect(migration.stages).toEqual(specs);
+  });
+
   it('seeds every template and stage-config entry on an install missing them', async () => {
     await expect(migration.up({ rootDir })).resolves.not.toThrow();
 
@@ -94,6 +102,9 @@ export function runSeedStageMigrationTests({ migration, stages, prefix }) {
     const installed = JSON.parse(readFileSync(installedConfigPath, 'utf-8'));
     for (const { stageKey, filename } of specs) {
       expect(readFileSync(join(stagesDir, filename), 'utf-8')).toBe(shippedBody(filename));
+      // toBeTruthy first: under partial drift both sides are `undefined` and a bare
+      // toEqual would pass vacuously, reading like it checked the seeding.
+      expect(config.stages[stageKey], `data.reference stage-config missing entry: ${stageKey}`).toBeTruthy();
       expect(installed.stages[stageKey]).toEqual(config.stages[stageKey]);
     }
   });
@@ -133,7 +144,11 @@ export function runSeedStageMigrationTests({ migration, stages, prefix }) {
     const installed = JSON.parse(readFileSync(installedConfigPath, 'utf-8'));
     // Tuned entry preserved verbatim; the remaining entries still get added.
     expect(installed.stages[specs[0].stageKey]).toEqual(tuned);
+    // Empty for a single-stage migration — the tuned-entry assertion above is the
+    // whole point there. Most of the ~59 makeSeedMigration(s) migrations this
+    // helper could cover are single-stage, so don't read this loop as coverage.
     for (const { stageKey } of specs.slice(1)) {
+      expect(config.stages[stageKey], `data.reference stage-config missing entry: ${stageKey}`).toBeTruthy();
       expect(installed.stages[stageKey]).toEqual(config.stages[stageKey]);
     }
   });
