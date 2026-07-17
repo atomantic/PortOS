@@ -524,11 +524,14 @@ export default function ChiefOfStaff() {
           'text-gray-500'
         }`} />
         <div className="flex-1 min-w-0 text-left">
-          <div className="text-[10px] text-gray-500">Learning</div>
+          <div className="text-[10px] text-gray-500 truncate">Learning</div>
           {/* Stacked, not a flex row: as flex items these keep min-width:auto,
               so on a narrow card the skipped label can't shrink and spills out.
-              The value itself stays wrappable — `truncate` would clip the
-              (widest) 'No data' to 'No dat…' on a narrow card. */}
+              (The `min-w-0` on the column above is what lets it shrink at all —
+              a nowrap label in a `min-width:auto` flex item can't.) The value
+              itself stays wrappable — `truncate` would clip the widest value,
+              'No data', to 'No dat…'. Mirrors StatCard's compact variant:
+              truncate the label, leave the value alone. */}
           <div className="text-sm font-bold text-white">
             {learningSummary?.overallSuccessRate != null ? `${learningSummary.overallSuccessRate}%` : 'No data'}
           </div>

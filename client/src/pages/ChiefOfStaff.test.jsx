@@ -176,6 +176,41 @@ describe('ChiefOfStaff Learning card skipped label', () => {
     }
   });
 
+  it('keeps the compact card\'s text column shrinkable so the truncate can bite', async () => {
+    // Third leg of the containment contract: `truncate` sets white-space:nowrap,
+    // which makes the label's min-content its FULL width. In the compact card
+    // that column is a flex item of the button's `flex items-center gap-2`, so
+    // without `min-w-0` it can't shrink below that min-content and the whole
+    // column spills past the border again — the exact reported bug, with the
+    // truncate still present and every other assertion here still green.
+    api.getCosLearningSummary.mockResolvedValue(summaryWithSkipped);
+    renderAt('config');
+
+    // Scope to the compact cards: the ascii `mini` card's label parent is the
+    // <button> itself (not a flex-item column), so this leg doesn't apply there.
+    const columns = (await learningCards())
+      .map(c => within(c).getByText(/skipped/).parentElement)
+      .filter(col => col.classList.contains('flex-1'));
+    expect(columns.length).toBeGreaterThan(0);
+    for (const col of columns) {
+      expect(col.classList.contains('min-w-0')).toBe(true);
+    }
+  });
+
+  it('renders a legitimate 0% rate as "0%", not the empty state', async () => {
+    // `overallSuccessRate != null` (not truthiness) is what keeps a total-failure
+    // 0% from disguising itself as "No data" — the highest-signal state reading
+    // as the empty one. Pins the branch against a future truthiness collapse.
+    api.getCosLearningSummary.mockResolvedValue({ overallSuccessRate: 0, skipped: 0, status: 'critical', totalCompleted: 12 });
+    renderAt('config');
+
+    for (const card of await learningCards()) {
+      expect(within(card).getByText('0%')).toBeInTheDocument();
+      expect(within(card).queryByText('No data')).not.toBeInTheDocument();
+      expect(within(card).queryByText('—')).not.toBeInTheDocument();
+    }
+  });
+
   it('leaves the value wrappable so "No data" is not clipped', async () => {
     // `truncate` implies white-space:nowrap. The label needs it (it can be
     // arbitrarily wide); the value must NOT have it — the widest value,
