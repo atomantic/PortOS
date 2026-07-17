@@ -30,7 +30,7 @@ import { validateCommand } from '../lib/commandSecurity.js';
 import { getSettings } from './settings.js';
 import { createTicket, searchIssues, addLabels, escapeJql } from './jira.js';
 import { computeWindowedStats, computeEffectiveSuccessRate, extractTaskType } from './taskLearning/store.js';
-import { formatRejectionReasons, formatRejectionReason } from './layeredIntelligenceRejections.js';
+import { formatRejectionReasons, formatRejectionReason, REJECTION_REASONS } from './layeredIntelligenceRejections.js';
 
 // Tracker labels + slug marker. The slug is the stable dedup key the reasoner
 // chooses; it is embedded in each filed issue body so a later run (or the
@@ -674,15 +674,22 @@ export function suppressedIssueSlug(issue) {
  * to avoid but WHY each was closed — the feedback loop of #2689 (ask #4), closing
  * the loop with the taxonomy #2735 already persists rather than any new signal.
  *
- * Only a RESOLVED non-merged record carries a diagnosis: a merged, unresolved, or
- * still-unclassified (`rejectionReason == null`) record contributes nothing, so the
- * annotation appears only where there is a real failure pattern to learn from.
- * First diagnosed record per slug wins (records arrive newest-filed-first). Pure.
+ * Only a RESOLVED non-merged record carries a diagnosis, and only a REAL taxonomy
+ * token (a member of REJECTION_REASONS) counts: a merged, unresolved, or
+ * still-unclassified (`rejectionReason == null`) record contributes nothing, and so
+ * does the `unknown-reason` SENTINEL — it means "we looked and found no signal",
+ * which is not an actionable failure pattern to route around, so annotating a
+ * suppressed proposal with "closed with no recorded reason" would add noise the
+ * reasoner can't act on (and would contradict the promise that undiagnosed closures
+ * stay unannotated). The annotation therefore appears only where a concrete reason
+ * explains the closure. First diagnosed record per slug wins (records arrive
+ * newest-filed-first). Pure.
  */
 export function rejectionReasonBySlug(outcomes = []) {
   const map = new Map();
   for (const o of Array.isArray(outcomes) ? outcomes : []) {
-    if (!o || (o.outcome !== 'rejected' && o.outcome !== 'abandoned') || !o.rejectionReason) continue;
+    if (!o || (o.outcome !== 'rejected' && o.outcome !== 'abandoned')) continue;
+    if (!REJECTION_REASONS.includes(o.rejectionReason)) continue;
     const slug = normalizeSlug(o.slug);
     if (slug && !map.has(slug)) map.set(slug, o.rejectionReason);
   }

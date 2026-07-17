@@ -694,16 +694,18 @@ describe('suppressedIssueSlug + rejectionReasonBySlug (#2689 feedback loop)', ()
     expect(suppressedIssueSlug({})).toBe(null);
   });
 
-  it('indexes only resolved, diagnosed, non-merged records — merged/unclassified contribute nothing', () => {
+  it('indexes only resolved records diagnosed with a REAL taxonomy reason', () => {
     const map = rejectionReasonBySlug([
       { slug: 'a', outcome: 'rejected', rejectionReason: 'scope-mismatch' },
-      { slug: 'b', outcome: 'abandoned', rejectionReason: 'unknown-reason' },
-      { slug: 'c', outcome: 'merged', rejectionReason: 'scope-mismatch' }, // merged: not a rejection
-      { slug: 'd', outcome: 'rejected', rejectionReason: null },            // unclassified: nothing to say
-      { slug: 'e', outcome: null, rejectionReason: 'duplicate' }            // unresolved
+      { slug: 'b', outcome: 'abandoned', rejectionReason: 'unknown-reason' }, // sentinel: not an actionable pattern
+      { slug: 'c', outcome: 'merged', rejectionReason: 'scope-mismatch' },    // merged: not a rejection
+      { slug: 'd', outcome: 'rejected', rejectionReason: null },              // unclassified: nothing to say
+      { slug: 'e', outcome: null, rejectionReason: 'duplicate' }              // unresolved
     ]);
     expect(map.get('a')).toBe('scope-mismatch');
-    expect(map.get('b')).toBe('unknown-reason');
+    // The `unknown-reason` sentinel is deliberately excluded — it is the absence of a
+    // diagnosis, not a failure pattern the reasoner can route around.
+    expect(map.has('b')).toBe(false);
     expect(map.has('c')).toBe(false);
     expect(map.has('d')).toBe(false);
     expect(map.has('e')).toBe(false);
@@ -847,6 +849,22 @@ describe('computeSelfEvalSummary (#2700)', () => {
     const report = computeSelfEvalSummary({
       // No outcomes gathered this run — the line renders exactly as before.
       outcomes: null,
+      existingIssues: [
+        { number: 12, title: 'Add telemetry', body: '<!-- lil-slug: add-telemetry -->', state: 'closed', closedAt: recent }
+      ],
+      now
+    });
+    expect(report).toContain('#12 [add-telemetry] Add telemetry');
+    expect(report).not.toContain('previously closed:');
+  });
+
+  it('does not annotate a proposal closed with the unknown-reason sentinel', () => {
+    const now = Date.now();
+    const recent = new Date(now - 5 * 24 * 60 * 60 * 1000).toISOString();
+    const report = computeSelfEvalSummary({
+      // Reconciled but undiagnosable: the sentinel is not an actionable failure pattern,
+      // so the "do NOT re-propose" line names it without a spurious reason gloss.
+      outcomes: [{ appId: 'a', slug: 'add-telemetry', outcome: 'rejected', rejectionReason: 'unknown-reason' }],
       existingIssues: [
         { number: 12, title: 'Add telemetry', body: '<!-- lil-slug: add-telemetry -->', state: 'closed', closedAt: recent }
       ],
