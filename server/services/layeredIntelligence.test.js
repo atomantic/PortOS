@@ -843,7 +843,14 @@ describe('readLiTaskMetrics (#2700)', () => {
   beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'lil-selfeval-')); });
   afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
 
-  it('reports read:false when the learning store is missing', async () => {
+  it('treats an ABSENT store as a fresh install (read:true), not a broken read', async () => {
+    // learning.json is created lazily on the first recorded outcome — a fresh
+    // install must be told "no LI runs recorded yet", never "your store is broken".
+    expect(await readLiTaskMetrics({ cosPath: dir })).toEqual({ read: true, metrics: null });
+  });
+
+  it('reports read:false when the store exists but is unparseable', async () => {
+    await writeFile(join(dir, 'learning.json'), '{ not json');
     expect(await readLiTaskMetrics({ cosPath: dir })).toEqual({ read: false, metrics: null });
   });
 

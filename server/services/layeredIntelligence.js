@@ -731,6 +731,11 @@ export function computeSelfEvalSummary({
   }
 
   // --- Signal 3: is the LI machinery itself healthy? --------------------------
+  // Deliberately GLOBAL, not per-app: the learning store keys LI runs by task type
+  // alone, so this bucket aggregates the loop's runs across every app. That is the
+  // right scope for the question being asked — "is the LI machinery working?" is a
+  // property of the shared loop, not of the app it happens to be pointed at — and
+  // it mirrors the cosMetrics source, which is likewise install-wide.
   let taskSignal = false;
   let liDegraded = false;
   if (!liTaskStats?.read) {
@@ -1159,7 +1164,15 @@ export async function gatherSources(app, config, { cosPath = PATHS.cos, trustShe
  * "healthy loop with no history" (or vice versa) — the sentinel rule.
  */
 export async function readLiTaskMetrics({ cosPath = PATHS.cos } = {}) {
-  const learning = await readJSONFile(join(cosPath, 'learning.json'), null);
+  const file = join(cosPath, 'learning.json');
+  // An ABSENT store is a fresh install, not a broken read: learning.json is created
+  // lazily on the first recorded task outcome. readJSONFile returns its default for
+  // ENOENT, I/O errors, and parse failures ALIKE, so leaning on it alone would tell
+  // every fresh install "your learning store could not be read" when the truth is
+  // "nothing has run here yet" — the exact conflation this function exists to
+  // prevent, just inverted. Check existence first so the two stay distinct.
+  if (!existsSync(file)) return { read: true, metrics: null };
+  const learning = await readJSONFile(file, null);
   const byTaskType = learning?.byTaskType;
   if (!byTaskType || typeof byTaskType !== 'object' || Array.isArray(byTaskType)) {
     return { read: false, metrics: null };
