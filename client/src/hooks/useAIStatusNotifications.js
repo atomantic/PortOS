@@ -22,13 +22,37 @@ import socket from '../services/socket';
  *     errors, or calls that take longer than a couple seconds.
  *   - Non-silent ops render from the start so the user sees feedback for
  *     explicit actions (Generate Summary, etc.) even on fast calls.
+ *   - *Background*-op errors are coalesced per-provider within a short rolling
+ *     window (see COALESCE below). An unattended job that fans out one AI call
+ *     per record (e.g. the multi-goal check-in via `Promise.all` in
+ *     server/services/goalCheckIn.js, which passes `background: true`) can
+ *     produce N systematic failures at once — each with a unique op id, so
+ *     Toast's content dedupe can't collapse them. Instead of N stacked red
+ *     toasts from a job the user never watched start, they get ONE toast that
+ *     counts the failures. The `background` flag is explicit provenance from the
+ *     unattended caller — NOT inferred from `silent`, because user-triggered
+ *     op-less actions (generateGoalPhases/decomposeGoal/checkInGoal) are silent
+ *     too and must keep toasting individually. Every user-triggered op — silent
+ *     or not — reports its failure immediately, individually, with the real
+ *     reason; that is load-bearing for #2733's single-voice Go-deeper design.
  */
 export function useAIStatusNotifications() {
   // Per-op state: { silent, opened, slowTimer? }
   const opsRef = useRef(new Map());
+  // Per-provider background-error coalescing: providerKey -> { toastId, count, firstReason, seen, timer }
+  const bgErrorsRef = useRef(new Map());
+  // Monotonic window counter so each fresh coalescing window gets a unique toast
+  // id (see coalesceSilentError) — a reused id would let a prior window's pending
+  // auto-dismiss timer remove a successor window's toast.
+  const windowSeqRef = useRef(0);
 
   useEffect(() => {
     const SLOW_CALL_MS = 2500;
+    // Rolling window over which concurrent background-op failures from the same
+    // provider collapse into a single counted toast. A burst from `Promise.all`
+    // arrives near-simultaneously, well inside this window; genuinely
+    // spaced-out failures (> window apart) each show their real reason again.
+    const BG_ERROR_WINDOW_MS = 4000;
 
     const phaseIcon = {
       start: '🤖',
@@ -36,6 +60,65 @@ export function useAIStatusNotifications() {
       'model:loaded': '✅',
       complete: '✓',
       error: '✕'
+    };
+
+    // Collapse a burst of background-op failures from one provider into a single
+    // toast keyed by provider. The first failure in the window shows the real
+    // reason; subsequent DISTINCT ops update the SAME toast with a running count,
+    // keeping that first reason visible so the toast stays actionable.
+    const coalesceBackgroundError = (event) => {
+      const key = event.providerId || event.providerName || '__unknown_provider__';
+      const providerLabel = event.providerName || event.providerId || 'AI provider';
+      const reason = event.message || `${providerLabel} background AI call failed`;
+
+      // The hook owns the coalesced toast's whole lifetime: render it with
+      // `duration: Infinity` so Toast schedules NO auto-dismiss timer of its own
+      // (it never cancels those, and each update's stale timer would otherwise
+      // dismiss the toast mid-window), and dismiss it ourselves once the rolling
+      // window lapses — BG_ERROR_WINDOW_MS after the LAST failure, since the
+      // timer is reset on every update below.
+      const armWindowExpiry = (k, toastId) =>
+        setTimeout(() => {
+          toast.dismiss(toastId);
+          bgErrorsRef.current.delete(k);
+        }, BG_ERROR_WINDOW_MS);
+
+      const entry = bgErrorsRef.current.get(key);
+
+      if (!entry) {
+        // Fresh window. Give the toast a window-unique id so that even if a
+        // dismissal ever races a brand-new window (e.g. rapid lapse/re-open),
+        // it can only ever target its own window's toast, never a successor's.
+        windowSeqRef.current += 1;
+        const toastId = `ai-bg-error::${key}::${windowSeqRef.current}`;
+        const fresh = { toastId, count: 1, firstReason: reason, seen: new Set([event.id]), timer: undefined };
+        fresh.timer = armWindowExpiry(key, toastId);
+        bgErrorsRef.current.set(key, fresh);
+        toast.error(reason, { id: toastId, duration: Infinity, icon: '✕' });
+        return;
+      }
+
+      // Count DISTINCT operations, not error events: one failed call can emit
+      // more than one error event with the same op id (an LM Studio model-load
+      // failure emits an error phase, then callProviderAISimple emits the final
+      // error too), which would otherwise report a single failure as two. A
+      // repeat id just keeps the window alive.
+      if (entry.seen.has(event.id)) {
+        if (entry.timer) clearTimeout(entry.timer);
+        entry.timer = armWindowExpiry(key, entry.toastId);
+        return;
+      }
+      entry.seen.add(event.id);
+      entry.count += 1;
+      if (entry.timer) clearTimeout(entry.timer);
+      entry.timer = armWindowExpiry(key, entry.toastId);
+      // Retain the first real reason — the count alone doesn't tell the user
+      // whether it was an expired key, a timeout, or a bad response, and these
+      // events can all land before the browser paints, so the counted toast is
+      // often the only one the user ever sees.
+      toast.error(`${providerLabel} failed on ${entry.count} background AI calls — ${entry.firstReason}`, {
+        id: entry.toastId, duration: Infinity, icon: '✕'
+      });
     };
 
     const showLoading = (event) => {
@@ -90,9 +173,22 @@ export function useAIStatusNotifications() {
 
       if (event.phase === 'error') {
         if (state.slowTimer) clearTimeout(state.slowTimer);
-        // Always show errors, even for silent ops — failures matter.
-        toast.error(event.message || 'AI call failed', { id: event.id, duration: 6000, icon: '✕' });
         opsRef.current.delete(event.id);
+        // Only UNATTENDED background jobs coalesce per-provider, so a systematic
+        // failure yields one counted toast, not N — and this holds for SLOW
+        // failures too (an unreachable endpoint / timeout, where every parallel
+        // op has already opened its own spinner): dismiss that orphan-prone
+        // Infinity-duration spinner first, then coalesce, so the goal-check-in
+        // flood collapses whether the provider fails fast or slow. Everything
+        // the user triggered — INCLUDING op-less "silent" actions — toasts
+        // immediately, individually, with the real reason (updating its own
+        // spinner in place if it had one). Load-bearing and never aggregated.
+        if (event.background) {
+          if (state.opened) toast.dismiss(event.id);
+          coalesceBackgroundError(event);
+        } else {
+          toast.error(event.message || 'AI call failed', { id: event.id, duration: 6000, icon: '✕' });
+        }
       }
     };
 
@@ -103,6 +199,13 @@ export function useAIStatusNotifications() {
         if (s.slowTimer) clearTimeout(s.slowTimer);
       }
       opsRef.current.clear();
+      for (const e of bgErrorsRef.current.values()) {
+        if (e.timer) clearTimeout(e.timer);
+        // These toasts render with duration: Infinity, so nothing else will
+        // dismiss them once we drop their window timer — clear them explicitly.
+        toast.dismiss(e.toastId);
+      }
+      bgErrorsRef.current.clear();
     };
   }, []);
 }
