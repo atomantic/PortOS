@@ -128,17 +128,26 @@ async function loadRawCharacter() {
 // birthDate (#2673), and the per-domain `skills` from each domain's existing stats (#2674).
 // `level` is null when no birthDate is set, so callers can render a "set your birth date"
 // prompt. Neither is ever persisted — see DERIVED_FIELDS / saveCharacter.
-async function enrichCharacter(raw) {
+// `withSkills: false` skips the skill fan-out (six domain stat reads) for callers that only
+// want the persisted fields plus the age level — deriving skills nobody reads is pure waste.
+// Skipping OMITS the key rather than setting it to [] or null: an absent `skills` means "not
+// computed", which must not be confused with "computed, and every domain is empty".
+async function enrichCharacter(raw, { withSkills = true } = {}) {
   const [{ birthDate }, skills] = await Promise.all([
     getBirthDate().catch(() => ({ birthDate: null })),
-    getCharacterSkills(),
+    withSkills ? getCharacterSkills() : Promise.resolve(undefined),
   ]);
   const ageYears = ageYearsFromBirthDate(birthDate);
-  return { ...raw, ageYears, level: levelFromAge(ageYears), skills };
+  const enriched = { ...raw, ageYears, level: levelFromAge(ageYears) };
+  // Drop any stale persisted key when skills weren't computed, so a hand-edited
+  // character.json can't pass its own `skills` off as freshly derived.
+  if (withSkills) enriched.skills = skills;
+  else delete enriched.skills;
+  return enriched;
 }
 
-export async function getCharacter() {
-  return enrichCharacter(await loadRawCharacter());
+export async function getCharacter(options = {}) {
+  return enrichCharacter(await loadRawCharacter(), options);
 }
 
 // Apply a partial patch of human-authored fields (name/class/avatarPath). Reads the RAW
@@ -164,7 +173,15 @@ export async function updateCharacterFields(patch = {}) {
 export async function getWireCharacter() {
   const raw = await readJSONFile(CHARACTER_FILE, null);
   if (!raw) return null;
-  return { ...raw, level: legacyLevelFromXp(raw.xp) };
+  // Strip every derived field a hand-edited or legacy character.json might be carrying before
+  // it goes out on the wire: `level` is then re-added below as the legacy xp-derived value,
+  // but `skills`/`ageYears` must never federate at all (skills are per-machine — see
+  // characterSkills.js — and ageYears is a pure function of the peer's own birthDate). Without
+  // this, applyCharacterRemote's no-local branch writes the payload verbatim and a stale key
+  // would self-propagate across peers.
+  const wire = { ...raw };
+  for (const field of DERIVED_FIELDS) delete wire[field];
+  return { ...wire, level: legacyLevelFromXp(raw.xp) };
 }
 
 export async function saveCharacter(data) {
