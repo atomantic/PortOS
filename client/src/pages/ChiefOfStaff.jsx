@@ -525,14 +525,16 @@ export default function ChiefOfStaff() {
         }`} />
         <div className="flex-1 min-w-0 text-left">
           <div className="text-[10px] text-gray-500">Learning</div>
-          <div className="text-sm font-bold text-white flex items-center gap-2">
+          {/* Stacked, not a flex row: as flex items these keep min-width:auto,
+              so on a narrow card the skipped label can't shrink and spills out. */}
+          <div className="text-sm font-bold text-white truncate">
             {learningSummary?.overallSuccessRate != null ? `${learningSummary.overallSuccessRate}%` : 'No data'}
-            {learningSummary?.skipped > 0 && (
-              <span className="text-[9px] text-port-error font-normal">
-                ({learningSummary.skipped} skipped)
-              </span>
-            )}
           </div>
+          {learningSummary?.skipped > 0 && (
+            <div className="text-[9px] text-port-error font-normal truncate">
+              {learningSummary.skipped} skipped
+            </div>
+          )}
         </div>
       </button>
       {status?.running ? (

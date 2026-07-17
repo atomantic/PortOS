@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
 // Regression coverage for #2519 — the page-level Force Evaluate handler must
@@ -110,6 +110,78 @@ describe('ChiefOfStaff handleForceEvaluate', () => {
     await waitFor(() => expect(screen.queryAllByText('Evaluating tasks...').length).toBeGreaterThan(0));
     // Must pass { silent: true } so the custom catch is the only error toast.
     expect(api.forceCosEvaluate).toHaveBeenCalledWith({ silent: true });
+  });
+});
+
+// The Learning stat card's skipped-count label used to sit in a `flex` row
+// beside the success-rate value. Flex items default to min-width:auto, so on a
+// narrow (mobile) card the label could not shrink below its min-content width
+// and rendered outside the card's border. jsdom does no layout, so these guards
+// pin the containment contract that keeps it inside: the label is its own block
+// under the value (not a flex sibling), and it truncates.
+describe('ChiefOfStaff Learning card skipped label', () => {
+  const summaryWithSkipped = {
+    overallSuccessRate: 84,
+    skipped: 3,
+    status: 'warning',
+    totalCompleted: 20,
+  };
+
+  const renderAt = (tab) => render(
+    <MemoryRouter initialEntries={[`/cos/${tab}`]}>
+      <Routes>
+        <Route path="/cos/:tab" element={<ChiefOfStaff />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  // The page renders more than one Learning card (the compact card in the CoS
+  // panel, plus the `mini` card in the ascii-mode stats bar — Tailwind-`hidden`,
+  // but jsdom applies no CSS so it is still queryable). Never index into a
+  // document-order match list: on the pre-fix markup the compact card read
+  // "(3 skipped)", so an exact-text lookup silently drifted to the mini card and
+  // asserted against the wrong element. Scope to each card and hold every
+  // variant to the contract instead.
+  const learningCards = async () => {
+    const cards = await screen.findAllByRole('button', { name: /Learning/ });
+    expect(cards.length).toBeGreaterThan(0);
+    return cards;
+  };
+
+  it('stacks the skipped label under the value instead of in a flex row', async () => {
+    api.getCosLearningSummary.mockResolvedValue(summaryWithSkipped);
+    renderAt('config');
+
+    for (const card of await learningCards()) {
+      const value = within(card).getByText('84%');
+      const label = within(card).getByText(/skipped/);
+      // The value element holds the rate and nothing else — a parenthetical
+      // tucked beside it inside one flex row is what overflowed.
+      expect(value.textContent).toBe('84%');
+      // Stacked in the card's text column: same parent, which must not lay its
+      // children out as a row. Exact token match — the column legitimately
+      // carries `flex-1` (a flex-child property, not `display:flex`), which
+      // must not trip this guard.
+      expect(label.parentElement).toBe(value.parentElement);
+      expect(value.parentElement.classList.contains('flex')).toBe(false);
+    }
+  });
+
+  it('truncates the skipped label so it clips inside the card', async () => {
+    api.getCosLearningSummary.mockResolvedValue(summaryWithSkipped);
+    renderAt('config');
+
+    for (const card of await learningCards()) {
+      expect(within(card).getByText(/skipped/).classList.contains('truncate')).toBe(true);
+    }
+  });
+
+  it('omits the skipped label entirely when nothing was skipped', async () => {
+    api.getCosLearningSummary.mockResolvedValue({ ...summaryWithSkipped, skipped: 0, status: 'good' });
+    renderAt('config');
+
+    expect(await screen.findAllByText('84%')).not.toHaveLength(0);
+    expect(screen.queryByText(/skipped/)).not.toBeInTheDocument();
   });
 });
 
