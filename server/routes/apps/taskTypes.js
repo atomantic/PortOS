@@ -5,7 +5,8 @@
  *   PUT  /bulk-task-type/:taskType   → { success, appsUpdated }  (all active apps)
  *   GET  /:id/task-types             → { taskTypeOverrides }
  *   GET  /:id/work-tracker           → { tracker info }
- *   GET  /:id/layered-intelligence   → { config, isPortos }
+ *   GET  /:id/layered-intelligence           → { config, isPortos }
+ *   GET  /:id/layered-intelligence/outcomes  → { stats, rejections, recent }
  *   PUT  /:id/task-types/all         → { success, taskTypeOverrides }
  *   PUT  /:id/task-types/:taskType   → { success, taskTypeOverrides }
  *
@@ -20,9 +21,17 @@ import { sanitizeTaskMetadata } from '../../lib/validation.js';
 import { parseCronToNextRun } from '../../services/eventScheduler.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from '../../services/taskSchedule.js';
+import { summarizeOutcomeStats } from '../../services/layeredIntelligence.js';
+import { listOutcomesResult } from '../../services/layeredIntelligenceOutcomes.js';
+import { summarizeRejectionReasons } from '../../services/layeredIntelligenceRejections.js';
 import { loadApp } from './shared.js';
 
 const router = Router();
+
+// How many recent outcome rows the dashboard payload carries. The aggregate
+// stats/rejection tally are computed over the FULL retained set; this cap only
+// bounds the per-record list the UI renders newest-first.
+const OUTCOMES_DASHBOARD_LIMIT = 25;
 
 // PUT /api/apps/bulk-task-type/:taskType - Enable/disable a task type for all active apps
 router.put('/bulk-task-type/:taskType', asyncHandler(async (req, res) => {
@@ -66,6 +75,47 @@ router.get('/:id/layered-intelligence', loadApp, asyncHandler(async (req, res) =
   const app = req.loadedApp;
   const config = await appsService.getAppLayeredIntelligenceConfig(app.id);
   res.json({ appId: app.id, appName: app.name, isPortos: app.id === PORTOS_APP_ID, config });
+}));
+
+// GET /api/apps/:id/layered-intelligence/outcomes - Read-only dashboard of how
+// this app's filed LI proposals fared (#2689). Composes the same pure aggregators
+// the reasoner prompt reasons over — summarizeOutcomeStats (merge-rate math) and
+// the rejection taxonomy (summarizeRejectionReasons) — plus a capped recent list,
+// so the diagnostics the loop already produces are visible to the user. Only reads
+// the outcome store: no tracker fetch, no LLM call.
+//
+// `read: false` is surfaced verbatim from listOutcomesResult so the UI can say
+// "couldn't load" rather than the lie "nothing has ever been filed" — the same
+// sentinel discipline the reasoner's selfEval uses (an unreadable store must not
+// collapse into an empty history).
+router.get('/:id/layered-intelligence/outcomes', loadApp, asyncHandler(async (req, res) => {
+  const app = req.loadedApp;
+  const { read, outcomes } = await listOutcomesResult({ appId: app.id });
+  if (!read) {
+    return res.json({ appId: app.id, appName: app.name, read: false, stats: null, rejections: null, recent: [] });
+  }
+  const { total, merged, rejected, abandoned, pending, resolved, rawMergeRate } = summarizeOutcomeStats(outcomes);
+  const rejections = summarizeRejectionReasons(outcomes);
+  const recent = outcomes.slice(0, OUTCOMES_DASHBOARD_LIMIT).map(o => ({
+    slug: o.slug,
+    scope: o.scope,
+    outcome: o.outcome,
+    rejectionReason: o.rejectionReason,
+    issueRef: o.issueRef,
+    tracker: o.tracker,
+    filedAt: o.filedAt,
+    outcomeAt: o.outcomeAt
+  }));
+  res.json({
+    appId: app.id,
+    appName: app.name,
+    read: true,
+    // `mergeRate` is the raw 0–100 percentage over RESOLVED proposals, or null when
+    // none have resolved (still-pending ≠ 0% merged). The client rounds for display.
+    stats: { total, merged, rejected, abandoned, pending, resolved, mergeRate: rawMergeRate },
+    rejections,
+    recent
+  });
 }));
 
 // PUT /api/apps/:id/task-types/all - Toggle all task types for an app

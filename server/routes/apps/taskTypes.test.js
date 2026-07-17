@@ -17,7 +17,15 @@ vi.mock('../../services/apps.js', () => ({
   PORTOS_APP_ID: 'portos-default'
 }));
 
+// The outcome STORE (file I/O) is mocked; the pure aggregators the route composes
+// (summarizeOutcomeStats + the rejection taxonomy) run for real so the test covers
+// the real merge-rate/rejection math, not a restated stub.
+vi.mock('../../services/layeredIntelligenceOutcomes.js', () => ({
+  listOutcomesResult: vi.fn()
+}));
+
 import * as appsService from '../../services/apps.js';
+import { listOutcomesResult } from '../../services/layeredIntelligenceOutcomes.js';
 
 describe('Apps Task-Type Routes', () => {
   let app;
@@ -58,6 +66,64 @@ describe('Apps Task-Type Routes', () => {
     it('returns 404 for an unknown app', async () => {
       appsService.getAppById.mockResolvedValue(null);
       const response = await request(app).get('/api/apps/app-999/layered-intelligence');
+      expect(response.status).toBe(404);
+    });
+  });
+
+  describe('GET /api/apps/:id/layered-intelligence/outcomes', () => {
+    it('composes stats + rejection tally + recent list from the store', async () => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'App' });
+      listOutcomesResult.mockResolvedValue({
+        read: true,
+        outcomes: [
+          { slug: 'add-metrics', scope: 'app-improvement', outcome: 'merged', rejectionReason: null, issueRef: '#10', tracker: 'github', filedAt: '2026-07-04T00:00:00.000Z', outcomeAt: '2026-07-05T00:00:00.000Z' },
+          { slug: 'drop-feature', scope: 'app-improvement', outcome: 'rejected', rejectionReason: 'user-rejected', issueRef: '#11', tracker: 'github', filedAt: '2026-07-03T00:00:00.000Z', outcomeAt: '2026-07-04T00:00:00.000Z' },
+          { slug: 'vague-idea', scope: 'app-data-gap', outcome: 'abandoned', rejectionReason: 'unknown-reason', issueRef: '#12', tracker: 'github', filedAt: '2026-07-02T00:00:00.000Z', outcomeAt: '2026-07-03T00:00:00.000Z' },
+          { slug: 'open-one', scope: 'app-improvement', outcome: null, rejectionReason: null, issueRef: '#13', tracker: 'github', filedAt: '2026-07-01T00:00:00.000Z', outcomeAt: null }
+        ]
+      });
+
+      const response = await request(app).get('/api/apps/app-001/layered-intelligence/outcomes');
+
+      expect(response.status).toBe(200);
+      expect(response.body.read).toBe(true);
+      expect(response.body.stats).toMatchObject({ total: 4, merged: 1, rejected: 1, abandoned: 1, pending: 1, resolved: 3 });
+      expect(response.body.stats.mergeRate).toBeCloseTo(100 / 3, 5);
+      // Real diagnoses only in entries; the undiagnosed abandoned row is `unknown`.
+      expect(response.body.rejections.entries).toEqual([{ reason: 'user-rejected', count: 1 }]);
+      expect(response.body.rejections.unknown).toBe(1);
+      expect(response.body.rejections.unclassified).toBe(0);
+      expect(response.body.recent).toHaveLength(4);
+      expect(response.body.recent[0]).toMatchObject({ slug: 'add-metrics', outcome: 'merged' });
+      expect(listOutcomesResult).toHaveBeenCalledWith({ appId: 'app-001' });
+    });
+
+    it('reports read:false when the store is unreadable (not an empty history)', async () => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'App' });
+      listOutcomesResult.mockResolvedValue({ read: false, outcomes: [] });
+
+      const response = await request(app).get('/api/apps/app-001/layered-intelligence/outcomes');
+
+      expect(response.status).toBe(200);
+      expect(response.body.read).toBe(false);
+      expect(response.body.stats).toBeNull();
+      expect(response.body.recent).toEqual([]);
+    });
+
+    it('returns a zero-total, null merge rate for an app that has filed nothing', async () => {
+      appsService.getAppById.mockResolvedValue({ id: 'app-001', name: 'App' });
+      listOutcomesResult.mockResolvedValue({ read: true, outcomes: [] });
+
+      const response = await request(app).get('/api/apps/app-001/layered-intelligence/outcomes');
+
+      expect(response.status).toBe(200);
+      expect(response.body.read).toBe(true);
+      expect(response.body.stats).toMatchObject({ total: 0, resolved: 0, mergeRate: null });
+    });
+
+    it('returns 404 for an unknown app', async () => {
+      appsService.getAppById.mockResolvedValue(null);
+      const response = await request(app).get('/api/apps/app-999/layered-intelligence/outcomes');
       expect(response.status).toBe(404);
     });
   });

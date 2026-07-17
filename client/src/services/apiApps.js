@@ -15,6 +15,11 @@ export const getAppWorkTracker = (id, options) =>
 // side). Caller owns its own .catch fallback, so default to silent.
 export const getAppLayeredIntelligence = (id, options) =>
   request(`/apps/${id}/layered-intelligence`, { silent: true, ...options });
+// Read-only LI proposal-outcome dashboard data (#2689): merge-rate stats, the
+// rejection-reason tally, and a capped recent list. The panel owns its own error
+// UI, so default to silent.
+export const getAppLayeredIntelligenceOutcomes = (id, options) =>
+  request(`/apps/${id}/layered-intelligence/outcomes`, { silent: true, ...options });
 export const createApp = (data) => request('/apps', {
   method: 'POST',
   body: JSON.stringify(data)
