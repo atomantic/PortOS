@@ -12,6 +12,8 @@
 
 ## Changed
 
+- [issue-2702] **The Creative Director now shows you what it made.** Project cards on `/creative-director` lead with a preview of the produced media — the final video's poster with a play badge (click the artwork to open the project, the badge to play it inline), a rendered scene, or a produced image from a directive plan — falling back to a tidy "no render yet" placeholder instead of a wall of text. The Overview tab renders the final cut inline instead of showing only a job id, keeping the Media History link alongside it; plans that emit images show the image. Previews respect each project's aspect ratio (16:9 / 9:16 / 1:1), and the grid never downloads a video until you actually press play.
+
 - Daily log entries now re-embed into the Chief-of-Staff memory index once you settle (coalesced per day, ~30s after your last edit) instead of on every single save. Autosave means a day's entry is now written every couple of seconds while you type; re-embedding per save would have meant an embedding call per typing pause — and, once a day's log grows past the embedding size budget, an unrequested AI summarization call each time too. Search results are unchanged; the index simply updates when you pause rather than mid-sentence, which also produces a better vector than embedding a half-typed sentence a hundred times. Journals now use the same debounced, coalesced re-embed path every other Brain record type already used.
 
 ## Internal
