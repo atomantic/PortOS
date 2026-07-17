@@ -30,7 +30,7 @@ import { validateCommand } from '../lib/commandSecurity.js';
 import { getSettings } from './settings.js';
 import { createTicket, searchIssues, addLabels, escapeJql } from './jira.js';
 import { computeWindowedStats, computeEffectiveSuccessRate, extractTaskType } from './taskLearning/store.js';
-import { formatRejectionReasons } from './layeredIntelligenceRejections.js';
+import { formatRejectionReasons, formatRejectionReason } from './layeredIntelligenceRejections.js';
 
 // Tracker labels + slug marker. The slug is the stable dedup key the reasoner
 // chooses; it is embedded in each filed issue body so a later run (or the
@@ -656,23 +656,59 @@ export function computeOutcomesReport({ outcomes = [], hasPlannedWork = false } 
 export const SELF_EVAL_MAX_SUPPRESSED_LISTED = 8;
 
 /**
+ * Recover a suppressed issue's normalized dedup slug — the key the reasoner must
+ * avoid re-using and the join key onto the outcome store's rejectionReason. Shapes
+ * vary by tracker: forge/jira rows carry `{ number, title, body }` (the slug lives
+ * in the body marker), while the `plan` filer yields bare `{ slug, state }`.
+ * Normalized both ways so the value matches the outcome record's stored slug
+ * (`normalizeSlug(slug)` at file time) exactly. Returns null when unrecoverable.
+ */
+export function suppressedIssueSlug(issue) {
+  if (issue?.slug) return normalizeSlug(issue.slug);
+  return normalizeSlug(extractSlugFromBody(issue?.body) || extractSlugFromBody(issue?.title));
+}
+
+/**
+ * Build a `slug → rejectionReason` lookup from reconciled outcome records, so the
+ * self-eval "recently closed" line can tell the reasoner not just WHICH proposals
+ * to avoid but WHY each was closed — the feedback loop of #2689 (ask #4), closing
+ * the loop with the taxonomy #2735 already persists rather than any new signal.
+ *
+ * Only a RESOLVED non-merged record carries a diagnosis: a merged, unresolved, or
+ * still-unclassified (`rejectionReason == null`) record contributes nothing, so the
+ * annotation appears only where there is a real failure pattern to learn from.
+ * First diagnosed record per slug wins (records arrive newest-filed-first). Pure.
+ */
+export function rejectionReasonBySlug(outcomes = []) {
+  const map = new Map();
+  for (const o of Array.isArray(outcomes) ? outcomes : []) {
+    if (!o || (o.outcome !== 'rejected' && o.outcome !== 'abandoned') || !o.rejectionReason) continue;
+    const slug = normalizeSlug(o.slug);
+    if (slug && !map.has(slug)) map.set(slug, o.rejectionReason);
+  }
+  return map;
+}
+
+/**
  * Identify a suppressed proposal for the prompt: its slug (the actual dedup key the
  * reasoner must avoid re-using) plus its title for human-readable context. Returns
  * null when neither is recoverable — an unidentifiable entry is left to the count
  * rather than rendered as a mystery bullet the reasoner can't act on.
  *
- * Shapes vary by tracker: forge/jira rows carry `{ number, title, body }` (the slug
- * lives in the body marker), while the `plan` filer yields bare `{ slug, state }`.
+ * When `reasonBySlug` (from rejectionReasonBySlug) holds this slug's diagnosis, it
+ * is appended as glossed prose so the reasoner sees the specific failure pattern
+ * that sank the earlier proposal (#2689), not merely a slug to route around. An
+ * undiagnosed (null) or unmatched slug renders exactly as before.
  */
-export function describeSuppressedIssue(issue) {
-  const slug = issue?.slug
-    ? normalizeSlug(issue.slug)
-    : (extractSlugFromBody(issue?.body) || extractSlugFromBody(issue?.title));
+export function describeSuppressedIssue(issue, reasonBySlug = null) {
+  const slug = suppressedIssueSlug(issue);
   const title = typeof issue?.title === 'string' ? issue.title.trim() : '';
   if (!slug && !title) return null;
   const ref = issue?.number ? `#${issue.number} ` : '';
-  if (!slug) return `${ref}${title}`.trim();
-  return `${ref}[${slug}]${title ? ` ${title}` : ''}`.trim();
+  const reason = slug && reasonBySlug instanceof Map ? reasonBySlug.get(slug) : null;
+  const why = reason ? ` — previously closed: ${formatRejectionReason(reason)}` : '';
+  if (!slug) return `${ref}${title}${why}`.trim();
+  return `${ref}[${slug}]${title ? ` ${title}` : ''}${why}`.trim();
 }
 
 /**
@@ -765,8 +801,14 @@ export function computeSelfEvalSummary({
     // whole run re-proposing something the dedup guard silently drops. Capped so a
     // long tail can't crowd out the sources it is meant to be reasoning about.
     if (closedSuppressed.length) {
+      // Join each suppressed proposal to its reconciled rejection reason (#2689),
+      // so the "do NOT re-propose" line also carries WHY each was closed — a
+      // no-extra-cost read of the outcome records selfEval already received. Empty
+      // when outcomes weren't gathered this run (`outcomes` not an array), leaving
+      // the line exactly as before.
+      const reasonBySlug = rejectionReasonBySlug(Array.isArray(outcomes) ? outcomes : []);
       const named = closedSuppressed
-        .map(i => describeSuppressedIssue(i))
+        .map(i => describeSuppressedIssue(i, reasonBySlug))
         .filter(Boolean)
         .slice(0, SELF_EVAL_MAX_SUPPRESSED_LISTED);
       if (named.length) {
