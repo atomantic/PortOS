@@ -96,9 +96,11 @@ export function computeAgeView(character) {
   };
 }
 
-// Compare two character snapshots to detect a fresh XP gain / level-up so the badge can
-// fire a transient burst. Tolerates null on either side (first poll has no prev). `gained`
-// is clamped to >= 0 so a manual XP reset (xp dropping) never reports a negative burst.
+// Compare two character snapshots to detect a fresh XP gain (cyan burst) and a level tick
+// (amber "level-up" burst). Since #2673 the level is age-based, so a level tick is a
+// *birthday* — detected purely from the `level` field, never from XP thresholds. Tolerates
+// null on either side (first poll has no prev). `gained` is clamped to >= 0 so a manual XP
+// reset (xp dropping) never reports a negative burst.
 export function diffXp(prev, next) {
   const prevXp = Number.isFinite(prev?.xp) ? prev.xp : null;
   const nextXp = Number.isFinite(next?.xp) ? next.xp : null;
@@ -111,9 +113,10 @@ export function diffXp(prev, next) {
   }
 
   const gained = Math.max(0, nextXp - prevXp);
-  const leveledUp = prevLevel != null && nextLevel != null
-    ? nextLevel > prevLevel
-    : levelFromXP(nextXp) > levelFromXP(prevXp);
+  // Level is decoupled from XP now: a level-up burst fires only on a real age-level increase
+  // (a birthday), never when an XP gain crosses a legacy threshold. When level is unknown
+  // (no birthDate on either snapshot) there is no level-up to celebrate.
+  const leveledUp = prevLevel != null && nextLevel != null && nextLevel > prevLevel;
 
   return { gained, leveledUp: gained > 0 && leveledUp };
 }

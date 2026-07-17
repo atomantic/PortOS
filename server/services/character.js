@@ -156,10 +156,10 @@ export async function takeDamage(diceNotation, description) {
   character.events.push(createEvent('damage', description || `Took ${roll.total} damage (${diceNotation})`, {
     damage: roll.total, diceNotation, diceRolls: roll.rolls
   }));
-  await saveCharacter(character);
+  const saved = await saveCharacter(character);
 
-  console.log(`💥 ${roll.total} damage (${diceNotation}: [${roll.rolls}]+${roll.modifier}) — ${character.hp}/${character.maxHp} HP`);
-  return { character, roll, totalDamage: roll.total };
+  console.log(`💥 ${roll.total} damage (${diceNotation}: [${roll.rolls}]+${roll.modifier}) — ${saved.hp}/${saved.maxHp} HP`);
+  return { character: saved, roll, totalDamage: roll.total };
 }
 
 export async function takeRest(type) {
@@ -175,10 +175,10 @@ export async function takeRest(type) {
   const hpRecovered = character.hp - oldHp;
 
   character.events.push(createEvent('rest', `${type === 'long' ? 'Long' : 'Short'} rest — recovered ${hpRecovered} HP`, { hpRecovered }));
-  await saveCharacter(character);
+  const saved = await saveCharacter(character);
 
-  console.log(`🛏️ ${type} rest — recovered ${hpRecovered} HP (${character.hp}/${character.maxHp})`);
-  return { character, hpRecovered };
+  console.log(`🛏️ ${type} rest — recovered ${hpRecovered} HP (${saved.hp}/${saved.maxHp})`);
+  return { character: saved, hpRecovered };
 }
 
 export async function addEvent(event) {

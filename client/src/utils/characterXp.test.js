@@ -165,9 +165,17 @@ describe('diffXp', () => {
     expect(d.leveledUp).toBe(true);
   });
 
-  it('infers level-up from XP when level fields are absent', () => {
+  it('does NOT infer a level-up from XP when level fields are absent (level is age-based)', () => {
+    // No birthDate → level is null on both snapshots. An XP gain crossing a legacy
+    // threshold must not fire the birthday "level-up" flash (#2673 decouples xp from level).
     const d = diffXp({ xp: 250 }, { xp: 400 }); // crosses the 300 threshold
     expect(d.gained).toBe(150);
+    expect(d.leveledUp).toBe(false);
+  });
+
+  it('fires a level-up only on a real age-level increase (birthday)', () => {
+    const d = diffXp({ xp: 100, level: 41 }, { xp: 150, level: 42 });
+    expect(d.gained).toBe(50);
     expect(d.leveledUp).toBe(true);
   });
 
