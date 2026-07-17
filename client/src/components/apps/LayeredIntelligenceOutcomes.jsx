@@ -90,10 +90,11 @@ export default function LayeredIntelligenceOutcomes({ appId }) {
         {heading}
         {tracked ? (
           // "tracked" only means the store is being written now; proposals filed
-          // BEFORE outcomes were enabled aren't backfilled, so scope the claim to
-          // "tracked" rather than asserting nothing was ever filed.
+          // BEFORE outcomes were enabled aren't backfilled, and resolved rows GC
+          // ~30 days after they close — so scope the claim to the recent window
+          // rather than asserting nothing was ever filed.
           <p className="text-xs text-gray-500">
-            No tracked proposals yet. Once the loop files improvement issues, their outcomes (merge rate + why any were rejected) appear here.
+            No recent tracked proposals. Once the loop files improvement issues, their outcomes (merge rate + why any were rejected) appear here — resolved ones drop off about 30 days after they close.
           </p>
         ) : (
           // The store is only written while the outcomes source is on, so an empty
