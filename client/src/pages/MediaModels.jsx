@@ -43,7 +43,10 @@ export default function MediaModels() {
 
   const refresh = useCallback(() => {
     setError(null);
-    listCachedModels()
+    // silent:true — the failure renders as the page's own full error state;
+    // the default toast would duplicate it. Mirrors handleAddFromHf, whose
+    // setAddError path is already silent.
+    listCachedModels({ silent: true })
       .then(setData)
       .catch(err => setError(err?.message || 'Failed to load media models'));
     listMediaModelRegistry()
