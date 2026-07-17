@@ -161,11 +161,18 @@ export default function TasteTab({ onRefresh }) {
       return;
     }
     setLoadingPersonalized(true);
-    // Sentinel: the endpoint 200s with a null body when it has nothing to ask
-    // (no identity context / no provider), but rejects on a real failure. Keep
-    // those apart — `undefined` means the request failed and request() already
-    // toasted the true reason, so the "try completing more identity documents"
-    // hint below would both double-toast and misattribute the cause.
+    // Sentinel: `undefined` = the request itself failed (validation/500/network)
+    // and request() already toasted the true reason, so the hint below must not
+    // fire on top of it and misattribute the cause. `null` = the endpoint 200'd
+    // with an empty body, which is the genuine "nothing to ask" case.
+    //
+    // Caveat: a *provider* failure (timeout, upstream 401, empty completion)
+    // also arrives as 200-null, because generatePersonalizedTasteQuestion
+    // returns null on result.error and the route bare-res.json()s it — so the
+    // hint can still misattribute that one. Fixing it needs a server-side
+    // signal that separates "provider failed" from "nothing to ask"; tracked
+    // separately (#2733), since ai:status already toasts provider errors
+    // and a naive throw would just re-create the double toast.
     const question = await api.getPersonalizedTasteQuestion(
       activeSection,
       selectedProvider.providerId,
