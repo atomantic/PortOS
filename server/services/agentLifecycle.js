@@ -911,6 +911,12 @@ export function resolveProgrammaticIoVerdict({ success, hookResult }) {
  * proceeds and task-learning falls back to the exit code (the pre-#2727
  * behavior). Generous by design — this is a hang backstop, not a latency budget;
  * a slow-but-honest hook should still get to return its real verdict.
+ *
+ * Timing out only stops us WAITING — it can't cancel the hook, which keeps running
+ * and still lands its side effects (filing the issue, recording the run). That's
+ * the desired trade: the work completes, it just no longer pins a concurrency slot
+ * or gates the completion write. A late rejection is still handled (Promise.race
+ * subscribes to both), so it can't surface as an unhandled rejection.
  */
 const OUTPUT_HOOK_TIMEOUT_MS = 5 * 60_000;
 
