@@ -1,0 +1,62 @@
+import { useEffect, useState } from 'react';
+import { listVideoHistory } from '../services/apiImageVideo.js';
+
+/**
+ * Resolve a video-history id to the URL of the file it actually points at.
+ *
+ * WHY THIS EXISTS: a history entry's id and its filename are NOT the same value,
+ * and only some writers make them look like they are. `videoGen/local.js` names
+ * a clip `<jobId>.mp4`, so reconstructing `/data/videos/<id>.mp4` happens to work
+ * for per-scene renders. The video-TIMELINE renderer — which produces a Creative
+ * Director project's stitched final cut — mints an independent
+ * `timeline-<project>-<ts>.mp4` alongside a `randomUUID()` id
+ * (`videoTimeline/local.js`), so a CD `finalVideoId` is a *history id*, not a
+ * filename stem, and the reconstructed path 404s. The thumbnail is keyed the
+ * other way (`generateThumbnail` always writes `<jobId>.jpg`), which is what
+ * makes the mismatch so easy to miss: the poster renders perfectly while the mp4
+ * behind it does not exist.
+ *
+ * So: resolve through the stored `filename` — the same thing the server does
+ * (`stitchRunner.js` joins `PATHS.videos` with `finalEntry.filename`) and the
+ * media UI does (`components/media/normalize.js` → `/data/videos/${v.filename}`).
+ *
+ * Usage: pass the resolved `src` to `<ScenePreview src=…>`, which falls back to
+ * its `<jobId>.mp4` reconstruction when this returns null. Callers should gate
+ * on `resolving` before AUTOPLAYING, or the player would race the lookup and
+ * autoplay the wrong (nonexistent) path. A caller that only renders an idle
+ * `preload="none"` player can ignore `resolving` — nothing is fetched until the
+ * user hits Play, by which time the lookup has long settled.
+ *
+ * `enabled` keeps this lazy: the list grid must not fetch history for N cards,
+ * so a card resolves only once the user actually presses play.
+ */
+export function useVideoFileSrc(jobId, { enabled = true } = {}) {
+  const [src, setSrc] = useState(null);
+  const [resolving, setResolving] = useState(false);
+
+  useEffect(() => {
+    setSrc(null);
+    if (!enabled || !jobId) {
+      setResolving(false);
+      return undefined;
+    }
+    setResolving(true);
+    let cancelled = false;
+    // Silent: a failed lookup is not a user-facing error — ScenePreview's
+    // reconstruction fallback (and its own missing-media UI) covers it, so a
+    // toast here would be noise on a page that already degrades gracefully.
+    listVideoHistory({ silent: true })
+      .then((entries) => {
+        if (cancelled) return;
+        const list = Array.isArray(entries) ? entries : [];
+        const entry = list.find((e) => e?.id === jobId);
+        const filename = typeof entry?.filename === 'string' ? entry.filename.trim() : '';
+        if (filename) setSrc(`/data/videos/${filename}`);
+      })
+      .catch(() => {})
+      .finally(() => { if (!cancelled) setResolving(false); });
+    return () => { cancelled = true; };
+  }, [jobId, enabled]);
+
+  return { src, resolving };
+}

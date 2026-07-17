@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   selectProjectPreview,
   previewAspectClass,
+  previewMaxWidthClass,
   startingImageSrc,
   videoSrcForJob,
   videoPosterForJob,
@@ -23,6 +24,19 @@ describe('previewAspectClass', () => {
     expect(previewAspectClass(undefined)).toBe('aspect-video');
     expect(previewAspectClass(null)).toBe('aspect-video');
     expect(previewAspectClass('21:9')).toBe('aspect-video');
+  });
+});
+
+describe('previewMaxWidthClass', () => {
+  it('caps an inline preview by WIDTH per ratio (a max-h would crop it)', () => {
+    expect(previewMaxWidthClass('16:9')).toBe('max-w-[calc(60vh*16/9)]');
+    expect(previewMaxWidthClass('9:16')).toBe('max-w-[calc(60vh*9/16)]');
+    expect(previewMaxWidthClass('1:1')).toBe('max-w-[60vh]');
+  });
+
+  it('falls back to the 16:9 cap for unset/unknown values', () => {
+    expect(previewMaxWidthClass(undefined)).toBe('max-w-[calc(60vh*16/9)]');
+    expect(previewMaxWidthClass('21:9')).toBe('max-w-[calc(60vh*16/9)]');
   });
 });
 
@@ -187,6 +201,21 @@ describe('selectProjectPreview', () => {
   it('falls back to the starting image, labeled as an input not a render', () => {
     const preview = selectProjectPreview({ startingImageFile: 'start.png' });
     expect(preview).toEqual({ kind: 'image', src: '/data/images/start.png', label: 'Starting image' });
+  });
+
+  it('marks a PRODUCED image with a jobId and a starting image WITHOUT one', () => {
+    // `jobId` is the discriminator between the two `kind: 'image'` cases —
+    // OverviewTab gates its hero section on it so a user-supplied input image
+    // never gets promoted as if the director produced it. Don't "helpfully"
+    // start setting jobId on the starting-image branch.
+    const produced = selectProjectPreview({
+      plan: { steps: [step('media_enqueueImageJob', 'done', { jobId: 'img-1' })] },
+    });
+    const starting = selectProjectPreview({ startingImageFile: 'start.png' });
+    expect(produced.kind).toBe('image');
+    expect(produced.jobId).toBe('img-1');
+    expect(starting.kind).toBe('image');
+    expect(starting.jobId).toBeUndefined();
   });
 
   it('does not use an unservable starting image', () => {

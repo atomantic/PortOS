@@ -31,20 +31,32 @@ import { videoSrcForJob, videoPosterForJob } from '../../lib/creativeDirectorPre
  *                  would be redundant. Off by default — the grid must never
  *                  fetch mp4s on its own (`preload="none"` only holds while
  *                  this is false).
+ *   src?         — explicit video URL, overriding the `<jobId>.mp4` guess below.
+ *                  Required whenever the id is NOT the filename stem: the
+ *                  timeline renderer (a CD project's stitched final cut) mints
+ *                  `timeline-<project>-<ts>.mp4` beside a `randomUUID()` id, so
+ *                  reconstructing the path 404s. Resolve one with
+ *                  `useVideoFileSrc(jobId)`. The POSTER is deliberately still
+ *                  derived from `jobId` — `generateThumbnail` always writes
+ *                  `<jobId>.jpg`, on both the clip and timeline paths.
  */
-export default function ScenePreview({ jobId, label, aspectClass = 'aspect-video', autoPlay = false }) {
+export default function ScenePreview({ jobId, label, aspectClass = 'aspect-video', autoPlay = false, src = null }) {
   const [missing, setMissing] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  // Reset on `src` too, not just `jobId`: a caller resolving the real filename
+  // asynchronously renders once with src=null (the reconstructed guess) and
+  // again once it lands. Without this, an error recorded against the guess
+  // would pin "media missing" over the correct URL that arrived a tick later.
   useEffect(() => {
     setMissing(false);
     setAttempt(0);
-  }, [jobId]);
+  }, [jobId, src]);
 
   if (!jobId) {
     return <div className={`bg-port-bg ${aspectClass} flex items-center justify-center text-port-text-muted text-xs`}>no render yet</div>;
   }
   const cacheBust = attempt > 0 ? `?retry=${attempt}` : '';
-  const videoSrc = `${videoSrcForJob(jobId)}${cacheBust}`;
+  const videoSrc = `${src || videoSrcForJob(jobId)}${cacheBust}`;
   const posterSrc = `${videoPosterForJob(jobId)}${cacheBust}`;
   if (missing) {
     return (
