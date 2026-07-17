@@ -197,12 +197,29 @@ export const filterGenerationModels = (models) =>
  * lists untouched — `isVisionModel` is a local-name heuristic and would wrongly
  * hide multimodal cloud models whose ids don't encode vision (`gpt-4o`,
  * `claude-*`). Pass as `useProviderModels({ modelFilter: visionLocalModelFilter })`.
+ *
+ * `visionModelIds` is the AUTHORITATIVE set the server reports from each
+ * backend's own capability metadata (Ollama `/api/show`, LM Studio
+ * `type: 'vlm'`) — see `useVisionModelIds`. It is unioned with, not substituted
+ * for, the id regex: the regex alone goes stale every time a new multimodal
+ * family ships (it knew `gemma-3` but not `gemma4`, so a user with only
+ * `gemma4:e4b` + `qwen3.6:35b` installed saw an EMPTY vision picker), while the
+ * authoritative set alone can't speak for a custom provider pointing at a
+ * remote host the server never enumerated. Pass `null` (the default) when the
+ * list hasn't loaded — a `null` set degrades to today's regex-only behavior,
+ * whereas an EMPTY set correctly means "fetched: no vision models installed".
+ * The union is still intersected with the provider's own `models` list by the
+ * callers below, so an id can never leak onto a provider that lacks it.
+ *
  * @param {string} id
  * @param {{endpoint?:string,name?:string}} [provider]
+ * @param {Set<string>|null} [visionModelIds]
  * @returns {boolean}
  */
-export const visionLocalModelFilter = (id, provider) =>
-  localBackendForProvider(provider) ? isVisionModel(id) : true;
+export const visionLocalModelFilter = (id, provider, visionModelIds = null) =>
+  localBackendForProvider(provider)
+    ? visionModelIds?.has(id) === true || isVisionModel(id)
+    : true;
 
 /**
  * Classify a provider as a local-LLM backend by its id/endpoint/name, so callers
@@ -433,9 +450,11 @@ export const assignmentProviderOptions = (entry, providers) => {
  * When `entry.modelFilter === 'vision'`, LOCAL backends (Ollama / LM Studio)
  * are reduced to vision-capable models via `visionLocalModelFilter` so the
  * Scene Evaluation (and other vision) pickers can't offer text-only ids.
- * Cloud/API providers are left intact by that filter.
+ * Cloud/API providers are left intact by that filter. Pass `visionModelIds`
+ * (from `useVisionModelIds`) so that reduction uses the backend's own
+ * capability metadata instead of the id regex alone.
  */
-export const assignmentModelOptions = (entry, providers, providerId) => {
+export const assignmentModelOptions = (entry, providers, providerId, visionModelIds = null) => {
   const provider = providers.find((p) => p.id === providerId);
   const raw = Array.isArray(entry?.modelOptions)
     ? entry.modelOptions
@@ -446,7 +465,7 @@ export const assignmentModelOptions = (entry, providers, providerId) => {
     .map((m) => (typeof m === 'string' ? m : m?.id))
     .filter(Boolean);
   if (entry?.modelFilter === 'vision') {
-    return models.filter((id) => visionLocalModelFilter(id, provider));
+    return models.filter((id) => visionLocalModelFilter(id, provider, visionModelIds));
   }
   return models;
 };
@@ -457,13 +476,13 @@ export const assignmentModelOptions = (entry, providers, providerId) => {
  * filtered options — a local backend's text-only `defaultModel` must not be
  * seeded into the Scene Evaluation picker.
  */
-export const assignmentDefaultModel = (entry, providers, providerId) => {
+export const assignmentDefaultModel = (entry, providers, providerId, visionModelIds = null) => {
   if (!providerId) return '';
   const provider = providers.find((p) => p.id === providerId);
   if (!provider) return '';
   const def = provider.defaultModel || '';
   if (entry?.modelFilter !== 'vision') return def;
-  const models = assignmentModelOptions(entry, providers, providerId);
+  const models = assignmentModelOptions(entry, providers, providerId, visionModelIds);
   if (def && models.includes(def)) return def;
   return models[0] || '';
 };

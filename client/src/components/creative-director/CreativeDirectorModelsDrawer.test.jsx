@@ -2,13 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
-vi.mock('../../services/api', () => ({ getAiAssignments: vi.fn() }));
+vi.mock('../../services/api', () => ({ getAiAssignments: vi.fn(), updateAiAssignment: vi.fn() }));
 vi.mock('../../services/apiCreativeDirector.js', () => ({ updateCreativeDirectorProject: vi.fn() }));
+vi.mock('../../services/apiLocalLlm', () => ({ getVisionModels: vi.fn() }));
 vi.mock('../ui/Toast', () => ({ default: { success: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
 import CreativeDirectorModelsDrawer from './CreativeDirectorModelsDrawer.jsx';
-import { getAiAssignments } from '../../services/api';
+import { getAiAssignments, updateAiAssignment } from '../../services/api';
 import { updateCreativeDirectorProject } from '../../services/apiCreativeDirector.js';
+import { getVisionModels } from '../../services/apiLocalLlm';
 
 const ASSIGNMENTS = {
   providers: [
@@ -45,6 +47,9 @@ const renderDrawer = (project, props = {}) => render(
 beforeEach(() => {
   vi.clearAllMocks();
   getAiAssignments.mockResolvedValue(ASSIGNMENTS);
+  // Default: the local backends report no vision models, so the id regex alone
+  // decides — the pre-`useVisionModelIds` behavior.
+  getVisionModels.mockResolvedValue({ models: [] });
 });
 
 describe('CreativeDirectorModelsDrawer', () => {
@@ -98,5 +103,126 @@ describe('CreativeDirectorModelsDrawer', () => {
     expect(optionValues).not.toContain('llama3.2:latest');
     // Text-only default is replaced by the first eligible VLM.
     expect(modelSelect.value).toBe('qwen2.5vl:latest');
+  });
+
+  // The reported bug: the client id regex knows `gemma-3` but not `gemma4`, so a
+  // user whose only installed VLMs are gemma4/qwen3.6 saw an EMPTY Scene
+  // evaluation model picker. The server already knows better via Ollama's
+  // /api/show capabilities, so its verdict is unioned in.
+  it('offers vision models the id regex misses but the server reports as vision-capable', async () => {
+    getVisionModels.mockResolvedValue({
+      models: [
+        { providerId: 'ollama', backend: 'ollama', id: 'gemma4:26b', vision: true },
+        { providerId: 'ollama', backend: 'ollama', id: 'llama3.2:latest', vision: true },
+      ],
+    });
+    renderDrawer({ id: 'cd-1', name: 'Demo', modelOverrides: {} });
+    await waitFor(() => expect(screen.getByLabelText('Scene evaluation provider')).toBeTruthy());
+    await waitFor(() => expect(getVisionModels).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByLabelText('Scene evaluation provider'), { target: { value: 'ollama' } });
+
+    const optionValues = Array.from(
+      screen.getByLabelText('Scene evaluation model').querySelectorAll('option'),
+    ).map((o) => o.value);
+    // Server-reported ids the regex would have hidden.
+    expect(optionValues).toContain('gemma4:26b');
+    expect(optionValues).toContain('llama3.2:latest');
+    // Union, not replacement — regex-matched ids the server didn't list survive.
+    expect(optionValues).toContain('qwen2.5vl:latest');
+    expect(optionValues).toContain('llava:latest');
+  });
+
+  it('does not fetch vision models while closed', async () => {
+    // The drawer stays mounted on the page; the endpoint asks Ollama for every
+    // installed model's capabilities, so a closed drawer must not pay for it.
+    render(
+      <MemoryRouter>
+        <CreativeDirectorModelsDrawer open={false} onClose={vi.fn()} project={{ id: 'cd-1', name: 'Demo' }} />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(getAiAssignments).not.toHaveBeenCalled());
+    expect(getVisionModels).not.toHaveBeenCalled();
+  });
+
+  it('falls back to the id regex when the vision-model fetch fails', async () => {
+    getVisionModels.mockRejectedValue(new Error('ollama down'));
+    renderDrawer({ id: 'cd-1', name: 'Demo', modelOverrides: {} });
+    await waitFor(() => expect(screen.getByLabelText('Scene evaluation provider')).toBeTruthy());
+
+    fireEvent.change(screen.getByLabelText('Scene evaluation provider'), { target: { value: 'ollama' } });
+
+    const optionValues = Array.from(
+      screen.getByLabelText('Scene evaluation model').querySelectorAll('option'),
+    ).map((o) => o.value);
+    expect(optionValues).toContain('qwen2.5vl:latest');
+    expect(optionValues).not.toContain('llama3.2:latest');
+  });
+
+  it('warns instead of showing a bare text box when a vision provider has no VLM', async () => {
+    getAiAssignments.mockResolvedValue({
+      ...ASSIGNMENTS,
+      providers: [
+        ...ASSIGNMENTS.providers.filter((p) => p.id !== 'ollama'),
+        // Text-only local backend — nothing survives the vision filter.
+        { id: 'ollama', name: 'Ollama', type: 'api', enabled: true, defaultModel: 'llama3.2:latest', models: ['llama3.2:latest'] },
+      ],
+    });
+    renderDrawer({ id: 'cd-1', name: 'Demo', modelOverrides: {} });
+    await waitFor(() => expect(screen.getByLabelText('Scene evaluation provider')).toBeTruthy());
+
+    fireEvent.change(screen.getByLabelText('Scene evaluation provider'), { target: { value: 'ollama' } });
+
+    expect(screen.getByText(/No vision-capable models found/i)).toBeTruthy();
+  });
+
+  describe('global scope', () => {
+    const renderGlobal = (props = {}) => render(
+      <MemoryRouter>
+        <CreativeDirectorModelsDrawer scope="global" open onClose={vi.fn()} {...props} />
+      </MemoryRouter>,
+    );
+
+    it('seeds drafts from the CD-wide assignment defaults', async () => {
+      getAiAssignments.mockResolvedValue({
+        ...ASSIGNMENTS,
+        assignments: ASSIGNMENTS.assignments.map((a) => (
+          a.id === 'settings.creativeDirector.treatment'
+            ? { ...a, providerId: 'agent-a', model: 'a-big' }
+            : a
+        )),
+      });
+      renderGlobal();
+      await waitFor(() => expect(screen.getByLabelText('Treatment provider')).toBeTruthy());
+      expect(screen.getByLabelText('Treatment provider').value).toBe('agent-a');
+      expect(screen.getByLabelText('Treatment model').value).toBe('a-big');
+      // Global scope pins the system default, so there is no "inherit" hint.
+      expect(screen.queryByText(/Inherit:/)).toBeNull();
+    });
+
+    it('saves only the changed stage through the AI assignment endpoint', async () => {
+      updateAiAssignment.mockResolvedValue(ASSIGNMENTS);
+      renderGlobal();
+      await waitFor(() => expect(screen.getByLabelText('Treatment provider')).toBeTruthy());
+
+      fireEvent.change(screen.getByLabelText('Treatment provider'), { target: { value: 'agent-a' } });
+      fireEvent.click(screen.getByRole('button', { name: /Save/i }));
+
+      await waitFor(() => expect(updateAiAssignment).toHaveBeenCalledTimes(1));
+      expect(updateAiAssignment.mock.calls[0][0]).toBe('settings.creativeDirector.treatment');
+      expect(updateAiAssignment.mock.calls[0][1]).toEqual({ providerId: 'agent-a', model: 'a-default' });
+      // Untouched stages are not PUT.
+      expect(updateAiAssignment.mock.calls.map((c) => c[0])).not.toContain('settings.creativeDirector.plan');
+    });
+
+    it('does not write the project record', async () => {
+      updateAiAssignment.mockResolvedValue(ASSIGNMENTS);
+      renderGlobal();
+      await waitFor(() => expect(screen.getByLabelText('Production plan provider')).toBeTruthy());
+      fireEvent.change(screen.getByLabelText('Production plan provider'), { target: { value: 'agent-a' } });
+      fireEvent.click(screen.getByRole('button', { name: /Save/i }));
+      await waitFor(() => expect(updateAiAssignment).toHaveBeenCalled());
+      expect(updateCreativeDirectorProject).not.toHaveBeenCalled();
+    });
   });
 });

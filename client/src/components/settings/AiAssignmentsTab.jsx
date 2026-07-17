@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { ArrowRight, Bot, RefreshCw, Save, Search } from 'lucide-react';
 import toast from '../ui/Toast';
 import { getAiAssignments, updateAiAssignment } from '../../services/api';
+import useVisionModelIds from '../../hooks/useVisionModelIds.js';
 import {
   providerDisplayName,
   assignmentProviderOptions,
@@ -45,6 +46,10 @@ export default function AiAssignmentsTab() {
   const [fromProvider, setFromProvider] = useState('');
   const [toProvider, setToProvider] = useState('');
   const [bulkSaving, setBulkSaving] = useState(false);
+  // Authoritative vision-capable ids straight from the local backends, so a
+  // vision-filtered row (Scene evaluation) isn't reduced to an empty list by
+  // the client's id regex not knowing a newer VLM family.
+  const visionModelIds = useVisionModelIds();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -131,7 +136,7 @@ export default function AiAssignmentsTab() {
     const savedIds = [];
     for (const entry of targets) {
       // Vision-filtered rows seed the first eligible VLM, not a text-only default.
-      const targetDefaultModel = assignmentDefaultModel(entry, data.providers, toProvider);
+      const targetDefaultModel = assignmentDefaultModel(entry, data.providers, toProvider, visionModelIds);
       const nextModel = entry.modelEditable === false ? (drafts[entry.id]?.model || '') : targetDefaultModel;
       const next = await updateAiAssignment(entry.id, {
         providerId: toProvider,
@@ -252,7 +257,7 @@ export default function AiAssignmentsTab() {
             {filtered.map((entry) => {
               const draft = drafts[entry.id] || getDraft(entry);
               const providerOptions = assignmentProviderOptions(entry, data.providers);
-              const modelOptions = assignmentModelOptions(entry, data.providers, draft.providerId);
+              const modelOptions = assignmentModelOptions(entry, data.providers, draft.providerId, visionModelIds);
               const dirty = !sameDraft(entry, draft);
               return (
                 <tr key={entry.id} className="align-top">
@@ -274,7 +279,7 @@ export default function AiAssignmentsTab() {
                           const nextProviderId = e.target.value;
                           // Vision-filtered rows (e.g. Scene evaluation) seed the
                           // first eligible VLM when the provider default is text-only.
-                          const nextDefault = assignmentDefaultModel(entry, data.providers, nextProviderId);
+                          const nextDefault = assignmentDefaultModel(entry, data.providers, nextProviderId, visionModelIds);
                           setDraft(entry.id, { providerId: nextProviderId, model: entry.modelEditable === false ? draft.model : nextDefault });
                         }}
                         aria-label={`Provider for ${entry.label}`}

@@ -428,6 +428,27 @@ describe('visionLocalModelFilter', () => {
     expect(visionLocalModelFilter('nomic-embed-text', ollama)).toBe(false);
   });
 
+  it('accepts a server-reported vision id the stale id regex does not know', () => {
+    // The id regex knows `gemma-3` but not `gemma4` — without the authoritative
+    // set, a user whose only VLMs are gemma4/qwen3.6 gets an empty picker.
+    expect(visionLocalModelFilter('gemma4:e4b', ollama)).toBe(false);
+    expect(visionLocalModelFilter('gemma4:e4b', ollama, new Set(['gemma4:e4b']))).toBe(true);
+    expect(visionLocalModelFilter('qwen3.6:35b', ollama, new Set(['qwen3.6:35b']))).toBe(true);
+  });
+
+  it('unions rather than replaces — the set never vetoes a regex match', () => {
+    // Fetched-but-empty (no local VLM reported) still keeps regex matches, and a
+    // set that omits a model the regex knows must not hide it.
+    expect(visionLocalModelFilter('llava:latest', ollama, new Set())).toBe(true);
+    expect(visionLocalModelFilter('llava:latest', ollama, new Set(['gemma4:e4b']))).toBe(true);
+    // ...and it still can't smuggle a text-only model past the filter.
+    expect(visionLocalModelFilter('qwen2.5-coder:32b', ollama, new Set(['gemma4:e4b']))).toBe(false);
+  });
+
+  it('leaves cloud providers untouched regardless of the authoritative set', () => {
+    expect(visionLocalModelFilter('gpt-4o', cloud, new Set())).toBe(true);
+  });
+
   it('leaves cloud/API providers untouched (multimodal ids that miss the local regex pass)', () => {
     // gpt-4o / claude are multimodal but their ids do not encode "vision";
     // a local-name heuristic must NOT hide them on a cloud provider.

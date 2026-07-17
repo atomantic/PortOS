@@ -3,8 +3,9 @@ import { Link } from 'react-router-dom';
 import { Bot, Save } from 'lucide-react';
 import Drawer from '../Drawer.jsx';
 import toast from '../ui/Toast';
-import { getAiAssignments } from '../../services/api';
+import { getAiAssignments, updateAiAssignment } from '../../services/api';
 import { updateCreativeDirectorProject } from '../../services/apiCreativeDirector.js';
+import useVisionModelIds from '../../hooks/useVisionModelIds.js';
 import {
   providerDisplayName,
   assignmentProviderOptions,
@@ -12,54 +13,66 @@ import {
   assignmentDefaultModel,
 } from '../../utils/providers.js';
 
-// Per-project AI model override drawer (per-project CD provider/model pins).
-// Lets the user pin the treatment / plan / evaluation stage to a specific
-// provider + model ON THIS PROJECT, overriding the global AI Assignment. A
-// blank stage inherits the global pin (shown as the "Inherit" hint). The same
-// resolution the server does (`resolveStagePin`) is mirrored here only for the
-// inherit-hint label — the authoritative resolve happens server-side.
-
-// Each CD cognitive stage maps 1:1 to a global AI Assignment entry keyed
-// `settings.creativeDirector.<key>`, so the drawer reads that entry's
-// `providerTypes` (which providers are eligible: CLI/TUI for treatment+plan,
-// API for evaluation) and its current global provider/model (the inherit hint).
+// Creative Director provider/model pins, at either of two scopes:
+//
+//   scope="global"  — the CD-wide defaults (`settings.creativeDirector.<stage>`),
+//                     which every project inherits. Saved through the same
+//                     AI Assignments endpoint the global settings table uses.
+//   scope="project" — this project's `modelOverrides.<stage>`, overriding the
+//                     CD-wide default. A blank stage inherits (shown as a hint).
+//
+// The server's `resolveStagePin` resolves project override → CD default →
+// system default; the inherit hint mirrors that chain for display only.
 const STAGES = [
   { key: 'treatment', label: 'Treatment', help: 'Agent that turns the brief into a treatment + scene plan.' },
   { key: 'plan', label: 'Production plan', help: 'Agent that converts a production directive into an executable plan.' },
-  { key: 'evaluation', label: 'Scene evaluation', help: 'Vision model that judges each rendered scene.' },
+  {
+    key: 'evaluation',
+    label: 'Scene evaluation',
+    // Spelled out because the provider list here looks "missing" otherwise: this
+    // stage is a direct HTTP vision call (sceneEvaluator's `usableApiProvider`
+    // requires `type === 'api'`), so agent CLI/TUI providers are not eligible
+    // and pinning one would be silently ignored at run time.
+    help: 'Vision model that judges each rendered scene. Runs as a direct vision call, so it needs an API provider (Ollama / LM Studio) — agent CLI/TUI providers such as Claude Ollama TUI can\'t serve it.',
+  },
 ];
 
 const assignmentIdFor = (key) => `settings.creativeDirector.${key}`;
 
-// The inherit-hint text: what this stage resolves to when left blank.
-const inheritLabel = (entry, providers) => {
-  if (!entry?.providerId) return 'system default';
-  const name = providerDisplayName(providers, entry.providerId);
-  return entry.model ? `${name} · ${entry.model}` : name;
+// Every draft source (blank / project record / assignments payload) is the same
+// shape — one `{ providerId, model }` per stage, blank-normalized — so they
+// share one builder. Stable key order is what makes the JSON dirty-compare
+// below sound.
+const draftsFrom = (pinFor) => Object.fromEntries(STAGES.map(({ key }) => {
+  const pin = pinFor(key) || {};
+  return [key, { providerId: pin.providerId || '', model: pin.model || '' }];
+}));
+
+const blankDrafts = () => draftsFrom(() => null);
+const draftsFromProject = (project) => draftsFrom((key) => project?.modelOverrides?.[key]);
+const draftsFromAssignments = (assignments) => {
+  const byId = Object.fromEntries((assignments || []).map((e) => [e.id, e]));
+  return draftsFrom((key) => byId[assignmentIdFor(key)]);
 };
 
-const draftsFromProject = (project) => {
-  const overrides = project?.modelOverrides || {};
-  return Object.fromEntries(STAGES.map(({ key }) => {
-    const o = overrides[key] || {};
-    return [key, { providerId: o.providerId || '', model: o.model || '' }];
-  }));
-};
-
-export default function CreativeDirectorModelsDrawer({ open, onClose, project, onSaved }) {
+export default function CreativeDirectorModelsDrawer({ open, onClose, project, onSaved, scope = 'project' }) {
+  const isGlobal = scope === 'global';
   const [loading, setLoading] = useState(true);
   const [providers, setProviders] = useState([]);
   const [assignments, setAssignments] = useState([]);
-  const [drafts, setDrafts] = useState(() => draftsFromProject(project));
+  const [drafts, setDrafts] = useState(blankDrafts);
+  // The persisted values the drafts were seeded from — the dirty check compares
+  // against this rather than a live prop, so the detail page's 5s project poll
+  // can't flip `dirty` mid-edit, and the global scope (whose baseline arrives
+  // async with the assignments fetch) uses the same code path.
+  const [baseline, setBaseline] = useState(blankDrafts);
   const [saving, setSaving] = useState(false);
+  // Authoritative vision-capable ids from the backends themselves; `null` until
+  // fetched, which `assignmentModelOptions` degrades to its id regex for. Gated
+  // on `open` — this drawer stays mounted on a closed page.
+  const visionModelIds = useVisionModelIds(open);
 
-  // Re-seed drafts from the persisted project only on the open transition or a
-  // project swap — NOT on `project` object identity, which the parent's 5s poll
-  // mints fresh every tick and would otherwise wipe in-progress edits.
-  useEffect(() => {
-    if (open) setDrafts(draftsFromProject(project));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, project?.id]);
+  const seed = useCallback((next) => { setDrafts(next); setBaseline(next); }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -70,44 +83,96 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
     if (next) {
       setProviders(next.providers || []);
       setAssignments(next.assignments || []);
+      // Global drafts live in the assignments payload, so they can only be
+      // seeded once it lands.
+      if (isGlobal) seed(draftsFromAssignments(next.assignments));
     }
     setLoading(false);
-  }, []);
+  }, [isGlobal, seed]);
 
   useEffect(() => { if (open) load(); }, [open, load]);
+
+  // Project drafts come off the record, so re-seed on the open transition or a
+  // project swap — NOT on `project` object identity, which the parent's 5s poll
+  // mints fresh every tick and would otherwise wipe in-progress edits.
+  useEffect(() => {
+    if (open && !isGlobal) seed(draftsFromProject(project));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, isGlobal, project?.id]);
 
   const entryById = useMemo(
     () => Object.fromEntries((assignments || []).map((e) => [e.id, e])),
     [assignments],
   );
 
-  // draftsFromProject normalizes every stage to a stable key order, so a plain
-  // JSON compare against the persisted project is a sound dirty check.
+  // Both seeds normalize every stage to a stable key order, so a plain JSON
+  // compare is a sound dirty check.
   const dirty = useMemo(
-    () => JSON.stringify(drafts) !== JSON.stringify(draftsFromProject(project)),
-    [drafts, project],
+    () => JSON.stringify(drafts) !== JSON.stringify(baseline),
+    [drafts, baseline],
   );
 
   const setStage = (key, patch) =>
     setDrafts((prev) => ({ ...prev, [key]: { ...prev[key], ...patch } }));
 
-  const handleSave = async () => {
-    setSaving(true);
+  // The inherit-hint text: what a blank project stage resolves to. Reads the
+  // CD-wide default off the assignment entry, falling back to the system default.
+  const inheritLabel = (entry) => {
+    if (!entry?.providerId) return 'system default';
+    const name = providerDisplayName(providers, entry.providerId);
+    return entry.model ? `${name} · ${entry.model}` : name;
+  };
+
+  const saveGlobal = async () => {
+    // Only PUT stages that actually changed — each call re-derives the whole
+    // assignments payload server-side.
+    let latest = null;
+    for (const { key, label } of STAGES) {
+      const d = drafts[key];
+      if (JSON.stringify(d) === JSON.stringify(baseline[key])) continue;
+      const next = await updateAiAssignment(
+        assignmentIdFor(key),
+        { providerId: d.providerId || null, model: d.model || null },
+        { silent: true },
+      ).catch((err) => {
+        toast.error(`Failed to save ${label}: ${err.message}`);
+        return null;
+      });
+      if (!next) return null;
+      latest = next;
+    }
+    return latest;
+  };
+
+  const saveProject = async () => {
     // Only send stages that name a provider; a blank provider means "inherit".
     const modelOverrides = {};
     for (const { key } of STAGES) {
       const d = drafts[key];
       if (d?.providerId) modelOverrides[key] = { providerId: d.providerId, ...(d.model ? { model: d.model } : {}) };
     }
-    const updated = await updateCreativeDirectorProject(project.id, { modelOverrides }, { silent: true })
+    return updateCreativeDirectorProject(project.id, { modelOverrides }, { silent: true })
       .catch((err) => {
         toast.error(err.message || 'Failed to save model overrides');
         return null;
       });
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    const result = isGlobal ? await saveGlobal() : await saveProject();
     setSaving(false);
-    if (!updated) return;
-    onSaved?.(updated.modelOverrides || {});
-    toast.success('Project model overrides saved');
+    if (!result) return;
+    if (isGlobal) {
+      setAssignments(result.assignments || []);
+      setProviders(result.providers || []);
+      setBaseline(drafts);
+      onSaved?.(drafts);
+      toast.success('Creative Director model defaults saved');
+    } else {
+      onSaved?.(result.modelOverrides || {});
+      toast.success('Project model overrides saved');
+    }
     onClose?.();
   };
 
@@ -115,8 +180,8 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
     <Drawer
       open={open}
       onClose={onClose}
-      title="AI models for this project"
-      subtitle={project?.name}
+      title={isGlobal ? 'Creative Director model defaults' : 'AI models for this project'}
+      subtitle={isGlobal ? 'Applies to every Creative Director project' : project?.name}
       size="md"
     >
       {loading ? (
@@ -124,25 +189,41 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
       ) : (
         <div className="space-y-5">
           <p className="text-xs text-gray-400">
-            Pin the provider + model for each Creative Director stage on this project. Leave a
-            stage on <span className="text-gray-300">Inherit</span> to use the global{' '}
-            <Link to="/settings/ai-assignments" className="text-port-accent hover:underline">AI Assignment</Link>.
+            {isGlobal ? (
+              <>
+                Pin the provider + model every Creative Director project uses by default. Leave a
+                stage blank to use the <span className="text-gray-300">system default provider</span>.
+                An individual project can still override these from its own Models drawer. Also
+                editable from{' '}
+                <Link to="/settings/ai-assignments" className="text-port-accent hover:underline">AI Assignments</Link>.
+              </>
+            ) : (
+              <>
+                Pin the provider + model for each Creative Director stage on this project. Leave a
+                stage on <span className="text-gray-300">Inherit</span> to use the{' '}
+                <Link to="/creative-director" className="text-port-accent hover:underline">Creative Director default</Link>.
+              </>
+            )}
           </p>
 
           {STAGES.map((stage) => {
             const entry = entryById[assignmentIdFor(stage.key)];
             const draft = drafts[stage.key] || { providerId: '', model: '' };
             const providerOptions = assignmentProviderOptions(entry, providers);
-            const modelOptions = assignmentModelOptions(entry, providers, draft.providerId);
-            const overriding = !!draft.providerId;
+            const modelOptions = assignmentModelOptions(entry, providers, draft.providerId, visionModelIds);
+            const pinned = !!draft.providerId;
+            // A vision stage on a local backend with nothing to offer means no
+            // VLM is installed — say so instead of showing a bare text box that
+            // reads as a broken dropdown.
+            const noVisionModels = pinned && entry?.modelFilter === 'vision' && modelOptions.length === 0;
             return (
               <section key={stage.key} className="bg-port-bg border border-port-border rounded-lg p-3 space-y-2">
                 <div className="flex items-center gap-2">
                   <Bot size={15} className="text-port-accent shrink-0" />
                   <h3 className="text-sm font-medium text-white">{stage.label}</h3>
-                  {!overriding && (
+                  {!pinned && !isGlobal && (
                     <span className="ml-auto text-[11px] px-1.5 py-0.5 rounded bg-port-card border border-port-border text-gray-400">
-                      Inherit: {inheritLabel(entry, providers)}
+                      Inherit: {inheritLabel(entry)}
                     </span>
                   )}
                 </div>
@@ -159,22 +240,22 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
                         // Vision-filtered stages (scene evaluation) seed the first
                         // eligible VLM when the provider's default is text-only.
                         const nextDefault = providerId
-                          ? assignmentDefaultModel(entry, providers, providerId)
+                          ? assignmentDefaultModel(entry, providers, providerId, visionModelIds)
                           : '';
                         // Seed the provider's default model on switch; clearing the
-                        // provider (Inherit) clears the model too.
+                        // provider clears the model too.
                         setStage(stage.key, { providerId, model: nextDefault });
                       }}
                       className="bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white"
                     >
-                      <option value="">Inherit global</option>
+                      <option value="">{isGlobal ? 'System default' : 'Inherit default'}</option>
                       {providerOptions.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
                     </select>
                   </label>
 
                   <label className="flex flex-col gap-1">
                     <span className="text-[11px] uppercase tracking-wide text-gray-500">Model</span>
-                    {!overriding ? (
+                    {!pinned ? (
                       <div className="text-sm text-gray-600 py-2">—</div>
                     ) : modelOptions.length > 0 ? (
                       <select
@@ -197,6 +278,14 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
                     )}
                   </label>
                 </div>
+
+                {noVisionModels && (
+                  <p className="text-xs text-port-warning">
+                    No vision-capable models found on this provider.{' '}
+                    <Link to="/settings/local-llm" className="underline hover:text-port-warning/80">Install a VLM</Link>
+                    {' '}(e.g. qwen3-vl, gemma4) or type a model id above.
+                  </p>
+                )}
               </section>
             );
           })}
