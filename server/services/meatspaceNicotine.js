@@ -105,7 +105,7 @@ function recalcDayTotal(entry) {
  *   because a fake 0 there reads as "you have never logged anything" (#2726).
  */
 async function loadDailyLog({ strict = false } = {}) {
-  const ml = await readDailyLogIfEnabled();
+  const ml = await readDailyLogIfEnabled({ strict });
   if (ml) return ml;
   const raw = await readJSONFile(DAILY_LOG_FILE, { entries: [], lastEntryDate: null }, { allowArray: false, strict });
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {

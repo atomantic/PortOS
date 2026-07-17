@@ -11,6 +11,10 @@ import { makePathsProxy } from '../lib/mockPathsDataRoot.js';
 const TEST_DATA_ROOT = mkdtempSync(join(tmpdir(), 'character-skills-test-'));
 const MEATSPACE_DIR = join(TEST_DATA_ROOT, 'meatspace');
 const IDENTITY_DIR = join(TEST_DATA_ROOT, 'digital-twin');
+// The MortalLoom shared store the ML-enabled cases in the "real read path" suite
+// point settings at. Kept at the temp-root so it survives the per-test MEATSPACE/
+// IDENTITY cleanups and is only read when a test flips MortalLoom on.
+const MORTALLOOM_FILE = join(TEST_DATA_ROOT, 'MortalLoom.json');
 
 vi.mock('../lib/fileUtils.js', async (importOriginal) =>
   makePathsProxy(await importOriginal(), {
@@ -18,11 +22,14 @@ vi.mock('../lib/fileUtils.js', async (importOriginal) =>
     extraOverrides: () => ({ meatspace: MEATSPACE_DIR, digitalTwin: IDENTITY_DIR }),
   }));
 
-// MortalLoom gates every health/goals read on settings. Pin it OFF so the loaders
-// deterministically fall through to the local files this suite controls — otherwise
-// a real settings read decides whether the test exercises the file path at all.
+// MortalLoom gates every health/goals read on settings. Default it OFF so the
+// loaders deterministically fall through to the local files this suite controls —
+// otherwise a real settings read decides whether the test exercises the file path
+// at all. Mutable so the "real read path" suite can flip it ON to prove an
+// enabled-but-unreadable MortalLoom store reaches `unavailable` (#2742).
+const mlSettings = vi.hoisted(() => ({ value: {} }));
 vi.mock('./settings.js', () => ({
-  getSettings: () => Promise.resolve({}),
+  getSettings: () => Promise.resolve(mlSettings.value),
   settingsEvents: new EventEmitter(),
 }));
 
@@ -70,6 +77,7 @@ const rows = (list) => Array.from({ length: list }, (_, i) => ({ id: `r${i}` }))
 // Restore every stat to the "brand new install" baseline between tests so a test that
 // populates one domain can't leak into the next one's empty-domain assertions.
 beforeEach(() => {
+  mlSettings.value = {}; // MortalLoom OFF unless a test opts in
   stats.universes = 0;
   stats.works = 0;
   stats.catalog = { total: 0, scraps: 0 };
@@ -427,6 +435,29 @@ describe('the real read path: an unreadable file is unavailable, an absent one i
       }));
       expect(await skillOf('vitalist')).toMatchObject({ value: 2, unavailable: false });
     });
+
+    // #2742: an enabled-but-unreadable MortalLoom store used to return null exactly
+    // like "sync disabled" and fall through to a local health file that, on an
+    // ML-backed install, was a genuine ENOENT — scoring a real-looking level 0. The
+    // strict read must now surface the unreadable shared store as unavailable.
+    it('is unavailable when MortalLoom sync is on but the shared store is unreadable (#2742)', async () => {
+      writeFileSync(MORTALLOOM_FILE, '{"bodyEntries": [');
+      mlSettings.value = { mortalloom: { enabled: true, path: MORTALLOOM_FILE } };
+      expect(await skillOf('vitalist')).toMatchObject({ level: null, value: null, unavailable: true });
+    });
+
+    it('counts real health logs from the MortalLoom store when sync is on (#2742)', async () => {
+      // Proves the strict read genuinely reaches the shared store — without it, the
+      // unavailable case above could pass for an unrelated reason.
+      writeFileSync(MORTALLOOM_FILE, JSON.stringify({
+        bodyEntries: [
+          { id: 'B1', date: '2026-01-01', weightLbs: 180 },
+          { id: 'B2', date: '2026-01-02', weightLbs: 181 },
+        ],
+      }));
+      mlSettings.value = { mortalloom: { enabled: true, path: MORTALLOOM_FILE } };
+      expect(await skillOf('vitalist')).toMatchObject({ value: 2, unavailable: false });
+    });
   });
 
   describe('strategist (goals)', () => {
@@ -450,6 +481,24 @@ describe('the real read path: an unreadable file is unavailable, an absent one i
       writeFileSync(join(IDENTITY_DIR, 'goals.json'), JSON.stringify({
         goals: [{ id: 'g1', title: 'Example goal', checkIns: [{ id: 'c1' }, { id: 'c2' }], progressHistory: [{ id: 'p1' }] }],
       }));
+      expect(await skillOf('strategist')).toMatchObject({ value: 3, unavailable: false });
+    });
+
+    // #2742: the goals path probes MortalLoom first (mlArrayIfEnabled('goals')).
+    // An enabled-but-unreadable shared store used to be indistinguishable from
+    // "sync disabled" and fell through to the local mirror; the strict read must
+    // now report the unreadable store as unavailable rather than a fake 0.
+    it('is unavailable when MortalLoom sync is on but the shared store is unreadable (#2742)', async () => {
+      writeFileSync(MORTALLOOM_FILE, '{"goals": [');
+      mlSettings.value = { mortalloom: { enabled: true, path: MORTALLOOM_FILE } };
+      expect(await skillOf('strategist')).toMatchObject({ level: null, value: null, unavailable: true });
+    });
+
+    it('counts real goal discipline from the MortalLoom store when sync is on (#2742)', async () => {
+      writeFileSync(MORTALLOOM_FILE, JSON.stringify({
+        goals: [{ id: 'G1', title: 'Example goal', checkIns: [{ id: 'c1' }, { id: 'c2' }], progressHistory: [{ id: 'p1' }] }],
+      }));
+      mlSettings.value = { mortalloom: { enabled: true, path: MORTALLOOM_FILE } };
       expect(await skillOf('strategist')).toMatchObject({ value: 3, unavailable: false });
     });
   });
