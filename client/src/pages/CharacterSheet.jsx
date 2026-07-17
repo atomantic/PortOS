@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
-  Sword, Star, Moon, ScrollText, Shield, Heart,
+  Sword, Star, Moon, ScrollText, Heart, UserRound, Cake,
   Sparkles, RefreshCw, Dices, X, ChevronDown, Zap, Image, Activity
 } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
@@ -147,10 +148,15 @@ function MetricsCard({ metrics }) {
 }
 
 export default function CharacterSheet() {
+  const navigate = useNavigate();
   const [char, setChar] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
   const [activeAction, setActiveAction] = useState(null);
+  // The D&D damage/rest/dice/XP mechanics are legacy relative to the human-centered sheet
+  // (#2677) — kept for back-compat with existing character.json + the RPG endpoints, but
+  // collapsed out of the primary view so age-level / skills / goals / metrics lead. Opt-in.
+  const [showLegacy, setShowLegacy] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [editingClass, setEditingClass] = useState(false);
   const [nameVal, setNameVal] = useState('');
@@ -313,10 +319,14 @@ export default function CharacterSheet() {
       setNameVal(char.name || '');
       return;
     }
-    if (!(nameVal.trim() && nameVal.trim() !== char.name)) return;
+    // Save on any real change, INCLUDING clearing back to '' (which returns the sheet to the
+    // "Your name" placeholder). Only a no-op — the trimmed value equal to what's persisted —
+    // skips the PUT. Compare against `char.name || ''` so a blank→blank edit doesn't churn.
+    const nextName = nameVal.trim();
+    if (nextName === (char.name || '')) return;
     setNameSaving(true);
     try {
-      const data = await charPut({ name: nameVal.trim() });
+      const data = await charPut({ name: nextName });
       setChar(data);
     } catch (err) {
       toast.error(err.message || 'Failed to save name');
@@ -339,8 +349,11 @@ export default function CharacterSheet() {
 
   const handleClassSave = async () => {
     try {
-      if (classVal.trim() && classVal !== char.class) {
-        const data = await charPut({ class: classVal.trim() });
+      // Save on any real change, including clearing back to '' (restores the "Add a title"
+      // placeholder); only a no-op skips the PUT.
+      const nextClass = classVal.trim();
+      if (nextClass !== (char.class || '')) {
+        const data = await charPut({ class: nextClass });
         setChar(data);
       }
     } catch (err) { toast.error(err.message || 'Failed to save class'); }
@@ -400,8 +413,8 @@ export default function CharacterSheet() {
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-port-border bg-port-card">
         <div className="flex items-center gap-3">
-          <Shield className="w-6 h-6 text-port-accent" />
-          <h1 className="text-xl font-semibold text-white">Character Sheet</h1>
+          <UserRound className="w-6 h-6 text-port-accent" />
+          <h1 className="text-xl font-semibold text-white">Character</h1>
         </div>
         <button
           onClick={() => { setLoading(true); load(); }}
@@ -429,7 +442,7 @@ export default function CharacterSheet() {
                   <img src={char.avatarPath} alt={char.name} className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-gray-600">
-                    <Shield className="w-8 h-8" />
+                    <UserRound className="w-8 h-8" />
                   </div>
                 )}
                 {/* Progress bar overlay */}
@@ -481,10 +494,10 @@ export default function CharacterSheet() {
                     type="button"
                     onClick={startNameEdit}
                     disabled={nameSaving}
-                    aria-label={`Edit character name (currently ${char.name || 'Unnamed Hero'})`}
+                    aria-label={`Edit your name (currently ${char.name || 'Your name'})`}
                     className="text-2xl font-bold text-white cursor-pointer hover:text-port-accent transition-colors truncate text-left bg-transparent border-0 p-0 disabled:opacity-60 disabled:cursor-wait"
                   >
-                    {char.name || 'Unnamed Hero'}
+                    {char.name || 'Your name'}
                   </button>
                 )}
               </div>
@@ -503,52 +516,47 @@ export default function CharacterSheet() {
                     onClick={() => setEditingClass(true)}
                     {...clickableProps(() => setEditingClass(true))}
                     className="text-sm text-gray-400 cursor-pointer hover:text-port-accent transition-colors"
-                    title="Click to edit class"
+                    title="Click to edit your title"
                   >
-                    {char.class || 'Adventurer'}
+                    {char.class || 'Add a title'}
                   </span>
                 )}
               </div>
             </div>
 
-            {/* Level Badge */}
-            <div className="flex-shrink-0 flex items-center gap-3">
-              <div className="relative w-20 h-20 flex items-center justify-center rounded-full border-2 border-port-accent bg-port-bg">
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-port-accent">{char.level ?? '—'}</div>
-                  <div className="text-[10px] uppercase tracking-wider text-gray-500">Level</div>
+            {/* Level Badge — life experience = age (#2673). Rendered only when a birthDate is
+                set; when the level is null the single call-to-action is the birth-date prompt
+                banner below (avoids two adjacent CTAs firing the same navigation). */}
+            {char.level != null && (
+              <div className="flex-shrink-0 flex items-center gap-3">
+                <div className="relative w-20 h-20 flex items-center justify-center rounded-full border-2 border-port-accent bg-port-bg">
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-port-accent">{char.level}</div>
+                    <div className="text-[10px] uppercase tracking-wider text-gray-500">Level</div>
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
 
-          {/* HP Bar */}
-          <div className="mt-4">
-            <div className="flex items-center justify-between mb-1">
-              <div className="flex items-center gap-1.5 text-sm font-medium text-gray-300">
-                <Heart className="w-4 h-4 text-port-error" />
-                HP
+          {/* Birth-date prompt — the human-centered level is age (#2673). Until a birth date
+              is on record there is no level to show, so surface a clear call to set it,
+              deep-linking to the age editor where the field lives. */}
+          {char.level == null && (
+            <button
+              type="button"
+              onClick={() => navigate('/meatspace/age')}
+              className="mt-4 w-full flex items-center gap-3 px-4 py-3 rounded-lg border border-dashed border-port-accent/50 bg-port-accent/5 hover:bg-port-accent/10 text-left transition-colors"
+            >
+              <Cake className="w-5 h-5 text-port-accent flex-shrink-0" />
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-white">Set your birth date</div>
+                <div className="text-xs text-gray-400">
+                  Your level is your life experience — each year lived is a level. Add your birth date to see it.
+                </div>
               </div>
-              <span className="text-sm text-gray-400">
-                {char.hp} / {char.maxHp}
-              </span>
-            </div>
-            <div className="h-5 bg-port-bg rounded-full overflow-hidden border border-port-border">
-              <div
-                className={`h-full rounded-full transition-all duration-500 ease-out ${hpColor(hpPct)}`}
-                style={{ width: `${hpPct}%` }}
-              />
-            </div>
-          </div>
-
-          {/* XP — a cumulative stat now (no longer a level-progress bar; level is age-based) */}
-          <div className="mt-3 flex items-center justify-between">
-            <div className="flex items-center gap-1.5 text-sm font-medium text-gray-300">
-              <Sparkles className="w-4 h-4 text-port-warning" />
-              XP
-            </div>
-            <span className="text-sm text-gray-400">{char.xp}</span>
-          </div>
+            </button>
+          )}
 
           {/* Progress toward the next birthday (fractional part of the current year of life) */}
           {char.level != null && (
@@ -580,8 +588,51 @@ export default function CharacterSheet() {
         {/* Skills — derived per-domain from real PortOS usage (#2674) */}
         <SkillsCard skills={char.skills} />
 
-        {/* Quick Actions */}
-        <div className="bg-port-card border border-port-border rounded-xl p-4">
+        {/* Legacy RPG mechanics — demoted out of the primary view (#2677). Kept for
+            back-compat with existing character.json and the damage/rest/dice/XP + JIRA/task
+            sync endpoints (they still work); just collapsed by default so the human-centered
+            content leads. */}
+        <div className="bg-port-card border border-port-border rounded-xl">
+          <button
+            type="button"
+            onClick={() => setShowLegacy(v => !v)}
+            aria-expanded={showLegacy}
+            className="w-full flex items-center gap-2 px-4 py-3 text-left text-gray-300 hover:text-white transition-colors"
+          >
+            <Dices className="w-4 h-4 text-gray-400" />
+            <span className="text-sm font-medium">RPG mechanics</span>
+            <span className="text-xs text-gray-500 hidden sm:inline">— legacy HP, XP, dice &amp; sync</span>
+            <ChevronDown className={`w-4 h-4 text-gray-500 ml-auto transition-transform ${showLegacy ? 'rotate-180' : ''}`} />
+          </button>
+
+          {showLegacy && (
+            <div className="px-4 pb-4 pt-2 border-t border-port-border space-y-4">
+              {/* HP + XP — flat, backward-compatible mechanics (no longer scaled off level) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-1.5 text-sm font-medium text-gray-300">
+                      <Heart className="w-4 h-4 text-port-error" />
+                      HP
+                    </div>
+                    <span className="text-sm text-gray-400">{char.hp} / {char.maxHp}</span>
+                  </div>
+                  <div className="h-5 bg-port-bg rounded-full overflow-hidden border border-port-border">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ease-out ${hpColor(hpPct)}`}
+                      style={{ width: `${hpPct}%` }}
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center justify-between sm:justify-start sm:gap-2 self-end pb-1">
+                  <div className="flex items-center gap-1.5 text-sm font-medium text-gray-300">
+                    <Sparkles className="w-4 h-4 text-port-warning" />
+                    XP
+                  </div>
+                  <span className="text-sm text-gray-400">{char.xp}</span>
+                </div>
+              </div>
+
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => toggleAction('damage')}
@@ -759,15 +810,15 @@ export default function CharacterSheet() {
               </div>
             </div>
           )}
-        </div>
 
-        {/* Event Log */}
-        <div className="bg-port-card border border-port-border rounded-xl flex flex-col min-h-0">
-          <div className="flex items-center gap-2 px-4 py-3 border-b border-port-border">
-            <ScrollText className="w-4 h-4 text-gray-400" />
-            <h3 className="text-sm font-medium text-gray-300">Event Log</h3>
-            <span className="text-xs text-gray-500">({char.events?.length || 0} entries)</span>
-          </div>
+              {/* Event Log — the legacy events[] feed (damage/rest/xp/sync). Kept for
+                  back-compat; lives inside the collapsed legacy section. */}
+              <div className="bg-port-bg border border-port-border rounded-xl flex flex-col min-h-0">
+                <div className="flex items-center gap-2 px-4 py-3 border-b border-port-border">
+                  <ScrollText className="w-4 h-4 text-gray-400" />
+                  <h3 className="text-sm font-medium text-gray-300">Event Log</h3>
+                  <span className="text-xs text-gray-500">({char.events?.length || 0} entries)</span>
+                </div>
           <div className="overflow-y-auto max-h-[400px] divide-y divide-port-border/50">
             {(!char.events || char.events.length === 0) ? (
               <div className="px-4 py-8 text-center text-gray-500 text-sm">
@@ -820,7 +871,10 @@ export default function CharacterSheet() {
                 );
               })
             )}
-          </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

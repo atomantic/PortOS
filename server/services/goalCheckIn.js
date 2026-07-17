@@ -38,7 +38,7 @@ Milestones completed: ${goal.milestones?.filter(m => m.completedAt).length || 0}
 Respond with JSON only (no markdown fences): { "assessment": "string", "recommendations": ["string", ...] }`;
 }
 
-export async function runGoalCheckIn() {
+export async function runGoalCheckIn({ background = false } = {}) {
   const { getActiveProvider } = await import('./providers.js');
   const goals = await readJSONFile(GOALS_FILE, { goals: [] });
   const activeGoals = goals.goals.filter(g => g.status === 'active' && g.targetDate);
@@ -68,9 +68,13 @@ export async function runGoalCheckIn() {
     return { goal, expectedProgress, actualProgress, status, attendanceRate, prompt };
   });
 
-  // Parallelize LLM calls
+  // Parallelize LLM calls. `background` provenance comes from the caller: the
+  // scheduled fire (executeScriptJob with no `manual`) passes true, so the client
+  // coalesces per-provider error toasts — a systematically-failing provider then
+  // yields one notification, not one red toast per goal. A manual "Run now" passes
+  // false, so its failures report individually, since the user is watching.
   const llmResults = await Promise.all(
-    checkInData.map(d => callProviderAISimple(provider, provider.defaultModel, d.prompt))
+    checkInData.map(d => callProviderAISimple(provider, provider.defaultModel, d.prompt, { background }))
   );
 
   const results = [];

@@ -224,11 +224,14 @@ export async function reconcileOutcomes({ appId, existingIssues = [], now = Date
     if (!outcome) continue;
     // Diagnose WHY a non-merged proposal ended that way (#2689). Derived from the
     // issue rows the reconciler already has, so classification costs no extra
-    // tracker call. Merged/unresolved → null.
+    // tracker call. Merged/unresolved → null. `closingComment` (#2748) is the
+    // deterministic last-resort signal for a close stated only in prose; forges
+    // that don't surface comments simply pass null.
     const rejectionReason = classifyRejection({
       outcome,
       stateReason: issue.stateReason,
-      labels: issue.labels
+      labels: issue.labels,
+      closingComment: issue.closingComment
     });
     // A same-outcome record is only rewritten when the tracker reports a NEWER
     // close time (closed → reopened → re-closed): outcomeAt drives retention/GC,

@@ -52,6 +52,7 @@ import {
   getTrustShellSources,
   normalizeIssueState,
   listForgeIssues,
+  extractClosingComment,
   listBlockingIssues,
   fileProposalToForge,
   ensureForgeLabels,
@@ -1374,6 +1375,48 @@ describe('forge I/O (injected exec)', () => {
     expect(issues[0].slug).toBe('slug-a');
     expect(issues[0].state).toBe('open');
     expect(issues[1].closedAt).toBe('2026-07-01T00:00:00Z');
+  });
+
+  it('listForgeIssues requests comments and threads the closing comment on gh rows (#2748)', async () => {
+    const exec = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify([
+        {
+          number: 3,
+          title: 'C',
+          body: `x ${slugMarker('slug-c')}`,
+          state: 'CLOSED',
+          closedAt: '2026-07-02T00:00:00Z',
+          comments: [
+            { body: 'Interesting idea.' },
+            { body: 'Closing — this is out of scope for the app.' }
+          ]
+        }
+      ])
+    });
+    const { ok, issues } = await listForgeIssues({ cli: 'gh', cwd: '/x', exec });
+    expect(ok).toBe(true);
+    // The batched list call must ask gh for `comments` so no extra fetch is needed.
+    expect(exec.mock.calls[0][1]).toContain('number,title,body,state,stateReason,closedAt,url,labels,comments');
+    // The LAST comment (closest to the close) becomes the classifier's signal.
+    expect(issues[0].closingComment).toBe('Closing — this is out of scope for the app.');
+  });
+
+  it('listForgeIssues leaves closingComment null when gh returns no comments', async () => {
+    const exec = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify([{ number: 4, title: 'D', body: `x ${slugMarker('slug-d')}`, state: 'CLOSED', comments: [] }])
+    });
+    const { issues } = await listForgeIssues({ cli: 'gh', cwd: '/x', exec });
+    expect(issues[0].closingComment).toBeNull();
+  });
+
+  it('extractClosingComment returns the last non-empty comment body, else null', () => {
+    expect(extractClosingComment([{ body: 'first' }, { body: '  ' }, { body: 'last real' }])).toBe('last real');
+    expect(extractClosingComment([{ body: 'only' }])).toBe('only');
+    expect(extractClosingComment([])).toBeNull();
+    expect(extractClosingComment(null)).toBeNull();
+    expect(extractClosingComment([{ body: '   ' }, { body: null }])).toBeNull();
   });
 
   it('listForgeIssues normalizes GitLab "opened" state to open', async () => {

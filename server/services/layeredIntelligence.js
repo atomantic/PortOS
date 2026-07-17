@@ -1524,7 +1524,7 @@ export async function listForgeIssues({ cli, cwd, env, label = LI_LABEL, state =
   // gh takes the state explicitly.
   const args = cli === 'glab'
     ? ['issue', 'list', '--label', label, ...(state === 'all' ? ['--all'] : []), '-P', '100', '-F', 'json']
-    : ['issue', 'list', '--label', label, '--state', state, '--limit', '100', '--json', 'number,title,body,state,stateReason,closedAt,url,labels'];
+    : ['issue', 'list', '--label', label, '--state', state, '--limit', '100', '--json', 'number,title,body,state,stateReason,closedAt,url,labels,comments'];
   const { code, stdout } = await exec(cli, args, { cwd, env });
   if (code !== 0) return { ok: false, issues: [] };
   if (!stdout.trim()) return { ok: true, issues: [] };
@@ -1546,9 +1546,30 @@ export async function listForgeIssues({ cli, cwd, env, label = LI_LABEL, state =
       // dead href.
       url: i.url || i.web_url || null,
       labels: normalizeIssueLabels(i.labels),
+      // The rejection classifier's last-resort signal (#2748): the prose a human
+      // left when declining, for a close with no matching label/close-reason. gh
+      // returns `comments` in the same batched list call (no extra fetch); glab's
+      // `-F json` omits them, so its rows carry null and fall through to label/
+      // stateReason only (tracked in the issue's Remaining).
+      closingComment: extractClosingComment(i.comments),
       slug: extractSlugFromBody(i.body || i.description || '') || extractSlugFromBody(i.title || '')
     }))
   };
+}
+
+/**
+ * The rationale a human left when closing a proposal, for the rejection classifier
+ * (#2748). gh returns issue comments oldest-first; the LAST non-empty one sits
+ * closest to the close, so it carries the decline reason in the common case.
+ * Returns null for an issue closed with no comment — there is nothing to classify.
+ */
+export function extractClosingComment(comments) {
+  if (!Array.isArray(comments)) return null;
+  for (let i = comments.length - 1; i >= 0; i -= 1) {
+    const body = comments[i]?.body;
+    if (typeof body === 'string' && body.trim()) return body;
+  }
+  return null;
 }
 
 /**
