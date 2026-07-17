@@ -20,6 +20,11 @@
  * collapse: a fake 0 would read as "you have never written anything" when the
  * truth is "we could not tell".
  *
+ * **Reads come from a shared context.** Each `compute()` takes a `read(signalId)` from
+ * `characterSignals.js` rather than importing a domain getter itself, so the six skills and
+ * the metrics grid (#2676) — which derive from the same nine signals — cost ONE read per
+ * signal per request, not one per consumer.
+ *
  * **Known gap in that guarantee (#2726).** `readSkill` honours whatever a domain
  * reports, but it can only *detect* a failure the getter actually surfaces — by
  * rejecting, or by resolving something non-countable. Today only the DB-backed
@@ -38,15 +43,7 @@
  * reporting failure, `readSkill` already classifies it correctly.
  */
 
-import { countUniverses } from './universeBuilder.js';
-import { countWorks } from './writersRoom/local.js';
-import { getCatalogStats } from './catalogDB.js';
-import { getPostSessions } from './meatspacePost.js';
-import { getAllTrainingEntries } from './meatspacePostTraining.js';
-import { getLoggingStats } from './meatspaceLoggingStats.js';
-import { getGoals } from './identity/goals.js';
-import { countMemories } from './memoryBackend.js';
-import { countAssets } from './mediaAssetIndex/db.js';
+import { createSignalContext } from './characterSignals.js';
 
 // Skills plateau rather than growing without bound — past this the curve is
 // noise, and an unbounded level would dwarf the age-based character level.
@@ -82,12 +79,14 @@ const STAT_UNAVAILABLE = Symbol('stat-unavailable');
 
 /**
  * The registry. Each entry is `{ id, label, domain, scale, compute }`, where
- * `compute` resolves to a single non-negative number: the domain's cumulative
- * engagement.
+ * `compute(read)` resolves to a single non-negative number: the domain's cumulative
+ * engagement. `read` is the shared signal context (`characterSignals.js`) — never import a
+ * domain getter here, or this skill's reads stop being shared with the metrics grid.
  *
  * Values are **cumulative**, never streak-based: a streak resets to 0 after one
  * missed day, and a skill you have already earned should not un-learn itself
- * because you took a week off.
+ * because you took a week off. (The metrics grid reports the *streaks* off the same
+ * signals — the two are complementary readings, not duplicates.)
  */
 export const SKILLS = [
   {
@@ -106,11 +105,11 @@ export const SKILLS = [
     // COUNT(*)s that exclude tombstones exactly as listUniverses()/listWorks() filter them,
     // so this no longer materializes every universe record, the universe-run history, or
     // every work's rebuilt manifest just to read a `.length`.
-    compute: async () => {
+    compute: async (read) => {
       const [universeCount, workCount, catalog] = await Promise.all([
-        countUniverses(),
-        countWorks(),
-        getCatalogStats(),
+        read('universeCount'),
+        read('workCount'),
+        read('catalogStats'),
       ]);
       return universeCount + workCount + catalog.total + catalog.scraps;
     },
@@ -123,8 +122,8 @@ export const SKILLS = [
     // Scored sessions + training-log entries (Morse / memory practice) — the same
     // "either counts as activity" union the unified POST streak uses, so this
     // can't disagree with what the Progress page calls practice.
-    compute: async () => {
-      const [sessions, training] = await Promise.all([getPostSessions(), getAllTrainingEntries()]);
+    compute: async (read) => {
+      const [sessions, training] = await Promise.all([read('postSessions'), read('postTraining')]);
       return sessions.length + training.length;
     },
   },
@@ -135,7 +134,7 @@ export const SKILLS = [
     // Health logs are near-daily and cheap to record, so the curve is stretched
     // to keep a single week of logging from vaulting to level 3.
     scale: 5,
-    compute: async () => (await getLoggingStats()).totalLogged,
+    compute: async (read) => (await read('loggingStats')).totalLogged,
   },
   {
     id: 'strategist',
@@ -144,8 +143,8 @@ export const SKILLS = [
     scale: 3,
     // Goal *discipline*, not goal count: check-ins plus recorded progress steps.
     // Filing ten goals and never revisiting them is not strategy.
-    compute: async () => {
-      const { goals } = await getGoals();
+    compute: async (read) => {
+      const { goals } = await read('goals');
       return (goals || []).reduce(
         (sum, goal) => sum + (goal.checkIns?.length || 0) + (goal.progressHistory?.length || 0),
         0
@@ -159,7 +158,7 @@ export const SKILLS = [
     // Memories accrue fastest of any domain (a single Brain capture can mint
     // several), so this needs the flattest curve of the six.
     scale: 10,
-    compute: async () => countMemories({}),
+    compute: async (read) => read('memoryCount'),
   },
   {
     id: 'auteur',
@@ -167,7 +166,7 @@ export const SKILLS = [
     domain: 'media',
     scale: 5,
     // Rendered images + videos in the durable media asset index.
-    compute: async () => countAssets(),
+    compute: async (read) => read('assetCount'),
   },
 ];
 
@@ -179,8 +178,8 @@ export const SKILLS = [
  *     would silently read as "no activity")
  *   - `compute` resolves 0        → a real, earned level 0
  */
-async function readSkill(skill) {
-  const raw = await skill.compute().catch((err) => {
+async function readSkill(skill, read) {
+  const raw = await skill.compute(read).catch((err) => {
     // `err?.message ?? err` — a non-Error rejection (a thrown string, a rejected `undefined`)
     // would otherwise throw *inside* the catch and defeat the per-skill containment below.
     console.warn(`⚠️ Character skill ${skill.id}: stat read failed — ${err?.message ?? err}`);
@@ -206,7 +205,12 @@ async function readSkill(skill) {
  * to its own skill, so one unreachable domain (e.g. Postgres down for the catalog
  * or memory reads) degrades that entry to `unavailable` instead of failing the
  * whole `GET /api/character`.
+ *
+ * `read` is the shared signal context. Callers deriving MORE than skills from the same
+ * request (`getCharacter()` also derives the metrics grid) must mint ONE context and pass it
+ * to both, or the signals the two registries share get read twice. Defaults to a private
+ * context so a skills-only caller stays a one-liner.
  */
-export async function getCharacterSkills() {
-  return Promise.all(SKILLS.map(readSkill));
+export async function getCharacterSkills(read = createSignalContext()) {
+  return Promise.all(SKILLS.map((skill) => readSkill(skill, read)));
 }

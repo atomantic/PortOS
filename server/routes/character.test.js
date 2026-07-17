@@ -34,10 +34,10 @@ beforeEach(() => {
 });
 
 describe('GET /api/character', () => {
-  it('includes skills by default', async () => {
+  it('includes skills and metrics by default', async () => {
     const res = await request(makeApp()).get('/api/character');
     expect(res.status).toBe(200);
-    expect(characterService.getCharacter).toHaveBeenCalledWith({ withSkills: true });
+    expect(characterService.getCharacter).toHaveBeenCalledWith({ withSkills: true, withMetrics: true });
   });
 
   it('skips the skill fan-out for ?skills=0 and ?skills=false', async () => {
@@ -45,22 +45,39 @@ describe('GET /api/character', () => {
       vi.clearAllMocks();
       const res = await request(makeApp()).get(`/api/character?skills=${value}`);
       expect(res.status).toBe(200);
-      expect(characterService.getCharacter).toHaveBeenCalledWith({ withSkills: false });
+      expect(characterService.getCharacter).toHaveBeenCalledWith({ withSkills: false, withMetrics: true });
     }
   });
 
-  it('keeps skills for an explicit opt-in', async () => {
+  it('skips the metrics fan-out for ?metrics=0 and ?metrics=false', async () => {
+    for (const value of ['0', 'false']) {
+      vi.clearAllMocks();
+      const res = await request(makeApp()).get(`/api/character?metrics=${value}`);
+      expect(res.status).toBe(200);
+      expect(characterService.getCharacter).toHaveBeenCalledWith({ withSkills: true, withMetrics: false });
+    }
+  });
+
+  it('gates the two fan-outs independently', async () => {
+    await request(makeApp()).get('/api/character?skills=0&metrics=0');
+    expect(characterService.getCharacter).toHaveBeenCalledWith({ withSkills: false, withMetrics: false });
+  });
+
+  it('keeps skills and metrics for an explicit opt-in', async () => {
     for (const value of ['1', 'true']) {
       vi.clearAllMocks();
-      await request(makeApp()).get(`/api/character?skills=${value}`);
-      expect(characterService.getCharacter).toHaveBeenCalledWith({ withSkills: true });
+      await request(makeApp()).get(`/api/character?skills=${value}&metrics=${value}`);
+      expect(characterService.getCharacter).toHaveBeenCalledWith({ withSkills: true, withMetrics: true });
     }
   });
 
-  it('rejects a nonsense skills value rather than silently including them', async () => {
-    const res = await request(makeApp()).get('/api/character?skills=maybe');
-    expect(res.status).toBe(400);
-    expect(characterService.getCharacter).not.toHaveBeenCalled();
+  it('rejects a nonsense skills or metrics value rather than silently including them', async () => {
+    for (const query of ['skills=maybe', 'metrics=maybe']) {
+      vi.clearAllMocks();
+      const res = await request(makeApp()).get(`/api/character?${query}`);
+      expect(res.status).toBe(400);
+      expect(characterService.getCharacter).not.toHaveBeenCalled();
+    }
   });
 });
 

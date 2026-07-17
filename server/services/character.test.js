@@ -20,17 +20,28 @@ vi.mock('../lib/fileUtils.js', () => ({
   }),
 }));
 
-// character.js eagerly imports the jira/cos/meatspace/characterSkills services at module
-// load; stub them so the unit under test loads without their dependency graphs. meatspace
-// supplies the canonical birthDate that age-based level derives from (#2673). The skill
-// registry (#2674) fans out to every domain's stats and has its own suite
-// (characterSkills.test.js) — here we only care THAT its output is attached on read and
-// stripped on save, so a single sentinel skill stands in for the real six.
+// character.js eagerly imports the jira/cos/meatspace/characterSkills/characterMetrics/
+// characterSignals services at module load; stub them so the unit under test loads without
+// their dependency graphs. meatspace supplies the canonical birthDate that age-based level
+// derives from (#2673). The skill registry (#2674) and metrics grid (#2676) each fan out to
+// every domain's stats and have their own suites (characterSkills.test.js /
+// characterMetrics.test.js) — here we only care THAT their output is attached on read and
+// stripped on save, so single sentinel entries stand in for the real registries.
 const FAKE_SKILLS = [{ id: 'wordsmith', label: 'Wordsmith', domain: 'create', level: 2, value: 7, unavailable: false }];
+const FAKE_METRICS = [{ id: 'recordsCreated', label: 'Records Created', unit: 'count', hint: 'x', value: 7, unavailable: false, notApplicable: false }];
+// A recognizable stand-in for the shared signal context, so the tests can assert BOTH
+// registries were handed the SAME one (the whole point of #2676's read-once contract).
+const FAKE_READ = vi.hoisted(() => vi.fn());
 vi.mock('./jira.js', () => ({}));
 vi.mock('./cos.js', () => ({}));
 vi.mock('./characterSkills.js', () => ({
   getCharacterSkills: vi.fn(async () => FAKE_SKILLS),
+}));
+vi.mock('./characterMetrics.js', () => ({
+  getCharacterMetrics: vi.fn(async () => FAKE_METRICS),
+}));
+vi.mock('./characterSignals.js', () => ({
+  createSignalContext: vi.fn(() => FAKE_READ),
 }));
 vi.mock('./meatspace.js', () => ({
   getBirthDate: vi.fn(async () => ({ birthDate: store.birthDate })),
@@ -122,7 +133,7 @@ describe('stripDerivedFields', () => {
   it('removes every derived field and leaves persisted ones untouched', () => {
     const stripped = characterService.stripDerivedFields({
       name: 'Gandalf', xp: 5000, hp: 15, events: [],
-      level: 99, ageYears: 999, skills: [{ id: 'stale' }],
+      level: 99, ageYears: 999, skills: [{ id: 'stale' }], metrics: [{ id: 'stale' }],
     });
     expect(stripped).toEqual({ name: 'Gandalf', xp: 5000, hp: 15, events: [] });
   });
@@ -169,11 +180,12 @@ describe('getWireCharacter federation projection', () => {
     expect(fresh.level).toBe(1); // 0 xp → level 1, never null
   });
 
-  it('never federates the usage-derived skills', async () => {
-    // Skills are per-machine (usage differs across a user's peers), so sending them would let
+  it('never federates the usage-derived skills or metrics', async () => {
+    // Both are per-machine (usage differs across a user's peers), so sending them would let
     // the least-used peer clobber the most-used one under LWW.
     const wire = await characterService.getWireCharacter();
     expect(wire.skills).toBeUndefined();
+    expect(wire.metrics).toBeUndefined();
   });
 
   it('strips a STALE derived field already sitting in character.json', async () => {
@@ -183,12 +195,14 @@ describe('getWireCharacter federation projection', () => {
     store.value = {
       ...store.value,
       skills: [{ id: 'stale', level: 99 }],
+      metrics: [{ id: 'stale', value: 99 }],
       ageYears: 999,
       level: 99,
     };
 
     const wire = await characterService.getWireCharacter();
     expect(wire.skills).toBeUndefined();
+    expect(wire.metrics).toBeUndefined();
     expect(wire.ageYears).toBeUndefined();
     expect(wire.level).toBe(4); // re-derived from xp, NOT the stale 99
   });
@@ -248,6 +262,105 @@ describe('getCharacter skills (derived on read, #2674)', () => {
     store.value = { ...store.value, skills: [{ id: 'stale', level: 99 }] };
     const character = await characterService.getCharacter({ withSkills: false });
     expect('skills' in character).toBe(false);
+  });
+});
+
+describe('getCharacter metrics (derived on read, #2676)', () => {
+  beforeEach(() => {
+    store.value = { name: 'Gandalf', class: 'Wizard', xp: 0, hp: 15, maxHp: 15, events: [] };
+    store.birthDate = null;
+  });
+
+  it('attaches the metrics registry output on read', async () => {
+    const character = await characterService.getCharacter();
+    expect(character.metrics).toEqual(FAKE_METRICS);
+  });
+
+  it('never persists metrics to character.json', async () => {
+    const character = await characterService.getCharacter();
+    expect(character.metrics).toBeDefined();
+
+    // Round-trip the enriched record straight back through save — the path a caller takes
+    // when it reads, mutates, and writes — and the derived metrics must not survive it.
+    await characterService.saveCharacter(character);
+    expect(store.value.metrics).toBeUndefined();
+  });
+
+  it('re-derives metrics on the record that save returns', async () => {
+    const saved = await characterService.saveCharacter(await characterService.getCharacter());
+    expect(saved.metrics).toEqual(FAKE_METRICS);
+  });
+
+  it('keeps a stale persisted metrics array from leaking through as truth', async () => {
+    store.value = { ...store.value, metrics: [{ id: 'stale', value: 99 }] };
+    const character = await characterService.getCharacter();
+    expect(character.metrics).toEqual(FAKE_METRICS);
+  });
+
+  it('skips the metrics fan-out entirely when withMetrics is false', async () => {
+    const { getCharacterMetrics } = await import('./characterMetrics.js');
+    vi.mocked(getCharacterMetrics).mockClear();
+
+    const character = await characterService.getCharacter({ withMetrics: false });
+
+    expect(getCharacterMetrics).not.toHaveBeenCalled();
+    // Absent, NOT [] — "not computed" must not read as "computed, every domain empty".
+    expect('metrics' in character).toBe(false);
+    expect(character.level).toBeDefined(); // the cheap age level still resolves
+  });
+
+  it('drops a stale persisted metrics key even when withMetrics is false', async () => {
+    store.value = { ...store.value, metrics: [{ id: 'stale', value: 99 }] };
+    const character = await characterService.getCharacter({ withMetrics: false });
+    expect('metrics' in character).toBe(false);
+  });
+
+  it('gates the two registries independently', async () => {
+    const { getCharacterSkills } = await import('./characterSkills.js');
+    const { getCharacterMetrics } = await import('./characterMetrics.js');
+    vi.mocked(getCharacterSkills).mockClear();
+    vi.mocked(getCharacterMetrics).mockClear();
+
+    const character = await characterService.getCharacter({ withSkills: false, withMetrics: true });
+
+    expect(getCharacterSkills).not.toHaveBeenCalled();
+    expect(getCharacterMetrics).toHaveBeenCalled();
+    expect('skills' in character).toBe(false);
+    expect(character.metrics).toEqual(FAKE_METRICS);
+  });
+});
+
+describe('shared signal context (read-once, #2676)', () => {
+  beforeEach(() => {
+    store.value = { name: 'Gandalf', class: 'Wizard', xp: 0, hp: 15, maxHp: 15, events: [] };
+    store.birthDate = null;
+  });
+
+  it('hands BOTH registries the same context, so shared signals are read once', async () => {
+    // The load-bearing assertion of #2676: six of the nine domain signals feed both the
+    // skills and the metrics. If each registry minted its own context they would each read
+    // those six, doubling the fan-out of a route the CyberCity HUD polls every 15s.
+    const { createSignalContext } = await import('./characterSignals.js');
+    const { getCharacterSkills } = await import('./characterSkills.js');
+    const { getCharacterMetrics } = await import('./characterMetrics.js');
+    vi.mocked(createSignalContext).mockClear();
+
+    await characterService.getCharacter();
+
+    expect(createSignalContext).toHaveBeenCalledTimes(1);
+    expect(getCharacterSkills).toHaveBeenCalledWith(FAKE_READ);
+    expect(getCharacterMetrics).toHaveBeenCalledWith(FAKE_READ);
+  });
+
+  it('does not mint a context at all when both registries are skipped', async () => {
+    // The cheap path (CyberCity HUD, askService, city snapshots) must stay free of any
+    // domain-signal machinery.
+    const { createSignalContext } = await import('./characterSignals.js');
+    vi.mocked(createSignalContext).mockClear();
+
+    await characterService.getCharacter({ withSkills: false, withMetrics: false });
+
+    expect(createSignalContext).not.toHaveBeenCalled();
   });
 });
 

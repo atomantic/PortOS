@@ -69,8 +69,8 @@ export const useCityData = () => {
       api.getCosTasks({ silent: true }).catch(() => ({ tasks: [] })),
       api.getLatestHealthMetrics(HEALTH_METRIC_KEYS, { silent: true }).catch(() => null),
       api.getVoiceStatus({ silent: true }).catch(() => null),
-      // `skills: false` — the city only renders the level (see fetchCharacter).
-      api.getCharacter({ silent: true, skills: false }).catch(() => null),
+      // `skills`/`metrics: false` — the city only renders the level (see fetchCharacter).
+      api.getCharacter({ silent: true, skills: false, metrics: false }).catch(() => null),
     ]);
 
     setApps(appsData);
@@ -120,9 +120,9 @@ export const useCityData = () => {
   // periodic poll. The Xp badge diffs successive snapshots to fire its burst.
   // Preserve last-good character on a transient blip (don't wipe to null).
   const fetchCharacter = useCallback(async () => {
-    // The HUD badge renders only the level, and this polls every 15s — `skills: false` skips
-    // the server's six-domain stat fan-out that nothing here reads.
-    const next = await api.getCharacter({ silent: true, skills: false }).catch(() => null);
+    // The HUD badge renders only the level, and this polls every 15s — `skills`/`metrics:
+    // false` skip the server's domain stat fan-outs that nothing here reads.
+    const next = await api.getCharacter({ silent: true, skills: false, metrics: false }).catch(() => null);
     if (next) setCharacter(next);
   }, []);
 

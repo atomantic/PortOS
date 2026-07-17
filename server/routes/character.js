@@ -2,8 +2,9 @@
  * Character Sheet Routes
  *
  * `GET /` returns the persisted record plus the fields derived on read: the
- * age-based `level`/`ageYears` (#2673) and the per-domain `skills` (#2674).
- * The XP/HP/damage/rest/event endpoints are retained for backward-compat.
+ * age-based `level`/`ageYears` (#2673), the per-domain `skills` (#2674), and the
+ * `metrics` grid (#2676). The XP/HP/damage/rest/event endpoints are retained for
+ * backward-compat.
  */
 
 import { Router } from 'express';
@@ -42,19 +43,27 @@ const addEventSchema = z.object({
   diceNotation: z.string().regex(/^\d+d\d+([+-]\d+)?$/).optional()
 });
 
-// `?skills=0` opts out of the six-domain skill fan-out for consumers that only read the
-// persisted fields plus the age level — notably the CyberCity HUD, which polls this route
-// every 15s and renders only `level`. Defaults to including them, so an unaware caller
-// (or an older client bundle) still gets the full sheet.
+// `?skills=0` / `?metrics=0` opt out of each derived registry's domain fan-out, for consumers
+// that only read the persisted fields plus the age level — notably the CyberCity HUD, which
+// polls this route every 15s and renders only `level`. They gate independently (a caller may
+// well want the metrics grid without the skill curve), and both default to ON so an unaware
+// caller — or an older client bundle that predates the flag — still gets the full sheet.
+const flagEnum = z.enum(['0', '1', 'false', 'true']).optional();
 const getCharacterQuerySchema = z.object({
-  skills: z.enum(['0', '1', 'false', 'true']).optional(),
+  skills: flagEnum,
+  metrics: flagEnum,
 });
+
+// A flag is on unless explicitly switched off. Absent ⇒ on (see the default-ON note above).
+const isEnabled = (flag) => flag !== '0' && flag !== 'false';
 
 // GET /api/character - Get character sheet
 router.get('/', asyncHandler(async (req, res) => {
-  const { skills } = validateRequest(getCharacterQuerySchema, req.query);
-  const withSkills = skills !== '0' && skills !== 'false';
-  res.json(await characterService.getCharacter({ withSkills }));
+  const { skills, metrics } = validateRequest(getCharacterQuerySchema, req.query);
+  res.json(await characterService.getCharacter({
+    withSkills: isEnabled(skills),
+    withMetrics: isEnabled(metrics),
+  }));
 }));
 
 // PUT /api/character - Update character name/class
