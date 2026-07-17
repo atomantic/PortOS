@@ -92,8 +92,23 @@ describe('the registry', () => {
     }
   });
 
-  it('ships at least the three real metrics the acceptance criteria require', async () => {
+  it('ships at least the three real metrics the acceptance criteria require', () => {
     expect(METRICS.length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('contains a synchronously-thrown compute to its own tile rather than failing the whole read', async () => {
+    // Every shipped compute is async, so a sync throw can only come from a future entry
+    // declared without `async` — which must degrade ONE tile, not reject GET /api/character.
+    const exploding = { id: 'boom', label: 'Boom', unit: 'count', hint: 'x', compute: () => { throw new Error('sync boom'); } };
+    METRICS.push(exploding);
+    try {
+      const metrics = await getCharacterMetrics();
+      expect(byId(metrics, 'boom')).toMatchObject({ value: null, unavailable: true });
+      // ...and the real tiles still report.
+      expect(byId(metrics, 'memoryCount').unavailable).toBe(false);
+    } finally {
+      METRICS.pop();
+    }
   });
 
   it('declares an emptyLabel for every metric that can be not-applicable', async () => {
@@ -103,6 +118,20 @@ describe('the registry', () => {
     const metrics = await getCharacterMetrics();
     for (const metric of metrics.filter((m) => m.notApplicable)) {
       expect(metric.emptyLabel).toBeTruthy();
+    }
+  });
+
+  it('returns one uniform key set across all three states', async () => {
+    // A consumer should never have to tell "absent key" apart from "null value" on top of the
+    // three states themselves.
+    stats.goals = { goals: [] };                // drives notApplicable
+    vi.mocked(countMemories).mockImplementation(fail('memory backend')); // drives unavailable
+    stats.assets = 5;                           // drives a real value
+
+    const metrics = await getCharacterMetrics();
+    const shape = ['emptyLabel', 'hint', 'id', 'label', 'notApplicable', 'unavailable', 'unit', 'value'];
+    for (const metric of metrics) {
+      expect(Object.keys(metric).sort()).toEqual(shape);
     }
   });
 });

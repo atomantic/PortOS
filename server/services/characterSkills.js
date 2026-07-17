@@ -179,7 +179,10 @@ export const SKILLS = [
  *   - `compute` resolves 0        → a real, earned level 0
  */
 async function readSkill(skill, read) {
-  const raw = await skill.compute(read).catch((err) => {
+  // `Promise.resolve().then(...)` rather than `skill.compute(read).catch(...)`: a compute
+  // declared without `async` that throws synchronously would otherwise escape before `.catch`
+  // is attached, rejecting the whole GET instead of degrading this one skill.
+  const raw = await Promise.resolve().then(() => skill.compute(read)).catch((err) => {
     // `err?.message ?? err` — a non-Error rejection (a thrown string, a rejected `undefined`)
     // would otherwise throw *inside* the catch and defeat the per-skill containment below.
     console.warn(`⚠️ Character skill ${skill.id}: stat read failed — ${err?.message ?? err}`);

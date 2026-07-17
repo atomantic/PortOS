@@ -129,9 +129,15 @@ export const METRICS = [
     // resolved goals the ratio is undefined, which is NOT 0% (see the header's three states).
     compute: async (read) => {
       const { goals } = await read('goals');
-      const completed = (goals || []).filter((g) => g?.status === 'completed').length;
-      const abandoned = (goals || []).filter((g) => g?.status === 'abandoned').length;
-      const resolved = completed + abandoned;
+      // One pass, and the denominator is derived from the SAME predicate set as the numerator
+      // — so adding a third resolved status can't leave the two out of sync.
+      let completed = 0;
+      let resolved = 0;
+      for (const g of goals || []) {
+        if (g?.status !== 'completed' && g?.status !== 'abandoned') continue;
+        resolved += 1;
+        if (g.status === 'completed') completed += 1;
+      }
       if (resolved === 0) return METRIC_NOT_APPLICABLE;
       return Math.round((completed / resolved) * 100);
     },
@@ -148,17 +154,28 @@ export const METRICS = [
  *   - `compute` resolves 0           → a real, earned 0
  */
 async function readMetric(metric, read) {
-  const raw = await metric.compute(read).catch((err) => {
+  // `Promise.resolve().then(...)` rather than `metric.compute(read).catch(...)`: a compute
+  // declared without `async` that throws synchronously would otherwise escape before `.catch`
+  // is attached, rejecting the whole GET instead of degrading this one tile.
+  const raw = await Promise.resolve().then(() => metric.compute(read)).catch((err) => {
     // `err?.message ?? err` — a non-Error rejection (a thrown string, a rejected `undefined`)
     // would otherwise throw *inside* the catch and defeat the per-metric containment below.
     console.warn(`⚠️ Character metric ${metric.id}: stat read failed — ${err?.message ?? err}`);
     return STAT_UNAVAILABLE;
   });
 
-  const base = { id: metric.id, label: metric.label, unit: metric.unit, hint: metric.hint };
+  // One uniform shape across all three states — every key is always present, so a consumer
+  // never has to distinguish "absent key" from "null value" on top of everything else.
+  const base = {
+    id: metric.id,
+    label: metric.label,
+    unit: metric.unit,
+    hint: metric.hint,
+    emptyLabel: metric.emptyLabel ?? null,
+  };
 
   if (raw === METRIC_NOT_APPLICABLE) {
-    return { ...base, value: null, unavailable: false, notApplicable: true, emptyLabel: metric.emptyLabel ?? null };
+    return { ...base, value: null, unavailable: false, notApplicable: true };
   }
 
   if (raw === STAT_UNAVAILABLE || !Number.isFinite(raw) || raw < 0) {

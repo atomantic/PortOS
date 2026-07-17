@@ -80,9 +80,11 @@ function SkillsCard({ skills }) {
   );
 }
 
-// Render one metric's value per its server-declared `unit`. Counts go through the shared
-// formatCompactCount so a 12,400-memory Brain reads "12.4K" instead of overflowing the tile.
-// Only called for tiles with a real numeric value — the null states are handled by the caller.
+// Render one metric's value per its server-declared `unit`. Only unbounded COUNTS go through
+// formatCompactCount, so a 12,400-memory Brain reads "12.4K" instead of overflowing the tile;
+// day counts stay literal (a 1200-day streak is "1200d", not a nonsense "1.2Kd") and percents
+// are 0-100 by construction. Only called for tiles with a real numeric value — the null
+// states are handled by the caller.
 //
 // Deliberately page-local rather than hoisted into utils/formatters.js: it defines no new
 // number formatting (it dispatches to the shared formatter), and it is coupled to the metric
@@ -90,7 +92,7 @@ function SkillsCard({ skills }) {
 // which Slice 5 (#2677) will restyle or relocate wholesale. Exported only for its unit test.
 export function formatMetricValue({ unit, value }) {
   if (unit === 'percent') return `${value}%`;
-  if (unit === 'days') return `${formatCompactCount(value)}d`;
+  if (unit === 'days') return `${value}d`;
   return formatCompactCount(value);
 }
 

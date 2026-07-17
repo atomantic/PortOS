@@ -18,9 +18,9 @@
  * **Failures propagate; they are not classified here.** A reader that rejects makes `read()`
  * reject with the same error, and the *consumer* decides what that means (both registries
  * turn it into an explicit `unavailable`, never a fake 0 — see `readSkill` / `readMetric`).
- * This module stays a cache, not a policy: the memoized entry settles to a discriminated
- * `{ ok }` result so a cached rejection can never surface as an unhandled rejection, and
- * `read()` re-throws it fresh to each caller.
+ * This module stays a cache, not a policy. A failed read is cached like any other, so a
+ * downed Postgres is hit once per request rather than once per skill AND once per metric
+ * that reads it.
  *
  * **Known gap (#2726).** Only the DB-backed readers (`universeCount`, `workCount`,
  * `catalogStats`, `memoryCount`, `assetCount`) actually reject on failure. `postSessions`,
@@ -85,24 +85,13 @@ export function createSignalContext() {
     const reader = SIGNAL_READERS[signalId];
     if (!reader) throw new Error(`Unknown character signal: ${signalId}`);
 
-    if (!cache.has(signalId)) {
-      // Settle to `{ ok }` so the MEMOIZED promise never rejects: a cached rejected promise
-      // that a later consumer doesn't await would surface as an unhandled rejection and (under
-      // Node's default policy) take the process down. `Promise.resolve().then(reader)` also
-      // normalizes a getter that throws synchronously into a rejection.
-      cache.set(
-        signalId,
-        Promise.resolve()
-          .then(reader)
-          .then((value) => ({ ok: true, value }), (error) => ({ ok: false, error }))
-      );
-    }
+    // `Promise.resolve().then(reader)` rather than `reader()`: it normalizes a getter that
+    // throws SYNCHRONOUSLY into a rejection, so a consumer's `.catch()`-based unavailable
+    // classification always sees it instead of the throw escaping `read()` and rejecting the
+    // whole GET. A settled promise re-delivers its value (or re-throws its error) to every
+    // later awaiter, so caching the promise is all the memoization either case needs.
+    if (!cache.has(signalId)) cache.set(signalId, Promise.resolve().then(reader));
 
-    // A fresh derived promise per call, rejecting with the original error — so every consumer
-    // sees the failure and classifies it itself.
-    return cache.get(signalId).then((result) => {
-      if (!result.ok) throw result.error;
-      return result.value;
-    });
+    return cache.get(signalId);
   };
 }
