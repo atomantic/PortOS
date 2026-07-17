@@ -144,7 +144,7 @@ export const createPipelineIssue = (seriesId, data, options = {}) =>
     ...options,
   });
 
-export const getPipelineIssue = (id) => request(`/pipeline/issues/${encodeURIComponent(id)}`);
+export const getPipelineIssue = (id, options = {}) => request(`/pipeline/issues/${encodeURIComponent(id)}`, options);
 
 export const updatePipelineIssue = (id, patch, requestOptions = {}) =>
   request(`/pipeline/issues/${encodeURIComponent(id)}`, {
