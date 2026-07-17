@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, readFile, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
-import migration from './195-dismiss-extension-error-alerts.js';
+import migration from './196-dismiss-extension-error-alerts.js';
 
 let rootDir;
 
@@ -41,7 +41,7 @@ afterEach(async () => {
   await rm(rootDir, { recursive: true, force: true });
 });
 
-describe('195-dismiss-extension-error-alerts', () => {
+describe('196-dismiss-extension-error-alerts', () => {
   it('dismisses an alert whose stack has an extension frame', async () => {
     await seed([alert({
       title: 'Unhandled rejection: Cannot read properties of null',

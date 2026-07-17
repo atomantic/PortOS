@@ -109,7 +109,7 @@ Five constraints worth preserving when touching this:
 The server re-checks rather than trusting the client: PortOS installs update on their own
 schedule and a long-lived tab keeps running an old bundle.
 
-The filter is prospective, so `scripts/migrations/195-dismiss-extension-error-alerts.js`
+The filter is prospective, so `scripts/migrations/196-dismiss-extension-error-alerts.js`
 applies the same predicate once to alerts already filed (status → `dismissed`, never
 deleted), so existing installs converge instead of carrying stale extension alerts forever.
 
