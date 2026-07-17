@@ -129,7 +129,7 @@ export default function BrowserPage() {
     if (!trimmed) return;
     const url = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
     setActionLoading('navigate');
-    const result = await navigateBrowser(url).catch(err => {
+    const result = await navigateBrowser(url, { silent: true }).catch(err => {
       toast.error(`Failed to navigate: ${err.message}`);
       return null;
     });

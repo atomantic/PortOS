@@ -65,22 +65,28 @@ export const getRemoteBranches = (path) => request('/git/remote-branches', {
   method: 'POST',
   body: JSON.stringify({ path })
 });
-export const deleteBranch = (path, branch, { local = false, remote = false } = {}) =>
+// `options` lets a caller suppress request()'s auto-toast with `{ silent: true }`
+// when it already renders its own error UI.
+export const deleteBranch = (path, branch, { local = false, remote = false } = {}, options = {}) =>
   request('/git/delete-branch', {
     method: 'POST',
-    body: JSON.stringify({ path, branch, local, remote })
+    body: JSON.stringify({ path, branch, local, remote }),
+    ...options
   });
-export const cleanupMergedBranches = (path) => request('/git/cleanup-merged', {
+export const cleanupMergedBranches = (path, options = {}) => request('/git/cleanup-merged', {
   method: 'POST',
-  body: JSON.stringify({ path })
+  body: JSON.stringify({ path }),
+  ...options
 });
-export const mergeBranch = (path, branch) => request('/git/merge', {
+export const mergeBranch = (path, branch, options = {}) => request('/git/merge', {
   method: 'POST',
-  body: JSON.stringify({ path, branch })
+  body: JSON.stringify({ path, branch }),
+  ...options
 });
-export const checkoutRemoteBranch = (path, branch) => request('/git/checkout-remote', {
+export const checkoutRemoteBranch = (path, branch, options = {}) => request('/git/checkout-remote', {
   method: 'POST',
-  body: JSON.stringify({ path, branch })
+  body: JSON.stringify({ path, branch }),
+  ...options
 });
 export const getSubmodules = () => request('/git/submodules/status');
 export const updateSubmodule = (path) => request('/git/submodules/update', {
