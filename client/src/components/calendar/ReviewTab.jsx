@@ -58,7 +58,7 @@ export default function ReviewTab() {
       data.note = editForm.note || undefined;
     }
 
-    const result = await api.confirmDailyReviewEvent(date, data).catch(() => null);
+    const result = await api.confirmDailyReviewEvent(date, data, { silent: true }).catch(() => null);
     setConfirming(null);
     setEditingEvent(null);
 
@@ -83,7 +83,7 @@ export default function ReviewTab() {
       note: editForm.note || undefined
     };
 
-    const result = await api.confirmDailyReviewEvent(date, data).catch(() => null);
+    const result = await api.confirmDailyReviewEvent(date, data, { silent: true }).catch(() => null);
     setConfirming(null);
     setEditingEvent(null);
 

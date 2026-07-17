@@ -51,7 +51,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const handleSaveOAuthCredentials = async () => {
     if (!oauthForm.clientId || !oauthForm.clientSecret) return toast.error('Both Client ID and Client Secret are required');
     setSavingOAuth(true);
-    const result = await api.saveGoogleAuthCredentials(oauthForm).catch(() => null);
+    const result = await api.saveGoogleAuthCredentials(oauthForm, { silent: true }).catch(() => null);
     setSavingOAuth(false);
     if (!result) return toast.error('Failed to save credentials');
     toast.success('OAuth credentials saved');
@@ -64,7 +64,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   };
 
   const handleStartOAuth = async () => {
-    const result = await api.getGoogleAuthUrl().catch(() => null);
+    const result = await api.getGoogleAuthUrl({ silent: true }).catch(() => null);
     if (result?.url) {
       window.open(result.url, '_blank');
       toast.success('Complete authorization in the opened browser tab');
@@ -80,14 +80,14 @@ export default function ConfigTab({ accounts, setAccounts }) {
   };
 
   const handleSyncMethodChange = async (account, method) => {
-    const result = await api.updateCalendarAccount(account.id, { syncMethod: method }).catch(() => null);
+    const result = await api.updateCalendarAccount(account.id, { syncMethod: method }, { silent: true }).catch(() => null);
     if (!result) return toast.error('Failed to update sync method');
     setAccounts(prev => prev.map(a => a.id === account.id ? { ...a, syncMethod: method } : a));
     toast.success(`Sync method set to ${method === 'google-api' ? 'Google API' : 'Claude MCP'}`);
   };
 
   const handleAutoConfigStart = async () => {
-    const result = await api.startGoogleAutoConfig().catch(() => null);
+    const result = await api.startGoogleAutoConfig({ silent: true }).catch(() => null);
     if (!result || result.error) {
       return toast.error(result?.error || 'Failed to open browser');
     }
@@ -100,7 +100,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
     // Find the google account's email to pass as test user
     const googleAccount = accounts.find(a => a.type === 'google-calendar');
     const email = googleAccount?.email || '';
-    const result = await api.runGoogleAutoConfig(email).catch(() => null);
+    const result = await api.runGoogleAutoConfig(email, { silent: true }).catch(() => null);
     if (!result || result.error) {
       setAutoConfigStep('login');
       return toast.error(result?.error || 'Automated setup failed. Try manual setup instead.');
@@ -121,7 +121,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const handleCreate = async () => {
     if (!form.name) return toast.error('Name is required');
     setSaving(true);
-    const result = await api.createCalendarAccount(form).catch(() => null);
+    const result = await api.createCalendarAccount(form, { silent: true }).catch(() => null);
     setSaving(false);
     if (!result) return toast.error('Failed to create account');
     setShowForm(false);
@@ -144,7 +144,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   };
 
   const handleToggle = async (account) => {
-    const result = await api.updateCalendarAccount(account.id, { enabled: !account.enabled }).catch(() => null);
+    const result = await api.updateCalendarAccount(account.id, { enabled: !account.enabled }, { silent: true }).catch(() => null);
     if (!result) return toast.error('Failed to update account');
     toast.success(account.enabled ? 'Account disabled' : 'Account enabled');
     setAccounts(prev => prev.map(a => a.id === account.id ? { ...a, enabled: !a.enabled } : a));
@@ -169,7 +169,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
     );
     setAccounts(prev => prev.map(a => a.id === account.id ? { ...a, subcalendars } : a));
     setSavingSubcals(account.id);
-    const result = await api.updateSubcalendars(account.id, { subcalendars }).catch(() => null);
+    const result = await api.updateSubcalendars(account.id, { subcalendars }, { silent: true }).catch(() => null);
     setSavingSubcals(null);
     if (!result) {
       // Rollback on failure
@@ -195,7 +195,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const handleEnableAll = async (account) => {
     const subcalendars = (account.subcalendars || []).map(sc => ({ ...sc, enabled: true, dormant: false }));
     setSavingSubcals(account.id);
-    const result = await api.updateSubcalendars(account.id, { subcalendars }).catch(() => null);
+    const result = await api.updateSubcalendars(account.id, { subcalendars }, { silent: true }).catch(() => null);
     setSavingSubcals(null);
     if (!result) return toast.error('Failed to update');
     setAccounts(prev => prev.map(a => a.id === account.id ? { ...a, subcalendars } : a));

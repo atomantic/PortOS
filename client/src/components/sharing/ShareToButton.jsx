@@ -128,7 +128,7 @@ export default function ShareToButton({ kind, ids, items, label = 'Share', compa
     setBusyBucketId(bucket.id);
     const existing = subscriptionForBucket(bucket.id);
     if (existing) {
-      const ok = await unsubscribeFromShareBucket(existing.id).catch((err) => {
+      const ok = await unsubscribeFromShareBucket(existing.id, { silent: true }).catch((err) => {
         toast.error(err.message || `Unshare from ${bucket.name} failed`);
         return null;
       });
@@ -141,7 +141,7 @@ export default function ShareToButton({ kind, ids, items, label = 'Share', compa
         bucketId: bucket.id,
         recordKind: kind,
         recordId,
-      }).catch((err) => {
+      }, { silent: true }).catch((err) => {
         toast.error(err.message || `Share to ${bucket.name} failed`);
         return null;
       });
@@ -156,7 +156,7 @@ export default function ShareToButton({ kind, ids, items, label = 'Share', compa
   // Media one-shot path — click to send a fresh manifest.
   const handleOneShotShare = async (bucket) => {
     setBusyBucketId(bucket.id);
-    const result = await exportToShareBucket(bucket.id, { kind, items: items || [] }).catch((err) => {
+    const result = await exportToShareBucket(bucket.id, { kind, items: items || [] }, { silent: true }).catch((err) => {
       toast.error(err.message || `Share to ${bucket.name} failed`);
       return null;
     });
