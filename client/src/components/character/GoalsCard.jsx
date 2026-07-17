@@ -28,9 +28,18 @@ const TOP_N = 4;
 // is stable. Real urgencies are clamped to [0,1] server-side, so -1 can never collide.
 const urgencyRank = (urgency) => (Number.isFinite(urgency) ? urgency : -1);
 
+// A missing `status` counts as active, matching server/services/voice/tools/goals.js. Goals
+// synced in from MortalLoom are only run through `normalizeGoal` (server/services/identity/
+// store.js), whose PORTOS_GOAL_DEFAULTS backfills every field EXCEPT status — so a
+// status-less goal is a real, reachable shape, and dropping it here would render a
+// user's populated goal list as "No active goals yet". Erring toward showing a goal is the
+// safe direction: the cost is at worst one stale row, versus a card that lies about the
+// user having no goals at all.
+const isActive = (goal) => Boolean(goal) && (goal.status === 'active' || !goal.status);
+
 export function selectTopGoals(goals, limit = TOP_N) {
   return goals
-    .filter((goal) => goal?.status === 'active')
+    .filter(isActive)
     .sort((a, b) => urgencyRank(b.urgency) - urgencyRank(a.urgency))
     .slice(0, limit);
 }
@@ -76,11 +85,16 @@ export default function GoalsCard() {
   useEffect(() => {
     let cancelled = false;
     // The TREE endpoint, not the flat one: `urgency` is only *persisted* when a goal is
-    // written or a birth date is set, and it decays from `timeHorizons.yearsRemaining` — so
-    // the stored value drifts stale with the mere passage of time, and `getGoals()` hands it
-    // back unrecomputed. `getGoalsTree().flat` re-derives urgency from current longevity, and
-    // is the exact source /goals ranks by, so the sheet can never disagree with the page it
-    // links to. (Enriching the flat endpoint instead would change a shared API's semantics.)
+    // written or a birth date is set, so `getGoals()` hands back whatever was last stored.
+    // `getGoalsTree().flat` re-derives urgency from the longevity horizons the goals feature
+    // maintains, and is the exact source /goals ranks by — so the sheet can never disagree
+    // with the page it links to. (Enriching the flat endpoint instead would change a shared
+    // API's semantics.)
+    //
+    // Those horizons are themselves only as fresh as the last deriveLongevity() run — every
+    // consumer shares that, and re-deriving from this read-only card would both write on a
+    // read path and make the sheet disagree with /goals. Tracked in PLAN.md as the goals
+    // feature's own fix.
     //
     // silent: this card owns its own error UI (the message below), so letting request() toast
     // as well would surface the same failure twice.

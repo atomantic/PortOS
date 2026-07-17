@@ -58,6 +58,19 @@ describe('selectTopGoals', () => {
     expect(picked.map(g => g.id)).toEqual(['a']);
   });
 
+  it('keeps a status-less goal rather than dropping it', () => {
+    // MortalLoom-synced goals pass through normalizeGoal, whose defaults backfill every field
+    // EXCEPT status. Dropping them would render a populated goal list as "No active goals
+    // yet" — the exact lie the empty state must never tell.
+    const picked = selectTopGoals([goal({ id: 'ml', status: undefined })]);
+    expect(picked.map(g => g.id)).toEqual(['ml']);
+  });
+
+  it('ignores null entries without dropping the rest of the list', () => {
+    const picked = selectTopGoals([null, goal({ id: 'a' })]);
+    expect(picked.map(g => g.id)).toEqual(['a']);
+  });
+
   it('sorts un-ranked goals last rather than treating null urgency as 0', () => {
     // urgency is null when the service has no horizon to rank against — that is "we don't
     // know", not "plenty of time". A null must never outrank a real 0.
@@ -168,6 +181,14 @@ describe('GoalsCard — empty', () => {
     expect(card.getByRole('link', { name: /Set your goals/ })).toHaveAttribute('href', GOALS_PATH);
     // A real empty state, not a broken/blank block.
     expect(card.queryByRole('link', { name: /Open in Goals/ })).not.toBeInTheDocument();
+  });
+
+  it('does NOT show the empty state for a MortalLoom-shaped goal with no status', async () => {
+    // The false-empty regression, pinned at the rendered level: a user whose goals sync in
+    // without a status field must still see them on the sheet.
+    const card = await renderCard([goal({ title: 'Example Synced Goal', status: undefined })]);
+    expect(card.getByText('Example Synced Goal')).toBeInTheDocument();
+    expect(card.queryByText('No active goals yet.')).not.toBeInTheDocument();
   });
 
   it('shows the empty state when every goal is completed or abandoned', async () => {
