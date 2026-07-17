@@ -4,6 +4,7 @@ import {
   MAX_LEVEL,
   levelFromXP,
   computeXpView,
+  computeAgeView,
   diffXp,
 } from './characterXp';
 
@@ -93,6 +94,55 @@ describe('computeXpView', () => {
     expect(computeXpView({ xp: 0, level: 1 }).xp).toBe(0);
     // both render as zero, but neither throws or NaNs
     expect(computeXpView({ xp: 0, level: 1 }).progress).toBe(0);
+  });
+});
+
+describe('computeAgeView', () => {
+  it('derives the age level and progress toward the next birthday', () => {
+    const vm = computeAgeView({ level: 42, ageYears: 42.5, xp: 1000, hp: 12, maxHp: 15 });
+    expect(vm.level).toBe(42);
+    expect(vm.hasBirthDate).toBe(true);
+    expect(vm.progress).toBeCloseTo(0.5);
+    expect(vm.xp).toBe(1000);
+    expect(vm.hp).toBe(12);
+    expect(vm.maxHp).toBe(15);
+    expect(Number.isNaN(vm.progress)).toBe(false);
+  });
+
+  it('floors ageYears for level when only ageYears is present', () => {
+    const vm = computeAgeView({ ageYears: 30.9, xp: 0 });
+    expect(vm.level).toBe(30);
+    expect(vm.progress).toBeCloseTo(0.9);
+    expect(vm.hasBirthDate).toBe(true);
+  });
+
+  it('is 0 progress exactly on a birthday', () => {
+    const vm = computeAgeView({ level: 40, ageYears: 40 });
+    expect(vm.level).toBe(40);
+    expect(vm.progress).toBe(0);
+  });
+
+  it('returns a safe no-birthDate view (null level, no NaN)', () => {
+    for (const input of [null, undefined, {}, { level: null, ageYears: null, xp: 500 }]) {
+      const vm = computeAgeView(input);
+      expect(vm.level).toBeNull();
+      expect(vm.hasBirthDate).toBe(false);
+      expect(vm.progress).toBe(0);
+      expect(vm.daysToNextBirthday).toBeNull();
+      expect(Number.isNaN(vm.progress)).toBe(false);
+    }
+  });
+
+  it('carries xp through as a stat while level is null (no birthDate)', () => {
+    const vm = computeAgeView({ level: null, ageYears: null, xp: 777 });
+    expect(vm.xp).toBe(777);
+    expect(vm.level).toBeNull();
+  });
+
+  it('computes a bounded days-to-next-birthday countdown', () => {
+    const vm = computeAgeView({ level: 25, ageYears: 25.0 });
+    expect(vm.daysToNextBirthday).toBeGreaterThan(360);
+    expect(vm.daysToNextBirthday).toBeLessThanOrEqual(366);
   });
 });
 

@@ -57,7 +57,7 @@ grep -i "what you want to do" client/src/utils/README.md
 
 | Module | Purpose |
 |---|---|
-| `characterXp` | Avatar XP/level math: `levelFromXP`, `computeXpView`, `diffXp`, and the XP threshold table. |
+| `characterXp` | Character HUD badge math: `computeAgeView` (age-based level + progress to next birthday), plus legacy XP helpers `levelFromXP`, `computeXpView`, `diffXp` and the XP threshold table. |
 
 ## CyberCity — scene compute helpers
 

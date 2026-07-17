@@ -306,12 +306,14 @@ async function applyCharacterRemote(remoteData) {
     xp: Math.max(local.xp || 0, remoteData.xp || 0),
     hp: scalarSource.hp,
     maxHp: scalarSource.maxHp,
-    level: Math.max(local.level || 1, remoteData.level || 1),
+    // `level` is age-derived on read (#2673), not persisted — never merge a stale peer level.
     events: mergedEvents,
     syncedJiraTickets: mergedTickets,
     syncedTaskIds: mergedTasks,
     updatedAt: remoteTs > localTs ? remoteTs : localTs
   };
+  // Drop any legacy persisted `level` (carried through `...local`) — it's derived on read now.
+  delete merged.level;
 
   if (eventsChanged || remoteTs > localTs) {
     await atomicWrite(CHARACTER_FILE, merged);
