@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, Film, Trash2, Play, Pause, FlaskConical, Sparkles, Wand2 } from 'lucide-react';
+import { Plus, Film, Trash2, Play, Pause, FlaskConical, Sparkles, Wand2, SlidersHorizontal } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
   listCreativeDirectorProjects,
@@ -18,6 +18,7 @@ import ModelSelect from '../components/ModelSelect';
 import PageHeader from '../components/PageHeader';
 import Drawer from '../components/Drawer';
 import DirectiveComposer from '../components/creative-director/DirectiveComposer.jsx';
+import CreativeDirectorModelsDrawer from '../components/creative-director/CreativeDirectorModelsDrawer.jsx';
 
 const ASPECT_RATIOS = ['16:9', '9:16', '1:1'];
 const QUALITIES = ['draft', 'standard', 'high'];
@@ -46,6 +47,7 @@ export default function CreativeDirector() {
   // that creates a studio production project seeded with a directive. State is
   // hoisted here (above the Drawer body) per the Drawer state-hoisting rule.
   const directiveOpen = searchParams.get('new') === 'directive';
+  const modelsOpen = searchParams.get('models') === '1';
   const [directiveName, setDirectiveName] = useState('');
   const [directiveDraft, setDirectiveDraft] = useState(EMPTY_DIRECTIVE);
   const [creatingDirective, setCreatingDirective] = useState(false);
@@ -158,6 +160,16 @@ export default function CreativeDirector() {
     setSearchParams((prev) => { const n = new URLSearchParams(prev); n.delete('new'); return n; }, { replace: true });
   };
 
+  // URL-driven so the CD-wide model defaults are deep-linkable, mirroring the
+  // per-project drawer's `?models=1` on the detail page.
+  const setModelsOpen = (open) => {
+    setSearchParams((prev) => {
+      const n = new URLSearchParams(prev);
+      if (open) n.set('models', '1'); else n.delete('models');
+      return n;
+    }, { replace: true });
+  };
+
   const handleCreateDirective = async () => {
     if (!directiveName.trim()) { toast.error('Name is required'); return; }
     if (!directiveDraft.goal.trim()) { toast.error('Directive goal is required'); return; }
@@ -256,6 +268,14 @@ export default function CreativeDirector() {
             >
               <Wand2 className="w-4 h-4" />
               New directive
+            </button>
+            <button
+              onClick={() => setModelsOpen(true)}
+              className="flex items-center gap-2 bg-port-card border border-port-border hover:bg-port-card/60 text-port-text px-3 py-2 rounded text-sm"
+              title="Pin the provider + model every Creative Director project uses by default"
+            >
+              <SlidersHorizontal className="w-4 h-4" />
+              Model defaults
             </button>
             <button
               onClick={() => { setShowForm((s) => !s); clearRemix(); }}
@@ -478,6 +498,12 @@ export default function CreativeDirector() {
           </button>
         </div>
       </Drawer>
+
+      <CreativeDirectorModelsDrawer
+        scope="global"
+        open={modelsOpen}
+        onClose={() => setModelsOpen(false)}
+      />
     </div>
   );
 }

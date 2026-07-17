@@ -416,9 +416,11 @@ describe('mergeModelLists', () => {
 });
 
 describe('visionLocalModelFilter', () => {
-  const ollama = { name: 'Ollama', endpoint: 'http://localhost:11434' };
-  const lmstudio = { name: 'LM Studio', endpoint: 'http://localhost:1234' };
-  const cloud = { name: 'OpenAI', endpoint: 'https://api.openai.com/v1' };
+  // `id` matters: the authoritative map is keyed by the provider id the SERVER
+  // enumerated, so only these canonical ids can be vouched for.
+  const ollama = { id: 'ollama', name: 'Ollama', endpoint: 'http://localhost:11434' };
+  const lmstudio = { id: 'lmstudio', name: 'LM Studio', endpoint: 'http://localhost:1234' };
+  const cloud = { id: 'openai', name: 'OpenAI', endpoint: 'https://api.openai.com/v1' };
 
   it('keeps only vision models for local backends (ollama/lm studio)', () => {
     expect(visionLocalModelFilter('qwen2.5vl:32b', ollama)).toBe(true);
@@ -426,6 +428,46 @@ describe('visionLocalModelFilter', () => {
     // Text-only / embedding local models are filtered out.
     expect(visionLocalModelFilter('qwen2.5-coder:32b', ollama)).toBe(false);
     expect(visionLocalModelFilter('nomic-embed-text', ollama)).toBe(false);
+  });
+
+  it('accepts a server-reported vision id the stale id regex does not know', () => {
+    // The id regex knows `gemma-3` but not `gemma4` — without the authoritative
+    // map, a user whose only VLMs are gemma4/qwen3.6 gets an empty picker.
+    expect(visionLocalModelFilter('gemma4:e4b', ollama)).toBe(false);
+    expect(visionLocalModelFilter('gemma4:e4b', ollama, { ollama: new Set(['gemma4:e4b']) })).toBe(true);
+    expect(visionLocalModelFilter('qwen3.6:35b', ollama, { ollama: new Set(['qwen3.6:35b']) })).toBe(true);
+  });
+
+  it('unions rather than replaces — the map never vetoes a regex match', () => {
+    // Fetched-but-empty (no local VLM reported) still keeps regex matches, and a
+    // map that omits a model the regex knows must not hide it.
+    expect(visionLocalModelFilter('llava:latest', ollama, { ollama: new Set() })).toBe(true);
+    expect(visionLocalModelFilter('llava:latest', ollama, { ollama: new Set(['gemma4:e4b']) })).toBe(true);
+    // ...and it still can't smuggle a text-only model past the filter.
+    expect(visionLocalModelFilter('qwen2.5-coder:32b', ollama, { ollama: new Set(['gemma4:e4b']) })).toBe(false);
+  });
+
+  it('scopes capabilities to the enumerated provider — an id is not a capability', () => {
+    // The same id can be a VLM on one backend and text-only on another; a flat
+    // set would mark it eligible for either. LM Studio says it's vision; Ollama
+    // never reported it, so on Ollama only the regex may speak (and it says no).
+    const lmOnly = { ollama: new Set(), lmstudio: new Set(['shared-id:latest']) };
+    expect(visionLocalModelFilter('shared-id:latest', lmstudio, lmOnly)).toBe(true);
+    expect(visionLocalModelFilter('shared-id:latest', ollama, lmOnly)).toBe(false);
+  });
+
+  it('does not vouch for a custom provider pointed at a host the server never enumerated', () => {
+    // A custom provider at a REMOTE ollama resolves to the ollama backend, but
+    // the local /vision-models result says nothing about that host — so a local
+    // VLM's id must not make a same-named remote model "vision".
+    const remote = { id: 'ollama-udev', name: 'Ollama (udev)', endpoint: 'http://udev:11434' };
+    const localOnly = { ollama: new Set(['gemma4:e4b']) };
+    expect(visionLocalModelFilter('gemma4:e4b', ollama, localOnly)).toBe(true);
+    expect(visionLocalModelFilter('gemma4:e4b', remote, localOnly)).toBe(false);
+  });
+
+  it('leaves cloud providers untouched regardless of the authoritative map', () => {
+    expect(visionLocalModelFilter('gpt-4o', cloud, { ollama: new Set() })).toBe(true);
   });
 
   it('leaves cloud/API providers untouched (multimodal ids that miss the local regex pass)', () => {

@@ -42,6 +42,7 @@ export { default as useMounted } from './useMounted.js';
 export { default as usePendingListRows } from './usePendingListRows.js';
 export { default as usePopoverPosition } from './usePopoverPosition.js';
 export { default as useLocalModels } from './useLocalModels.js';
+export { default as useVisionModelIds } from './useVisionModelIds.js';
 export { default as usePreviewRoute } from './usePreviewRoute.js';
 export { default as useProviderModels } from './useProviderModels.js';
 export { default as useRowDraft } from './useRowDraft.js';
