@@ -87,9 +87,12 @@ export default function OverviewTab({ status, settings, onRefresh }) {
       return;
     }
     setCheckingContradictions(true);
+    // silent: the failure is surfaced inline below (contradictions.error), so
+    // letting request() toast as well would double-report the same error.
     const result = await api.detectSoulContradictions(
       selectedProvider.providerId,
-      selectedProvider.model
+      selectedProvider.model,
+      { silent: true }
     ).catch(e => ({ error: e.message }));
     setContradictions(result);
     setCheckingContradictions(false);
