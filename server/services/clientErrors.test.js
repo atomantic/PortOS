@@ -183,4 +183,84 @@ describe('recordClientError', () => {
     expect(arg.description).toContain('URL: https://portos/callback');
     expect(arg.description).not.toContain('access_token');
   });
+
+  describe('browser-extension errors', () => {
+    it('never reaches the Review Hub when thrown by an injected content script', async () => {
+      const result = await recordClientError({
+        type: 'error',
+        message: "Cannot read properties of null (reading 'ethereum')",
+        source: 'chrome-extension://examplewalletextensionid00000000/inpage.js',
+        url: 'https://portos/dashboard',
+      });
+
+      expect(result).toEqual({ accepted: false, reason: 'extension' });
+      expect(review.createItem).not.toHaveBeenCalled();
+    });
+
+    it('does not spend the throttle slot, so a real error right behind it still lands', async () => {
+      // The whole reason the filter runs BEFORE the throttle gate: an
+      // extension error accepted at T would drop a genuine PortOS error at
+      // T+<1s as `rate-limited`, losing it permanently.
+      await recordClientError({
+        type: 'unhandledrejection',
+        message: 'Failed to connect to MetaMask',
+      });
+      const real = await recordClientError({
+        type: 'error',
+        message: 'Genuine PortOS failure',
+        source: '/assets/index.js',
+      });
+
+      expect(real.accepted).toBe(true);
+      expect(review.createItem).toHaveBeenCalledTimes(1);
+      expect(review.createItem.mock.calls[0][0].title).toContain('Genuine PortOS failure');
+    });
+
+    it('still detects the frame when truncation would have cut it off', async () => {
+      // Why detection runs on the RAW payload: sanitize() caps the stack at
+      // MAX_STACK_CHARS (4000), so an unusually long first line pushes the
+      // originating frame past the cut and a post-sanitize check would let the
+      // extension error through as if it were ours.
+      const stack = [
+        `TypeError: ${'x'.repeat(5000)}`,
+        '    at inject (chrome-extension://examplewalletextensionid00000000/inpage.js:1:1)',
+      ].join('\n');
+
+      const result = await recordClientError({ type: 'error', message: 'boom', stack });
+
+      expect(result.reason).toBe('extension');
+      expect(review.createItem).not.toHaveBeenCalled();
+    });
+
+    it('does NOT drop a real PortOS error that merely ran through extension code', async () => {
+      // The extension frame is below ours, so PortOS threw it — it must reach
+      // the Review Hub rather than be silently swallowed.
+      const result = await recordClientError({
+        type: 'error',
+        message: "Cannot read properties of undefined (reading 'id')",
+        stack: [
+          "TypeError: Cannot read properties of undefined (reading 'id')",
+          '    at renderRow (https://portos/assets/index-abc.js:10:5)',
+          '    at wrappedFetch (chrome-extension://examplewalletextensionid00000000/inpage.js:1:1)',
+        ].join('\n'),
+      });
+
+      expect(result.accepted).toBe(true);
+      expect(review.createItem).toHaveBeenCalledTimes(1);
+    });
+
+    it('does NOT filter `crypto.randomUUID is not a function` — that is our own bug', async () => {
+      // Insecure-origin crash from PortOS's own code (see client/src/lib/uuid.js).
+      // It superficially resembles extension noise; filtering it would hide a
+      // real crash that fires from every toast.
+      const result = await recordClientError({
+        type: 'unhandledrejection',
+        message: 'crypto.randomUUID is not a function',
+        url: 'http://example-host.ts.net:5554/apps/portos-demo',
+      });
+
+      expect(result.accepted).toBe(true);
+      expect(review.createItem).toHaveBeenCalledTimes(1);
+    });
+  });
 });

@@ -27,6 +27,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useSearchParams, useNavigate, Link } from 'react-router-dom';
 import Drawer from '../components/Drawer';
+import { uuidv4 } from '../lib/uuid.js';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
 import LocalSetupPanel from '../components/settings/LocalSetupPanel';
 import RuntimeInstallModal from '../components/install/RuntimeInstallModal';
@@ -91,10 +92,7 @@ const MODES = [
   { id: 'a2v',    label: 'Audio',  icon: Music,      desc: 'Audio-to-video (audio drives motion + sync)' },
 ];
 
-const newQueueId = () =>
-  (typeof crypto !== 'undefined' && crypto.randomUUID)
-    ? crypto.randomUUID()
-    : `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+const newQueueId = () => uuidv4();
 
 const videoModelMemoryGb = (model) => {
   const explicit = Number(model?.memoryGb);
