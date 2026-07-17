@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Target, ArrowRight } from 'lucide-react';
-import { getGoals } from '../../services/api';
+import { getGoalsTree } from '../../services/api';
 import BrailleSpinner from '../BrailleSpinner';
 
 // The human's real life-goals, surfaced read-only on the Character sheet (#2675) so the sheet
@@ -75,14 +75,21 @@ export default function GoalsCard() {
 
   useEffect(() => {
     let cancelled = false;
+    // The TREE endpoint, not the flat one: `urgency` is only *persisted* when a goal is
+    // written or a birth date is set, and it decays from `timeHorizons.yearsRemaining` — so
+    // the stored value drifts stale with the mere passage of time, and `getGoals()` hands it
+    // back unrecomputed. `getGoalsTree().flat` re-derives urgency from current longevity, and
+    // is the exact source /goals ranks by, so the sheet can never disagree with the page it
+    // links to. (Enriching the flat endpoint instead would change a shared API's semantics.)
+    //
     // silent: this card owns its own error UI (the message below), so letting request() toast
     // as well would surface the same failure twice.
-    getGoals({ silent: true })
+    getGoalsTree({ silent: true })
       .then((data) => {
         if (cancelled) return;
         // Array.isArray, not truthiness: a genuinely zero-goal install must reach the empty
         // state, while a malformed payload must reach the error state.
-        if (Array.isArray(data?.goals)) setState({ status: 'ready', goals: data.goals });
+        if (Array.isArray(data?.flat)) setState({ status: 'ready', goals: data.flat });
         else setState({ status: 'error', goals: [] });
       })
       .catch(() => {
