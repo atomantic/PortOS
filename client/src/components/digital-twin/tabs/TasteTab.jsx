@@ -22,6 +22,7 @@ import {Palette,
   Minus} from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
+import socket from '../../../services/socket';
 import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
 import MarkdownOutput from '../../cos/MarkdownOutput';
@@ -70,10 +71,16 @@ export const noQuestionToast = (reason) => NO_QUESTION_TOAST[reason] || NO_QUEST
  * error toast with the provider's real reason, so that toast is the single voice for it —
  * the server also marks it warning-severity so the global `error:notified` channel stays
  * quiet. Everything else — validation, 500, network drop — has no other reporter (the
- * request is sent `{ silent: true }`), so this component is its single voice. Exactly one
- * layer speaks either way (#2733, #2669).
+ * request is sent `{ silent: true }`), so this component is its single voice.
+ *
+ * `statusChannelLive` is what keeps "someone else is reporting this" from collapsing into
+ * "nobody is". `ai:status` is an unbuffered Socket.IO event: with the socket down, HTTP
+ * still delivers the 502 but the toast never arrives, so deferring would fail the click
+ * in total silence. Deferring only while the channel is live keeps exactly one layer
+ * speaking in both states (#2733, #2669).
  */
-export const shouldReportGoDeeperError = (err) => err?.code !== 'AI_PROVIDER_ERROR';
+export const shouldReportGoDeeperError = (err, statusChannelLive) =>
+  err?.code !== 'AI_PROVIDER_ERROR' || !statusChannelLive;
 
 export default function TasteTab({ onRefresh }) {
   const [profile, setProfile] = useState(null);
@@ -195,7 +202,9 @@ export default function TasteTab({ onRefresh }) {
       selectedProvider.model,
       { silent: true }
     ).catch((err) => {
-      if (shouldReportGoDeeperError(err)) {
+      // Read `connected` at catch time: by now the server has emitted its ai:status
+      // error, so a live socket means that toast is landing and this layer defers.
+      if (shouldReportGoDeeperError(err, socket.connected)) {
         toast.error(err?.message || 'Failed to generate a personalized question');
       }
       return undefined;

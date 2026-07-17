@@ -24,15 +24,24 @@ describe('TasteTab "Go deeper" reporting', () => {
   });
 
   describe('shouldReportGoDeeperError', () => {
-    it('stays silent for a provider failure, which ai:status already toasts', () => {
+    const LIVE = true;
+    const DOWN = false;
+
+    it('stays silent for a provider failure while ai:status is live to toast it', () => {
       // Reporting here too would restore the double toast #2669 removed.
-      expect(shouldReportGoDeeperError({ code: 'AI_PROVIDER_ERROR', message: 'Provider returned 401' })).toBe(false);
+      expect(shouldReportGoDeeperError({ code: 'AI_PROVIDER_ERROR', message: 'Provider returned 401' }, LIVE)).toBe(false);
+    });
+
+    it('reports a provider failure when the status channel is down and cannot', () => {
+      // ai:status is unbuffered — deferring to a socket that is not connected would
+      // fail the click in total silence, the sentinel trap this guard exists to avoid.
+      expect(shouldReportGoDeeperError({ code: 'AI_PROVIDER_ERROR', message: 'Provider returned 401' }, DOWN)).toBe(true);
     });
 
     it('reports every other failure, which has no other voice once the request is silenced', () => {
-      expect(shouldReportGoDeeperError({ code: 'VALIDATION_ERROR', message: 'bad section' })).toBe(true);
-      expect(shouldReportGoDeeperError({ message: 'Server unreachable' })).toBe(true);
-      expect(shouldReportGoDeeperError(undefined)).toBe(true);
+      expect(shouldReportGoDeeperError({ code: 'VALIDATION_ERROR', message: 'bad section' }, LIVE)).toBe(true);
+      expect(shouldReportGoDeeperError({ message: 'Server unreachable' }, LIVE)).toBe(true);
+      expect(shouldReportGoDeeperError(undefined, LIVE)).toBe(true);
     });
   });
 });
