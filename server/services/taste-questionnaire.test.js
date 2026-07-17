@@ -168,6 +168,11 @@ describe('generatePersonalizedTasteQuestion outcomes', () => {
     await expect(taste.generatePersonalizedTasteQuestion('movies')).rejects.toMatchObject({
       code: 'AI_PROVIDER_ERROR',
       status: 502,
+      // Load-bearing: warning severity keeps this off the global `error:notified`
+      // channel, so useErrorNotifications doesn't red-toast it on top of the
+      // ai:status toast that already named the provider's reason. Dropping it
+      // silently restores the double toast #2669 removed.
+      severity: 'warning',
       message: expect.stringContaining('invalid key'),
     });
   });

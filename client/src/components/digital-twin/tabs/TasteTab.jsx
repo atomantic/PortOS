@@ -67,10 +67,11 @@ export const noQuestionToast = (reason) => NO_QUESTION_TOAST[reason] || NO_QUEST
  * Whether "Go deeper" must report a failed request itself.
  *
  * A provider failure (502 `AI_PROVIDER_ERROR`) is already announced by the `ai:status`
- * error toast with the provider's real reason, so that toast is the single voice for it.
- * Everything else — validation, 500, network drop — has no other reporter (the request
- * is sent `{ silent: true }`), so this component is its single voice. Exactly one layer
- * speaks either way (#2733, #2669).
+ * error toast with the provider's real reason, so that toast is the single voice for it —
+ * the server also marks it warning-severity so the global `error:notified` channel stays
+ * quiet. Everything else — validation, 500, network drop — has no other reporter (the
+ * request is sent `{ silent: true }`), so this component is its single voice. Exactly one
+ * layer speaks either way (#2733, #2669).
  */
 export const shouldReportGoDeeperError = (err) => err?.code !== 'AI_PROVIDER_ERROR';
 

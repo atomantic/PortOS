@@ -897,10 +897,12 @@ async function aggregateIdentityContext(sectionId) {
  *   - `{ question: null, reason: <why> }`   — nothing to ask. `reason` names which
  *     precondition was missing so the caller can explain the right thing instead of
  *     blaming the user's identity documents for every empty result.
- *   - throws `ServerError` (`AI_PROVIDER_ERROR`) — the provider call itself failed.
- *     `callProviderAISimple` has already emitted `ai:status` phase `error` carrying
- *     the real reason, so that toast is the single voice for this case and the
- *     client silences `request()`'s own toast. Do not add a second reporter here.
+ *   - throws `ServerError` (`AI_PROVIDER_ERROR`, warning severity) — the provider call
+ *     itself failed. `callProviderAISimple` has already emitted `ai:status` phase
+ *     `error` carrying the real reason, so that toast is the single voice: the client
+ *     silences `request()`'s toast and skips its own for this code, and the warning
+ *     severity keeps the global `error:notified` channel quiet. Three layers can report
+ *     this — exactly one must. Do not add a fourth.
  */
 export async function generatePersonalizedTasteQuestion(sectionId, providerId, model) {
   const config = TASTE_SECTIONS[sectionId];
@@ -949,9 +951,16 @@ Generate exactly ONE question. Do not include any preamble, numbering, or explan
   // classified as an error by callProviderAISimple, so it arrives here too.
   if (result.error) {
     console.log(`🎨 Personalized question generation failed for ${sectionId}: ${result.error}`);
+    // `severity: 'warning'` keeps this off the global error channel: every route error
+    // is broadcast as `error:notified` and toasted by useErrorNotifications, which
+    // would be a SECOND red toast on top of the `ai:status` one that already named the
+    // provider's real reason. Warning-severity opts out of that surfacing (precedent:
+    // routes/mediaJobs.js), leaving ai:status the single voice. The response is
+    // unchanged — callers still get a 502 + AI_PROVIDER_ERROR code.
     throw new ServerError(`Personalized question generation failed: ${result.error}`, {
       status: 502,
-      code: 'AI_PROVIDER_ERROR'
+      code: 'AI_PROVIDER_ERROR',
+      severity: 'warning'
     });
   }
 
