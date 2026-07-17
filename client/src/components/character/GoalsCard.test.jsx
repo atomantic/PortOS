@@ -8,10 +8,10 @@ import { MemoryRouter } from 'react-router-dom';
 //
 // All fixture goals use obviously-fake placeholder titles — never real goal data.
 
-const getGoals = vi.fn();
+const getGoalsTree = vi.fn();
 
 vi.mock('../../services/api', () => ({
-  getGoals: (...a) => getGoals(...a),
+  getGoalsTree: (...a) => getGoalsTree(...a),
 }));
 
 import GoalsCard, { selectTopGoals, progressPct, GOALS_PATH } from './GoalsCard';
@@ -28,7 +28,7 @@ const goal = (overrides = {}) => ({
 // Scoped to the card's own region: the sheet renders other percentages, and a page-wide
 // query would let a broken row pass.
 const renderCard = async (goals) => {
-  getGoals.mockResolvedValue(goals === undefined ? {} : { goals });
+  getGoalsTree.mockResolvedValue(goals === undefined ? {} : { flat: goals });
   render(<MemoryRouter><GoalsCard /></MemoryRouter>);
   const region = await screen.findByRole('region', { name: 'Life Goals' });
   await waitFor(() => expect(within(region).queryByText(/Loading goals/)).not.toBeInTheDocument());
@@ -145,13 +145,18 @@ describe('GoalsCard — populated', () => {
       .toBeInTheDocument();
   });
 
-  it('reads goals from the service without ever writing them back', async () => {
+  it('reads goals once from the tree endpoint, silently, and never writes them back', async () => {
     await renderCard([goal()]);
     // Surface, don't duplicate: a read-only mirror calls the read endpoint exactly once and
     // owns no write path at all.
-    expect(getGoals).toHaveBeenCalledTimes(1);
+    //
+    // The TREE endpoint specifically: getGoals() hands back whatever urgency was last
+    // WRITTEN, which decays as yearsRemaining falls, so ranking off it would let the sheet
+    // order goals differently from the /goals page it links to. Only getGoalsTree()
+    // re-derives urgency from current longevity.
+    expect(getGoalsTree).toHaveBeenCalledTimes(1);
     // silent — the card renders its own error message, so request() must not toast it too.
-    expect(getGoals).toHaveBeenCalledWith({ silent: true });
+    expect(getGoalsTree).toHaveBeenCalledWith({ silent: true });
   });
 });
 
@@ -178,7 +183,7 @@ describe('GoalsCard — empty', () => {
 describe('GoalsCard — error', () => {
   it('says the goals could not be loaded rather than claiming there are none', async () => {
     // The sentinel rule: "we could not read this" must not read as "you have never done this".
-    getGoals.mockRejectedValue(new Error('network'));
+    getGoalsTree.mockRejectedValue(new Error('network'));
     render(<MemoryRouter><GoalsCard /></MemoryRouter>);
 
     const card = within(await screen.findByRole('region', { name: 'Life Goals' }));

@@ -12,11 +12,14 @@ const get = vi.fn();
 vi.mock('../services/api', () => ({
   default: { get: (...a) => get(...a), post: vi.fn(), put: vi.fn() },
   generateAvatar: vi.fn(() => Promise.resolve({})),
-  // The sheet's GoalsCard fetches goals itself (#2675); stubbed empty so this suite stays
-  // scoped to the metrics grid. GoalsCard's own states are covered next to it, in
-  // components/character/GoalsCard.test.jsx.
-  getGoals: vi.fn(() => Promise.resolve({ goals: [] })),
 }));
+
+// GoalsCard (#2675) owns a mount-effect fetch of its own. Stubbed out rather than mocked at
+// the api layer so this suite stays scoped to the metrics grid AND settles synchronously —
+// a live child would resolve its promise after the sync test body and trip the act(...)
+// guard in src/test/setup.js. Its own states are covered next to it, in
+// components/character/GoalsCard.test.jsx.
+vi.mock('../components/character/GoalsCard', () => ({ default: () => null }));
 
 vi.mock('../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
