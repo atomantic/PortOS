@@ -86,6 +86,11 @@ export const AGENT_STATES = {
 // coding = jabbing away at the work (Punch); investigating = slow side-to-side
 // scan (No); reviewing = approving nod (Yes); planning = confident "locked in"
 // thumbs-up (ThumbsUp); ideating = creative celebration (Dance).
+//
+// This map is the single-clip base loop for each state — also the graceful
+// fallback for any state that ALSO has a MUSE_STATE_SEQUENCES entry (below) but
+// whose GLB is missing the sequence clips. Keep every entry mapped to an
+// in-place clip; the constants test asserts none is a MUSE_ROOT_MOTION_CLIPS.
 export const MUSE_STATE_ANIMATIONS = {
   sleeping:      { clip: 'Sitting',  timeScale: 0.8, once: true },
   thinking:      { clip: 'Idle',     timeScale: 0.85 },
@@ -96,18 +101,50 @@ export const MUSE_STATE_ANIMATIONS = {
   ideating:      { clip: 'Dance',    timeScale: 1.0 },
 };
 
+// Naming suffix for the neutralized "run/walk in place" clip variants that
+// MuseCoSAvatar synthesizes at load time (see `withInPlaceClips` in
+// client/src/utils/animationClips.js). This is an INTERNAL implementation
+// detail — sequences below reference real GLB clip names (`Running`) and the
+// avatar auto-routes any root-motion clip to its stripped variant. Exported
+// only so the avatar and the clip util agree on the suffix.
+export const MUSE_IN_PLACE_SUFFIX = ' (in place)';
+
+// Multi-clip montages: a state can cycle through an ordered list of clips
+// instead of looping one. Each step plays for `reps` repetitions (finite
+// LoopRepeat), then the AnimationMixer's `finished` event advances to the next
+// step, wrapping around — so `coding` reads as an energetic, varied work
+// montage (jab, sprint, leap, approve, stride, celebrate) rather than a single
+// clip on infinite repeat. Steps name real GLB clips; root-motion clips
+// (`Running`/`Walking`) are automatically routed to their neutralized in-place
+// variant by the avatar, so they can't drift the fixed frame. Steps are
+// resolved against the loaded GLB at runtime; unresolvable clips are dropped,
+// and a state whose GLB yields fewer than 2 resolvable steps falls back to its
+// MUSE_STATE_ANIMATIONS base loop.
+export const MUSE_STATE_SEQUENCES = {
+  coding: [
+    { clip: 'Punch',    timeScale: 1.2,  reps: 2 },
+    { clip: 'Running',  timeScale: 1.1,  reps: 4 },
+    { clip: 'Jump',     timeScale: 1.0,  reps: 1 },
+    { clip: 'ThumbsUp', timeScale: 0.95, reps: 1 },
+    { clip: 'Walking',  timeScale: 1.2,  reps: 4 },
+    { clip: 'Dance',    timeScale: 1.0,  reps: 1 },
+  ],
+};
+
 // Clip used when a mapped state clip is absent from the loaded GLB.
 export const MUSE_ANIMATION_FALLBACK = 'Idle';
 
 // One-shot gesture played on the rising edge of `speaking`, then the avatar
-// returns to its base state loop.
+// returns to its base state loop (or resumes its montage).
 export const MUSE_SPEAKING_GESTURE = 'Wave';
 
 // RobotExpressive clips that carry root translation (they walk the model
 // forward). Never used as a base loop for the fixed-frame avatar — the state
 // map above avoids them, the constants test asserts it, and MuseCoSAvatar's
 // "GLB has clips but none are mapped" fallback skips them so a custom GLB
-// whose first clip happens to be a walk cycle can't drift out of view.
+// whose first clip happens to be a walk cycle can't drift out of view. When a
+// montage step names one of these, the avatar auto-routes it to its neutralized
+// in-place variant (root-translation stripped) so it no longer drifts.
 export const MUSE_ROOT_MOTION_CLIPS = ['Walking', 'Running', 'WalkJump'];
 
 // Default messages shown when no specific event message is available
