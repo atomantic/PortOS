@@ -134,7 +134,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
         voiceMode: config.voiceMode
       }
     };
-    const result = await api.updateSettings(patch).catch(() => null);
+    const result = await api.updateSettings(patch, { silent: true }).catch(() => null);
     if (!result) return toast.error('Failed to save config');
     toast.success('Message config saved');
     setConfigDirty(false);
@@ -149,7 +149,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   const handleCreate = async () => {
     if (!form.name) return toast.error('Name is required');
     setSaving(true);
-    const result = await api.createMessageAccount(form).catch(() => null);
+    const result = await api.createMessageAccount(form, { silent: true }).catch(() => null);
     setSaving(false);
     if (!result) return toast.error('Failed to create account');
     setShowForm(false);
@@ -168,7 +168,7 @@ export default function ConfigTab({ accounts, setAccounts }) {
   };
 
   const handleToggle = async (account) => {
-    const result = await api.updateMessageAccount(account.id, { enabled: !account.enabled }).catch(() => null);
+    const result = await api.updateMessageAccount(account.id, { enabled: !account.enabled }, { silent: true }).catch(() => null);
     if (!result) return toast.error('Failed to update account');
     toast.success(account.enabled ? 'Account disabled' : 'Account enabled');
     setAccounts(prev => prev.map(a => a.id === account.id ? { ...a, enabled: !a.enabled } : a));
