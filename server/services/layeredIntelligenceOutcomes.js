@@ -23,6 +23,7 @@ import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { createCollectionStore } from '../lib/collectionStore.js';
 import { normalizeSlug, deriveOutcome, PROPOSAL_OUTCOMES, CLOSED_SUPPRESSION_MS } from './layeredIntelligence.js';
+import { classifyRejection, REJECTION_REASON_VALUES } from './layeredIntelligenceRejections.js';
 
 // The report/retention window. Reuses the dedup suppression window so a proposal
 // stays in the outcome report exactly as long as it still suppresses re-proposal —
@@ -38,6 +39,19 @@ export const LI_OUTCOMES_SCHEMA_VERSION = 1;
  * appId+slug (the identity), coerces the outcome to a known value or null, and
  * defaults the timestamps. Returning null makes collectionStore treat the row as
  * invalid (loadOne → null), so a hand-corrupted file can't poison the report.
+ *
+ * `rejectionReason` (#2689) carries the structured diagnosis and is deliberately
+ * three-valued — the sentinel rule, which matters here because the whole point of
+ * the field is to MEASURE how much history is undiagnosed:
+ *   - `null`             — not classified (a merged record, an unresolved one, or
+ *                          a record written before this field existed). Reconcile
+ *                          treats it as work to do.
+ *   - `'unknown-reason'` — classified, and no signal explained the rejection. A
+ *                          real, deliberate answer; NOT re-derived every run.
+ *   - a taxonomy token   — classified with a supporting signal.
+ * An unrecognized token coerces to `null` rather than `'unknown-reason'`, so a
+ * hand-edited or future-version value re-classifies on the next reconcile instead
+ * of being laundered into a fake "we looked and found nothing".
  */
 export function sanitizeOutcomeRecord(raw) {
   if (!raw || typeof raw !== 'object') return null;
@@ -45,6 +59,9 @@ export function sanitizeOutcomeRecord(raw) {
   const slug = normalizeSlug(raw.slug);
   if (!appId || !slug) return null;
   const outcome = PROPOSAL_OUTCOMES.includes(raw.outcome) ? raw.outcome : null;
+  // A merged proposal has no rejection to explain, so its slot stays null however
+  // the file reads — a stray token there would inflate the rejection tally.
+  const rejectable = outcome === 'rejected' || outcome === 'abandoned';
   return {
     appId,
     slug,
@@ -54,7 +71,8 @@ export function sanitizeOutcomeRecord(raw) {
     filedAt: typeof raw.filedAt === 'string' ? raw.filedAt : null,
     outcome,
     outcomeAt: outcome && typeof raw.outcomeAt === 'string' ? raw.outcomeAt : null,
-    outcomeReason: outcome && typeof raw.outcomeReason === 'string' ? raw.outcomeReason : null
+    outcomeReason: outcome && typeof raw.outcomeReason === 'string' ? raw.outcomeReason : null,
+    rejectionReason: rejectable && REJECTION_REASON_VALUES.includes(raw.rejectionReason) ? raw.rejectionReason : null
   };
 }
 
@@ -113,7 +131,9 @@ export async function recordFiledProposal({ appId, slug, tracker = null, issueRe
     filedAt: new Date(now).toISOString(),
     outcome: null,
     outcomeAt: null,
-    outcomeReason: null
+    outcomeReason: null,
+    // Unresolved: nothing has rejected it yet, so there is nothing to diagnose.
+    rejectionReason: null
   };
   await ensureTypeIndex(store);
   const ok = await store.saveOne(outcomeId(appId, normSlug), record).then(() => true, (err) => {
@@ -202,6 +222,14 @@ export async function reconcileOutcomes({ appId, existingIssues = [], now = Date
     if (!issue) continue;
     const outcome = deriveOutcome(issue);
     if (!outcome) continue;
+    // Diagnose WHY a non-merged proposal ended that way (#2689). Derived from the
+    // issue rows the reconciler already has, so classification costs no extra
+    // tracker call. Merged/unresolved → null.
+    const rejectionReason = classifyRejection({
+      outcome,
+      stateReason: issue.stateReason,
+      labels: issue.labels
+    });
     // A same-outcome record is only rewritten when the tracker reports a NEWER
     // close time (closed → reopened → re-closed): outcomeAt drives retention/GC,
     // so it must track the latest closure. Timestampless trackers (plan) and an
@@ -209,12 +237,19 @@ export async function reconcileOutcomes({ appId, existingIssues = [], now = Date
     const closedMs = Date.parse(issue.closedAt);
     const storedMs = Date.parse(r.outcomeAt);
     const newerClose = Number.isFinite(closedMs) && (!Number.isFinite(storedMs) || closedMs > storedMs);
-    if (outcome === r.outcome && !newerClose) continue;
+    // A changed classification is its own reason to rewrite — same self-heal as
+    // the outcome reclassification above (#2620). It BACKFILLS records written
+    // before the taxonomy existed (stored null, now a token) and re-diagnoses an
+    // `unknown-reason` record once someone finally labels the issue. Comparing the
+    // derived token to the stored one (rather than writing unconditionally) keeps
+    // a settled record from churning on every reconcile.
+    if (outcome === r.outcome && rejectionReason === r.rejectionReason && !newerClose) continue;
     const next = {
       ...r,
       outcome,
       outcomeAt: issue.closedAt || r.outcomeAt || new Date(now).toISOString(),
-      outcomeReason: issue.stateReason || 'auto-derived from tracker state'
+      outcomeReason: issue.stateReason || 'auto-derived from tracker state',
+      rejectionReason
     };
     const ok = await store.saveOne(outcomeId(appId, r.slug), next).then(() => true, () => false);
     if (ok) updated += 1;
