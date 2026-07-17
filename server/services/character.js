@@ -117,8 +117,13 @@ function createEvent(type, description, overrides = {}) {
 export function createDefaultCharacter() {
   const now = new Date().toISOString();
   return {
-    name: 'Adventurer',
-    class: 'Developer',
+    // Empty = unset. The human-centered Character page (#2677) renders "Your name" / "Add a
+    // title" placeholders for an empty name/class, so a fresh install starts blank rather than
+    // presenting the old generic "Adventurer" / "Developer" identity (epic #2672). Existing
+    // installs whose character.json still carries those legacy defaults are cleared by
+    // migration 198.
+    name: '',
+    class: '',
     xp: 0,
     hp: DEFAULT_MAX_HP,
     maxHp: DEFAULT_MAX_HP,
