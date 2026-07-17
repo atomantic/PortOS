@@ -19,7 +19,7 @@ export const mcpSyncGoogleCalendar = (accountId) => request(`/calendar/sync/${ac
 export const mcpDiscoverCalendars = (accountId) => request(`/calendar/sync/${accountId}/discover`, { method: 'POST' });
 export const getGoogleAuthStatus = () => request('/calendar/google/auth/status');
 export const saveGoogleAuthCredentials = (data) => request('/calendar/google/auth/credentials', { method: 'POST', body: JSON.stringify(data) });
-export const getGoogleAuthUrl = () => request('/calendar/google/auth/url');
+export const getGoogleAuthUrl = (options = {}) => request('/calendar/google/auth/url', options);
 export const clearGoogleAuth = () => request('/calendar/google/auth/clear', { method: 'POST' });
 export const apiSyncGoogleCalendar = (accountId) => request(`/calendar/sync/${accountId}/api`, { method: 'POST' });
 export const apiDiscoverCalendars = (accountId) => request(`/calendar/sync/${accountId}/discover-api`, { method: 'POST' });

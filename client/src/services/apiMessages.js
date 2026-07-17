@@ -7,7 +7,7 @@ export const updateMessageAccount = (id, data) => request(`/messages/accounts/${
 export const deleteMessageAccount = (id) => request(`/messages/accounts/${id}`, { method: 'DELETE' });
 export const syncMessageAccount = (accountId, mode = 'unread', options = {}) => request(`/messages/sync/${accountId}`, { method: 'POST', body: JSON.stringify({ mode }), ...options });
 export const getMessageSyncStatus = (accountId) => request(`/messages/sync/${accountId}/status`);
-export const evaluateMessages = (data = {}) => request('/messages/evaluate', { method: 'POST', body: JSON.stringify(data) });
+export const evaluateMessages = (data = {}, options = {}) => request('/messages/evaluate', { method: 'POST', body: JSON.stringify(data), ...options });
 export const getMessageInbox = (params = {}) => {
   const qs = new URLSearchParams();
   if (params.accountId) qs.set('accountId', params.accountId);
@@ -44,7 +44,7 @@ export const executeMessageAction = (accountId, messageId, action, options = {})
   request(`/messages/${accountId}/${messageId}/action`, { method: 'POST', body: JSON.stringify({ action }), silent: true, ...options });
 export const clearMessageCache = (accountId) =>
   request(`/messages/accounts/${accountId}/cache/clear`, { method: 'POST' });
-export const enableGmailApi = () => request('/messages/gmail/enable-api', { method: 'POST' });
+export const enableGmailApi = (options = {}) => request('/messages/gmail/enable-api', { method: 'POST', ...options });
 
 // iMessage ingestion (#2151) — read-only chat.db sync, tribe + timeline feed.
 export const getImessageStatus = (options = {}) => request('/imessage/status', options);

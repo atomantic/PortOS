@@ -106,14 +106,14 @@ export default function ConfigTab({ accounts, setAccounts }) {
 
   const handleReauthorize = () => {
     setReauthorizing(true);
-    api.getGoogleAuthUrl()
+    api.getGoogleAuthUrl({ silent: true })
       .then(({ url }) => { window.open(url, '_blank'); })
       .catch(() => toast.error('Failed to get auth URL'))
       .finally(() => setReauthorizing(false));
   };
 
   const handleEnableGmailApi = () => {
-    api.enableGmailApi()
+    api.enableGmailApi({ silent: true })
       .then(r => toast.success(r.message))
       .catch(() => toast.error('Failed to open Gmail API page'));
   };

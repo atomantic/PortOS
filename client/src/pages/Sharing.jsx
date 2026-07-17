@@ -199,7 +199,7 @@ function SharingBuckets({ selectedId }) {
       mode: form.mode,
       displayNameOverride: form.displayNameOverride.trim() || null,
       bioOverride: form.bioOverride.trim() || null,
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to register bucket');
       return null;
     });
@@ -221,7 +221,7 @@ function SharingBuckets({ selectedId }) {
       const next = prior.find((b) => b.id !== bucket.id);
       navigate(next ? `/sharing/buckets/${encodeURIComponent(next.id)}` : '/sharing');
     }
-    return deleteShareBucket(bucket.id).catch((err) => {
+    return deleteShareBucket(bucket.id, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to remove bucket');
       setBuckets(prior);
     });
@@ -229,7 +229,7 @@ function SharingBuckets({ selectedId }) {
 
   const handleModeToggle = async (bucket) => {
     const nextMode = bucket.mode === 'auto-merge' ? 'inbox' : 'auto-merge';
-    const result = await updateShareBucket(bucket.id, { mode: nextMode }).catch((err) => {
+    const result = await updateShareBucket(bucket.id, { mode: nextMode }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to update mode');
       return null;
     });
@@ -244,7 +244,7 @@ function SharingBuckets({ selectedId }) {
       sharingDisplayName: sharingDisplayName.trim(),
       sharingBio: sharingBio.trim(),
     };
-    const merged = await updateSettings(patch).catch((err) => {
+    const merged = await updateSettings(patch, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to save');
       return null;
     });
@@ -256,7 +256,7 @@ function SharingBuckets({ selectedId }) {
   };
 
   const handlePromote = async (bucketId, manifestId) => {
-    const result = await promoteShareInboxItem(bucketId, manifestId).catch((err) => {
+    const result = await promoteShareInboxItem(bucketId, manifestId, { silent: true }).catch((err) => {
       toast.error(err.message || 'Promote failed');
       return null;
     });
@@ -267,7 +267,7 @@ function SharingBuckets({ selectedId }) {
   };
 
   const handleDismiss = async (bucketId, manifestId) => {
-    const result = await dismissShareInboxItem(bucketId, manifestId).catch((err) => {
+    const result = await dismissShareInboxItem(bucketId, manifestId, { silent: true }).catch((err) => {
       toast.error(err.message || 'Dismiss failed');
       return null;
     });
