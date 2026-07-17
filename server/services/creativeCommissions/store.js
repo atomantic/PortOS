@@ -315,7 +315,15 @@ export async function listCommissions() {
   // any un-migrated legacy inline feedback is split lazily by getCommission /
   // backfillAllCommissionFeedback, not on this hot list path.
   const byId = await listFeedbackByCommissionIds(recs.map((r) => r.id)).catch(() => new Map());
-  for (const r of recs) r.feedback = byId.get(r.id) || [];
+  // Prefer the federated view; fall back to the record's own (sanitized) inline
+  // feedback only when NO federated reaction exists for it yet — the transient
+  // pre-migration window before getCommission / backfillAllCommissionFeedback has
+  // split its legacy inline reactions. `byId.has` (not `|| []`) distinguishes
+  // "federated store has this commission's reactions" (authoritative, even if the
+  // array is non-empty) from "not yet migrated" (show the legacy inline so the
+  // list page doesn't transiently under-report), without ever double-counting
+  // (post-migration the inline array is empty).
+  for (const r of recs) r.feedback = byId.has(r.id) ? byId.get(r.id) : r.feedback;
   return recs;
 }
 
@@ -328,8 +336,16 @@ export async function getCommission(id) {
   // route GET always see the federated feedback even before the boot backfill
   // runs. Idempotent (deterministic ids, never-clobber upsert).
   if (rec.feedback.length > 0) {
-    await backfillInlineFeedback(id, rec.feedback).catch(() => {});
-    await clearInlineFeedback(id).catch(() => {});
+    // Clear the inline array ONLY if the split SUCCEEDED. A mid-batch DB failure
+    // in backfillInlineFeedback (after ≥1 reaction was federated) must leave the
+    // inline array intact so a later read/boot can retry — clearing on a swallowed
+    // throw would permanently drop the un-migrated reactions. Gate on "didn't
+    // throw", NOT on the boolean return (which is legitimately false on an
+    // idempotent re-run where everything is already federated — clearing is still
+    // correct then).
+    let split = false;
+    try { await backfillInlineFeedback(id, rec.feedback); split = true; } catch { /* leave inline for retry */ }
+    if (split) await clearInlineFeedback(id).catch(() => {});
   }
   rec.feedback = await listFeedbackForCommission(id).catch(() => []);
   return rec;
@@ -501,7 +517,10 @@ export async function backfillAllCommissionFeedback() {
   for (const r of raw) {
     const rec = sanitizeCommission(r);
     if (!rec || rec.feedback.length === 0) continue;
-    await backfillInlineFeedback(rec.id, rec.feedback).catch(() => {});
+    // Same non-atomic guard as getCommission: clear the inline array only after
+    // the split succeeded, so a transient failure mid-batch leaves the un-migrated
+    // reactions in place for the next boot/read instead of silently dropping them.
+    try { await backfillInlineFeedback(rec.id, rec.feedback); } catch { continue; }
     await clearInlineFeedback(rec.id).catch(() => {});
     migrated += 1;
   }

@@ -32,8 +32,10 @@ const {
   updateCommission,
   deleteCommission,
   getCommission,
+  listCommissions,
   recordCommissionRun,
   submitCommissionFeedback,
+  backfillAllCommissionFeedback,
   ERR_VALIDATION,
   ERR_NOT_FOUND,
 } = await import('./store.js');
@@ -240,6 +242,48 @@ describe('sanitizeCommission (feedback)', () => {
     expect(rec.feedback).toHaveLength(100); // MAX_PERSISTED_FEEDBACK
     // The ratingless entry is filtered before capping.
     expect(rec.feedback.every((f) => f.rating === 'up' || f.rating === 'down')).toBe(true);
+  });
+});
+
+describe('legacy inline feedback → federated split (#2686)', () => {
+  // Seed a pre-#2686 record that still carries INLINE feedback (Phase 2 storage),
+  // written straight into the machine-local commission map.
+  const seedLegacy = () => {
+    records.set('commission-legacy', {
+      id: 'commission-legacy', name: 'Legacy', enabled: true, targetAbility: 'video',
+      brief: {}, schedule: { kind: 'DAILY', atLocalTime: '02:00' }, generation: {},
+      runs: [{ id: 'run-A', status: 'started' }],
+      feedback: [{ id: 'feedback-old', runId: 'run-A', rating: 'up', note: 'legacy like', at: '2026-01-01T00:00:00.000Z' }],
+      createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+  };
+
+  it('listCommissions falls back to inline feedback before migration (no under-report)', async () => {
+    seedLegacy();
+    const list = await listCommissions();
+    const legacy = list.find((c) => c.id === 'commission-legacy');
+    expect(legacy.feedback).toHaveLength(1);
+    expect(legacy.feedback[0]).toMatchObject({ runId: 'run-A', rating: 'up', note: 'legacy like' });
+  });
+
+  it('getCommission migrates inline → federated and clears the inline array', async () => {
+    seedLegacy();
+    const rec = await getCommission('commission-legacy');
+    expect(rec.feedback).toHaveLength(1);
+    expect(rec.feedback[0]).toMatchObject({ runId: 'run-A', rating: 'up', note: 'legacy like' });
+    // Inline array on the machine-local record is now cleared; a federated record exists.
+    expect(records.get('commission-legacy').feedback).toEqual([]);
+    expect([...feedbackRecords.values()].some((f) => f.commissionId === 'commission-legacy')).toBe(true);
+  });
+
+  it('backfillAllCommissionFeedback splits every commission idempotently', async () => {
+    seedLegacy();
+    const first = await backfillAllCommissionFeedback();
+    expect(first.migrated).toBe(1);
+    // Re-running is a no-op (inline already cleared).
+    const second = await backfillAllCommissionFeedback();
+    expect(second.migrated).toBe(0);
+    expect(records.get('commission-legacy').feedback).toEqual([]);
   });
 });
 
