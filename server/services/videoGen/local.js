@@ -1693,6 +1693,12 @@ export async function deleteHistoryItem(id) {
   // Serialized removal through the shared tail (re-filters the freshest list),
   // so a concurrent download/render append isn't dropped by this save.
   await mutateVideoHistory((h) => h.filter((x) => x.id !== id));
+  // Drop the derived index row with the entry (#2738) — keyed by job id, the
+  // ref the index wrote it under. Non-fatal + dynamically imported; see the
+  // matching hook in imageGen/local.js#deleteImage for the rationale.
+  await import('../mediaAssetIndex/index.js')
+    .then((m) => m.unindexVideo(id))
+    .catch((err) => console.error(`❌ Media index video delete hook: ${err.message}`));
   console.log(`🗑️ Deleted video: ${item.filename}`);
   return { ok: true };
 }

@@ -4,10 +4,15 @@
  * Writes the `media_assets` table. This table is a DERIVED index over media
  * that lives on disk, so the write surface is small:
  *   - upsertAsset(row)         — index/refresh one asset (the live hook + reconcile)
- *   - removeAsset(mediaKey)    — drop one asset's row (delete hook, future slice)
+ *   - removeAsset(mediaKey)    — drop one asset's row. Driven by the live delete
+ *                                hooks (index.js unindexImage/unindexVideo), so a
+ *                                row dies with its file rather than lingering
+ *                                until the next boot (#2738).
  *   - reconcileMediaAssets()   — full sweep: upsert every on-disk asset, prune
  *                                rows whose backing file is gone. Idempotent and
- *                                cheap to re-run; called at boot.
+ *                                cheap to re-run; called at boot. Still the
+ *                                backstop for OUT-OF-BAND removals (a file
+ *                                deleted off-disk never runs a delete hook).
  *   - listAssets(...)          — query helper (no consumer reads it for
  *                                correctness yet; here for the follow-up slices
  *                                that make collections/catalog resolve through it)

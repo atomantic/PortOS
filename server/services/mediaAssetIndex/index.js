@@ -7,6 +7,8 @@
  *     to the existing image/video `completed` events so a freshly generated
  *     asset is indexed immediately, then runs a full reconcile so the index
  *     matches disk regardless of any events missed while the server was down.
+ *   - unindexImage() / unindexVideo() — the delete-side mirror of those hooks,
+ *     called by the media delete paths so a row dies with its file (#2738).
  *   - The reconcile + row I/O live in db.js; the pure transforms in logic.js.
  *
  * No hot-path generator edits: we hang off the `imageGenEvents` /
@@ -21,8 +23,8 @@
 import { checkHealth, ensureSchema } from '../../lib/db.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { videoGenEvents } from '../videoGen/events.js';
-import { upsertAsset, reconcileMediaAssets } from './db.js';
-import { imageToRow, videoToRow } from './logic.js';
+import { upsertAsset, removeAsset, reconcileMediaAssets } from './db.js';
+import { imageMediaKey, imageToRow, videoMediaKey, videoToRow } from './logic.js';
 
 export { reconcileMediaAssets } from './db.js';
 
@@ -62,6 +64,32 @@ async function onVideoCompleted({ generationId } = {}) {
   if (!entry) return;
   const row = videoToRow(entry);
   await upsertAsset(row).catch((err) => console.error(`❌ Media index video upsert failed: ${err.message}`));
+}
+
+// Drop one row, non-fatally. The delete paths call this AFTER the file is
+// already gone, so a failure here must never surface to the user — the row just
+// lingers until the next boot reconcile prunes it, i.e. exactly the old
+// behavior. Skipped under the escape hatch, where there's no index to maintain.
+async function unindexKey(mediaKey, kind) {
+  if (!mediaKey || isEscapeHatch()) return;
+  await removeAsset(mediaKey).catch((err) => console.error(`❌ Media index ${kind} remove failed: ${err.message}`));
+}
+
+/**
+ * Drop a deleted image's row. `filename` is the gallery filename — the same ref
+ * onImageCompleted indexed it under, so the key matches the row that was written.
+ * Never throws.
+ */
+export async function unindexImage(filename) {
+  await unindexKey(imageMediaKey(filename), 'image');
+}
+
+/**
+ * Drop a deleted video's row. `id` is the job id (NOT the filename) — the same
+ * ref onVideoCompleted indexed it under. Never throws.
+ */
+export async function unindexVideo(id) {
+  await unindexKey(videoMediaKey(id), 'video');
 }
 
 /**

@@ -48,6 +48,7 @@
 - A Creative Director project no longer wedges in "Planning" when its agent is interrupted or crashes mid-run. The stuck run is now cleaned up as soon as the dead agent is detected, so the project can retry on its own instead of waiting for the next server restart.
 - The Creative Director "Runs" tab now shows why a run failed (e.g. "interrupted by restart") instead of leaving failed runs blank with no explanation.
 - Creative Director agents are no longer told to run `/do:push` (or open a pull request) when they finish. A CD agent's job is to write its plan or update a scene over the API, not to change code — so the end-of-task "commit and push" instruction was wrong and just made the agent load that command for nothing. They now get a completion step that matches what they actually do.
+- [issue-2738] **Deleting an image or video now drops your media asset count right away, instead of waiting for a restart.** The media index kept a row for every deleted asset until the next boot swept it up, so the Character sheet's Auteur skill and Media Assets tile — both of which count that index — kept counting media you'd already thrown away. Deletes now retire the row with the file, including for downloaded videos. The boot sweep stays as the backstop for anything removed outside PortOS (a file deleted straight off disk never runs a delete). A failing index removal can't fail the delete itself: the file is already gone, so the row just waits for the next sweep exactly as it used to.
 
 ## Character Sheet
 

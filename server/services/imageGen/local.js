@@ -992,6 +992,15 @@ export async function deleteImage(filename) {
   await unlink(join(PATHS.images, filename)).catch(() => {});
   await unlink(join(PATHS.images, filename.replace('.png', '.metadata.json'))).catch(() => {});
   await unlink(join(PATHS.images, `${filename}.metadata.json`)).catch(() => {});
+  // Drop the derived index row with the file (#2738). Without this the row
+  // survives until the next boot reconcile, so anything counting the index
+  // (the Character sheet's Auteur skill / Media Assets tile) reads high in
+  // between. Non-fatal + dynamically imported: a broken index must never fail
+  // the user's delete, and this keeps the pg stack out of this module's static
+  // graph (the mirror of how the index dynamically imports the media stack).
+  await import('../mediaAssetIndex/index.js')
+    .then((m) => m.unindexImage(filename))
+    .catch((err) => console.error(`❌ Media index image delete hook: ${err.message}`));
   console.log(`🗑️ Deleted image: ${filename}`);
   return { ok: true };
 }
