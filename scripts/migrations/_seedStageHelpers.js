@@ -14,8 +14,8 @@
  * leave a newly-shipped stage unseeded and the dependent check would throw
  * "Stage not found" the first time it runs.
  *
- * `makeSeedMigration(stageKey, { filename })` returns the `{ up }` object every
- * such migration exports as its default. The runner (`scripts/run-migrations.js`)
+ * `makeSeedMigration(stageKey, { filename })` returns the `{ up, stages }` object
+ * every such migration exports as its default. The runner (`scripts/run-migrations.js`)
  * only ever calls `up()` and tracks applied migrations by filename — there is no
  * rollback path, so no `down()` is emitted (it would be never-invoked dead code).
  * The runner skips `_`-prefixed files, so this module is never imported as a
@@ -77,7 +77,9 @@ export function normalizeStageSpec(spec) {
 export function makeSeedMigrations(stageSpecs) {
   // Frozen because `up()` closes over this same array on an ESM module-cached
   // singleton — a consumer mutating it would silently change what gets seeded.
-  const stages = Object.freeze(stageSpecs.map(normalizeStageSpec));
+  // Deep: `up()` destructures `{ stageKey, filename }` out of the elements at
+  // call time, so freezing only the array would leave that mutable.
+  const stages = Object.freeze(stageSpecs.map((spec) => Object.freeze(normalizeStageSpec(spec))));
   return {
     stages,
     async up({ rootDir }) {
@@ -154,7 +156,7 @@ export function makeSeedMigrations(stageSpecs) {
  * Single-stage convenience wrapper over {@link makeSeedMigrations}.
  * @param {string} stageKey  - stage-config key, e.g. `pipeline-editorial-character-consistency`
  * @param {{ filename?: string }} [opts] - template basename under `prompts/stages/` (defaults to `${stageKey}.md`)
- * @returns {{ up: (ctx: { rootDir: string }) => Promise<void> }}
+ * @returns {{ up: (ctx: { rootDir: string }) => Promise<void>, stages: ReadonlyArray<{ stageKey: string, filename: string }> }}
  */
 export function makeSeedMigration(stageKey, { filename = `${stageKey}.md` } = {}) {
   return makeSeedMigrations([{ stageKey, filename }]);

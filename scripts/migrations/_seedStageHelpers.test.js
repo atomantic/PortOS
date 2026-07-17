@@ -48,11 +48,14 @@ describe('makeSeedMigration', () => {
     expect(migration.stages).toEqual([{ stageKey: STAGE_KEY, filename: FILENAME }]);
   });
 
-  it('freezes the exposed stages so a consumer cannot mutate what up() seeds', () => {
+  it('deep-freezes the exposed stages so a consumer cannot mutate what up() seeds', () => {
     // `stages` is the same array `up()` closes over on an ESM module-cached
     // singleton — mutating it would silently change what the migration seeds.
+    // The freeze must reach the specs: up() destructures stageKey/filename out
+    // of them at call time, so a shallow freeze would leave that mutable.
     const migration = makeSeedMigration(STAGE_KEY);
     expect(Object.isFrozen(migration.stages)).toBe(true);
+    expect(Object.isFrozen(migration.stages[0])).toBe(true);
   });
 
   it('seeds the .md template and merges the stage-config entry on a fresh install', async () => {
