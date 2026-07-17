@@ -819,28 +819,64 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
  * and that is exactly the signal task-learning wants. `checkForTaskCommit` is
  * git-repo-gated, off the event loop, and hard-timeout-bounded, so a non-repo
  * workspace or a hung git degrades to "no commit" rather than stalling finalize.
+ *
+ * `hookResult` is the programmatic-I/O output-hook result (from
+ * `dispatchTaskOutputHook`), which finalizeAgent resolves BEFORE calling this so
+ * those task types can be judged by their real deliverable; `success` is the
+ * runner's exit-code verdict that hook result is weighed against. Both are
+ * absent/null for every other task shape.
  */
-export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath }) {
+export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, success = false, hookResult = null }) {
   if (terminatedByUser) return null;
   const taskType = task?.taskType || 'user';
+  // Programmatic-I/O tasks (taskTypeHooks.js) declare their OWN criterion — the
+  // sentinel parsed and the hook accepted it — so this branch comes FIRST: it is
+  // keyed on the hook result rather than on a workspace/commit, and must not be
+  // pre-empted by the `!workspacePath` bail below (a hook that already ran and
+  // threw is a real verdict even if the worktree is gone). Their prompts
+  // explicitly FORBID committing or opening a PR (the worktree is discarded), so
+  // the `[task-<id>]` commit check would mark every correct run a failure (#2700).
+  // Judging them purely by exit code instead is also wrong: an exit-0 run whose
+  // `.agent-done` sentinel was missing/malformed, or whose hook threw, produced
+  // nothing usable and must be recorded as the failure it is (#2727).
+  if (isProgrammaticIoTaskType(task?.metadata?.analysisType)) {
+    return resolveProgrammaticIoVerdict({ success, hookResult });
+  }
   // Interactive/user tasks declare no machine-checkable criterion; neither does
   // a run missing the task id or workspace needed to validate.
   if (taskType === 'user' || !task?.id || !workspacePath) return null;
   // Pipeline/media tasks deliver artifacts, not a `[task-<id>]` commit — the
   // commit criterion doesn't apply, so don't mislabel a clean artifact run as a
   // validation miss (which would also pollute the correlation window). null =
-  // no commit criterion declared for this task shape.
+  // no commit criterion declared for this task shape. Unlike programmatic-I/O
+  // tasks they register no output hook, so there is no deliverable signal to
+  // judge them by — they stay exit-code-judged (unchanged by #2727).
   if (task?.metadata?.pipeline || task?.metadata?.mediaJob) return null;
-  // Programmatic-I/O tasks (taskTypeHooks.js) are the same story one step further:
-  // their deliverable is the `.agent-done` sentinel an output hook consumes, and
-  // their prompts explicitly FORBID committing or opening a PR (the worktree is
-  // discarded). Checking for a `[task-<id>]` commit would therefore mark every
-  // correctly-executed run a failure — and because a declared verdict OVERRIDES the
-  // runner's exit code in task-learning (`outcomeSuccess`), that poisons the type's
-  // success rate to ~0 and, through it, anything reading that rate back. null = no
-  // commit criterion declared for this task shape.
-  if (isProgrammaticIoTaskType(task?.metadata?.analysisType)) return null;
   return await checkForTaskCommit(task.id, workspacePath);
+}
+
+/**
+ * The programmatic-I/O success criterion (#2727): "the sentinel parsed and the
+ * output hook accepted it". Pure.
+ *
+ * Delegates the accept/reject classification to `resolveTypeFailureSignal`, the
+ * same pure decision the #2616 type-level failure ledger uses — so the learning
+ * verdict and the ledger can never drift apart on what counts as a bad run
+ * (thrown hook, `unparseable-response`), and a new benign reason only has to be
+ * taught to one function.
+ *
+ * Sentinel discipline: a hook that never ran (type registers no
+ * `processTaskOutput`, or no task type resolved) yields NO verdict — null, not
+ * `true`. "Nothing evaluated the output" must not collapse into "the output was
+ * accepted"; null lets task-learning fall back to the exit code as before.
+ *
+ * @returns {boolean|null} true = accepted, false = rejected, null = undeclared
+ */
+export function resolveProgrammaticIoVerdict({ success, hookResult }) {
+  if (!hookResult?.ran) return null;
+  const signal = resolveTypeFailureSignal({ success, hookResult });
+  if (signal.record === 'skip') return null;
+  return signal.record === 'success';
 }
 
 /**
@@ -886,12 +922,38 @@ export async function finalizeAgent({
       ? { status: 'completed' }
       : await resolveFailedTaskUpdate(task, errorAnalysis, agentId);
 
+  // Programmatic-I/O task types (e.g. layered-intelligence) run a deterministic
+  // post-agent step on the agent's STRUCTURED output — the parsed `.agent-done`
+  // payload — rather than only handling the completion sentinel. Read + dispatch
+  // it mode-agnostically here (the single finalize chokepoint for TUI/CLI/runner
+  // agents), gated on the task type actually registering an output hook so a
+  // normal agent pays no extra I/O. Its side effects (filing an issue, etc.) are
+  // isolated from the agent's discarded worktree — the payload is the only
+  // durable channel out. Errors are caught: a hook failure must not strand the
+  // rest of finalize. See taskTypeHooks.js + the design plan.
+  //
+  // Ordering (#2727): this runs BEFORE completeAgent because the hook result is
+  // the only signal that can judge a programmatic-I/O run (see
+  // evaluateSuccessCriteria), and completeAgent is what writes the learning
+  // verdict — so the judgement has to exist first. Safe for every other task
+  // shape: dispatchTaskOutputHook is a no-op unless the type registers a hook
+  // (isProgrammaticIoTaskType), so nothing else is reordered. The lane is already
+  // released by this point (releaseAgentLane fires earlier, in the spawn paths),
+  // and `agent:completed` — which schedules the next dequeue — still fires from
+  // completeAgent below, i.e. AFTER any handoff task the hook enqueues.
+  const hookResult = await dispatchTaskOutputHook({ agentId, task, success, workspacePath }).catch(err => {
+    emitLog('error', `processTaskOutput hook threw for ${agentId} (${task?.taskType}): ${err.message}`, { agentId, error: err.message });
+    // A thrown hook is a non-success signal for the type ledger (#2616) and a
+    // failed success criterion for task-learning (#2727).
+    return { ran: true, threw: true };
+  });
+
   // Success-criteria validation (issue #2344): stamp an explicit pass/fail (or
   // null-when-undeclared) verdict onto the completion result, distinct from the
   // exit-code `success`, so task-learning telemetry can distinguish "ran clean
   // but produced nothing" from a genuine success. Best-effort — a validation
   // check failure must never block finalize (falls back to the null sentinel).
-  const validationPassed = await evaluateSuccessCriteria({ task, terminatedByUser, workspacePath })
+  const validationPassed = await evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, success, hookResult })
     .catch(err => {
       emitLog('warn', `⚠️ Success-criteria validation failed for ${agentId}: ${err.message}`, { agentId });
       return null;
@@ -942,21 +1004,6 @@ export async function finalizeAgent({
       });
     }
   }
-
-  // Programmatic-I/O task types (e.g. layered-intelligence) run a deterministic
-  // post-agent step on the agent's STRUCTURED output — the parsed `.agent-done`
-  // payload — rather than only handling the completion sentinel. Read + dispatch
-  // it mode-agnostically here (the single finalize chokepoint for TUI/CLI/runner
-  // agents), gated on the task type actually registering an output hook so a
-  // normal agent pays no extra I/O. Its side effects (filing an issue, etc.) are
-  // isolated from the agent's discarded worktree — the payload is the only
-  // durable channel out. Errors are caught: a hook failure must not strand the
-  // rest of finalize. See taskTypeHooks.js + the design plan.
-  const hookResult = await dispatchTaskOutputHook({ agentId, task, success, workspacePath }).catch(err => {
-    emitLog('error', `processTaskOutput hook threw for ${agentId} (${task?.taskType}): ${err.message}`, { agentId, error: err.message });
-    // A thrown hook is a non-success signal for the type ledger (#2616).
-    return { ran: true, threw: true };
-  });
 
   // Type-level consecutive-failure ledger (#2616): feed the per-type
   // backoff/auto-park in taskSchedule. Only SCHEDULED task types carry

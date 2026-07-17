@@ -258,6 +258,35 @@ describe('buildTaskTelemetryContext', () => {
     expect(plain.outcomeSuccess).toBe(true);
   });
 
+  it('records an exit-0 programmatic-I/O run that produced nothing usable as a failure (#2727)', () => {
+    // A layered-intelligence run whose `.agent-done` sentinel was missing/malformed
+    // (or whose output hook threw) exits 0 but delivered nothing. finalizeAgent now
+    // stamps validationPassed:false from the hook result, so the learning outcome —
+    // and the failure signature routing reads — reflect the real miss instead of
+    // reporting an inflated success rate for the type.
+    const agent = {
+      ...baseAgent,
+      metadata: { ...baseAgent.metadata, taskType: 'internal', analysisType: 'layered-intelligence' },
+      result: { success: true, duration: 3000, validationPassed: false }
+    };
+    const ctx = buildTaskTelemetryContext(agent, { taskType: 'layered-intelligence' });
+    expect(ctx.success).toBe(true);
+    expect(ctx.outcomeSuccess).toBe(false);
+    expect(ctx.failureSignature).not.toBeNull();
+  });
+
+  it('records an exit-0 programmatic-I/O run whose hook accepted the payload as a success (#2727)', () => {
+    // No commit is required for these tasks — an accepted sentinel IS the deliverable.
+    const agent = {
+      ...baseAgent,
+      metadata: { ...baseAgent.metadata, taskType: 'internal', analysisType: 'layered-intelligence' },
+      result: { success: true, duration: 3000, validationPassed: true }
+    };
+    const ctx = buildTaskTelemetryContext(agent, { taskType: 'layered-intelligence' });
+    expect(ctx.outcomeSuccess).toBe(true);
+    expect(ctx.failureSignature).toBeNull();
+  });
+
   it('carries the validation verdict into the harvested failure signature sample (#2344)', () => {
     const agent = {
       ...baseAgent,
