@@ -68,7 +68,9 @@ function finiteOrNull(value) {
 // `level` field (a legacy payload that predates age-based level) falls back to XP.
 export function effectiveLevel(character) {
   const lvl = character?.level;
-  if (Number.isFinite(lvl) && lvl >= 1) return Math.floor(lvl);
+  // Any finite nonnegative level is authoritative — including 0, a legitimate age level for a
+  // birthDate less than a year ago. (`>= 1` would reject it and let XP unlock level artifacts.)
+  if (Number.isFinite(lvl) && lvl >= 0) return Math.floor(lvl);
   if (lvl === null) return null;
   const xp = finiteOrNull(character?.xp);
   if (xp === null) return null;

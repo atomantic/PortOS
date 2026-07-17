@@ -33,10 +33,14 @@ describe('effectiveLevel', () => {
     expect(effectiveLevel({ level: null, xp: 0 })).toBeNull();
   });
 
+  it('treats age level 0 (birthDate < 1yr ago) as authoritative, not an XP fallback', () => {
+    expect(effectiveLevel({ level: 0, xp: 999999 })).toBe(0);
+  });
+
   it('returns null when neither level nor xp is usable', () => {
     expect(effectiveLevel(null)).toBeNull();
     expect(effectiveLevel({})).toBeNull();
-    expect(effectiveLevel({ level: 0, xp: 'nope' })).toBeNull();
+    expect(effectiveLevel({ level: null, xp: 'nope' })).toBeNull();
   });
 });
 

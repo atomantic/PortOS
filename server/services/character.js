@@ -62,6 +62,21 @@ export function levelFromAge(ageYears) {
   return Number.isFinite(ageYears) ? Math.floor(ageYears) : null;
 }
 
+// Legacy pre-#2673 XP→level curve, retained ONLY for the federation wire projection
+// (getWireCharacter) so an older peer — which still levels off XP — receives a level
+// consistent with the shared `xp`. NOT used for the live age-based level.
+const LEGACY_XP_THRESHOLDS = [
+  0, 300, 900, 2700, 6500, 14000, 23000, 34000, 48000, 64000,
+  85000, 100000, 120000, 140000, 165000, 195000, 225000, 265000, 305000, 355000
+];
+function legacyLevelFromXp(xp) {
+  const safe = Number.isFinite(xp) ? xp : 0;
+  for (let i = LEGACY_XP_THRESHOLDS.length - 1; i >= 0; i--) {
+    if (safe >= LEGACY_XP_THRESHOLDS[i]) return i + 1;
+  }
+  return 1;
+}
+
 function createEvent(type, description, overrides = {}) {
   return {
     id: crypto.randomUUID(),
@@ -118,15 +133,17 @@ export async function getCharacter() {
 
 // Federation wire projection: the persisted record plus a backward-compatible integer `level`
 // for pre-#2673 peers, whose CharacterSheet indexes XP thresholds by `character.level` and
-// NaNs without it. The level is age-derived (or the historical default 1 when birthDate is
-// unset) but NOT persisted; `ageYears` is deliberately excluded so the sync checksum stays
-// stable between birthdays. New peers ignore the remote level (applyCharacterRemote no longer
-// merges it), so this projection is invisible to same-version installs.
+// NaNs without it. The level is the LEGACY xp-derived value (what those peers compute from the
+// same shared `xp`), NOT the age level — deliberately so it stays a pure function of
+// `character.json`: the file-mtime checksum that fingerprints the `character` category then
+// still invalidates correctly, whereas an age/time-derived level would drift out of sync with
+// that checksum on a birthday or a birthDate edit (which touch a different file). It is not
+// persisted, and new peers ignore the remote level (applyCharacterRemote no longer merges it),
+// so this projection is invisible to same-version installs.
 export async function getWireCharacter() {
   const raw = await readJSONFile(CHARACTER_FILE, null);
   if (!raw) return null;
-  const { birthDate } = await getBirthDate().catch(() => ({ birthDate: null }));
-  return { ...raw, level: levelFromAge(ageYearsFromBirthDate(birthDate)) ?? 1 };
+  return { ...raw, level: legacyLevelFromXp(raw.xp) };
 }
 
 export async function saveCharacter(data) {
