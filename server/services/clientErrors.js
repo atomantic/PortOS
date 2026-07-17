@@ -13,6 +13,7 @@ import { createHash } from 'crypto';
 import * as reviewService from './review.js';
 import { redactOutput } from '../lib/commandSecurity.js';
 import { stripQueryString } from '../lib/errorHandler.js';
+import { isExtensionError } from '../lib/extensionErrors.js';
 
 const MAX_MESSAGE_CHARS = 500;
 const MAX_STACK_CHARS = 4000;
@@ -127,6 +128,15 @@ function pruneRecent(now) {
  */
 export async function recordClientError(rawPayload) {
   const now = Date.now();
+
+  // Before the throttle: an extension error taking the 1/sec slot would drop a
+  // real PortOS error arriving behind it. Before sanitize: MAX_STACK_CHARS
+  // would truncate away the extension frame that proves provenance.
+  // Re-checked here even though current clients filter at the source — a
+  // long-lived tab keeps running an old bundle.
+  if (isExtensionError(rawPayload)) {
+    return { accepted: false, reason: 'extension' };
+  }
 
   // Throttle gate runs before sanitize so a flooded endpoint doesn't burn the
   // regex passes on a payload we're about to drop. The 24h dedup window does

@@ -1,6 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { generatePostDrill, submitPostSession, scorePostLlmDrill, submitTrainingEntry } from '../services/api';
 import toast from '../components/ui/Toast';
+import { uuidv4 } from '../lib/uuid.js';
 import {
   LLM_DRILL_TYPES, MEMORY_DRILL_TYPES, DRILL_TO_DOMAIN, countLlmCorrect,
   WORDPLAY_LLM_DRILL_TYPES, LLM_TRAINING_CORRECT_THRESHOLD,
@@ -16,23 +17,10 @@ const RUN_STORAGE_KEY = 'post.activeRun';
 // reload, and an `idle`/`saved` run has nothing live to restore.
 const RESTORABLE_STATES = new Set(['drilling', 'between-drills', 'complete']);
 
-// uuid v4 usable in non-secure contexts. `crypto.randomUUID` only exists in a
-// secure context (HTTPS / localhost) — PortOS is commonly reached over plain
-// HTTP via Tailscale, where it's undefined — but `crypto.getRandomValues` is
-// available there too, so derive a spec-valid v4 from it (the server validates
-// the id with Zod `.uuid()`). Math.random is the last-ditch fallback.
-function newRunId() {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return crypto.randomUUID();
-  }
-  const b = new Uint8Array(16);
-  if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(b);
-  else for (let i = 0; i < 16; i++) b[i] = Math.floor(Math.random() * 256);
-  b[6] = (b[6] & 0x0f) | 0x40; // version 4
-  b[8] = (b[8] & 0x3f) | 0x80; // variant 10
-  const h = [...b].map(x => x.toString(16).padStart(2, '0'));
-  return `${h[0]}${h[1]}${h[2]}${h[3]}-${h[4]}${h[5]}-${h[6]}${h[7]}-${h[8]}${h[9]}-${h[10]}${h[11]}${h[12]}${h[13]}${h[14]}${h[15]}`;
-}
+// The server validates this id with Zod `.uuid()`, so it has to stay
+// spec-valid on the insecure origins where `crypto.randomUUID` is undefined —
+// which is exactly what `uuidv4` guarantees.
+const newRunId = () => uuidv4();
 
 function loadRunSnapshot() {
   if (typeof sessionStorage === 'undefined') return null;
