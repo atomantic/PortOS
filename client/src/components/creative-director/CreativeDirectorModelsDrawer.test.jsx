@@ -133,6 +133,33 @@ describe('CreativeDirectorModelsDrawer', () => {
     expect(optionValues).toContain('llava:latest');
   });
 
+  // The shipped `ollama` provider starts with `models: []` and /local-llm/install
+  // never refreshes it, so on a fresh install the stored snapshot is empty while
+  // a VLM IS installed. Filtering that empty list can only ever yield nothing —
+  // the server's installed list has to be merged INTO the candidates.
+  it('offers an installed VLM even when the provider model list is stale/empty', async () => {
+    getAiAssignments.mockResolvedValue({
+      ...ASSIGNMENTS,
+      providers: [
+        ...ASSIGNMENTS.providers.filter((p) => p.id !== 'ollama'),
+        { id: 'ollama', name: 'Ollama', type: 'api', enabled: true, defaultModel: null, models: [] },
+      ],
+    });
+    getVisionModels.mockResolvedValue({
+      models: [{ providerId: 'ollama', backend: 'ollama', id: 'gemma4:e4b', vision: true }],
+    });
+    renderDrawer({ id: 'cd-1', name: 'Demo', modelOverrides: {} });
+    await waitFor(() => expect(getVisionModels).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByLabelText('Scene evaluation provider'), { target: { value: 'ollama' } });
+
+    const modelSelect = screen.getByLabelText('Scene evaluation model');
+    expect(Array.from(modelSelect.querySelectorAll('option')).map((o) => o.value)).toContain('gemma4:e4b');
+    // ...and it seeds, rather than leaving the stage on a blank/auto pin.
+    expect(modelSelect.value).toBe('gemma4:e4b');
+    expect(screen.queryByText(/No vision-capable models found/i)).toBeNull();
+  });
+
   it('does not fetch vision models while closed', async () => {
     // The drawer stays mounted on the page; the endpoint asks Ollama for every
     // installed model's capabilities, so a closed drawer must not pay for it.

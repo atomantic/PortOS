@@ -50,7 +50,7 @@ export default function AiAssignmentsTab() {
   // vision-filtered row (Scene evaluation) isn't reduced to an empty list by
   // the client's id regex not knowing a newer VLM family. This table renders a
   // <select> either way (no "none installed" claim), so it needs the map only.
-  const { idsByBackend: visionIdsByBackend } = useVisionModelIds();
+  const { idsByProvider: visionIdsByProvider } = useVisionModelIds();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -137,7 +137,7 @@ export default function AiAssignmentsTab() {
     const savedIds = [];
     for (const entry of targets) {
       // Vision-filtered rows seed the first eligible VLM, not a text-only default.
-      const targetDefaultModel = assignmentDefaultModel(entry, data.providers, toProvider, visionIdsByBackend);
+      const targetDefaultModel = assignmentDefaultModel(entry, data.providers, toProvider, visionIdsByProvider);
       const nextModel = entry.modelEditable === false ? (drafts[entry.id]?.model || '') : targetDefaultModel;
       const next = await updateAiAssignment(entry.id, {
         providerId: toProvider,
@@ -258,7 +258,7 @@ export default function AiAssignmentsTab() {
             {filtered.map((entry) => {
               const draft = drafts[entry.id] || getDraft(entry);
               const providerOptions = assignmentProviderOptions(entry, data.providers);
-              const modelOptions = assignmentModelOptions(entry, data.providers, draft.providerId, visionIdsByBackend);
+              const modelOptions = assignmentModelOptions(entry, data.providers, draft.providerId, visionIdsByProvider);
               const dirty = !sameDraft(entry, draft);
               return (
                 <tr key={entry.id} className="align-top">
@@ -280,7 +280,7 @@ export default function AiAssignmentsTab() {
                           const nextProviderId = e.target.value;
                           // Vision-filtered rows (e.g. Scene evaluation) seed the
                           // first eligible VLM when the provider default is text-only.
-                          const nextDefault = assignmentDefaultModel(entry, data.providers, nextProviderId, visionIdsByBackend);
+                          const nextDefault = assignmentDefaultModel(entry, data.providers, nextProviderId, visionIdsByProvider);
                           setDraft(entry.id, { providerId: nextProviderId, model: entry.modelEditable === false ? draft.model : nextDefault });
                         }}
                         aria-label={`Provider for ${entry.label}`}

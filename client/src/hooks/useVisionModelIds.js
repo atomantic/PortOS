@@ -22,8 +22,17 @@ import { getVisionModels } from '../services/apiLocalLlm';
 const LOCAL_VISION_BACKENDS = new Set(['ollama', 'lmstudio']);
 
 /**
- * The model ids the SERVER reports as vision-capable, keyed BY LOCAL BACKEND
- * (`{ ollama: Set, lmstudio: Set }`), fetched once.
+ * The provider ids the server tags its local rows with (`PROVIDER_ID[backend]` in
+ * server/services/localLlm.js). Seeded into the map so a backend that reports no
+ * VLM is a definite "none installed" rather than an absent key. A CUSTOM provider
+ * pointed at a different Ollama/LM Studio host is deliberately NOT here: the
+ * server never enumerated that host, so it stays on the regex-only path.
+ */
+const LOCAL_PROVIDER_IDS = ['ollama', 'lmstudio'];
+
+/**
+ * The model ids the SERVER reports as vision-capable, keyed BY THE PROVIDER ID
+ * that serves them (`{ ollama: Set, lmstudio: Set }`), fetched once.
  *
  * The client's `isVisionModel` regex can only recognize multimodal families it
  * was written against, so it silently goes stale as new ones ship — it knew
@@ -31,36 +40,36 @@ const LOCAL_VISION_BACKENDS = new Set(['ollama', 'lmstudio']);
  * `gemma4:e4b` and `qwen3.6:35b` staring at an EMPTY Scene Evaluation model
  * picker. The server has the authoritative answer (Ollama's `/api/show`
  * capabilities and LM Studio's `type: 'vlm'` tag), so vision pickers union this
- * set with the regex via `visionLocalModelFilter`.
+ * in via `visionLocalModelFilter` / `assignmentModelOptions`.
  *
- * Returns `{ idsByBackend, loaded }`. Callers union `idsByBackend` with the regex
- * via `visionLocalModelFilter`, so it only ever ADDS models the regex didn't
- * recognize — a `null`/empty map simply degrades to regex-only rather than
- * blanking a picker. Widening is the safe direction: a stale regex hides a model
- * the user has, whereas this map can't speak for a custom provider pointing at a
- * host the server never enumerated, so neither source vetoes the other.
+ * Returns `{ idsByProvider, loaded }`. Callers union `idsByProvider` with the
+ * regex, so it only ever ADDS models the regex didn't recognize — a `null`/empty
+ * map degrades to regex-only rather than blanking a picker. Widening is the safe
+ * direction: a stale regex hides a model the user has, whereas this map can't
+ * speak for a provider the server never enumerated, so neither vetoes the other.
  *
- * Keyed by backend, never flattened to one id set: a bare id is not a
- * capability. The same id can be a VLM on one backend and text-only on another,
- * and CLI rows assert vision for every model of a claude/codex CLI regardless of
- * the model — so a flat set leaks text-only ids onto the `ollama` provider,
- * whose own list contains the very same ids.
+ * Keyed by the ENUMERATED PROVIDER, never flattened and never keyed by backend
+ * alone — a bare id is not a capability. Flattening leaks a claude/codex CLI's
+ * blanket per-provider vision claim onto `ollama` (whose list holds the very same
+ * ids); keying by backend still leaks a local VLM's id onto a CUSTOM provider
+ * pointed at a *different* Ollama/LM Studio host that the server never
+ * enumerated. Both matter because sceneEvaluator honors a pin's model verbatim.
  *
  * `loaded` flips true once the fetch SETTLES (success or failure) and exists so a
  * caller can tell "still fetching" from "fetched, none installed" — the endpoint
  * asks Ollama for each installed model's capabilities, so the pending window is
  * real. Without it a picker asserts "no vision models found" during the fetch
- * (the very bug this hook exists to fix) and then flips. `idsByBackend` alone
+ * (the very bug this hook exists to fix) and then flips. `idsByProvider` alone
  * can't carry that distinction: it stays `null` on failure too.
  *
  * @param {boolean} [enabled] gate the fetch — pass a drawer/modal's `open` when
  *   the host stays mounted while closed, so a page merely *containing* a closed
  *   picker doesn't pay for the capability scan. Fetches once and keeps the result
  *   if `enabled` later goes false.
- * @returns {{idsByBackend: Record<string, Set<string>>|null, loaded: boolean}}
+ * @returns {{idsByProvider: Record<string, Set<string>>|null, loaded: boolean}}
  */
 export default function useVisionModelIds(enabled = true) {
-  const [state, setState] = useState({ idsByBackend: null, loaded: false });
+  const [state, setState] = useState({ idsByProvider: null, loaded: false });
 
   useEffect(() => {
     if (!enabled || state.loaded) return undefined;
@@ -72,18 +81,21 @@ export default function useVisionModelIds(enabled = true) {
     getVisionModels({ silent: true })
       .then((res) => {
         if (canceled) return;
-        // Every local backend gets a key even when it reports nothing, so a
-        // present-but-empty backend reads as "none installed" rather than
+        // Key by the providerId the server itself reports for each row, so the
+        // map only ever vouches for the provider the server actually enumerated.
+        // Seed a key per enumerated local provider even when it reports nothing,
+        // so a present-but-empty backend reads as "none installed" rather than
         // "unknown" at the lookup site.
-        const idsByBackend = Object.fromEntries(
-          [...LOCAL_VISION_BACKENDS].map((backend) => [backend, new Set()]),
-        );
+        const idsByProvider = {};
         for (const m of res?.models || []) {
-          if (m?.id && LOCAL_VISION_BACKENDS.has(m?.backend)) idsByBackend[m.backend].add(m.id);
+          if (!LOCAL_VISION_BACKENDS.has(m?.backend) || !m?.providerId) continue;
+          (idsByProvider[m.providerId] ||= new Set());
+          if (m.id) idsByProvider[m.providerId].add(m.id);
         }
-        setState({ idsByBackend, loaded: true });
+        for (const providerId of LOCAL_PROVIDER_IDS) idsByProvider[providerId] ||= new Set();
+        setState({ idsByProvider, loaded: true });
       })
-      .catch(() => { if (!canceled) setState({ idsByBackend: null, loaded: true }); });
+      .catch(() => { if (!canceled) setState({ idsByProvider: null, loaded: true }); });
     // A cancel (drawer closed mid-flight) leaves `loaded` false, so reopening
     // refetches rather than rendering against a result that never arrived.
     return () => { canceled = true; };

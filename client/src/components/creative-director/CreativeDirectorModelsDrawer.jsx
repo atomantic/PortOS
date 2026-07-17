@@ -75,7 +75,7 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
   // assignments fetch, so `loading===false` with the scan still in flight is the
   // normal first render, and asserting "none found" there would flash the exact
   // empty-picker bug this drawer was fixed for.
-  const { idsByBackend: visionIdsByBackend, loaded: visionLoaded } = useVisionModelIds(open);
+  const { idsByProvider: visionIdsByProvider, loaded: visionLoaded } = useVisionModelIds(open);
 
   const seed = useCallback((next) => { setDrafts(next); setBaseline(next); }, []);
 
@@ -215,7 +215,7 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
             const entry = entryById[assignmentIdFor(stage.key)];
             const draft = drafts[stage.key] || { providerId: '', model: '' };
             const providerOptions = assignmentProviderOptions(entry, providers);
-            const modelOptions = assignmentModelOptions(entry, providers, draft.providerId, visionIdsByBackend);
+            const modelOptions = assignmentModelOptions(entry, providers, draft.providerId, visionIdsByProvider);
             const pinned = !!draft.providerId;
             // Both hints below are about the LOCAL capability scan, so they only
             // apply when the pinned provider is an Ollama / LM Studio backend. A
@@ -256,7 +256,7 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
                         // Vision-filtered stages (scene evaluation) seed the first
                         // eligible VLM when the provider's default is text-only.
                         const nextDefault = providerId
-                          ? assignmentDefaultModel(entry, providers, providerId, visionIdsByBackend)
+                          ? assignmentDefaultModel(entry, providers, providerId, visionIdsByProvider)
                           : '';
                         // Seed the provider's default model on switch; clearing the
                         // provider clears the model too.
