@@ -93,20 +93,23 @@ function normalizeToken(value) {
   return typeof value === 'string' ? value.trim().toLowerCase().replace(/[\s_-]+/g, '-') : '';
 }
 
-// Label → reason. Every key here must be a label a HUMAN applies as a judgement
-// about the issue: that is what earns labels their precedence over the generic
-// stateReason (`not_planned` + a `duplicate` label is a duplicate, not a bare user
-// rejection).
+// Label → reason. Every key here must be a label that states a JUDGEMENT ABOUT THE
+// PROPOSAL'S MERIT — by a human, or by another agent that actually assessed it.
+// That is what earns labels their precedence over the generic stateReason
+// (`not_planned` + a `duplicate` label is a duplicate, not a bare user rejection),
+// and `needs-input` qualifies even though an agent applies it: it is a finding that
+// the proposal under-specified itself, which is exactly `missing-context`.
 //
-// Machine-applied labels must NEVER appear in this map, however suggestive they
-// look. LI stamps `layered-intelligence:blocking` on its own proposals to record
-// that the loop is paused there (applyBlockingLabel ← the reasoner's
-// `pause.blockOnIssue`); it is bookkeeping, not a diagnosis of why a proposal
-// failed. Mapping it to `environment-blocker` would outrank a real `not_planned`
-// close and feed the loop "blocked on the environment" when the user simply
-// declined — LI corrupting the very signal this taxonomy exists to produce, via
-// its own marker. Human-applied `blocked` / `environment-blocker` labels below
-// carry that meaning legitimately.
+// LI's OWN BOOKKEEPING must never appear here, however suggestive it looks. LI
+// stamps `layered-intelligence:blocking` on its proposals to record that the loop
+// is paused there (applyBlockingLabel ← the reasoner's `pause.blockOnIssue`), and
+// `layered-intelligence` to mark authorship — neither says anything about why a
+// proposal failed. Mapping the blocking label to `environment-blocker` would
+// outrank a real `not_planned` close and feed the loop "blocked on the environment"
+// when the user simply declined: LI corrupting the very signal this taxonomy exists
+// to produce, through its own marker. The `blocked` / `environment-blocker` entries
+// below carry that meaning legitimately because someone diagnosed the proposal to
+// apply them.
 //
 // Keys are normalizeToken'd; add conventions here rather than teaching callers to
 // pre-map.
