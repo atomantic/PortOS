@@ -4,6 +4,7 @@ import {
   Sparkles, RefreshCw, Dices, X, ChevronDown, Zap, Image, Activity
 } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
+import GoalsCard from '../components/character/GoalsCard';
 import toast from '../components/ui/Toast';
 import { timeAgo, formatCompactCount } from '../utils/formatters';
 import api, { generateAvatar } from '../services/api';
@@ -570,6 +571,11 @@ export default function CharacterSheet() {
             Sits directly under the identity card so the sheet's most concrete information is
             above the fold. */}
         <MetricsCard metrics={char.metrics} />
+
+        {/* Life Goals — the human's real goals, mirrored read-only from the goals service
+            (#2675). Owns its own fetch (the goals API is a separate surface from /character),
+            so it is rendered unconditionally and handles its own loading/empty/error states. */}
+        <GoalsCard />
 
         {/* Skills — derived per-domain from real PortOS usage (#2674) */}
         <SkillsCard skills={char.skills} />
