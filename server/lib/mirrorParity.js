@@ -32,12 +32,36 @@ export function stripCommentsAndNormalize(src) {
 }
 
 /**
+ * Index of the delimiter matching the opener at `openIdx`, or -1 if unbalanced.
+ * Counts `{}`, `()` and `[]` together — good enough for the declarations we
+ * mirror, and the parity diff is textual anyway.
+ */
+function matchDelimiter(src, openIdx) {
+  let depth = 0;
+  for (let i = openIdx; i < src.length; i++) {
+    const ch = src[i];
+    if (ch === '{' || ch === '(' || ch === '[') depth++;
+    else if (ch === '}' || ch === ')' || ch === ']') {
+      depth--;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/**
  * Extract a top-level declaration by name — `function` / `async function` /
- * `const` (including `Object.freeze(…)` and array/object literal bodies).
+ * `const` (regex literal, array/object initializer, `Object.freeze(…)`, arrow
+ * function). Returns the declaration text, or `null` when the name is absent
+ * or its source is unbalanced.
  *
- * Walks from the declaration to the first opening delimiter and returns the
- * slice through its match, tracking `{}`, `()` and `[]` together. Returns the
- * declaration text, or `null` when the name is absent.
+ * The two forms terminate differently, and conflating them is a trap worth
+ * spelling out: a naive "walk to the first time depth returns to 0" returns
+ * `function f(a)` — the closing paren of the PARAMETER LIST — so the entire
+ * body escapes the parity diff and a gutted mirror passes green. Likewise it
+ * truncates `const RE = /(?:a|b):\/\//i` at the non-capturing group's `)`.
+ * So: a function is walked to the matching brace of its BODY, and a const to
+ * its terminating `;`.
  */
 export function extractDeclaration(src, name) {
   const startRe = new RegExp(`(?:export\\s+)?(?:async\\s+function|function|const)\\s+${name}[\\s=(]`);
@@ -45,18 +69,30 @@ export function extractDeclaration(src, name) {
   if (!match) return null;
 
   const start = match.index;
-  let depth = 0;
-  let foundOpen = false;
 
+  if (/(?:async\s+)?function\s/.test(match[0])) {
+    // Skip the parameter list, then return through the body's matching brace.
+    const parenOpen = src.indexOf('(', start);
+    if (parenOpen === -1) return null;
+    const parenClose = matchDelimiter(src, parenOpen);
+    if (parenClose === -1) return null;
+    const braceOpen = src.indexOf('{', parenClose);
+    if (braceOpen === -1) return null;
+    const braceClose = matchDelimiter(src, braceOpen);
+    return braceClose === -1 ? null : src.slice(start, braceClose + 1);
+  }
+
+  // `const`: run to the statement's terminating `;` at depth 0. This ends a
+  // regex literal, an array/object initializer, and an arrow function alike.
+  // Caveat: a `;` inside a top-level string/regex literal would end the slice
+  // early — no mirrored declaration does that, and a full lexer isn't worth it
+  // here. Every mirrored `const` must be semicolon-terminated.
+  let depth = 0;
   for (let i = start; i < src.length; i++) {
     const ch = src[i];
-    if (ch === '{' || ch === '(' || ch === '[') {
-      depth++;
-      foundOpen = true;
-    } else if (ch === '}' || ch === ')' || ch === ']') {
-      depth--;
-      if (foundOpen && depth === 0) return src.slice(start, i + 1);
-    }
+    if (ch === '{' || ch === '(' || ch === '[') depth++;
+    else if (ch === '}' || ch === ')' || ch === ']') depth--;
+    else if (ch === ';' && depth === 0) return src.slice(start, i + 1);
   }
   return null;
 }
