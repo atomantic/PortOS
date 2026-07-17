@@ -47,10 +47,13 @@ import { atomicWrite } from '../../server/lib/fileUtils.js';
 /**
  * Normalize a stage spec (bare `stageKey` string or `{ stageKey, filename }`)
  * into `{ stageKey, filename }` with the universal `${stageKey}.md` default.
+ * Exported so `_seedStageTestHelpers.js` derives fixture filenames through the
+ * same rule the migration itself uses (the rule is covered directly by
+ * `_seedStageHelpers.test.js`).
  * @param {string | { stageKey: string, filename?: string }} spec
  * @returns {{ stageKey: string, filename: string }}
  */
-function normalizeStageSpec(spec) {
+export function normalizeStageSpec(spec) {
   if (typeof spec === 'string') return { stageKey: spec, filename: `${spec}.md` };
   const { stageKey, filename } = spec;
   return { stageKey, filename: filename || `${stageKey}.md` };

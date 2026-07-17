@@ -1,5 +1,9 @@
 # Unreleased Changes
 
+## Internal
+
+- **[issue-2706] Stage-seeding migrations now guard their own `data.reference` assets.** Migrations 189 (model-personality), 094 (object-attachment checks), and 182 (CWQE quality) each seed stage prompts on upgrade but shipped without a colocated test, so a rename or removal of a reference template would have surfaced only at runtime as "Stage not found" on a fresh install. Each now has a `.test.js` asserting it seeds when absent, no-ops on re-run, never clobbers a customized template or hand-tuned config entry, and — the point — that every `data.reference/prompts/stages/*.md` template it names and its `stage-config.json` entry actually ship. The three suites collapse to one `runSeedStageMigrationTests({ migration, stages, prefix })` call apiece via a new shared helper — the seed-family analogue of `_testHelpers.js`'s `runPromptMigrationTests`. (`scripts/migrations/_seedStageTestHelpers.js`)
+
 ## Fixed
 
 - [issue-2669] Sharing, Messages, and Calendar screens no longer show two stacked error toasts when a share/subscribe/export/save/sync action fails — the custom-catch callers now pass `{ silent: true }` so only their own toast fires, not the shared `request()` helper's default one too. Swept the Messages/calendar/sharing feature area (both ConfigTabs, InboxTab, ReviewTab, ShareToButton, and the Sharing page) and threaded a backward-compatible `options` arg into the affected API wrappers (`evaluateMessages`, `enableGmailApi`, `getGoogleAuthUrl`, `create/updateMessageAccount`, `create/updateCalendarAccount`, `updateSubcalendars`, `saveGoogleAuthCredentials`, `start/runGoogleAutoConfig`, `confirmDailyReviewEvent`).
