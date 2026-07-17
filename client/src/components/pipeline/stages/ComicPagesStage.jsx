@@ -100,7 +100,7 @@ export default function ComicPagesStage({ issue, onStageUpdate, actionsGated = f
 
   const runExtract = async () => {
     setExtracting(true);
-    const result = await extractPipelineComicPages(issue.id, { force: true }).catch((err) => {
+    const result = await extractPipelineComicPages(issue.id, { force: true }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Page extraction failed');
       return null;
     });
@@ -137,7 +137,7 @@ export default function ComicPagesStage({ issue, onStageUpdate, actionsGated = f
       return;
     }
     markRendering(pi, true);
-    const result = await generatePipelineComicPage(issue.id, pi, genConfigToImageOptions(genConfig)).catch((err) => {
+    const result = await generatePipelineComicPage(issue.id, pi, genConfigToImageOptions(genConfig), { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to enqueue page render');
       return null;
     });
@@ -165,7 +165,7 @@ export default function ComicPagesStage({ issue, onStageUpdate, actionsGated = f
     }
     const key = `${pi}:${ni}`;
     setRefiningKey(key);
-    const result = await refinePipelineComicPanelPrompt(issue.id, pi, ni, genConfigToRefineOptions(genConfig))
+    const result = await refinePipelineComicPanelPrompt(issue.id, pi, ni, genConfigToRefineOptions(genConfig), { silent: true })
       .catch((err) => {
         toast.error(err.message || 'Refine failed');
         return null;
@@ -196,7 +196,7 @@ export default function ComicPagesStage({ issue, onStageUpdate, actionsGated = f
     const gen = candidateGenRef.current;
     await persist(pagesRef.current);
     const result = await generatePipelineComicPanelImagePrompts(
-      issue.id, pi, ni, { count: promptCount, ...genConfigToRefineOptions(genConfig) },
+      issue.id, pi, ni, { count: promptCount, ...genConfigToRefineOptions(genConfig) }, { silent: true },
     ).catch((err) => {
       toast.error(err.message || 'Prompt generation failed');
       return null;
@@ -245,7 +245,7 @@ export default function ComicPagesStage({ issue, onStageUpdate, actionsGated = f
     const result = await generatePipelineVisualImage(issue.id, 'comicPages', {
       description: panel.description,
       ...genConfigToImageOptions(genConfig),
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to enqueue image');
       return null;
     });
