@@ -182,7 +182,10 @@ const GENERIC_REJECTION_REASONS = new Set(['user-rejected']);
 // tiebreak when one comment trips more than one bucket — most-specific intent
 // (scope) before the vaguer quality catch-all. Patterns are conservative: a miss
 // (→ null → the honest `unknown-reason`) is the correct failure, better than a
-// confident wrong diagnosis feeding the reasoner a fabricated pattern.
+// confident wrong diagnosis feeding the reasoner a fabricated pattern. There is no
+// negation handling — a keyword pass can't reliably parse "not out of scope" — so
+// patterns favor phrasings that read unambiguously when they appear; the safety net
+// is that this only ever refines an already-decided rejection, never the outcome.
 const CLOSING_COMMENT_PATTERNS = [
   {
     reason: 'scope-mismatch',
@@ -199,7 +202,7 @@ const CLOSING_COMMENT_PATTERNS = [
     reason: 'missing-context',
     patterns: [
       /\b(?:need|needs|needing|require[sd]?) (?:more|additional|further) (?:info|information|context|detail|details|clarification)\b/,
-      /\b(?:not enough|insufficient|lack(?:s|ing)? (?:of )?) (?:info|information|context|detail|details)\b/,
+      /\b(?:not enough|insufficient|lack(?:s|ing)?(?: of)?) (?:info|information|context|detail|details)\b/,
       /\b(?:can ?not|cannot|can'?t|could ?not|could ?n'?t|couldn'?t|unable to) reproduce\b/,
       /\bunder[\s-]?specified\b/,
       /\bplease clarify\b/,

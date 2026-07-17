@@ -213,7 +213,10 @@ describe('classifyClosingComment', () => {
       'Not enough detail to proceed.',
       "Can't reproduce from what's here.",
       'This is under-specified — please clarify.',
-      'The description is too vague.'
+      'The description is too vague.',
+      'This lacks information to act on.',
+      'Lacks of context.',
+      'Lacking detail.'
     ]) {
       expect(classifyClosingComment(text)).toBe('missing-context');
     }
