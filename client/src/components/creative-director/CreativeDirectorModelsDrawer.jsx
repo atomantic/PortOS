@@ -69,8 +69,12 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
   const [saving, setSaving] = useState(false);
   // Authoritative vision-capable ids from the backends themselves; `null` until
   // fetched, which `assignmentModelOptions` degrades to its id regex for. Gated
-  // on `open` — this drawer stays mounted on a closed page.
-  const visionModelIds = useVisionModelIds(open);
+  // on `open` — this drawer stays mounted on a closed page. `visionLoaded` gates
+  // the "no VLM installed" claim below: the capability scan is slower than the
+  // assignments fetch, so `loading===false` with the scan still in flight is the
+  // normal first render, and asserting "none found" there would flash the exact
+  // empty-picker bug this drawer was fixed for.
+  const { ids: visionModelIds, loaded: visionLoaded } = useVisionModelIds(open);
 
   const seed = useCallback((next) => { setDrafts(next); setBaseline(next); }, []);
 
@@ -212,10 +216,15 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
             const providerOptions = assignmentProviderOptions(entry, providers);
             const modelOptions = assignmentModelOptions(entry, providers, draft.providerId, visionModelIds);
             const pinned = !!draft.providerId;
+            // A vision stage's options are only trustworthy once the capability
+            // scan has settled — until then `modelOptions` is regex-only, which
+            // is exactly the stale answer that hid the user's VLMs.
+            const visionPending = entry?.modelFilter === 'vision' && !visionLoaded;
             // A vision stage on a local backend with nothing to offer means no
             // VLM is installed — say so instead of showing a bare text box that
             // reads as a broken dropdown.
-            const noVisionModels = pinned && entry?.modelFilter === 'vision' && modelOptions.length === 0;
+            const noVisionModels = pinned && entry?.modelFilter === 'vision'
+              && !visionPending && modelOptions.length === 0;
             return (
               <section key={stage.key} className="bg-port-bg border border-port-border rounded-lg p-3 space-y-2">
                 <div className="flex items-center gap-2">
@@ -257,6 +266,12 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
                     <span className="text-[11px] uppercase tracking-wide text-gray-500">Model</span>
                     {!pinned ? (
                       <div className="text-sm text-gray-600 py-2">—</div>
+                    ) : visionPending ? (
+                      // Hold the slot rather than rendering the free-text
+                      // fallback: the scan is about to widen the list, and
+                      // swapping an <input> the user may have typed into for a
+                      // <select> would drop their text from view.
+                      <div className="text-sm text-gray-500 py-2">Checking installed models…</div>
                     ) : modelOptions.length > 0 ? (
                       <select
                         value={draft.model}

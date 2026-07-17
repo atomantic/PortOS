@@ -145,6 +145,35 @@ describe('CreativeDirectorModelsDrawer', () => {
     expect(getVisionModels).not.toHaveBeenCalled();
   });
 
+  // /vision-models also returns `backend:'cli'` rows, and those are a blanket
+  // per-PROVIDER claim: the server tags EVERY model of a `command:'claude'|'codex'`
+  // CLI vision-capable because the CLI can read an image file. An ollama-backed
+  // Claude CLI's model list is Ollama's TOOL-USE models, whose ids collide with
+  // the real ollama provider's — so a flat id set would hand a text-only model to
+  // the vision picker and sceneEvaluator would send frames to a model that can't
+  // see them.
+  it('ignores cli-backend rows so a text-only model cannot be smuggled in as vision', async () => {
+    getVisionModels.mockResolvedValue({
+      models: [
+        { providerId: 'ollama', backend: 'ollama', id: 'gemma4:26b', vision: true },
+        // The ollama-backed Claude CLI fronting a text-only Ollama model whose id
+        // is also in the real `ollama` provider's list.
+        { providerId: 'claude-ollama', backend: 'cli', id: 'llama3.2:latest', vision: true },
+      ],
+    });
+    renderDrawer({ id: 'cd-1', name: 'Demo', modelOverrides: {} });
+    await waitFor(() => expect(getVisionModels).toHaveBeenCalled());
+
+    fireEvent.change(screen.getByLabelText('Scene evaluation provider'), { target: { value: 'ollama' } });
+
+    const optionValues = Array.from(
+      screen.getByLabelText('Scene evaluation model').querySelectorAll('option'),
+    ).map((o) => o.value);
+    expect(optionValues).toContain('gemma4:26b');
+    // The cli-backend row must NOT make this text-only id a vision option.
+    expect(optionValues).not.toContain('llama3.2:latest');
+  });
+
   it('falls back to the id regex when the vision-model fetch fails', async () => {
     getVisionModels.mockRejectedValue(new Error('ollama down'));
     renderDrawer({ id: 'cd-1', name: 'Demo', modelOverrides: {} });

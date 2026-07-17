@@ -48,8 +48,9 @@ export default function AiAssignmentsTab() {
   const [bulkSaving, setBulkSaving] = useState(false);
   // Authoritative vision-capable ids straight from the local backends, so a
   // vision-filtered row (Scene evaluation) isn't reduced to an empty list by
-  // the client's id regex not knowing a newer VLM family.
-  const visionModelIds = useVisionModelIds();
+  // the client's id regex not knowing a newer VLM family. This table renders a
+  // <select> either way (no "none installed" claim), so it needs `ids` only.
+  const { ids: visionModelIds } = useVisionModelIds();
 
   const load = useCallback(async () => {
     setLoading(true);
