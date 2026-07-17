@@ -109,6 +109,38 @@ describe('reconcileSplitContext', () => {
   });
 });
 
+describe('no-code / API-action task completion (CD agents must NOT be told to /do:push)', () => {
+  // A Creative Director agent's deliverable is an HTTP PATCH described in its
+  // prompt, not a commit — so it must get the No-Code completion section, never
+  // the /do:push "Completion Workflow" (which just makes it load that skill for
+  // nothing and contradicts its "on a 200 your task is complete" instructions).
+  const cdTask = () => makeTask({
+    metadata: { context: 'PATCH /api/creative-director/x/plan with the plan', noCodeOutput: true, openPR: false },
+  });
+
+  it('a no-code TUI task gets the No-Code completion section, not the /do:push Completion Workflow', () => {
+    const prompt = buildLightContextPrompt(cdTask(), '/repo', null, isTruthyMeta, {
+      providerId: 'claude-code-tui', providerCommand: 'claude',
+    });
+    expect(prompt).toMatch(/## Completion \(No Code Output\)/);
+    expect(prompt).toMatch(/there is nothing to push/);
+    expect(prompt).toMatch(/\.agent-done/); // still writes the sentinel so it finalizes promptly
+    // The /do:push "Completion Workflow" section must be absent (the only literal
+    // `/do:push` left is inside the "do NOT run /do:push" instruction itself).
+    expect(prompt).not.toMatch(/## Completion Workflow/);
+  });
+
+  it('a normal code task on the same provider still gets the /do:push Completion Workflow', () => {
+    const prompt = buildLightContextPrompt(
+      makeTask({ metadata: { openPR: false } }), '/repo', null, isTruthyMeta,
+      { providerId: 'claude-code-tui', providerCommand: 'claude' },
+    );
+    expect(prompt).toMatch(/## Completion Workflow/);
+    expect(prompt).toMatch(/\/do:push/);
+    expect(prompt).not.toMatch(/## Completion \(No Code Output\)/);
+  });
+});
+
 describe('buildLightContextPrompt', () => {
   describe('what it omits', () => {
     it('does NOT include the obsolete "# Chief of Staff Agent Briefing" header', () => {
