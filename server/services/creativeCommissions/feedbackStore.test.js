@@ -105,6 +105,18 @@ describe('federation facades', () => {
     expect(live).toEqual([{ id: 'cfeedback-run-Z', updatedAt: '2026-05-05T00:00:00.000Z' }]);
   });
 
+  it('re-applies the per-commission cap AFTER a sync merge (two peers reconciling cannot exceed the bound)', async () => {
+    const { MAX_LIVE_FEEDBACK_PER_COMMISSION } = await import('./feedbackStore.js');
+    // Simulate a reconnection delivering a batch that pushes past the cap.
+    const batch = Array.from({ length: MAX_LIVE_FEEDBACK_PER_COMMISSION + 5 }, (_, i) => ({
+      id: `cfeedback-run-${String(i).padStart(4, '0')}`, commissionId: 'c9', runId: `run-${i}`,
+      rating: 'up', at: new Date(2026, 0, 1, 0, i).toISOString(), updatedAt: new Date(2026, 0, 1, 0, i).toISOString(),
+    }));
+    await mergeCommissionFeedbackFromSync(batch, { source: { via: 'sync', peerId: 'peer-a' } });
+    const live = await listFeedbackForCommission('c9');
+    expect(live).toHaveLength(MAX_LIVE_FEEDBACK_PER_COMMISSION);
+  });
+
   it('a stale remote does not clobber a newer local reaction', async () => {
     await recordFeedback({ commissionId: 'c1', runId: 'run-A', rating: 'down', note: 'newer' });
     feedbackRecords.get('cfeedback-run-A').updatedAt = '2026-09-09T00:00:00.000Z';

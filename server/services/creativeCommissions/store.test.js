@@ -306,14 +306,43 @@ describe('commission BRIEF federation (#2686)', () => {
     expect(next.name).toBe('Newer');
   });
 
-  it('mergeCommissionsFromSync inserts a remote commission the peer can now attach feedback to', async () => {
-    const remote = { id: 'commission-peer', name: 'From peer A', brief: { intent: 'dreamlike' }, updatedAt: '2026-05-05T00:00:00.000Z' };
+  it('mergeCommissionsFromSync inserts a remote commission DORMANT (no cron, disabled) so it never double-runs', async () => {
+    const remote = { id: 'commission-peer', name: 'From peer A', enabled: true, brief: { intent: 'dreamlike' }, updatedAt: '2026-05-05T00:00:00.000Z' };
     const res = await mergeCommissionsFromSync([remote], { source: { via: 'sync', peerId: 'peer-a' } });
     expect(res).toEqual({ applied: true, count: 1 });
     const got = await getCommission('commission-peer');
     expect(got.name).toBe('From peer A');
-    // Inserted with no schedule → the receiver won't fire it (no double-run).
+    // Dormant on the receiver: no usable schedule AND disabled, so the user must
+    // explicitly enable + schedule it locally to activate — no double-run.
     expect(got.schedule.atLocalTime).toBeNull();
+    expect(got.enabled).toBe(false);
+  });
+
+  it('a schedule-only edit does NOT advance the brief clock; a brief edit does', async () => {
+    const created = await createCommission(validInput());
+    const briefClock0 = records.get(created.id).briefUpdatedAt;
+    await updateCommission(created.id, { schedule: { kind: 'DAILY', atLocalTime: '05:00' } });
+    const afterSched = records.get(created.id);
+    // Machine-local edit → brief clock preserved, so a peer's brief edit isn't
+    // beaten by it (deterministic: the schedule path copies current.briefUpdatedAt).
+    expect(afterSched.briefUpdatedAt).toBe(briefClock0);
+    await updateCommission(created.id, { name: 'Renamed' });
+    const afterName = records.get(created.id);
+    // Federated edit → brief clock advances to the update moment (== updatedAt).
+    expect(afterName.briefUpdatedAt).toBe(afterName.updatedAt);
+  });
+
+  it('a tombstone advances the brief clock so the delete wins the LWW on peers', async () => {
+    const created = await createCommission(validInput());
+    await deleteCommission(created.id);
+    const tomb = records.get(created.id);
+    expect(tomb.deleted).toBe(true);
+    // Delete bumps the brief clock to the delete moment (== updatedAt == deletedAt),
+    // so a peer's briefUpdatedAt-keyed LWW applies the tombstone.
+    expect(tomb.briefUpdatedAt).toBe(tomb.updatedAt);
+    expect(tomb.briefUpdatedAt).toBe(tomb.deletedAt);
+    // The wire form's LWW key (updatedAt) is the brief clock — a peer will apply it.
+    expect(sanitizeCommissionForSync(tomb).briefUpdatedAt).toBe(tomb.briefUpdatedAt);
   });
 
   it('getCommissionForSync surfaces a tombstone after delete', async () => {

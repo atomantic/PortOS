@@ -281,24 +281,30 @@ export async function mergeCommissionFeedbackFromSync(remoteRecords, { source = 
   if (!Array.isArray(remoteRecords)) return { applied: false, count: 0 };
   const store = feedbackStore();
   let changed = 0;
+  const touchedCommissions = new Set();
   for (const remote of remoteRecords) {
     const id = remote?.id;
     if (!isStr(id) || !CFEEDBACK_ID_RE.test(id)) continue;
     const applied = await store.queueRecordWrite(id, async () => {
       const local = await store.readRaw(id, { includeDeleted: true });
       const { next, inserted, remoteWins, changed: didChange } = mergeCommissionFeedbackRecord(local, remote);
-      if (!next) return false; // malformed remote → dropped
-      if (!inserted && (!remoteWins || !didChange)) return false; // local wins, or no-op
+      if (!next) return null; // malformed remote → dropped
+      if (!inserted && (!remoteWins || !didChange)) return null; // local wins, or no-op
       if (!inserted) {
         await maybeJournalBeforeOverwrite({ kind: COMMISSION_FEEDBACK_KIND, id: next.id, local, remote: next, source });
       }
       await store.writeRaw(id, next);
       await setSyncBaseHash(COMMISSION_FEEDBACK_KIND, next.id, contentHashForRecord(COMMISSION_FEEDBACK_KIND, next));
-      return true;
+      return next;
     });
-    if (applied) changed += 1;
+    if (applied) { changed += 1; if (applied.commissionId) touchedCommissions.add(applied.commissionId); }
   }
   await flushBaseHashes();
+  // Re-apply the per-commission live cap AFTER the batch — two disconnected peers
+  // that each accumulated up-to-cap distinct reactions would otherwise leave the
+  // receiver with up to 2× the cap live after reconnection. Tombstone the oldest
+  // excess (sync-safe) on each commission the merge grew.
+  for (const commissionId of touchedCommissions) await enforceFeedbackCap(commissionId).catch(() => {});
   return changed === 0 ? { applied: false, count: 0 } : { applied: true, count: changed };
 }
 

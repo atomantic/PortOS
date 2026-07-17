@@ -176,6 +176,14 @@ export function sanitizeCommission(raw) {
     runs: Array.isArray(raw.runs) ? raw.runs.slice(-MAX_PERSISTED_RUNS) : [],
     createdAt: isStr(raw.createdAt) ? raw.createdAt : now,
     updatedAt: isStr(raw.updatedAt) ? raw.updatedAt : (isStr(raw.createdAt) ? raw.createdAt : now),
+    // Brief-scoped LWW clock (#2686). The federation compares THIS, not `updatedAt`
+    // — because `updatedAt` is bumped by machine-local edits (a schedule change, a
+    // recordCommissionRun append) that must NOT let a stale brief win the LWW or a
+    // schedule-only edit push a stale brief. `briefUpdatedAt` advances ONLY when a
+    // federated field (name/targetAbility/brief/generation/feedbackWindow) changes.
+    // Pre-#2686 records fall back to `updatedAt`.
+    briefUpdatedAt: isStr(raw.briefUpdatedAt) ? raw.briefUpdatedAt
+      : (isStr(raw.updatedAt) ? raw.updatedAt : (isStr(raw.createdAt) ? raw.createdAt : now)),
     // Soft-delete tombstone trio (#2686). The commission BRIEF federates so it
     // exists on every peer (letting a synced reaction attach to the same
     // commission); a delete must therefore propagate as a tombstone, not a hard
@@ -206,26 +214,47 @@ export function sanitizeCommissionForSync(raw) {
   return sanitizeCommission(raw);
 }
 
-/** Re-attach the receiver's local-only schedule/runs/assignment onto a winning remote. */
+// The MACHINE-LOCAL fields that never travel on the wire — the receiver keeps its
+// OWN values for all of these. `enabled` is machine-local too (#2686): a remotely-
+// inserted commission must NOT arm a cron on the receiver, so each machine decides
+// whether/when it runs. `feedback` is preserved so a remote brief-win can't wipe a
+// commission's un-migrated legacy inline reactions before the boot backfill runs.
+const LOCAL_COMMISSION_FIELDS = ['schedule', 'runs', 'assignment', 'enabled', 'feedback'];
+// The federated brief fields — a patch touching any of these advances the brief
+// LWW clock (`briefUpdatedAt`); a machine-local-only patch does not.
+const FEDERATED_COMMISSION_FIELDS = ['name', 'targetAbility', 'brief', 'generation', 'feedbackWindow'];
+
+/** Re-attach the receiver's local-only fields onto a winning remote; bump the UI clock. */
 function preserveLocalCommissionFields(remote, local) {
   if (!local) return remote;
-  return { ...remote, schedule: local.schedule, runs: local.runs, assignment: local.assignment };
+  const out = { ...remote };
+  for (const f of LOCAL_COMMISSION_FIELDS) out[f] = local[f];
+  // The wire form set `updatedAt = briefUpdatedAt`; restore a real UI "last-changed"
+  // clock (max of the two) while keeping the federated brief clock as the LWW key.
+  out.updatedAt = new Date().toISOString();
+  return out;
 }
 
 /**
  * LWW merge decision for one incoming commission (mirrors mergeWorkRecord): the
- * remote is sanitized here (drop-on-floor → null), a missing local inserts it,
- * else newer `updatedAt` wins. When the remote wins, the receiver's own
- * machine-local schedule/runs/assignment are carried forward (the wire form never
- * carried them), so a peer's brief edit can't reset this machine's schedule.
+ * remote is sanitized here (drop-on-floor → null); a missing local INSERTS the
+ * brief in a DORMANT state (enabled:false, no usable schedule) so it never fires
+ * on the receiver until the user opts in; else the newer BRIEF clock wins, and the
+ * receiver's machine-local schedule/runs/assignment/enabled/feedback carry forward
+ * (they never travel), so a peer's brief edit can't arm or reset this machine.
  */
 export function mergeCommissionRecord(local, remoteRaw) {
   const remote = sanitizeCommissionForSync(remoteRaw);
   if (!remote) return { next: null, inserted: false, remoteWins: false, changed: false };
-  if (!local) return { next: remote, inserted: true, remoteWins: true, changed: true };
-  const localKey = sanitizeCommission(local)?.updatedAt ?? local.updatedAt;
-  const remoteWins = compareNewerWins(remote.updatedAt, localKey);
-  const next = remoteWins ? preserveLocalCommissionFields(remote, sanitizeCommission(local)) : local;
+  if (!local) {
+    // Dormant insert: enabled:false + the sanitizer's null-time schedule (no cron)
+    // so editing only the synced brief on the receiver can't silently arm a daily
+    // run. The user explicitly enables + schedules it locally to activate.
+    return { next: { ...remote, enabled: false }, inserted: true, remoteWins: true, changed: true };
+  }
+  const sanitizedLocal = sanitizeCommission(local);
+  const remoteWins = compareNewerWins(remote.briefUpdatedAt, sanitizedLocal.briefUpdatedAt);
+  const next = remoteWins ? preserveLocalCommissionFields(remote, sanitizedLocal) : local;
   const changed = JSON.stringify(next) !== JSON.stringify(local);
   return { next, inserted: false, remoteWins, changed };
 }
@@ -458,6 +487,7 @@ export async function updateCommission(id, patch) {
     const currentRaw = await store.readRaw(id);
     if (!currentRaw) return null;
     const current = sanitizeCommission(currentRaw);
+    const nowIso = new Date().toISOString();
     const next = sanitizeCommission({
       ...current,
       ...patch,
@@ -483,7 +513,14 @@ export async function updateCommission(id, patch) {
       assignment: patch.assignment ? patch.assignment : current.assignment,
       id,
       createdAt: current.createdAt,
-      updatedAt: new Date().toISOString(),
+      updatedAt: nowIso,
+      // Advance the federated BRIEF clock ONLY when a federated field changes —
+      // a machine-local edit (schedule/assignment) must not poison the LWW key or
+      // it could push a stale brief to peers / make a real brief edit lose. When it
+      // DOES advance, it equals `updatedAt` (same `nowIso`); a local-only edit
+      // leaves it at the prior value (< updatedAt).
+      briefUpdatedAt: FEDERATED_COMMISSION_FIELDS.some((k) => k in patch)
+        ? nowIso : current.briefUpdatedAt,
     });
     await store.writeRaw(id, next);
     return next;
@@ -510,7 +547,10 @@ export async function deleteCommission(id) {
     const current = sanitizeCommission(currentRaw);
     if (current.deleted) return false;
     const now = new Date().toISOString();
-    await store.writeRaw(id, { ...current, deleted: true, deletedAt: now, updatedAt: now });
+    // Bump the BRIEF clock too — the tombstone is a brief-level change that must
+    // win the briefUpdatedAt-keyed LWW on peers (otherwise it ties the pre-delete
+    // brief and never propagates).
+    await store.writeRaw(id, { ...current, deleted: true, deletedAt: now, updatedAt: now, briefUpdatedAt: now });
     return true;
   });
   if (!existed) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
@@ -633,10 +673,11 @@ export async function getCommissionForSync(id) {
   return raw ? sanitizeCommissionForSync(raw) : null;
 }
 
-/** Every LIVE commission as `{ id, updatedAt }` for full-sync coverage compare. */
+/** Every LIVE commission as `{ id, updatedAt }` for full-sync coverage compare.
+ *  `updatedAt` is the BRIEF clock (the wire LWW key), so coverage compares like-for-like. */
 export async function listCommissionsForSync() {
   const raw = await commissionStore().listRaw();
-  return raw.map(sanitizeCommissionForSync).filter(Boolean).map((r) => ({ id: r.id, updatedAt: r.updatedAt }));
+  return raw.map(sanitizeCommissionForSync).filter(Boolean).map((r) => ({ id: r.id, updatedAt: r.briefUpdatedAt }));
 }
 
 /** Every commission id — live only by default, or all (incl. tombstones) for the sweep. */
@@ -702,7 +743,9 @@ export async function restoreCommission(id, patch) {
       id, createdAt: current.createdAt,
       // Never let a snapshot restore resurrect the machine-local fields — keep ours.
       schedule: current.schedule, runs: current.runs, assignment: current.assignment,
-      deleted: false, deletedAt: null, updatedAt: new Date().toISOString(),
+      enabled: current.enabled,
+      // Advance the brief clock so the restore wins the next LWW and re-pushes.
+      deleted: false, deletedAt: null, updatedAt: new Date().toISOString(), briefUpdatedAt: new Date().toISOString(),
     });
     await store.writeRaw(id, next);
     return next;
