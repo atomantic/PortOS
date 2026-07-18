@@ -302,7 +302,7 @@ export async function buildTaskInput({ app } = {}) {
   // (#2698) can read the app's committed backlog off the SAME tracker the loop
   // files to — gatherSources has no other way to know where work lives.
   const [sources, issuesRead] = await Promise.all([
-    gatherSources(app, config, { tracker: { filer, forgeCli, cwd, jira } }),
+    gatherSources(app, config, { tracker: { filer, forgeCli, cwd, jira }, isPortos }),
     readIssues({ filer, forgeCli, cwd, jira, config })
   ])
   const { openIssues, existingIssues, trackerReadFailed } = issuesRead

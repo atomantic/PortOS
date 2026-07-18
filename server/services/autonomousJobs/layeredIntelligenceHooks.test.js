@@ -230,7 +230,7 @@ describe('buildTaskInput', () => {
     expect(li.gatherSources).toHaveBeenCalledWith(
       APP,
       expect.anything(),
-      { tracker: { filer: 'forge', forgeCli: 'gh', cwd: '/repo', jira: null } }
+      { tracker: { filer: 'forge', forgeCli: 'gh', cwd: '/repo', jira: null }, isPortos: expect.any(Boolean) }
     );
   });
 
@@ -241,7 +241,7 @@ describe('buildTaskInput', () => {
     expect(li.gatherSources).toHaveBeenCalledWith(
       jiraApp,
       expect.anything(),
-      { tracker: expect.objectContaining({ filer: 'jira', jira: expect.objectContaining({ instanceId: 'i1', projectKey: 'PROJ' }) }) }
+      { tracker: expect.objectContaining({ filer: 'jira', jira: expect.objectContaining({ instanceId: 'i1', projectKey: 'PROJ' }) }), isPortos: expect.any(Boolean) }
     );
   });
 

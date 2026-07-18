@@ -46,6 +46,7 @@ import {
   SCOPE_AVOID_SUCCESS_THRESHOLD,
   SCOPE_PREFER_SUCCESS_THRESHOLD,
   SCOPE_AWARENESS_MIN_SAMPLE,
+  SCOPE_AWARENESS_MAX_PER_LIST,
   PROPOSAL_OUTCOMES,
   extractPlanSlugs,
   appendProposalToPlan,
@@ -478,18 +479,18 @@ describe('computeScopeAwareness (#2760)', () => {
     const out = computeScopeAwareness({ metricsByType: {
       'self-improve:layered-intelligence': { lifetimeSuccessRate: 0, lifetimeCompleted: 9 }
     } });
-    expect(out).toContain('AVOID');
-    expect(out).toContain('self-improve:layered-intelligence: 0% success over 9 runs');
-    expect(out).not.toContain('PREFER');
+    expect(out).toContain('LOW-COMPLETION');
+    expect(out).toContain('self-improve:layered-intelligence: 0% completed over 9 runs');
+    expect(out).not.toContain('HIGH-COMPLETION');
   });
 
   it('classifies an at/above-threshold scope with enough runs as PREFER', () => {
     const out = computeScopeAwareness({ metricsByType: {
       'plan-task': { lifetimeSuccessRate: 100, lifetimeCompleted: 10 }
     } });
-    expect(out).toContain('PREFER');
-    expect(out).toContain('plan-task: 100% success over 10 runs');
-    expect(out).not.toContain('AVOID');
+    expect(out).toContain('HIGH-COMPLETION');
+    expect(out).toContain('plan-task: 100% completed over 10 runs');
+    expect(out).not.toContain('LOW-COMPLETION');
   });
 
   it('leaves a mid-band scope (between avoid and prefer) unclassified', () => {
@@ -514,9 +515,9 @@ describe('computeScopeAwareness (#2760)', () => {
     const out = computeScopeAwareness({ metricsByType: {
       'branch-reconcile': { lifetimeSuccessRate: 10, lifetimeCompleted: 20, recentSuccessRate: 100, recentCompleted: 6 }
     } });
-    expect(out).not.toContain('AVOID');
-    expect(out).toContain('PREFER');
-    expect(out).toContain('branch-reconcile: 100% success over 6 runs'); // windowed rate AND windowed count
+    expect(out).not.toContain('LOW-COMPLETION');
+    expect(out).toContain('HIGH-COMPLETION');
+    expect(out).toContain('branch-reconcile: 100% completed over 6 runs'); // windowed rate AND windowed count
   });
 
   it('judges on the windowed rate so a REGRESSED scope enters avoid despite a high lifetime rate', () => {
@@ -524,9 +525,9 @@ describe('computeScopeAwareness (#2760)', () => {
     const out = computeScopeAwareness({ metricsByType: {
       'performance': { lifetimeSuccessRate: 95, lifetimeCompleted: 40, recentSuccessRate: 20, recentCompleted: 8 }
     } });
-    expect(out).toContain('AVOID');
-    expect(out).toContain('performance: 20% success over 8 runs'); // windowed rate AND windowed count
-    expect(out).not.toContain('PREFER');
+    expect(out).toContain('LOW-COMPLETION');
+    expect(out).toContain('performance: 20% completed over 8 runs'); // windowed rate AND windowed count
+    expect(out).not.toContain('HIGH-COMPLETION');
   });
 
   it('ignores a THIN recent window (below the sample floor) and lets lifetime govern (#2760)', () => {
@@ -536,9 +537,9 @@ describe('computeScopeAwareness (#2760)', () => {
     const out = computeScopeAwareness({ metricsByType: {
       'plan-task': { lifetimeSuccessRate: 95, lifetimeCompleted: 40, recentSuccessRate: 0, recentCompleted: 1 }
     } });
-    expect(out).toContain('PREFER');
-    expect(out).toContain('plan-task: 95% success over 40 runs'); // lifetime rate AND lifetime count
-    expect(out).not.toContain('AVOID');
+    expect(out).toContain('HIGH-COMPLETION');
+    expect(out).toContain('plan-task: 95% completed over 40 runs'); // lifetime rate AND lifetime count
+    expect(out).not.toContain('LOW-COMPLETION');
   });
 
   it('falls back to the lifetime rate when the recency window is empty', () => {
@@ -546,8 +547,8 @@ describe('computeScopeAwareness (#2760)', () => {
     const out = computeScopeAwareness({ metricsByType: {
       'plan-task': { lifetimeSuccessRate: 100, lifetimeCompleted: 10, recentSuccessRate: null, recentCompleted: 0 }
     } });
-    expect(out).toContain('PREFER');
-    expect(out).toContain('plan-task: 100% success over 10 runs');
+    expect(out).toContain('HIGH-COMPLETION');
+    expect(out).toContain('plan-task: 100% completed over 10 runs');
   });
 
   it('sorts AVOID worst-first and PREFER best-first', () => {
@@ -562,7 +563,17 @@ describe('computeScopeAwareness (#2760)', () => {
     // best prefer (performance 100%) precedes the milder one (test-coverage 80%)
     expect(out.indexOf('performance')).toBeLessThan(out.indexOf('test-coverage'));
     // AVOID section precedes PREFER section
-    expect(out.indexOf('AVOID')).toBeLessThan(out.indexOf('PREFER'));
+    expect(out.indexOf('LOW-COMPLETION')).toBeLessThan(out.indexOf('HIGH-COMPLETION'));
+  });
+
+  it('truncates a pathologically long task-type name (#2760 codex P2)', () => {
+    const longType = 'self-improve:mission-' + 'x'.repeat(200);
+    const out = computeScopeAwareness({ metricsByType: {
+      [longType]: { lifetimeSuccessRate: 0, lifetimeCompleted: 5 }
+    } });
+    expect(out).toContain('LOW-COMPLETION');
+    expect(out).not.toContain(longType); // full 200-char name never rendered verbatim
+    expect(out).toContain('…');           // truncation marker present
   });
 
   it('honors the exported thresholds at their exact boundaries', () => {
@@ -570,7 +581,7 @@ describe('computeScopeAwareness (#2760)', () => {
     const atPrefer = computeScopeAwareness({ metricsByType: {
       x: { lifetimeSuccessRate: SCOPE_PREFER_SUCCESS_THRESHOLD, lifetimeCompleted: SCOPE_AWARENESS_MIN_SAMPLE }
     } });
-    expect(atPrefer).toContain('PREFER');
+    expect(atPrefer).toContain('HIGH-COMPLETION');
     const atAvoidBoundary = computeScopeAwareness({ metricsByType: {
       x: { lifetimeSuccessRate: SCOPE_AVOID_SUCCESS_THRESHOLD, lifetimeCompleted: SCOPE_AWARENESS_MIN_SAMPLE }
     } });
@@ -587,13 +598,26 @@ describe('buildPrompt', () => {
     expect(without).not.toContain('liScopeAwareness');
     const withGuidance = buildPrompt({
       ...base,
-      sources: { scopeGuidance: 'AVOID — these scopes have historically FAILED:\n- branch-reconcile: 0% success over 4 runs' }
+      sources: { scopeGuidance: 'LOW-COMPLETION task types:\n- branch-reconcile: 0% completed over 4 runs' }
     });
     expect(withGuidance).toContain('### liScopeAwareness');
-    expect(withGuidance).toContain('branch-reconcile: 0% success over 4 runs');
-    expect(withGuidance).toContain('executed as CoS tasks');
+    expect(withGuidance).toContain('branch-reconcile: 0% completed over 4 runs');
+    expect(withGuidance).toContain('completion rates for THIS install'); // honest framing (codex P1)
     // rendered under its dedicated heading, never as a generic "### scopeGuidance" dump
     expect(withGuidance).not.toContain('### scopeGuidance');
+  });
+
+  it('suppresses the scope-awareness block on a managed (non-PortOS) app (#2760 codex P2)', () => {
+    // Even if a stray scopeGuidance string reaches a managed app's sources, buildPrompt
+    // must not render it — the rates are this install's own CoS history, meaningless
+    // there. Defense-in-depth alongside gatherSources gating the derivation on isPortos.
+    const out = buildPrompt({
+      app, isPortos: false,
+      config: { allowedScopes: ['app-improvement'], rules: '' },
+      sources: { scopeGuidance: 'LOW-COMPLETION task types:\n- plan-task: 0% completed over 9 runs' }
+    });
+    expect(out).not.toContain('liScopeAwareness');
+    expect(out).not.toContain('plan-task: 0% completed over 9 runs');
   });
 
   it('only offers meta/self scopes on PortOS', () => {
@@ -1974,7 +1998,7 @@ describe('gatherSources cosMetrics windowed rate (issue #2460)', () => {
     expect(out.cosMetrics).toBeUndefined();
   });
 
-  it('emits scopeGuidance derived from the same per-type rates (#2760)', async () => {
+  it('emits scopeGuidance derived from the same per-type rates on PortOS (#2760)', async () => {
     await writeLearning({
       byTaskType: {
         'self-improve:layered-intelligence': { completed: 9, succeeded: 0, failed: 9, successRate: 0, recentOutcomes: [] },
@@ -1982,11 +2006,11 @@ describe('gatherSources cosMetrics windowed rate (issue #2460)', () => {
         'feature-ideas': { completed: 8, succeeded: 5, failed: 3, successRate: 63, recentOutcomes: [] } // mid-band → neither
       }
     });
-    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: true } }, { cosPath: dir });
-    expect(out.scopeGuidance).toContain('AVOID');
-    expect(out.scopeGuidance).toContain('self-improve:layered-intelligence: 0% success over 9 runs');
-    expect(out.scopeGuidance).toContain('PREFER');
-    expect(out.scopeGuidance).toContain('plan-task: 100% success over 10 runs');
+    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: true } }, { cosPath: dir, isPortos: true });
+    expect(out.scopeGuidance).toContain('LOW-COMPLETION');
+    expect(out.scopeGuidance).toContain('self-improve:layered-intelligence: 0% completed over 9 runs');
+    expect(out.scopeGuidance).toContain('HIGH-COMPLETION');
+    expect(out.scopeGuidance).toContain('plan-task: 100% completed over 10 runs');
     expect(out.scopeGuidance).not.toContain('feature-ideas');
   });
 
@@ -1994,16 +2018,44 @@ describe('gatherSources cosMetrics windowed rate (issue #2460)', () => {
     await writeLearning({
       byTaskType: { 'plan-task': { completed: 2, succeeded: 2, failed: 0, successRate: 100, recentOutcomes: [] } }
     });
-    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: true } }, { cosPath: dir });
+    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: true } }, { cosPath: dir, isPortos: true });
     expect(out.cosMetrics).toBeDefined(); // raw metrics still surfaced
     expect(out.scopeGuidance).toBeUndefined();
+  });
+
+  it('does NOT emit scopeGuidance for a managed app even when it enabled cosMetrics (#2760 codex P2)', async () => {
+    // These completion rates are the install's own CoS history — irrelevant to a
+    // managed app — so the derivation is gated on isPortos, not just the cosMetrics
+    // toggle (which a managed app CAN turn on). cosMetrics itself is still surfaced.
+    await writeLearning({
+      byTaskType: { 'plan-task': { completed: 10, succeeded: 0, failed: 10, successRate: 0, recentOutcomes: [] } }
+    });
+    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: true } }, { cosPath: dir, isPortos: false });
+    expect(out.cosMetrics).toBeDefined();
+    expect(out.scopeGuidance).toBeUndefined();
+  });
+
+  it('caps the number of task types per list and notes the overflow (#2760 codex P2)', async () => {
+    // Overflow the cap by 3 chronically-failing types (all past the sample floor) → the
+    // block must cap at SCOPE_AWARENESS_MAX_PER_LIST and note the remainder, not dump all.
+    const overflow = 3;
+    const total = SCOPE_AWARENESS_MAX_PER_LIST + overflow;
+    const byTaskType = {};
+    for (let i = 0; i < total; i++) {
+      byTaskType[`self-improve:fail-scope-${i}`] = { completed: 5, succeeded: 0, failed: 5, successRate: 0, recentOutcomes: [] };
+    }
+    await writeLearning({ byTaskType });
+    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: true } }, { cosPath: dir, isPortos: true });
+    const listedTypes = (out.scopeGuidance.match(/self-improve:fail-scope-\d+/g) || []).length;
+    expect(listedTypes).toBe(SCOPE_AWARENESS_MAX_PER_LIST);
+    expect(out.scopeGuidance).toContain(`and ${overflow} more`);
   });
 
   it('does not emit scopeGuidance when cosMetrics is off (#2760)', async () => {
     await writeLearning({
       byTaskType: { 'accessibility': { completed: 4, succeeded: 0, failed: 4, successRate: 0, recentOutcomes: [] } }
     });
-    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: false } }, { cosPath: dir });
+    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: false } }, { cosPath: dir, isPortos: true });
     expect(out.scopeGuidance).toBeUndefined();
   });
 });
