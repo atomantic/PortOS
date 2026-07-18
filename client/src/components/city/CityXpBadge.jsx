@@ -57,6 +57,9 @@ export default function CityXpBadge({ character }) {
   const cta = view.hasBirthDate ? null : birthDateCta(view.birthDateStatus);
   const levelLabel = view.hasBirthDate ? `LV ${view.level}` : cta.badgeLabel;
   const target = view.hasBirthDate ? '/character' : cta.path;
+  // A present-but-unusable date (invalid/future/unreadable) renders in the warning color, matching
+  // the CharacterSheet "fix" prompt and the changelog's promise (#2757). Never true while leveling.
+  const fixState = cta?.kind === 'fix';
 
   return (
     <div className="absolute bottom-16 right-3 pointer-events-auto">
@@ -67,9 +70,11 @@ export default function CityXpBadge({ character }) {
         className={`relative block w-40 sm:w-48 bg-black/85 backdrop-blur-sm border rounded-lg px-3 py-2.5 overflow-hidden text-left transition-all duration-300 hover:bg-cyan-500/10 ${
           leveling
             ? 'border-amber-400/70 shadow-[0_0_16px_rgba(245,158,11,0.5)]'
-            : gaining
-              ? 'border-cyan-400/70 shadow-[0_0_12px_rgba(6,182,212,0.45)]'
-              : 'border-cyan-500/30'
+            : fixState
+              ? 'border-port-warning/60 shadow-[0_0_12px_rgba(245,158,11,0.35)]'
+              : gaining
+                ? 'border-cyan-400/70 shadow-[0_0_12px_rgba(6,182,212,0.45)]'
+                : 'border-cyan-500/30'
         }`}
       >
         {/* Transient flash overlay keyed on burst.seq so it re-mounts each gain */}
@@ -89,8 +94,8 @@ export default function CityXpBadge({ character }) {
         <div className="relative flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <span
-              className={`font-pixel text-base tracking-wider ${leveling ? 'text-amber-300' : 'text-cyan-300'}`}
-              style={{ textShadow: leveling ? '0 0 10px rgba(245,158,11,0.7)' : '0 0 8px rgba(6,182,212,0.5)' }}
+              className={`font-pixel text-base tracking-wider ${leveling ? 'text-amber-300' : fixState ? 'text-port-warning' : 'text-cyan-300'}`}
+              style={{ textShadow: leveling ? '0 0 10px rgba(245,158,11,0.7)' : fixState ? '0 0 8px rgba(245,158,11,0.5)' : '0 0 8px rgba(6,182,212,0.5)' }}
             >
               {levelLabel}
             </span>

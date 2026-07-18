@@ -47,15 +47,32 @@ export function stripDerivedFields(record) {
   return out;
 }
 
+// Pure: is `birthDate` a USABLE stored birth date — a real calendar day, not just a string
+// `new Date` happens to parse? The canonical stored form is `YYYY-MM-DD` (birthDateInputSchema),
+// but legacy/migrated data can be a full ISO timestamp, so accept a `YYYY-MM-DD` prefix
+// (optionally followed by a time) and verify the day round-trips. This rejects the cases
+// `new Date` silently NORMALIZES — an impossible calendar day (`2021-02-29` → Mar 1,
+// `2024-02-30`) or a loose numeric like `"0"` — which would otherwise yield a bogus level
+// instead of the "fix your birth date" CTA (#2757, codex review). Non-string / non-date-shaped
+// input is not usable.
+export function usableBirthDate(birthDate) {
+  if (typeof birthDate !== 'string') return false;
+  const m = birthDate.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) return false;
+  const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() + 1 === mo && dt.getUTCDate() === d;
+}
+
 // Pure: fractional years lived since birthDate (whole years + progress toward the next
 // birthday), or null when birthDate is unset/invalid/future. Uses **calendar** birthdays,
 // not a fixed 365.25-day average — averaging would tick the level up to a day early across
 // leap years. UTC components are used on both sides so the tick lands on the birthday's UTC
 // date regardless of the server's local timezone.
 export function ageYearsFromBirthDate(birthDate, now = new Date()) {
-  if (!birthDate) return null;
+  if (!usableBirthDate(birthDate)) return null;
   const birth = new Date(birthDate);
-  if (Number.isNaN(birth.getTime()) || birth.getTime() > now.getTime()) return null;
+  if (birth.getTime() > now.getTime()) return null;
 
   // Completed calendar years = how many birthdays have passed.
   let years = now.getUTCFullYear() - birth.getUTCFullYear();
@@ -91,16 +108,17 @@ export function levelFromAge(ageYears) {
 // the sentinel distinction (absent vs failed vs valid — see CLAUDE.md) as an explicit status:
 //   'unreadable' → the meatspace config could not be read/parsed (getBirthDateStrict readable:false)
 //   'unset'      → no birthDate on record
-//   'invalid'    → birthDate present but not a parseable date
-//   'future'     → birthDate parses but is in the future
+//   'invalid'    → birthDate present but not a usable calendar date (unparseable, or an
+//                  impossible/normalized day like 2021-02-29 — see usableBirthDate)
+//   'future'     → birthDate is a real date but in the future
 //   'ok'         → a usable past birthDate (a real level exists)
-// Mirrors ageYearsFromBirthDate's own null cases so status and level never disagree.
+// Mirrors ageYearsFromBirthDate's own null cases (via the shared usableBirthDate check) so
+// status and level never disagree.
 export function birthDateStatusFrom(birthDate, readable = true, now = new Date()) {
   if (!readable) return 'unreadable';
   if (!birthDate) return 'unset';
-  const birth = new Date(birthDate);
-  if (Number.isNaN(birth.getTime())) return 'invalid';
-  if (birth.getTime() > now.getTime()) return 'future';
+  if (!usableBirthDate(birthDate)) return 'invalid';
+  if (new Date(birthDate).getTime() > now.getTime()) return 'future';
   return 'ok';
 }
 

@@ -194,7 +194,13 @@ export default function CityHudCompact({
             onClick={() => navigate(birthCta.path)}
             aria-label={`${birthCta.title} to show your level`}
             title={birthCta.title}
-            className="bg-black/85 backdrop-blur-sm border border-cyan-500/40 rounded-lg px-2.5 min-h-[44px] flex items-center font-pixel text-[11px] text-cyan-300/70 tracking-wider"
+            // A present-but-unusable date (invalid/future/unreadable) renders in the warning color,
+            // matching the CharacterSheet "fix" prompt and the changelog's promise (#2757).
+            className={`bg-black/85 backdrop-blur-sm rounded-lg px-2.5 min-h-[44px] flex items-center font-pixel text-[11px] tracking-wider border ${
+              birthCta.kind === 'fix'
+                ? 'border-port-warning/50 text-port-warning'
+                : 'border-cyan-500/40 text-cyan-300/70'
+            }`}
           >
             {birthCta.badgeLabel}
           </button>
