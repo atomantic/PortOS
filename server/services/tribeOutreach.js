@@ -41,6 +41,12 @@ const MAX_GROUNDING_EVENTS = 12;
 
 const MESSAGE_KINDS = new Set(['message.sent', 'message.received']);
 
+// NOTE (upgrade transient): activity rows synced BEFORE the isReaction tag shipped
+// lack it, so a Tapback already in the timeline at upgrade isn't excluded until it
+// ages out of the detection window (≤14 days) — a bounded, self-healing edge. A
+// retroactive backfill would need to re-read chat.db by rowid (macOS + Full Disk
+// Access only), so it's deliberately not attempted here.
+//
 // Sources whose ingestion records BOTH directions per conversation, so an
 // "unanswered" verdict is trustworthy. iMessage (#2151) and Signal (#2154) emit a
 // `message.sent` for every outgoing turn; email sync ingests the inbox only (no
@@ -92,7 +98,11 @@ function threadFields(inbound, eventCount, ageMs) {
     handle: m.handle || null,
     lastInboundAt: inbound.happenedAt,
     daysAgo: Math.floor(ageMs / DAY_MS),
-    snippet: String(inbound.summary || inbound.title || '').trim(),
+    // Only the real message text — NOT `title`, which for an attachment-only/
+    // undecodable chat message is just the contact/conversation name and would
+    // render as `You never replied to "Alex"`. Empty → the alert's own
+    // "their message" fallback is used instead.
+    snippet: String(inbound.summary || '').trim(),
     eventCount,
   };
 }

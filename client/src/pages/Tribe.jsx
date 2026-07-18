@@ -720,7 +720,7 @@ function OutreachQueue() {
                   </div>
                   {draft.subject && <p className="mt-2 text-xs text-gray-500">Subject: {draft.subject}</p>}
                   <p className="mt-2 whitespace-pre-wrap text-sm text-gray-300">{draft.body}</p>
-                  <p className="mt-2 text-xs text-gray-500">Filed in Messages → Drafts. Review, edit, and send it there — it is never sent automatically.</p>
+                  <p className="mt-2 text-xs text-gray-500">Saved to Messages → Drafts for your records. Copy it here or there, then send it from your messaging app — PortOS never sends it for you.</p>
                 </div>
               )}
             </div>
