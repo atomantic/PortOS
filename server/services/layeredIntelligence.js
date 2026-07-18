@@ -20,9 +20,10 @@
  */
 
 import { spawn } from 'child_process';
-import { join, resolve, relative, isAbsolute } from 'path';
+import { join, resolve, relative, isAbsolute, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { readFile, writeFile, appendFile, realpath } from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { DAY, tryReadFile, readJSONFile, safeJSONParse, PATHS } from '../lib/fileUtils.js';
 import { bufferedSpawn } from '../lib/bufferedSpawn.js';
 import { fetchPublicText } from '../lib/safeUrlFetch.js';
@@ -58,6 +59,26 @@ export const PLANNED_WORK_MAX_CHARS = 8000;
 // the whole point of the source: turn "here is the backlog" into "so do not file
 // against it".
 export const PLANNED_WORK_GUIDANCE = 'Cross-reference your proposal against the user\'s actively-planned work above. If your proposal duplicates or conflicts with an active item, DO NOT file — return proposal: null. Only propose genuinely new work that does NOT overlap with what is already in scope.';
+
+// The LI Proposal Playbook (#2763): standing, human-authored guidance distilling
+// which proposals actually land vs. get rejected — scope selection, success/rejection
+// pattern catalogs, task-type selection rules, and a goal-alignment check. Loaded
+// once from the co-located markdown file so the prose stays reviewable-as-prose and
+// buildPrompt can render it verbatim as the always-on `liPlaybook` block. It ships in
+// the SOURCE tree (not seeded to data/prompts/), so it is code-versioned guidance that
+// updates with the code — NOT a user-customizable stage prompt, and thus needs no
+// PROMPT_VERSIONS bump or setup-data migration. Read synchronously at module load so
+// the constant is ready before the first buildPrompt call; the file ships with the
+// module, so a miss is a packaging bug worth surfacing loudly rather than swallowing.
+export const LI_PROPOSAL_PLAYBOOK = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), 'layeredIntelligence.playbook.md'),
+  'utf-8'
+).trim();
+
+// The instruction that frames the playbook block: apply it as a standing constraint,
+// but let a live per-app data block (liOutcomes / liProposalExecution) override a
+// general rule when it has real numbers that contradict it.
+export const LI_PLAYBOOK_GUIDANCE = 'This playbook is the distilled, standing rule set for choosing WHAT to propose — apply it as a hard constraint on scope, task type, and goal alignment before you commit to a proposal. Where a live report above (liOutcomes / liProposalExecution) contradicts a general rule here with real data for THIS app, the live data wins; absent that data, follow the playbook.';
 
 // Rendered when the tracker read SUCCEEDED and the app genuinely has no committed
 // backlog. Says so explicitly rather than omitting the block, so "nothing planned"
@@ -1158,6 +1179,9 @@ const BESPOKE_SOURCE_BLOCK_KEYS = new Set(['plannedWork', 'scopeGuidance']);
  * `liScopeAwareness` block the same way (#2760). `proposalExecutionReport` (from
  * computeProposalExecutionAwareness) is injected as a `liProposalExecution` block —
  * the TRUE per-proposal-domain execution record #2760 could only approximate (#2765).
+ * Finally, the static `liPlaybook` block (LI_PROPOSAL_PLAYBOOK, #2763) is ALWAYS
+ * appended: the a-priori scope/task-type/goal rule set LI needs from run one, before
+ * any per-app outcome data exists.
  */
 export function buildPrompt({ app, config, sources = {}, openIssues = [], isPortos = false, outcomesReport = '', selfEvalReport = '', proposalExecutionReport = '' }) {
   const allowed = (config.allowedScopes || []).filter(s =>
@@ -1238,6 +1262,16 @@ export function buildPrompt({ app, config, sources = {}, openIssues = [], isPort
     ? `\n### liProposalExecution\n${proposalExecutionReport.trim()}\n\nThis is a DIRECT record of how LI's own proposals in each domain fared once implemented — not directional context. Favor domains LI executes reliably; for a low-execution domain, either narrow the proposal to a slice an agent can finish or justify why it is still the highest-value work despite the track record.\n`
     : '';
 
+  // Proposal Playbook (#2763): the STANDING, a-priori rule set — always rendered.
+  // Unlike the data blocks above (which appear only once enough per-app outcome data
+  // accumulates), the playbook is the guidance LI needs from run one, when it would
+  // otherwise be proposing blind. It sits last so it is the freshest instruction
+  // before the JSON contract, and its guidance sentence defers to any live data block
+  // above that has real numbers contradicting a general rule.
+  const playbookBlock = LI_PROPOSAL_PLAYBOOK
+    ? `\n### liPlaybook\n${LI_PROPOSAL_PLAYBOOK}\n\n${LI_PLAYBOOK_GUIDANCE}\n`
+    : '';
+
   return `You are the Layered Intelligence reasoner for the app "${app.name}". Your job is to evaluate how THIS app is performing against its OWN goals and purpose${isPortos ? '' : ', not how well PortOS\'s tooling manages it'}. Decide the SINGLE highest-value improvement to propose this run (signal, not noise), grounded in the app's own goals and its own performance metrics (user success, KPIs, production telemetry). You never write code; you return structured JSON that a deterministic system files as ONE tracker issue.
 ${handoffNote}${metricsGuidance}
 Rules & guidance from the operator:
@@ -1251,7 +1285,7 @@ ${openList}
 
 Gathered sources:
 ${sourceBlocks || (plannedWorkBlock ? '(no other sources available — you may propose an app-data-gap to add telemetry)' : '(no sources available — you may propose an app-data-gap to add telemetry)')}
-${plannedWorkBlock}${outcomesBlock}${selfEvalBlock}${scopeGuidanceBlock}${proposalExecutionBlock}
+${plannedWorkBlock}${outcomesBlock}${selfEvalBlock}${scopeGuidanceBlock}${proposalExecutionBlock}${playbookBlock}
 Respond with JSON only (no markdown fences):
 {
   "analysis": "brief reasoning summary",
