@@ -40,11 +40,32 @@ Parameters (JSON schema): {{parametersJson}}
 
 This project is locked to **{{render.aspectRatio}}** ({{render.width}}×{{render.height}}), **{{render.quality}}** quality, target ~{{render.targetDurationSeconds}}s. For any `media_enqueueVideoJob` step, set ONLY the creative params (`prompt`, `negativePrompt`, `style`, and optionally a shorter per-beat `durationSeconds`). Do NOT set `aspectRatio`, `width`, `height`, `fps`, or `steps` — the server forces the locked geometry onto every render, so any values you supply for those are ignored.
 
+## Referencing a prior step's result
+
+A step that CREATES a record (e.g. `pipeline_createSeries`) mints its id only when it runs — you cannot know that id in advance. To thread a just-created id into a LATER step's `args`, reference the earlier step's result with a placeholder:
+
+```
+{{steps.<stepId>.result.<key>}}
+```
+
+The server resolves it at dispatch time from the referenced step's result. Available result keys are the ids the step returns — commonly `id` (the created record's own id, e.g. a new series' id), plus `seriesId` / `issueId` / `universeId` / `jobId` / `name` when the tool produces them. The referenced step MUST be listed in `dependsOn` so it completes first. A whole-value reference (the `args` value is exactly the placeholder) substitutes the raw id; you may also embed one inside a longer string.
+
+Example — create a series, then run its autopilot on the just-minted id:
+
+```json
+{
+  "stepId": "run-autopilot",
+  "toolName": "pipeline_startSeriesAutopilot",
+  "args": { "seriesId": "{{steps.create-series.result.id}}" },
+  "dependsOn": ["create-series"]
+}
+```
+
 ## Task
 
 1. Decompose the directive into the smallest sequence of registry tool calls that delivers the requested deliverables. Prefer existing records over creating new ones where the constraints name a target universe/series id.
 2. Give every step a stable, unique `stepId` (e.g. `create-series`, `cover-issue-1`).
-3. Use `dependsOn` to encode ordering — a step runs only after every id in its `dependsOn` reaches a terminal-success state. Steps with no dependencies run in listed order (execution is sequential; there are no parallel branches).
+3. Use `dependsOn` to encode ordering — a step runs only after every id in its `dependsOn` reaches a terminal-success state. Steps with no dependencies run in listed order (execution is sequential; there are no parallel branches). When a step needs an id produced by an earlier step, reference it with `{{steps.<stepId>.result.<key>}}` (see "Referencing a prior step's result" above) and list that step in `dependsOn`.
 4. Do NOT invent tool names or arguments. If a deliverable cannot be produced with the available tools, omit it rather than fabricating a step.
 
 ## Output contract
