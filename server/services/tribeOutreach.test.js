@@ -209,6 +209,29 @@ describe('generateOutreachDraft', () => {
     expect(replyTo.bodyText).toBe('the one we detected');
   });
 
+  it('refuses (409) when a reply was sent after the detected inbound', async () => {
+    listEvents.mockResolvedValue([
+      { kind: 'message.received', happenedAt: '2026-07-15T00:00:00.000Z', summary: 'you around?' },
+      { kind: 'message.sent', happenedAt: '2026-07-16T00:00:00.000Z', summary: 'yes!' },
+    ]);
+    await expect(generateOutreachDraft({
+      personId: 'p1', source: 'imessage', chatGuid: 'chat-1', lastInboundAt: '2026-07-15T00:00:00.000Z',
+    })).rejects.toMatchObject({ status: 409 });
+    expect(generateReplyBody).not.toHaveBeenCalled();
+    expect(createDraft).not.toHaveBeenCalled();
+  });
+
+  it('uses a chat-appropriate reply template, not the email default', async () => {
+    listEvents.mockResolvedValue([
+      { kind: 'message.received', happenedAt: '2026-07-15T00:00:00.000Z', summary: 'hey' },
+    ]);
+    await generateOutreachDraft({ personId: 'p1', source: 'imessage', chatGuid: 'chat-1' });
+    const [, , opts] = generateReplyBody.mock.calls[0];
+    expect(opts.templateOverride).toMatch(/text message/i);
+    expect(opts.templateOverride).toMatch(/casual/i);
+    expect(opts.templateOverride).not.toMatch(/professional reply to this email/i);
+  });
+
   it('prefers the chat handle over a person email in the review-only recipient', async () => {
     getPerson.mockResolvedValue({ id: 'p1', name: 'Alex', phones: [], emails: ['alex@example.com'] });
     listEvents.mockResolvedValue([

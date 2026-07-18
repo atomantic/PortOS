@@ -49,6 +49,11 @@ const MESSAGE_KINDS = new Set(['message.sent', 'message.received']);
 // per-account sent/replied ingestion exists — see #2796.
 const TWO_WAY_SOURCES = new Set(['imessage', 'signal']);
 
+// Channel-appropriate reply prompt for chat outreach — generateReplyBody's default
+// template is email-toned ("Write a professional reply to this email"), which reads
+// wrong for a text message. {{from}}/{{body}} are substituted by generateReplyBody.
+const OUTREACH_CHAT_TEMPLATE = 'Write a brief, warm, casual reply to reconnect over a text message. Keep it short and personal — no email subject line, no formal salutation or sign-off.\n\nFrom: {{from}}\nTheir message:\n{{body}}';
+
 // A conversation is keyed by the most specific stable identifier available:
 // chatGuid (iMessage), conversationId (Signal — its outbound turns carry no
 // handle, so keying on the shared conversationId is the only thing that unifies
@@ -178,14 +183,18 @@ export async function findUnansweredTribeThreads({
   // mark a thread answered.
   const received = [];
   const sent = [];
-  await Promise.all([...TWO_WAY_SOURCES].map(async (src) => {
-    const [r, s] = await Promise.all([
-      listEvents({ from, source: src, kind: 'message.received', limit: 2000 }).catch(() => []),
-      listEvents({ from, source: src, kind: 'message.sent', limit: 2000 }).catch(() => []),
-    ]);
-    received.push(...r);
-    sent.push(...s);
-  }));
+  await Promise.all([...TWO_WAY_SOURCES].map((src) =>
+    // Fail CLOSED per source: if EITHER direction's query fails, drop this source's
+    // turns entirely. Substituting [] for only the failed direction would leave
+    // received without its sent counterpart, making every inbound look unanswered
+    // and emitting false nudges — the function's contract is to stay quiet on a
+    // read failure, not to nudge on half the data.
+    Promise.all([
+      listEvents({ from, source: src, kind: 'message.received', limit: 2000 }),
+      listEvents({ from, source: src, kind: 'message.sent', limit: 2000 }),
+    ]).then(([r, s]) => { received.push(...r); sent.push(...s); })
+      .catch(() => { /* partial read → drop this source to avoid false nudges */ })
+  ));
 
   // Every outbound turn just needs to cancel the unanswered flag for its
   // conversation (grouped by chatGuid/conversationId).
@@ -311,13 +320,28 @@ export async function generateOutreachDraft({
     // No conversational grounding at all — refuse rather than fabricate context.
     throw new ServerError('No conversation history found to ground an outreach draft', { status: 404 });
   }
+
+  // Revalidate against fresh timeline state: the Care Queue fetched once, so the
+  // user may have replied (a newer sync recorded a `message.sent`) between then and
+  // this click. Don't spend a paid LLM call drafting a reply to an already-answered
+  // thread — bail with a clear signal the client can surface instead.
+  const anchorT = Date.parse(anchorEv.happenedAt);
+  const alreadyReplied = sorted.some((ev) => ev.kind === 'message.sent' && Date.parse(ev.happenedAt) > anchorT);
+  if (alreadyReplied) {
+    throw new ServerError('You have already replied to this conversation', { status: 409, code: 'ALREADY_REPLIED' });
+  }
+
   // Grounding context: the last N turns, but always keep the anchor in-window.
   const windowEvents = sorted.slice(-MAX_GROUNDING_EVENTS);
   if (!windowEvents.includes(anchorEv)) windowEvents.unshift(anchorEv);
   const threadMessages = windowEvents.map((ev) => eventToMessage(ev, person?.name));
   const replyTo = eventToMessage(anchorEv, person?.name);
 
-  const aiResult = await generateReplyBody(replyTo, instructions, { useVoice, threadMessages }).catch((err) => {
+  const aiResult = await generateReplyBody(replyTo, instructions, {
+    useVoice,
+    threadMessages,
+    templateOverride: OUTREACH_CHAT_TEMPLATE,
+  }).catch((err) => {
     console.error(`❌ Outreach draft generation failed: ${err.message}`);
     return null;
   });

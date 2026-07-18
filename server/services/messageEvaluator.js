@@ -192,14 +192,17 @@ ${formatted}
  * @returns {{ body: string }}
  */
 export async function generateReplyBody(message, instructions = '', options = {}) {
-  const { useVoice, threadMessages } = options;
+  const { useVoice, threadMessages, templateOverride } = options;
   const { provider, model, msgConfig } = await resolveProviderConfig('reply');
 
   // Determine if voice mode is active (explicit param > settings default)
   const shouldUseVoice = useVoice ?? msgConfig.voiceMode ?? false;
 
-  // Build prompt from template
-  let template = msgConfig.replyTemplate || 'Write a professional reply to this email.\n\nFrom: {{from}}\nSubject: {{subject}}\nBody:\n{{body}}';
+  // Build prompt from template. `templateOverride` lets a caller supply a
+  // channel-appropriate prompt (e.g. Tribe chat outreach, #2158) instead of the
+  // email-toned default or the user's email replyTemplate — a text message needs
+  // a casual, subject-less reply, not "Write a professional reply to this email."
+  let template = templateOverride || msgConfig.replyTemplate || 'Write a professional reply to this email.\n\nFrom: {{from}}\nSubject: {{subject}}\nBody:\n{{body}}';
   // Sanitize untrusted email content to prevent prompt injection
   const vars = {
     from: sanitize(message.from?.name || message.from?.email || 'Unknown'),
