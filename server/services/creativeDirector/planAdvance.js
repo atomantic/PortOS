@@ -108,6 +108,95 @@ export function deriveNextPlanAction(plan) {
   return { type: 'complete' };
 }
 
+// A single cross-step result reference: `{{steps.<stepId>.result.<dotpath>}}`.
+// The reference resolves to a value produced by an EARLIER (terminal-success)
+// step's persisted `result` — the id-only summary `summarizeResult` stored (e.g.
+// a created series' `result.id`). stepIds allow letters/digits/`_`/`-`; the path
+// is a dotted key list into the result object.
+// One source for the reference grammar; the anchored form (whole-value → raw
+// type preserved) and the global form (embedded → stringified) derive from it so
+// widening the id/path character classes can't diverge the two.
+const STEP_REF_BODY = String.raw`\{\{\s*steps\.([\w-]+)\.result\.([\w.-]+)\s*\}\}`;
+const STEP_REF_ANCHORED = new RegExp(`^${STEP_REF_BODY}$`);
+const STEP_REF_GLOBAL = new RegExp(STEP_REF_BODY, 'g');
+
+/**
+ * Resolve `{{steps.<stepId>.result.<path>}}` references in a plan step's `args`
+ * against the plan's already-completed steps (#2773). The executor otherwise
+ * dispatches `args` verbatim and never interpolated prior results — so a step
+ * that needs a just-minted id (the classic case: a `series` commission where
+ * `pipeline_startSeriesAutopilot` needs the id `pipeline_createSeries` mints)
+ * had no way to reference it, and could only ever create an empty series.
+ *
+ * A whole-string reference (`"{{steps.create-series.result.id}}"`) substitutes
+ * the RAW resolved value (type preserved); an embedded reference inside a longer
+ * string is stringified in place. References are resolved recursively through
+ * nested arrays/objects in `args`.
+ *
+ * Pure + side-effect-free (exported for direct unit testing). Returns
+ * `{ args, error }`: `error` is a non-null human-readable string when any
+ * reference points at an unknown step, a step that is not terminal-success, or a
+ * missing result key — the executor treats that as a planning error (fail the
+ * step → bounded re-plan) rather than dispatching an unresolved `{{…}}` literal.
+ *
+ * @param {{stepId?: string, args?: object}} step
+ * @param {{steps?: Array<object>}} plan
+ */
+export function resolvePlanStepArgs(step, plan) {
+  const args = step?.args || {};
+  // Fast path: the vast majority of steps carry no references. Every reference
+  // contains the `{{steps.` sentinel, so a cheap serialize-and-scan returns the
+  // args untouched without building the step index or walking/cloning the tree.
+  if (!JSON.stringify(args).includes('{{steps.')) return { args, error: null };
+
+  const steps = Array.isArray(plan?.steps) ? plan.steps : [];
+  const byId = new Map(steps.map((s) => [s.stepId, s]));
+  const errors = [];
+
+  const resolveRef = (stepId, path) => {
+    const dep = byId.get(stepId);
+    if (!dep) { errors.push(`references unknown step "${stepId}"`); return undefined; }
+    if (!PLAN_STEP_TERMINAL_SUCCESS.has(dep.status)) {
+      errors.push(`references step "${stepId}" which is not complete (status: ${dep.status || 'pending'})`);
+      return undefined;
+    }
+    let val = dep.result;
+    for (const seg of path.split('.')) val = val == null ? undefined : val[seg];
+    if (val === undefined || val === null) {
+      errors.push(`references missing result "${path}" on step "${stepId}"`);
+      return undefined;
+    }
+    return val;
+  };
+
+  const resolveString = (str) => {
+    if (!str.includes('{{')) return str;
+    const whole = STEP_REF_ANCHORED.exec(str);
+    if (whole) {
+      const v = resolveRef(whole[1], whole[2]);
+      return v === undefined ? str : v;
+    }
+    return str.replace(STEP_REF_GLOBAL, (m, stepId, path) => {
+      const v = resolveRef(stepId, path);
+      return v === undefined ? m : String(v);
+    });
+  };
+
+  const resolveValue = (val) => {
+    if (typeof val === 'string') return resolveString(val);
+    if (Array.isArray(val)) return val.map(resolveValue);
+    if (val && typeof val === 'object') {
+      const out = {};
+      for (const [k, v] of Object.entries(val)) out[k] = resolveValue(v);
+      return out;
+    }
+    return val;
+  };
+
+  const resolvedArgs = resolveValue(args);
+  return { args: resolvedArgs, error: errors.length ? `Step "${step?.stepId}" ${errors.join('; ')}` : null };
+}
+
 // In-memory dedup, same role as completionHook's inflight sets. `inflightPlanner`
 // covers the updateProject→enqueue window for the planner; `inflightPlanStep`
 // covers the getProject→recordRun window for a dispatch (released once the
@@ -244,12 +333,27 @@ async function runPlanStep(project, step) {
     // in-memory key so a raced advance sees the persisted state and bails.
     inflightPlanStep.delete(key);
   }
+  // Resolve cross-step result references in the args (#2773) so this step can
+  // consume a prior step's minted id (e.g. a created series' `result.id`). A
+  // reference that can't be resolved is a planning error (a mis-authored plan) →
+  // fail the step and route through bounded re-plan, never dispatch a literal
+  // `{{…}}`. The RESOLVED step flows onward so downstream settle logic (e.g. the
+  // autopilot listener's `step.args.seriesId`) sees the concrete id, not the ref.
+  const resolved = resolvePlanStepArgs(step, project.plan);
+  if (resolved.error) {
+    await finishRun(projectId, run?.runId, 'failed', resolved.error);
+    const bumped = (step.retryCount || 0) + 1;
+    await updatePlanStep(projectId, step.stepId, { status: 'failed', retryCount: bumped, result: { error: resolved.error } });
+    console.log(`❌ CD plan ${projectId}: step "${step.stepId}" ${resolved.error}`);
+    return handlePlanStepFailure(projectId, { ...step, retryCount: bumped });
+  }
+  const resolvedStep = { ...step, args: resolved.args };
   console.log(`▶️  CD plan ${projectId}: dispatching step "${step.stepId}" (${step.toolName})`);
   // Outside the request lifecycle — catch so a throw becomes a settle, never an
   // unhandled rejection.
-  const dispatch = await dispatchCreativeTool(step.toolName, step.args || {}, { projectId })
+  const dispatch = await dispatchCreativeTool(resolvedStep.toolName, resolvedStep.args, { projectId })
     .catch((err) => ({ ok: false, threw: true, error: err.message }));
-  return settlePlanStepDispatch(projectId, step, run?.runId, dispatch);
+  return settlePlanStepDispatch(projectId, resolvedStep, run?.runId, dispatch);
 }
 
 async function settlePlanStepDispatch(projectId, step, runId, dispatch) {

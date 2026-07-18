@@ -12,7 +12,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // ---- pure derivation (no mocks needed) -------------------------------------
-import { deriveNextPlanAction, lastRenderedVideoJobId } from './planAdvance.js';
+import { deriveNextPlanAction, lastRenderedVideoJobId, resolvePlanStepArgs } from './planAdvance.js';
 
 const step = (id, over = {}) => ({ stepId: id, toolName: 't', args: {}, dependsOn: [], status: 'pending', ...over });
 
@@ -86,6 +86,70 @@ describe('deriveNextPlanAction (pure)', () => {
     const a = deriveNextPlanAction({ steps: [step('a', { status: 'done' }), step('b', { status: 'failed' })] });
     expect(a.type).toBe('failed');
     expect(a.steps.map((s) => s.stepId)).toEqual(['b']);
+  });
+});
+
+describe('resolvePlanStepArgs (pure) — cross-step result references (#2773)', () => {
+  const donePlan = (result) => ({ steps: [
+    { stepId: 'create-series', status: 'done', result },
+  ] });
+
+  it('substitutes a whole-string reference with the raw result value (type preserved)', () => {
+    const plan = donePlan({ id: 'ser-42', name: 'Nova' });
+    const out = resolvePlanStepArgs({ stepId: 'run', args: { seriesId: '{{steps.create-series.result.id}}' } }, plan);
+    expect(out.error).toBeNull();
+    expect(out.args).toEqual({ seriesId: 'ser-42' });
+  });
+
+  it('preserves a non-string value type for a whole-string reference', () => {
+    const plan = donePlan({ id: 'ser-1', status: 'active', count: 3 });
+    const out = resolvePlanStepArgs({ stepId: 'run', args: { n: '{{steps.create-series.result.count}}' } }, plan);
+    expect(out.args.n).toBe(3); // number, not "3"
+  });
+
+  it('interpolates an embedded reference inside a longer string', () => {
+    const plan = donePlan({ name: 'Nova' });
+    const out = resolvePlanStepArgs({ stepId: 'run', args: { title: 'Cover for {{steps.create-series.result.name}}' } }, plan);
+    expect(out.args.title).toBe('Cover for Nova');
+  });
+
+  it('resolves references nested in arrays and objects', () => {
+    const plan = donePlan({ id: 'ser-9' });
+    const out = resolvePlanStepArgs({ stepId: 'run', args: {
+      list: ['{{steps.create-series.result.id}}'],
+      nested: { seriesId: '{{steps.create-series.result.id}}' },
+    } }, plan);
+    expect(out.args).toEqual({ list: ['ser-9'], nested: { seriesId: 'ser-9' } });
+  });
+
+  it('leaves non-reference args untouched and clones cleanly', () => {
+    const out = resolvePlanStepArgs({ stepId: 'run', args: { name: 'plain', keep: 5 } }, { steps: [] });
+    expect(out.error).toBeNull();
+    expect(out.args).toEqual({ name: 'plain', keep: 5 });
+  });
+
+  it('errors on an unknown referenced step', () => {
+    const out = resolvePlanStepArgs({ stepId: 'run', args: { seriesId: '{{steps.ghost.result.id}}' } }, { steps: [] });
+    expect(out.error).toMatch(/unknown step "ghost"/);
+  });
+
+  it('errors when the referenced step is not yet complete', () => {
+    const plan = { steps: [{ stepId: 'create-series', status: 'pending', result: null }] };
+    const out = resolvePlanStepArgs({ stepId: 'run', args: { seriesId: '{{steps.create-series.result.id}}' } }, plan);
+    expect(out.error).toMatch(/not complete/);
+  });
+
+  it('errors on a missing result key', () => {
+    const plan = donePlan({ name: 'Nova' }); // no `id`
+    const out = resolvePlanStepArgs({ stepId: 'run', args: { seriesId: '{{steps.create-series.result.id}}' } }, plan);
+    expect(out.error).toMatch(/missing result "id"/);
+  });
+
+  it('treats a skipped step as a resolvable terminal-success source', () => {
+    const plan = { steps: [{ stepId: 'create-series', status: 'skipped', result: { id: 'ser-7' } }] };
+    const out = resolvePlanStepArgs({ stepId: 'run', args: { seriesId: '{{steps.create-series.result.id}}' } }, plan);
+    expect(out.error).toBeNull();
+    expect(out.args.seriesId).toBe('ser-7');
   });
 });
 
@@ -377,6 +441,44 @@ describe('advanceAfterPlanStepSettled — runAutopilot plan step', () => {
     ap.autopilotEvents.emit('ser-1', { type: 'complete', runId: 'r1', steps: 3 });
     await flush();
     expect(read().plan.steps[0].status).toBe('done');
+  });
+
+  it('threads a just-minted series id into the autopilot step via a result reference (#2773)', async () => {
+    // The series-commission shape: create the series (mints an id), then start
+    // the autopilot on THAT id — expressed as `{{steps.create-series.result.id}}`
+    // because the planner can't know the id until create-series runs.
+    const read = makeStore(planProject([
+      step('create-series', { toolName: 'pipeline_createSeries', args: { name: 'Nova' } }),
+      step('a', { toolName: 'pipeline_startSeriesAutopilot', args: { seriesId: '{{steps.create-series.result.id}}' }, dependsOn: ['create-series'] }),
+    ]));
+    mockDispatch.mockResolvedValueOnce({ ok: true, mode: 'execute', result: { id: 'ser-77', name: 'Nova' } }); // create-series
+    mockDispatch.mockResolvedValueOnce(autopilotDispatch()); // start autopilot
+    await advanceAfterPlanStepSettled('cd-1');
+    // The autopilot was dispatched with the RESOLVED concrete id, not the literal ref.
+    expect(mockDispatch).toHaveBeenNthCalledWith(2, 'pipeline_startSeriesAutopilot', { seriesId: 'ser-77' }, { projectId: 'cd-1' });
+    expect(read().plan.steps[1].status).toBe('running');
+    // The listener is armed on the resolved id — a terminal frame on 'ser-77' settles it.
+    ap.autopilotEvents.emit('ser-77', { type: 'complete', runId: 'r1', steps: 5 });
+    await flush();
+    const p = read();
+    expect(p.plan.steps[1].status).toBe('done');
+    expect(p.status).toBe('complete');
+  });
+
+  it('fails a step whose result reference cannot be resolved and re-plans (#2773)', async () => {
+    // A mis-authored plan: the autopilot references a step that never produced
+    // an `id`. The executor must fail the step (not dispatch a `{{…}}` literal)
+    // and route through bounded re-plan.
+    const read = makeStore(planProject([
+      step('create-series', { toolName: 'pipeline_createSeries', args: { name: 'Nova' }, status: 'done', result: { name: 'Nova' } }),
+      step('a', { toolName: 'pipeline_startSeriesAutopilot', args: { seriesId: '{{steps.create-series.result.id}}' }, dependsOn: ['create-series'] }),
+    ]));
+    await advanceAfterPlanStepSettled('cd-1');
+    const p = read();
+    expect(p.plan.steps[1].status).toBe('failed');
+    expect(p.plan.steps[1].result.error).toMatch(/missing result "id"/);
+    expect(mockDispatch).not.toHaveBeenCalled(); // never dispatched the unresolved step
+    expect(mockEnqueuePlanTask).toHaveBeenCalledTimes(1); // under the replan budget
   });
 
   it('settles immediately off the persisted marker when the run already finished (attach race)', async () => {
