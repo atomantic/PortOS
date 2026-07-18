@@ -1171,6 +1171,29 @@ describe('fileUtils', () => {
       await atomicWrite(target, { created: true });
       expect(JSON.parse(await readFile(target, 'utf8'))).toEqual({ created: true });
     });
+
+    it.skipIf(process.platform === 'win32')(
+      'replaces a symlink target with a regular file rather than following it (design decision: #1893)',
+      async () => {
+        // Decision pinned by this test: temp+rename REPLACES the link, standard
+        // atomic-write semantics — it does NOT follow the symlink to update the
+        // backing file. Following would reintroduce the non-atomic in-place
+        // truncate atomicWrite exists to avoid. See the JSDoc + issue #1893.
+        const { symlinkSync, lstatSync } = await import('fs');
+        const backing = join(tmpRoot, 'backing.json');
+        const link = join(tmpRoot, 'link.json');
+        writeFileSync(backing, '{"orig":true}');
+        symlinkSync(backing, link);
+
+        await atomicWrite(link, { replaced: true });
+
+        // The link path is now a regular file holding the new content...
+        expect(lstatSync(link).isSymbolicLink()).toBe(false);
+        expect(JSON.parse(await readFile(link, 'utf8'))).toEqual({ replaced: true });
+        // ...and the original backing file is untouched (link was not followed).
+        expect(JSON.parse(await readFile(backing, 'utf8'))).toEqual({ orig: true });
+      }
+    );
   });
 });
 

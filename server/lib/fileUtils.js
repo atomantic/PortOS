@@ -201,6 +201,16 @@ export async function ensureDirs(dirs) {
  * Guarantees readers never see a partial write. Accepts a string or any JSON-
  * serializable value (objects are stringified with 2-space indentation).
  *
+ * Symlink semantics (design decision, issue #1893): when `filePath` is a
+ * symlink, the temp+rename REPLACES the link with a regular file — it does NOT
+ * follow the link to update the backing file. This is the standard atomic-write
+ * contract (git, dpkg, rsync, `os.replace` all replace the link); following the
+ * link would reintroduce the non-atomic in-place truncate this helper exists to
+ * eliminate. PortOS ships no symlinked data files, so this is a documented
+ * property rather than a supported use case — do not pass a symlink you expect
+ * to be followed. Callers that genuinely need follow-the-link semantics must
+ * resolve `realpath(filePath)` themselves before calling.
+ *
  * @param {string} filePath - Destination file path
  * @param {string|object} data - String or JSON-serializable value
  * @returns {Promise<void>}
