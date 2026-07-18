@@ -2,6 +2,8 @@
 
 ## Character LoRA training
 
+- **[issue-2787] Character LoRA training now sets itself up even when your system Python is too old.** The MLX trainer needs Python 3.10+, and on a machine whose default `python3` is older (or locked down so packages can't be installed into it), the setup step used to fail and leave training unavailable. Now it detects that and builds a dedicated, self-contained Python environment for the trainer instead — and PortOS finds it automatically, so training just works with no Settings to configure. Machines whose system Python already works are unaffected and keep their existing setup.
+
 - **[issue-1227] Character LoRA training is validated end-to-end on Apple Silicon, and now fails fast when it can't run.** A real training run was taken all the way through on the MLX (mflux) runtime — from staging a character's images to a trained adapter, then loading that adapter back into image generation to confirm it renders — so training your own character LoRAs is a proven path on this hardware. The torch-based fallback trainer, meanwhile, can't train on a Mac's GPU (a PyTorch/Metal limitation), so instead of quietly loading gigabytes of weights and then crashing partway in, PortOS now stops you at the start with a clear message to set up the MLX trainer. Nothing changes for Linux/CUDA machines, where the fallback is the intended path.
 
 ## Added
