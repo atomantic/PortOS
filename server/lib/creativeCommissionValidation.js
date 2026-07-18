@@ -25,21 +25,50 @@ import { z } from 'zod';
 // future work under epic #2657 — only the five the request enumerated ship here.
 export const CREATIVE_COMMISSION_ABILITIES = Object.freeze(['video', 'image', 'music', 'music-video', 'series']);
 
-// Per-ability generation spec — the SINGLE SOURCE OF TRUTH for which render/knob
-// keys each output type carries and their defaults. Consumed by the create-path
-// superRefine below (rejects a key that doesn't belong to the chosen type), by
-// the ability adapter's `sanitizeGeneration` (fills defaults + preserves only
-// these keys), and mirrored on the client (commissionForm.js
-// GENERATION_FIELDS_BY_ABILITY). `model` is accepted on every type (an optional
-// per-type engine/model override) and so is not repeated in each `keys` list —
-// the superset schema and the adapter both treat it as universally allowed.
-export const ABILITY_GENERATION_SPEC = Object.freeze({
-  video: { keys: ['quality', 'aspectRatio', 'targetDurationSeconds'], defaults: { quality: 'standard', aspectRatio: '16:9', targetDurationSeconds: 10 } },
-  image: { keys: ['quality', 'aspectRatio', 'imageCount'], defaults: { quality: 'standard', aspectRatio: '16:9', imageCount: 1 } },
-  music: { keys: ['lengthSeconds'], defaults: { lengthSeconds: 30 } },
-  'music-video': { keys: ['quality', 'aspectRatio', 'targetDurationSeconds'], defaults: { quality: 'standard', aspectRatio: '16:9', targetDurationSeconds: 10 } },
-  series: { keys: ['episodeCount'], defaults: { episodeCount: 1 } },
+// Schedule cadence kinds. DAILY/WEEKLY are composed into a cron by the service;
+// CUSTOM carries a raw 5-field cron the service validates via isValidCron.
+export const CREATIVE_COMMISSION_SCHEDULE_KINDS = Object.freeze(['DAILY', 'WEEKLY', 'CUSTOM']);
+
+export const CREATIVE_COMMISSION_QUALITIES = Object.freeze(['draft', 'standard', 'high']);
+export const CREATIVE_COMMISSION_ASPECT_RATIOS = Object.freeze(['16:9', '9:16', '1:1']);
+
+// Per-KEY generation descriptor — the SINGLE SOURCE OF TRUTH for a generation
+// param's type, bounds, and default. Everything else derives from this: the Zod
+// superset (`creativeCommissionGenerationSchema`), the per-ability key lists +
+// defaults (`ABILITY_GENERATION_SPEC`), and the ability adapter's data-driven
+// `sanitizeGeneration`. Keeping the bounds here (not re-typed in the schema AND
+// the adapter AND the client) is what stops the four-way drift. The client
+// (commissionForm.js) mirrors these values in its own package — kept in sync by
+// hand; there is no cross-package import.
+export const GENERATION_KEY_DEFS = Object.freeze({
+  quality: { type: 'enum', values: CREATIVE_COMMISSION_QUALITIES, default: 'standard' },
+  aspectRatio: { type: 'enum', values: CREATIVE_COMMISSION_ASPECT_RATIOS, default: '16:9' },
+  targetDurationSeconds: { type: 'int', min: 5, max: 600, default: 10 },
+  imageCount: { type: 'int', min: 1, max: 6, default: 1 },
+  lengthSeconds: { type: 'int', min: 5, max: 600, default: 30 },
+  episodeCount: { type: 'int', min: 1, max: 6, default: 1 },
 });
+
+// Which keys each output type carries (the universal `model` is added separately
+// — every type accepts an optional engine/model override). The adapter fills
+// these keys' defaults and preserves only them.
+const ABILITY_GENERATION_KEYS = Object.freeze({
+  video: ['quality', 'aspectRatio', 'targetDurationSeconds'],
+  image: ['quality', 'aspectRatio', 'imageCount'],
+  music: ['lengthSeconds'],
+  'music-video': ['quality', 'aspectRatio', 'targetDurationSeconds'],
+  series: ['episodeCount'],
+});
+
+// Derived per-ability { keys, defaults } view — the shape the store sanitizer and
+// tests consume. Built from GENERATION_KEY_DEFS so a default only ever lives in
+// one place.
+export const ABILITY_GENERATION_SPEC = Object.freeze(
+  Object.fromEntries(Object.entries(ABILITY_GENERATION_KEYS).map(([ability, keys]) => [ability, {
+    keys,
+    defaults: Object.fromEntries(keys.map((k) => [k, GENERATION_KEY_DEFS[k].default])),
+  }])),
+);
 
 // Keys allowed for a given ability (the spec keys + the universal `model`). Used
 // by the create-path superRefine to flag a param that doesn't belong to the type.
@@ -48,12 +77,13 @@ export function generationKeysForAbility(ability) {
   return ['model', ...spec.keys];
 }
 
-// Schedule cadence kinds. DAILY/WEEKLY are composed into a cron by the service;
-// CUSTOM carries a raw 5-field cron the service validates via isValidCron.
-export const CREATIVE_COMMISSION_SCHEDULE_KINDS = Object.freeze(['DAILY', 'WEEKLY', 'CUSTOM']);
-
-export const CREATIVE_COMMISSION_QUALITIES = Object.freeze(['draft', 'standard', 'high']);
-export const CREATIVE_COMMISSION_ASPECT_RATIOS = Object.freeze(['16:9', '9:16', '1:1']);
+// Build a Zod field for one generation-key descriptor (optional in the superset;
+// per-ability strictness is applied by the create-path superRefine, not here).
+function generationFieldSchema(def) {
+  return def.type === 'enum'
+    ? z.enum(def.values).optional()
+    : z.number().int().min(def.min).max(def.max).optional();
+}
 
 export const COMMISSION_NAME_MAX = 200;
 export const COMMISSION_INTENT_MAX = 2000;
@@ -132,12 +162,9 @@ export const creativeCommissionScheduleSchema = z.object({
 // `episodeCount` is never silently stripped before it reaches sanitizeCommission.
 export const creativeCommissionGenerationSchema = z.object({
   model: z.string().trim().max(64).nullable().optional(),
-  quality: z.enum(CREATIVE_COMMISSION_QUALITIES).optional(),
-  aspectRatio: z.enum(CREATIVE_COMMISSION_ASPECT_RATIOS).optional(),
-  targetDurationSeconds: z.number().int().min(5).max(600).optional(),
-  imageCount: z.number().int().min(1).max(6).optional(),
-  lengthSeconds: z.number().int().min(5).max(600).optional(),
-  episodeCount: z.number().int().min(1).max(6).optional(),
+  // Every generation key, derived from GENERATION_KEY_DEFS so the bounds live in
+  // exactly one place (see the drift note there).
+  ...Object.fromEntries(Object.entries(GENERATION_KEY_DEFS).map(([key, def]) => [key, generationFieldSchema(def)])),
 });
 
 // The UPDATE path shares the same superset — every field optional, no defaults —

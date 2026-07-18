@@ -70,7 +70,6 @@ import {
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import { commissionToCron } from './directive.js';
 import { getAbilityAdapter } from './abilityAdapters.js';
-import { CREATIVE_COMMISSION_ABILITIES } from '../../lib/creativeCommissionValidation.js';
 import {
   recordFeedback,
   listFeedbackForCommission,
@@ -137,11 +136,17 @@ export function sanitizeCommission(raw) {
   const brief = raw.brief && typeof raw.brief === 'object' ? raw.brief : {};
   const schedule = raw.schedule && typeof raw.schedule === 'object' ? raw.schedule : {};
   const generation = raw.generation && typeof raw.generation === 'object' ? raw.generation : {};
-  // Resolve the output type up front (#2769) so the generation block can defer to
-  // the matching ability adapter — which fills that type's defaults and preserves
-  // ONLY that type's keys (an image `imageCount`, a series `episodeCount`), rather
-  // than the old video-only shape.
-  const resolvedAbility = CREATIVE_COMMISSION_ABILITIES.includes(raw.targetAbility) ? raw.targetAbility : 'video';
+  // Resolve the output type up front (#2769). A KNOWN type is sanitized through
+  // its ability adapter (fills that type's defaults, keeps ONLY that type's keys —
+  // an image `imageCount`, a series `episodeCount`). An UNKNOWN non-empty type (a
+  // forward-version record synced verbatim from a newer peer) is PRESERVED, not
+  // rewritten to `video`: rewriting would corrupt the newer peer's brief on read
+  // and could push the downgrade back via LWW (violating the distribution model's
+  // forward-compat rule). The scheduler skips an unknown ability rather than
+  // mis-generating it, so unknown = inert-but-preserved. A missing/blank type
+  // falls back to the default `video`.
+  const resolvedAbility = isStr(raw.targetAbility) && raw.targetAbility ? raw.targetAbility : 'video';
+  const abilityAdapter = getAbilityAdapter(resolvedAbility);
   const assignment = raw.assignment && typeof raw.assignment === 'object' && !Array.isArray(raw.assignment)
     ? raw.assignment : {};
   // The LLM pin that processes the commission (CD treatment + plan stages). A
@@ -156,11 +161,8 @@ export function sanitizeCommission(raw) {
     id: raw.id,
     name: isStr(raw.name) ? raw.name : 'Untitled Commission',
     enabled: raw.enabled !== false,
-    // Clamp to a KNOWN output type (#2769). An unknown/hand-edited value would
-    // otherwise persist and make the scheduler skip the fire as `unknown-ability`;
-    // fall back to `video` (the default + pre-#2769 shape) so the record stays
-    // generatable rather than silently inert. `resolvedAbility` (above) is the
-    // clamped value, reused so the ability and its generation shape never diverge.
+    // Preserve the resolved output type as-is (#2769) — known types pass through,
+    // an unknown forward-version type round-trips untouched (see above).
     targetAbility: resolvedAbility,
     brief: {
       intent: isStr(brief.intent) ? brief.intent : '',
@@ -178,10 +180,11 @@ export function sanitizeCommission(raw) {
       cron: isStr(schedule.cron) ? schedule.cron : null,
       timezone: isStr(schedule.timezone) ? schedule.timezone : null,
     },
-    // Per-ability generation (#2769): the adapter fills THIS type's defaults and
-    // keeps only THIS type's keys. `getAbilityAdapter` never returns null here
-    // because `resolvedAbility` is already clamped to a known ability.
-    generation: getAbilityAdapter(resolvedAbility).sanitizeGeneration(generation),
+    // Per-ability generation (#2769): a known type's adapter fills its defaults
+    // and keeps only its keys; an unknown (forward-version) type has no adapter, so
+    // preserve the raw generation object verbatim — nothing is lost on round-trip
+    // and the scheduler won't fire it anyway.
+    generation: abilityAdapter ? abilityAdapter.sanitizeGeneration(generation) : { ...generation },
     // Which AI provider/model processes this commission's CD cognitive stages.
     // `providerId: null` = inherit the install's default AI Assignment.
     assignment: {

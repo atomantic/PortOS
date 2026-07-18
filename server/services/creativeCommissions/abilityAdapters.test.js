@@ -1,12 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
-  ABILITY_ADAPTERS, ABILITY_IDS, getAbilityAdapter, buildCommissionDirective,
+  ABILITY_ADAPTERS, getAbilityAdapter, buildCommissionDirective,
 } from './abilityAdapters.js';
 import { CREATIVE_COMMISSION_ABILITIES, ABILITY_GENERATION_SPEC } from '../../lib/creativeCommissionValidation.js';
 
 describe('ability adapter registry', () => {
   it('has an adapter for every supported ability (and no extras)', () => {
-    expect(ABILITY_IDS).toEqual([...CREATIVE_COMMISSION_ABILITIES]);
     expect(Object.keys(ABILITY_ADAPTERS).sort()).toEqual([...CREATIVE_COMMISSION_ABILITIES].sort());
   });
 

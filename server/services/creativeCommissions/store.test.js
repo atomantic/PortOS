@@ -100,11 +100,19 @@ describe('sanitizeCommission', () => {
     expect(series.generation).toEqual({ model: null, episodeCount: 2 });
   });
 
-  it('clamps an unknown output type back to video so the record stays generatable (#2769)', () => {
-    const rec = sanitizeCommission({ id: 'c1', targetAbility: 'hologram', generation: { imageCount: 3 } });
-    expect(rec.targetAbility).toBe('video');
-    // Video shape — the stray imageCount is dropped.
-    expect(rec.generation).toEqual({ model: null, quality: 'standard', aspectRatio: '16:9', targetDurationSeconds: 10 });
+  it('preserves an unknown (forward-version) output type verbatim so a newer peer record round-trips (#2769)', () => {
+    // A newer peer might sync an output type this install does not know yet.
+    // Rewriting it to `video` would corrupt the newer brief on read (and could
+    // push the downgrade back via LWW), so it is preserved untouched; the
+    // scheduler skips it rather than mis-generating.
+    const rec = sanitizeCommission({ id: 'c1', targetAbility: 'story', generation: { chapters: 5 } });
+    expect(rec.targetAbility).toBe('story');
+    expect(rec.generation).toEqual({ chapters: 5 });
+  });
+
+  it('falls back to video for a missing/blank output type', () => {
+    expect(sanitizeCommission({ id: 'c1' }).targetAbility).toBe('video');
+    expect(sanitizeCommission({ id: 'c2', targetAbility: '' }).targetAbility).toBe('video');
   });
 
   it('caps runs to the last MAX_PERSISTED_RUNS', () => {

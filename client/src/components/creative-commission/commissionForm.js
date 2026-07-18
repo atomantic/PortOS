@@ -27,9 +27,12 @@ const ASPECT_FIELD = { key: 'aspectRatio', label: 'Aspect ratio', type: 'select'
 const DURATION_FIELD = { key: 'targetDurationSeconds', label: 'Duration (sec)', type: 'number', min: 5, max: 600 };
 
 // Per-ability generation field descriptors — the client mirror of the server's
-// ABILITY_GENERATION_SPEC (server/lib/creativeCommissionValidation.js). The
-// config form renders exactly these fields for the selected type; keep the two in
-// sync (the mirror is asserted in commissionForm.test.js).
+// GENERATION_KEY_DEFS / ABILITY_GENERATION_SPEC (server/lib/creativeCommissionValidation.js).
+// The config form renders exactly these fields for the selected type. There is no
+// cross-package import, so this must be kept in sync with the server spec BY HAND
+// when a key/bound/default changes; commissionForm.test.js asserts only the
+// client-internal invariant (every field has a matching default), not server↔client
+// parity.
 export const GENERATION_FIELDS_BY_ABILITY = {
   video: [QUALITY_FIELD, ASPECT_FIELD, DURATION_FIELD],
   image: [QUALITY_FIELD, ASPECT_FIELD, { key: 'imageCount', label: 'Image count', type: 'number', min: 1, max: 6 }],
@@ -69,17 +72,10 @@ export function generationToForm(ability, generation) {
 
 // When the user switches output type, seed the new type's fields with the type's
 // defaults but carry over any overlapping value the user already set (e.g. keep
-// their quality/aspectRatio when going video → image).
-export function mergeGenerationForAbility(nextAbility, currentGeneration) {
-  const a = abilityOr(nextAbility);
-  const defaults = GENERATION_DEFAULTS_BY_ABILITY[a];
-  const out = {};
-  for (const key of Object.keys(defaults)) {
-    const v = currentGeneration?.[key];
-    out[key] = v === undefined || v === null ? defaults[key] : v;
-  }
-  return out;
-}
+// their quality/aspectRatio when going video → image). This is exactly the
+// project-a-record projection — carrying over an overlapping key IS falling back
+// to the default only when absent — so it delegates to generationToForm.
+export const mergeGenerationForAbility = generationToForm;
 
 // Build the API generation payload for the current ability: emit only that
 // ability's keys, coercing number fields (form <input type=number> values are
