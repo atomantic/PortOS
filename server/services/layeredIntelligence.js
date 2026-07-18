@@ -166,6 +166,32 @@ export const LI_DEGRADED_MIN_SAMPLE = 4;
 // to merged for trackers that report no stateReason.
 export const PROPOSAL_OUTCOMES = ['merged', 'rejected', 'abandoned'];
 
+// Scope-awareness thresholds (#2760). LI's own execution data shows several CoS
+// task-type scopes it consistently fails at (e.g. self-improve:layered-intelligence,
+// branch-reconcile, accessibility all sit at 0%) while others succeed reliably
+// (plan-task, test-coverage, performance at ~100%). Since an LI proposal is later
+// EXECUTED as a CoS task, proposing work that maps to a chronically-failing scope is
+// systematic waste. These bound a deterministic, self-clearing classifier
+// (computeScopeAwareness) that surfaces the avoid/prefer split to the reasoner so it
+// can steer proposals toward scopes that actually execute.
+//
+// A scope is "avoid" when its lifetime success rate is below AVOID and it has enough
+// completed runs to be evidence; "prefer" when at/above PREFER with the same sample
+// floor. Reusing the degraded-execution boundary (50%) for AVOID keeps LI's two
+// success signals — its own loop health and per-scope executability — on the same
+// coin-flip line. Because the classification is recomputed from fresh learning.json
+// every run, an "avoid" scope self-clears the moment its rate recovers past AVOID —
+// no persisted avoid-list to go stale (the issue's "dynamic adjustment" requirement).
+export const SCOPE_AVOID_SUCCESS_THRESHOLD = LI_DEGRADED_SUCCESS_THRESHOLD; // < 50% → avoid
+export const SCOPE_PREFER_SUCCESS_THRESHOLD = 75;                          // >= 75% → prefer
+
+// Minimum completed runs before a scope's rate is trusted for avoid/prefer, mirroring
+// LI_DEGRADED_MIN_SAMPLE's rationale (0-of-1 and 0-of-50 are both "0%", only the
+// second is evidence). Set to 3 per #2760 — one below the degraded floor because the
+// prompt guidance is advisory (it steers the reasoner, it does not hard-suppress a
+// proposal), so a slightly lower bar to surface the signal is acceptable.
+export const SCOPE_AWARENESS_MIN_SAMPLE = 3;
+
 /**
  * The default per-app config. PortOS (isPortos) additionally gets the meta/self
  * scopes so the loop can extend itself; every other app is capped at its own
@@ -896,6 +922,51 @@ export function computeSelfEvalSummary({
  * block with calibration guidance when non-empty (#2428). `selfEvalReport` (from
  * computeSelfEvalSummary) is injected as a `liSelfEval` block the same way (#2700).
  */
+/**
+ * Scope-awareness report (#2760). Classifies each CoS task-type scope by its lifetime
+ * execution success rate into "avoid" (chronically failing) and "prefer" (reliably
+ * succeeding), then renders guidance the reasoner can use to steer a proposal toward
+ * work that will actually execute. Pure — takes the already-parsed per-type metrics
+ * map (the `summary` gatherSources builds from learning.byTaskType) and returns a
+ * report string, or '' when no scope has enough runs to qualify either way.
+ *
+ * `metricsByType[type] = { lifetimeSuccessRate: number|null, lifetimeCompleted: number, ... }`.
+ * The steering is advisory, not a hard gate: LI still MAY propose in an avoid scope
+ * when it is genuinely the highest-value work, but it must justify doing so. Because
+ * the input is re-read every run, the split is dynamic and self-clearing — a scope
+ * leaves "avoid" automatically once its rate climbs back past the threshold.
+ */
+export function computeScopeAwareness({ metricsByType = {} } = {}) {
+  const avoid = [];
+  const prefer = [];
+  for (const [type, m] of Object.entries(metricsByType || {})) {
+    const rate = m?.lifetimeSuccessRate;
+    const n = m?.lifetimeCompleted || 0;
+    // Only a scope with enough evidence is classified; a NUMBER rate is required so a
+    // never-run scope (null) neither avoids nor prefers — it defaults to neutral.
+    if (typeof rate !== 'number' || n < SCOPE_AWARENESS_MIN_SAMPLE) continue;
+    if (rate < SCOPE_AVOID_SUCCESS_THRESHOLD) avoid.push({ type, rate, n });
+    else if (rate >= SCOPE_PREFER_SUCCESS_THRESHOLD) prefer.push({ type, rate, n });
+  }
+  if (!avoid.length && !prefer.length) return '';
+  // Worst-first for avoid, best-first for prefer — the reasoner reads the sharpest
+  // signal at the top of each list.
+  avoid.sort((a, b) => a.rate - b.rate);
+  prefer.sort((a, b) => b.rate - a.rate);
+  const fmt = ({ type, rate, n }) => `- ${type}: ${Math.round(rate)}% success over ${n} runs`;
+  const lines = [];
+  if (avoid.length) {
+    lines.push(`AVOID — these scopes' work has historically FAILED to execute (below ${SCOPE_AVOID_SUCCESS_THRESHOLD}% success):`);
+    lines.push(avoid.map(fmt).join('\n'));
+  }
+  if (prefer.length) {
+    if (lines.length) lines.push('');
+    lines.push(`PREFER — these scopes execute reliably (at or above ${SCOPE_PREFER_SUCCESS_THRESHOLD}% success):`);
+    lines.push(prefer.map(fmt).join('\n'));
+  }
+  return lines.join('\n');
+}
+
 export function buildPrompt({ app, config, sources = {}, openIssues = [], isPortos = false, outcomesReport = '', selfEvalReport = '' }) {
   const allowed = (config.allowedScopes || []).filter(s =>
     isScopeAllowed({ scope: s, allowedScopes: config.allowedScopes, isPortos })
@@ -906,7 +977,7 @@ export function buildPrompt({ app, config, sources = {}, openIssues = [], isPort
   // under the committed backlog it refers to instead of drifting to wherever
   // object key order happens to put it.
   const sourceBlocks = Object.entries(sources)
-    .filter(([k]) => k !== 'plannedWork')
+    .filter(([k]) => k !== 'plannedWork' && k !== 'scopeGuidance')
     .filter(([, v]) => typeof v === 'string' && v.trim())
     .map(([k, v]) => `### ${k}\n${v.trim()}`)
     .join('\n\n');
@@ -953,6 +1024,15 @@ export function buildPrompt({ app, config, sources = {}, openIssues = [], isPort
     ? `\n### liSelfEval\n${selfEvalReport.trim()}\n\nWeigh this against the sources above before you commit to a proposal. Filing nothing (proposal: null) is a legitimate, and sometimes the correct, outcome — a marginal issue costs the user triage time and lowers your merge rate further.\n`
     : '';
 
+  // Scope-awareness (#2760): your proposal, once filed, is EXECUTED as a CoS task, so
+  // the historical per-scope execution-success rates below predict whether the work
+  // you propose will actually land. Steer toward PREFER scopes and away from AVOID
+  // ones; if the highest-value work genuinely falls in an AVOID scope, you may still
+  // propose it, but scope it narrowly and justify why it will execute this time.
+  const scopeGuidanceBlock = (typeof sources.scopeGuidance === 'string' && sources.scopeGuidance.trim())
+    ? `\n### liScopeAwareness\n${sources.scopeGuidance.trim()}\n\nYour proposals are executed as CoS tasks in these scopes. Favor work that maps to a PREFER scope; treat AVOID scopes as needing a narrow scope and an explicit justification (or a null proposal) rather than a default.\n`
+    : '';
+
   return `You are the Layered Intelligence reasoner for the app "${app.name}". Your job is to evaluate how THIS app is performing against its OWN goals and purpose${isPortos ? '' : ', not how well PortOS\'s tooling manages it'}. Decide the SINGLE highest-value improvement to propose this run (signal, not noise), grounded in the app's own goals and its own performance metrics (user success, KPIs, production telemetry). You never write code; you return structured JSON that a deterministic system files as ONE tracker issue.
 ${handoffNote}${metricsGuidance}
 Rules & guidance from the operator:
@@ -966,7 +1046,7 @@ ${openList}
 
 Gathered sources:
 ${sourceBlocks || (plannedWorkBlock ? '(no other sources available — you may propose an app-data-gap to add telemetry)' : '(no sources available — you may propose an app-data-gap to add telemetry)')}
-${plannedWorkBlock}${outcomesBlock}${selfEvalBlock}
+${plannedWorkBlock}${outcomesBlock}${selfEvalBlock}${scopeGuidanceBlock}
 Respond with JSON only (no markdown fences):
 {
   "analysis": "brief reasoning summary",
@@ -1222,6 +1302,14 @@ export async function gatherSources(app, config, { cosPath = PATHS.cos, trustShe
         };
       }
       out.cosMetrics = JSON.stringify(summary).slice(0, 4000);
+      // Scope-awareness guidance (#2760): a deterministic avoid/prefer split derived
+      // from the SAME per-type rates above, so the reasoner gets an interpreted signal
+      // alongside the raw JSON instead of being asked to spot the pattern itself.
+      // Rendered as its own prompt block (see buildPrompt), not a generic source dump.
+      // Gated implicitly on the cosMetrics source being enabled — which is the
+      // PortOS-vs-managed boundary these self-execution rates belong to.
+      const scopeGuidance = computeScopeAwareness({ metricsByType: summary });
+      if (scopeGuidance) out.scopeGuidance = scopeGuidance;
     }
   }
   for (const custom of src.custom || []) {
