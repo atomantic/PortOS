@@ -54,6 +54,14 @@
  *
  *   No-op by construction on installs that never ran LI (the common case) — the
  *   file is only rewritten when the bucket is actually present.
+ *
+ *   This purge identifies its target by bucket PRESENCE, so a rerun after
+ *   data/migrations.applied.json is lost/corrupt would drop legitimately-earned
+ *   post-fix history. It therefore opts into the runner's PURGE class
+ *   (`purge: true`): run-migrations.js records a purge migration as applied
+ *   WITHOUT executing it whenever the applied-list started empty/rebuilt (#2770).
+ *   The guard lives in the runner and is shared with migration 198 — no
+ *   per-migration marker to drift.
  */
 
 import { readFile, writeFile } from 'fs/promises';
@@ -70,6 +78,9 @@ const LEARNING_REL = 'data/cos/learning.json';
 const LI_BUCKET = 'self-improve:layered-intelligence';
 
 export default {
+  // Opt into the runner's non-idempotent PURGE class — no-op on a rerun against
+  // a rebuilt-from-[] ledger so post-fix learning data is never destroyed (#2770).
+  purge: true,
   async up({ rootDir }) {
     const path = join(rootDir, LEARNING_REL);
     const raw = await readFile(path, 'utf-8').catch((err) => {
