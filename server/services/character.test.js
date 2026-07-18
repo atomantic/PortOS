@@ -110,6 +110,16 @@ describe('birthDateStatusFrom (#2757)', () => {
   it('reports invalid for an unparseable date', () => {
     expect(characterService.birthDateStatusFrom('not-a-date', true, now)).toBe('invalid');
   });
+  it('reports invalid for an impossible/normalized calendar day (not a bogus level) (#2757 codex)', () => {
+    // new Date('2021-02-29') silently rolls to Mar 1 — must be rejected, not treated as ok.
+    expect(characterService.birthDateStatusFrom('2021-02-29', true, now)).toBe('invalid');
+    expect(characterService.birthDateStatusFrom('2024-02-30', true, now)).toBe('invalid');
+    expect(characterService.birthDateStatusFrom('0', true, now)).toBe('invalid');
+    expect(characterService.birthDateStatusFrom('1990/05/15', true, now)).toBe('invalid');
+  });
+  it('accepts a full ISO timestamp (legacy/migrated storage), not just YYYY-MM-DD', () => {
+    expect(characterService.birthDateStatusFrom('1984-01-01T00:00:00.000Z', true, now)).toBe('ok');
+  });
   it('reports future for a date past now', () => {
     expect(characterService.birthDateStatusFrom('2030-01-01', true, now)).toBe('future');
   });
