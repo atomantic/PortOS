@@ -44,6 +44,24 @@ describe('198-purge-poisoned-coordinator-learning-buckets (#2696)', () => {
     expect(data.byTaskType['self-improve:accessibility'].successRate).toBe(80);
   });
 
+  it('purges ALL four coordinator buckets and leaves committing types alone', async () => {
+    await seed({
+      byTaskType: {
+        'self-improve:branch-reconcile': { completed: 2, succeeded: 0, failed: 2, successRate: 0 },
+        'self-improve:issue-reconcile': { completed: 2, succeeded: 0, failed: 2, successRate: 0 },
+        'self-improve:branch-cleanup': { completed: 3, succeeded: 0, failed: 3, successRate: 0 },
+        'self-improve:jira-status-report': { completed: 1, succeeded: 0, failed: 1, successRate: 0 },
+        // These COMMIT — their bucket is legitimate and must survive.
+        'self-improve:jira-sprint-manager': { completed: 4, succeeded: 3, failed: 1, successRate: 75 },
+        'self-improve:accessibility': { completed: 5, succeeded: 4, failed: 1, successRate: 80 }
+      }
+    });
+    const out = await migration.up({ rootDir });
+    expect(out.purged).toBe(8);
+    const data = await readLearning();
+    expect(Object.keys(data.byTaskType).sort()).toEqual(['self-improve:accessibility', 'self-improve:jira-sprint-manager']);
+  });
+
   it('purges just the one coordinator bucket present when the other never ran', async () => {
     await seed({
       byTaskType: {

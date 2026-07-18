@@ -47,14 +47,16 @@ import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
 
 import { removeTaskTypeFromLearningData } from '../../server/services/taskLearning/metrics.js';
+import { NON_COMMITTING_COORDINATOR_TASK_TYPES } from '../../server/services/taskTypeHooks.js';
 
 const LEARNING_REL = 'data/cos/learning.json';
 
 // The keys the coordinator runs are recorded under. A scheduled coordinator task carries
 // `metadata.analysisType = '<type>'`, and extractTaskType's first branch prefixes any such
 // task into `self-improve:<type>` — so these, not the bare schedule names, are the poisoned
-// buckets. Mirrors NON_COMMITTING_COORDINATOR_TASK_TYPES in agentLifecycle.js.
-const COORDINATOR_BUCKETS = ['self-improve:branch-reconcile', 'self-improve:issue-reconcile'];
+// buckets. Derived from NON_COMMITTING_COORDINATOR_TASK_TYPES (the runtime source of truth)
+// so a new coordinator type added there is automatically healed on upgrade — the two can't drift.
+const COORDINATOR_BUCKETS = [...NON_COMMITTING_COORDINATOR_TASK_TYPES].map((t) => `self-improve:${t}`);
 
 export default {
   async up({ rootDir }) {

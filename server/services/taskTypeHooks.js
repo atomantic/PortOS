@@ -73,6 +73,38 @@ export function resolveTaskHookType(task) {
 }
 
 /**
+ * Scheduled COORDINATOR task types whose deliverable is a git/gh/external side effect —
+ * a merged PR, a resolved conflict, a deleted branch, healed issue state, a status report
+ * posted to Jira — NOT a `[task-<id>]` commit. Their agent runs in the app's LIVE checkout
+ * (no worktree, no PR), so they DO have a workspacePath at finalize, and the `[task-<id>]`
+ * commit criterion would score every SUCCESSFUL run as a failure and pin their learning
+ * bucket at ~0% (#2696). They declare no commit criterion (fall back to the exit code),
+ * exactly like pipeline/media jobs.
+ *
+ * Deliberately NOT every self-improvement type: accessibility / security / code-quality
+ * / plan-task / claim-issue / claim-work / jira-sprint-manager / do-replan all COMMIT
+ * (fixing tasks, /claim flows, or a triage that commits PLAN.md), so their commit
+ * criterion is real and must stay — exempting them would MASK genuine failures. Only the
+ * structurally-no-commit coordinators belong here. pr-watcher is intentionally excluded:
+ * its prompt is customizable to push code, so exempting it could mask a customized run's
+ * failure. Kept as a leaf so both agentLifecycle (the live criterion) and taskLearning's
+ * history backfill (migration-durability) read ONE source of truth. Migration 198 purges
+ * the buckets these already poisoned on existing installs.
+ */
+export const NON_COMMITTING_COORDINATOR_TASK_TYPES = new Set([
+  'branch-reconcile', 'issue-reconcile', 'branch-cleanup', 'jira-status-report',
+]);
+
+/**
+ * Whether a task declares NO `[task-<id>]` commit criterion because it is a gh/git
+ * coordinator (see NON_COMMITTING_COORDINATOR_TASK_TYPES). Keyed on the same resolver as
+ * the programmatic-I/O gate so the scheduled type — not the CoS queue category — decides.
+ */
+export function isNonCommittingCoordinatorTask(task) {
+  return NON_COMMITTING_COORDINATOR_TASK_TYPES.has(resolveTaskHookType(task));
+}
+
+/**
  * Resolve the pre-agent input hook for a task type, or null if it has none.
  * `buildTaskInput({ app, taskType })` → `{ prompt?, providerId?, model?, skip? }`.
  */

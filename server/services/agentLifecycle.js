@@ -21,7 +21,7 @@ import { createToolExecution, startExecution, completeExecution, errorExecution 
 import { determineLane, acquire, release } from './executionLanes.js';
 import { analyzeAgentFailure, resolveFailedTaskUpdate, resolveTypeFailureSignal } from './agentErrorAnalysis.js';
 import { createAgentRun, completeAgentRun, checkForTaskCommit } from './agentRunTracking.js';
-import { isProgrammaticIoTaskType, resolveTaskHookType } from './taskTypeHooks.js';
+import { isProgrammaticIoTaskType, resolveTaskHookType, NON_COMMITTING_COORDINATOR_TASK_TYPES } from './taskTypeHooks.js';
 import { buildAgentPrompt, getAppWorkspace } from './agentPromptBuilder.js';
 import { isOllamaClaudeProvider, isClaudeCommand, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
@@ -805,18 +805,6 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
   }
 }
 
-// Scheduled COORDINATOR task types whose deliverable is a git/gh side effect (a merged
-// PR, a resolved conflict, healed issue state), NOT a `[task-<id>]` commit. Their
-// coordinator runs in the app's LIVE checkout with useWorktree/openPR locked off (see
-// taskSchedule.js MANAGED_AGENT_OPTIONS), so the `[task-<id>]` commit criterion in
-// evaluateSuccessCriteria would score every SUCCESSFUL run as a failure and poison their
-// learning bucket to ~0% (#2696). Kept as an explicit allow-list — NOT every
-// MANAGED_AGENT_OPTIONS type — because plan-task / claim-issue / claim-work also lock
-// worktree/PR off yet DO commit (they run the /claim flow in their own worktree), so their
-// commit criterion is real and must stay. Mirrored by migration 198, which purges the
-// buckets these already poisoned on existing installs.
-const NON_COMMITTING_COORDINATOR_TASK_TYPES = new Set(['branch-reconcile', 'issue-reconcile']);
-
 /**
  * Evaluate a completed autonomous run against its DECLARED success criteria
  * (issue #2344). Distinct from the runner's exit-code `success`: it answers
@@ -868,15 +856,15 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
   // tasks they register no output hook, so there is no deliverable signal to
   // judge them by — they stay exit-code-judged (unchanged by #2727).
   if (task?.metadata?.pipeline || task?.metadata?.mediaJob) return null;
-  // gh/git COORDINATOR task types deliver their work through git+gh operations in
-  // the app's live checkout — opening/merging PRs, resolving conflicts, healing
-  // issue state — and by design NEVER produce a `[task-<id>]` commit (useWorktree/
-  // openPR are locked off, see taskSchedule.js MANAGED_AGENT_OPTIONS). Because their
-  // workspacePath IS set (the live checkout), the commit check above would return
-  // false on every SUCCESSFUL run and drive their learning bucket to ~0% (#2696) —
-  // the same artifact #2700 fixed for the programmatic-I/O reasoning run. They
-  // register no output hook, so like pipeline/media jobs there is no deliverable
-  // signal to judge them by; fall back to the exit code (null = criterion undeclared).
+  // gh/git/external COORDINATOR task types (NON_COMMITTING_COORDINATOR_TASK_TYPES in
+  // taskTypeHooks.js — branch-reconcile/issue-reconcile/branch-cleanup/jira-status-report)
+  // deliver their work as a side effect — a merged PR, a resolved conflict, a deleted
+  // branch, a posted report — and by design NEVER produce a `[task-<id>]` commit. Because
+  // their workspacePath IS set (the app's live checkout), the commit check above would
+  // return false on every SUCCESSFUL run and drive their learning bucket to ~0% (#2696) —
+  // the same artifact #2700 fixed for the programmatic-I/O reasoning run. They register no
+  // output hook, so like pipeline/media jobs there is no deliverable signal to judge them
+  // by; fall back to the exit code (null = criterion undeclared).
   if (NON_COMMITTING_COORDINATOR_TASK_TYPES.has(scheduledType)) return null;
   return await checkForTaskCommit(task.id, workspacePath);
 }
