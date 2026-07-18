@@ -29,6 +29,7 @@ import {
   filerForTracker,
   trackerSupportsPause,
   buildPrompt,
+  LI_PROPOSAL_PLAYBOOK,
   deriveOutcome,
   computeOutcomesReport,
   computeSelfEvalSummary,
@@ -676,7 +677,10 @@ describe('buildPrompt', () => {
   it('injects the scope-awareness block only when present, under its own heading (#2760)', () => {
     const base = { app, isPortos: true, config: { allowedScopes: ['loop-meta'], rules: '' } };
     const without = buildPrompt(base);
-    expect(without).not.toContain('liScopeAwareness');
+    // Heading form: the always-on liPlaybook block legitimately references the block
+    // id in prose, so assert the block itself (its `### ` heading) is absent, not the
+    // bare token.
+    expect(without).not.toContain('### liScopeAwareness');
     const withGuidance = buildPrompt({
       ...base,
       sources: { scopeGuidance: 'LOW-COMPLETION task types:\n- branch-reconcile: 0% completed over 4 runs' }
@@ -690,7 +694,7 @@ describe('buildPrompt', () => {
 
   it('injects the per-proposal-domain execution block only when a report is passed (#2765)', () => {
     const base = { app, isPortos: true, config: { allowedScopes: ['loop-meta'], rules: '' } };
-    expect(buildPrompt(base)).not.toContain('liProposalExecution');
+    expect(buildPrompt(base)).not.toContain('### liProposalExecution');
     const withExec = buildPrompt({
       ...base,
       proposalExecutionReport: 'HIGH-EXECUTION proposal domains — LI reliably implements its own proposals here (at or above 75%):\n- loop-meta: LI implemented 100% of its own loop-meta proposals successfully over 3 executed'
@@ -709,7 +713,7 @@ describe('buildPrompt', () => {
       config: { allowedScopes: ['app-improvement'], rules: '' },
       sources: { scopeGuidance: 'LOW-COMPLETION task types:\n- plan-task: 0% completed over 9 runs' }
     });
-    expect(out).not.toContain('liScopeAwareness');
+    expect(out).not.toContain('### liScopeAwareness');
     expect(out).not.toContain('plan-task: 0% completed over 9 runs');
   });
 
@@ -718,7 +722,11 @@ describe('buildPrompt', () => {
       app, isPortos: false,
       config: { allowedScopes: ['app-improvement', 'app-data-gap', 'loop-meta'], rules: '' }
     });
-    expect(nonPortos).not.toContain('loop-meta'); // gated out by isScopeAllowed
+    // Assert the scope is not OFFERED (absent from the allowed-scope bullet list,
+    // rendered as `  - loop-meta`). The always-on liPlaybook block references loop-meta
+    // by name in its prose — clearly marked "PortOS install only" — so a bare-token
+    // check would spuriously fail; the offered-bullet form is the precise assertion.
+    expect(nonPortos).not.toContain('  - loop-meta'); // gated out by isScopeAllowed
     expect(nonPortos).toContain('meta/self scopes are unavailable');
 
     const portos = buildPrompt({
@@ -753,7 +761,7 @@ describe('buildPrompt', () => {
   it('injects the outcomes report + calibration guidance only when non-empty', () => {
     const base = { app, isPortos: false, config: { allowedScopes: ['app-improvement'], rules: '' } };
     const without = buildPrompt(base);
-    expect(without).not.toContain('liOutcomes');
+    expect(without).not.toContain('### liOutcomes');
     const withReport = buildPrompt({ ...base, outcomesReport: 'Past LI proposals (last 30 days):\n- Total filed: 3' });
     expect(withReport).toContain('### liOutcomes');
     expect(withReport).toContain('Total filed: 3');
@@ -783,6 +791,30 @@ describe('buildPrompt', () => {
   it('frames the mission around the app\'s own goals and performance', () => {
     const out = buildPrompt({ app, isPortos: false, config: { allowedScopes: ['app-improvement'], rules: '' } });
     expect(out).toContain('its OWN goals and purpose');
+  });
+
+  it('always injects the static proposal playbook block (#2763)', () => {
+    // Unlike the data-driven blocks, the playbook is a-priori guidance that must be
+    // present from run one — even with no sources, outcomes, or self-eval data.
+    const bare = buildPrompt({ app, isPortos: true, config: { allowedScopes: ['loop-meta'], rules: '' } });
+    expect(bare).toContain('### liPlaybook');
+    expect(bare).toContain('# LI Proposal Playbook');
+    // The five deliverables the issue calls for are all present in the rendered block.
+    expect(bare).toContain('Scope Selection Guide');
+    expect(bare).toContain('Success Pattern Catalog');
+    expect(bare).toContain('Rejection Pattern Catalog');
+    expect(bare).toContain('Task Type Selection Rules');
+    expect(bare).toContain('Goal Alignment Check');
+    // NOT_PLANNED = roadmap conflict is the headline rejection heuristic.
+    expect(bare).toContain('NOT_PLANNED');
+    // Rendered under its dedicated heading, never dumped as a generic source block.
+    expect(bare).toContain('apply it as a hard constraint');
+  });
+
+  it('renders the playbook on managed (non-PortOS) apps too — the general rules are universal', () => {
+    const managed = buildPrompt({ app, isPortos: false, config: { allowedScopes: ['app-improvement'], rules: '' } });
+    expect(managed).toContain('### liPlaybook');
+    expect(managed).toContain('Goal Alignment Check');
   });
 
   it('nudges a managed app with no own-performance metrics toward a METRICS.md data gap', () => {
