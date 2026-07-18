@@ -26,7 +26,7 @@ import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { spawnDetached, reapDetached, reattachDetached, isReattachable } from '../../lib/detachedSpawn.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { getImageModels } from '../../lib/mediaModels.js';
-import { resolveFlux2Python, isFlux2VenvHealthy } from '../../lib/pythonSetup.js';
+import { resolveFlux2Python, isFlux2VenvHealthy, resolveMfluxPython } from '../../lib/pythonSetup.js';
 import { getSettings } from '../settings.js';
 import { enqueueJob, getJob, mediaJobEvents } from '../mediaJobQueue/index.js';
 import { updateDataset } from '../loraDatasets.js';
@@ -147,7 +147,12 @@ export async function startTrainingRun({
   datasetId, baseModelId, name = null, params = {}, acknowledgeCaptionLeak = false,
 }) {
   const settings = await getSettings();
-  const pythonPath = settings?.imageGen?.local?.pythonPath || null;
+  // Resolve the mflux trainer's Python: the configured image-gen Python when it
+  // ships mflux-train (the `pip --user` layout), else an auto-discovered
+  // dedicated ~/.portos/venv-mflux (setup-image-video.sh's fallback for a system
+  // Python that can't host mflux). The resolved path threads into the job so
+  // runTraining spawns the right interpreter without re-resolving.
+  const pythonPath = resolveMfluxPython(settings?.imageGen?.local?.pythonPath || null);
   // Engine pick: prefer mflux's MLX trainer when the user's mflux install
   // ships it (Apple Silicon native, no second venv); fall back to the
   // torch/diffusers trainer in venv-flux2.
