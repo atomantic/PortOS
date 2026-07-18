@@ -29,7 +29,7 @@ import { fetchPublicText } from '../lib/safeUrlFetch.js';
 import { validateCommand } from '../lib/commandSecurity.js';
 import { getSettings } from './settings.js';
 import { createTicket, searchIssues, addLabels, escapeJql } from './jira.js';
-import { computeWindowedStats, computeEffectiveSuccessRate, extractTaskType } from './taskLearning/store.js';
+import { computeWindowedStats, computeEffectiveSuccessRate, EFFECTIVE_RATE_MIN_WINDOW_SAMPLES, extractTaskType } from './taskLearning/store.js';
 import { formatRejectionReasons, formatRejectionReason, REJECTION_REASONS } from './layeredIntelligenceRejections.js';
 
 // Tracker labels + slug marker. The slug is the stable dedup key the reasoner
@@ -180,7 +180,8 @@ export const PROPOSAL_OUTCOMES = ['merged', 'rejected', 'abandoned'];
 // PREFER with the same sample floor. Reusing the degraded-execution boundary (50%) for
 // AVOID keeps LI's two success signals — its own loop health and per-scope
 // executability — on the same coin-flip line. The classification is recomputed from
-// fresh metrics every run and keyed on the windowed rate, so an "avoid" scope
+// fresh metrics every run and keyed on the windowed rate (once the window clears the
+// scheduler's own EFFECTIVE_RATE_MIN_WINDOW_SAMPLES floor), so an "avoid" scope
 // self-clears once it recovers in-window — no persisted avoid-list to go stale (the
 // issue's "dynamic adjustment" requirement). See computeScopeAwareness for why the
 // windowed rate, not the near-permanent lifetime rate, is the right basis.
@@ -927,16 +928,21 @@ export function computeSelfEvalSummary({
  * `metricsByType[type] = { lifetimeSuccessRate, lifetimeCompleted, recentSuccessRate, recentCompleted, ... }`.
  *
  * Classification judges on the EFFECTIVE rate — the recency-windowed rate when the
- * scope has run in-window, else lifetime — NOT the raw lifetime rate. This matters for
- * the issue's "dynamic adjustment" requirement: the lifetime rate barely decays (an
- * old failure burst depresses it near-permanently), so a scope that has actually
+ * window has enough samples, else lifetime — NOT the raw lifetime rate. This matters
+ * for the issue's "dynamic adjustment" requirement: the lifetime rate barely decays
+ * (an old failure burst depresses it near-permanently), so a scope that has actually
  * recovered would stay stuck on the avoid list for dozens of runs. Using the windowed
- * rate lets a recovered scope leave "avoid" promptly — and keeps this advisory list
- * moving in the same direction the scheduler's own skip logic acts on
- * (isSkipCandidate / computeEffectiveSuccessRate in taskLearning also key off the
- * effective rate). The sample floor still gates on LIFETIME completed: a scope needs
- * enough TOTAL evidence to be judged at all, even if only a couple of those runs are
- * in-window.
+ * rate lets a recovered scope leave "avoid" promptly — and, critically, this uses the
+ * SAME window floor as the scheduler's own skip logic
+ * (EFFECTIVE_RATE_MIN_WINDOW_SAMPLES, the threshold in computeEffectiveSuccessRate /
+ * isSkipCandidate): the window is trusted only at >= that many in-window runs, so a
+ * single noisy recent result can't flip a lifetime-reliable scope to avoid (or vice
+ * versa). Below that floor the lifetime rate governs, exactly as the scheduler does,
+ * so this advisory list moves in the same direction the scheduler acts on. The base
+ * sample floor still gates on LIFETIME completed: a scope needs enough TOTAL evidence
+ * to be judged at all. Each rendered rate is paired with the run count of the SAME
+ * basis (windowed count when the window governs, lifetime count otherwise) so the
+ * "N% over M runs" line never mixes a windowed rate with a lifetime count.
  *
  * The thresholds (50/75) are deliberately NOT the scheduler's 30% hard-skip line: this
  * steering is advisory (it nudges what LI PROPOSES, it never suppresses execution), so
@@ -947,15 +953,19 @@ export function computeScopeAwareness({ metricsByType = {} } = {}) {
   const avoid = [];
   const prefer = [];
   for (const [type, m] of Object.entries(metricsByType || {})) {
-    const n = m?.lifetimeCompleted || 0;
-    if (n < SCOPE_AWARENESS_MIN_SAMPLE) continue; // not enough total evidence to judge
-    // Effective rate: trust the recency window when it has runs, else fall back to
-    // lifetime. recentSuccessRate is null (not 0) when the window is empty (#2460), so
-    // guard on recentCompleted before using it.
-    const rate = (m?.recentCompleted > 0 && typeof m?.recentSuccessRate === 'number')
-      ? m.recentSuccessRate
-      : m?.lifetimeSuccessRate;
+    const lifetimeN = m?.lifetimeCompleted || 0;
+    if (lifetimeN < SCOPE_AWARENESS_MIN_SAMPLE) continue; // not enough total evidence to judge
+    // Effective rate: trust the recency window ONLY when it carries enough samples —
+    // the same EFFECTIVE_RATE_MIN_WINDOW_SAMPLES floor the scheduler's
+    // computeEffectiveSuccessRate uses — so one noisy recent run can't flip a
+    // lifetime-reliable scope. Below the floor (including an empty window, where
+    // recentSuccessRate is null, not 0 — #2460), lifetime governs. Pair the rate with
+    // the count of its own basis so the rendered "N% over M runs" is truthful.
+    const useWindow = m?.recentCompleted >= EFFECTIVE_RATE_MIN_WINDOW_SAMPLES
+      && typeof m?.recentSuccessRate === 'number';
+    const rate = useWindow ? m.recentSuccessRate : m?.lifetimeSuccessRate;
     if (typeof rate !== 'number') continue; // a never-run scope stays neutral
+    const n = useWindow ? m.recentCompleted : lifetimeN;
     if (rate < SCOPE_AVOID_SUCCESS_THRESHOLD) avoid.push({ type, rate, n });
     else if (rate >= SCOPE_PREFER_SUCCESS_THRESHOLD) prefer.push({ type, rate, n });
   }

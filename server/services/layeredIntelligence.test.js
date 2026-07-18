@@ -506,26 +506,39 @@ describe('computeScopeAwareness (#2760)', () => {
   });
 
   it('judges on the recency-windowed rate so a RECOVERED scope leaves avoid (#2760 dynamic adjustment)', () => {
-    // Lifetime is dragged to 10% by an old failure burst, but the recent window is all
-    // successes → the effective rate is high, so the scope must NOT be on the avoid
-    // list (and here clears PREFER). Proves self-clearing works off the windowed rate,
-    // which the near-permanent lifetime rate could never deliver.
+    // Lifetime is dragged to 10% by an old failure burst, but the recent window (>= the
+    // 5-sample floor) is all successes → the effective rate is high, so the scope must
+    // NOT be on the avoid list (and here clears PREFER). Proves self-clearing works off
+    // the windowed rate, which the near-permanent lifetime rate could never deliver.
+    // The rendered count matches the rate's basis: windowed rate → windowed count.
     const out = computeScopeAwareness({ metricsByType: {
-      'branch-reconcile': { lifetimeSuccessRate: 10, lifetimeCompleted: 20, recentSuccessRate: 100, recentCompleted: 5 }
+      'branch-reconcile': { lifetimeSuccessRate: 10, lifetimeCompleted: 20, recentSuccessRate: 100, recentCompleted: 6 }
     } });
     expect(out).not.toContain('AVOID');
     expect(out).toContain('PREFER');
-    expect(out).toContain('branch-reconcile: 100% success over 20 runs'); // rate = windowed, count = lifetime total
+    expect(out).toContain('branch-reconcile: 100% success over 6 runs'); // windowed rate AND windowed count
   });
 
   it('judges on the windowed rate so a REGRESSED scope enters avoid despite a high lifetime rate', () => {
-    // Lifetime looks great (95%) but the recent window has collapsed → treat as avoid.
+    // Lifetime looks great (95%) but the recent window (>= floor) has collapsed → avoid.
     const out = computeScopeAwareness({ metricsByType: {
-      'performance': { lifetimeSuccessRate: 95, lifetimeCompleted: 40, recentSuccessRate: 20, recentCompleted: 5 }
+      'performance': { lifetimeSuccessRate: 95, lifetimeCompleted: 40, recentSuccessRate: 20, recentCompleted: 8 }
     } });
     expect(out).toContain('AVOID');
-    expect(out).toContain('performance: 20% success over 40 runs');
+    expect(out).toContain('performance: 20% success over 8 runs'); // windowed rate AND windowed count
     expect(out).not.toContain('PREFER');
+  });
+
+  it('ignores a THIN recent window (below the sample floor) and lets lifetime govern (#2760)', () => {
+    // Only 1 recent run — below EFFECTIVE_RATE_MIN_WINDOW_SAMPLES (5) — so one noisy
+    // recent failure must NOT flip a lifetime-reliable scope to avoid; lifetime (95%)
+    // governs → PREFER, matching the scheduler's own effective-rate floor.
+    const out = computeScopeAwareness({ metricsByType: {
+      'plan-task': { lifetimeSuccessRate: 95, lifetimeCompleted: 40, recentSuccessRate: 0, recentCompleted: 1 }
+    } });
+    expect(out).toContain('PREFER');
+    expect(out).toContain('plan-task: 95% success over 40 runs'); // lifetime rate AND lifetime count
+    expect(out).not.toContain('AVOID');
   });
 
   it('falls back to the lifetime rate when the recency window is empty', () => {
