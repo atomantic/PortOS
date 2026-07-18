@@ -154,6 +154,31 @@ describe('migration 200 — split brain stores to per-record', () => {
     expect(existsSync(backupPath('people'))).toBe(false);
   });
 
+  it('splits healthy stores even when an earlier type is unreadable, then throws an aggregate', async () => {
+    // `people` is first in the type order and unparseable; `admin` is later and valid.
+    writeFileSync(legacyPath('people'), 'not json{');
+    writeJson(legacyPath('admin'), { records: { 'a1': rec({ name: 'ok' }) } });
+
+    await expect(migration.up({ rootDir })).rejects.toThrow(/failed to split.*people/);
+
+    // The later healthy store was still split despite the earlier failure.
+    expect(readJson(recordPath('admin', 'a1')).name).toBe('ok');
+    // The failed store is left intact for repair (not split, not renamed).
+    expect(existsSync(legacyPath('people'))).toBe(true);
+    expect(existsSync(typeIndexPath('people'))).toBe(false);
+  });
+
+  it('treats a malformed records container as unreadable (throws, stays pending, keeps legacy)', async () => {
+    // Valid JSON, but `records` is an array rather than an object map — corruption.
+    writeJson(legacyPath('ideas'), { records: [1, 2, 3] });
+
+    await expect(migration.up({ rootDir })).rejects.toThrow(/failed to split.*ideas/);
+
+    // Legacy left intact, index not stamped — so the migration re-runs next boot.
+    expect(existsSync(legacyPath('ideas'))).toBe(true);
+    expect(existsSync(typeIndexPath('ideas'))).toBe(false);
+  });
+
   it('recovers from a .bak-200 backup when the split half-completed', async () => {
     // Simulate: legacy already renamed to backup, but records not yet split.
     writeJson(backupPath('projects'), { records: { 'proj-0001': rec({ name: 'PortOS' }) } });

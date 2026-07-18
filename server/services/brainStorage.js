@@ -450,15 +450,18 @@ export async function updateMany(type, updates) {
       await store.saveOneNow(id, next);
       return next;
     });
-    if (record) applied.push({ id, record });
-  }
-  if (applied.length === 0) return [];
-
-  for (const { id, record } of applied) {
+    if (!record) continue;
+    // Emit + append the sync-log entry as EACH record lands, not once after the
+    // whole batch. Per-record files mean there is no all-or-nothing batch to
+    // preserve, so if a later id's write throws, the records already persisted
+    // must still have federated — a batch-tail loop would skip them entirely and
+    // leave earlier successes local-only.
+    applied.push({ id, record });
     brainEvents.emit(`${type}:upserted`, { id, record: { id, ...record } });
     await brainSyncLog.appendChange('update', type, id, record, record.originInstanceId)
       .catch(err => console.error(`⚠️ Sync log append failed for update ${type}/${id}: ${err.message}`));
   }
+  if (applied.length === 0) return [];
   console.log(`🧠 Updated ${applied.length} ${type} records in one batch`);
   return applied.map(({ id, record }) => ({ id, ...record }));
 }

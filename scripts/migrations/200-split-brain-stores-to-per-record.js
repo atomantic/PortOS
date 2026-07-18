@@ -95,12 +95,29 @@ const perTypeSplits = BRAIN_ENTITY_TYPES.map((type) => makeSplitMigration({
 export default {
   up: async (ctx) => {
     const perType = [];
-    // Sequential (not Promise.all) so the per-type log lines stay ordered and a
-    // failure surfaces against the type that caused it. Each type's split is
-    // independent — `onUnreadable: 'throw'` on one leaves the others' work in
-    // place and keeps THIS migration pending for a retry.
-    for (const up of perTypeSplits) {
-      perType.push(await up(ctx));
+    const failures = [];
+    // Sequential (not Promise.all) so the per-type log lines stay ordered. Each
+    // type's store is INDEPENDENT — a corrupt/unreadable legacy file for one type
+    // must NOT abort the splits for the others. brainStorage reads only the
+    // per-record dirs, so an un-split later type would load as empty even though
+    // its legacy file is intact on disk; aborting mid-loop on the first bad file
+    // would therefore hide every alphabetically-later store until manual repair.
+    // So run every type, collect per-type outcomes, and only THEN re-throw an
+    // aggregate — which keeps the migration PENDING (unapplied) for a retry while
+    // the healthy types that already split become gate-1 no-ops next boot.
+    for (let i = 0; i < perTypeSplits.length; i++) {
+      try {
+        perType.push(await perTypeSplits[i](ctx));
+      } catch (err) {
+        failures.push(BRAIN_ENTITY_TYPES[i]);
+        console.error(`❌ migration 200 (brain/${BRAIN_ENTITY_TYPES[i]}): ${err.message}`);
+      }
+    }
+    if (failures.length > 0) {
+      throw new Error(
+        `migration 200: ${failures.length} brain store(s) failed to split (${failures.join(', ')}) — ` +
+        `repair the unreadable legacy file(s) and reboot to retry; the healthy stores were split.`,
+      );
     }
     return { ok: true, perType };
   },
