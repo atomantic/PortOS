@@ -60,6 +60,35 @@ describe('CreativeDirectorModelsDrawer', () => {
     expect(screen.getByLabelText('Treatment model').value).toBe('a-big');
   });
 
+  it('warns when the plan stage is pinned to a local model that cannot call tools', async () => {
+    // The incident: a plan agent on gemma (no tool use) narrates "done" without
+    // ever PATCHing the plan, wedging the project. The drawer must flag it.
+    renderDrawer({ id: 'cd-1', name: 'Demo', modelOverrides: { plan: { providerId: 'ollama', model: 'gemma4:26b' } } });
+    await waitFor(() => expect(screen.getByLabelText('Production plan model')).toBeTruthy());
+    expect(screen.getByText(/recognized tool-calling model/i)).toBeInTheDocument();
+  });
+
+  it('does not warn when the plan stage is pinned to a tool-capable local model', async () => {
+    renderDrawer({ id: 'cd-1', name: 'Demo', modelOverrides: { plan: { providerId: 'ollama', model: 'qwen2.5vl:latest' } } });
+    await waitFor(() => expect(screen.getByLabelText('Production plan model')).toBeTruthy());
+    expect(screen.queryByText(/recognized tool-calling model/i)).not.toBeInTheDocument();
+  });
+
+  it('warns when the plan stage inherits a non-tool provider default (blank model)', async () => {
+    // ollama's defaultModel is gemma4:26b; a blank model pin runs that default.
+    renderDrawer({ id: 'cd-1', name: 'Demo', modelOverrides: { plan: { providerId: 'ollama', model: '' } } });
+    await waitFor(() => expect(screen.getByLabelText('Production plan provider')).toBeTruthy());
+    expect(screen.getByText(/recognized tool-calling model/i)).toBeInTheDocument();
+  });
+
+  it('never shows a tool-use warning on the vision (evaluation) stage', async () => {
+    // The evaluation stage is a direct vision call, not an agent — a non-tool
+    // local model there is expected and must NOT be flagged as tool-incapable.
+    renderDrawer({ id: 'cd-1', name: 'Demo', modelOverrides: { evaluation: { providerId: 'ollama', model: 'gemma4:26b' } } });
+    await waitFor(() => expect(screen.getByLabelText('Scene evaluation provider')).toBeTruthy());
+    expect(screen.queryByText(/recognized tool-calling model/i)).not.toBeInTheDocument();
+  });
+
   it('saves only stages that name a provider, omitting inherited ones', async () => {
     updateCreativeDirectorProject.mockResolvedValue({ modelOverrides: { evaluation: { providerId: 'vlm-x', model: 'moondream' } } });
     const onSaved = vi.fn();

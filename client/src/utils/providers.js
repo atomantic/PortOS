@@ -182,6 +182,57 @@ export const toolUseLocalModelFilter = (id, provider) =>
   localBackendForProvider(provider) ? isToolUseModel(id) : true;
 
 /**
+ * Agent-picker tool-use annotation for a model id. Agent / CoS tasks (the CD
+ * treatment + plan stages, coding agents) only work with a model that can emit
+ * native tool calls — a local model that can't (e.g. Gemma) narrates a
+ * done-message instead of acting, silently wedging the task. This decides the
+ * per-option marker + the "pick a tool-capable model" warning in agent pickers.
+ *
+ * Returns `null` for cloud / API providers: their model ids don't encode their
+ * family, so the name heuristic would mislabel them (same reason
+ * `toolUseLocalModelFilter` leaves cloud lists untouched). LOCAL backends return
+ * `{ toolCapable }` keyed on {@link isToolUseModel} — where "local" is BOTH a
+ * direct Ollama / LM Studio backend ({@link localBackendForProvider}) AND an
+ * Ollama-BACKED CLI/TUI wrapper ({@link isOllamaBackedProvider}): a renamed
+ * `claude-ollama-tui` / OpenCode wrapper keeps `ollamaBacked: true` but may lose
+ * the "ollama" name/endpoint/id that `localBackendForProvider` matches on, and
+ * that wrapper is exactly the incident's provider class — so it must still be
+ * flagged, not silently skipped.
+ * @param {string} id
+ * @param {object} [provider]
+ * @returns {{toolCapable:boolean}|null}
+ */
+export const localToolUseHint = (id, provider) =>
+  (localBackendForProvider(provider) || isOllamaBackedProvider(provider))
+    && typeof id === 'string' && id.length > 0
+    ? { toolCapable: isToolUseModel(id) }
+    : null;
+
+/**
+ * Suffix a native `<option>` label with a tool-use marker for an agent picker.
+ * No-op (returns `label` unchanged) for cloud providers or a blank id, so it's
+ * safe to wrap every option. Pairs with {@link localToolUseHint} for the
+ * below-the-select warning. Emoji (not lucide icons) because native `<option>`
+ * elements can't render markup.
+ *
+ * The signal is asymmetric because {@link isToolUseModel} is a *positive
+ * allowlist* of families with dependable function-calling: a match is a reliable
+ * "tool-capable", but a NON-match only means "not a recognized tool-caller" —
+ * NOT a proven negative (a newer tool-capable family whose id isn't in the regex
+ * yet would fall here). So the negative marker is worded as unverified, not a
+ * false-certain "no tool use".
+ * @param {string} id - model id (drives the heuristic)
+ * @param {string} label - display label to annotate (often === id)
+ * @param {object} [provider] - the selected provider object
+ * @returns {string}
+ */
+export const withToolUseOptionLabel = (id, label, provider) => {
+  const hint = localToolUseHint(id, provider);
+  if (!hint) return label;
+  return `${label}${hint.toolCapable ? ' · 🔧 tool use' : ' · ⚠ no known tool use'}`;
+};
+
+/**
  * Selectable models for a generation/chat picker: drops internal sentinels AND
  * embedding-only models. Use anywhere the user picks a model that will run a
  * prompt (provider editor model lists, fallback model, manuscript review).
