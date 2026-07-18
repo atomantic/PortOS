@@ -421,9 +421,17 @@ describe('buildHandoffTask', () => {
     expect(jira).toContain('change X to Y'); // carries the proposal body
   });
 
-  it('stamps the proposal identity + domain for per-domain execution tracking (#2765)', () => {
-    const t = buildHandoffTask({ app, proposal: { ...proposal, scope: 'loop-meta' }, issueRef: 42 });
+  it('stamps the proposal identity + domain for per-domain execution tracking when recordExecution (#2765)', () => {
+    const t = buildHandoffTask({ app, proposal: { ...proposal, scope: 'loop-meta' }, issueRef: 42, recordExecution: true });
     expect(t.liProposal).toEqual({ appId: 'app-1', slug: 'fix-typo', scope: 'loop-meta' });
+  });
+
+  it('omits the execution marker when outcomes tracking is off (recordExecution false/absent) (#2765)', () => {
+    // Honors the `outcomes` source toggle: a hand-off filed while tracking is off must
+    // not carry a marker, or recordProposalExecution's fallback would create an orphan
+    // outcome row the toggle says isn't tracked (codex P2).
+    expect(buildHandoffTask({ app, proposal: { ...proposal, scope: 'loop-meta' }, issueRef: 42, recordExecution: false }).liProposal).toBeUndefined();
+    expect(buildHandoffTask({ app, proposal: { ...proposal, scope: 'loop-meta' }, issueRef: 42 }).liProposal).toBeUndefined();
   });
 });
 

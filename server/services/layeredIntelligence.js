@@ -534,7 +534,7 @@ export function isHandoffEligible({ proposal, config, filed } = {}) {
  * `LI hand-off:` prefix so addTask's per-app dedup suppresses a re-enqueue while
  * the same proposal's task is still pending/in-flight.
  */
-export function buildHandoffTask({ app, proposal, issueRef } = {}) {
+export function buildHandoffTask({ app, proposal, issueRef, recordExecution = false } = {}) {
   const ref = typeof issueRef === 'number' ? `#${issueRef}` : String(issueRef ?? '').trim();
   const context = [
     '# Layered Intelligence hand-off',
@@ -551,26 +551,36 @@ export function buildHandoffTask({ app, proposal, issueRef } = {}) {
     '',
     proposal?.body || ''
   ].join('\n');
-  return {
+  const task = {
     description: `LI hand-off: ${proposal?.title || ref}`,
     priority: 'MEDIUM',
     context,
     app: app?.id,
-    approvalRequired: true,
-    // Per-proposal-domain execution tracking (#2765): stamp the proposal's identity
-    // + domain onto the task so, when this agent run completes, recordTaskCompletion
-    // can attribute the execution success/failure back to the proposal's DOMAIN (not
-    // the generic `internal-task` bucket this hand-off would otherwise land in).
-    // addTask allowlists this top-level field into `metadata.liProposal`, and
-    // registerAgent projects it onto `agent.metadata.taskLiProposal`. Kept a
-    // dedicated key (not any of the extractTaskType-recognized metadata fields) so it
-    // never reclassifies the task's own byTaskType bucket.
-    liProposal: {
+    approvalRequired: true
+  };
+  // Per-proposal-domain execution tracking (#2765): stamp the proposal's identity +
+  // domain onto the task so, when this agent run completes, recordTaskCompletion can
+  // attribute the execution success/failure back to the proposal's DOMAIN (not the
+  // generic `internal-task` bucket this hand-off would otherwise land in). addTask
+  // allowlists this top-level field into `metadata.liProposal`, and registerAgent
+  // projects it onto `agent.metadata.taskLiProposal`. Kept a dedicated key (not any of
+  // the extractTaskType-recognized metadata fields) so it never reclassifies the task's
+  // own byTaskType bucket.
+  //
+  // Gated on `recordExecution` — the caller passes true ONLY when the outcomes source is
+  // on AND the tracker is outcomes-capable, the SAME gate that governs recordFiledProposal.
+  // Without this, a hand-off filed while outcomes-tracking is OFF would still carry the
+  // marker, and recordProposalExecution's missing-record fallback would create an outcome
+  // row — recording a proposal the source toggle says isn't tracked (codex P2). Omitting
+  // the marker keeps filing and execution-recording consistent with the one toggle.
+  if (recordExecution) {
+    task.liProposal = {
       appId: app?.id ?? null,
       slug: proposal?.slug ?? null,
       scope: proposal?.scope ?? null
-    }
-  };
+    };
+  }
+  return task;
 }
 
 /**
