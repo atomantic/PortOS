@@ -21,7 +21,7 @@ import { createToolExecution, startExecution, completeExecution, errorExecution 
 import { determineLane, acquire, release } from './executionLanes.js';
 import { analyzeAgentFailure, resolveFailedTaskUpdate, resolveTypeFailureSignal } from './agentErrorAnalysis.js';
 import { createAgentRun, completeAgentRun, checkForTaskCommit } from './agentRunTracking.js';
-import { isProgrammaticIoTaskType, resolveTaskHookType, NON_COMMITTING_COORDINATOR_TASK_TYPES } from './taskTypeHooks.js';
+import { isProgrammaticIoTaskType, resolveTaskHookType, isNonCommittingCoordinatorTask } from './taskTypeHooks.js';
 import { buildAgentPrompt, getAppWorkspace } from './agentPromptBuilder.js';
 import { isOllamaClaudeProvider, isClaudeCommand, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
@@ -864,8 +864,10 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
   // return false on every SUCCESSFUL run and drive their learning bucket to ~0% (#2696) —
   // the same artifact #2700 fixed for the programmatic-I/O reasoning run. They register no
   // output hook, so like pipeline/media jobs there is no deliverable signal to judge them
-  // by; fall back to the exit code (null = criterion undeclared).
-  if (NON_COMMITTING_COORDINATOR_TASK_TYPES.has(scheduledType)) return null;
+  // by; fall back to the exit code (null = criterion undeclared). Uses the predicate (not a
+  // bare `scheduledType` lookup) so the archived `taskAnalysisType` shape resolves the same
+  // way the learning bucket does — see isNonCommittingCoordinatorTask.
+  if (isNonCommittingCoordinatorTask(task)) return null;
   return await checkForTaskCommit(task.id, workspacePath);
 }
 

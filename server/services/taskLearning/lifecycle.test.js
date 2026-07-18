@@ -49,6 +49,20 @@ describe('backfillFromHistory — stale coordinator verdict (#2696)', () => {
     }
   });
 
+  it('strips the fossil for the ARCHIVED shape (taskAnalysisType, no analysisType) (#2696 codex)', async () => {
+    // agentLifecycle stamps the run type onto the AGENT as metadata.taskAnalysisType, and the
+    // backfill re-processes exactly that shape. extractTaskType buckets it as
+    // self-improve:branch-reconcile, so the sanitizer MUST recognize it too, or the purge is
+    // undone. (No `analysisType` key — only the archived `taskAnalysisType`.)
+    agentsStore.list = [{
+      status: 'completed', taskId: 't1',
+      result: { success: true, duration: 100, validationPassed: false },
+      metadata: { taskAnalysisType: 'branch-reconcile', taskType: 'internal' },
+    }];
+    await backfillFromHistory();
+    expect(recordTaskCompletion.mock.calls[0][0].result.validationPassed).toBeNull();
+  });
+
   it('passes a committing type through UNTOUCHED — its commit verdict is real', async () => {
     // accessibility genuinely commits; a persisted false is a real miss, not a fossil.
     agentsStore.list = [completed('t1', 'accessibility', false)];

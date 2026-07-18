@@ -97,11 +97,22 @@ export const NON_COMMITTING_COORDINATOR_TASK_TYPES = new Set([
 
 /**
  * Whether a task declares NO `[task-<id>]` commit criterion because it is a gh/git
- * coordinator (see NON_COMMITTING_COORDINATOR_TASK_TYPES). Keyed on the same resolver as
- * the programmatic-I/O gate so the scheduled type — not the CoS queue category — decides.
+ * coordinator (see NON_COMMITTING_COORDINATOR_TASK_TYPES).
+ *
+ * Resolves the type the SAME way extractTaskType (taskLearning/store.js) computes the
+ * learning bucket — `metadata.analysisType || metadata.taskAnalysisType || taskType` — NOT
+ * via resolveTaskHookType (which reads only `analysisType`). This matters for the archived
+ * agent shape: a LIVE queue task carries `metadata.analysisType`, but agentLifecycle stamps
+ * the run's type onto the AGENT record as `metadata.taskAnalysisType` (agentLifecycle.js),
+ * and that archived form is exactly what the history backfill re-processes. Keying on
+ * `analysisType` alone made this predicate DISAGREE with the bucket for archived agents, so
+ * the backfill sanitizer skipped them and the migration's purge could be undone (#2696,
+ * codex review). Matching extractTaskType keeps the criterion, the bucket, and the sanitizer
+ * consistent across both task shapes.
  */
 export function isNonCommittingCoordinatorTask(task) {
-  return NON_COMMITTING_COORDINATOR_TASK_TYPES.has(resolveTaskHookType(task));
+  const type = task?.metadata?.analysisType || task?.metadata?.taskAnalysisType || task?.taskType || null;
+  return NON_COMMITTING_COORDINATOR_TASK_TYPES.has(type);
 }
 
 /**
