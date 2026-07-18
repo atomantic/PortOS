@@ -109,18 +109,41 @@ export async function runMigrations({
   // readAppliedList).
   const applied = await readAppliedList(appliedFile, { repair: true });
 
+  // Guard for #2770: when the applied-list started EMPTY — missing, corrupt and
+  // rebuilt from [], or a genuinely fresh install — we cannot prove that a
+  // non-idempotent PURGE migration hasn't already run. Rerunning one (they
+  // identify their targets by PRESENCE, e.g. a learning bucket) would delete
+  // legitimately-earned data accumulated since the purge first ran. So a
+  // migration that opts into the purge class (`export default { purge: true }`)
+  // is recorded as applied WITHOUT executing whenever the ledger started empty:
+  // on a fresh install there is nothing to purge anyway, and on a lost/corrupt
+  // ledger this protects post-fix data. The rare install that has genuine
+  // poisoned data AND lost its ledger before the purge ran keeps that stale data
+  // rather than losing real data — the deliberately safer trade. This is the
+  // single shared guard for every purge migration (197, 198, …) — no per-migration
+  // marker to drift out of sync.
+  const ledgerStartedEmpty = applied.length === 0;
+
   const files = await scanMigrationFiles(migrationsDir);
 
   let ran = 0;
   for (const file of files) {
     if (applied.includes(file)) continue;
 
-    console.log(`🔄 Running migration: ${file}`);
     const mod = await import(pathToFileURL(join(migrationsDir, file)).href);
     const migration = (mod?.default && typeof mod.default.up === 'function') ? mod.default : mod;
     if (!migration || typeof migration.up !== 'function') {
       throw new Error(`Migration "${file}" does not export an up() function`);
     }
+
+    if (migration.purge && ledgerStartedEmpty) {
+      console.warn(`⏭️ Skipping purge migration ${file}: applied-list started empty/rebuilt — recorded as applied without running to avoid a destructive rerun (#2770)`);
+      applied.push(file);
+      await writeFile(appliedFile, JSON.stringify(applied, null, 2) + '\n');
+      continue;
+    }
+
+    console.log(`🔄 Running migration: ${file}`);
     await migration.up({ rootDir, migrationsDir });
     applied.push(file);
     await writeFile(appliedFile, JSON.stringify(applied, null, 2) + '\n');
