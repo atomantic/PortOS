@@ -54,6 +54,7 @@ import {
   applyJiraBlockingLabel,
   computeOutcomesReport,
   computeSelfEvalSummary,
+  computeProposalExecutionAwareness,
   readLiTaskMetrics,
   hasPlannedWorkListing
 } from '../layeredIntelligence.js'
@@ -318,6 +319,11 @@ export async function buildTaskInput({ app } = {}) {
   // "this app has never had a proposal merged" (#2700).
   let outcomes = null
   let outcomesReport = ''
+  // Per-proposal-domain execution record (#2765): the true avoid/prefer signal keyed
+  // on how LI's OWN proposals in each domain fared once handed off + executed. Derived
+  // from the SAME outcome records loaded below (no extra store read), so it's gated on
+  // the same outcomes source; stays '' until at least one domain clears the sample floor.
+  let proposalExecutionReport = ''
   if (config.sources?.outcomes && outcomesTrackerSupported(filer)) {
     if (!trackerReadFailed) await reconcileOutcomes({ appId: app.id, existingIssues })
     // Discriminated read: an unreadable outcome store stays `null` here rather than
@@ -334,6 +340,11 @@ export async function buildTaskInput({ app } = {}) {
       outcomes,
       hasPlannedWork: hasPlannedWorkListing(sources.plannedWork)
     })
+    // Only a successful read yields records to attribute; a failed read (outcomes ===
+    // null) leaves the block empty rather than claiming "no domain has executed".
+    if (Array.isArray(outcomes)) {
+      proposalExecutionReport = computeProposalExecutionAwareness({ outcomes })
+    }
   }
 
   // Self-evaluation (#2700): the loop's deterministic pre-filing check on its own
@@ -359,7 +370,7 @@ export async function buildTaskInput({ app } = {}) {
     })
   }
 
-  const prompt = buildPrompt({ app, config, sources, openIssues, isPortos, outcomesReport, selfEvalReport }) + buildCompletionContract()
+  const prompt = buildPrompt({ app, config, sources, openIssues, isPortos, outcomesReport, selfEvalReport, proposalExecutionReport }) + buildCompletionContract()
   // Option A: surface the fully-resolved LI agent provider/model (from
   // resolveLiAgentProvider — per-app override, else the resolved schedule pin) so
   // the generator pins the AGENT to it. Resolving the pin HERE (not delegating it

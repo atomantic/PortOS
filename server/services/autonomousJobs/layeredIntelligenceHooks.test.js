@@ -60,6 +60,10 @@ vi.mock('../layeredIntelligence.js', () => ({
   // degraded guidance) are unit-tested in layeredIntelligence.test.js; these are
   // spies so the hook's WIRING can be asserted — which inputs it feeds in.
   computeSelfEvalSummary: vi.fn(() => 'LI self-evaluation:\n- Reasoning confidence: low'),
+  // Per-proposal-domain execution awareness (#2765). Semantics are unit-tested in
+  // layeredIntelligence.test.js; a spy here so the hook's WIRING (computed from the
+  // loaded outcomes and passed to buildPrompt) can be asserted.
+  computeProposalExecutionAwareness: vi.fn(() => ''),
   readLiTaskMetrics: vi.fn().mockResolvedValue({ read: true, metrics: null }),
   // The predicate's own semantics (listing vs. either sentinel) are unit-tested in
   // layeredIntelligence.test.js; here it's a spy so the hook's WIRING can be

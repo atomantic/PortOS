@@ -166,6 +166,24 @@ export const LI_DEGRADED_MIN_SAMPLE = 4;
 // to merged for trackers that report no stateReason.
 export const PROPOSAL_OUTCOMES = ['merged', 'rejected', 'abandoned'];
 
+// The EXECUTION outcomes an LI proposal reaches once it is handed off to a coding
+// agent and that agent's run completes (#2765). Distinct from PROPOSAL_OUTCOMES
+// (the FILING fate — did the issue get merged/closed): execution is "did LI's own
+// coding agent successfully implement the proposal it filed". Only populated for
+// proposals that took the Engine-A hand-off path (config.handoff.enabled + a
+// trivial+safe proposal); a filed-but-never-handed-off proposal keeps a null
+// executionOutcome. Environmental failures (rate-limit/outage) are NOT recorded —
+// they say nothing about the proposal's domain (same gate as #2618).
+export const PROPOSAL_EXECUTION_OUTCOMES = ['success', 'failure'];
+
+// Minimum recorded executions before a proposal DOMAIN's success rate is trusted
+// for the per-domain avoid/prefer split (#2765). Lower than SCOPE_AWARENESS_MIN_SAMPLE
+// (3) because each data point here is a REAL, high-signal LI-proposal execution — not
+// install-wide task-type telemetry that a proposal only loosely maps onto — and the
+// hand-off path is rare, so a floor of 2 lets a genuine per-domain signal surface
+// without letting a single fluke mint a list.
+export const PROPOSAL_EXECUTION_MIN_SAMPLE = 2;
+
 // Scope-awareness thresholds (#2760). LI's own execution data shows several CoS
 // task-type scopes it consistently fails at (e.g. self-improve:layered-intelligence,
 // branch-reconcile, accessibility all sit at 0%) while others succeed reliably
@@ -538,7 +556,20 @@ export function buildHandoffTask({ app, proposal, issueRef } = {}) {
     priority: 'MEDIUM',
     context,
     app: app?.id,
-    approvalRequired: true
+    approvalRequired: true,
+    // Per-proposal-domain execution tracking (#2765): stamp the proposal's identity
+    // + domain onto the task so, when this agent run completes, recordTaskCompletion
+    // can attribute the execution success/failure back to the proposal's DOMAIN (not
+    // the generic `internal-task` bucket this hand-off would otherwise land in).
+    // addTask allowlists this top-level field into `metadata.liProposal`, and
+    // registerAgent projects it onto `agent.metadata.taskLiProposal`. Kept a
+    // dedicated key (not any of the extractTaskType-recognized metadata fields) so it
+    // never reclassifies the task's own byTaskType bucket.
+    liProposal: {
+      appId: app?.id ?? null,
+      slug: proposal?.slug ?? null,
+      scope: proposal?.scope ?? null
+    }
   };
 }
 
@@ -927,6 +958,43 @@ export function computeSelfEvalSummary({
 }
 
 /**
+ * Clamp a task-type / proposal-domain label so one pathological key (e.g. a mission
+ * task type embedding an unbounded mission name) can't blow the scope-awareness block
+ * budget. Shared by both avoid/prefer signals below.
+ */
+function clampScopeLabel(label) {
+  return label.length > SCOPE_AWARENESS_MAX_TYPE_LEN
+    ? `${label.slice(0, SCOPE_AWARENESS_MAX_TYPE_LEN - 1)}…`
+    : label;
+}
+
+/**
+ * Render an avoid/prefer prompt block from pre-classified item lists — the presentation
+ * both scope-awareness signals share (#2760 install-wide task-type rates, #2765
+ * per-proposal-domain execution rates). Owns the sort (worst-first avoid, best-first
+ * prefer), the per-list cap + "…and N more" overflow, and the empty-guard, so a tweak
+ * to any of those lands in one place. Callers supply their own classified `avoid`/
+ * `prefer` lists, the per-item `fmt`, and the two headers — the only parts that
+ * legitimately differ between the two signals. Returns '' when both lists are empty.
+ */
+function renderAvoidPreferSections({ avoid = [], prefer = [], fmt, avoidHeader, preferHeader }) {
+  if (!avoid.length && !prefer.length) return '';
+  avoid.sort((a, b) => a.rate - b.rate);  // worst-first — sharpest signal at the top
+  prefer.sort((a, b) => b.rate - a.rate); // best-first
+  const section = (header, items) => {
+    const shown = items.slice(0, SCOPE_AWARENESS_MAX_PER_LIST);
+    const more = items.length - shown.length;
+    const lines = shown.map(fmt);
+    if (more > 0) lines.push(`- …and ${more} more`);
+    return `${header}\n${lines.join('\n')}`;
+  };
+  const sections = [];
+  if (avoid.length) sections.push(section(avoidHeader, avoid));
+  if (prefer.length) sections.push(section(preferHeader, prefer));
+  return sections.join('\n\n');
+}
+
+/**
  * Scope-awareness report (#2760). Classifies each CoS task TYPE by its completion rate
  * into low-completion and high-completion lists, as directional context for the
  * reasoner. Pure — takes the already-parsed per-type metrics map (the `summary`
@@ -988,33 +1056,78 @@ export function computeScopeAwareness({ metricsByType = {} } = {}) {
     if (rate < SCOPE_AVOID_SUCCESS_THRESHOLD) avoid.push({ type, rate, n });
     else if (rate >= SCOPE_PREFER_SUCCESS_THRESHOLD) prefer.push({ type, rate, n });
   }
-  if (!avoid.length && !prefer.length) return '';
-  // Worst-first for avoid, best-first for prefer — the reasoner reads the sharpest
-  // signal at the top of each list.
-  avoid.sort((a, b) => a.rate - b.rate);
-  prefer.sort((a, b) => b.rate - a.rate);
-  // Cap each list (sharpest-first) and truncate a pathological task-type name so the
-  // block stays bounded on a long-lived install.
-  const clampType = (type) => type.length > SCOPE_AWARENESS_MAX_TYPE_LEN
-    ? `${type.slice(0, SCOPE_AWARENESS_MAX_TYPE_LEN - 1)}…`
-    : type;
-  const fmt = ({ type, rate, n }) => `- ${clampType(type)}: ${Math.round(rate)}% completed over ${n} runs`;
-  const section = (header, items) => {
-    const shown = items.slice(0, SCOPE_AWARENESS_MAX_PER_LIST);
-    const more = items.length - shown.length;
-    const lines = shown.map(fmt);
-    if (more > 0) lines.push(`- …and ${more} more`);
-    return `${header}\n${lines.join('\n')}`;
-  };
-  const sections = [];
   // Honest framing (#2760, codex P1): these are per-task-TYPE completion rates for the
   // whole install — NOT a per-proposal execution record. An LI proposal is implemented
   // through a claim/plan/handoff task whose type does not carry the proposal's domain,
   // so this is directional context ("work of this kind tends to (not) get finished
   // here"), not a claim that a given proposal maps 1:1 onto a listed type.
-  if (avoid.length) sections.push(section(`LOW-COMPLETION task types — work of this kind is finished below ${SCOPE_AVOID_SUCCESS_THRESHOLD}% of the time on this install:`, avoid));
-  if (prefer.length) sections.push(section(`HIGH-COMPLETION task types — finished at or above ${SCOPE_PREFER_SUCCESS_THRESHOLD}%:`, prefer));
-  return sections.join('\n\n');
+  return renderAvoidPreferSections({
+    avoid,
+    prefer,
+    fmt: ({ type, rate, n }) => `- ${clampScopeLabel(type)}: ${Math.round(rate)}% completed over ${n} runs`,
+    avoidHeader: `LOW-COMPLETION task types — work of this kind is finished below ${SCOPE_AVOID_SUCCESS_THRESHOLD}% of the time on this install:`,
+    preferHeader: `HIGH-COMPLETION task types — finished at or above ${SCOPE_PREFER_SUCCESS_THRESHOLD}%:`
+  });
+}
+
+/**
+ * Aggregate LI proposal EXECUTION outcomes by proposal DOMAIN (scope) (#2765).
+ * Pure. Unlike computeScopeAwareness — which borrows install-wide CoS
+ * per-task-TYPE completion rates that a proposal only loosely maps onto — this is a
+ * TRUE per-proposal record: each data point is one of LI's OWN filed proposals that
+ * was handed off and executed, keyed by the domain (scope) it was proposed under.
+ *
+ * `outcomes` is the app's outcome records (from listOutcomes); only records carrying
+ * a resolved `executionOutcome` AND a `scope` contribute. Returns
+ * `{ [scope]: { completed, succeeded, successRate } }` (empty when nothing has been
+ * executed yet). The acceptance signal for #2765: after one proposal in domain X is
+ * executed, only X's bucket moves.
+ */
+export function computeExecutionByDomain(outcomes = []) {
+  const byDomain = {};
+  for (const r of Array.isArray(outcomes) ? outcomes : []) {
+    if (!r || typeof r !== 'object') continue;
+    if (!PROPOSAL_EXECUTION_OUTCOMES.includes(r.executionOutcome)) continue;
+    const scope = typeof r.scope === 'string' && r.scope.trim() ? r.scope.trim() : null;
+    if (!scope) continue;
+    const bucket = byDomain[scope] || (byDomain[scope] = { completed: 0, succeeded: 0 });
+    bucket.completed += 1;
+    if (r.executionOutcome === 'success') bucket.succeeded += 1;
+  }
+  // successRate is derived once here — the sole writer — so the bucket carries no
+  // dead initial value above.
+  for (const bucket of Object.values(byDomain)) {
+    bucket.successRate = Math.round((bucket.succeeded / bucket.completed) * 100);
+  }
+  return byDomain;
+}
+
+/**
+ * Render the per-proposal-DOMAIN execution avoid/prefer split for the reasoning
+ * prompt (#2765) — the real per-proposal signal the #2760 install-wide scope block
+ * could only approximate. Returns '' when no domain clears the sample floor, so
+ * buildPrompt omits the block. Mirrors computeScopeAwareness's 50/75 thresholds and
+ * bounded rendering, but keys on the proposal's own scope and carries NO
+ * "directional context only" caveat: this IS how LI's own proposals in each domain
+ * fared, so the reasoner can steer toward domains it actually executes and away from
+ * domains where its own hand-offs fail even after the proposal was accepted.
+ */
+export function computeProposalExecutionAwareness({ outcomes = [] } = {}) {
+  const byDomain = computeExecutionByDomain(outcomes);
+  const avoid = [];
+  const prefer = [];
+  for (const [scope, bucket] of Object.entries(byDomain)) {
+    if (bucket.completed < PROPOSAL_EXECUTION_MIN_SAMPLE) continue; // not enough executions to judge this domain
+    if (bucket.successRate < SCOPE_AVOID_SUCCESS_THRESHOLD) avoid.push({ scope, rate: bucket.successRate, n: bucket.completed });
+    else if (bucket.successRate >= SCOPE_PREFER_SUCCESS_THRESHOLD) prefer.push({ scope, rate: bucket.successRate, n: bucket.completed });
+  }
+  return renderAvoidPreferSections({
+    avoid,
+    prefer,
+    fmt: ({ scope, rate, n }) => `- ${clampScopeLabel(scope)}: LI implemented ${rate}% of its own ${scope} proposals successfully over ${n} executed`,
+    avoidHeader: `LOW-EXECUTION proposal domains — LI's OWN hand-offs in these domains succeed below ${SCOPE_AVOID_SUCCESS_THRESHOLD}% of the time; a proposal here needs a strong justification or a narrower slice:`,
+    preferHeader: `HIGH-EXECUTION proposal domains — LI reliably implements its own proposals here (at or above ${SCOPE_PREFER_SUCCESS_THRESHOLD}%):`
+  });
 }
 
 // Source keys that buildPrompt renders as their OWN dedicated block (with tailored
@@ -1032,9 +1145,11 @@ const BESPOKE_SOURCE_BLOCK_KEYS = new Set(['plannedWork', 'scopeGuidance']);
  * block with calibration guidance when non-empty (#2428). `selfEvalReport` (from
  * computeSelfEvalSummary) is injected as a `liSelfEval` block the same way (#2700).
  * `sources.scopeGuidance` (from computeScopeAwareness) is injected as a
- * `liScopeAwareness` block the same way (#2760).
+ * `liScopeAwareness` block the same way (#2760). `proposalExecutionReport` (from
+ * computeProposalExecutionAwareness) is injected as a `liProposalExecution` block —
+ * the TRUE per-proposal-domain execution record #2760 could only approximate (#2765).
  */
-export function buildPrompt({ app, config, sources = {}, openIssues = [], isPortos = false, outcomesReport = '', selfEvalReport = '' }) {
+export function buildPrompt({ app, config, sources = {}, openIssues = [], isPortos = false, outcomesReport = '', selfEvalReport = '', proposalExecutionReport = '' }) {
   const allowed = (config.allowedScopes || []).filter(s =>
     isScopeAllowed({ scope: s, allowedScopes: config.allowedScopes, isPortos })
   );
@@ -1099,7 +1214,18 @@ export function buildPrompt({ app, config, sources = {}, openIssues = [], isPort
   // onto a listed type, so treat a low-completion type as a reason for extra scrutiny /
   // a narrower scope, not a hard veto.
   const scopeGuidanceBlock = (isPortos && typeof sources.scopeGuidance === 'string' && sources.scopeGuidance.trim())
-    ? `\n### liScopeAwareness\n${sources.scopeGuidance.trim()}\n\nThese are per-task-type completion rates for THIS install — how reliably each KIND of work tends to get finished, not a per-proposal record (your proposals don't map 1:1 onto these types). Use it as directional context: a proposal whose implementation resembles a low-completion type deserves extra scrutiny or a narrower scope; high-completion kinds are safer bets. A low rate on self-improve:layered-intelligence is LI's OWN reasoning-run rate — a direct signal to propose conservatively.\n`
+    ? `\n### liScopeAwareness\n${sources.scopeGuidance.trim()}\n\nThese are per-task-type completion rates for THIS install — how reliably each KIND of work tends to get finished, not a per-proposal record (your proposals don't map 1:1 onto these types). Use it as directional context: a proposal whose implementation resembles a low-completion type deserves extra scrutiny or a narrower scope; high-completion kinds are safer bets. A low rate on self-improve:layered-intelligence is LI's OWN reasoning-run rate — a direct signal to propose conservatively. Where the liProposalExecution block below covers a domain, prefer it: it is a direct per-proposal record, whereas these buckets are only directional.\n`
+    : '';
+
+  // Per-proposal-domain execution record (#2765): unlike liScopeAwareness above —
+  // which borrows install-wide per-task-TYPE rates a proposal only loosely maps onto —
+  // this keys on how LI's OWN proposals in each domain actually fared once handed off
+  // and executed. It carries NO "directional only" caveat because the mapping is real,
+  // so it is the authoritative avoid/prefer signal wherever it has data. The report is
+  // pre-gated on the outcomes source by the caller (built from the same records), so no
+  // isPortos re-check here — the block simply renders when execution history exists.
+  const proposalExecutionBlock = (typeof proposalExecutionReport === 'string' && proposalExecutionReport.trim())
+    ? `\n### liProposalExecution\n${proposalExecutionReport.trim()}\n\nThis is a DIRECT record of how LI's own proposals in each domain fared once implemented — not directional context. Favor domains LI executes reliably; for a low-execution domain, either narrow the proposal to a slice an agent can finish or justify why it is still the highest-value work despite the track record.\n`
     : '';
 
   return `You are the Layered Intelligence reasoner for the app "${app.name}". Your job is to evaluate how THIS app is performing against its OWN goals and purpose${isPortos ? '' : ', not how well PortOS\'s tooling manages it'}. Decide the SINGLE highest-value improvement to propose this run (signal, not noise), grounded in the app's own goals and its own performance metrics (user success, KPIs, production telemetry). You never write code; you return structured JSON that a deterministic system files as ONE tracker issue.
@@ -1115,7 +1241,7 @@ ${openList}
 
 Gathered sources:
 ${sourceBlocks || (plannedWorkBlock ? '(no other sources available — you may propose an app-data-gap to add telemetry)' : '(no sources available — you may propose an app-data-gap to add telemetry)')}
-${plannedWorkBlock}${outcomesBlock}${selfEvalBlock}${scopeGuidanceBlock}
+${plannedWorkBlock}${outcomesBlock}${selfEvalBlock}${scopeGuidanceBlock}${proposalExecutionBlock}
 Respond with JSON only (no markdown fences):
 {
   "analysis": "brief reasoning summary",
