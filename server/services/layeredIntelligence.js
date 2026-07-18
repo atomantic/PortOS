@@ -175,13 +175,15 @@ export const PROPOSAL_OUTCOMES = ['merged', 'rejected', 'abandoned'];
 // (computeScopeAwareness) that surfaces the avoid/prefer split to the reasoner so it
 // can steer proposals toward scopes that actually execute.
 //
-// A scope is "avoid" when its lifetime success rate is below AVOID and it has enough
-// completed runs to be evidence; "prefer" when at/above PREFER with the same sample
-// floor. Reusing the degraded-execution boundary (50%) for AVOID keeps LI's two
-// success signals — its own loop health and per-scope executability — on the same
-// coin-flip line. Because the classification is recomputed from fresh learning.json
-// every run, an "avoid" scope self-clears the moment its rate recovers past AVOID —
-// no persisted avoid-list to go stale (the issue's "dynamic adjustment" requirement).
+// A scope is "avoid" when its effective (recency-windowed-or-lifetime) success rate is
+// below AVOID and it has enough completed runs to be evidence; "prefer" when at/above
+// PREFER with the same sample floor. Reusing the degraded-execution boundary (50%) for
+// AVOID keeps LI's two success signals — its own loop health and per-scope
+// executability — on the same coin-flip line. The classification is recomputed from
+// fresh metrics every run and keyed on the windowed rate, so an "avoid" scope
+// self-clears once it recovers in-window — no persisted avoid-list to go stale (the
+// issue's "dynamic adjustment" requirement). See computeScopeAwareness for why the
+// windowed rate, not the near-permanent lifetime rate, is the right basis.
 export const SCOPE_AVOID_SUCCESS_THRESHOLD = LI_DEGRADED_SUCCESS_THRESHOLD; // < 50% → avoid
 export const SCOPE_PREFER_SUCCESS_THRESHOLD = 75;                          // >= 75% → prefer
 
@@ -915,36 +917,45 @@ export function computeSelfEvalSummary({
 }
 
 /**
- * Build the JSON-only reasoning prompt for one app. Deterministic: given the
- * gathered sources, open issues, and config, produces the exact string sent to
- * the model. Meta/self scopes are only offered when the app is PortOS.
- * `outcomesReport` (from computeOutcomesReport) is injected as a `liOutcomes`
- * block with calibration guidance when non-empty (#2428). `selfEvalReport` (from
- * computeSelfEvalSummary) is injected as a `liSelfEval` block the same way (#2700).
- */
-/**
- * Scope-awareness report (#2760). Classifies each CoS task-type scope by its lifetime
- * execution success rate into "avoid" (chronically failing) and "prefer" (reliably
- * succeeding), then renders guidance the reasoner can use to steer a proposal toward
- * work that will actually execute. Pure — takes the already-parsed per-type metrics
- * map (the `summary` gatherSources builds from learning.byTaskType) and returns a
- * report string, or '' when no scope has enough runs to qualify either way.
+ * Scope-awareness report (#2760). Classifies each CoS task-type scope by its execution
+ * success rate into "avoid" (chronically failing) and "prefer" (reliably succeeding),
+ * then renders guidance the reasoner can use to steer a proposal toward work that will
+ * actually execute. Pure — takes the already-parsed per-type metrics map (the `summary`
+ * gatherSources builds from learning.byTaskType) and returns a report string, or ''
+ * when no scope has enough runs to qualify either way.
  *
- * `metricsByType[type] = { lifetimeSuccessRate: number|null, lifetimeCompleted: number, ... }`.
- * The steering is advisory, not a hard gate: LI still MAY propose in an avoid scope
- * when it is genuinely the highest-value work, but it must justify doing so. Because
- * the input is re-read every run, the split is dynamic and self-clearing — a scope
- * leaves "avoid" automatically once its rate climbs back past the threshold.
+ * `metricsByType[type] = { lifetimeSuccessRate, lifetimeCompleted, recentSuccessRate, recentCompleted, ... }`.
+ *
+ * Classification judges on the EFFECTIVE rate — the recency-windowed rate when the
+ * scope has run in-window, else lifetime — NOT the raw lifetime rate. This matters for
+ * the issue's "dynamic adjustment" requirement: the lifetime rate barely decays (an
+ * old failure burst depresses it near-permanently), so a scope that has actually
+ * recovered would stay stuck on the avoid list for dozens of runs. Using the windowed
+ * rate lets a recovered scope leave "avoid" promptly — and keeps this advisory list
+ * moving in the same direction the scheduler's own skip logic acts on
+ * (isSkipCandidate / computeEffectiveSuccessRate in taskLearning also key off the
+ * effective rate). The sample floor still gates on LIFETIME completed: a scope needs
+ * enough TOTAL evidence to be judged at all, even if only a couple of those runs are
+ * in-window.
+ *
+ * The thresholds (50/75) are deliberately NOT the scheduler's 30% hard-skip line: this
+ * steering is advisory (it nudges what LI PROPOSES, it never suppresses execution), so
+ * a wider, more cautious net is correct here. LI still MAY propose in an avoid scope
+ * when it is genuinely the highest-value work — it just has to justify doing so.
  */
 export function computeScopeAwareness({ metricsByType = {} } = {}) {
   const avoid = [];
   const prefer = [];
   for (const [type, m] of Object.entries(metricsByType || {})) {
-    const rate = m?.lifetimeSuccessRate;
     const n = m?.lifetimeCompleted || 0;
-    // Only a scope with enough evidence is classified; a NUMBER rate is required so a
-    // never-run scope (null) neither avoids nor prefers — it defaults to neutral.
-    if (typeof rate !== 'number' || n < SCOPE_AWARENESS_MIN_SAMPLE) continue;
+    if (n < SCOPE_AWARENESS_MIN_SAMPLE) continue; // not enough total evidence to judge
+    // Effective rate: trust the recency window when it has runs, else fall back to
+    // lifetime. recentSuccessRate is null (not 0) when the window is empty (#2460), so
+    // guard on recentCompleted before using it.
+    const rate = (m?.recentCompleted > 0 && typeof m?.recentSuccessRate === 'number')
+      ? m.recentSuccessRate
+      : m?.lifetimeSuccessRate;
+    if (typeof rate !== 'number') continue; // a never-run scope stays neutral
     if (rate < SCOPE_AVOID_SUCCESS_THRESHOLD) avoid.push({ type, rate, n });
     else if (rate >= SCOPE_PREFER_SUCCESS_THRESHOLD) prefer.push({ type, rate, n });
   }
@@ -954,19 +965,30 @@ export function computeScopeAwareness({ metricsByType = {} } = {}) {
   avoid.sort((a, b) => a.rate - b.rate);
   prefer.sort((a, b) => b.rate - a.rate);
   const fmt = ({ type, rate, n }) => `- ${type}: ${Math.round(rate)}% success over ${n} runs`;
-  const lines = [];
-  if (avoid.length) {
-    lines.push(`AVOID — these scopes' work has historically FAILED to execute (below ${SCOPE_AVOID_SUCCESS_THRESHOLD}% success):`);
-    lines.push(avoid.map(fmt).join('\n'));
-  }
-  if (prefer.length) {
-    if (lines.length) lines.push('');
-    lines.push(`PREFER — these scopes execute reliably (at or above ${SCOPE_PREFER_SUCCESS_THRESHOLD}% success):`);
-    lines.push(prefer.map(fmt).join('\n'));
-  }
-  return lines.join('\n');
+  const section = (header, items) => `${header}\n${items.map(fmt).join('\n')}`;
+  const sections = [];
+  if (avoid.length) sections.push(section(`AVOID — these scopes' work has historically FAILED to execute (below ${SCOPE_AVOID_SUCCESS_THRESHOLD}% success):`, avoid));
+  if (prefer.length) sections.push(section(`PREFER — these scopes execute reliably (at or above ${SCOPE_PREFER_SUCCESS_THRESHOLD}% success):`, prefer));
+  return sections.join('\n\n');
 }
 
+// Source keys that buildPrompt renders as their OWN dedicated block (with tailored
+// guidance) instead of dumping into the generic "### <key>\n<value>" source list.
+// Keeping them in one named set — rather than accreting `&& k !== 'x'` clauses on the
+// filter — documents WHY these keys are special and gives the next dedicated-block
+// signal a single edit point.
+const BESPOKE_SOURCE_BLOCK_KEYS = new Set(['plannedWork', 'scopeGuidance']);
+
+/**
+ * Build the JSON-only reasoning prompt for one app. Deterministic: given the
+ * gathered sources, open issues, and config, produces the exact string sent to
+ * the model. Meta/self scopes are only offered when the app is PortOS.
+ * `outcomesReport` (from computeOutcomesReport) is injected as a `liOutcomes`
+ * block with calibration guidance when non-empty (#2428). `selfEvalReport` (from
+ * computeSelfEvalSummary) is injected as a `liSelfEval` block the same way (#2700).
+ * `sources.scopeGuidance` (from computeScopeAwareness) is injected as a
+ * `liScopeAwareness` block the same way (#2760).
+ */
 export function buildPrompt({ app, config, sources = {}, openIssues = [], isPortos = false, outcomesReport = '', selfEvalReport = '' }) {
   const allowed = (config.allowedScopes || []).filter(s =>
     isScopeAllowed({ scope: s, allowedScopes: config.allowedScopes, isPortos })
@@ -977,7 +999,7 @@ export function buildPrompt({ app, config, sources = {}, openIssues = [], isPort
   // under the committed backlog it refers to instead of drifting to wherever
   // object key order happens to put it.
   const sourceBlocks = Object.entries(sources)
-    .filter(([k]) => k !== 'plannedWork' && k !== 'scopeGuidance')
+    .filter(([k]) => !BESPOKE_SOURCE_BLOCK_KEYS.has(k))
     .filter(([, v]) => typeof v === 'string' && v.trim())
     .map(([k, v]) => `### ${k}\n${v.trim()}`)
     .join('\n\n');

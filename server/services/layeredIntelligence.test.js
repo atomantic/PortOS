@@ -505,6 +505,38 @@ describe('computeScopeAwareness (#2760)', () => {
     } })).toBe('');
   });
 
+  it('judges on the recency-windowed rate so a RECOVERED scope leaves avoid (#2760 dynamic adjustment)', () => {
+    // Lifetime is dragged to 10% by an old failure burst, but the recent window is all
+    // successes → the effective rate is high, so the scope must NOT be on the avoid
+    // list (and here clears PREFER). Proves self-clearing works off the windowed rate,
+    // which the near-permanent lifetime rate could never deliver.
+    const out = computeScopeAwareness({ metricsByType: {
+      'branch-reconcile': { lifetimeSuccessRate: 10, lifetimeCompleted: 20, recentSuccessRate: 100, recentCompleted: 5 }
+    } });
+    expect(out).not.toContain('AVOID');
+    expect(out).toContain('PREFER');
+    expect(out).toContain('branch-reconcile: 100% success over 20 runs'); // rate = windowed, count = lifetime total
+  });
+
+  it('judges on the windowed rate so a REGRESSED scope enters avoid despite a high lifetime rate', () => {
+    // Lifetime looks great (95%) but the recent window has collapsed → treat as avoid.
+    const out = computeScopeAwareness({ metricsByType: {
+      'performance': { lifetimeSuccessRate: 95, lifetimeCompleted: 40, recentSuccessRate: 20, recentCompleted: 5 }
+    } });
+    expect(out).toContain('AVOID');
+    expect(out).toContain('performance: 20% success over 40 runs');
+    expect(out).not.toContain('PREFER');
+  });
+
+  it('falls back to the lifetime rate when the recency window is empty', () => {
+    // recentCompleted 0 / recentSuccessRate null → lifetime rate governs.
+    const out = computeScopeAwareness({ metricsByType: {
+      'plan-task': { lifetimeSuccessRate: 100, lifetimeCompleted: 10, recentSuccessRate: null, recentCompleted: 0 }
+    } });
+    expect(out).toContain('PREFER');
+    expect(out).toContain('plan-task: 100% success over 10 runs');
+  });
+
   it('sorts AVOID worst-first and PREFER best-first', () => {
     const out = computeScopeAwareness({ metricsByType: {
       'branch-reconcile': { lifetimeSuccessRate: 20, lifetimeCompleted: 5 },
@@ -536,7 +568,7 @@ describe('computeScopeAwareness (#2760)', () => {
 describe('buildPrompt', () => {
   const app = { name: 'TestApp' };
 
-  it('injects the scope-awareness block + steering guidance only when present (#2760)', () => {
+  it('injects the scope-awareness block only when present, under its own heading (#2760)', () => {
     const base = { app, isPortos: true, config: { allowedScopes: ['loop-meta'], rules: '' } };
     const without = buildPrompt(base);
     expect(without).not.toContain('liScopeAwareness');
@@ -547,17 +579,8 @@ describe('buildPrompt', () => {
     expect(withGuidance).toContain('### liScopeAwareness');
     expect(withGuidance).toContain('branch-reconcile: 0% success over 4 runs');
     expect(withGuidance).toContain('executed as CoS tasks');
-  });
-
-  it('does not render scopeGuidance as a generic source block', () => {
-    const out = buildPrompt({
-      app, isPortos: true,
-      config: { allowedScopes: ['loop-meta'], rules: '' },
-      sources: { scopeGuidance: 'PREFER — plan-task: 100% success over 10 runs' }
-    });
-    // rendered under its dedicated heading, never as "### scopeGuidance"
-    expect(out).not.toContain('### scopeGuidance');
-    expect(out).toContain('### liScopeAwareness');
+    // rendered under its dedicated heading, never as a generic "### scopeGuidance" dump
+    expect(withGuidance).not.toContain('### scopeGuidance');
   });
 
   it('only offers meta/self scopes on PortOS', () => {
