@@ -137,6 +137,31 @@ describe('PATCH /api/creative-commission/:id', () => {
     expect(res.status).toBe(400);
     expect(svc.updateCommission).not.toHaveBeenCalled();
   });
+
+  it('rejects a PATCH whose generation param conflicts with an explicit targetAbility (#2769)', async () => {
+    // targetAbility is in the patch, so the off-type key is checkable → 400.
+    const res = await request(buildApp()).patch('/api/creative-commission/commission-1')
+      .send({ targetAbility: 'image', generation: { targetDurationSeconds: 10 } });
+    expect(res.status).toBe(400);
+    expect(svc.updateCommission).not.toHaveBeenCalled();
+  });
+
+  it('accepts a PATCH that switches type and sets that type\'s params (#2769)', async () => {
+    svc.updateCommission.mockResolvedValue({ id: 'commission-1', targetAbility: 'image' });
+    const res = await request(buildApp()).patch('/api/creative-commission/commission-1')
+      .send({ targetAbility: 'image', generation: { imageCount: 3 } });
+    expect(res.status).toBe(200);
+    expect(svc.updateCommission).toHaveBeenCalledWith('commission-1', { targetAbility: 'image', generation: { imageCount: 3 } });
+  });
+
+  it('accepts a generation-only PATCH without targetAbility (sanitizer backstops off-type keys) (#2769)', async () => {
+    // No targetAbility in the patch → the effective type is the stored record's,
+    // which the schema can't see; the adapter drops any off-type key on sanitize.
+    svc.updateCommission.mockResolvedValue({ id: 'commission-1' });
+    const res = await request(buildApp()).patch('/api/creative-commission/commission-1')
+      .send({ generation: { imageCount: 3 } });
+    expect(res.status).toBe(200);
+  });
 });
 
 describe('POST /api/creative-commission/:id/run', () => {

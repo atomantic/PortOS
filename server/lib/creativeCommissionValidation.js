@@ -181,11 +181,9 @@ export const creativeCommissionGenerationUpdateSchema = creativeCommissionGenera
 // `episodeCount` on a `video` one) is a 400 at the boundary rather than silently
 // dropped by the sanitizer. Runs only where the ability is known (the create
 // schema, whose `targetAbility` defaults to `video`).
-function refineGenerationForAbility(data, ctx) {
-  if (!data || typeof data.generation !== 'object' || data.generation === null) return;
-  const ability = data.targetAbility || 'video';
+function pushOffTypeKeyIssues(generation, ability, ctx) {
   const allowed = new Set(generationKeysForAbility(ability));
-  for (const key of Object.keys(data.generation)) {
+  for (const key of Object.keys(generation)) {
     if (!allowed.has(key)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -194,6 +192,25 @@ function refineGenerationForAbility(data, ctx) {
       });
     }
   }
+}
+
+// Create path: `targetAbility` always resolves (defaults to `video`), so the
+// generation keys are always checkable.
+function refineGenerationForAbility(data, ctx) {
+  if (!data || typeof data.generation !== 'object' || data.generation === null) return;
+  pushOffTypeKeyIssues(data.generation, data.targetAbility || 'video', ctx);
+}
+
+// Update path: only check when the PATCH ALSO sets `targetAbility` — then the
+// pairing is unambiguous (e.g. `{ targetAbility: 'image', generation: {
+// targetDurationSeconds } }` is a mistake we can reject). When the PATCH omits
+// `targetAbility`, the effective type is the stored record's, which the schema
+// can't see; the adapter's `sanitizeGeneration` drops any off-type key as the
+// backstop (a harmless no-op, not a corruption).
+function refineGenerationForAbilityIfTargetPresent(data, ctx) {
+  if (!data || typeof data.generation !== 'object' || data.generation === null) return;
+  if (!data.targetAbility) return;
+  pushOffTypeKeyIssues(data.generation, data.targetAbility, ctx);
 }
 
 // The LLM provider/model that PROCESSES the commission — i.e. the Creative
@@ -279,4 +296,5 @@ export const creativeCommissionUpdateSchema = z.object({
   // model: null }`), so no separate no-defaults update variant is needed.
   assignment: creativeCommissionAssignmentSchema.optional(),
   feedbackWindow: z.number().int().min(0).max(50).optional(),
-}).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
+}).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' })
+  .superRefine(refineGenerationForAbilityIfTargetPresent);
