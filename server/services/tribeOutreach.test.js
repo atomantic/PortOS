@@ -1,0 +1,116 @@
+import { describe, it, expect } from 'vitest';
+
+import { groupUnansweredThreads } from './tribeOutreach.js';
+
+// `groupUnansweredThreads` is the pure detection core — no DB, no LLM. These
+// tests pin the "unanswered inbound from a Tribe person, within the actionable
+// window" contract that both the /tribe/outreach route and the `tribe_unanswered`
+// proactive alert depend on (#2158).
+
+const NOW = Date.parse('2026-07-18T12:00:00Z');
+const hoursAgo = (h) => new Date(NOW - h * 3600000).toISOString();
+const daysAgo = (d) => new Date(NOW - d * 86400000).toISOString();
+
+// Default window: nudge after 20h stale, drop after 14 days.
+const WINDOW = { now: NOW, staleAfterMs: 20 * 3600000, withinMs: 14 * 86400000 };
+
+const inbound = (over) => ({
+  kind: 'message.received',
+  source: 'imessage',
+  personId: 'p1',
+  personName: 'Alex',
+  ring: 'tribe',
+  summary: 'dinner Friday?',
+  metadata: { chatGuid: 'chat-1', handle: '+15550001' },
+  ...over,
+});
+const sent = (over) => ({
+  kind: 'message.sent',
+  source: 'imessage',
+  summary: 'sounds good',
+  metadata: { chatGuid: 'chat-1' },
+  ...over,
+});
+
+describe('groupUnansweredThreads', () => {
+  it('surfaces an unanswered inbound from a Tribe person within the window', () => {
+    const out = groupUnansweredThreads([inbound({ happenedAt: daysAgo(3) })], WINDOW);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({
+      personId: 'p1',
+      personName: 'Alex',
+      source: 'imessage',
+      chatGuid: 'chat-1',
+      daysAgo: 3,
+      snippet: 'dinner Friday?',
+    });
+  });
+
+  it('excludes a thread you already replied to (sent after their last inbound)', () => {
+    const out = groupUnansweredThreads([
+      inbound({ happenedAt: daysAgo(3) }),
+      sent({ happenedAt: daysAgo(2) }), // replied one day later
+    ], WINDOW);
+    expect(out).toHaveLength(0);
+  });
+
+  it('still surfaces when your reply predates their newest message', () => {
+    const out = groupUnansweredThreads([
+      sent({ happenedAt: daysAgo(5) }),      // old reply
+      inbound({ happenedAt: daysAgo(2) }),   // they came back after
+    ], WINDOW);
+    expect(out).toHaveLength(1);
+    expect(out[0].daysAgo).toBe(2);
+  });
+
+  it('excludes threads too fresh to nudge (within staleAfter)', () => {
+    const out = groupUnansweredThreads([inbound({ happenedAt: hoursAgo(4) })], WINDOW);
+    expect(out).toHaveLength(0);
+  });
+
+  it('excludes threads too old to still be actionable (beyond withinMs)', () => {
+    const out = groupUnansweredThreads([inbound({ happenedAt: daysAgo(30) })], WINDOW);
+    expect(out).toHaveLength(0);
+  });
+
+  it('ignores inbound from non-Tribe people (external ring / unresolved)', () => {
+    const out = groupUnansweredThreads([
+      inbound({ happenedAt: daysAgo(3), personId: 'p2', ring: 'external', metadata: { chatGuid: 'chat-2' } }),
+      inbound({ happenedAt: daysAgo(3), personId: null, metadata: { chatGuid: 'chat-3' } }),
+    ], WINDOW);
+    expect(out).toHaveLength(0);
+  });
+
+  it('cancels an iMessage thread via chatGuid even when the sent turn carries no handle', () => {
+    // Real iMessage `message.sent` events have no counterpart handle and never
+    // resolve to a person — they must still cancel the unanswered flag by chatGuid.
+    const out = groupUnansweredThreads([
+      inbound({ happenedAt: daysAgo(3) }),
+      { kind: 'message.sent', source: 'imessage', happenedAt: daysAgo(1), metadata: { chatGuid: 'chat-1', handle: null } },
+    ], WINDOW);
+    expect(out).toHaveLength(0);
+  });
+
+  it('groups separate conversations independently and sorts most-overdue first', () => {
+    const out = groupUnansweredThreads([
+      inbound({ happenedAt: daysAgo(2), personId: 'p1', personName: 'Alex', metadata: { chatGuid: 'chat-1' } }),
+      inbound({ happenedAt: daysAgo(6), personId: 'p2', personName: 'Bo', ring: 'core', metadata: { chatGuid: 'chat-2' } }),
+    ], WINDOW);
+    expect(out.map((t) => t.personName)).toEqual(['Bo', 'Alex']);
+    expect(out[0].daysAgo).toBe(6);
+  });
+
+  it('keys email conversations by threadId so sent + received turns unify', () => {
+    const out = groupUnansweredThreads([
+      { kind: 'message.received', source: 'gmail', personId: 'p1', personName: 'Alex', ring: 'tribe',
+        happenedAt: daysAgo(4), summary: 'proposal attached', metadata: { threadId: 't-9' } },
+      { kind: 'message.sent', source: 'gmail', happenedAt: daysAgo(3), metadata: { threadId: 't-9' } },
+    ], WINDOW);
+    expect(out).toHaveLength(0); // replied within the same email thread
+  });
+
+  it('drops events with unparseable timestamps without throwing', () => {
+    const out = groupUnansweredThreads([inbound({ happenedAt: 'not-a-date' })], WINDOW);
+    expect(out).toHaveLength(0);
+  });
+});

@@ -3,15 +3,18 @@ import { useSearchParams } from 'react-router-dom';
 import {
   Calendar,
   Clock,
+  Copy,
   Edit3,
   Filter,
   Heart,
   MessageCircle,
+  MessageSquareReply,
   Network,
   Orbit,
   Plus,
   Save,
   Search,
+  Sparkles,
   Trash2,
   UserRound,
   Users,
@@ -25,6 +28,7 @@ import PageHeader from '../components/PageHeader';
 import toast from '../components/ui/Toast';
 import TabPills from '../components/ui/TabPills';
 import TribeCircleMap from '../components/tribe/TribeCircleMap.jsx';
+import { copyToClipboard } from '../lib/clipboard.js';
 import {
   RINGS,
   ENERGY,
@@ -557,6 +561,134 @@ function EmptyState({ onNew }) {
   );
 }
 
+const SOURCE_LABELS = {
+  imessage: 'iMessage',
+  signal: 'Signal',
+  gmail: 'Gmail',
+  outlook: 'Outlook',
+  teams: 'Teams',
+  message: 'Message',
+  calendar: 'Calendar',
+};
+const sourceLabel = (source) => SOURCE_LABELS[source] || (source ? source[0].toUpperCase() + source.slice(1) : 'Message');
+const agoLabel = (days) => (days <= 0 ? 'today' : days === 1 ? 'yesterday' : `${days} days ago`);
+
+// Timeline-aware outreach (#2158): inbound messages from Tribe people you never
+// replied to. Detection is server-side and LLM-free; the "Draft reply" button is
+// the only path that calls a provider (user action, per the AI-provider policy).
+// Nothing is ever auto-sent — the generated draft is filed for review.
+function OutreachQueue() {
+  // null = still loading; [] = loaded-empty. Distinguishing them keeps the panel
+  // from flashing an empty state before the first fetch resolves.
+  const [threads, setThreads] = useState(null);
+  const [busyKey, setBusyKey] = useState(null);
+  const [drafts, setDrafts] = useState({});
+  const [copiedKey, setCopiedKey] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.getTribeOutreach({ silent: true })
+      .then((result) => { if (!cancelled) setThreads(result?.threads || []); })
+      .catch(() => { if (!cancelled) setThreads([]); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const generate = async (thread) => {
+    setBusyKey(thread.conversationKey);
+    const seed = {
+      personId: thread.personId,
+      source: thread.source,
+      accountId: thread.accountId,
+      threadId: thread.threadId,
+      chatGuid: thread.chatGuid,
+      handle: thread.handle,
+      replyToExternalId: thread.replyToExternalId,
+    };
+    const result = await api.generateTribeOutreachDraft(seed, { silent: true }).catch((err) => {
+      toast.error(err.message || 'Could not generate a draft');
+      return null;
+    });
+    setBusyKey((prev) => (prev === thread.conversationKey ? null : prev));
+    if (result?.draft) {
+      setDrafts((prev) => ({ ...prev, [thread.conversationKey]: result.draft }));
+      toast.success(`Draft saved for ${thread.personName} — review before sending`);
+    }
+  };
+
+  const copyBody = async (key, body) => {
+    const ok = await copyToClipboard(body);
+    if (ok) {
+      setCopiedKey(key);
+      setTimeout(() => setCopiedKey((prev) => (prev === key ? null : prev)), 1500);
+    } else {
+      toast.error('Could not copy to clipboard');
+    }
+  };
+
+  // Quiet when loading or when nothing is unanswered — the Care Queue below still
+  // shows cadence nudges, so an empty outreach panel would just be noise.
+  if (threads === null || !threads.length) return null;
+
+  return (
+    <section className="border border-port-border bg-port-card rounded p-4">
+      <div className="flex items-center gap-2">
+        <MessageSquareReply size={18} className="text-port-warning" aria-hidden="true" />
+        <h2 className="text-sm font-semibold text-white">Waiting on a reply</h2>
+        <span className="ml-auto rounded-full bg-port-warning/20 px-2 py-0.5 text-xs text-port-warning">{threads.length}</span>
+      </div>
+      <p className="mt-1 text-xs text-gray-500">
+        Inbound messages from your Tribe you never replied to. Drafting a reply uses your configured AI provider; nothing is sent automatically.
+      </p>
+      <div className="mt-3 grid gap-3">
+        {threads.map((thread) => {
+          const draft = drafts[thread.conversationKey];
+          const busy = busyKey === thread.conversationKey;
+          return (
+            <div key={thread.conversationKey} className="rounded border border-port-border bg-port-bg p-3">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                <span className="font-medium text-white">{thread.personName}</span>
+                <span className="rounded border border-port-border px-1.5 py-0.5">{sourceLabel(thread.source)}</span>
+                <span className="ml-auto">{agoLabel(thread.daysAgo)}</span>
+              </div>
+              {thread.snippet && (
+                <p className="mt-2 text-sm text-gray-300 line-clamp-2">“{thread.snippet}”</p>
+              )}
+              {!draft ? (
+                <button
+                  type="button"
+                  onClick={() => generate(thread)}
+                  disabled={busy}
+                  className="mt-3 inline-flex items-center gap-2 rounded bg-port-accent px-3 py-1.5 text-sm font-medium text-black hover:bg-port-accent/90 disabled:opacity-60"
+                >
+                  <Sparkles size={14} aria-hidden="true" />
+                  {busy ? 'Drafting…' : 'Draft reply'}
+                </button>
+              ) : (
+                <div className="mt-3 rounded border border-port-border bg-port-card p-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold uppercase tracking-wide text-port-success">Draft saved</span>
+                    <button
+                      type="button"
+                      onClick={() => copyBody(thread.conversationKey, draft.body)}
+                      className="inline-flex items-center gap-1 rounded border border-port-border px-2 py-1 text-xs text-gray-300 hover:text-white"
+                    >
+                      <Copy size={12} aria-hidden="true" />
+                      {copiedKey === thread.conversationKey ? 'Copied' : 'Copy'}
+                    </button>
+                  </div>
+                  {draft.subject && <p className="mt-2 text-xs text-gray-500">Subject: {draft.subject}</p>}
+                  <p className="mt-2 whitespace-pre-wrap text-sm text-gray-300">{draft.body}</p>
+                  <p className="mt-2 text-xs text-gray-500">Filed in Messages → Drafts. Review, edit, and send it there — it is never sent automatically.</p>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function CareQueue({ contacts, onSelect, onLogTouch, onNew }) {
   // External people are outside the tribe — no care cadence is owed, so they
   // never appear in the queue (otherwise their null daysRemaining would sort
@@ -1030,12 +1162,15 @@ export default function Tribe() {
 
           {activeTab === 'care' && (
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(330px,420px)]">
-              <CareQueue
-                contacts={contacts}
-                onSelect={(contact) => { selectContact(contact); setActiveTab('circle'); }}
-                onLogTouch={logTouch}
-                onNew={startNewRelationship}
-              />
+              <div className="grid gap-4">
+                <OutreachQueue />
+                <CareQueue
+                  contacts={contacts}
+                  onSelect={(contact) => { selectContact(contact); setActiveTab('circle'); }}
+                  onLogTouch={logTouch}
+                  onNew={startNewRelationship}
+                />
+              </div>
               <ContactForm
                 draft={draft}
                 onChange={setDraft}

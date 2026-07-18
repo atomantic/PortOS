@@ -5,6 +5,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { partialWithoutDefaults } from '../lib/zodCompat.js';
 import * as tribe from '../services/tribe.js';
+import * as tribeOutreach from '../services/tribeOutreach.js';
 
 const router = Router();
 
@@ -58,6 +59,21 @@ const memoryLinkSchema = z.object({
   note: z.string().max(1000).optional().default(''),
 });
 
+// Outreach draft generation (#2158). The seed fields come from a detected
+// unanswered thread; the LLM call happens only on this explicit POST (user action)
+// per the AI-provider policy — never from the detection sweep.
+const outreachDraftSchema = z.object({
+  personId: z.string().guid().nullable().optional(),
+  source: z.string().max(60).nullable().optional(),
+  accountId: z.string().guid().nullable().optional(),
+  threadId: z.string().max(500).nullable().optional(),
+  chatGuid: z.string().max(500).nullable().optional(),
+  handle: z.string().max(320).nullable().optional(),
+  replyToExternalId: z.string().max(500).nullable().optional(),
+  instructions: z.string().max(2000).optional().default(''),
+  useVoice: z.boolean().optional(),
+});
+
 const listQuerySchema = z.object({
   search: z.string().max(200).optional(),
   ring: ringSchema.or(z.literal('all')).optional(),
@@ -90,6 +106,25 @@ router.get('/care', asyncHandler(async (req, res) => {
   const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 5, 1), 50);
   const summary = await tribe.getCareSummary(limit);
   res.json(summary);
+}));
+
+// Unanswered inbound threads from Tribe people, detected from the activity
+// timeline (#2158). Detection only — NO LLM. Feeds the Tribe Outreach panel and
+// mirrors the `tribe_unanswered` proactive alert.
+router.get('/outreach', asyncHandler(async (req, res) => {
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 8, 1), 50);
+  const threads = await tribeOutreach.findUnansweredTribeThreads({ limit });
+  res.json({ threads });
+}));
+
+// Generate a grounded outreach draft for one unanswered thread and file it through
+// the existing draft-then-approve pipeline. This is the user-action-gated LLM step
+// — it never auto-sends. The client shows the returned draft for review.
+router.post('/outreach/draft', asyncHandler(async (req, res) => {
+  const data = validateRequest(outreachDraftSchema, req.body);
+  const result = await tribeOutreach.generateOutreachDraft(data);
+  req.app.get('io')?.emit('messages:draft:created', { draftId: result.draft.id });
+  res.status(201).json(result);
 }));
 
 router.post('/people', asyncHandler(async (req, res) => {

@@ -56,3 +56,21 @@ export const linkTribeMemory = (personId, data, options = {}) => request(`/tribe
 
 export const unlinkTribeMemory = (personId, memoryId, options = {}) =>
   request(`/tribe/people/${personId}/memories/${memoryId}`, { method: 'DELETE', ...options });
+
+// Unanswered inbound threads from Tribe people, detected from the activity
+// timeline (#2158). Read-only, no LLM.
+export const getTribeOutreach = (options = {}) => {
+  const params = new URLSearchParams();
+  if (options.limit) params.set('limit', String(options.limit));
+  const qs = params.toString();
+  return request(`/tribe/outreach${qs ? `?${qs}` : ''}`, { silent: options.silent });
+};
+
+// Generate a grounded outreach draft for one detected thread (user-action-gated
+// LLM call). Never sends — returns the filed draft for review.
+export const generateTribeOutreachDraft = (seed, options = {}) =>
+  request('/tribe/outreach/draft', {
+    method: 'POST',
+    body: JSON.stringify(seed),
+    ...options,
+  });

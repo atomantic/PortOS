@@ -18,6 +18,7 @@ import { getPerformanceSummary, getLearningSummary } from './taskLearning.js';
 import { listProcesses } from './pm2.js';
 import { getUsage } from './usage.js';
 import { getCareSummary } from './tribe.js';
+import { findUnansweredTribeThreads } from './tribeOutreach.js';
 import { getMemoryStats } from '../lib/memoryStats.js';
 
 const STALL_THRESHOLD_DAYS = 14;
@@ -265,22 +266,60 @@ async function checkTribeCadence() {
 }
 
 /**
+ * Detect unanswered inbound threads from Tribe people via the activity timeline
+ * (#2158). Cadence-only nudges (checkTribeCadence) say "you haven't talked in a
+ * while"; this says "you never replied to X's message about Y" with real
+ * conversational grounding. Detection only — NO LLM here (the AI-provider policy
+ * forbids cold-bootstrap calls); drafting a reply is a separate user-action-gated
+ * step. Quiet when nothing is unanswered. Reuses the shared detection service.
+ */
+async function checkUnansweredTribeThreads() {
+  const threads = await findUnansweredTribeThreads().catch(() => []);
+  if (!threads.length) return [];
+
+  const ago = (days) => (days <= 0 ? 'today' : days === 1 ? 'yesterday' : `${days} days ago`);
+  return threads.map((t) => {
+    const snippet = t.snippet ? `“${t.snippet}”` : 'their message';
+    return {
+      type: 'tribe_unanswered',
+      // A week-stale unanswered message from someone you care about is worth more
+      // than a fresh one still within normal reply latency.
+      severity: t.daysAgo >= 7 ? 'high' : 'medium',
+      title: `Unanswered: ${t.personName}`,
+      detail: `You never replied to ${snippet} (${ago(t.daysAgo)})`,
+      link: '/tribe?tab=care',
+      metadata: {
+        personId: t.personId,
+        source: t.source,
+        accountId: t.accountId,
+        threadId: t.threadId,
+        chatGuid: t.chatGuid,
+        handle: t.handle,
+        replyToExternalId: t.replyToExternalId,
+        daysAgo: t.daysAgo,
+      },
+    };
+  });
+}
+
+/**
  * Generate all proactive alerts by running all checks.
  * Returns a sorted list with critical/high items first.
  */
 export async function generateAlerts() {
   const startMs = Date.now();
 
-  const [goalAlerts, successAlerts, systemAlerts, learningAlerts, usageAlerts, tribeAlerts] = await Promise.all([
+  const [goalAlerts, successAlerts, systemAlerts, learningAlerts, usageAlerts, tribeAlerts, unansweredAlerts] = await Promise.all([
     checkGoalStalls(),
     checkSuccessRates(),
     checkSystemHealth(),
     checkLearningHealth(),
     checkUsageSpikes(),
-    checkTribeCadence()
+    checkTribeCadence(),
+    checkUnansweredTribeThreads()
   ]);
 
-  const all = [...goalAlerts, ...successAlerts, ...systemAlerts, ...learningAlerts, ...usageAlerts, ...tribeAlerts];
+  const all = [...goalAlerts, ...successAlerts, ...systemAlerts, ...learningAlerts, ...usageAlerts, ...tribeAlerts, ...unansweredAlerts];
 
   // Sort by severity: critical > high > medium > low
   const severityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
