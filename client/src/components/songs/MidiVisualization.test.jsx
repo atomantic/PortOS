@@ -2,10 +2,40 @@ import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/re
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import MidiVisualization from './MidiVisualization.jsx';
 import { __clearMidiNotesCache } from '../../hooks/useMidiNotes.js';
-import { createFakeAudio } from '../../test/fakeAudioContext.js';
 
-// One fake pair for the file — lib/audioContext.js caches the context.
-const { FakeAudioContext } = createFakeAudio();
+// Mock the synth-preview hook so the transport button's label is driven by a
+// synchronous React state flip, not the real async audio lifecycle (#2775).
+// These component tests only assert the CHROME wiring — playing → label,
+// click/Space → toggle, collapse → teardown — and asserting on the real hook's
+// *optimistic* `playing` state raced its async revert (`play()`'s
+// `await ctx.resume()` microtask hop and the `totalSec <= 0 → onEnded` immediate
+// reset), so `findByLabelText('Pause playback')` flaked in CI. The hook's own
+// async behavior (optimistic set, `.catch` revert, `onEnded` reset, teardown) is
+// covered directly in useMidiPlayer.test.jsx, and the player lib in
+// midiPlayback.test.js — mocking here loses no coverage.
+vi.mock('../../hooks/useMidiPlayer.js', async () => {
+  const { useState, useCallback } = await import('react');
+  // Named `use*` so the rules-of-hooks lint recognizes it as a hook.
+  const useMidiPlayer = (data) => {
+    const [playing, setPlaying] = useState(false);
+    const [prevData, setPrevData] = useState(data);
+    // Mirror the real hook's teardown — when the player's `data` is cleared (a
+    // collapse nulls it), reset `playing` so re-expanding comes back idle — but
+    // do it SYNCHRONOUSLY during render (React's "adjust state when a prop
+    // changes" pattern), NOT via a data-keyed useEffect. A passive effect would
+    // schedule setPlaying(false) that can flush AFTER a toggle's optimistic
+    // setPlaying(true), re-introducing the very findByLabelText timing flake this
+    // mock exists to remove. Guarding on `!data` also means the null→parsed load
+    // and the toggle re-render (stable `data` ref, cached per URL) never reset it.
+    if (data !== prevData) {
+      setPrevData(data);
+      if (!data) setPlaying(false);
+    }
+    const toggle = useCallback(() => { if (data) setPlaying((p) => !p); }, [data]);
+    return { playing, toggle, seek: () => {}, getPosition: () => 0 };
+  };
+  return { default: useMidiPlayer };
+});
 
 // Tiny hand-built SMF fixture: a sustained C-major triad (C4 E4 G4) for one
 // quarter at the default 120 BPM. Same builder approach as midiNotes.test.js.
@@ -44,9 +74,8 @@ describe('<MidiVisualization>', () => {
     ctx = makeCtx();
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(ctx);
     vi.stubGlobal('ResizeObserver', class { observe() {} disconnect() {} });
-    // jsdom has no Web Audio — shared fake for the synth-preview player (the
-    // static clock is enough for these UI-wiring tests).
-    vi.stubGlobal('AudioContext', FakeAudioContext);
+    // useMidiPlayer is mocked (above), so nothing here reaches for Web Audio —
+    // no AudioContext stub needed.
     Object.defineProperty(HTMLElement.prototype, 'clientWidth', { configurable: true, get() { return 800; } });
     vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
       ok: true,
