@@ -41,6 +41,14 @@ const MAX_GROUNDING_EVENTS = 12;
 
 const MESSAGE_KINDS = new Set(['message.sent', 'message.received']);
 
+// Sources whose ingestion records BOTH directions per conversation, so an
+// "unanswered" verdict is trustworthy. iMessage (#2151) and Signal (#2154) emit a
+// `message.sent` for every outgoing turn; email sync ingests the inbox only (no
+// `message.sent`), so a reply is invisible to the timeline and every stale inbound
+// would read as unanswered forever. Email/other one-way sources are deferred until
+// per-account sent/replied ingestion exists — see #2796.
+const TWO_WAY_SOURCES = new Set(['imessage', 'signal']);
+
 // A conversation is keyed by the most specific stable identifier available:
 // chatGuid (iMessage), conversationId (Signal — its outbound turns carry no
 // handle, so keying on the shared conversationId is the only thing that unifies
@@ -66,11 +74,15 @@ function threadFields(inbound, eventCount, ageMs) {
     personName: inbound.personName || 'someone',
     ring: inbound.ring || null,
     source: inbound.source || null,
-    accountId: inbound.accountId || null,
+    // The detected conversation key must round-trip to draft generation so the
+    // reply is grounded in THIS conversation. chatGuid (iMessage) /
+    // conversationId (Signal) / threadId (email) are the per-source keys; handle
+    // is the counterpart. personId is NOT a usable key — message events don't
+    // persist it on their participants (it's resolved at read time).
     threadId: m.threadId || null,
     chatGuid: m.chatGuid || null,
+    conversationId: m.conversationId || null,
     handle: m.handle || null,
-    replyToExternalId: m.externalId || null,
     lastInboundAt: inbound.happenedAt,
     daysAgo: Math.floor(ageMs / DAY_MS),
     snippet: String(inbound.summary || inbound.title || '').trim(),
@@ -161,33 +173,24 @@ export async function findUnansweredTribeThreads({
   const from = new Date(now - withinDays * DAY_MS).toISOString();
   // Two kind-filtered queries instead of one broad scan: the timeline is capped
   // at 2000 rows per query, so on a busy install a single unfiltered query could
-  // return 2000 non-message rows and drop every message event. Fetch inbound
-  // within the window; fetch outbound WITHOUT a `from` bound (2000 newest) so it
-  // doubles as the source-capability probe below — a source that has never
-  // recorded an outbound turn (e.g. email, whose sync ingests the inbox only and
-  // never emits `message.sent`) must not have its stale inbound reported as
-  // "unanswered" just because a reply is structurally invisible to the timeline.
+  // return 2000 non-message rows and drop every message event.
   const [received, sent] = await Promise.all([
     listEvents({ from, kind: 'message.received', limit: 2000 }).catch(() => []),
-    listEvents({ kind: 'message.sent', limit: 2000 }).catch(() => []),
+    listEvents({ from, kind: 'message.sent', limit: 2000 }).catch(() => []),
   ]);
 
-  // Sources that demonstrably record outbound activity (two-way observable).
-  const outboundSources = new Set();
-  for (const ev of sent) if (ev.source) outboundSources.add(ev.source);
-
-  // Keep every outbound turn — it only needs to cancel the unanswered flag for
-  // its conversation (grouped by chatGuid/conversationId/threadId).
-  const tagged = [...sent];
+  // Keep every outbound turn from a two-way source — it only needs to cancel the
+  // unanswered flag for its conversation (grouped by chatGuid/conversationId).
+  const tagged = sent.filter((ev) => TWO_WAY_SOURCES.has(ev.source));
   for (const ev of received) {
-    // Only nudge for sources we can actually see replies on; otherwise every
-    // stale Tribe inbound would read as unanswered forever (finding: email).
-    if (!outboundSources.has(ev.source)) continue;
-    // Resolve the counterpart to a Tribe person (handle first, then any
-    // participant with a resolved personId). Drop inbound we can't tie to Tribe.
+    // Only nudge for sources where a reply would actually be visible (chat).
+    if (!TWO_WAY_SOURCES.has(ev.source)) continue;
+    // Resolve the SENDER to a Tribe person — the event's handle, else the first
+    // participant (message.from). NOT "any participant with a personId": a group
+    // thread from an untracked sender to a Tribe recipient would otherwise be
+    // misattributed to the recipient. Drop inbound we can't tie to a Tribe sender.
     const enriched = enrichActivityEvent(ev, ctx);
-    let personId = enriched.personId;
-    if (!personId) personId = (enriched.participants || []).find((p) => p.personId)?.personId || null;
+    const personId = enriched.personId || enriched.participants?.[0]?.personId || null;
     if (!personId) continue;
     const ring = ringById.get(personId);
     if (!ring || ring === 'external') continue;
@@ -202,11 +205,11 @@ export async function findUnansweredTribeThreads({
   return threads.slice(0, Math.max(0, limit));
 }
 
-// Build a synthetic thread (buildThreadContext / generateReplyBody shape) from
-// the conversation's own timeline events when no rich provider cache is available
-// (iMessage/Signal, or an email thread pruned from cache). The message summaries
-// are the actual message text (shortSummary-capped), so this still grounds the
-// reply in the real conversation. `selfName` labels the user's own sent turns.
+// Build a synthetic thread (buildThreadContext / generateReplyBody shape) from the
+// conversation's own timeline events. The message summaries are the actual message
+// text (shortSummary-capped), so this grounds the reply in the real conversation —
+// including the user's own sent turns (labeled "You"), which is why the draft query
+// keys on the conversation, not just the counterpart handle.
 function timelineThreadMessages(events, personName) {
   return (events || [])
     .filter((ev) => MESSAGE_KINDS.has(ev.kind) && (ev.summary || ev.title))
@@ -219,92 +222,54 @@ function timelineThreadMessages(events, personName) {
     }));
 }
 
-function replySubject(subject) {
-  const s = String(subject || '').trim();
-  if (!s) return '';
-  return /^re:/i.test(s) ? s : `Re: ${s}`;
-}
-
 /**
- * Generate a grounded outreach draft for one unanswered thread and file it through
- * the existing draft-then-approve pipeline. USER-ACTION-GATED: only ever called
- * from an explicit request (the Tribe Outreach panel / an opt-in automation) — it
- * is the single LLM entry point here and must never be wired into a boot/sweep path.
+ * Generate a grounded outreach draft for one detected unanswered thread and file
+ * it through the existing draft-then-approve pipeline. USER-ACTION-GATED: only ever
+ * called from an explicit request (the Tribe Outreach panel / an opt-in automation)
+ * — it is the single LLM entry point here and must never be wired into a boot/sweep
+ * path. Detection only surfaces the two-way chat sources (iMessage/Signal), which
+ * carry no message account and no programmatic send channel, so the draft is always
+ * grounded from the timeline and filed as review-only — never auto-sent.
  *
  * @returns {Promise<{ draft, person: { id, name } | null }>}
  */
 export async function generateOutreachDraft({
   personId = null,
   source = null,
-  accountId = null,
-  threadId = null,
   chatGuid = null,
+  conversationId = null,
+  threadId = null,
   handle = null,
-  replyToExternalId = null,
   instructions = '',
   useVoice,
 } = {}) {
-  const [
-    { getPerson },
-    { getAccount },
-    { getThread },
-    { listEvents },
-    { generateReplyBody },
-    { createDraft },
-  ] = await Promise.all([
+  const [{ getPerson }, { listEvents }, { generateReplyBody }, { createDraft }] = await Promise.all([
     import('./tribe.js'),
-    import('./messageAccounts.js'),
-    import('./messageSync.js'),
     import('./humanActivity.js'),
     import('./messageEvaluator.js'),
     import('./messageDrafts.js'),
   ]);
 
   const person = personId ? await getPerson(personId).catch(() => null) : null;
-  // accountId is optional: iMessage/Signal threads have no message account, so a
-  // real messageAccounts row exists only for email sources. Absent/unknown → the
-  // draft grounds off the timeline and stays review-only (no derived send channel).
-  const account = accountId ? await getAccount(accountId).catch(() => null) : null;
-  const selfEmail = String(account?.email || '').trim().toLowerCase();
 
-  // Prefer the rich provider cache (full message bodies) when an email account +
-  // threadId are present; otherwise ground off the conversation's timeline events.
-  let cacheThread = [];
-  if (account && threadId) {
-    cacheThread = await getThread(accountId, threadId).catch(() => []);
-  }
-
-  let replyTo = null;
-  let threadMessages = null;
-  if (cacheThread.length) {
-    // Reply to the EXACT detected inbound first (its externalId came from the
-    // Tribe-resolved timeline event). Only when that message isn't in the cache
-    // fall back to the newest non-self inbound — in a multi-participant thread the
-    // newest inbound may be from someone else entirely, so anchoring on the
-    // detected message keeps the draft addressed to the right person.
-    replyTo = (replyToExternalId ? cacheThread.find((m) => m.externalId === replyToExternalId) : null)
-      || [...cacheThread].reverse().find((m) => {
-        const fromEmail = String(m.from?.email || '').trim().toLowerCase();
-        return !(selfEmail && fromEmail === selfEmail);
-      })
-      || cacheThread[cacheThread.length - 1];
-    threadMessages = cacheThread;
-  } else {
-    // Timeline grounding: pull this conversation's message events. chatGuid is the
-    // most selective key; fall back to handle, then the person's whole history.
-    const convoEvents = await listEvents({
-      source: source || undefined,
-      chatGuid: chatGuid || undefined,
-      handle: chatGuid ? undefined : (handle || undefined),
-      personId: (chatGuid || handle) ? undefined : (personId || undefined),
-      limit: 200,
-    }).catch(() => []);
-    const msgs = timelineThreadMessages(convoEvents, person?.name);
-    threadMessages = msgs;
-    // Reply to the last inbound turn (the person's), else the newest turn.
-    replyTo = [...msgs].reverse().find((m) => m.from?.name !== 'You') || msgs[msgs.length - 1] || null;
-  }
-
+  // Ground the reply in the actual conversation, pulled from the timeline by the
+  // DETECTED conversation key — chatGuid (iMessage) / conversationId (Signal) /
+  // threadId (email) / handle (counterpart). NOT personId: message events don't
+  // persist it on their participants, so a personId query returns nothing. Pass
+  // exactly the most-selective key present (listEvents ANDs its filters).
+  const convoEvents = await listEvents({
+    source: source || undefined,
+    chatGuid: chatGuid || undefined,
+    conversationId: chatGuid ? undefined : (conversationId || undefined),
+    threadId: (chatGuid || conversationId) ? undefined : (threadId || undefined),
+    handle: (chatGuid || conversationId || threadId) ? undefined : (handle || undefined),
+    limit: 200,
+  }).catch(() => []);
+  const threadMessages = timelineThreadMessages(convoEvents, person?.name);
+  // Reply to the last inbound turn (the person's), else the newest turn.
+  const replyTo = [...threadMessages].reverse().find((m) => m.from?.name !== 'You')
+    || threadMessages[threadMessages.length - 1]
+    || null;
   if (!replyTo) {
     // No conversational grounding at all — refuse rather than fabricate context.
     throw new ServerError('No conversation history found to ground an outreach draft', { status: 404 });
@@ -319,28 +284,24 @@ export async function generateOutreachDraft({
     throw new ServerError('Could not generate an outreach draft — check your reply provider in Messages > Config', { status: 502 });
   }
 
-  // Recipient: `to` is a string[] of addresses/handles (the shape every existing
-  // draft consumer expects — DraftsTab and the Gmail serializer both call
-  // `draft.to.join(', ')`). Prefer the detected sender's email, else the person's
-  // known email, else the conversation handle / phone for review-only channels.
+  // Recipient: `to` is a string[] (the shape every draft consumer expects —
+  // DraftsTab and the Gmail serializer both call `draft.to.join(', ')`). Chat
+  // sources are review-only, so prefer the actual chat handle/phone over a generic
+  // person email — the To must name the channel the conversation happened on.
   const to = [];
-  const recipient = replyTo.from?.email
-    || person?.emails?.[0]
-    || handle
-    || person?.phones?.[0];
+  const recipient = handle || person?.phones?.[0] || person?.emails?.[0];
   if (recipient) to.push(recipient);
 
   const draft = await createDraft({
-    accountId: accountId || null,
-    replyToMessageId: replyTo.id || null,
-    threadId: threadId || replyTo.threadId || null,
+    accountId: null,
+    threadId: threadId || null,
     to,
-    subject: replySubject(replyTo.subject),
+    subject: '',
     body,
     // Distinct provenance so the drafts list can badge Tribe-originated outreach.
     generatedBy: 'tribe-outreach',
-    // Only email accounts have a real send channel; leave others as review-only.
-    sendVia: account ? (account.type === 'gmail' ? 'api' : 'playwright') : 'review',
+    // Chat sources have no programmatic send channel — review-only (never sent).
+    sendVia: 'review',
   });
 
   console.log(`🤝 Outreach draft filed for ${person?.name || 'a Tribe contact'} (${source || 'timeline'})`);

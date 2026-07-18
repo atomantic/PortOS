@@ -581,7 +581,10 @@ function OutreachQueue() {
   // null = still loading; [] = loaded-empty. Distinguishing them keeps the panel
   // from flashing an empty state before the first fetch resolves.
   const [threads, setThreads] = useState(null);
-  const [busyKey, setBusyKey] = useState(null);
+  // A SET of in-flight conversation keys, not a single key — with one key, starting
+  // a second generation re-enables the first thread's button and a re-click fires a
+  // duplicate provider call + duplicate draft.
+  const [busyKeys, setBusyKeys] = useState(() => new Set());
   const [drafts, setDrafts] = useState({});
   const [copiedKey, setCopiedKey] = useState(null);
 
@@ -594,23 +597,24 @@ function OutreachQueue() {
   }, []);
 
   const generate = async (thread) => {
-    setBusyKey(thread.conversationKey);
+    const key = thread.conversationKey;
+    if (busyKeys.has(key) || drafts[key]) return; // already generating or done
+    setBusyKeys((prev) => new Set(prev).add(key));
     const seed = {
       personId: thread.personId,
       source: thread.source,
-      accountId: thread.accountId,
       threadId: thread.threadId,
       chatGuid: thread.chatGuid,
+      conversationId: thread.conversationId,
       handle: thread.handle,
-      replyToExternalId: thread.replyToExternalId,
     };
     const result = await api.generateTribeOutreachDraft(seed, { silent: true }).catch((err) => {
       toast.error(err.message || 'Could not generate a draft');
       return null;
     });
-    setBusyKey((prev) => (prev === thread.conversationKey ? null : prev));
+    setBusyKeys((prev) => { const next = new Set(prev); next.delete(key); return next; });
     if (result?.draft) {
-      setDrafts((prev) => ({ ...prev, [thread.conversationKey]: result.draft }));
+      setDrafts((prev) => ({ ...prev, [key]: result.draft }));
       toast.success(`Draft saved for ${thread.personName} — review before sending`);
     }
   };
@@ -642,7 +646,7 @@ function OutreachQueue() {
       <div className="mt-3 grid gap-3">
         {threads.map((thread) => {
           const draft = drafts[thread.conversationKey];
-          const busy = busyKey === thread.conversationKey;
+          const busy = busyKeys.has(thread.conversationKey);
           return (
             <div key={thread.conversationKey} className="rounded border border-port-border bg-port-bg p-3">
               <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">

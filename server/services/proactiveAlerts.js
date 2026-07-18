@@ -291,11 +291,10 @@ async function checkUnansweredTribeThreads() {
       metadata: {
         personId: t.personId,
         source: t.source,
-        accountId: t.accountId,
         threadId: t.threadId,
         chatGuid: t.chatGuid,
+        conversationId: t.conversationId,
         handle: t.handle,
-        replyToExternalId: t.replyToExternalId,
         daysAgo: t.daysAgo,
       },
     };

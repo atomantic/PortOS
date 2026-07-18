@@ -65,11 +65,10 @@ const memoryLinkSchema = z.object({
 const outreachDraftSchema = z.object({
   personId: z.string().guid().nullable().optional(),
   source: z.string().max(60).nullable().optional(),
-  accountId: z.string().guid().nullable().optional(),
   threadId: z.string().max(500).nullable().optional(),
   chatGuid: z.string().max(500).nullable().optional(),
+  conversationId: z.string().max(500).nullable().optional(),
   handle: z.string().max(320).nullable().optional(),
-  replyToExternalId: z.string().max(500).nullable().optional(),
   instructions: z.string().max(2000).optional().default(''),
   useVoice: z.boolean().optional(),
 });

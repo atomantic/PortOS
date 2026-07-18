@@ -96,7 +96,7 @@ export default function DraftsTab({ accounts }) {
                 )}
               </div>
               <div className="flex items-center gap-1">
-                {draft.status === 'draft' && (
+                {draft.status === 'draft' && draft.sendVia !== 'review' && (
                   <button
                     onClick={() => handleApprove(draft.id)}
                     className="p-1 text-gray-400 hover:text-port-success transition-colors"
@@ -123,7 +123,10 @@ export default function DraftsTab({ accounts }) {
                     Review only
                   </span>
                 )}
-                {['draft', 'pending_review', 'failed'].includes(draft.status) && (
+                {/* Review-only drafts never reach a 'sent' state (there's no send
+                    channel), so keep Delete available at any status — otherwise an
+                    approved iMessage/Signal draft would be stuck with no action. */}
+                {(['draft', 'pending_review', 'failed'].includes(draft.status) || draft.sendVia === 'review') && (
                   <button
                     onClick={() => requestDelete(draft.id)}
                     className="p-1 text-gray-400 hover:text-port-error transition-colors"

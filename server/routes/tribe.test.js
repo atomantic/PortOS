@@ -300,10 +300,10 @@ describe('Tribe Routes', () => {
     expect(emit).toHaveBeenCalledWith('messages:draft:created', { draftId: '44444444-4444-4444-8444-444444444444' });
   });
 
-  it('rejects an outreach draft request with a non-UUID accountId', async () => {
+  it('rejects an outreach draft request with a non-UUID personId', async () => {
     const response = await request(app)
       .post('/api/tribe/outreach/draft')
-      .send({ accountId: 'not-a-uuid' });
+      .send({ personId: 'not-a-uuid' });
 
     expect(response.status).toBe(400);
     expect(tribeOutreach.generateOutreachDraft).not.toHaveBeenCalled();
