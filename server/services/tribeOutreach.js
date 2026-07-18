@@ -42,14 +42,17 @@ const MAX_GROUNDING_EVENTS = 12;
 const MESSAGE_KINDS = new Set(['message.sent', 'message.received']);
 
 // A conversation is keyed by the most specific stable identifier available:
-// chatGuid (iMessage/Signal group or 1:1), then the email threadId, then the raw
-// handle. Person-scoped fallback only when an event carries none of those — it
-// keeps a lone handle-less inbound groupable, but is deliberately last so that
-// sent + received turns of the SAME email/iMessage thread always share a key
-// (a person fallback would split them whenever one side lacks a person match).
+// chatGuid (iMessage), conversationId (Signal — its outbound turns carry no
+// handle, so keying on the shared conversationId is the only thing that unifies
+// sent + received), the email threadId, then the raw handle. Person-scoped
+// fallback only when an event carries none of those — it keeps a lone
+// handle-less inbound groupable, but is deliberately last so that sent + received
+// turns of the SAME thread always share a key (a person fallback would split them
+// whenever one side lacks a person match — e.g. an iMessage/Signal sent turn).
 function conversationKey(event) {
   const m = event?.metadata || {};
   if (m.chatGuid) return `chat:${m.chatGuid}`;
+  if (m.conversationId) return `convo:${m.conversationId}`;
   if (m.threadId) return `thread:${m.threadId}`;
   if (m.handle) return `handle:${String(m.handle).toLowerCase()}`;
   if (event?.personId) return `person:${event.personId}`;
@@ -156,18 +159,31 @@ export async function findUnansweredTribeThreads({
 
   const now = Date.now();
   const from = new Date(now - withinDays * DAY_MS).toISOString();
-  const events = await listEvents({ from, limit: 2000 }).catch(() => []);
+  // Two kind-filtered queries instead of one broad scan: the timeline is capped
+  // at 2000 rows per query, so on a busy install a single unfiltered query could
+  // return 2000 non-message rows and drop every message event. Fetch inbound
+  // within the window; fetch outbound WITHOUT a `from` bound (2000 newest) so it
+  // doubles as the source-capability probe below — a source that has never
+  // recorded an outbound turn (e.g. email, whose sync ingests the inbox only and
+  // never emits `message.sent`) must not have its stale inbound reported as
+  // "unanswered" just because a reply is structurally invisible to the timeline.
+  const [received, sent] = await Promise.all([
+    listEvents({ from, kind: 'message.received', limit: 2000 }).catch(() => []),
+    listEvents({ kind: 'message.sent', limit: 2000 }).catch(() => []),
+  ]);
 
-  const tagged = [];
-  for (const ev of events) {
-    if (!MESSAGE_KINDS.has(ev.kind)) continue;
-    if (ev.kind === 'message.sent') {
-      // Keep every outbound turn unresolved — it only needs to cancel the
-      // unanswered flag for its conversation (grouped by chatGuid/threadId).
-      tagged.push(ev);
-      continue;
-    }
-    // Inbound: resolve the counterpart to a Tribe person (handle first, then any
+  // Sources that demonstrably record outbound activity (two-way observable).
+  const outboundSources = new Set();
+  for (const ev of sent) if (ev.source) outboundSources.add(ev.source);
+
+  // Keep every outbound turn — it only needs to cancel the unanswered flag for
+  // its conversation (grouped by chatGuid/conversationId/threadId).
+  const tagged = [...sent];
+  for (const ev of received) {
+    // Only nudge for sources we can actually see replies on; otherwise every
+    // stale Tribe inbound would read as unanswered forever (finding: email).
+    if (!outboundSources.has(ev.source)) continue;
+    // Resolve the counterpart to a Tribe person (handle first, then any
     // participant with a resolved personId). Drop inbound we can't tie to Tribe.
     const enriched = enrichActivityEvent(ev, ctx);
     let personId = enriched.personId;
@@ -261,12 +277,16 @@ export async function generateOutreachDraft({
   let replyTo = null;
   let threadMessages = null;
   if (cacheThread.length) {
-    // Last inbound = newest message NOT from the account owner.
-    replyTo = [...cacheThread].reverse().find((m) => {
-      const fromEmail = String(m.from?.email || '').trim().toLowerCase();
-      return !(selfEmail && fromEmail === selfEmail);
-    })
-      || (replyToExternalId ? cacheThread.find((m) => m.externalId === replyToExternalId) : null)
+    // Reply to the EXACT detected inbound first (its externalId came from the
+    // Tribe-resolved timeline event). Only when that message isn't in the cache
+    // fall back to the newest non-self inbound — in a multi-participant thread the
+    // newest inbound may be from someone else entirely, so anchoring on the
+    // detected message keeps the draft addressed to the right person.
+    replyTo = (replyToExternalId ? cacheThread.find((m) => m.externalId === replyToExternalId) : null)
+      || [...cacheThread].reverse().find((m) => {
+        const fromEmail = String(m.from?.email || '').trim().toLowerCase();
+        return !(selfEmail && fromEmail === selfEmail);
+      })
       || cacheThread[cacheThread.length - 1];
     threadMessages = cacheThread;
   } else {
@@ -299,15 +319,16 @@ export async function generateOutreachDraft({
     throw new ServerError('Could not generate an outreach draft — check your reply provider in Messages > Config', { status: 502 });
   }
 
-  // Recipient: the cached message's sender, else the person's known email/phone.
+  // Recipient: `to` is a string[] of addresses/handles (the shape every existing
+  // draft consumer expects — DraftsTab and the Gmail serializer both call
+  // `draft.to.join(', ')`). Prefer the detected sender's email, else the person's
+  // known email, else the conversation handle / phone for review-only channels.
   const to = [];
-  if (replyTo.from?.email || replyTo.from?.name) {
-    if (replyTo.from.email) to.push({ name: replyTo.from.name, email: replyTo.from.email });
-  }
-  if (to.length === 0) {
-    if (person?.emails?.length) to.push({ name: person.name, email: person.emails[0] });
-    else if (person?.phones?.length) to.push({ name: person.name, phone: person.phones[0] });
-  }
+  const recipient = replyTo.from?.email
+    || person?.emails?.[0]
+    || handle
+    || person?.phones?.[0];
+  if (recipient) to.push(recipient);
 
   const draft = await createDraft({
     accountId: accountId || null,

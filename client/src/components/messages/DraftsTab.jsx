@@ -44,7 +44,9 @@ export default function DraftsTab({ accounts }) {
 
   const getAccountName = (accountId) => {
     const account = accounts.find(a => a.id === accountId);
-    return account?.name || 'Unknown';
+    // Tribe-outreach drafts (#2158) for iMessage/Signal have no message account.
+    if (!account) return accountId ? 'Unknown' : 'Tribe outreach';
+    return account.name;
   };
 
   const statusColors = {
@@ -103,7 +105,11 @@ export default function DraftsTab({ accounts }) {
                     <Check size={16} />
                   </button>
                 )}
-                {draft.status === 'approved' && (
+                {/* Review-only drafts (e.g. Tribe outreach for iMessage/Signal,
+                    which have no programmatic send channel) never offer Send —
+                    messageSender can't deliver them, so the button would only
+                    fail. Send them yourself from the Messages/Signal app. */}
+                {draft.status === 'approved' && draft.sendVia !== 'review' && (
                   <button
                     onClick={() => handleSend(draft.id)}
                     className="p-1 text-gray-400 hover:text-port-accent transition-colors"
@@ -111,6 +117,11 @@ export default function DraftsTab({ accounts }) {
                   >
                     <Send size={16} />
                   </button>
+                )}
+                {draft.sendVia === 'review' && (
+                  <span className="text-xs text-gray-500" title="No programmatic send — copy and send from your messaging app">
+                    Review only
+                  </span>
                 )}
                 {['draft', 'pending_review', 'failed'].includes(draft.status) && (
                   <button

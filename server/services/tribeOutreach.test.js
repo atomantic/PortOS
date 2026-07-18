@@ -100,6 +100,29 @@ describe('groupUnansweredThreads', () => {
     expect(out[0].daysAgo).toBe(6);
   });
 
+  it('cancels a Signal thread via conversationId when the sent turn has no handle', () => {
+    // Signal writes metadata.conversationId (not chatGuid), and outbound Signal
+    // events carry no handle — so grouping must key on conversationId or the
+    // reply is discarded and the thread looks unanswered.
+    const out = groupUnansweredThreads([
+      { kind: 'message.received', source: 'signal', personId: 'p1', personName: 'Alex', ring: 'tribe',
+        happenedAt: daysAgo(4), summary: 'you around?', metadata: { conversationId: 'c-77', handle: '+15550009' } },
+      { kind: 'message.sent', source: 'signal', happenedAt: daysAgo(2),
+        metadata: { conversationId: 'c-77', handle: null } },
+    ], WINDOW);
+    expect(out).toHaveLength(0);
+  });
+
+  it('surfaces an unanswered Signal thread keyed by conversationId', () => {
+    const out = groupUnansweredThreads([
+      { kind: 'message.received', source: 'signal', personId: 'p1', personName: 'Alex', ring: 'tribe',
+        happenedAt: daysAgo(4), summary: 'you around?', metadata: { conversationId: 'c-77', handle: '+15550009' } },
+    ], WINDOW);
+    expect(out).toHaveLength(1);
+    expect(out[0].conversationKey).toBe('convo:c-77');
+    expect(out[0].handle).toBe('+15550009');
+  });
+
   it('keys email conversations by threadId so sent + received turns unify', () => {
     const out = groupUnansweredThreads([
       { kind: 'message.received', source: 'gmail', personId: 'p1', personName: 'Alex', ring: 'tribe',
