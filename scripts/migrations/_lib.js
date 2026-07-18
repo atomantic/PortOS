@@ -84,8 +84,17 @@ const splitReadJsonTolerant = async (path) => {
   try { return JSON.parse(raw); } catch { return { __unreadable: true }; }
 };
 
-const splitWriteJson = (path, value) =>
-  writeFile(path, JSON.stringify(value, null, 2) + '\n');
+// Atomic write (temp + rename) so a crash mid-write can't leave a truncated
+// `<id>/index.json`. Without it, a retry's `splitExistingRecordIds` scan would
+// see the partial file, trust it as already-split, skip re-splitting from the
+// authoritative legacy value, then stamp + rename the legacy store — and the
+// truncated record would forever load as null. rename() is atomic within one
+// filesystem, and tmp sits in the same dir as its target, so the swap is safe.
+const splitWriteJson = async (path, value) => {
+  const tmp = `${path}.tmp-${process.pid}`;
+  await writeFile(tmp, JSON.stringify(value, null, 2) + '\n');
+  await rename(tmp, path);
+};
 
 // Reserved keys a legacy `map`-shape doc can carry as own properties (JSON.parse
 // surfaces a literal `"__proto__"` key as an own property). They pass a typical
@@ -205,8 +214,20 @@ export function makeSplitMigration({
     let pairs;
     if (recordsShape === 'map') {
       const container = doc[recordsKey];
-      const map = (container && typeof container === 'object' && !Array.isArray(container)) ? container : {};
-      pairs = Object.entries(map).filter(([key]) => !RESERVED_MAP_KEYS.has(key));
+      // Distinguish "records key absent" (a legitimately empty store → 0 records)
+      // from "records present but NOT an object map" (corruption). Silently
+      // emptying the latter would stamp v1, rename the legacy file to backup, and
+      // mark the migration applied while the real data sits stranded and unread in
+      // the backup — so honor `onUnreadable` for a malformed container exactly as
+      // for unparseable JSON.
+      if (container != null && !(typeof container === 'object' && !Array.isArray(container))) {
+        if (onUnreadable === 'throw') {
+          throw new Error(`${migrationLabel}: ${sourcePath} has a malformed "${recordsKey}" container (expected an object map) — repair or remove it, then reboot to retry the split`);
+        }
+        console.warn(`⚠️ ${migrationLabel}: ${sourcePath} has a malformed "${recordsKey}" container — skipping. Resolve manually before next boot.`);
+        return { ok: false, reason: 'unreadable' };
+      }
+      pairs = Object.entries(container ?? {}).filter(([key]) => !RESERVED_MAP_KEYS.has(key));
     } else {
       const records = Array.isArray(doc[recordsKey]) ? doc[recordsKey] : [];
       pairs = records.map((record) => [record?.id, record]);
