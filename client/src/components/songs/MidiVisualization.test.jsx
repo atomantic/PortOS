@@ -14,14 +14,23 @@ import { __clearMidiNotesCache } from '../../hooks/useMidiNotes.js';
 // covered directly in useMidiPlayer.test.jsx, and the player lib in
 // midiPlayback.test.js — mocking here loses no coverage.
 vi.mock('../../hooks/useMidiPlayer.js', async () => {
-  const { useState, useCallback, useEffect } = await import('react');
+  const { useState, useCallback } = await import('react');
   // Named `use*` so the rules-of-hooks lint recognizes it as a hook.
   const useMidiPlayer = (data) => {
     const [playing, setPlaying] = useState(false);
-    // Mirror the real hook's teardown: rebuilding/clearing the player (data
-    // change, e.g. a collapse that nulls `data`) resets `playing` to false, so
-    // re-expanding comes back idle rather than stuck "playing".
-    useEffect(() => { setPlaying(false); return () => setPlaying(false); }, [data]);
+    const [prevData, setPrevData] = useState(data);
+    // Mirror the real hook's teardown — when the player's `data` is cleared (a
+    // collapse nulls it), reset `playing` so re-expanding comes back idle — but
+    // do it SYNCHRONOUSLY during render (React's "adjust state when a prop
+    // changes" pattern), NOT via a data-keyed useEffect. A passive effect would
+    // schedule setPlaying(false) that can flush AFTER a toggle's optimistic
+    // setPlaying(true), re-introducing the very findByLabelText timing flake this
+    // mock exists to remove. Guarding on `!data` also means the null→parsed load
+    // and the toggle re-render (stable `data` ref, cached per URL) never reset it.
+    if (data !== prevData) {
+      setPrevData(data);
+      if (!data) setPlaying(false);
+    }
     const toggle = useCallback(() => { if (data) setPlaying((p) => !p); }, [data]);
     return { playing, toggle, seek: () => {}, getPosition: () => 0 };
   };
