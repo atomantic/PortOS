@@ -7,6 +7,7 @@ import {
   videoSrcForJob,
   videoPosterForJob,
   imageSrcForJob,
+  musicBedSrc,
 } from './creativeDirectorPreview.js';
 
 // Obviously-fake ids/filenames throughout — never real records from an install.
@@ -45,6 +46,18 @@ describe('asset path builders', () => {
     expect(videoSrcForJob('job-1')).toBe('/data/videos/job-1.mp4');
     expect(videoPosterForJob('job-1')).toBe('/data/video-thumbnails/job-1.jpg');
     expect(imageSrcForJob('job-1')).toBe('/data/images/job-1.png');
+  });
+
+  it('resolves a music bed to its /data/music/ mount, encoding the filename', () => {
+    expect(musicBedSrc({ filename: 'music-gen-abc.wav' })).toBe('/data/music/music-gen-abc.wav');
+    expect(musicBedSrc({ filename: 'a b.wav' })).toBe('/data/music/a%20b.wav');
+  });
+
+  it('returns null for a missing/blank music-bed filename', () => {
+    expect(musicBedSrc(null)).toBeNull();
+    expect(musicBedSrc({})).toBeNull();
+    expect(musicBedSrc({ filename: '   ' })).toBeNull();
+    expect(musicBedSrc({ filename: 42 })).toBeNull();
   });
 });
 
@@ -226,6 +239,46 @@ describe('selectProjectPreview', () => {
     expect(produced.jobId).toBe('img-1');
     expect(starting.kind).toBe('image');
     expect(starting.jobId).toBeUndefined();
+  });
+
+  it('surfaces a music bed as a playable audio result for a music commission (#2772)', () => {
+    const preview = selectProjectPreview({
+      id: 'cd-music-1',
+      musicBed: { filename: 'music-gen-xyz.wav', durationSec: 30.4, engine: 'musicgen' },
+    });
+    expect(preview).toEqual({
+      kind: 'audio',
+      src: '/data/music/music-gen-xyz.wav',
+      label: 'Music bed',
+      durationSec: 30.4,
+    });
+  });
+
+  it('reports a null durationSec for a music bed missing/invalid duration', () => {
+    const preview = selectProjectPreview({ musicBed: { filename: 'music-gen-xyz.wav' } });
+    expect(preview.kind).toBe('audio');
+    expect(preview.durationSec).toBeNull();
+  });
+
+  it('prefers a produced video/image over a music bed (music-video keeps its video hero)', () => {
+    const preview = selectProjectPreview({
+      finalVideoId: 'final-1',
+      musicBed: { filename: 'music-gen-xyz.wav' },
+    });
+    expect(preview.kind).toBe('video');
+    expect(preview.jobId).toBe('final-1');
+  });
+
+  it('prefers a music bed over a bare starting image (produced output beats an input)', () => {
+    const preview = selectProjectPreview({
+      musicBed: { filename: 'music-gen-xyz.wav' },
+      startingImageFile: 'start.png',
+    });
+    expect(preview.kind).toBe('audio');
+  });
+
+  it('ignores a music bed with no filename', () => {
+    expect(selectProjectPreview({ musicBed: { durationSec: 12 } }).kind).toBe('none');
   });
 
   it('does not use an unservable starting image', () => {

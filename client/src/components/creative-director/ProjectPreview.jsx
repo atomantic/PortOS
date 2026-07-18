@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { Play, Film } from 'lucide-react';
+import { Play, Film, Music } from 'lucide-react';
 import MediaImage from '../MediaImage.jsx';
 import ScenePreview from './ScenePreview.jsx';
 import { selectProjectPreview, previewAspectClass } from '../../lib/creativeDirectorPreview.js';
@@ -65,6 +65,34 @@ export default function ProjectPreview({ project, to }) {
         aspectClass={aspectClass}
         autoPlay
       />
+    );
+  }
+
+  // A `music` commission's output is an audio track, not a frame — render a
+  // native <audio controls> so the run is playable/rateable in place (#2772).
+  // The player is interactive, so it sits OUTSIDE the navigation <Link> (same
+  // "no interactive control inside an <a>" rule as the video play button); the
+  // icon + label above it carry the click-to-open target instead.
+  if (preview.kind === 'audio') {
+    const durationSuffix = preview.durationSec ? ` · ${Math.round(preview.durationSec)}s` : '';
+    return (
+      <div className={`relative ${aspectClass} rounded overflow-hidden bg-port-bg border border-port-border flex flex-col items-center justify-center gap-2 p-3`}>
+        <Link
+          to={to}
+          className="flex flex-col items-center gap-1 text-port-text-muted hover:text-white focus:outline-none focus:ring-2 focus:ring-port-accent rounded"
+          aria-label={`Open ${project?.name || 'project'}`}
+        >
+          <Music className="w-6 h-6 text-port-accent" aria-hidden="true" />
+          <span className="text-[10px]">{preview.label}{durationSuffix}</span>
+        </Link>
+        <audio
+          controls
+          preload="none"
+          src={preview.src}
+          aria-label={`${project?.name || 'Project'} — ${preview.label}`}
+          className="w-full max-w-[95%]"
+        />
+      </div>
     );
   }
 
