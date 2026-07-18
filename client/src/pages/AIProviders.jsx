@@ -121,7 +121,7 @@ export default function AIProviders() {
   // next failure re-benches it — recovery is "try again now", not "fix the cause".
   const handleRecover = async (id) => {
     setRecovering(prev => ({ ...prev, [id]: true }));
-    const result = await api.recoverProvider(id).catch(() => null);
+    const result = await api.recoverProvider(id, { silent: true }).catch(() => null);
     if (result) {
       setStatuses(prev => ({ ...prev, [id]: { ...prev[id], available: true, reason: 'ok', message: 'Provider available', timeUntilRecovery: null } }));
       toast.success('Provider marked available — it will be retried on the next call');
@@ -176,7 +176,7 @@ export default function AIProviders() {
   const handleRefreshModels = async (id) => {
     setRefreshing(prev => ({ ...prev, [id]: true }));
     try {
-      const result = await api.refreshProviderModels(id);
+      const result = await api.refreshProviderModels(id, { silent: true });
       if (result) {
         toast.success(`Models refreshed for ${result.name}`);
         loadData();
