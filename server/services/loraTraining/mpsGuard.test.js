@@ -38,6 +38,9 @@ vi.mock('../mediaJobQueue/index.js', () => ({
 vi.mock('../../lib/pythonSetup.js', () => ({
   resolveFlux2Python: () => '/fake/venv-flux2/bin/python3',
   isFlux2VenvHealthy: (...a) => isFlux2VenvHealthyMock(...a),
+  // No mflux-train anywhere → resolves to null, so routing falls through to the
+  // torch (flux2) runtime the guard protects. Mirrors resolveMfluxPython(null).
+  resolveMfluxPython: (p) => p || null,
 }));
 
 const { startTrainingRun } = await import('./index.js');

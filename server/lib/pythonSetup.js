@@ -1,7 +1,7 @@
 import { execFile, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { arch, homedir, platform } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { PATHS } from './fileUtils.js';
 import { safeChildProcessEnv, whichFirst } from './processEnv.js';
@@ -187,6 +187,50 @@ export async function isFlux2VenvHealthy() {
 export function invalidateFlux2Health() {
   cachedFlux2Python = null;
   cachedFlux2Healthy = null;
+}
+
+// mflux's `mflux-train` LoRA trainer CLI is a console script installed beside
+// whichever Python pip-installed mflux. Historically that's the system /
+// image-gen Python (`pip install --user`), but on a box whose system Python
+// can't host mflux (too old, or PEP 668 externally-managed),
+// `scripts/setup-image-video.sh` instead builds a dedicated venv at
+// ~/.portos/venv-mflux — which we auto-discover here, mirroring
+// resolveFlux2Python. macOS/Linux only in practice (mflux is MLX/Apple-Silicon;
+// there's no Windows trainer), but the candidate list stays Windows-shaped for
+// symmetry with the other resolvers.
+const MFLUX_TRAIN_BIN = IS_WIN ? 'mflux-train.exe' : 'mflux-train';
+
+// True when `mflux-train` sits next to `pythonPath` (the same probe
+// loraTraining's isMfluxTrainAvailable uses; kept here so resolveMfluxPython is
+// self-contained). Null/empty path → false.
+export const hasMfluxTrain = (pythonPath) =>
+  !!pythonPath && existsSync(join(dirname(pythonPath), MFLUX_TRAIN_BIN));
+
+const MFLUX_VENV_CANDIDATES = IS_WIN
+  ? [
+      join(HOME, '.portos', 'venv-mflux', 'Scripts', 'python.exe'),
+      join(PATHS.data, 'python', 'venv-mflux', 'Scripts', 'python.exe'),
+    ]
+  : [
+      join(HOME, '.portos', 'venv-mflux', 'bin', 'python3'),
+      join(PATHS.data, 'python', 'venv-mflux', 'bin', 'python3'),
+    ];
+
+export const MFLUX_VENV_DEFAULT = MFLUX_VENV_CANDIDATES[0];
+
+// Resolve the Python whose `mflux-train` PortOS should spawn for MLX LoRA
+// training. Preference order: (1) an explicitly-configured image-gen Python
+// that actually ships mflux-train — the historical `pip --user` layout, so
+// existing installs behave exactly as before; (2) the first dedicated
+// ~/.portos/venv-mflux that ships it. When neither ships mflux-train, return
+// the configured path unchanged (or null) so the caller's isMfluxTrainAvailable
+// still reports the honest "not installed" state instead of a phantom venv path.
+export function resolveMfluxPython(configuredPath = null) {
+  if (hasMfluxTrain(configuredPath)) return configuredPath;
+  for (const p of MFLUX_VENV_CANDIDATES) {
+    if (hasMfluxTrain(p)) return p;
+  }
+  return configuredPath || null;
 }
 
 // MusicGen (Pipeline Audio Phase 4c.2) runs in its own venv at
