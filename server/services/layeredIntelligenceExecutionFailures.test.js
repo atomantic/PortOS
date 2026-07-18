@@ -43,10 +43,10 @@ describe('execution-failure taxonomy vocabulary', () => {
 });
 
 describe('classifyExecutionFailure', () => {
-  it('returns null when the execution did not fail', () => {
+  it('returns null unless success is strictly false — nothing else to diagnose', () => {
     expect(classifyExecutionFailure({ success: true, errorCategory: 'test-failure' })).toBeNull();
-    expect(classifyExecutionFailure({ success: null, executionOutcome: 'success' })).toBeNull();
-    // Nothing at all → nothing to diagnose.
+    // An absent/unknown success flag is not a failure.
+    expect(classifyExecutionFailure({ errorCategory: 'test-failure' })).toBeNull();
     expect(classifyExecutionFailure({})).toBeNull();
   });
 
@@ -82,8 +82,9 @@ describe('classifyExecutionFailure', () => {
     expect(classifyExecutionFailure({ success: false, errorCategory: 'rate-limit' })).toBe(UNKNOWN_EXECUTION_FAILURE);
   });
 
-  it('re-diagnoses a persisted record from executionOutcome when no explicit success is given', () => {
-    expect(classifyExecutionFailure({ executionOutcome: 'failure', errorCategory: 'test-failure' })).toBe('testing');
+  it('re-classifies a stored failed record from its retained raw signal', () => {
+    // The §3-forward path: pass success:false + the persisted failureSignal.
+    expect(classifyExecutionFailure({ success: false, errorCategory: 'test-failure' })).toBe('testing');
   });
 
   it('is deterministic', () => {

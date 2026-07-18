@@ -202,12 +202,13 @@ export async function recordProposalExecution({ appId, slug, scope = null, succe
   // fallback and the scope-preservation merge below.
   const normScope = typeof scope === 'string' && scope.trim() ? scope.trim() : null;
   // Diagnose WHY a failed hand-off failed (#2764 §1) from the failure signal the
-  // caller already computed — a success has nothing to diagnose, so both fields
-  // stay null on success. `failureSignal` keeps the raw category (root-cause
-  // signal) even when it doesn't map to a taxonomy token, so a later reconcile
-  // could re-classify without re-running the task. Classification is deterministic
-  // and pure — no provider round-trip (the "no cold-bootstrap LLM" policy).
-  const failureCategory = success ? null : classifyExecutionFailure({ success, errorCategory, validationPassed });
+  // caller already computed. The classifier owns the null-on-success rule (it
+  // returns null unless success is strictly false), so no outer guard here.
+  // `failureSignal` keeps the raw category (root-cause signal) even when it doesn't
+  // map to a taxonomy token, so a later reconcile could re-classify without
+  // re-running the task. Classification is deterministic and pure — no provider
+  // round-trip (the "no cold-bootstrap LLM" policy).
+  const failureCategory = classifyExecutionFailure({ success, errorCategory, validationPassed });
   const failureSignal = success ? null : (typeof errorCategory === 'string' && errorCategory.trim() ? errorCategory.trim() : null);
   await ensureTypeIndex(store);
   // Fence the whole read-modify-write in the per-id write queue (#2765, codex P2). A bare
