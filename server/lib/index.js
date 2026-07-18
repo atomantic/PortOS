@@ -183,6 +183,7 @@ export * from './vectorMath.js';
 export * from './htmlToText.js';
 export * from './jsonExtract.js';
 export * from './taskParser.js';
+export * from './taxonomyTally.js';
 export * from './xmlEntities.js';
 
 // === Curated static data ===
