@@ -161,7 +161,7 @@ import { initSharing } from './services/sharing/index.js';
 import askRoutes from './routes/ask.js';
 import { ensureSelf, startPolling } from './services/instances.js';
 import { initSyncLog } from './services/brainSyncLog.js';
-import { backfillOriginInstanceId } from './services/brainStorage.js';
+import { backfillOriginInstanceId, brainCollectionStores } from './services/brainStorage.js';
 import { initSyncOrchestrator } from './services/syncOrchestrator.js';
 import { initSocket } from './services/socket.js';
 import { errorMiddleware, setupProcessErrorHandlers, asyncHandler, ServerError } from './lib/errorHandler.js';
@@ -283,7 +283,7 @@ await runMigrations({ rootDir: resolveInstallRoot(join(__dirname, '..')) }).catc
 // but DO NOT crash the server. PortOS is single-user (CLAUDE.md "Security
 // Model"); a hard exit on startup is worse than a noisy log the user can act
 // on. Returns per-store statuses for downstream telemetry; we discard them.
-await verifyCollectionVersions([universeStore(), seriesStore(), issueStore(), conflictJournalStore(), storyBuilderStore(), mediaCollectionStore(), loraDatasetStore, liOutcomesStore(), commissionStore()]).catch(err => {
+await verifyCollectionVersions([universeStore(), seriesStore(), issueStore(), conflictJournalStore(), storyBuilderStore(), mediaCollectionStore(), loraDatasetStore, liOutcomesStore(), commissionStore(), ...brainCollectionStores()]).catch(err => {
   console.error(`❌ Collection version check failed at startup: ${err?.stack ?? err}`);
 });
 
