@@ -15,7 +15,10 @@ import { useEffect, useMemo, useState } from 'react';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { isProcessProvider } from '../../utils/providers';
 import { getProviders } from '../../services/api';
-import { WEEKDAYS, inputCls, labelCls, describeSchedule } from './commissionForm.js';
+import {
+  WEEKDAYS, inputCls, labelCls, describeSchedule,
+  ABILITY_OPTIONS, GENERATION_FIELDS_BY_ABILITY, mergeGenerationForAbility,
+} from './commissionForm.js';
 
 export default function CommissionConfigForm({ form, patchForm, saving, onSave, onCancel, saveLabel = 'Save' }) {
   return (
@@ -41,6 +44,31 @@ export default function CommissionConfigForm({ form, patchForm, saving, onSave, 
           />
           Enabled (fires on schedule)
         </label>
+      </section>
+
+      {/* Output type — drives which generation params + directive the run uses */}
+      <section className="space-y-3 border-t border-port-border pt-4">
+        <div>
+          <label className={labelCls} htmlFor="commission-ability">Creative output</label>
+          <select
+            id="commission-ability"
+            className={inputCls}
+            value={form.targetAbility}
+            onChange={(e) => {
+              const next = e.target.value;
+              // Re-seed the generation params for the new type (carrying over any
+              // overlapping value) BEFORE switching the type, so the rendered
+              // fields and the payload always match the selected output.
+              patchForm(['generation'], mergeGenerationForAbility(next, form.generation));
+              patchForm(['targetAbility'], next);
+            }}
+          >
+            {ABILITY_OPTIONS.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+          </select>
+          <p className="text-xs text-gray-500 mt-1">
+            What each scheduled run produces. The parameters and the Creative Director&apos;s brief adapt to this type.
+          </p>
+        </div>
       </section>
 
       {/* Brief */}
@@ -152,50 +180,8 @@ export default function CommissionConfigForm({ form, patchForm, saving, onSave, 
         <p className="text-xs text-gray-500">{describeSchedule(form.schedule)}</p>
       </section>
 
-      {/* Generation */}
-      <section className="space-y-3 border-t border-port-border pt-4">
-        <h3 className="text-sm font-semibold text-gray-200">Generation (video)</h3>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-          <div>
-            <label className={labelCls} htmlFor="commission-quality">Quality</label>
-            <select
-              id="commission-quality"
-              className={inputCls}
-              value={form.generation.quality}
-              onChange={(e) => patchForm(['generation', 'quality'], e.target.value)}
-            >
-              <option value="draft">Draft</option>
-              <option value="standard">Standard</option>
-              <option value="high">High</option>
-            </select>
-          </div>
-          <div>
-            <label className={labelCls} htmlFor="commission-aspect">Aspect ratio</label>
-            <select
-              id="commission-aspect"
-              className={inputCls}
-              value={form.generation.aspectRatio}
-              onChange={(e) => patchForm(['generation', 'aspectRatio'], e.target.value)}
-            >
-              <option value="16:9">16:9</option>
-              <option value="9:16">9:16</option>
-              <option value="1:1">1:1</option>
-            </select>
-          </div>
-          <div>
-            <label className={labelCls} htmlFor="commission-duration">Duration (sec)</label>
-            <input
-              id="commission-duration"
-              type="number"
-              min={5}
-              max={600}
-              className={inputCls}
-              value={form.generation.targetDurationSeconds}
-              onChange={(e) => patchForm(['generation', 'targetDurationSeconds'], e.target.value)}
-            />
-          </div>
-        </div>
-      </section>
+      {/* Generation — fields adapt to the selected output type (#2769) */}
+      <GenerationSection ability={form.targetAbility} generation={form.generation} patchForm={patchForm} />
 
       {/* AI provider & model — who processes this commission */}
       <section className="space-y-2 border-t border-port-border pt-4">
@@ -243,6 +229,51 @@ export default function CommissionConfigForm({ form, patchForm, saving, onSave, 
         )}
       </div>
     </div>
+  );
+}
+
+// Generation params for the selected output type (#2769). Renders the ability's
+// field descriptors (GENERATION_FIELDS_BY_ABILITY) generically so all five types
+// share one layout — a select for enum fields, a bounded number input otherwise.
+// The label names the type so it's clear which output these knobs drive.
+function GenerationSection({ ability, generation, patchForm }) {
+  const fields = GENERATION_FIELDS_BY_ABILITY[ability] || GENERATION_FIELDS_BY_ABILITY.video;
+  const abilityLabel = (ABILITY_OPTIONS.find((o) => o.id === ability) || ABILITY_OPTIONS[0]).label;
+  return (
+    <section className="space-y-3 border-t border-port-border pt-4">
+      <h3 className="text-sm font-semibold text-gray-200">Generation ({abilityLabel})</h3>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {fields.map((field) => {
+          const id = `commission-gen-${field.key}`;
+          const value = generation?.[field.key] ?? '';
+          return (
+            <div key={field.key}>
+              <label className={labelCls} htmlFor={id}>{field.label}</label>
+              {field.type === 'select' ? (
+                <select
+                  id={id}
+                  className={inputCls}
+                  value={value}
+                  onChange={(e) => patchForm(['generation', field.key], e.target.value)}
+                >
+                  {field.options.map(([val, lbl]) => <option key={val} value={val}>{lbl}</option>)}
+                </select>
+              ) : (
+                <input
+                  id={id}
+                  type="number"
+                  min={field.min}
+                  max={field.max}
+                  className={inputCls}
+                  value={value}
+                  onChange={(e) => patchForm(['generation', field.key], e.target.value)}
+                />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 

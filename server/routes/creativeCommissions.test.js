@@ -77,8 +77,27 @@ describe('POST /api/creative-commission', () => {
     expect(svc.createCommission).not.toHaveBeenCalled();
   });
 
-  it('rejects an unsupported target ability with 400 (Phase 1 is video-only)', async () => {
-    const res = await request(buildApp()).post('/api/creative-commission').send({ ...validBody(), targetAbility: 'music' });
+  it('accepts a non-video output type with its own generation params (#2769)', async () => {
+    svc.createCommission.mockResolvedValue({ id: 'commission-2', name: 'Daily Stills' });
+    const res = await request(buildApp()).post('/api/creative-commission')
+      .send({ ...validBody(), targetAbility: 'image', generation: { imageCount: 3, aspectRatio: '9:16' } });
+    expect(res.status).toBe(201);
+    expect(svc.createCommission).toHaveBeenCalledWith(expect.objectContaining({
+      targetAbility: 'image',
+      generation: expect.objectContaining({ imageCount: 3 }),
+    }));
+  });
+
+  it('rejects an UNKNOWN target ability with 400 (#2769)', async () => {
+    const res = await request(buildApp()).post('/api/creative-commission').send({ ...validBody(), targetAbility: 'hologram' });
+    expect(res.status).toBe(400);
+    expect(svc.createCommission).not.toHaveBeenCalled();
+  });
+
+  it('rejects a generation param that does not belong to the chosen type with 400 (#2769)', async () => {
+    // targetDurationSeconds is a video knob, not an image one.
+    const res = await request(buildApp()).post('/api/creative-commission')
+      .send({ ...validBody(), targetAbility: 'image', generation: { targetDurationSeconds: 10 } });
     expect(res.status).toBe(400);
     expect(svc.createCommission).not.toHaveBeenCalled();
   });

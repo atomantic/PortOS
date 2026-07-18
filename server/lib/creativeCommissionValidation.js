@@ -16,10 +16,37 @@ import { z } from 'zod';
 // suite doesn't drag the scheduler graph along. The authoritative cron-validity
 // check (isValidCron) lives in the service layer, not here.
 
-// Phase 1 supports `video` only. The enum is deliberately narrow so a user can't
-// create a commission that silently never runs — Phase 3/4 widen it (image,
-// universe, series, story, writers-room, music) alongside the ability adapter.
-export const CREATIVE_COMMISSION_ABILITIES = Object.freeze(['video']);
+// Supported creative-output types (#2769). Each is backed by an ability adapter
+// (server/services/creativeCommissions/abilityAdapters.js) that owns its
+// generation params, its CD directive, and its createProject mapping. `video`
+// stays first so it remains the default and pre-#2769 records (which have no
+// explicit type or default to `video`) keep running unchanged. The broader set
+// the original Phase-1 note named (`universe`, `story`, `writers-room`) stays
+// future work under epic #2657 — only the five the request enumerated ship here.
+export const CREATIVE_COMMISSION_ABILITIES = Object.freeze(['video', 'image', 'music', 'music-video', 'series']);
+
+// Per-ability generation spec — the SINGLE SOURCE OF TRUTH for which render/knob
+// keys each output type carries and their defaults. Consumed by the create-path
+// superRefine below (rejects a key that doesn't belong to the chosen type), by
+// the ability adapter's `sanitizeGeneration` (fills defaults + preserves only
+// these keys), and mirrored on the client (commissionForm.js
+// GENERATION_FIELDS_BY_ABILITY). `model` is accepted on every type (an optional
+// per-type engine/model override) and so is not repeated in each `keys` list —
+// the superset schema and the adapter both treat it as universally allowed.
+export const ABILITY_GENERATION_SPEC = Object.freeze({
+  video: { keys: ['quality', 'aspectRatio', 'targetDurationSeconds'], defaults: { quality: 'standard', aspectRatio: '16:9', targetDurationSeconds: 10 } },
+  image: { keys: ['quality', 'aspectRatio', 'imageCount'], defaults: { quality: 'standard', aspectRatio: '16:9', imageCount: 1 } },
+  music: { keys: ['lengthSeconds'], defaults: { lengthSeconds: 30 } },
+  'music-video': { keys: ['quality', 'aspectRatio', 'targetDurationSeconds'], defaults: { quality: 'standard', aspectRatio: '16:9', targetDurationSeconds: 10 } },
+  series: { keys: ['episodeCount'], defaults: { episodeCount: 1 } },
+});
+
+// Keys allowed for a given ability (the spec keys + the universal `model`). Used
+// by the create-path superRefine to flag a param that doesn't belong to the type.
+export function generationKeysForAbility(ability) {
+  const spec = ABILITY_GENERATION_SPEC[ability] || ABILITY_GENERATION_SPEC.video;
+  return ['model', ...spec.keys];
+}
 
 // Schedule cadence kinds. DAILY/WEEKLY are composed into a cron by the service;
 // CUSTOM carries a raw 5-field cron the service validates via isValidCron.
@@ -87,32 +114,60 @@ export const creativeCommissionScheduleSchema = z.object({
   }
 });
 
-// Render knobs handed to the CD project the commission mints each fire. `model`
-// is the CD video modelId (an LTX variant); absent → the install's default video
-// model at fire time.
-// No object-level `.default({})` here: it would inject a `generation: {}` key
-// even when the caller omits generation, which makes an empty PATCH body parse
-// non-empty (defeating the update schema's "at least one field" refine) and
-// forces every update to rewrite generation. sanitizeCommission fills the
-// generation defaults instead; the per-field defaults still apply when the
-// object IS present but partial.
+// Render knobs handed to the CD project the commission mints each fire. This is
+// a SUPERSET over every output type's params (#2769) — each field is validated
+// for type/enum/range but left optional, and which fields actually apply is
+// decided per-ability by the create-path superRefine (below) and the adapter's
+// `sanitizeGeneration`. `model` is a universal optional engine/model override
+// (the CD video modelId — an LTX variant — for video; absent → the install's
+// default at fire time).
+// No object-level `.default({})` and NO per-field defaults here: a `.default({})`
+// would inject a `generation: {}` key even when the caller omits generation,
+// making an empty PATCH body parse non-empty (defeating the update schema's "at
+// least one field" refine), and field defaults would overwrite stored values on
+// a partial PATCH (the absent-vs-empty footgun). sanitizeCommission fills the
+// per-ability defaults instead. The create and update paths share the same
+// superset (the create-path per-ability strictness is added by the superRefine
+// on the create schema, not here) so a type-specific key like `imageCount` or
+// `episodeCount` is never silently stripped before it reaches sanitizeCommission.
 export const creativeCommissionGenerationSchema = z.object({
-  model: z.string().trim().max(64).nullable().optional(),
-  quality: z.enum(CREATIVE_COMMISSION_QUALITIES).default('standard'),
-  aspectRatio: z.enum(CREATIVE_COMMISSION_ASPECT_RATIOS).default('16:9'),
-  targetDurationSeconds: z.number().int().min(5).max(600).default(10),
-});
-
-// Generation schema for the UPDATE path: no per-field defaults, so a partial
-// `PATCH { generation: { quality: 'draft' } }` doesn't materialize `aspectRatio`
-// / `targetDurationSeconds` defaults that would overwrite stored values in the
-// service merge — same absent-vs-empty rule as the brief update schema.
-export const creativeCommissionGenerationUpdateSchema = z.object({
   model: z.string().trim().max(64).nullable().optional(),
   quality: z.enum(CREATIVE_COMMISSION_QUALITIES).optional(),
   aspectRatio: z.enum(CREATIVE_COMMISSION_ASPECT_RATIOS).optional(),
   targetDurationSeconds: z.number().int().min(5).max(600).optional(),
+  imageCount: z.number().int().min(1).max(6).optional(),
+  lengthSeconds: z.number().int().min(5).max(600).optional(),
+  episodeCount: z.number().int().min(1).max(6).optional(),
 });
+
+// The UPDATE path shares the same superset — every field optional, no defaults —
+// so a partial `PATCH { generation: { quality: 'draft' } }` doesn't materialize
+// other keys that would overwrite stored values in the service merge, and a
+// type-specific key still round-trips. (A PATCH may omit `targetAbility`, so the
+// per-ability strictness the create superRefine adds can't run here; the
+// adapter's `sanitizeGeneration` is the backstop that drops off-type keys.)
+export const creativeCommissionGenerationUpdateSchema = creativeCommissionGenerationSchema;
+
+// Reusable superRefine: when `generation` is present, reject any key that does
+// not belong to the chosen `targetAbility` (per ABILITY_GENERATION_SPEC), so a
+// mistaken param (e.g. `targetDurationSeconds` on an `image` commission, or
+// `episodeCount` on a `video` one) is a 400 at the boundary rather than silently
+// dropped by the sanitizer. Runs only where the ability is known (the create
+// schema, whose `targetAbility` defaults to `video`).
+function refineGenerationForAbility(data, ctx) {
+  if (!data || typeof data.generation !== 'object' || data.generation === null) return;
+  const ability = data.targetAbility || 'video';
+  const allowed = new Set(generationKeysForAbility(ability));
+  for (const key of Object.keys(data.generation)) {
+    if (!allowed.has(key)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['generation', key],
+        message: `'${key}' is not a valid generation param for a '${ability}' commission`,
+      });
+    }
+  }
+}
 
 // The LLM provider/model that PROCESSES the commission — i.e. the Creative
 // Director cognitive stages (treatment + production plan) the scheduled fire
@@ -143,7 +198,7 @@ export const creativeCommissionCreateSchema = z.object({
   // run's prompt (Phase 2 populates `feedback`; kept here so the field is stable
   // and editable from creation). 0 disables conditioning.
   feedbackWindow: z.number().int().min(0).max(50).default(5),
-});
+}).superRefine(refineGenerationForAbility);
 
 // Brief schema for the UPDATE path: every field optional and — critically — NO
 // defaults. The create-path `creativeCommissionBriefSchema` defaults

@@ -69,6 +69,8 @@ import {
 } from '../../lib/conflictJournal.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import { commissionToCron } from './directive.js';
+import { getAbilityAdapter } from './abilityAdapters.js';
+import { CREATIVE_COMMISSION_ABILITIES } from '../../lib/creativeCommissionValidation.js';
 import {
   recordFeedback,
   listFeedbackForCommission,
@@ -135,6 +137,11 @@ export function sanitizeCommission(raw) {
   const brief = raw.brief && typeof raw.brief === 'object' ? raw.brief : {};
   const schedule = raw.schedule && typeof raw.schedule === 'object' ? raw.schedule : {};
   const generation = raw.generation && typeof raw.generation === 'object' ? raw.generation : {};
+  // Resolve the output type up front (#2769) so the generation block can defer to
+  // the matching ability adapter — which fills that type's defaults and preserves
+  // ONLY that type's keys (an image `imageCount`, a series `episodeCount`), rather
+  // than the old video-only shape.
+  const resolvedAbility = CREATIVE_COMMISSION_ABILITIES.includes(raw.targetAbility) ? raw.targetAbility : 'video';
   const assignment = raw.assignment && typeof raw.assignment === 'object' && !Array.isArray(raw.assignment)
     ? raw.assignment : {};
   // The LLM pin that processes the commission (CD treatment + plan stages). A
@@ -149,7 +156,12 @@ export function sanitizeCommission(raw) {
     id: raw.id,
     name: isStr(raw.name) ? raw.name : 'Untitled Commission',
     enabled: raw.enabled !== false,
-    targetAbility: isStr(raw.targetAbility) ? raw.targetAbility : 'video',
+    // Clamp to a KNOWN output type (#2769). An unknown/hand-edited value would
+    // otherwise persist and make the scheduler skip the fire as `unknown-ability`;
+    // fall back to `video` (the default + pre-#2769 shape) so the record stays
+    // generatable rather than silently inert. `resolvedAbility` (above) is the
+    // clamped value, reused so the ability and its generation shape never diverge.
+    targetAbility: resolvedAbility,
     brief: {
       intent: isStr(brief.intent) ? brief.intent : '',
       genre: isStr(brief.genre) ? brief.genre : null,
@@ -166,12 +178,10 @@ export function sanitizeCommission(raw) {
       cron: isStr(schedule.cron) ? schedule.cron : null,
       timezone: isStr(schedule.timezone) ? schedule.timezone : null,
     },
-    generation: {
-      model: isStr(generation.model) ? generation.model : null,
-      quality: isStr(generation.quality) ? generation.quality : 'standard',
-      aspectRatio: isStr(generation.aspectRatio) ? generation.aspectRatio : '16:9',
-      targetDurationSeconds: Number.isInteger(generation.targetDurationSeconds) ? generation.targetDurationSeconds : 10,
-    },
+    // Per-ability generation (#2769): the adapter fills THIS type's defaults and
+    // keeps only THIS type's keys. `getAbilityAdapter` never returns null here
+    // because `resolvedAbility` is already clamped to a known ability.
+    generation: getAbilityAdapter(resolvedAbility).sanitizeGeneration(generation),
     // Which AI provider/model processes this commission's CD cognitive stages.
     // `providerId: null` = inherit the install's default AI Assignment.
     assignment: {

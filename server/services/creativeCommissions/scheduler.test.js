@@ -275,11 +275,20 @@ describe('runScheduledCommission gates', () => {
     expect(recordRunMock).not.toHaveBeenCalled();
   });
 
-  it('skips a non-video target ability (Phase 1 supports video only)', async () => {
-    getCommissionMock.mockResolvedValue(videoCommission({ targetAbility: 'music' }));
+  it('creates a project for a non-video output type (#2769)', async () => {
+    getCommissionMock.mockResolvedValue(videoCommission({ targetAbility: 'music', generation: { lengthSeconds: 45 } }));
+    await runScheduledCommission('commission-1');
+    expect(createProjectMock).toHaveBeenCalledTimes(1);
+    // The directive steers the CD planner to the music tools rather than a video render.
+    expect(createProjectMock.mock.calls[0][0].directive.goal).toMatch(/music generation tools/i);
+    expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({ status: 'started' }));
+  });
+
+  it('skips an UNKNOWN target ability rather than mis-generating (#2769)', async () => {
+    getCommissionMock.mockResolvedValue(videoCommission({ targetAbility: 'hologram' }));
     await runScheduledCommission('commission-1');
     expect(createProjectMock).not.toHaveBeenCalled();
-    expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({ status: 'skipped', reason: 'unsupported-ability' }));
+    expect(recordRunMock).toHaveBeenCalledWith('commission-1', expect.objectContaining({ status: 'skipped', reason: 'unknown-ability' }));
   });
 
   it('tags scheduled runs with trigger "schedule"', async () => {

@@ -26,7 +26,8 @@ import { schedule, cancel, isValidCron } from '../eventScheduler.js';
 import { getUserTimezone } from '../../lib/timezone.js';
 import { settingsEvents } from '../settings.js';
 import { listCommissions, getCommission, recordCommissionRun, commissionEvents } from './store.js';
-import { commissionToCron, buildCommissionDirective } from './directive.js';
+import { commissionToCron } from './directive.js';
+import { buildCommissionDirective, getAbilityAdapter } from './abilityAdapters.js';
 import { surfaceCommissionRun } from './surface.js';
 
 const eventId = (commissionId) => `creative-commission-${commissionId}`;
@@ -207,9 +208,12 @@ async function fireCommission(commission, trigger) {
     if (!budget) return skip('budget-unavailable');
     if (!budget.withinBudget) return skip('budget');
 
-    // Phase 1 supports video only. A non-video commission can't be created via
-    // the UI (schema restricts the enum), but a hand-edited record is possible.
-    if (commission.targetAbility !== 'video') return skip('unsupported-ability');
+    // Resolve the output-type adapter (#2769). Every supported type (video,
+    // image, music, music-video, series) has one; an unknown ability (a
+    // hand-edited or forward-version record the store sanitizer couldn't clamp)
+    // is skipped rather than mis-generated as a video.
+    const abilityAdapter = getAbilityAdapter(commission.targetAbility);
+    if (!abilityAdapter) return skip('unknown-ability');
 
     // NOTE: we deliberately do NOT pre-charge the cos budget here. The planner
     // spawns as a normal CoS agent (a `cd-` task) and is accounted by
@@ -225,7 +229,6 @@ async function fireCommission(commission, trigger) {
     ]);
 
     const directive = buildCommissionDirective(commission);
-    const gen = commission.generation || {};
     // Fan the commission's single LLM pin onto BOTH CD cognitive stages
     // (treatment + plan) as the project's `modelOverrides`, so the scheduled
     // fire is processed by the provider/model the user chose rather than the
@@ -273,12 +276,14 @@ async function fireCommission(commission, trigger) {
     const baseName = commission.name.length > maxBase
       ? `${commission.name.slice(0, maxBase - 1)}…`
       : commission.name;
+    // Per-ability project params (#2769): each output type maps its generation
+    // knobs onto createProject's render settings. Non-video types pass harmless
+    // geometry defaults (the planner only forces that geometry onto video render
+    // steps) and let their directive drive the non-video tools.
+    const projectParams = abilityAdapter.buildProjectParams(commission, { defaultVideoModelId });
     const project = await createProject({
       name: `${baseName}${dateSuffix}`,
-      aspectRatio: gen.aspectRatio || '16:9',
-      quality: gen.quality || 'standard',
-      modelId: gen.model || defaultVideoModelId(),
-      targetDurationSeconds: gen.targetDurationSeconds || 10,
+      ...projectParams,
       styleSpec: commission.brief?.styleSpec || '',
       directive,
       modelOverrides,
