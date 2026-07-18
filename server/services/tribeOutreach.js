@@ -120,6 +120,8 @@ export function groupUnansweredThreads(events, { now = Date.now(), staleAfterMs 
   const groups = new Map();
   for (const ev of events || []) {
     if (!ev || !MESSAGE_KINDS.has(ev.kind)) continue;
+    // A Tapback/reaction is not a message awaiting (or constituting) a reply.
+    if (ev.metadata?.isReaction) continue;
     const key = conversationKey(ev);
     if (!key) continue;
     if (!groups.has(key)) groups.set(key, []);
@@ -208,10 +210,12 @@ export async function findUnansweredTribeThreads({
     }).catch(() => { /* partial read → drop this source to avoid false nudges */ })
   ));
 
-  // Every outbound turn just needs to cancel the unanswered flag for its
-  // conversation (grouped by chatGuid/conversationId).
-  const tagged = [...sent];
+  // Drop Tapbacks/reactions from both directions — a reaction is not a message
+  // awaiting a reply (it must not anchor an "unanswered" thread), and a sent
+  // reaction is not a real reply (it must not mark a thread answered).
+  const tagged = sent.filter((ev) => !ev.metadata?.isReaction);
   for (const ev of received) {
+    if (ev.metadata?.isReaction) continue;
     // Scope to 1:1 conversations — a chat with more than one counterpart is a
     // group, where "you never replied" rarely means a personal obligation and
     // multi-sender turns can't be cleanly attributed or anchored. A 1:1 chat's
@@ -319,7 +323,9 @@ async function generateOutreachDraftImpl({
   }).catch(() => []);
 
   const sorted = (convoEvents || [])
-    .filter((ev) => MESSAGE_KINDS.has(ev.kind))
+    // Exclude reactions here too — they must neither anchor the reply nor pad the
+    // grounding context as spurious '[non-text message]' turns.
+    .filter((ev) => MESSAGE_KINDS.has(ev.kind) && !ev.metadata?.isReaction)
     .sort((a, b) => Date.parse(a.happenedAt) - Date.parse(b.happenedAt));
   // Anchor to the EXACT detected inbound (by timestamp) in the FULL list, BEFORE
   // any grounding-window truncation — otherwise a long tail of later turns could

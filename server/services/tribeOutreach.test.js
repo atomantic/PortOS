@@ -145,6 +145,16 @@ describe('groupUnansweredThreads', () => {
     expect(out).toHaveLength(0); // replied within the same email thread
   });
 
+  it('ignores Tapback/reaction turns — a reaction neither anchors nor answers', () => {
+    // A reaction as the last inbound must NOT create an unanswered nudge.
+    const out = groupUnansweredThreads([
+      inbound({ happenedAt: daysAgo(5), summary: 'dinner Friday?' }),
+      { kind: 'message.sent', source: 'imessage', happenedAt: daysAgo(4), metadata: { chatGuid: 'chat-1' } },
+      inbound({ happenedAt: daysAgo(2), summary: 'liked "sounds good"', metadata: { chatGuid: 'chat-1', handle: '+15550001', isReaction: true } }),
+    ], WINDOW);
+    expect(out).toHaveLength(0); // the real inbound was answered; the reaction is ignored
+  });
+
   it('drops events with unparseable timestamps without throwing', () => {
     const out = groupUnansweredThreads([inbound({ happenedAt: 'not-a-date' })], WINDOW);
     expect(out).toHaveLength(0);

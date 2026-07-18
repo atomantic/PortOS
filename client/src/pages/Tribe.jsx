@@ -628,11 +628,18 @@ function OutreachQueue() {
       lastInboundAt: thread.lastInboundAt,
     };
     const result = await api.generateTribeOutreachDraft(seed, { silent: true }).catch((err) => {
-      // The thread may have been answered since the list loaded (409) — drop it
-      // rather than leave a stale nudge the user can re-click.
-      if (err?.status === 409 || err?.code === 'ALREADY_REPLIED') {
+      // The Care Queue loaded once, so the thread may have moved on (409):
+      //  - ALREADY_REPLIED: you answered it → drop the now-resolved nudge.
+      //  - STALE_INBOUND: they sent a newer message → it's STILL unanswered, so
+      //    refetch to pick up the latest turn rather than falsely dropping it.
+      if (err?.code === 'ALREADY_REPLIED') {
         setThreads((prev) => (prev || []).filter((t) => t.conversationKey !== key));
         toast.success(`Looks like you already replied to ${thread.personName}`);
+      } else if (err?.code === 'STALE_INBOUND') {
+        api.getTribeOutreach({ silent: true })
+          .then((r) => setThreads(r?.threads || []))
+          .catch(() => {});
+        toast(`${thread.personName} sent a newer message — refreshed`);
       } else {
         toast.error(err.message || 'Could not generate a draft');
       }

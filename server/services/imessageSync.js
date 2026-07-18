@@ -162,6 +162,10 @@ export function imessageActivityCandidate(msg) {
       service: msg.service || null,
       handle: counterpart || null,
       rowid: msg.rowid ?? null,
+      // Tag Tapbacks/reactions so downstream consumers (Tribe outreach #2158) can
+      // exclude them — a reaction is not a message awaiting a reply. Only set when
+      // true to keep ordinary-message metadata unchanged.
+      ...(Number(msg.associatedType) ? { isReaction: true } : {}),
     },
   };
 }
@@ -333,7 +337,7 @@ function readMessages(db, cursorRowid, limit) {
   // string; appleDateToDate parses it (second-scale precision is all we need).
   const rows = db.prepare(
     `SELECT m.ROWID AS rowid, m.guid, CAST(m.date AS TEXT) AS date, m.text, m.attributedBody,
-            m.is_from_me AS is_from_me, m.service,
+            m.is_from_me AS is_from_me, m.service, m.associated_message_type AS assoc_type,
             h.id AS handle,
             c.guid AS chat_guid, c.display_name AS chat_name, c.chat_identifier
        FROM message m
@@ -369,6 +373,9 @@ function readMessages(db, cursorRowid, limit) {
       chatGuid,
       chatName: row.chat_name || row.chat_identifier || '',
       service: row.service || null,
+      // Non-zero `associated_message_type` = a Tapback/reaction/edit attached to
+      // another message, not a standalone message (2000-3005 reactions, etc.).
+      associatedType: Number(row.assoc_type) || 0,
       participants,
     });
   }
