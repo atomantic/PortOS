@@ -146,6 +146,15 @@ describe('resolvePlanStepArgs (pure) — cross-step result references (#2773)', 
     expect(out.error).toMatch(/not complete/);
   });
 
+  it('errors (never dispatches a literal) on a reference to an exotic stepId the grammar cannot parse', () => {
+    // The plan schema allows a dotted stepId; the reference grammar does not, so
+    // the placeholder survives unmatched — the leftover-check must fail the step.
+    const plan = { steps: [{ stepId: 'create.series', status: 'done', result: { id: 'ser-1' } }] };
+    const out = resolvePlanStepArgs({ stepId: 'run', args: { seriesId: '{{steps.create.series.result.id}}' } }, plan);
+    expect(out.error).toMatch(/unresolved step reference/);
+    expect(out.args.seriesId).toBe('{{steps.create.series.result.id}}'); // literal, but the error blocks dispatch
+  });
+
   it('errors on a missing result key', () => {
     const plan = donePlan({ name: 'Nova' }); // no `id`
     const out = resolvePlanStepArgs({ stepId: 'run', args: { seriesId: '{{steps.create-series.result.id}}' } }, plan);

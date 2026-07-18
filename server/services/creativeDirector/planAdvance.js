@@ -205,6 +205,15 @@ export function resolvePlanStepArgs(step, plan) {
   };
 
   const resolvedArgs = resolveValue(args);
+  // Belt-and-suspenders: the plan schema permits stepIds the reference grammar
+  // (`[\w-]+`) can't parse (a dot, colon, space, or Unicode char). Such a
+  // reference matches the sentinel but not STEP_REF_*, so it would survive
+  // resolution as a literal and dispatch unresolved. If any `{{steps.…}}` is left
+  // after a clean pass, fail the step (→ re-plan) instead — never dispatch a
+  // literal placeholder. Skip when errors already fired (they carry the real cause).
+  if (!errors.length && STEP_REF_SENTINEL.test(JSON.stringify(resolvedArgs))) {
+    errors.push('contains an unresolved step reference — use the form {{steps.<stepId>.result.<key>}} with a word/hyphen stepId');
+  }
   return { args: resolvedArgs, error: errors.length ? `Step "${step?.stepId}" ${errors.join('; ')}` : null };
 }
 
