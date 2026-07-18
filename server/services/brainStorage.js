@@ -394,6 +394,9 @@ export async function updateWith(type, id, fn) {
  */
 export async function upsertWithId(type, id, recordData, { emitEvent = true } = {}) {
   const store = storeFor(type);
+  // A malformed id can't name a valid per-record dir — mirror the other write
+  // paths and no-op rather than letting the store's write-queue assertion throw.
+  if (!store.isValidId(id)) return null;
   // Resolve our instance id outside the queue (independent read); the existing
   // record's origin is preferred inside the queue when one is present.
   const fallbackOrigin = await getInstanceId();
