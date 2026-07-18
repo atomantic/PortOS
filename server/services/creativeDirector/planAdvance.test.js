@@ -107,6 +107,13 @@ describe('resolvePlanStepArgs (pure) — cross-step result references (#2773)', 
     expect(out.args.n).toBe(3); // number, not "3"
   });
 
+  it('resolves a whitespace-padded reference (fast-path sentinel matches the grammar)', () => {
+    const plan = donePlan({ id: 'ser-42' });
+    const out = resolvePlanStepArgs({ stepId: 'run', args: { seriesId: '{{ steps.create-series.result.id }}' } }, plan);
+    expect(out.error).toBeNull();
+    expect(out.args.seriesId).toBe('ser-42'); // not dispatched as a literal
+  });
+
   it('interpolates an embedded reference inside a longer string', () => {
     const plan = donePlan({ name: 'Nova' });
     const out = resolvePlanStepArgs({ stepId: 'run', args: { title: 'Cover for {{steps.create-series.result.name}}' } }, plan);
@@ -143,6 +150,15 @@ describe('resolvePlanStepArgs (pure) — cross-step result references (#2773)', 
     const plan = donePlan({ name: 'Nova' }); // no `id`
     const out = resolvePlanStepArgs({ stepId: 'run', args: { seriesId: '{{steps.create-series.result.id}}' } }, plan);
     expect(out.error).toMatch(/missing result "id"/);
+  });
+
+  it('resolves a reference into a dry-run predecessor to a placeholder (no spurious error)', () => {
+    // In a dry-run preview the create step settles `done` with `{ planned: true }`
+    // and mints no id — a downstream reference must not hard-fail the walk.
+    const plan = { steps: [{ stepId: 'create-series', status: 'done', result: { planned: true } }] };
+    const out = resolvePlanStepArgs({ stepId: 'run', args: { seriesId: '{{steps.create-series.result.id}}' } }, plan);
+    expect(out.error).toBeNull();
+    expect(out.args.seriesId).toBe('dry-run:create-series.id');
   });
 
   it('treats a skipped step as a resolvable terminal-success source', () => {
