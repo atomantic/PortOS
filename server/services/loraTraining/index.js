@@ -293,9 +293,13 @@ export async function resumeTrainingRun(runId, { auto = false } = {}) {
     });
   }
 
-  // Engine health: mirror startTrainingRun for the run's existing runtime.
+  // Engine health: mirror startTrainingRun for the run's existing runtime —
+  // including resolving the dedicated ~/.portos/venv-mflux, so a resume (manual
+  // OR the stall-watchdog auto-resume) on a dedicated-venv install doesn't
+  // falsely fail the availability check and thread a null interpreter into the
+  // re-enqueued job.
   const settings = await getSettings();
-  const pythonPath = settings?.imageGen?.local?.pythonPath || null;
+  const pythonPath = resolveMfluxPython(settings?.imageGen?.local?.pythonPath || null);
   if (run.runtime === TRAINING_RUNTIMES.FLUX2) {
     if (!(await isFlux2VenvHealthy())) {
       throw new ServerError('FLUX.2 training venv is unavailable — run `bash scripts/setup-image-video.sh`', {

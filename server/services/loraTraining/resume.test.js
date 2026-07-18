@@ -30,6 +30,7 @@ vi.mock('../settings.js', () => ({ getSettings: vi.fn(async () => ({})) }));
 vi.mock('../../lib/pythonSetup.js', () => ({
   isFlux2VenvHealthy: (...a) => isFlux2VenvHealthyMock(...a),
   resolveFlux2Python: vi.fn(() => '/venv/python'),
+  resolveMfluxPython: (p) => p || null,
 }));
 vi.mock('../mediaJobQueue/index.js', () => ({
   enqueueJob: (...a) => enqueueJobMock(...a),
