@@ -601,6 +601,29 @@ describe('creativeDirector routes', () => {
     });
   });
 
+  describe('PATCH /:id/plan — stepId grammar (#2773)', () => {
+    const validStep = { stepId: 'create-series', toolName: 'pipeline_createSeries', args: { name: 'Nova' }, dependsOn: [] };
+
+    it('accepts a word/hyphen stepId', async () => {
+      cdService.setPlan.mockResolvedValue({ id: 'cd-1', plan: { steps: [validStep] } });
+      const r = await request(app).patch('/api/creative-director/cd-1/plan').send({ steps: [validStep] });
+      expect(r.status).toBe(200);
+      expect(cdService.setPlan).toHaveBeenCalled();
+    });
+
+    it('400s on a stepId with a dot (unreferenceable by the result-reference grammar)', async () => {
+      const r = await request(app).patch('/api/creative-director/cd-1/plan')
+        .send({ steps: [{ ...validStep, stepId: 'create.series' }] });
+      expect(r.status).toBe(400);
+    });
+
+    it('400s on a stepId with a space', async () => {
+      const r = await request(app).patch('/api/creative-director/cd-1/plan')
+        .send({ steps: [{ ...validStep, stepId: 'create series' }] });
+      expect(r.status).toBe(400);
+    });
+  });
+
   describe('POST /:id/plan/step/:stepId', () => {
     const projectWithStep = (status = 'rendering') => ({
       id: 'cd-1', status, directive: { goal: 'x' },

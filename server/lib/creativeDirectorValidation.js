@@ -261,7 +261,13 @@ export const creativeDirectorSceneUpdateSchema = z.object({
 // ---------------------------------------------------------------------------
 
 export const creativeDirectorPlanStepSchema = z.object({
-  stepId: z.string().min(1).max(64),
+  // Word chars + hyphen only — this MUST stay in lockstep with the cross-step
+  // result-reference grammar in planAdvance.js (`{{steps.<stepId>.result.<key>}}`,
+  // stepId group `[\w-]+`, #2773). A looser stepId here would let the planner mint
+  // an id that a downstream step can't reference, with no safe re-plan recovery
+  // (the producer already ran, and renaming the step re-runs it). Rejecting at
+  // plan-author time surfaces a 4xx the planner fixes per the cd-plan prompt.
+  stepId: z.string().min(1).max(64).regex(/^[\w-]+$/, 'stepId must contain only word characters or hyphens'),
   toolName: z.string().min(1).max(64),
   // Free-form tool args — each tool re-validates against its own Zod schema at
   // dispatch, so the plan gate stays permissive (an over-strict gate here would

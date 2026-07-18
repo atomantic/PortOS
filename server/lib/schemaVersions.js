@@ -344,15 +344,19 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // rewrite is needed — existing legacy projects simply lack both keys and the
   // advance loop treats an absent key identically to null (falsy → legacy video
   // flow); migration 175 only seeds the new `cd-plan` prompt stage.
-  // NOT bumped to 3 for cross-step result references (`{{steps.<id>.result.<key>}}`
-  // in `plan.steps[].args`, #2773): the trigger for a bump is a project-SHAPE
-  // change a plan-unaware sanitizer would strip on round-trip. References add no
-  // field — they are string VALUES inside `args`, already `z.record(z.any())`,
-  // which a v2 sanitizer preserves verbatim (no strip, no LWW loss). A v2 peer
-  // merely can't RESOLVE the syntax at execution time, and schema-versioning
-  // gates payload integrity, not execution parity across rolling upgrades (a v2
-  // peer can't run any v3-added behavior — that's inherent, not a corruption).
-  creativeDirectorProjects: 2,
+  // v3 = cross-step result references (`{{steps.<stepId>.result.<key>}}` inside
+  // `plan.steps[].args`, #2773). Unlike v2 this is NOT about a sanitizer
+  // round-trip strip (the refs are free-form `args` strings a v2 sanitizer
+  // preserves verbatim) — it's an EXECUTION-semantics break: only the v3 advance
+  // loop resolves the syntax. A v2 peer that receives a running reference-plan and
+  // then boot-recovers it (`recoverInFlightProjects` resets the step to pending)
+  // would dispatch the literal `{{…}}` as e.g. a seriesId, fail/re-plan, and
+  // LWW-push the damaged plan back onto the v3 peer — corrupting the newer peer's
+  // healthy project. Bumping makes the v2 receiver reject the ahead-version
+  // transfer (per-category 412) until it upgrades, so it never mis-executes a
+  // syntax it can't resolve. No record rewrite needed — reference-free projects
+  // are unchanged; the bump only gates cross-version CD-project sync.
+  creativeDirectorProjects: 3,
   // v1 = Mood boards (PostgreSQL `mood_boards`) federated via the per-record
   // peer-sync push pipeline (record kind `moodBoard`, sync category `moodBoards`,
   // #1564). Same posture as `creativeDirectorProjects` above: a brand-NEW synced
