@@ -46,6 +46,17 @@ import { createHash } from 'crypto';
 //   - `buildConfig(doc)` — 034 moves the legacy cross-record `runs[]` into
 //     `config.runs`; the others stamp `config: {}`.
 //   - `idPattern` / `invalidWarn` / `recordNoun` — per-kind id shape + log copy.
+//   - `recordsShape: 'array' | 'map'` — the legacy container shape. 034/035/036/
+//     059 store `{ [recordsKey]: [ {id, …}, … ] }` (an ARRAY; id comes from
+//     `record.id`) — the default `'array'`. Brain entity stores (migration 200)
+//     store `{ [recordsKey]: { <id>: record } }` (an object MAP; id is the KEY,
+//     the record value carries no id field). `'map'` iterates `Object.entries`,
+//     derives the id from the key, and — because the value is written verbatim —
+//     PRESERVES in-place tombstones (`{ _deleted: true, updatedAt, … }`) so a
+//     split can't drop the last-writer-wins markers federation depends on. Map
+//     mode also skips the reserved keys `__proto__` / `constructor` / `prototype`
+//     (a legacy JSON map can carry them as own keys; the collectionStore id
+//     allowlist would accept them, so guard here) — left in the backup.
 
 const splitFileExists = (path) => stat(path).then(() => true, (err) => {
   if (err.code === 'ENOENT') return false;
@@ -75,6 +86,12 @@ const splitReadJsonTolerant = async (path) => {
 
 const splitWriteJson = (path, value) =>
   writeFile(path, JSON.stringify(value, null, 2) + '\n');
+
+// Reserved keys a legacy `map`-shape doc can carry as own properties (JSON.parse
+// surfaces a literal `"__proto__"` key as an own property). They pass a typical
+// `idPattern`, so a map split must drop them explicitly rather than write a
+// `__proto__/index.json` record dir — left in the backup for manual recovery.
+const RESERVED_MAP_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 // Scan the type dir for records already split in a prior partial run. Uses
 // `withFileTypes` so stray non-directory entries (user `.bak` files, editor
@@ -110,6 +127,9 @@ async function splitExistingRecordIds(typeDir) {
  *   - `extraValid(record)`— extra per-record validity gate beyond id (059's name check)
  *   - `dedupe`           — claim ids as written so later duplicates skip (059); default false
  *   - `onUnreadable`     — `'return'` (default) or `'throw'`
+ *   - `recordsShape`     — `'array'` (default; id from `record.id`) or `'map'`
+ *                          (legacy `{ [recordsKey]: { <id>: record } }`; id is the
+ *                          object key, tombstones preserved, reserved keys skipped)
  */
 export function makeSplitMigration({
   migrationLabel,
@@ -125,6 +145,7 @@ export function makeSplitMigration({
   extraValid = null,
   dedupe = false,
   onUnreadable = 'return',
+  recordsShape = 'array',
 }) {
   const up = async ({ rootDir }) => {
     const dataDir = join(rootDir, 'data');
@@ -175,20 +196,34 @@ export function makeSplitMigration({
       return { ok: false, reason: 'unreadable' };
     }
 
-    const records = Array.isArray(doc[recordsKey]) ? doc[recordsKey] : [];
+    // Normalize both container shapes into `[id, record]` pairs so the split
+    // loop below is shape-agnostic. Array: id from `record.id` (034/035/036/059).
+    // Map: id from the object KEY, value written verbatim (migration 200 — brain
+    // `{ records: { <id>: record } }`, tombstones and all). Both feed the same
+    // downstream object/id/idPattern validation, so a null/non-string id or a
+    // non-object record is rejected there, not here.
+    let pairs;
+    if (recordsShape === 'map') {
+      const container = doc[recordsKey];
+      const map = (container && typeof container === 'object' && !Array.isArray(container)) ? container : {};
+      pairs = Object.entries(map).filter(([key]) => !RESERVED_MAP_KEYS.has(key));
+    } else {
+      const records = Array.isArray(doc[recordsKey]) ? doc[recordsKey] : [];
+      pairs = records.map((record) => [record?.id, record]);
+    }
     const existingIds = await splitExistingRecordIds(typeDir);
     await mkdir(typeDir, { recursive: true });
 
     let written = 0;
     let skipped = 0;
     let invalid = 0;
-    for (const record of records) {
+    for (const [rawId, record] of pairs) {
       if (!record || typeof record !== 'object') {
         invalid += 1;
         console.warn(`⚠️ ${migrationLabel}: skipping non-object ${recordNoun} record (left in backup for manual recovery)`);
         continue;
       }
-      const id = typeof record.id === 'string' ? record.id : null;
+      const id = typeof rawId === 'string' ? rawId : null;
       if (!id || !idPattern.test(id)) {
         invalid += 1;
         console.warn(`⚠️ ${migrationLabel}: skipping ${recordNoun} with invalid id "${id}" (left in backup for manual recovery)`);
