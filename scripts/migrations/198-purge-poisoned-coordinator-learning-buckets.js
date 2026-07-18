@@ -42,11 +42,12 @@
  *   No-op by construction on installs that never ran these types — the file is only
  *   rewritten when at least one bucket is actually present.
  *
- *   Known caveat (shared with migration 197, tracked in #2770): if data/migrations.applied.json
- *   is lost/corrupt, the runner rebuilds the ledger from [] and reruns every migration — this
- *   purge identifies its target by bucket PRESENCE, so a rerun would also drop legitimate
- *   post-fix coordinator history. Deferred as a cross-cutting fix (a per-198 marker would diverge
- *   from 197); see #2770.
+ *   Destructive-rerun guard (#2770): this purge identifies its target by bucket PRESENCE, so a
+ *   rerun after data/migrations.applied.json is lost/corrupt (the runner rebuilds the ledger from
+ *   [] and reruns every migration) would drop legitimate post-fix coordinator history. It therefore
+ *   opts into the runner's PURGE class (`purge: true`): run-migrations.js records a purge migration
+ *   as applied WITHOUT executing it whenever the applied-list started empty/rebuilt. The guard lives
+ *   in the runner and is shared with migration 197 — one mechanism, no per-migration marker to drift.
  */
 
 import { readFile, writeFile } from 'fs/promises';
@@ -65,6 +66,9 @@ const LEARNING_REL = 'data/cos/learning.json';
 const COORDINATOR_BUCKETS = [...NON_COMMITTING_COORDINATOR_TASK_TYPES].map((t) => `self-improve:${t}`);
 
 export default {
+  // Opt into the runner's non-idempotent PURGE class — no-op on a rerun against
+  // a rebuilt-from-[] ledger so post-fix learning data is never destroyed (#2770).
+  purge: true,
   async up({ rootDir }) {
     const path = join(rootDir, LEARNING_REL);
     const raw = await readFile(path, 'utf-8').catch((err) => {

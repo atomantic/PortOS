@@ -17,10 +17,13 @@
  *                                            on completion (mid-flight commissions).
  *   4. last done image-render plan step    — a plan that emits images (e.g. a comic)
  *                                            rather than video.
- *   5. `startingImageFile`                 — no render yet, but the project has a
+ *   5. `musicBed`                          — a `music` commission's produced audio
+ *                                            (or a first-pass bed), filed onto the
+ *                                            project by the durable music-bed hook.
+ *   6. `startingImageFile`                 — no render yet, but the project has a
  *                                            reference image. Labeled distinctly so
  *                                            the UI never passes an INPUT off as output.
- *   6. `{ kind: 'none' }`                  — nothing to show.
+ *   7. `{ kind: 'none' }`                  — nothing to show.
  *
  * NOTE ON CAST PORTRAITS: #2702 also floated "first cast portrait" as a fallback.
  * A project's `cast[]` member is `{ ingredientId, name, type, role, summary }` —
@@ -37,6 +40,16 @@
 export const videoSrcForJob = (jobId) => `/data/videos/${jobId}.mp4`;
 export const videoPosterForJob = (jobId) => `/data/video-thumbnails/${jobId}.jpg`;
 export const imageSrcForJob = (jobId) => `/data/images/${jobId}.png`;
+
+// A project's music bed (a `music` commission's produced audio, or a first-pass
+// bed) is stored as `project.musicBed.filename` and served from `/data/music/`
+// (PATHS.music, mounted in server/index.js). generateMusic names the file
+// `music-gen-<uuid>.wav`; the hook stores just that basename, so encode it and
+// prefix the mount.
+export const musicBedSrc = (musicBed) => {
+  const filename = nonEmptyString(musicBed?.filename);
+  return filename ? `/data/music/${encodeURIComponent(filename)}` : null;
+};
 
 // The registry tools a plan step uses to render media. Mirrors
 // `VIDEO_RENDER_TOOL_NAME` in server/services/creativeDirector/planAdvance.js;
@@ -174,6 +187,15 @@ export function selectProjectPreview(project) {
   const planImageId = lastDoneStepJobId(project.plan, IMAGE_RENDER_TOOL);
   if (planImageId) {
     return { kind: 'image', jobId: planImageId, src: imageSrcForJob(planImageId), label: 'Produced image' };
+  }
+
+  // A `music` commission produces no video/image — its output is the rendered
+  // music bed filed onto `project.musicBed` by the durable music-bed hook
+  // (#2772). Surface it as a playable audio result so the run is rateable.
+  const audio = musicBedSrc(project.musicBed);
+  if (audio) {
+    const durationSec = Number.isFinite(project.musicBed?.durationSec) ? project.musicBed.durationSec : null;
+    return { kind: 'audio', src: audio, label: 'Music bed', durationSec };
   }
 
   // Last resort: the project's own reference image. Distinct label — this is an
