@@ -286,7 +286,7 @@ export function LocalLlmTab() {
   const loadStatus = useCallback(() => {
     const requestId = ++statusRequestId.current;
     setLoading(true);
-    return getLocalLlmStatus()
+    return getLocalLlmStatus({ silent: true })
       .then((s) => {
         if (requestId !== statusRequestId.current) return;
         setStatus(s);

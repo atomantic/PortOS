@@ -244,11 +244,11 @@ export default function ManuscriptCommentCard({
     onDraftChange({ fixKey, drafts: editDrafts, selected: typeof updater === 'function' ? updater(selectedEdits) : updater });
 
   const [runGenerate, generating] = useAsyncAction(
-    () => generatePipelineManuscriptFix(seriesId, comment.id, { providerOverride, modelOverride }),
+    () => generatePipelineManuscriptFix(seriesId, comment.id, { providerOverride, modelOverride }, { silent: true }),
     { errorMessage: 'Failed to generate fix' },
   );
   const [runAccept, accepting] = useAsyncAction(
-    (selected) => acceptPipelineManuscriptFix(seriesId, comment.id, { edits: selected }),
+    (selected) => acceptPipelineManuscriptFix(seriesId, comment.id, { edits: selected }, { silent: true }),
     { errorMessage: 'Failed to apply fix' },
   );
 

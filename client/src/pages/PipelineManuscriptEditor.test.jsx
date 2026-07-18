@@ -133,7 +133,7 @@ describe('PipelineManuscriptEditor', () => {
 
     fireEvent.click(await screen.findByText('Generate fix'));
     expect(await screen.findByDisplayValue('She left, but paused.')).toBeInTheDocument();
-    expect(api.generatePipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'mrc-1', expect.any(Object));
+    expect(api.generatePipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'mrc-1', expect.any(Object), { silent: true });
 
     fireEvent.click(screen.getByText('Accept'));
 
@@ -142,7 +142,7 @@ describe('PipelineManuscriptEditor', () => {
     await waitFor(() => expect(screen.getByText(/0 open/)).toBeInTheDocument());
     expect(api.acceptPipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'mrc-1', {
       edits: [{ issueNumber: 1, issueId: 'iss-1', stageId: 'prose', find: 'She left.', replace: 'She left, but paused.', fuzzy: undefined }],
-    });
+    }, { silent: true });
   });
 
   it('shows issue tabs and focuses one issue; a deep link opens that issue', async () => {
@@ -289,7 +289,7 @@ describe('PipelineManuscriptEditor', () => {
     revealFromIndex('The ending is abrupt');
     fireEvent.click(await screen.findByText('Generate fix'));
     await waitFor(() => expect(api.generatePipelineManuscriptFix).toHaveBeenCalledWith(
-      'ser-1', 'mrc-1', { providerOverride: 'anthropic', modelOverride: 'claude-haiku' },
+      'ser-1', 'mrc-1', { providerOverride: 'anthropic', modelOverride: 'claude-haiku' }, { silent: true },
     ));
   });
 

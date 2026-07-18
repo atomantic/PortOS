@@ -581,10 +581,11 @@ export const patchPipelineManuscriptComment = (seriesId, commentId, patch, optio
   });
 
 // Generate one or more anchored fix edits for a comment (does not apply them).
-export const generatePipelineManuscriptFix = (seriesId, commentId, { providerOverride, modelOverride } = {}) =>
+export const generatePipelineManuscriptFix = (seriesId, commentId, { providerOverride, modelOverride } = {}, options = {}) =>
   request(`/pipeline/series/${encodeURIComponent(seriesId)}/manuscript/review/comments/${encodeURIComponent(commentId)}/fix`, {
     method: 'POST',
     body: JSON.stringify({ providerOverride, modelOverride }),
+    ...options,
   });
 
 // Apply one or more optionally edited fixes into stage output + mark accepted.
