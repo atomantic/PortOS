@@ -69,6 +69,7 @@ import {
 } from '../../lib/conflictJournal.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import { commissionToCron } from './directive.js';
+import { getAbilityAdapter } from './abilityAdapters.js';
 import {
   recordFeedback,
   listFeedbackForCommission,
@@ -135,6 +136,17 @@ export function sanitizeCommission(raw) {
   const brief = raw.brief && typeof raw.brief === 'object' ? raw.brief : {};
   const schedule = raw.schedule && typeof raw.schedule === 'object' ? raw.schedule : {};
   const generation = raw.generation && typeof raw.generation === 'object' ? raw.generation : {};
+  // Resolve the output type up front (#2769). A KNOWN type is sanitized through
+  // its ability adapter (fills that type's defaults, keeps ONLY that type's keys —
+  // an image `imageCount`, a series `episodeCount`). An UNKNOWN non-empty type (a
+  // forward-version record synced verbatim from a newer peer) is PRESERVED, not
+  // rewritten to `video`: rewriting would corrupt the newer peer's brief on read
+  // and could push the downgrade back via LWW (violating the distribution model's
+  // forward-compat rule). The scheduler skips an unknown ability rather than
+  // mis-generating it, so unknown = inert-but-preserved. A missing/blank type
+  // falls back to the default `video`.
+  const resolvedAbility = isStr(raw.targetAbility) && raw.targetAbility ? raw.targetAbility : 'video';
+  const abilityAdapter = getAbilityAdapter(resolvedAbility);
   const assignment = raw.assignment && typeof raw.assignment === 'object' && !Array.isArray(raw.assignment)
     ? raw.assignment : {};
   // The LLM pin that processes the commission (CD treatment + plan stages). A
@@ -149,7 +161,9 @@ export function sanitizeCommission(raw) {
     id: raw.id,
     name: isStr(raw.name) ? raw.name : 'Untitled Commission',
     enabled: raw.enabled !== false,
-    targetAbility: isStr(raw.targetAbility) ? raw.targetAbility : 'video',
+    // Preserve the resolved output type as-is (#2769) — known types pass through,
+    // an unknown forward-version type round-trips untouched (see above).
+    targetAbility: resolvedAbility,
     brief: {
       intent: isStr(brief.intent) ? brief.intent : '',
       genre: isStr(brief.genre) ? brief.genre : null,
@@ -166,12 +180,11 @@ export function sanitizeCommission(raw) {
       cron: isStr(schedule.cron) ? schedule.cron : null,
       timezone: isStr(schedule.timezone) ? schedule.timezone : null,
     },
-    generation: {
-      model: isStr(generation.model) ? generation.model : null,
-      quality: isStr(generation.quality) ? generation.quality : 'standard',
-      aspectRatio: isStr(generation.aspectRatio) ? generation.aspectRatio : '16:9',
-      targetDurationSeconds: Number.isInteger(generation.targetDurationSeconds) ? generation.targetDurationSeconds : 10,
-    },
+    // Per-ability generation (#2769): a known type's adapter fills its defaults
+    // and keeps only its keys; an unknown (forward-version) type has no adapter, so
+    // preserve the raw generation object verbatim — nothing is lost on round-trip
+    // and the scheduler won't fire it anyway.
+    generation: abilityAdapter ? abilityAdapter.sanitizeGeneration(generation) : { ...generation },
     // Which AI provider/model processes this commission's CD cognitive stages.
     // `providerId: null` = inherit the install's default AI Assignment.
     assignment: {

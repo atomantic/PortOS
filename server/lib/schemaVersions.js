@@ -418,7 +418,14 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // see syncWire's `creativeCommission` case) so only the owning machine fires the
   // cron (no double-run). Soft-delete tombstones; the FIRST incompatible
   // brief-shape change MUST bump this to 2.
-  creativeCommissions: 1,
+  // v2 = per-output-type commissions (#2769): `targetAbility` widened past `video`
+  // and `generation` became per-type (image `imageCount`, music `lengthSeconds`,
+  // series `episodeCount`). A pre-#2769 (v1) peer's sanitizer only understands the
+  // video generation shape, so it would silently drop those type-specific keys on
+  // receive — and could push the video-shaped downgrade back via LWW. The bump
+  // gates mixed-version transfers of this category so a v1 peer never mangles a v2
+  // brief (compareSchemaVersions marks a v2 sender "ahead" of a v1 receiver).
+  creativeCommissions: 2,
   // v1 = standalone media-library federation (#1566). NOT a record kind — it's
   // the wire contract for the library-level asset manifest a full-sync peer
   // advertises at GET /api/peer-sync/library-manifest. The receiver-pull sweep

@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   toForm, toPayload, blankForm, patchFormState, validateForm,
   describeSchedule, describeAssignment,
+  ABILITY_OPTIONS, GENERATION_FIELDS_BY_ABILITY, GENERATION_DEFAULTS_BY_ABILITY,
+  generationToForm, mergeGenerationForAbility, generationToPayload,
 } from './commissionForm.js';
 
 describe('commissionForm helpers', () => {
@@ -115,6 +117,64 @@ describe('commissionForm helpers', () => {
     it('names the provider and model when pinned', () => {
       expect(describeAssignment({ providerId: 'claude' })).toBe('claude');
       expect(describeAssignment({ providerId: 'claude', model: 'opus' })).toBe('claude · opus');
+    });
+  });
+
+  describe('output-type generation params (#2769)', () => {
+    it('exposes every ability with a field list and defaults', () => {
+      for (const { id } of ABILITY_OPTIONS) {
+        expect(Array.isArray(GENERATION_FIELDS_BY_ABILITY[id])).toBe(true);
+        expect(GENERATION_DEFAULTS_BY_ABILITY[id]).toBeTruthy();
+        // Every declared field has a matching default key.
+        for (const field of GENERATION_FIELDS_BY_ABILITY[id]) {
+          expect(GENERATION_DEFAULTS_BY_ABILITY[id]).toHaveProperty(field.key);
+        }
+      }
+    });
+
+    it('generationToForm fills the ability defaults and keeps only that ability keys', () => {
+      expect(generationToForm('image', {})).toEqual({ quality: 'standard', aspectRatio: '16:9', imageCount: 1 });
+      // A stored video key is ignored when projecting as image.
+      expect(generationToForm('image', { imageCount: 4, targetDurationSeconds: 30 })).toEqual({ quality: 'standard', aspectRatio: '16:9', imageCount: 4 });
+      expect(generationToForm('music', { lengthSeconds: 60 })).toEqual({ lengthSeconds: 60 });
+    });
+
+    it('toForm projects a stored non-video record onto its ability fields', () => {
+      const f = toForm({ targetAbility: 'series', brief: { intent: 'noir' }, generation: { episodeCount: 3 } });
+      expect(f.targetAbility).toBe('series');
+      expect(f.generation).toEqual({ episodeCount: 3 });
+    });
+
+    it('mergeGenerationForAbility carries overlapping keys across a type switch', () => {
+      // video → image keeps quality/aspectRatio, seeds imageCount default, drops duration.
+      expect(mergeGenerationForAbility('image', { quality: 'high', aspectRatio: '9:16', targetDurationSeconds: 20 }))
+        .toEqual({ quality: 'high', aspectRatio: '9:16', imageCount: 1 });
+      // image → music keeps nothing overlapping, just the music default.
+      expect(mergeGenerationForAbility('music', { imageCount: 4 })).toEqual({ lengthSeconds: 30 });
+    });
+
+    it('generationToPayload emits only the ability keys and coerces numbers', () => {
+      // number inputs arrive as strings from the DOM.
+      expect(generationToPayload('image', { quality: 'standard', aspectRatio: '1:1', imageCount: '3' }))
+        .toEqual({ quality: 'standard', aspectRatio: '1:1', imageCount: 3 });
+      expect(generationToPayload('music', { lengthSeconds: '45' })).toEqual({ lengthSeconds: 45 });
+    });
+
+    it('toPayload round-trips a non-video commission', () => {
+      const form = toForm({ name: 'Daily Stills', targetAbility: 'image', brief: { intent: 'x' }, generation: { imageCount: 2 } });
+      const payload = toPayload(form);
+      expect(payload.targetAbility).toBe('image');
+      expect(payload.generation).toEqual({ quality: 'standard', aspectRatio: '16:9', imageCount: 2 });
+    });
+
+    it('validateForm rejects an out-of-range per-ability number', () => {
+      const base = { name: 'x', brief: { intent: 'y' }, feedbackWindow: 5 };
+      const okImage = { ...base, targetAbility: 'image', generation: { quality: 'standard', aspectRatio: '16:9', imageCount: 3 } };
+      expect(validateForm(okImage)).toBeNull();
+      const badImage = { ...base, targetAbility: 'image', generation: { quality: 'standard', aspectRatio: '16:9', imageCount: 99 } };
+      expect(validateForm(badImage)).toMatch(/Image count/);
+      const clearedMusic = { ...base, targetAbility: 'music', generation: { lengthSeconds: '' } };
+      expect(validateForm(clearedMusic)).toMatch(/Length/);
     });
   });
 });

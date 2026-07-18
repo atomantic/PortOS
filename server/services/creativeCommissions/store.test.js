@@ -56,7 +56,7 @@ const {
   ERR_VALIDATION,
   ERR_NOT_FOUND,
 } = await import('./store.js');
-const { buildCommissionDirective } = await import('./directive.js');
+const { buildCommissionDirective } = await import('./abilityAdapters.js');
 
 beforeEach(() => { records.clear(); feedbackRecords.clear(); });
 
@@ -85,6 +85,34 @@ describe('sanitizeCommission', () => {
     expect(rec.generation).toMatchObject({ quality: 'standard', aspectRatio: '16:9', targetDurationSeconds: 10 });
     expect(rec.runs).toEqual([]);
     expect(rec.feedback).toEqual([]);
+  });
+
+  it('routes generation through the ability adapter per output type (#2769)', () => {
+    const img = sanitizeCommission({ id: 'c1', targetAbility: 'image', generation: { imageCount: 4, targetDurationSeconds: 30 } });
+    expect(img.targetAbility).toBe('image');
+    // Keeps the image key; drops the off-type video duration key.
+    expect(img.generation).toEqual({ model: null, quality: 'standard', aspectRatio: '16:9', imageCount: 4 });
+
+    const music = sanitizeCommission({ id: 'c2', targetAbility: 'music', generation: { lengthSeconds: 60 } });
+    expect(music.generation).toEqual({ model: null, lengthSeconds: 60 });
+
+    const series = sanitizeCommission({ id: 'c3', targetAbility: 'series', generation: { episodeCount: 2 } });
+    expect(series.generation).toEqual({ model: null, episodeCount: 2 });
+  });
+
+  it('preserves an unknown (forward-version) output type verbatim so a newer peer record round-trips (#2769)', () => {
+    // A newer peer might sync an output type this install does not know yet.
+    // Rewriting it to `video` would corrupt the newer brief on read (and could
+    // push the downgrade back via LWW), so it is preserved untouched; the
+    // scheduler skips it rather than mis-generating.
+    const rec = sanitizeCommission({ id: 'c1', targetAbility: 'story', generation: { chapters: 5 } });
+    expect(rec.targetAbility).toBe('story');
+    expect(rec.generation).toEqual({ chapters: 5 });
+  });
+
+  it('falls back to video for a missing/blank output type', () => {
+    expect(sanitizeCommission({ id: 'c1' }).targetAbility).toBe('video');
+    expect(sanitizeCommission({ id: 'c2', targetAbility: '' }).targetAbility).toBe('video');
   });
 
   it('caps runs to the last MAX_PERSISTED_RUNS', () => {
