@@ -553,7 +553,8 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
         // read back its outcome. Gated on the app's `outcomes` source toggle AND
         // an outcomes-capable tracker (forge / jira / plan — a checked `- [x]`
         // PLAN item now reconciles, #2435).
-        if (config.sources?.outcomes && outcomesTrackerSupported(filer)) {
+        const outcomesRecordable = !!(config.sources?.outcomes && outcomesTrackerSupported(filer))
+        if (outcomesRecordable) {
           await recordFiledProposal({
             appId: app.id, slug: proposal.slug, tracker: tracker.resolved,
             issueRef: filedRef(filedKey, filedNumber), scope: proposal.scope
@@ -561,7 +562,10 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
         }
         const issueRef = filedKey || filedNumber
         if (isHandoffEligible({ proposal, config, filed: issueRef })) {
-          const task = await enqueueHandoff(buildHandoffTask({ app, proposal, issueRef }))
+          // Only mark the hand-off for per-domain execution recording (#2765) when the
+          // proposal itself was recorded above — same gate — so execution-tracking never
+          // creates an outcome row for a proposal the `outcomes` toggle says isn't tracked.
+          const task = await enqueueHandoff(buildHandoffTask({ app, proposal, issueRef, recordExecution: outcomesRecordable }))
             .catch((err) => { console.error(`❌ Layered Intelligence: ${app.name} hand-off enqueue failed: ${err.message}`); return null })
           if (task && !task.duplicate) {
             handedOff = true

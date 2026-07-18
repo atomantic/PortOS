@@ -498,6 +498,21 @@ describe('recordProposalExecution (#2765)', () => {
     expect(byDomain['app-improvement']).toBeUndefined();
   });
 
+  it('reconcile preserves executionOutcome when it later stamps the filing outcome (#2765 field-preservation)', async () => {
+    // The reverse-race guard: execution is recorded first, then reconcile marks the
+    // issue merged. The fenced re-read must carry executionOutcome through, not clobber
+    // it with a stale pre-execution record.
+    await recordFiledProposal({ appId: 'app-1', slug: 'both', scope: 'loop-meta' }, store);
+    await recordProposalExecution({ appId: 'app-1', slug: 'both', success: true }, store);
+    await reconcileOutcomes({
+      appId: 'app-1',
+      existingIssues: [{ slug: 'both', state: 'closed', stateReason: 'completed', closedAt: new Date().toISOString() }]
+    }, store);
+    const [row] = await listOutcomes({ appId: 'app-1' }, store);
+    expect(row.outcome).toBe('merged');           // reconcile applied the filing outcome
+    expect(row.executionOutcome).toBe('success'); // …without dropping the execution signal
+  });
+
   it('aggregates a domain’s success rate across multiple executions', async () => {
     await recordFiledProposal({ appId: 'app-1', slug: 'a', scope: 'loop-meta' }, store);
     await recordFiledProposal({ appId: 'app-1', slug: 'b', scope: 'loop-meta' }, store);

@@ -177,29 +177,38 @@ export async function recordProposalExecution({ appId, slug, scope = null, succe
   // per-domain aggregation. Normalized once and reused by both the missing-record
   // fallback and the scope-preservation merge below.
   const normScope = typeof scope === 'string' && scope.trim() ? scope.trim() : null;
-  const existing = await store.loadOne(id).catch(() => null);
-  const base = existing && typeof existing === 'object'
-    ? existing
-    : {
-        appId, slug: normSlug, tracker: null, issueRef: null,
-        scope: normScope,
-        filedAt: new Date(now).toISOString(),
-        outcome: null, outcomeAt: null, outcomeReason: null, rejectionReason: null
-      };
-  const next = {
-    ...base,
-    // Preserve the filed scope when the record already carries one; otherwise adopt
-    // the domain the completion hook passed (a missing-record fallback).
-    scope: (typeof base.scope === 'string' && base.scope.trim()) ? base.scope : normScope,
-    executionOutcome: success ? 'success' : 'failure',
-    executionAt: new Date(now).toISOString()
-  };
   await ensureTypeIndex(store);
-  const ok = await store.saveOne(id, next).then(() => true, (err) => {
+  // Fence the whole read-modify-write in the per-id write queue (#2765, codex P2). A bare
+  // loadOne→saveOne lets a concurrent reconcileOutcomes write on the same slug interleave
+  // between our read and write and clobber either the executionOutcome we're setting or
+  // the reconciled filing outcome. queueRecordWrite tail-chains per id, so re-reading
+  // INSIDE the fence sees the other write path's committed record and the two compose
+  // (reconcile uses the same fence). Best-effort — a failure logs and returns false
+  // rather than throwing into the completion hook.
+  return store.queueRecordWrite(id, async () => {
+    const existing = await store.loadOne(id).catch(() => null);
+    const base = existing && typeof existing === 'object'
+      ? existing
+      : {
+          appId, slug: normSlug, tracker: null, issueRef: null,
+          scope: normScope,
+          filedAt: new Date(now).toISOString(),
+          outcome: null, outcomeAt: null, outcomeReason: null, rejectionReason: null
+        };
+    const next = {
+      ...base,
+      // Preserve the filed scope when the record already carries one; otherwise adopt
+      // the domain the completion hook passed (a missing-record fallback).
+      scope: (typeof base.scope === 'string' && base.scope.trim()) ? base.scope : normScope,
+      executionOutcome: success ? 'success' : 'failure',
+      executionAt: new Date(now).toISOString()
+    };
+    await store.saveOneNow(id, next);
+    return true;
+  }).catch((err) => {
     console.error(`❌ Layered Intelligence: failed to record execution outcome for ${appId}/${normSlug}: ${err.message}`);
     return false;
   });
-  return ok;
 }
 
 /**
@@ -306,14 +315,26 @@ export async function reconcileOutcomes({ appId, existingIssues = [], now = Date
     // derived token to the stored one (rather than writing unconditionally) keeps
     // a settled record from churning on every reconcile.
     if (outcome === r.outcome && rejectionReason === r.rejectionReason && !newerClose) continue;
-    const next = {
-      ...r,
-      outcome,
-      outcomeAt: issue.closedAt || r.outcomeAt || new Date(now).toISOString(),
-      outcomeReason: issue.stateReason || 'auto-derived from tracker state',
-      rejectionReason
-    };
-    const ok = await store.saveOne(outcomeId(appId, r.slug), next).then(() => true, () => false);
+    const id = outcomeId(appId, r.slug);
+    // Fence the per-record write in the same per-id queue recordProposalExecution uses
+    // (#2765, codex P2), and re-read INSIDE the fence: `records` came from an upfront
+    // listOutcomes read, so a hand-off completion that wrote `executionOutcome` after that
+    // read but before here would be clobbered by a stale `{...r}`. Merging over the FRESH
+    // record (loadOne, falling back to `r` only if GC'd mid-flight) preserves the execution
+    // fields while still applying the recomputed filing outcome. The recomputed fields come
+    // from `issue`, not `fresh`, so a concurrent execution write can't revert them either.
+    const ok = await store.queueRecordWrite(id, async () => {
+      const fresh = (await store.loadOne(id).catch(() => null)) || r;
+      const next = {
+        ...fresh,
+        outcome,
+        outcomeAt: issue.closedAt || fresh.outcomeAt || new Date(now).toISOString(),
+        outcomeReason: issue.stateReason || 'auto-derived from tracker state',
+        rejectionReason
+      };
+      await store.saveOneNow(id, next);
+      return true;
+    }).catch(() => false);
     if (ok) updated += 1;
   }
   return updated;
