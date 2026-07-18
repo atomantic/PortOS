@@ -9,6 +9,7 @@ import {
   createMultiScorePlayer,
   DEFAULT_BPM,
 } from './scorePlayback.js';
+import { createFakeAudio } from '../test/fakeAudioContext.js';
 
 // --- Pitch → frequency ------------------------------------------------------
 describe('pitch → frequency', () => {
@@ -94,28 +95,11 @@ describe('buildSchedule', () => {
 });
 
 // --- Player (stubbed Web Audio) --------------------------------------------
-// jsdom has no Web Audio. A minimal fake AudioContext records created
+// jsdom has no Web Audio. The shared fake AudioContext records created
 // oscillators and exposes a controllable clock so we can drive the lookahead
-// scheduler deterministically with fake timers.
-const audio = { now: 0, oscillators: [] };
-const fakeParam = () => ({ setValueAtTime: () => {}, exponentialRampToValueAtTime: () => {} });
-function FakeAudioContext() {
-  return {
-    state: 'running',
-    resume: () => Promise.resolve(),
-    get currentTime() { return audio.now; },
-    destination: { id: 'destination' },
-    createOscillator() {
-      const osc = {
-        type: '', frequency: fakeParam(), onended: null, started: null, stopped: null,
-        connect: (t) => t, start(t) { this.started = t; }, stop(t) { this.stopped = t; },
-      };
-      audio.oscillators.push(osc);
-      return osc;
-    },
-    createGain() { return { gain: fakeParam(), connect: (t) => t }; },
-  };
-}
+// scheduler deterministically with fake timers. One pair for the whole file —
+// lib/audioContext.js caches the context.
+const { FakeAudioContext, audio } = createFakeAudio();
 
 const drive = (toSec) => {
   for (let t = 0; t <= toSec; t += 0.1) { audio.now = Number(t.toFixed(3)); vi.advanceTimersByTime(100); }
@@ -123,8 +107,7 @@ const drive = (toSec) => {
 
 describe('createScorePlayer', () => {
   beforeEach(() => {
-    audio.now = 0;
-    audio.oscillators = [];
+    audio.reset();
     vi.stubGlobal('AudioContext', FakeAudioContext);
     vi.useFakeTimers();
   });
@@ -177,8 +160,7 @@ describe('createScorePlayer', () => {
 // --- Multi-part player (layered MIDI) --------------------------------------
 describe('createMultiScorePlayer', () => {
   beforeEach(() => {
-    audio.now = 0;
-    audio.oscillators = [];
+    audio.reset();
     vi.stubGlobal('AudioContext', FakeAudioContext);
     vi.useFakeTimers();
   });
