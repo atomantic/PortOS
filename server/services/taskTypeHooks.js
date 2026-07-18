@@ -84,12 +84,24 @@ export function resolveTaskHookType(task) {
  * Deliberately NOT every self-improvement type: accessibility / security / code-quality
  * / plan-task / claim-issue / claim-work / jira-sprint-manager / do-replan all COMMIT
  * (fixing tasks, /claim flows, or a triage that commits PLAN.md), so their commit
- * criterion is real and must stay — exempting them would MASK genuine failures. Only the
- * structurally-no-commit coordinators belong here. pr-watcher is intentionally excluded:
- * its prompt is customizable to push code, so exempting it could mask a customized run's
- * failure. Kept as a leaf so both agentLifecycle (the live criterion) and taskLearning's
- * history backfill (migration-durability) read ONE source of truth. Migration 198 purges
- * the buckets these already poisoned on existing installs.
+ * criterion is real and must stay — exempting them would MASK genuine failures. Only
+ * complete tasks whose DEFAULT contract is structurally no-commit belong here.
+ *
+ * pr-watcher is intentionally excluded on a different axis: it is a review-of-others'-PRs
+ * TEMPLATE — its shipped prompt explicitly says "the operator customizes this prompt to
+ * change what happens on each opened PR" (and it ships `readOnly:false`), i.e. it is
+ * designed to be rewritten, commonly into a commit-pushing flow, so a type-level exemption
+ * would be the wrong default for it. The four types here are complete tasks that finish
+ * YOUR in-flight work via a git/gh/API side effect. CAVEAT: the exemption keys on the
+ * SCHEDULED TYPE, not the actual per-install prompt, so an operator who rewrites one of
+ * these four prompts to make source commits would have that customized run judged by exit
+ * code instead of its commit (a telemetry-accuracy tradeoff, not a functional bug). A
+ * per-task `noCommitCriterion` contract would remove that caveat but complicates the
+ * migration's static type→bucket mapping; deferred as not worth it for the default case.
+ *
+ * Kept as a leaf so both agentLifecycle (the live criterion) and taskLearning's history
+ * backfill (migration-durability) read ONE source of truth. Migration 198 purges the
+ * buckets these already poisoned on existing installs.
  */
 export const NON_COMMITTING_COORDINATOR_TASK_TYPES = new Set([
   'branch-reconcile', 'issue-reconcile', 'branch-cleanup', 'jira-status-report',

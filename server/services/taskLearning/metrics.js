@@ -29,7 +29,6 @@ import {
 } from './store.js';
 import { deriveFailureSignalAvoidance, isNonRoutableLearnedTier } from './routing.js';
 import { recordCorrelationSample } from './correlationQuality.js';
-import { isNonCommittingCoordinatorTask } from '../taskTypeHooks.js';
 
 // Cap on retained per-category signature samples — bounds file growth the same
 // way `recentUnknownErrors` does, while keeping enough recent context to spot
@@ -879,26 +878,31 @@ export async function recalculateDurationStats() {
       agentCount++;
 
       const duration = meta.result?.duration || 0;
-      const archivedTask = {
-        description: meta.metadata?.taskDescription,
-        metadata: meta.metadata,
-        taskType: meta.metadata?.taskType
-      };
       // Validation-authoritative outcome (issue #2344), consistent with the live
       // recordTaskCompletion path: an archived clean-exit run that missed its
       // declared criterion is NOT a success (excluded from success-only ETAs),
       // and a commit-found run is a success even on a non-zero exit. Falls back to
       // the raw exit-code success for records that predate validationPassed.
-      // A gh/git coordinator's persisted validationPassed is a pre-fix FOSSIL (#2696) —
-      // it never makes a [task-<id>] commit — so drop it here exactly as the backfill
-      // sanitizer and finalize do, or its successful runs would be wrongly excluded and
-      // its success-only ETA underestimated.
-      const vp = isNonCommittingCoordinatorTask(archivedTask) ? null : meta.result?.validationPassed;
+      // NOTE (#2696): the coordinator commit-criterion exemption is deliberately NOT
+      // applied here. This rebuild re-derives success-only DURATIONS from archives but
+      // does not rebuild the `succeeded` COUNTS, and totals.successDurationMs (below) is
+      // summed unconditionally. Overriding a coordinator's fossil validationPassed:false
+      // to an exit-code success here would add its duration to totals while migration 198
+      // had already removed its count — inflating the totals ETA. A post-fix coordinator
+      // run carries validationPassed:null (finalize returns null) and is already counted
+      // correctly; a pre-fix fossil is left excluded so durations stay consistent with the
+      // purged counts. The residual archives-vs-counts skew of this manual rebuild predates
+      // #2696 and is ETA-cosmetic.
+      const vp = meta.result?.validationPassed;
       const outcomeSuccess = typeof vp === 'boolean' ? vp : !!meta.result?.success;
       if (!outcomeSuccess || duration <= 0) continue;
 
       successCount++;
-      const taskType = extractTaskType(archivedTask);
+      const taskType = extractTaskType({
+        description: meta.metadata?.taskDescription,
+        metadata: meta.metadata,
+        taskType: meta.metadata?.taskType
+      });
 
       if (data.byTaskType[taskType]) {
         data.byTaskType[taskType].successDurationMs += duration;
