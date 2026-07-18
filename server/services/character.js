@@ -207,10 +207,14 @@ async function enrichCharacter(raw, { withSkills = true, withMetrics = true } = 
     withSkills ? getCharacterSkills(read) : Promise.resolve(undefined),
     withMetrics ? getCharacterMetrics(read) : Promise.resolve(undefined),
   ]);
-  const ageYears = ageYearsFromBirthDate(birthDate);
+  // One shared `now` for both derivations so status and level can't disagree at the future
+  // boundary (a birthDate a millisecond apart from two separate `new Date()` clocks) — the
+  // invariant CityXpBadge/CityHudCompact rely on (#2757, claude review).
+  const now = new Date();
+  const ageYears = ageYearsFromBirthDate(birthDate, now);
   // birthDateStatus (#2757) lets the CTA branch "set" (unset) vs "fix" (invalid/future/unreadable)
   // instead of conflating every null-level case. Derived + stripped like the other DERIVED_FIELDS.
-  const birthDateStatus = birthDateStatusFrom(birthDate, readable);
+  const birthDateStatus = birthDateStatusFrom(birthDate, readable, now);
   const enriched = { ...raw, ageYears, level: levelFromAge(ageYears), birthDateStatus };
   // Drop any stale persisted key when a registry wasn't computed, so a hand-edited
   // character.json can't pass its own `skills`/`metrics` off as freshly derived.

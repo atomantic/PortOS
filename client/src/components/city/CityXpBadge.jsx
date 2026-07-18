@@ -54,9 +54,13 @@ export default function CityXpBadge({ character }) {
   // the birth-date field lives). The CTA distinguishes a genuinely unset date ("set") from a
   // present-but-unusable one ("fix" — invalid/future/unreadable), so we never tell the user to
   // set a date they already entered (#2757).
+  // birthDateCta returns null for 'ok' (a real level exists). It's non-null whenever hasBirthDate
+  // is false under the server's status⟺level invariant, but read every cta.* through `?.`/`??`
+  // anyway so a hypothetical invariant break degrades to the SET prompt instead of crashing the
+  // whole HUD — the same defensive gate CharacterSheet and CityHudCompact use (#2757, claude review).
   const cta = view.hasBirthDate ? null : birthDateCta(view.birthDateStatus);
-  const levelLabel = view.hasBirthDate ? `LV ${view.level}` : cta.badgeLabel;
-  const target = view.hasBirthDate ? '/character' : cta.path;
+  const levelLabel = view.hasBirthDate ? `LV ${view.level}` : (cta?.badgeLabel ?? 'LV —');
+  const target = view.hasBirthDate ? '/character' : (cta?.path ?? '/meatspace/age');
   // A present-but-unusable date (invalid/future/unreadable) renders in the warning color, matching
   // the CharacterSheet "fix" prompt and the changelog's promise (#2757). Never true while leveling.
   const fixState = cta?.kind === 'fix';
@@ -66,7 +70,7 @@ export default function CityXpBadge({ character }) {
       <button
         type="button"
         onClick={() => navigate(target)}
-        title={view.hasBirthDate ? 'Open character sheet' : cta.title}
+        title={view.hasBirthDate ? 'Open character sheet' : (cta?.title ?? 'Set your birth date')}
         className={`relative block w-40 sm:w-48 bg-black/85 backdrop-blur-sm border rounded-lg px-3 py-2.5 overflow-hidden text-left transition-all duration-300 hover:bg-cyan-500/10 ${
           leveling
             ? 'border-amber-400/70 shadow-[0_0_16px_rgba(245,158,11,0.5)]'
@@ -124,7 +128,7 @@ export default function CityXpBadge({ character }) {
 
         <div className="relative flex items-center justify-between mt-1">
           <span className="font-pixel text-[8px] text-gray-500 tracking-wider">
-            {view.hasBirthDate ? `${pct}% TO NEXT` : cta.badgeCaption}
+            {view.hasBirthDate ? `${pct}% TO NEXT` : (cta?.badgeCaption ?? 'SET BIRTH DATE')}
           </span>
           {view.hp != null && view.maxHp != null && (
             <span
