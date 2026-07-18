@@ -251,6 +251,12 @@ function eventToMessage(ev, personName) {
   };
 }
 
+// Per-(conversation, inbound) in-flight guard so two concurrent requests for the
+// same thread (two tabs, a retry) don't each fire a paid LLM call before either
+// files its draft — the file-write queue serializes the writes, not the
+// lookup→generate→create span. The second caller awaits the first's result.
+const inflightOutreach = new Map();
+
 /**
  * Generate a grounded outreach draft for one detected unanswered thread and file
  * it through the existing draft-then-approve pipeline. USER-ACTION-GATED: only ever
@@ -262,7 +268,22 @@ function eventToMessage(ev, personName) {
  *
  * @returns {Promise<{ draft, person: { id, name } | null }>}
  */
-export async function generateOutreachDraft({
+export async function generateOutreachDraft(params = {}) {
+  const conversationKey = params.chatGuid || params.conversationId || params.threadId || params.handle || null;
+  // No key to guard on (validated away at the route, but defensive) → run directly.
+  if (!conversationKey) return generateOutreachDraftImpl(params);
+  const guardKey = `${conversationKey}::${params.lastInboundAt || ''}`;
+  const pending = inflightOutreach.get(guardKey);
+  if (pending) return pending;
+  const promise = generateOutreachDraftImpl(params);
+  inflightOutreach.set(guardKey, promise);
+  promise.finally(() => {
+    if (inflightOutreach.get(guardKey) === promise) inflightOutreach.delete(guardKey);
+  }).catch(() => {}); // finally's own rejection is irrelevant; callers see `promise`
+  return promise;
+}
+
+async function generateOutreachDraftImpl({
   personId = null,
   source = null,
   chatGuid = null,
@@ -282,24 +303,6 @@ export async function generateOutreachDraft({
 
   const person = personId ? await getPerson(personId).catch(() => null) : null;
   const conversationKey = chatGuid || conversationId || threadId || handle || null;
-
-  // Idempotency: a Tribe-outreach draft is a paid LLM call. Detection doesn't
-  // clear when a draft is filed (the inbound is still the last turn), so the same
-  // thread resurfaces after a page reload / tab remount. Reuse an existing un-sent
-  // draft for this conversation — but ONLY when it targets the SAME detected inbound
-  // (`lastInboundAt`): once the contact sends a newer message, that draft is stale
-  // and a fresh reply must be generated, not the old one returned forever (review-
-  // only drafts never reach 'sent').
-  if (conversationKey) {
-    const existing = (await listDrafts().catch(() => []))
-      .find((d) => d.generatedBy === 'tribe-outreach'
-        && d.conversationKey === conversationKey
-        && d.lastInboundAt === lastInboundAt
-        && d.status !== 'sent');
-    if (existing) {
-      return { draft: existing, person: person ? { id: person.id, name: person.name } : null, reused: true };
-    }
-  }
 
   // Ground the reply in the actual conversation, pulled from the timeline by the
   // DETECTED conversation key — chatGuid (iMessage) / conversationId (Signal) /
@@ -333,14 +336,35 @@ export async function generateOutreachDraft({
     throw new ServerError('No conversation history found to ground an outreach draft', { status: 404 });
   }
 
-  // Revalidate against fresh timeline state: the Care Queue fetched once, so the
-  // user may have replied (a newer sync recorded a `message.sent`) between then and
-  // this click. Don't spend a paid LLM call drafting a reply to an already-answered
-  // thread — bail with a clear signal the client can surface instead.
+  // Revalidate against fresh timeline state BEFORE any reuse or generation: the
+  // Care Queue fetched once, so between then and this click the user may have
+  // replied (a newer `message.sent`) OR the contact may have sent a follow-up (a
+  // newer `message.received`). Either makes the detected anchor stale — bail with a
+  // clear signal so we don't reply to the wrong (old) turn or an answered thread.
+  // Doing this before the draft-reuse lookup means a since-answered thread returns
+  // 409 even when an obsolete un-sent draft is still on file.
   const anchorT = Date.parse(anchorEv.happenedAt);
-  const alreadyReplied = sorted.some((ev) => ev.kind === 'message.sent' && Date.parse(ev.happenedAt) > anchorT);
-  if (alreadyReplied) {
+  if (sorted.some((ev) => ev.kind === 'message.sent' && Date.parse(ev.happenedAt) > anchorT)) {
     throw new ServerError('You have already replied to this conversation', { status: 409, code: 'ALREADY_REPLIED' });
+  }
+  if (lastInboundAt && sorted.some((ev) => ev.kind === 'message.received' && Date.parse(ev.happenedAt) > anchorT)) {
+    throw new ServerError('A newer message arrived — reload to draft a reply to the latest one', { status: 409, code: 'STALE_INBOUND' });
+  }
+
+  // Idempotency: a Tribe-outreach draft is a paid LLM call, and detection doesn't
+  // clear when a draft is filed (the inbound is still the last turn), so the same
+  // thread resurfaces after a reload / tab remount. Reuse an existing un-sent draft
+  // for the SAME conversation + inbound instead of regenerating. (A newer inbound
+  // has a different lastInboundAt and was already rejected above as stale.)
+  if (conversationKey) {
+    const existing = (await listDrafts().catch(() => []))
+      .find((d) => d.generatedBy === 'tribe-outreach'
+        && d.conversationKey === conversationKey
+        && d.lastInboundAt === lastInboundAt
+        && d.status !== 'sent');
+    if (existing) {
+      return { draft: existing, person: person ? { id: person.id, name: person.name } : null, reused: true };
+    }
   }
 
   // Grounding context: the last N turns, but always keep the anchor in-window.

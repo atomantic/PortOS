@@ -589,10 +589,11 @@ function OutreachQueue() {
   const [copiedKey, setCopiedKey] = useState(null);
   const [highlightKey, setHighlightKey] = useState(null);
   const rowRefs = useRef({});
-  // A proactive alert deep-links here as ?outreach=<personId> — scroll to and
-  // highlight that person's thread so clicking one of several alerts lands on it.
+  // A proactive alert deep-links here as ?outreach=<conversationKey> — scroll to and
+  // highlight that exact thread so clicking one of several alerts lands on it (keyed
+  // by conversation, since one person can have multiple unanswered threads).
   const [searchParams] = useSearchParams();
-  const outreachPersonId = searchParams.get('outreach');
+  const outreachKey = searchParams.get('outreach');
 
   useEffect(() => {
     let cancelled = false;
@@ -603,15 +604,15 @@ function OutreachQueue() {
   }, []);
 
   useEffect(() => {
-    if (!outreachPersonId || !Array.isArray(threads)) return;
-    const target = threads.find((t) => t.personId === outreachPersonId);
+    if (!outreachKey || !Array.isArray(threads)) return;
+    const target = threads.find((t) => t.conversationKey === outreachKey);
     if (!target) return;
     const el = rowRefs.current[target.conversationKey];
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
     setHighlightKey(target.conversationKey);
     const timer = setTimeout(() => setHighlightKey((prev) => (prev === target.conversationKey ? null : prev)), 2500);
     return () => clearTimeout(timer);
-  }, [outreachPersonId, threads]);
+  }, [outreachKey, threads]);
 
   const generate = async (thread) => {
     const key = thread.conversationKey;

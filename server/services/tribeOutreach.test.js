@@ -158,6 +158,11 @@ describe('generateOutreachDraft', () => {
     generateReplyBody.mockResolvedValue({ body: 'Hey Alex — sorry for the delay!' });
     createDraft.mockImplementation(async (d) => ({ id: 'draft-new', status: 'draft', ...d }));
     listDrafts.mockResolvedValue([]);
+    // Default timeline: a single inbound matching the tests' lastInboundAt, so the
+    // pre-generation freshness read (now runs before reuse) finds a fresh anchor.
+    listEvents.mockResolvedValue([
+      { kind: 'message.received', happenedAt: '2026-07-15T00:00:00.000Z', summary: 'hi' },
+    ]);
   });
 
   it('reuses an existing un-sent outreach draft for the same conversation + inbound (no duplicate LLM call)', async () => {
@@ -169,6 +174,16 @@ describe('generateOutreachDraft', () => {
     expect(result.draft.id).toBe('draft-old');
     expect(generateReplyBody).not.toHaveBeenCalled();
     expect(createDraft).not.toHaveBeenCalled();
+  });
+
+  it('anchors the reply to the detected inbound even with older turns present', async () => {
+    listEvents.mockResolvedValue([
+      { kind: 'message.sent', happenedAt: '2026-07-10T00:00:00.000Z', summary: 'an older reply of mine' },
+      { kind: 'message.received', happenedAt: '2026-07-15T00:00:00.000Z', summary: 'the detected one' },
+    ]);
+    await generateOutreachDraft({ personId: 'p1', source: 'imessage', chatGuid: 'chat-1', lastInboundAt: '2026-07-15T00:00:00.000Z' });
+    const [replyTo] = generateReplyBody.mock.calls[0];
+    expect(replyTo.bodyText).toBe('the detected one');
   });
 
   it('does NOT reuse a draft for a stale inbound — a newer message generates a fresh draft', async () => {
@@ -196,19 +211,6 @@ describe('generateOutreachDraft', () => {
     expect(createDraft).toHaveBeenCalledWith(expect.objectContaining({ conversationKey: 'chat-1', sendVia: 'review' }));
   });
 
-  it('anchors the reply to the detected inbound timestamp, not the newest turn', async () => {
-    listEvents.mockResolvedValue([
-      { kind: 'message.received', happenedAt: '2026-07-15T00:00:00.000Z', summary: 'the one we detected' },
-      { kind: 'message.received', happenedAt: '2026-07-16T00:00:00.000Z', summary: 'a later turn from someone else' },
-    ]);
-    await generateOutreachDraft({
-      personId: 'p1', source: 'imessage', chatGuid: 'chat-1',
-      lastInboundAt: '2026-07-15T00:00:00.000Z',
-    });
-    const [replyTo] = generateReplyBody.mock.calls[0];
-    expect(replyTo.bodyText).toBe('the one we detected');
-  });
-
   it('refuses (409) when a reply was sent after the detected inbound', async () => {
     listEvents.mockResolvedValue([
       { kind: 'message.received', happenedAt: '2026-07-15T00:00:00.000Z', summary: 'you around?' },
@@ -219,6 +221,28 @@ describe('generateOutreachDraft', () => {
     })).rejects.toMatchObject({ status: 409 });
     expect(generateReplyBody).not.toHaveBeenCalled();
     expect(createDraft).not.toHaveBeenCalled();
+  });
+
+  it('refuses (409 STALE_INBOUND) when a newer inbound arrived after the detected one', async () => {
+    listEvents.mockResolvedValue([
+      { kind: 'message.received', happenedAt: '2026-07-15T00:00:00.000Z', summary: 'the detected one' },
+      { kind: 'message.received', happenedAt: '2026-07-18T00:00:00.000Z', summary: 'a newer follow-up' },
+    ]);
+    await expect(generateOutreachDraft({
+      personId: 'p1', source: 'imessage', chatGuid: 'chat-1', lastInboundAt: '2026-07-15T00:00:00.000Z',
+    })).rejects.toMatchObject({ status: 409, code: 'STALE_INBOUND' });
+    expect(generateReplyBody).not.toHaveBeenCalled();
+  });
+
+  it('coalesces two concurrent generations for the same thread into one LLM call', async () => {
+    listEvents.mockResolvedValue([
+      { kind: 'message.received', happenedAt: '2026-07-15T00:00:00.000Z', summary: 'hi' },
+    ]);
+    const seed = { personId: 'p1', source: 'imessage', chatGuid: 'chat-1', lastInboundAt: '2026-07-15T00:00:00.000Z' };
+    const [a, b] = await Promise.all([generateOutreachDraft(seed), generateOutreachDraft(seed)]);
+    expect(generateReplyBody).toHaveBeenCalledTimes(1);
+    expect(createDraft).toHaveBeenCalledTimes(1);
+    expect(a.draft).toBe(b.draft);
   });
 
   it('uses a chat-appropriate reply template, not the email default', async () => {
