@@ -120,12 +120,14 @@ function normalizeToken(value) {
 // about LI's own capability, so on the off chance one arrives it correctly reads as
 // `unknown-failure` rather than a real capability signal.
 const RAW_CATEGORY_TAXONOMY = new Map(Object.entries({
-  // testing — the change was made but broke a project check (a regression).
+  // testing — the change was made but broke a project check (a regression). Note a
+  // clean-exit VALIDATION MISS is not a raw errorCategory token (it's only ever a
+  // synthetic `failed:validation-miss` display label), so it is handled by the
+  // `validationPassed === false → testing` branch in classifyExecutionFailure, not here.
   'test-failure': 'testing',
   'lint-error': 'testing',
   'build-error': 'testing',
   'npm-error': 'testing',
-  'validation-miss': 'testing',
 
   // execution — the agent got the mechanical application of the change wrong.
   'git-conflict': 'execution',
