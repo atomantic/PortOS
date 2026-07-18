@@ -43,6 +43,9 @@ import {
   LI_DEGRADED_SUCCESS_THRESHOLD,
   LI_DEGRADED_MIN_SAMPLE,
   computeScopeAwareness,
+  computeExecutionByDomain,
+  computeProposalExecutionAwareness,
+  PROPOSAL_EXECUTION_MIN_SAMPLE,
   SCOPE_AVOID_SUCCESS_THRESHOLD,
   SCOPE_PREFER_SUCCESS_THRESHOLD,
   SCOPE_AWARENESS_MIN_SAMPLE,
@@ -417,6 +420,76 @@ describe('buildHandoffTask', () => {
     expect(jira).toContain('PROJ-7');
     expect(jira).toContain('change X to Y'); // carries the proposal body
   });
+
+  it('stamps the proposal identity + domain for per-domain execution tracking (#2765)', () => {
+    const t = buildHandoffTask({ app, proposal: { ...proposal, scope: 'loop-meta' }, issueRef: 42 });
+    expect(t.liProposal).toEqual({ appId: 'app-1', slug: 'fix-typo', scope: 'loop-meta' });
+  });
+});
+
+describe('computeExecutionByDomain (#2765)', () => {
+  it('groups executed proposals by their scope and computes per-domain success rate', () => {
+    const byDomain = computeExecutionByDomain([
+      { scope: 'loop-meta', executionOutcome: 'success' },
+      { scope: 'loop-meta', executionOutcome: 'failure' },
+      { scope: 'app-improvement', executionOutcome: 'success' }
+    ]);
+    expect(byDomain['loop-meta']).toEqual({ completed: 2, succeeded: 1, successRate: 50 });
+    expect(byDomain['app-improvement']).toEqual({ completed: 1, succeeded: 1, successRate: 100 });
+  });
+
+  it('ignores records with no executionOutcome or no scope', () => {
+    const byDomain = computeExecutionByDomain([
+      { scope: 'loop-meta', executionOutcome: null },      // filed but never executed
+      { scope: null, executionOutcome: 'success' },        // executed but domain unknown
+      { executionOutcome: 'success' },                     // no scope key
+      'nonsense',
+      { scope: 'app-data-gap', executionOutcome: 'success' }
+    ]);
+    expect(Object.keys(byDomain)).toEqual(['app-data-gap']);
+  });
+
+  it('returns an empty map for a non-array / empty input', () => {
+    expect(computeExecutionByDomain()).toEqual({});
+    expect(computeExecutionByDomain(null)).toEqual({});
+    expect(computeExecutionByDomain([])).toEqual({});
+  });
+});
+
+describe('computeProposalExecutionAwareness (#2765)', () => {
+  const execRecords = (scope, successes, failures) => [
+    ...Array.from({ length: successes }, () => ({ scope, executionOutcome: 'success' })),
+    ...Array.from({ length: failures }, () => ({ scope, executionOutcome: 'failure' }))
+  ];
+
+  it('returns "" until a domain clears the sample floor', () => {
+    // One execution is below PROPOSAL_EXECUTION_MIN_SAMPLE (2) — no list yet.
+    expect(computeProposalExecutionAwareness({ outcomes: execRecords('loop-meta', 0, 1) })).toBe('');
+    expect(computeProposalExecutionAwareness({ outcomes: [] })).toBe('');
+    expect(computeProposalExecutionAwareness()).toBe('');
+  });
+
+  it('lists a low-execution domain under AVOID and a high one under PREFER', () => {
+    const out = computeProposalExecutionAwareness({
+      outcomes: [
+        ...execRecords('app-improvement', 0, 3), // 0% → avoid
+        ...execRecords('loop-meta', 3, 0)         // 100% → prefer
+      ]
+    });
+    expect(out).toContain('LOW-EXECUTION proposal domains');
+    expect(out).toContain('app-improvement');
+    expect(out).toContain('HIGH-EXECUTION proposal domains');
+    expect(out).toContain('loop-meta');
+    // No "directional context only" hedge — this is a true per-proposal record.
+    expect(out).not.toContain('directional');
+    expect(out).not.toMatch(/don't map 1:1|do not map 1:1/);
+  });
+
+  it('leaves a mid-rate domain (>=avoid, <prefer) off both lists', () => {
+    // 2/3 ≈ 67%: above the 50% avoid line, below the 75% prefer line.
+    expect(computeProposalExecutionAwareness({ outcomes: execRecords('loop-meta', 2, 1) })).toBe('');
+    expect(PROPOSAL_EXECUTION_MIN_SAMPLE).toBe(2);
+  });
 });
 
 describe('resolveBlockOnIssue', () => {
@@ -605,6 +678,18 @@ describe('buildPrompt', () => {
     expect(withGuidance).toContain('completion rates for THIS install'); // honest framing (codex P1)
     // rendered under its dedicated heading, never as a generic "### scopeGuidance" dump
     expect(withGuidance).not.toContain('### scopeGuidance');
+  });
+
+  it('injects the per-proposal-domain execution block only when a report is passed (#2765)', () => {
+    const base = { app, isPortos: true, config: { allowedScopes: ['loop-meta'], rules: '' } };
+    expect(buildPrompt(base)).not.toContain('liProposalExecution');
+    const withExec = buildPrompt({
+      ...base,
+      proposalExecutionReport: 'HIGH-EXECUTION proposal domains — LI reliably implements its own proposals here (at or above 75%):\n- loop-meta: LI implemented 100% of its own loop-meta proposals successfully over 3 executed'
+    });
+    expect(withExec).toContain('### liProposalExecution');
+    expect(withExec).toContain('loop-meta');
+    expect(withExec).toContain('DIRECT record'); // framed as authoritative, not directional
   });
 
   it('suppresses the scope-awareness block on a managed (non-PortOS) app (#2760 codex P2)', () => {

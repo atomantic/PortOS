@@ -291,10 +291,30 @@ export function recordFailureSignature(data, context) {
 }
 
 /**
+ * Build the per-proposal-domain execution payload (#2765) from a completed task that
+ * took the Layered-Intelligence hand-off path, or null when the task carries no LI
+ * marker. The marker (`metadata.taskLiProposal`) is projected onto the agent by
+ * agentLifecycle and reconstructed onto the task by the completion listener; it names
+ * the proposal's app, slug, and domain (scope). `success` is the validation-authoritative
+ * learning outcome, so it agrees with the byTaskType aggregate for the same run.
+ */
+function deriveLiExecutionPayload(task, success) {
+  const li = task?.metadata?.taskLiProposal;
+  if (!li || typeof li !== 'object' || Array.isArray(li)) return null;
+  if (!li.appId || !li.slug) return null;
+  return { appId: li.appId, slug: li.slug, scope: li.scope ?? null, success: !!success };
+}
+
+/**
  * Record a completed task for learning
  */
 export async function recordTaskCompletion(agent, task) {
-  return withLock(async () => {
+  // Per-proposal-domain execution attribution (#2765) — captured inside the lock (it
+  // needs this run's validation-authoritative outcome) but WRITTEN after it, so the LI
+  // outcome store's I/O never runs under the learning lock and the generic learning
+  // store stays statically decoupled from LI (lazy import below).
+  let liExecPayload = null;
+  const result = await withLock(async () => {
   const data = await loadLearningData();
 
   // Structured telemetry context (failure signature + execution context +
@@ -327,6 +347,11 @@ export async function recordTaskCompletion(agent, task) {
   // (ordinary task output tripping a loose pattern). Structured provider/runner
   // signals and pre-marker records (null origin) keep the category-only behavior.
   const isEnvironmentalFailure = shouldDivertToEnvironmental(outcomeSuccess, errorCategory, errorOrigin);
+
+  // Attribute an LI hand-off's outcome to the proposal's DOMAIN (#2765). Only a
+  // non-environmental completion counts: a rate-limit/outage says nothing about the
+  // domain, exactly as it is barred from denting the byTaskType aggregate below.
+  liExecPayload = isEnvironmentalFailure ? null : deriveLiExecutionPayload(task, outcomeSuccess);
 
   // Correlation-quality prediction snapshot (issue #2344) — captured HERE, before
   // ANY of this run's aggregates (byModelTier, routingAccuracy, failureSignatures)
@@ -556,6 +581,17 @@ export async function recordTaskCompletion(agent, task) {
 
   return data;
   });
+
+  // Post-lock, best-effort: record the LI hand-off execution outcome keyed to the
+  // proposal's domain (#2765). Lazy import keeps the learning store's static module
+  // graph free of LI; a failure here never disturbs the learning write above.
+  if (liExecPayload) {
+    await import('../layeredIntelligenceOutcomes.js')
+      .then(m => m.recordProposalExecution(liExecPayload))
+      .catch(err => console.error(`❌ 📚 TaskLearning: failed to record LI proposal execution: ${err.message}`));
+  }
+
+  return result;
 }
 
 /**

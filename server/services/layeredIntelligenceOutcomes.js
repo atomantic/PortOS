@@ -22,7 +22,7 @@
 import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { createCollectionStore } from '../lib/collectionStore.js';
-import { normalizeSlug, deriveOutcome, PROPOSAL_OUTCOMES, CLOSED_SUPPRESSION_MS } from './layeredIntelligence.js';
+import { normalizeSlug, deriveOutcome, PROPOSAL_OUTCOMES, PROPOSAL_EXECUTION_OUTCOMES, CLOSED_SUPPRESSION_MS } from './layeredIntelligence.js';
 import { classifyRejection, REJECTION_REASON_VALUES } from './layeredIntelligenceRejections.js';
 
 // The report/retention window. Reuses the dedup suppression window so a proposal
@@ -72,7 +72,15 @@ export function sanitizeOutcomeRecord(raw) {
     outcome,
     outcomeAt: outcome && typeof raw.outcomeAt === 'string' ? raw.outcomeAt : null,
     outcomeReason: outcome && typeof raw.outcomeReason === 'string' ? raw.outcomeReason : null,
-    rejectionReason: rejectable && REJECTION_REASON_VALUES.includes(raw.rejectionReason) ? raw.rejectionReason : null
+    rejectionReason: rejectable && REJECTION_REASON_VALUES.includes(raw.rejectionReason) ? raw.rejectionReason : null,
+    // Per-proposal-domain EXECUTION record (#2765) — orthogonal to `outcome` (the
+    // FILING fate): whether LI's own coding agent implemented the proposal after the
+    // Engine-A hand-off. `null` = never handed off / not yet executed; a token only
+    // when it is a recognized execution outcome, so a hand-edited/future value coerces
+    // to null (re-derivable on the next run) rather than a fake result. `executionAt`
+    // is kept only alongside a real executionOutcome.
+    executionOutcome: PROPOSAL_EXECUTION_OUTCOMES.includes(raw.executionOutcome) ? raw.executionOutcome : null,
+    executionAt: PROPOSAL_EXECUTION_OUTCOMES.includes(raw.executionOutcome) && typeof raw.executionAt === 'string' ? raw.executionAt : null
   };
 }
 
@@ -133,11 +141,62 @@ export async function recordFiledProposal({ appId, slug, tracker = null, issueRe
     outcomeAt: null,
     outcomeReason: null,
     // Unresolved: nothing has rejected it yet, so there is nothing to diagnose.
-    rejectionReason: null
+    rejectionReason: null,
+    // Not executed yet — set only if this proposal is later handed off and its agent
+    // run completes (recordProposalExecution, #2765).
+    executionOutcome: null,
+    executionAt: null
   };
   await ensureTypeIndex(store);
   const ok = await store.saveOne(outcomeId(appId, normSlug), record).then(() => true, (err) => {
     console.error(`❌ Layered Intelligence: failed to record outcome for ${appId}/${normSlug}: ${err.message}`);
+    return false;
+  });
+  return ok;
+}
+
+/**
+ * Record the EXECUTION outcome of a handed-off proposal (#2765): once LI's own
+ * coding agent finishes implementing a proposal it filed, stamp whether the run
+ * succeeded, keyed to the proposal's (app, slug) — so computeExecutionByDomain can
+ * later group these by the proposal's domain (scope). Merges over the existing filed
+ * record (preserving its filing outcome, scope, and refs); if the record is gone
+ * (GC'd, or the filing write failed) a minimal record is created from the passed
+ * scope so the execution signal isn't silently lost. `success` must be a strict
+ * boolean — a non-boolean is a caller bug and returns false without writing.
+ * Best-effort: a write failure logs and returns false rather than throwing into the
+ * completion hook. Environmental failures must be filtered by the CALLER (they say
+ * nothing about the domain — same gate as #2618); this helper records whatever it is
+ * given.
+ */
+export async function recordProposalExecution({ appId, slug, scope = null, success, now = Date.now() } = {}, store = outcomesStore()) {
+  const normSlug = normalizeSlug(slug);
+  if (!appId || !normSlug || typeof success !== 'boolean') return false;
+  const id = outcomeId(appId, normSlug);
+  // The domain to adopt when we don't already have one — the load-bearing field for
+  // per-domain aggregation. Normalized once and reused by both the missing-record
+  // fallback and the scope-preservation merge below.
+  const normScope = typeof scope === 'string' && scope.trim() ? scope.trim() : null;
+  const existing = await store.loadOne(id).catch(() => null);
+  const base = existing && typeof existing === 'object'
+    ? existing
+    : {
+        appId, slug: normSlug, tracker: null, issueRef: null,
+        scope: normScope,
+        filedAt: new Date(now).toISOString(),
+        outcome: null, outcomeAt: null, outcomeReason: null, rejectionReason: null
+      };
+  const next = {
+    ...base,
+    // Preserve the filed scope when the record already carries one; otherwise adopt
+    // the domain the completion hook passed (a missing-record fallback).
+    scope: (typeof base.scope === 'string' && base.scope.trim()) ? base.scope : normScope,
+    executionOutcome: success ? 'success' : 'failure',
+    executionAt: new Date(now).toISOString()
+  };
+  await ensureTypeIndex(store);
+  const ok = await store.saveOne(id, next).then(() => true, (err) => {
+    console.error(`❌ Layered Intelligence: failed to record execution outcome for ${appId}/${normSlug}: ${err.message}`);
     return false;
   });
   return ok;

@@ -461,6 +461,11 @@ async function runAgentSpawn(task) {
       taskAnalysisType: task.metadata?.analysisType || null,
       taskReviewType: task.metadata?.reviewType || null,
       taskApp: task.metadata?.app || null,
+      // LI hand-off provenance (#2765): projected onto the agent so the completion
+      // hook (recordTaskCompletion) can attribute the run's success/failure back to
+      // the proposal's domain. agent.metadata is a hand-picked projection of
+      // task.metadata (not a full spread), so this must be listed explicitly.
+      taskLiProposal: task.metadata?.liProposal || null,
       taskAppName: resolvedAppName,
       selfImprovementType: task.metadata?.selfImprovementType || null,
       jobId: task.metadata?.jobId || null,

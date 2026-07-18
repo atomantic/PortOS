@@ -305,6 +305,14 @@ export async function addTask(taskData, taskType = 'user', { raw = false, ignore
     if (taskData.diagnostics && typeof taskData.diagnostics === 'object' && !Array.isArray(taskData.diagnostics)) {
       metadata.diagnostics = taskData.diagnostics;
     }
+    // Layered-Intelligence hand-off provenance (#2765): the proposal's identity +
+    // domain, carried from buildHandoffTask so recordTaskCompletion can attribute this
+    // agent run's success/failure back to the proposal's DOMAIN (per-proposal execution
+    // record). A non-object / array (defensive) is ignored. Round-trips through the
+    // markdown store via the same JSON sentinel as `diagnostics` above.
+    if (taskData.liProposal && typeof taskData.liProposal === 'object' && !Array.isArray(taskData.liProposal)) {
+      metadata.liProposal = taskData.liProposal;
+    }
     // Content-edit timestamp for cross-peer newest-edit-wins LWW (#1714). Stamped
     // at creation so a freshly-added task always carries a stamp; the merge treats
     // an absent stamp as oldest, so this also keeps a stamped task from losing a

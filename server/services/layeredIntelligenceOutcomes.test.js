@@ -6,12 +6,14 @@ import { createCollectionStore } from '../lib/collectionStore.js';
 import {
   sanitizeOutcomeRecord,
   recordFiledProposal,
+  recordProposalExecution,
   listOutcomes,
   listOutcomesResult,
   reconcileOutcomes,
   OUTCOME_RETENTION_MS,
   LI_OUTCOMES_SCHEMA_VERSION
 } from './layeredIntelligenceOutcomes.js';
+import { computeExecutionByDomain } from './layeredIntelligence.js';
 
 // Build an isolated store over a temp dir so the suite never touches the real
 // data/cos/li-outcomes collection. The store functions all take an injectable
@@ -77,6 +79,29 @@ describe('sanitizeOutcomeRecord', () => {
 
     it('defaults a pre-taxonomy record to null rather than inventing a reason', () => {
       expect(sanitize({ outcome: 'rejected' }).rejectionReason).toBeNull();
+    });
+  });
+
+  describe('executionOutcome (#2765)', () => {
+    const sanitize = (over) => sanitizeOutcomeRecord({ appId: 'a', slug: 's', ...over });
+
+    it('keeps a recognized execution outcome + its timestamp', () => {
+      const r = sanitize({ executionOutcome: 'success', executionAt: '2026-01-01T00:00:00.000Z' });
+      expect(r.executionOutcome).toBe('success');
+      expect(r.executionAt).toBe('2026-01-01T00:00:00.000Z');
+      expect(sanitize({ executionOutcome: 'failure', executionAt: 'x' }).executionOutcome).toBe('failure');
+    });
+
+    it('coerces an unrecognized execution outcome to null and drops its timestamp', () => {
+      const r = sanitize({ executionOutcome: 'bogus', executionAt: 'x' });
+      expect(r.executionOutcome).toBeNull();
+      expect(r.executionAt).toBeNull();
+    });
+
+    it('defaults a record with no execution field to null (never executed)', () => {
+      const r = sanitize({ outcome: 'merged' });
+      expect(r.executionOutcome).toBeNull();
+      expect(r.executionAt).toBeNull();
     });
   });
 });
@@ -423,5 +448,64 @@ describe('listOutcomesResult read sentinel (#2700)', () => {
     expect(await listOutcomes({ appId: 'app-1' }, store)).toHaveLength(1);
     const broken = { loadAll: () => Promise.reject(new Error('nope')), deleteOne: () => Promise.resolve() };
     expect(await listOutcomes({ appId: 'app-1' }, broken)).toEqual([]);
+  });
+});
+
+describe('recordProposalExecution (#2765)', () => {
+  it('stamps execution success onto an existing filed record, preserving its scope + filing outcome', async () => {
+    await recordFiledProposal({ appId: 'app-1', slug: 'tidy-thing', tracker: 'github', issueRef: '#7', scope: 'loop-meta' }, store);
+    const ok = await recordProposalExecution({ appId: 'app-1', slug: 'tidy-thing', success: true }, store);
+    expect(ok).toBe(true);
+    const [row] = await listOutcomes({ appId: 'app-1' }, store);
+    expect(row).toMatchObject({ slug: 'tidy-thing', scope: 'loop-meta', executionOutcome: 'success' });
+    expect(row.executionAt).toBeTruthy();
+    // The filed identity is untouched — execution is orthogonal to the filing fate.
+    expect(row.issueRef).toBe('#7');
+    expect(row.outcome).toBeNull();
+  });
+
+  it('records a failure and normalizes the slug', async () => {
+    await recordFiledProposal({ appId: 'app-1', slug: 'flaky-fix', scope: 'app-improvement' }, store);
+    await recordProposalExecution({ appId: 'app-1', slug: 'Flaky Fix', success: false }, store);
+    const [row] = await listOutcomes({ appId: 'app-1' }, store);
+    expect(row.executionOutcome).toBe('failure');
+  });
+
+  it('creates a minimal record (adopting the passed scope) when the filed record is missing', async () => {
+    // GC'd or a filing-write miss — the execution signal must not be silently lost.
+    const ok = await recordProposalExecution({ appId: 'app-2', slug: 'orphan', scope: 'portos-self', success: true }, store);
+    expect(ok).toBe(true);
+    const [row] = await listOutcomes({ appId: 'app-2' }, store);
+    expect(row).toMatchObject({ appId: 'app-2', slug: 'orphan', scope: 'portos-self', executionOutcome: 'success' });
+  });
+
+  it('rejects a non-boolean success / missing identity without writing', async () => {
+    expect(await recordProposalExecution({ appId: 'app-1', slug: 's', success: 'yes' }, store)).toBe(false);
+    expect(await recordProposalExecution({ appId: 'app-1', success: true }, store)).toBe(false);
+    expect(await recordProposalExecution({ slug: 's', success: true }, store)).toBe(false);
+    expect(await listOutcomes({ appId: 'app-1' }, store)).toHaveLength(0);
+  });
+
+  it('acceptance (#2765): filing + executing a proposal moves ONLY that domain’s bucket', async () => {
+    // Two proposals in different domains; execute only the loop-meta one.
+    await recordFiledProposal({ appId: 'app-1', slug: 'meta-one', scope: 'loop-meta' }, store);
+    await recordFiledProposal({ appId: 'app-1', slug: 'improve-one', scope: 'app-improvement' }, store);
+    await recordProposalExecution({ appId: 'app-1', slug: 'meta-one', success: true }, store);
+
+    const byDomain = computeExecutionByDomain(await listOutcomes({ appId: 'app-1' }, store));
+    expect(byDomain['loop-meta']).toEqual({ completed: 1, succeeded: 1, successRate: 100 });
+    // The un-executed proposal's domain never appears — no executionOutcome to count.
+    expect(byDomain['app-improvement']).toBeUndefined();
+  });
+
+  it('aggregates a domain’s success rate across multiple executions', async () => {
+    await recordFiledProposal({ appId: 'app-1', slug: 'a', scope: 'loop-meta' }, store);
+    await recordFiledProposal({ appId: 'app-1', slug: 'b', scope: 'loop-meta' }, store);
+    await recordFiledProposal({ appId: 'app-1', slug: 'c', scope: 'loop-meta' }, store);
+    await recordProposalExecution({ appId: 'app-1', slug: 'a', success: true }, store);
+    await recordProposalExecution({ appId: 'app-1', slug: 'b', success: true }, store);
+    await recordProposalExecution({ appId: 'app-1', slug: 'c', success: false }, store);
+    const byDomain = computeExecutionByDomain(await listOutcomes({ appId: 'app-1' }, store));
+    expect(byDomain['loop-meta']).toEqual({ completed: 3, succeeded: 2, successRate: 67 });
   });
 });
