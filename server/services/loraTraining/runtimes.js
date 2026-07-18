@@ -80,26 +80,32 @@ const MFLUX_SCHED = Object.freeze({ steps: 40, guidance: 1.0, timestepLow: 25, t
  * Memory-derived training knobs — mirrors the FFLF pixel-budget pattern
  * (videoGen/local.js): pure, with total RAM injected by the caller.
  * Training a bf16 base + in-RAM latent cache OOM-killed a 48 GB machine
- * during verification, so anything under 96 GB trains QLoRA-style against
- * an on-the-fly-quantized base. The encoded dataset cache ALWAYS spills to
+ * during verification, so every tier trains QLoRA-style against an
+ * on-the-fly-quantized base. The encoded dataset cache ALWAYS spills to
  * disk (`low_ram`): keeping it in RAM bought nothing but pushed a 128 GB box
  * to 122 GB used + 21 GB swap (the swap-thrash that coincided with GPU
  * watchdog reboots — see docs/research/2026-06-13-mflux-training-watchdog-panic.md);
  * disk-backing it costs only I/O, no training quality. Quantizing the FROZEN
  * base is the standard QLoRA recipe — the LoRA weights stay full precision.
  *
+ * Default tier never auto-selects unquantized bf16 (issue #1321): even a
+ * ≥96 GB box gets 8-bit QLoRA, not bf16. The bf16 9B path was pathologically
+ * slow (couldn't complete a step in 14 min on an M5 Max 128 GB) AND the config
+ * that GPU-watchdog-panicked the box three times
+ * (docs/research/2026-06-13-mflux-training-watchdog-panic.md) — so it's opt-in
+ * only, never the silent default. 8-bit QLoRA is the standard character-LoRA
+ * recipe with minimal fidelity loss; a run that genuinely wants a heavier base
+ * asks for it explicitly via `baseQuant: 16` (→ `quantize: null`).
+ *
  * Callers feed the *available* memory budget (post-unload, see memoryPrep.js),
  * not raw RAM, so the tier reflects real headroom on a shared box.
  *
- * Override (`LORA_TRAIN_MAX_QUANT_BITS`): on new M5-class silicon the
- * unquantized-bf16 9B path is both pathologically slow (couldn't complete a
- * step in 14 min on an M5 Max 128 GB) AND the config that GPU-watchdog-panicked
- * the box three times (docs/research/2026-06-13-mflux-training-watchdog-panic.md).
- * Setting `LORA_TRAIN_MAX_QUANT_BITS=8` caps the top tier at 8-bit QLoRA even
- * when RAM would allow bf16 — far lighter, standard QLoRA recipe (frozen base
- * quantized, LoRA weights full precision), minimal fidelity loss for a
- * character LoRA. Unset → original memory-derived behavior (no change for other
- * installs). Accepts 8 or 4; anything else is ignored.
+ * Override (`LORA_TRAIN_MAX_QUANT_BITS`): a hard per-install ceiling on the
+ * frozen-base bit-width. Setting it to `4` forces every tier (and every per-run
+ * opt-in) down to 4-bit; setting it to `8` clamps an explicit `baseQuant: 16`
+ * bf16 opt-in back to 8-bit (the 8-bit default is already at/under the cap, so
+ * it's a no-op there). Unset → the memory-derived tier plus whatever a run opts
+ * into. Accepts 8 or 4; anything else is ignored.
  *
  * Per-run overrides (`overrides = { quantize?, low_ram? }`, issue #1321): a
  * single run can opt into a heavier or lighter frozen base than its memory tier
@@ -112,11 +118,13 @@ const MFLUX_SCHED = Object.freeze({ steps: 40, guidance: 1.0, timestepLow: 25, t
  */
 export function deriveMfluxMemoryConfig(totalMemGb, overrides = {}) {
   const gb = Number.isFinite(totalMemGb) ? totalMemGb : 0; // unknown → most conservative
-  const result = gb >= 96
-    ? { quantize: null, low_ram: true }
-    : gb >= 64
-      ? { quantize: 8, low_ram: true }
-      : { quantize: 4, low_ram: true };
+  // bf16 is never the auto default (issue #1321) — the top tier is 8-bit QLoRA,
+  // not unquantized bf16, even at ≥96 GB (bf16 9B was pathologically slow and
+  // GPU-watchdog-panicked the box). A run opts into bf16 explicitly via
+  // `baseQuant: 16`. Tighter budgets step down to 4-bit.
+  const result = gb >= 64
+    ? { quantize: 8, low_ram: true }
+    : { quantize: 4, low_ram: true };
   // Request override wins over the memory-derived tier. hasOwnProperty (not a
   // truthiness check) so an explicit `quantize: null` (bf16) is honored as a
   // deliberate clear, not mistaken for "absent".

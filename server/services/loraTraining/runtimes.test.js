@@ -120,9 +120,10 @@ describe('buildMfluxTrainConfig', () => {
 
   it('derives quantize from the memory budget; latent cache always spills to disk', () => {
     // low_ram is true at every tier — an in-RAM latent cache bought nothing
-    // but risked swap-thrash (the 128 GB / 21 GB-swap incident). quantize still
-    // steps down as the available budget shrinks.
-    expect(deriveMfluxMemoryConfig(128)).toEqual({ quantize: null, low_ram: true });
+    // but risked swap-thrash (the 128 GB / 21 GB-swap incident). bf16 is never
+    // the auto default (issue #1321): even a 128 GB box gets 8-bit QLoRA, not
+    // unquantized bf16. quantize still steps down to 4-bit on tighter budgets.
+    expect(deriveMfluxMemoryConfig(128)).toEqual({ quantize: 8, low_ram: true });
     expect(deriveMfluxMemoryConfig(64)).toEqual({ quantize: 8, low_ram: true });
     expect(deriveMfluxMemoryConfig(48)).toEqual({ quantize: 4, low_ram: true });
     expect(deriveMfluxMemoryConfig(null)).toEqual({ quantize: 4, low_ram: true });
@@ -134,20 +135,20 @@ describe('buildMfluxTrainConfig', () => {
   it('LORA_TRAIN_MAX_QUANT_BITS caps the top tier (M5 bf16-panic mitigation)', () => {
     const prev = process.env.LORA_TRAIN_MAX_QUANT_BITS;
     try {
-      // cap=8: a bf16 (null) box is capped to 8-bit; already-8 stays; smaller (4) is kept.
+      // cap=8: already at the 8-bit default (no-op); smaller (4) is kept.
       process.env.LORA_TRAIN_MAX_QUANT_BITS = '8';
       expect(deriveMfluxMemoryConfig(128)).toEqual({ quantize: 8, low_ram: true });
       expect(deriveMfluxMemoryConfig(64)).toEqual({ quantize: 8, low_ram: true });
       expect(deriveMfluxMemoryConfig(48)).toEqual({ quantize: 4, low_ram: true });
-      // cap=4: everything capped to 4-bit.
+      // cap=4: everything (default 8-bit and the 4-bit tier) forced to 4-bit.
       process.env.LORA_TRAIN_MAX_QUANT_BITS = '4';
       expect(deriveMfluxMemoryConfig(128)).toEqual({ quantize: 4, low_ram: true });
       expect(deriveMfluxMemoryConfig(64)).toEqual({ quantize: 4, low_ram: true });
-      // garbage / unsupported values are ignored → original behavior.
+      // garbage / unsupported values are ignored → memory-derived default (8-bit).
       process.env.LORA_TRAIN_MAX_QUANT_BITS = '16';
-      expect(deriveMfluxMemoryConfig(128)).toEqual({ quantize: null, low_ram: true });
+      expect(deriveMfluxMemoryConfig(128)).toEqual({ quantize: 8, low_ram: true });
       process.env.LORA_TRAIN_MAX_QUANT_BITS = 'banana';
-      expect(deriveMfluxMemoryConfig(128)).toEqual({ quantize: null, low_ram: true });
+      expect(deriveMfluxMemoryConfig(128)).toEqual({ quantize: 8, low_ram: true });
     } finally {
       if (prev === undefined) delete process.env.LORA_TRAIN_MAX_QUANT_BITS;
       else process.env.LORA_TRAIN_MAX_QUANT_BITS = prev;
@@ -159,8 +160,8 @@ describe('buildMfluxTrainConfig', () => {
     // box, or lighter than the box would otherwise pick.
     expect(deriveMfluxMemoryConfig(48, { quantize: null })).toEqual({ quantize: null, low_ram: true });
     expect(deriveMfluxMemoryConfig(128, { quantize: 4 })).toEqual({ quantize: 4, low_ram: true });
-    // low_ram override flips the spill independently of quantize.
-    expect(deriveMfluxMemoryConfig(128, { low_ram: false })).toEqual({ quantize: null, low_ram: false });
+    // low_ram override flips the spill independently of quantize (128 GB → 8-bit default).
+    expect(deriveMfluxMemoryConfig(128, { low_ram: false })).toEqual({ quantize: 8, low_ram: false });
     // Absent keys keep the memory-derived value; an empty override is a no-op.
     expect(deriveMfluxMemoryConfig(64, {})).toEqual({ quantize: 8, low_ram: true });
     // An explicit quantize: null (bf16) is honored as a deliberate clear, not
@@ -193,10 +194,10 @@ describe('buildMfluxTrainConfig', () => {
     expect(buildMfluxTrainConfig({ ...base, params: { baseQuant: 8 } }).quantize).toBe(8);
     expect(buildMfluxTrainConfig({ ...base, totalMemGb: 128, params: { baseQuant: 4 } }).quantize).toBe(4);
     // lowRam alone flips the spill at the config-builder level, leaving the
-    // memory-derived quant (128 GB → bf16) untouched.
+    // memory-derived quant (128 GB → 8-bit default) untouched.
     expect(buildMfluxTrainConfig({ ...base, totalMemGb: 128, params: { lowRam: false } }).low_ram).toBe(false);
-    // No override → memory-derived tier is untouched (128 GB → bf16).
-    expect(buildMfluxTrainConfig({ ...base, totalMemGb: 128 }).quantize).toBeNull();
+    // No override → memory-derived tier is untouched (128 GB → 8-bit, never bf16; issue #1321).
+    expect(buildMfluxTrainConfig({ ...base, totalMemGb: 128 }).quantize).toBe(8);
   });
 
   it('treats null baseQuant/lowRam ("Auto") as no override (issue #1407)', () => {
