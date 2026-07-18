@@ -69,6 +69,7 @@ const outreachDraftSchema = z.object({
   chatGuid: z.string().max(500).nullable().optional(),
   conversationId: z.string().max(500).nullable().optional(),
   handle: z.string().max(320).nullable().optional(),
+  lastInboundAt: z.string().datetime().nullable().optional(),
   instructions: z.string().max(2000).optional().default(''),
   useVoice: z.boolean().optional(),
 });

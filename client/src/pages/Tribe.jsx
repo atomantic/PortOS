@@ -607,6 +607,7 @@ function OutreachQueue() {
       chatGuid: thread.chatGuid,
       conversationId: thread.conversationId,
       handle: thread.handle,
+      lastInboundAt: thread.lastInboundAt,
     };
     const result = await api.generateTribeOutreachDraft(seed, { silent: true }).catch((err) => {
       toast.error(err.message || 'Could not generate a draft');

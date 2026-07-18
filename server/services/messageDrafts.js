@@ -44,6 +44,9 @@ export async function createDraft(data) {
     accountId: data.accountId,
     replyToMessageId: data.replyToMessageId || null,
     threadId: data.threadId || null,
+    // Stable per-conversation key for provenance-scoped dedup (Tribe outreach,
+    // #2158) — null for ordinary drafts.
+    conversationKey: data.conversationKey || null,
     to: data.to || [],
     cc: data.cc || [],
     subject: data.subject || '',

@@ -1,14 +1,23 @@
 import { useState, useEffect, useCallback } from 'react';
-import { FileText, Trash2, Send, Check, RefreshCw } from 'lucide-react';
+import { FileText, Trash2, Send, Check, RefreshCw, Copy } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
+import { copyToClipboard } from '../../lib/clipboard.js';
 
 export default function DraftsTab({ accounts }) {
   const [drafts, setDrafts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [copiedId, setCopiedId] = useState(null);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
+
+  const handleCopy = async (draft) => {
+    const ok = await copyToClipboard(draft.body || '');
+    if (!ok) { toast.error('Could not copy to clipboard'); return; }
+    setCopiedId(draft.id);
+    setTimeout(() => setCopiedId((prev) => (prev === draft.id ? null : prev)), 1500);
+  };
 
   const fetchDrafts = useCallback(async () => {
     setLoading(true);
@@ -119,9 +128,19 @@ export default function DraftsTab({ accounts }) {
                   </button>
                 )}
                 {draft.sendVia === 'review' && (
-                  <span className="text-xs text-gray-500" title="No programmatic send — copy and send from your messaging app">
-                    Review only
-                  </span>
+                  <>
+                    <span className="text-xs text-gray-500" title="No programmatic send — copy and send from your messaging app">
+                      Review only
+                    </span>
+                    <button
+                      onClick={() => handleCopy(draft)}
+                      className="p-1 text-gray-400 hover:text-port-accent transition-colors"
+                      title="Copy message"
+                      aria-label="Copy message"
+                    >
+                      {copiedId === draft.id ? <Check size={16} /> : <Copy size={16} />}
+                    </button>
+                  </>
                 )}
                 {/* Review-only drafts never reach a 'sent' state (there's no send
                     channel), so keep Delete available at any status — otherwise an
@@ -141,7 +160,9 @@ export default function DraftsTab({ accounts }) {
             {draft.to?.length > 0 && (
               <div className="text-xs text-gray-500">To: {draft.to.join(', ')}</div>
             )}
-            <div className="text-sm text-gray-400 whitespace-pre-wrap line-clamp-3">
+            {/* Review-only drafts are sent by hand, so show the full body (not
+                clamped) — it's the text the user copies into their messaging app. */}
+            <div className={`text-sm text-gray-400 whitespace-pre-wrap ${draft.sendVia === 'review' ? '' : 'line-clamp-3'}`}>
               {draft.body}
             </div>
             {isConfirming(draft.id) && (

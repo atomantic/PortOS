@@ -295,6 +295,7 @@ async function checkUnansweredTribeThreads() {
         chatGuid: t.chatGuid,
         conversationId: t.conversationId,
         handle: t.handle,
+        lastInboundAt: t.lastInboundAt,
         daysAgo: t.daysAgo,
       },
     };

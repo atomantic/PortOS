@@ -185,12 +185,15 @@ export async function findUnansweredTribeThreads({
   for (const ev of received) {
     // Only nudge for sources where a reply would actually be visible (chat).
     if (!TWO_WAY_SOURCES.has(ev.source)) continue;
-    // Resolve the SENDER to a Tribe person — the event's handle, else the first
-    // participant (message.from). NOT "any participant with a personId": a group
-    // thread from an untracked sender to a Tribe recipient would otherwise be
-    // misattributed to the recipient. Drop inbound we can't tie to a Tribe sender.
+    // Resolve the SENDER to a Tribe person via the event's counterpart handle
+    // ONLY. For iMessage/Signal a received event's `metadata.handle` IS the
+    // sender, which is what `enrichActivityEvent` resolves. Do NOT fall back to
+    // participants[]: iMessage builds it from every chat member in unspecified
+    // order, so a group message from an untracked sender to a Tribe member would
+    // be misattributed to that member — a false "unanswered" nudge for someone
+    // who never wrote. An unresolved sender is skipped, not guessed.
     const enriched = enrichActivityEvent(ev, ctx);
-    const personId = enriched.personId || enriched.participants?.[0]?.personId || null;
+    const personId = enriched.personId || null;
     if (!personId) continue;
     const ring = ringById.get(personId);
     if (!ring || ring === 'external') continue;
@@ -240,10 +243,11 @@ export async function generateOutreachDraft({
   conversationId = null,
   threadId = null,
   handle = null,
+  lastInboundAt = null,
   instructions = '',
   useVoice,
 } = {}) {
-  const [{ getPerson }, { listEvents }, { generateReplyBody }, { createDraft }] = await Promise.all([
+  const [{ getPerson }, { listEvents }, { generateReplyBody }, { createDraft, listDrafts }] = await Promise.all([
     import('./tribe.js'),
     import('./humanActivity.js'),
     import('./messageEvaluator.js'),
@@ -251,6 +255,20 @@ export async function generateOutreachDraft({
   ]);
 
   const person = personId ? await getPerson(personId).catch(() => null) : null;
+  const conversationKey = chatGuid || conversationId || threadId || handle || null;
+
+  // Idempotency: a Tribe-outreach draft is a paid LLM call. Detection doesn't
+  // clear when a draft is filed (the inbound is still the last turn), so the same
+  // thread resurfaces after a page reload / tab remount. If an un-sent outreach
+  // draft already exists for this conversation, return it instead of generating —
+  // otherwise a second click bills the provider again and files a duplicate.
+  if (conversationKey) {
+    const existing = (await listDrafts().catch(() => []))
+      .find((d) => d.generatedBy === 'tribe-outreach' && d.conversationKey === conversationKey && d.status !== 'sent');
+    if (existing) {
+      return { draft: existing, person: person ? { id: person.id, name: person.name } : null, reused: true };
+    }
+  }
 
   // Ground the reply in the actual conversation, pulled from the timeline by the
   // DETECTED conversation key — chatGuid (iMessage) / conversationId (Signal) /
@@ -266,8 +284,14 @@ export async function generateOutreachDraft({
     limit: 200,
   }).catch(() => []);
   const threadMessages = timelineThreadMessages(convoEvents, person?.name);
-  // Reply to the last inbound turn (the person's), else the newest turn.
-  const replyTo = [...threadMessages].reverse().find((m) => m.from?.name !== 'You')
+  // Anchor to the EXACT detected inbound (by its timestamp) — a group chat's
+  // chatGuid loads every member's turns, so "newest inbound from anyone" could
+  // reply to a different member who spoke after the Tribe person. Fall back to the
+  // newest inbound, then the newest turn, only when the anchor isn't found.
+  const replyTo = (lastInboundAt
+    ? threadMessages.find((m) => m.from?.name !== 'You' && m.date === lastInboundAt)
+    : null)
+    || [...threadMessages].reverse().find((m) => m.from?.name !== 'You')
     || threadMessages[threadMessages.length - 1]
     || null;
   if (!replyTo) {
@@ -300,6 +324,8 @@ export async function generateOutreachDraft({
     body,
     // Distinct provenance so the drafts list can badge Tribe-originated outreach.
     generatedBy: 'tribe-outreach',
+    // Stable per-conversation key so a repeat request reuses this draft (above).
+    conversationKey,
     // Chat sources have no programmatic send channel — review-only (never sent).
     sendVia: 'review',
   });

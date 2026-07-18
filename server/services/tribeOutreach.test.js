@@ -1,6 +1,19 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-import { groupUnansweredThreads } from './tribeOutreach.js';
+import { groupUnansweredThreads, generateOutreachDraft } from './tribeOutreach.js';
+
+// generateOutreachDraft dynamically imports these — mock them so the draft-side
+// logic (idempotent reuse, anchoring the reply to the detected inbound) is
+// testable without a DB or a live LLM.
+vi.mock('./tribe.js', () => ({ getPerson: vi.fn() }));
+vi.mock('./humanActivity.js', () => ({ listEvents: vi.fn() }));
+vi.mock('./messageEvaluator.js', () => ({ generateReplyBody: vi.fn() }));
+vi.mock('./messageDrafts.js', () => ({ createDraft: vi.fn(), listDrafts: vi.fn() }));
+
+import { getPerson } from './tribe.js';
+import { listEvents } from './humanActivity.js';
+import { generateReplyBody } from './messageEvaluator.js';
+import { createDraft, listDrafts } from './messageDrafts.js';
 
 // `groupUnansweredThreads` is the pure detection core — no DB, no LLM. These
 // tests pin the "unanswered inbound from a Tribe person, within the actionable
@@ -135,5 +148,61 @@ describe('groupUnansweredThreads', () => {
   it('drops events with unparseable timestamps without throwing', () => {
     const out = groupUnansweredThreads([inbound({ happenedAt: 'not-a-date' })], WINDOW);
     expect(out).toHaveLength(0);
+  });
+});
+
+describe('generateOutreachDraft', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getPerson.mockResolvedValue({ id: 'p1', name: 'Alex', phones: ['+15550001'], emails: [] });
+    generateReplyBody.mockResolvedValue({ body: 'Hey Alex — sorry for the delay!' });
+    createDraft.mockImplementation(async (d) => ({ id: 'draft-new', status: 'draft', ...d }));
+    listDrafts.mockResolvedValue([]);
+  });
+
+  it('reuses an existing un-sent outreach draft for the same conversation (no duplicate LLM call)', async () => {
+    listDrafts.mockResolvedValue([
+      { id: 'draft-old', generatedBy: 'tribe-outreach', conversationKey: 'chat-1', status: 'draft', body: 'earlier' },
+    ]);
+    const result = await generateOutreachDraft({ personId: 'p1', source: 'imessage', chatGuid: 'chat-1' });
+    expect(result.reused).toBe(true);
+    expect(result.draft.id).toBe('draft-old');
+    expect(generateReplyBody).not.toHaveBeenCalled();
+    expect(createDraft).not.toHaveBeenCalled();
+  });
+
+  it('does not reuse an already-sent draft — generates a fresh one', async () => {
+    listDrafts.mockResolvedValue([
+      { id: 'draft-sent', generatedBy: 'tribe-outreach', conversationKey: 'chat-1', status: 'sent', body: 'sent' },
+    ]);
+    listEvents.mockResolvedValue([
+      { kind: 'message.received', happenedAt: '2026-07-15T00:00:00.000Z', summary: 'you around?' },
+    ]);
+    const result = await generateOutreachDraft({ personId: 'p1', source: 'imessage', chatGuid: 'chat-1' });
+    expect(result.reused).toBeUndefined();
+    expect(generateReplyBody).toHaveBeenCalled();
+    expect(createDraft).toHaveBeenCalledWith(expect.objectContaining({ conversationKey: 'chat-1', sendVia: 'review' }));
+  });
+
+  it('anchors the reply to the detected inbound timestamp, not the newest turn', async () => {
+    listEvents.mockResolvedValue([
+      { kind: 'message.received', happenedAt: '2026-07-15T00:00:00.000Z', summary: 'the one we detected' },
+      { kind: 'message.received', happenedAt: '2026-07-16T00:00:00.000Z', summary: 'a later turn from someone else' },
+    ]);
+    await generateOutreachDraft({
+      personId: 'p1', source: 'imessage', chatGuid: 'chat-1',
+      lastInboundAt: '2026-07-15T00:00:00.000Z',
+    });
+    const [replyTo] = generateReplyBody.mock.calls[0];
+    expect(replyTo.bodyText).toBe('the one we detected');
+  });
+
+  it('prefers the chat handle over a person email in the review-only recipient', async () => {
+    getPerson.mockResolvedValue({ id: 'p1', name: 'Alex', phones: [], emails: ['alex@example.com'] });
+    listEvents.mockResolvedValue([
+      { kind: 'message.received', happenedAt: '2026-07-15T00:00:00.000Z', summary: 'hi' },
+    ]);
+    await generateOutreachDraft({ personId: 'p1', source: 'imessage', chatGuid: 'chat-1', handle: '+15559999' });
+    expect(createDraft).toHaveBeenCalledWith(expect.objectContaining({ to: ['+15559999'] }));
   });
 });
