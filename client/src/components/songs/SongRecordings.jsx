@@ -141,7 +141,7 @@ export default function SongRecordings({ recordings = [], layers = [], onChange,
     }
     // Upload the WAV; the returned filename is what we persist + play from.
     const ts = new Date().toISOString().replace(/[:.]/g, '-');
-    const result = await uploadFile(take.audioBase64, `vocal-${ts}.wav`).catch((err) => {
+    const result = await uploadFile(take.audioBase64, `vocal-${ts}.wav`, { silent: true }).catch((err) => {
       toast.error(err?.message || 'Failed to save recording');
       return null;
     });

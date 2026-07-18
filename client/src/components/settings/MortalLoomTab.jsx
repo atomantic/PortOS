@@ -63,7 +63,7 @@ export function MortalLoomTab() {
       return;
     }
     setImporting(true);
-    const res = await importMortalLoom().catch(() => null);
+    const res = await importMortalLoom({ silent: true }).catch(() => null);
     setImporting(false);
     if (!res?.ok) {
       toast.error('Import failed: ' + (res?.reason || 'unknown'));

@@ -298,11 +298,24 @@ export function recordFailureSignature(data, context) {
  * the proposal's app, slug, and domain (scope). `success` is the validation-authoritative
  * learning outcome, so it agrees with the byTaskType aggregate for the same run.
  */
-function deriveLiExecutionPayload(task, success) {
+function deriveLiExecutionPayload(task, success, { errorCategory = null, validationPassed = null } = {}) {
   const li = task?.metadata?.taskLiProposal;
   if (!li || typeof li !== 'object' || Array.isArray(li)) return null;
   if (!li.appId || !li.slug) return null;
-  return { appId: li.appId, slug: li.slug, scope: li.scope ?? null, success: !!success };
+  // Carry the run's failure signal so the outcome store can classify the
+  // execution-failure taxonomy (#2764 §1). The store keys classification off
+  // `success` and ignores these on a successful run (where they are already null
+  // upstream anyway — a clean run has no failureSignature), so they are forwarded
+  // as-is. `errorCategory` is the raw agentErrorAnalysis category; `validationPassed`
+  // distinguishes a clean-exit criterion miss (→ testing) when no error matched.
+  return {
+    appId: li.appId,
+    slug: li.slug,
+    scope: li.scope ?? null,
+    success: !!success,
+    errorCategory,
+    validationPassed
+  };
 }
 
 /**
@@ -351,7 +364,7 @@ export async function recordTaskCompletion(agent, task) {
   // Attribute an LI hand-off's outcome to the proposal's DOMAIN (#2765). Only a
   // non-environmental completion counts: a rate-limit/outage says nothing about the
   // domain, exactly as it is barred from denting the byTaskType aggregate below.
-  liExecPayload = isEnvironmentalFailure ? null : deriveLiExecutionPayload(task, outcomeSuccess);
+  liExecPayload = isEnvironmentalFailure ? null : deriveLiExecutionPayload(task, outcomeSuccess, { errorCategory, validationPassed: telemetry.validationPassed });
 
   // Correlation-quality prediction snapshot (issue #2344) — captured HERE, before
   // ANY of this run's aggregates (byModelTier, routingAccuracy, failureSignatures)

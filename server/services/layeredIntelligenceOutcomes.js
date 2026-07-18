@@ -24,6 +24,12 @@ import { PATHS } from '../lib/fileUtils.js';
 import { createCollectionStore } from '../lib/collectionStore.js';
 import { normalizeSlug, deriveOutcome, PROPOSAL_OUTCOMES, PROPOSAL_EXECUTION_OUTCOMES, CLOSED_SUPPRESSION_MS } from './layeredIntelligence.js';
 import { classifyRejection, REJECTION_REASON_VALUES } from './layeredIntelligenceRejections.js';
+import { classifyExecutionFailure, EXECUTION_FAILURE_VALUES } from './layeredIntelligenceExecutionFailures.js';
+
+// Longest raw failure-signal token stored on a record. The signal is one of
+// agentErrorAnalysis's controlled `category` tokens (e.g. `test-failure`), so this
+// only bounds a hand-edited/corrupt value — the real tokens are far shorter.
+const FAILURE_SIGNAL_MAX_LEN = 64;
 
 // The report/retention window. Reuses the dedup suppression window so a proposal
 // stays in the outcome report exactly as long as it still suppresses re-proposal —
@@ -80,7 +86,22 @@ export function sanitizeOutcomeRecord(raw) {
     // to null (re-derivable on the next run) rather than a fake result. `executionAt`
     // is kept only alongside a real executionOutcome.
     executionOutcome: PROPOSAL_EXECUTION_OUTCOMES.includes(raw.executionOutcome) ? raw.executionOutcome : null,
-    executionAt: PROPOSAL_EXECUTION_OUTCOMES.includes(raw.executionOutcome) && typeof raw.executionAt === 'string' ? raw.executionAt : null
+    executionAt: PROPOSAL_EXECUTION_OUTCOMES.includes(raw.executionOutcome) && typeof raw.executionAt === 'string' ? raw.executionAt : null,
+    // Execution-FAILURE taxonomy (#2764 §1) — the structured "why" for a failed
+    // hand-off, orthogonal to the binary executionOutcome above. Both fields are
+    // three-valued in the same spirit as rejectionReason, and only ever populated
+    // for a FAILED execution (a success/unresolved has nothing to diagnose, so a
+    // stray token there would inflate the failure tally):
+    //   - `failureCategory` — an EXECUTION_FAILURE_VALUES token, or null. An
+    //     unrecognized/future token coerces to null (re-derivable on the next
+    //     execution write) rather than being laundered into a fake `unknown-failure`.
+    //   - `failureSignal` — the raw agentErrorAnalysis `category` the classification
+    //     was derived from (the root-cause signal #2764 §1 asks to keep), a short
+    //     controlled token bounded defensively; null when none was captured.
+    failureCategory: raw.executionOutcome === 'failure' && EXECUTION_FAILURE_VALUES.includes(raw.failureCategory) ? raw.failureCategory : null,
+    failureSignal: raw.executionOutcome === 'failure' && typeof raw.failureSignal === 'string' && raw.failureSignal.trim()
+      ? raw.failureSignal.trim().slice(0, FAILURE_SIGNAL_MAX_LEN)
+      : null
   };
 }
 
@@ -145,7 +166,10 @@ export async function recordFiledProposal({ appId, slug, tracker = null, issueRe
     // Not executed yet — set only if this proposal is later handed off and its agent
     // run completes (recordProposalExecution, #2765).
     executionOutcome: null,
-    executionAt: null
+    executionAt: null,
+    // No execution has failed yet, so there is no failure to diagnose (#2764 §1).
+    failureCategory: null,
+    failureSignal: null
   };
   await ensureTypeIndex(store);
   const ok = await store.saveOne(outcomeId(appId, normSlug), record).then(() => true, (err) => {
@@ -169,7 +193,7 @@ export async function recordFiledProposal({ appId, slug, tracker = null, issueRe
  * nothing about the domain — same gate as #2618); this helper records whatever it is
  * given.
  */
-export async function recordProposalExecution({ appId, slug, scope = null, success, now = Date.now() } = {}, store = outcomesStore()) {
+export async function recordProposalExecution({ appId, slug, scope = null, success, errorCategory = null, validationPassed = null, now = Date.now() } = {}, store = outcomesStore()) {
   const normSlug = normalizeSlug(slug);
   if (!appId || !normSlug || typeof success !== 'boolean') return false;
   const id = outcomeId(appId, normSlug);
@@ -177,6 +201,15 @@ export async function recordProposalExecution({ appId, slug, scope = null, succe
   // per-domain aggregation. Normalized once and reused by both the missing-record
   // fallback and the scope-preservation merge below.
   const normScope = typeof scope === 'string' && scope.trim() ? scope.trim() : null;
+  // Diagnose WHY a failed hand-off failed (#2764 §1) from the failure signal the
+  // caller already computed. The classifier owns the null-on-success rule (it
+  // returns null unless success is strictly false), so no outer guard here.
+  // `failureSignal` keeps the raw category (root-cause signal) even when it doesn't
+  // map to a taxonomy token, so a later reconcile could re-classify without
+  // re-running the task. Classification is deterministic and pure — no provider
+  // round-trip (the "no cold-bootstrap LLM" policy).
+  const failureCategory = classifyExecutionFailure({ success, errorCategory, validationPassed });
+  const failureSignal = success ? null : (typeof errorCategory === 'string' && errorCategory.trim() ? errorCategory.trim() : null);
   await ensureTypeIndex(store);
   // Fence the whole read-modify-write in the per-id write queue (#2765, codex P2). A bare
   // loadOne→saveOne lets a concurrent reconcileOutcomes write on the same slug interleave
@@ -201,7 +234,11 @@ export async function recordProposalExecution({ appId, slug, scope = null, succe
       // the domain the completion hook passed (a missing-record fallback).
       scope: (typeof base.scope === 'string' && base.scope.trim()) ? base.scope : normScope,
       executionOutcome: success ? 'success' : 'failure',
-      executionAt: new Date(now).toISOString()
+      executionAt: new Date(now).toISOString(),
+      // Set the failure diagnosis (#2764 §1) unconditionally so a success overwrites
+      // any stale failure fields from a prior failed run that later re-ran and passed.
+      failureCategory,
+      failureSignal
     };
     await store.saveOneNow(id, next);
     return true;
