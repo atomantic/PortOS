@@ -269,16 +269,25 @@ describe('evaluateSuccessCriteria — commit criterion (#2344)', () => {
 describe('evaluateSuccessCriteria — gh/git coordinator exemption (#2696)', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('declares NO commit criterion for a branch-reconcile coordinator run', async () => {
-    const task = { id: 't1', taskType: 'internal', metadata: { analysisType: 'branch-reconcile' } };
-    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true })).toBeNull();
+  it('declares NO commit criterion for every non-committing coordinator type', async () => {
+    // The structurally-no-commit coordinators: they run in the live checkout and deliver a
+    // git/gh/external side effect, never a [task-<id>] commit.
+    for (const analysisType of ['branch-reconcile', 'issue-reconcile', 'branch-cleanup', 'jira-status-report']) {
+      const task = { id: 't1', taskType: 'internal', metadata: { analysisType } };
+      expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true })).toBeNull();
+    }
     expect(checkForTaskCommit).not.toHaveBeenCalled();
   });
 
-  it('declares NO commit criterion for an issue-reconcile coordinator run', async () => {
-    const task = { id: 't1', taskType: 'internal', metadata: { analysisType: 'issue-reconcile' } };
-    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: false })).toBeNull();
-    expect(checkForTaskCommit).not.toHaveBeenCalled();
+  it('STILL commit-checks committing self-improve types (jira-sprint-manager, do-replan)', async () => {
+    // jira-sprint-manager commits + opens MRs; do-replan commits PLAN.md edits — their commit
+    // criterion is real, so exempting them would MASK genuine failures. Must stay checked.
+    for (const analysisType of ['jira-sprint-manager', 'do-replan']) {
+      checkForTaskCommit.mockResolvedValueOnce(true);
+      const task = { id: 't1', taskType: 'internal', metadata: { analysisType, selfImprovement: true } };
+      expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true })).toBe(true);
+    }
+    expect(checkForTaskCommit).toHaveBeenCalledTimes(2);
   });
 
   it('exempts a coordinator typed on taskType alone, not just metadata.analysisType', async () => {
