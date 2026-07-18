@@ -1,9 +1,9 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // In-memory backing for the character.json read/write so the test exercises the
 // real read-modify-save path without touching disk. `birthDate` drives the mocked
 // meatspace accessor so age-based level derivation is deterministic.
-const store = vi.hoisted(() => ({ value: null, birthDate: null }));
+const store = vi.hoisted(() => ({ value: null, birthDate: null, readable: true }));
 
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { data: '/tmp/portos-test-data' },
@@ -45,6 +45,10 @@ vi.mock('./characterSignals.js', () => ({
 }));
 vi.mock('./meatspace.js', () => ({
   getBirthDate: vi.fn(async () => ({ birthDate: store.birthDate })),
+  // getBirthDateStrict adds the read-trustworthiness flag the birthDateStatus derivation
+  // needs (#2757). `store.readable` defaults true so existing tests are unaffected; the
+  // unreadable-config case flips it to false.
+  getBirthDateStrict: vi.fn(async () => ({ birthDate: store.birthDate, readable: store.readable ?? true })),
 }));
 
 vi.mock('fs/promises', () => ({
@@ -90,6 +94,78 @@ describe('levelFromAge', () => {
   it('returns null when age is null / NaN', () => {
     expect(characterService.levelFromAge(null)).toBeNull();
     expect(characterService.levelFromAge(NaN)).toBeNull();
+  });
+});
+
+describe('birthDateStatusFrom (#2757)', () => {
+  const now = new Date('2026-07-01T00:00:00Z');
+  it('reports unreadable when the config read is untrustworthy, even with a would-be-valid date', () => {
+    expect(characterService.birthDateStatusFrom('1984-01-01', false, now)).toBe('unreadable');
+    expect(characterService.birthDateStatusFrom(null, false, now)).toBe('unreadable');
+  });
+  it('reports unset for an absent date on a readable config', () => {
+    expect(characterService.birthDateStatusFrom(null, true, now)).toBe('unset');
+    expect(characterService.birthDateStatusFrom('', true, now)).toBe('unset');
+  });
+  it('reports invalid for an unparseable date', () => {
+    expect(characterService.birthDateStatusFrom('not-a-date', true, now)).toBe('invalid');
+  });
+  it('reports future for a date past now', () => {
+    expect(characterService.birthDateStatusFrom('2030-01-01', true, now)).toBe('future');
+  });
+  it('reports ok for a usable past date', () => {
+    expect(characterService.birthDateStatusFrom('1984-01-01', true, now)).toBe('ok');
+  });
+});
+
+describe('getCharacter birthDateStatus (#2757)', () => {
+  beforeEach(() => {
+    store.value = { name: 'Gandalf', class: 'Wizard', xp: 0, hp: 15, maxHp: 15, events: [] };
+    store.birthDate = null;
+    store.readable = true;
+  });
+  afterEach(() => { store.readable = true; });
+
+  it('is "unset" with a null level when no birthDate is on record', async () => {
+    const char = await characterService.getCharacter();
+    expect(char.level).toBeNull();
+    expect(char.birthDateStatus).toBe('unset');
+  });
+
+  it('is "invalid" for a present-but-unparseable birthDate (still null level)', async () => {
+    store.birthDate = 'not-a-date';
+    const char = await characterService.getCharacter();
+    expect(char.level).toBeNull();
+    expect(char.birthDateStatus).toBe('invalid');
+  });
+
+  it('is "unreadable" when the meatspace config read fails, distinct from unset', async () => {
+    store.readable = false;
+    const char = await characterService.getCharacter();
+    expect(char.level).toBeNull();
+    expect(char.birthDateStatus).toBe('unreadable');
+  });
+
+  it('is "ok" for a usable past birthDate', async () => {
+    const birth = new Date();
+    birth.setFullYear(birth.getFullYear() - 40);
+    birth.setDate(birth.getDate() - 30);
+    store.birthDate = birth.toISOString();
+    const char = await characterService.getCharacter();
+    expect(char.level).toBe(40);
+    expect(char.birthDateStatus).toBe('ok');
+  });
+
+  it('never persists birthDateStatus to character.json', async () => {
+    const char = await characterService.getCharacter();
+    await characterService.saveCharacter(char);
+    expect(store.value.birthDateStatus).toBeUndefined();
+  });
+
+  it('is stripped from the federation wire payload', async () => {
+    store.value = { ...store.value, birthDateStatus: 'ok' };
+    const wire = await characterService.getWireCharacter();
+    expect(wire.birthDateStatus).toBeUndefined();
   });
 });
 

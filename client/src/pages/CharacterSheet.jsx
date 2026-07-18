@@ -1,9 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Sword, Star, Moon, ScrollText, Heart, UserRound, Cake,
+  Sword, Star, Moon, ScrollText, Heart, UserRound, Cake, AlertTriangle,
   Sparkles, RefreshCw, Dices, X, ChevronDown, Zap, Image, Activity
 } from 'lucide-react';
+import { birthDateCta } from '../utils/characterXp';
 import BrailleSpinner from '../components/BrailleSpinner';
 import GoalsCard from '../components/character/GoalsCard';
 import toast from '../components/ui/Toast';
@@ -408,6 +409,11 @@ export default function CharacterSheet() {
     ? Math.round((char.ageYears - Math.floor(char.ageYears)) * 100)
     : 0;
 
+  // No usable level → CTA distinguishes a genuinely unset birth date ("set") from a
+  // present-but-unusable one ("fix" — invalid/future/unreadable) so the user isn't told to set
+  // a date they already entered (#2757). Null when a real level exists (no CTA rendered).
+  const birthCta = char.level == null ? birthDateCta(char.birthDateStatus) : null;
+
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {/* Header */}
@@ -539,21 +545,27 @@ export default function CharacterSheet() {
             )}
           </div>
 
-          {/* Birth-date prompt — the human-centered level is age (#2673). Until a birth date
-              is on record there is no level to show, so surface a clear call to set it,
-              deep-linking to the age editor where the field lives. */}
-          {char.level == null && (
+          {/* Birth-date prompt — the human-centered level is age (#2673). Until a USABLE birth
+              date is on record there is no level to show, so surface a clear call to action,
+              deep-linking to the age editor where the field lives. A present-but-unusable date
+              (invalid/future/unreadable, #2757) shows a "fix" prompt instead of "set" so the
+              user isn't told to set a date they already entered. */}
+          {birthCta && (
             <button
               type="button"
-              onClick={() => navigate('/meatspace/age')}
-              className="mt-4 w-full flex items-center gap-3 px-4 py-3 rounded-lg border border-dashed border-port-accent/50 bg-port-accent/5 hover:bg-port-accent/10 text-left transition-colors"
+              onClick={() => navigate(birthCta.path)}
+              className={`mt-4 w-full flex items-center gap-3 px-4 py-3 rounded-lg border border-dashed text-left transition-colors ${
+                birthCta.kind === 'fix'
+                  ? 'border-port-warning/50 bg-port-warning/5 hover:bg-port-warning/10'
+                  : 'border-port-accent/50 bg-port-accent/5 hover:bg-port-accent/10'
+              }`}
             >
-              <Cake className="w-5 h-5 text-port-accent flex-shrink-0" />
+              {birthCta.kind === 'fix'
+                ? <AlertTriangle className="w-5 h-5 text-port-warning flex-shrink-0" />
+                : <Cake className="w-5 h-5 text-port-accent flex-shrink-0" />}
               <div className="min-w-0">
-                <div className="text-sm font-medium text-white">Set your birth date</div>
-                <div className="text-xs text-gray-400">
-                  Your level is your life experience — each year lived is a level. Add your birth date to see it.
-                </div>
+                <div className="text-sm font-medium text-white">{birthCta.heading}</div>
+                <div className="text-xs text-gray-400">{birthCta.caption}</div>
               </div>
             </button>
           )}

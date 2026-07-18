@@ -108,4 +108,33 @@ describe('CityHudCompact', () => {
     expect(screen.queryByText('ATTENTION')).not.toBeInTheDocument();
     expect(screen.getByTestId('loc').textContent).toBe('');
   });
+
+  describe('birth-date level CTA (#2757)', () => {
+    it('shows a SET prompt (LV —) for a genuinely unset birth date', () => {
+      renderCompact('', { character: { level: null, birthDateStatus: 'unset' } });
+      expect(screen.getByRole('button', { name: /set your birth date/i })).toBeInTheDocument();
+      expect(screen.getByText('LV —')).toBeInTheDocument();
+    });
+
+    it('shows a FIX prompt (LV !) for a present-but-invalid birth date', () => {
+      renderCompact('', { character: { level: null, birthDateStatus: 'invalid' } });
+      const btn = screen.getByRole('button', { name: /fix your birth date/i });
+      expect(btn).toBeInTheDocument();
+      expect(screen.getByText('LV !')).toBeInTheDocument();
+      expect(screen.queryByText('LV —')).not.toBeInTheDocument();
+    });
+
+    it('shows a FIX prompt for an unreadable config, not a set prompt', () => {
+      renderCompact('', { character: { level: null, birthDateStatus: 'unreadable' } });
+      expect(screen.getByRole('button', { name: /fix your birth date/i })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /set your birth date/i })).not.toBeInTheDocument();
+    });
+
+    it('shows the numeric level (no CTA) when a level exists', () => {
+      renderCompact('', { character: { level: 7, birthDateStatus: 'ok' } });
+      expect(screen.getByText('LV 7')).toBeInTheDocument();
+      expect(screen.queryByText('LV —')).not.toBeInTheDocument();
+      expect(screen.queryByText('LV !')).not.toBeInTheDocument();
+    });
+  });
 });
