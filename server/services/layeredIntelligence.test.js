@@ -42,6 +42,10 @@ import {
   rejectionReasonBySlug,
   LI_DEGRADED_SUCCESS_THRESHOLD,
   LI_DEGRADED_MIN_SAMPLE,
+  computeScopeAwareness,
+  SCOPE_AVOID_SUCCESS_THRESHOLD,
+  SCOPE_PREFER_SUCCESS_THRESHOLD,
+  SCOPE_AWARENESS_MIN_SAMPLE,
   PROPOSAL_OUTCOMES,
   extractPlanSlugs,
   appendProposalToPlan,
@@ -455,8 +459,106 @@ describe('filerForTracker / trackerSupportsPause (dispatch)', () => {
   });
 });
 
+describe('computeScopeAwareness (#2760)', () => {
+  it('returns empty string when no scope clears the sample floor', () => {
+    // Both under SCOPE_AWARENESS_MIN_SAMPLE (3) → neither classified.
+    expect(computeScopeAwareness({ metricsByType: {
+      'plan-task': { lifetimeSuccessRate: 100, lifetimeCompleted: 2 },
+      'accessibility': { lifetimeSuccessRate: 0, lifetimeCompleted: 1 }
+    } })).toBe('');
+  });
+
+  it('returns empty string for an empty / missing map', () => {
+    expect(computeScopeAwareness({})).toBe('');
+    expect(computeScopeAwareness()).toBe('');
+    expect(computeScopeAwareness({ metricsByType: {} })).toBe('');
+  });
+
+  it('classifies a below-threshold scope with enough runs as AVOID', () => {
+    const out = computeScopeAwareness({ metricsByType: {
+      'self-improve:layered-intelligence': { lifetimeSuccessRate: 0, lifetimeCompleted: 9 }
+    } });
+    expect(out).toContain('AVOID');
+    expect(out).toContain('self-improve:layered-intelligence: 0% success over 9 runs');
+    expect(out).not.toContain('PREFER');
+  });
+
+  it('classifies an at/above-threshold scope with enough runs as PREFER', () => {
+    const out = computeScopeAwareness({ metricsByType: {
+      'plan-task': { lifetimeSuccessRate: 100, lifetimeCompleted: 10 }
+    } });
+    expect(out).toContain('PREFER');
+    expect(out).toContain('plan-task: 100% success over 10 runs');
+    expect(out).not.toContain('AVOID');
+  });
+
+  it('leaves a mid-band scope (between avoid and prefer) unclassified', () => {
+    // 60% is >= AVOID (50) and < PREFER (75) → neither list.
+    expect(computeScopeAwareness({ metricsByType: {
+      'feature-ideas': { lifetimeSuccessRate: 60, lifetimeCompleted: 8 }
+    } })).toBe('');
+  });
+
+  it('ignores a never-run scope (null rate) even with a high completed count artifact', () => {
+    expect(computeScopeAwareness({ metricsByType: {
+      'idle-review': { lifetimeSuccessRate: null, lifetimeCompleted: 12 }
+    } })).toBe('');
+  });
+
+  it('sorts AVOID worst-first and PREFER best-first', () => {
+    const out = computeScopeAwareness({ metricsByType: {
+      'branch-reconcile': { lifetimeSuccessRate: 20, lifetimeCompleted: 5 },
+      'accessibility': { lifetimeSuccessRate: 0, lifetimeCompleted: 4 },
+      'test-coverage': { lifetimeSuccessRate: 80, lifetimeCompleted: 5 },
+      'performance': { lifetimeSuccessRate: 100, lifetimeCompleted: 3 }
+    } });
+    // worst avoid (accessibility 0%) precedes the milder one (branch-reconcile 20%)
+    expect(out.indexOf('accessibility')).toBeLessThan(out.indexOf('branch-reconcile'));
+    // best prefer (performance 100%) precedes the milder one (test-coverage 80%)
+    expect(out.indexOf('performance')).toBeLessThan(out.indexOf('test-coverage'));
+    // AVOID section precedes PREFER section
+    expect(out.indexOf('AVOID')).toBeLessThan(out.indexOf('PREFER'));
+  });
+
+  it('honors the exported thresholds at their exact boundaries', () => {
+    // exactly PREFER threshold → prefer; exactly AVOID threshold → neither (< is strict)
+    const atPrefer = computeScopeAwareness({ metricsByType: {
+      x: { lifetimeSuccessRate: SCOPE_PREFER_SUCCESS_THRESHOLD, lifetimeCompleted: SCOPE_AWARENESS_MIN_SAMPLE }
+    } });
+    expect(atPrefer).toContain('PREFER');
+    const atAvoidBoundary = computeScopeAwareness({ metricsByType: {
+      x: { lifetimeSuccessRate: SCOPE_AVOID_SUCCESS_THRESHOLD, lifetimeCompleted: SCOPE_AWARENESS_MIN_SAMPLE }
+    } });
+    expect(atAvoidBoundary).toBe(''); // 50% is not < 50 and not >= 75
+  });
+});
+
 describe('buildPrompt', () => {
   const app = { name: 'TestApp' };
+
+  it('injects the scope-awareness block + steering guidance only when present (#2760)', () => {
+    const base = { app, isPortos: true, config: { allowedScopes: ['loop-meta'], rules: '' } };
+    const without = buildPrompt(base);
+    expect(without).not.toContain('liScopeAwareness');
+    const withGuidance = buildPrompt({
+      ...base,
+      sources: { scopeGuidance: 'AVOID — these scopes have historically FAILED:\n- branch-reconcile: 0% success over 4 runs' }
+    });
+    expect(withGuidance).toContain('### liScopeAwareness');
+    expect(withGuidance).toContain('branch-reconcile: 0% success over 4 runs');
+    expect(withGuidance).toContain('executed as CoS tasks');
+  });
+
+  it('does not render scopeGuidance as a generic source block', () => {
+    const out = buildPrompt({
+      app, isPortos: true,
+      config: { allowedScopes: ['loop-meta'], rules: '' },
+      sources: { scopeGuidance: 'PREFER — plan-task: 100% success over 10 runs' }
+    });
+    // rendered under its dedicated heading, never as "### scopeGuidance"
+    expect(out).not.toContain('### scopeGuidance');
+    expect(out).toContain('### liScopeAwareness');
+  });
 
   it('only offers meta/self scopes on PortOS', () => {
     const nonPortos = buildPrompt({
@@ -1834,6 +1936,39 @@ describe('gatherSources cosMetrics windowed rate (issue #2460)', () => {
     await writeLearning({ byTaskType: { x: { successRate: 50, recentOutcomes: [] } } });
     const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: false } }, { cosPath: dir });
     expect(out.cosMetrics).toBeUndefined();
+  });
+
+  it('emits scopeGuidance derived from the same per-type rates (#2760)', async () => {
+    await writeLearning({
+      byTaskType: {
+        'self-improve:layered-intelligence': { completed: 9, succeeded: 0, failed: 9, successRate: 0, recentOutcomes: [] },
+        'plan-task': { completed: 10, succeeded: 10, failed: 0, successRate: 100, recentOutcomes: [] },
+        'feature-ideas': { completed: 8, succeeded: 5, failed: 3, successRate: 63, recentOutcomes: [] } // mid-band → neither
+      }
+    });
+    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: true } }, { cosPath: dir });
+    expect(out.scopeGuidance).toContain('AVOID');
+    expect(out.scopeGuidance).toContain('self-improve:layered-intelligence: 0% success over 9 runs');
+    expect(out.scopeGuidance).toContain('PREFER');
+    expect(out.scopeGuidance).toContain('plan-task: 100% success over 10 runs');
+    expect(out.scopeGuidance).not.toContain('feature-ideas');
+  });
+
+  it('omits scopeGuidance when no scope clears the sample floor (#2760)', async () => {
+    await writeLearning({
+      byTaskType: { 'plan-task': { completed: 2, succeeded: 2, failed: 0, successRate: 100, recentOutcomes: [] } }
+    });
+    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: true } }, { cosPath: dir });
+    expect(out.cosMetrics).toBeDefined(); // raw metrics still surfaced
+    expect(out.scopeGuidance).toBeUndefined();
+  });
+
+  it('does not emit scopeGuidance when cosMetrics is off (#2760)', async () => {
+    await writeLearning({
+      byTaskType: { 'accessibility': { completed: 4, succeeded: 0, failed: 4, successRate: 0, recentOutcomes: [] } }
+    });
+    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: false } }, { cosPath: dir });
+    expect(out.scopeGuidance).toBeUndefined();
   });
 });
 
