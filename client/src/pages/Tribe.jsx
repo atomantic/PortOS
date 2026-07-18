@@ -621,12 +621,12 @@ function OutreachQueue() {
   };
 
   const copyBody = async (key, body) => {
-    const ok = await copyToClipboard(body);
+    // Pass null to suppress the helper's success toast (we show a transient
+    // "Copied" checkmark) and let it own the single failure toast.
+    const ok = await copyToClipboard(body, null);
     if (ok) {
       setCopiedKey(key);
       setTimeout(() => setCopiedKey((prev) => (prev === key ? null : prev)), 1500);
-    } else {
-      toast.error('Could not copy to clipboard');
     }
   };
 

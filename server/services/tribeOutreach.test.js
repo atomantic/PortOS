@@ -160,15 +160,27 @@ describe('generateOutreachDraft', () => {
     listDrafts.mockResolvedValue([]);
   });
 
-  it('reuses an existing un-sent outreach draft for the same conversation (no duplicate LLM call)', async () => {
+  it('reuses an existing un-sent outreach draft for the same conversation + inbound (no duplicate LLM call)', async () => {
     listDrafts.mockResolvedValue([
-      { id: 'draft-old', generatedBy: 'tribe-outreach', conversationKey: 'chat-1', status: 'draft', body: 'earlier' },
+      { id: 'draft-old', generatedBy: 'tribe-outreach', conversationKey: 'chat-1', lastInboundAt: '2026-07-15T00:00:00.000Z', status: 'draft', body: 'earlier' },
     ]);
-    const result = await generateOutreachDraft({ personId: 'p1', source: 'imessage', chatGuid: 'chat-1' });
+    const result = await generateOutreachDraft({ personId: 'p1', source: 'imessage', chatGuid: 'chat-1', lastInboundAt: '2026-07-15T00:00:00.000Z' });
     expect(result.reused).toBe(true);
     expect(result.draft.id).toBe('draft-old');
     expect(generateReplyBody).not.toHaveBeenCalled();
     expect(createDraft).not.toHaveBeenCalled();
+  });
+
+  it('does NOT reuse a draft for a stale inbound — a newer message generates a fresh draft', async () => {
+    listDrafts.mockResolvedValue([
+      { id: 'draft-old', generatedBy: 'tribe-outreach', conversationKey: 'chat-1', lastInboundAt: '2026-07-15T00:00:00.000Z', status: 'draft', body: 'earlier' },
+    ]);
+    listEvents.mockResolvedValue([
+      { kind: 'message.received', happenedAt: '2026-07-17T00:00:00.000Z', summary: 'a newer message' },
+    ]);
+    const result = await generateOutreachDraft({ personId: 'p1', source: 'imessage', chatGuid: 'chat-1', lastInboundAt: '2026-07-17T00:00:00.000Z' });
+    expect(result.reused).toBeUndefined();
+    expect(generateReplyBody).toHaveBeenCalled();
   });
 
   it('does not reuse an already-sent draft — generates a fresh one', async () => {

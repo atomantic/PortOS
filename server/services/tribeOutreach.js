@@ -171,27 +171,34 @@ export async function findUnansweredTribeThreads({
 
   const now = Date.now();
   const from = new Date(now - withinDays * DAY_MS).toISOString();
-  // Two kind-filtered queries instead of one broad scan: the timeline is capped
-  // at 2000 rows per query, so on a busy install a single unfiltered query could
-  // return 2000 non-message rows and drop every message event.
-  const [received, sent] = await Promise.all([
-    listEvents({ from, kind: 'message.received', limit: 2000 }).catch(() => []),
-    listEvents({ from, kind: 'message.sent', limit: 2000 }).catch(() => []),
-  ]);
+  // Query each two-way source × kind separately, each with its own 2000-row cap.
+  // A single shared query would let a high-volume source (e.g. thousands of
+  // imported email events) fill the newest-2000 slice and push older iMessage /
+  // Signal turns out of range — missing an alert, or hiding the reply that would
+  // mark a thread answered.
+  const received = [];
+  const sent = [];
+  await Promise.all([...TWO_WAY_SOURCES].map(async (src) => {
+    const [r, s] = await Promise.all([
+      listEvents({ from, source: src, kind: 'message.received', limit: 2000 }).catch(() => []),
+      listEvents({ from, source: src, kind: 'message.sent', limit: 2000 }).catch(() => []),
+    ]);
+    received.push(...r);
+    sent.push(...s);
+  }));
 
-  // Keep every outbound turn from a two-way source — it only needs to cancel the
-  // unanswered flag for its conversation (grouped by chatGuid/conversationId).
-  const tagged = sent.filter((ev) => TWO_WAY_SOURCES.has(ev.source));
+  // Every outbound turn just needs to cancel the unanswered flag for its
+  // conversation (grouped by chatGuid/conversationId).
+  const tagged = [...sent];
   for (const ev of received) {
-    // Only nudge for sources where a reply would actually be visible (chat).
-    if (!TWO_WAY_SOURCES.has(ev.source)) continue;
+    // Scope to 1:1 conversations — a chat with more than one counterpart is a
+    // group, where "you never replied" rarely means a personal obligation and
+    // multi-sender turns can't be cleanly attributed or anchored. A 1:1 chat's
+    // participant list is exactly the counterpart.
+    if (Array.isArray(ev.participants) && ev.participants.length > 1) continue;
     // Resolve the SENDER to a Tribe person via the event's counterpart handle
-    // ONLY. For iMessage/Signal a received event's `metadata.handle` IS the
-    // sender, which is what `enrichActivityEvent` resolves. Do NOT fall back to
-    // participants[]: iMessage builds it from every chat member in unspecified
-    // order, so a group message from an untracked sender to a Tribe member would
-    // be misattributed to that member — a false "unanswered" nudge for someone
-    // who never wrote. An unresolved sender is skipped, not guessed.
+    // ONLY (a 1:1 received event's `metadata.handle` IS the sender, which
+    // `enrichActivityEvent` resolves). An unresolved sender is skipped, not guessed.
     const enriched = enrichActivityEvent(ev, ctx);
     const personId = enriched.personId || null;
     if (!personId) continue;
@@ -208,21 +215,19 @@ export async function findUnansweredTribeThreads({
   return threads.slice(0, Math.max(0, limit));
 }
 
-// Build a synthetic thread (buildThreadContext / generateReplyBody shape) from the
-// conversation's own timeline events. The message summaries are the actual message
-// text (shortSummary-capped), so this grounds the reply in the real conversation —
-// including the user's own sent turns (labeled "You"), which is why the draft query
-// keys on the conversation, not just the counterpart handle.
-function timelineThreadMessages(events, personName) {
-  return (events || [])
-    .filter((ev) => MESSAGE_KINDS.has(ev.kind) && (ev.summary || ev.title))
-    .sort((a, b) => Date.parse(a.happenedAt) - Date.parse(b.happenedAt))
-    .slice(-MAX_GROUNDING_EVENTS)
-    .map((ev) => ({
-      from: { name: ev.kind === 'message.sent' ? 'You' : (personName || 'them') },
-      date: ev.happenedAt,
-      bodyText: String(ev.summary || ev.title || ''),
-    }));
+// Map one timeline event to a synthetic message (buildThreadContext /
+// generateReplyBody shape). The summary is the real message text (shortSummary-
+// capped). Detection is 1:1-only, so a received turn is always from the resolved
+// person; the user's own sent turns are labeled "You". An attachment-only turn has
+// no summary — the chat TITLE is merely the contact name, so a placeholder is used
+// rather than feeding the model a fabricated body.
+function eventToMessage(ev, personName) {
+  const text = String(ev.summary || '').trim();
+  return {
+    from: { name: ev.kind === 'message.sent' ? 'You' : (personName || 'them') },
+    date: ev.happenedAt,
+    bodyText: text || '[non-text message]',
+  };
 }
 
 /**
@@ -259,12 +264,17 @@ export async function generateOutreachDraft({
 
   // Idempotency: a Tribe-outreach draft is a paid LLM call. Detection doesn't
   // clear when a draft is filed (the inbound is still the last turn), so the same
-  // thread resurfaces after a page reload / tab remount. If an un-sent outreach
-  // draft already exists for this conversation, return it instead of generating —
-  // otherwise a second click bills the provider again and files a duplicate.
+  // thread resurfaces after a page reload / tab remount. Reuse an existing un-sent
+  // draft for this conversation — but ONLY when it targets the SAME detected inbound
+  // (`lastInboundAt`): once the contact sends a newer message, that draft is stale
+  // and a fresh reply must be generated, not the old one returned forever (review-
+  // only drafts never reach 'sent').
   if (conversationKey) {
     const existing = (await listDrafts().catch(() => []))
-      .find((d) => d.generatedBy === 'tribe-outreach' && d.conversationKey === conversationKey && d.status !== 'sent');
+      .find((d) => d.generatedBy === 'tribe-outreach'
+        && d.conversationKey === conversationKey
+        && d.lastInboundAt === lastInboundAt
+        && d.status !== 'sent');
     if (existing) {
       return { draft: existing, person: person ? { id: person.id, name: person.name } : null, reused: true };
     }
@@ -283,21 +293,29 @@ export async function generateOutreachDraft({
     handle: (chatGuid || conversationId || threadId) ? undefined : (handle || undefined),
     limit: 200,
   }).catch(() => []);
-  const threadMessages = timelineThreadMessages(convoEvents, person?.name);
-  // Anchor to the EXACT detected inbound (by its timestamp) — a group chat's
-  // chatGuid loads every member's turns, so "newest inbound from anyone" could
-  // reply to a different member who spoke after the Tribe person. Fall back to the
-  // newest inbound, then the newest turn, only when the anchor isn't found.
-  const replyTo = (lastInboundAt
-    ? threadMessages.find((m) => m.from?.name !== 'You' && m.date === lastInboundAt)
+
+  const sorted = (convoEvents || [])
+    .filter((ev) => MESSAGE_KINDS.has(ev.kind))
+    .sort((a, b) => Date.parse(a.happenedAt) - Date.parse(b.happenedAt));
+  // Anchor to the EXACT detected inbound (by timestamp) in the FULL list, BEFORE
+  // any grounding-window truncation — otherwise a long tail of later turns could
+  // drop it and the reply would target a newer message. Fall back to the newest
+  // inbound, then the newest turn.
+  const anchorEv = (lastInboundAt
+    ? sorted.find((ev) => ev.kind === 'message.received' && ev.happenedAt === lastInboundAt)
     : null)
-    || [...threadMessages].reverse().find((m) => m.from?.name !== 'You')
-    || threadMessages[threadMessages.length - 1]
+    || [...sorted].reverse().find((ev) => ev.kind === 'message.received')
+    || sorted[sorted.length - 1]
     || null;
-  if (!replyTo) {
+  if (!anchorEv) {
     // No conversational grounding at all — refuse rather than fabricate context.
     throw new ServerError('No conversation history found to ground an outreach draft', { status: 404 });
   }
+  // Grounding context: the last N turns, but always keep the anchor in-window.
+  const windowEvents = sorted.slice(-MAX_GROUNDING_EVENTS);
+  if (!windowEvents.includes(anchorEv)) windowEvents.unshift(anchorEv);
+  const threadMessages = windowEvents.map((ev) => eventToMessage(ev, person?.name));
+  const replyTo = eventToMessage(anchorEv, person?.name);
 
   const aiResult = await generateReplyBody(replyTo, instructions, { useVoice, threadMessages }).catch((err) => {
     console.error(`❌ Outreach draft generation failed: ${err.message}`);
@@ -324,8 +342,10 @@ export async function generateOutreachDraft({
     body,
     // Distinct provenance so the drafts list can badge Tribe-originated outreach.
     generatedBy: 'tribe-outreach',
-    // Stable per-conversation key so a repeat request reuses this draft (above).
+    // Stable per-conversation key + the inbound it answers, so a repeat request
+    // reuses this draft (above) but a NEWER inbound generates a fresh one.
     conversationKey,
+    lastInboundAt,
     // Chat sources have no programmatic send channel — review-only (never sent).
     sendVia: 'review',
   });

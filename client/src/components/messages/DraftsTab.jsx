@@ -13,8 +13,10 @@ export default function DraftsTab({ accounts }) {
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
 
   const handleCopy = async (draft) => {
-    const ok = await copyToClipboard(draft.body || '');
-    if (!ok) { toast.error('Could not copy to clipboard'); return; }
+    // null → suppress the helper's success toast (we show a "Copied" checkmark);
+    // the helper still owns the single failure toast.
+    const ok = await copyToClipboard(draft.body || '', null);
+    if (!ok) return;
     setCopiedId(draft.id);
     setTimeout(() => setCopiedId((prev) => (prev === draft.id ? null : prev)), 1500);
   };
