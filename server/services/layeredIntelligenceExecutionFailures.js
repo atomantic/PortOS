@@ -179,14 +179,18 @@ const RAW_CATEGORY_TAXONOMY = new Map(Object.entries({
  *      null).
  * Anything else falls through to `unknown-failure`.
  *
+ * The classifier owns the "null when there is nothing to diagnose" rule (mirroring
+ * classifyRejection returning null for a merged/unresolved proposal), so callers
+ * pass the run's `success` flag unconditionally rather than pre-guarding. To
+ * re-classify a stored failed record from its retained raw signal, pass
+ * `{ success: false, errorCategory: record.failureSignal }`.
+ *
  * Deterministic and total: same inputs always yield the same token.
  */
-export function classifyExecutionFailure({ success = null, executionOutcome = null, errorCategory = null, validationPassed = null } = {}) {
-  // Resolve whether this is a failed execution. Prefer an explicit boolean
-  // `success`; otherwise fall back to the stored `executionOutcome` token so the
-  // classifier can also re-diagnose a persisted record.
-  const failed = success === false || (success === null && executionOutcome === 'failure');
-  if (!failed) return null;
+export function classifyExecutionFailure({ success, errorCategory = null, validationPassed = null } = {}) {
+  // Only a failed execution (success strictly false) has something to diagnose — a
+  // success, or an unknown/absent success flag, has no failure to explain.
+  if (success !== false) return null;
 
   // 1. A mapped raw error category is the most specific signal.
   const mapped = RAW_CATEGORY_TAXONOMY.get(normalizeToken(errorCategory));

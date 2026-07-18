@@ -302,18 +302,19 @@ function deriveLiExecutionPayload(task, success, { errorCategory = null, validat
   const li = task?.metadata?.taskLiProposal;
   if (!li || typeof li !== 'object' || Array.isArray(li)) return null;
   if (!li.appId || !li.slug) return null;
-  // On failure, carry the run's failure signal so the outcome store can classify
-  // the execution-failure taxonomy (#2764 §1). Harmless on success (the store
-  // ignores it and nulls both diagnosis fields). `errorCategory` is the raw
-  // agentErrorAnalysis category; `validationPassed` distinguishes a clean-exit
-  // criterion miss (→ testing) when no error pattern matched.
+  // Carry the run's failure signal so the outcome store can classify the
+  // execution-failure taxonomy (#2764 §1). The store keys classification off
+  // `success` and ignores these on a successful run (where they are already null
+  // upstream anyway — a clean run has no failureSignature), so they are forwarded
+  // as-is. `errorCategory` is the raw agentErrorAnalysis category; `validationPassed`
+  // distinguishes a clean-exit criterion miss (→ testing) when no error matched.
   return {
     appId: li.appId,
     slug: li.slug,
     scope: li.scope ?? null,
     success: !!success,
-    errorCategory: success ? null : errorCategory,
-    validationPassed: success ? null : validationPassed
+    errorCategory,
+    validationPassed
   };
 }
 
