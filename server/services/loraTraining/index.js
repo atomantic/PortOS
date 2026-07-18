@@ -156,6 +156,23 @@ export async function startTrainingRun({
   const { dataset } = await validateDatasetReady(datasetId, { acknowledgeCaptionLeak });
 
   if (routing.runtime === TRAINING_RUNTIMES.FLUX2) {
+    // The torch/diffusers fallback trainer can't train on Apple Silicon:
+    // PyTorch's MPS backend has no `linear_backward` for the FLUX.2 transformer
+    // Linear layers, so a LoRA backward dies at the first optimizer step
+    // ("mps_linear_backward: unsupported weights data type", for both bf16 and
+    // fp32 — validated on an M-series box, issue #1227). mflux (MLX-native) is
+    // THE Apple-Silicon runtime. Refuse at request time so we never queue a run
+    // that loads a ~16 GB base and precomputes latents for minutes before
+    // crashing. `--device cpu` would work but is impractically slow, so the
+    // actionable guidance is to install mflux. (Linux/CUDA installs are the
+    // torch path's real target and are unaffected.)
+    if (platform() === 'darwin') {
+      throw new ServerError(
+        'LoRA training on Apple Silicon requires the mflux runtime — the torch fallback can\'t train on this Mac\'s GPU (Metal/MPS). '
+        + 'Install mflux ≥0.17 in your local image-gen python (Settings → Image Gen) via `bash scripts/setup-image-video.sh`.',
+        { status: 412, code: 'TRAINING_MPS_UNSUPPORTED' },
+      );
+    }
     const healthy = await isFlux2VenvHealthy();
     if (!healthy) {
       throw new ServerError(
