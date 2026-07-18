@@ -195,6 +195,15 @@ export const SCOPE_PREFER_SUCCESS_THRESHOLD = 75;                          // >=
 // proposal), so a slightly lower bar to surface the signal is acceptable.
 export const SCOPE_AWARENESS_MIN_SAMPLE = 3;
 
+// Prompt-size bounds for the scope-awareness block, so a long-lived install with many
+// task types (mission task keys embed an unbounded mission name) can't render an
+// oversized block — the raw cosMetrics source is already char-capped for the same
+// reason. Cap the entries surfaced per list (the lists are sorted sharpest-first, so
+// the cap keeps the most decision-relevant scopes) and truncate any single task-type
+// name so one pathological key can't blow the budget.
+export const SCOPE_AWARENESS_MAX_PER_LIST = 12;
+export const SCOPE_AWARENESS_MAX_TYPE_LEN = 80;
+
 /**
  * The default per-app config. PortOS (isPortos) additionally gets the meta/self
  * scopes so the loop can extend itself; every other app is capped at its own
@@ -918,12 +927,22 @@ export function computeSelfEvalSummary({
 }
 
 /**
- * Scope-awareness report (#2760). Classifies each CoS task-type scope by its execution
- * success rate into "avoid" (chronically failing) and "prefer" (reliably succeeding),
- * then renders guidance the reasoner can use to steer a proposal toward work that will
- * actually execute. Pure — takes the already-parsed per-type metrics map (the `summary`
+ * Scope-awareness report (#2760). Classifies each CoS task TYPE by its completion rate
+ * into low-completion and high-completion lists, as directional context for the
+ * reasoner. Pure — takes the already-parsed per-type metrics map (the `summary`
  * gatherSources builds from learning.byTaskType) and returns a report string, or ''
- * when no scope has enough runs to qualify either way.
+ * when no type has enough runs to qualify either way.
+ *
+ * IMPORTANT (codex P1): this is per-task-TYPE, install-wide completion telemetry — NOT
+ * a per-proposal execution record. An LI proposal is later implemented through a
+ * claim/plan/handoff task whose task type does NOT carry the proposal's domain (a
+ * handoff becomes `internal-task`; a claimed issue runs under the claim task type), so
+ * these buckets are populated by independently-scheduled jobs, not by LI's own
+ * proposals bucketed by subject. The block is therefore framed as "work of this KIND
+ * tends to (not) get finished here" — useful directional context (especially LI's own
+ * reasoning-run type, self-improve:layered-intelligence, which IS LI's execution) — and
+ * deliberately NOT a claim that a given proposal maps 1:1 onto a listed type. Proper
+ * per-proposal-domain outcome correlation is tracked as a follow-up (#2765).
  *
  * `metricsByType[type] = { lifetimeSuccessRate, lifetimeCompleted, recentSuccessRate, recentCompleted, ... }`.
  *
@@ -974,11 +993,27 @@ export function computeScopeAwareness({ metricsByType = {} } = {}) {
   // signal at the top of each list.
   avoid.sort((a, b) => a.rate - b.rate);
   prefer.sort((a, b) => b.rate - a.rate);
-  const fmt = ({ type, rate, n }) => `- ${type}: ${Math.round(rate)}% success over ${n} runs`;
-  const section = (header, items) => `${header}\n${items.map(fmt).join('\n')}`;
+  // Cap each list (sharpest-first) and truncate a pathological task-type name so the
+  // block stays bounded on a long-lived install.
+  const clampType = (type) => type.length > SCOPE_AWARENESS_MAX_TYPE_LEN
+    ? `${type.slice(0, SCOPE_AWARENESS_MAX_TYPE_LEN - 1)}…`
+    : type;
+  const fmt = ({ type, rate, n }) => `- ${clampType(type)}: ${Math.round(rate)}% completed over ${n} runs`;
+  const section = (header, items) => {
+    const shown = items.slice(0, SCOPE_AWARENESS_MAX_PER_LIST);
+    const more = items.length - shown.length;
+    const lines = shown.map(fmt);
+    if (more > 0) lines.push(`- …and ${more} more`);
+    return `${header}\n${lines.join('\n')}`;
+  };
   const sections = [];
-  if (avoid.length) sections.push(section(`AVOID — these scopes' work has historically FAILED to execute (below ${SCOPE_AVOID_SUCCESS_THRESHOLD}% success):`, avoid));
-  if (prefer.length) sections.push(section(`PREFER — these scopes execute reliably (at or above ${SCOPE_PREFER_SUCCESS_THRESHOLD}% success):`, prefer));
+  // Honest framing (#2760, codex P1): these are per-task-TYPE completion rates for the
+  // whole install — NOT a per-proposal execution record. An LI proposal is implemented
+  // through a claim/plan/handoff task whose type does not carry the proposal's domain,
+  // so this is directional context ("work of this kind tends to (not) get finished
+  // here"), not a claim that a given proposal maps 1:1 onto a listed type.
+  if (avoid.length) sections.push(section(`LOW-COMPLETION task types — work of this kind is finished below ${SCOPE_AVOID_SUCCESS_THRESHOLD}% of the time on this install:`, avoid));
+  if (prefer.length) sections.push(section(`HIGH-COMPLETION task types — finished at or above ${SCOPE_PREFER_SUCCESS_THRESHOLD}%:`, prefer));
   return sections.join('\n\n');
 }
 
@@ -1056,13 +1091,15 @@ export function buildPrompt({ app, config, sources = {}, openIssues = [], isPort
     ? `\n### liSelfEval\n${selfEvalReport.trim()}\n\nWeigh this against the sources above before you commit to a proposal. Filing nothing (proposal: null) is a legitimate, and sometimes the correct, outcome — a marginal issue costs the user triage time and lowers your merge rate further.\n`
     : '';
 
-  // Scope-awareness (#2760): your proposal, once filed, is EXECUTED as a CoS task, so
-  // the historical per-scope execution-success rates below predict whether the work
-  // you propose will actually land. Steer toward PREFER scopes and away from AVOID
-  // ones; if the highest-value work genuinely falls in an AVOID scope, you may still
-  // propose it, but scope it narrowly and justify why it will execute this time.
-  const scopeGuidanceBlock = (typeof sources.scopeGuidance === 'string' && sources.scopeGuidance.trim())
-    ? `\n### liScopeAwareness\n${sources.scopeGuidance.trim()}\n\nYour proposals are executed as CoS tasks in these scopes. Favor work that maps to a PREFER scope; treat AVOID scopes as needing a narrow scope and an explicit justification (or a null proposal) rather than a default.\n`
+  // Scope-awareness (#2760): install-wide completion rates by CoS task TYPE — directional
+  // context for how reliably different KINDS of work get finished here. PortOS-only
+  // (codex P2): these rates are this install's own CoS execution history, meaningless to
+  // a managed app, so the block is gated on isPortos even if a managed app enabled the
+  // cosMetrics source. It is context, not a rule (codex P1): a proposal does not map 1:1
+  // onto a listed type, so treat a low-completion type as a reason for extra scrutiny /
+  // a narrower scope, not a hard veto.
+  const scopeGuidanceBlock = (isPortos && typeof sources.scopeGuidance === 'string' && sources.scopeGuidance.trim())
+    ? `\n### liScopeAwareness\n${sources.scopeGuidance.trim()}\n\nThese are per-task-type completion rates for THIS install — how reliably each KIND of work tends to get finished, not a per-proposal record (your proposals don't map 1:1 onto these types). Use it as directional context: a proposal whose implementation resembles a low-completion type deserves extra scrutiny or a narrower scope; high-completion kinds are safer bets. A low rate on self-improve:layered-intelligence is LI's OWN reasoning-run rate — a direct signal to propose conservatively.\n`
     : '';
 
   return `You are the Layered Intelligence reasoner for the app "${app.name}". Your job is to evaluate how THIS app is performing against its OWN goals and purpose${isPortos ? '' : ', not how well PortOS\'s tooling manages it'}. Decide the SINGLE highest-value improvement to propose this run (signal, not noise), grounded in the app's own goals and its own performance metrics (user success, KPIs, production telemetry). You never write code; you return structured JSON that a deterministic system files as ONE tracker issue.
@@ -1267,7 +1304,7 @@ export async function gatherPlannedWork({
  * (`{ filer, forgeCli, cwd, jira }`, resolved by the caller) enables the
  * plannedWork source — absent, that source is simply skipped.
  */
-export async function gatherSources(app, config, { cosPath = PATHS.cos, trustShellSources, tracker = null } = {}) {
+export async function gatherSources(app, config, { cosPath = PATHS.cos, trustShellSources, tracker = null, isPortos = false } = {}) {
   const out = {};
   const src = config.sources || {};
   const repo = app.repoPath;
@@ -1334,14 +1371,18 @@ export async function gatherSources(app, config, { cosPath = PATHS.cos, trustShe
         };
       }
       out.cosMetrics = JSON.stringify(summary).slice(0, 4000);
-      // Scope-awareness guidance (#2760): a deterministic avoid/prefer split derived
-      // from the SAME per-type rates above, so the reasoner gets an interpreted signal
-      // alongside the raw JSON instead of being asked to spot the pattern itself.
-      // Rendered as its own prompt block (see buildPrompt), not a generic source dump.
-      // Gated implicitly on the cosMetrics source being enabled — which is the
-      // PortOS-vs-managed boundary these self-execution rates belong to.
-      const scopeGuidance = computeScopeAwareness({ metricsByType: summary });
-      if (scopeGuidance) out.scopeGuidance = scopeGuidance;
+      // Scope-awareness guidance (#2760): a deterministic low/high-completion split
+      // derived from the SAME per-type rates above, so the reasoner gets an interpreted
+      // signal alongside the raw JSON instead of being asked to spot the pattern itself.
+      // Rendered as its own prompt block (see buildPrompt). Gated on isPortos (codex P2):
+      // these are THIS install's own CoS completion rates, meaningless to a managed app —
+      // and a managed app CAN enable the cosMetrics source, so the cosMetrics toggle
+      // alone is not the PortOS boundary. buildPrompt re-checks isPortos as defense in
+      // depth; deriving it here only for PortOS also avoids the wasted work.
+      if (isPortos) {
+        const scopeGuidance = computeScopeAwareness({ metricsByType: summary });
+        if (scopeGuidance) out.scopeGuidance = scopeGuidance;
+      }
     }
   }
   for (const custom of src.custom || []) {
