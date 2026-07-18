@@ -15,6 +15,8 @@ import {
   visionLocalModelFilter,
   isToolUseModel,
   toolUseLocalModelFilter,
+  localToolUseHint,
+  withToolUseOptionLabel,
   localBackendForProvider,
   knownProviderContextWindow,
   CODEX_CONTEXT_WINDOW,
@@ -312,6 +314,56 @@ describe('toolUseLocalModelFilter', () => {
     const cloud = { name: 'OpenAI', endpoint: 'https://api.openai.com/v1' };
     expect(toolUseLocalModelFilter('gpt-4o', cloud)).toBe(true);
     expect(toolUseLocalModelFilter('anything', undefined)).toBe(true);
+  });
+});
+
+describe('localToolUseHint', () => {
+  const ollama = { name: 'Ollama', endpoint: 'http://localhost:11434/v1' };
+
+  it('flags a local tool-capable model', () => {
+    expect(localToolUseHint('qwen3.6:35b', ollama)).toEqual({ toolCapable: true });
+  });
+
+  it('flags a local non-tool model (Gemma narrates instead of acting)', () => {
+    expect(localToolUseHint('gemma4:e4b', ollama)).toEqual({ toolCapable: false });
+    expect(localToolUseHint('gemma2:9b', ollama)).toEqual({ toolCapable: false });
+  });
+
+  it('returns null for cloud providers (their ids do not encode family)', () => {
+    const cloud = { name: 'OpenAI', endpoint: 'https://api.openai.com/v1' };
+    expect(localToolUseHint('gpt-4o', cloud)).toBeNull();
+    expect(localToolUseHint('gemma4:e4b', undefined)).toBeNull();
+  });
+
+  it('flags a renamed Ollama-backed CLI/TUI wrapper (no "ollama" name/endpoint)', () => {
+    // The incident's provider class: a claude-ollama-tui wrapper the user renamed,
+    // so localBackendForProvider misses it — but it still carries ollamaBacked.
+    const wrapper = { id: 'my-local-agent', name: 'My Local Agent', ollamaBacked: true };
+    expect(localToolUseHint('gemma4:e4b', wrapper)).toEqual({ toolCapable: false });
+    expect(localToolUseHint('qwen3.6:35b', wrapper)).toEqual({ toolCapable: true });
+    // Also via ANTHROPIC_BASE_URL pointing at the Ollama daemon.
+    const viaBase = { name: 'Renamed', envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434/v1' } };
+    expect(localToolUseHint('gemma4:e4b', viaBase)).toEqual({ toolCapable: false });
+  });
+
+  it('returns null for a blank id', () => {
+    expect(localToolUseHint('', ollama)).toBeNull();
+  });
+});
+
+describe('withToolUseOptionLabel', () => {
+  const ollama = { name: 'Ollama', endpoint: 'http://localhost:11434/v1' };
+
+  it('marks recognized-tool vs unrecognized local models', () => {
+    expect(withToolUseOptionLabel('qwen3.6:35b', 'qwen3.6:35b', ollama)).toBe('qwen3.6:35b · 🔧 tool use');
+    // Non-match is worded as unverified, not a false-certain negative — the id
+    // regex is a positive allowlist, so a miss only means "not recognized".
+    expect(withToolUseOptionLabel('gemma4:e4b', 'gemma4:e4b', ollama)).toBe('gemma4:e4b · ⚠ no known tool use');
+  });
+
+  it('leaves cloud provider labels unchanged', () => {
+    const cloud = { name: 'OpenAI', endpoint: 'https://api.openai.com/v1' };
+    expect(withToolUseOptionLabel('gpt-4o', 'GPT-4o', cloud)).toBe('GPT-4o');
   });
 });
 

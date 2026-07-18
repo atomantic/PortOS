@@ -283,6 +283,7 @@ function AssignmentPicker({ assignment, onChange }) {
       label="Provider"
       modelDisabled={availableModels.length === 0}
       alwaysShowModel
+      highlightToolUse
       emptyProviderOption="Install default (Creative Director assignment)"
       emptyModelOption="Default model"
     />

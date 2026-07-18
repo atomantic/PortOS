@@ -30,8 +30,15 @@
  * @param {'row'|'stacked'} [props.layout] - 'row' (default) lays the two selects
  *   side by side; 'stacked' places the model select under the provider select for
  *   narrow columns.
+ * @param {boolean} [props.highlightToolUse] - Opt-in for AGENT / CoS-task pickers:
+ *   marks each LOCAL (Ollama / LM Studio) model option with a tool-use indicator
+ *   and warns below the select when the chosen local model can't call tools (it
+ *   would narrate instead of acting). Off by default so non-agent pickers
+ *   (embeddings, vision, prose generation) stay unannotated. No-op for cloud/API
+ *   providers, whose ids don't encode their family.
  */
 import { useId } from 'react';
+import { localToolUseHint, withToolUseOptionLabel } from '../utils/providers.js';
 
 const SELECT_CLASS =
   'w-full px-3 py-1.5 min-h-[36px] bg-port-bg border border-port-border rounded-lg text-white text-sm';
@@ -59,10 +66,23 @@ export default function ProviderModelSelector({
   emptyProviderOption,
   emptyModelOption,
   alwaysShowModel = false,
-  layout = 'row'
+  layout = 'row',
+  highlightToolUse = false
 }) {
   const providerSelectId = useId();
   const modelSelectId = useId();
+  // Agent-picker tool-use highlight (opt-in). Resolve the selected provider so
+  // the annotation only fires for local backends (the heuristic mislabels cloud
+  // ids). `localToolUseHint` returns null for cloud/blank, so the warning stays
+  // scoped to a genuinely tool-incapable local pin.
+  const selectedProvider = providers.find((p) => p.id === selectedProviderId);
+  // A blank model ("Default model") isn't a no-op: the agent resolver then runs
+  // the provider's own defaultModel — which for an Ollama-backed provider can be
+  // a non-tool model that silently wedges the stage. So evaluate the EFFECTIVE
+  // model (explicit selection, else the provider default) for the warning.
+  const effectiveModel = selectedModel || selectedProvider?.defaultModel || '';
+  const toolHint = highlightToolUse ? localToolUseHint(effectiveModel, selectedProvider) : null;
+  const toolIncapable = toolHint?.toolCapable === false;
   // Only offer enabled providers (treat a missing `enabled` as enabled). The
   // currently-selected provider stays visible even if disabled, so a record
   // pinned to a now-disabled provider still renders its value instead of
@@ -108,9 +128,20 @@ export default function ProviderModelSelector({
             {availableModels.map(m => {
               const opt = modelOption(m);
               if (!opt) return null;
-              return <option key={opt.value} value={opt.value}>{opt.label}</option>;
+              const label = highlightToolUse
+                ? withToolUseOptionLabel(opt.value, opt.label, selectedProvider)
+                : opt.label;
+              return <option key={opt.value} value={opt.value}>{label}</option>;
             })}
           </select>
+          {toolIncapable && (
+            <p className="mt-1 text-xs text-port-warning">
+              ⚠ <span className="font-medium">{effectiveModel}</span>
+              {!selectedModel && ' (this provider’s default)'} isn't a recognized tool-calling
+              model — many local models (e.g. Gemma) reply with text instead of calling tools, which
+              stalls an agent. Prefer a recognized tool-capable model (e.g. qwen3.6:35b).
+            </p>
+          )}
         </div>
       )}
     </div>

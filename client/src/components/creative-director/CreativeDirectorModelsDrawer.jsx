@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Bot, Save } from 'lucide-react';
+import { Bot, Save, AlertTriangle } from 'lucide-react';
 import Drawer from '../Drawer.jsx';
 import toast from '../ui/Toast';
 import { getAiAssignments, updateAiAssignment } from '../../services/api';
@@ -12,6 +12,8 @@ import {
   assignmentModelOptions,
   assignmentDefaultModel,
   localBackendForProvider,
+  localToolUseHint,
+  withToolUseOptionLabel,
 } from '../../utils/providers.js';
 
 // Creative Director provider/model pins, at either of two scopes:
@@ -25,8 +27,12 @@ import {
 // The server's `resolveStagePin` resolves project override → CD default →
 // system default; the inherit hint mirrors that chain for display only.
 const STAGES = [
-  { key: 'treatment', label: 'Treatment', help: 'Agent that turns the brief into a treatment + scene plan.' },
-  { key: 'plan', label: 'Production plan', help: 'Agent that converts a production directive into an executable plan.' },
+  // `needsTools`: these stages run as agent-harness tasks that must emit native
+  // tool calls (the plan agent PATCHes the API to write the plan). A local model
+  // without tool-calling (e.g. Gemma) narrates a done-message instead of acting,
+  // silently wedging the project — so the picker marks + warns on those.
+  { key: 'treatment', label: 'Treatment', needsTools: true, help: 'Agent that turns the brief into a treatment + scene plan.' },
+  { key: 'plan', label: 'Production plan', needsTools: true, help: 'Agent that converts a production directive into an executable plan.' },
   {
     key: 'evaluation',
     label: 'Scene evaluation',
@@ -220,16 +226,30 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
           {STAGES.map((stage) => {
             const entry = entryById[assignmentIdFor(stage.key)];
             const draft = drafts[stage.key] || { providerId: '', model: '' };
+            const selectedProvider = providers.find((p) => p.id === draft.providerId);
             const providerOptions = assignmentProviderOptions(entry, providers);
             const modelOptions = assignmentModelOptions(entry, providers, draft.providerId, visionIdsByProvider);
             const pinned = !!draft.providerId;
+            // Agent stages (treatment/plan) need native tool calling. Warn when a
+            // pinned LOCAL model can't do it (Gemma & friends narrate instead of
+            // PATCHing) — the incident behind this: a plan agent on gemma4:e4b
+            // reported "done" without ever writing the plan. `localToolUseHint`
+            // is null for cloud providers (their ids don't encode family), so the
+            // warning only fires where the heuristic is trustworthy.
+            // A blank model runs the provider's default at fire time, so evaluate
+            // the EFFECTIVE model (explicit pin, else provider default) — a pinned
+            // provider whose default is a non-tool local model wedges the stage
+            // just the same.
+            const effectiveModel = draft.model || selectedProvider?.defaultModel || '';
+            const toolHint = stage.needsTools ? localToolUseHint(effectiveModel, selectedProvider) : null;
+            const toolIncapable = pinned && toolHint?.toolCapable === false;
             // Both hints below are about the LOCAL capability scan, so they only
             // apply when the pinned provider is an Ollama / LM Studio backend. A
             // cloud API provider's list is never vision-filtered, so an empty one
             // just means no models are configured on it — "install a VLM" would
             // be the wrong remediation, and the free-text input still works.
             const visionLocal = entry?.modelFilter === 'vision'
-              && !!localBackendForProvider(providers.find((p) => p.id === draft.providerId));
+              && !!localBackendForProvider(selectedProvider);
             // A vision stage's options are only trustworthy once the capability
             // scan has settled — until then `modelOptions` is regex-only, which
             // is exactly the stale answer that hid the user's VLMs.
@@ -300,7 +320,11 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
                         className="bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white"
                       >
                         <option value="">Provider default / auto</option>
-                        {modelOptions.map((m) => <option key={m} value={m}>{m}</option>)}
+                        {modelOptions.map((m) => (
+                          <option key={m} value={m}>
+                            {stage.needsTools ? withToolUseOptionLabel(m, m, selectedProvider) : m}
+                          </option>
+                        ))}
                       </select>
                     ) : (
                       <input
@@ -319,6 +343,20 @@ export default function CreativeDirectorModelsDrawer({ open, onClose, project, o
                     No vision-capable models found on this provider.{' '}
                     <Link to="/settings/local-llm" className="underline hover:text-port-warning/80">Install a VLM</Link>
                     {' '}(e.g. qwen3-vl, gemma4) or type a model id above.
+                  </p>
+                )}
+
+                {toolIncapable && (
+                  <p className="flex items-start gap-1.5 text-xs text-port-warning">
+                    <AlertTriangle size={13} className="shrink-0 mt-0.5" />
+                    <span>
+                      <span className="font-medium">{effectiveModel}</span>
+                      {!draft.model && ' (this provider’s default)'} isn't a recognized tool-calling
+                      model — many local models (e.g. Gemma) reply with text instead of calling tools,
+                      which can leave this agent's stage stuck. Prefer a recognized tool-capable local
+                      model (e.g. <span className="text-gray-300">qwen3.6:35b</span>) or an API/CLI provider.{' '}
+                      <Link to="/settings/local-llm" className="underline hover:text-port-warning/80">Browse models</Link>.
+                    </span>
                   </p>
                 )}
               </section>
