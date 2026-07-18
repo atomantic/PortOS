@@ -6,36 +6,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { parseScore } from './scoreNotation.js';
 import { createScorePlayer, createMultiScorePlayer } from './scorePlayback.js';
+import { createFakeAudio } from '../test/fakeAudioContext.js';
 
-const audio = { now: 0, oscillators: [] };
-const fakeParam = () => ({ setValueAtTime: () => {}, exponentialRampToValueAtTime: () => {} });
-
-// A context that starts suspended and only resumes when we resolve the deferred
-// returned by resume() — so a test can interleave a stop()/pause() between play()'s
-// `await ctx.resume()` and its continuation.
-let resolveResume;
-function SuspendedAudioContext() {
-  return {
-    state: 'suspended',
-    resume() { return new Promise((r) => { resolveResume = r; }); },
-    get currentTime() { return audio.now; },
-    destination: { id: 'destination' },
-    createOscillator() {
-      const osc = { type: '', frequency: fakeParam(), onended: null, started: null, stopped: null,
-        connect: (t) => t, start(t) { this.started = t; }, stop(t) { this.stopped = t; } };
-      audio.oscillators.push(osc);
-      return osc;
-    },
-    createGain() { return { gain: fakeParam(), connect: (t) => t }; },
-  };
-}
+// The shared fake in suspended mode starts the context suspended and only
+// resolves resume() when we call audio.flushResume() — so a test can interleave
+// a stop()/pause() between play()'s `await ctx.resume()` and its continuation,
+// reproducing the teardown-during-await race the playToken guard fixes. One
+// pair for the whole file (lib/audioContext.js caches the context).
+const { FakeAudioContext, audio } = createFakeAudio({ suspended: true });
 
 describe('resume-window teardown race', () => {
   beforeEach(() => {
-    audio.now = 0;
-    audio.oscillators = [];
-    resolveResume = undefined;
-    vi.stubGlobal('AudioContext', SuspendedAudioContext);
+    audio.reset();
+    vi.stubGlobal('AudioContext', FakeAudioContext);
     vi.useFakeTimers();
   });
   afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
@@ -46,7 +29,7 @@ describe('resume-window teardown race', () => {
     const player = createScorePlayer(SCORE, { bpm: 120 });
     const playing = player.play(); // suspends on ctx.resume()
     player.stop();                 // teardown lands mid-await — bumps the token
-    resolveResume();               // resume resolves; play() must see the stale token and bail
+    audio.flushResume();           // resume resolves; play() must see the stale token and bail
     await playing;
     audio.now = 5; vi.advanceTimersByTime(5000); // no interval should be running
     expect(player.isPlaying()).toBe(false);
@@ -57,7 +40,7 @@ describe('resume-window teardown race', () => {
     const player = createMultiScorePlayer([{ id: 'melody', score: SCORE }], { bpm: 120 });
     const playing = player.play();
     player.stop();
-    resolveResume();
+    audio.flushResume();
     await playing;
     audio.now = 5; vi.advanceTimersByTime(5000);
     expect(player.isPlaying()).toBe(false);

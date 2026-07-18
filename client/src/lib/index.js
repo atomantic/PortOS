@@ -86,6 +86,7 @@ export * from './chordShapes.js';
 export * from './colorMatch.js';
 export * from './editorialChecks.js';
 export * from './editorialHealth.js';
+export * from './lookaheadTransport.js';
 export * from './lossSparkline.js';
 export * from './metronome.js';
 export * from './midiChords.js';
