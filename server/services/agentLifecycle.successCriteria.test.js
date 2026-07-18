@@ -290,6 +290,14 @@ describe('evaluateSuccessCriteria — gh/git coordinator exemption (#2696)', () 
     expect(checkForTaskCommit).toHaveBeenCalledTimes(2);
   });
 
+  it('exempts the ARCHIVED coordinator shape (metadata.taskAnalysisType) (#2696 codex)', async () => {
+    // Matches extractTaskType's bucket resolution so the criterion agrees with the bucket on
+    // the archived agent shape too (agentLifecycle stamps taskAnalysisType).
+    const task = { id: 't4', taskType: 'internal', metadata: { taskAnalysisType: 'branch-cleanup' } };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true })).toBeNull();
+    expect(checkForTaskCommit).not.toHaveBeenCalled();
+  });
+
   it('exempts a coordinator typed on taskType alone, not just metadata.analysisType', async () => {
     // Same resolver as the programmatic-I/O gate (resolveTaskHookType), so a task shaped
     // with the scheduled type at the top level is exempted the same way.
