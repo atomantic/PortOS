@@ -897,6 +897,27 @@ describe('computeOutcomesReport', () => {
     expect(report).toContain('Why non-merged proposals were closed: already tracked elsewhere (duplicate) (1)');
   });
 
+  it('surfaces the execution-failure taxonomy line only when a hand-off has failed (#2764 §1)', () => {
+    // A clean execution record shows no failure line…
+    const clean = computeOutcomesReport({
+      outcomes: [{ scope: 'loop-meta', outcome: 'merged', executionOutcome: 'success' }]
+    });
+    expect(clean).not.toContain("Why LI's own hand-offs failed");
+
+    // …but a failed hand-off surfaces the classified "why".
+    const withFailure = computeOutcomesReport({
+      outcomes: [
+        { scope: 'loop-meta', outcome: 'merged', executionOutcome: 'success' },
+        { scope: 'loop-meta', outcome: null, executionOutcome: 'failure', failureCategory: 'testing' },
+        { scope: 'loop-meta', outcome: null, executionOutcome: 'failure', failureCategory: 'testing' },
+        { scope: 'loop-meta', outcome: null, executionOutcome: 'failure', failureCategory: 'execution' }
+      ]
+    });
+    expect(withFailure).toContain("Why LI's own hand-offs failed when implemented:");
+    expect(withFailure).toContain('regression'); // the `testing` gloss
+    expect(withFailure).toContain('(2)');         // commonest diagnosis count
+  });
+
   it('reports an undiagnosed rejection history as the data gap it is (#2689)', () => {
     const report = computeOutcomesReport({
       outcomes: [
