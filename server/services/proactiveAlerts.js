@@ -287,7 +287,9 @@ async function checkUnansweredTribeThreads() {
       severity: t.daysAgo >= 7 ? 'high' : 'medium',
       title: `Unanswered: ${t.personName}`,
       detail: `You never replied to ${snippet} (${ago(t.daysAgo)})`,
-      link: '/tribe?tab=care',
+      // Deep-link to the specific outreach item (person) so clicking one of several
+      // alerts scrolls to and highlights the right thread, not just the Care Queue.
+      link: `/tribe?tab=care&outreach=${encodeURIComponent(t.personId)}`,
       metadata: {
         personId: t.personId,
         source: t.source,

@@ -51,8 +51,10 @@ const TWO_WAY_SOURCES = new Set(['imessage', 'signal']);
 
 // Channel-appropriate reply prompt for chat outreach — generateReplyBody's default
 // template is email-toned ("Write a professional reply to this email"), which reads
-// wrong for a text message. {{from}}/{{body}} are substituted by generateReplyBody.
-const OUTREACH_CHAT_TEMPLATE = 'Write a brief, warm, casual reply to reconnect over a text message. Keep it short and personal — no email subject line, no formal salutation or sign-off.\n\nFrom: {{from}}\nTheir message:\n{{body}}';
+// wrong for a text message. generateReplyBody substitutes {{from}}/{{body}} and
+// resolves the {{#instructions}} conditional block, so any caller-supplied guidance
+// actually reaches the model (the default template omits it and drops it silently).
+const OUTREACH_CHAT_TEMPLATE = 'Write a brief, warm, casual reply to reconnect over a text message. Keep it short and personal — no email subject line, no formal salutation or sign-off.{{#instructions}}\n\nAdditional guidance: {{instructions}}{{/instructions}}\n\nFrom: {{from}}\nTheir message:\n{{body}}';
 
 // A conversation is keyed by the most specific stable identifier available:
 // chatGuid (iMessage), conversationId (Signal — its outbound turns carry no
@@ -192,8 +194,18 @@ export async function findUnansweredTribeThreads({
     Promise.all([
       listEvents({ from, source: src, kind: 'message.received', limit: 2000 }),
       listEvents({ from, source: src, kind: 'message.sent', limit: 2000 }),
-    ]).then(([r, s]) => { received.push(...r); sent.push(...s); })
-      .catch(() => { /* partial read → drop this source to avoid false nudges */ })
+    ]).then(([r, s]) => {
+      // Fail CLOSED when either direction hits the 2000-row cap: the two queries
+      // are capped independently, so a truncated `sent` result could omit an older
+      // reply while its inbound survives in `received` — reporting an answered
+      // thread as unanswered. Better no nudge for that (very heavy) source than a
+      // false one. (received-cap is a false-negative only, but skip either to be safe.)
+      if (r.length >= 2000 || s.length >= 2000) {
+        console.warn(`🤝 Skipping ${src} outreach scan — timeline query hit the 2000-row cap (can't verify reply state)`);
+        return;
+      }
+      received.push(...r); sent.push(...s);
+    }).catch(() => { /* partial read → drop this source to avoid false nudges */ })
   ));
 
   // Every outbound turn just needs to cancel the unanswered flag for its

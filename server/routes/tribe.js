@@ -72,7 +72,12 @@ const outreachDraftSchema = z.object({
   lastInboundAt: z.string().datetime().nullable().optional(),
   instructions: z.string().max(2000).optional().default(''),
   useVoice: z.boolean().optional(),
-});
+}).refine(
+  // Require a conversation key — without one, generateOutreachDraft would query
+  // the whole timeline and draft a reply to an unrelated conversation.
+  (d) => Boolean(d.threadId || d.chatGuid || d.conversationId || d.handle),
+  { message: 'An outreach draft needs one of threadId, chatGuid, conversationId, or handle' },
+);
 
 const listQuerySchema = z.object({
   search: z.string().max(200).optional(),

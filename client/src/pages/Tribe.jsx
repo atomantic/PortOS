@@ -587,6 +587,12 @@ function OutreachQueue() {
   const [busyKeys, setBusyKeys] = useState(() => new Set());
   const [drafts, setDrafts] = useState({});
   const [copiedKey, setCopiedKey] = useState(null);
+  const [highlightKey, setHighlightKey] = useState(null);
+  const rowRefs = useRef({});
+  // A proactive alert deep-links here as ?outreach=<personId> — scroll to and
+  // highlight that person's thread so clicking one of several alerts lands on it.
+  const [searchParams] = useSearchParams();
+  const outreachPersonId = searchParams.get('outreach');
 
   useEffect(() => {
     let cancelled = false;
@@ -595,6 +601,17 @@ function OutreachQueue() {
       .catch(() => { if (!cancelled) setThreads([]); });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (!outreachPersonId || !Array.isArray(threads)) return;
+    const target = threads.find((t) => t.personId === outreachPersonId);
+    if (!target) return;
+    const el = rowRefs.current[target.conversationKey];
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setHighlightKey(target.conversationKey);
+    const timer = setTimeout(() => setHighlightKey((prev) => (prev === target.conversationKey ? null : prev)), 2500);
+    return () => clearTimeout(timer);
+  }, [outreachPersonId, threads]);
 
   const generate = async (thread) => {
     const key = thread.conversationKey;
@@ -655,8 +672,13 @@ function OutreachQueue() {
         {threads.map((thread) => {
           const draft = drafts[thread.conversationKey];
           const busy = busyKeys.has(thread.conversationKey);
+          const highlighted = highlightKey === thread.conversationKey;
           return (
-            <div key={thread.conversationKey} className="rounded border border-port-border bg-port-bg p-3">
+            <div
+              key={thread.conversationKey}
+              ref={(el) => { rowRefs.current[thread.conversationKey] = el; }}
+              className={`rounded border bg-port-bg p-3 transition-colors ${highlighted ? 'border-port-warning ring-1 ring-port-warning' : 'border-port-border'}`}
+            >
               <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
                 <span className="font-medium text-white">{thread.personName}</span>
                 <span className="rounded border border-port-border px-1.5 py-0.5">{sourceLabel(thread.source)}</span>

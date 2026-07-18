@@ -303,7 +303,16 @@ describe('Tribe Routes', () => {
   it('rejects an outreach draft request with a non-UUID personId', async () => {
     const response = await request(app)
       .post('/api/tribe/outreach/draft')
-      .send({ personId: 'not-a-uuid' });
+      .send({ personId: 'not-a-uuid', chatGuid: 'chat-1' });
+
+    expect(response.status).toBe(400);
+    expect(tribeOutreach.generateOutreachDraft).not.toHaveBeenCalled();
+  });
+
+  it('rejects an outreach draft request with no conversation key', async () => {
+    const response = await request(app)
+      .post('/api/tribe/outreach/draft')
+      .send({ personId: PERSON_ID }); // valid person, but no thread/chat/convo/handle
 
     expect(response.status).toBe(400);
     expect(tribeOutreach.generateOutreachDraft).not.toHaveBeenCalled();
