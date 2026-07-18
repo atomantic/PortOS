@@ -41,6 +41,12 @@
  *
  *   No-op by construction on installs that never ran these types — the file is only
  *   rewritten when at least one bucket is actually present.
+ *
+ *   Known caveat (shared with migration 197, tracked in #2770): if data/migrations.applied.json
+ *   is lost/corrupt, the runner rebuilds the ledger from [] and reruns every migration — this
+ *   purge identifies its target by bucket PRESENCE, so a rerun would also drop legitimate
+ *   post-fix coordinator history. Deferred as a cross-cutting fix (a per-198 marker would diverge
+ *   from 197); see #2770.
  */
 
 import { readFile, writeFile } from 'fs/promises';
