@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { computeAgeView, diffXp } from '../../utils/characterXp';
+import { computeAgeView, diffXp, birthDateCta } from '../../utils/characterXp';
 
 // CyberCity character HUD badge (roadmap 2.11; reframed in #2673). A compact floating panel
 // showing the current **age-based level** (life experience = age) and a progress bar =
@@ -50,17 +50,20 @@ export default function CityXpBadge({ character }) {
   const gaining = burst.kind !== null;
   const barColor = leveling ? '#f59e0b' : '#06b6d4';
   const pct = Math.round(view.progress * 100);
-  // No birthDate set → level is null; show a prompt instead of NaN, and send the click to the
-  // age editor (where the birth-date field actually lives) rather than the character sheet.
-  const levelLabel = view.hasBirthDate ? `LV ${view.level}` : 'LV —';
-  const target = view.hasBirthDate ? '/character' : '/meatspace/age';
+  // No usable level → show a prompt instead of NaN and send the click to the age editor (where
+  // the birth-date field lives). The CTA distinguishes a genuinely unset date ("set") from a
+  // present-but-unusable one ("fix" — invalid/future/unreadable), so we never tell the user to
+  // set a date they already entered (#2757).
+  const cta = view.hasBirthDate ? null : birthDateCta(view.birthDateStatus);
+  const levelLabel = view.hasBirthDate ? `LV ${view.level}` : cta.badgeLabel;
+  const target = view.hasBirthDate ? '/character' : cta.path;
 
   return (
     <div className="absolute bottom-16 right-3 pointer-events-auto">
       <button
         type="button"
         onClick={() => navigate(target)}
-        title={view.hasBirthDate ? 'Open character sheet' : 'Set your birth date'}
+        title={view.hasBirthDate ? 'Open character sheet' : cta.title}
         className={`relative block w-40 sm:w-48 bg-black/85 backdrop-blur-sm border rounded-lg px-3 py-2.5 overflow-hidden text-left transition-all duration-300 hover:bg-cyan-500/10 ${
           leveling
             ? 'border-amber-400/70 shadow-[0_0_16px_rgba(245,158,11,0.5)]'
@@ -116,7 +119,7 @@ export default function CityXpBadge({ character }) {
 
         <div className="relative flex items-center justify-between mt-1">
           <span className="font-pixel text-[8px] text-gray-500 tracking-wider">
-            {view.hasBirthDate ? `${pct}% TO NEXT` : 'SET BIRTH DATE'}
+            {view.hasBirthDate ? `${pct}% TO NEXT` : cta.badgeCaption}
           </span>
           {view.hp != null && view.maxHp != null && (
             <span

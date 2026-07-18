@@ -7,7 +7,7 @@
 
 import { readFile } from 'fs/promises';
 import { join } from 'path';
-import { atomicWrite, PATHS, ensureDir, readJSONFile } from '../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, readJSONFile, readJSONFileStrict } from '../lib/fileUtils.js';
 import { getSnpIndex } from './genome.js';
 import { mlGetProfileIfEnabled, mlPatchProfileIfEnabled } from './mortalLoomStore.js';
 
@@ -278,6 +278,19 @@ export async function getBirthDate() {
   const config = await loadConfig();
   const migrated = await migrateBirthDateFromGoals(config);
   return { birthDate: migrated.birthDate };
+}
+
+// Like getBirthDate, but reports whether the config read was TRUSTWORTHY (see
+// readJSONFileStrict / CLAUDE.md's "Sentinel + validate" rule). A corrupt/unreadable
+// config.json yields `{ birthDate: null, readable: false }` — distinct from a genuinely
+// unset date (`readable: true`) — so consumers (the character enrichment, #2757) can tell a
+// user "your birth date is unreadable, fix it" instead of "set your birth date". An ENOENT
+// (never-written) config is a trustworthy empty and stays `readable: true`.
+export async function getBirthDateStrict() {
+  const { ok, value: config } = await readJSONFileStrict(CONFIG_FILE, structuredClone(DEFAULT_CONFIG));
+  if (!ok) return { birthDate: null, readable: false };
+  const migrated = await migrateBirthDateFromGoals(config);
+  return { birthDate: migrated.birthDate, readable: true };
 }
 
 export async function updateBirthDate(birthDate, { syncGoals = true } = {}) {

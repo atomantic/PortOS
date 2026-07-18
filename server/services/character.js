@@ -18,7 +18,7 @@ import path from 'path';
 import { atomicWrite, ensureDir, readJSONFile, PATHS } from '../lib/fileUtils.js';
 import * as jiraService from './jira.js';
 import * as cosService from './cos.js';
-import { getBirthDate } from './meatspace.js';
+import { getBirthDateStrict } from './meatspace.js';
 import { getCharacterSkills } from './characterSkills.js';
 import { getCharacterMetrics } from './characterMetrics.js';
 import { createSignalContext } from './characterSignals.js';
@@ -33,7 +33,7 @@ const DEFAULT_MAX_HP = 15;
 // stale age-level (or a per-machine usage-derived skill set) never lands on disk or in the
 // federated snapshot. `skills` (#2674) and `metrics` (#2676) are per-machine by design — see
 // characterSkills.js / characterMetrics.js.
-const DERIVED_FIELDS = ['level', 'ageYears', 'skills', 'metrics'];
+const DERIVED_FIELDS = ['level', 'ageYears', 'skills', 'metrics', 'birthDateStatus'];
 
 /**
  * Copy `record` without any derived field. The single chokepoint for that rule — used by the
@@ -82,6 +82,26 @@ export function ageYearsFromBirthDate(birthDate, now = new Date()) {
 // Pure: age-based level = whole years lived. null when age is unknown.
 export function levelFromAge(ageYears) {
   return Number.isFinite(ageYears) ? Math.floor(ageYears) : null;
+}
+
+// Pure: classify the birth-date state so the "no level" CTA can distinguish a genuinely
+// unset date from one that is present-but-unusable (#2757). `levelFromAge(ageYears)` collapses
+// all of unset/invalid/future/unreadable into `null`, which the client used to treat uniformly
+// as "set your birth date" — telling a user to *set* a date they already entered. This restores
+// the sentinel distinction (absent vs failed vs valid — see CLAUDE.md) as an explicit status:
+//   'unreadable' → the meatspace config could not be read/parsed (getBirthDateStrict readable:false)
+//   'unset'      → no birthDate on record
+//   'invalid'    → birthDate present but not a parseable date
+//   'future'     → birthDate parses but is in the future
+//   'ok'         → a usable past birthDate (a real level exists)
+// Mirrors ageYearsFromBirthDate's own null cases so status and level never disagree.
+export function birthDateStatusFrom(birthDate, readable = true, now = new Date()) {
+  if (!readable) return 'unreadable';
+  if (!birthDate) return 'unset';
+  const birth = new Date(birthDate);
+  if (Number.isNaN(birth.getTime())) return 'invalid';
+  if (birth.getTime() > now.getTime()) return 'future';
+  return 'ok';
 }
 
 // Legacy pre-#2673 XP→level curve, retained ONLY for the federation wire projection
@@ -163,13 +183,17 @@ async function loadRawCharacter() {
 // empty".
 async function enrichCharacter(raw, { withSkills = true, withMetrics = true } = {}) {
   const read = withSkills || withMetrics ? createSignalContext() : null;
-  const [{ birthDate }, skills, metrics] = await Promise.all([
-    getBirthDate().catch(() => ({ birthDate: null })),
+  const [{ birthDate, readable }, skills, metrics] = await Promise.all([
+    // A thrown read (rather than a corrupt-but-parsed one) is also unreadable, not unset.
+    getBirthDateStrict().catch(() => ({ birthDate: null, readable: false })),
     withSkills ? getCharacterSkills(read) : Promise.resolve(undefined),
     withMetrics ? getCharacterMetrics(read) : Promise.resolve(undefined),
   ]);
   const ageYears = ageYearsFromBirthDate(birthDate);
-  const enriched = { ...raw, ageYears, level: levelFromAge(ageYears) };
+  // birthDateStatus (#2757) lets the CTA branch "set" (unset) vs "fix" (invalid/future/unreadable)
+  // instead of conflating every null-level case. Derived + stripped like the other DERIVED_FIELDS.
+  const birthDateStatus = birthDateStatusFrom(birthDate, readable);
+  const enriched = { ...raw, ageYears, level: levelFromAge(ageYears), birthDateStatus };
   // Drop any stale persisted key when a registry wasn't computed, so a hand-edited
   // character.json can't pass its own `skills`/`metrics` off as freshly derived.
   if (withSkills) enriched.skills = skills;

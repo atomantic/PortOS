@@ -8,6 +8,7 @@ import CityMiniMap from './CityMiniMap';
 import CityFilterBar from './CityFilterBar';
 import CityFocusPanel from './CityFocusPanel';
 import { CITY_PANE_IDS, CITY_INTEL_PANE_IDS, CITY_PANE_LABELS } from './cityPanes';
+import { birthDateCta } from '../../utils/characterXp';
 
 // A 44×44 dock control. `active`/`aria-pressed` mark a toggled disclosure launcher;
 // omit `active` for one-shot actions (photo, history) that just fire a callback.
@@ -101,6 +102,10 @@ export default function CityHudCompact({
   );
   const criticalCount = items.filter(i => i.severity === 'critical').length;
   const hasApps = (apps || []).length > 0;
+  // No usable level → the birth-date CTA distinguishes a genuinely unset date ("set") from a
+  // present-but-unusable one ("fix" — invalid/future/unreadable) so we don't tell the user to
+  // set a date they already entered (#2757). Null when a real level exists.
+  const birthCta = character && character.level == null ? birthDateCta(character.birthDateStatus) : null;
 
   const onSettings = location.pathname === '/city/settings';
   const goSettings = () => navigate(onSettings ? `/city${location.search}` : `/city/settings${location.search}`);
@@ -180,17 +185,18 @@ export default function CityHudCompact({
           >
             LV {character.level}
           </button>
-        ) : character ? (
-          // Character loaded but no birthDate → level is null (age-based, #2673). Prompt the
-          // user to set it, routing to the age editor where the birth-date field lives.
+        ) : birthCta ? (
+          // Character loaded but no usable level (age-based, #2673). Prompt the user to set the
+          // birth date — or FIX it when present-but-unusable (#2757) — routing to the age editor
+          // where the field lives.
           <button
             type="button"
-            onClick={() => navigate('/meatspace/age')}
-            aria-label="Set your birth date to show your level"
-            title="Set your birth date"
+            onClick={() => navigate(birthCta.path)}
+            aria-label={`${birthCta.title} to show your level`}
+            title={birthCta.title}
             className="bg-black/85 backdrop-blur-sm border border-cyan-500/40 rounded-lg px-2.5 min-h-[44px] flex items-center font-pixel text-[11px] text-cyan-300/70 tracking-wider"
           >
-            LV —
+            {birthCta.badgeLabel}
           </button>
         ) : null}
       </div>
