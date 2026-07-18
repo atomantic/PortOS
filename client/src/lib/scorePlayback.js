@@ -130,6 +130,63 @@ export const scheduleTone = (c, freq, startAt, durSec, destination, peak = TONE_
   return { osc, gain };
 };
 
+// --- Shared per-voice scheduler ---------------------------------------------
+// Both score players are thin schedulers over the same shared transport
+// (lookaheadTransport.js): the solo player drives one schedule, the multi player
+// drives one schedule per voice. Their scheduler-tick and cursor-positioning
+// bodies were byte-for-byte the same walk, differing only in destination (context
+// output vs. per-play master bus), the onNote signature, and (for the multi
+// player) a per-voice end-notify. The two helpers below own that shared walk so
+// each player only wires up its own distinct pieces.
+
+// The mutable scheduling position for one schedule: the next event to hand to the
+// oscillator scheduler, the next to fire onNote for, and the last index notified
+// (so a repeated tick doesn't re-fire the same playhead).
+const makeVoiceCursor = () => ({ nextScheduleIdx: 0, nextNotifyIdx: 0, lastNotified: -1 });
+
+// Position a cursor at a resume `offset` — the first event still sounding at (or
+// starting after) offset. Both cursors share this point so the note under the
+// playhead at resume is (re)scheduled AND (re)notified, and a fresh play from 0
+// still notifies note 0 (stop/finish call this with offset 0 to reset to the top).
+const positionVoiceCursor = (cursor, schedule, offset) => {
+  const events = schedule.events;
+  let idx = events.findIndex((e) => e.startSec + e.durSec > offset + 1e-6);
+  if (idx < 0) idx = events.length;
+  cursor.nextScheduleIdx = idx;
+  cursor.nextNotifyIdx = idx;
+  cursor.lastNotified = -1;
+};
+
+// One scheduler tick for a single schedule: hand any due tones to the audio clock
+// (via the transport-supplied `track`, routed to `destination`) and fire
+// `onNoteIndex(index)` for the latest note that has started. End-of-voice /
+// end-of-piece handling stays in the caller — the solo player leaves it to the
+// transport's finish, the multi player adds a per-voice end-notify because voices
+// differ in length.
+const advanceVoiceWindow = (cursor, schedule, now, startTime, track, destination, onNoteIndex) => {
+  const events = schedule.events;
+
+  while (cursor.nextScheduleIdx < events.length) {
+    const ev = events[cursor.nextScheduleIdx];
+    const at = startTime + ev.startSec;
+    if (at > now + SCHEDULE_AHEAD) break;
+    if (!ev.rest && ev.freq) {
+      track(scheduleTone(ctx(), ev.freq, Math.max(at, now), ev.durSec, destination));
+    }
+    cursor.nextScheduleIdx += 1;
+  }
+
+  let newest = -1;
+  while (cursor.nextNotifyIdx < events.length && startTime + events[cursor.nextNotifyIdx].startSec <= now) {
+    newest = events[cursor.nextNotifyIdx].index;
+    cursor.nextNotifyIdx += 1;
+  }
+  if (newest >= 0 && newest !== cursor.lastNotified) {
+    cursor.lastNotified = newest;
+    onNoteIndex(newest);
+  }
+};
+
 /**
  * Build a melody player over a parsed score.
  *
@@ -147,51 +204,19 @@ export const createScorePlayer = (score, options = {}) => {
   let bpm = Number.isFinite(options.bpm) && options.bpm > 0 ? options.bpm : null;
   let schedule = buildSchedule(score, bpm);
 
-  let nextScheduleIdx = 0; // next event to hand to the oscillator scheduler
-  let nextNotifyIdx = 0;   // next event to fire onNote for
-  let lastNotified = -1;
+  const cursor = makeVoiceCursor();
 
-  // One scheduler tick: hand any due tones to the audio clock (via the
-  // transport-supplied `track`) and fire the playhead callback for the latest
-  // note that has started. (The transport handles the end-of-piece finish.)
+  // One scheduler tick over the single schedule, routed to the context output.
+  // The transport handles the end-of-piece finish, so there's no per-voice
+  // end-notify here (unlike the multi-part player).
   const scheduleWindow = (now, startTime, track) => {
-    const events = schedule.events;
-
-    while (nextScheduleIdx < events.length) {
-      const ev = events[nextScheduleIdx];
-      const at = startTime + ev.startSec;
-      if (at > now + SCHEDULE_AHEAD) break;
-      if (!ev.rest && ev.freq) {
-        track(scheduleTone(ctx(), ev.freq, Math.max(at, now), ev.durSec, ctx().destination));
-      }
-      nextScheduleIdx += 1;
-    }
-
-    let newest = -1;
-    while (nextNotifyIdx < events.length && startTime + events[nextNotifyIdx].startSec <= now) {
-      newest = events[nextNotifyIdx].index;
-      nextNotifyIdx += 1;
-    }
-    if (newest >= 0 && newest !== lastNotified) {
-      lastNotified = newest;
-      safeCall(onNote, newest);
-    }
+    advanceVoiceWindow(cursor, schedule, now, startTime, track, ctx().destination, (index) => safeCall(onNote, index));
   };
 
-  // Position the schedule/notify cursors at a resume offset — the first event
-  // still sounding at (or starting after) `offset`. Both cursors share this
-  // point so the note under the playhead at resume is (re)scheduled AND
-  // (re)notified, and a fresh play from 0 still notifies note 0 (stop/finish
-  // call this with offset 0 to reset to the top). No tails, so it ignores the
-  // transport's soundTails/startTime/track args.
-  const seekCursors = (offset) => {
-    const events = schedule.events;
-    let idx = events.findIndex((e) => e.startSec + e.durSec > offset + 1e-6);
-    if (idx < 0) idx = events.length;
-    nextScheduleIdx = idx;
-    nextNotifyIdx = idx;
-    lastNotified = -1;
-  };
+  // Position the schedule/notify cursors at a resume offset (stop/finish call this
+  // with 0 to reset to the top). No tails, so it ignores the transport's
+  // soundTails/startTime/track args.
+  const seekCursors = (offset) => { positionVoiceCursor(cursor, schedule, offset); };
 
   // Rebuild to pick up a tempo change made while idle, then bail (as ended) on
   // an empty score. Runs after the transport's resume/token recheck.
@@ -258,9 +283,7 @@ export const createMultiScorePlayer = (parts, options = {}) => {
   const buildVoices = () => (parts || []).map((p) => ({
     id: p.id,
     schedule: buildSchedule(p.score, bpm),
-    nextScheduleIdx: 0,
-    nextNotifyIdx: 0,
-    lastNotified: -1,
+    ...makeVoiceCursor(),
     endNotified: false,
   }));
 
@@ -281,38 +304,14 @@ export const createMultiScorePlayer = (parts, options = {}) => {
   // track args.
   const seekCursors = (offset = 0) => {
     for (const v of voices) {
-      const events = v.schedule.events;
-      let idx = events.findIndex((e) => e.startSec + e.durSec > offset + 1e-6);
-      if (idx < 0) idx = events.length;
-      v.nextScheduleIdx = idx;
-      v.nextNotifyIdx = idx;
-      v.lastNotified = -1;
+      positionVoiceCursor(v, v.schedule, offset);
       v.endNotified = false;
     }
   };
 
   const scheduleWindow = (now, startTime, track) => {
     for (const v of voices) {
-      const events = v.schedule.events;
-      while (v.nextScheduleIdx < events.length) {
-        const ev = events[v.nextScheduleIdx];
-        const at = startTime + ev.startSec;
-        if (at > now + SCHEDULE_AHEAD) break;
-        if (!ev.rest && ev.freq) {
-          track(scheduleTone(ctx(), ev.freq, Math.max(at, now), ev.durSec, master));
-        }
-        v.nextScheduleIdx += 1;
-      }
-
-      let newest = -1;
-      while (v.nextNotifyIdx < events.length && startTime + events[v.nextNotifyIdx].startSec <= now) {
-        newest = events[v.nextNotifyIdx].index;
-        v.nextNotifyIdx += 1;
-      }
-      if (newest >= 0 && newest !== v.lastNotified) {
-        v.lastNotified = newest;
-        safeCall(onNote, v.id, newest);
-      }
+      advanceVoiceWindow(v, v.schedule, now, startTime, track, master, (index) => safeCall(onNote, v.id, index));
 
       // Clear this voice's playhead the moment IT finishes (its last note's
       // duration has elapsed), independent of longer voices still sounding.
