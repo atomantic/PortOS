@@ -32,6 +32,7 @@ import { getSettings } from './settings.js';
 import { createTicket, searchIssues, addLabels, escapeJql } from './jira.js';
 import { computeWindowedStats, computeEffectiveSuccessRate, EFFECTIVE_RATE_MIN_WINDOW_SAMPLES, extractTaskType } from './taskLearning/store.js';
 import { formatRejectionReasons, formatRejectionReason, REJECTION_REASONS } from './layeredIntelligenceRejections.js';
+import { formatExecutionFailures } from './layeredIntelligenceExecutionFailures.js';
 
 // Tracker labels + slug marker. The slug is the stable dedup key the reasoner
 // chooses; it is embedded in each filed issue body so a later run (or the
@@ -711,6 +712,12 @@ export function computeOutcomesReport({ outcomes = [], hasPlannedWork = false } 
   // unknown", which the line reports explicitly.
   const rejectionReasons = formatRejectionReasons(filed, 5);
 
+  // Structured diagnosis of every FAILED hand-off (#2764 §1) — the "why" behind the
+  // per-domain execution rate the liProposalExecution block reports (#2765). '' when
+  // no hand-off has failed, so the line below is omitted rather than contradicting a
+  // clean execution record.
+  const executionFailures = formatExecutionFailures(filed, 5);
+
   // Low-merge-rate alarm (#2698). `rawMergeRate` is measured over RESOLVED
   // proposals only and is null when none have resolved — see summarizeOutcomeStats
   // for the sentinel rationale (pending ≠ rejected). A null rate stays silent
@@ -745,6 +752,10 @@ export function computeOutcomesReport({ outcomes = [], hasPlannedWork = false } 
     scopeLines || '- (none)',
     '',
     `Why non-merged proposals were closed: ${rejectionReasons || 'nothing has been closed unmerged yet'}`,
+    // Only emit the execution-failure line when a hand-off has actually failed —
+    // an app whose proposals were never handed off (or all succeeded) shows nothing
+    // here rather than a misleading "no failures" line.
+    ...(executionFailures ? [`Why LI's own hand-offs failed when implemented: ${executionFailures}`] : []),
     ...lowMergeWarning
   ].join('\n');
 }

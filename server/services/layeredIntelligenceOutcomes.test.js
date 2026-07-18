@@ -104,6 +104,41 @@ describe('sanitizeOutcomeRecord', () => {
       expect(r.executionAt).toBeNull();
     });
   });
+
+  describe('failureCategory + failureSignal (#2764 §1)', () => {
+    const sanitize = (over) => sanitizeOutcomeRecord({ appId: 'a', slug: 's', ...over });
+
+    it('keeps a recognized failure category + signal on a FAILED execution', () => {
+      const r = sanitize({ executionOutcome: 'failure', executionAt: 'x', failureCategory: 'testing', failureSignal: 'test-failure' });
+      expect(r.failureCategory).toBe('testing');
+      expect(r.failureSignal).toBe('test-failure');
+    });
+
+    it('keeps the unknown-failure sentinel', () => {
+      expect(sanitize({ executionOutcome: 'failure', executionAt: 'x', failureCategory: 'unknown-failure' }).failureCategory).toBe('unknown-failure');
+    });
+
+    it('coerces an unrecognized/future category to null (re-derivable), not the sentinel', () => {
+      expect(sanitize({ executionOutcome: 'failure', executionAt: 'x', failureCategory: 'bogus' }).failureCategory).toBeNull();
+    });
+
+    it('drops the diagnosis on a SUCCESS — a success has nothing to explain', () => {
+      const r = sanitize({ executionOutcome: 'success', executionAt: 'x', failureCategory: 'testing', failureSignal: 'test-failure' });
+      expect(r.failureCategory).toBeNull();
+      expect(r.failureSignal).toBeNull();
+    });
+
+    it('defaults both fields to null on a record that never executed', () => {
+      const r = sanitize({ outcome: 'merged' });
+      expect(r.failureCategory).toBeNull();
+      expect(r.failureSignal).toBeNull();
+    });
+
+    it('bounds a hand-edited over-long failure signal', () => {
+      const r = sanitize({ executionOutcome: 'failure', executionAt: 'x', failureSignal: 'z'.repeat(500) });
+      expect(r.failureSignal.length).toBe(64);
+    });
+  });
 });
 
 describe('recordFiledProposal + listOutcomes', () => {
@@ -471,6 +506,39 @@ describe('recordProposalExecution (#2765)', () => {
     expect(row.executionOutcome).toBe('failure');
   });
 
+  it('classifies + persists the failure taxonomy from the run signal (#2764 §1)', async () => {
+    await recordFiledProposal({ appId: 'app-1', slug: 'regressed', scope: 'loop-meta' }, store);
+    await recordProposalExecution({ appId: 'app-1', slug: 'regressed', success: false, errorCategory: 'test-failure' }, store);
+    const [row] = await listOutcomes({ appId: 'app-1' }, store);
+    expect(row).toMatchObject({ executionOutcome: 'failure', failureCategory: 'testing', failureSignal: 'test-failure' });
+  });
+
+  it('classifies a clean-exit validation miss as testing even with no error category (#2764 §1)', async () => {
+    await recordProposalExecution({ appId: 'app-1', slug: 'missed', scope: 'loop-meta', success: false, errorCategory: null, validationPassed: false }, store);
+    const [row] = await listOutcomes({ appId: 'app-1' }, store);
+    expect(row.failureCategory).toBe('testing');
+    expect(row.failureSignal).toBeNull(); // no raw category to keep
+  });
+
+  it('leaves the diagnosis null on a SUCCESS, and clears a prior failure on a passing re-run (#2764 §1)', async () => {
+    await recordProposalExecution({ appId: 'app-1', slug: 'retry', scope: 'loop-meta', success: false, errorCategory: 'git-conflict' }, store);
+    let [row] = await listOutcomes({ appId: 'app-1' }, store);
+    expect(row.failureCategory).toBe('execution');
+    // A later passing re-run must overwrite the stale failure diagnosis.
+    await recordProposalExecution({ appId: 'app-1', slug: 'retry', scope: 'loop-meta', success: true }, store);
+    [row] = await listOutcomes({ appId: 'app-1' }, store);
+    expect(row.executionOutcome).toBe('success');
+    expect(row.failureCategory).toBeNull();
+    expect(row.failureSignal).toBeNull();
+  });
+
+  it('stores an unmapped failure signal as unknown-failure but keeps the raw signal (#2764 §1)', async () => {
+    await recordProposalExecution({ appId: 'app-1', slug: 'mystery', scope: 'loop-meta', success: false, errorCategory: 'weird-new-category' }, store);
+    const [row] = await listOutcomes({ appId: 'app-1' }, store);
+    expect(row.failureCategory).toBe('unknown-failure');
+    expect(row.failureSignal).toBe('weird-new-category');
+  });
+
   it('creates a minimal record (adopting the passed scope) when the filed record is missing', async () => {
     // GC'd or a filing-write miss — the execution signal must not be silently lost.
     const ok = await recordProposalExecution({ appId: 'app-2', slug: 'orphan', scope: 'portos-self', success: true }, store);
@@ -511,6 +579,23 @@ describe('recordProposalExecution (#2765)', () => {
     const [row] = await listOutcomes({ appId: 'app-1' }, store);
     expect(row.outcome).toBe('merged');           // reconcile applied the filing outcome
     expect(row.executionOutcome).toBe('success'); // …without dropping the execution signal
+  });
+
+  it('reconcile preserves the failure diagnosis when it later stamps the filing outcome (#2764 §1)', async () => {
+    // A failed hand-off later gets its issue closed-as-rejected. Reconcile applies the
+    // filing outcome via a fenced re-read that spreads the fresh record — the
+    // execution-failure fields must ride through untouched.
+    await recordFiledProposal({ appId: 'app-1', slug: 'diag', scope: 'loop-meta' }, store);
+    await recordProposalExecution({ appId: 'app-1', slug: 'diag', success: false, errorCategory: 'git-conflict' }, store);
+    await reconcileOutcomes({
+      appId: 'app-1',
+      existingIssues: [{ slug: 'diag', state: 'closed', stateReason: 'not_planned', closedAt: new Date().toISOString() }]
+    }, store);
+    const [row] = await listOutcomes({ appId: 'app-1' }, store);
+    expect(row.outcome).toBe('rejected');          // reconcile applied the filing outcome
+    expect(row.executionOutcome).toBe('failure');  // …preserving the execution signal
+    expect(row.failureCategory).toBe('execution'); // …and the failure diagnosis
+    expect(row.failureSignal).toBe('git-conflict');
   });
 
   it('aggregates a domain’s success rate across multiple executions', async () => {
