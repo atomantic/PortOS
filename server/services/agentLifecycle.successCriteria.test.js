@@ -257,3 +257,45 @@ describe('evaluateSuccessCriteria — commit criterion (#2344)', () => {
     expect(await evaluateSuccessCriteria({ task: { id: 't2', taskType: 'internal' }, workspacePath: '/w' })).toBe(false);
   });
 });
+
+/**
+ * gh/git COORDINATOR task types (#2696): branch-reconcile / issue-reconcile drive
+ * their work through git+gh in the app's LIVE checkout (workspacePath IS set) and never
+ * produce a `[task-<id>]` commit, so the commit criterion scored every successful run a
+ * failure and drove their learning bucket to ~0% — the same artifact #2700 fixed for the
+ * programmatic-I/O reasoning run. They must declare NO commit criterion (fall back to the
+ * exit code), exactly like pipeline/media jobs.
+ */
+describe('evaluateSuccessCriteria — gh/git coordinator exemption (#2696)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('declares NO commit criterion for a branch-reconcile coordinator run', async () => {
+    const task = { id: 't1', taskType: 'internal', metadata: { analysisType: 'branch-reconcile' } };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true })).toBeNull();
+    expect(checkForTaskCommit).not.toHaveBeenCalled();
+  });
+
+  it('declares NO commit criterion for an issue-reconcile coordinator run', async () => {
+    const task = { id: 't1', taskType: 'internal', metadata: { analysisType: 'issue-reconcile' } };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: false })).toBeNull();
+    expect(checkForTaskCommit).not.toHaveBeenCalled();
+  });
+
+  it('exempts a coordinator typed on taskType alone, not just metadata.analysisType', async () => {
+    // Same resolver as the programmatic-I/O gate (resolveTaskHookType), so a task shaped
+    // with the scheduled type at the top level is exempted the same way.
+    const task = { id: 't2', taskType: 'branch-reconcile' };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true })).toBeNull();
+    expect(checkForTaskCommit).not.toHaveBeenCalled();
+  });
+
+  it('does NOT exempt accessibility — it is a fixing task that DOES commit (#2696 scope)', async () => {
+    // accessibility's prompt ends "Test and commit changes": it makes code changes in a
+    // worktree and commits, so its commit criterion is real and its 0% (if any) is a
+    // genuine agent failure, NOT the coordinator artifact. Must stay commit-checked.
+    checkForTaskCommit.mockResolvedValueOnce(false);
+    const task = { id: 't3', taskType: 'internal', metadata: { analysisType: 'accessibility', selfImprovement: true } };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true })).toBe(false);
+    expect(checkForTaskCommit).toHaveBeenCalledWith('t3', '/w');
+  });
+});

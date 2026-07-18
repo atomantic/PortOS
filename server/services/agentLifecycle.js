@@ -805,6 +805,18 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
   }
 }
 
+// Scheduled COORDINATOR task types whose deliverable is a git/gh side effect (a merged
+// PR, a resolved conflict, healed issue state), NOT a `[task-<id>]` commit. Their
+// coordinator runs in the app's LIVE checkout with useWorktree/openPR locked off (see
+// taskSchedule.js MANAGED_AGENT_OPTIONS), so the `[task-<id>]` commit criterion in
+// evaluateSuccessCriteria would score every SUCCESSFUL run as a failure and poison their
+// learning bucket to ~0% (#2696). Kept as an explicit allow-list — NOT every
+// MANAGED_AGENT_OPTIONS type — because plan-task / claim-issue / claim-work also lock
+// worktree/PR off yet DO commit (they run the /claim flow in their own worktree), so their
+// commit criterion is real and must stay. Mirrored by migration 198, which purges the
+// buckets these already poisoned on existing installs.
+const NON_COMMITTING_COORDINATOR_TASK_TYPES = new Set(['branch-reconcile', 'issue-reconcile']);
+
 /**
  * Evaluate a completed autonomous run against its DECLARED success criteria
  * (issue #2344). Distinct from the runner's exit-code `success`: it answers
@@ -829,6 +841,10 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
 export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, success = false, hookResult = null }) {
   if (terminatedByUser) return null;
   const taskType = task?.taskType || 'user';
+  // The SCHEDULED type (`metadata.analysisType`) if any, else the queue category —
+  // the same resolution the programmatic-I/O gate uses, reused for the coordinator
+  // gate below so both key on the task's real type, not the CoS bucket ('internal').
+  const scheduledType = resolveTaskHookType(task);
   // Programmatic-I/O tasks (taskTypeHooks.js) declare their OWN criterion — the
   // sentinel parsed and the hook accepted it — so this branch comes FIRST: it is
   // keyed on the hook result rather than on a workspace/commit, and must not be
@@ -839,7 +855,7 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
   // Judging them purely by exit code instead is also wrong: an exit-0 run whose
   // `.agent-done` sentinel was missing/malformed, or whose hook threw, produced
   // nothing usable and must be recorded as the failure it is (#2727).
-  if (isProgrammaticIoTaskType(resolveTaskHookType(task))) {
+  if (isProgrammaticIoTaskType(scheduledType)) {
     return resolveProgrammaticIoVerdict({ success, hookResult });
   }
   // Interactive/user tasks declare no machine-checkable criterion; neither does
@@ -852,6 +868,16 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
   // tasks they register no output hook, so there is no deliverable signal to
   // judge them by — they stay exit-code-judged (unchanged by #2727).
   if (task?.metadata?.pipeline || task?.metadata?.mediaJob) return null;
+  // gh/git COORDINATOR task types deliver their work through git+gh operations in
+  // the app's live checkout — opening/merging PRs, resolving conflicts, healing
+  // issue state — and by design NEVER produce a `[task-<id>]` commit (useWorktree/
+  // openPR are locked off, see taskSchedule.js MANAGED_AGENT_OPTIONS). Because their
+  // workspacePath IS set (the live checkout), the commit check above would return
+  // false on every SUCCESSFUL run and drive their learning bucket to ~0% (#2696) —
+  // the same artifact #2700 fixed for the programmatic-I/O reasoning run. They
+  // register no output hook, so like pipeline/media jobs there is no deliverable
+  // signal to judge them by; fall back to the exit code (null = criterion undeclared).
+  if (NON_COMMITTING_COORDINATOR_TASK_TYPES.has(scheduledType)) return null;
   return await checkForTaskCommit(task.id, workspacePath);
 }
 
