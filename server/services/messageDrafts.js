@@ -2,8 +2,16 @@
 import { join } from 'path';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { atomicWrite, ensureDir, PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import { createFileWriteQueue } from '../lib/fileWriteQueue.js';
 
 const DRAFTS_FILE = join(PATHS.messages, 'drafts.json');
+
+// Serialize every read-modify-write of drafts.json onto a single tail so two
+// concurrent createDraft/updateDraft/delete calls can't read the same snapshot and
+// have one atomic rename clobber the other's just-persisted draft. This matters
+// now that Tribe outreach (#2158) permits several draft generations in flight at
+// once — each finishing LLM call lands its own createDraft.
+const queueWrite = createFileWriteQueue();
 
 async function loadDrafts() {
   await ensureDir(PATHS.messages);
@@ -38,39 +46,47 @@ export async function getDraft(id) {
 }
 
 export async function createDraft(data) {
-  const drafts = await loadDrafts();
-  const draft = {
-    id: uuidv4(),
-    accountId: data.accountId,
-    replyToMessageId: data.replyToMessageId || null,
-    threadId: data.threadId || null,
-    to: data.to || [],
-    cc: data.cc || [],
-    subject: data.subject || '',
-    body: data.body || '',
-    status: 'draft',
-    generatedBy: data.generatedBy || 'manual',
-    sendVia: data.sendVia || 'api',
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
-  };
-  drafts.push(draft);
-  await saveDrafts(drafts);
-  console.log(`📝 Message draft created: "${draft.subject}" via ${draft.sendVia}`);
-  return draft;
+  return queueWrite(async () => {
+    const drafts = await loadDrafts();
+    const draft = {
+      id: uuidv4(),
+      accountId: data.accountId,
+      replyToMessageId: data.replyToMessageId || null,
+      threadId: data.threadId || null,
+      // Stable per-conversation key + the inbound timestamp it answers, for
+      // provenance-scoped dedup (Tribe outreach, #2158) — null for ordinary drafts.
+      conversationKey: data.conversationKey || null,
+      lastInboundAt: data.lastInboundAt || null,
+      to: data.to || [],
+      cc: data.cc || [],
+      subject: data.subject || '',
+      body: data.body || '',
+      status: 'draft',
+      generatedBy: data.generatedBy || 'manual',
+      sendVia: data.sendVia || 'api',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    drafts.push(draft);
+    await saveDrafts(drafts);
+    console.log(`📝 Message draft created: "${draft.subject}" via ${draft.sendVia}`);
+    return draft;
+  });
 }
 
 export async function updateDraft(id, updates) {
-  const drafts = await loadDrafts();
-  const idx = drafts.findIndex(d => d.id === id);
-  if (idx === -1) return null;
-  const allowed = ['to', 'cc', 'subject', 'body', 'status'];
-  for (const key of allowed) {
-    if (updates[key] !== undefined) drafts[idx][key] = updates[key];
-  }
-  drafts[idx].updatedAt = new Date().toISOString();
-  await saveDrafts(drafts);
-  return drafts[idx];
+  return queueWrite(async () => {
+    const drafts = await loadDrafts();
+    const idx = drafts.findIndex(d => d.id === id);
+    if (idx === -1) return null;
+    const allowed = ['to', 'cc', 'subject', 'body', 'status'];
+    for (const key of allowed) {
+      if (updates[key] !== undefined) drafts[idx][key] = updates[key];
+    }
+    drafts[idx].updatedAt = new Date().toISOString();
+    await saveDrafts(drafts);
+    return drafts[idx];
+  });
 }
 
 export async function approveDraft(id) {
@@ -78,20 +94,24 @@ export async function approveDraft(id) {
 }
 
 export async function deleteDraftsByAccountId(accountId) {
-  const drafts = await loadDrafts();
-  const remaining = drafts.filter(d => d.accountId !== accountId);
-  if (remaining.length < drafts.length) {
-    await saveDrafts(remaining);
-    console.log(`🗑️ Deleted ${drafts.length - remaining.length} drafts for account ${accountId}`);
-  }
+  return queueWrite(async () => {
+    const drafts = await loadDrafts();
+    const remaining = drafts.filter(d => d.accountId !== accountId);
+    if (remaining.length < drafts.length) {
+      await saveDrafts(remaining);
+      console.log(`🗑️ Deleted ${drafts.length - remaining.length} drafts for account ${accountId}`);
+    }
+  });
 }
 
 export async function deleteDraft(id) {
-  const drafts = await loadDrafts();
-  const idx = drafts.findIndex(d => d.id === id);
-  if (idx === -1) return false;
-  drafts.splice(idx, 1);
-  await saveDrafts(drafts);
-  console.log(`🗑️ Message draft deleted: ${id}`);
-  return true;
+  return queueWrite(async () => {
+    const drafts = await loadDrafts();
+    const idx = drafts.findIndex(d => d.id === id);
+    if (idx === -1) return false;
+    drafts.splice(idx, 1);
+    await saveDrafts(drafts);
+    console.log(`🗑️ Message draft deleted: ${id}`);
+    return true;
+  });
 }

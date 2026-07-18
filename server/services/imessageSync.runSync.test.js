@@ -65,7 +65,7 @@ beforeAll(() => {
     CREATE TABLE handle (ROWID INTEGER PRIMARY KEY, id TEXT);
     CREATE TABLE chat (ROWID INTEGER PRIMARY KEY, guid TEXT, chat_identifier TEXT, display_name TEXT);
     CREATE TABLE chat_handle_join (chat_id INTEGER, handle_id INTEGER);
-    CREATE TABLE message (ROWID INTEGER PRIMARY KEY, guid TEXT, date INTEGER, text TEXT, attributedBody BLOB, is_from_me INTEGER, service TEXT, handle_id INTEGER);
+    CREATE TABLE message (ROWID INTEGER PRIMARY KEY, guid TEXT, date INTEGER, text TEXT, attributedBody BLOB, is_from_me INTEGER, service TEXT, handle_id INTEGER, associated_message_type INTEGER DEFAULT 0);
     CREATE TABLE chat_message_join (chat_id INTEGER, message_id INTEGER);
   `);
   db.exec(`INSERT INTO handle VALUES (1,'+15551234567')`);

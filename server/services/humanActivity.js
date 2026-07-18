@@ -351,7 +351,7 @@ async function insertActivityChunk(rows) {
 // lower, exclusive upper); `personId` matches a participant via the JSONB
 // containment operator. `chatGuid` / `handle` match iMessage-style metadata
 // pointers. Newest first, capped by `limit` (default 500, max 2000).
-export async function listEvents({ from, to, source, kind, personId, chatGuid, handle, limit } = {}) {
+export async function listEvents({ from, to, source, kind, personId, chatGuid, conversationId, threadId, handle, limit } = {}) {
   await ensureReady();
   const clauses = [];
   const params = [];
@@ -366,6 +366,14 @@ export async function listEvents({ from, to, source, kind, personId, chatGuid, h
   if (chatGuid != null && String(chatGuid).length > 0) {
     params.push(String(chatGuid));
     clauses.push(`metadata->>'chatGuid' = $${params.length}`);
+  }
+  if (conversationId != null && String(conversationId).length > 0) {
+    params.push(String(conversationId));
+    clauses.push(`metadata->>'conversationId' = $${params.length}`);
+  }
+  if (threadId != null && String(threadId).length > 0) {
+    params.push(String(threadId));
+    clauses.push(`metadata->>'threadId' = $${params.length}`);
   }
   if (handle != null && String(handle).length > 0) {
     params.push(String(handle));

@@ -24,7 +24,13 @@ vi.mock('../services/tribe.js', () => ({
   unlinkMemory: vi.fn(),
 }));
 
+vi.mock('../services/tribeOutreach.js', () => ({
+  findUnansweredTribeThreads: vi.fn(),
+  generateOutreachDraft: vi.fn(),
+}));
+
 import * as tribe from '../services/tribe.js';
+import * as tribeOutreach from '../services/tribeOutreach.js';
 
 const PERSON_ID = '11111111-1111-4111-8111-111111111111';
 const MEMORY_ID = '22222222-2222-4222-8222-222222222222';
@@ -262,5 +268,53 @@ describe('Tribe Routes', () => {
 
     expect(response.status).toBe(404);
     expect(emit).not.toHaveBeenCalledWith('tribe:changed', expect.anything());
+  });
+
+  it('lists unanswered outreach threads with a clamped limit', async () => {
+    tribeOutreach.findUnansweredTribeThreads.mockResolvedValue([
+      { conversationKey: 'chat:1', personId: PERSON_ID, personName: 'Ada', daysAgo: 3 },
+    ]);
+
+    const response = await request(app).get('/api/tribe/outreach?limit=999');
+
+    expect(response.status).toBe(200);
+    expect(response.body.threads).toHaveLength(1);
+    expect(tribeOutreach.findUnansweredTribeThreads).toHaveBeenCalledWith({ limit: 50 }); // clamped
+  });
+
+  it('generates an outreach draft and announces the new draft', async () => {
+    tribeOutreach.generateOutreachDraft.mockResolvedValue({
+      draft: { id: '44444444-4444-4444-8444-444444444444', body: 'Hey Ada!' },
+      person: { id: PERSON_ID, name: 'Ada' },
+    });
+
+    const response = await request(app)
+      .post('/api/tribe/outreach/draft')
+      .send({ personId: PERSON_ID, source: 'imessage', chatGuid: 'chat-1' });
+
+    expect(response.status).toBe(201);
+    expect(response.body.draft.body).toBe('Hey Ada!');
+    expect(tribeOutreach.generateOutreachDraft).toHaveBeenCalledWith(
+      expect.objectContaining({ personId: PERSON_ID, source: 'imessage', chatGuid: 'chat-1' }),
+    );
+    expect(emit).toHaveBeenCalledWith('messages:draft:created', { draftId: '44444444-4444-4444-8444-444444444444' });
+  });
+
+  it('rejects an outreach draft request with a non-UUID personId', async () => {
+    const response = await request(app)
+      .post('/api/tribe/outreach/draft')
+      .send({ personId: 'not-a-uuid', chatGuid: 'chat-1' });
+
+    expect(response.status).toBe(400);
+    expect(tribeOutreach.generateOutreachDraft).not.toHaveBeenCalled();
+  });
+
+  it('rejects an outreach draft request with no conversation key', async () => {
+    const response = await request(app)
+      .post('/api/tribe/outreach/draft')
+      .send({ personId: PERSON_ID }); // valid person, but no thread/chat/convo/handle
+
+    expect(response.status).toBe(400);
+    expect(tribeOutreach.generateOutreachDraft).not.toHaveBeenCalled();
   });
 });
