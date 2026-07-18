@@ -73,6 +73,61 @@ export function resolveTaskHookType(task) {
 }
 
 /**
+ * Scheduled COORDINATOR task types whose deliverable is a git/gh/external side effect —
+ * a merged PR, a resolved conflict, a deleted branch, healed issue state, a status report
+ * posted to Jira — NOT a `[task-<id>]` commit. Their agent runs in the app's LIVE checkout
+ * (no worktree, no PR), so they DO have a workspacePath at finalize, and the `[task-<id>]`
+ * commit criterion would score every SUCCESSFUL run as a failure and pin their learning
+ * bucket at ~0% (#2696). They declare no commit criterion (fall back to the exit code),
+ * exactly like pipeline/media jobs.
+ *
+ * Deliberately NOT every self-improvement type: accessibility / security / code-quality
+ * / plan-task / claim-issue / claim-work / jira-sprint-manager / do-replan all COMMIT
+ * (fixing tasks, /claim flows, or a triage that commits PLAN.md), so their commit
+ * criterion is real and must stay — exempting them would MASK genuine failures. Only
+ * complete tasks whose DEFAULT contract is structurally no-commit belong here.
+ *
+ * pr-watcher is intentionally excluded on a different axis: it is a review-of-others'-PRs
+ * TEMPLATE — its shipped prompt explicitly says "the operator customizes this prompt to
+ * change what happens on each opened PR" (and it ships `readOnly:false`), i.e. it is
+ * designed to be rewritten, commonly into a commit-pushing flow, so a type-level exemption
+ * would be the wrong default for it. The four types here are complete tasks that finish
+ * YOUR in-flight work via a git/gh/API side effect. CAVEAT: the exemption keys on the
+ * SCHEDULED TYPE, not the actual per-install prompt, so an operator who rewrites one of
+ * these four prompts to make source commits would have that customized run judged by exit
+ * code instead of its commit (a telemetry-accuracy tradeoff, not a functional bug). A
+ * per-task `noCommitCriterion` contract would remove that caveat but complicates the
+ * migration's static type→bucket mapping; deferred as not worth it for the default case.
+ *
+ * Kept as a leaf so both agentLifecycle (the live criterion) and taskLearning's history
+ * backfill (migration-durability) read ONE source of truth. Migration 198 purges the
+ * buckets these already poisoned on existing installs.
+ */
+export const NON_COMMITTING_COORDINATOR_TASK_TYPES = new Set([
+  'branch-reconcile', 'issue-reconcile', 'branch-cleanup', 'jira-status-report',
+]);
+
+/**
+ * Whether a task declares NO `[task-<id>]` commit criterion because it is a gh/git
+ * coordinator (see NON_COMMITTING_COORDINATOR_TASK_TYPES).
+ *
+ * Resolves the type the SAME way extractTaskType (taskLearning/store.js) computes the
+ * learning bucket — `metadata.analysisType || metadata.taskAnalysisType || taskType` — NOT
+ * via resolveTaskHookType (which reads only `analysisType`). This matters for the archived
+ * agent shape: a LIVE queue task carries `metadata.analysisType`, but agentLifecycle stamps
+ * the run's type onto the AGENT record as `metadata.taskAnalysisType` (agentLifecycle.js),
+ * and that archived form is exactly what the history backfill re-processes. Keying on
+ * `analysisType` alone made this predicate DISAGREE with the bucket for archived agents, so
+ * the backfill sanitizer skipped them and the migration's purge could be undone (#2696,
+ * codex review). Matching extractTaskType keeps the criterion, the bucket, and the sanitizer
+ * consistent across both task shapes.
+ */
+export function isNonCommittingCoordinatorTask(task) {
+  const type = task?.metadata?.analysisType || task?.metadata?.taskAnalysisType || task?.taskType || null;
+  return NON_COMMITTING_COORDINATOR_TASK_TYPES.has(type);
+}
+
+/**
  * Resolve the pre-agent input hook for a task type, or null if it has none.
  * `buildTaskInput({ app, taskType })` → `{ prompt?, providerId?, model?, skip? }`.
  */

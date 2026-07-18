@@ -883,6 +883,16 @@ export async function recalculateDurationStats() {
       // declared criterion is NOT a success (excluded from success-only ETAs),
       // and a commit-found run is a success even on a non-zero exit. Falls back to
       // the raw exit-code success for records that predate validationPassed.
+      // NOTE (#2696): the coordinator commit-criterion exemption is deliberately NOT
+      // applied here. This rebuild re-derives success-only DURATIONS from archives but
+      // does not rebuild the `succeeded` COUNTS, and totals.successDurationMs (below) is
+      // summed unconditionally. Overriding a coordinator's fossil validationPassed:false
+      // to an exit-code success here would add its duration to totals while migration 198
+      // had already removed its count — inflating the totals ETA. A post-fix coordinator
+      // run carries validationPassed:null (finalize returns null) and is already counted
+      // correctly; a pre-fix fossil is left excluded so durations stay consistent with the
+      // purged counts. The residual archives-vs-counts skew of this manual rebuild predates
+      // #2696 and is ETA-cosmetic.
       const vp = meta.result?.validationPassed;
       const outcomeSuccess = typeof vp === 'boolean' ? vp : !!meta.result?.success;
       if (!outcomeSuccess || duration <= 0) continue;

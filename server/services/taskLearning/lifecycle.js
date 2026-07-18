@@ -9,6 +9,21 @@
 
 import { cosEvents, emitLog } from './store.js';
 import { recordTaskCompletion, recalculateModelTierMetrics } from './metrics.js';
+import { isNonCommittingCoordinatorTask } from '../taskTypeHooks.js';
+
+// A pre-#2696 gh/git coordinator run (branch-reconcile/issue-reconcile/branch-cleanup/
+// jira-status-report) carries a FOSSIL `result.validationPassed` — a boolean the old
+// `[task-<id>]` commit criterion stamped on a run that never makes such a commit (almost
+// always `false`). recordTaskCompletion trusts a persisted boolean over the exit code, so
+// re-recording one verbatim would restore the very bucket migration 198 purged. These types
+// now declare NO commit criterion, so drop the fossil and let the exit-code success stand —
+// exactly as finalize now records a live coordinator run. Non-coordinator agents (and those
+// with no boolean verdict) pass through untouched.
+function withoutStaleCoordinatorVerdict(agent, task) {
+  if (!isNonCommittingCoordinatorTask(task)) return agent;
+  if (typeof agent?.result?.validationPassed !== 'boolean') return agent;
+  return { ...agent, result: { ...agent.result, validationPassed: null } };
+}
 
 /**
  * Initialize learning system - listen for agent completions
@@ -54,7 +69,7 @@ export async function backfillFromHistory() {
         metadata: agent.metadata
       };
 
-      await recordTaskCompletion(agent, task).catch(() => {});
+      await recordTaskCompletion(withoutStaleCoordinatorVerdict(agent, task), task).catch(() => {});
       backfilled++;
     }
   }

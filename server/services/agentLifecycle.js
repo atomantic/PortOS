@@ -21,7 +21,7 @@ import { createToolExecution, startExecution, completeExecution, errorExecution 
 import { determineLane, acquire, release } from './executionLanes.js';
 import { analyzeAgentFailure, resolveFailedTaskUpdate, resolveTypeFailureSignal } from './agentErrorAnalysis.js';
 import { createAgentRun, completeAgentRun, checkForTaskCommit } from './agentRunTracking.js';
-import { isProgrammaticIoTaskType, resolveTaskHookType } from './taskTypeHooks.js';
+import { isProgrammaticIoTaskType, resolveTaskHookType, isNonCommittingCoordinatorTask } from './taskTypeHooks.js';
 import { buildAgentPrompt, getAppWorkspace } from './agentPromptBuilder.js';
 import { isOllamaClaudeProvider, isClaudeCommand, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { buildOpencodeEnvVars } from '../lib/opencodeConfig.js';
@@ -829,6 +829,10 @@ export function releaseAgentLane({ agentId, success, duration, exitCode, executi
 export async function evaluateSuccessCriteria({ task, terminatedByUser, workspacePath, success = false, hookResult = null }) {
   if (terminatedByUser) return null;
   const taskType = task?.taskType || 'user';
+  // The SCHEDULED type (`metadata.analysisType`) if any, else the queue category —
+  // the same resolution the programmatic-I/O gate uses, reused for the coordinator
+  // gate below so both key on the task's real type, not the CoS bucket ('internal').
+  const scheduledType = resolveTaskHookType(task);
   // Programmatic-I/O tasks (taskTypeHooks.js) declare their OWN criterion — the
   // sentinel parsed and the hook accepted it — so this branch comes FIRST: it is
   // keyed on the hook result rather than on a workspace/commit, and must not be
@@ -839,7 +843,7 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
   // Judging them purely by exit code instead is also wrong: an exit-0 run whose
   // `.agent-done` sentinel was missing/malformed, or whose hook threw, produced
   // nothing usable and must be recorded as the failure it is (#2727).
-  if (isProgrammaticIoTaskType(resolveTaskHookType(task))) {
+  if (isProgrammaticIoTaskType(scheduledType)) {
     return resolveProgrammaticIoVerdict({ success, hookResult });
   }
   // Interactive/user tasks declare no machine-checkable criterion; neither does
@@ -852,6 +856,18 @@ export async function evaluateSuccessCriteria({ task, terminatedByUser, workspac
   // tasks they register no output hook, so there is no deliverable signal to
   // judge them by — they stay exit-code-judged (unchanged by #2727).
   if (task?.metadata?.pipeline || task?.metadata?.mediaJob) return null;
+  // gh/git/external COORDINATOR task types (NON_COMMITTING_COORDINATOR_TASK_TYPES in
+  // taskTypeHooks.js — branch-reconcile/issue-reconcile/branch-cleanup/jira-status-report)
+  // deliver their work as a side effect — a merged PR, a resolved conflict, a deleted
+  // branch, a posted report — and by design NEVER produce a `[task-<id>]` commit. Because
+  // their workspacePath IS set (the app's live checkout), the commit check above would
+  // return false on every SUCCESSFUL run and drive their learning bucket to ~0% (#2696) —
+  // the same artifact #2700 fixed for the programmatic-I/O reasoning run. They register no
+  // output hook, so like pipeline/media jobs there is no deliverable signal to judge them
+  // by; fall back to the exit code (null = criterion undeclared). Uses the predicate (not a
+  // bare `scheduledType` lookup) so the archived `taskAnalysisType` shape resolves the same
+  // way the learning bucket does — see isNonCommittingCoordinatorTask.
+  if (isNonCommittingCoordinatorTask(task)) return null;
   return await checkForTaskCommit(task.id, workspacePath);
 }
 

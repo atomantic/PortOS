@@ -257,3 +257,62 @@ describe('evaluateSuccessCriteria — commit criterion (#2344)', () => {
     expect(await evaluateSuccessCriteria({ task: { id: 't2', taskType: 'internal' }, workspacePath: '/w' })).toBe(false);
   });
 });
+
+/**
+ * gh/git COORDINATOR task types (#2696): branch-reconcile / issue-reconcile drive
+ * their work through git+gh in the app's LIVE checkout (workspacePath IS set) and never
+ * produce a `[task-<id>]` commit, so the commit criterion scored every successful run a
+ * failure and drove their learning bucket to ~0% — the same artifact #2700 fixed for the
+ * programmatic-I/O reasoning run. They must declare NO commit criterion (fall back to the
+ * exit code), exactly like pipeline/media jobs.
+ */
+describe('evaluateSuccessCriteria — gh/git coordinator exemption (#2696)', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('declares NO commit criterion for every non-committing coordinator type', async () => {
+    // The structurally-no-commit coordinators: they run in the live checkout and deliver a
+    // git/gh/external side effect, never a [task-<id>] commit.
+    for (const analysisType of ['branch-reconcile', 'issue-reconcile', 'branch-cleanup', 'jira-status-report']) {
+      const task = { id: 't1', taskType: 'internal', metadata: { analysisType } };
+      expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true })).toBeNull();
+    }
+    expect(checkForTaskCommit).not.toHaveBeenCalled();
+  });
+
+  it('STILL commit-checks committing self-improve types (jira-sprint-manager, do-replan)', async () => {
+    // jira-sprint-manager commits + opens MRs; do-replan commits PLAN.md edits — their commit
+    // criterion is real, so exempting them would MASK genuine failures. Must stay checked.
+    for (const analysisType of ['jira-sprint-manager', 'do-replan']) {
+      checkForTaskCommit.mockResolvedValueOnce(true);
+      const task = { id: 't1', taskType: 'internal', metadata: { analysisType, selfImprovement: true } };
+      expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true })).toBe(true);
+    }
+    expect(checkForTaskCommit).toHaveBeenCalledTimes(2);
+  });
+
+  it('exempts the ARCHIVED coordinator shape (metadata.taskAnalysisType) (#2696 codex)', async () => {
+    // Matches extractTaskType's bucket resolution so the criterion agrees with the bucket on
+    // the archived agent shape too (agentLifecycle stamps taskAnalysisType).
+    const task = { id: 't4', taskType: 'internal', metadata: { taskAnalysisType: 'branch-cleanup' } };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true })).toBeNull();
+    expect(checkForTaskCommit).not.toHaveBeenCalled();
+  });
+
+  it('exempts a coordinator typed on taskType alone, not just metadata.analysisType', async () => {
+    // Same resolver as the programmatic-I/O gate (resolveTaskHookType), so a task shaped
+    // with the scheduled type at the top level is exempted the same way.
+    const task = { id: 't2', taskType: 'branch-reconcile' };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true })).toBeNull();
+    expect(checkForTaskCommit).not.toHaveBeenCalled();
+  });
+
+  it('does NOT exempt accessibility — it is a fixing task that DOES commit (#2696 scope)', async () => {
+    // accessibility's prompt ends "Test and commit changes": it makes code changes in a
+    // worktree and commits, so its commit criterion is real and its 0% (if any) is a
+    // genuine agent failure, NOT the coordinator artifact. Must stay commit-checked.
+    checkForTaskCommit.mockResolvedValueOnce(false);
+    const task = { id: 't3', taskType: 'internal', metadata: { analysisType: 'accessibility', selfImprovement: true } };
+    expect(await evaluateSuccessCriteria({ task, workspacePath: '/w', success: true })).toBe(false);
+    expect(checkForTaskCommit).toHaveBeenCalledWith('t3', '/w');
+  });
+});
