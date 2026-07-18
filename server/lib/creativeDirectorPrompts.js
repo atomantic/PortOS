@@ -118,8 +118,22 @@ function buildPlanView(project, toolSpecs) {
     },
     tools,
     hasCurrentPlan: currentSteps.length > 0,
+    // Serialize `dependsOn` + `args` (not just id/tool/status) so a re-planning
+    // agent can keep completed steps verbatim AND see a failed step's authored
+    // args — critical when the failure is a bad `{{steps.…}}` result reference,
+    // which is only diagnosable from the args + the persisted error. Without the
+    // error the re-planner reproduces the broken reference until MAX_REPLAN_ROUNDS.
     currentPlanJson: JSON.stringify(
-      currentSteps.map((s) => ({ stepId: s.stepId, toolName: s.toolName, status: s.status })),
+      currentSteps.map((s) => ({
+        stepId: s.stepId,
+        toolName: s.toolName,
+        status: s.status,
+        dependsOn: s.dependsOn || [],
+        args: s.args || {},
+        ...(s.result && (s.result.error || s.result.reason)
+          ? { error: s.result.error || s.result.reason }
+          : {}),
+      })),
     ),
   };
 }

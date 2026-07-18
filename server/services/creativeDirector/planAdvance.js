@@ -119,6 +119,11 @@ export function deriveNextPlanAction(plan) {
 const STEP_REF_BODY = String.raw`\{\{\s*steps\.([\w-]+)\.result\.([\w.-]+)\s*\}\}`;
 const STEP_REF_ANCHORED = new RegExp(`^${STEP_REF_BODY}$`);
 const STEP_REF_GLOBAL = new RegExp(STEP_REF_BODY, 'g');
+// Fast-path sentinel — the grammar's opening (`{{`, optional whitespace,
+// `steps.`). MUST stay as tolerant as STEP_REF_BODY's prefix or a
+// whitespace-padded reference the resolver WOULD match slips past the early-out
+// and dispatches as a literal. Non-global so `.test()` carries no lastIndex.
+const STEP_REF_SENTINEL = /\{\{\s*steps\./;
 
 /**
  * Resolve `{{steps.<stepId>.result.<path>}}` references in a plan step's `args`
@@ -144,10 +149,10 @@ const STEP_REF_GLOBAL = new RegExp(STEP_REF_BODY, 'g');
  */
 export function resolvePlanStepArgs(step, plan) {
   const args = step?.args || {};
-  // Fast path: the vast majority of steps carry no references. Every reference
-  // contains the `{{steps.` sentinel, so a cheap serialize-and-scan returns the
-  // args untouched without building the step index or walking/cloning the tree.
-  if (!JSON.stringify(args).includes('{{steps.')) return { args, error: null };
+  // Fast path: the vast majority of steps carry no references. A cheap
+  // serialize-and-scan for the reference opener returns the args untouched
+  // without building the step index or walking/cloning the tree.
+  if (!STEP_REF_SENTINEL.test(JSON.stringify(args))) return { args, error: null };
 
   const steps = Array.isArray(plan?.steps) ? plan.steps : [];
   const byId = new Map(steps.map((s) => [s.stepId, s]));
@@ -160,6 +165,12 @@ export function resolvePlanStepArgs(step, plan) {
       errors.push(`references step "${stepId}" which is not complete (status: ${dep.status || 'pending'})`);
       return undefined;
     }
+    // Dry-run preview: a step dispatched in dry-run mode settles `done` with only
+    // `{ planned: true }` and mints no real id, so a reference into it has nothing
+    // to resolve. Substitute a synthetic placeholder rather than erroring, so the
+    // whole-plan preview walk completes (the downstream step is itself dry-run and
+    // never uses the value) instead of failing into a spurious re-plan.
+    if (dep.result?.planned === true) return `dry-run:${stepId}.${path}`;
     let val = dep.result;
     for (const seg of path.split('.')) val = val == null ? undefined : val[seg];
     if (val === undefined || val === null) {
