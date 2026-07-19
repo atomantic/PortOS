@@ -82,6 +82,12 @@ export default function PlayerAvatar({ rigRef }) {
       obj.castShadow = false;
       obj.receiveShadow = false;
     });
+    // Reset to the source transform before measuring so this is idempotent: under
+    // StrictMode the mount effect runs twice on the same scene, and measuring an
+    // already-fitted scene would compute scale≈1 and blow the model back up to source size.
+    scene.scale.setScalar(1);
+    scene.position.set(0, 0, 0);
+    scene.updateMatrixWorld(true);
     const box = new THREE.Box3().setFromObject(scene);
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
