@@ -136,11 +136,10 @@ export const METRICS = [
     // and `videoDownload.js` routes downloads through the same index on purpose. Labelling it
     // "Media Rendered" would claim a provenance the row doesn't carry.
     //
-    // Caveat this tile inherits from the index (NOT introduced here — the `auteur` skill reads
-    // the same source): deletes don't decrement it until the next boot, because `removeAsset`
-    // has no production callers yet ("delete hook, future slice" per mediaAssetIndex/db.js).
-    // So the count can read high between a delete and a restart. Tracked as a follow-up; the
-    // honest label keeps the tile from overstating what it measures in the meantime (#2738).
+    // Deletes decrement live: the in-app delete paths retire the index row with the file
+    // (#2738 — `unindexImage`/`unindexVideo` → `removeAsset`). The boot-time
+    // `reconcileMediaAssets()` sweep remains the backstop for files removed outside PortOS,
+    // so only an out-of-band disk delete can read high until the next restart.
     compute: async (read) => read('assetCount'),
   },
   {
