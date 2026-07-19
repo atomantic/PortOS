@@ -190,11 +190,12 @@ describe('GoalDetailPanel Daily Driver feature-area override (issue #2679)', () 
     );
   });
 
-  it('preserves forward-unknown ids when editing an unrelated field (no data loss on federated installs)', async () => {
-    // A goal synced from a newer peer carries a feature-area id this install
-    // doesn't know. Editing an unrelated field must round-trip that id intact —
-    // dropping it would LWW-propagate a truncated array back and erase the newer
-    // peer's config. The (non-strict) server schema accepts the unknown id.
+  it('omits featureAreas when the selector was untouched (no stale-snapshot clobber of a concurrent peer edit)', async () => {
+    // The editor sends a startEdit snapshot of every field. Re-sending an
+    // untouched featureAreas would let that stale value win the whole-record LWW
+    // merge and erase a featureAreas change a federated peer made while the editor
+    // was open. Omitting the field lets the service preserve whatever is stored —
+    // including any forward-unknown id from a newer peer, which is never dropped.
     await renderPanel({ ...baseGoal, featureAreas: ['someFutureAreaFromANewerPeer'] });
     fireEvent.click(screen.getByText('Edit'));
     // Change only the title; never touch the feature-area buttons.
@@ -205,7 +206,7 @@ describe('GoalDetailPanel Daily Driver feature-area override (issue #2679)', () 
       await Promise.resolve();
     });
     const [, payload] = api.updateGoal.mock.calls[0];
-    expect(payload.featureAreas).toEqual(['someFutureAreaFromANewerPeer']);
+    expect(payload).not.toHaveProperty('featureAreas');
     expect(payload.title).toBe('Master the craft, revised');
   });
 

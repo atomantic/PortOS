@@ -68,17 +68,35 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
   };
 
   const saveEdit = async () => {
-    // `form.featureAreas` carries the full override, INCLUDING any forward-unknown
-    // ids preserved from `startEdit` (issue #2679). The multi-select only toggles
-    // ids this install knows; unknown ids ride along untouched. We send the whole
-    // array so those unknown ids are never dropped — the (now non-strict) server
-    // schema accepts them and `getGoalFeatureAreas` filters them at read time.
-    await api.updateGoal(goal.id, {
-      ...form,
+    // featureAreas handling (issue #2679):
+    //  - When the user did NOT touch the selector, OMIT featureAreas from the
+    //    PATCH. The whole editor sends a startEdit snapshot, so re-sending an
+    //    untouched featureAreas would let a stale value win the whole-record LWW
+    //    merge and clobber a concurrent featureAreas edit from a federated peer.
+    //    Omitting it lets the service preserve whatever is currently stored. (The
+    //    pre-#2679 editor never sent this field at all, so this restores that
+    //    immunity for the untouched case.)
+    //  - When the user DID change it, send the full array — INCLUDING any
+    //    forward-unknown ids preserved from startEdit (the known-id-only
+    //    multi-select leaves them untouched). The update schema accepts unknown
+    //    ids and getGoalFeatureAreas filters them at read time, so they are never
+    //    dropped.
+    const { featureAreas, ...rest } = form;
+    const original = goal.featureAreas || [];
+    const current = featureAreas || [];
+    const featureAreasChanged =
+      current.length !== original.length ||
+      current.some((id, i) => id !== original[i]);
+    const payload = {
+      ...rest,
       parentId: form.parentId || null,
       targetDate: form.targetDate || null,
       timeBlockConfig: form.timeBlockConfig || null
-    });
+    };
+    if (featureAreasChanged) {
+      payload.featureAreas = current;
+    }
+    await api.updateGoal(goal.id, payload);
     setEditing(false);
     onRefresh();
   };
