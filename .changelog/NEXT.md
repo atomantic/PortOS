@@ -1,5 +1,9 @@
 # Unreleased Changes
 
+## Enterprise GitHub support
+
+- [issue-2650] The CoS branch reconciler and issue reconciler now work on self-hosted GitHub Enterprise (`github.*`) repos, not just `github.com`. Both previously gated on the github.com-only `isGithub` origin flag (which drives PortOS's own fork/update flow), so their scans silently skipped enterprise repos even though the sibling PR-watcher already handled them. All three services now share an `isGithubHost(host)` classifier and target `gh` via a host-qualified `HOST/OWNER/REPO` selector, so enterprise repos reconcile correctly and detection stays deterministic on a fork+upstream checkout. Existing github.com behavior is unchanged.
+
 ## Changed
 
 - Agent triage policy is now "decide, don't defer": when a follow-up's only obstacle is an undecided design choice, agents make the call themselves (state it as the decision in the issue body) and file it ready-to-work rather than parking it as a decision-blocked `future`/`needs-input` issue. `future` is reserved for work a human must personally drive — a real validation run or a step needing specific hardware/credentials — which is now marked `blocked`, not `future`. Encoded in CLAUDE.md ("Decide, don't defer"), the Layered Intelligence proposal playbook, and every claim-work scheduled-task prompt — `claim-issue` (v7), `claim-issue-gitlab` (v6), `claim-issue-jira` (v4), and `plan-task` (v10): the verify phase no longer parks an *ambiguous* item (a `needs-input` label, a "Needs clarification" JIRA todo, or a `.plan-questions.md` clarification PR) and re-picks — it decides on the most reasonable reading, records it in a comment/note/commit, and ships; the park is now reserved for destructive/irreversible or genuinely human-gated cases (a genuinely too-large item still parks so the autonomous drain converges).
