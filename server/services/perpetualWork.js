@@ -250,10 +250,21 @@ const FORGE_ISSUE_CONFIG = {
     // `groups/parent%2Fsubgroup`. A probe failure (network/unauth/non-200) degrades
     // to isOrg:false → the pre-existing `--author <owner>` behavior, so no new
     // transient park appears.
+    //
+    // Numeric-namespace guard: `groups/:id` treats an ALL-NUMERIC `:id` as a
+    // database group ID, not a path — so probing `groups/1234` could match an
+    // unrelated group by ID and falsely park a user's `/1234/widget` as
+    // owner-is-group. GitLab forbids all-numeric namespace *paths* precisely to
+    // avoid this id/path ambiguity, so such a namespace shouldn't occur; if one
+    // somehow does, skip the ambiguous probe and take the safe `--author <ns>`
+    // path (isOrg:false). Nested subgroups are URL-encoded (`parent%2Fsub`) and so
+    // are never all-numeric — they still probe normally.
     resolveOwner: async (repoPath) => {
       const namespace = await resolveGitlabNamespace(repoPath);
       if (!namespace) return { error: 'glab-owner-unresolved' };
-      const probe = await runCli('glab', ['api', `groups/${encodeURIComponent(namespace)}`], repoPath);
+      const probe = /^\d+$/.test(namespace)
+        ? { code: 1 }
+        : await runCli('glab', ['api', `groups/${encodeURIComponent(namespace)}`], repoPath);
       return { owner: namespace, isOrg: probe.code === 0 };
     },
     // `--self` mode: glab's `--author` expects a username (no `@me` token), so
