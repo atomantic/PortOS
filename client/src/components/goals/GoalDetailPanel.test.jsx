@@ -189,4 +189,41 @@ describe('GoalDetailPanel Daily Driver feature-area override (issue #2679)', () 
       expect.objectContaining({ featureAreas: [] })
     );
   });
+
+  it('omits featureAreas from the payload when the override was not touched (forward-compat)', async () => {
+    // Editing an unrelated field must NOT round-trip featureAreas — otherwise a
+    // goal synced from a newer federated peer carrying a forward-unknown area id
+    // would 400 against the strict updateGoalInputSchema enum. Omitting the key
+    // lets the service preserve the stored value (unknown ids included).
+    await renderPanel({ ...baseGoal, featureAreas: ['someFutureAreaFromANewerPeer'] });
+    fireEvent.click(screen.getByText('Edit'));
+    // Change only the title; never touch the feature-area buttons.
+    const titleInput = screen.getByDisplayValue('Master the craft');
+    fireEvent.change(titleInput, { target: { value: 'Master the craft, revised' } });
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save'));
+      await Promise.resolve();
+    });
+    const [, payload] = api.updateGoal.mock.calls[0];
+    expect(payload).not.toHaveProperty('featureAreas');
+    expect(payload.title).toBe('Master the craft, revised');
+  });
+
+  it('strips locally-unknown ids when the override IS changed', async () => {
+    // A goal carries a forward-unknown id plus a known one; the user toggles a
+    // known area, so the override is "changed" and gets sent — but the unknown
+    // id (invisible in this install's UI) must be stripped so the update still
+    // validates.
+    await renderPanel({ ...baseGoal, featureAreas: ['someFutureAreaFromANewerPeer', 'universes'] });
+    fireEvent.click(screen.getByText('Edit'));
+    // Toggle a different known area on → override changed.
+    fireEvent.click(screen.getByRole('button', { name: /Tribe/ }));
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save'));
+      await Promise.resolve();
+    });
+    const [, payload] = api.updateGoal.mock.calls[0];
+    expect(payload.featureAreas).toEqual(['universes', 'tribe']);
+    expect(payload.featureAreas).not.toContain('someFutureAreaFromANewerPeer');
+  });
 });

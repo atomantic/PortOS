@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import * as api from '../services/api';
 import { MAX_TAGS, MAX_TAG_LENGTH } from '../components/goals/goalConstants';
+import { FEATURE_AREA_IDS } from '../lib/goalFeatureMap';
 
 // State + handlers backing GoalDetailPanel. Extracted so the panel can stay a
 // thin composition shell; behavior is identical to the prior inline logic.
@@ -68,12 +69,29 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
   };
 
   const saveEdit = async () => {
-    await api.updateGoal(goal.id, {
-      ...form,
+    // Forward-compat across federated installs (issue #2679): a goal synced
+    // from a newer peer can carry a `featureAreas` id this install doesn't know
+    // yet, and `updateGoalInputSchema`'s strict enum would 400 if we sent it.
+    // So only include `featureAreas` in the payload when the user actually
+    // changed the override — when unchanged, omit it and let the service
+    // preserve the stored value (unknown ids included). On the changed path,
+    // strip to locally-known ids so the update always validates.
+    const { featureAreas, ...rest } = form;
+    const original = goal.featureAreas || [];
+    const current = featureAreas || [];
+    const featureAreasChanged =
+      current.length !== original.length ||
+      current.some((id, i) => id !== original[i]);
+    const payload = {
+      ...rest,
       parentId: form.parentId || null,
       targetDate: form.targetDate || null,
       timeBlockConfig: form.timeBlockConfig || null
-    });
+    };
+    if (featureAreasChanged) {
+      payload.featureAreas = current.filter(id => FEATURE_AREA_IDS.includes(id));
+    }
+    await api.updateGoal(goal.id, payload);
     setEditing(false);
     onRefresh();
   };
