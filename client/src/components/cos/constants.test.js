@@ -7,6 +7,7 @@ import {
   DEFAULT_DOMAIN_MODE,
   AGENT_STATES,
   MUSE_STATE_ANIMATIONS,
+  MUSE_STATE_SEQUENCES,
   MUSE_ANIMATION_FALLBACK,
   MUSE_SPEAKING_GESTURE,
   MUSE_ROOT_MOTION_CLIPS
@@ -67,6 +68,33 @@ describe('muse avatar animation triggers', () => {
     }
     expect(MUSE_ROOT_MOTION_CLIPS).not.toContain(MUSE_ANIMATION_FALLBACK);
     expect(MUSE_ROOT_MOTION_CLIPS).not.toContain(MUSE_SPEAKING_GESTURE);
+  });
+});
+
+// The `coding` montage cycles several clips so the working avatar reads as
+// varied/dynamic (jab, sprint, leap, approve, stride, celebrate). Steps name
+// real GLB clips; root-motion clips are auto-routed to their neutralized
+// in-place variant by the avatar (see animationClips.test.js for that routing),
+// so the data can freely name a walk/run cycle without risking drift. These
+// invariants just keep the montage steps well-formed.
+
+describe('muse avatar state sequences (montages)', () => {
+  it('gives the coding state a montage of at least 2 steps', () => {
+    expect(Array.isArray(MUSE_STATE_SEQUENCES.coding)).toBe(true);
+    expect(MUSE_STATE_SEQUENCES.coding.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('has well-formed steps (string clip + positive integer reps when present)', () => {
+    for (const [state, steps] of Object.entries(MUSE_STATE_SEQUENCES)) {
+      expect(Array.isArray(steps), `sequence "${state}" must be an array`).toBe(true);
+      for (const step of steps) {
+        expect(typeof step.clip, `sequence "${state}" step needs a clip name`).toBe('string');
+        expect(step.clip.length).toBeGreaterThan(0);
+        if (step.reps !== undefined) {
+          expect(Number.isInteger(step.reps) && step.reps > 0, `sequence "${state}" reps must be a positive integer`).toBe(true);
+        }
+      }
+    }
   });
 });
 

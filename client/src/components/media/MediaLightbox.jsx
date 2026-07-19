@@ -41,7 +41,7 @@ const SAVED_INDICATOR_MS = 1500;
 // so preventDefault here still cancels the browser's default text behavior. The
 // editable-target check is shared with useKeyboardShortcuts (imported above).
 
-const CLEAN_TOOLTIP = 'Re-encode and denoise: removes the C2PA metadata chunk (when present) and reduces visible AI-generation artifacts. Does NOT defeat SynthID — gpt-image / Imagen / Gemini renders remain detectable by their vendor watermark checkers. Saves a new image alongside the original.';
+const CLEAN_TOOLTIP = 'Resize-squeeze (CPU, no GPU): a downscale→upscale round-trip that removes the C2PA metadata chunk (via re-encode) and perturbs SynthID’s resolution-dependent carriers. Best-effort SynthID disruption — in testing it made OpenAI’s SynthID detector fail to return a positive, but it is detector-dependent and never a guaranteed removal. Saves a new image alongside the original.';
 
 // Three lineage cases:
 //   - auto-cleaned (replaced in place): "Auto-cleaned (aggressive)"

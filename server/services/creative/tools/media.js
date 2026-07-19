@@ -60,6 +60,27 @@ async function enforceVideoRenderPreset(params, ctx) {
   };
 }
 
+/**
+ * Tag a planner-enqueued audio job so the durable `creativeDirectorMusicBedHook`
+ * files the finished track onto the owning project's `musicBed` field (#2772).
+ *
+ * Without this, a `music` commission's plan step enqueues an audio job that
+ * completes with only a job id — `project.musicBed` stays null and the run has
+ * no surfaced, rateable output. The first-pass music flow
+ * (creativeDirector/firstPassMusicGen.js) already stamps this exact tag; the
+ * planner path did not, so the hook never fired for planner-driven audio.
+ *
+ * Only tags inside a CD project context (`ctx.projectId`) — a bare enqueue with
+ * no owning project keeps its params untouched. An explicit
+ * `creativeDirectorMusicBed` already on the params (a caller that set its own
+ * destination) wins and is left as-is.
+ */
+function attachMusicBedTag(params, ctx) {
+  if (!ctx?.projectId) return params;
+  if (params?.creativeDirectorMusicBed) return params;
+  return { ...params, creativeDirectorMusicBed: { projectId: ctx.projectId } };
+}
+
 const mediaTool = (kind, label) => ({
   name: `media_enqueue${label}Job`,
   description: `Enqueue a ${kind} media job. Long-running: returns a job handle; completion arrives via media-job events. Tags the job owner to the calling project.`,
@@ -75,9 +96,9 @@ const mediaTool = (kind, label) => ({
     required: ['params'],
   },
   execute: async (args, ctx) => {
-    const params = kind === 'video'
-      ? await enforceVideoRenderPreset(args.params || {}, ctx)
-      : (args.params || {});
+    let params = args.params || {};
+    if (kind === 'video') params = await enforceVideoRenderPreset(params, ctx);
+    else if (kind === 'audio') params = attachMusicBedTag(params, ctx);
     return enqueueJob({ kind, params, owner: resolveOwner(args, ctx) });
   },
 });

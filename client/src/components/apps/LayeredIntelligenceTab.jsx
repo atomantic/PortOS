@@ -1,6 +1,7 @@
 import { Plus, Trash2, Brain } from 'lucide-react';
 import Banner from '../ui/Banner';
 import ProviderModelSelector from '../ProviderModelSelector';
+import LayeredIntelligenceOutcomes from './LayeredIntelligenceOutcomes';
 import { filterSelectableModels } from '../../utils/providers';
 import { timeAgo } from '../../utils/formatters';
 import { formatLiReason, liReasonTone } from '../../utils/layeredIntelligenceReasons';
@@ -19,7 +20,9 @@ export const LI_SOURCE_FIELDS = [
   { key: 'healthReport', label: 'Health report', hint: 'Latest health / lint / test summary' },
   { key: 'planMd', label: 'PLAN.md', hint: 'The app\'s open work-plan items' },
   { key: 'openIssues', label: 'Open issues', hint: 'Currently open tracker issues' },
-  { key: 'outcomes', label: 'Proposal outcomes', hint: 'Past LI proposals + how they fared (merge rate), fed back so the loop calibrates on its own results' }
+  { key: 'plannedWork', label: 'Planned work', hint: 'The backlog you\'ve already committed to (plan-labeled issues / prioritized Jira backlog / unchecked PLAN.md items), so the loop won\'t propose work that\'s already in scope' },
+  { key: 'outcomes', label: 'Proposal outcomes', hint: 'Past LI proposals + how they fared (merge rate), fed back so the loop calibrates on its own results' },
+  { key: 'selfEval', label: 'Self-evaluation', hint: 'A deterministic check of the loop\'s own record — merge rate, proposals it has already filed, and whether its own runs are succeeding — so it can judge proposal quality before filing instead of only learning from rejections' }
 ];
 
 // The proposal scopes the loop may file. loop-meta / portos-self extend the loop
@@ -213,7 +216,7 @@ export function buildLayeredIntelligenceScheduleUpdate(baseline, current) {
  * with a partial update. `sources` updates merge one level deep here so a single
  * toggle doesn't wipe the others.
  */
-export default function LayeredIntelligenceTab({ li, onChange, providers, isPortos, loaded, error = false, onRetry }) {
+export default function LayeredIntelligenceTab({ appId, li, onChange, providers, isPortos, loaded, error = false, onRetry }) {
   if (!loaded) {
     return <div className="text-sm text-gray-500">Loading Layered Intelligence config…</div>;
   }
@@ -270,6 +273,8 @@ export default function LayeredIntelligenceTab({ li, onChange, providers, isPort
           <span className={LAST_RUN_TONE_CLASS[lastRun.tone] || 'text-gray-400'}>{lastRun.text}.</span>
         </div>
       )}
+
+      <LayeredIntelligenceOutcomes appId={appId} />
 
       <label className="flex items-center gap-2 cursor-pointer">
         <input

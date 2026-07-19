@@ -84,7 +84,7 @@ export default function ReferenceReposPanel({ appId, appName }) {
   }, [appId]);
 
   const handleAdd = async (form) => {
-    const created = await api.addReferenceRepo(appId, form).catch((e) => { toast.error(e.message || 'Add failed'); return null; });
+    const created = await api.addReferenceRepo(appId, form, { silent: true }).catch((e) => { toast.error(e.message || 'Add failed'); return null; });
     if (!created) return;
     toast.success(`Added "${created.name}"`);
     setShowAdd(false);
@@ -105,7 +105,7 @@ export default function ReferenceReposPanel({ appId, appName }) {
     // Only mutate local state on success — otherwise the row vanishes from
     // the UI while the server still has the ref, leaving the user confused
     // about why "delete failed" appeared next to a now-empty list.
-    const ok = await api.deleteReferenceRepo(appId, ref.id)
+    const ok = await api.deleteReferenceRepo(appId, ref.id, { silent: true })
       .then(() => true)
       .catch((e) => { toast.error(e.message || 'Delete failed'); return false; });
     if (!ok) return;
@@ -117,7 +117,7 @@ export default function ReferenceReposPanel({ appId, appName }) {
     // Add this ref's id to the in-flight set so its spinner stays on
     // while it runs, even if a different ref's check completes first.
     setCheckingIds((prev) => { const n = new Set(prev); n.add(ref.id); return n; });
-    const snap = await api.checkReferenceRepo(appId, ref.id).catch((e) => {
+    const snap = await api.checkReferenceRepo(appId, ref.id, { silent: true }).catch((e) => {
       toast.error(e.message || 'Check failed');
       return null;
     });
@@ -159,7 +159,7 @@ export default function ReferenceReposPanel({ appId, appName }) {
     // PATCH. Otherwise the UI claims the ref was reviewed while the server
     // still has the old lastReviewedSha — which gets confusing fast since
     // the next "Check" rediscovers the same commits.
-    const ok = await api.markReferenceRepoReviewed(appId, ref.id, sha)
+    const ok = await api.markReferenceRepoReviewed(appId, ref.id, sha, { silent: true })
       .then(() => true)
       .catch((e) => { toast.error(e.message || 'Mark reviewed failed'); return false; });
     if (!ok) return;
@@ -172,7 +172,7 @@ export default function ReferenceReposPanel({ appId, appName }) {
     // Keep the editor open on a failed PATCH — losing the user's draft on
     // a transient network blip is the worst possible outcome here. They
     // can re-click Save, or click Cancel to discard.
-    const ok = await api.updateReferenceRepo(appId, ref.id, { notes: nextNotes })
+    const ok = await api.updateReferenceRepo(appId, ref.id, { notes: nextNotes }, { silent: true })
       .then(() => true)
       .catch((e) => { toast.error(e.message || 'Update failed'); return false; });
     if (!ok) return;

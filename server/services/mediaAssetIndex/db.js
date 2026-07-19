@@ -4,10 +4,15 @@
  * Writes the `media_assets` table. This table is a DERIVED index over media
  * that lives on disk, so the write surface is small:
  *   - upsertAsset(row)         — index/refresh one asset (the live hook + reconcile)
- *   - removeAsset(mediaKey)    — drop one asset's row (delete hook, future slice)
+ *   - removeAsset(mediaKey)    — drop one asset's row. Driven by the live delete
+ *                                hooks (index.js unindexImage/unindexVideo), so a
+ *                                row dies with its file rather than lingering
+ *                                until the next boot (#2738).
  *   - reconcileMediaAssets()   — full sweep: upsert every on-disk asset, prune
  *                                rows whose backing file is gone. Idempotent and
- *                                cheap to re-run; called at boot.
+ *                                cheap to re-run; called at boot. Still the
+ *                                backstop for OUT-OF-BAND removals (a file
+ *                                deleted off-disk never runs a delete hook).
  *   - listAssets(...)          — query helper (no consumer reads it for
  *                                correctness yet; here for the follow-up slices
  *                                that make collections/catalog resolve through it)
@@ -84,6 +89,21 @@ export async function listAssets({ kind } = {}) {
     ? await query(`SELECT data FROM media_assets WHERE kind = $1 ORDER BY created_at DESC`, [kind])
     : await query(`SELECT data FROM media_assets ORDER BY created_at DESC`);
   return result.rows.map(rowToAsset);
+}
+
+/**
+ * Count index rows. Optional `kind` filter ('image' | 'video').
+ *
+ * Use this over `listAssets().length` when only the tally is wanted: listAssets selects and
+ * JSON-parses the full payload of every rendered image and video, which is a lot of work to
+ * throw away for one number (the character skill registry reads this on every
+ * `GET /api/character`).
+ */
+export async function countAssets({ kind } = {}) {
+  const result = kind
+    ? await query(`SELECT COUNT(*) AS count FROM media_assets WHERE kind = $1`, [kind])
+    : await query(`SELECT COUNT(*) AS count FROM media_assets`);
+  return parseInt(result.rows[0].count, 10);
 }
 
 // Strict video-history reader for reconcile. The live store's loadHistory()

@@ -433,11 +433,11 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
   // concatenated markdown unless they expand the source-details panel.
   const handleGenerate = async () => {
     setLocalGenerating(true);
-    const result = await generatePipelineStage(issue.id, 'comicScript', overrides)
+    const result = await generatePipelineStage(issue.id, 'comicScript', overrides, { silent: true })
       .catch((err) => { toast.error(err.message || 'Generation failed'); return null; });
     if (!result) { setLocalGenerating(false); return; }
     onStageUpdate?.('comicScript', result.stage);
-    const extracted = await extractPipelineComicPages(issue.id, { force: true })
+    const extracted = await extractPipelineComicPages(issue.id, { force: true }, { silent: true })
       .catch((err) => { toast.error(`Page split failed: ${err.message}`); return null; });
     setLocalGenerating(false);
     if (extracted) {
@@ -448,7 +448,7 @@ export default function ComicScriptStage({ issue, series, onStageUpdate, actions
 
   const handleExtract = async () => {
     setExtracting(true);
-    const extracted = await extractPipelineComicPages(issue.id, { force: pages.length > 0 })
+    const extracted = await extractPipelineComicPages(issue.id, { force: pages.length > 0 }, { silent: true })
       .catch((err) => { toast.error(err.message || 'Page split failed'); return null; });
     setExtracting(false);
     if (extracted) {
@@ -816,7 +816,7 @@ function PageRow({
 
   const handleSave = async () => {
     setSaving(true);
-    const res = await updatePipelineComicPage(issue.id, pageIndex, { rawText: draft })
+    const res = await updatePipelineComicPage(issue.id, pageIndex, { rawText: draft }, { silent: true })
       .catch((err) => { toast.error(err.message || 'Save failed'); return null; });
     setSaving(false);
     if (res) {
@@ -839,7 +839,7 @@ function PageRow({
       target,
       useProofAsBase,
       ...(refPage ? { referencePage: refPage } : {}),
-    }).catch((err) => { toast.error(err.message || 'Render failed'); return null; });
+    }, { silent: true }).catch((err) => { toast.error(err.message || 'Render failed'); return null; });
     setFlight(false);
     if (res) {
       onStageUpdate?.('comicPages', res.stage);
@@ -875,7 +875,7 @@ function PageRow({
     const res = await refinePipelineComicPageRender(issue.id, pageIndex, {
       ...renderOpts,
       instruction,
-    }).catch((err) => { toast.error(err.message || 'Refine failed'); return null; });
+    }, { silent: true }).catch((err) => { toast.error(err.message || 'Refine failed'); return null; });
     setRefining(false);
     if (res) {
       onStageUpdate?.('comicPages', res.stage);

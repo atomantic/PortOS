@@ -8,6 +8,15 @@ import InlineConfirmRow from '../../ui/InlineConfirmRow';
 import { FormField } from '../../ui/FormField';
 import { onVoiceEvent, sendText, setDictation as setVoiceDictation } from '../../../services/voiceClient';
 import BrailleSpinner from '../../BrailleSpinner';
+import useMounted from '../../../hooks/useMounted';
+import { useVisibilityEvent } from '../../../hooks/useVisibilityEvent';
+
+// Autosave cadence. The debounce keeps us from PUTting on every keystroke;
+// the max-wait ceiling exists because a pure debounce never fires at all
+// during a long uninterrupted typing run — the whole entry would sit unsaved
+// until the user paused.
+const AUTOSAVE_DEBOUNCE_MS = 1500;
+const AUTOSAVE_MAX_WAIT_MS = 10000;
 
 // Slim shape kept in the sidebar history list — full `content`/`segments`
 // would accumulate as the log grows and the sidebar never renders them.
@@ -70,7 +79,35 @@ export default function DailyLogTab() {
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  // Set when a dictated segment landed while the user had unsaved edits, so
+  // the textarea and the server have diverged. Autosave stands down until the
+  // user resolves it — a full-content PUT would silently drop the segment
+  // (setJournalContent replaces content wholesale). The explicit Save button
+  // still works: clicking it is the user choosing their edits.
+  const [voiceConflict, setVoiceConflict] = useState(false);
   const editorRef = useRef(null);
+  const mountedRef = useMounted();
+  // Single-flight gate. `saving` state lags re-renders, so the debounce timer
+  // and a blur flush can otherwise both fire a PUT for the same content.
+  const savingRef = useRef(false);
+  // Ref-stashed so the debounce effect, blur, visibilitychange, and Cmd+S all
+  // drive one save without re-subscribing on every keystroke.
+  const saveRef = useRef(null);
+  // Anchors the max-wait ceiling: when the current run of unsaved edits began.
+  const firstDirtyAtRef = useRef(null);
+  // Suppresses repeat failure toasts — a failing autosave retries on the next
+  // keystroke, so an unreachable server would otherwise toast every tick.
+  const autoSaveFailedRef = useRef(false);
+  // The body of the last FAILED save. The autosave effect refuses to re-arm
+  // while `content` still equals it — without this, a failed PUT flips
+  // `saving`, the effect re-runs, and an unreachable server gets a silent
+  // PUT every debounce tick. Cleared on success; a keystroke (content change),
+  // explicit save, or blur/visibility flush still retries.
+  const lastFailedBodyRef = useRef(null);
+  // Which date the text in `content` actually belongs to. `date` flips before
+  // the new entry loads, so this is the only safe answer to "what am I about
+  // to overwrite?" — see the guard in saveRef.
+  const loadedDateRef = useRef(null);
   // Ref mirror of the dirty flag so the socket event handler can check it
   // without adding `content`/`entry` to the effect's dependency list
   // (which would re-subscribe on every keystroke).
@@ -97,6 +134,8 @@ export default function DailyLogTab() {
     const res = await api.getDailyLog(d).catch(() => null);
     if (reqId !== loadRequestRef.current) return;
     const data = res?.entry || null;
+    loadedDateRef.current = d;
+    setVoiceConflict(false);
     setEntry(data);
     setContent(data?.content || '');
     if (!silent) setLoading(false);
@@ -204,6 +243,9 @@ export default function DailyLogTab() {
             ? `${prevContent.replace(/\s+$/, '')}\n\n${appendedText}`
             : appendedText));
         } else {
+          // Server and textarea have diverged — park autosave so it can't
+          // overwrite the segment with content that never contained it.
+          setVoiceConflict(true);
           toast('Voice segment appended while you were editing — save or refresh to see it.', { icon: '📝' });
         }
       }
@@ -247,23 +289,100 @@ export default function DailyLogTab() {
     return () => offs.forEach((off) => off());
   }, [date]);
 
+  // Adopt the server's entry wholesale, textarea included — which is exactly
+  // the point any divergence with the server is resolved, so the voice-conflict
+  // park lifts here too.
   const applyEntry = (next) => {
+    setVoiceConflict(false);
     setEntry(next);
     setContent(next.content || '');
     setHistory((prev) => upsertHistory(prev, next));
   };
 
-  const handleSave = async () => {
+  // Reassigned every render so it always closes over fresh `content`/`date`
+  // without the callers needing it in a dependency list.
+  saveRef.current = async ({ auto = false } = {}) => {
+    if (savingRef.current || !dirty) return;
+    // Every automatic trigger (debounce, blur, backgrounding) funnels through
+    // here, so the voice-conflict park belongs here rather than in any one
+    // caller. An explicit save passes auto:false and is never parked.
+    if (auto && voiceConflict) return;
+    // `content` belongs to loadedDateRef, not necessarily `date`: changing the
+    // day flips `date` immediately while the new entry is still loading.
+    // Saving in that window would write this day's text into another day.
+    if (loadedDateRef.current !== date) return;
+    const targetDate = date;
+    const body = content;
+    savingRef.current = true;
+    // Anchor the ceiling at attempt time, not on success: resetting it only
+    // after a successful PUT would leave `waited` past the ceiling forever
+    // once a save failed, collapsing the debounce into a PUT per keystroke
+    // against an already-unhealthy server.
+    firstDirtyAtRef.current = null;
     setSaving(true);
-    const res = await api.updateDailyLog(date, content, { silent: true }).catch(() => null);
+    const res = await api.updateDailyLog(targetDate, body, { silent: true }).catch(() => null);
+    savingRef.current = false;
+    if (!mountedRef.current) return;
     setSaving(false);
     if (!res?.entry) {
-      toast.error('Save failed');
+      if (!auto || !autoSaveFailedRef.current) toast.error('Save failed');
+      autoSaveFailedRef.current = true;
+      lastFailedBodyRef.current = body;
       return;
     }
-    applyEntry(res.entry);
-    toast.success('Saved');
+    autoSaveFailedRef.current = false;
+    lastFailedBodyRef.current = null;
+    // Adopt the server's metadata but deliberately leave the textarea alone.
+    // Anything typed during the in-flight PUT stays in `content` and stays
+    // dirty against res.entry.content, so the next tick saves it — whereas
+    // applyEntry() would revert those keystrokes to the server's echo.
+    if (loadedDateRef.current === targetDate) {
+      setEntry(res.entry);
+      setHistory((prev) => upsertHistory(prev, res.entry));
+    }
+    if (!auto) toast.success('Saved');
   };
+
+  const handleSave = () => {
+    // Explicit save = the user choosing their edits over the unmerged segment.
+    setVoiceConflict(false);
+    return saveRef.current?.();
+  };
+
+  // Autosave. Re-arms on every render whose deps moved: each keystroke
+  // restarts the debounce, and `saving` flipping back to false re-checks for
+  // work that arrived mid-PUT (or was skipped by the single-flight gate).
+  useEffect(() => {
+    if (!dirty || voiceConflict || loadedDateRef.current !== date) {
+      firstDirtyAtRef.current = null;
+      return undefined;
+    }
+    // A body that just failed doesn't get an automatic re-attempt — that loops
+    // a PUT per debounce tick against a down server. Wait for a content change
+    // (or an explicit save / blur / visibility flush, which bypass this effect).
+    if (lastFailedBodyRef.current !== null && content === lastFailedBodyRef.current) {
+      firstDirtyAtRef.current = null;
+      return undefined;
+    }
+    if (firstDirtyAtRef.current === null) firstDirtyAtRef.current = Date.now();
+    const waited = Date.now() - firstDirtyAtRef.current;
+    const wait = Math.max(0, Math.min(AUTOSAVE_DEBOUNCE_MS, AUTOSAVE_MAX_WAIT_MS - waited));
+    const timer = setTimeout(() => saveRef.current?.({ auto: true }), wait);
+    return () => clearTimeout(timer);
+  }, [content, dirty, saving, voiceConflict, date]);
+
+  // Flush when the tab/app is backgrounded. Mobile browsers can freeze or
+  // discard the page without firing blur on the textarea, so the pending
+  // debounce timer would never run.
+  useVisibilityEvent((state) => {
+    if (state === 'hidden') saveRef.current?.({ auto: true });
+  });
+
+  // Flush on unmount (tab switch, route change). The debounce timer is cleared
+  // by its own cleanup, so without this any edit still inside the debounce
+  // window is silently dropped. The in-flight PUT outlives the component; its
+  // post-await setState is already gated on mountedRef.
+  useEffect(() => () => { saveRef.current?.({ auto: true }); }, []);
 
   const handleAppend = async () => {
     const text = quickAppend.trim();
@@ -319,6 +438,7 @@ export default function DailyLogTab() {
     }
     toast.success('Deleted');
     setConfirmDelete(false);
+    setVoiceConflict(false);
     setEntry(null);
     setContent('');
     setHistory((prev) => prev.filter((h) => h.date !== date));
@@ -380,6 +500,16 @@ export default function DailyLogTab() {
 
   const isToday = date === serverToday;
   const segmentCount = entry?.segments?.length ?? entry?.segmentCount ?? 0;
+
+  // Autosave is silent, so the toolbar carries the feedback the toast used to.
+  // The park only means anything while there's something unsaved to park, so
+  // `dirty` gates it — otherwise a resolved conflict would leave the toolbar
+  // telling the user to click a Save button that's disabled.
+  const parked = dirty && voiceConflict;
+  const saveStatus = saving ? 'Saving…'
+    : parked ? 'Autosave paused — save to keep your edits'
+    : dirty ? 'Unsaved…'
+    : entry ? 'Saved' : '';
 
   const dateLabel = useMemo(() => {
     try {
@@ -604,6 +734,7 @@ export default function DailyLogTab() {
             <div className="text-xs text-gray-500 truncate">
               {segmentCount} segment{segmentCount === 1 ? '' : 's'}
               {entry?.obsidianPath ? ` · ${entry.obsidianPath}` : ''}
+              {saveStatus ? <span className={parked ? 'text-port-warning' : ''}> · {saveStatus}</span> : null}
             </div>
           </div>
           <button
@@ -688,6 +819,7 @@ export default function DailyLogTab() {
               ref={editorRef}
               value={content}
               onChange={(e) => setContent(e.target.value)}
+              onBlur={() => saveRef.current?.({ auto: true })}
               placeholder={isToday
                 ? "What's on your mind today? Type freely, append voice segments, or toggle dictation above…"
                 : 'This day\'s entry is empty.'}

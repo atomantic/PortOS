@@ -214,7 +214,7 @@ export default function Pipeline() {
       universeId: form.universeId,
       issueCountTarget: Number.isFinite(target) && target > 0 ? target : undefined,
       arc: form.shape ? { shape: form.shape } : undefined,
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to create series');
       return null;
     });
@@ -254,7 +254,7 @@ export default function Pipeline() {
   const handleDelete = (s) => confirmDelete(() => {
     const prior = series;
     setSeries((prev) => prev.filter((x) => x.id !== s.id));
-    return deletePipelineSeries(s.id).catch((err) => {
+    return deletePipelineSeries(s.id, { silent: true }).catch((err) => {
       toast.error(err.message || 'Delete failed');
       setSeries(prior);
     });

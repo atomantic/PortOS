@@ -184,7 +184,7 @@ export default function GenomeTab() {
     }
     notesTimerRef.current[markerId] = setTimeout(async () => {
       setSavingNotes(markerId);
-      await api.updateGenomeMarkerNotes(markerId, notes).catch(() => {
+      await api.updateGenomeMarkerNotes(markerId, notes, { silent: true }).catch(() => {
         toast.error('Failed to save notes');
       });
       setSavingNotes(null);

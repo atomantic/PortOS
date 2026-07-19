@@ -115,10 +115,24 @@ export async function generateImage(params) {
 
 const DEFAULT_NEGATIVE_PROMPT = 'blurry, low quality, distorted, deformed, ugly, watermark, text, signature';
 
+// Build the default avatar prompt for the human-centered Character surface (#2677).
+// The Character page portrays the real human user, so a blank identity must NOT
+// fall back to the old generic D&D adventurer/warrior prompt: an empty name/class
+// yields a neutral human portrait, and any provided identity fields shape a
+// photographic (not fantasy) prompt. Callers that genuinely want a fantasy/RPG
+// avatar pass an explicit `prompt` to opt out of this default.
+export function buildAvatarPrompt({ name, characterClass } = {}) {
+  const descriptors = [name, characterClass]
+    .map((v) => (typeof v === 'string' ? v.trim() : ''))
+    .filter(Boolean)
+    .join(', ');
+  const subject = descriptors ? `portrait of ${descriptors}` : 'portrait of a person';
+  return `${subject}, photographic, natural lighting, detailed, high quality`;
+}
+
 export async function generateAvatar({ name, characterClass, prompt }) {
-  const defaultPrompt = `fantasy portrait of ${name || 'an adventurer'}, ${characterClass || 'warrior'} class, D&D character art, detailed, dramatic lighting, painterly style`;
   return generateImage({
-    prompt: prompt || defaultPrompt,
+    prompt: prompt || buildAvatarPrompt({ name, characterClass }),
     width: 512,
     height: 512,
     negativePrompt: `${DEFAULT_NEGATIVE_PROMPT}, nude, nsfw`,

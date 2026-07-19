@@ -15,6 +15,12 @@ vi.mock('../services/api', () => ({
   generateAvatar: vi.fn(() => Promise.resolve({})),
 }));
 
+// GoalsCard (#2675) owns a mount-effect fetch of its own. Stubbed out rather than mocked at
+// the api layer so this suite stays scoped to the name-edit control AND settles
+// synchronously — a live child would resolve its promise after the sync test body and trip
+// the act(...) guard in src/test/setup.js.
+vi.mock('../components/character/GoalsCard', () => ({ default: () => null }));
+
 vi.mock('../services/socket', () => ({
   default: { on: vi.fn(), off: vi.fn(), emit: vi.fn() },
 }));
@@ -49,7 +55,7 @@ beforeEach(() => {
 });
 
 const findNameTrigger = () =>
-  screen.findByRole('button', { name: /edit character name/i });
+  screen.findByRole('button', { name: /edit your name/i });
 
 describe('CharacterSheet name editing accessibility', () => {
   it('exposes the name as a labeled, keyboard-focusable button', async () => {
@@ -80,7 +86,7 @@ describe('CharacterSheet name editing accessibility', () => {
     await waitFor(() => expect(put).toHaveBeenCalledWith('/character', { name: 'Strider' }, { silent: true }));
     // Back to the button view with the new name.
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /edit character name/i }))
+      expect(screen.getByRole('button', { name: /edit your name/i }))
         .toHaveTextContent('Strider'),
     );
   });
@@ -100,7 +106,7 @@ describe('CharacterSheet name editing accessibility', () => {
 
     // First PUT is now pending; the trigger is back but disabled, so a click
     // (which would seed a stale 'Aragorn' input) is a no-op.
-    const trigger = await screen.findByRole('button', { name: /edit character name/i });
+    const trigger = await screen.findByRole('button', { name: /edit your name/i });
     expect(trigger).toBeDisabled();
     fireEvent.click(trigger);
     expect(screen.queryByLabelText('Character name')).toBeNull();
@@ -109,7 +115,23 @@ describe('CharacterSheet name editing accessibility', () => {
     resolvePut();
     await waitFor(() => expect(put).toHaveBeenCalledTimes(1));
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /edit character name/i })).not.toBeDisabled(),
+      expect(screen.getByRole('button', { name: /edit your name/i })).not.toBeDisabled(),
+    );
+  });
+
+  it('clears the name to empty on Enter, returning to the placeholder (#2677)', async () => {
+    // The human-centered page renders '' as the "Your name" placeholder, so clearing must be a
+    // real save — not a skipped no-op — or the placeholder state is unreachable once a name is set.
+    renderSheet();
+    fireEvent.click(await findNameTrigger());
+    const input = screen.getByLabelText('Character name');
+    fireEvent.change(input, { target: { value: '' } });
+
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/character', { name: '' }, { silent: true }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /edit your name/i })).toHaveTextContent('Your name'),
     );
   });
 
@@ -124,7 +146,7 @@ describe('CharacterSheet name editing accessibility', () => {
 
     // No save fired, and the original name is shown again.
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: /edit character name/i }))
+      expect(screen.getByRole('button', { name: /edit your name/i }))
         .toHaveTextContent('Aragorn'),
     );
     expect(put).not.toHaveBeenCalled();

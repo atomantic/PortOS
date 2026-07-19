@@ -21,7 +21,7 @@ describe('surfaceCommissionRun', () => {
     await surfaceCommissionRun(commission, run);
     expect(addNotificationMock).toHaveBeenCalledWith(expect.objectContaining({
       type: 'creative_commission',
-      link: '/creative-commission/commission-1',
+      link: '/creative-commission/commission-1?run=run-A',
       metadata: expect.objectContaining({ commissionId: 'commission-1', runId: 'run-A', projectId: 'cd-1' }),
     }));
   });

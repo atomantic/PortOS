@@ -607,7 +607,7 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
     setConfirmingRegen(false);
     setRunning('generate');
     const result = await withFlush(() =>
-      generatePipelineArcOverview(series.id, { commit: true, ...llmOverride }).catch((err) => {
+      generatePipelineArcOverview(series.id, { commit: true, ...llmOverride }, { silent: true }).catch((err) => {
         toast.error(err.message || 'Failed to generate arc');
         return null;
       }),
@@ -621,7 +621,7 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
   const runVerify = async () => {
     setRunning('verify');
     const result = await withFlush(() =>
-      verifyPipelineArc(series.id, llmOverride).catch((err) => {
+      verifyPipelineArc(series.id, llmOverride, { silent: true }).catch((err) => {
         toast.error(err.message || 'Failed to verify arc');
         return null;
       }),
@@ -644,7 +644,7 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
       resolvePipelineArcIssues(series.id, {
         findings: findingsSubset,
         ...llmOverride,
-      }).catch((err) => {
+      }, { silent: true }).catch((err) => {
         toast.error(err.message || 'Auto-resolve failed');
         return null;
       }),
@@ -690,7 +690,7 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
   const runDerive = async () => {
     setRunning('derive');
     const result = await withFlush(() =>
-      derivePipelineArcFromManuscript(series.id, llmOverride).catch((err) => {
+      derivePipelineArcFromManuscript(series.id, llmOverride, { silent: true }).catch((err) => {
         toast.error(err.message || 'Failed to derive from manuscript');
         return null;
       }),
@@ -705,7 +705,7 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
   // reassignment + bible fill show immediately.
   const runDeriveCommit = async (proposal) => {
     setRunning('derive-commit');
-    const result = await commitPipelineArcFromManuscript(series.id, proposal).catch((err) => {
+    const result = await commitPipelineArcFromManuscript(series.id, proposal, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to apply');
       return null;
     });
@@ -725,7 +725,7 @@ function ArcHeader({ series, onSeriesUpdate, onIssuesUpdate, onFlushPending }) {
   const runCompleteness = async () => {
     setRunning('completeness');
     const result = await withFlush(() =>
-      analyzePipelineManuscriptCompleteness(series.id, llmOverride).catch((err) => {
+      analyzePipelineManuscriptCompleteness(series.id, llmOverride, { silent: true }).catch((err) => {
         toast.error(err.message || 'Failed to analyze manuscript');
         return null;
       }),
@@ -1725,7 +1725,7 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
   const [verifyIssues, setVerifyIssues] = useState(null);
   const seasonLocked = season.locked === true;
   const { busy: lockBusy, toggle: toggleSeasonLock } = useLockToggle({
-    patchFn: (next) => updatePipelineSeason(series.id, season.id, { locked: next }),
+    patchFn: (next) => updatePipelineSeason(series.id, season.id, { locked: next }, { silent: true }),
     onSuccess: (updated) => onSeriesUpdate({
       ...series,
       seasons: seasons.map((s) => (s.id === season.id ? updated : s)),
@@ -1779,7 +1779,7 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
       mode,
       providerOverride: series.llm?.provider || undefined,
       modelOverride: series.llm?.model || undefined,
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to start beat-sheet run');
       return null;
     });
@@ -1789,7 +1789,7 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
   };
 
   const cancelBeats = async () => {
-    await cancelPipelineVolumeBeats(series.id, season.id).catch((err) => {
+    await cancelPipelineVolumeBeats(series.id, season.id, { silent: true }).catch((err) => {
       toast.error(err.message || 'Cancel failed');
     });
   };
@@ -1801,7 +1801,7 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
     const result = await verifyPipelineVolume(series.id, season.id, {
       providerOverride: series.llm?.provider || undefined,
       modelOverride: series.llm?.model || undefined,
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to verify volume');
       return null;
     });
@@ -1826,7 +1826,7 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
       commit: true,
       providerOverride: series.llm?.provider || undefined,
       modelOverride: series.llm?.model || undefined,
-    })
+    }, { silent: true })
       .catch((err) => {
         toast.error(err.message || 'Failed to generate issues / episodes');
         return null;
@@ -1850,7 +1850,7 @@ function SeasonRow({ series, season, seasons, issues, onSeriesUpdate, onIssuesUp
   const [deleteMode, setDeleteMode] = useState('idle');
   const runDeleteSeason = async () => {
     setDeleteMode('deleting');
-    const result = await deletePipelineSeason(series.id, season.id, { reassignTo: null }).catch((err) => {
+    const result = await deletePipelineSeason(series.id, season.id, { reassignTo: null }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Delete failed');
       return null;
     });
@@ -2171,7 +2171,7 @@ function VolumeCoversPanel({ series, season, seasons, onSeriesUpdate }) {
   const persistScript = async (target, nextScript) => {
     const updatedSeason = await updatePipelineSeason(series.id, season.id, {
       [target]: { script: nextScript },
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Save failed');
       return null;
     });
@@ -2389,7 +2389,7 @@ function SeasonEditor({ series, season, seasons, onSeriesUpdate, seasonLocked = 
         episodeCountTarget: Number(draft.episodeCountTarget) || 0,
         status: draft.status,
       };
-    const updated = await updatePipelineSeason(series.id, season.id, patch).catch((err) => {
+    const updated = await updatePipelineSeason(series.id, season.id, patch, { silent: true }).catch((err) => {
       toast.error(err.message || 'Save failed');
       return null;
     });
@@ -2520,7 +2520,7 @@ function SeasonActions({
       seasonId: season.id,
       // arcPosition = max(existing) + 1 — sequential within the season.
       arcPosition: null, // server will fall through to null; we'll patch right after to set position
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to create episode');
       return null;
     });
@@ -2698,7 +2698,7 @@ function IssueRow({ issue, seasons, onIssuesUpdate }) {
 
   const runDelete = async () => {
     setConfirmingDelete(false);
-    const ok = await deletePipelineIssue(issue.id).catch((err) => {
+    const ok = await deletePipelineIssue(issue.id, { silent: true }).catch((err) => {
       toast.error(err.message || 'Delete failed');
       return null;
     });
@@ -2819,7 +2819,7 @@ function AddSeasonRow({ series, onSeriesUpdate }) {
     const t = title.trim();
     if (!t) return;
     setSaving(true);
-    const created = await createPipelineSeason(series.id, { title: t }).catch((err) => {
+    const created = await createPipelineSeason(series.id, { title: t }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to create volume / season');
       return null;
     });

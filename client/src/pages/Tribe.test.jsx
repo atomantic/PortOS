@@ -4,6 +4,8 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 
 vi.mock('../services/api', () => ({
   getTribePeople: vi.fn(() => Promise.resolve({ people: [] })),
+  // OutreachQueue (care tab) fetches unanswered threads on mount (#2158).
+  getTribeOutreach: vi.fn(() => Promise.resolve({ threads: [] })),
 }));
 
 vi.mock('../services/socket', () => ({

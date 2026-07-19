@@ -242,6 +242,19 @@ export async function listWorks() {
     .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
 }
 
+/**
+ * How many works listWorks() would return — without rebuilding a single
+ * manifest (#2729). A `COUNT(*)` on PG; the shared live-set read on the file
+ * backend. Tombstones are excluded on both, exactly as listWorks filters them.
+ *
+ * Use this for a tally (the Wordsmith skill's engagement score) so
+ * `(await listWorks()).length` — two queries plus every work's drafts[] — never
+ * has to run just to produce a number.
+ */
+export async function countWorks() {
+  return store().countWorks();
+}
+
 export async function getWork(id) {
   const manifest = await loadManifest(id);
   if (!manifest) throw notFound('Work');

@@ -107,9 +107,14 @@ export default function AppDetailView() {
   const handleBuild = async () => {
     setBuildLoading(true);
     const isSelfBuild = appId === api.PORTOS_APP_ID;
-    const result = await api.buildApp(appId).catch(err => {
-      // Self-build may cause a socket hangup as the server restarts — that's expected
-      if (isSelfBuild) return { selfBuildTriggered: true };
+    const result = await api.buildApp(appId, { silent: true }).catch(err => {
+      // Self-build may cause a socket hangup as the server restarts — that's
+      // expected, so treat it as "triggered" rather than a failure. Narrow to
+      // transport failures only: request() stamps `status` on an HTTP error but
+      // throws a bare "Server unreachable" Error for a hangup. Without that
+      // check a real 500 (BUILD_FAILED with the compiler output) on the self
+      // app would be reported as a green "build triggered" and never surface.
+      if (isSelfBuild && !err.status) return { selfBuildTriggered: true };
       toast.error(`Build failed: ${err.message}`);
       return null;
     });

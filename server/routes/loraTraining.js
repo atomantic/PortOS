@@ -13,7 +13,7 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { startTrainingRunSchema, validateRequest } from '../lib/validation.js';
 import { assertSafeFilename } from '../lib/fileUtils.js';
-import { resolveFlux2Python, isFlux2VenvHealthy } from '../lib/pythonSetup.js';
+import { resolveFlux2Python, isFlux2VenvHealthy, resolveMfluxPython } from '../lib/pythonSetup.js';
 import { getSettings } from '../services/settings.js';
 import { attachSseClient, cancelJob } from '../services/mediaJobQueue/index.js';
 import {
@@ -41,7 +41,10 @@ const router = Router();
 // with the user's install, the torch venv is the fallback.
 router.get('/status', asyncHandler(async (_req, res) => {
   const settings = await getSettings();
-  const mfluxPython = settings?.imageGen?.local?.pythonPath || null;
+  // Prefer the configured image-gen Python when it ships mflux-train, else the
+  // auto-discovered dedicated ~/.portos/venv-mflux — so the panel reports mflux
+  // ready even when the user never set pythonPath (fresh dedicated-venv install).
+  const mfluxPython = resolveMfluxPython(settings?.imageGen?.local?.pythonPath || null);
   const flux2Python = resolveFlux2Python();
   res.json({
     runtimes: {

@@ -139,7 +139,7 @@ export const cancelVideoGen = () => request('/video-gen/cancel', { method: 'POST
 // resume progress display after a page reload. Silent so a 5xx during status
 // poll doesn't double-toast on every navigation.
 export const getActiveVideoJob = () => request('/video-gen/active', { silent: true });
-export const listVideoHistory = () => request('/video-gen/history');
+export const listVideoHistory = (options = {}) => request('/video-gen/history', options);
 export const deleteVideoHistoryItem = (id, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}`, { method: 'DELETE', ...options });
 export const setVideoHidden = (id, hidden, options = {}) => request(`/video-gen/history/${encodeURIComponent(id)}/visibility`, {
   method: 'POST',
@@ -273,7 +273,7 @@ export const createBlankSketch = ({ silent = false } = {}) =>
   request('/media/sketches', { method: 'POST', silent });
 
 // Models management (HF cache + LoRAs)
-export const listCachedModels = () => request('/image-video/models');
+export const listCachedModels = (options = {}) => request('/image-video/models', options);
 export const deleteCachedModel = (dirName, options = {}) => request(`/image-video/models/hf/${encodeURIComponent(dirName)}`, { method: 'DELETE', ...options });
 export const deleteLora = (filename, options = {}) => request(`/image-video/models/lora/${encodeURIComponent(filename)}`, { method: 'DELETE', ...options });
 
@@ -334,7 +334,7 @@ export const removeCustomMediaModel = (id, { silent = false } = {}) => request(`
 // LoRA manager — Civitai-aware list/install/patch/delete. Reads sidecar
 // metadata so the manager UI can show trigger words, base model, recommended
 // scale, preview thumbnail. Used by /media/loras and the Image Gen LoRA picker.
-export const listLorasFull = () => request('/loras');
+export const listLorasFull = (options = {}) => request('/loras', options);
 // `silent: true` suppresses the auto-toast in apiCore so the page can route
 // CIVITAI_AUTH errors into the in-UI key prompt instead of a fire-and-forget
 // red toast the user can't act on.
@@ -431,8 +431,8 @@ export async function installLoraFromHuggingfaceStream({ url, family, onProgress
 
 // Civitai LoRA suggestions per runner family. Cached server-side for 1h.
 // Pass `force: true` to bust the cache and re-fetch from Civitai.
-export const getCivitaiSuggestions = ({ force = false } = {}) =>
-  request(`/loras/suggestions${force ? '?force=1' : ''}`);
+export const getCivitaiSuggestions = ({ force = false } = {}, options = {}) =>
+  request(`/loras/suggestions${force ? '?force=1' : ''}`, options);
 
 // Live keyword search + cursor pagination within one runner family. Backs the
 // per-category search box and "Load more" button on /media/loras. `query`
@@ -452,14 +452,15 @@ export const searchCivitaiLoras = ({ runner, query = '', cursor = null, limit, s
 // Civitai auth — read/save/clear the API key. The key never round-trips back
 // to the client; the GET only returns `{ hasKey, source }`.
 export const getCivitaiAuth = () => request('/loras/auth/civitai');
-export const setCivitaiAuth = (apiKey) => request('/loras/auth/civitai', {
+export const setCivitaiAuth = (apiKey, options = {}) => request('/loras/auth/civitai', {
   method: 'POST',
   body: JSON.stringify({ apiKey }),
+  ...options,
 });
-export const clearCivitaiAuth = () => request('/loras/auth/civitai', { method: 'DELETE' });
+export const clearCivitaiAuth = (options = {}) => request('/loras/auth/civitai', { method: 'DELETE', ...options });
 export const getLora = (filename) => request(`/loras/${encodeURIComponent(filename)}`);
 export const patchLora = (filename, patch) => request(`/loras/${encodeURIComponent(filename)}`, {
   method: 'PATCH',
   body: JSON.stringify(patch),
 });
-export const deleteLoraFull = (filename) => request(`/loras/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+export const deleteLoraFull = (filename, options = {}) => request(`/loras/${encodeURIComponent(filename)}`, { method: 'DELETE', ...options });

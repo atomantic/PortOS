@@ -67,10 +67,18 @@ export async function saveBloodTests(data) {
 
 // === Body Composition ===
 
-export async function getBodyHistory() {
-  const ml = await mlArrayIfEnabled('bodyEntries');
+/**
+ * @param {{ strict?: boolean }} [options] - `strict: true` throws when the daily log
+ *   is present-but-unreadable/corrupt rather than reporting zero body entries
+ *   (#2726). Off by default — existing callers keep the empty fallback.
+ */
+export async function getBodyHistory({ strict = false } = {}) {
+  const ml = await mlArrayIfEnabled('bodyEntries', { strict });
   if (ml) return ml.map(({ id, ...rest }) => rest).sort(byDate);
-  const log = await readJSONFile(DAILY_LOG_FILE, { entries: [] });
+  const log = await readJSONFile(DAILY_LOG_FILE, { entries: [] }, { strict });
+  if (strict && !Array.isArray(log?.entries)) {
+    throw new Error(`Health daily log malformed: ${DAILY_LOG_FILE}`);
+  }
   return (log.entries || [])
     .filter(e => e.body && Object.keys(e.body).length > 0)
     .map(e => ({ date: e.date, ...e.body }))
@@ -185,8 +193,15 @@ export async function removeEyeExam(index) {
 // `workouts` array key, and adding one would need a coordinated MortalLoom
 // schema change). Voice/CoS log workouts here via addWorkout().
 
-export async function getWorkouts() {
-  const data = await readJSONFile(WORKOUTS_FILE, { workouts: [] });
+/**
+ * @param {{ strict?: boolean }} [options] - `strict: true` throws when workouts.json
+ *   is present-but-unreadable/corrupt rather than reporting zero workouts (#2726).
+ */
+export async function getWorkouts({ strict = false } = {}) {
+  const data = await readJSONFile(WORKOUTS_FILE, { workouts: [] }, { strict });
+  if (strict && !Array.isArray(data?.workouts)) {
+    throw new Error(`Workouts malformed: ${WORKOUTS_FILE}`);
+  }
   return (data.workouts || []).slice().sort(byDate);
 }
 
@@ -215,9 +230,17 @@ export async function addWorkout({ date, type, durationMinutes, intensity, notes
 // upserted by date so multiple readings on the same day (e.g. from Apple Health
 // sync + manual entry) merge into one row.
 
-export async function getBloodPressureHistory() {
-  const ml = await mlArrayIfEnabled('healthMetrics');
-  const source = ml ?? (await readJSONFile(HEALTH_METRICS_FILE, { entries: [] })).entries;
+/**
+ * @param {{ strict?: boolean }} [options] - `strict: true` throws when the health
+ *   metrics file is present-but-unreadable/corrupt rather than reporting zero blood
+ *   pressure readings (#2726).
+ */
+export async function getBloodPressureHistory({ strict = false } = {}) {
+  const ml = await mlArrayIfEnabled('healthMetrics', { strict });
+  const source = ml ?? (await readJSONFile(HEALTH_METRICS_FILE, { entries: [] }, { strict })).entries;
+  if (strict && !Array.isArray(source)) {
+    throw new Error(`Health metrics malformed: ${HEALTH_METRICS_FILE}`);
+  }
   return source
     .filter(m => m?.bloodPressureSystolic != null && m?.bloodPressureDiastolic != null)
     .map(m => ({

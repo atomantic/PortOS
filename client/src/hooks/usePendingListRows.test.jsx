@@ -132,17 +132,20 @@ describe('usePendingListRows', () => {
     expect(result.current.isPending(1)).toBe(true);
   });
 
-  it('addRow without crypto.randomUUID falls back to Date+Math (no crash)', () => {
+  it('addRow still mints a prefixed id without crypto.randomUUID (insecure origin)', () => {
     // jsdom's `crypto` getter is non-writable, so swap randomUUID via spy
-    // instead of reassigning `globalThis.crypto`.
+    // instead of reassigning `globalThis.crypto`. `uuidv4` (lib/uuid.js) owns
+    // the fallback; this only pins that the `<prefix><id>` shape survives it.
     const spy = vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue(undefined);
     const { result } = renderHook(() => usePendingListRows({
       persisted: [], requiredColumn: 'name', idPrefix: 'wd-', blankRow: WARDROBE_BLANK, onChange: vi.fn(),
     }));
     act(() => result.current.addRow());
-    expect(result.current.merged[0].id.startsWith('wd-')).toBe(true);
-    // Suffix is the Date+Math fallback string — non-empty.
-    expect(result.current.merged[0].id.length).toBeGreaterThan('wd-'.length);
+    // Assert the real v4 shape, not just "non-empty" — a regression to a
+    // non-uuid fallback would otherwise slip through.
+    expect(result.current.merged[0].id).toMatch(
+      /^wd-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
     spy.mockRestore();
   });
 });

@@ -133,7 +133,7 @@ describe('PipelineManuscriptEditor', () => {
 
     fireEvent.click(await screen.findByText('Generate fix'));
     expect(await screen.findByDisplayValue('She left, but paused.')).toBeInTheDocument();
-    expect(api.generatePipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'mrc-1', expect.any(Object));
+    expect(api.generatePipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'mrc-1', expect.any(Object), { silent: true });
 
     fireEvent.click(screen.getByText('Accept'));
 
@@ -142,7 +142,7 @@ describe('PipelineManuscriptEditor', () => {
     await waitFor(() => expect(screen.getByText(/0 open/)).toBeInTheDocument());
     expect(api.acceptPipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'mrc-1', {
       edits: [{ issueNumber: 1, issueId: 'iss-1', stageId: 'prose', find: 'She left.', replace: 'She left, but paused.', fuzzy: undefined }],
-    });
+    }, { silent: true });
   });
 
   it('shows issue tabs and focuses one issue; a deep link opens that issue', async () => {
@@ -210,7 +210,7 @@ describe('PipelineManuscriptEditor', () => {
     await screen.findByText('My Series');
     fireEvent.click(screen.getByText('Teleplay'));
     expect(await screen.findByDisplayValue('INT. ROOM - DAY')).toBeInTheDocument();
-    expect(api.getPipelineManuscript).toHaveBeenCalledWith('ser-1', 'teleplay');
+    expect(api.getPipelineManuscript).toHaveBeenCalledWith('ser-1', 'teleplay', { silent: true });
   });
 
   it('saves a changed free-text section edit on blur (versioned), and skips no-op blurs', async () => {
@@ -289,7 +289,7 @@ describe('PipelineManuscriptEditor', () => {
     revealFromIndex('The ending is abrupt');
     fireEvent.click(await screen.findByText('Generate fix'));
     await waitFor(() => expect(api.generatePipelineManuscriptFix).toHaveBeenCalledWith(
-      'ser-1', 'mrc-1', { providerOverride: 'anthropic', modelOverride: 'claude-haiku' },
+      'ser-1', 'mrc-1', { providerOverride: 'anthropic', modelOverride: 'claude-haiku' }, { silent: true },
     ));
   });
 
@@ -306,7 +306,7 @@ describe('PipelineManuscriptEditor', () => {
 
     expect(await screen.findByText('New pacing note')).toBeInTheDocument();
     expect(api.analyzePipelineManuscriptCompleteness).toHaveBeenCalledWith(
-      'ser-1', { providerOverride: 'openai', modelOverride: 'gpt-5', mode: 'merge' },
+      'ser-1', { providerOverride: 'openai', modelOverride: 'gpt-5', mode: 'merge' }, { silent: true },
     );
     await waitFor(() => expect(screen.getByText(/2 open/)).toBeInTheDocument());
   });
@@ -322,7 +322,7 @@ describe('PipelineManuscriptEditor', () => {
     fireEvent.click(screen.getByText('Run editorial review'));
 
     await waitFor(() => expect(api.analyzePipelineManuscriptCompleteness).toHaveBeenCalledWith(
-      'ser-1', expect.objectContaining({ mode: 'fresh' }),
+      'ser-1', expect.objectContaining({ mode: 'fresh' }), { silent: true },
     ));
   });
 
@@ -375,7 +375,7 @@ describe('PipelineManuscriptEditor — generate-edits streamed review', () => {
     fireEvent.click(screen.getByText('Run editorial review'));
 
     await waitFor(() => expect(api.startPipelineManuscriptCompleteness).toHaveBeenCalledWith(
-      'ser-1', expect.objectContaining({ mode: 'merge' }),
+      'ser-1', expect.objectContaining({ mode: 'merge' }), { silent: true },
     ));
     expect(api.analyzePipelineManuscriptCompleteness).not.toHaveBeenCalled();
     // Let the deferred SSE-open effect flush + close inside the test (while the

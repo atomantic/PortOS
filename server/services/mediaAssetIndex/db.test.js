@@ -71,6 +71,27 @@ describe.skipIf(!dbReady)('media asset index DB round-trip', () => {
     expect(after.some((x) => x.filename === `${PFX}a.png`)).toBe(false);
   });
 
+  it('countAssets matches listAssets().length without materializing rows', async () => {
+    // countAssets is the cheap COUNT(*) the character skill registry reads on every
+    // GET /api/character. Pin it against listAssets so the two can never disagree.
+    const keys = [`image:${PFX}c1.png`, `image:${PFX}c2.png`, `video:${PFX}c3.mp4`];
+    const before = await db.countAssets({ kind: 'image' });
+    expect(before).toBe((await db.listAssets({ kind: 'image' })).length);
+
+    await db.upsertAsset({ mediaKey: keys[0], kind: 'image', ref: `${PFX}c1.png`, data: { filename: `${PFX}c1.png` }, createdAt: '2026-01-01T00:00:00.000Z' });
+    await db.upsertAsset({ mediaKey: keys[1], kind: 'image', ref: `${PFX}c2.png`, data: { filename: `${PFX}c2.png` }, createdAt: '2026-01-02T00:00:00.000Z' });
+    await db.upsertAsset({ mediaKey: keys[2], kind: 'video', ref: `${PFX}c3.mp4`, data: { filename: `${PFX}c3.mp4` }, createdAt: '2026-01-03T00:00:00.000Z' });
+
+    // The `kind` filter must actually filter — the video must not land in the image tally.
+    expect(await db.countAssets({ kind: 'image' })).toBe(before + 2);
+    expect(await db.countAssets({ kind: 'image' })).toBe((await db.listAssets({ kind: 'image' })).length);
+    // Unfiltered counts every kind, and is what the Auteur skill reads.
+    expect(await db.countAssets()).toBe((await db.listAssets()).length);
+
+    for (const key of keys) await db.removeAsset(key);
+    expect(await db.countAssets({ kind: 'image' })).toBe(before);
+  });
+
   it('upsert refreshes data + created_at on conflict', async () => {
     const key = `image:${PFX}b.png`;
     await db.upsertAsset({ mediaKey: key, kind: 'image', ref: `${PFX}b.png`, data: { filename: `${PFX}b.png`, v: 1 }, createdAt: '2026-01-01T00:00:00.000Z' });
@@ -79,6 +100,26 @@ describe.skipIf(!dbReady)('media asset index DB round-trip', () => {
     const found = imgs.find((x) => x.filename === `${PFX}b.png`);
     expect(found.v).toBe(2);
     await db.removeAsset(key);
+  });
+
+  it('a delete-hook removal drops the count immediately, with no reconcile (#2738)', async () => {
+    // The acceptance criterion for the delete hooks, end-to-end against a real
+    // table: index an asset exactly as the completed-hook does (imageToRow /
+    // videoToRow), then remove it by the key the DELETE path derives
+    // (imageMediaKey / videoMediaKey). If those two derivations ever diverge the
+    // DELETE misses and the count stays high — which is the bug #2738 fixed.
+    const { imageToRow, videoToRow, imageMediaKey, videoMediaKey } = await import('./logic.js');
+    const before = await db.countAssets();
+
+    await db.upsertAsset(imageToRow({ filename: `${PFX}del.png`, createdAt: '2026-01-01T00:00:00.000Z' }));
+    await db.upsertAsset(videoToRow({ id: `${PFX}delvid`, filename: `${PFX}delvid.mp4`, createdAt: '2026-01-02T00:00:00.000Z' }));
+    expect(await db.countAssets()).toBe(before + 2);
+
+    await db.removeAsset(imageMediaKey(`${PFX}del.png`));
+    expect(await db.countAssets()).toBe(before + 1);
+    // Keyed by job id, not filename — deleting by the filename must NOT be what works.
+    await db.removeAsset(videoMediaKey(`${PFX}delvid`));
+    expect(await db.countAssets()).toBe(before);
   });
 
   it('reconcile upserts on-disk assets and prunes stale rows (injected readers)', async () => {

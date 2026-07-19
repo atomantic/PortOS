@@ -33,6 +33,33 @@ describe('resolveModelRates', () => {
     expect(resolveModelRates('codex', 'gpt-5.6-terra-2026-06-01')).toMatchObject({ rateModel: 'gpt-5.6-terra', matched: 'family' });
   });
 
+  it('prices Cerebras gpt-oss-120b at open-weights rates, not OpenAI GPT rates', () => {
+    expect(resolveModelRates('cerebras', 'gpt-oss-120b')).toMatchObject({
+      rateModel: 'gpt-oss-120b (cerebras)', inputPer1M: 0.35, outputPer1M: 0.75,
+    });
+  });
+
+  it('keeps other gpt-oss sizes on open-weights rates rather than the proprietary /gpt/ rule', () => {
+    expect(resolveModelRates('cerebras', 'gpt-oss-20b')).toMatchObject({ rateModel: 'gpt-oss-120b (cerebras)', matched: 'family' });
+  });
+
+  // gpt-oss is open-weights: the id does not identify the host, and rates differ
+  // per host — so no bare gpt-oss id may report `exact` (that would strip the
+  // UI's `~` approximate marker and claim a published rate we don't have).
+  it('never reports an exact match for an open-weights gpt-oss id on any host', () => {
+    for (const providerId of ['cerebras', 'groq', 'openrouter', 'some-custom-host']) {
+      expect(resolveModelRates(providerId, 'gpt-oss-120b').matched).not.toBe('exact');
+    }
+  });
+
+  it('still resolves proprietary OpenAI ids through the gpt family rule', () => {
+    expect(resolveModelRates('codex', 'gpt-4.1')).toMatchObject({ rateModel: 'gpt-5.4', matched: 'family' });
+  });
+
+  it('estimates an unrecognized Cerebras model at the Cerebras flagship rate', () => {
+    expect(resolveModelRates('cerebras', 'zai-glm-4.7')).toMatchObject({ rateModel: 'gpt-oss-120b (cerebras)', matched: 'providerDefault' });
+  });
+
   it('falls back to a provider default when the model is unknown', () => {
     const r = resolveModelRates('claude-code', 'my-custom-alias');
     expect(r).toMatchObject({ rateModel: 'claude-sonnet-4-5', matched: 'providerDefault' });

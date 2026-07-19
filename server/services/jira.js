@@ -296,6 +296,9 @@ export async function searchIssues(instanceId, jql, { fields = 'summary,status,l
     description: issue.fields.description || '',
     status: issue.fields.status?.name || null,
     statusCategory: issue.fields.status?.statusCategory?.name || null,
+    // Only populated when the caller asked for the `priority` field (it is not in
+    // the default `fields` set) — null otherwise, never a fabricated default.
+    priority: issue.fields.priority?.name || null,
     labels: issue.fields.labels || [],
     updated: issue.fields.updated || null,
     resolutiondate: issue.fields.resolutiondate || null,

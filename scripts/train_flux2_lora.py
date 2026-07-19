@@ -190,6 +190,24 @@ def main():
     from peft.utils import get_peft_model_state_dict
 
     device = pick_device(args.device)
+    # Apple-Silicon guard: this torch/diffusers trainer can't complete a LoRA
+    # backward on Metal. PyTorch's MPS backend has no `linear_backward` for the
+    # FLUX.2 transformer's Linear layers (raises "mps_linear_backward:
+    # unsupported weights data type" for both bf16 AND fp32 at the first
+    # loss.backward()). The preferred Apple-Silicon runtime is mflux (MLX-native,
+    # trains bf16 directly); this torch path is the fallback for CUDA/CPU boxes.
+    # Fail fast BEFORE loading the ~16 GB base + minutes of latent precompute
+    # rather than crashing at the first optimizer step. A forced `--device cpu`
+    # is still allowed (fp32 CPU backward works, just slow).
+    if device == "mps":
+        print(
+            "USER_ERROR:TRAINING_UNSUPPORTED_DEVICE:the torch FLUX.2 trainer can't train on "
+            "Apple Silicon (Metal/MPS) — PyTorch has no MPS linear_backward for these layers. "
+            "Use the mflux runtime instead: install mflux ≥0.17 via scripts/setup-image-video.sh. "
+            "(Force --device cpu to train on CPU, but that is impractically slow.)",
+            file=sys.stderr, flush=True,
+        )
+        sys.exit(1)
     dtype = torch.bfloat16 if device != "cpu" else torch.float32
     torch.manual_seed(args.seed)
 

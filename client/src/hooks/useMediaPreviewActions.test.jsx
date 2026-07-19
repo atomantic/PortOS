@@ -11,7 +11,7 @@ vi.mock('../services/apiImageVideo', () => ({
   removeImageWatermark: vi.fn(),
 }));
 
-import { removeImageWatermark } from '../services/apiImageVideo';
+import { removeImageWatermark, cleanGalleryImage } from '../services/apiImageVideo';
 
 const parseNav = () => {
   const url = navigate.mock.calls.at(-1)?.[0] || '';
@@ -76,5 +76,26 @@ describe('useMediaPreviewActions.handleRemoveWatermark', () => {
     const { result } = renderHook(() => useMediaPreviewActions());
     await expect(result.current.handleRemoveWatermark({})).rejects.toThrow('Missing filename');
     expect(removeImageWatermark).not.toHaveBeenCalled();
+  });
+});
+
+describe('useMediaPreviewActions.handleClean', () => {
+  beforeEach(() => cleanGalleryImage.mockReset());
+
+  it('runs the gallery clean endpoint (resize-squeeze) and returns the cleaned variant', async () => {
+    const variant = { filename: 'cat_clean-resize-squeeze.png', cleanLevel: 'resize-squeeze' };
+    cleanGalleryImage.mockResolvedValue(variant);
+    const onCleanComplete = vi.fn();
+    const { result } = renderHook(() => useMediaPreviewActions({ onCleanComplete }));
+    const returned = await result.current.handleClean({ filename: 'cat.png' });
+    expect(cleanGalleryImage).toHaveBeenCalledWith('cat.png', { silent: true });
+    expect(onCleanComplete).toHaveBeenCalledWith(variant);
+    expect(returned).toBe(variant);
+  });
+
+  it('throws when the image has no filename', async () => {
+    const { result } = renderHook(() => useMediaPreviewActions());
+    await expect(result.current.handleClean({})).rejects.toThrow('Missing filename');
+    expect(cleanGalleryImage).not.toHaveBeenCalled();
   });
 });

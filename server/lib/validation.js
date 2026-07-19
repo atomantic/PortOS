@@ -129,9 +129,17 @@ export const layeredIntelligenceConfigSchema = z.object({
     healthReport: z.boolean().optional(),
     planMd: z.boolean().optional(),
     openIssues: z.boolean().optional(),
+    // The committed backlog (#2698): `plan`-labeled tracker issues / the
+    // prioritized Jira backlog / PLAN.md's unchecked items, fed in so the reasoner
+    // can suppress a proposal that overlaps work already in scope. Default on.
+    plannedWork: z.boolean().optional(),
     // Feedback loop (#2428): feed past LI proposals + their tracker outcomes back
     // into the reasoning prompt. Default on for PortOS, off for managed apps.
     outcomes: z.boolean().optional(),
+    // Self-evaluation (#2700): fold LI's own merge rate, already-filed proposal
+    // count, and agent-run health back into the prompt so the loop can judge its
+    // proposal quality before filing. Default on for PortOS, off for managed apps.
+    selfEval: z.boolean().optional(),
     // Custom Layer-1 sources. Discriminated on `type`: a repo-relative `file`,
     // an `http`(s) URL, or a shell `cmd`. All three carry an optional display
     // `label`. gatherSources also re-enforces the file confinement + the

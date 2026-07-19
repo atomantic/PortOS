@@ -15,6 +15,11 @@ export const getAppWorkTracker = (id, options) =>
 // side). Caller owns its own .catch fallback, so default to silent.
 export const getAppLayeredIntelligence = (id, options) =>
   request(`/apps/${id}/layered-intelligence`, { silent: true, ...options });
+// Read-only LI proposal-outcome dashboard data (#2689): merge-rate stats, the
+// rejection-reason tally, and a capped recent list. The panel owns its own error
+// UI, so default to silent.
+export const getAppLayeredIntelligenceOutcomes = (id, options) =>
+  request(`/apps/${id}/layered-intelligence/outcomes`, { silent: true, ...options });
 export const createApp = (data) => request('/apps', {
   method: 'POST',
   body: JSON.stringify(data)
@@ -72,7 +77,9 @@ export const openAppInClaude = (id) => request(`/apps/${id}/open-claude`, { meth
 export const openAppFolder = (id) => request(`/apps/${id}/open-folder`, { method: 'POST' });
 export const refreshAppConfig = (id) => request(`/apps/${id}/refresh-config`, { method: 'POST' });
 export const pullAndUpdateApp = (id) => request(`/apps/${id}/update`, { method: 'POST' });
-export const buildApp = (id) => request(`/apps/${id}/build`, { method: 'POST' });
+// `options` lets a caller suppress request()'s auto-toast with `{ silent: true }`
+// when it already renders its own error UI.
+export const buildApp = (id, options = {}) => request(`/apps/${id}/build`, { method: 'POST', ...options });
 export const getAppStatus = (id) => request(`/apps/${id}/status`);
 export const getAppTaskTypes = (id) => request(`/apps/${id}/task-types`);
 export const toggleAllAppTaskTypes = (id, enabled, options = {}) => request(`/apps/${id}/task-types/all`, {

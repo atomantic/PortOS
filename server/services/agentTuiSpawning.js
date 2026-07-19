@@ -1123,7 +1123,21 @@ export async function spawnTuiAgent({
   // POSITIVE input-ready footer (see createInputReadyTracker), auto-confirm the
   // trust gate, and NEVER blind-paste: if the prompt never appears we surface a
   // failure. Other TUI providers keep the original idle heuristic + deadline.
-  const requireInputReady = commandName === 'claude';
+  //
+  // Antigravity (agy) gets the SAME positive gate (issue #2705). agy's TUI also
+  // enables bracketed-paste mode (`ESC[?2004h`) exactly when its input box is
+  // live — the identical signal createInputReadyTracker keys on — but the old
+  // blind-paste path fired into agy's still-initializing banner, so the prompt
+  // never landed and the agent sat idle at an empty prompt until it was reaped
+  // having done nothing. agy DOES have a first-run folder-trust gate ("Do you
+  // trust the contents of this project?") like claude's — production spawns agy
+  // with `--dangerously-skip-permissions`, which bypasses it; and if it does
+  // appear (agy launched without that flag), its "Yes, I trust this folder"
+  // option matches TUI_TRUST_PROMPT_PATTERN, so the requireInputReady auto-confirm
+  // branch below handles it exactly as it does claude's. If agy ever fails to
+  // signal ready, the requireInputReady path fails fast with a surfaced startup
+  // error instead of silently idle-reaping.
+  const requireInputReady = isClaudeCommand(tuiConfig.command) || isAntigravityCommand(tuiConfig.command);
   // sendPrompt / finishStartupFailure are async and dispatched fire-and-forget
   // from the interval below. A setInterval callback can't await, and an
   // unhandled rejection there (e.g. a finalizeAgent throw inside finish())

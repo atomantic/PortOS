@@ -31,6 +31,7 @@ grep -i "what you want to do" client/src/utils/README.md
 
 | Module | Purpose |
 |---|---|
+| `animationClips` | Treadmill helpers for rigged GLB clips: `withInPlaceClips` synthesizes root-translation-stripped ("in place") variants of root-motion walk/run clips so a fixed-frame avatar can't drift; `inPlaceClipName` routes a clip name to its variant. Framework-agnostic (caller passes the root-motion names + suffix). |
 | `coalesce` | Trailing-edge coalescer: wraps a function so rapid calls collapse into one deferred invocation. |
 | `easing` | `smoothstep` interpolation easing curve. |
 | `hashString` | Deterministic string → 32-bit hash (stable colors, keys, seeds). |
@@ -57,7 +58,7 @@ grep -i "what you want to do" client/src/utils/README.md
 
 | Module | Purpose |
 |---|---|
-| `characterXp` | Avatar XP/level math: `levelFromXP`, `computeXpView`, `diffXp`, and the XP threshold table. |
+| `characterXp` | Character HUD badge math: `computeAgeView` (age-based level + progress to next birthday), plus legacy XP helpers `levelFromXP`, `computeXpView`, `diffXp` and the XP threshold table. |
 
 ## CyberCity — scene compute helpers
 

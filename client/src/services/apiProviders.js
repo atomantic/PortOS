@@ -26,4 +26,4 @@ export const refreshProviderModels = (id, options) => request(`/providers/${id}/
 // Provider status (usage limits, availability)
 export const getProviderStatuses = () => request('/providers/status');
 export const getProviderStatus = (id) => request(`/providers/${id}/status`);
-export const recoverProvider = (id) => request(`/providers/${id}/status/recover`, { method: 'POST' });
+export const recoverProvider = (id, options) => request(`/providers/${id}/status/recover`, { method: 'POST', ...options });

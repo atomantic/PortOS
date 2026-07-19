@@ -52,9 +52,15 @@ import {
   fileProposalToJira,
   resolveJiraBlockKey,
   applyJiraBlockingLabel,
-  computeOutcomesReport
+  computeOutcomesReport,
+  computeSelfEvalSummary,
+  computeProposalExecutionAwareness,
+  computeCrossReferenceAnalysis,
+  computeHandoffRouting,
+  readLiTaskMetrics,
+  hasPlannedWorkListing
 } from '../layeredIntelligence.js'
-import { recordFiledProposal, listOutcomes, reconcileOutcomes } from '../layeredIntelligenceOutcomes.js'
+import { recordFiledProposal, listOutcomesResult, reconcileOutcomes, listOutcomes } from '../layeredIntelligenceOutcomes.js'
 
 // The outcome feedback loop (#2428) can only reconcile a proposal's fate on a
 // tracker that reports closed-state. All three now qualify: a forge (gh/glab
@@ -295,8 +301,11 @@ export async function buildTaskInput({ app } = {}) {
 
   // Independent reads (app source set vs the tracker's open-issue list) — overlap
   // them so the non-parked path pays one round-trip, not two.
+  // The resolved tracker coords flow into gatherSources so the plannedWork source
+  // (#2698) can read the app's committed backlog off the SAME tracker the loop
+  // files to — gatherSources has no other way to know where work lives.
   const [sources, issuesRead] = await Promise.all([
-    gatherSources(app, config),
+    gatherSources(app, config, { tracker: { filer, forgeCli, cwd, jira }, isPortos }),
     readIssues({ filer, forgeCli, cwd, jira, config })
   ])
   const { openIssues, existingIssues, trackerReadFailed } = issuesRead
@@ -307,14 +316,69 @@ export async function buildTaskInput({ app } = {}) {
   // AND an outcomes-capable tracker (forge / jira / plan — #2435 taught the plan
   // parse to read a checked `- [x]` item as closed). A failed tracker read skips
   // reconciliation (never mark closed on a blind read).
+  // `null` (not `[]`) until the outcomes pipeline actually runs this cycle: selfEval
+  // reads this too, and "the outcomes source is off" must not reach it looking like
+  // "this app has never had a proposal merged" (#2700).
+  let outcomes = null
   let outcomesReport = ''
+  // Per-proposal-domain execution record (#2765): the true avoid/prefer signal keyed
+  // on how LI's OWN proposals in each domain fared once handed off + executed. Derived
+  // from the SAME outcome records loaded below (no extra store read), so it's gated on
+  // the same outcomes source; stays '' until at least one domain clears the sample floor.
+  let proposalExecutionReport = ''
+  // Cross-reference (#2764 §3): domains LI proposes well but executes poorly. Derived
+  // from the SAME outcome records as the two blocks above (no extra store read), so it
+  // rides the same outcomes gate and stays '' until a domain has both a merge and a
+  // diagnosed failed hand-off.
+  let crossReferenceReport = ''
   if (config.sources?.outcomes && outcomesTrackerSupported(filer)) {
     if (!trackerReadFailed) await reconcileOutcomes({ appId: app.id, existingIssues })
-    const outcomes = await listOutcomes({ appId: app.id })
-    outcomesReport = computeOutcomesReport({ outcomes })
+    // Discriminated read: an unreadable outcome store stays `null` here rather than
+    // collapsing to `[]`, so selfEval reports its merge rate as UNAVAILABLE instead
+    // of telling the reasoner it has never filed a proposal.
+    const outcomesRead = await listOutcomesResult({ appId: app.id })
+    outcomes = outcomesRead.read ? outcomesRead.outcomes : null
+    // The low-merge-rate warning cites the plannedWork block by name — only let it
+    // do that when a real BACKLOG LISTING was gathered. The source is
+    // per-app-toggleable, yields nothing on an unresolvable tracker, and renders a
+    // sentinel (not a listing) when the tracker is empty or unreadable — none of
+    // which are something the reasoner can go review.
+    outcomesReport = computeOutcomesReport({
+      outcomes,
+      hasPlannedWork: hasPlannedWorkListing(sources.plannedWork)
+    })
+    // Only a successful read yields records to attribute; a failed read (outcomes ===
+    // null) leaves the block empty rather than claiming "no domain has executed".
+    if (Array.isArray(outcomes)) {
+      proposalExecutionReport = computeProposalExecutionAwareness({ outcomes })
+      crossReferenceReport = computeCrossReferenceAnalysis({ outcomes })
+    }
   }
 
-  const prompt = buildPrompt({ app, config, sources, openIssues, isPortos, outcomesReport }) + buildCompletionContract()
+  // Self-evaluation (#2700): the loop's deterministic pre-filing check on its own
+  // reasoning — no LLM call, just a read of the record it already keeps. Note
+  // `existingIssues` is passed as null on a FAILED tracker read: readIssues returns
+  // `[]` in that case, which would otherwise tell selfEval "you have filed nothing"
+  // and license a duplicate re-file off a blind read.
+  //
+  // Scope: `trackerReadFailed` is only ever set by the forge and jira branches. The
+  // `plan` branch cannot distinguish an unreadable PLAN.md from an absent one, so it
+  // reports `[]` either way — but for a plan tracker that is honest rather than
+  // blind: the downstream isProposalDuplicate guard reads the same empty list, so
+  // selfEval's "nothing is currently suppressed" correctly describes what filing
+  // will actually do. Do NOT "fix" this by marking a missing PLAN.md as a failed
+  // read: an app with no PLAN.md yet genuinely has nothing filed, and suppressing
+  // its proposals would park the loop on every such app permanently.
+  let selfEvalReport = ''
+  if (config.sources?.selfEval) {
+    selfEvalReport = computeSelfEvalSummary({
+      outcomes,
+      existingIssues: trackerReadFailed ? null : existingIssues,
+      liTaskStats: await readLiTaskMetrics()
+    })
+  }
+
+  const prompt = buildPrompt({ app, config, sources, openIssues, isPortos, outcomesReport, selfEvalReport, proposalExecutionReport, crossReferenceReport }) + buildCompletionContract()
   // Option A: surface the fully-resolved LI agent provider/model (from
   // resolveLiAgentProvider — per-app override, else the resolved schedule pin) so
   // the generator pins the AGENT to it. Resolving the pin HERE (not delegating it
@@ -384,6 +448,10 @@ async function recordRun(app, outcome = {}) {
 }
 
 /** Default hand-off enqueue: an approval-gated internal CoS task for a coding agent. */
+// The documented reasoner response shape. An object carrying none of these keys
+// isn't an answer at all — see the envelope resolution in processTaskOutput.
+const REASONER_ENVELOPE_KEYS = ['analysis', 'proposal', 'pause']
+
 async function defaultEnqueueHandoff(taskData) {
   const { addTask } = await import('../cos.js')
   return addTask(taskData, 'internal')
@@ -415,21 +483,49 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
 
   // The payload IS the reasoner's JSON object (parsed from the sentinel). A null/
   // malformed payload is the "returned nothing usable" case.
-  const { proposal, pause } = validateReasonerResponse(
-    payload && typeof payload === 'object' ? payload : null
-  )
+  //
+  // Sentinel discipline (#2727): resolve the usable ENVELOPE once and key both the
+  // validation and the `reason` below off it. A payload that parsed as JSON but
+  // isn't a reasoner envelope — a bare string/number/array, or an object carrying
+  // none of the documented keys ({}, {"foo":1}) — used to reach
+  // `reason = 'no-proposal'`, the SAME reason a well-formed response that
+  // legitimately proposes nothing gets. So "the agent emitted garbage" was
+  // indistinguishable from "the agent correctly had nothing to propose", and the
+  // former was recorded as a successful run. Reachable both ways: the sentinel
+  // envelope only requires `payload` to be an object, and salvageSentinelPayload's
+  // lenient extractor can surface a non-envelope object out of prose.
+  // `Object.hasOwn` — an inherited key must not qualify a junk object as an answer.
+  const isEnvelope = !!payload && typeof payload === 'object' && !Array.isArray(payload)
+    && REASONER_ENVELOPE_KEYS.some(k => Object.hasOwn(payload, k))
+  const envelope = isEnvelope ? payload : null
+  const { proposal, pause } = validateReasonerResponse(envelope)
 
-  // Re-read issues NOW (not at gather time) so dedup sees the freshest tracker
-  // state — the agent may have run for minutes.
-  const { existingIssues, trackerReadFailed } = await readIssues({ filer, forgeCli, cwd, jira, config })
+  // A reasoner that SUPPLIED a non-null proposal which then failed validation
+  // (missing/unknown scope, no title, unnormalizable slug) did not "look and find
+  // nothing" — it tried to propose and emitted the wrong shape. Both used to land
+  // on `no-proposal` → success. `proposal: null` stays the legitimate empty answer.
+  // Narrow on purpose: validateReasonerResponse is documented to drop invalid
+  // pieces leniently, and this only reclassifies the field that IS the deliverable.
+  const proposalAttemptedButInvalid = envelope != null && !proposal && envelope.proposal != null
 
   let filedNumber = null
   let filedKey = null
   let filedAction = 'no-op'
-  let reason = payload == null ? 'unparseable-response' : 'no-proposal'
+  let reason = envelope == null || proposalAttemptedButInvalid ? 'unparseable-response' : 'no-proposal'
   let handedOff = false
+  // §4 (#2764): when the deterministic routing gate files-for-human instead of
+  // auto-handing-off a trivial+safe proposal, surface WHY on the returned result.
+  let handoffRouted = false
+  let handoffRoutingReason = null
 
   if (proposal) {
+    // Re-read issues NOW (not at gather time) so dedup sees the freshest tracker
+    // state — the agent may have run for minutes. Scoped to the has-a-proposal path:
+    // it's an unbounded forge call and only this branch consumes it, so the common
+    // no-proposal/unparseable runs no longer shell out to `gh issue list` (which,
+    // since the #2727 hoist, would hold a CoS concurrency slot and could burn the
+    // finalize timeout on a run whose verdict is already known).
+    const { existingIssues, trackerReadFailed } = await readIssues({ filer, forgeCli, cwd, jira, config })
     const scopeOk = isScopeAllowed({ scope: proposal.scope, allowedScopes: config.allowedScopes, isPortos })
     if (!scopeOk) {
       console.log(`🚫 Layered Intelligence: ${app.name} proposal scope "${proposal.scope}" not allowed — suppressed`)
@@ -469,7 +565,8 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
         // read back its outcome. Gated on the app's `outcomes` source toggle AND
         // an outcomes-capable tracker (forge / jira / plan — a checked `- [x]`
         // PLAN item now reconciles, #2435).
-        if (config.sources?.outcomes && outcomesTrackerSupported(filer)) {
+        const outcomesRecordable = !!(config.sources?.outcomes && outcomesTrackerSupported(filer))
+        if (outcomesRecordable) {
           await recordFiledProposal({
             appId: app.id, slug: proposal.slug, tracker: tracker.resolved,
             issueRef: filedRef(filedKey, filedNumber), scope: proposal.scope
@@ -477,11 +574,32 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
         }
         const issueRef = filedKey || filedNumber
         if (isHandoffEligible({ proposal, config, filed: issueRef })) {
-          const task = await enqueueHandoff(buildHandoffTask({ app, proposal, issueRef }))
-            .catch((err) => { console.error(`❌ Layered Intelligence: ${app.name} hand-off enqueue failed: ${err.message}`); return null })
-          if (task && !task.duplicate) {
-            handedOff = true
-            console.log(`🤝 Layered Intelligence: ${app.name} handed off ${ref} to a coding agent (task ${task.id})`)
+          // §4 (#2764): the reasoner-signal gate (isHandoffEligible) passed, but the
+          // SYSTEM still refuses to auto-hand-off a trivial+safe proposal in a domain
+          // where LI's OWN prior hand-offs chronically fail — it stays filed for a human
+          // instead. Load the app's historical outcomes lazily (only on the hand-off-
+          // eligible path) for computeHandoffRouting. An unreadable history degrades to
+          // "allow hand-off as before" (no-signal → handoff:true) — a store hiccup must
+          // never silently SUPPRESS a hand-off.
+          const outcomes = await listOutcomes({ appId: app.id }).catch(() => [])
+          const routing = computeHandoffRouting({ proposal, outcomes })
+          if (routing.handoff === false) {
+            // Filing-for-human IS the intended good outcome here, not a failure — the
+            // proposal WAS filed successfully, so `reason` stays null. Record the routing
+            // on the returned result for observability.
+            handoffRouted = true
+            handoffRoutingReason = routing.reason
+            console.log(`🧭 Layered Intelligence: ${app.name} routed ${ref} to human review instead of auto-hand-off — ${routing.reason}`)
+          } else {
+            // Only mark the hand-off for per-domain execution recording (#2765) when the
+            // proposal itself was recorded above — same gate — so execution-tracking never
+            // creates an outcome row for a proposal the `outcomes` toggle says isn't tracked.
+            const task = await enqueueHandoff(buildHandoffTask({ app, proposal, issueRef, recordExecution: outcomesRecordable }))
+              .catch((err) => { console.error(`❌ Layered Intelligence: ${app.name} hand-off enqueue failed: ${err.message}`); return null })
+            if (task && !task.duplicate) {
+              handedOff = true
+              console.log(`🤝 Layered Intelligence: ${app.name} handed off ${ref} to a coding agent (task ${task.id})`)
+            }
           }
         }
       } else {
@@ -509,5 +627,5 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
     }
   }
 
-  return settle({ action: filedAction, reason, filedNumber, filedKey, paused, handedOff })
+  return settle({ action: filedAction, reason, filedNumber, filedKey, paused, handedOff, handoffRouted, handoffRoutingReason })
 }

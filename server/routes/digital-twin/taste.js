@@ -115,8 +115,11 @@ router.post('/taste/:section/personalized-question', asyncHandler(async (req, re
     });
   }
   const { providerId, model } = validateRequest(tastePersonalizedQuestionInputSchema, req.body);
-  const question = await tasteService.generatePersonalizedTasteQuestion(parsed.data, providerId, model);
-  res.json(question);
+  // `{ question, reason }` — a provider failure throws (502 AI_PROVIDER_ERROR) and
+  // bubbles to the error middleware, so a 200 here always means "we asked, and this
+  // is the answer": either a question, or a `reason` naming what was missing.
+  const result = await tasteService.generatePersonalizedTasteQuestion(parsed.data, providerId, model);
+  res.json(result);
 }));
 
 /**

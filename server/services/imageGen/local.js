@@ -992,6 +992,31 @@ export async function deleteImage(filename) {
   await unlink(join(PATHS.images, filename)).catch(() => {});
   await unlink(join(PATHS.images, filename.replace('.png', '.metadata.json'))).catch(() => {});
   await unlink(join(PATHS.images, `${filename}.metadata.json`)).catch(() => {});
+  // Drop the derived index row with the file (#2738). Without this the row
+  // survives until the next boot reconcile, so anything counting the index
+  // (the Character sheet's Auteur skill / Media Assets tile) reads high in
+  // between. Non-fatal + dynamically imported: a broken index must never fail
+  // the user's delete, and this keeps the pg stack out of this module's static
+  // graph (the mirror of how the index dynamically imports the media stack).
+  //
+  // Gated on the PNG being CONFIRMED gone. The unlink above swallows its error,
+  // so an EACCES/EBUSY/EIO failure leaves the image on disk and still listed by
+  // listGallery() — unindexing it there would swap this bug for its mirror and
+  // UNDERcount a live image. Failed-to-delete is not deleted.
+  //
+  // The probe is tri-state, NOT existsSync: that collapses "absent" and "I
+  // couldn't tell" (EACCES on the dir, EIO) into the same `false`, which is the
+  // absent-vs-failed sentinel trap — an unreadable gallery would read as "every
+  // image is gone" and retire live rows. Only a definitive ENOENT retires the
+  // row; present-or-unknown leaves it for the reconcile, which reads disk.
+  const probeErr = await stat(join(PATHS.images, filename)).then(() => null, (err) => err);
+  if (probeErr?.code === 'ENOENT') {
+    await import('../mediaAssetIndex/index.js')
+      .then((m) => m.unindexImage(filename))
+      .catch((err) => console.error(`❌ Media index image delete hook: ${err.message}`));
+  } else {
+    console.error(`❌ Image file not confirmed gone (${probeErr?.code || 'still present'}), keeping its index row: ${filename}`);
+  }
   console.log(`🗑️ Deleted image: ${filename}`);
   return { ok: true };
 }

@@ -58,3 +58,30 @@ export function liReasonTone(reason = null) {
   if (LI_NEUTRAL_REASONS.has(reason)) return 'neutral';
   return 'warn';
 }
+
+// The proposal-REJECTION taxonomy (#2689) — WHY a filed proposal ended up not
+// merged. Distinct vocabulary from the run-reason tokens above: those explain why a
+// LOOP RUN produced no proposal, these explain why a FILED proposal was rejected.
+// Mirrors the server gloss (REJECTION_REASON_LABELS in
+// server/services/layeredIntelligenceRejections.js) so the outcomes dashboard reads
+// the same as the reasoner prompt. Keep in lockstep; an unknown token degrades to
+// itself. `unknown-reason` is the honest "we classified it and found no signal"
+// sentinel — a real answer, not a gap.
+const LI_REJECTION_REASON_LABELS = {
+  'duplicate': 'already tracked elsewhere (duplicate)',
+  'user-rejected': 'the user declined it (closed as not planned)',
+  'scope-mismatch': "outside the app's scope",
+  'missing-context': 'missing context the proposal should have supplied',
+  'quality-issue': 'the proposal itself was low quality or malformed',
+  'environment-blocker': 'blocked on the environment or a dependency',
+  'merge-conflict': 'the implementing change could not be merged',
+  'validation-failed': 'the implementing change failed lint/validation',
+  'unknown-reason': 'closed with no recorded reason'
+};
+
+// Gloss one rejection-reason token as prose. A nullish input renders as '' (not
+// classified — nothing to say); an unglossed token passes through.
+export function formatLiRejectionReason(reason = null) {
+  if (!reason) return '';
+  return LI_REJECTION_REASON_LABELS[reason] || reason;
+}

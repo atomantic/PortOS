@@ -19,23 +19,42 @@ It ships 14 animation clips — `Idle`, `Walking`, `Running`, `Dance`, `Death`,
 MuseCoSAvatar drives these clips from the CoS runtime via an `AnimationMixer`,
 mapping each agent state to an **in-place** clip (see `MUSE_STATE_ANIMATIONS` in
 `client/src/components/cos/constants.js`). `Walking` / `Running` / `WalkJump`
-carry root translation and are intentionally left unmapped so the fixed-frame
+carry root translation and are never used as a base loop so the fixed-frame
 avatar can't drift out of view. The `speaking` flag fires a one-shot `Wave`
-overlay that returns to the base state loop.
+overlay that returns to the base loop (or resumes the montage).
+
+The model is rendered with its **own textures and full color** — the per-state
+hue lives in the surrounding lights, halo, ground glow, and sparkles, not as a
+tint painted onto the mesh.
 
 | CoS state | Clip | Read |
 |-----------|------|------|
 | sleeping | `Sitting` | seated rest (clamped on final frame) |
 | thinking | `Idle` | calm contemplation |
-| coding | `Punch` | jabbing away at the work |
+| coding | _montage_ | varied working sequence (see below) |
 | investigating | `No` | slow side-to-side scan |
 | reviewing | `Yes` | approving nod |
 | planning | `ThumbsUp` | confident "locked in" |
 | ideating | `Dance` | creative celebration |
 | _speaking_ | `Wave` | one-shot gesture, then back to base loop |
 
+### `coding` montage
+
+Rather than looping a single clip, the `coding` state cycles an ordered montage
+(`MUSE_STATE_SEQUENCES.coding`) so a working agent reads as dynamic and varied:
+**Punch → Running → Jump → ThumbsUp → Walking → Dance**, then repeats. Each step
+plays for a set number of repetitions before the mixer's `finished` event
+advances to the next.
+
+The montage names real GLB clips. `Running` / `Walking` carry root translation,
+so the avatar auto-routes them to synthesized **"in place"** variants — cloned
+clips with their root-translation (`.position`) tracks stripped (the treadmill
+technique, in `client/src/utils/animationClips.js`) — so the gait animates
+without drifting the fixed frame. A GLB missing the montage clips falls back to
+the single-clip base loop (`MUSE_STATE_ANIMATIONS.coding` = `Punch`).
+
 A GLB with none of these clips (or no clips at all) falls back to the
-procedural rotation/glow treatment, so static models still render.
+procedural float treatment, so static models still render.
 
 ## Selectable variants
 

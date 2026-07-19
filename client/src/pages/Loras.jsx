@@ -107,7 +107,9 @@ export default function Loras() {
   const refresh = useCallback(() => {
     setError(null);
     setLoading(true);
-    listLorasFull()
+    // silent:true — the failure renders as a persistent inline error Banner;
+    // the default toast would say the same thing a second time.
+    listLorasFull({ silent: true })
       .then(setLoras)
       .catch((err) => setError(err?.message || 'Failed to load LoRAs'))
       .finally(() => setLoading(false));
@@ -115,7 +117,7 @@ export default function Loras() {
 
   const refreshSuggestions = useCallback(({ force = false } = {}) => {
     setLoadingSuggestions(true);
-    getCivitaiSuggestions({ force })
+    getCivitaiSuggestions({ force }, { silent: true })
       .then(setSuggestions)
       .catch((err) => toast.error(err?.message || 'Failed to load suggestions'))
       .finally(() => setLoadingSuggestions(false));
@@ -219,7 +221,7 @@ export default function Loras() {
 
   const handleDelete = async (filename) => {
     setDeleting(filename);
-    await deleteLoraFull(filename)
+    await deleteLoraFull(filename, { silent: true })
       .then(() => {
         toast.success('LoRA deleted');
         setLoras((prev) => prev.filter((l) => l.filename !== filename));
@@ -922,7 +924,7 @@ function CivitaiAuthModal({ pendingUrl, message, auth, onClose, onSaved, onRetry
     e?.preventDefault?.();
     if (!apiKey.trim() || saving) return;
     setSaving(true);
-    await setCivitaiAuth(apiKey.trim())
+    await setCivitaiAuth(apiKey.trim(), { silent: true })
       .then((updated) => {
         toast.success('Civitai API key saved');
         onSaved?.(updated);
@@ -940,7 +942,7 @@ function CivitaiAuthModal({ pendingUrl, message, auth, onClose, onSaved, onRetry
 
   const handleClear = async () => {
     setClearing(true);
-    await clearCivitaiAuth()
+    await clearCivitaiAuth({ silent: true })
       .then((updated) => {
         toast.success(updated.hasKey ? 'Saved key cleared (env CIVITAI_API_KEY still active)' : 'Civitai API key cleared');
         onSaved?.(updated);

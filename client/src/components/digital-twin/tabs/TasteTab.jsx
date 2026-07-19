@@ -22,6 +22,7 @@ import {Palette,
   Minus} from 'lucide-react';
 import BrailleSpinner from '../../BrailleSpinner';
 import * as api from '../../../services/api';
+import socket from '../../../services/socket';
 import toast from '../../ui/Toast';
 import Banner from '../../ui/Banner';
 import MarkdownOutput from '../../cos/MarkdownOutput';
@@ -50,6 +51,36 @@ const SECTION_COLORS = {
 
 const NO_API_PROVIDER_TOAST = 'No API provider configured — open AI Providers to add one (e.g. LM Studio, OpenAI).';
 const NO_API_PROVIDER_TITLE = 'Configure an AI provider to enable';
+
+// "Go deeper" came back with no question. Each `reason` names the precondition that
+// was actually missing, so only a genuine lack of identity context points the user at
+// their documents (#2733) — the other reasons aren't about documents at all.
+const NO_QUESTION_TOAST = {
+  'no-context': 'No personalized question available — try completing more identity documents',
+  'no-provider': NO_API_PROVIDER_TOAST,
+  'unknown-section': 'This section doesn\'t support personalized questions.'
+};
+const NO_QUESTION_FALLBACK_TOAST = 'No personalized question available right now.';
+
+export const noQuestionToast = (reason) => NO_QUESTION_TOAST[reason] || NO_QUESTION_FALLBACK_TOAST;
+
+/**
+ * Whether "Go deeper" must report a failed request itself.
+ *
+ * A provider failure (502 `AI_PROVIDER_ERROR`) is already announced by the `ai:status`
+ * error toast with the provider's real reason, so that toast is the single voice for it —
+ * the server also marks it warning-severity so the global `error:notified` channel stays
+ * quiet. Everything else — validation, 500, network drop — has no other reporter (the
+ * request is sent `{ silent: true }`), so this component is its single voice.
+ *
+ * `statusChannelLive` is what keeps "someone else is reporting this" from collapsing into
+ * "nobody is". `ai:status` is an unbuffered Socket.IO event: with the socket down, HTTP
+ * still delivers the 502 but the toast never arrives, so deferring would fail the click
+ * in total silence. Deferring only while the channel is live keeps exactly one layer
+ * speaking in both states (#2733, #2669).
+ */
+export const shouldReportGoDeeperError = (err, statusChannelLive) =>
+  err?.code !== 'AI_PROVIDER_ERROR' || !statusChannelLive;
 
 export default function TasteTab({ onRefresh }) {
   const [profile, setProfile] = useState(null);
@@ -161,14 +192,32 @@ export default function TasteTab({ onRefresh }) {
       return;
     }
     setLoadingPersonalized(true);
-    const question = await api.getPersonalizedTasteQuestion(
+    // Sentinel: `undefined` = the request failed and has already been reported (see
+    // shouldReportGoDeeperError). A 200 always resolves to `{ question, reason }`, so a
+    // missing question names its own cause instead of being guessed at here (#2733).
+    // The request is silenced so that reporting stays a single layer's job.
+    const result = await api.getPersonalizedTasteQuestion(
       activeSection,
       selectedProvider.providerId,
-      selectedProvider.model
-    ).catch(() => null);
+      selectedProvider.model,
+      { silent: true }
+    ).catch((err) => {
+      // Read `connected` at catch time: by now the server has emitted its ai:status
+      // error, so a live socket means that toast is landing and this layer defers.
+      if (shouldReportGoDeeperError(err, socket.connected)) {
+        toast.error(err?.message || 'Failed to generate a personalized question');
+      }
+      return undefined;
+    });
 
+    if (result === undefined) {
+      setLoadingPersonalized(false);
+      return;
+    }
+
+    const { question, reason } = result || {};
     if (!question) {
-      toast('No personalized question available — try completing more identity documents', { icon: '⚠️' });
+      toast(noQuestionToast(reason), { icon: '⚠️' });
       setLoadingPersonalized(false);
       return;
     }
@@ -197,7 +246,10 @@ export default function TasteTab({ onRefresh }) {
   };
 
   const handleResetSection = async (sectionId) => {
-    await api.resetTasteSection(sectionId).catch(() => null);
+    // request() owns the failure toast; bail before the success toast so a
+    // failed reset doesn't report "Section reset" on top of that error.
+    const ok = await api.resetTasteSection(sectionId).then(() => true).catch(() => false);
+    if (!ok) return;
     toast.success('Section reset');
     await loadProfile();
     setReviewSection(null);

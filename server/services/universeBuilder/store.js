@@ -81,14 +81,25 @@ function makeFileBackend(dir) {
     idPattern: /^[A-Za-z0-9_-]{1,128}$/,
   });
   const runsOf = (ti) => (Array.isArray(ti.config?.runs) ? ti.config.runs : []);
+  const listRaw = async () => {
+    const ids = await cs.listIds();
+    const records = await Promise.all(ids.map((id) => cs.loadOneRaw(id)));
+    return records.filter((r) => r != null);
+  };
   return {
     name: 'file',
     readRaw: (id) => cs.loadOneRaw(id),
     listIds: () => cs.listIds(),
-    listRaw: async () => {
-      const ids = await cs.listIds();
-      const records = await Promise.all(ids.map((id) => cs.loadOneRaw(id)));
-      return records.filter((r) => r != null);
+    listRaw,
+    // There is no cheap count on the file layout — `deleted` lives INSIDE each
+    // record, so knowing which ids are live means reading them all (listIds()
+    // alone can't tell). This still skips what made listUniverses() expensive:
+    // the run-history load and the per-record sanitize+sort. Matches the PG
+    // backend's semantics — `deleted !== true` is exactly the predicate
+    // sanitizeSoftDeleteFields applies before listUniverses filters on it.
+    countUniverses: async ({ includeDeleted = false } = {}) => {
+      const records = await listRaw();
+      return includeDeleted ? records.length : records.filter((r) => r?.deleted !== true).length;
     },
     writeRaw: (id, record) => cs.saveOneNow(id, record),
     deleteRaw: (id) => cs.deleteOneNow(id),
@@ -127,6 +138,7 @@ function makePgBackend(db) {
     readRaw: db.readRaw,
     listIds: db.listIds,
     listRaw: db.listRaw,
+    countUniverses: db.countUniverses,
     writeRaw: db.writeRaw,
     deleteRaw: db.deleteRaw,
     loadRuns: db.loadRuns,
@@ -183,6 +195,7 @@ function createFacade({ dir, sanitizeRecord }) {
     // Reads
     listIds: async () => (await getBackend()).listIds(),
     listRaw: async () => (await getBackend()).listRaw(),
+    countUniverses: async (opts) => (await getBackend()).countUniverses(opts),
     loadOneRaw: async (id) => (await getBackend()).readRaw(id),
     loadOne: async (id) => {
       const raw = await (await getBackend()).readRaw(id);

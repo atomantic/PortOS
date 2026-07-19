@@ -62,6 +62,7 @@ const ALLOWED_PROVIDER_HOSTS = new Set([
   'api.cohere.ai',
   'api.cohere.com',
   'api.fireworks.ai',
+  'api.cerebras.ai',
 ]);
 
 const IPV4_RE = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/;

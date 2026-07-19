@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { render, screen, cleanup, act } from '@testing-library/react';
 
 import { toast, Toaster } from './Toast.jsx';
@@ -6,6 +6,25 @@ import { toast, Toaster } from './Toast.jsx';
 afterEach(() => {
   act(() => toast.dismiss());
   cleanup();
+  vi.unstubAllGlobals();
+});
+
+describe('Toast on an insecure origin', () => {
+  // Regression: `add()` minted ids with a bare `crypto.randomUUID()`, which is
+  // undefined outside a secure context. PortOS is routinely reached over plain
+  // HTTP via Tailscale, so EVERY toast threw `crypto.randomUUID is not a
+  // function` there — including the error toasts the API client raises to
+  // report a failure, which surfaced it as an unhandled rejection.
+  it('renders without crypto.randomUUID (plain HTTP via Tailscale)', () => {
+    vi.stubGlobal('crypto', {
+      getRandomValues: globalThis.crypto.getRandomValues.bind(globalThis.crypto),
+    });
+    expect(globalThis.crypto.randomUUID).toBeUndefined();
+
+    render(<Toaster />);
+    expect(() => act(() => { toast.error('Request failed'); })).not.toThrow();
+    expect(screen.getByRole('alert')).toHaveTextContent('Request failed');
+  });
 });
 
 describe('Toaster accessibility', () => {

@@ -194,3 +194,40 @@ describe('reportClientError', () => {
     expect(result.reason).toBe('transport-error');
   });
 });
+
+describe('browser-extension errors', () => {
+  it('never POSTs an error thrown by an injected content script', async () => {
+    const result = await reportClientError({
+      type: 'error',
+      message: "Cannot read properties of null (reading 'ethereum')",
+      filename: 'chrome-extension://examplewalletextensionid00000000/inpage.js',
+      lineno: 1,
+      colno: 1,
+    });
+
+    expect(result).toEqual({ sent: false, reason: 'extension' });
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('detects an extension frame in a rejected Error stack', async () => {
+    const err = new Error('boom');
+    err.stack = 'Error: boom\n    at inject (moz-extension://abcd-1234/content.js:5:9)';
+    const result = await reportClientError({ type: 'unhandledrejection', reason: err });
+
+    expect(result.reason).toBe('extension');
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it('does not spend the throttle slot, so a real error right behind it still sends', async () => {
+    // Without the pre-throttle filter, the extension error below would take
+    // the 1/sec slot and the genuine error would be lost as `rate-limited`
+    // before ever leaving the browser.
+    await reportClientError({ type: 'unhandledrejection', reason: 'Failed to connect to MetaMask' });
+    const real = await reportClientError({ type: 'error', message: 'Genuine PortOS failure' });
+
+    expect(real.sent).toBe(true);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    const body = JSON.parse(globalThis.fetch.mock.calls[0][1].body);
+    expect(body.message).toBe('Genuine PortOS failure');
+  });
+});

@@ -116,4 +116,82 @@ describe('ProviderModelSelector', () => {
     const { container } = renderSelector({ layout: 'stacked' });
     expect(container.firstChild.className).toContain('flex-col');
   });
+
+  describe('highlightToolUse (agent pickers)', () => {
+    const OLLAMA = [{ id: 'ollama', name: 'Ollama' }];
+
+    it('marks local model options with a tool-use indicator', () => {
+      renderSelector({
+        providers: OLLAMA,
+        selectedProviderId: 'ollama',
+        selectedModel: 'qwen3.6:35b',
+        availableModels: ['qwen3.6:35b', 'gemma4:e4b'],
+        highlightToolUse: true,
+      });
+      const labels = [...screen.getAllByRole('combobox')[1].querySelectorAll('option')].map((o) => o.textContent);
+      expect(labels).toEqual(['qwen3.6:35b · 🔧 tool use', 'gemma4:e4b · ⚠ no known tool use']);
+    });
+
+    it('warns when the selected LOCAL model cannot call tools', () => {
+      renderSelector({
+        providers: OLLAMA,
+        selectedProviderId: 'ollama',
+        selectedModel: 'gemma4:e4b',
+        availableModels: ['qwen3.6:35b', 'gemma4:e4b'],
+        highlightToolUse: true,
+      });
+      expect(screen.getByText(/recognized tool-calling model/i)).toBeInTheDocument();
+    });
+
+    it('warns on the provider default when the model selection is blank', () => {
+      // "Default model" (blank) isn't a no-op — the resolver runs the provider's
+      // defaultModel, which here is a non-tool local model.
+      renderSelector({
+        providers: [{ id: 'ollama', name: 'Ollama', defaultModel: 'gemma4:e4b' }],
+        selectedProviderId: 'ollama',
+        selectedModel: '',
+        availableModels: ['qwen3.6:35b', 'gemma4:e4b'],
+        alwaysShowModel: true,
+        emptyModelOption: 'Default model',
+        highlightToolUse: true,
+      });
+      expect(screen.getByText(/recognized tool-calling model/i)).toBeInTheDocument();
+    });
+
+    it('does not warn when the selected local model is tool-capable', () => {
+      renderSelector({
+        providers: OLLAMA,
+        selectedProviderId: 'ollama',
+        selectedModel: 'qwen3.6:35b',
+        availableModels: ['qwen3.6:35b', 'gemma4:e4b'],
+        highlightToolUse: true,
+      });
+      expect(screen.queryByText(/recognized tool-calling model/i)).not.toBeInTheDocument();
+    });
+
+    it('is a no-op for cloud providers (ids do not encode family)', () => {
+      renderSelector({
+        providers: [{ id: 'openai', name: 'OpenAI', endpoint: 'https://api.openai.com/v1' }],
+        selectedProviderId: 'openai',
+        selectedModel: 'gpt-4o',
+        availableModels: ['gpt-4o', 'o1'],
+        highlightToolUse: true,
+      });
+      const labels = [...screen.getAllByRole('combobox')[1].querySelectorAll('option')].map((o) => o.textContent);
+      expect(labels).toEqual(['gpt-4o', 'o1']);
+      expect(screen.queryByText(/recognized tool-calling model/i)).not.toBeInTheDocument();
+    });
+
+    it('leaves options unannotated when highlightToolUse is off (default)', () => {
+      renderSelector({
+        providers: OLLAMA,
+        selectedProviderId: 'ollama',
+        selectedModel: 'gemma4:e4b',
+        availableModels: ['qwen3.6:35b', 'gemma4:e4b'],
+      });
+      const labels = [...screen.getAllByRole('combobox')[1].querySelectorAll('option')].map((o) => o.textContent);
+      expect(labels).toEqual(['qwen3.6:35b', 'gemma4:e4b']);
+      expect(screen.queryByText(/recognized tool-calling model/i)).not.toBeInTheDocument();
+    });
+  });
 });

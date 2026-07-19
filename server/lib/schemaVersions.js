@@ -344,7 +344,19 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // rewrite is needed — existing legacy projects simply lack both keys and the
   // advance loop treats an absent key identically to null (falsy → legacy video
   // flow); migration 175 only seeds the new `cd-plan` prompt stage.
-  creativeDirectorProjects: 2,
+  // v3 = cross-step result references (`{{steps.<stepId>.result.<key>}}` inside
+  // `plan.steps[].args`, #2773). Unlike v2 this is NOT about a sanitizer
+  // round-trip strip (the refs are free-form `args` strings a v2 sanitizer
+  // preserves verbatim) — it's an EXECUTION-semantics break: only the v3 advance
+  // loop resolves the syntax. A v2 peer that receives a running reference-plan and
+  // then boot-recovers it (`recoverInFlightProjects` resets the step to pending)
+  // would dispatch the literal `{{…}}` as e.g. a seriesId, fail/re-plan, and
+  // LWW-push the damaged plan back onto the v3 peer — corrupting the newer peer's
+  // healthy project. Bumping makes the v2 receiver reject the ahead-version
+  // transfer (per-category 412) until it upgrades, so it never mis-executes a
+  // syntax it can't resolve. No record rewrite needed — reference-free projects
+  // are unchanged; the bump only gates cross-version CD-project sync.
+  creativeDirectorProjects: 3,
   // v1 = Mood boards (PostgreSQL `mood_boards`) federated via the per-record
   // peer-sync push pipeline (record kind `moodBoard`, sync category `moodBoards`,
   // #1564). Same posture as `creativeDirectorProjects` above: a brand-NEW synced
@@ -401,6 +413,31 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // it federates via its own channels / a follow-up. The FIRST incompatible
   // project-shape change MUST bump this to 2.
   musicVideoProjects: 1,
+  // v1 = Creative Commission FEEDBACK federation (PostgreSQL `commission_feedback`)
+  // via the per-record peer-sync push pipeline (record kind `commissionFeedback`,
+  // sync category `commissionFeedback`, #2686 — split-record follow-up to #2657).
+  // The taste reactions federate (so a 👍/👎 carries across a user's machines and
+  // conditions the same commission's next run) while the parent commission stays
+  // machine-local (a synced schedule would double-run). Body-less whole-record
+  // LWW with soft-delete tombstones — the merge never propagates a hard delete.
+  // The FIRST incompatible reaction-shape change MUST bump this to 2.
+  commissionFeedback: 1,
+  // v1 = Creative Commission BRIEF federation (PostgreSQL `creative_commissions`)
+  // via the per-record peer-sync push pipeline (record kind `creativeCommission`,
+  // sync category `creativeCommissions`, #2686). The brief/identity federates so a
+  // synced reaction attaches to the SAME commission on every peer, while
+  // `schedule`/`runs`/`assignment` stay MACHINE-LOCAL (stripped from the wire —
+  // see syncWire's `creativeCommission` case) so only the owning machine fires the
+  // cron (no double-run). Soft-delete tombstones; the FIRST incompatible
+  // brief-shape change MUST bump this to 2.
+  // v2 = per-output-type commissions (#2769): `targetAbility` widened past `video`
+  // and `generation` became per-type (image `imageCount`, music `lengthSeconds`,
+  // series `episodeCount`). A pre-#2769 (v1) peer's sanitizer only understands the
+  // video generation shape, so it would silently drop those type-specific keys on
+  // receive — and could push the video-shaped downgrade back via LWW. The bump
+  // gates mixed-version transfers of this category so a v1 peer never mangles a v2
+  // brief (compareSchemaVersions marks a v2 sender "ahead" of a v1 receiver).
+  creativeCommissions: 2,
   // v1 = standalone media-library federation (#1566). NOT a record kind — it's
   // the wire contract for the library-level asset manifest a full-sync peer
   // advertises at GET /api/peer-sync/library-manifest. The receiver-pull sweep
@@ -501,6 +538,8 @@ export const RECORD_KIND_SCHEMA_CATEGORIES = Object.freeze({
   writersRoomFolder: Object.freeze(['writersRoomFolders']),
   writersRoomExercise: Object.freeze(['writersRoomExercises']),
   musicVideoProject: Object.freeze(['musicVideoProjects']),
+  commissionFeedback: Object.freeze(['commissionFeedback']),
+  creativeCommission: Object.freeze(['creativeCommissions']),
 });
 
 /**

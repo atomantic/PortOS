@@ -77,8 +77,27 @@ describe('POST /api/creative-commission', () => {
     expect(svc.createCommission).not.toHaveBeenCalled();
   });
 
-  it('rejects an unsupported target ability with 400 (Phase 1 is video-only)', async () => {
-    const res = await request(buildApp()).post('/api/creative-commission').send({ ...validBody(), targetAbility: 'music' });
+  it('accepts a non-video output type with its own generation params (#2769)', async () => {
+    svc.createCommission.mockResolvedValue({ id: 'commission-2', name: 'Daily Stills' });
+    const res = await request(buildApp()).post('/api/creative-commission')
+      .send({ ...validBody(), targetAbility: 'image', generation: { imageCount: 3, aspectRatio: '9:16' } });
+    expect(res.status).toBe(201);
+    expect(svc.createCommission).toHaveBeenCalledWith(expect.objectContaining({
+      targetAbility: 'image',
+      generation: expect.objectContaining({ imageCount: 3 }),
+    }));
+  });
+
+  it('rejects an UNKNOWN target ability with 400 (#2769)', async () => {
+    const res = await request(buildApp()).post('/api/creative-commission').send({ ...validBody(), targetAbility: 'hologram' });
+    expect(res.status).toBe(400);
+    expect(svc.createCommission).not.toHaveBeenCalled();
+  });
+
+  it('rejects a generation param that does not belong to the chosen type with 400 (#2769)', async () => {
+    // targetDurationSeconds is a video knob, not an image one.
+    const res = await request(buildApp()).post('/api/creative-commission')
+      .send({ ...validBody(), targetAbility: 'image', generation: { targetDurationSeconds: 10 } });
     expect(res.status).toBe(400);
     expect(svc.createCommission).not.toHaveBeenCalled();
   });
@@ -117,6 +136,31 @@ describe('PATCH /api/creative-commission/:id', () => {
     const res = await request(buildApp()).patch('/api/creative-commission/commission-1').send({});
     expect(res.status).toBe(400);
     expect(svc.updateCommission).not.toHaveBeenCalled();
+  });
+
+  it('rejects a PATCH whose generation param conflicts with an explicit targetAbility (#2769)', async () => {
+    // targetAbility is in the patch, so the off-type key is checkable → 400.
+    const res = await request(buildApp()).patch('/api/creative-commission/commission-1')
+      .send({ targetAbility: 'image', generation: { targetDurationSeconds: 10 } });
+    expect(res.status).toBe(400);
+    expect(svc.updateCommission).not.toHaveBeenCalled();
+  });
+
+  it('accepts a PATCH that switches type and sets that type\'s params (#2769)', async () => {
+    svc.updateCommission.mockResolvedValue({ id: 'commission-1', targetAbility: 'image' });
+    const res = await request(buildApp()).patch('/api/creative-commission/commission-1')
+      .send({ targetAbility: 'image', generation: { imageCount: 3 } });
+    expect(res.status).toBe(200);
+    expect(svc.updateCommission).toHaveBeenCalledWith('commission-1', { targetAbility: 'image', generation: { imageCount: 3 } });
+  });
+
+  it('accepts a generation-only PATCH without targetAbility (sanitizer backstops off-type keys) (#2769)', async () => {
+    // No targetAbility in the patch → the effective type is the stored record's,
+    // which the schema can't see; the adapter drops any off-type key on sanitize.
+    svc.updateCommission.mockResolvedValue({ id: 'commission-1' });
+    const res = await request(buildApp()).patch('/api/creative-commission/commission-1')
+      .send({ generation: { imageCount: 3 } });
+    expect(res.status).toBe(200);
   });
 });
 

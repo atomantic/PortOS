@@ -166,7 +166,8 @@ export function sanitizeRecordForWire(kind, record) {
     case 'moodBoard':
     case 'writersRoomFolder':
     case 'writersRoomExercise':
-    case 'musicVideoProject': {
+    case 'musicVideoProject':
+    case 'commissionFeedback': {
       // Persona/music/creative-director/mood-board records: like mediaCollection,
       // no `ephemeral` flag — always wire-syncable when present. Strip-then-tail-
       // re-add the soft-delete pair for byte-stable checksums. The whole record
@@ -179,6 +180,9 @@ export function sanitizeRecordForWire(kind, record) {
       // LWW kinds with no ephemeral counters — they wire identically (no liveMode
       // strip like writersRoomWork below). A musicVideoProject (#1770:
       // metadata + beat-aligned scenes[]) is the same whole-record LWW contract.
+      // A commissionFeedback (#2686: one reaction — commissionId/runId/rating/
+      // note/tags/at) is a body-less whole-record LWW record with no local-only
+      // fields to strip, so it rides this same group.
       const { deleted: _d, deletedAt: _da, ...rest } = record;
       return { ...rest, ...sanitizeSoftDeleteFields(record) };
     }
@@ -198,6 +202,27 @@ export function sanitizeRecordForWire(kind, record) {
         rest.liveMode = liveModeKnobs;
       }
       return { ...rest, ...sanitizeSoftDeleteFields(record) };
+    }
+    case 'creativeCommission': {
+      // The commission BRIEF federates (#2686) so a synced reaction attaches to
+      // the SAME commission on every peer — but `schedule`, `runs`, `assignment`,
+      // and `enabled` are MACHINE-LOCAL and MUST NOT transit: a federated schedule
+      // (or enabled flag) would arm/double-run the cron on every peer (the whole
+      // reason the commission was machine-local pre-#2686), `runs` is per-machine
+      // execution history, and `assignment` pins a provider/model that may not
+      // exist on the peer. Strip them; the receiver keeps its OWN values on merge
+      // (preserveLocalCommissionFields) and a fresh insert lands dormant. `feedback`
+      // never rides here either — it federates as its own `commissionFeedback`
+      // record kind. The LWW key on the wire is the BRIEF clock (`briefUpdatedAt`),
+      // NOT the general `updatedAt` (which local-only edits bump) — so a
+      // schedule-only edit can't push a stale brief and a delayed brief edit still
+      // wins. Whole-record LWW over what remains (id/name/targetAbility/brief/
+      // generation/feedbackWindow), hashed in full by contentHashForRecord.
+      const { deleted: _d, deletedAt: _da, schedule: _s, runs: _r, assignment: _a,
+        feedback: _f, enabled: _e, briefUpdatedAt: _bu, updatedAt: _ua, ...rest } = record;
+      const briefClock = typeof record.briefUpdatedAt === 'string' ? record.briefUpdatedAt
+        : (typeof record.updatedAt === 'string' ? record.updatedAt : undefined);
+      return { ...rest, ...(briefClock ? { updatedAt: briefClock } : {}), ...sanitizeSoftDeleteFields(record) };
     }
     default:
       return null;

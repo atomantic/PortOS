@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
-import { Plus, Film, Trash2, Play, Pause, FlaskConical, Sparkles, Wand2 } from 'lucide-react';
+import { Plus, Film, Trash2, Play, Pause, FlaskConical, Sparkles, Wand2, SlidersHorizontal } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
   listCreativeDirectorProjects,
@@ -18,6 +18,8 @@ import ModelSelect from '../components/ModelSelect';
 import PageHeader from '../components/PageHeader';
 import Drawer from '../components/Drawer';
 import DirectiveComposer from '../components/creative-director/DirectiveComposer.jsx';
+import CreativeDirectorModelsDrawer from '../components/creative-director/CreativeDirectorModelsDrawer.jsx';
+import ProjectPreview from '../components/creative-director/ProjectPreview.jsx';
 
 const ASPECT_RATIOS = ['16:9', '9:16', '1:1'];
 const QUALITIES = ['draft', 'standard', 'high'];
@@ -46,6 +48,7 @@ export default function CreativeDirector() {
   // that creates a studio production project seeded with a directive. State is
   // hoisted here (above the Drawer body) per the Drawer state-hoisting rule.
   const directiveOpen = searchParams.get('new') === 'directive';
+  const modelsOpen = searchParams.get('models') === '1';
   const [directiveName, setDirectiveName] = useState('');
   const [directiveDraft, setDirectiveDraft] = useState(EMPTY_DIRECTIVE);
   const [creatingDirective, setCreatingDirective] = useState(false);
@@ -70,7 +73,7 @@ export default function CreativeDirector() {
   });
 
   const fetchProjects = useCallback(() => {
-    listCreativeDirectorProjects()
+    listCreativeDirectorProjects({ silent: true })
       .then((data) => { setProjects(data || []); setLoading(false); })
       .catch((err) => {
         toast.error(err?.message || 'Failed to load Creative Director projects');
@@ -131,7 +134,7 @@ export default function CreativeDirector() {
       ...(remixIds.length ? { catalogIngredientIds: remixIds } : {}),
     };
     try {
-      const created = await createCreativeDirectorProject(payload);
+      const created = await createCreativeDirectorProject(payload, { silent: true });
       setProjects((prev) => [...prev, created]);
       setShowForm(false);
       setForm((f) => ({ ...f, name: '', styleSpec: '', userStory: '', startingImageFile: '' }));
@@ -158,6 +161,16 @@ export default function CreativeDirector() {
     setSearchParams((prev) => { const n = new URLSearchParams(prev); n.delete('new'); return n; }, { replace: true });
   };
 
+  // URL-driven so the CD-wide model defaults are deep-linkable, mirroring the
+  // per-project drawer's `?models=1` on the detail page.
+  const setModelsOpen = (open) => {
+    setSearchParams((prev) => {
+      const n = new URLSearchParams(prev);
+      if (open) n.set('models', '1'); else n.delete('models');
+      return n;
+    }, { replace: true });
+  };
+
   const handleCreateDirective = async () => {
     if (!directiveName.trim()) { toast.error('Name is required'); return; }
     if (!directiveDraft.goal.trim()) { toast.error('Directive goal is required'); return; }
@@ -177,7 +190,7 @@ export default function CreativeDirector() {
         deliverables: directiveDraft.deliverables || [],
         constraints: directiveDraft.constraints || {},
       },
-    }).catch((err) => { toast.error(err.message || 'Failed to create directive project'); return null; });
+    }, { silent: true }).catch((err) => { toast.error(err.message || 'Failed to create directive project'); return null; });
     setCreatingDirective(false);
     if (!created) return;
     setProjects((prev) => [created, ...prev]);
@@ -191,7 +204,7 @@ export default function CreativeDirector() {
   // server's authoritative status within 5s if anything diverges.
   const handleStart = async (id) => {
     try {
-      await startCreativeDirectorProject(id);
+      await startCreativeDirectorProject(id, { silent: true });
       setProjects((prev) => prev.map((p) => p.id === id ? { ...p, status: p.treatment ? 'rendering' : 'planning' } : p));
       toast.success('Pipeline started');
     } catch (err) {
@@ -201,7 +214,7 @@ export default function CreativeDirector() {
 
   const handlePause = async (id) => {
     try {
-      await pauseCreativeDirectorProject(id);
+      await pauseCreativeDirectorProject(id, { silent: true });
       setProjects((prev) => prev.map((p) => p.id === id ? { ...p, status: 'paused' } : p));
       toast.success('Paused');
     } catch (err) {
@@ -213,7 +226,7 @@ export default function CreativeDirector() {
     // No confirmation modal yet — destructive but reversible if you re-create.
     // Future: inline two-click confirm pattern.
     try {
-      await deleteCreativeDirectorProject(id);
+      await deleteCreativeDirectorProject(id, { silent: true });
       setProjects((prev) => prev.filter((p) => p.id !== id));
       toast.success('Deleted');
     } catch (err) {
@@ -235,7 +248,7 @@ export default function CreativeDirector() {
           <>
             <button
               onClick={async () => {
-                const created = await createSmokeTestCreativeDirectorProject().catch((e) => {
+                const created = await createSmokeTestCreativeDirectorProject({ silent: true }).catch((e) => {
                   toast.error(e?.message || 'Smoke test failed to start');
                   return null;
                 });
@@ -256,6 +269,14 @@ export default function CreativeDirector() {
             >
               <Wand2 className="w-4 h-4" />
               New directive
+            </button>
+            <button
+              onClick={() => setModelsOpen(true)}
+              className="flex items-center gap-2 bg-port-card border border-port-border hover:bg-port-card/60 text-port-text px-3 py-2 rounded text-sm"
+              title="Pin the provider + model every Creative Director project uses by default"
+            >
+              <SlidersHorizontal className="w-4 h-4" />
+              Model defaults
             </button>
             <button
               onClick={() => { setShowForm((s) => !s); clearRemix(); }}
@@ -403,6 +424,7 @@ export default function CreativeDirector() {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
           {projects.map((p) => (
             <div key={p.id} className="bg-port-card border border-port-border rounded p-3 flex flex-col gap-2">
+              <ProjectPreview project={p} to={`/creative-director/${p.id}/overview`} />
               <div className="flex items-start justify-between gap-2">
                 <Link to={`/creative-director/${p.id}/overview`} className="flex-1 min-w-0">
                   <div className="font-medium truncate">{p.name}</div>
@@ -478,6 +500,12 @@ export default function CreativeDirector() {
           </button>
         </div>
       </Drawer>
+
+      <CreativeDirectorModelsDrawer
+        scope="global"
+        open={modelsOpen}
+        onClose={() => setModelsOpen(false)}
+      />
     </div>
   );
 }

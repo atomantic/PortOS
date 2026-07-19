@@ -16,6 +16,7 @@ export * from './timeWindow.js';
 export * from './timezone.js';
 
 // === General pure helpers ===
+export * from './animationClips.js';
 export * from './coalesce.js';
 export * from './easing.js';
 export * from './hashString.js';

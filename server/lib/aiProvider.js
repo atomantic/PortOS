@@ -175,6 +175,13 @@ async function postChatCompletion(provider, model, prompt, { temperature, max_to
   if (typeof content !== 'string') {
     return { error: 'Provider returned a malformed (non-JSON or unexpected) response body' };
   }
+  // An empty/whitespace-only completion is unusable output, not a successful call —
+  // same class as the malformed body above. Classifying it here keeps the `ai:status`
+  // stream honest (a call that produced nothing must not report "done") and gives
+  // callers a single "the provider failed" signal to test: `result.error`.
+  if (!content.trim()) {
+    return { error: 'Provider returned an empty completion' };
+  }
   // OpenAI-compatible bodies report token counts under `usage`; surface the completion
   // token count so the AI Core landmark can size its activity beam by output volume
   // (tokens/sec). Absent on some providers — callers treat a missing count as "unknown".
@@ -206,7 +213,7 @@ async function postChatCompletion(provider, model, prompt, { temperature, max_to
  * so the beam's thickness can track tokens/sec.
  */
 export async function callProviderAISimple(provider, model, prompt, options = {}) {
-  const { temperature = 0.3, max_tokens = 1000, op, opLabel, appId, workspacePath } = options;
+  const { temperature = 0.3, max_tokens = 1000, op, opLabel, appId, workspacePath, background } = options;
   if (provider.type !== 'api') {
     return { error: 'This operation requires an API-based provider' };
   }
@@ -225,7 +232,13 @@ export async function callProviderAISimple(provider, model, prompt, options = {}
     model,
     appId,
     workspacePath,
-    silent: !op
+    silent: !op,
+    // `background` marks an UNATTENDED fan-out job (e.g. the scheduled multi-goal
+    // check-in) so the client coalesces its per-provider error toasts. It is the
+    // caller's explicit provenance signal — NOT inferred from `!op`, because
+    // user-triggered actions (generateGoalPhases/decomposeGoal/checkInGoal) are
+    // also op-less/silent and must keep toasting individually.
+    background: !!background
   });
 
   const doneLabel = effectiveLabel.replace(/…$/, '');

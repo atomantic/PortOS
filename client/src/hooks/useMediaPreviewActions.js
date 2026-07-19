@@ -40,9 +40,10 @@ function buildImageGenParams(item) {
  *
  * @param {object} [options]
  * @param {(cleaned: object) => any | Promise<any>} [options.onCleanComplete]
- *   Fires AFTER `cleanGalleryImage` resolves. Use it to splice the cleaned
- *   image into the consumer's local state (collection items, gallery list,
- *   variation imageRefs, etc.). Errors thrown from the callback bubble.
+ *   Fires AFTER a Clean (`handleClean`) or watermark-removal resolves. Use it to
+ *   splice the resulting variant into the consumer's local state (collection
+ *   items, gallery list, variation imageRefs, etc.). Errors thrown from the
+ *   callback bubble.
  *
  * Returns the four handlers shaped for direct use as MediaPreview props.
  */
@@ -143,12 +144,18 @@ export default function useMediaPreviewActions({ onCleanComplete = null } = {}) 
     navigate(`/media/video?${params}`);
   }, [navigate]);
 
-  // Clean: re-encode + denoise via the gallery clean endpoint to strip C2PA
-  // provenance and reduce AI artifacts. Returns the resulting gallery item so
-  // consumers can splice it into local state. `onCleanComplete` is the
-  // consumer-specific post-step (add-to-collection / prepend-to-history /
-  // etc.) — fired AFTER the success toast so a failing post-step still shows
-  // the user the clean succeeded server-side.
+  // Clean: run the gallery clean endpoint, which applies the CPU resize-squeeze
+  // (a downscale→upscale resolution shift) — it re-encodes to PNG so it still
+  // strips the C2PA provenance chunk AND perturbs SynthID's resolution-dependent
+  // carriers (issue #1764: validated best-effort against OpenAI's SynthID
+  // detector — it makes the detector fail to return a positive; best-effort/
+  // detector-dependent, never a guaranteed removal). Runs on the /clean endpoint
+  // (not the regen endpoint) so the result is tagged as a clean — its lineage
+  // reads "Cleaned (resize-squeeze)", distinct from the Regenerate panel's own
+  // light pass ("Regenerated (light)"). Returns the new gallery variant directly.
+  // `onCleanComplete` is the consumer-specific post-step (add-to-collection /
+  // prepend-to-history / etc.) — fired AFTER the success toast so a failing
+  // post-step still shows the user it succeeded.
   const handleClean = useCallback(async (img) => {
     if (!img?.filename) throw new Error('Missing filename');
     const cleaned = await cleanGalleryImage(img.filename, { silent: true }).catch((err) => {

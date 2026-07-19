@@ -103,6 +103,18 @@ export default [
         caughtErrorsIgnorePattern: '^_'
       }],
       'no-undef': 'error',
+      // `crypto.randomUUID` only exists in a SECURE context. PortOS is routinely
+      // reached over plain HTTP via Tailscale, where it is undefined — so every
+      // bare call is a crash for the users on that deployment (it took out every
+      // toast until `lib/uuid.js` landed). The footgun was independently
+      // rediscovered at half a dozen sites, each inventing a different
+      // workaround, so a shared helper alone was not enough to stop it: this
+      // rule is what actually holds the line. `no-restricted-properties` is NOT
+      // a substitute — it misses `globalThis.crypto.randomUUID`.
+      'no-restricted-syntax': ['error', {
+        selector: "MemberExpression[property.name='randomUUID']",
+        message: 'crypto.randomUUID is undefined on insecure origins (PortOS over plain HTTP via Tailscale). Import { uuidv4 } from lib/uuid.js instead.',
+      }],
       'no-useless-escape': 'error',
       'react-hooks/rules-of-hooks': 'error',
       // exhaustive-deps is dominated by the deliberate run-once-on-mount pattern across
@@ -122,6 +134,14 @@ export default [
       'react-hooks/preserve-manual-memoization': 'off',
       'react-hooks/static-components': 'off',
       'react-hooks/globals': 'off',
+    },
+  },
+  {
+    // `lib/uuid.js` is the one place allowed to probe `crypto.randomUUID` — it
+    // exists to wrap it. Tests may reference it to simulate an insecure origin.
+    files: ['src/lib/uuid.js', 'src/**/*.test.{js,jsx}'],
+    rules: {
+      'no-restricted-syntax': 'off',
     },
   },
 ];

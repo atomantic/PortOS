@@ -10,6 +10,7 @@ import ScenePreview from '../../creative-director/ScenePreview';
 import ModelSelect from '../../ModelSelect';
 import { useAsyncAction } from '../../../hooks/useAsyncAction';
 import { useAutoRefetch } from '../../../hooks/useAutoRefetch';
+import { useVideoFileSrc } from '../../../hooks/useVideoFileSrc';
 import { sceneShotWarnings } from '../../../lib/shotContinuity';
 
 // Monotonic snapshot: a poll is logically equivalent when the project's id,
@@ -171,7 +172,7 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
       // its own default (videoGen.defaultModelId → registry default).
       if (modelId) payload.modelId = modelId;
       if (force) payload.force = true;
-      return generatePipelineVisualImage(issue.id, 'episodeVideo', payload).catch((err) => {
+      return generatePipelineVisualImage(issue.id, 'episodeVideo', payload, { silent: true }).catch((err) => {
         // Re-throw with a force-aware fallback so useAsyncAction's toaster
         // surfaces the right verb (start vs restart) if the server didn't
         // include a message.
@@ -221,6 +222,14 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
   const accepted = sortedScenes.filter((s) => s.status === 'accepted').length;
   const total = sortedScenes.length;
   const finalVideoId = cdProject?.finalVideoId || null;
+  // A CD final is a video-history id, NOT a filename stem — the timeline
+  // renderer that stitches it mints `timeline-<project>-<ts>.mp4` beside a
+  // randomUUID() id, so ScenePreview's `<jobId>.mp4` reconstruction 404s here
+  // (under a poster that loads fine, since thumbnails ARE `<jobId>.jpg`).
+  // Resolve through the stored filename like the CD surfaces do (#2702).
+  const { src: finalVideoSrc, retry: retryFinalVideo } = useVideoFileSrc(finalVideoId, {
+    enabled: Boolean(finalVideoId),
+  });
   const isComplete = cdProject?.status === 'complete' && finalVideoId;
   const isFailed = cdProject?.status === 'failed';
   const polling = cdProject && !isTerminalProjectStatus(cdProject.status);
@@ -376,7 +385,7 @@ export default function EpisodeVideoStage({ issue, onStageUpdate }) {
 
           {isComplete && finalVideoId && (
             <div className="space-y-2 pt-1">
-              <ScenePreview jobId={finalVideoId} label="Final episode video" />
+              <ScenePreview jobId={finalVideoId} src={finalVideoSrc} onRetry={retryFinalVideo} label="Final episode video" />
               <div className="text-xs text-gray-500">
                 <span className="font-mono">final {finalVideoId.slice(0, 8)}</span>
               </div>

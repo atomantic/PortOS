@@ -201,6 +201,16 @@ export async function ensureDirs(dirs) {
  * Guarantees readers never see a partial write. Accepts a string or any JSON-
  * serializable value (objects are stringified with 2-space indentation).
  *
+ * Symlink semantics (design decision, issue #1893): when `filePath` is a
+ * symlink, the temp+rename REPLACES the link with a regular file — it does NOT
+ * follow the link to update the backing file. This is the standard atomic-write
+ * contract (git, dpkg, rsync, `os.replace` all replace the link); following the
+ * link would reintroduce the non-atomic in-place truncate this helper exists to
+ * eliminate. PortOS ships no symlinked data files, so this is a documented
+ * property rather than a supported use case — do not pass a symlink you expect
+ * to be followed. Callers that genuinely need follow-the-link semantics must
+ * resolve `realpath(filePath)` themselves before calling.
+ *
  * @param {string} filePath - Destination file path
  * @param {string|object} data - String or JSON-serializable value
  * @returns {Promise<void>}
@@ -315,6 +325,28 @@ export function isValidJSON(str, { allowArray = true } = {}) {
 }
 
 /**
+ * Index of the first JSON array token in `str`, or -1 when it holds none.
+ *
+ * Split out of `extractJSONArray` so a caller can tell "found an array" from "found
+ * nothing" — a distinction `extractJSONArray` erases by design (it manufactures a
+ * literal '[]' for the not-found case). `readJSONFileStrict` needs it: for a
+ * swallowing caller a manufactured '[]' is just the default, but for a strict one it
+ * would forge a trustworthy-looking EMPTY out of unreadable bytes.
+ *
+ * @param {string} str
+ * @returns {number} Index of the array start, or -1
+ */
+function findJSONArrayStart(str) {
+  if (!str) return -1;
+  // Look for '[{' (array with objects) first
+  const objectStart = str.indexOf('[{');
+  if (objectStart >= 0) return objectStart;
+  // Check for empty array - find '[]' that's not part of ANSI codes like [31m
+  const emptyMatch = str.match(/\[\](?![0-9])/);
+  return emptyMatch ? str.indexOf(emptyMatch[0]) : -1;
+}
+
+/**
  * Extract JSON array from string that may contain ANSI codes or other noise.
  * Useful for parsing pm2 jlist output which may include warnings before the JSON.
  *
@@ -322,14 +354,7 @@ export function isValidJSON(str, { allowArray = true } = {}) {
  * @returns {string} Extracted JSON or '[]' if not found
  */
 export function extractJSONArray(str) {
-  if (!str) return '[]';
-  // Look for '[{' (array with objects) first
-  let jsonStart = str.indexOf('[{');
-  if (jsonStart < 0) {
-    // Check for empty array - find '[]' that's not part of ANSI codes like [31m
-    const emptyMatch = str.match(/\[\](?![0-9])/);
-    jsonStart = emptyMatch ? str.indexOf(emptyMatch[0]) : -1;
-  }
+  const jsonStart = findJSONArrayStart(str);
   return jsonStart >= 0 ? str.slice(jsonStart) : '[]';
 }
 
@@ -378,26 +403,15 @@ export function safeJSONParse(str, defaultValue = null, { allowArray = true, log
 }
 
 /**
- * Read a JSON file safely with validation and default fallback.
- * Combines file reading with safe JSON parsing.
- *
- * @param {string} filePath - Path to JSON file
- * @param {*} defaultValue - Default value if file doesn't exist or is invalid
- * @param {Object} options - Options
- * @param {boolean} [options.allowArray=true] - Allow array JSON
- * @param {boolean} [options.logError=true] - Log errors
- * @returns {Promise<*>} Parsed JSON or default value
- *
- * @example
- * const config = await readJSONFile('./config.json', { port: 3000 });
- * const items = await readJSONFile('./items.json', []);
- */
-/**
  * Read a file, returning null on any error (missing file, permission denied, etc.).
  *
  * Collapses the inlined `readFile(path, encoding).catch(() => null)` pattern used
  * across services for "optional file — fall through if absent." For Buffer reads,
  * pass `encoding: null` (or omit when calling with no second arg, default 'utf8').
+ *
+ * NOTE: like `readJSONFile`, this conflates "absent" with "unreadable" — both
+ * return null. When the caller derives a user-visible stat from the result (where
+ * a fake empty is a lie, not a default), reach for `readJSONFileStrict` instead.
  *
  * @param {string} filePath - Path to read
  * @param {string|null} [encoding='utf8'] - Encoding (null for Buffer)
@@ -407,22 +421,132 @@ export async function tryReadFile(filePath, encoding = 'utf8') {
   return readFile(filePath, encoding).catch(() => null);
 }
 
-export async function readJSONFile(filePath, defaultValue = null, { allowArray = true, logError = true } = {}) {
+// Private sentinel for "the parse produced nothing usable". A unique Symbol, NOT
+// null/undefined — a file whose real contents parse to the caller's defaultValue
+// must stay distinguishable from a file that failed to parse at all, and any
+// in-band marker could legitimately BE the parsed value.
+const PARSE_FAILED = Symbol('json-parse-failed');
+
+/**
+ * Read a JSON file, reporting whether the read is TRUSTWORTHY rather than
+ * collapsing every failure into the default (the `readJSONFile` behavior below).
+ *
+ * The absent-vs-unreadable distinction (see CLAUDE.md's "Sentinel + validate"):
+ *
+ *   - ENOENT (never written)      → `{ ok: true,  value: defaultValue }` — a genuine
+ *     empty. A caller counting records may trust this as a real zero.
+ *   - any other read error        → `{ ok: false, value: defaultValue }` — EACCES,
+ *     EIO, EISDIR, a transient FS failure. We do NOT know the file is empty.
+ *   - unparseable / truncated     → `{ ok: false, value: defaultValue }` — corrupt
+ *     bytes are not an empty collection.
+ *   - parsed                      → `{ ok: true,  value: parsed }`
+ *
+ * `value` is always populated so an `ok`-indifferent caller can ignore the flag and
+ * behave exactly like `readJSONFile` — which is how `readJSONFile` is implemented.
+ *
+ * Generalizes the local `{ ok, list }` precedent in
+ * `services/mediaAssetIndex/db.js#readVideoHistoryStrict`, written because "corrupt
+ * history" reading as "no videos exist" would have pruned every still-on-disk video
+ * from the index. Same bug class, shared helper (#2726).
+ *
+ * @param {string} filePath - Path to JSON file
+ * @param {*} defaultValue - Value returned whenever the file yields no parsed value
+ * @param {Object} options - Options
+ * @param {boolean} [options.allowArray=true] - Allow array JSON
+ * @param {boolean} [options.logError=true] - Log read/parse errors
+ * @returns {Promise<{ ok: boolean, value: * }>}
+ *
+ * @example
+ * const { ok, value } = await readJSONFileStrict('./sessions.json', { sessions: [] });
+ * if (!ok) throw new Error('sessions unreadable'); // never report a fake 0
+ */
+export async function readJSONFileStrict(filePath, defaultValue = null, { allowArray = true, logError = true } = {}) {
   let content;
   try {
     content = await readFile(filePath, 'utf-8');
   } catch (err) {
-    // ENOENT = file doesn't exist, return default silently
+    // ENOENT = file doesn't exist → a trustworthy "nothing here yet", silently.
     if (err.code === 'ENOENT') {
-      return defaultValue;
+      return { ok: true, value: defaultValue };
     }
-    // Log other I/O errors if requested
     if (logError) {
       console.warn(`Failed to read file ${filePath}: ${err.message}`);
     }
-    return defaultValue;
+    return { ok: false, value: defaultValue };
   }
-  return safeJSONParse(content, defaultValue, { allowArray, logError, context: filePath });
+
+  // Mirror safeJSONParse's noisy-output affordance BEFORE delegating: it keys the
+  // extraction off `Array.isArray(defaultValue)`, and the sentinel we pass as its
+  // fallback below is not an array — so an array-defaulted caller (e.g. pm2 jlist
+  // with ANSI codes) would silently lose the extraction if we left it to that call.
+  //
+  // Deliberately NOT via `extractJSONArray`: it returns a literal '[]' when the text
+  // holds no array at all, which would parse cleanly and report `ok: true` — forging
+  // a trustworthy empty out of unreadable bytes, the exact lie this function exists
+  // to prevent. Only a real find rewrites `text`; otherwise the parse below fails and
+  // the read is correctly reported as untrustworthy.
+  let text = content;
+  if (allowArray && Array.isArray(defaultValue) && text && !text.trim().startsWith('[')) {
+    const arrayStart = findJSONArrayStart(text);
+    if (arrayStart >= 0) text = text.slice(arrayStart);
+  }
+
+  const parsed = safeJSONParse(text, PARSE_FAILED, { allowArray, logError, context: filePath });
+  if (parsed === PARSE_FAILED) return { ok: false, value: defaultValue };
+
+  // An array `defaultValue` is the caller declaring "I expect a list" — every such
+  // caller in-tree goes straight to `.filter`/`.find`/`.findIndex` on the result. A
+  // parsed object root therefore isn't a usable read: swallowing callers must still
+  // get their list back (a hand-edited or legacy-shaped file used to degrade to `[]`
+  // here, via the manufactured-'[]' path above, and would now TypeError instead), and
+  // a strict caller must refuse to count a shape it cannot count.
+  if (allowArray && Array.isArray(defaultValue) && !Array.isArray(parsed)) {
+    if (logError) {
+      console.warn(`Expected a JSON array in ${filePath}, got ${parsed === null ? 'null' : typeof parsed}`);
+    }
+    return { ok: false, value: defaultValue };
+  }
+
+  return { ok: true, value: parsed };
+}
+
+/**
+ * Read a JSON file safely with validation and default fallback.
+ * Combines file reading with safe JSON parsing.
+ *
+ * By default this SWALLOWS every failure — a missing file, an unreadable one, and
+ * corrupt JSON all return `defaultValue`. That is the right shape for config-ish
+ * reads with a sensible fallback, and is the long-standing behavior of every
+ * existing caller.
+ *
+ * It is the WRONG shape when the value is counted or shown to the user, because a
+ * fake empty then reads as fact ("0 sessions logged" when the truth is "we could not
+ * read your sessions"). Those callers pass `{ strict: true }` to convert an
+ * untrustworthy read into a throw, or use `readJSONFileStrict` for the `{ ok, value }`
+ * pair directly.
+ *
+ * @param {string} filePath - Path to JSON file
+ * @param {*} defaultValue - Default value if file doesn't exist or is invalid
+ * @param {Object} options - Options
+ * @param {boolean} [options.allowArray=true] - Allow array JSON
+ * @param {boolean} [options.logError=true] - Log errors
+ * @param {boolean} [options.strict=false] - Throw instead of returning `defaultValue`
+ *   when the file exists but could not be read or parsed. A genuinely absent file
+ *   (ENOENT) still returns `defaultValue` — absent is a trustworthy empty.
+ * @returns {Promise<*>} Parsed JSON or default value
+ * @throws {Error} Only when `strict` and the file is present-but-unreadable/corrupt
+ *
+ * @example
+ * const config = await readJSONFile('./config.json', { port: 3000 });
+ * const items = await readJSONFile('./items.json', []);
+ * const real = await readJSONFile('./sessions.json', [], { strict: true }); // throws if corrupt
+ */
+export async function readJSONFile(filePath, defaultValue = null, { allowArray = true, logError = true, strict = false } = {}) {
+  const { ok, value } = await readJSONFileStrict(filePath, defaultValue, { allowArray, logError });
+  if (!ok && strict) {
+    throw new Error(`Unreadable JSON file: ${filePath}`);
+  }
+  return value;
 }
 
 /**

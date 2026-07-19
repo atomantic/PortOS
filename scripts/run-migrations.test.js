@@ -110,6 +110,158 @@ export const md5 = (s) => s;
   });
 });
 
+describe('runMigrations purge-migration guard (#2770)', () => {
+  let rootDir;
+  let dataDir;
+  let migrationsDir;
+  let appliedFile;
+  let warnSpy;
+  let logSpy;
+
+  // A purge migration that identifies its target by PRESENCE: it deletes a
+  // bucket from a data file every time up() runs. If the runner reran it after
+  // the applied-list was lost, it would destroy legitimately-earned data.
+  const PURGE_FIXTURE = `
+import { readFile, writeFile } from 'fs/promises';
+import { join } from 'path';
+export default {
+  purge: true,
+  async up({ rootDir }) {
+    const path = join(rootDir, 'data', 'learning.json');
+    const raw = await readFile(path, 'utf-8').catch(() => null);
+    if (raw == null) return { purged: 0 };
+    const data = JSON.parse(raw);
+    const had = data.bucket !== undefined;
+    delete data.bucket;
+    await writeFile(path, JSON.stringify(data));
+    return { purged: had ? 1 : 0 };
+  }
+};
+`;
+
+  beforeEach(() => {
+    rootDir = mkdtempSync(join(tmpdir(), 'run-migrations-purge-'));
+    dataDir = join(rootDir, 'data');
+    migrationsDir = join(rootDir, 'migrations');
+    mkdirSync(dataDir, { recursive: true });
+    mkdirSync(migrationsDir, { recursive: true });
+    appliedFile = join(dataDir, 'migrations.applied.json');
+    writeFileSync(join(migrationsDir, '197-purge.js'), PURGE_FIXTURE);
+
+    warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    rmSync(rootDir, { recursive: true, force: true });
+    warnSpy.mockRestore();
+    logSpy.mockRestore();
+  });
+
+  const seedLearning = (data) =>
+    writeFileSync(join(dataDir, 'learning.json'), JSON.stringify(data));
+  const readLearning = () =>
+    JSON.parse(readFileSync(join(dataDir, 'learning.json'), 'utf-8'));
+
+  it('runs a purge migration normally when the applied-list has prior content', async () => {
+    // The healthy upgrade path: an install with earlier migrations recorded runs
+    // the purge for the first time and it DOES purge the poisoned bucket.
+    writeFileSync(appliedFile, JSON.stringify(['000-earlier.js'], null, 2) + '\n');
+    seedLearning({ bucket: { poisoned: true }, keep: 1 });
+
+    const ran = await runMigrations({ rootDir, migrationsDir });
+
+    expect(ran).toBe(1);
+    expect(readLearning()).toEqual({ keep: 1 }); // bucket purged
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toContain('197-purge.js');
+  });
+
+  it('does NOT rerun a purge migration when the applied-list was lost — post-fix data survives', async () => {
+    // The bug: applied-list deleted, learning.json holds ONLY post-fix runs.
+    // A destructive rerun would delete the legitimately-earned bucket.
+    expect(existsSync(appliedFile)).toBe(false);
+    seedLearning({ bucket: { legitPostFixRuns: 12 }, keep: 1 });
+
+    const ran = await runMigrations({ rootDir, migrationsDir });
+
+    expect(ran).toBe(0); // recorded-as-applied without executing
+    // The earned bucket is untouched — NOT purged.
+    expect(readLearning()).toEqual({ bucket: { legitPostFixRuns: 12 }, keep: 1 });
+    // Still recorded so a later boot with a healthy ledger won't rerun it either.
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['197-purge.js']);
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Skipping purge migration'));
+  });
+
+  it('does NOT rerun a purge migration when the applied-list was corrupt-rebuilt', async () => {
+    writeFileSync(appliedFile, '{ truncated'); // corrupt → rebuilt from []
+    seedLearning({ bucket: { legitPostFixRuns: 5 }, keep: 2 });
+
+    const ran = await runMigrations({ rootDir, migrationsDir });
+
+    expect(ran).toBe(0);
+    expect(readLearning()).toEqual({ bucket: { legitPostFixRuns: 5 }, keep: 2 });
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['197-purge.js']);
+  });
+
+  it('records a purge migration as applied on a fresh install (nothing to purge)', async () => {
+    // No learning.json at all — the empty-ledger skip is harmless and still marks
+    // it applied so it never fires destructively later.
+    const ran = await runMigrations({ rootDir, migrationsDir });
+
+    expect(ran).toBe(0);
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toEqual(['197-purge.js']);
+  });
+
+  it('still runs non-purge migrations when the applied-list starts empty', async () => {
+    // Only purge-flagged migrations are held back on an empty ledger — ordinary
+    // idempotent migrations must still run on a fresh/rebuilt install.
+    writeFileSync(join(migrationsDir, '001-normal.js'), `
+import { writeFileSync } from 'fs';
+import { join } from 'path';
+export default {
+  async up({ rootDir }) { writeFileSync(join(rootDir, 'data', 'normal-marker.txt'), 'ran'); }
+};
+`);
+
+    const ran = await runMigrations({ rootDir, migrationsDir });
+
+    expect(ran).toBe(1); // the normal one ran; the purge one was skip-recorded
+    expect(existsSync(join(dataDir, 'normal-marker.txt'))).toBe(true);
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8')).sort())
+      .toEqual(['001-normal.js', '197-purge.js']);
+  });
+
+  it('disarms purge migrations even when an earlier migration aborts the rebuilt-empty run', async () => {
+    // The re-arm hole: a rebuilt-from-empty run that throws BEFORE reaching the
+    // purge migration persists a partial ledger. The next boot's ledger no
+    // longer "starts empty" — so unless the purge was disarmed up front, it
+    // would then execute destructively against the rebuilt install.
+    // Throws on its first execution only (marker-gated, since the module cache
+    // would defeat rewriting the file between runs in-process).
+    writeFileSync(join(migrationsDir, '001-throws.js'), `
+import { existsSync, writeFileSync } from 'fs';
+import { join } from 'path';
+export default {
+  async up({ rootDir }) {
+    const marker = join(rootDir, 'data', 'throw-once.txt');
+    if (!existsSync(marker)) { writeFileSync(marker, '1'); throw new Error('repair me and reboot'); }
+  }
+};
+`);
+    seedLearning({ bucket: { legitPostFixRuns: 7 }, keep: 3 });
+
+    // Run 1: ledger starts empty, 001 throws and aborts the run.
+    await expect(runMigrations({ rootDir, migrationsDir })).rejects.toThrow('repair me');
+    // The purge was already skip-recorded before the loop reached 001.
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toContain('197-purge.js');
+
+    // "Reboot": the ledger is now non-empty, but the purge must NOT fire — it
+    // was recorded as applied during the aborted run.
+    await runMigrations({ rootDir, migrationsDir });
+    expect(readLearning()).toEqual({ bucket: { legitPostFixRuns: 7 }, keep: 3 });
+  });
+});
+
 describe('runMigrations worktree backstop (#1947)', () => {
   let baseDir;
   let migrationsDir;

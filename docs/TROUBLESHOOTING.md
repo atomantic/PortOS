@@ -378,6 +378,12 @@ to protect and largely stops firing.
   free — so an oversubscribed run can't swap-thrash the box into a reboot. If a
   run won't start with a "not enough free memory" error, stop other model servers
   or close apps and retry.
+- The frozen base is **never auto-trained as unquantized bf16** (issue #1321):
+  the top tier is now 8-bit QLoRA even on a ≥96 GB box. Auto-bf16-9B was both
+  pathologically slow and the exact config that panicked this machine three
+  times, so it's opt-in only — a run that genuinely wants it sets **Base quant →
+  16** in the training panel (or `LORA_TRAIN_MAX_QUANT_BITS=8`/`=4` still forces
+  an even lighter ceiling install-wide).
 
 **What to do / how to investigate**: see the full incident record and checklist in
 [`docs/research/2026-06-13-mflux-training-watchdog-panic.md`](research/2026-06-13-mflux-training-watchdog-panic.md).

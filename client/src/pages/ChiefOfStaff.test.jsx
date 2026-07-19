@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
 import { MemoryRouter, Routes, Route } from 'react-router-dom';
 
 // Regression coverage for #2519 — the page-level Force Evaluate handler must
@@ -110,6 +110,140 @@ describe('ChiefOfStaff handleForceEvaluate', () => {
     await waitFor(() => expect(screen.queryAllByText('Evaluating tasks...').length).toBeGreaterThan(0));
     // Must pass { silent: true } so the custom catch is the only error toast.
     expect(api.forceCosEvaluate).toHaveBeenCalledWith({ silent: true });
+  });
+});
+
+// The Learning stat card's skipped-count label used to sit in a `flex` row
+// beside the success-rate value. Flex items default to min-width:auto, so on a
+// narrow (mobile) card the label could not shrink below its min-content width
+// and rendered outside the card's border (measured: 26px past it at 390px).
+//
+// jsdom does no layout, so these guards pin the *structure* that keeps it in.
+// All three legs are load-bearing — drop any one and the label spills again:
+//   1. the label is its own block under the value, not a flex-row sibling;
+//   2. the label truncates (its width is unbounded);
+//   3. the text column keeps `min-w-0` — truncate implies white-space:nowrap,
+//      which makes the label's min-content its FULL width, so a column at
+//      min-width:auto still can't shrink below it.
+// Plus two value-side branches that are easy to break while "tidying": the
+// value must NOT truncate (it would clip "No data"), and must use `!= null`
+// (truthiness would render a real 0% as the empty state).
+describe('ChiefOfStaff Learning card skipped label', () => {
+  const summaryWithSkipped = {
+    overallSuccessRate: 84,
+    skipped: 3,
+    status: 'warning',
+    totalCompleted: 20,
+  };
+
+  const renderAt = (tab) => render(
+    <MemoryRouter initialEntries={[`/cos/${tab}`]}>
+      <Routes>
+        <Route path="/cos/:tab" element={<ChiefOfStaff />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  // The page renders more than one Learning card (the compact card in the CoS
+  // panel, plus the `mini` card in the ascii-mode stats bar — Tailwind-`hidden`,
+  // but jsdom applies no CSS so it is still queryable). Never index into a
+  // document-order match list: on the pre-fix markup the compact card read
+  // "(3 skipped)", so an exact-text lookup silently drifted to the mini card and
+  // asserted against the wrong element. Scope to each card and hold every
+  // variant to the contract instead.
+  const learningCards = async () => {
+    const cards = await screen.findAllByRole('button', { name: /Learning/ });
+    expect(cards.length).toBeGreaterThan(0);
+    return cards;
+  };
+
+  it('stacks the skipped label under the value instead of in a flex row', async () => {
+    api.getCosLearningSummary.mockResolvedValue(summaryWithSkipped);
+    renderAt('config');
+
+    for (const card of await learningCards()) {
+      const value = within(card).getByText('84%');
+      const label = within(card).getByText(/skipped/);
+      // The value element holds the rate and nothing else — a parenthetical
+      // tucked beside it inside one flex row is what overflowed.
+      expect(value.textContent).toBe('84%');
+      // Stacked in the card's text column: same parent, which must not lay its
+      // children out as a row. Exact token match — the column legitimately
+      // carries `flex-1` (a flex-child property, not `display:flex`), which
+      // must not trip this guard.
+      expect(label.parentElement).toBe(value.parentElement);
+      expect(value.parentElement.classList.contains('flex')).toBe(false);
+    }
+  });
+
+  it('truncates the skipped label so it clips inside the card', async () => {
+    api.getCosLearningSummary.mockResolvedValue(summaryWithSkipped);
+    renderAt('config');
+
+    for (const card of await learningCards()) {
+      expect(within(card).getByText(/skipped/).classList.contains('truncate')).toBe(true);
+    }
+  });
+
+  it('keeps the compact card\'s text column shrinkable so the truncate can bite', async () => {
+    // Third leg of the containment contract: `truncate` sets white-space:nowrap,
+    // which makes the label's min-content its FULL width. In the compact card
+    // that column is a flex item of the button's `flex items-center gap-2`, so
+    // without `min-w-0` it can't shrink below that min-content and the whole
+    // column spills past the border again — the exact reported bug, with the
+    // truncate still present and every other assertion here still green.
+    api.getCosLearningSummary.mockResolvedValue(summaryWithSkipped);
+    renderAt('config');
+
+    // Scope to the compact cards: the ascii `mini` card's label parent is the
+    // <button> itself (not a flex-item column), so this leg doesn't apply there.
+    const columns = (await learningCards())
+      .map(c => within(c).getByText(/skipped/).parentElement)
+      .filter(col => col.classList.contains('flex-1'));
+    expect(columns.length).toBeGreaterThan(0);
+    for (const col of columns) {
+      expect(col.classList.contains('min-w-0')).toBe(true);
+    }
+  });
+
+  it('renders a legitimate 0% rate as "0%", not the empty state', async () => {
+    // `overallSuccessRate != null` (not truthiness) is what keeps a total-failure
+    // 0% from disguising itself as "No data" — the highest-signal state reading
+    // as the empty one. Pins the branch against a future truthiness collapse.
+    api.getCosLearningSummary.mockResolvedValue({ overallSuccessRate: 0, skipped: 0, status: 'critical', totalCompleted: 12 });
+    renderAt('config');
+
+    for (const card of await learningCards()) {
+      expect(within(card).getByText('0%')).toBeInTheDocument();
+      expect(within(card).queryByText('No data')).not.toBeInTheDocument();
+      expect(within(card).queryByText('—')).not.toBeInTheDocument();
+    }
+  });
+
+  it('leaves the value wrappable so "No data" is not clipped', async () => {
+    // `truncate` implies white-space:nowrap. The label needs it (it can be
+    // arbitrarily wide); the value must NOT have it — the widest value,
+    // "No data", is wider than the compact card's ~45px text column and would
+    // render clipped as "No dat…" instead of wrapping.
+    api.getCosLearningSummary.mockResolvedValue({ overallSuccessRate: null, skipped: 0, status: 'unknown', totalCompleted: 0 });
+    renderAt('config');
+
+    // Only the compact card spells the empty state "No data" — the ascii `mini`
+    // card renders an em dash — so scope to the card that actually shows it.
+    const cards = await learningCards();
+    const values = cards.map(c => within(c).queryByText('No data')).filter(Boolean);
+    expect(values.length).toBeGreaterThan(0);
+    for (const value of values) {
+      expect(value.classList.contains('truncate')).toBe(false);
+    }
+  });
+
+  it('omits the skipped label entirely when nothing was skipped', async () => {
+    api.getCosLearningSummary.mockResolvedValue({ ...summaryWithSkipped, skipped: 0, status: 'good' });
+    renderAt('config');
+
+    expect(await screen.findAllByText('84%')).not.toHaveLength(0);
+    expect(screen.queryByText(/skipped/)).not.toBeInTheDocument();
   });
 });
 

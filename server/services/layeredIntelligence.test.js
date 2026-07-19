@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, readFile, writeFile, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { extractTaskType } from './taskLearning/store.js';
 import {
   defaultLayeredIntelligenceConfig,
   getEffectiveConfig,
@@ -28,8 +29,30 @@ import {
   filerForTracker,
   trackerSupportsPause,
   buildPrompt,
+  LI_PROPOSAL_PLAYBOOK,
   deriveOutcome,
   computeOutcomesReport,
+  computeSelfEvalSummary,
+  summarizeOutcomeStats,
+  readLiTaskMetrics,
+  LI_TASK_TYPE,
+  LI_SCHEDULED_TASK_TYPE,
+  SELF_EVAL_MAX_SUPPRESSED_LISTED,
+  describeSuppressedIssue,
+  suppressedIssueSlug,
+  rejectionReasonBySlug,
+  LI_DEGRADED_SUCCESS_THRESHOLD,
+  LI_DEGRADED_MIN_SAMPLE,
+  computeScopeAwareness,
+  computeExecutionByDomain,
+  computeProposalExecutionAwareness,
+  computeCrossReferenceAnalysis,
+  computeHandoffRouting,
+  PROPOSAL_EXECUTION_MIN_SAMPLE,
+  SCOPE_AVOID_SUCCESS_THRESHOLD,
+  SCOPE_PREFER_SUCCESS_THRESHOLD,
+  SCOPE_AWARENESS_MIN_SAMPLE,
+  SCOPE_AWARENESS_MAX_PER_LIST,
   PROPOSAL_OUTCOMES,
   extractPlanSlugs,
   appendProposalToPlan,
@@ -40,6 +63,7 @@ import {
   getTrustShellSources,
   normalizeIssueState,
   listForgeIssues,
+  extractClosingComment,
   listBlockingIssues,
   fileProposalToForge,
   ensureForgeLabels,
@@ -54,7 +78,22 @@ import {
   LI_LABEL,
   LI_BLOCKING_LABEL,
   LI_JIRA_BLOCKING_LABEL,
-  LI_JOB_ID
+  LI_JOB_ID,
+  normalizeIssueLabels,
+  extractIssuePriority,
+  extractPlannedPlanItems,
+  formatPlannedWork,
+  gatherPlannedWork,
+  plannedWorkUnavailable,
+  plannedWorkJql,
+  PLANNED_WORK_LABEL,
+  PLANNED_WORK_MAX_ITEMS,
+  PLANNED_WORK_NONE,
+  PLANNED_WORK_GUIDANCE,
+  PLANNED_WORK_UNAVAILABLE_PREFIX,
+  hasPlannedWorkListing,
+  LOW_MERGE_RATE_THRESHOLD,
+  LOW_MERGE_RATE_MIN_SAMPLE
 } from './layeredIntelligence.js';
 
 describe('defaultLayeredIntelligenceConfig', () => {
@@ -87,6 +126,11 @@ describe('defaultLayeredIntelligenceConfig', () => {
   it('defaults the outcomes feedback source on for PortOS, off for managed apps', () => {
     expect(defaultLayeredIntelligenceConfig(false).sources.outcomes).toBe(false);
     expect(defaultLayeredIntelligenceConfig(true).sources.outcomes).toBe(true);
+  });
+
+  it('defaults the selfEval source on for PortOS, off for managed apps (#2700)', () => {
+    expect(defaultLayeredIntelligenceConfig(false).sources.selfEval).toBe(false);
+    expect(defaultLayeredIntelligenceConfig(true).sources.selfEval).toBe(true);
   });
 
   it('defaults cosMetrics on for PortOS, off for managed apps (it is a PortOS-side agent-perf metric)', () => {
@@ -379,6 +423,259 @@ describe('buildHandoffTask', () => {
     expect(jira).toContain('PROJ-7');
     expect(jira).toContain('change X to Y'); // carries the proposal body
   });
+
+  it('stamps the proposal identity + domain for per-domain execution tracking when recordExecution (#2765)', () => {
+    const t = buildHandoffTask({ app, proposal: { ...proposal, scope: 'loop-meta' }, issueRef: 42, recordExecution: true });
+    expect(t.liProposal).toEqual({ appId: 'app-1', slug: 'fix-typo', scope: 'loop-meta' });
+  });
+
+  it('omits the execution marker when outcomes tracking is off (recordExecution false/absent) (#2765)', () => {
+    // Honors the `outcomes` source toggle: a hand-off filed while tracking is off must
+    // not carry a marker, or recordProposalExecution's fallback would create an orphan
+    // outcome row the toggle says isn't tracked (codex P2).
+    expect(buildHandoffTask({ app, proposal: { ...proposal, scope: 'loop-meta' }, issueRef: 42, recordExecution: false }).liProposal).toBeUndefined();
+    expect(buildHandoffTask({ app, proposal: { ...proposal, scope: 'loop-meta' }, issueRef: 42 }).liProposal).toBeUndefined();
+  });
+});
+
+describe('computeExecutionByDomain (#2765)', () => {
+  it('groups executed proposals by their scope and computes per-domain success rate', () => {
+    const byDomain = computeExecutionByDomain([
+      { scope: 'loop-meta', executionOutcome: 'success' },
+      { scope: 'loop-meta', executionOutcome: 'failure' },
+      { scope: 'app-improvement', executionOutcome: 'success' }
+    ]);
+    // The loop-meta failure carries no failureCategory, so it lands in `unclassified`
+    // rather than as a diagnosis; app-improvement had no failure at all.
+    expect(byDomain['loop-meta']).toEqual({
+      completed: 2, succeeded: 1, successRate: 50,
+      failureSummary: { entries: [], unknown: 0, unclassified: 1, diagnosed: 0, total: 1 }
+    });
+    expect(byDomain['app-improvement']).toEqual({
+      completed: 1, succeeded: 1, successRate: 100,
+      failureSummary: { entries: [], unknown: 0, unclassified: 0, diagnosed: 0, total: 0 }
+    });
+  });
+
+  it('buckets a "__proto__" scope as data instead of rewriting the prototype', () => {
+    const byDomain = computeExecutionByDomain([
+      { scope: '__proto__', executionOutcome: 'success' }
+    ]);
+    // A plain {} would swallow this key into the prototype: absent from
+    // Object.entries yet truthy on lookup — inconsistent gate-vs-prompt views.
+    expect(Object.keys(byDomain)).toEqual(['__proto__']);
+    expect(byDomain['__proto__'].completed).toBe(1);
+  });
+
+  it('carries the dominant per-domain failure causes in failureSummary (#2764 §3)', () => {
+    const byDomain = computeExecutionByDomain([
+      { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' },
+      { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' },
+      { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'execution' },
+      { scope: 'loop-meta', executionOutcome: 'success' }
+    ]);
+    expect(byDomain['loop-meta'].failureSummary).toEqual({
+      entries: [{ category: 'planning', count: 2 }, { category: 'execution', count: 1 }],
+      unknown: 0, unclassified: 0, diagnosed: 3, total: 3
+    });
+  });
+
+  it('ignores records with no executionOutcome or no scope', () => {
+    const byDomain = computeExecutionByDomain([
+      { scope: 'loop-meta', executionOutcome: null },      // filed but never executed
+      { scope: null, executionOutcome: 'success' },        // executed but domain unknown
+      { executionOutcome: 'success' },                     // no scope key
+      'nonsense',
+      { scope: 'app-data-gap', executionOutcome: 'success' }
+    ]);
+    expect(Object.keys(byDomain)).toEqual(['app-data-gap']);
+  });
+
+  it('returns an empty map for a non-array / empty input', () => {
+    expect(computeExecutionByDomain()).toEqual({});
+    expect(computeExecutionByDomain(null)).toEqual({});
+    expect(computeExecutionByDomain([])).toEqual({});
+  });
+});
+
+describe('computeProposalExecutionAwareness (#2765)', () => {
+  const execRecords = (scope, successes, failures) => [
+    ...Array.from({ length: successes }, () => ({ scope, executionOutcome: 'success' })),
+    ...Array.from({ length: failures }, () => ({ scope, executionOutcome: 'failure' }))
+  ];
+
+  it('returns "" until a domain clears the sample floor', () => {
+    // One execution is below PROPOSAL_EXECUTION_MIN_SAMPLE (2) — no list yet.
+    expect(computeProposalExecutionAwareness({ outcomes: execRecords('loop-meta', 0, 1) })).toBe('');
+    expect(computeProposalExecutionAwareness({ outcomes: [] })).toBe('');
+    expect(computeProposalExecutionAwareness()).toBe('');
+  });
+
+  it('lists a low-execution domain under AVOID and a high one under PREFER', () => {
+    const out = computeProposalExecutionAwareness({
+      outcomes: [
+        ...execRecords('app-improvement', 0, 3), // 0% → avoid
+        ...execRecords('loop-meta', 3, 0)         // 100% → prefer
+      ]
+    });
+    expect(out).toContain('LOW-EXECUTION proposal domains');
+    expect(out).toContain('app-improvement');
+    expect(out).toContain('HIGH-EXECUTION proposal domains');
+    expect(out).toContain('loop-meta');
+    // No "directional context only" hedge — this is a true per-proposal record.
+    expect(out).not.toContain('directional');
+    expect(out).not.toMatch(/don't map 1:1|do not map 1:1/);
+  });
+
+  it('leaves a mid-rate domain (>=avoid, <prefer) off both lists', () => {
+    // 2/3 ≈ 67%: above the 50% avoid line, below the 75% prefer line.
+    expect(computeProposalExecutionAwareness({ outcomes: execRecords('loop-meta', 2, 1) })).toBe('');
+    expect(PROPOSAL_EXECUTION_MIN_SAMPLE).toBe(2);
+  });
+
+  it('names the dominant failure cause on a low-execution AVOID line (#2764 §3)', () => {
+    const out = computeProposalExecutionAwareness({
+      outcomes: [
+        { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' },
+        { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' },
+        { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'execution' }
+      ]
+    });
+    expect(out).toContain('LOW-EXECUTION proposal domains');
+    expect(out).toContain('loop-meta');
+    // The glossed dominant cause is appended to the avoid line, commonest first.
+    expect(out).toContain('failing mostly on');
+    expect(out).toContain('the task was under-defined or already done (no correct change to make) (2)');
+  });
+
+  it('omits the cause clause when no failure carries a diagnosis', () => {
+    // All failures are unclassified (no failureCategory), so there is no cause to name.
+    const out = computeProposalExecutionAwareness({ outcomes: execRecords('app-improvement', 0, 3) });
+    expect(out).toContain('app-improvement');
+    expect(out).not.toContain('failing mostly on');
+  });
+});
+
+describe('computeCrossReferenceAnalysis (#2764 §3)', () => {
+  it('surfaces a domain that merges well but executes poorly', () => {
+    const out = computeCrossReferenceAnalysis({
+      outcomes: [
+        // loop-meta: 2 of 4 resolved proposals merged (50%)...
+        { scope: 'loop-meta', outcome: 'merged' },
+        { scope: 'loop-meta', outcome: 'merged' },
+        { scope: 'loop-meta', outcome: 'rejected' },
+        { scope: 'loop-meta', outcome: 'abandoned' },
+        // ...but its hand-offs fail: planning 3, execution 1 (planning dominant)
+        { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' },
+        { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' },
+        { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' },
+        { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'execution' }
+      ]
+    });
+    expect(out).toContain('PROPOSES well but EXECUTES poorly');
+    expect(out).toContain('loop-meta: proposals merge at 50% (2/4) but hand-offs here fail on planning (3 of 4)');
+  });
+
+  it('excludes a domain with no merged proposal (proposes poorly too)', () => {
+    // Domain fails execution but never merged — liProposalExecution already covers it,
+    // so the cross-reference (which is about the CONTRAST) stays silent.
+    expect(computeCrossReferenceAnalysis({
+      outcomes: [
+        { scope: 'loop-meta', outcome: 'rejected' },
+        { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' }
+      ]
+    })).toBe('');
+  });
+
+  it('excludes a domain whose failures are all undiagnosed', () => {
+    // Merges well, but the failed hand-offs carry no recognized cause — nothing to
+    // cross-reference, so no line (unknown/unclassified are not findings).
+    expect(computeCrossReferenceAnalysis({
+      outcomes: [
+        { scope: 'loop-meta', outcome: 'merged' },
+        { scope: 'loop-meta', executionOutcome: 'failure' } // unclassified
+      ]
+    })).toBe('');
+  });
+
+  it('returns "" for empty / non-array input', () => {
+    expect(computeCrossReferenceAnalysis({ outcomes: [] })).toBe('');
+    expect(computeCrossReferenceAnalysis({ outcomes: null })).toBe('');
+    expect(computeCrossReferenceAnalysis()).toBe('');
+  });
+});
+
+describe('computeHandoffRouting (#2764 §4)', () => {
+  const execRecords = (scope, successes, failures, extraFail = {}) => [
+    ...Array.from({ length: successes }, () => ({ scope, executionOutcome: 'success' })),
+    ...Array.from({ length: failures }, () => ({ scope, executionOutcome: 'failure', ...extraFail }))
+  ];
+
+  it('allows the hand-off when the proposal has no scope (cannot judge)', () => {
+    expect(computeHandoffRouting({ proposal: {}, outcomes: [] })).toEqual({ handoff: true, reason: null });
+    expect(computeHandoffRouting({ proposal: { scope: '  ' }, outcomes: [] })).toEqual({ handoff: true, reason: null });
+    expect(computeHandoffRouting()).toEqual({ handoff: true, reason: null });
+  });
+
+  it('allows the hand-off for an unknown domain (no execution history)', () => {
+    expect(computeHandoffRouting({ proposal: { scope: 'loop-meta' }, outcomes: [] }))
+      .toEqual({ handoff: true, reason: null });
+  });
+
+  it('allows the hand-off below the sample floor even at 0%', () => {
+    // One failed execution is below PROPOSAL_EXECUTION_MIN_SAMPLE (2) — not evidence.
+    expect(computeHandoffRouting({ proposal: { scope: 'loop-meta' }, outcomes: execRecords('loop-meta', 0, 1) }))
+      .toEqual({ handoff: true, reason: null });
+  });
+
+  it('allows the hand-off when the rate is at/above the avoid threshold', () => {
+    // 2/3 ≈ 67% is at/above the 50% avoid line → not chronically failing.
+    expect(computeHandoffRouting({ proposal: { scope: 'loop-meta' }, outcomes: execRecords('loop-meta', 2, 1) }))
+      .toEqual({ handoff: true, reason: null });
+  });
+
+  it('suppresses the hand-off for a chronically-failing domain and names domain+rate+cause', () => {
+    const routing = computeHandoffRouting({
+      proposal: { scope: 'loop-meta' },
+      outcomes: [
+        { scope: 'loop-meta', executionOutcome: 'success' },              // 1 success
+        { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' },
+        { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' }  // 2 failures → 33%
+      ]
+    });
+    expect(routing.handoff).toBe(false);
+    expect(routing.domain).toBe('loop-meta');
+    expect(routing.rate).toBe(33);
+    expect(routing.n).toBe(3);
+    expect(routing.reason).toContain('loop-meta');
+    expect(routing.reason).toContain('33%');
+    expect(routing.reason).toContain('over 3 executed');
+    expect(routing.reason).toContain('filing for human review instead of auto-hand-off');
+    // Dominant cause is glossed and appended in parentheses.
+    expect(routing.reason).toContain('failing mostly on');
+    expect(routing.reason).toContain('the task was under-defined or already done (no correct change to make) (2)');
+    // Agrees with the reasoner-facing avoid list on WHICH domains are chronically failing.
+    expect(computeProposalExecutionAwareness({ outcomes: [
+      { scope: 'loop-meta', executionOutcome: 'success' },
+      { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' },
+      { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' }
+    ] })).toContain('loop-meta');
+  });
+
+  it('suppresses with NO trailing cause clause when failures are purely undiagnosed', () => {
+    const routing = computeHandoffRouting({
+      proposal: { scope: 'app-improvement' },
+      outcomes: execRecords('app-improvement', 0, 3) // 0%, all unclassified
+    });
+    expect(routing.handoff).toBe(false);
+    expect(routing.domain).toBe('app-improvement');
+    expect(routing.rate).toBe(0);
+    expect(routing.n).toBe(3);
+    expect(routing.cause).toBe('');
+    expect(routing.reason).toContain('app-improvement');
+    expect(routing.reason).not.toContain('failing mostly on');
+    expect(routing.reason).not.toContain('(');
+  });
 });
 
 describe('resolveBlockOnIssue', () => {
@@ -422,15 +719,202 @@ describe('filerForTracker / trackerSupportsPause (dispatch)', () => {
   });
 });
 
+describe('computeScopeAwareness (#2760)', () => {
+  it('returns empty string when no scope clears the sample floor', () => {
+    // Both under SCOPE_AWARENESS_MIN_SAMPLE (3) → neither classified.
+    expect(computeScopeAwareness({ metricsByType: {
+      'plan-task': { lifetimeSuccessRate: 100, lifetimeCompleted: 2 },
+      'accessibility': { lifetimeSuccessRate: 0, lifetimeCompleted: 1 }
+    } })).toBe('');
+  });
+
+  it('returns empty string for an empty / missing map', () => {
+    expect(computeScopeAwareness({})).toBe('');
+    expect(computeScopeAwareness()).toBe('');
+    expect(computeScopeAwareness({ metricsByType: {} })).toBe('');
+  });
+
+  it('classifies a below-threshold scope with enough runs as AVOID', () => {
+    const out = computeScopeAwareness({ metricsByType: {
+      'self-improve:layered-intelligence': { lifetimeSuccessRate: 0, lifetimeCompleted: 9 }
+    } });
+    expect(out).toContain('LOW-COMPLETION');
+    expect(out).toContain('self-improve:layered-intelligence: 0% completed over 9 runs');
+    expect(out).not.toContain('HIGH-COMPLETION');
+  });
+
+  it('classifies an at/above-threshold scope with enough runs as PREFER', () => {
+    const out = computeScopeAwareness({ metricsByType: {
+      'plan-task': { lifetimeSuccessRate: 100, lifetimeCompleted: 10 }
+    } });
+    expect(out).toContain('HIGH-COMPLETION');
+    expect(out).toContain('plan-task: 100% completed over 10 runs');
+    expect(out).not.toContain('LOW-COMPLETION');
+  });
+
+  it('leaves a mid-band scope (between avoid and prefer) unclassified', () => {
+    // 60% is >= AVOID (50) and < PREFER (75) → neither list.
+    expect(computeScopeAwareness({ metricsByType: {
+      'feature-ideas': { lifetimeSuccessRate: 60, lifetimeCompleted: 8 }
+    } })).toBe('');
+  });
+
+  it('ignores a never-run scope (null rate) even with a high completed count artifact', () => {
+    expect(computeScopeAwareness({ metricsByType: {
+      'idle-review': { lifetimeSuccessRate: null, lifetimeCompleted: 12 }
+    } })).toBe('');
+  });
+
+  it('judges on the recency-windowed rate so a RECOVERED scope leaves avoid (#2760 dynamic adjustment)', () => {
+    // Lifetime is dragged to 10% by an old failure burst, but the recent window (>= the
+    // 5-sample floor) is all successes → the effective rate is high, so the scope must
+    // NOT be on the avoid list (and here clears PREFER). Proves self-clearing works off
+    // the windowed rate, which the near-permanent lifetime rate could never deliver.
+    // The rendered count matches the rate's basis: windowed rate → windowed count.
+    const out = computeScopeAwareness({ metricsByType: {
+      'branch-reconcile': { lifetimeSuccessRate: 10, lifetimeCompleted: 20, recentSuccessRate: 100, recentCompleted: 6 }
+    } });
+    expect(out).not.toContain('LOW-COMPLETION');
+    expect(out).toContain('HIGH-COMPLETION');
+    expect(out).toContain('branch-reconcile: 100% completed over 6 runs'); // windowed rate AND windowed count
+  });
+
+  it('judges on the windowed rate so a REGRESSED scope enters avoid despite a high lifetime rate', () => {
+    // Lifetime looks great (95%) but the recent window (>= floor) has collapsed → avoid.
+    const out = computeScopeAwareness({ metricsByType: {
+      'performance': { lifetimeSuccessRate: 95, lifetimeCompleted: 40, recentSuccessRate: 20, recentCompleted: 8 }
+    } });
+    expect(out).toContain('LOW-COMPLETION');
+    expect(out).toContain('performance: 20% completed over 8 runs'); // windowed rate AND windowed count
+    expect(out).not.toContain('HIGH-COMPLETION');
+  });
+
+  it('ignores a THIN recent window (below the sample floor) and lets lifetime govern (#2760)', () => {
+    // Only 1 recent run — below EFFECTIVE_RATE_MIN_WINDOW_SAMPLES (5) — so one noisy
+    // recent failure must NOT flip a lifetime-reliable scope to avoid; lifetime (95%)
+    // governs → PREFER, matching the scheduler's own effective-rate floor.
+    const out = computeScopeAwareness({ metricsByType: {
+      'plan-task': { lifetimeSuccessRate: 95, lifetimeCompleted: 40, recentSuccessRate: 0, recentCompleted: 1 }
+    } });
+    expect(out).toContain('HIGH-COMPLETION');
+    expect(out).toContain('plan-task: 95% completed over 40 runs'); // lifetime rate AND lifetime count
+    expect(out).not.toContain('LOW-COMPLETION');
+  });
+
+  it('falls back to the lifetime rate when the recency window is empty', () => {
+    // recentCompleted 0 / recentSuccessRate null → lifetime rate governs.
+    const out = computeScopeAwareness({ metricsByType: {
+      'plan-task': { lifetimeSuccessRate: 100, lifetimeCompleted: 10, recentSuccessRate: null, recentCompleted: 0 }
+    } });
+    expect(out).toContain('HIGH-COMPLETION');
+    expect(out).toContain('plan-task: 100% completed over 10 runs');
+  });
+
+  it('sorts AVOID worst-first and PREFER best-first', () => {
+    const out = computeScopeAwareness({ metricsByType: {
+      'branch-reconcile': { lifetimeSuccessRate: 20, lifetimeCompleted: 5 },
+      'accessibility': { lifetimeSuccessRate: 0, lifetimeCompleted: 4 },
+      'test-coverage': { lifetimeSuccessRate: 80, lifetimeCompleted: 5 },
+      'performance': { lifetimeSuccessRate: 100, lifetimeCompleted: 3 }
+    } });
+    // worst avoid (accessibility 0%) precedes the milder one (branch-reconcile 20%)
+    expect(out.indexOf('accessibility')).toBeLessThan(out.indexOf('branch-reconcile'));
+    // best prefer (performance 100%) precedes the milder one (test-coverage 80%)
+    expect(out.indexOf('performance')).toBeLessThan(out.indexOf('test-coverage'));
+    // AVOID section precedes PREFER section
+    expect(out.indexOf('LOW-COMPLETION')).toBeLessThan(out.indexOf('HIGH-COMPLETION'));
+  });
+
+  it('truncates a pathologically long task-type name (#2760 codex P2)', () => {
+    const longType = 'self-improve:mission-' + 'x'.repeat(200);
+    const out = computeScopeAwareness({ metricsByType: {
+      [longType]: { lifetimeSuccessRate: 0, lifetimeCompleted: 5 }
+    } });
+    expect(out).toContain('LOW-COMPLETION');
+    expect(out).not.toContain(longType); // full 200-char name never rendered verbatim
+    expect(out).toContain('…');           // truncation marker present
+  });
+
+  it('honors the exported thresholds at their exact boundaries', () => {
+    // exactly PREFER threshold → prefer; exactly AVOID threshold → neither (< is strict)
+    const atPrefer = computeScopeAwareness({ metricsByType: {
+      x: { lifetimeSuccessRate: SCOPE_PREFER_SUCCESS_THRESHOLD, lifetimeCompleted: SCOPE_AWARENESS_MIN_SAMPLE }
+    } });
+    expect(atPrefer).toContain('HIGH-COMPLETION');
+    const atAvoidBoundary = computeScopeAwareness({ metricsByType: {
+      x: { lifetimeSuccessRate: SCOPE_AVOID_SUCCESS_THRESHOLD, lifetimeCompleted: SCOPE_AWARENESS_MIN_SAMPLE }
+    } });
+    expect(atAvoidBoundary).toBe(''); // 50% is not < 50 and not >= 75
+  });
+});
+
 describe('buildPrompt', () => {
   const app = { name: 'TestApp' };
+
+  it('injects the scope-awareness block only when present, under its own heading (#2760)', () => {
+    const base = { app, isPortos: true, config: { allowedScopes: ['loop-meta'], rules: '' } };
+    const without = buildPrompt(base);
+    // Heading form: the always-on liPlaybook block legitimately references the block
+    // id in prose, so assert the block itself (its `### ` heading) is absent, not the
+    // bare token.
+    expect(without).not.toContain('### liScopeAwareness');
+    const withGuidance = buildPrompt({
+      ...base,
+      sources: { scopeGuidance: 'LOW-COMPLETION task types:\n- branch-reconcile: 0% completed over 4 runs' }
+    });
+    expect(withGuidance).toContain('### liScopeAwareness');
+    expect(withGuidance).toContain('branch-reconcile: 0% completed over 4 runs');
+    expect(withGuidance).toContain('completion rates for THIS install'); // honest framing (codex P1)
+    // rendered under its dedicated heading, never as a generic "### scopeGuidance" dump
+    expect(withGuidance).not.toContain('### scopeGuidance');
+  });
+
+  it('injects the per-proposal-domain execution block only when a report is passed (#2765)', () => {
+    const base = { app, isPortos: true, config: { allowedScopes: ['loop-meta'], rules: '' } };
+    expect(buildPrompt(base)).not.toContain('### liProposalExecution');
+    const withExec = buildPrompt({
+      ...base,
+      proposalExecutionReport: 'HIGH-EXECUTION proposal domains — LI reliably implements its own proposals here (at or above 75%):\n- loop-meta: LI implemented 100% of its own loop-meta proposals successfully over 3 executed'
+    });
+    expect(withExec).toContain('### liProposalExecution');
+    expect(withExec).toContain('loop-meta');
+    expect(withExec).toContain('DIRECT record'); // framed as authoritative, not directional
+  });
+
+  it('injects the cross-reference block only when a report is passed (#2764 §3)', () => {
+    const base = { app, isPortos: true, config: { allowedScopes: ['loop-meta'], rules: '' } };
+    expect(buildPrompt(base)).not.toContain('### liCrossReference');
+    const withXref = buildPrompt({
+      ...base,
+      crossReferenceReport: "Domains where LI PROPOSES well but EXECUTES poorly:\n- loop-meta: proposals merge at 50% (2/4) but hand-offs here fail on planning (3 of 4)"
+    });
+    expect(withXref).toContain('### liCrossReference');
+    expect(withXref).toContain('hand-offs here fail on planning (3 of 4)');
+  });
+
+  it('suppresses the scope-awareness block on a managed (non-PortOS) app (#2760 codex P2)', () => {
+    // Even if a stray scopeGuidance string reaches a managed app's sources, buildPrompt
+    // must not render it — the rates are this install's own CoS history, meaningless
+    // there. Defense-in-depth alongside gatherSources gating the derivation on isPortos.
+    const out = buildPrompt({
+      app, isPortos: false,
+      config: { allowedScopes: ['app-improvement'], rules: '' },
+      sources: { scopeGuidance: 'LOW-COMPLETION task types:\n- plan-task: 0% completed over 9 runs' }
+    });
+    expect(out).not.toContain('### liScopeAwareness');
+    expect(out).not.toContain('plan-task: 0% completed over 9 runs');
+  });
 
   it('only offers meta/self scopes on PortOS', () => {
     const nonPortos = buildPrompt({
       app, isPortos: false,
       config: { allowedScopes: ['app-improvement', 'app-data-gap', 'loop-meta'], rules: '' }
     });
-    expect(nonPortos).not.toContain('loop-meta'); // gated out by isScopeAllowed
+    // Assert the scope is not OFFERED (absent from the allowed-scope bullet list,
+    // rendered as `  - loop-meta`). The always-on liPlaybook block references loop-meta
+    // by name in its prose — clearly marked "PortOS install only" — so a bare-token
+    // check would spuriously fail; the offered-bullet form is the precise assertion.
+    expect(nonPortos).not.toContain('  - loop-meta'); // gated out by isScopeAllowed
     expect(nonPortos).toContain('meta/self scopes are unavailable');
 
     const portos = buildPrompt({
@@ -465,16 +949,60 @@ describe('buildPrompt', () => {
   it('injects the outcomes report + calibration guidance only when non-empty', () => {
     const base = { app, isPortos: false, config: { allowedScopes: ['app-improvement'], rules: '' } };
     const without = buildPrompt(base);
-    expect(without).not.toContain('liOutcomes');
+    expect(without).not.toContain('### liOutcomes');
     const withReport = buildPrompt({ ...base, outcomesReport: 'Past LI proposals (last 30 days):\n- Total filed: 3' });
     expect(withReport).toContain('### liOutcomes');
     expect(withReport).toContain('Total filed: 3');
     expect(withReport).toContain('calibrate your proposal');
   });
 
+  it('injects the selfEval block only when non-empty (#2700)', () => {
+    const base = { app, isPortos: false, config: { allowedScopes: ['app-improvement'], rules: '' } };
+    expect(buildPrompt(base)).not.toContain('liSelfEval');
+    expect(buildPrompt({ ...base, selfEvalReport: '   ' })).not.toContain('liSelfEval');
+    const withReport = buildPrompt({ ...base, selfEvalReport: 'LI self-evaluation:\n- Reasoning confidence: low' });
+    expect(withReport).toContain('### liSelfEval');
+    expect(withReport).toContain('Reasoning confidence: low');
+    expect(withReport).toContain('Filing nothing (proposal: null) is a legitimate');
+  });
+
+  it('renders selfEval and outcomes as independent blocks (either can stand alone)', () => {
+    const base = { app, isPortos: false, config: { allowedScopes: ['app-improvement'], rules: '' } };
+    const selfOnly = buildPrompt({ ...base, selfEvalReport: 'self-eval body' });
+    expect(selfOnly).toContain('### liSelfEval');
+    expect(selfOnly).not.toContain('### liOutcomes');
+    const both = buildPrompt({ ...base, outcomesReport: 'outcomes body', selfEvalReport: 'self-eval body' });
+    expect(both).toContain('### liOutcomes');
+    expect(both).toContain('### liSelfEval');
+  });
+
   it('frames the mission around the app\'s own goals and performance', () => {
     const out = buildPrompt({ app, isPortos: false, config: { allowedScopes: ['app-improvement'], rules: '' } });
     expect(out).toContain('its OWN goals and purpose');
+  });
+
+  it('always injects the static proposal playbook block (#2763)', () => {
+    // Unlike the data-driven blocks, the playbook is a-priori guidance that must be
+    // present from run one — even with no sources, outcomes, or self-eval data.
+    const bare = buildPrompt({ app, isPortos: true, config: { allowedScopes: ['loop-meta'], rules: '' } });
+    expect(bare).toContain('### liPlaybook');
+    expect(bare).toContain('# LI Proposal Playbook');
+    // The five deliverables the issue calls for are all present in the rendered block.
+    expect(bare).toContain('Scope Selection Guide');
+    expect(bare).toContain('Success Pattern Catalog');
+    expect(bare).toContain('Rejection Pattern Catalog');
+    expect(bare).toContain('Task Type Selection Rules');
+    expect(bare).toContain('Goal Alignment Check');
+    // NOT_PLANNED = roadmap conflict is the headline rejection heuristic.
+    expect(bare).toContain('NOT_PLANNED');
+    // Rendered under its dedicated heading, never dumped as a generic source block.
+    expect(bare).toContain('apply it as a hard constraint');
+  });
+
+  it('renders the playbook on managed (non-PortOS) apps too — the general rules are universal', () => {
+    const managed = buildPrompt({ app, isPortos: false, config: { allowedScopes: ['app-improvement'], rules: '' } });
+    expect(managed).toContain('### liPlaybook');
+    expect(managed).toContain('Goal Alignment Check');
   });
 
   it('nudges a managed app with no own-performance metrics toward a METRICS.md data gap', () => {
@@ -539,11 +1067,11 @@ describe('computeOutcomesReport', () => {
     expect(computeOutcomesReport({})).toBe('');
   });
 
-  it('summarizes totals, per-scope merge rates, and rejection reasons', () => {
+  it('summarizes totals, per-scope merge rates, and classified rejection reasons', () => {
     const outcomes = [
       { scope: 'app-data-gap', outcome: 'merged' },
       { scope: 'app-data-gap', outcome: 'merged' },
-      { scope: 'app-improvement', outcome: 'rejected', outcomeReason: 'too complex' },
+      { scope: 'app-improvement', outcome: 'rejected', rejectionReason: 'duplicate' },
       { scope: 'app-improvement', outcome: null }
     ];
     const report = computeOutcomesReport({ outcomes });
@@ -553,7 +1081,59 @@ describe('computeOutcomesReport', () => {
     expect(report).toContain('Still open: 1 (25%)');
     expect(report).toContain('app-data-gap: 2 filed, 2 merged (100%)');
     expect(report).toContain('app-improvement: 2 filed, 0 merged (0%)');
-    expect(report).toContain('Common rejection reasons: too complex');
+    // The taxonomy gloss (#2689), not the raw tracker string this used to echo.
+    expect(report).toContain('Why non-merged proposals were closed: already tracked elsewhere (duplicate) (1)');
+  });
+
+  it('surfaces the execution-failure taxonomy line only when a hand-off has failed (#2764 §1)', () => {
+    // A clean execution record shows no failure line…
+    const clean = computeOutcomesReport({
+      outcomes: [{ scope: 'loop-meta', outcome: 'merged', executionOutcome: 'success' }]
+    });
+    expect(clean).not.toContain("Why LI's own hand-offs failed");
+
+    // …but a failed hand-off surfaces the classified "why".
+    const withFailure = computeOutcomesReport({
+      outcomes: [
+        { scope: 'loop-meta', outcome: 'merged', executionOutcome: 'success' },
+        { scope: 'loop-meta', outcome: null, executionOutcome: 'failure', failureCategory: 'testing' },
+        { scope: 'loop-meta', outcome: null, executionOutcome: 'failure', failureCategory: 'testing' },
+        { scope: 'loop-meta', outcome: null, executionOutcome: 'failure', failureCategory: 'execution' }
+      ]
+    });
+    expect(withFailure).toContain("Why LI's own hand-offs failed when implemented:");
+    expect(withFailure).toContain('regression'); // the `testing` gloss
+    expect(withFailure).toContain('(2)');         // commonest diagnosis count
+  });
+
+  it('reports an undiagnosed rejection history as the data gap it is (#2689)', () => {
+    const report = computeOutcomesReport({
+      outcomes: [
+        { scope: 'app-improvement', outcome: 'merged' },
+        { scope: 'app-improvement', outcome: 'rejected', rejectionReason: 'unknown-reason' }
+      ]
+    });
+    expect(report).toContain('Why non-merged proposals were closed: 1 of 1 closed with no recorded reason');
+  });
+
+  it('says nothing has been closed unmerged rather than implying no reasons exist (#2689)', () => {
+    const report = computeOutcomesReport({ outcomes: [{ scope: 'app-improvement', outcome: 'merged' }] });
+    expect(report).toContain('Why non-merged proposals were closed: nothing has been closed unmerged yet');
+  });
+
+  it('never claims nothing was closed unmerged while reporting rejections (#2689)', () => {
+    // A resolved record that reconcile has not classified yet (a pre-taxonomy
+    // install, or an issue that fell out of the tracker read) must not make the
+    // report contradict its own "Rejected: 2" line two rows above.
+    const report = computeOutcomesReport({
+      outcomes: [
+        { scope: 'app-improvement', outcome: 'rejected' },
+        { scope: 'app-improvement', outcome: 'abandoned' }
+      ]
+    });
+    expect(report).toContain('Rejected: 1 (50%)');
+    expect(report).not.toContain('nothing has been closed unmerged yet');
+    expect(report).toContain('Why non-merged proposals were closed: 2 of 2 not yet classified');
   });
 
   it('reports abandoned distinctly and excludes it from the merged numerator (#2620)', () => {
@@ -561,7 +1141,7 @@ describe('computeOutcomesReport', () => {
       { scope: 'app-improvement', outcome: 'merged' },
       { scope: 'app-improvement', outcome: 'abandoned' },
       { scope: 'app-improvement', outcome: 'abandoned' },
-      { scope: 'app-improvement', outcome: 'rejected', outcomeReason: 'dup' }
+      { scope: 'app-improvement', outcome: 'rejected', rejectionReason: 'duplicate' }
     ];
     const report = computeOutcomesReport({ outcomes });
     expect(report).toContain('Abandoned: 2 (50%)');
@@ -572,6 +1152,401 @@ describe('computeOutcomesReport', () => {
 
   it('exposes the recognized outcome set', () => {
     expect(PROPOSAL_OUTCOMES).toEqual(['merged', 'rejected', 'abandoned']);
+  });
+});
+
+describe('summarizeOutcomeStats', () => {
+  it('reports a null merge rate (not 0) when nothing has resolved yet', () => {
+    const stats = summarizeOutcomeStats([{ outcome: null }, { outcome: null }]);
+    expect(stats.total).toBe(2);
+    expect(stats.pending).toBe(2);
+    expect(stats.resolved).toBe(0);
+    // The sentinel that keeps "awaiting triage" from reading as "all rejected".
+    expect(stats.rawMergeRate).toBeNull();
+  });
+
+  it('measures the merge rate over resolved proposals only, unrounded', () => {
+    const stats = summarizeOutcomeStats([
+      { outcome: 'merged' },
+      { outcome: 'rejected' },
+      { outcome: 'abandoned' },
+      { outcome: null }
+    ]);
+    expect(stats.resolved).toBe(3);
+    expect(stats.pending).toBe(1);
+    expect(stats.rawMergeRate).toBeCloseTo(33.33, 1);
+  });
+
+  it('tolerates a non-array / junk input', () => {
+    expect(summarizeOutcomeStats(null).total).toBe(0);
+    expect(summarizeOutcomeStats([null, 'x', { outcome: 'merged' }]).total).toBe(1);
+  });
+});
+
+describe('suppressedIssueSlug + rejectionReasonBySlug (#2689 feedback loop)', () => {
+  it('recovers a normalized slug from a forge body marker, a bare plan row, or nothing', () => {
+    expect(suppressedIssueSlug({ body: '<!-- lil-slug: Add-Telemetry -->' })).toBe('add-telemetry');
+    expect(suppressedIssueSlug({ slug: 'Fix Thing' })).toBe('fix-thing');
+    expect(suppressedIssueSlug({ title: 'no marker here' })).toBe(null);
+    expect(suppressedIssueSlug({})).toBe(null);
+  });
+
+  it('indexes only resolved records diagnosed with a REAL taxonomy reason', () => {
+    const map = rejectionReasonBySlug([
+      { slug: 'a', outcome: 'rejected', rejectionReason: 'scope-mismatch' },
+      { slug: 'b', outcome: 'abandoned', rejectionReason: 'unknown-reason' }, // sentinel: not an actionable pattern
+      { slug: 'c', outcome: 'merged', rejectionReason: 'scope-mismatch' },    // merged: not a rejection
+      { slug: 'd', outcome: 'rejected', rejectionReason: null },              // unclassified: nothing to say
+      { slug: 'e', outcome: null, rejectionReason: 'duplicate' }              // unresolved
+    ]);
+    expect(map.get('a')).toBe('scope-mismatch');
+    // The `unknown-reason` sentinel is deliberately excluded — it is the absence of a
+    // diagnosis, not a failure pattern the reasoner can route around.
+    expect(map.has('b')).toBe(false);
+    expect(map.has('c')).toBe(false);
+    expect(map.has('d')).toBe(false);
+    expect(map.has('e')).toBe(false);
+  });
+
+  it('keeps the first diagnosed record per slug and tolerates non-array input', () => {
+    const map = rejectionReasonBySlug([
+      { slug: 'dup', outcome: 'rejected', rejectionReason: 'duplicate' },
+      { slug: 'dup', outcome: 'rejected', rejectionReason: 'quality-issue' }
+    ]);
+    expect(map.get('dup')).toBe('duplicate');
+    expect(rejectionReasonBySlug(null).size).toBe(0);
+    expect(rejectionReasonBySlug(undefined).size).toBe(0);
+  });
+
+  it('describeSuppressedIssue appends the glossed reason only when the slug is diagnosed', () => {
+    const reasons = new Map([['add-telemetry', 'scope-mismatch']]);
+    expect(describeSuppressedIssue({ number: 12, title: 'Add telemetry', body: '<!-- lil-slug: add-telemetry -->' }, reasons))
+      .toBe("#12 [add-telemetry] Add telemetry — previously closed: outside the app's scope");
+    // Unmatched slug or no lookup → unchanged output (back-compat).
+    expect(describeSuppressedIssue({ slug: 'other' }, reasons)).toBe('[other]');
+    expect(describeSuppressedIssue({ slug: 'add-telemetry' })).toBe('[add-telemetry]');
+  });
+});
+
+describe('computeSelfEvalSummary (#2700)', () => {
+  const liMetrics = (over = {}) => ({
+    read: true,
+    metrics: { completed: 10, succeeded: 8, failed: 2, successRate: 80, recentOutcomes: [], ...over }
+  });
+
+  it('reports every signal as explicitly unavailable — and low confidence — with no data', () => {
+    const report = computeSelfEvalSummary();
+    expect(report).toContain('Reasoning confidence: low (0 of 3 self-signals available)');
+    expect(report).toContain('Proposal merge rate: UNAVAILABLE');
+    expect(report).toContain('Your already-filed proposals: UNKNOWN');
+    expect(report).toContain('LI execution health: UNAVAILABLE');
+    expect(report).toContain('GUIDANCE — low self-confidence');
+    // A blind run must never be told it has a 0% rate.
+    expect(report).not.toContain('(0%)');
+  });
+
+  it('distinguishes "outcomes not gathered" from "gathered, none filed"', () => {
+    expect(computeSelfEvalSummary({ outcomes: null })).toContain('Proposal merge rate: UNAVAILABLE');
+    expect(computeSelfEvalSummary({ outcomes: [] })).toContain('no proposals filed yet for this app');
+  });
+
+  it('does not read filed-but-unresolved proposals as a 0% merge rate', () => {
+    const report = computeSelfEvalSummary({ outcomes: [{ outcome: null }, { outcome: null }] });
+    expect(report).toContain('2 filed, none resolved yet — rate unknown');
+    expect(report).toContain('Awaiting triage is NOT rejection');
+    expect(report).not.toContain('0%');
+  });
+
+  it('reports a real merge rate with its classified rejection reasons', () => {
+    const outcomes = [
+      { outcome: 'merged' },
+      { outcome: 'rejected', rejectionReason: 'user-rejected' },
+      { outcome: 'rejected', rejectionReason: 'user-rejected' },
+      { outcome: 'abandoned', rejectionReason: 'duplicate' }
+    ];
+    const report = computeSelfEvalSummary({ outcomes });
+    expect(report).toContain('1 of 4 resolved proposals merged (25%)');
+    // Tallied by taxonomy token and glossed, commonest first — and an `abandoned`
+    // proposal is explained too, not just a `rejected` one (#2689).
+    expect(report).toContain(
+      'Why the rest were closed: the user declined it (closed as not planned) (2); already tracked elsewhere (duplicate) (1)'
+    );
+  });
+
+  it('omits the rejection clause when every resolved proposal merged (#2689)', () => {
+    const report = computeSelfEvalSummary({ outcomes: [{ outcome: 'merged' }, { outcome: 'merged' }] });
+    expect(report).toContain('2 of 2 resolved proposals merged (100%)');
+    expect(report).not.toContain('Why the rest were closed');
+  });
+
+  it('flags a below-floor sample as unreadable rather than as evidence', () => {
+    const report = computeSelfEvalSummary({ outcomes: [{ outcome: 'rejected' }] });
+    expect(report).toContain('too small a sample to read a rate from yet');
+    // One rejection is not a merge-rate signal → confidence must not count it.
+    expect(report).toContain('Reasoning confidence: low');
+  });
+
+  it('counts open and still-suppressed closed proposals so the loop does not re-file', () => {
+    const now = Date.now();
+    const report = computeSelfEvalSummary({
+      existingIssues: [
+        { slug: 'a', state: 'open' },
+        { slug: 'b', state: 'open' },
+        { slug: 'c', state: 'closed', closedAt: new Date(now - 5 * 24 * 60 * 60 * 1000).toISOString() },
+        // Closed long ago → out of the window → re-proposable, so NOT counted.
+        { slug: 'd', state: 'closed', closedAt: new Date(now - 90 * 24 * 60 * 60 * 1000).toISOString() }
+      ],
+      now
+    });
+    expect(report).toContain('2 open, plus 1 closed but still within the 30-day suppression window');
+    expect(report).toContain('deterministically suppressed');
+  });
+
+  it('NAMES the closed-but-suppressed proposals, not just their count', () => {
+    const now = Date.now();
+    const recent = new Date(now - 5 * 24 * 60 * 60 * 1000).toISOString();
+    const report = computeSelfEvalSummary({
+      existingIssues: [
+        { number: 12, title: 'Add telemetry', body: '<!-- lil-slug: add-telemetry -->', state: 'closed', closedAt: recent },
+        // The plan filer's bare shape carries a slug and nothing else.
+        { slug: 'fix-thing', state: 'closed' }
+      ],
+      now
+    });
+    // A closed issue appears nowhere else in the prompt — the reasoner can only
+    // avoid re-proposing it if selfEval names its dedup key.
+    expect(report).toContain('Recently closed (do NOT re-propose):');
+    expect(report).toContain('#12 [add-telemetry] Add telemetry');
+    expect(report).toContain('[fix-thing]');
+  });
+
+  it('annotates each named suppressed proposal with WHY it was closed (#2689 feedback loop)', () => {
+    const now = Date.now();
+    const recent = new Date(now - 5 * 24 * 60 * 60 * 1000).toISOString();
+    const report = computeSelfEvalSummary({
+      // The reconciled outcome store carries the rejection diagnosis per slug.
+      outcomes: [
+        { appId: 'a', slug: 'add-telemetry', outcome: 'rejected', rejectionReason: 'scope-mismatch' },
+        { appId: 'a', slug: 'fix-thing', outcome: 'abandoned', rejectionReason: 'duplicate' }
+      ],
+      existingIssues: [
+        { number: 12, title: 'Add telemetry', body: '<!-- lil-slug: add-telemetry -->', state: 'closed', closedAt: recent },
+        { slug: 'fix-thing', state: 'closed' }
+      ],
+      now
+    });
+    // The reasoner sees the specific failure pattern, not merely a slug to route around.
+    expect(report).toContain("#12 [add-telemetry] Add telemetry — previously closed: outside the app's scope");
+    expect(report).toContain('[fix-thing] — previously closed: already tracked elsewhere (duplicate)');
+  });
+
+  it('leaves an undiagnosed suppressed proposal unannotated', () => {
+    const now = Date.now();
+    const recent = new Date(now - 5 * 24 * 60 * 60 * 1000).toISOString();
+    const report = computeSelfEvalSummary({
+      // No outcomes gathered this run — the line renders exactly as before.
+      outcomes: null,
+      existingIssues: [
+        { number: 12, title: 'Add telemetry', body: '<!-- lil-slug: add-telemetry -->', state: 'closed', closedAt: recent }
+      ],
+      now
+    });
+    expect(report).toContain('#12 [add-telemetry] Add telemetry');
+    expect(report).not.toContain('previously closed:');
+  });
+
+  it('does not annotate a proposal closed with the unknown-reason sentinel', () => {
+    const now = Date.now();
+    const recent = new Date(now - 5 * 24 * 60 * 60 * 1000).toISOString();
+    const report = computeSelfEvalSummary({
+      // Reconciled but undiagnosable: the sentinel is not an actionable failure pattern,
+      // so the "do NOT re-propose" line names it without a spurious reason gloss.
+      outcomes: [{ appId: 'a', slug: 'add-telemetry', outcome: 'rejected', rejectionReason: 'unknown-reason' }],
+      existingIssues: [
+        { number: 12, title: 'Add telemetry', body: '<!-- lil-slug: add-telemetry -->', state: 'closed', closedAt: recent }
+      ],
+      now
+    });
+    expect(report).toContain('#12 [add-telemetry] Add telemetry');
+    expect(report).not.toContain('previously closed:');
+  });
+
+  it('caps the named list and counts the remainder', () => {
+    const now = Date.now();
+    const closedAt = new Date(now - 24 * 60 * 60 * 1000).toISOString();
+    const existingIssues = Array.from({ length: SELF_EVAL_MAX_SUPPRESSED_LISTED + 3 }, (_, i) => ({
+      slug: `item-${i}`, state: 'closed', closedAt
+    }));
+    const report = computeSelfEvalSummary({ existingIssues, now });
+    expect(report).toContain('[item-0]');
+    expect(report).toContain('(+3 more)');
+    expect(report).not.toContain(`[item-${SELF_EVAL_MAX_SUPPRESSED_LISTED}]`);
+  });
+
+  it('leaves an unidentifiable suppressed entry to the count rather than a mystery bullet', () => {
+    const now = Date.now();
+    const report = computeSelfEvalSummary({
+      existingIssues: [{ state: 'closed', closedAt: new Date(now - 1000).toISOString() }],
+      now
+    });
+    expect(report).toContain('plus 1 closed but still within the 30-day suppression window');
+    expect(report).not.toContain('Recently closed (do NOT re-propose):');
+  });
+
+  it('says so plainly when nothing is suppressed', () => {
+    const report = computeSelfEvalSummary({ existingIssues: [] });
+    expect(report).toContain('0 open');
+    expect(report).toContain('Nothing is currently suppressed');
+  });
+
+  it('treats a failed tracker read (null) as unknown, never as "nothing filed"', () => {
+    const report = computeSelfEvalSummary({ existingIssues: null });
+    expect(report).toContain('Your already-filed proposals: UNKNOWN');
+    expect(report).toContain('may be about to re-file something that already exists');
+    expect(report).not.toContain('0 open');
+  });
+
+  it('distinguishes an unreadable learning store from a loop that has never run', () => {
+    expect(computeSelfEvalSummary({ liTaskStats: { read: false, metrics: null } }))
+      .toContain('LI execution health: UNAVAILABLE');
+    expect(computeSelfEvalSummary({ liTaskStats: { read: true, metrics: null } }))
+      .toContain('no LI runs recorded yet');
+  });
+
+  it('adds degraded-execution guidance when LI run success is under the threshold', () => {
+    const report = computeSelfEvalSummary({
+      liTaskStats: liMetrics({ completed: 9, succeeded: 3, failed: 6, successRate: 33 })
+    });
+    expect(report).toContain('33% of 9 lifetime LI runs succeeded — DEGRADED');
+    expect(report).toContain('GUIDANCE — your own execution is degraded');
+    expect(report).toContain('the problem may be THIS LOOP, not the app');
+    expect(report).toContain('do not mark anything trivial+safe for hand-off');
+  });
+
+  it('does not fire the degraded warning on a healthy loop', () => {
+    const report = computeSelfEvalSummary({ liTaskStats: liMetrics() });
+    expect(report).toContain('80% of 10 lifetime LI runs succeeded');
+    expect(report).not.toContain('DEGRADED');
+    expect(report).not.toContain('execution is degraded');
+  });
+
+  it('does not fire the degraded warning below the sample floor', () => {
+    const report = computeSelfEvalSummary({
+      liTaskStats: liMetrics({ completed: 1, succeeded: 0, failed: 1, successRate: 0 })
+    });
+    expect(report).toContain('too small a sample to judge');
+    expect(report).not.toContain('DEGRADED');
+  });
+
+  it('rates confidence high with all three signals, and drops guidance', () => {
+    const outcomes = Array.from({ length: 6 }, () => ({ outcome: 'merged' }));
+    const report = computeSelfEvalSummary({
+      outcomes,
+      existingIssues: [{ slug: 'a', state: 'open' }],
+      liTaskStats: liMetrics()
+    });
+    expect(report).toContain('Reasoning confidence: high (3 of 3 self-signals available)');
+    expect(report).not.toContain('GUIDANCE — low self-confidence');
+  });
+
+  it('rates a well-measured 0% merge rate as HIGH confidence in a bad result, not low', () => {
+    // Confidence rates the EVIDENCE, not the news. A loop with solid evidence that
+    // it is failing should act decisively, not hedge as if it were flying blind.
+    const outcomes = Array.from({ length: 8 }, () => ({ outcome: 'rejected', rejectionReason: 'user-rejected' }));
+    const report = computeSelfEvalSummary({
+      outcomes,
+      existingIssues: [{ slug: 'a', state: 'open' }],
+      liTaskStats: liMetrics()
+    });
+    expect(report).toContain('0 of 8 resolved proposals merged (0%)');
+    expect(report).toContain('Reasoning confidence: high');
+    expect(report).not.toContain('GUIDANCE — low self-confidence');
+  });
+
+  it('rates confidence medium with two of three signals', () => {
+    const report = computeSelfEvalSummary({
+      outcomes: Array.from({ length: 5 }, () => ({ outcome: 'merged' })),
+      existingIssues: [],
+      liTaskStats: { read: false, metrics: null }
+    });
+    expect(report).toContain('Reasoning confidence: medium (2 of 3 self-signals available)');
+    expect(report).not.toContain('GUIDANCE — low self-confidence');
+  });
+
+  it('exposes the degraded thresholds', () => {
+    expect(LI_DEGRADED_SUCCESS_THRESHOLD).toBe(50);
+    expect(LI_DEGRADED_MIN_SAMPLE).toBe(4);
+  });
+
+  it('honors the injected clock when ageing the LI run window', () => {
+    const now = Date.now();
+    const DAY_MS = 24 * 60 * 60 * 1000;
+    // 6 in-window failures (enough for the 'windowed' branch, which needs >= 5)
+    // alongside a lifetime rate that says the loop is healthy: the windowed read
+    // must win, which it can only do if `now` reaches computeWindowedStats.
+    const recentOutcomes = Array.from({ length: 6 }, (_, i) => ({
+      t: new Date(now - (i + 1) * DAY_MS).toISOString(), s: false
+    }));
+    const liTaskStats = { read: true, metrics: { completed: 50, succeeded: 50, failed: 0, successRate: 100, recentOutcomes } };
+    expect(computeSelfEvalSummary({ liTaskStats, now })).toContain('0% of 6 windowed LI runs succeeded — DEGRADED');
+    // Wind the clock past the window: the same ring ages out and the lifetime rate
+    // takes over. A hard-wired Date.now() would report DEGRADED here too.
+    const later = now + 365 * DAY_MS;
+    expect(computeSelfEvalSummary({ liTaskStats, now: later })).toContain('100% of 50 lifetime LI runs succeeded');
+  });
+});
+
+describe('LI_TASK_TYPE (#2700)', () => {
+  // The learning store keys LI's runs by extractTaskType, whose FIRST branch
+  // prefixes any task carrying an analysisType. Asserting against the real
+  // function (not a restated literal) is the point: a hand-written
+  // 'layered-intelligence' silently matches no bucket, leaving execution health
+  // permanently reading "no LI runs recorded yet" with every test still green.
+  it('matches the key extractTaskType records a real scheduled LI task under', () => {
+    // The task shape cosTaskGenerator.generateSelfImprovementTaskForType builds.
+    const liTask = { metadata: { analysisType: LI_SCHEDULED_TASK_TYPE, autoGenerated: true, selfImprovement: true } };
+    expect(LI_TASK_TYPE).toBe(extractTaskType(liTask));
+  });
+
+  it('is the self-improve-prefixed key, NOT the bare schedule name', () => {
+    expect(LI_SCHEDULED_TASK_TYPE).toBe('layered-intelligence');
+    expect(LI_TASK_TYPE).toBe('self-improve:layered-intelligence');
+    expect(LI_TASK_TYPE).not.toBe(LI_SCHEDULED_TASK_TYPE);
+  });
+});
+
+describe('readLiTaskMetrics (#2700)', () => {
+  let dir;
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'lil-selfeval-')); });
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  it('treats an ABSENT store as a fresh install (read:true), not a broken read', async () => {
+    // learning.json is created lazily on the first recorded outcome — a fresh
+    // install must be told "no LI runs recorded yet", never "your store is broken".
+    expect(await readLiTaskMetrics({ cosPath: dir })).toEqual({ read: true, metrics: null });
+  });
+
+  it('reports read:false when the store exists but is unparseable', async () => {
+    await writeFile(join(dir, 'learning.json'), '{ not json');
+    expect(await readLiTaskMetrics({ cosPath: dir })).toEqual({ read: false, metrics: null });
+  });
+
+  it('reports read:false when the store is malformed (no byTaskType map)', async () => {
+    await writeFile(join(dir, 'learning.json'), JSON.stringify({ byTaskType: [] }));
+    expect(await readLiTaskMetrics({ cosPath: dir })).toEqual({ read: false, metrics: null });
+  });
+
+  it('reports read:true with a null bucket when LI has never run (distinct from unreadable)', async () => {
+    await writeFile(join(dir, 'learning.json'), JSON.stringify({ byTaskType: { 'idle-review': { completed: 3 } } }));
+    expect(await readLiTaskMetrics({ cosPath: dir })).toEqual({ read: true, metrics: null });
+  });
+
+  it('returns the layered-intelligence bucket when present', async () => {
+    const bucket = { completed: 4, succeeded: 1, failed: 3, successRate: 25, recentOutcomes: [] };
+    await writeFile(join(dir, 'learning.json'), JSON.stringify({ byTaskType: { [LI_TASK_TYPE]: bucket } }));
+    const stats = await readLiTaskMetrics({ cosPath: dir });
+    expect(stats.read).toBe(true);
+    expect(stats.metrics.successRate).toBe(25);
   });
 });
 
@@ -896,6 +1871,48 @@ describe('forge I/O (injected exec)', () => {
     expect(issues[0].slug).toBe('slug-a');
     expect(issues[0].state).toBe('open');
     expect(issues[1].closedAt).toBe('2026-07-01T00:00:00Z');
+  });
+
+  it('listForgeIssues requests comments and threads the closing comment on gh rows (#2748)', async () => {
+    const exec = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify([
+        {
+          number: 3,
+          title: 'C',
+          body: `x ${slugMarker('slug-c')}`,
+          state: 'CLOSED',
+          closedAt: '2026-07-02T00:00:00Z',
+          comments: [
+            { body: 'Interesting idea.' },
+            { body: 'Closing — this is out of scope for the app.' }
+          ]
+        }
+      ])
+    });
+    const { ok, issues } = await listForgeIssues({ cli: 'gh', cwd: '/x', exec });
+    expect(ok).toBe(true);
+    // The batched list call must ask gh for `comments` so no extra fetch is needed.
+    expect(exec.mock.calls[0][1]).toContain('number,title,body,state,stateReason,closedAt,url,labels,comments');
+    // The LAST comment (closest to the close) becomes the classifier's signal.
+    expect(issues[0].closingComment).toBe('Closing — this is out of scope for the app.');
+  });
+
+  it('listForgeIssues leaves closingComment null when gh returns no comments', async () => {
+    const exec = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify([{ number: 4, title: 'D', body: `x ${slugMarker('slug-d')}`, state: 'CLOSED', comments: [] }])
+    });
+    const { issues } = await listForgeIssues({ cli: 'gh', cwd: '/x', exec });
+    expect(issues[0].closingComment).toBeNull();
+  });
+
+  it('extractClosingComment returns the last non-empty comment body, else null', () => {
+    expect(extractClosingComment([{ body: 'first' }, { body: '  ' }, { body: 'last real' }])).toBe('last real');
+    expect(extractClosingComment([{ body: 'only' }])).toBe('only');
+    expect(extractClosingComment([])).toBeNull();
+    expect(extractClosingComment(null)).toBeNull();
+    expect(extractClosingComment([{ body: '   ' }, { body: null }])).toBeNull();
   });
 
   it('listForgeIssues normalizes GitLab "opened" state to open', async () => {
@@ -1313,5 +2330,577 @@ describe('gatherSources cosMetrics windowed rate (issue #2460)', () => {
     await writeLearning({ byTaskType: { x: { successRate: 50, recentOutcomes: [] } } });
     const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: false } }, { cosPath: dir });
     expect(out.cosMetrics).toBeUndefined();
+  });
+
+  it('emits scopeGuidance derived from the same per-type rates on PortOS (#2760)', async () => {
+    await writeLearning({
+      byTaskType: {
+        'self-improve:layered-intelligence': { completed: 9, succeeded: 0, failed: 9, successRate: 0, recentOutcomes: [] },
+        'plan-task': { completed: 10, succeeded: 10, failed: 0, successRate: 100, recentOutcomes: [] },
+        'feature-ideas': { completed: 8, succeeded: 5, failed: 3, successRate: 63, recentOutcomes: [] } // mid-band → neither
+      }
+    });
+    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: true } }, { cosPath: dir, isPortos: true });
+    expect(out.scopeGuidance).toContain('LOW-COMPLETION');
+    expect(out.scopeGuidance).toContain('self-improve:layered-intelligence: 0% completed over 9 runs');
+    expect(out.scopeGuidance).toContain('HIGH-COMPLETION');
+    expect(out.scopeGuidance).toContain('plan-task: 100% completed over 10 runs');
+    expect(out.scopeGuidance).not.toContain('feature-ideas');
+  });
+
+  it('omits scopeGuidance when no scope clears the sample floor (#2760)', async () => {
+    await writeLearning({
+      byTaskType: { 'plan-task': { completed: 2, succeeded: 2, failed: 0, successRate: 100, recentOutcomes: [] } }
+    });
+    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: true } }, { cosPath: dir, isPortos: true });
+    expect(out.cosMetrics).toBeDefined(); // raw metrics still surfaced
+    expect(out.scopeGuidance).toBeUndefined();
+  });
+
+  it('does NOT emit scopeGuidance for a managed app even when it enabled cosMetrics (#2760 codex P2)', async () => {
+    // These completion rates are the install's own CoS history — irrelevant to a
+    // managed app — so the derivation is gated on isPortos, not just the cosMetrics
+    // toggle (which a managed app CAN turn on). cosMetrics itself is still surfaced.
+    await writeLearning({
+      byTaskType: { 'plan-task': { completed: 10, succeeded: 0, failed: 10, successRate: 0, recentOutcomes: [] } }
+    });
+    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: true } }, { cosPath: dir, isPortos: false });
+    expect(out.cosMetrics).toBeDefined();
+    expect(out.scopeGuidance).toBeUndefined();
+  });
+
+  it('caps the number of task types per list and notes the overflow (#2760 codex P2)', async () => {
+    // Overflow the cap by 3 chronically-failing types (all past the sample floor) → the
+    // block must cap at SCOPE_AWARENESS_MAX_PER_LIST and note the remainder, not dump all.
+    const overflow = 3;
+    const total = SCOPE_AWARENESS_MAX_PER_LIST + overflow;
+    const byTaskType = {};
+    for (let i = 0; i < total; i++) {
+      byTaskType[`self-improve:fail-scope-${i}`] = { completed: 5, succeeded: 0, failed: 5, successRate: 0, recentOutcomes: [] };
+    }
+    await writeLearning({ byTaskType });
+    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: true } }, { cosPath: dir, isPortos: true });
+    const listedTypes = (out.scopeGuidance.match(/self-improve:fail-scope-\d+/g) || []).length;
+    expect(listedTypes).toBe(SCOPE_AWARENESS_MAX_PER_LIST);
+    expect(out.scopeGuidance).toContain(`and ${overflow} more`);
+  });
+
+  it('does not emit scopeGuidance when cosMetrics is off (#2760)', async () => {
+    await writeLearning({
+      byTaskType: { 'accessibility': { completed: 4, succeeded: 0, failed: 4, successRate: 0, recentOutcomes: [] } }
+    });
+    const out = await gatherSources({ repoPath: dir }, { sources: { cosMetrics: false } }, { cosPath: dir, isPortos: true });
+    expect(out.scopeGuidance).toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// plannedWork source (#2698) — the committed backlog fed to the reasoner so it
+// can suppress a proposal that overlaps work already in scope.
+// ---------------------------------------------------------------------------
+
+describe('normalizeIssueLabels', () => {
+  it('reads gh label objects and glab label strings alike', () => {
+    expect(normalizeIssueLabels([{ name: 'plan' }, { name: 'p1' }])).toEqual(['plan', 'p1']);
+    expect(normalizeIssueLabels(['plan', 'p1'])).toEqual(['plan', 'p1']);
+  });
+
+  it('drops junk rather than rendering [object Object] into the prompt', () => {
+    expect(normalizeIssueLabels([{ color: 'red' }, null, '', '  ', 42, { name: ' ok ' }])).toEqual(['ok']);
+  });
+
+  it('returns [] for a non-array (never throws)', () => {
+    expect(normalizeIssueLabels(undefined)).toEqual([]);
+    expect(normalizeIssueLabels('plan')).toEqual([]);
+  });
+});
+
+describe('extractIssuePriority', () => {
+  it('reads the common priority label conventions', () => {
+    expect(extractIssuePriority(['bug', 'priority: high'])).toBe('high');
+    expect(extractIssuePriority(['priority/critical'])).toBe('critical');
+    expect(extractIssuePriority(['P0'])).toBe('p0');
+    expect(extractIssuePriority(['high-priority'])).toBe('high');
+    expect(extractIssuePriority([{ name: 'low' }])).toBe('low');
+  });
+
+  it('returns null when no label looks like a priority (absent ≠ p0)', () => {
+    expect(extractIssuePriority(['plan', 'enhancement'])).toBeNull();
+    expect(extractIssuePriority([])).toBeNull();
+    expect(extractIssuePriority(undefined)).toBeNull();
+    // A near-miss must not be coerced into a priority.
+    expect(extractIssuePriority(['p9', 'priority'])).toBeNull();
+  });
+});
+
+describe('extractPlannedPlanItems', () => {
+  it('extracts unchecked items only — a done item is not pending work', () => {
+    const plan = [
+      '# Plan',
+      '## Next Up',
+      '- [ ] Add a widget',
+      '- [x] Already shipped',
+      '* [ ] Star bullet item',
+      'not a list item'
+    ].join('\n');
+    expect(extractPlannedPlanItems(plan).map(i => i.title)).toEqual(['Add a widget', 'Star bullet item']);
+  });
+
+  it('collapses whitespace and yields the planned-item shape', () => {
+    expect(extractPlannedPlanItems('- [ ]   Do    the   thing  ')[0]).toEqual({
+      number: null, title: 'Do the thing', labels: [], priority: null
+    });
+  });
+
+  it('returns [] for a non-string or an empty/checkbox-less plan', () => {
+    expect(extractPlannedPlanItems(null)).toEqual([]);
+    expect(extractPlannedPlanItems('# Plan\n\nJust prose.')).toEqual([]);
+    // A checkbox with no text is not an item.
+    expect(extractPlannedPlanItems('- [ ]   ')).toEqual([]);
+  });
+});
+
+describe('formatPlannedWork', () => {
+  it('renders number, title, priority and labels', () => {
+    const out = formatPlannedWork([{ number: 12, title: 'Ship X', labels: ['plan', 'p1'], priority: 'p1' }]);
+    expect(out).toContain('- #12 Ship X');
+    expect(out).toContain('priority: p1');
+    expect(out).toContain('labels: plan, p1');
+  });
+
+  it('omits the priority/labels parens when there is nothing to say', () => {
+    const out = formatPlannedWork([{ number: null, title: 'Bare item', labels: [], priority: null }]);
+    const itemLine = out.split('\n').find(l => l.startsWith('- '));
+    expect(itemLine).toBe('- Bare item');
+  });
+
+  it('reports the FULL count when truncating so a partial list never reads as the whole backlog', () => {
+    const many = Array.from({ length: 40 }, (_, n) => ({ number: n + 1, title: `Item ${n + 1}`, labels: [], priority: null }));
+    const out = formatPlannedWork(many);
+    expect(out).toContain('40 items');
+    expect(out).toContain(`showing the top ${PLANNED_WORK_MAX_ITEMS}`);
+    expect(out).toContain('- #15 Item 15');
+    expect(out).not.toContain('Item 16');
+  });
+
+  it('bounds the rendered block', () => {
+    const many = Array.from({ length: 15 }, (_, n) => ({ number: n, title: 'x'.repeat(2000), labels: [], priority: null }));
+    expect(formatPlannedWork(many).length).toBeLessThanOrEqual(8000);
+  });
+
+  it('says "nothing planned" EXPLICITLY for a real empty result (not an omitted block)', () => {
+    expect(formatPlannedWork([])).toBe(PLANNED_WORK_NONE);
+    expect(formatPlannedWork(undefined)).toBe(PLANNED_WORK_NONE);
+    expect(PLANNED_WORK_NONE).toContain('read successfully');
+  });
+});
+
+describe('plannedWorkUnavailable', () => {
+  it('tells the reasoner NOT to read a failed read as "nothing planned"', () => {
+    const msg = plannedWorkUnavailable('the gh issue list failed');
+    expect(msg).toContain('could NOT be read');
+    expect(msg).toContain('the gh issue list failed');
+    // The whole point of the sentinel: it must be distinguishable from the
+    // legitimately-empty rendering.
+    expect(msg).not.toBe(PLANNED_WORK_NONE);
+  });
+});
+
+describe('hasPlannedWorkListing', () => {
+  it('is true only for a real backlog listing', () => {
+    expect(hasPlannedWorkListing('2 item(s) of actively-planned work:\n- #3 Ship X')).toBe(true);
+  });
+
+  it('is false for BOTH sentinels — neither is a backlog to go review', () => {
+    // "nothing is planned" and "could not be read" both render in the prompt and
+    // both mean something, but telling the reasoner "review the plannedWork source
+    // — you may be overlapping committed work" under either is a contradiction.
+    expect(hasPlannedWorkListing(PLANNED_WORK_NONE)).toBe(false);
+    expect(hasPlannedWorkListing(plannedWorkUnavailable('the gh issue list failed'))).toBe(false);
+  });
+
+  it('is false for an absent / blank / non-string source', () => {
+    expect(hasPlannedWorkListing(undefined)).toBe(false);
+    expect(hasPlannedWorkListing(null)).toBe(false);
+    expect(hasPlannedWorkListing('   ')).toBe(false);
+    expect(hasPlannedWorkListing(['#3'])).toBe(false);
+  });
+
+  it('tracks the sentinels through their constructors (no drifting copy of the text)', () => {
+    expect(plannedWorkUnavailable('x').startsWith(PLANNED_WORK_UNAVAILABLE_PREFIX)).toBe(true);
+  });
+});
+
+describe('plannedWorkJql', () => {
+  it('filters to not-Done plan-labeled tickets and orders by priority', () => {
+    const jql = plannedWorkJql('PROJ');
+    expect(jql).toContain('project = "PROJ"');
+    expect(jql).toContain('statusCategory != Done');
+    expect(jql).toContain('ORDER BY priority DESC');
+  });
+
+  it('filters on the plan label — parity with the forge, not "every open ticket"', () => {
+    // Without this the source would return the whole untriaged backlog under a
+    // header claiming the user committed to it, and tell the reasoner to suppress
+    // against essentially the entire tracker.
+    expect(plannedWorkJql('PROJ')).toContain(`labels = "${PLANNED_WORK_LABEL}"`);
+  });
+
+  it('does NOT reference openSprints or filter on priority NAMES (both hard-400 on some projects)', () => {
+    const jql = plannedWorkJql('PROJ');
+    expect(jql).not.toContain('openSprints');
+    expect(jql).not.toContain('priority in');
+  });
+
+  it('escapes the project key', () => {
+    expect(plannedWorkJql('A"B')).toContain('A\\"B');
+  });
+});
+
+describe('gatherPlannedWork', () => {
+  it('forge: queries the plan label + open state and summarizes with derived priority', async () => {
+    const listForge = vi.fn().mockResolvedValue({
+      ok: true,
+      issues: [
+        { number: 3, title: 'Planned A', state: 'open', labels: ['plan', 'priority: high'] },
+        { number: 4, title: 'Planned B', state: 'open', labels: ['plan'] }
+      ]
+    });
+    const out = await gatherPlannedWork({ filer: 'forge', forgeCli: 'gh', cwd: '/repo', listForge });
+    expect(listForge).toHaveBeenCalledWith({ cli: 'gh', cwd: '/repo', label: PLANNED_WORK_LABEL, state: 'open' });
+    expect(out).toContain('- #3 Planned A');
+    expect(out).toContain('priority: high');
+    expect(out).toContain('- #4 Planned B');
+  });
+
+  it('forge: filters out a closed issue the tracker still returned', async () => {
+    const listForge = vi.fn().mockResolvedValue({
+      ok: true,
+      issues: [
+        { number: 3, title: 'Open one', state: 'open', labels: [] },
+        { number: 5, title: 'Done one', state: 'closed', labels: [] }
+      ]
+    });
+    const out = await gatherPlannedWork({ filer: 'forge', forgeCli: 'glab', cwd: '/repo', listForge });
+    expect(out).toContain('Open one');
+    expect(out).not.toContain('Done one');
+    expect(out).toContain('1 item(s)');
+  });
+
+  it('forge: a FAILED read renders the unavailable sentinel, NOT "nothing planned"', async () => {
+    const listForge = vi.fn().mockResolvedValue({ ok: false, issues: [] });
+    const out = await gatherPlannedWork({ filer: 'forge', forgeCli: 'gh', cwd: '/repo', listForge });
+    expect(out).toContain('could NOT be read');
+    expect(out).not.toBe(PLANNED_WORK_NONE);
+  });
+
+  it('forge: a SUCCESSFUL empty read renders "nothing planned" (distinct from a failure)', async () => {
+    const listForge = vi.fn().mockResolvedValue({ ok: true, issues: [] });
+    expect(await gatherPlannedWork({ filer: 'forge', forgeCli: 'gh', cwd: '/repo', listForge })).toBe(PLANNED_WORK_NONE);
+  });
+
+  it('jira: uses the planned-work JQL, requests the priority field, and prefers it over labels', async () => {
+    const listJira = vi.fn().mockResolvedValue({
+      ok: true,
+      issues: [{ number: 'PROJ-9', title: 'Jira item', state: 'open', labels: ['low'], priority: 'Highest' }]
+    });
+    const out = await gatherPlannedWork({
+      filer: 'jira', jira: { instanceId: 'i1', projectKey: 'PROJ' }, listJira
+    });
+    const arg = listJira.mock.calls[0][0];
+    expect(arg.jql).toBe(plannedWorkJql('PROJ'));
+    expect(arg.searchOptions.fields).toContain('priority');
+    // Jira's real priority field wins over the label-derived fallback.
+    expect(out).toContain('priority: Highest');
+    expect(out).toContain('- #PROJ-9 Jira item');
+  });
+
+  it('jira: falls back to a label-derived priority when the field is absent', async () => {
+    const listJira = vi.fn().mockResolvedValue({
+      ok: true,
+      issues: [{ number: 'PROJ-9', title: 'J', state: 'open', labels: ['p2'], priority: null }]
+    });
+    const out = await gatherPlannedWork({ filer: 'jira', jira: { instanceId: 'i1', projectKey: 'PROJ' }, listJira });
+    expect(out).toContain('priority: p2');
+  });
+
+  it('jira: a FAILED search renders the unavailable sentinel', async () => {
+    const listJira = vi.fn().mockResolvedValue({ ok: false, issues: [] });
+    const out = await gatherPlannedWork({ filer: 'jira', jira: { instanceId: 'i1', projectKey: 'PROJ' }, listJira });
+    expect(out).toContain('could NOT be read');
+  });
+
+  it('returns null when the tracker coords are unusable (source simply does not apply)', async () => {
+    expect(await gatherPlannedWork({ filer: 'forge', forgeCli: null, cwd: '/repo' })).toBeNull();
+    expect(await gatherPlannedWork({ filer: 'jira', jira: null })).toBeNull();
+    expect(await gatherPlannedWork({ filer: 'plan', cwd: null })).toBeNull();
+    expect(await gatherPlannedWork({})).toBeNull();
+  });
+
+  describe('plan tracker', () => {
+    let dir;
+    beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'lil-planned-')); });
+    afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+    it('summarizes PLAN.md unchecked items', async () => {
+      await writeFile(join(dir, 'PLAN.md'), '# P\n- [ ] Committed thing\n- [x] Done thing\n');
+      const out = await gatherPlannedWork({ filer: 'plan', cwd: dir });
+      expect(out).toContain('- Committed thing');
+      expect(out).not.toContain('Done thing');
+    });
+
+    it('an ABSENT PLAN.md is a real "nothing planned"', async () => {
+      expect(await gatherPlannedWork({ filer: 'plan', cwd: dir })).toBe(PLANNED_WORK_NONE);
+    });
+
+    it('a PRESENT-but-unreadable PLAN.md is a FAILURE, not "nothing planned"', async () => {
+      await writeFile(join(dir, 'PLAN.md'), '- [ ] x');
+      // tryReadFile collapses every failure to null; the existsSync probe is what
+      // keeps "unreadable" from masquerading as "no plan at all".
+      const out = await gatherPlannedWork({ filer: 'plan', cwd: dir, readFileFn: async () => null });
+      expect(out).toContain('could NOT be read');
+      expect(out).not.toBe(PLANNED_WORK_NONE);
+    });
+  });
+});
+
+describe('gatherSources plannedWork wiring (#2698)', () => {
+  let dir;
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'lil-pw-src-')); });
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  it('gathers plannedWork when the source is on and a tracker is supplied', async () => {
+    await writeFile(join(dir, 'PLAN.md'), '- [ ] Committed thing\n');
+    const out = await gatherSources(
+      { repoPath: dir },
+      { sources: { plannedWork: true } },
+      { tracker: { filer: 'plan', cwd: dir } }
+    );
+    expect(out.plannedWork).toContain('Committed thing');
+  });
+
+  it('skips plannedWork when the source is off', async () => {
+    await writeFile(join(dir, 'PLAN.md'), '- [ ] Committed thing\n');
+    const out = await gatherSources(
+      { repoPath: dir },
+      { sources: { plannedWork: false } },
+      { tracker: { filer: 'plan', cwd: dir } }
+    );
+    expect(out.plannedWork).toBeUndefined();
+  });
+
+  it('skips plannedWork when no tracker context was resolved', async () => {
+    await writeFile(join(dir, 'PLAN.md'), '- [ ] Committed thing\n');
+    const out = await gatherSources({ repoPath: dir }, { sources: { plannedWork: true } });
+    expect(out.plannedWork).toBeUndefined();
+  });
+
+  it('is on by default for every app', () => {
+    expect(defaultLayeredIntelligenceConfig(false).sources.plannedWork).toBe(true);
+    expect(defaultLayeredIntelligenceConfig(true).sources.plannedWork).toBe(true);
+  });
+
+  it('reaches an existing install that stored sources before the key existed', () => {
+    // getEffectiveConfig spreads defaults under stored sources, so no migration
+    // is needed for the new key — but an explicit opt-out must still survive.
+    const stored = { layeredIntelligence: { sources: { goals: false } } };
+    expect(getEffectiveConfig(stored).sources.plannedWork).toBe(true);
+    const optedOut = { layeredIntelligence: { sources: { plannedWork: false } } };
+    expect(getEffectiveConfig(optedOut).sources.plannedWork).toBe(false);
+  });
+});
+
+describe('buildPrompt plannedWork block (#2698)', () => {
+  const app = { name: 'App' };
+  const config = { allowedScopes: ['app-improvement'], sources: {} };
+
+  it('renders the block with the cross-reference guidance attached', () => {
+    const p = buildPrompt({ app, config, sources: { plannedWork: '1 item(s):\n- #3 Ship X' } });
+    expect(p).toContain('### plannedWork');
+    expect(p).toContain('- #3 Ship X');
+    expect(p).toContain(PLANNED_WORK_GUIDANCE);
+    expect(p).toContain('DO NOT file — return proposal: null');
+  });
+
+  it('renders plannedWork ONCE — not also inside the generic source list', () => {
+    const p = buildPrompt({ app, config, sources: { goals: 'be great', plannedWork: 'PLANNED BACKLOG' } });
+    expect(p.match(/### plannedWork/g)).toHaveLength(1);
+    expect(p).toContain('### goals');
+  });
+
+  it('puts the guidance AFTER the backlog it refers to', () => {
+    const p = buildPrompt({ app, config, sources: { plannedWork: 'PLANNED BACKLOG' } });
+    expect(p.indexOf('PLANNED BACKLOG')).toBeLessThan(p.indexOf(PLANNED_WORK_GUIDANCE));
+  });
+
+  it('still surfaces the "could not be read" sentinel to the reasoner', () => {
+    const p = buildPrompt({ app, config, sources: { plannedWork: plannedWorkUnavailable('the gh issue list failed') } });
+    expect(p).toContain('### plannedWork');
+    expect(p).toContain('could NOT be read');
+    expect(p).toContain(PLANNED_WORK_GUIDANCE);
+  });
+
+  it('omits the block entirely when the source produced nothing', () => {
+    expect(buildPrompt({ app, config, sources: { goals: 'g' } })).not.toContain('### plannedWork');
+    expect(buildPrompt({ app, config, sources: { plannedWork: '   ' } })).not.toContain('### plannedWork');
+  });
+
+  it('does not claim "no sources available" while rendering a populated plannedWork block', () => {
+    // plannedWork is excluded from sourceBlocks so its guidance stays anchored —
+    // the empty-sources fallback must not therefore contradict the block below it.
+    const p = buildPrompt({ app, config, sources: { plannedWork: '1 item(s):\n- #3 Ship X' } });
+    expect(p).toContain('- #3 Ship X');
+    expect(p).toContain('(no other sources available');
+    // Still says the plain thing when there is genuinely nothing at all.
+    expect(buildPrompt({ app, config, sources: {} })).toContain('(no sources available');
+  });
+});
+
+describe('computeOutcomesReport low-merge-rate warning (#2698)', () => {
+  const filed = (outcome) => ({ scope: 'app-improvement', outcome });
+  const rejected = (n) => Array.from({ length: n }, () => filed('rejected'));
+
+  it('warns and points at plannedWork when the resolved merge rate is below the threshold', () => {
+    // 0 of 4 resolved merged → 0% < 20%, and 4 clears the sample floor.
+    const report = computeOutcomesReport({ outcomes: [...rejected(3), filed('abandoned')], hasPlannedWork: true });
+    expect(report).toContain('WARNING');
+    expect(report).toContain('merge rate is critically low');
+    expect(report).toContain('plannedWork');
+    expect(report).toContain('0 of 4 resolved proposals (0%)');
+  });
+
+  it('stays silent when the merge rate is healthy', () => {
+    const report = computeOutcomesReport({ outcomes: [filed('merged'), filed('merged'), filed('rejected'), filed('merged')] });
+    expect(report).not.toContain('WARNING');
+  });
+
+  it('stays silent when NOTHING is resolved yet (pending ≠ rejected)', () => {
+    // Filed, all still open: 0 merged of 0 resolved. Dividing by `total` would
+    // render 0% and alarm — but nothing has actually failed.
+    const report = computeOutcomesReport({ outcomes: [filed(null), filed(null), filed(null), filed(null), filed(null)] });
+    expect(report).toContain('Total filed: 5');
+    expect(report).not.toContain('WARNING');
+  });
+
+  it('measures over resolved proposals, not total (a pending backlog cannot trip it)', () => {
+    // 1 merged of 1 resolved = 100% → healthy, despite 1/5 = 20% of total.
+    const report = computeOutcomesReport({ outcomes: [filed('merged'), filed(null), filed(null), filed(null), filed(null)] });
+    expect(report).not.toContain('WARNING');
+  });
+
+  it('stays silent below the sample floor — 0-of-1 is not evidence of a rate', () => {
+    // A single early rejection must not tell the loop to stop proposing: it can
+    // never earn a merge if it stops filing.
+    for (let n = 1; n < LOW_MERGE_RATE_MIN_SAMPLE; n += 1) {
+      expect(computeOutcomesReport({ outcomes: rejected(n), hasPlannedWork: true })).not.toContain('WARNING');
+    }
+    expect(computeOutcomesReport({ outcomes: rejected(LOW_MERGE_RATE_MIN_SAMPLE), hasPlannedWork: true })).toContain('WARNING');
+    expect(LOW_MERGE_RATE_MIN_SAMPLE).toBe(4);
+  });
+
+  it('fires exactly below the documented threshold', () => {
+    // 1 merged of 5 resolved = 20% → NOT below 20 → silent.
+    const at = computeOutcomesReport({ outcomes: [filed('merged'), ...rejected(4)] });
+    expect(at).not.toContain('WARNING');
+    // 1 merged of 6 resolved = 17% → below → warns.
+    const below = computeOutcomesReport({ outcomes: [filed('merged'), ...rejected(5)] });
+    expect(below).toContain('WARNING');
+    expect(LOW_MERGE_RATE_THRESHOLD).toBe(20);
+  });
+
+  it('compares the RAW rate — a sub-threshold rate that rounds up still warns', () => {
+    // 10 merged of 51 resolved = 19.6% — genuinely below 20, but rounds to 20.
+    // Rounding before the comparison would suppress the warning entirely.
+    const report = computeOutcomesReport({
+      outcomes: [...Array.from({ length: 10 }, () => filed('merged')), ...rejected(41)]
+    });
+    expect(report).toContain('WARNING');
+    // ...while the DISPLAYED figure is still the friendly rounded one.
+    expect(report).toContain('10 of 51 resolved proposals (20%)');
+  });
+
+  it('does NOT cite a plannedWork block that is not in the prompt', () => {
+    // The source is per-app-toggleable and yields nothing on an unresolvable
+    // tracker — citing a section that isn't there is just noise.
+    const report = computeOutcomesReport({ outcomes: rejected(5), hasPlannedWork: false });
+    expect(report).toContain('WARNING');
+    expect(report).not.toContain('plannedWork');
+    expect(report).toContain('return proposal: null');
+  });
+
+  it('still returns "" with no filed history (nothing to calibrate on)', () => {
+    expect(computeOutcomesReport({ outcomes: [] })).toBe('');
+  });
+});
+
+describe('listForgeIssues label/state parameterization (#2698)', () => {
+  it('defaults to the LI label across all states', async () => {
+    const exec = vi.fn().mockResolvedValue({ code: 0, stdout: '[]' });
+    await listForgeIssues({ cli: 'gh', cwd: '/x', exec });
+    const args = exec.mock.calls[0][1];
+    expect(args).toContain(LI_LABEL);
+    expect(args).toContain('--state');
+    expect(args[args.indexOf('--state') + 1]).toBe('all');
+  });
+
+  it('queries the requested label + state (gh)', async () => {
+    const exec = vi.fn().mockResolvedValue({ code: 0, stdout: '[]' });
+    await listForgeIssues({ cli: 'gh', cwd: '/x', label: 'plan', state: 'open', exec });
+    const args = exec.mock.calls[0][1];
+    expect(args).toContain('plan');
+    expect(args).not.toContain(LI_LABEL);
+    expect(args[args.indexOf('--state') + 1]).toBe('open');
+    expect(args[args.indexOf('--json') + 1]).toContain('labels');
+  });
+
+  it('drops --all for an open-only glab query (glab lists open by default)', async () => {
+    const exec = vi.fn().mockResolvedValue({ code: 0, stdout: '[]' });
+    await listForgeIssues({ cli: 'glab', cwd: '/x', label: 'plan', state: 'open', exec });
+    expect(exec.mock.calls[0][1]).not.toContain('--all');
+    await listForgeIssues({ cli: 'glab', cwd: '/x', exec });
+    expect(exec.mock.calls[1][1]).toContain('--all');
+  });
+
+  it('normalizes labels from both forges', async () => {
+    const exec = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify([{ number: 1, title: 'A', state: 'open', labels: [{ name: 'plan' }] }])
+    });
+    const { issues } = await listForgeIssues({ cli: 'gh', cwd: '/x', exec });
+    expect(issues[0].labels).toEqual(['plan']);
+  });
+
+  it('reports [] labels when the forge omits the field (never undefined)', async () => {
+    const exec = vi.fn().mockResolvedValue({ code: 0, stdout: JSON.stringify([{ number: 1, title: 'A', state: 'open' }]) });
+    const { issues } = await listForgeIssues({ cli: 'gh', cwd: '/x', exec });
+    expect(issues[0].labels).toEqual([]);
+  });
+});
+
+describe('listJiraIssues jql override (#2698)', () => {
+  it('defaults to the LI-label JQL and passes no search options', async () => {
+    const search = vi.fn().mockResolvedValue([]);
+    await listJiraIssues({ instanceId: 'i1', projectKey: 'PROJ', search });
+    expect(search).toHaveBeenCalledWith('i1', expect.stringContaining(`labels = "${LI_LABEL}"`));
+  });
+
+  it('uses an explicit jql + search options when given', async () => {
+    const search = vi.fn().mockResolvedValue([]);
+    await listJiraIssues({
+      instanceId: 'i1', projectKey: 'PROJ', jql: 'CUSTOM JQL', searchOptions: { fields: 'summary,priority' }, search
+    });
+    expect(search).toHaveBeenCalledWith('i1', 'CUSTOM JQL', { fields: 'summary,priority' });
+  });
+
+  it('maps priority + labels, and keeps an absent priority null', async () => {
+    const search = vi.fn().mockResolvedValue([
+      { key: 'PROJ-1', summary: 'A', statusCategory: 'To Do', priority: 'High', labels: ['plan'] },
+      { key: 'PROJ-2', summary: 'B', statusCategory: 'To Do' }
+    ]);
+    const { issues } = await listJiraIssues({ instanceId: 'i1', projectKey: 'PROJ', search });
+    expect(issues[0].priority).toBe('High');
+    expect(issues[0].labels).toEqual(['plan']);
+    expect(issues[1].priority).toBeNull();
+    expect(issues[1].labels).toEqual([]);
   });
 });

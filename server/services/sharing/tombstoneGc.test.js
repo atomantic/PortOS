@@ -56,6 +56,14 @@ vi.mock('../writersRoom/sync.js', () => ({
   pruneTombstonedExercises: vi.fn().mockResolvedValue({ pruned: 0 }),
   listExerciseIdsForSync: vi.fn().mockResolvedValue([]),
 }));
+vi.mock('../creativeCommissions/feedbackStore.js', () => ({
+  pruneTombstonedCommissionFeedback: vi.fn().mockResolvedValue({ pruned: 0 }),
+  listCommissionFeedbackIdsForSync: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('../creativeCommissions/store.js', () => ({
+  pruneTombstonedCommissions: vi.fn().mockResolvedValue({ pruned: 0 }),
+  listCommissionIdsForSync: vi.fn().mockResolvedValue([]),
+}));
 vi.mock('../../lib/conflictJournal.js', () => ({
   pruneOrphanedBaseHashes: vi.fn().mockResolvedValue({ pruned: 0 }),
 }));
@@ -464,6 +472,8 @@ describe('sweepTombstones — return shape', () => {
       writersRoomWorks: 10,
       writersRoomFolders: 11,
       writersRoomExercises: 12,
+      commissionFeedback: 0,
+      creativeCommissions: 0,
       orphanBaseHashes: 0,
       orphanSubscriptions: 0,
       refused: [],

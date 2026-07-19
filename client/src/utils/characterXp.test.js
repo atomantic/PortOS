@@ -4,7 +4,9 @@ import {
   MAX_LEVEL,
   levelFromXP,
   computeXpView,
+  computeAgeView,
   diffXp,
+  birthDateCta,
 } from './characterXp';
 
 describe('levelFromXP', () => {
@@ -96,6 +98,101 @@ describe('computeXpView', () => {
   });
 });
 
+describe('computeAgeView', () => {
+  it('derives the age level and progress toward the next birthday', () => {
+    const vm = computeAgeView({ level: 42, ageYears: 42.5, xp: 1000, hp: 12, maxHp: 15 });
+    expect(vm.level).toBe(42);
+    expect(vm.hasBirthDate).toBe(true);
+    expect(vm.progress).toBeCloseTo(0.5);
+    expect(vm.xp).toBe(1000);
+    expect(vm.hp).toBe(12);
+    expect(vm.maxHp).toBe(15);
+    expect(Number.isNaN(vm.progress)).toBe(false);
+  });
+
+  it('floors ageYears for level when only ageYears is present', () => {
+    const vm = computeAgeView({ ageYears: 30.9, xp: 0 });
+    expect(vm.level).toBe(30);
+    expect(vm.progress).toBeCloseTo(0.9);
+    expect(vm.hasBirthDate).toBe(true);
+  });
+
+  it('is 0 progress exactly on a birthday', () => {
+    const vm = computeAgeView({ level: 40, ageYears: 40 });
+    expect(vm.level).toBe(40);
+    expect(vm.progress).toBe(0);
+  });
+
+  it('returns a safe no-birthDate view (null level, no NaN)', () => {
+    for (const input of [null, undefined, {}, { level: null, ageYears: null, xp: 500 }]) {
+      const vm = computeAgeView(input);
+      expect(vm.level).toBeNull();
+      expect(vm.hasBirthDate).toBe(false);
+      expect(vm.progress).toBe(0);
+      expect(vm.daysToNextBirthday).toBeNull();
+      expect(Number.isNaN(vm.progress)).toBe(false);
+    }
+  });
+
+  it('carries xp through as a stat while level is null (no birthDate)', () => {
+    const vm = computeAgeView({ level: null, ageYears: null, xp: 777 });
+    expect(vm.xp).toBe(777);
+    expect(vm.level).toBeNull();
+  });
+
+  it('computes a bounded days-to-next-birthday countdown', () => {
+    const vm = computeAgeView({ level: 25, ageYears: 25.0 });
+    expect(vm.daysToNextBirthday).toBeGreaterThan(360);
+    expect(vm.daysToNextBirthday).toBeLessThanOrEqual(366);
+  });
+
+  it('surfaces the server birthDateStatus (#2757)', () => {
+    expect(computeAgeView({ level: null, ageYears: null, birthDateStatus: 'invalid' }).birthDateStatus).toBe('invalid');
+    expect(computeAgeView({ level: 40, ageYears: 40, birthDateStatus: 'ok' }).birthDateStatus).toBe('ok');
+  });
+
+  it('defaults birthDateStatus for an older server bundle that omits it', () => {
+    // No level → assume unset (the historical CTA); a real level → ok.
+    expect(computeAgeView({ level: null, ageYears: null }).birthDateStatus).toBe('unset');
+    expect(computeAgeView({ level: 33, ageYears: 33.2 }).birthDateStatus).toBe('ok');
+  });
+});
+
+describe('birthDateCta (#2757)', () => {
+  it('returns null for a usable date (ok) — no CTA', () => {
+    expect(birthDateCta('ok')).toBeNull();
+  });
+
+  it('prompts to SET only for a genuinely unset date', () => {
+    const cta = birthDateCta('unset');
+    expect(cta.kind).toBe('set');
+    expect(cta.title).toBe('Set your birth date');
+    expect(cta.badgeLabel).toBe('LV —');
+    expect(cta.path).toBe('/meatspace/age');
+  });
+
+  it('prompts to FIX for a present-but-unusable date, distinct from set', () => {
+    for (const status of ['invalid', 'future', 'unreadable']) {
+      const cta = birthDateCta(status);
+      expect(cta.kind).toBe('fix');
+      expect(cta.title).toBe('Fix your birth date');
+      expect(cta.badgeLabel).toBe('LV !');
+      expect(cta.path).toBe('/meatspace/age');
+    }
+  });
+
+  it('gives the unreadable case its own copy', () => {
+    expect(birthDateCta('unreadable').caption).toMatch(/couldn't be read/i);
+    expect(birthDateCta('future').caption).toMatch(/future/i);
+    expect(birthDateCta('invalid').caption).toMatch(/invalid/i);
+  });
+
+  it('treats an unknown/absent status as unset (backward compatible)', () => {
+    expect(birthDateCta(undefined).kind).toBe('set');
+    expect(birthDateCta('mystery').kind).toBe('set');
+  });
+});
+
 describe('diffXp', () => {
   it('reports a gain when XP increased without a level change', () => {
     const d = diffXp({ xp: 100, level: 1 }, { xp: 250, level: 1 });
@@ -115,9 +212,24 @@ describe('diffXp', () => {
     expect(d.leveledUp).toBe(true);
   });
 
-  it('infers level-up from XP when level fields are absent', () => {
+  it('does NOT infer a level-up from XP when level fields are absent (level is age-based)', () => {
+    // No birthDate → level is null on both snapshots. An XP gain crossing a legacy
+    // threshold must not fire the birthday "level-up" flash (#2673 decouples xp from level).
     const d = diffXp({ xp: 250 }, { xp: 400 }); // crosses the 300 threshold
     expect(d.gained).toBe(150);
+    expect(d.leveledUp).toBe(false);
+  });
+
+  it('fires a level-up only on a real age-level increase (birthday)', () => {
+    const d = diffXp({ xp: 100, level: 41 }, { xp: 150, level: 42 });
+    expect(d.gained).toBe(50);
+    expect(d.leveledUp).toBe(true);
+  });
+
+  it('reports a birthday level-up even when XP did not change', () => {
+    // A birthday almost never coincides with an XP gain — leveledUp must not depend on gained.
+    const d = diffXp({ xp: 150, level: 41 }, { xp: 150, level: 42 });
+    expect(d.gained).toBe(0);
     expect(d.leveledUp).toBe(true);
   });
 

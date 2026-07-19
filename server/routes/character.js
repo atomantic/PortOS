@@ -1,6 +1,10 @@
 /**
  * Character Sheet Routes
- * D&D-style character sheet with XP, HP, damage, rests, and event tracking.
+ *
+ * `GET /` returns the persisted record plus the fields derived on read: the
+ * age-based `level`/`ageYears` (#2673), the per-domain `skills` (#2674), and the
+ * `metrics` grid (#2676). The XP/HP/damage/rest/event endpoints are retained for
+ * backward-compat.
  */
 
 import { Router } from 'express';
@@ -13,8 +17,11 @@ const router = Router();
 
 // Zod schemas for request validation
 const updateCharacterSchema = z.object({
-  name: z.string().min(1).max(100).optional(),
-  class: z.string().min(1).max(100).optional(),
+  // Empty is allowed (not `.min(1)`): '' is the "unset" state the human-centered page renders
+  // as the "Your name" / "Add a title" placeholder (#2677), so the user must be able to clear
+  // a name/title back to blank, not just replace it.
+  name: z.string().max(100).optional(),
+  class: z.string().max(100).optional(),
   avatarPath: z.string().max(500).regex(/^\/data\/images\/[A-Za-z0-9._-]+$/, 'Invalid avatar path').optional()
 });
 
@@ -39,21 +46,39 @@ const addEventSchema = z.object({
   diceNotation: z.string().regex(/^\d+d\d+([+-]\d+)?$/).optional()
 });
 
+// `?skills=0` / `?metrics=0` opt out of each derived registry's domain fan-out, for consumers
+// that only read the persisted fields plus the age level — notably the CyberCity HUD, which
+// polls this route every 15s and renders only `level`. Both default to ON, so an unaware
+// caller still gets the full sheet.
+//
+// `metrics` defaults to whatever `skills` says rather than to ON. `?skills=0` predates the
+// metrics grid (#2676) and has only ever meant one thing — "give me the cheap sheet, skip the
+// domain fan-out" — so a caller that predates the flag (a browser holding a stale bundle
+// across an update, or any external script) must not silently start paying a NEW fan-out it
+// has no way to ask about. An explicit `?metrics=` always wins, so the two stay independently
+// gateable: `?skills=0&metrics=1` gets the grid without the skill curve.
+const flagEnum = z.enum(['0', '1', 'false', 'true']).optional();
+const getCharacterQuerySchema = z.object({
+  skills: flagEnum,
+  metrics: flagEnum,
+});
+
+// A flag is on unless explicitly switched off. Absent ⇒ on (see the default-ON note above).
+const isEnabled = (flag) => flag !== '0' && flag !== 'false';
+
 // GET /api/character - Get character sheet
 router.get('/', asyncHandler(async (req, res) => {
-  const character = await characterService.getCharacter();
-  res.json(character);
+  const { skills, metrics } = validateRequest(getCharacterQuerySchema, req.query);
+  res.json(await characterService.getCharacter({
+    withSkills: isEnabled(skills),
+    withMetrics: isEnabled(metrics ?? skills),
+  }));
 }));
 
 // PUT /api/character - Update character name/class
 router.put('/', asyncHandler(async (req, res) => {
   const data = validateRequest(updateCharacterSchema, req.body);
-  const character = await characterService.getCharacter();
-  if (data.name) character.name = data.name;
-  if (data.class) character.class = data.class;
-  if (data.avatarPath) character.avatarPath = data.avatarPath;
-  const updated = await characterService.saveCharacter(character);
-  res.json(updated);
+  res.json(await characterService.updateCharacterFields(data));
 }));
 
 // POST /api/character/xp - Add XP manually

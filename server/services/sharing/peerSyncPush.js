@@ -45,6 +45,8 @@ import {
   getFolderForSync,
   getExerciseForSync,
 } from '../writersRoom/sync.js';
+import { getCommissionFeedbackForSync } from '../creativeCommissions/feedbackStore.js';
+import { getCommissionForSync } from '../creativeCommissions/store.js';
 import { ackDeletesUpTo } from './peerTombstoneCursors.js';
 import {
   buildAssetManifestWithCollection,
@@ -148,6 +150,14 @@ async function isSubscriptionRecordTombstone(sub) {
   }
   if (sub.recordKind === 'musicVideoProject') {
     const record = await getMusicVideoProject(sub.recordId, { includeDeleted: true }).catch(() => null);
+    return record?.deleted === true;
+  }
+  if (sub.recordKind === 'commissionFeedback') {
+    const record = await getCommissionFeedbackForSync(sub.recordId).catch(() => null);
+    return record?.deleted === true;
+  }
+  if (sub.recordKind === 'creativeCommission') {
+    const record = await getCommissionForSync(sub.recordId).catch(() => null);
     return record?.deleted === true;
   }
   return false;
@@ -823,6 +833,24 @@ export async function buildPushPayload(sub, sourceInstanceId) {
       kind: 'musicVideoProject', record: sanitized, assetManifest, sourceInstanceId, portosMeta,
       ...(linkedTrack ? { linkedTrack } : {}),
     };
+  }
+  if (sub.recordKind === 'commissionFeedback') {
+    // Body-less (#2686) — no asset manifest, just the LWW record envelope
+    // (one taste reaction). A tombstone ships the same shape (deleted:true).
+    const record = await getCommissionFeedbackForSync(sub.recordId).catch(() => null);
+    if (!record) return null;
+    const sanitized = sanitizeRecordForWire('commissionFeedback', record);
+    if (!sanitized) return null;
+    return { kind: 'commissionFeedback', record: sanitized, assetManifest: [], sourceInstanceId, portosMeta };
+  }
+  if (sub.recordKind === 'creativeCommission') {
+    // The commission BRIEF (#2686). sanitizeRecordForWire strips the machine-local
+    // schedule/runs/assignment, so only the federatable brief travels. No assets.
+    const record = await getCommissionForSync(sub.recordId).catch(() => null);
+    if (!record) return null;
+    const sanitized = sanitizeRecordForWire('creativeCommission', record);
+    if (!sanitized) return null;
+    return { kind: 'creativeCommission', record: sanitized, assetManifest: [], sourceInstanceId, portosMeta };
   }
   return null;
 }

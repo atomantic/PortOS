@@ -374,8 +374,8 @@ export default function ImageClean() {
     },
     {
       key: 'diffusion',
-      label: 'Diffusion pass — disrupt SynthID',
-      hint: 'Lossy, best-effort — round-trips the pixels to perturb SynthID\'s watermark carriers. This is the only step that touches SynthID, and it disrupts — never guarantees removal. Blurs fine text (use the ignore-zone mask to preserve regions).',
+      label: 'Disrupt SynthID (resize-squeeze / diffusion)',
+      hint: 'Lossy, best-effort — the only step that touches SynthID. Pick a sub-mode below: a CPU resize-squeeze (downscale→upscale, no GPU) or a GPU FLUX round-trip. Both perturb SynthID\'s resolution-dependent carriers and disrupt — never guarantee removal. Blurs fine text (use the ignore-zone mask to preserve regions).',
     },
   ];
 
@@ -483,7 +483,7 @@ export default function ImageClean() {
                 <Zap size={16} className="text-port-accent" />
                 <span className="text-sm font-medium text-white">Diffusion sub-mode</span>
               </div>
-              {/* Sub-mode selector — GPU (hardware-gated) vs CPU light pass. */}
+              {/* Sub-mode selector — GPU FLUX round-trip (hardware-gated) vs CPU resize-squeeze. */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <button
                   type="button"
@@ -512,9 +512,10 @@ export default function ImageClean() {
                       : 'border-port-border hover:border-port-accent/50'
                   }`}
                 >
-                  <span className="flex items-center gap-2 text-sm text-white"><Cpu size={14} /> CPU light pass</span>
+                  <span className="flex items-center gap-2 text-sm text-white"><Cpu size={14} /> CPU resize-squeeze</span>
                   <span className="block text-xs text-gray-500 mt-1">
-                    Always available, synchronous. Best-effort spatial round-trip — lower reliability than the GPU pass.
+                    Always available, synchronous, no GPU. Downscale→upscale round-trip that shifts SynthID&apos;s
+                    resolution-dependent carriers. Best-effort and detector-dependent — never guaranteed removal.
                   </span>
                 </button>
               </div>

@@ -126,9 +126,10 @@ export const setActiveDigitalTwinPersona = (personaId) => request('/digital-twin
 
 // Digital Twin - Validation & Analysis
 export const getDigitalTwinCompleteness = () => request('/digital-twin/validate/completeness');
-export const detectDigitalTwinContradictions = (providerId, model) => request('/digital-twin/validate/contradictions', {
+export const detectDigitalTwinContradictions = (providerId, model, options = {}) => request('/digital-twin/validate/contradictions', {
   method: 'POST',
-  body: JSON.stringify({ providerId, model })
+  body: JSON.stringify({ providerId, model }),
+  ...options
 });
 export const generateDigitalTwinTests = (providerId, model, options = {}) => request('/digital-twin/tests/generate', {
   method: 'POST',
@@ -238,10 +239,11 @@ export const generateTasteSummary = (providerId, model, section) => request('/di
   method: 'POST',
   body: JSON.stringify({ providerId, model, ...(section ? { section } : {}) })
 });
-export const getPersonalizedTasteQuestion = (section, providerId, model) =>
+export const getPersonalizedTasteQuestion = (section, providerId, model, options = {}) =>
   request(`/digital-twin/taste/${section}/personalized-question`, {
     method: 'POST',
-    body: JSON.stringify({ providerId, model })
+    body: JSON.stringify({ providerId, model }),
+    ...options
   });
 export const resetTasteSection = (section) => request(`/digital-twin/taste/${section}`, {
   method: 'DELETE'

@@ -291,10 +291,43 @@ export function recordFailureSignature(data, context) {
 }
 
 /**
+ * Build the per-proposal-domain execution payload (#2765) from a completed task that
+ * took the Layered-Intelligence hand-off path, or null when the task carries no LI
+ * marker. The marker (`metadata.taskLiProposal`) is projected onto the agent by
+ * agentLifecycle and reconstructed onto the task by the completion listener; it names
+ * the proposal's app, slug, and domain (scope). `success` is the validation-authoritative
+ * learning outcome, so it agrees with the byTaskType aggregate for the same run.
+ */
+function deriveLiExecutionPayload(task, success, { errorCategory = null, validationPassed = null } = {}) {
+  const li = task?.metadata?.taskLiProposal;
+  if (!li || typeof li !== 'object' || Array.isArray(li)) return null;
+  if (!li.appId || !li.slug) return null;
+  // Carry the run's failure signal so the outcome store can classify the
+  // execution-failure taxonomy (#2764 §1). The store keys classification off
+  // `success` and ignores these on a successful run (where they are already null
+  // upstream anyway — a clean run has no failureSignature), so they are forwarded
+  // as-is. `errorCategory` is the raw agentErrorAnalysis category; `validationPassed`
+  // distinguishes a clean-exit criterion miss (→ testing) when no error matched.
+  return {
+    appId: li.appId,
+    slug: li.slug,
+    scope: li.scope ?? null,
+    success: !!success,
+    errorCategory,
+    validationPassed
+  };
+}
+
+/**
  * Record a completed task for learning
  */
 export async function recordTaskCompletion(agent, task) {
-  return withLock(async () => {
+  // Per-proposal-domain execution attribution (#2765) — captured inside the lock (it
+  // needs this run's validation-authoritative outcome) but WRITTEN after it, so the LI
+  // outcome store's I/O never runs under the learning lock and the generic learning
+  // store stays statically decoupled from LI (lazy import below).
+  let liExecPayload = null;
+  const result = await withLock(async () => {
   const data = await loadLearningData();
 
   // Structured telemetry context (failure signature + execution context +
@@ -327,6 +360,11 @@ export async function recordTaskCompletion(agent, task) {
   // (ordinary task output tripping a loose pattern). Structured provider/runner
   // signals and pre-marker records (null origin) keep the category-only behavior.
   const isEnvironmentalFailure = shouldDivertToEnvironmental(outcomeSuccess, errorCategory, errorOrigin);
+
+  // Attribute an LI hand-off's outcome to the proposal's DOMAIN (#2765). Only a
+  // non-environmental completion counts: a rate-limit/outage says nothing about the
+  // domain, exactly as it is barred from denting the byTaskType aggregate below.
+  liExecPayload = isEnvironmentalFailure ? null : deriveLiExecutionPayload(task, outcomeSuccess, { errorCategory, validationPassed: telemetry.validationPassed });
 
   // Correlation-quality prediction snapshot (issue #2344) — captured HERE, before
   // ANY of this run's aggregates (byModelTier, routingAccuracy, failureSignatures)
@@ -556,6 +594,17 @@ export async function recordTaskCompletion(agent, task) {
 
   return data;
   });
+
+  // Post-lock, best-effort: record the LI hand-off execution outcome keyed to the
+  // proposal's domain (#2765). Lazy import keeps the learning store's static module
+  // graph free of LI; a failure here never disturbs the learning write above.
+  if (liExecPayload) {
+    await import('../layeredIntelligenceOutcomes.js')
+      .then(m => m.recordProposalExecution(liExecPayload))
+      .catch(err => console.error(`❌ 📚 TaskLearning: failed to record LI proposal execution: ${err.message}`));
+  }
+
+  return result;
 }
 
 /**
@@ -592,6 +641,12 @@ export async function resetTaskTypeLearning(taskType) {
   // Purge this type from the environmental buckets FIRST (#2618): an
   // outage-only type has no byTaskType bucket, so the purge must not sit
   // behind the task-type-not-found early return below.
+  //
+  // Deliberately part of the RESET path, not of removeTaskTypeFromLearningData:
+  // this function is "the user says this type is fixed — forget all of it", so
+  // dropping its outage history is intended. A caller repairing mis-recorded
+  // BUCKET data (e.g. migration 197) must not purge outages, which are recorded
+  // from real errors and are true regardless of any bucket-level bug.
   const environmentalRemoved = purgeEnvironmentalFailuresForType(data, taskType);
 
   const metrics = data.byTaskType[taskType];
@@ -604,22 +659,64 @@ export async function resetTaskTypeLearning(taskType) {
     return { reset: false, reason: 'task-type-not-found', taskType };
   }
 
-  // Subtract this task type's contribution from totals
-  data.totals.completed -= metrics.completed;
-  data.totals.succeeded -= metrics.succeeded;
-  data.totals.failed -= metrics.failed;
-  data.totals.totalDurationMs -= metrics.totalDurationMs;
-  if (data.totals.successDurationMs) {
-    data.totals.successDurationMs = Math.max(0, data.totals.successDurationMs - (metrics.successDurationMs || 0));
+  const previousMetrics = removeTaskTypeFromLearningData(data, taskType);
+
+  await saveLearningData(data);
+
+  emitLog('info', `Reset learning data for ${taskType} (was ${metrics.successRate}% success after ${metrics.completed} attempts)`, {
+    taskType,
+    previousSuccessRate: metrics.successRate,
+    previousAttempts: metrics.completed
+  }, '📚 TaskLearning');
+
+  return { reset: true, taskType, previousMetrics };
+  });
+}
+
+/**
+ * Remove one task type's contribution from every learning aggregate, in place.
+ * Pure (mutates `data`, no I/O) so both the runtime reset and offline repairs
+ * (migrations) can share ONE definition of "what a task type contributes to" —
+ * a second, hand-rolled version would silently drift as aggregates are added.
+ *
+ * Unwinds: `totals` (+ recomputed max/ETA), `errorPatterns`, `byModelTier` (via
+ * `routingAccuracy`, which must be read BEFORE it is deleted), `routingAccuracy`,
+ * `byTaskType`, `failureSignatures` (#2619), and `correlationWindow` (#2619).
+ *
+ * Does NOT touch `environmentalFailures` — that is a separate ledger fed only by
+ * real outages, so removing it is a policy decision belonging to the caller (see
+ * `resetTaskTypeLearning`, which purges it; migration 197, which must not).
+ *
+ * @param {Object} data - the loaded learning store, mutated in place
+ * @param {string} taskType - e.g. 'self-improve:layered-intelligence'
+ * @returns {{ completed:number, succeeded:number, failed:number, successRate:number }|null}
+ *   the removed bucket's headline metrics, or null when the type had no bucket.
+ */
+export function removeTaskTypeFromLearningData(data, taskType) {
+  const metrics = data?.byTaskType?.[taskType];
+  if (!metrics) return null;
+
+  // Subtract this task type's contribution from totals. Guarded because this helper
+  // also runs OFFLINE against a raw on-disk store (migrations), where the defaults
+  // loadLearningData applies at runtime haven't been layered on — and an aggregate
+  // this function throws on would block boot rather than repair anything.
+  if (data.totals && typeof data.totals === 'object') {
+    data.totals.completed -= metrics.completed;
+    data.totals.succeeded -= metrics.succeeded;
+    data.totals.failed -= metrics.failed;
+    data.totals.totalDurationMs -= metrics.totalDurationMs;
+    if (data.totals.successDurationMs) {
+      data.totals.successDurationMs = Math.max(0, data.totals.successDurationMs - (metrics.successDurationMs || 0));
+    }
+    // Recalculate max from remaining task types (we can't subtract a max)
+    const remainingTypes = Object.entries(data.byTaskType).filter(([t]) => t !== taskType);
+    data.totals.successMaxDurationMs = remainingTypes.reduce((max, [, m]) => Math.max(max, m.successMaxDurationMs || 0), 0);
+    Object.assign(data.totals, calculateDurationETA(data.totals));
   }
-  // Recalculate max from remaining task types (we can't subtract a max)
-  const remainingTypes = Object.entries(data.byTaskType).filter(([t]) => t !== taskType);
-  data.totals.successMaxDurationMs = remainingTypes.reduce((max, [, m]) => Math.max(max, m.successMaxDurationMs || 0), 0);
-  Object.assign(data.totals, calculateDurationETA(data.totals));
 
   // Clean up error patterns referencing this task type
-  for (const [category, pattern] of Object.entries(data.errorPatterns)) {
-    const taskTypeCount = pattern.taskTypes[taskType] || 0;
+  for (const [category, pattern] of Object.entries(data.errorPatterns || {})) {
+    const taskTypeCount = pattern?.taskTypes?.[taskType] || 0;
     if (taskTypeCount > 0) {
       pattern.count -= taskTypeCount;
       delete pattern.taskTypes[taskType];
@@ -685,25 +782,12 @@ export async function resetTaskTypeLearning(taskType) {
     data.correlationWindow = data.correlationWindow.filter((row) => row?.taskType !== taskType);
   }
 
-  await saveLearningData(data);
-
-  emitLog('info', `Reset learning data for ${taskType} (was ${metrics.successRate}% success after ${metrics.completed} attempts)`, {
-    taskType,
-    previousSuccessRate: metrics.successRate,
-    previousAttempts: metrics.completed
-  }, '📚 TaskLearning');
-
   return {
-    reset: true,
-    taskType,
-    previousMetrics: {
-      completed: metrics.completed,
-      succeeded: metrics.succeeded,
-      failed: metrics.failed,
-      successRate: metrics.successRate
-    }
+    completed: metrics.completed,
+    succeeded: metrics.succeeded,
+    failed: metrics.failed,
+    successRate: metrics.successRate
   };
-  });
 }
 
 /**
@@ -848,6 +932,16 @@ export async function recalculateDurationStats() {
       // declared criterion is NOT a success (excluded from success-only ETAs),
       // and a commit-found run is a success even on a non-zero exit. Falls back to
       // the raw exit-code success for records that predate validationPassed.
+      // NOTE (#2696): the coordinator commit-criterion exemption is deliberately NOT
+      // applied here. This rebuild re-derives success-only DURATIONS from archives but
+      // does not rebuild the `succeeded` COUNTS, and totals.successDurationMs (below) is
+      // summed unconditionally. Overriding a coordinator's fossil validationPassed:false
+      // to an exit-code success here would add its duration to totals while migration 198
+      // had already removed its count — inflating the totals ETA. A post-fix coordinator
+      // run carries validationPassed:null (finalize returns null) and is already counted
+      // correctly; a pre-fix fossil is left excluded so durations stay consistent with the
+      // purged counts. The residual archives-vs-counts skew of this manual rebuild predates
+      // #2696 and is ETA-cosmetic.
       const vp = meta.result?.validationPassed;
       const outcomeSuccess = typeof vp === 'boolean' ? vp : !!meta.result?.success;
       if (!outcomeSuccess || duration <= 0) continue;

@@ -322,10 +322,10 @@ describe('songs entity enrollment (SongBook)', () => {
   });
 });
 
-// Read the raw stored record (including tombstones) by bypassing the read filter.
+// Read the raw stored record (including tombstones) by bypassing the read
+// filter. getRawRecords returns the per-record map with tombstones, so this is
+// layout-agnostic (works against the collectionStore per-record files).
 async function rawRecord(type, id) {
-  const { readFile } = await import('fs/promises');
-  const file = join(getTempRoot(), 'brain', `${type}.json`);
-  const data = JSON.parse(await readFile(file, 'utf-8'));
-  return data.records[id];
+  const map = await brainStorage.getRawRecords(type);
+  return map[id];
 }

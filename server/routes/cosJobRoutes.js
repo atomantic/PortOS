@@ -156,9 +156,12 @@ router.post('/jobs/:id/trigger', asyncHandler(async (req, res) => {
     return res.json({ success: result.success !== false, type: 'shell', ...result });
   }
 
-  // Script jobs run their built-in handler directly
+  // Script jobs run their built-in handler directly. This is the manual
+  // "Run now" path — the user explicitly requested it, so mark it foreground
+  // (`manual: true`) and any fan-out handler reports failures individually
+  // rather than coalescing them as unattended background work.
   if (autonomousJobs.isScriptJob(job)) {
-    const result = await autonomousJobs.executeScriptJob(job).catch(err => ({
+    const result = await autonomousJobs.executeScriptJob(job, { manual: true }).catch(err => ({
       success: false,
       error: err.message
     }));

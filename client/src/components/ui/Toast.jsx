@@ -5,6 +5,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { uuidv4 } from '../../lib/uuid.js';
 
 let toasts = [];
 const listeners = new Set();
@@ -26,7 +27,10 @@ const fingerprintFor = (content, type) =>
   typeof content === 'string' ? `${type}::${content}` : null;
 
 function add(content, opts = {}, type = 'default') {
-  const id = opts.id || crypto.randomUUID();
+  // `uuidv4`, not `crypto.randomUUID` — the latter is undefined on insecure
+  // origins (PortOS over plain HTTP via Tailscale), where it threw out of
+  // every toast, including the ones the API client raises to report a failure.
+  const id = opts.id || uuidv4();
   const duration = opts.duration !== undefined ? opts.duration : (type === 'loading' ? Infinity : DEFAULT_DURATION);
 
   // Skip if an identical toast was just shown — but only when the caller

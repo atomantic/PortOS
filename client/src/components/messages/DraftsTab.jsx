@@ -1,14 +1,25 @@
 import { useState, useEffect, useCallback } from 'react';
-import { FileText, Trash2, Send, Check, RefreshCw } from 'lucide-react';
+import { FileText, Trash2, Send, Check, RefreshCw, Copy } from 'lucide-react';
 import toast from '../ui/Toast';
 import * as api from '../../services/api';
 import InlineConfirmRow from '../ui/InlineConfirmRow';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
+import { copyToClipboard } from '../../lib/clipboard.js';
 
 export default function DraftsTab({ accounts }) {
   const [drafts, setDrafts] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [copiedId, setCopiedId] = useState(null);
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
+
+  const handleCopy = async (draft) => {
+    // null → suppress the helper's success toast (we show a "Copied" checkmark);
+    // the helper still owns the single failure toast.
+    const ok = await copyToClipboard(draft.body || '', null);
+    if (!ok) return;
+    setCopiedId(draft.id);
+    setTimeout(() => setCopiedId((prev) => (prev === draft.id ? null : prev)), 1500);
+  };
 
   const fetchDrafts = useCallback(async () => {
     setLoading(true);
@@ -44,7 +55,9 @@ export default function DraftsTab({ accounts }) {
 
   const getAccountName = (accountId) => {
     const account = accounts.find(a => a.id === accountId);
-    return account?.name || 'Unknown';
+    // Tribe-outreach drafts (#2158) for iMessage/Signal have no message account.
+    if (!account) return accountId ? 'Unknown' : 'Tribe outreach';
+    return account.name;
   };
 
   const statusColors = {
@@ -94,7 +107,7 @@ export default function DraftsTab({ accounts }) {
                 )}
               </div>
               <div className="flex items-center gap-1">
-                {draft.status === 'draft' && (
+                {draft.status === 'draft' && draft.sendVia !== 'review' && (
                   <button
                     onClick={() => handleApprove(draft.id)}
                     className="p-1 text-gray-400 hover:text-port-success transition-colors"
@@ -103,7 +116,11 @@ export default function DraftsTab({ accounts }) {
                     <Check size={16} />
                   </button>
                 )}
-                {draft.status === 'approved' && (
+                {/* Review-only drafts (e.g. Tribe outreach for iMessage/Signal,
+                    which have no programmatic send channel) never offer Send —
+                    messageSender can't deliver them, so the button would only
+                    fail. Send them yourself from the Messages/Signal app. */}
+                {draft.status === 'approved' && draft.sendVia !== 'review' && (
                   <button
                     onClick={() => handleSend(draft.id)}
                     className="p-1 text-gray-400 hover:text-port-accent transition-colors"
@@ -112,7 +129,25 @@ export default function DraftsTab({ accounts }) {
                     <Send size={16} />
                   </button>
                 )}
-                {['draft', 'pending_review', 'failed'].includes(draft.status) && (
+                {draft.sendVia === 'review' && (
+                  <>
+                    <span className="text-xs text-gray-500" title="No programmatic send — copy and send from your messaging app">
+                      Review only
+                    </span>
+                    <button
+                      onClick={() => handleCopy(draft)}
+                      className="p-1 text-gray-400 hover:text-port-accent transition-colors"
+                      title="Copy message"
+                      aria-label="Copy message"
+                    >
+                      {copiedId === draft.id ? <Check size={16} /> : <Copy size={16} />}
+                    </button>
+                  </>
+                )}
+                {/* Review-only drafts never reach a 'sent' state (there's no send
+                    channel), so keep Delete available at any status — otherwise an
+                    approved iMessage/Signal draft would be stuck with no action. */}
+                {(['draft', 'pending_review', 'failed'].includes(draft.status) || draft.sendVia === 'review') && (
                   <button
                     onClick={() => requestDelete(draft.id)}
                     className="p-1 text-gray-400 hover:text-port-error transition-colors"
@@ -127,7 +162,9 @@ export default function DraftsTab({ accounts }) {
             {draft.to?.length > 0 && (
               <div className="text-xs text-gray-500">To: {draft.to.join(', ')}</div>
             )}
-            <div className="text-sm text-gray-400 whitespace-pre-wrap line-clamp-3">
+            {/* Review-only drafts are sent by hand, so show the full body (not
+                clamped) — it's the text the user copies into their messaging app. */}
+            <div className={`text-sm text-gray-400 whitespace-pre-wrap ${draft.sendVia === 'review' ? '' : 'line-clamp-3'}`}>
               {draft.body}
             </div>
             {isConfirming(draft.id) && (

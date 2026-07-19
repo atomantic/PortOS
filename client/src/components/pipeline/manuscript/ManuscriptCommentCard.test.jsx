@@ -75,7 +75,7 @@ describe('ManuscriptCommentCard keyboard shortcuts (#1603)', () => {
     generatePipelineManuscriptFix.mockResolvedValue({ comment: baseComment });
     renderCard();
     pressKey('g');
-    expect(generatePipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'c1', expect.any(Object));
+    expect(generatePipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'c1', expect.any(Object), { silent: true });
     await settle();
   });
 
@@ -117,7 +117,7 @@ describe('ManuscriptCommentCard keyboard shortcuts (#1603)', () => {
     pressKey('a');
     expect(acceptPipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'c1', expect.objectContaining({
       edits: expect.arrayContaining([expect.objectContaining({ replace: 'new text' })]),
-    }));
+    }), { silent: true });
     await settle();
   });
 
@@ -214,7 +214,7 @@ describe('ManuscriptCommentCard — manual edit path (#1610)', () => {
 
     await waitFor(() => expect(acceptPipelineManuscriptFix).toHaveBeenCalledWith('ser-1', 'c1', {
       edits: [{ issueId: 'iss-1', stageId: 'script', issueNumber: 5, find: 'the muddled span', replace: 'the clear span' }],
-    }));
+    }, { silent: true }));
     await waitFor(() => expect(onAccepted).toHaveBeenCalled());
   });
 

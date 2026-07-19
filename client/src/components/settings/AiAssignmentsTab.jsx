@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { ArrowRight, Bot, RefreshCw, Save, Search } from 'lucide-react';
 import toast from '../ui/Toast';
 import { getAiAssignments, updateAiAssignment } from '../../services/api';
+import useVisionModelIds from '../../hooks/useVisionModelIds.js';
 import {
   providerDisplayName,
   assignmentProviderOptions,
@@ -45,6 +46,11 @@ export default function AiAssignmentsTab() {
   const [fromProvider, setFromProvider] = useState('');
   const [toProvider, setToProvider] = useState('');
   const [bulkSaving, setBulkSaving] = useState(false);
+  // Authoritative vision-capable ids straight from the local backends, so a
+  // vision-filtered row (Scene evaluation) isn't reduced to an empty list by
+  // the client's id regex not knowing a newer VLM family. This table renders a
+  // <select> either way (no "none installed" claim), so it needs the map only.
+  const { idsByProvider: visionIdsByProvider, loaded: visionLoaded } = useVisionModelIds();
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -131,7 +137,7 @@ export default function AiAssignmentsTab() {
     const savedIds = [];
     for (const entry of targets) {
       // Vision-filtered rows seed the first eligible VLM, not a text-only default.
-      const targetDefaultModel = assignmentDefaultModel(entry, data.providers, toProvider);
+      const targetDefaultModel = assignmentDefaultModel(entry, data.providers, toProvider, visionIdsByProvider);
       const nextModel = entry.modelEditable === false ? (drafts[entry.id]?.model || '') : targetDefaultModel;
       const next = await updateAiAssignment(entry.id, {
         providerId: toProvider,
@@ -252,8 +258,13 @@ export default function AiAssignmentsTab() {
             {filtered.map((entry) => {
               const draft = drafts[entry.id] || getDraft(entry);
               const providerOptions = assignmentProviderOptions(entry, data.providers);
-              const modelOptions = assignmentModelOptions(entry, data.providers, draft.providerId);
+              const modelOptions = assignmentModelOptions(entry, data.providers, draft.providerId, visionIdsByProvider);
               const dirty = !sameDraft(entry, draft);
+              // Choosing a provider seeds its default model; for a vision row
+              // that seed is only correct once the capability scan has settled.
+              // Picking during it leaves a blank model pin, which the evaluator
+              // resolves to the provider's own (possibly text-only) default.
+              const visionUnknown = entry.modelFilter === 'vision' && !visionLoaded;
               return (
                 <tr key={entry.id} className="align-top">
                   <td className="px-3 py-3 text-sm text-gray-300 whitespace-nowrap">
@@ -274,11 +285,12 @@ export default function AiAssignmentsTab() {
                           const nextProviderId = e.target.value;
                           // Vision-filtered rows (e.g. Scene evaluation) seed the
                           // first eligible VLM when the provider default is text-only.
-                          const nextDefault = assignmentDefaultModel(entry, data.providers, nextProviderId);
+                          const nextDefault = assignmentDefaultModel(entry, data.providers, nextProviderId, visionIdsByProvider);
                           setDraft(entry.id, { providerId: nextProviderId, model: entry.modelEditable === false ? draft.model : nextDefault });
                         }}
                         aria-label={`Provider for ${entry.label}`}
-                        className="w-full bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white"
+                        disabled={visionUnknown}
+                        className="w-full bg-port-card border border-port-border rounded px-2 py-2 text-sm text-white disabled:opacity-50"
                       >
                         <option value="">Default / unset</option>
                         {providerOptions.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}

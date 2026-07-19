@@ -200,3 +200,62 @@ describe('detectArm64Python', () => {
     await expect(detectArm64Python()).resolves.toBe('/opt/homebrew/bin/python3');
   });
 });
+
+describe('hasMfluxTrain', () => {
+  beforeEach(resetState);
+
+  it('is false for a null/empty path', async () => {
+    const { hasMfluxTrain } = await loadModule();
+    expect(hasMfluxTrain(null)).toBe(false);
+    expect(hasMfluxTrain('')).toBe(false);
+  });
+
+  it('is true when mflux-train sits beside the python', async () => {
+    mockState.presentPaths.add('/opt/homebrew/bin/mflux-train');
+    const { hasMfluxTrain } = await loadModule();
+    expect(hasMfluxTrain('/opt/homebrew/bin/python3')).toBe(true);
+  });
+
+  it('is false when mflux-train is absent beside the python', async () => {
+    const { hasMfluxTrain } = await loadModule();
+    expect(hasMfluxTrain('/opt/homebrew/bin/python3')).toBe(false);
+  });
+});
+
+describe('resolveMfluxPython', () => {
+  beforeEach(resetState);
+  // darwin homedir is /Users/test → dedicated venv python is
+  // /Users/test/.portos/venv-mflux/bin/python3, mflux-train beside it.
+  const VENV_PY = '/Users/test/.portos/venv-mflux/bin/python3';
+  const VENV_TRAIN = '/Users/test/.portos/venv-mflux/bin/mflux-train';
+
+  it('prefers the configured python when it ships mflux-train (existing --user layout)', async () => {
+    mockState.presentPaths.add('/opt/homebrew/bin/mflux-train');
+    mockState.presentPaths.add(VENV_TRAIN); // even when the venv also exists, configured wins
+    const { resolveMfluxPython } = await loadModule();
+    expect(resolveMfluxPython('/opt/homebrew/bin/python3')).toBe('/opt/homebrew/bin/python3');
+  });
+
+  it('falls back to the dedicated venv when the configured python lacks mflux-train', async () => {
+    mockState.presentPaths.add(VENV_TRAIN);
+    const { resolveMfluxPython } = await loadModule();
+    expect(resolveMfluxPython('/opt/homebrew/bin/python3')).toBe(VENV_PY);
+  });
+
+  it('discovers the dedicated venv even when no python is configured', async () => {
+    mockState.presentPaths.add(VENV_TRAIN);
+    const { resolveMfluxPython } = await loadModule();
+    expect(resolveMfluxPython(null)).toBe(VENV_PY);
+  });
+
+  it('returns the configured path unchanged when neither ships mflux-train (honest "not installed")', async () => {
+    const { resolveMfluxPython } = await loadModule();
+    expect(resolveMfluxPython('/opt/homebrew/bin/python3')).toBe('/opt/homebrew/bin/python3');
+  });
+
+  it('returns null when nothing is configured and no venv exists', async () => {
+    const { resolveMfluxPython } = await loadModule();
+    expect(resolveMfluxPython(null)).toBeNull();
+    expect(resolveMfluxPython()).toBeNull();
+  });
+});

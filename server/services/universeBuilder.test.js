@@ -715,6 +715,32 @@ describe("universeBuilder service", () => {
       expect(all[0].updatedAt).toBe(all[0].deletedAt);
     });
 
+    it("countUniverses excludes tombstones and agrees with listUniverses().length", async () => {
+      // countUniverses is the cheap tally the character skill registry reads instead
+      // of materializing every record + the run history (#2729). Pin it against
+      // listUniverses so the two can never disagree — the specific bug a naive
+      // listIds().length would introduce is counting tombstones, since listIds()
+      // returns live + ephemeral + tombstones and leaves filtering to the service.
+      expect(await svc.countUniverses()).toBe(0);
+
+      const live = await seedWorld();
+      const doomed = await seedWorld({ name: "Doomed World" });
+      expect(await svc.countUniverses()).toBe(2);
+      expect(await svc.countUniverses()).toBe((await svc.listUniverses()).length);
+
+      await svc.deleteUniverse(doomed.id);
+      // The tombstone is still ON DISK (soft delete) — listIds() would still see it.
+      expect(await svc.listUniverses({ includeDeleted: true })).toHaveLength(2);
+      // ...but it must NOT be counted.
+      expect(await svc.countUniverses()).toBe(1);
+      expect(await svc.countUniverses()).toBe((await svc.listUniverses()).length);
+      expect((await svc.listUniverses()).map((u) => u.id)).toEqual([live.id]);
+
+      // includeDeleted mirrors listUniverses's own option, tombstones and all.
+      expect(await svc.countUniverses({ includeDeleted: true }))
+        .toBe((await svc.listUniverses({ includeDeleted: true })).length);
+    });
+
     it("getUniverse returns 404 for tombstoned, includeDeleted exposes it", async () => {
       const w = await seedWorld();
       await svc.deleteUniverse(w.id);

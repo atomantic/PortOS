@@ -16,12 +16,14 @@ import { getWorkouts, getBodyHistory, getBloodPressureHistory } from './meatspac
 
 // Each domain contributes an array of `{ date: 'YYYY-MM-DD', ... }` records.
 // `label` is the human-facing name shown per-domain in the widget.
+// `load(options)` forwards `{ strict }` so a caller that counts these can refuse an
+// unreadable file rather than a fake empty one (#2726).
 const DOMAINS = [
-  { key: 'alcohol', label: 'Alcohol', load: () => getDailyAlcohol() },
-  { key: 'nicotine', label: 'Nicotine', load: () => getDailyNicotine() },
-  { key: 'workouts', label: 'Workouts', load: () => getWorkouts() },
-  { key: 'body', label: 'Body', load: () => getBodyHistory() },
-  { key: 'bloodPressure', label: 'Blood Pressure', load: () => getBloodPressureHistory() },
+  { key: 'alcohol', label: 'Alcohol', load: (o) => getDailyAlcohol(undefined, undefined, o) },
+  { key: 'nicotine', label: 'Nicotine', load: (o) => getDailyNicotine(undefined, undefined, o) },
+  { key: 'workouts', label: 'Workouts', load: (o) => getWorkouts(o) },
+  { key: 'body', label: 'Body', load: (o) => getBodyHistory(o) },
+  { key: 'bloodPressure', label: 'Blood Pressure', load: (o) => getBloodPressureHistory(o) },
 ];
 
 // Consecutive days (ending today, or yesterday if today is empty) that have at
@@ -69,9 +71,28 @@ function calculateLongestStreak(loggedDates) {
   return longest;
 }
 
-export async function getLoggingStats() {
+/**
+ * @param {{ strict?: boolean }} [options] - `strict: true` propagates a domain's read
+ *   failure instead of substituting an empty entry list for it (#2726).
+ *
+ *   The default per-domain `.catch(() => [])` is right for the dashboard widget: one
+ *   unreadable file shouldn't blank the whole streak card. It is wrong for anything
+ *   that COUNTS these — all five domains can fail and still produce a perfectly
+ *   plausible `totalLogged: 0`, which reads as "you have never logged anything"
+ *   rather than "we could not tell". Under strict the first failure rejects, and the
+ *   caller renders that as explicitly unavailable.
+ */
+export async function getLoggingStats({ strict = false } = {}) {
+  const loadEntries = async (d) => {
+    if (!strict) return (await d.load().catch(() => [])) || [];
+    const entries = await d.load({ strict: true });
+    // Validate, don't coerce: a non-array here means the loader returned something
+    // uncountable, which under strict must not silently become a zero.
+    if (!Array.isArray(entries)) throw new Error(`${d.key} logs unreadable`);
+    return entries;
+  };
   const perDomain = await Promise.all(
-    DOMAINS.map(async (d) => ({ ...d, entries: (await d.load().catch(() => [])) || [] }))
+    DOMAINS.map(async (d) => ({ ...d, entries: await loadEntries(d) }))
   );
 
   const today = new Date();

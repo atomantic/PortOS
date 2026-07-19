@@ -8,6 +8,7 @@ import CityMiniMap from './CityMiniMap';
 import CityFilterBar from './CityFilterBar';
 import CityFocusPanel from './CityFocusPanel';
 import { CITY_PANE_IDS, CITY_INTEL_PANE_IDS, CITY_PANE_LABELS } from './cityPanes';
+import { birthDateCta } from '../../utils/characterXp';
 
 // A 44×44 dock control. `active`/`aria-pressed` mark a toggled disclosure launcher;
 // omit `active` for one-shot actions (photo, history) that just fire a callback.
@@ -101,6 +102,10 @@ export default function CityHudCompact({
   );
   const criticalCount = items.filter(i => i.severity === 'critical').length;
   const hasApps = (apps || []).length > 0;
+  // No usable level → the birth-date CTA distinguishes a genuinely unset date ("set") from a
+  // present-but-unusable one ("fix" — invalid/future/unreadable) so we don't tell the user to
+  // set a date they already entered (#2757). Null when a real level exists.
+  const birthCta = character && character.level == null ? birthDateCta(character.birthDateStatus) : null;
 
   const onSettings = location.pathname === '/city/settings';
   const goSettings = () => navigate(onSettings ? `/city${location.search}` : `/city/settings${location.search}`);
@@ -170,7 +175,7 @@ export default function CityHudCompact({
           <StatusDot on={connected} label={connected ? 'Link online' : 'Link offline'} onClass="bg-port-success shadow-[0_0_8px_rgba(34,197,94,0.6)]" offClass="bg-port-error" />
           <StatusDot on={cosStatus?.running} label={cosStatus?.running ? 'CoS running' : 'CoS idle'} onClass="bg-cyan-400 animate-pulse shadow-[0_0_8px_rgba(6,182,212,0.6)]" />
         </div>
-        {character?.level != null && (
+        {character?.level != null ? (
           <button
             type="button"
             onClick={() => navigate('/character')}
@@ -180,7 +185,26 @@ export default function CityHudCompact({
           >
             LV {character.level}
           </button>
-        )}
+        ) : birthCta ? (
+          // Character loaded but no usable level (age-based, #2673). Prompt the user to set the
+          // birth date — or FIX it when present-but-unusable (#2757) — routing to the age editor
+          // where the field lives.
+          <button
+            type="button"
+            onClick={() => navigate(birthCta.path)}
+            aria-label={`${birthCta.title} to show your level`}
+            title={birthCta.title}
+            // A present-but-unusable date (invalid/future/unreadable) renders in the warning color,
+            // matching the CharacterSheet "fix" prompt and the changelog's promise (#2757).
+            className={`bg-black/85 backdrop-blur-sm rounded-lg px-2.5 min-h-[44px] flex items-center font-pixel text-[11px] tracking-wider border ${
+              birthCta.kind === 'fix'
+                ? 'border-port-warning/50 text-port-warning'
+                : 'border-cyan-500/40 text-cyan-300/70'
+            }`}
+          >
+            {birthCta.badgeLabel}
+          </button>
+        ) : null}
       </div>
 
       {/* Focused building detail sheet (issue #2593) — replaces the disclosure sheet while a

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getTaskInputHook, getTaskOutputHook } from './taskTypeHooks.js';
+import { getTaskInputHook, getTaskOutputHook, isProgrammaticIoTaskType } from './taskTypeHooks.js';
 
 describe('taskTypeHooks registry', () => {
   it('resolves both hooks for layered-intelligence to callables', async () => {
@@ -14,5 +14,21 @@ describe('taskTypeHooks registry', () => {
     expect(await getTaskOutputHook('security')).toBeNull();
     expect(await getTaskInputHook('does-not-exist')).toBeNull();
     expect(await getTaskOutputHook('does-not-exist')).toBeNull();
+  });
+});
+
+describe('isProgrammaticIoTaskType (#2700)', () => {
+  it('recognizes a registered programmatic-I/O task type', () => {
+    expect(isProgrammaticIoTaskType('layered-intelligence')).toBe(true);
+  });
+
+  it('rejects unregistered types, non-strings, and inherited Object keys', () => {
+    expect(isProgrammaticIoTaskType('ui')).toBe(false);
+    expect(isProgrammaticIoTaskType('')).toBe(false);
+    expect(isProgrammaticIoTaskType(undefined)).toBe(false);
+    expect(isProgrammaticIoTaskType(null)).toBe(false);
+    // A truthiness check on the registry object would let these through.
+    expect(isProgrammaticIoTaskType('constructor')).toBe(false);
+    expect(isProgrammaticIoTaskType('toString')).toBe(false);
   });
 });

@@ -161,7 +161,7 @@ import { initSharing } from './services/sharing/index.js';
 import askRoutes from './routes/ask.js';
 import { ensureSelf, startPolling } from './services/instances.js';
 import { initSyncLog } from './services/brainSyncLog.js';
-import { backfillOriginInstanceId } from './services/brainStorage.js';
+import { backfillOriginInstanceId, brainCollectionStores } from './services/brainStorage.js';
 import { initSyncOrchestrator } from './services/syncOrchestrator.js';
 import { initSocket } from './services/socket.js';
 import { errorMiddleware, setupProcessErrorHandlers, asyncHandler, ServerError } from './lib/errorHandler.js';
@@ -212,7 +212,7 @@ import { verifyCollectionVersions } from './lib/collectionStore.js';
 import { conflictJournalStore } from './lib/conflictJournal.js';
 import { universeStore } from './services/universeBuilder.js';
 import { seriesStore } from './services/pipeline/series.js';
-import { commissionStore } from './services/creativeCommissions/store.js';
+import { commissionStore, backfillAllCommissionFeedback } from './services/creativeCommissions/store.js';
 import { issueStore } from './services/pipeline/issues.js';
 import { storyBuilderStore } from './services/storyBuilder.js';
 import { writersRoomStore } from './services/writersRoom/store.js';
@@ -283,7 +283,7 @@ await runMigrations({ rootDir: resolveInstallRoot(join(__dirname, '..')) }).catc
 // but DO NOT crash the server. PortOS is single-user (CLAUDE.md "Security
 // Model"); a hard exit on startup is worse than a noisy log the user can act
 // on. Returns per-store statuses for downstream telemetry; we discard them.
-await verifyCollectionVersions([universeStore(), seriesStore(), issueStore(), conflictJournalStore(), storyBuilderStore(), mediaCollectionStore(), loraDatasetStore, liOutcomesStore(), commissionStore()]).catch(err => {
+await verifyCollectionVersions([universeStore(), seriesStore(), issueStore(), conflictJournalStore(), storyBuilderStore(), mediaCollectionStore(), loraDatasetStore, liOutcomesStore(), commissionStore(), ...brainCollectionStores()]).catch(err => {
   console.error(`❌ Collection version check failed at startup: ${err?.stack ?? err}`);
 });
 
@@ -648,6 +648,12 @@ startSeriesAutopilotScheduler().catch(err => console.error(`❌ Series Autopilot
 // Commission. Boot only ARMS timers; nothing fires until a cadence elapses, and
 // each fire gates on creative autonomy `execute` + the daily cos budget (so an
 // `off`/`dry-run` install generates nothing). Sanctioned scheduled-automation.
+// Split any legacy INLINE commission feedback into the federated commissionFeedback
+// store (#2686) BEFORE arming the scheduler, so a fire reads the federated view.
+// Pure data movement (no LLM), idempotent, best-effort. The scripts/migrations
+// runner executes before the DB pool is up, so the data move lives here (see the
+// migration 194 registration stub); the table itself is created by ensureSchema.
+backfillAllCommissionFeedback().catch(err => console.error(`❌ Commission feedback backfill failed: ${err.message}`));
 startCommissionScheduler().catch(err => console.error(`❌ Creative Commission scheduler init failed: ${err.message}`));
 // Initialize CyberCity snapshot scheduler — records periodic city-state frames
 // for the historical timeline scrubber (issue #877).

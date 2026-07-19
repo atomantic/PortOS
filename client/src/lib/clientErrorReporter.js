@@ -10,6 +10,7 @@
  */
 
 import { evictOldest } from './boundedMap.js';
+import { isExtensionError } from './extensionErrors.js';
 
 const ENDPOINT = '/api/client-errors';
 const MIN_SEND_INTERVAL_MS = 1000;
@@ -142,7 +143,7 @@ function safeBody(payload) {
 /**
  * Report a client-side error. Resolves to:
  *   - `{ sent: true }` — sent to the server.
- *   - `{ sent: false, reason: 'duplicate' | 'rate-limited' | 'no-fetch' | 'transport-error' | 'caught' | 'empty' }`
+ *   - `{ sent: false, reason: 'duplicate' | 'extension' | 'rate-limited' | 'no-fetch' | 'transport-error' | 'caught' | 'empty' }`
  *
  * Never throws — any synchronous exception while building the payload or any
  * fetch failure resolves to `{ sent: false, reason }`. This is critical because
@@ -158,6 +159,11 @@ export async function reportClientError(input) {
   try {
     payload = buildPayload(input);
     if (!payload.message) return { sent: false, reason: 'empty' };
+
+    // Before the throttle below, so an extension error can't consume the 1/sec
+    // slot and drop a real PortOS error arriving behind it. See
+    // lib/extensionErrors.js for why we filter these at all.
+    if (isExtensionError(payload)) return { sent: false, reason: 'extension' };
 
     if (now - lastSentAt < MIN_SEND_INTERVAL_MS) {
       return { sent: false, reason: 'rate-limited' };

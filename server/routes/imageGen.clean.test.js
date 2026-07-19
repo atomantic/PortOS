@@ -74,8 +74,8 @@ beforeAll(async () => {
   // to a real path when the route reads from it.
   sandbox = await mkdtemp(join(tmpdir(), 'portos-imageclean-'));
   ({ default: imageGenRoutes } = await import('./imageGen.js'));
-  // Noisy 16×16 RGB so light vs aggressive denoise produce visibly different
-  // outputs. A solid-color fixture would round-trip identically through both.
+  // Noisy 16×16 RGB so the resize-squeeze round-trip visibly moves pixels.
+  // A solid-color fixture would round-trip near-identically.
   const raw = Buffer.alloc(16 * 16 * 3);
   for (let i = 0; i < raw.length; i += 1) raw[i] = (i * 73 + 11) % 256;
   pngFixture = await sharp(raw, { raw: { width: 16, height: 16, channels: 3 } })
@@ -101,7 +101,7 @@ describe('POST /api/image-gen/:filename/clean', () => {
     addItemMock.mockResolvedValue({});
   });
 
-  it('cleans an existing PNG and writes _clean-aggressive.png back to the gallery', async () => {
+  it('cleans an existing PNG and writes _clean-resize-squeeze.png back to the gallery', async () => {
     await writeFile(join(sandbox, 'render-1.png'), pngFixture);
     await writeFile(join(sandbox, 'render-1.metadata.json'), JSON.stringify({
       prompt: 'a red square', seed: 42, modelId: 'flux-v1',
@@ -109,16 +109,16 @@ describe('POST /api/image-gen/:filename/clean', () => {
 
     const res = await request(app).post('/api/image-gen/render-1.png/clean').send({});
     expect(res.status).toBe(200);
-    expect(res.body.filename).toBe('render-1_clean-aggressive.png');
+    expect(res.body.filename).toBe('render-1_clean-resize-squeeze.png');
     expect(res.body.cleanedFrom).toBe('render-1.png');
-    expect(res.body.cleanLevel).toBe('aggressive');
+    expect(res.body.cleanLevel).toBe('resize-squeeze');
     // Source sidecar carried forward so the cleaned copy retains lineage.
     expect(res.body.prompt).toBe('a red square');
     expect(res.body.seed).toBe(42);
     expect(res.body.modelId).toBe('flux-v1');
 
-    expect(existsSync(join(sandbox, 'render-1_clean-aggressive.png'))).toBe(true);
-    expect(existsSync(join(sandbox, 'render-1_clean-aggressive.metadata.json'))).toBe(true);
+    expect(existsSync(join(sandbox, 'render-1_clean-resize-squeeze.png'))).toBe(true);
+    expect(existsSync(join(sandbox, 'render-1_clean-resize-squeeze.metadata.json'))).toBe(true);
   });
 
   it('idempotent: running clean twice overwrites instead of accumulating', async () => {
@@ -126,7 +126,7 @@ describe('POST /api/image-gen/:filename/clean', () => {
     const first = await request(app).post('/api/image-gen/render-3.png/clean').send({});
     const second = await request(app).post('/api/image-gen/render-3.png/clean').send({});
     expect(first.body.filename).toBe(second.body.filename);
-    expect(first.body.filename).toBe('render-3_clean-aggressive.png');
+    expect(first.body.filename).toBe('render-3_clean-resize-squeeze.png');
   });
 
   it('rejects non-PNG filenames (gallery is PNG-only)', async () => {
@@ -147,9 +147,9 @@ describe('POST /api/image-gen/:filename/clean', () => {
   it('writes a sidecar that records the cleaning lineage', async () => {
     await writeFile(join(sandbox, 'render-6.png'), pngFixture);
     await request(app).post('/api/image-gen/render-6.png/clean').send({});
-    const sidecar = JSON.parse(await readFile(join(sandbox, 'render-6_clean-aggressive.metadata.json'), 'utf-8'));
+    const sidecar = JSON.parse(await readFile(join(sandbox, 'render-6_clean-resize-squeeze.metadata.json'), 'utf-8'));
     expect(sidecar.cleanedFrom).toBe('render-6.png');
-    expect(sidecar.cleanLevel).toBe('aggressive');
+    expect(sidecar.cleanLevel).toBe('resize-squeeze');
     expect(typeof sidecar.createdAt).toBe('string');
   });
 
@@ -163,7 +163,7 @@ describe('POST /api/image-gen/:filename/clean', () => {
     expect(res.body.hidden).toBeUndefined();
     expect(res.body.prompt).toBe('a hidden render');
 
-    const sidecar = JSON.parse(await readFile(join(sandbox, 'render-hidden_clean-aggressive.metadata.json'), 'utf-8'));
+    const sidecar = JSON.parse(await readFile(join(sandbox, 'render-hidden_clean-resize-squeeze.metadata.json'), 'utf-8'));
     expect(sidecar.hidden).toBeUndefined();
   });
 
@@ -171,7 +171,7 @@ describe('POST /api/image-gen/:filename/clean', () => {
     await writeFile(join(sandbox, 'my..render.png'), pngFixture);
     const res = await request(app).post(`/api/image-gen/${encodeURIComponent('my..render.png')}/clean`).send({});
     expect(res.status).toBe(200);
-    expect(res.body.filename).toBe('my..render_clean-aggressive.png');
+    expect(res.body.filename).toBe('my..render_clean-resize-squeeze.png');
   });
 
   it('output file size is reflected in sizeBytes / sizeAfter', async () => {
@@ -199,8 +199,8 @@ describe('POST /api/image-gen/:filename/clean', () => {
       expect(addItemMock).toHaveBeenCalledTimes(2);
       const calls = addItemMock.mock.calls.map(([id, item]) => ({ id, item }));
       expect(calls).toEqual(expect.arrayContaining([
-        { id: 'col-a', item: { kind: 'image', ref: 'render-coll_clean-aggressive.png' } },
-        { id: 'col-b', item: { kind: 'image', ref: 'render-coll_clean-aggressive.png' } },
+        { id: 'col-a', item: { kind: 'image', ref: 'render-coll_clean-resize-squeeze.png' } },
+        { id: 'col-b', item: { kind: 'image', ref: 'render-coll_clean-resize-squeeze.png' } },
       ]));
       expect(calls.find((c) => c.id === 'col-c-unrelated')).toBeUndefined();
     });
@@ -226,7 +226,7 @@ describe('POST /api/image-gen/:filename/clean', () => {
       const res = await request(app).post('/api/image-gen/render-dup.png/clean').send({});
       // The clean itself succeeds; the duplicate is swallowed.
       expect(res.status).toBe(200);
-      expect(res.body.filename).toBe('render-dup_clean-aggressive.png');
+      expect(res.body.filename).toBe('render-dup_clean-resize-squeeze.png');
     });
 
     it('clean succeeds even if listCollections throws (best-effort)', async () => {
@@ -235,9 +235,9 @@ describe('POST /api/image-gen/:filename/clean', () => {
 
       const res = await request(app).post('/api/image-gen/render-listfail.png/clean').send({});
       expect(res.status).toBe(200);
-      expect(res.body.filename).toBe('render-listfail_clean-aggressive.png');
+      expect(res.body.filename).toBe('render-listfail_clean-resize-squeeze.png');
       // The cleaned file still landed on disk.
-      expect(existsSync(join(sandbox, 'render-listfail_clean-aggressive.png'))).toBe(true);
+      expect(existsSync(join(sandbox, 'render-listfail_clean-resize-squeeze.png'))).toBe(true);
     });
 
     it('clean succeeds even when one addItem throws a non-DUPLICATE error (best-effort, others still fire)', async () => {

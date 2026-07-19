@@ -87,9 +87,12 @@ export default function OverviewTab({ status, settings, onRefresh }) {
       return;
     }
     setCheckingContradictions(true);
+    // silent: the failure is surfaced inline below (contradictions.error), so
+    // letting request() toast as well would double-report the same error.
     const result = await api.detectSoulContradictions(
       selectedProvider.providerId,
-      selectedProvider.model
+      selectedProvider.model,
+      { silent: true }
     ).catch(e => ({ error: e.message }));
     setContradictions(result);
     setCheckingContradictions(false);
@@ -99,9 +102,13 @@ export default function OverviewTab({ status, settings, onRefresh }) {
 
   const handleSaveSettings = async () => {
     setSaving(true);
-    await api.updateSoulSettings(settingsForm);
-    toast.success('Settings updated');
+    // request() owns the failure toast, but the spinner must clear either way:
+    // an uncaught rejection here left `saving` true, stranding the button
+    // permanently disabled on "Saving..." with no way to retry.
+    const ok = await api.updateSoulSettings(settingsForm).then(() => true).catch(() => false);
     setSaving(false);
+    if (!ok) return;
+    toast.success('Settings updated');
     setShowSettings(false);
     onRefresh();
   };

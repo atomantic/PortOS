@@ -1,5 +1,5 @@
 import { join } from 'path';
-import { atomicWrite, PATHS, ensureDir, safeJSONParse, tryReadFile } from '../../lib/fileUtils.js';
+import { atomicWrite, PATHS, ensureDir, readJSONFileStrict } from '../../lib/fileUtils.js';
 import { isMortalLoomEnabled, mlArrayIfEnabled, mlReplace } from '../mortalLoomStore.js';
 
 // === Goal normalization defaults ===
@@ -85,14 +85,44 @@ export async function ensureIdentityDir() {
   await ensureDir(IDENTITY_DIR);
 }
 
-export async function loadJSON(filePath, defaultVal) {
-  const raw = await tryReadFile(filePath);
-  const data = raw ? safeJSONParse(raw, structuredClone(defaultVal)) : structuredClone(defaultVal);
+/**
+ * @param {string} filePath
+ * @param {*} defaultVal
+ * @param {{ strict?: boolean }} [options] - `strict: true` throws when `filePath`
+ *   exists but can't be read or parsed, instead of silently returning `defaultVal`.
+ *   Off by default so every existing caller keeps the fallback. Callers that COUNT
+ *   what they load opt in, so an unreadable file can't report as an empty one
+ *   (#2726). A genuinely absent file (never written) still returns `defaultVal`
+ *   under strict — that IS a trustworthy empty.
+ */
+export async function loadJSON(filePath, defaultVal, { strict = false } = {}) {
+  // `readJSONFileStrict` rather than tryReadFile+safeJSONParse: both of those
+  // swallow, so together they can't tell "no goals yet" from "goals.json is
+  // corrupt" — and this is the read the Strategist skill counts. Passing `null` as
+  // its default (rather than `defaultVal`) keeps "the file gave us nothing" legible
+  // here: a parsed file can never BE null (bare `null` fails validation), so `value`
+  // is null exactly when the file was absent, unreadable, or corrupt.
+  const { ok, value } = await readJSONFileStrict(filePath, null);
+  const data = value ?? structuredClone(defaultVal);
   // When MortalLoom iCloud sync is enabled, the goals array is sourced from
   // MortalLoom.json; birthDate and lifeExpectancy metadata stay in local PortOS.
+  let mlGoals = null;
   if (filePath === GOALS_FILE) {
-    const mlGoals = await mlArrayIfEnabled('goals');
+    // Forward strict into the ML probe so an enabled-but-unreadable MortalLoom
+    // store throws here rather than returning null and falling through to a local
+    // file that may be a genuine ENOENT and score a fake 0 (#2742). A readable
+    // store with no `goals` key returns null (not a throw) and falls through to
+    // the local mirror below — see mlArrayIfEnabled's semantic note.
+    mlGoals = await mlArrayIfEnabled('goals', { strict });
     if (mlGoals) data.goals = mlGoals.map(normalizeGoal);
+  }
+  // Strictness gates on the source that actually supplies the counted array, which
+  // is why this sits AFTER the MortalLoom probe. On an ML-backed install the local
+  // file contributes only birthDate/lifeExpectancy metadata — failing to read it
+  // costs no goals, so reporting Strategist "unavailable" off it would be a lie in
+  // the opposite direction: the goals were right there and readable.
+  if (strict && !ok && !mlGoals) {
+    throw new Error(`Unreadable identity file: ${filePath}`);
   }
   return data;
 }

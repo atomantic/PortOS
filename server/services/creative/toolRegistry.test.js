@@ -273,6 +273,41 @@ describe('budget charging', () => {
     expect(enqueueJob).toHaveBeenCalledWith({ kind: 'video', params: { prompt: 'p', width: 640 }, owner: 'creative' });
   });
 
+  it('tags a planner-enqueued audio job with creativeDirectorMusicBed so the durable hook files it onto the project (#2772)', async () => {
+    setMode('execute');
+    await dispatchCreativeTool(
+      'media_enqueueAudioJob',
+      { params: { prompt: 'a mournful synth score', engine: 'musicgen' } },
+      { projectId: 'p1' },
+    );
+    const enqueued = enqueueJob.mock.calls.at(-1)[0];
+    expect(enqueued.kind).toBe('audio');
+    // Without this tag, project.musicBed stays null and the run has no surfaced output.
+    expect(enqueued.params.creativeDirectorMusicBed).toEqual({ projectId: 'p1' });
+    // Creative params the planner owns are preserved.
+    expect(enqueued.params.prompt).toBe('a mournful synth score');
+    expect(enqueued.owner).toBe('creative-director:p1');
+  });
+
+  it('leaves audio params untagged when there is no owning project (bare enqueue)', async () => {
+    setMode('execute');
+    await dispatchCreativeTool('media_enqueueAudioJob', { params: { prompt: 'p' } }, {});
+    const enqueued = enqueueJob.mock.calls.at(-1)[0];
+    expect(enqueued.kind).toBe('audio');
+    expect(enqueued.params).not.toHaveProperty('creativeDirectorMusicBed');
+  });
+
+  it('preserves an explicit creativeDirectorMusicBed tag the caller already set', async () => {
+    setMode('execute');
+    await dispatchCreativeTool(
+      'media_enqueueAudioJob',
+      { params: { prompt: 'p', creativeDirectorMusicBed: { projectId: 'explicit' } } },
+      { projectId: 'p1' },
+    );
+    const enqueued = enqueueJob.mock.calls.at(-1)[0];
+    expect(enqueued.params.creativeDirectorMusicBed).toEqual({ projectId: 'explicit' });
+  });
+
   it('does not charge a free tool', async () => {
     setMode('execute');
     await dispatchCreativeTool('pipeline_createSeries', { name: 'S' });

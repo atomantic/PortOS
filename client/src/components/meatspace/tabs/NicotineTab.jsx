@@ -155,7 +155,7 @@ export default function NicotineTab() {
     e.preventDefault();
     const error = validateProductButton(buttonForm);
     if (error) { toast.error(error); return; }
-    const result = await api.addCustomNicotineProduct({ name: buttonForm.name, mgPerUnit: parseFloat(buttonForm.mgPerUnit) }).catch(() => null);
+    const result = await api.addCustomNicotineProduct({ name: buttonForm.name, mgPerUnit: parseFloat(buttonForm.mgPerUnit) }, { silent: true }).catch(() => null);
     if (!result) { toast.error('Failed to add product button'); return; }
     setButtonForm({ name: '', mgPerUnit: '' });
     fetchProductButtons();
@@ -171,7 +171,7 @@ export default function NicotineTab() {
     if (editingButtonIdx === null) return;
     const error = validateProductButton(buttonForm);
     if (error) { toast.error(error); return; }
-    const result = await api.updateCustomNicotineProduct(editingButtonIdx, { name: buttonForm.name, mgPerUnit: parseFloat(buttonForm.mgPerUnit) }).catch(() => null);
+    const result = await api.updateCustomNicotineProduct(editingButtonIdx, { name: buttonForm.name, mgPerUnit: parseFloat(buttonForm.mgPerUnit) }, { silent: true }).catch(() => null);
     if (!result) { toast.error('Failed to update product button'); return; }
     setEditingButtonIdx(null);
     setButtonForm({ name: '', mgPerUnit: '' });

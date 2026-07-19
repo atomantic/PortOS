@@ -28,6 +28,7 @@ import { mergeMediaCollectionsFromSync, listCollections, itemKey } from './media
 import { listSyncableSessionsForWire, mergeStorySessionsFromSync } from './storyBuilder.js';
 import { getStoryBuilderMutationEpoch } from './storyBuilderStore/store.js';
 import { sanitizeStateForWire } from '../lib/syncWire.js';
+import * as characterService from './character.js';
 import {
   getDigitalTwinSnapshot,
   applyDigitalTwinRemote,
@@ -262,7 +263,9 @@ async function applyGoalsRemote(remoteData) {
 // --- Category: Character ---
 
 async function getCharacterSnapshot() {
-  const data = await readJSONFile(CHARACTER_FILE, null);
+  // Use the wire projection (persisted record + a backward-compatible `level`) so pre-#2673
+  // peers still get a usable integer level even though `level` is no longer persisted (#2673).
+  const data = await characterService.getWireCharacter();
   if (!data) return { data: null, checksum: 'empty' };
   return { data, checksum: computeChecksum(data) };
 }
@@ -272,8 +275,10 @@ async function applyCharacterRemote(remoteData) {
 
   const local = await readJSONFile(CHARACTER_FILE, null);
   if (!local) {
-    // No local character — accept remote entirely
-    await atomicWrite(CHARACTER_FILE, remoteData);
+    // No local character — accept remote entirely, but strip every derived field (an older
+    // peer still sends `level`): they're derived on read now (#2673/#2674), so a stored value
+    // would be stale and would re-propagate in our own snapshot.
+    await atomicWrite(CHARACTER_FILE, characterService.stripDerivedFields(remoteData));
     console.log(`🔄 Character sync: accepted remote character`);
     return { applied: true, count: 1 };
   }
@@ -306,15 +311,19 @@ async function applyCharacterRemote(remoteData) {
     xp: Math.max(local.xp || 0, remoteData.xp || 0),
     hp: scalarSource.hp,
     maxHp: scalarSource.maxHp,
-    level: Math.max(local.level || 1, remoteData.level || 1),
+    // `level` is age-derived on read (#2673), not persisted — never merge a stale peer level.
     events: mergedEvents,
     syncedJiraTickets: mergedTickets,
     syncedTaskIds: mergedTasks,
     updatedAt: remoteTs > localTs ? remoteTs : localTs
   };
+  // Drop every derived field (level/ageYears/skills) that `...local` may have carried in from
+  // a legacy or hand-edited file — they're all derived on read now. Routed through the
+  // service's shared helper so a newly-derived field can't be forgotten at this site.
+  const persisted = characterService.stripDerivedFields(merged);
 
   if (eventsChanged || remoteTs > localTs) {
-    await atomicWrite(CHARACTER_FILE, merged);
+    await atomicWrite(CHARACTER_FILE, persisted);
     console.log(`🔄 Character sync: merged ${mergedEvents.length} events`);
     return { applied: true, count: mergedEvents.length };
   }

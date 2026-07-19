@@ -419,7 +419,7 @@ export default function AudioStage({ issue, onStageUpdate }) {
 
   const loadMusicLibrary = async () => {
     setMusicLibraryLoading(true);
-    const result = await listPipelineMusicLibrary().catch((err) => {
+    const result = await listPipelineMusicLibrary({ silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to load music library');
       return null;
     });
@@ -451,7 +451,7 @@ export default function AudioStage({ issue, onStageUpdate }) {
 
   const handleAttach = async (track) => {
     setMusicAttaching(track.filename);
-    const result = await attachPipelineMusicTrack(issue.id, { trackFilename: track.filename, label: track.label }).catch((err) => {
+    const result = await attachPipelineMusicTrack(issue.id, { trackFilename: track.filename, label: track.label }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Attach failed');
       return null;
     });
@@ -463,7 +463,7 @@ export default function AudioStage({ issue, onStageUpdate }) {
   };
 
   const handleDetach = async () => {
-    const result = await detachPipelineMusicTrack(issue.id).catch((err) => {
+    const result = await detachPipelineMusicTrack(issue.id, { silent: true }).catch((err) => {
       toast.error(err.message || 'Detach failed');
       return null;
     });
@@ -474,7 +474,7 @@ export default function AudioStage({ issue, onStageUpdate }) {
 
   const handleLibraryDelete = async (filename) => {
     setPendingLibraryDelete(null);
-    const result = await deletePipelineMusicTrack(filename).catch((err) => {
+    const result = await deletePipelineMusicTrack(filename, { silent: true }).catch((err) => {
       toast.error(err.message || 'Delete failed');
       return null;
     });
@@ -502,7 +502,7 @@ export default function AudioStage({ issue, onStageUpdate }) {
     const needsConfirm = lines.length > 0;
     setConfirmingExtract(false);
     setExtracting(true);
-    const result = await extractPipelineAudioLines(issue.id, { force: needsConfirm }).catch((err) => {
+    const result = await extractPipelineAudioLines(issue.id, { force: needsConfirm }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Extract failed');
       return null;
     });
@@ -527,7 +527,7 @@ export default function AudioStage({ issue, onStageUpdate }) {
   const saveLinePatch = (lineIdx, patch) => {
     const set = pendingSavesRef.current.get(lineIdx) || new Set();
     if (!pendingSavesRef.current.has(lineIdx)) pendingSavesRef.current.set(lineIdx, set);
-    const promise = patchPipelineAudioLine(issue.id, lineIdx, patch)
+    const promise = patchPipelineAudioLine(issue.id, lineIdx, patch, { silent: true })
       .then((updated) => {
         if (updated) onStageUpdate?.('audio', updated.stage, updated.issue);
         return updated;
@@ -592,7 +592,7 @@ export default function AudioStage({ issue, onStageUpdate }) {
     }
 
     setRenderingLines((prev) => new Set(prev).add(lineIdx));
-    const result = await renderPipelineAudioLine(issue.id, lineIdx).catch((err) => {
+    const result = await renderPipelineAudioLine(issue.id, lineIdx, undefined, { silent: true }).catch((err) => {
       toast.error(err.message || 'Render failed');
       return null;
     });

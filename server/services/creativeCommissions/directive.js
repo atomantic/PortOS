@@ -1,12 +1,16 @@
 /**
- * Creative Commission — pure directive + cron composition (#2657, Phase 1).
+ * Creative Commission — pure, ability-agnostic directive + cron helpers (#2657).
  *
  * These are side-effect-free helpers: `commissionToCron` turns a schedule
- * descriptor into a 5-field cron string, and `buildCommissionDirective` composes
- * the CD directive (goal + deliverables + constraints) the planner turns into a
- * plan. Kept pure and dependency-free so they're trivially unit-testable and can
- * be imported anywhere without dragging the scheduler graph along. The
- * authoritative cron-VALIDITY check (isValidCron) lives in the scheduler/service.
+ * descriptor into a 5-field cron string; `renderFeedbackDigest` renders the taste
+ * feedback into a steering digest; and `composeDirectiveGoal` folds a list of
+ * brief lines + that digest into a CD directive `goal` under the 5000-char cap.
+ * The per-output-type directive assembly (which lines/deliverables each type
+ * gets) lives in abilityAdapters.js (#2769), which imports these — this module
+ * stays a dependency-free leaf and never imports back. Kept pure so they're
+ * trivially unit-testable and importable anywhere without dragging the scheduler
+ * graph along. The authoritative cron-VALIDITY check (isValidCron) lives in the
+ * scheduler/service.
  */
 
 // The CD directive `goal` this composes is fed straight into `createProject` by
@@ -104,44 +108,25 @@ export function renderFeedbackDigest(feedback, windowSize = 5) {
 }
 
 /**
- * Build the CD directive for a commission's next fire. Folds the brief (intent +
- * genre/category/style) and the accumulated feedback digest into `goal`, and
- * maps the brief's constraints (universe/series) onto the directive constraints.
- * Shape matches `creativeDirectorDirectiveSchema` (goal/deliverables/constraints)
- * so it round-trips straight into `createProject({ directive })`.
+ * Compose a CD directive `goal` string from a list of brief lines and a feedback
+ * digest, under the CD's 5000-char cap. Ability-agnostic (#2769): each ability
+ * adapter builds its own type-specific `lines` (see abilityAdapters.js) and hands
+ * them here so the char-budget / digest-reservation logic lives in exactly one
+ * place.
+ *
+ * The scheduler feeds the result straight into `createProject({ directive })`,
+ * skipping the route's input validation, so the clamp is load-bearing. RESERVE
+ * room for the digest first, then clamp the BRIEF text into whatever remains —
+ * truncating the tail of the whole string would drop the digest (appended last)
+ * whenever a long intent/style fills the budget, silently killing the feedback
+ * signal. The digest is bounded (MAX_DIGEST_LEN) so the reservation is finite.
  */
-export function buildCommissionDirective(commission) {
-  const brief = commission?.brief || {};
-  const ability = commission?.targetAbility || 'video';
-  const lines = [];
-  lines.push(`Create a ${ability} piece. ${String(brief.intent || '').trim()}`.trim());
-  if (brief.genre) lines.push(`Genre: ${brief.genre}.`);
-  if (brief.category) lines.push(`Category: ${brief.category}.`);
-  if (brief.styleSpec) lines.push(`Style: ${brief.styleSpec}.`);
-
-  const digest = renderFeedbackDigest(commission?.feedback, commission?.feedbackWindow ?? 5);
-
-  const constraints = {};
-  if (brief.constraints?.universeId) constraints.universeId = brief.constraints.universeId;
-  if (brief.constraints?.seriesId) constraints.seriesId = brief.constraints.seriesId;
-
-  // Compose the goal under the CD's 5000-char cap (the scheduler feeds this
-  // straight into createProject, skipping the route's input validation). RESERVE
-  // room for the digest first, then clamp the BRIEF text into whatever remains —
-  // truncating the tail of the whole string would drop the digest (appended last)
-  // whenever a long intent/style fills the budget, silently killing the feedback
-  // signal. The digest is bounded (MAX_DIGEST_LEN) so the reservation is finite.
-  const briefText = lines.join(' ');
+export function composeDirectiveGoal(lines, digest) {
+  const briefText = (Array.isArray(lines) ? lines : []).filter(Boolean).join(' ');
   const reserve = digest ? digest.length + 1 : 0; // +1 for the joining space
   const briefBudget = Math.max(0, MAX_DIRECTIVE_GOAL_LEN - reserve);
   const clampedBrief = clamp(briefText, briefBudget);
   let goal = digest ? `${clampedBrief} ${digest}`.trim() : clampedBrief;
   // Final safety net (defensive — brief+reserve already fits): clamp the whole.
-  goal = clamp(goal, MAX_DIRECTIVE_GOAL_LEN);
-
-  return {
-    goal,
-    deliverables: [`One ${ability} artifact matching the brief`],
-    constraints,
-  };
+  return clamp(goal, MAX_DIRECTIVE_GOAL_LEN);
 }

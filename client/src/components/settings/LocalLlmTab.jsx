@@ -48,6 +48,18 @@ const CAPABILITY_META = {
   audio: { Icon: Music, label: 'Audio generation', cls: 'text-pink-400 border-pink-400/50' },
 };
 
+// A model suited to AGENT / CoS tasks (coding agents, the Creative Director
+// treatment/plan agents) needs BOTH native tool calling AND enough coding /
+// instruction-following muscle to drive a multi-step loop. A chat-only
+// tool-caller (e.g. a small function-calling voice brain) clears `tools` but
+// isn't an agent workhorse, and a `code` model without `tools` narrates instead
+// of acting — so we require both. Keyed off catalog capabilities (server truth),
+// NOT a hard-coded model list, so new agentic models light up automatically.
+const isAgentRecommendedModel = (capabilities) =>
+  Array.isArray(capabilities)
+  && capabilities.includes('tools')
+  && capabilities.includes('code');
+
 // Server-computed per-quant fit verdict → badge styling + short label. Drives
 // the RAM-fit hint on the quant picker so a too-large build reads as a warning.
 const FIT_META = {
@@ -286,7 +298,7 @@ export function LocalLlmTab() {
   const loadStatus = useCallback(() => {
     const requestId = ++statusRequestId.current;
     setLoading(true);
-    return getLocalLlmStatus()
+    return getLocalLlmStatus({ silent: true })
       .then((s) => {
         if (requestId !== statusRequestId.current) return;
         setStatus(s);
@@ -826,6 +838,14 @@ export function LocalLlmTab() {
                             className={`ml-1.5 align-middle text-[10px] px-1 py-0.5 rounded border ${FORMAT_META[m.format].cls}`}
                           >
                             {FORMAT_META[m.format].label}
+                          </span>
+                        )}
+                        {isAgentRecommendedModel(m.capabilities) && (
+                          <span
+                            title="Recommended for agent & CoS tasks — has native tool calling plus coding strength, so it can actually drive multi-step agent work (unlike chat-only or tool-less models)."
+                            className="ml-1.5 align-middle inline-flex items-center gap-0.5 text-[10px] px-1 py-0.5 rounded border border-port-accent/50 text-port-accent"
+                          >
+                            <Star size={9} className="fill-current" /> Agents
                           </span>
                         )}
                       </div>

@@ -92,6 +92,14 @@ import { createFileWriteQueue, createRecordWriteQueue } from './fileWriteQueue.j
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
+// Reserved names that must never become a record-directory id. They pass the
+// default (and any typical) `idPattern` — a legacy JSON map can carry them as
+// own keys — but naming a record `__proto__`/`constructor`/`prototype` invites
+// prototype-pollution confusion and a weird on-disk dir. Rejecting them in
+// `isValidId` (below) makes the store the single owner of "what id may I hold,"
+// so consumers don't each re-guard the triple.
+const RESERVED_IDS = new Set(['__proto__', 'constructor', 'prototype']);
+
 /**
  * The type-index `config` slot — cross-record state owned by the collection as
  * a whole. See the header doc block for the convention. All keys are optional;
@@ -163,7 +171,7 @@ export function createCollectionStore({
   // uses readdir as the source of truth whenever the collection dir exists.
   const knownIds = new Set();
 
-  const isValidId = (id) => typeof id === 'string' && idPattern.test(id);
+  const isValidId = (id) => typeof id === 'string' && idPattern.test(id) && !RESERVED_IDS.has(id);
 
   // Per-record write queue. Tail-chained per `id` so two writes against the
   // same record serialize while writes against different records proceed in
@@ -414,6 +422,7 @@ export function createCollectionStore({
     dir,
     type,
     schemaVersion,
+    isValidId,
     typeIndexPath,
     recordDir,
     recordPath,

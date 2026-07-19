@@ -429,6 +429,21 @@ const pendingResync = new Map(); // bridgeKey → { type, id, hardDelete } (dedu
 let resyncTimer = null;
 let resyncFlushing = false; // single-flight guard so two flushes can't overlap
 
+// Journals re-embed on a much longer window than the other brain types, per
+// day. The daily-log editor autosaves while the user types, so 'journals:upserted'
+// now fires every couple of seconds for the SAME day — where it used to fire
+// once per explicit Save. Re-embedding per event would mean an embedding call
+// per typing pause, and — once the day's entry outgrows the embedding char
+// budget — a full LLM summarization per event too (see generateMemoryEmbedding's
+// over-budget branch), which is exactly the kind of unannounced provider traffic
+// the AI policy rules out. Coalescing per day collapses a whole writing session
+// into one re-embed after the user settles; resyncBrainRecord re-reads the
+// canonical entry at flush time, so the trailing flush always embeds the newest
+// content — and embedding once the sentence is finished beats embedding it
+// half-typed 100 times.
+const JOURNAL_RESYNC_DEBOUNCE_MS = 30_000;
+const journalResyncTimers = new Map(); // journal id (the ISO date) → timer
+
 /**
  * Archive the memory entry mapped to a brain record (if any). Used when the
  * canonical record is gone (tombstoned), archived, or otherwise should no
@@ -619,11 +634,17 @@ export function initBridge() {
   // embedding calls per dictation segment and saturate the embedding
   // backend.) appendJournal/setJournalContent fire 'journals:upserted' with
   // the single affected entry; deleteJournal fires 'journals:deleted'.
-  brainEvents.on('journals:upserted', ({ entry }) => handleJournalUpserted(entry));
+  // Debounced per day because the editor autosaves — see queueJournalResync.
+  brainEvents.on('journals:upserted', ({ entry }) => {
+    if (entry?.id) queueJournalResync(entry.id);
+  });
   // handleJournalDeleted is async and awaits loadBridgeMap(); wrap the call
   // in a .catch so a rejection becomes a logged error instead of an
   // unhandled-rejection warning (or a process crash under strict modes).
   brainEvents.on('journals:deleted', ({ entry }) => {
+    // Drop any debounced re-embed for the day first — the hard-delete below
+    // prunes the mapped memory, and a later flush would only re-read a tombstone.
+    if (entry?.id) cancelPendingJournalResync(entry.id);
     handleJournalDeleted(entry).catch((err) => {
       console.error(`❌ Brain bridge delete sync failed for journals/${entry?.id}: ${err.message}`);
     });
@@ -640,11 +661,31 @@ export function initBridge() {
   console.log('🧠🔗 Brain→Memory bridge initialized');
 }
 
-function handleJournalUpserted(entry) {
-  if (!entry?.id) return;
-  syncBrainRecord('journals', entry).catch((err) => {
-    console.error(`❌ Brain bridge sync failed for journals/${entry.id}: ${err.message}`);
-  });
+/**
+ * Coalesce repeated saves of one day into a single re-embed, then hand off to
+ * the shared queueResync path (dedup + sequential drain + canonical re-read).
+ * Trailing-edge per day: each save pushes the flush out, so a writing session
+ * costs one re-embed once the user stops. See JOURNAL_RESYNC_DEBOUNCE_MS.
+ */
+function queueJournalResync(id) {
+  clearTimeout(journalResyncTimers.get(id));
+  const timer = setTimeout(() => {
+    journalResyncTimers.delete(id);
+    queueResync([{ type: 'journals', id }]);
+  }, JOURNAL_RESYNC_DEBOUNCE_MS);
+  // Don't hold the event loop open for a pending journal re-embed.
+  if (typeof timer.unref === 'function') timer.unref();
+  journalResyncTimers.set(id, timer);
+}
+
+/**
+ * Drop a day's pending re-embed. Called when the day is deleted: the delete
+ * path prunes the mapped memory immediately, so letting the debounce fire
+ * afterwards would just re-read a tombstone. Also exported for tests.
+ */
+export function cancelPendingJournalResync(id) {
+  clearTimeout(journalResyncTimers.get(id));
+  journalResyncTimers.delete(id);
 }
 
 async function handleJournalDeleted(entry) {

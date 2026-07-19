@@ -3,8 +3,23 @@ import { request } from './apiCore.js';
 // Alerts
 export const getAlertsSummary = (options) => request('/alerts/summary', options);
 
-// Character sheet (D&D-style XP / level / HP — powers the CyberCity XP HUD badge)
-export const getCharacter = (options) => request('/character', options);
+// Character sheet (age-based level / XP / HP / usage-derived skills + metrics grid).
+// `skills: false` / `metrics: false` skip the server's domain stat fan-out for each derived
+// registry — pass them from callers that only read the persisted fields or the level (e.g.
+// the polling CyberCity XP HUD badge). Both default on, so a caller that wants the whole
+// sheet just calls getCharacter().
+export const getCharacter = ({ skills = true, metrics = true, ...options } = {}) => {
+  const params = new URLSearchParams();
+  if (!skills) params.set('skills', '0');
+  if (!metrics) params.set('metrics', '0');
+  // `metrics=1` must go on the wire EXPLICITLY when skills are off, because the server infers
+  // an absent `metrics` from `skills` (back-compat: a bare `?skills=0` predates the metrics
+  // grid and means "cheap sheet"). Without this, `{ skills: false }` would silently drop the
+  // metrics this wrapper's own default promises.
+  else if (!skills) params.set('metrics', '1');
+  const query = params.toString();
+  return request(`/character${query ? `?${query}` : ''}`, options);
+};
 
 // Health
 export const checkHealth = (options) => request('/system/health', options);

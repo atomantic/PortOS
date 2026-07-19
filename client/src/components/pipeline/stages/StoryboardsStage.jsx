@@ -225,7 +225,7 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
     setRenderingShots((prev) => new Set(prev).add(key));
     const result = await generatePipelineShotStartFrame(issue.id, sceneIdx, shotIdx, {
       ...genConfigToImageOptions(genConfig),
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Shot render failed');
       return null;
     });
@@ -261,7 +261,7 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
       force: true,
       providerOverride: series?.llm?.provider || undefined,
       modelOverride: series?.llm?.model || undefined,
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Scene extraction failed');
       return null;
     });
@@ -292,7 +292,7 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
       // server-side from the persisted scene).
       characterAppearances: scene.characterAppearances,
       ...genConfigToImageOptions(genConfig),
-    }).catch((err) => {
+    }, { silent: true }).catch((err) => {
       toast.error(err.message || 'Failed to enqueue image');
       return null;
     });
@@ -313,7 +313,7 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
       return;
     }
     setRefiningIdx(i);
-    const result = await refinePipelineSceneImagePrompt(issue.id, i, genConfigToRefineOptions(genConfig))
+    const result = await refinePipelineSceneImagePrompt(issue.id, i, genConfigToRefineOptions(genConfig), { silent: true })
       .catch((err) => {
         toast.error(err.message || 'Refine failed');
         return null;
@@ -344,7 +344,7 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
     const gen = candidateGenRef.current;
     await persist(scenesRef.current);
     const result = await generatePipelineSceneImagePrompts(
-      issue.id, i, { count: promptCount, ...genConfigToRefineOptions(genConfig) },
+      issue.id, i, { count: promptCount, ...genConfigToRefineOptions(genConfig) }, { silent: true },
     ).catch((err) => {
       toast.error(err.message || 'Prompt generation failed');
       return null;
@@ -390,7 +390,7 @@ export default function StoryboardsStage({ issue, series, onStageUpdate, actions
       return;
     }
     setRenderingVideoIdx(i);
-    const result = await generatePipelineSceneVideo(issue.id, i, {})
+    const result = await generatePipelineSceneVideo(issue.id, i, {}, { silent: true })
       .catch((err) => {
         toast.error(err.message || 'Failed to enqueue scene video');
         return null;

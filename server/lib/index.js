@@ -183,6 +183,7 @@ export * from './vectorMath.js';
 export * from './htmlToText.js';
 export * from './jsonExtract.js';
 export * from './taskParser.js';
+export * from './taxonomyTally.js';
 export * from './xmlEntities.js';
 
 // === Curated static data ===
@@ -239,9 +240,11 @@ export * from './authGate.js';
 export * from './domainAutonomy.js';
 export * from './domainBudgets.js';
 export * from './errorHandler.js';
+export * from './extensionErrors.js';
 export * from './lwwTimestamp.js';
 export * from './mapWithConcurrency.js';
 export * from './markedSection.js';
+export * from './mirrorParity.js';
 export * from './objects.js';
 export * from './openapiSpec.js';
 export * from './shellQuote.js';

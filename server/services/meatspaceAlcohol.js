@@ -139,12 +139,24 @@ export function computeRollingAverages(entries, sex = 'male') {
 
 // === File I/O ===
 
-async function loadDailyLog() {
-  const ml = await readDailyLogIfEnabled();
+/**
+ * @param {{ strict?: boolean }} [options] - `strict: true` throws when the daily log
+ *   is present-but-unreadable/corrupt instead of substituting an empty log. Off by
+ *   default so the UI keeps degrading gracefully; the health-logging COUNT opts in,
+ *   because a fake 0 there reads as "you have never logged anything" (#2726).
+ */
+async function loadDailyLog({ strict = false } = {}) {
+  const ml = await readDailyLogIfEnabled({ strict });
   if (ml) return ml;
-  const raw = await readJSONFile(DAILY_LOG_FILE, { entries: [], lastEntryDate: null }, { allowArray: false });
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { entries: [], lastEntryDate: null };
-  if (!Array.isArray(raw.entries)) raw.entries = [];
+  const raw = await readJSONFile(DAILY_LOG_FILE, { entries: [], lastEntryDate: null }, { allowArray: false, strict });
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    if (strict) throw new Error(`Alcohol daily log malformed: ${DAILY_LOG_FILE}`);
+    return { entries: [], lastEntryDate: null };
+  }
+  if (!Array.isArray(raw.entries)) {
+    if (strict) throw new Error(`Alcohol daily log malformed: ${DAILY_LOG_FILE}`);
+    raw.entries = [];
+  }
   return raw;
 }
 
@@ -185,8 +197,11 @@ export async function getAlcoholSummary() {
   return averageCache;
 }
 
-export async function getDailyAlcohol(from, to) {
-  const log = await loadDailyLog();
+/**
+ * @param {{ strict?: boolean }} [options] - see `loadDailyLog` (#2726).
+ */
+export async function getDailyAlcohol(from, to, options) {
+  const log = await loadDailyLog(options);
   let entries = (log.entries || []).filter(e => e.alcohol?.drinks?.length > 0);
 
   if (from) entries = entries.filter(e => e.date >= from);

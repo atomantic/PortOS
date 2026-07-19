@@ -10,7 +10,9 @@ import {
   TrendingUp,
   Cpu,
   BookOpen,
-  CheckCircle
+  CheckCircle,
+  Users,
+  MessageSquareReply
 } from 'lucide-react';
 import * as api from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
@@ -41,7 +43,9 @@ const TYPE_ICONS = {
   cost_spike: TrendingUp,
   system_resource: Cpu,
   process_error: AlertOctagon,
-  learning_health: BookOpen
+  learning_health: BookOpen,
+  tribe_cadence: Users,
+  tribe_unanswered: MessageSquareReply
 };
 
 const ProactiveAlertsWidget = memo(function ProactiveAlertsWidget() {

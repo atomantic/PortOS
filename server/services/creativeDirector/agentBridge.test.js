@@ -63,6 +63,9 @@ describe('Creative Director agent bridge model assignments', () => {
     const [task] = mocks.addTask.mock.calls[0];
     expect(task.metadata).not.toHaveProperty('provider');
     expect(task.metadata).not.toHaveProperty('model');
+    // A CD agent's deliverable is an HTTP PATCH, not code — it must NOT be told to
+    // /do:push at the end (agentPromptBuilder routes on this flag). (#2705 follow-up)
+    expect(task.metadata.noCodeOutput).toBe(true);
   });
 
   it('prefers the project-level override over the global assignment', async () => {

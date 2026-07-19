@@ -528,10 +528,13 @@ ${rprBody ? `\n### /do:rpr Reference (full procedure)\n\nWhen following the proc
  */
 export function buildCompletionGuidelineBullet({
   isReadOnly, isTui, tuiCompletionCommand, slashdoFree = false,
-  worktreeInfo, willOpenPR, willReviewLoop, discardWorktree = false,
+  worktreeInfo, willOpenPR, willReviewLoop, discardWorktree = false, noCodeOutput = false,
 }) {
   if (discardWorktree) {
     return '**This is a reasoning-only task.** The worktree is discarded on exit — do NOT commit, push, merge, or open a PR. Write your result to the completion sentinel (see the Completion section) and stop.';
+  }
+  if (noCodeOutput) {
+    return '**This task produces no code output.** Its result is the API request your instructions describe — do NOT run `/do:push`, `/do:pr`, `/simplify`, `git commit`, `git push`, or open a PR. Write the completion sentinel (see the Completion section) and stop.';
   }
   if (isReadOnly) {
     return '**This is a read-only task.** Do NOT commit, push, or modify any files in the repository. Only read data and generate reports.';
@@ -604,6 +607,27 @@ export function buildReadOnlyCompletionSection({ isTui = false, sentinelPath = n
     notice,
     '',
     `When you have finished, write a short markdown summary of what you found (and where you recorded it) to \`${sentinelPath}\`, then stop. PortOS polls this sentinel every 2s, finalizes the run, and closes the session for you — do NOT run \`/quit\` and do NOT wait for anything after writing the sentinel.`
+  ].join('\n');
+}
+
+/**
+ * Completion block for a **no-code / API-action** task (e.g. a Creative Director
+ * plan/treatment/evaluate agent). The agent's deliverable is the HTTP request its
+ * task instructions already describe (a PATCH to a PortOS endpoint), NOT a code
+ * change — so the normal `/do:push`+PR completion workflow is wrong: there is
+ * nothing to commit or push, and telling the agent to run `/do:push` just makes it
+ * load that skill for no reason (and can contradict the task prompt's own
+ * "on a 200 your task is complete"). A TUI agent still writes a `.agent-done`
+ * sentinel so the 2s poll finalizes it promptly instead of waiting on the idle
+ * reaper.
+ */
+export function buildActionOutputCompletionSection({ isTui = false, sentinelPath = null } = {}) {
+  const notice = '## Completion (No Code Output)\nThis task produces **no code change** — its result is delivered by the API request your instructions describe (a PATCH to a PortOS endpoint), not by a commit. Do NOT run `/do:push`, `/do:pr`, `/simplify`, `git commit`, `git push`, or open a pull request; there is nothing to push.';
+  if (!isTui || !sentinelPath) return notice;
+  return [
+    notice,
+    '',
+    `Your task is complete once that request succeeds. Then write a one-line summary to \`${sentinelPath}\` and stop — PortOS polls this sentinel every 2s, finalizes the run, and closes the session for you. Do NOT run \`/quit\` and do NOT wait for anything after writing the sentinel.`
   ].join('\n');
 }
 
@@ -699,6 +723,12 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   // away on exit with no commit/merge/PR (see agentWorktreeCleanup.js). Suppresses
   // all commit/push/PR completion guidance in favor of the sentinel-only contract.
   const discardWorktree = isTruthyMetaFn(task.metadata?.discardWorktree);
+  // No-code / API-action task (e.g. Creative Director agents): deliverable is an
+  // HTTP PATCH, not a commit — suppress the /do:push completion workflow. Also
+  // derive from a CD task's own `creativeDirector` marker so tasks queued as
+  // `pending` BEFORE this flag existed (persisted across an upgrade) are still
+  // recognized without a metadata migration.
+  const noCodeOutput = isTruthyMetaFn(task.metadata?.noCodeOutput) || !!task.metadata?.creativeDirector;
   const isWorktreeOnExistingBranch = worktreeInfo?.existingBranch === true;
   const worktreeSection = worktreeInfo ? `
 ## Git Worktree Context
@@ -782,17 +812,19 @@ After completing your work and before committing, ${simplifyInstruction}. Fix an
   // over the fallback template's commit/push instructions below.
   const tuiCompletionSection = discardWorktree
     ? buildProgrammaticOutputCompletionSection(sentinelPath)
-    : isTui
-      ? buildTuiCompletionSection({
-          willOpenPR, willReviewLoop, simplifyEnabled, providerId,
-          sentinelPath,
-          reviewers: taskReviewers,
-          usernames: taskReviewerUsernames,
-          optionalReviewers: taskOptionalReviewers,
-          reviewStopMode: taskReviewStopMode,
-          reviewerApplies: taskReviewerApplies
-        })
-      : '';
+    : noCodeOutput
+      ? buildActionOutputCompletionSection({ isTui, sentinelPath })
+      : isTui
+        ? buildTuiCompletionSection({
+            willOpenPR, willReviewLoop, simplifyEnabled, providerId,
+            sentinelPath,
+            reviewers: taskReviewers,
+            usernames: taskReviewerUsernames,
+            optionalReviewers: taskOptionalReviewers,
+            reviewStopMode: taskReviewStopMode,
+            reviewerApplies: taskReviewerApplies
+          })
+        : '';
 
   // Build review loop section if enabled. The agent itself does NOT open the PR
   // or run /do:rpr — by the time the PR exists, the agent has already exited.
@@ -955,7 +987,7 @@ ${(() => {
   const bullet = buildCompletionGuidelineBullet({
     isReadOnly: isTruthyMetaFn(task.metadata?.readOnly),
     isTui, tuiCompletionCommand, slashdoFree: isTui && isOpencodeCommand(providerCommand),
-    worktreeInfo, willOpenPR, willReviewLoop, discardWorktree,
+    worktreeInfo, willOpenPR, willReviewLoop, discardWorktree, noCodeOutput,
   });
   return bullet ? `- ${bullet}` : '';
 })()}
@@ -1031,6 +1063,12 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
   const simplifyEnabled = isTruthyMetaFn(task.metadata?.simplify);
   const isReadOnly = isTruthyMetaFn(task.metadata?.readOnly);
   const discardWorktree = isTruthyMetaFn(task.metadata?.discardWorktree);
+  // A no-code / API-action task (e.g. a Creative Director plan/treatment/evaluate
+  // agent): its deliverable is an HTTP PATCH, not a commit — suppress the
+  // /do:push completion workflow (see buildActionOutputCompletionSection). Also
+  // derive from a CD task's `creativeDirector` marker so pre-upgrade `pending`
+  // tasks (queued before this flag existed) are recognized without a migration.
+  const noCodeOutput = isTruthyMetaFn(task.metadata?.noCodeOutput) || !!task.metadata?.creativeDirector;
   const isReviewLoopFollowUp = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp);
   const isWorktreeOnExistingBranch = worktreeInfo?.existingBranch === true;
   // Ordered reviewer list + flags for the Review Loop (task metadata wins; else
@@ -1135,6 +1173,11 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
     // output hook) is the sole output; the worktree is discarded on exit. Wins
     // over the isTui / CLI push-and-PR completion workflows below.
     sections.push(buildProgrammaticOutputCompletionSection(`${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`));
+  } else if (noCodeOutput) {
+    sections.push(buildActionOutputCompletionSection({
+      isTui,
+      sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`,
+    }));
   } else if (isReadOnly) {
     sections.push(buildReadOnlyCompletionSection({
       isTui,

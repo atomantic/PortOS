@@ -19,11 +19,13 @@
 import { makePromptReplaceMigration } from './_lib.js';
 
 export const ACCEPTED_OLD_MD5 = {
-  'cd-plan.md': ['3ce871196a8fd04781b71b6780e89c86'], // pre-193 shipped
+  // pre-193 shipped; post-193/pre-199 (locked render settings). Resynced when 199
+  // shipped the result-references note — both prior shapes upgrade to the latest.
+  'cd-plan.md': ['3ce871196a8fd04781b71b6780e89c86', '0768d6809645c2c1fe73cacae9740fe9'],
 };
 
 export const NEW_SHIPPED_MD5 = {
-  'cd-plan.md': '0768d6809645c2c1fe73cacae9740fe9', // post-193 (locked render settings)
+  'cd-plan.md': 'ef0d96f6ebde43af6c4579969d31cfb7', // post-199 (cross-step result references)
 };
 
 const { applyMigration, up } = makePromptReplaceMigration({

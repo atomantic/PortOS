@@ -2,7 +2,7 @@
  * Shared scaffolding for first-shipment "seed a pipeline stage" migrations (#1838).
  *
  * Companion to `./_lib.js` (hash-driven prompt-*replace*) — this one covers the
- * *seed-a-brand-new-stage* family: ~44 near-identical migrations (e.g.
+ * *seed-a-brand-new-stage* family: ~56 near-identical migrations (e.g.
  * `130-editorial-character-consistency-stage.js`) that each
  *   1) copy a `.md` template from `data.reference/prompts/stages/` into
  *      `data/prompts/stages/` when missing (never clobbering a customized file), and
@@ -14,8 +14,8 @@
  * leave a newly-shipped stage unseeded and the dependent check would throw
  * "Stage not found" the first time it runs.
  *
- * `makeSeedMigration(stageKey, { filename })` returns the `{ up }` object every
- * such migration exports as its default. The runner (`scripts/run-migrations.js`)
+ * `makeSeedMigration(stageKey, { filename })` returns the `{ up, stages }` object
+ * every such migration exports as its default. The runner (`scripts/run-migrations.js`)
  * only ever calls `up()` and tracks applied migrations by filename — there is no
  * rollback path, so no `down()` is emitted (it would be never-invoked dead code).
  * The runner skips `_`-prefixed files, so this module is never imported as a
@@ -47,10 +47,13 @@ import { atomicWrite } from '../../server/lib/fileUtils.js';
 /**
  * Normalize a stage spec (bare `stageKey` string or `{ stageKey, filename }`)
  * into `{ stageKey, filename }` with the universal `${stageKey}.md` default.
+ * Exported so `_seedStageTestHelpers.js` derives fixture filenames through the
+ * same rule the migration itself uses (the rule is covered directly by
+ * `_seedStageHelpers.test.js`).
  * @param {string | { stageKey: string, filename?: string }} spec
  * @returns {{ stageKey: string, filename: string }}
  */
-function normalizeStageSpec(spec) {
+export function normalizeStageSpec(spec) {
   if (typeof spec === 'string') return { stageKey: spec, filename: `${spec}.md` };
   const { stageKey, filename } = spec;
   return { stageKey, filename: filename || `${stageKey}.md` };
@@ -62,12 +65,23 @@ function normalizeStageSpec(spec) {
  * with an `N added` summary. Behaviour-identical to the hand-rolled
  * `for (const stageKey of STAGES)` loops it replaces.
  *
+ * The returned object also carries the normalized `stages` list. The runner only
+ * ever looks for `up()` (`scripts/run-migrations.js`) and ignores everything else,
+ * so exposing it costs nothing at runtime — it lets `_seedStageTestHelpers.js`
+ * assert against the stage list the migration *actually* seeds rather than a list
+ * hand-copied into the test (which would go stale silently when a stage is added).
+ *
  * @param {Array<string | { stageKey: string, filename?: string }>} stageSpecs
- * @returns {{ up: (ctx: { rootDir: string }) => Promise<void> }}
+ * @returns {{ up: (ctx: { rootDir: string }) => Promise<void>, stages: Array<{ stageKey: string, filename: string }> }}
  */
 export function makeSeedMigrations(stageSpecs) {
-  const stages = stageSpecs.map(normalizeStageSpec);
+  // Frozen because `up()` closes over this same array on an ESM module-cached
+  // singleton — a consumer mutating it would silently change what gets seeded.
+  // Deep: `up()` destructures `{ stageKey, filename }` out of the elements at
+  // call time, so freezing only the array would leave that mutable.
+  const stages = Object.freeze(stageSpecs.map((spec) => Object.freeze(normalizeStageSpec(spec))));
   return {
+    stages,
     async up({ rootDir }) {
       const stagesDir = join(rootDir, 'data', 'prompts', 'stages');
       await mkdir(stagesDir, { recursive: true });
@@ -142,7 +156,7 @@ export function makeSeedMigrations(stageSpecs) {
  * Single-stage convenience wrapper over {@link makeSeedMigrations}.
  * @param {string} stageKey  - stage-config key, e.g. `pipeline-editorial-character-consistency`
  * @param {{ filename?: string }} [opts] - template basename under `prompts/stages/` (defaults to `${stageKey}.md`)
- * @returns {{ up: (ctx: { rootDir: string }) => Promise<void> }}
+ * @returns {{ up: (ctx: { rootDir: string }) => Promise<void>, stages: ReadonlyArray<{ stageKey: string, filename: string }> }}
  */
 export function makeSeedMigration(stageKey, { filename = `${stageKey}.md` } = {}) {
   return makeSeedMigrations([{ stageKey, filename }]);

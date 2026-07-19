@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { commissionToCron, renderFeedbackDigest, buildCommissionDirective } from './directive.js';
+import { commissionToCron, renderFeedbackDigest, composeDirectiveGoal } from './directive.js';
 
 describe('commissionToCron', () => {
   it('composes a DAILY cron from HH:MM', () => {
@@ -102,71 +102,21 @@ describe('renderFeedbackDigest', () => {
   });
 });
 
-describe('buildCommissionDirective', () => {
-  it('composes goal + deliverables + constraints from the brief', () => {
-    const directive = buildCommissionDirective({
-      name: 'Nightly Surreal',
-      targetAbility: 'video',
-      brief: {
-        intent: 'something surreal, dreamlike, unsettlingly beautiful',
-        genre: 'surrealism',
-        styleSpec: 'flat color, Magritte',
-        constraints: { universeId: 'u-123' },
-      },
-      feedbackWindow: 5,
-    });
-    expect(directive.goal).toContain('Create a video piece.');
-    expect(directive.goal).toContain('something surreal');
-    expect(directive.goal).toContain('Genre: surrealism.');
-    expect(directive.goal).toContain('Style: flat color, Magritte.');
-    expect(directive.deliverables).toEqual(['One video artifact matching the brief']);
-    expect(directive.constraints).toEqual({ universeId: 'u-123' });
+describe('composeDirectiveGoal', () => {
+  it('joins brief lines and appends the digest', () => {
+    const goal = composeDirectiveGoal(['Create a video piece. surreal', 'Genre: x.'], 'Recent likes: more.');
+    expect(goal).toBe('Create a video piece. surreal Genre: x. Recent likes: more.');
   });
 
-  it('folds recent feedback into the goal', () => {
-    const directive = buildCommissionDirective({
-      targetAbility: 'video',
-      brief: { intent: 'surreal' },
-      feedback: [{ rating: 'down', note: 'less horror' }, { rating: 'up', note: 'more Magritte' }],
-      feedbackWindow: 5,
-    });
-    expect(directive.goal).toContain('Recent likes: more Magritte.');
-    expect(directive.goal).toContain('Recent dislikes: less horror.');
+  it('drops falsy lines and returns just the brief when there is no digest', () => {
+    expect(composeDirectiveGoal(['A.', '', null, 'B.'], '')).toBe('A. B.');
   });
 
-  it('omits absent constraints', () => {
-    const directive = buildCommissionDirective({ targetAbility: 'video', brief: { intent: 'x' } });
-    expect(directive.constraints).toEqual({});
-  });
-
-  it('clamps the goal so a large feedback window + long notes stay under the CD 5000-char cap', () => {
-    // 50 reactions × 1000-char notes would blow well past the CD directive goal
-    // limit; the scheduler feeds this goal straight into createProject without the
-    // route's validation, so the builder must bound it itself.
-    const feedback = Array.from({ length: 50 }, (_, i) => ({
-      rating: i % 2 === 0 ? 'up' : 'down',
-      note: 'z'.repeat(1000),
-    }));
-    const directive = buildCommissionDirective({
-      targetAbility: 'video',
-      brief: { intent: 'surreal' },
-      feedback,
-      feedbackWindow: 50,
-    });
-    expect(directive.goal.length).toBeLessThanOrEqual(4500);
-  });
-
-  it('keeps the feedback digest even when the brief text is very long (digest is reserved, brief is clamped)', () => {
-    // A 2000-char intent + 3000-char style would fill the whole 4500 budget; the
-    // digest must survive (it is appended last, but reserved for) rather than
-    // being truncated away — otherwise ratings stop steering the run.
-    const directive = buildCommissionDirective({
-      targetAbility: 'video',
-      brief: { intent: 'x'.repeat(2000), styleSpec: 'y'.repeat(3000) },
-      feedback: [{ rating: 'down', note: 'less horror' }],
-      feedbackWindow: 5,
-    });
-    expect(directive.goal.length).toBeLessThanOrEqual(4500);
-    expect(directive.goal).toContain('Recent dislikes: less horror.');
+  it('reserves room for the digest and clamps the brief so the whole goal stays under the CD cap', () => {
+    // A huge brief must not truncate away the digest (appended last, but reserved
+    // for) — otherwise ratings stop steering the run.
+    const goal = composeDirectiveGoal(['x'.repeat(6000)], 'Recent dislikes: less horror.');
+    expect(goal.length).toBeLessThanOrEqual(4500);
+    expect(goal).toContain('Recent dislikes: less horror.');
   });
 });

@@ -25,16 +25,12 @@
 //     into promotion is the user blurring the required column (no live
 //     drafts on sibling columns at that moment).
 //
-// `globalThis.crypto` rather than bare `crypto`: bare `crypto?.…` throws
-// ReferenceError in some non-secure-context envs; going through `globalThis`
-// short-circuits cleanly to the Date+Math fallback.
 import { useState } from 'react';
+import { uuidv4 } from '../lib/uuid.js';
 
-function mintId(prefix) {
-  const uuid = globalThis.crypto?.randomUUID?.()
-    ?? `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
-  return `${prefix}${uuid}`;
-}
+// `uuidv4` keeps the `<prefix><uuid>` shape above intact even on the insecure
+// origins where `crypto.randomUUID` is undefined — see lib/uuid.js.
+const mintId = (prefix) => `${prefix}${uuidv4()}`;
 
 export default function usePendingListRows({
   persisted = [],

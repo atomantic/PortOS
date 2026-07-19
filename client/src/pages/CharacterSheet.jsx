@@ -1,11 +1,14 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
-  Sword, Star, Moon, ScrollText, Shield, Heart,
-  Sparkles, RefreshCw, Dices, X, ChevronDown, Zap, Image
+  Sword, Star, Moon, ScrollText, Heart, UserRound, Cake, AlertTriangle,
+  Sparkles, RefreshCw, Dices, X, ChevronDown, Zap, Image, Activity
 } from 'lucide-react';
+import { birthDateCta } from '../utils/characterXp';
 import BrailleSpinner from '../components/BrailleSpinner';
+import GoalsCard from '../components/character/GoalsCard';
 import toast from '../components/ui/Toast';
-import { timeAgo } from '../utils/formatters';
+import { timeAgo, formatCompactCount } from '../utils/formatters';
 import api, { generateAvatar } from '../services/api';
 import socket from '../services/socket';
 import { clickableProps } from '../lib/a11yKeyboard.js';
@@ -17,18 +20,6 @@ import { clickableProps } from '../lib/a11yKeyboard.js';
 const charGet = (options = {}) => api.get('/character', { silent: true, ...options });
 const charPost = (path, body, options = {}) => api.post(`/character${path}`, body, { silent: true, ...options });
 const charPut = (body, options = {}) => api.put('/character', body, { silent: true, ...options });
-
-// D&D 5e XP thresholds (must match server)
-const XP_THRESHOLDS = [
-  0, 300, 900, 2700, 6500, 14000, 23000, 34000, 48000, 64000,
-  85000, 100000, 120000, 140000, 165000, 195000, 225000, 265000, 305000, 355000
-];
-function xpForNextLevel(level) {
-  return level >= 20 ? XP_THRESHOLDS[19] : XP_THRESHOLDS[level];
-}
-function xpForCurrentLevel(level) {
-  return level <= 1 ? 0 : XP_THRESHOLDS[level - 1];
-}
 
 const EVENT_ICONS = {
   damage: Sword,
@@ -54,11 +45,119 @@ function hpColor(pct) {
   return 'bg-port-error';
 }
 
+// Per-domain skills derived on read from each domain's existing stats (#2674). Deliberately
+// a plain read-only card: Slice 5 (#2677) owns the page's framing/redesign, so this stays
+// easy to restyle or relocate wholesale.
+//
+// `unavailable` renders as an explicit "—" rather than a 0: the server distinguishes an
+// untouched domain (a real level 0) from one whose stat could not be read, and collapsing
+// those here would re-introduce the exact lie the server's sentinel exists to prevent.
+function SkillsCard({ skills }) {
+  if (!skills?.length) return null;
+
+  return (
+    <section aria-labelledby="character-skills-heading" className="bg-port-card border border-port-border rounded-xl p-4">
+      <div className="flex items-center gap-1.5 mb-3">
+        <Zap className="w-4 h-4 text-port-accent-2" />
+        <h2 id="character-skills-heading" className="text-sm font-medium text-gray-300">Skills</h2>
+        <span className="text-xs text-gray-500">— earned by using PortOS</span>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+        {skills.map((skill) => (
+          <div key={skill.id} className="bg-port-bg border border-port-border rounded-lg px-3 py-2">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-sm text-gray-300 truncate">{skill.label}</span>
+              {skill.unavailable ? (
+                <span className="text-sm text-gray-600" title="This domain's stats could not be read">—</span>
+              ) : (
+                <span className="text-sm font-semibold text-port-accent-2">Lv {skill.level}</span>
+              )}
+            </div>
+            <div className="text-xs text-gray-500 mt-0.5">
+              {skill.unavailable ? 'Unavailable' : `${skill.value} logged`}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// Render one metric's value per its server-declared `unit`. Only unbounded COUNTS go through
+// formatCompactCount, so a 12,400-memory Brain reads "12.4K" instead of overflowing the tile;
+// day counts stay literal (a 1200-day streak is "1200d", not a nonsense "1.2Kd") and percents
+// are 0-100 by construction. Only called for tiles with a real numeric value — the null
+// states are handled by the caller.
+//
+// Deliberately page-local rather than hoisted into utils/formatters.js: it defines no new
+// number formatting (it dispatches to the shared formatter), and it is coupled to the metric
+// payload shape that characterMetrics.js owns — so it belongs with the card that renders it,
+// which Slice 5 (#2677) will restyle or relocate wholesale. Exported only for its unit test.
+export function formatMetricValue({ unit, value }) {
+  if (unit === 'percent') return `${value}%`;
+  if (unit === 'days') return `${value}d`;
+  return formatCompactCount(value);
+}
+
+// Engagement metrics derived on read from the same domain signals that power the skills
+// (#2676). Like SkillsCard this is deliberately a plain read-only card — Slice 5 (#2677) owns
+// the page's framing/redesign, so it stays easy to restyle or relocate wholesale.
+//
+// THREE states per tile, never two (mirroring the server's sentinels):
+//   - unavailable   → "Unavailable" and an em dash. The stat could not be read.
+//   - notApplicable → the metric's own emptyLabel ("No goals resolved yet"). No honest number
+//                     exists yet — and 0 is emphatically not it for a ratio.
+//   - a real value  → the number, INCLUDING a real 0.
+// Collapsing any of these into a fake 0 would re-introduce the exact lie the server's
+// sentinels exist to prevent.
+function MetricsCard({ metrics }) {
+  if (!metrics?.length) return null;
+
+  return (
+    <section aria-labelledby="character-metrics-heading" className="bg-port-card border border-port-border rounded-xl p-4">
+      <div className="flex items-center gap-1.5 mb-3">
+        <Activity className="w-4 h-4 text-port-accent" />
+        <h2 id="character-metrics-heading" className="text-sm font-medium text-gray-300">Metrics</h2>
+        <span className="text-xs text-gray-500">— your real activity</span>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+        {metrics.map((metric) => (
+          <div key={metric.id} className="bg-port-bg border border-port-border rounded-lg px-3 py-2">
+            <div
+              className={`text-xl font-semibold truncate ${
+                metric.unavailable || metric.notApplicable ? 'text-gray-600' : 'text-port-accent'
+              }`}
+              title={metric.unavailable ? 'This stat could not be read' : undefined}
+            >
+              {metric.unavailable || metric.notApplicable ? '—' : formatMetricValue(metric)}
+            </div>
+            <div className="text-xs text-gray-300 truncate mt-0.5" title={metric.label}>
+              {metric.label}
+            </div>
+            <div className="text-[11px] text-gray-500 mt-0.5 line-clamp-2">
+              {metric.unavailable
+                ? 'Unavailable'
+                : metric.notApplicable
+                  ? (metric.emptyLabel || 'Not applicable yet')
+                  : metric.hint}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 export default function CharacterSheet() {
+  const navigate = useNavigate();
   const [char, setChar] = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
   const [activeAction, setActiveAction] = useState(null);
+  // The D&D damage/rest/dice/XP mechanics are legacy relative to the human-centered sheet
+  // (#2677) — kept for back-compat with existing character.json + the RPG endpoints, but
+  // collapsed out of the primary view so age-level / skills / goals / metrics lead. Opt-in.
+  const [showLegacy, setShowLegacy] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [editingClass, setEditingClass] = useState(false);
   const [nameVal, setNameVal] = useState('');
@@ -221,10 +320,14 @@ export default function CharacterSheet() {
       setNameVal(char.name || '');
       return;
     }
-    if (!(nameVal.trim() && nameVal.trim() !== char.name)) return;
+    // Save on any real change, INCLUDING clearing back to '' (which returns the sheet to the
+    // "Your name" placeholder). Only a no-op — the trimmed value equal to what's persisted —
+    // skips the PUT. Compare against `char.name || ''` so a blank→blank edit doesn't churn.
+    const nextName = nameVal.trim();
+    if (nextName === (char.name || '')) return;
     setNameSaving(true);
     try {
-      const data = await charPut({ name: nameVal.trim() });
+      const data = await charPut({ name: nextName });
       setChar(data);
     } catch (err) {
       toast.error(err.message || 'Failed to save name');
@@ -247,8 +350,11 @@ export default function CharacterSheet() {
 
   const handleClassSave = async () => {
     try {
-      if (classVal.trim() && classVal !== char.class) {
-        const data = await charPut({ class: classVal.trim() });
+      // Save on any real change, including clearing back to '' (restores the "Add a title"
+      // placeholder); only a no-op skips the PUT.
+      const nextClass = classVal.trim();
+      if (nextClass !== (char.class || '')) {
+        const data = await charPut({ class: nextClass });
         setChar(data);
       }
     } catch (err) { toast.error(err.message || 'Failed to save class'); }
@@ -296,18 +402,25 @@ export default function CharacterSheet() {
   }
 
   const hpPct = Math.max(0, Math.min(100, (char.hp / char.maxHp) * 100));
-  const nextLevelXP = xpForNextLevel(char.level);
-  const currentLevelXP = xpForCurrentLevel(char.level);
-  const levelRange = nextLevelXP - currentLevelXP;
-  const xpPct = char.level >= 20 ? 100 : Math.max(0, Math.min(100, ((char.xp - currentLevelXP) / levelRange) * 100));
+  // Level is age-derived now (#2673) — it no longer maps to an XP threshold, so the old
+  // "XP toward next level" bar is gone. XP survives as a plain cumulative stat here; the
+  // birthday-progress bar lives on the CyberCity HUD badge (full page reframe is Slice 5).
+  const birthdayPct = Number.isFinite(char.ageYears)
+    ? Math.round((char.ageYears - Math.floor(char.ageYears)) * 100)
+    : 0;
+
+  // No usable level → CTA distinguishes a genuinely unset birth date ("set") from a
+  // present-but-unusable one ("fix" — invalid/future/unreadable) so the user isn't told to set
+  // a date they already entered (#2757). Null when a real level exists (no CTA rendered).
+  const birthCta = char.level == null ? birthDateCta(char.birthDateStatus) : null;
 
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-port-border bg-port-card">
         <div className="flex items-center gap-3">
-          <Shield className="w-6 h-6 text-port-accent" />
-          <h1 className="text-xl font-semibold text-white">Character Sheet</h1>
+          <UserRound className="w-6 h-6 text-port-accent" />
+          <h1 className="text-xl font-semibold text-white">Character</h1>
         </div>
         <button
           onClick={() => { setLoading(true); load(); }}
@@ -335,7 +448,7 @@ export default function CharacterSheet() {
                   <img src={char.avatarPath} alt={char.name} className="w-full h-full object-cover" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-gray-600">
-                    <Shield className="w-8 h-8" />
+                    <UserRound className="w-8 h-8" />
                   </div>
                 )}
                 {/* Progress bar overlay */}
@@ -387,10 +500,10 @@ export default function CharacterSheet() {
                     type="button"
                     onClick={startNameEdit}
                     disabled={nameSaving}
-                    aria-label={`Edit character name (currently ${char.name || 'Unnamed Hero'})`}
+                    aria-label={`Edit your name (currently ${char.name || 'Your name'})`}
                     className="text-2xl font-bold text-white cursor-pointer hover:text-port-accent transition-colors truncate text-left bg-transparent border-0 p-0 disabled:opacity-60 disabled:cursor-wait"
                   >
-                    {char.name || 'Unnamed Hero'}
+                    {char.name || 'Your name'}
                   </button>
                 )}
               </div>
@@ -409,66 +522,129 @@ export default function CharacterSheet() {
                     onClick={() => setEditingClass(true)}
                     {...clickableProps(() => setEditingClass(true))}
                     className="text-sm text-gray-400 cursor-pointer hover:text-port-accent transition-colors"
-                    title="Click to edit class"
+                    title="Click to edit your title"
                   >
-                    {char.class || 'Adventurer'}
+                    {char.class || 'Add a title'}
                   </span>
                 )}
               </div>
             </div>
 
-            {/* Level Badge */}
-            <div className="flex-shrink-0 flex items-center gap-3">
-              <div className="relative w-20 h-20 flex items-center justify-center rounded-full border-2 border-port-accent bg-port-bg">
-                <div className="text-center">
-                  <div className="text-2xl font-bold text-port-accent">{char.level}</div>
-                  <div className="text-[10px] uppercase tracking-wider text-gray-500">Level</div>
+            {/* Level Badge — life experience = age (#2673). Rendered only when a birthDate is
+                set; when the level is null the single call-to-action is the birth-date prompt
+                banner below (avoids two adjacent CTAs firing the same navigation). */}
+            {char.level != null && (
+              <div className="flex-shrink-0 flex items-center gap-3">
+                <div className="relative w-20 h-20 flex items-center justify-center rounded-full border-2 border-port-accent bg-port-bg">
+                  <div className="text-center">
+                    <div className="text-2xl font-bold text-port-accent">{char.level}</div>
+                    <div className="text-[10px] uppercase tracking-wider text-gray-500">Level</div>
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
 
-          {/* HP Bar */}
-          <div className="mt-4">
-            <div className="flex items-center justify-between mb-1">
-              <div className="flex items-center gap-1.5 text-sm font-medium text-gray-300">
-                <Heart className="w-4 h-4 text-port-error" />
-                HP
+          {/* Birth-date prompt — the human-centered level is age (#2673). Until a USABLE birth
+              date is on record there is no level to show, so surface a clear call to action,
+              deep-linking to the age editor where the field lives. A present-but-unusable date
+              (invalid/future/unreadable, #2757) shows a "fix" prompt instead of "set" so the
+              user isn't told to set a date they already entered. */}
+          {birthCta && (
+            <button
+              type="button"
+              onClick={() => navigate(birthCta.path)}
+              className={`mt-4 w-full flex items-center gap-3 px-4 py-3 rounded-lg border border-dashed text-left transition-colors ${
+                birthCta.kind === 'fix'
+                  ? 'border-port-warning/50 bg-port-warning/5 hover:bg-port-warning/10'
+                  : 'border-port-accent/50 bg-port-accent/5 hover:bg-port-accent/10'
+              }`}
+            >
+              {birthCta.kind === 'fix'
+                ? <AlertTriangle className="w-5 h-5 text-port-warning flex-shrink-0" />
+                : <Cake className="w-5 h-5 text-port-accent flex-shrink-0" />}
+              <div className="min-w-0">
+                <div className="text-sm font-medium text-white">{birthCta.heading}</div>
+                <div className="text-xs text-gray-400">{birthCta.caption}</div>
               </div>
-              <span className="text-sm text-gray-400">
-                {char.hp} / {char.maxHp}
-              </span>
-            </div>
-            <div className="h-5 bg-port-bg rounded-full overflow-hidden border border-port-border">
-              <div
-                className={`h-full rounded-full transition-all duration-500 ease-out ${hpColor(hpPct)}`}
-                style={{ width: `${hpPct}%` }}
-              />
-            </div>
-          </div>
+            </button>
+          )}
 
-          {/* XP Bar */}
-          <div className="mt-3">
-            <div className="flex items-center justify-between mb-1">
-              <div className="flex items-center gap-1.5 text-sm font-medium text-gray-300">
-                <Sparkles className="w-4 h-4 text-port-warning" />
-                XP
+          {/* Progress toward the next birthday (fractional part of the current year of life) */}
+          {char.level != null && (
+            <div className="mt-3">
+              <div className="flex items-center justify-between mb-1">
+                <div className="text-sm font-medium text-gray-300">Next birthday</div>
+                <span className="text-sm text-gray-400">{birthdayPct}%</span>
               </div>
-              <span className="text-sm text-gray-400">
-                {char.xp} / {nextLevelXP}
-              </span>
+              <div className="h-3 bg-port-bg rounded-full overflow-hidden border border-port-border">
+                <div
+                  className="h-full rounded-full transition-all duration-500 ease-out bg-port-accent"
+                  style={{ width: `${birthdayPct}%` }}
+                />
+              </div>
             </div>
-            <div className="h-3 bg-port-bg rounded-full overflow-hidden border border-port-border">
-              <div
-                className="h-full rounded-full transition-all duration-500 ease-out bg-port-warning"
-                style={{ width: `${xpPct}%` }}
-              />
-            </div>
-          </div>
+          )}
         </div>
 
-        {/* Quick Actions */}
-        <div className="bg-port-card border border-port-border rounded-xl p-4">
+        {/* Metrics — real engagement stats derived from existing domain signals (#2676).
+            Sits directly under the identity card so the sheet's most concrete information is
+            above the fold. */}
+        <MetricsCard metrics={char.metrics} />
+
+        {/* Life Goals — the human's real goals, mirrored read-only from the goals service
+            (#2675). Owns its own fetch (the goals API is a separate surface from /character),
+            so it is rendered unconditionally and handles its own loading/empty/error states. */}
+        <GoalsCard />
+
+        {/* Skills — derived per-domain from real PortOS usage (#2674) */}
+        <SkillsCard skills={char.skills} />
+
+        {/* Legacy RPG mechanics — demoted out of the primary view (#2677). Kept for
+            back-compat with existing character.json and the damage/rest/dice/XP + JIRA/task
+            sync endpoints (they still work); just collapsed by default so the human-centered
+            content leads. */}
+        <div className="bg-port-card border border-port-border rounded-xl">
+          <button
+            type="button"
+            onClick={() => setShowLegacy(v => !v)}
+            aria-expanded={showLegacy}
+            className="w-full flex items-center gap-2 px-4 py-3 text-left text-gray-300 hover:text-white transition-colors"
+          >
+            <Dices className="w-4 h-4 text-gray-400" />
+            <span className="text-sm font-medium">RPG mechanics</span>
+            <span className="text-xs text-gray-500 hidden sm:inline">— legacy HP, XP, dice &amp; sync</span>
+            <ChevronDown className={`w-4 h-4 text-gray-500 ml-auto transition-transform ${showLegacy ? 'rotate-180' : ''}`} />
+          </button>
+
+          {showLegacy && (
+            <div className="px-4 pb-4 pt-2 border-t border-port-border space-y-4">
+              {/* HP + XP — flat, backward-compatible mechanics (no longer scaled off level) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-1.5 text-sm font-medium text-gray-300">
+                      <Heart className="w-4 h-4 text-port-error" />
+                      HP
+                    </div>
+                    <span className="text-sm text-gray-400">{char.hp} / {char.maxHp}</span>
+                  </div>
+                  <div className="h-5 bg-port-bg rounded-full overflow-hidden border border-port-border">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ease-out ${hpColor(hpPct)}`}
+                      style={{ width: `${hpPct}%` }}
+                    />
+                  </div>
+                </div>
+                <div className="flex items-center justify-between sm:justify-start sm:gap-2 self-end pb-1">
+                  <div className="flex items-center gap-1.5 text-sm font-medium text-gray-300">
+                    <Sparkles className="w-4 h-4 text-port-warning" />
+                    XP
+                  </div>
+                  <span className="text-sm text-gray-400">{char.xp}</span>
+                </div>
+              </div>
+
           <div className="flex flex-wrap gap-2">
             <button
               onClick={() => toggleAction('damage')}
@@ -646,15 +822,15 @@ export default function CharacterSheet() {
               </div>
             </div>
           )}
-        </div>
 
-        {/* Event Log */}
-        <div className="bg-port-card border border-port-border rounded-xl flex flex-col min-h-0">
-          <div className="flex items-center gap-2 px-4 py-3 border-b border-port-border">
-            <ScrollText className="w-4 h-4 text-gray-400" />
-            <h3 className="text-sm font-medium text-gray-300">Event Log</h3>
-            <span className="text-xs text-gray-500">({char.events?.length || 0} entries)</span>
-          </div>
+              {/* Event Log — the legacy events[] feed (damage/rest/xp/sync). Kept for
+                  back-compat; lives inside the collapsed legacy section. */}
+              <div className="bg-port-bg border border-port-border rounded-xl flex flex-col min-h-0">
+                <div className="flex items-center gap-2 px-4 py-3 border-b border-port-border">
+                  <ScrollText className="w-4 h-4 text-gray-400" />
+                  <h3 className="text-sm font-medium text-gray-300">Event Log</h3>
+                  <span className="text-xs text-gray-500">({char.events?.length || 0} entries)</span>
+                </div>
           <div className="overflow-y-auto max-h-[400px] divide-y divide-port-border/50">
             {(!char.events || char.events.length === 0) ? (
               <div className="px-4 py-8 text-center text-gray-500 text-sm">
@@ -707,7 +883,10 @@ export default function CharacterSheet() {
                 );
               })
             )}
-          </div>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

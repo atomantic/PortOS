@@ -77,6 +77,21 @@ export async function listUniverses({ includeDeleted = false } = {}) {
   return [...filtered].sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
 }
 
+/**
+ * How many universes listUniverses() would return — without materializing any
+ * of them (#2729). A `COUNT(*)` on PG; a raw-record scan on the file backend.
+ *
+ * Use this for a tally (the Wordsmith skill's engagement score). It skips the
+ * run-history load, the per-record sanitize, and the sort that listUniverses()
+ * pays for, so `(await listUniverses()).length` should never appear again.
+ * Tombstones are excluded by default, exactly as listUniverses filters them —
+ * pinned by tests asserting the two agree on both backends.
+ */
+export async function countUniverses({ includeDeleted = false } = {}) {
+  await ensureDir(PATHS.data);
+  return store().countUniverses({ includeDeleted });
+}
+
 export async function getUniverse(id, { includeDeleted = false } = {}) {
   // Direct per-record load — no full collection scan needed for a by-id read.
   // The store's sanitizer (sanitizeTemplate) runs on the loaded record, so the

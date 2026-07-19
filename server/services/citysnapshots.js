@@ -159,7 +159,9 @@ async function buildSnapshot() {
       getPeers().catch(() => FAILED),
       backup.getState().catch(() => FAILED),
       getCountsByType().catch(() => FAILED),
-      getCharacter().catch(() => FAILED),
+      // Only `character.level` is snapshotted (see the frame below), so skip both derived
+      // fan-outs — this runs on every snapshot tick.
+      getCharacter({ withSkills: false, withMetrics: false }).catch(() => FAILED),
       getMemoryStats().catch(() => FAILED),
       getDiskPercent().catch(() => null),
     ]);

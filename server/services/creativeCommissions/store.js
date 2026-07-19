@@ -16,17 +16,33 @@
  * (`createRecordWriteQueue`, identical to universeBuilder), and delegates only
  * plain leaf I/O to the selected backend.
  *
- * Commissions are MACHINE-LOCAL and NOT federated in Phase 1 — the same rationale
- * as `seriesAutopilotScheduler`'s settings-based schedules: a schedule that
+ * The COMMISSION stays MACHINE-LOCAL and NOT federated — the same rationale as
+ * `seriesAutopilotScheduler`'s settings-based schedules: a schedule that
  * federated across sync peers would double-run on every machine. The DB row
  * carries no sync cursor/tombstone (deletes are hard deletes, mirroring tribe).
- * Federation is Phase 2 work, and it must split this record: the brief/feedback
- * CAN federate, but the `schedule` field (+ a future "home peer" pointer) MUST
- * stay machine-local, or the whole double-run avoidance breaks.
  *
- * The record shape is stable/forward-looking: `feedback[]` + `feedbackWindow`
- * exist now (Phase 1 leaves feedback empty) so Phase 2 only needs the rate
- * surface, not a schema change.
+ * FEEDBACK, by contrast, IS federated as of #2686 (split-record federation): the
+ * taste reactions live in their own `commissionFeedback` record kind (see
+ * ./feedbackStore.js) so a 👍/👎 rated on machine A conditions the SAME
+ * commission's next run on machine B, while the `schedule` (+ future home-peer
+ * pointer) stays local. The commission's `feedback[]` field is now a READ-THROUGH
+ * VIEW hydrated from the federated store on read (listCommissions/getCommission);
+ * `submitCommissionFeedback` writes the federated store, not this row. Legacy
+ * inline reactions (Phase 2 storage) are split into the federated store lazily on
+ * read and by `backfillAllCommissionFeedback()` at boot.
+ *
+ * The commission BRIEF itself also federates (#2686, record kind
+ * `creativeCommission`) so the same commission — and thus the attach point for a
+ * synced reaction — exists on every peer. The federated brief fields are
+ * name / targetAbility / brief / generation / feedbackWindow (feedbackWindow is
+ * part of the brief config, so it carries across machines); `schedule`, `runs`,
+ * `assignment`, and `enabled` stay MACHINE-LOCAL (stripped from the wire, kept by
+ * the receiver on merge, dormant on a fresh insert) so only the machine you
+ * scheduled it on ever fires the cron. The federated LWW key is a brief-scoped
+ * clock (`briefUpdatedAt`) that advances only on a federated-field edit (or a
+ * delete/restore), NOT the general `updatedAt` that machine-local edits and run
+ * appends bump — so a schedule change or a recordCommissionRun can never push a
+ * stale brief or make a real brief edit lose.
  *
  * Mutations emit `commission:changed` on `commissionEvents` so the scheduler
  * re-arms crons off the DATA changing (any writer), not off the three REST
@@ -43,7 +59,24 @@ import { createCollectionStore } from '../../lib/collectionStore.js';
 import { createPgFileFacade, resolvePgBackend, isFileBackend } from '../../lib/pgFileFacade.js';
 import { createRecordWriteQueue } from '../../lib/fileWriteQueue.js';
 import { isValidCron } from '../eventScheduler.js';
+import { compareNewerWins } from '../../lib/lwwTimestamp.js';
+import {
+  contentHashForRecord,
+  setSyncBaseHash,
+  deleteSyncBaseHash,
+  flushBaseHashes,
+  maybeJournalBeforeOverwrite,
+} from '../../lib/conflictJournal.js';
+import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import { commissionToCron } from './directive.js';
+import { getAbilityAdapter } from './abilityAdapters.js';
+import {
+  recordFeedback,
+  listFeedbackForCommission,
+  listFeedbackByCommissionIds,
+  backfillInlineFeedback,
+  tombstoneFeedbackForCommission,
+} from './feedbackStore.js';
 
 // Emits `commission:changed` on any create/update/delete (not on run-record
 // appends, which don't affect scheduling). The scheduler subscribes to re-sync.
@@ -104,6 +137,17 @@ export function sanitizeCommission(raw) {
   const brief = raw.brief && typeof raw.brief === 'object' ? raw.brief : {};
   const schedule = raw.schedule && typeof raw.schedule === 'object' ? raw.schedule : {};
   const generation = raw.generation && typeof raw.generation === 'object' ? raw.generation : {};
+  // Resolve the output type up front (#2769). A KNOWN type is sanitized through
+  // its ability adapter (fills that type's defaults, keeps ONLY that type's keys —
+  // an image `imageCount`, a series `episodeCount`). An UNKNOWN non-empty type (a
+  // forward-version record synced verbatim from a newer peer) is PRESERVED, not
+  // rewritten to `video`: rewriting would corrupt the newer peer's brief on read
+  // and could push the downgrade back via LWW (violating the distribution model's
+  // forward-compat rule). The scheduler skips an unknown ability rather than
+  // mis-generating it, so unknown = inert-but-preserved. A missing/blank type
+  // falls back to the default `video`.
+  const resolvedAbility = isStr(raw.targetAbility) && raw.targetAbility ? raw.targetAbility : 'video';
+  const abilityAdapter = getAbilityAdapter(resolvedAbility);
   const assignment = raw.assignment && typeof raw.assignment === 'object' && !Array.isArray(raw.assignment)
     ? raw.assignment : {};
   // The LLM pin that processes the commission (CD treatment + plan stages). A
@@ -118,7 +162,9 @@ export function sanitizeCommission(raw) {
     id: raw.id,
     name: isStr(raw.name) ? raw.name : 'Untitled Commission',
     enabled: raw.enabled !== false,
-    targetAbility: isStr(raw.targetAbility) ? raw.targetAbility : 'video',
+    // Preserve the resolved output type as-is (#2769) — known types pass through,
+    // an unknown forward-version type round-trips untouched (see above).
+    targetAbility: resolvedAbility,
     brief: {
       intent: isStr(brief.intent) ? brief.intent : '',
       genre: isStr(brief.genre) ? brief.genre : null,
@@ -135,12 +181,11 @@ export function sanitizeCommission(raw) {
       cron: isStr(schedule.cron) ? schedule.cron : null,
       timezone: isStr(schedule.timezone) ? schedule.timezone : null,
     },
-    generation: {
-      model: isStr(generation.model) ? generation.model : null,
-      quality: isStr(generation.quality) ? generation.quality : 'standard',
-      aspectRatio: isStr(generation.aspectRatio) ? generation.aspectRatio : '16:9',
-      targetDurationSeconds: Number.isInteger(generation.targetDurationSeconds) ? generation.targetDurationSeconds : 10,
-    },
+    // Per-ability generation (#2769): a known type's adapter fills its defaults
+    // and keeps only its keys; an unknown (forward-version) type has no adapter, so
+    // preserve the raw generation object verbatim — nothing is lost on round-trip
+    // and the scheduler won't fire it anyway.
+    generation: abilityAdapter ? abilityAdapter.sanitizeGeneration(generation) : { ...generation },
     // Which AI provider/model processes this commission's CD cognitive stages.
     // `providerId: null` = inherit the install's default AI Assignment.
     assignment: {
@@ -157,7 +202,87 @@ export function sanitizeCommission(raw) {
     runs: Array.isArray(raw.runs) ? raw.runs.slice(-MAX_PERSISTED_RUNS) : [],
     createdAt: isStr(raw.createdAt) ? raw.createdAt : now,
     updatedAt: isStr(raw.updatedAt) ? raw.updatedAt : (isStr(raw.createdAt) ? raw.createdAt : now),
+    // Brief-scoped LWW clock (#2686). The federation compares THIS, not `updatedAt`
+    // — because `updatedAt` is bumped by machine-local edits (a schedule change, a
+    // recordCommissionRun append) that must NOT let a stale brief win the LWW or a
+    // schedule-only edit push a stale brief. `briefUpdatedAt` advances ONLY when a
+    // federated field (name/targetAbility/brief/generation/feedbackWindow) changes.
+    // Pre-#2686 records fall back to `updatedAt`.
+    briefUpdatedAt: isStr(raw.briefUpdatedAt) ? raw.briefUpdatedAt
+      : (isStr(raw.updatedAt) ? raw.updatedAt : (isStr(raw.createdAt) ? raw.createdAt : now)),
+    // Soft-delete tombstone trio (#2686). The commission BRIEF federates so it
+    // exists on every peer (letting a synced reaction attach to the same
+    // commission); a delete must therefore propagate as a tombstone, not a hard
+    // delete the LWW merge would never carry. `schedule`/`runs`/`assignment` stay
+    // machine-local (stripped from the wire — see syncWire's `creativeCommission`
+    // case + preserveLocalCommissionFields), so only the OWNING machine fires the
+    // cron (no double-run). Pre-#2686 records carry neither field → live.
+    deleted: raw.deleted === true,
+    deletedAt: raw.deleted === true && isStr(raw.deletedAt) ? raw.deletedAt : null,
   };
+}
+
+// The peer-sync record kind + id shape for the federated commission brief (#2686).
+export const CREATIVE_COMMISSION_KIND = 'creativeCommission';
+export const COMMISSION_ID_RE = /^commission-[0-9a-z-]+$/i;
+
+/**
+ * Normalize a raw commission into the canonical wire/stored shape for a sync
+ * round-trip (drop-on-floor for a non-object / bad id). Reuses sanitizeCommission
+ * (which now normalizes the soft-delete trio) — the machine-local fields
+ * (schedule/runs/assignment) are stripped from the actual WIRE form by syncWire's
+ * `creativeCommission` case, and carried forward from the local copy on merge by
+ * preserveLocalCommissionFields, so they never transit or reset a peer's schedule.
+ */
+export function sanitizeCommissionForSync(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  if (!isStr(raw.id) || !COMMISSION_ID_RE.test(raw.id)) return null;
+  return sanitizeCommission(raw);
+}
+
+// The MACHINE-LOCAL fields that never travel on the wire — the receiver keeps its
+// OWN values for all of these. `enabled` is machine-local too (#2686): a remotely-
+// inserted commission must NOT arm a cron on the receiver, so each machine decides
+// whether/when it runs. `feedback` is preserved so a remote brief-win can't wipe a
+// commission's un-migrated legacy inline reactions before the boot backfill runs.
+const LOCAL_COMMISSION_FIELDS = ['schedule', 'runs', 'assignment', 'enabled', 'feedback'];
+// The federated brief fields — a patch touching any of these advances the brief
+// LWW clock (`briefUpdatedAt`); a machine-local-only patch does not.
+const FEDERATED_COMMISSION_FIELDS = ['name', 'targetAbility', 'brief', 'generation', 'feedbackWindow'];
+
+/** Re-attach the receiver's local-only fields onto a winning remote; bump the UI clock. */
+function preserveLocalCommissionFields(remote, local) {
+  if (!local) return remote;
+  const out = { ...remote };
+  for (const f of LOCAL_COMMISSION_FIELDS) out[f] = local[f];
+  // The wire form set `updatedAt = briefUpdatedAt`; restore a real UI "last-changed"
+  // clock (max of the two) while keeping the federated brief clock as the LWW key.
+  out.updatedAt = new Date().toISOString();
+  return out;
+}
+
+/**
+ * LWW merge decision for one incoming commission (mirrors mergeWorkRecord): the
+ * remote is sanitized here (drop-on-floor → null); a missing local INSERTS the
+ * brief in a DORMANT state (enabled:false, no usable schedule) so it never fires
+ * on the receiver until the user opts in; else the newer BRIEF clock wins, and the
+ * receiver's machine-local schedule/runs/assignment/enabled/feedback carry forward
+ * (they never travel), so a peer's brief edit can't arm or reset this machine.
+ */
+export function mergeCommissionRecord(local, remoteRaw) {
+  const remote = sanitizeCommissionForSync(remoteRaw);
+  if (!remote) return { next: null, inserted: false, remoteWins: false, changed: false };
+  if (!local) {
+    // Dormant insert: enabled:false + the sanitizer's null-time schedule (no cron)
+    // so editing only the synced brief on the receiver can't silently arm a daily
+    // run. The user explicitly enables + schedules it locally to activate.
+    return { next: { ...remote, enabled: false }, inserted: true, remoteWins: true, changed: true };
+  }
+  const sanitizedLocal = sanitizeCommission(local);
+  const remoteWins = compareNewerWins(remote.briefUpdatedAt, sanitizedLocal.briefUpdatedAt);
+  const next = remoteWins ? preserveLocalCommissionFields(remote, sanitizedLocal) : local;
+  const changed = JSON.stringify(next) !== JSON.stringify(local);
+  return { next, inserted: false, remoteWins, changed };
 }
 
 // --- File backend (dev/test escape hatch): wraps collectionStore ---
@@ -176,12 +301,38 @@ function makeFileBackend(dir) {
     stamped = true;
     await cs.saveTypeIndex({}).catch(() => { stamped = false; });
   };
+  const live = (r) => r && r.deleted !== true;
   return {
     name: 'file',
-    listRaw: () => cs.loadAll(),
-    readRaw: (id) => cs.loadOne(id),
+    listRaw: async ({ includeDeleted = false } = {}) =>
+      (await cs.loadAll()).filter((r) => includeDeleted || live(r)),
+    readRaw: async (id, { includeDeleted = false } = {}) => {
+      const rec = await cs.loadOne(id);
+      if (!rec) return null;
+      return includeDeleted || live(rec) ? rec : null;
+    },
+    listIds: async ({ includeDeleted = false } = {}) =>
+      (await cs.loadAll()).filter((r) => includeDeleted || live(r)).map((r) => r.id),
     writeRaw: async (id, record) => { await ensureTypeIndex(); await cs.saveOneNow(id, record); return record; },
     deleteRaw: (id) => cs.deleteOneNow(id),
+    // Same predicate as pruneTombstoned below — this backend's truth is the JSON.
+    listPrunable: async (olderThanMs) => {
+      if (!Number.isFinite(olderThanMs)) return [];
+      return (await cs.loadAll())
+        .filter((r) => r?.deleted === true && isStr(r.deletedAt) && Date.parse(r.deletedAt) < olderThanMs)
+        .map((r) => r.id);
+    },
+    isPrunable: async (id, olderThanMs) => {
+      if (!Number.isFinite(olderThanMs)) return false;
+      const r = await cs.loadOne(id);
+      return !!r && r.deleted === true && isStr(r.deletedAt) && Date.parse(r.deletedAt) < olderThanMs;
+    },
+    pruneTombstoned: async (olderThanMs) => {
+      if (!Number.isFinite(olderThanMs)) return { pruned: 0, ids: [] };
+      const stale = (await cs.loadAll()).filter((r) => r?.deleted === true && isStr(r.deletedAt) && Date.parse(r.deletedAt) < olderThanMs);
+      for (const r of stale) await cs.deleteOneNow(r.id);
+      return { pruned: stale.length, ids: stale.map((r) => r.id) };
+    },
     verify: () => cs.verifySchemaVersion(),
   };
 }
@@ -194,8 +345,12 @@ function makePgBackend(db) {
     name: 'postgres',
     listRaw: db.listRaw,
     readRaw: db.readRaw,
+    listIds: db.listIds,
     writeRaw: db.writeRaw,
     deleteRaw: db.deleteRaw,
+    listPrunable: db.listPrunable,
+    isPrunable: db.isPrunable,
+    pruneTombstoned: db.pruneTombstoned,
   };
 }
 
@@ -233,10 +388,14 @@ function createFacade(dir) {
     dir,
     type: TYPE,
     getBackendName,
-    listRaw: async () => (await getBackend()).listRaw(),
-    readRaw: async (id) => (await getBackend()).readRaw(id),
+    listRaw: async (opts) => (await getBackend()).listRaw(opts),
+    readRaw: async (id, opts) => (await getBackend()).readRaw(id, opts),
+    listIds: async (opts) => (await getBackend()).listIds(opts),
     writeRaw: async (id, record) => (await getBackend()).writeRaw(id, record),
     deleteRaw: async (id) => (await getBackend()).deleteRaw(id),
+    listPrunable: async (olderThanMs) => (await getBackend()).listPrunable(olderThanMs),
+    isPrunable: async (id, olderThanMs) => (await getBackend()).isPrunable(id, olderThanMs),
+    pruneTombstoned: async (olderThanMs) => (await getBackend()).pruneTombstoned(olderThanMs),
     queueRecordWrite,
     // Under PG, report ok WITHOUT forcing backend selection (the early boot
     // verifier runs before the dbReady gate); under the file escape hatch, read
@@ -279,15 +438,100 @@ export function assertValidSchedule(schedule) {
   return cron;
 }
 
+/**
+ * Persist `feedback: []` on the machine-local commission after its legacy inline
+ * reactions have been split into the federated store — WITHOUT bumping
+ * `updatedAt` (the storage migration doesn't change scheduling, so it must not
+ * re-arm crons or win an LWW it has no business in). Serialized on the per-id
+ * queue like every other RMW here.
+ */
+/**
+ * Union the federated feedback view with any still-stored legacy INLINE reactions,
+ * deduped by runId (the deterministic `cfeedback-<runId>` key) or, for run-less
+ * reactions, by id. Federated wins on a collision. This keeps reads complete
+ * during the migration window: if `backfillInlineFeedback` migrated only a PREFIX
+ * before throwing (inline retained for retry), neither the list page nor the
+ * scheduler directive silently omits the un-migrated tail. After a full migration
+ * the inline array is empty, so this is just the federated view.
+ */
+function unionInlineFeedback(federated, inline) {
+  if (!Array.isArray(inline) || inline.length === 0) return federated;
+  const seenRun = new Set(federated.filter((f) => f.runId).map((f) => f.runId));
+  const seenId = new Set(federated.map((f) => f.id));
+  // A run-less legacy inline entry is stored federated under the backfill's
+  // remapped id (`cfeedback-<sanitized legacy id>`), so match that form too —
+  // otherwise the reaction counts twice while the inline copy is retained.
+  const backfilledId = (f) => `cfeedback-${String(f?.id || '').replace(/[^0-9a-z-]/gi, '-')}`;
+  const extra = inline.filter((f) => (f?.runId
+    ? !seenRun.has(f.runId)
+    : !(seenId.has(f?.id) || seenId.has(backfilledId(f)))));
+  if (extra.length === 0) return federated;
+  return [...federated, ...extra].sort((a, b) => String(a.at).localeCompare(String(b.at)));
+}
+
+async function clearInlineFeedback(id) {
+  const store = commissionStore();
+  await store.queueRecordWrite(id, async () => {
+    const currentRaw = await store.readRaw(id);
+    if (!currentRaw) return;
+    const current = sanitizeCommission(currentRaw);
+    if (current.feedback.length === 0) return;
+    await store.writeRaw(id, { ...current, feedback: [] });
+  });
+}
+
 export async function listCommissions() {
   const raw = await commissionStore().listRaw();
-  return raw.map(sanitizeCommission).filter(Boolean);
+  const recs = raw.map(sanitizeCommission).filter(Boolean);
+  // Hydrate the federated feedback view (read-through) in ONE pass — feedback is
+  // no longer stored inline on the machine-local commission (#2686). Read-only:
+  // any un-migrated legacy inline feedback is split lazily by getCommission /
+  // backfillAllCommissionFeedback, not on this hot list path.
+  const byId = await listFeedbackByCommissionIds(recs.map((r) => r.id)).catch(() => new Map());
+  // Prefer the federated view; fall back to the record's own (sanitized) inline
+  // feedback only when NO federated reaction exists for it yet — the transient
+  // pre-migration window before getCommission / backfillAllCommissionFeedback has
+  // split its legacy inline reactions. `byId.has` (not `|| []`) distinguishes
+  // "federated store has this commission's reactions" (authoritative, even if the
+  // array is non-empty) from "not yet migrated" (show the legacy inline so the
+  // list page doesn't transiently under-report), without ever double-counting
+  // (post-migration the inline array is empty).
+  for (const r of recs) r.feedback = unionInlineFeedback(byId.get(r.id) || [], r.feedback);
+  return recs;
 }
 
 export async function getCommission(id) {
   const raw = await commissionStore().readRaw(id);
   const rec = raw ? sanitizeCommission(raw) : null;
   if (!rec) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
+  // Lazily migrate any legacy inline feedback (Phase 2 storage) into the
+  // federated store, then clear it — so the scheduler's pre-fire read and the
+  // route GET always see the federated feedback even before the boot backfill
+  // runs. Idempotent (deterministic ids, never-clobber upsert).
+  const inlineLegacy = rec.feedback;
+  if (inlineLegacy.length > 0) {
+    // Clear the inline array ONLY if the split SUCCEEDED. A mid-batch DB failure
+    // in backfillInlineFeedback (after ≥1 reaction was federated) must leave the
+    // inline array intact so a later read/boot can retry — clearing on a swallowed
+    // throw would permanently drop the un-migrated reactions. Gate on "didn't
+    // throw", NOT on the boolean return (which is legitimately false on an
+    // idempotent re-run where everything is already federated — clearing is still
+    // correct then).
+    let split = false;
+    try { await backfillInlineFeedback(id, inlineLegacy); split = true; } catch { /* leave inline for retry */ }
+    if (split) await clearInlineFeedback(id).catch(() => {});
+  }
+  // No catch: a FAILED federated read must not collapse into "no feedback" —
+  // the scheduler's pre-fire read would spend generation budget ignoring the
+  // user's ratings. Let it throw: the route surfaces the error, the scheduler
+  // aborts the fire and retries next tick. (listCommissions keeps its display
+  // fallback — a degraded list page is fine; a mis-directed generation is not.)
+  const federated = await listFeedbackForCommission(id);
+  // Union with the legacy inline reactions so a PARTIAL migration (backfill wrote
+  // a prefix then threw, inline retained for retry) never hides the un-migrated
+  // tail from the scheduler directive or the UI. After a full migration the inline
+  // array is empty, so this is just the federated view (dedup drops the overlap).
+  rec.feedback = unionInlineFeedback(federated, inlineLegacy);
   return rec;
 }
 
@@ -300,6 +544,12 @@ export async function createCommission(input) {
   const record = sanitizeCommission({ ...input, id, createdAt: now, updatedAt: now });
   await commissionStore().writeRaw(id, record);
   commissionEvents.emit('commission:changed', { id, action: 'create' });
+  // Federate the commission BRIEF (#2686) so it exists on every peer and a synced
+  // reaction can attach to the same commission. The schedule/runs/assignment stay
+  // machine-local (stripped from the wire), so the peer holds the brief but never
+  // fires the cron.
+  autoSubscribeRecordToAllPeers(CREATIVE_COMMISSION_KIND, id).catch(() => {});
+  emitRecordUpdated(CREATIVE_COMMISSION_KIND, id);
   return record;
 }
 
@@ -314,6 +564,7 @@ export async function updateCommission(id, patch) {
     const currentRaw = await store.readRaw(id);
     if (!currentRaw) return null;
     const current = sanitizeCommission(currentRaw);
+    const nowIso = new Date().toISOString();
     const next = sanitizeCommission({
       ...current,
       ...patch,
@@ -339,32 +590,51 @@ export async function updateCommission(id, patch) {
       assignment: patch.assignment ? patch.assignment : current.assignment,
       id,
       createdAt: current.createdAt,
-      updatedAt: new Date().toISOString(),
+      updatedAt: nowIso,
+      // Advance the federated BRIEF clock ONLY when a federated field changes —
+      // a machine-local edit (schedule/assignment) must not poison the LWW key or
+      // it could push a stale brief to peers / make a real brief edit lose. When it
+      // DOES advance, it equals `updatedAt` (same `nowIso`); a local-only edit
+      // leaves it at the prior value (< updatedAt).
+      briefUpdatedAt: FEDERATED_COMMISSION_FIELDS.some((k) => k in patch)
+        ? nowIso : current.briefUpdatedAt,
     });
     await store.writeRaw(id, next);
     return next;
   });
   if (!merged) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
   commissionEvents.emit('commission:changed', { id, action: 'update' });
+  // Push the brief change to subscribed peers (the schedule/runs/assignment are
+  // stripped from the wire, so only the brief travels).
+  emitRecordUpdated(CREATIVE_COMMISSION_KIND, id);
   return merged;
 }
 
 export async function deleteCommission(id) {
   const store = commissionStore();
-  // Serialize the read+delete on the SAME per-id write queue as
-  // update/recordRun/submitFeedback. Otherwise an in-flight feedback write (its
-  // own queued read→writeRaw) could interleave with a delete that runs outside
-  // the queue: feedback reads the row, delete hard-deletes it, feedback's
-  // writeRaw then upserts the stale record and resurrects the commission. With
-  // delete on the tail, a feedback write queued after it finds no row and 404s.
+  // SOFT-delete (tombstone) now that the commission BRIEF federates (#2686): a
+  // hard delete would never propagate (the LWW merge only adds/updates), so an
+  // out-of-date peer would resurrect the commission on the next sync. Tombstone
+  // instead — the deletion rides the same push path and the peer converges.
+  // Serialized on the SAME per-id write queue as update/recordRun/submitFeedback
+  // so an in-flight feedback/run write can't interleave and resurrect a live row.
   const existed = await store.queueRecordWrite(id, async () => {
-    const current = await store.readRaw(id);
-    if (!current) return false;
-    await store.deleteRaw(id);
+    const currentRaw = await store.readRaw(id);
+    if (!currentRaw) return false;
+    const current = sanitizeCommission(currentRaw);
+    if (current.deleted) return false;
+    const now = new Date().toISOString();
+    // Bump the BRIEF clock too — the tombstone is a brief-level change that must
+    // win the briefUpdatedAt-keyed LWW on peers (otherwise it ties the pre-delete
+    // brief and never propagates).
+    await store.writeRaw(id, { ...current, deleted: true, deletedAt: now, updatedAt: now, briefUpdatedAt: now });
     return true;
   });
   if (!existed) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
+  // Re-sync schedules (the scheduler cancels the now-tombstoned commission's cron)
+  // and push the tombstone to peers.
   commissionEvents.emit('commission:changed', { id, action: 'delete' });
+  emitRecordDeleted(CREATIVE_COMMISSION_KIND, id);
   return { id, deleted: true };
 }
 
@@ -419,35 +689,175 @@ export async function recordCommissionRun(id, runEntry) {
  * recordCommissionRun, which also stays silent).
  */
 export async function submitCommissionFeedback(id, input) {
+  // getCommission validates existence (→404), hydrates the federated feedback
+  // view, and lazily splits any legacy inline reactions into the federated store.
+  const commission = await getCommission(id);
+  // The UI always rates a specific run; reject a runId that isn't on the record
+  // so feedback can't dangle against a non-existent run.
+  if (input?.runId && !commission.runs.some((r) => r.id === input.runId)) {
+    throw makeErr(`Run not found on commission: ${input.runId}`, ERR_VALIDATION);
+  }
+  // Write to the FEDERATED feedback store (#2686): one record per reaction,
+  // deterministic id per run so a re-rating LWW-updates in place (one reaction
+  // per run) and the change propagates to every sync peer — the machine-local
+  // commission no longer carries feedback inline.
+  const rec = await recordFeedback({
+    commissionId: id,
+    runId: input?.runId ?? null,
+    rating: input?.rating,
+    note: input?.note,
+    tags: input?.tags,
+  });
+  if (!rec) throw makeErr('Invalid feedback: a non-zero rating (up/down) is required', ERR_VALIDATION);
+  commission.feedback = await listFeedbackForCommission(id).catch(() => []);
+  return commission;
+}
+
+/**
+ * Boot-time backfill (#2686 split-record migration): move every commission's
+ * legacy INLINE feedback into the federated store and clear the inline array.
+ * Idempotent — after the first pass commissions carry `feedback: []`, so a
+ * re-run is a no-op. Invoked from server boot after the DB is ready (the
+ * scripts/migrations runner executes before the pool is up, so the data move
+ * can't live there — see migration 194's registration stub).
+ */
+export async function backfillAllCommissionFeedback() {
+  const raw = await commissionStore().listRaw();
+  let migrated = 0;
+  for (const r of raw) {
+    const rec = sanitizeCommission(r);
+    if (!rec || rec.feedback.length === 0) continue;
+    // Same non-atomic guard as getCommission: clear the inline array only after
+    // the split succeeded, so a transient failure mid-batch leaves the un-migrated
+    // reactions in place for the next boot/read instead of silently dropping them.
+    try { await backfillInlineFeedback(rec.id, rec.feedback); } catch { continue; }
+    await clearInlineFeedback(rec.id).catch(() => {});
+    migrated += 1;
+  }
+  if (migrated > 0) console.log(`🎯 Commission feedback: split ${migrated} commission(s)' inline reactions into the federated store (#2686)`);
+  return { migrated };
+}
+
+// ---------- commission BRIEF federation facades (#2686) ----------
+// The peer-sync layer imports these exactly as it imports writersRoom/sync.js.
+// The commission record federates (so a synced reaction attaches to the same
+// commission on every peer) while schedule/runs/assignment stay machine-local
+// (stripped from the wire by syncWire, carried forward on merge).
+
+/** One commission's sanitized record (tombstone surfaced), or null. */
+export async function getCommissionForSync(id) {
+  const raw = await commissionStore().readRaw(id, { includeDeleted: true });
+  return raw ? sanitizeCommissionForSync(raw) : null;
+}
+
+/** Every LIVE commission as `{ id, updatedAt }` for full-sync coverage compare.
+ *  `updatedAt` is the BRIEF clock (the wire LWW key), so coverage compares like-for-like. */
+export async function listCommissionsForSync() {
+  const raw = await commissionStore().listRaw();
+  return raw.map(sanitizeCommissionForSync).filter(Boolean).map((r) => ({ id: r.id, updatedAt: r.briefUpdatedAt }));
+}
+
+/** Every commission id — live only by default, or all (incl. tombstones) for the sweep. */
+export async function listCommissionIdsForSync(options = {}) {
+  return commissionStore().listIds(options);
+}
+
+/**
+ * Merge an incoming batch of commission records from a peer (LWW, tombstone-aware).
+ * Serialized per-id on the same write queue as the REST writers so a user edit
+ * can't clobber the merge. Journals the about-to-be-overwritten local version
+ * when the remote wins, seeds the conflict-journal base hash, and re-syncs the
+ * scheduler (a merged brief/tombstone can change what's armed). Mirrors
+ * writersRoom's `mergeBodylessFromSync`, minus the PG row lock.
+ */
+export async function mergeCommissionsFromSync(remoteRecords, { source = { via: 'sync', peerId: null } } = {}) {
+  if (!Array.isArray(remoteRecords)) return { applied: false, count: 0 };
+  const store = commissionStore();
+  let changed = 0;
+  for (const remote of remoteRecords) {
+    const id = remote?.id;
+    if (!isStr(id) || !COMMISSION_ID_RE.test(id)) continue;
+    const applied = await store.queueRecordWrite(id, async () => {
+      const local = await store.readRaw(id, { includeDeleted: true });
+      const { next, inserted, remoteWins, changed: didChange } = mergeCommissionRecord(local, remote);
+      if (!next) return false;
+      if (!inserted && (!remoteWins || !didChange)) return false;
+      if (!inserted) {
+        await maybeJournalBeforeOverwrite({ kind: CREATIVE_COMMISSION_KIND, id: next.id, local, remote: next, source });
+      }
+      await store.writeRaw(id, next);
+      await setSyncBaseHash(CREATIVE_COMMISSION_KIND, next.id, contentHashForRecord(CREATIVE_COMMISSION_KIND, next));
+      return true;
+    });
+    if (applied) changed += 1;
+  }
+  await flushBaseHashes();
+  if (changed > 0) commissionEvents.emit('commission:changed', { action: 'merge' });
+  return changed === 0 ? { applied: false, count: 0 } : { applied: true, count: changed };
+}
+
+/** Hard-remove tombstoned commissions older than the cutoff; evicts each base hash. */
+export async function pruneTombstonedCommissions(olderThanMs) {
+  if (!Number.isFinite(olderThanMs)) return { pruned: 0, ids: [] };
+  const store = commissionStore();
+  // Eligibility comes from the BACKEND's own predicate (`listPrunable` mirrors
+  // pruneTombstoned's — on PG that is the normalized `deleted_at` column, which
+  // writeRaw corrects while leaving the JSON verbatim), so the set we tombstone
+  // feedback for is exactly the set the delete would remove. Then each id is
+  // revalidated and deleted INSIDE its per-id write queue — the same queue
+  // restoreCommission and the peer merge write through — so a restore or
+  // fresher tombstone landing mid-sweep either runs before us (the record no
+  // longer passes the prune predicate and keeps its feedback) or after (it
+  // finds the record gone and reports ERR_TARGET_GONE, exactly as if it raced
+  // the old bulk prune). Feedback is tombstoned before
+  // the row delete: a failure there throws, the commission tombstone stays
+  // put, and the next sweep retries both halves — never an orphaned rating.
+  const candidates = await store.listPrunable(olderThanMs);
+  const ids = [];
+  for (const id of candidates) {
+    const pruned = await store.queueRecordWrite(id, async () => {
+      // Recheck the backend's FULL prune predicate, not just deleted:true — a
+      // peer merge that rewrote this tombstone with a fresher deletedAt mid-
+      // sweep restarted its GC grace period, and hard-deleting it early would
+      // let an offline peer resurrect the stale record.
+      if (!(await store.isPrunable(id, olderThanMs))) return false;
+      await tombstoneFeedbackForCommission(id);
+      await store.deleteRaw(id);
+      return true;
+    });
+    if (!pruned) continue;
+    ids.push(id);
+    await deleteSyncBaseHash(CREATIVE_COMMISSION_KIND, id).catch(() => {});
+  }
+  return { pruned: ids.length, ids };
+}
+
+/**
+ * Restore a tombstoned/edited commission from a conflict-journal snapshot. Merges
+ * the RESTORABLE brief fields, un-tombstones, bumps updatedAt so the restore wins
+ * the next LWW and re-pushes. Returns null for a missing record (→ ERR_TARGET_GONE).
+ */
+export async function restoreCommission(id, patch) {
   const store = commissionStore();
   const result = await store.queueRecordWrite(id, async () => {
-    const currentRaw = await store.readRaw(id);
-    if (!currentRaw) return { notFound: true };
+    const currentRaw = await store.readRaw(id, { includeDeleted: true });
+    if (!currentRaw) return null;
     const current = sanitizeCommission(currentRaw);
-    // The UI always rates a specific run; reject a runId that isn't on the record
-    // so feedback can't dangle against a non-existent run.
-    if (input?.runId && !current.runs.some((r) => r.id === input.runId)) {
-      throw makeErr(`Run not found on commission: ${input.runId}`, ERR_VALIDATION);
-    }
-    const entry = sanitizeFeedbackEntry({
-      ...input,
-      id: `feedback-${randomUUID()}`,
-      at: new Date().toISOString(),
+    const next = sanitizeCommission({
+      ...current,
+      ...(patch && typeof patch === 'object' ? patch : {}),
+      id, createdAt: current.createdAt,
+      // Never let a snapshot restore resurrect the machine-local fields — keep ours.
+      schedule: current.schedule, runs: current.runs, assignment: current.assignment,
+      enabled: current.enabled,
+      // Advance the brief clock so the restore wins the next LWW and re-pushes.
+      deleted: false, deletedAt: null, updatedAt: new Date().toISOString(), briefUpdatedAt: new Date().toISOString(),
     });
-    if (!entry) throw makeErr('Invalid feedback: a non-zero rating (up/down) is required', ERR_VALIDATION);
-    // UPSERT by runId, don't append: re-rating a run must REPLACE its prior
-    // reaction, not stack a second one. The UI shows only the latest reaction per
-    // run, but `renderFeedbackDigest` consumes every entry — so a stacked
-    // like-then-dislike for the same run would fold BOTH a "like" and a "dislike"
-    // for one output into the next directive, and repeated votes would each burn a
-    // `feedbackWindow` slot. Dropping the prior same-runId entry keeps one reaction
-    // per run and moves the re-rated run to the most-recent position.
-    const prior = (current.feedback || []).filter((f) => !f.runId || f.runId !== entry.runId);
-    const feedback = [...prior, entry].slice(-MAX_PERSISTED_FEEDBACK);
-    const next = { ...current, feedback, updatedAt: new Date().toISOString() };
     await store.writeRaw(id, next);
-    return { record: next };
+    return next;
   });
-  if (result?.notFound) throw makeErr(`Commission not found: ${id}`, ERR_NOT_FOUND);
-  return result.record;
+  if (!result) return null;
+  commissionEvents.emit('commission:changed', { id, action: 'restore' });
+  emitRecordUpdated(CREATIVE_COMMISSION_KIND, id);
+  return result;
 }
