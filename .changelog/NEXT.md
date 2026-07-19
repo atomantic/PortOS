@@ -4,6 +4,10 @@
 
 - [issue-2650] The CoS branch reconciler and issue reconciler now work on self-hosted GitHub Enterprise (`github.*`) repos, not just `github.com`. Both previously gated on the github.com-only `isGithub` origin flag (which drives PortOS's own fork/update flow), so their scans silently skipped enterprise repos even though the sibling PR-watcher already handled them. All three services now share an `isGithubHost(host)` classifier and target `gh` via a host-qualified `HOST/OWNER/REPO` selector, so enterprise repos reconcile correctly and detection stays deterministic on a fork+upstream checkout. Existing github.com behavior is unchanged.
 
+## Goals
+
+- [issue-2679] The goal editor now has a "Daily Driver Feature Areas" multi-select, so you can pin exactly which PortOS areas (Daily POST, Body Health, Writers Room, Universes, Series Pipeline, Tribe, Autobiography, Legacy Bundle, Sharing, Plan Milestones, Memory) the Daily Driver deep-links to for a given goal. Each area shows its icon and label; when you leave the selection empty the editor shows the greyed category default it falls back to, and clearing an override restores that default.
+
 ## Changed
 
 - `[issue-2651]` The CoS `claim-issue-gitlab` work detector now short-circuits the group-owner filter trap the same way `claim-issue` handles a GitHub org owner. A GitLab group-owned project's namespace is the group, which never authors issues, so `owner` author-filter mode previously found nothing and parked with the vague `no-authored-issues` reason. GitLab's owner resolver now resolves the full project namespace (including nested subgroups like `parent/subgroup`) and probes `glab api groups/<url-encoded-namespace>` (200 = group, 404 = user namespace); for a group it skips the guaranteed-empty `--author <group>` query and parks with a distinct `owner-is-group` reason carrying the real open count. The on-demand toast reads *"the \"owner\" filter matches a group, which can't author issues — set it to \"self\" or \"any\""* — GitLab-appropriate wording ("group", not "org"). A probe failure degrades to the pre-existing behavior, so no new transient park appears.
