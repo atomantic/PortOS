@@ -366,6 +366,23 @@ export async function deleteCommissionFeedback(id) {
 }
 
 /**
+ * Tombstone every live feedback record for a commission. Called when the
+ * commission's own tombstone is hard-pruned: past that point no peer can
+ * resurrect the commission, but its feedback rows would otherwise stay live
+ * forever — enumerated by the sync listers and pushed to every new peer, with
+ * no GC path (tombstone GC only prunes rows that are already tombstoned).
+ */
+export async function tombstoneFeedbackForCommission(commissionId) {
+  const raw = await feedbackStore().listRawByCommission(commissionId);
+  let tombstoned = 0;
+  for (const rec of raw) {
+    const res = await deleteCommissionFeedback(rec.id).catch(() => ({ deleted: false }));
+    if (res.deleted) tombstoned += 1;
+  }
+  return { commissionId, tombstoned };
+}
+
+/**
  * Migrate a commission's INLINE `feedback[]` (Phase 2 storage) into the federated
  * store, then return true if any were moved (the caller clears the inline array).
  * Idempotent: deterministic ids + `ON CONFLICT` upsert mean re-running is a no-op

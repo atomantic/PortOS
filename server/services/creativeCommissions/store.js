@@ -75,6 +75,7 @@ import {
   listFeedbackForCommission,
   listFeedbackByCommissionIds,
   backfillInlineFeedback,
+  tombstoneFeedbackForCommission,
 } from './feedbackStore.js';
 
 // Emits `commission:changed` on any create/update/delete (not on run-record
@@ -441,7 +442,13 @@ function unionInlineFeedback(federated, inline) {
   if (!Array.isArray(inline) || inline.length === 0) return federated;
   const seenRun = new Set(federated.filter((f) => f.runId).map((f) => f.runId));
   const seenId = new Set(federated.map((f) => f.id));
-  const extra = inline.filter((f) => (f?.runId ? !seenRun.has(f.runId) : !seenId.has(f?.id)));
+  // A run-less legacy inline entry is stored federated under the backfill's
+  // remapped id (`cfeedback-<sanitized legacy id>`), so match that form too —
+  // otherwise the reaction counts twice while the inline copy is retained.
+  const backfilledId = (f) => `cfeedback-${String(f?.id || '').replace(/[^0-9a-z-]/gi, '-')}`;
+  const extra = inline.filter((f) => (f?.runId
+    ? !seenRun.has(f.runId)
+    : !(seenId.has(f?.id) || seenId.has(backfilledId(f)))));
   if (extra.length === 0) return federated;
   return [...federated, ...extra].sort((a, b) => String(a.at).localeCompare(String(b.at)));
 }
@@ -771,7 +778,13 @@ export async function mergeCommissionsFromSync(remoteRecords, { source = { via: 
 /** Hard-remove tombstoned commissions older than the cutoff; evicts each base hash. */
 export async function pruneTombstonedCommissions(olderThanMs) {
   const result = await commissionStore().pruneTombstoned(olderThanMs);
-  for (const id of result.ids || []) await deleteSyncBaseHash(CREATIVE_COMMISSION_KIND, id).catch(() => {});
+  for (const id of result.ids || []) {
+    await deleteSyncBaseHash(CREATIVE_COMMISSION_KIND, id).catch(() => {});
+    // The commission is gone everywhere its tombstone aged out — tombstone its
+    // feedback too, so the rows GC through the normal path instead of staying
+    // live (and peer-pushed) forever with no owner.
+    await tombstoneFeedbackForCommission(id).catch(() => {});
+  }
   return result;
 }
 
