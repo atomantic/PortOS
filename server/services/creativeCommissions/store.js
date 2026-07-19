@@ -505,7 +505,12 @@ export async function getCommission(id) {
     try { await backfillInlineFeedback(id, inlineLegacy); split = true; } catch { /* leave inline for retry */ }
     if (split) await clearInlineFeedback(id).catch(() => {});
   }
-  const federated = await listFeedbackForCommission(id).catch(() => []);
+  // No catch: a FAILED federated read must not collapse into "no feedback" —
+  // the scheduler's pre-fire read would spend generation budget ignoring the
+  // user's ratings. Let it throw: the route surfaces the error, the scheduler
+  // aborts the fire and retries next tick. (listCommissions keeps its display
+  // fallback — a degraded list page is fine; a mis-directed generation is not.)
+  const federated = await listFeedbackForCommission(id);
   // Union with the legacy inline reactions so a PARTIAL migration (backfill wrote
   // a prefix then threw, inline retained for retry) never hides the un-migrated
   // tail from the scheduler directive or the UI. After a full migration the inline
@@ -777,14 +782,18 @@ export async function mergeCommissionsFromSync(remoteRecords, { source = { via: 
 
 /** Hard-remove tombstoned commissions older than the cutoff; evicts each base hash. */
 export async function pruneTombstonedCommissions(olderThanMs) {
-  const result = await commissionStore().pruneTombstoned(olderThanMs);
-  for (const id of result.ids || []) {
-    await deleteSyncBaseHash(CREATIVE_COMMISSION_KIND, id).catch(() => {});
-    // The commission is gone everywhere its tombstone aged out — tombstone its
-    // feedback too, so the rows GC through the normal path instead of staying
-    // live (and peer-pushed) forever with no owner.
-    await tombstoneFeedbackForCommission(id).catch(() => {});
+  // Tombstone each stale commission's feedback BEFORE hard-pruning the
+  // commission. Once the prune removes the record there is nothing left for a
+  // later sweep to rediscover, so a failure after the prune would leave the
+  // feedback live (and peer-pushed) forever. In this order a failure throws,
+  // the commission tombstone stays put, and the next sweep retries both halves.
+  if (Number.isFinite(olderThanMs)) {
+    const stale = (await commissionStore().listRaw({ includeDeleted: true }))
+      .filter((r) => r?.deleted === true && isStr(r.deletedAt) && Date.parse(r.deletedAt) < olderThanMs);
+    for (const r of stale) await tombstoneFeedbackForCommission(r.id);
   }
+  const result = await commissionStore().pruneTombstoned(olderThanMs);
+  for (const id of result.ids || []) await deleteSyncBaseHash(CREATIVE_COMMISSION_KIND, id).catch(() => {});
   return result;
 }
 

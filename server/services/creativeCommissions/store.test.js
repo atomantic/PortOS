@@ -53,6 +53,7 @@ const {
   mergeCommissionRecord,
   getCommissionForSync,
   mergeCommissionsFromSync,
+  pruneTombstonedCommissions,
   ERR_VALIDATION,
   ERR_NOT_FOUND,
 } = await import('./store.js');
@@ -263,6 +264,29 @@ describe('deleteCommission', () => {
     const created = await createCommission(validInput());
     await deleteCommission(created.id);
     await expect(deleteCommission(created.id)).rejects.toMatchObject({ code: ERR_NOT_FOUND });
+  });
+});
+
+describe('pruneTombstonedCommissions', () => {
+  it('tombstones the commission\'s feedback BEFORE the hard-prune so it GCs instead of staying live', async () => {
+    const created = await createCommission(validInput());
+    await recordCommissionRun(created.id, { id: 'run-A', status: 'completed' });
+    await submitCommissionFeedback(created.id, { runId: 'run-A', rating: 'up', note: 'more Magritte' });
+    await deleteCommission(created.id);
+    // Age the commission tombstone past the cutoff.
+    const rec = records.get(created.id);
+    records.set(created.id, { ...rec, deletedAt: '2020-01-01T00:00:00.000Z' });
+
+    const result = await pruneTombstonedCommissions(Date.parse('2021-01-01T00:00:00.000Z'));
+
+    expect(result.pruned).toBe(1);
+    expect(records.has(created.id)).toBe(false); // commission hard-pruned
+    // The orphan-prevention contract: every feedback row for the pruned
+    // commission is now a tombstone (not live, not hard-deleted), so it
+    // federates its removal and ages out through normal tombstone GC.
+    const rows = [...feedbackRecords.values()].filter((f) => f.commissionId === created.id);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const f of rows) expect(f.deleted).toBe(true);
   });
 });
 
