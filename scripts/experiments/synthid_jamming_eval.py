@@ -189,23 +189,26 @@ def text_legibility(ref, cand):
 # ----------------------------------------------------------------------------
 # Disruption stages under test
 # ----------------------------------------------------------------------------
-def jam_fft_band_noise(img, amp):
-    """Additive structured noise confined to the watermark's FFT band."""
+def jam_fft_band_noise(img, amp, lo=BAND_LO, hi=BAND_HI):
+    """Additive structured noise confined to an FFT band. Default band matches the
+    synthetic mark; the real-image mode sweeps `lo`/`hi` since real SynthID's
+    carrier location is unknown."""
     rng = np.random.default_rng(RNG_SEED + 101)
     noise = rng.standard_normal(img.shape)
     F = np.fft.fft2(noise)
-    F[~_annulus_mask(img.shape)] = 0.0
+    F[~_annulus_mask(img.shape, lo, hi)] = 0.0
     band = np.real(np.fft.ifft2(F))
     band /= (band.std() + 1e-9)
     return img + amp * band
 
 
-def jam_fft_phase_perturb(img, amp):
-    """Randomize phase within the watermark band, keep magnitude (reverse-SynthID
-    'phase subtraction' family). `amp` in [0,1] blends toward fully random phase."""
+def jam_fft_phase_perturb(img, amp, lo=BAND_LO, hi=BAND_HI):
+    """Randomize phase within an FFT band, keep magnitude (reverse-SynthID 'phase
+    subtraction' family). `amp` in [0,1] blends toward fully random phase. Default
+    band matches the synthetic mark; the real-image mode sweeps `lo`/`hi`."""
     rng = np.random.default_rng(RNG_SEED + 202)
     F = np.fft.fft2(img)
-    mask = _annulus_mask(img.shape)
+    mask = _annulus_mask(img.shape, lo, hi)
     mag = np.abs(F)
     phase = np.angle(F)
     rand_phase = rng.uniform(-np.pi, np.pi, img.shape)
@@ -306,12 +309,193 @@ def print_table(out):
         last = r["stage"]
 
 
+# ----------------------------------------------------------------------------
+# Real-image mode — apply the jamming stages to an ACTUAL gpt-image/codex render
+# (which carries real SynthID) and emit uploadable variants + a manifest, so a
+# human can run each through a real SynthID detector web form (the manual oracle
+# the synthetic proxy stands in for) and record which stages actually clear it.
+#
+# IMPORTANT: this operates on the user's own private image. Keep the input and
+# the emitted variants LOCAL — never commit a real render or its variants (they
+# are private data, and a jammed copy is still the same private image).
+# ----------------------------------------------------------------------------
+def _load_rgb(path):
+    im = Image.open(path).convert("RGB")
+    return np.asarray(im, dtype=np.float64)
+
+
+def _save_rgb(arr, path):
+    Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8)).save(path)  # PNG = lossless
+
+
+def _perturb_luma(rgb, fn):
+    """Apply a 2-D stage `fn` to the luminance (Y) channel only, preserving color
+    (Cb/Cr untouched). Higher fidelity than perturbing R/G/B independently, and a
+    closer match to how a luminance-domain watermark would be attacked."""
+    im = Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8)).convert("YCbCr")
+    y, cb, cr = im.split()
+    yj = np.clip(fn(np.asarray(y, dtype=np.float64)), 0, 255).astype(np.uint8)
+    merged = Image.merge("YCbCr", (Image.fromarray(yj), cb, cr)).convert("RGB")
+    return np.asarray(merged, dtype=np.float64)
+
+
+def _resize_squeeze_rgb(rgb, factor):
+    h, w, _ = rgb.shape
+    im = Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8))
+    small = im.resize((max(1, int(w * factor)), max(1, int(h * factor))), Image.LANCZOS)
+    return np.asarray(small.resize((w, h), Image.LANCZOS), dtype=np.float64)
+
+
+# Band presets for the unknown real-carrier sweep. "mid" is the synthetic-mark
+# band; "wide" hedges across most of the spectrum since real SynthID's carrier
+# location is not published.
+BANDS = {"mid": (BAND_LO, BAND_HI), "wide": (0.05, 0.45)}
+
+# (label, builder) — each builder maps the original RGB array to a variant.
+# Ordered cheap/high-fidelity first. `original` is the control (must still detect).
+REAL_VARIANTS = [
+    ("00_original",                    lambda o: o.copy()),
+    ("01_resize_squeeze_0.85",         lambda o: _resize_squeeze_rgb(o, 0.85)),
+    ("02_resize_squeeze_0.70",         lambda o: _resize_squeeze_rgb(o, 0.70)),
+    ("03_phase_lumaMid_a0.50",         lambda o: _perturb_luma(o, lambda y: jam_fft_phase_perturb(y, 0.50, *BANDS["mid"]))),
+    ("04_phase_lumaMid_a0.75",         lambda o: _perturb_luma(o, lambda y: jam_fft_phase_perturb(y, 0.75, *BANDS["mid"]))),
+    ("05_phase_lumaWide_a0.50",        lambda o: _perturb_luma(o, lambda y: jam_fft_phase_perturb(y, 0.50, *BANDS["wide"]))),
+    ("06_phase_lumaWide_a0.75",        lambda o: _perturb_luma(o, lambda y: jam_fft_phase_perturb(y, 0.75, *BANDS["wide"]))),
+    ("07_bandnoise_lumaWide_a6.0",     lambda o: _perturb_luma(o, lambda y: jam_fft_band_noise(y, 6.0, *BANDS["wide"]))),
+    ("08_combo_resize0.85+phaseWide0.50",
+        lambda o: _perturb_luma(_resize_squeeze_rgb(o, 0.85), lambda y: jam_fft_phase_perturb(y, 0.50, *BANDS["wide"]))),
+    ("09_diffusion_proxy_blur1.2",     lambda o: _perturb_luma(o, lambda y: diffusion_roundtrip_proxy(y, 1.2))),
+]
+
+MANUAL_ORACLE_README = """\
+SynthID adversarial-jamming — REAL detector test (issue #1764)
+===============================================================
+
+These are jammed variants of ONE gpt-image/codex render that carries real
+SynthID. Upload each to your SynthID detector web form and record the result
+in manifest.csv under `synthid_detected` (yes / no / uncertain).
+
+Protocol:
+  1. Upload 00_original.png FIRST. It MUST come back DETECTED — that confirms
+     this source actually carries SynthID and the form works. If it does NOT,
+     stop: this render has no SynthID and the test proves nothing.
+  2. Upload each other variant. Note detected/not + how bad it looks (the psnr_db
+     column is the objective fidelity cost; your eyes judge text/detail).
+  3. A stage is a WIN only if it flips DETECTED→not-detected AT ACCEPTABLE
+     FIDELITY. A variant that clears SynthID but looks wrecked is not shippable.
+
+Reading it:
+  - resize_squeeze_* is the stage PortOS already ships (#970) — it's the control
+    to beat. If it already clears SynthID at high PSNR, jamming has to do better.
+  - phase_* stages are the synthetic experiment's promising vector. If NONE of
+    them clear real SynthID, that's the answer: the synthetic result did not
+    transfer, keep jamming unshipped.
+  - These are your private images — do not commit or upload anywhere but the
+    detector form.
+"""
+
+
+def process_real_image(in_path, out_dir):
+    import csv
+    import os
+    os.makedirs(out_dir, exist_ok=True)
+    original = _load_rgb(in_path)
+    rows = []
+    for label, build in REAL_VARIANTS:
+        variant = build(original)
+        out_png = os.path.join(out_dir, f"{label}.png")
+        _save_rgb(variant, out_png)
+        # PSNR of every variant vs the original render (the control scores ~inf).
+        rows.append({
+            "file": f"{label}.png",
+            "psnr_db": round(psnr(original, variant), 2) if label != "00_original" else "control",
+            "synthid_detected": "",   # fill after uploading: yes / no / uncertain
+            "looks_ok": "",           # fill: yes / no
+            "notes": "",
+        })
+        print(f"  wrote {out_png}  (PSNR {rows[-1]['psnr_db']})")
+    with open(os.path.join(out_dir, "manifest.csv"), "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["file", "psnr_db", "synthid_detected", "looks_ok", "notes"])
+        w.writeheader()
+        w.writerows(rows)
+    with open(os.path.join(out_dir, "README.txt"), "w") as f:
+        f.write(MANUAL_ORACLE_README)
+    print(f"\nWrote {len(rows)} variants + manifest.csv + README.txt to {out_dir}")
+    print("Upload 00_original.png first (must detect), then the rest; record results in manifest.csv.")
+
+
+# Resize-squeeze factor/filter bisection — maps where a resize-squeeze makes a
+# real detector behave anomalously (in the 2026-07-18 run against the OpenAI
+# SynthID detector, a ~0.85-0.9 squeeze made it TIME OUT rather than return a
+# verdict — see the design doc). Sweeps the shipped cubic-down/lanczos-up method
+# (matching `applyLightRegen` in server/services/imageGen/regen.js) across
+# factors, plus a lanczos/lanczos control matching the reproduce case.
+def _floor16(x):
+    return max(16, (int(x) // 16) * 16)
+
+
+def _squeeze_rgb(rgb, factor, down, up, use_floor16):
+    h, w, _ = rgb.shape
+    sw = _floor16(w * factor) if use_floor16 else max(1, int(w * factor))
+    sh = _floor16(h * factor) if use_floor16 else max(1, int(h * factor))
+    im = Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8))
+    back = im.resize((sw, sh), down).resize((w, h), up)
+    return np.asarray(back, dtype=np.float64), (sw, sh)
+
+
+def process_squeeze_bisect(in_path, out_dir):
+    import csv
+    import os
+    os.makedirs(out_dir, exist_ok=True)
+    orig = _load_rgb(in_path)
+    rows = []
+    # Shipped resize method: bicubic down (floor-16 dims) -> lanczos up.
+    for f in [0.95, 0.92, 0.90, 0.88, 0.85, 0.82, 0.78, 0.70]:
+        arr, (sw, sh) = _squeeze_rgb(orig, f, Image.BICUBIC, Image.LANCZOS, True)
+        name = f"cubicDN_lanczosUP_f{f:.2f}"
+        _save_rgb(arr, os.path.join(out_dir, name + ".png"))
+        rows.append({"file": name + ".png", "method": "bicubic->lanczos floor16",
+                     "factor": f, "squeezed_dims": f"{sw}x{sh}",
+                     "psnr_db": round(psnr(orig, arr), 2), "synthid_result": "", "notes": ""})
+    # Reproduce control: lanczos/lanczos at 0.85 (the first variant that hung).
+    arr, (sw, sh) = _squeeze_rgb(orig, 0.85, Image.LANCZOS, Image.LANCZOS, False)
+    _save_rgb(arr, os.path.join(out_dir, "REPRO_lanczos_lanczos_f0.85.png"))
+    rows.append({"file": "REPRO_lanczos_lanczos_f0.85.png", "method": "lanczos->lanczos int",
+                 "factor": 0.85, "squeezed_dims": f"{sw}x{sh}",
+                 "psnr_db": round(psnr(orig, arr), 2), "synthid_result": "", "notes": "reproduce the hang"})
+    with open(os.path.join(out_dir, "manifest.csv"), "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=["file", "method", "factor", "squeezed_dims", "psnr_db", "synthid_result", "notes"])
+        w.writeheader()
+        w.writerows(rows)
+    for r in rows:
+        print(f"  {r['file']:<34} dims {r['squeezed_dims']:<11} PSNR {r['psnr_db']}")
+    print(f"\nWrote {len(rows)} squeeze variants + manifest.csv to {out_dir}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--size", type=int, default=512)
     ap.add_argument("--alpha", type=float, default=2.2, help="watermark embed strength")
     ap.add_argument("--json", action="store_true", help="emit JSON instead of a table")
+    ap.add_argument("--image", metavar="PATH",
+                    help="REAL-image mode: apply jamming stages to a real gpt-image/codex "
+                         "render (carries real SynthID) and emit uploadable variants for a "
+                         "manual detector web-form test. Requires --out.")
+    ap.add_argument("--squeeze-bisect", action="store_true",
+                    help="with --image/--out: emit a resize-squeeze factor/filter sweep "
+                         "(maps the detector-timeout anomaly) instead of the jamming variants.")
+    ap.add_argument("--out", metavar="DIR", help="output directory for --image variants")
     args = ap.parse_args()
+
+    if args.image:
+        if not args.out:
+            ap.error("--image requires --out DIR")
+        if args.squeeze_bisect:
+            process_squeeze_bisect(args.image, args.out)
+        else:
+            process_real_image(args.image, args.out)
+        return
+
     out = run(size=args.size, alpha=args.alpha)
     if args.json:
         json.dump(out, sys.stdout, indent=2)
