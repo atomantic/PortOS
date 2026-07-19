@@ -1,6 +1,13 @@
 # Adversarial jamming as a quality-preserving SynthID-disruption vector — experiment
 
-**Date:** 2026-07-18 · **Area:** `server/lib/imageClean.js`, `server/services/imageGen/regen.js` (context only — nothing shipped) · **Issue:** #1764 · **Lineage:** #912, #970, #1763; builds on `docs/plans/2026-06-05-synthid-removal-eval.md`
+**Date:** 2026-07-18 · **Area:** `server/lib/imageClean.js`, `server/services/imageGen/regen.js`, `client/src/pages/ImageClean.jsx` · **Issue:** #1764 · **Lineage:** #912, #970, #1763; builds on `docs/plans/2026-06-05-synthid-removal-eval.md`
+
+> **Update (2026-07-18, same day): the "no oracle" premise was relaxed.** OpenAI's
+> gpt-image ("codex") renders carry SynthID, and OpenAI exposes a **detector web
+> form** — a manual, low-throughput but *real* oracle. We ran it. The synthetic
+> finding did **not** transfer (as predicted), but the resolution-shift
+> **resize-squeeze** did measurably affect the real detector. See "Update: real
+> OpenAI SynthID detector" below — it supersedes the synthetic-only conclusions.
 
 Research record for a **scientific-curiosity experiment** (not a product commitment):
 can *adversarial jamming* — low-amplitude structured perturbation aimed at the
@@ -30,7 +37,53 @@ heavier diffusion pass.
   guaranteed (or even measured) SynthID removal from this work. Language stays at
   "disrupt / best-effort / experimental."
 
-## The hard constraint (why this is measured by proxy)
+## Update: real OpenAI SynthID detector (2026-07-18)
+
+The synthetic proxy above was built because we assumed no oracle. That assumption
+was too strong: **OpenAI's gpt-image ("codex") renders carry SynthID, and OpenAI
+exposes a public detector web form.** It is manual and low-throughput (upload one
+image, read the verdict), but it is a *real* oracle. We generated jammed variants
+of one real codex render (`scripts/experiments/synthid_jamming_eval.py --image …`)
+and ran each through the form. Results:
+
+| Variant class | Fidelity | Real detector verdict |
+|---|---|---|
+| Heavy phase jam (`phase_lumaWide` a0.5–0.75, combos) | PSNR ≤ ~25, **visibly wrecked** | **Not detected** (SynthID cleared) |
+| Quality-preserving jams (`phase_lumaMid` a0.5 @29 dB, `bandnoise` @32 dB, `blur` @28 dB, `resize_squeeze` 0.70 @36 dB) | look fine | **Still detected** |
+| **`resize_squeeze` ~0.85 (lanczos/lanczos) AND the exact shipped `applyLightRegen` (0.9 cubic→lanczos + median/sharpen)** | PSNR ~39 dB, **looks near-original** | **Detector TIMES OUT** — never returns a verdict (reproduced several times) |
+
+**What this establishes:**
+
+1. **The synthetic phase-perturbation win did NOT transfer** — exactly the caveat
+   the proxy section flagged. No *additive/phase* FFT jam cleared real SynthID at
+   usable fidelity; only heavy, visibly-destructive perturbation removed it. So the
+   FFT-band idea the issue proposed is **not** a quality-preserving defeat. That
+   part of the recommendation stands: don't ship additive/phase jamming.
+
+2. **The resolution-shift `resize-squeeze` is the one high-fidelity operation that
+   measurably affected the detector** — but the observed effect was a **timeout**,
+   not a returned "not-detected." This is the CPU-cheap resolution-domain attack
+   (#970), *not* the frequency-band jamming #1764 set out to test. It is already
+   shipped: `applyLightRegen` in `regen.js`, and now surfaced honestly in
+   `devtools/image-clean` as the **CPU resize-squeeze** sub-mode (relabeled from
+   the misleading "CPU light pass"/"diffusion" naming).
+
+3. **"Detector times out" ≠ "SynthID removed" — keep these separate.** A hang is
+   an *inconclusive* detector result, not a confirmed clear. Whether that counts
+   as a successful jam depends entirely on how a downstream consumer treats an
+   inconclusive/timeout (fail-open "no watermark" vs fail-closed "error"). We treat
+   a non-positive result as a best-effort jam for the user's purposes, but the UI
+   copy stays at "disrupt / best-effort / detector-dependent — never guaranteed
+   removal." This is one detector at one point in time; do not generalize it into a
+   removal claim (honesty guardrail + the cross-install distribution model).
+
+**Open follow-up (not chased here):** *why* a ~0.85–0.9 resize-squeeze specifically
+makes this detector hang — and whether it's a reliable property or an artifact of
+the current detector version — is unexplained. `--image --squeeze-bisect` emits a
+factor/filter sweep (0.95→0.70, shipped cubic→lanczos method + a lanczos/lanczos
+control) to map the boundary; the mapping itself needs more manual detector runs.
+
+## The hard constraint (why the *synthetic* experiment was measured by proxy)
 
 Google's SynthID Detector is limited-access with **no public API and no open image
 detector** (Google open-sourced SynthID-*Text*, not the image model). So we have
@@ -174,19 +227,35 @@ diffusion_proxy       2.5     8.11      47.2    19.49     0.019
 
 ## Recommendation & reopen criteria
 
-**Keep jamming experimental and unshipped.** Continue to rely on the VAE regen as
-the honest, hardware-gated defeat path. Revisit promotion **only if** one of these
-changes:
+Revised after the real-detector run (the synthetic-only recommendation below it is
+superseded):
 
-1. **Detector access** — a public/limited SynthID Detector API, or a validated
-   open detector, appears. Then re-run this frontier against *real* SynthID (swap
-   the proxy oracle for the real one) before trusting any transfer.
-2. **Carrier evidence** — credible public analysis shows SynthID's image carrier
-   *is* phase-encoded in a recoverable band, making phase perturbation a
-   principled (not just proxy-plausible) attack.
+- **Additive/phase FFT jamming — do NOT ship.** It did not clear real SynthID at
+  usable fidelity; only heavy, visibly-destructive perturbation removed it. The
+  synthetic phase-perturbation win did not transfer. This was #1764's actual
+  hypothesis, and the answer is negative.
+- **Resolution-shift resize-squeeze — already shipped, now surfaced honestly.** The
+  one CPU-cheap, high-fidelity operation that measurably affected the real detector
+  is the resize-squeeze (a resolution-domain attack, #970), not frequency jamming.
+  It ships in `applyLightRegen` and is now a clearly-labeled **CPU resize-squeeze**
+  option in `devtools/image-clean` so the user can apply it to arbitrary images.
+  Framing stays best-effort/detector-dependent — the observed effect was a detector
+  *timeout*, which is not the same as confirmed removal.
+- **Honesty guardrail holds.** One detector, one point in time, timeout ≠ removal.
+  No UI/changelog/doc claims guaranteed SynthID removal.
 
-Until then: no jamming stage, no removal claims, "disrupt / best-effort /
-experimental" language only.
+Superseded synthetic-only stance (kept for the record): "keep jamming experimental
+and unshipped; revisit only on detector access or carrier evidence." Detector
+access arrived (the manual web form), so that gate is now met; the additive/phase
+line was tested and closed, and the resize-squeeze line was surfaced.
+
+Still-open follow-ups worth a future issue:
+1. **Map the timeout anomaly** — which resize factors/filters make the detector
+   hang, and whether it's reliable or a transient artifact of the detector version
+   (`--image --squeeze-bisect` generates the sweep; the mapping needs manual runs).
+2. **Carrier evidence** — if credible public analysis ever shows SynthID's image
+   carrier is phase-encoded in a recoverable band, revisit phase perturbation as a
+   principled attack rather than the proxy-plausible one this experiment tested.
 
 ## Reproduce
 
