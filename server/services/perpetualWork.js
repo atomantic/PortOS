@@ -88,18 +88,25 @@ export function issueNumberFromRef(ref) {
 async function resolveGitlabNamespace(repoPath) {
   const url = await readOriginRemoteUrl(repoPath).catch(() => null);
   if (typeof url !== 'string' || !url.trim()) return null;
-  // Strip `scheme://`, an optional `user@`, and a trailing `.git`, then split off
-  // the host (the segment before the first ':' or '/') to leave the repo path.
-  const afterHostPrefix = url.trim()
-    .replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, '')
-    .replace(/^[^@/]+@/, '')
-    .replace(/\.git$/i, '');
-  const sepIdx = afterHostPrefix.search(/[:/]/);
-  if (sepIdx === -1) return null;
-  const rawPath = afterHostPrefix.slice(sepIdx + 1)
-    .replace(/^\/+/, '')    // strip leading slash(es) after `host:` / `host/`
-    .replace(/^\d+\//, ''); // strip an SSH `host:443/owner/repo` port hop
-  const segments = rawPath.split('/').filter(Boolean);
+  const trimmed = url.trim().replace(/\.git$/i, '');
+  // Extract the repo PATH (everything after the host) without mistaking any of the
+  // host for it. A `[^/]+` host run stops at the path's first slash — and since a
+  // host (bracketed IPv6 included) contains no slash, this isolates the path even
+  // for `[2001:db8::1]/group/repo` and keeps a `:port` with the host. No numeric
+  // segment is ever stripped from the path, so a numeric GitLab namespace
+  // (`/1234/repo`) survives intact.
+  let rawPath = null;
+  const urlStyle = trimmed.match(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\/(?:[^@/]+@)?[^/]+\/(.+)$/);
+  if (urlStyle) {
+    rawPath = urlStyle[1]; // scheme://[user@]host[:port]/PATH
+  } else {
+    // scp-style SSH: [user@]host:PATH — the host may be a bracketed IPv6 literal
+    // (whose inner colons must NOT be read as the host/path separator).
+    const scpStyle = trimmed.match(/^(?:[^@]+@)?(?:\[[^\]]+\]|[^:]+):(.+)$/);
+    if (!scpStyle) return null;
+    rawPath = scpStyle[1];
+  }
+  const segments = rawPath.replace(/^\/+/, '').split('/').filter(Boolean);
   if (segments.length < 2) return null; // need at least namespace + repo
   segments.pop(); // drop the repo segment; the rest is the (possibly nested) namespace
   return segments.join('/');

@@ -480,6 +480,37 @@ describe('perpetualWork', () => {
       expect(issueCalls.every(([, a]) => !a.includes('--author'))).toBe(true);
     });
 
+    it('preserves a numeric namespace in an HTTPS remote (does not strip it as a port hop)', async () => {
+      // Regression: an all-numeric top-level namespace (`/1234/widget`) must NOT be
+      // mistaken for an SSH `:443/` port hop and dropped — GitLab numeric group/user
+      // paths are valid, so the probe must target groups/1234.
+      spawn.mockImplementation((cmd, args = []) => {
+        if (cmd === 'git' && args[0] === 'remote') return fakeChild('https://gitlab.example/1234/widget.git\n');
+        if (cmd === 'glab' && args[0] === 'api' && String(args[1]).startsWith('groups/')) return fakeChild('{"kind":"group"}');
+        if (cmd === 'glab' && args[0] === 'issue') return fakeChild(JSON.stringify([{ iid: 3, title: 'x', assignees: [], labels: [] }]));
+        return fakeChild('');
+      });
+      const out = await detectGitlabIssues(app, { issueAuthorFilter: 'owner' });
+      expect(out).toMatchObject({ reason: 'owner-is-group', total: 1 });
+      const probeCall = spawn.mock.calls.find(([cmd, a]) => cmd === 'glab' && a[0] === 'api' && String(a[1]).startsWith('groups/'));
+      expect(probeCall[1][1]).toBe('groups/1234');
+    });
+
+    it('parses a bracketed IPv6 host without leaking the address into the namespace', async () => {
+      // Regression: the host/path split must not trip on the colons inside a
+      // bracketed IPv6 literal — the namespace is `group`, not part of the address.
+      spawn.mockImplementation((cmd, args = []) => {
+        if (cmd === 'git' && args[0] === 'remote') return fakeChild('https://[2001:db8::1]/group/widget.git\n');
+        if (cmd === 'glab' && args[0] === 'api' && String(args[1]).startsWith('groups/')) return fakeChild('{"kind":"group"}');
+        if (cmd === 'glab' && args[0] === 'issue') return fakeChild(JSON.stringify([{ iid: 4, title: 'x', assignees: [], labels: [] }]));
+        return fakeChild('');
+      });
+      const out = await detectGitlabIssues(app, { issueAuthorFilter: 'owner' });
+      expect(out).toMatchObject({ reason: 'owner-is-group', total: 1 });
+      const probeCall = spawn.mock.calls.find(([cmd, a]) => cmd === 'glab' && a[0] === 'api' && String(a[1]).startsWith('groups/'));
+      expect(probeCall[1][1]).toBe('groups/group');
+    });
+
     it('owner filter on a USER-owned project passes --author <namespace> (groups probe 404)', async () => {
       // A user namespace: `glab api groups/<namespace>` 404s (non-zero exit) → not
       // a group, so owner-mode filters by the namespace login as before.
