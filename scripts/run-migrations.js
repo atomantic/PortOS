@@ -126,6 +126,25 @@ export async function runMigrations({
 
   const files = await scanMigrationFiles(migrationsDir);
 
+  // Disarm EVERY pending purge migration up front, not as each is reached in
+  // the run loop: if this rebuilt-from-empty run aborted on an earlier
+  // throwing migration (the documented repair-and-reboot flow), the partial
+  // ledger would no longer "start empty" on the next boot — and the purge
+  // would then execute destructively against the rebuilt install.
+  if (ledgerStartedEmpty) {
+    let disarmed = 0;
+    for (const file of files) {
+      if (applied.includes(file)) continue;
+      const mod = await import(pathToFileURL(join(migrationsDir, file)).href);
+      const migration = (mod?.default && typeof mod.default.up === 'function') ? mod.default : mod;
+      if (!migration?.purge) continue;
+      console.warn(`⏭️ Skipping purge migration ${file}: applied-list started empty/rebuilt — recorded as applied without running to avoid a destructive rerun (#2770)`);
+      applied.push(file);
+      disarmed++;
+    }
+    if (disarmed > 0) await writeFile(appliedFile, JSON.stringify(applied, null, 2) + '\n');
+  }
+
   let ran = 0;
   for (const file of files) {
     if (applied.includes(file)) continue;
@@ -134,13 +153,6 @@ export async function runMigrations({
     const migration = (mod?.default && typeof mod.default.up === 'function') ? mod.default : mod;
     if (!migration || typeof migration.up !== 'function') {
       throw new Error(`Migration "${file}" does not export an up() function`);
-    }
-
-    if (migration.purge && ledgerStartedEmpty) {
-      console.warn(`⏭️ Skipping purge migration ${file}: applied-list started empty/rebuilt — recorded as applied without running to avoid a destructive rerun (#2770)`);
-      applied.push(file);
-      await writeFile(appliedFile, JSON.stringify(applied, null, 2) + '\n');
-      continue;
     }
 
     console.log(`🔄 Running migration: ${file}`);

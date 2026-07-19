@@ -230,6 +230,36 @@ export default {
     expect(JSON.parse(readFileSync(appliedFile, 'utf-8')).sort())
       .toEqual(['001-normal.js', '197-purge.js']);
   });
+
+  it('disarms purge migrations even when an earlier migration aborts the rebuilt-empty run', async () => {
+    // The re-arm hole: a rebuilt-from-empty run that throws BEFORE reaching the
+    // purge migration persists a partial ledger. The next boot's ledger no
+    // longer "starts empty" — so unless the purge was disarmed up front, it
+    // would then execute destructively against the rebuilt install.
+    // Throws on its first execution only (marker-gated, since the module cache
+    // would defeat rewriting the file between runs in-process).
+    writeFileSync(join(migrationsDir, '001-throws.js'), `
+import { existsSync, writeFileSync } from 'fs';
+import { join } from 'path';
+export default {
+  async up({ rootDir }) {
+    const marker = join(rootDir, 'data', 'throw-once.txt');
+    if (!existsSync(marker)) { writeFileSync(marker, '1'); throw new Error('repair me and reboot'); }
+  }
+};
+`);
+    seedLearning({ bucket: { legitPostFixRuns: 7 }, keep: 3 });
+
+    // Run 1: ledger starts empty, 001 throws and aborts the run.
+    await expect(runMigrations({ rootDir, migrationsDir })).rejects.toThrow('repair me');
+    // The purge was already skip-recorded before the loop reached 001.
+    expect(JSON.parse(readFileSync(appliedFile, 'utf-8'))).toContain('197-purge.js');
+
+    // "Reboot": the ledger is now non-empty, but the purge must NOT fire — it
+    // was recorded as applied during the aborted run.
+    await runMigrations({ rootDir, migrationsDir });
+    expect(readLearning()).toEqual({ bucket: { legitPostFixRuns: 7 }, keep: 3 });
+  });
 });
 
 describe('runMigrations worktree backstop (#1947)', () => {
