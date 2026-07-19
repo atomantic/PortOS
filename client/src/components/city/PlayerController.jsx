@@ -268,15 +268,22 @@ export default function PlayerController({
         if (!isWalkable(nextPos.x, nextPos.z)) blocked = true;
       }
 
-      if (!blocked) {
-        // World bounds
-        nextPos.x = Math.max(-WORLD.bound, Math.min(WORLD.bound, nextPos.x));
-        nextPos.y = Math.max(EYE_HEIGHT, Math.min(MAX_CAMERA_HEIGHT, nextPos.y));
-        nextPos.z = Math.max(-WORLD.bound, Math.min(WORLD.bound, nextPos.z));
-        // Landed (or hit the ceiling): kill the jump's vertical velocity.
-        if (nextPos.y <= EYE_HEIGHT + 1e-3 || nextPos.y >= MAX_CAMERA_HEIGHT) rig.vy = 0;
-        rig.position.copy(nextPos);
+      // Vertical (jump/gravity) is independent of horizontal collision: a wall only
+      // stops x/z, never the jump arc. Pinning x/z back to the current position when
+      // blocked — instead of skipping the whole write — lets the hop still rise, fall,
+      // and land (resetting rig.vy) rather than freezing mid-air while vy keeps
+      // integrating downward and then yanking the player down when they turn away.
+      if (blocked) {
+        nextPos.x = rig.position.x;
+        nextPos.z = rig.position.z;
       }
+      // World bounds
+      nextPos.x = Math.max(-WORLD.bound, Math.min(WORLD.bound, nextPos.x));
+      nextPos.y = Math.max(EYE_HEIGHT, Math.min(MAX_CAMERA_HEIGHT, nextPos.y));
+      nextPos.z = Math.max(-WORLD.bound, Math.min(WORLD.bound, nextPos.z));
+      // Landed (or hit the ceiling): kill the jump's vertical velocity.
+      if (nextPos.y <= EYE_HEIGHT + 1e-3 || nextPos.y >= MAX_CAMERA_HEIGHT) rig.vy = 0;
+      rig.position.copy(nextPos);
     }
 
     // Pose classification for the avatar + facing/banking toward movement.
