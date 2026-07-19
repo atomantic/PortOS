@@ -32,7 +32,7 @@ import { getSettings } from './settings.js';
 import { createTicket, searchIssues, addLabels, escapeJql } from './jira.js';
 import { computeWindowedStats, computeEffectiveSuccessRate, EFFECTIVE_RATE_MIN_WINDOW_SAMPLES, extractTaskType } from './taskLearning/store.js';
 import { formatRejectionReasons, formatRejectionReason, REJECTION_REASONS } from './layeredIntelligenceRejections.js';
-import { formatExecutionFailures } from './layeredIntelligenceExecutionFailures.js';
+import { formatExecutionFailures, summarizeExecutionFailures, formatExecutionFailure } from './layeredIntelligenceExecutionFailures.js';
 
 // Tracker labels + slug marker. The slug is the stable dedup key the reasoner
 // chooses; it is embedded in each filed issue body so a later run (or the
@@ -1121,27 +1121,62 @@ export function computeScopeAwareness({ metricsByType = {} } = {}) {
  *
  * `outcomes` is the app's outcome records (from listOutcomes); only records carrying
  * a resolved `executionOutcome` AND a `scope` contribute. Returns
- * `{ [scope]: { completed, succeeded, successRate } }` (empty when nothing has been
- * executed yet). The acceptance signal for #2765: after one proposal in domain X is
- * executed, only X's bucket moves.
+ * `{ [scope]: { completed, succeeded, successRate, failureSummary } }` (empty when
+ * nothing has been executed yet). The acceptance signal for #2765: after one proposal
+ * in domain X is executed, only X's bucket moves.
+ *
+ * `failureSummary` (#2764 §3) carries the per-domain execution-FAILURE taxonomy tally
+ * so a low execution rate no longer arrives without its cause: it is the shared
+ * `summarizeExecutionFailures` engine run over ONLY this domain's records (the engine
+ * itself keeps just the failures), the "filter per-domain, then reuse the existing
+ * summariser" join #2764 §3 asks for. Every bucket carries one — a domain with zero
+ * failed hand-offs simply reports `total: 0`, the honest "nothing to explain" reading.
  */
 export function computeExecutionByDomain(outcomes = []) {
-  const byDomain = {};
+  // Group each executed record by its domain first, so the failure taxonomy can be
+  // tallied over that domain's OWN records rather than the install-wide set.
+  const recordsByScope = new Map();
   for (const r of Array.isArray(outcomes) ? outcomes : []) {
     if (!r || typeof r !== 'object') continue;
     if (!PROPOSAL_EXECUTION_OUTCOMES.includes(r.executionOutcome)) continue;
     const scope = typeof r.scope === 'string' && r.scope.trim() ? r.scope.trim() : null;
     if (!scope) continue;
-    const bucket = byDomain[scope] || (byDomain[scope] = { completed: 0, succeeded: 0 });
-    bucket.completed += 1;
-    if (r.executionOutcome === 'success') bucket.succeeded += 1;
+    if (!recordsByScope.has(scope)) recordsByScope.set(scope, []);
+    recordsByScope.get(scope).push(r);
   }
-  // successRate is derived once here — the sole writer — so the bucket carries no
-  // dead initial value above.
-  for (const bucket of Object.values(byDomain)) {
-    bucket.successRate = Math.round((bucket.succeeded / bucket.completed) * 100);
+  const byDomain = {};
+  for (const [scope, records] of recordsByScope) {
+    const completed = records.length;
+    const succeeded = records.filter(r => r.executionOutcome === 'success').length;
+    byDomain[scope] = {
+      completed,
+      succeeded,
+      successRate: Math.round((succeeded / completed) * 100),
+      // Reuse the shared taxonomy engine on this domain's slice — it discards the
+      // successes internally, so passing the whole slice yields this domain's own
+      // failure shape without a second pre-filter here.
+      failureSummary: summarizeExecutionFailures(records)
+    };
   }
   return byDomain;
+}
+
+/**
+ * Render the dominant execution-failure causes from a domain's `failureSummary`
+ * (#2764 §3) as a compact clause for the per-domain avoid line. Reuses the shared
+ * `formatExecutionFailure` gloss so the wording matches the install-wide failure line
+ * in computeOutcomesReport. Returns '' when the domain holds NO diagnosed failure — a
+ * pure-`unknown`/`unclassified` (or failure-free) domain adds no cause clause rather
+ * than a hollow "failed for unknown reasons" tail on every low-execution line.
+ */
+function formatDominantFailureCause(failureSummary, limit = 2) {
+  const entries = Array.isArray(failureSummary?.entries) ? failureSummary.entries : [];
+  if (entries.length === 0) return '';
+  const listed = entries
+    .slice(0, limit)
+    .map(({ category, count }) => `${formatExecutionFailure(category)} (${count})`)
+    .join('; ');
+  return `failing mostly on ${listed}`;
 }
 
 /**
@@ -1159,17 +1194,97 @@ export function computeProposalExecutionAwareness({ outcomes = [] } = {}) {
   const avoid = [];
   const prefer = [];
   for (const [scope, bucket] of Object.entries(byDomain)) {
+    // The per-domain failure CAUSE (#2764 §3) is surfaced only for domains that clear
+    // this floor — i.e. only where the domain is already listed as low-execution. A
+    // single failed hand-off below the floor is the install-wide early-signal case the
+    // "Why LI's own hand-offs failed" line in computeOutcomesReport already reports, so
+    // we do not also emit a one-sample per-domain cause here (it would read as a trend
+    // off n=1).
     if (bucket.completed < PROPOSAL_EXECUTION_MIN_SAMPLE) continue; // not enough executions to judge this domain
-    if (bucket.successRate < SCOPE_AVOID_SUCCESS_THRESHOLD) avoid.push({ scope, rate: bucket.successRate, n: bucket.completed });
+    if (bucket.successRate < SCOPE_AVOID_SUCCESS_THRESHOLD) avoid.push({ scope, rate: bucket.successRate, n: bucket.completed, cause: formatDominantFailureCause(bucket.failureSummary) });
     else if (bucket.successRate >= SCOPE_PREFER_SUCCESS_THRESHOLD) prefer.push({ scope, rate: bucket.successRate, n: bucket.completed });
   }
   return renderAvoidPreferSections({
     avoid,
     prefer,
-    fmt: ({ scope, rate, n }) => `- ${clampScopeLabel(scope)}: LI implemented ${rate}% of its own ${scope} proposals successfully over ${n} executed`,
+    // Only the avoid list carries a `cause`; a preferred (reliably-executed) domain has
+    // no failure shape worth naming, so its clause is simply absent.
+    fmt: ({ scope, rate, n, cause }) => `- ${clampScopeLabel(scope)}: LI implemented ${rate}% of its own ${scope} proposals successfully over ${n} executed${cause ? ` — ${cause}` : ''}`,
     avoidHeader: `LOW-EXECUTION proposal domains — LI's OWN hand-offs in these domains succeed below ${SCOPE_AVOID_SUCCESS_THRESHOLD}% of the time; a proposal here needs a strong justification or a narrower slice:`,
     preferHeader: `HIGH-EXECUTION proposal domains — LI reliably implements its own proposals here (at or above ${SCOPE_PREFER_SUCCESS_THRESHOLD}%):`
   });
+}
+
+// Header for the cross-reference block (#2764 §3). Names the pattern the block exists
+// to surface: a domain LI PROPOSES well (its proposals earn merges) yet EXECUTES
+// poorly (its own hand-offs there fail), which neither liOutcomes (merge rate alone)
+// nor liProposalExecution (execution rate alone) puts side by side.
+const CROSS_REFERENCE_HEADER = "Domains where LI PROPOSES well but EXECUTES poorly — the proposal earns a merge, yet LI's OWN hand-off to implement it tends to fail with the named cause. These are blind spots: you pick the right work here but can't finish it as handed off. Narrow such a proposal to a slice an agent can complete, split it, or route it to a human — don't re-file the same shape expecting a different execution result:";
+
+/**
+ * Cross-reference MERGED-proposal success against EXECUTION-failure modes within the
+ * SAME domain (#2764 §3). Pure + side-effect-free like the sibling report functions;
+ * derives only from the outcome records already loaded (no new store read, no AI/tracker
+ * call). The unique signal it adds over liOutcomes (per-scope merge rate) and
+ * liProposalExecution (per-domain execution rate) is the CONTRAST between them: a domain
+ * whose proposals the user merges but whose hand-offs then fail is "proposes well,
+ * executes poorly" — the reasoner should keep proposing there but narrow the scope, not
+ * abandon the domain (which a low execution rate read alone might imply).
+ *
+ * A domain qualifies only when BOTH signals are present: at least one MERGED proposal
+ * (the "proposes well" side — otherwise the domain is just failing outright, which
+ * liProposalExecution already covers) AND at least one DIAGNOSED failed hand-off (the
+ * "executes poorly" side, with a concrete cause to name — a purely `unknown`/
+ * `unclassified` failure history has no actionable mode to cross-reference). Merge rate
+ * is measured over RESOLVED proposals only, mirroring computeOutcomesReport's per-scope
+ * math. Sorted sharpest-execution-problem first; bounded like the avoid/prefer lists.
+ * Returns '' when no domain qualifies, so buildPrompt omits the block.
+ */
+export function computeCrossReferenceAnalysis({ outcomes = [] } = {}) {
+  const records = (Array.isArray(outcomes) ? outcomes : []).filter(o => o && typeof o === 'object');
+  const byDomain = computeExecutionByDomain(records); // per-domain failure taxonomy
+
+  // Per-domain merge stats over RESOLVED proposals (pending ≠ a merge verdict).
+  const mergeByScope = new Map();
+  for (const o of records) {
+    const scope = typeof o.scope === 'string' && o.scope.trim() ? o.scope.trim() : null;
+    if (!scope) continue;
+    if (!PROPOSAL_OUTCOMES.includes(o.outcome)) continue; // unresolved: no verdict yet
+    const agg = mergeByScope.get(scope) || { merged: 0, resolved: 0 };
+    agg.resolved += 1;
+    if (o.outcome === 'merged') agg.merged += 1;
+    mergeByScope.set(scope, agg);
+  }
+
+  const qualifying = [];
+  for (const [scope, exec] of Object.entries(byDomain)) {
+    const merge = mergeByScope.get(scope);
+    if (!merge || merge.merged < 1) continue; // "proposes well" side needs a merge
+    const { entries, diagnosed, total: failTotal } = exec.failureSummary;
+    if (diagnosed < 1) continue; // "executes poorly" side needs a diagnosed failed hand-off
+    const top = entries[0];
+    qualifying.push({
+      scope,
+      mergeRate: Math.round((merge.merged / merge.resolved) * 100),
+      merged: merge.merged,
+      resolved: merge.resolved,
+      cause: top.category,
+      causeCount: top.count,
+      failTotal,
+      diagnosed
+    });
+  }
+  if (!qualifying.length) return '';
+  // Sharpest execution problem first (most diagnosed failures), ties broken by the
+  // strongest "proposes well" contrast (highest merge rate) so the output is stable.
+  qualifying.sort((a, b) => b.diagnosed - a.diagnosed || b.mergeRate - a.mergeRate);
+  const shown = qualifying.slice(0, SCOPE_AWARENESS_MAX_PER_LIST);
+  const more = qualifying.length - shown.length;
+  const lines = shown.map(q =>
+    `- ${clampScopeLabel(q.scope)}: proposals merge at ${q.mergeRate}% (${q.merged}/${q.resolved}) but hand-offs here fail on ${q.cause} (${q.causeCount} of ${q.failTotal})`
+  );
+  if (more > 0) lines.push(`- …and ${more} more`);
+  return `${CROSS_REFERENCE_HEADER}\n${lines.join('\n')}`;
 }
 
 // Source keys that buildPrompt renders as their OWN dedicated block (with tailored
@@ -1190,11 +1305,13 @@ const BESPOKE_SOURCE_BLOCK_KEYS = new Set(['plannedWork', 'scopeGuidance']);
  * `liScopeAwareness` block the same way (#2760). `proposalExecutionReport` (from
  * computeProposalExecutionAwareness) is injected as a `liProposalExecution` block —
  * the TRUE per-proposal-domain execution record #2760 could only approximate (#2765).
+ * `crossReferenceReport` (from computeCrossReferenceAnalysis) is injected as a
+ * `liCrossReference` block that names domains LI proposes well but executes poorly (#2764 §3).
  * Finally, the static `liPlaybook` block (LI_PROPOSAL_PLAYBOOK, #2763) is ALWAYS
  * appended: the a-priori scope/task-type/goal rule set LI needs from run one, before
  * any per-app outcome data exists.
  */
-export function buildPrompt({ app, config, sources = {}, openIssues = [], isPortos = false, outcomesReport = '', selfEvalReport = '', proposalExecutionReport = '' }) {
+export function buildPrompt({ app, config, sources = {}, openIssues = [], isPortos = false, outcomesReport = '', selfEvalReport = '', proposalExecutionReport = '', crossReferenceReport = '' }) {
   const allowed = (config.allowedScopes || []).filter(s =>
     isScopeAllowed({ scope: s, allowedScopes: config.allowedScopes, isPortos })
   );
@@ -1273,6 +1390,15 @@ export function buildPrompt({ app, config, sources = {}, openIssues = [], isPort
     ? `\n### liProposalExecution\n${proposalExecutionReport.trim()}\n\nThis is a DIRECT record of how LI's own proposals in each domain fared once implemented — not directional context. Favor domains LI executes reliably; for a low-execution domain, either narrow the proposal to a slice an agent can finish or justify why it is still the highest-value work despite the track record.\n`
     : '';
 
+  // Cross-reference (#2764 §3): the CONTRAST liOutcomes and liProposalExecution can't
+  // show on their own — a domain LI proposes well (merges) but executes poorly (its
+  // hand-offs fail with a named cause). It carries its own actionable guidance in the
+  // header, so no extra instruction sentence is appended. Gated on the outcomes source
+  // by the caller (built from the same records), so no isPortos re-check here.
+  const crossReferenceBlock = (typeof crossReferenceReport === 'string' && crossReferenceReport.trim())
+    ? `\n### liCrossReference\n${crossReferenceReport.trim()}\n`
+    : '';
+
   // Proposal Playbook (#2763): the STANDING, a-priori rule set — always rendered.
   // Unlike the data blocks above (which appear only once enough per-app outcome data
   // accumulates), the playbook is the guidance LI needs from run one, when it would
@@ -1296,7 +1422,7 @@ ${openList}
 
 Gathered sources:
 ${sourceBlocks || (plannedWorkBlock ? '(no other sources available — you may propose an app-data-gap to add telemetry)' : '(no sources available — you may propose an app-data-gap to add telemetry)')}
-${plannedWorkBlock}${outcomesBlock}${selfEvalBlock}${scopeGuidanceBlock}${proposalExecutionBlock}${playbookBlock}
+${plannedWorkBlock}${outcomesBlock}${selfEvalBlock}${scopeGuidanceBlock}${proposalExecutionBlock}${crossReferenceBlock}${playbookBlock}
 Respond with JSON only (no markdown fences):
 {
   "analysis": "brief reasoning summary",
