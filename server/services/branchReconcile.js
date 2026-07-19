@@ -22,7 +22,7 @@ import { execGit } from '../lib/execGit.js';
 import { listWorktrees, forceRemoveWorktreeDir, classifyWorktreeDirt, isHumanClaimWorktree } from './worktreeManager.js';
 import { execGh } from './github.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
-import { isGithubHost } from '../lib/workTracker.js';
+import { githubRepoSpec } from '../lib/workTracker.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 
 // Never reconciled — these are long-lived shared branches, not disposable work.
@@ -97,11 +97,10 @@ async function getOpenPrsByHead(repoPath) {
   const origin = await getOriginInfo(repoPath).catch(() => null);
   // Accept any GitHub-family host (github.com AND enterprise github.*), mirroring
   // prWatcher.checkPullRequests. `origin.isGithub` is github.com-only, so gating
-  // on it silently skipped enterprise repos. The host-qualified `HOST/OWNER/REPO`
-  // selector keeps gh deterministic on a fork+upstream checkout (a bare
-  // OWNER/REPO defaults to github.com) — the same reason prWatcher pins the host.
-  if (!origin?.hasOrigin || !origin.fullName || !isGithubHost(origin.host)) return new Map();
-  const repoSpec = `${origin.host}/${origin.fullName}`;
+  // on it silently skipped enterprise repos. githubRepoSpec pairs that gate with
+  // the host-qualified `HOST/OWNER/REPO` selector (null for a non-GitHub origin).
+  const repoSpec = githubRepoSpec(origin);
+  if (!repoSpec) return new Map();
   const raw = await execGh([
     'pr', 'list', '--repo', repoSpec, '--state', 'open',
     '--limit', String(PR_LIST_LIMIT),

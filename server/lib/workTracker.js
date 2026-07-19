@@ -67,6 +67,26 @@ export function isGithubHost(host) {
 }
 
 /**
+ * Build the host-qualified `HOST/OWNER/REPO` selector for `gh --repo` from a
+ * `getOriginInfo()` result, or null when the origin isn't a usable GitHub repo
+ * (no origin, unparsed owner/repo, or a non-GitHub host). The host qualifier is
+ * load-bearing: a bare `OWNER/REPO` defaults `gh` to github.com, so enterprise
+ * repos would be silently queried against github.com — and it stays
+ * deterministic on a fork+upstream checkout where gh's cwd remote-detection
+ * ambiguously resolves to the parent repo. Pairs the isGithubHost gate with the
+ * selector so prWatcher, branchReconcile, and issueReconcile share one
+ * definition of "a resolvable GitHub repo" instead of three hand-copied ones.
+ * (No separate `hasOrigin` check: isGithubHost is true only for a real GitHub
+ * host string, which getOriginInfo returns only when an origin exists.)
+ * @param {{host?:string|null, fullName?:string|null}} origin
+ * @returns {string|null}
+ */
+export function githubRepoSpec(origin) {
+  if (!origin?.fullName || !isGithubHost(origin.host)) return null;
+  return `${origin.host}/${origin.fullName}`;
+}
+
+/**
  * Which forge CLI a concrete tracker drives: github → `gh`, gitlab → `glab`.
  * PLAN.md and JIRA have no forge CLI, so they return null.
  */
