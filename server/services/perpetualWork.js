@@ -176,6 +176,9 @@ const FORGE_ISSUE_CONFIG = {
     listArgs: ['issue', 'list', '--state', 'open', '--search', 'sort:created-asc', '--json', 'number,assignees,labels,title', '--limit', '100'],
     listFail: 'gh-list-failed',
     parseFail: 'gh-parse-failed',
+    // Park reason when the owner filter resolves to a non-authoring owner. On
+    // GitHub that owner is an ORG; the toast copy is org-flavored to match.
+    ownerIsOrgReason: 'owner-is-org',
     // Authoritative repo owner (org or user) + whether that owner is an org, via
     // gh; transient if gh is unauthenticated / not a GitHub remote. `isOrg` lets
     // detectForgeIssues short-circuit the owner-filter org trap — an org login is
@@ -204,14 +207,24 @@ const FORGE_ISSUE_CONFIG = {
     listArgs: ['issue', 'list', '--per-page', '100', '-F', 'json'],
     listFail: 'glab-list-failed',
     parseFail: 'glab-parse-failed',
+    // Park reason when the owner filter resolves to a non-authoring owner. On
+    // GitLab that owner is a GROUP, not an "org"; the toast copy is group-flavored
+    // to match (a GitLab user would never call their namespace an org).
+    ownerIsOrgReason: 'owner-is-group',
     // GitLab has no authoritative `gh repo view` equivalent here; resolve the
     // author filter from the project namespace (git remote owner), matching the
-    // claim-issue-gitlab prompt. For a GROUP-owned project the namespace is the
-    // group (not an issue author), so owner-mode finds nothing and parks —
-    // switch the task to 'any' author mode for group projects.
+    // claim-issue-gitlab prompt. GitLab can't tell a user namespace from a GROUP
+    // namespace from the remote URL alone, so probe: `glab api groups/<namespace>`
+    // returns 200 for a group and 404 for a user namespace. A group is never an
+    // issue author, so populate `isOrg: true` for groups and let detectForgeIssues
+    // fire the same owner-filter short-circuit GitHub uses — no new branch logic.
+    // A probe failure (network/unauth/non-200) degrades to isOrg:false → the
+    // pre-existing `--author <owner>` behavior, so no new transient park appears.
     resolveOwner: async (repoPath) => {
       const owner = await resolveRemoteOwner(repoPath);
-      return owner ? { owner } : { error: 'glab-owner-unresolved' };
+      if (!owner) return { error: 'glab-owner-unresolved' };
+      const probe = await runCli('glab', ['api', `groups/${owner}`], repoPath);
+      return { owner, isOrg: probe.code === 0 };
     },
     // `--self` mode: glab's `--author` expects a username (no `@me` token), so
     // resolve the authenticated account via the API; transient if glab is
@@ -283,13 +296,14 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self' } =
     const { owner, isOrg, error } = await cfg.resolveOwner(repoPath);
     if (error) return { actionable: false, count: 0, reason: error, transient: true };
     if (isOrg) {
-      // The owner filter resolved to an ORG login, which can never be an issue
-      // author — `--author <org>` is guaranteed to match zero. Skip that empty
-      // query and report the real open count with a distinct `owner-is-org`
-      // reason, so the toast steers the user to 'self'/'any' instead of implying
-      // a personal-username mismatch (the failure that motivated this branch).
+      // The owner filter resolved to a non-authoring owner (a GitHub ORG or a
+      // GitLab GROUP), which can never be an issue author — `--author <owner>` is
+      // guaranteed to match zero. Skip that empty query and report the real open
+      // count with the forge-flavored short-circuit reason (`owner-is-org` /
+      // `owner-is-group`), so the toast steers the user to 'self'/'any' instead of
+      // implying a personal-username mismatch (the failure that motivated this).
       const openCount = await countOpenIssuesUnfiltered(cfg, repoPath);
-      return parked('owner-is-org', openCount);
+      return parked(cfg.ownerIsOrgReason, openCount);
     }
     args.push('--author', owner);
     authorApplied = true;
@@ -313,8 +327,9 @@ async function detectForgeIssues(forgeKey, app, { issueAuthorFilter = 'self' } =
     // An empty *filtered* list is ambiguous: the repo may truly have no open
     // issues, OR it has open issues that just don't match the author filter —
     // e.g. `self`/@me resolving to a different identity than whoever filed the
-    // issues, or a non-org `owner` who simply filed none. (The org-owner trap is
-    // caught earlier with the distinct `owner-is-org` reason.)
+    // issues, or a non-org `owner` who simply filed none. (The org/group-owner
+    // trap is caught earlier with the distinct `owner-is-org`/`owner-is-group`
+    // reason.)
     // Reporting a flat "no open issues" there hid a claimable queue behind a
     // full recheck park (the "open issues exist but the task still parked"
     // failure this fixes). Re-probe WITHOUT the author filter; if issues exist,

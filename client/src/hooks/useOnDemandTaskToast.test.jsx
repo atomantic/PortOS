@@ -97,4 +97,19 @@ describe('useOnDemandTaskToast — parked outcome', () => {
     expect(msg).toMatch(/0 of 10 open/);
     expect(msg).not.toMatch(/re-checked now — no open issues/);
   });
+
+  it('uses group-flavored copy for the GitLab owner-filter trap (a group is not an "org")', () => {
+    renderHook(() => useOnDemandTaskToast());
+    fire({
+      taskType: 'claim-issue-gitlab', appName: 'App One', outcome: 'parked',
+      parkReason: 'owner-is-group', counts: { open: 10, inFlight: 0, filtered: 0 },
+      parkedUntil: new Date(Date.now() + 23 * 3600 * 1000).toISOString()
+    });
+    const [msg] = toastSpy.mock.calls[0];
+    // GitLab-appropriate wording — "group", never "org".
+    expect(msg).toMatch(/matches a group/);
+    expect(msg).not.toMatch(/matches an org/);
+    expect(msg).toMatch(/set it to "self" or "any"/);
+    expect(msg).toMatch(/0 of 10 open/);
+  });
 });

@@ -13,6 +13,7 @@ const PARK_REASON_LABELS = {
   'no-open-issues': 'no open issues',
   'no-authored-issues': 'open issues exist, but none match the author filter — set it to "any"',
   'owner-is-org': 'the "owner" filter matches an org, which can\'t author issues — set it to "self" or "any"',
+  'owner-is-group': 'the "owner" filter matches a group, which can\'t author issues — set it to "self" or "any"',
   'no-in-flight-branches': 'no branches in flight',
   'no-zombie-issues': 'no stale issues to reconcile',
   'no-actionable-plan-items': 'no unblocked PLAN items',
