@@ -78,12 +78,19 @@ export function isGithubHost(host) {
  * definition of "a resolvable GitHub repo" instead of three hand-copied ones.
  * (No separate `hasOrigin` check: isGithubHost is true only for a real GitHub
  * host string, which getOriginInfo returns only when an origin exists.)
+ *
+ * Canonicalizes GitHub's SSH-over-443 alias: a `git@ssh.github.com:443/owner/repo`
+ * remote parses to host `ssh.github.com`, but `gh --repo` reads the `HOST/` prefix
+ * as the API host, so `ssh.github.com/owner/repo` would query the SSH endpoint and
+ * silently return nothing. Strip a leading `ssh.` so the selector names the real
+ * API host (`ssh.github.com`→`github.com`, `ssh.github.example.com`→`github.example.com`).
  * @param {{host?:string|null, fullName?:string|null}} origin
  * @returns {string|null}
  */
 export function githubRepoSpec(origin) {
   if (!origin?.fullName || !isGithubHost(origin.host)) return null;
-  return `${origin.host}/${origin.fullName}`;
+  const apiHost = origin.host.replace(/^ssh\./i, '');
+  return `${apiHost}/${origin.fullName}`;
 }
 
 /**
