@@ -32,6 +32,7 @@ import {
   isOllamaBackedProvider,
   isClaudeCodePlanCli,
   isGrokBuildCli,
+  isLocalEndpoint,
   enabledApiProviderFilter,
   providerTypeClass,
   getProviderTimeout,
@@ -127,6 +128,24 @@ describe('provider type predicates', () => {
     expect(isApiProvider(undefined)).toBe(false);
     expect(isProcessProvider(null)).toBe(false);
     expect(isOllamaBackedProvider(undefined)).toBe(false);
+  });
+});
+
+describe('isLocalEndpoint', () => {
+  it('matches loopback endpoints regardless of scheme/port/path', () => {
+    expect(isLocalEndpoint('http://localhost:11434')).toBe(true);
+    expect(isLocalEndpoint('http://127.0.0.1:1234/v1')).toBe(true);
+    expect(isLocalEndpoint('https://[::1]:8080')).toBe(true);
+    expect(isLocalEndpoint('localhost:11434')).toBe(true);
+  });
+
+  it('rejects hosted endpoints and non-strings', () => {
+    expect(isLocalEndpoint('https://api.cerebras.ai/v1')).toBe(false);
+    expect(isLocalEndpoint('https://api.openai.com/v1')).toBe(false);
+    // "localhost" as a subdomain of a remote host must not count as local.
+    expect(isLocalEndpoint('https://localhost.evil.com/v1')).toBe(false);
+    expect(isLocalEndpoint('')).toBe(false);
+    expect(isLocalEndpoint(undefined)).toBe(false);
   });
 });
 

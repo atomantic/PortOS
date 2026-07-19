@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
-import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isOllamaBackedProvider, isClaudeCodePlanCli, isGrokBuildCli, effectiveModelContextWindow } from '../utils/providers';
+import { filterSelectableModels, filterGenerationModels, isEmbeddingModel, mergeModelLists, localBackendForProvider, modelOptionLabel, providerTypeClass, isTuiProvider, isApiProvider, isProcessProvider, isOllamaBackedProvider, isClaudeCodePlanCli, isGrokBuildCli, isLocalEndpoint, effectiveModelContextWindow } from '../utils/providers';
 import useLocalModels from '../hooks/useLocalModels';
 import EmptyState from '../components/EmptyState';
 import {
@@ -350,6 +350,9 @@ export default function AIProviders() {
                       {isApiProvider(provider) && (
                         <p>Endpoint: <code className="text-gray-300">{provider.endpoint}</code></p>
                       )}
+                      {isApiProvider(provider) && !isLocalEndpoint(provider.endpoint) && (
+                        <p className="text-port-warning">Needs an API key — after adding, use Edit to paste it</p>
+                      )}
                       {filterSelectableModels(provider.models).length > 0 && (
                         <p>Models: {filterSelectableModels(provider.models).slice(0, 3).join(', ')}{filterSelectableModels(provider.models).length > 3 ? ` +${filterSelectableModels(provider.models).length - 3}` : ''}</p>
                       )}
@@ -519,6 +522,18 @@ export default function AIProviders() {
                   )}
                   {isApiProvider(provider) && (
                     <p className="break-words">Endpoint: <code className="text-gray-300 break-all">{provider.endpoint}</code></p>
+                  )}
+                  {/* API-type providers auth solely via the stored apiKey (sent as a
+                      Bearer header) — surface its state here so "where does the key
+                      go?" is answered from the card, not by spelunking the form. */}
+                  {isApiProvider(provider) && (
+                    provider.hasApiKey ? (
+                      <p className="text-xs">API key: <span className="text-port-success">set</span></p>
+                    ) : isLocalEndpoint(provider.endpoint) ? (
+                      <p className="text-xs">API key: <span className="text-gray-500">none (local endpoint)</span></p>
+                    ) : (
+                      <p className="text-xs">API key: <span className="text-port-warning">not set — Edit this provider to paste one</span></p>
+                    )
                   )}
                   {provider.models?.length > 0 && (
                     <p>Models: {provider.models.slice(0, 3).join(', ')}{provider.models.length > 3 ? ` +${provider.models.length - 3}` : ''}</p>
@@ -958,9 +973,19 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                   type="password"
                   value={formData.apiKey}
                   onChange={(e) => setFormData(prev => ({ ...prev, apiKey: e.target.value }))}
-                  placeholder={provider?.hasApiKey ? 'Key set — leave blank to keep' : 'Optional'}
+                  placeholder={provider?.hasApiKey
+                    ? 'Key set — leave blank to keep'
+                    : isLocalEndpoint(formData.endpoint)
+                      ? 'Not needed for local endpoints'
+                      : 'Paste the key from your provider dashboard'}
                   className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
                 />
+                <p className="text-xs text-gray-500 mt-1">
+                  This field is the only place API providers read a key from — it's stored on this
+                  provider and sent as an <code>Authorization: Bearer</code> header on every request.
+                  No environment variable is involved. Hosted APIs (Cerebras, Grok, NVIDIA, …) require
+                  one; local backends (Ollama, LM Studio) don't.
+                </p>
               </FormField>
 
               <FormField label="Custom endpoint">
@@ -1237,9 +1262,18 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
             )}
           </div>
 
-          {/* Environment Variables */}
+          {/* Environment Variables — consumed only when spawning CLI/TUI child
+              processes; API runs never read them (auth is the API Key field).
+              For API type the add-row is hidden so a key can't be "set" here by
+              mistake, but existing entries stay editable/removable. */}
           <div className="border-t border-port-border pt-4 mt-4">
             <h4 className="text-sm font-medium text-gray-300 mb-3">Environment Variables</h4>
+            {formData.type === 'api' && Object.entries(formData.envVars).length > 0 && (
+              <p className="text-xs text-port-warning mb-2">
+                API providers ignore environment variables — these entries have no effect.
+                Put the key in the API Key field above.
+              </p>
+            )}
             {Object.entries(formData.envVars).length > 0 && (
               <div className="space-y-2 mb-3">
                 {Object.entries(formData.envVars).map(([key, value]) => {
@@ -1292,6 +1326,7 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                 })}
               </div>
             )}
+            {formData.type !== 'api' && (
             <div className="flex gap-2">
               <input
                 type="text"
@@ -1338,8 +1373,11 @@ function ProviderForm({ provider, onClose, onSave, allProviders = [] }) {
                 Add
               </button>
             </div>
+            )}
             <p className="text-xs text-gray-500 mt-2">
-              Environment variables passed to the CLI process (e.g., CLAUDE_CODE_USE_BEDROCK=1, AWS_PROFILE).
+              {formData.type === 'api'
+                ? 'Not used by API providers — auth goes in the API Key field above. Env vars only apply to CLI/TUI process providers.'
+                : 'Environment variables passed to the CLI process (e.g., CLAUDE_CODE_USE_BEDROCK=1, AWS_PROFILE).'}
             </p>
           </div>
 

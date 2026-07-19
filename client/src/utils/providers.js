@@ -313,7 +313,7 @@ export const localBackendForProvider = (provider) => {
 };
 
 const LOCAL_ENDPOINT_RE = /^(https?:\/\/)?(localhost|127\.0\.0\.1|0\.0\.0\.0|\[?::1\]?)(:|\/|$)/i;
-const isLocalEndpoint = (endpoint) =>
+export const isLocalEndpoint = (endpoint) =>
   typeof endpoint === 'string' && LOCAL_ENDPOINT_RE.test(endpoint.trim());
 
 export const isLikelyLargeContextProvider = (provider) => {
