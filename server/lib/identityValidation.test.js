@@ -167,6 +167,16 @@ describe('identityValidation', () => {
       });
       expect(r.success).toBe(false);
     });
+
+    it('accepts a known featureAreas override', () => {
+      expect(createGoalInputSchema.safeParse({ title: 'x', featureAreas: ['universes', 'tribe'] }).success).toBe(true);
+    });
+
+    it('rejects an unknown featureAreas id on create (strict — catches typos/bugs)', () => {
+      // Create happens on THIS install, so an id outside this version's set is a
+      // mistake worth rejecting (issue #2679 keeps create strict).
+      expect(createGoalInputSchema.safeParse({ title: 'x', featureAreas: ['someBogusArea'] }).success).toBe(false);
+    });
   });
 
   describe('updateGoalInputSchema', () => {
@@ -180,6 +190,18 @@ describe('identityValidation', () => {
 
     it('rejects bad status value', () => {
       expect(updateGoalInputSchema.safeParse({ status: 'paused' }).success).toBe(false);
+    });
+
+    it('accepts a forward-unknown featureAreas id on update (lenient — federated forward-compat)', () => {
+      // A goal synced from a newer peer can carry an id this install doesn't know
+      // yet; the edit path must not 400 on it (issue #2679). getGoalFeatureAreas
+      // filters unknown ids at read time, so storing them is harmless.
+      const r = updateGoalInputSchema.safeParse({ featureAreas: ['universes', 'someFutureAreaFromANewerPeer'] });
+      expect(r.success).toBe(true);
+    });
+
+    it('rejects a non-string featureAreas entry on update', () => {
+      expect(updateGoalInputSchema.safeParse({ featureAreas: [123] }).success).toBe(false);
     });
   });
 
