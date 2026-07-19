@@ -27,7 +27,7 @@
 import { execGh } from './github.js';
 import { getAppById, updateApp } from './apps.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
-import { hostToWorkTracker } from '../lib/workTracker.js';
+import { isGithubHost } from '../lib/workTracker.js';
 import { PR_AUTHOR_FILTERS } from '../lib/validation.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 
@@ -196,9 +196,9 @@ export async function checkPullRequests(app, { authorFilter = 'any' } = {}) {
   // Accept any GitHub-family host — github.com AND self-hosted GitHub Enterprise
   // (github.*) — not just github.com. `origin.isGithub` is github.com-only (it
   // drives PortOS's own fork/update flow), so gating on it silently excluded
-  // enterprise repos. hostToWorkTracker classifies enterprise GitHub the same
-  // way the claim-issue router does; gitlab.* and non-forge hosts fall through.
-  if (!origin?.hasOrigin || !origin.fullName || hostToWorkTracker(origin.host) !== 'github') {
+  // enterprise repos. isGithubHost classifies enterprise GitHub the same way the
+  // claim-issue router does; gitlab.* and non-forge hosts fall through.
+  if (!origin?.hasOrigin || !origin.fullName || !isGithubHost(origin.host)) {
     return { ok: false, reason: 'not-a-github-repo' };
   }
   const repoFullName = origin.fullName;

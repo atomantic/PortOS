@@ -5,6 +5,7 @@ import {
   DEFAULT_WORK_TRACKER,
   workTrackerLabel,
   hostToWorkTracker,
+  isGithubHost,
   forgeCliForTracker,
   trackerToClaimTaskType,
   resolveWorkTracker,
@@ -35,6 +36,23 @@ describe('hostToWorkTracker', () => {
     expect(hostToWorkTracker('')).toBeNull();
     expect(hostToWorkTracker(null)).toBeNull();
     expect(hostToWorkTracker(undefined)).toBeNull();
+  });
+});
+
+describe('isGithubHost', () => {
+  it('is true for github.com AND enterprise github.* hosts', () => {
+    expect(isGithubHost('github.com')).toBe(true);
+    expect(isGithubHost('GitHub.com')).toBe(true);
+    expect(isGithubHost('github.mycorp.com')).toBe(true);
+    expect(isGithubHost('github.acme.example')).toBe(true);
+  });
+  it('is false for gitlab, other forges, and empty/invalid hosts', () => {
+    expect(isGithubHost('gitlab.com')).toBe(false);
+    expect(isGithubHost('gitlab.example.com')).toBe(false);
+    expect(isGithubHost('bitbucket.org')).toBe(false);
+    expect(isGithubHost('')).toBe(false);
+    expect(isGithubHost(null)).toBe(false);
+    expect(isGithubHost(undefined)).toBe(false);
   });
 });
 

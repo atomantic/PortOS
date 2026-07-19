@@ -54,6 +54,19 @@ export function hostToWorkTracker(host) {
 }
 
 /**
+ * True when `host` is a GitHub-family host — github.com AND self-hosted GitHub
+ * Enterprise (github.*). This is the enterprise-aware replacement for the
+ * github.com-only `getOriginInfo().isGithub` gate: `isGithub` drives PortOS's
+ * own fork/update flow (upstream lives on github.com), so reusing it to decide
+ * whether a repo's issues/PRs live on GitHub silently excluded enterprise repos.
+ * Shared by prWatcher, branchReconcile, and issueReconcile so the three stay
+ * consistent about what counts as "a GitHub repo".
+ */
+export function isGithubHost(host) {
+  return hostToWorkTracker(host) === 'github';
+}
+
+/**
  * Which forge CLI a concrete tracker drives: github → `gh`, gitlab → `glab`.
  * PLAN.md and JIRA have no forge CLI, so they return null.
  */
