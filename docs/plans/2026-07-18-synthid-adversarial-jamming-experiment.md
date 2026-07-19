@@ -60,7 +60,13 @@ effectiveness claims against SynthID.
 ## Method
 
 `scripts/experiments/synthid_jamming_eval.py` (self-contained; numpy + pillow, no
-GPU/torch/network; fixed seeds → bit-reproducible). It:
+GPU/torch/network; all randomness is seeded, so a run is deterministic and
+byte-identical on repeat). The results table below is the **reference run on macOS
+(Arial)** — the absolute figures depend on which TTF actually renders the test
+text (different glyph shapes → different edge spectra), so a Linux/Windows run
+prints slightly different numbers (the script tries DejaVu/Windows Arial before
+Pillow's bitmap default, and stamps the resolved `font=` in its output). The
+*directional* conclusions below are font-independent. It:
 
 1. Renders a **fully synthetic** 512² test image (no real user images / no PII):
    smooth gradient + radial low-freq structure + photo-like grain + hard
@@ -71,8 +77,11 @@ GPU/torch/network; fixed seeds → bit-reproducible). It:
    - **z_after** — residual detector z-score (higher = still detected)
    - **disruption %** — fraction of the 13.88 detection margin removed
    - **PSNR (dB)** vs the watermarked source (global fidelity)
-   - **text_legibility** — retained high-freq edge energy in the text band
-     (1.0 = glyphs fully preserved; the #1763 concern)
+   - **text_legibility** — retained high-freq edge energy in the text region
+     (1.0 = edges fully preserved; the #1763 glyph concern). The crop spans the
+     rendered glyphs plus the rectangle outlines crossing those rows, so it is
+     text-region edge retention, not glyphs in isolation — both soften together
+     under blur/resize, so it still tracks legibility.
 
 Stages:
 
@@ -186,3 +195,8 @@ python3 -m venv /tmp/jam-venv && /tmp/jam-venv/bin/pip install numpy pillow
 /tmp/jam-venv/bin/python scripts/experiments/synthid_jamming_eval.py          # table
 /tmp/jam-venv/bin/python scripts/experiments/synthid_jamming_eval.py --json   # machine-readable
 ```
+
+The header line reports the `font=` that rendered the test text. The exact figures
+above reproduce on a host that resolves `Arial` (macOS); on a host that falls back
+to DejaVu or Pillow's bitmap default the numbers shift a little but the ranking of
+stages does not.

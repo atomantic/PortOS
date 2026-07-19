@@ -68,11 +68,27 @@ def make_test_image(size=512):
     # Hard edges (frequency content across the spectrum)
     for i in range(4):
         draw.rectangle([40 + i * 90, 40, 90 + i * 90, 470], outline=(255, 255, 255), width=2)
-    # Rendered text — the comic-dialog legibility case from #1763
-    try:
-        font = ImageFont.truetype("/System/Library/Fonts/Supplemental/Arial.ttf", 34)
-    except OSError:
-        font = ImageFont.load_default()
+    # Rendered text — the comic-dialog legibility case from #1763.
+    # The absolute z-scores/PSNR/text-legibility numbers depend on which font
+    # actually renders (different glyph shapes → different edge spectra), so the
+    # exact results table in the design doc is the REFERENCE run on the first
+    # font found below. Try a few common cross-platform TTFs before Pillow's
+    # tiny bitmap default so a Linux/Windows run still renders real glyphs (the
+    # *directional* conclusions hold regardless of font; only the exact figures
+    # shift). Record the resolved font in the output meta for transparency.
+    font, font_used = ImageFont.load_default(), "pillow-default"
+    for path in (
+        "/System/Library/Fonts/Supplemental/Arial.ttf",              # macOS
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",           # Debian/Ubuntu
+        "/usr/share/fonts/dejavu/DejaVuSans.ttf",                    # Fedora/Arch
+        "C:\\Windows\\Fonts\\arial.ttf",                             # Windows
+    ):
+        try:
+            font, font_used = ImageFont.truetype(path, 34), path
+            break
+        except OSError:
+            continue
+    make_test_image.font_used = font_used
     for row, txt in enumerate(["QUALITY", "vs", "DISRUPTION", "0123456789"]):
         draw.text((60, 120 + row * 70), txt, fill=(255, 255, 255), font=font)
     return np.asarray(img.convert("L"), dtype=np.float64)
@@ -150,12 +166,15 @@ def psnr(a, b):
 
 
 def text_legibility(ref, cand):
-    """Retained high-frequency edge energy in the text band (rows 110..400).
+    """Retained high-frequency edge energy in the text region (rows 110..400).
 
     Ratio of candidate gradient energy to reference gradient energy in the text
-    region, clipped to [0, 1.2]. 1.0 = glyph edges fully preserved; lower = the
-    process softened the text. Sensitive to blur (diffusion/roundtrip proxies)
-    and to spatial resampling (resize-squeeze).
+    region, clipped to [0, 1.2]. 1.0 = edges fully preserved; lower = the process
+    softened them. Sensitive to blur (diffusion/roundtrip proxies) and to spatial
+    resampling (resize-squeeze). Note: the crop spans the rendered glyphs AND the
+    vertical rectangle outlines that pass through those rows, so this is
+    text-region edge retention, not glyph edges in isolation — both degrade
+    together under blur/resize, so the ratio still tracks glyph legibility.
     """
     def edge_energy(a):
         crop = a[110:400, 40:472]
@@ -263,6 +282,9 @@ def run(size=512, alpha=2.2):
             "z_clean": round(z_clean, 2), "z_watermarked": round(z_wm, 2),
             "detection_margin": round(margin, 2),
             "band": [BAND_LO, BAND_HI],
+            # Absolute figures depend on the rendered font; record which one ran
+            # so a differing table on another host is explainable, not "broken".
+            "font": getattr(make_test_image, "font_used", "unknown"),
         },
         "results": rows,
     }
@@ -271,7 +293,7 @@ def run(size=512, alpha=2.2):
 def print_table(out):
     m = out["meta"]
     print(f"# Synthetic proxy-oracle: z(clean)={m['z_clean']}  z(watermarked)={m['z_watermarked']}  "
-          f"margin={m['detection_margin']}  band={m['band']}\n")
+          f"margin={m['detection_margin']}  band={m['band']}  font={m.get('font')}\n")
     hdr = f"{'stage':<18}{'param':>7}{'z_after':>9}{'disrupt%':>10}{'PSNR dB':>9}{'text_leg':>10}"
     print(hdr)
     print("-" * len(hdr))
