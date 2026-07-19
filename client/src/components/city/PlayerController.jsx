@@ -59,6 +59,7 @@ export default function PlayerController({
     facing: 0, // the character's body heading (damped toward movement direction)
     bank: 0, // lean into turns
     vy: 0, // vertical velocity for the Space jump arc (E/Q free-fly zeroes it)
+    jumping: false, // an active Space jump arc — gates gravity so E/Q free-fly holds altitude
     state: 'idle',
   });
   // Stable array view of the positions Map for the per-frame boom collision test —
@@ -211,23 +212,23 @@ export default function PlayerController({
 
     const hasHorizontal = moveDir.lengthSq() > 0;
 
-    // Vertical: E/Q is direct free-fly and takes precedence (zeroing any jump arc);
-    // otherwise Space launches a gravity-based jump from the ground. The arc integrates
-    // rig.vy so the runner hops and lands rather than floating; landing (clamp to
-    // EYE_HEIGHT below) resets rig.vy. Holding Space re-jumps on touchdown.
+    // Vertical: E/Q is direct free-fly and takes precedence — it cancels any jump and
+    // holds altitude when released (no gravity). Gravity applies ONLY during an active
+    // Space jump arc (rig.jumping), so releasing E mid-air keeps the free-fly hover intact
+    // instead of dropping the player. A jump launches only from the ground; the arc
+    // integrates rig.vy until the landing/ceiling clamp below clears rig.jumping.
     const flyDir = (keys.has('e') ? 1 : 0) - (keys.has('q') ? 1 : 0);
     const grounded = rig.position.y <= EYE_HEIGHT + 1e-3;
     let dy = 0;
     if (flyDir !== 0) {
+      rig.jumping = false;
       rig.vy = 0;
       dy = flyDir * verticalSpeed;
     } else {
-      if (keys.has(' ') && grounded && rig.vy <= 0) rig.vy = JUMP_SPEED; // launch
-      if (!grounded || rig.vy > 0) {
+      if (keys.has(' ') && grounded && !rig.jumping) { rig.vy = JUMP_SPEED; rig.jumping = true; } // launch
+      if (rig.jumping) {
         rig.vy += GRAVITY * delta; // gravity through the arc
         dy = rig.vy * delta;
-      } else {
-        rig.vy = 0;
       }
     }
     const moving = hasHorizontal || dy !== 0;
@@ -281,8 +282,12 @@ export default function PlayerController({
       nextPos.x = Math.max(-WORLD.bound, Math.min(WORLD.bound, nextPos.x));
       nextPos.y = Math.max(EYE_HEIGHT, Math.min(MAX_CAMERA_HEIGHT, nextPos.y));
       nextPos.z = Math.max(-WORLD.bound, Math.min(WORLD.bound, nextPos.z));
-      // Landed (or hit the ceiling): kill the jump's vertical velocity.
-      if (nextPos.y <= EYE_HEIGHT + 1e-3 || nextPos.y >= MAX_CAMERA_HEIGHT) rig.vy = 0;
+      // Landed (or hit the ceiling): end the jump arc so gravity stops and Space can
+      // launch again (and so releasing E above ground doesn't inherit a stale arc).
+      if (nextPos.y <= EYE_HEIGHT + 1e-3 || nextPos.y >= MAX_CAMERA_HEIGHT) {
+        rig.vy = 0;
+        rig.jumping = false;
+      }
       rig.position.copy(nextPos);
     }
 
