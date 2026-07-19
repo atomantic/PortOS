@@ -1,12 +1,31 @@
-import { X } from 'lucide-react';
+import {
+  X, Target,
+  Brain, HeartPulse, PenLine, Globe, Clapperboard, Users,
+  BookOpen, Package, Share2, ListTree, BrainCircuit,
+} from 'lucide-react';
 import Pill from '../ui/Pill';
 import { FormField } from '../ui/FormField';
 import { CATEGORY_CONFIG, HORIZON_OPTIONS, GOAL_TYPE_OPTIONS, MAX_TAGS } from './goalConstants';
+import { FEATURE_AREAS, FEATURE_AREA_IDS, GOAL_CATEGORY_FEATURE_MAP } from '../../lib/goalFeatureMap';
+
+// Resolve a feature-area icon NAME (kept as a string in goalFeatureMap.js so
+// that module stays React-free and server-mirrorable) to a lucide component.
+// Mirrors the map in DailyDriverWidget — the two render the same area set.
+const AREA_ICONS = {
+  Brain, HeartPulse, PenLine, Globe, Clapperboard, Users,
+  BookOpen, Package, Share2, ListTree, BrainCircuit, Target,
+};
 
 export default function GoalEditForm({
   form, setForm, tagInput, setTagInput, addTag, removeTag,
-  parentOptions, saveEdit, onCancel
+  toggleFeatureArea, parentOptions, saveEdit, onCancel
 }) {
+  const selectedAreas = form.featureAreas || [];
+  // Category default shown (greyed) when no per-goal override is set, so the
+  // user sees which areas the Daily Driver will deep-link to by default.
+  const categoryDefaultLabels = (GOAL_CATEGORY_FEATURE_MAP[form.category] || [])
+    .map(id => FEATURE_AREAS[id]?.label)
+    .filter(Boolean);
   return (
     <div className="space-y-3">
       <input
@@ -161,6 +180,37 @@ export default function GoalEditForm({
             Add
           </button>
         </div>
+      </div>
+      <div>
+        <label id="feature-areas-label" className="text-xs text-gray-500">Daily Driver Feature Areas</label>
+        <p className="text-[10px] text-gray-600 mt-0.5">
+          Pin which PortOS areas the Daily Driver deep-links to for this goal. Leave empty to use the category default.
+        </p>
+        <div role="group" aria-labelledby="feature-areas-label" className="flex flex-wrap gap-1 mt-1">
+          {FEATURE_AREA_IDS.map(id => {
+            const area = FEATURE_AREAS[id];
+            const Icon = AREA_ICONS[area.icon] || Target;
+            const active = selectedAreas.includes(id);
+            return (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={active}
+                onClick={() => toggleFeatureArea(id)}
+                className={`flex items-center gap-1 px-1.5 py-0.5 text-[10px] rounded ${active ? 'bg-port-accent text-white' : 'bg-port-bg border border-port-border text-gray-400'}`}
+              >
+                <Icon className="w-3 h-3" />
+                {area.label}
+              </button>
+            );
+          })}
+        </div>
+        {selectedAreas.length === 0 && (
+          <p className="text-[10px] text-gray-600 mt-1">
+            Default ({CATEGORY_CONFIG[form.category]?.label || form.category}):{' '}
+            {categoryDefaultLabels.length > 0 ? categoryDefaultLabels.join(', ') : 'none for this category'}
+          </p>
+        )}
       </div>
       <div className="flex gap-2">
         <button onClick={saveEdit} className="px-3 py-1.5 text-sm rounded bg-port-accent text-white hover:bg-port-accent/80">

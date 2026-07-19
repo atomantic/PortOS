@@ -7,7 +7,10 @@ import { act, render, screen, fireEvent } from '@testing-library/react';
 vi.mock('../../services/api', () => ({
   getActivities: vi.fn(() => Promise.resolve([])),
   getCalendarAccounts: vi.fn(() => Promise.resolve([])),
+  updateGoal: vi.fn(() => Promise.resolve({})),
 }));
+
+import * as api from '../../services/api';
 
 import GoalDetailPanel from './GoalDetailPanel';
 
@@ -135,5 +138,55 @@ describe('GoalDetailPanel provenance chip', () => {
     expect(screen.getByText('Inferred')).toBeTruthy(); // read mode: present
     fireEvent.click(screen.getByText('Edit'));
     expect(screen.queryByText('Inferred')).toBeNull();
+  });
+});
+
+describe('GoalDetailPanel Daily Driver feature-area override (issue #2679)', () => {
+  it('shows the category default (greyed) when no per-goal override is set', async () => {
+    // mastery → ['post', 'memory'] → "Daily POST, Memory" per goalFeatureMap.
+    await renderPanel();
+    fireEvent.click(screen.getByText('Edit'));
+    expect(screen.getByText(/Default \(Mastery\):/)).toBeTruthy();
+    expect(screen.getByText(/Daily POST, Memory/)).toBeTruthy();
+  });
+
+  it('initializes the multi-select from goal.featureAreas and reflects selection', async () => {
+    await renderPanel({ ...baseGoal, featureAreas: ['writersRoom'] });
+    fireEvent.click(screen.getByText('Edit'));
+    const writersBtn = screen.getByRole('button', { name: /Writers Room/ });
+    expect(writersBtn.getAttribute('aria-pressed')).toBe('true');
+    // With an override present, the category-default hint is hidden.
+    expect(screen.queryByText(/Default \(/)).toBeNull();
+  });
+
+  it('round-trips the override through updateGoal when saved', async () => {
+    await renderPanel(); // no override → falls back to category default
+    fireEvent.click(screen.getByText('Edit'));
+    // Toggle two areas on, then save.
+    fireEvent.click(screen.getByRole('button', { name: /Universes/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Tribe/ }));
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save'));
+      await Promise.resolve();
+    });
+    expect(api.updateGoal).toHaveBeenCalledWith(
+      'g-1',
+      expect.objectContaining({ featureAreas: ['universes', 'tribe'] })
+    );
+  });
+
+  it('sends an empty featureAreas array when the override is cleared (falls back to category default)', async () => {
+    await renderPanel({ ...baseGoal, featureAreas: ['universes'] });
+    fireEvent.click(screen.getByText('Edit'));
+    // Toggle the sole selected area off.
+    fireEvent.click(screen.getByRole('button', { name: /Universes/ }));
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save'));
+      await Promise.resolve();
+    });
+    expect(api.updateGoal).toHaveBeenCalledWith(
+      'g-1',
+      expect.objectContaining({ featureAreas: [] })
+    );
   });
 });

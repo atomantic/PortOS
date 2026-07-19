@@ -58,7 +58,11 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
       parentId: goal.parentId || '',
       tags: [...(goal.tags || [])],
       targetDate: goal.targetDate || '',
-      timeBlockConfig: goal.timeBlockConfig || null
+      timeBlockConfig: goal.timeBlockConfig || null,
+      // Per-goal Daily Driver feature-area override (issue #2679). An empty
+      // array = "no override" — getGoalFeatureAreas falls back to the category
+      // default, so we don't need a separate null sentinel here.
+      featureAreas: [...(goal.featureAreas || [])]
     });
     setEditing(true);
   };
@@ -259,6 +263,18 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     setForm({ ...form, tags: form.tags.filter(t => t !== tag) });
   };
 
+  // Toggle a Daily Driver feature-area id in the per-goal override (issue #2679).
+  // Mirrors addTag/removeTag: the form owns the list, the hook owns the mutation.
+  const toggleFeatureArea = (areaId) => {
+    setForm(prev => {
+      const current = prev.featureAreas || [];
+      const next = current.includes(areaId)
+        ? current.filter(a => a !== areaId)
+        : [...current, areaId];
+      return { ...prev, featureAreas: next };
+    });
+  };
+
   // Exclude self and descendants from parent options to prevent cycles
   const getDescendantIds = (id) => {
     const ids = new Set([id]);
@@ -307,6 +323,6 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     handleLinkActivity, handleAddProgress, resetProgressForm, handleDeleteProgress,
     handleUnlinkActivity, handleLinkCalendar, handleUnlinkCalendar,
     handleProgressChange, handleAddTodo, handleToggleTodo, handleDeleteTodo,
-    addTag, removeTag, getDescendantIds
+    addTag, removeTag, toggleFeatureArea, getDescendantIds
   };
 }
