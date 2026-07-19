@@ -64,8 +64,11 @@ export function formatTaxonomyToken(token, labels) {
  *
  * `unknown`/`unclassified` stay OUT of `entries` so they can't crowd real diagnoses
  * out of a caller's top-N list — they measure missing data, they are not findings.
+ *
+ * Internal stage of `createTaxonomyTally` (the module's single composed seam), kept
+ * unexported so the tally/render pipeline can evolve without a barrel-visible change.
  */
-export function tallyTaxonomy(records, { predicate, select, vocabulary, sentinel, field }) {
+function tallyTaxonomy(records, { predicate, select, vocabulary, sentinel, field }) {
   const counts = new Map();
   let unknown = 0;
   let unclassified = 0;
@@ -102,8 +105,11 @@ export function tallyTaxonomy(records, { predicate, select, vocabulary, sentinel
  *   - `gapWording` — `{ unknown(n, total), unclassified(n, total) }`, each returning the
  *     gap clause for that bucket. Both taxonomies phrase `unclassified` the same but
  *     `unknown` differently ("no recorded reason" vs "no recognized cause").
+ *
+ * Internal stage of `createTaxonomyTally` (the module's single composed seam), kept
+ * unexported so the tally/render pipeline can evolve without a barrel-visible change.
  */
-export function renderTallyLine(summary, { field, glossFn, limit = 3, gapWording }) {
+function renderTallyLine(summary, { field, glossFn, limit = 3, gapWording }) {
   const { entries, unknown, unclassified, total } = summary;
   if (total === 0) return '';
   const listed = entries
