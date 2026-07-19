@@ -320,6 +320,33 @@ describe('pruneTombstonedCommissions', () => {
     expect(rows.length).toBeGreaterThan(0);
     for (const f of rows) expect(f.deleted).not.toBe(true); // ratings survived
   });
+
+  it('a FRESHER tombstone landing mid-sweep restarts its grace period instead of being pruned', async () => {
+    const created = await createCommission(validInput());
+    await deleteCommission(created.id);
+    records.set(created.id, { ...records.get(created.id), deletedAt: '2020-01-01T00:00:00.000Z' });
+
+    // Mid-sweep, a peer merge rewrites the tombstone with a fresh deletedAt
+    // (still deleted:true). The queued revalidation must recheck the FULL
+    // prune predicate — deleted alone would pass and hard-delete early,
+    // letting an offline peer resurrect the stale record.
+    const store = commissionStore();
+    let releaseMerge;
+    const gate = new Promise((resolve) => { releaseMerge = resolve; });
+    const mergeDone = store.queueRecordWrite(created.id, async () => {
+      await gate;
+      const rec = await store.readRaw(created.id, { includeDeleted: true });
+      await store.writeRaw(created.id, { ...rec, deletedAt: new Date().toISOString() });
+    });
+    const prunePromise = pruneTombstonedCommissions(Date.parse('2021-01-01T00:00:00.000Z'));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    releaseMerge();
+    const result = await prunePromise;
+    await mergeDone;
+
+    expect(result).toEqual({ pruned: 0, ids: [] });
+    expect(records.get(created.id)).toMatchObject({ deleted: true }); // tombstone retained for its new grace period
+  });
 });
 
 describe('sanitizeFeedbackEntry', () => {

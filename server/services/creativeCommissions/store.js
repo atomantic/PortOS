@@ -322,6 +322,11 @@ function makeFileBackend(dir) {
         .filter((r) => r?.deleted === true && isStr(r.deletedAt) && Date.parse(r.deletedAt) < olderThanMs)
         .map((r) => r.id);
     },
+    isPrunable: async (id, olderThanMs) => {
+      if (!Number.isFinite(olderThanMs)) return false;
+      const r = await cs.loadOne(id);
+      return !!r && r.deleted === true && isStr(r.deletedAt) && Date.parse(r.deletedAt) < olderThanMs;
+    },
     pruneTombstoned: async (olderThanMs) => {
       if (!Number.isFinite(olderThanMs)) return { pruned: 0, ids: [] };
       const stale = (await cs.loadAll()).filter((r) => r?.deleted === true && isStr(r.deletedAt) && Date.parse(r.deletedAt) < olderThanMs);
@@ -344,6 +349,7 @@ function makePgBackend(db) {
     writeRaw: db.writeRaw,
     deleteRaw: db.deleteRaw,
     listPrunable: db.listPrunable,
+    isPrunable: db.isPrunable,
     pruneTombstoned: db.pruneTombstoned,
   };
 }
@@ -388,6 +394,7 @@ function createFacade(dir) {
     writeRaw: async (id, record) => (await getBackend()).writeRaw(id, record),
     deleteRaw: async (id) => (await getBackend()).deleteRaw(id),
     listPrunable: async (olderThanMs) => (await getBackend()).listPrunable(olderThanMs),
+    isPrunable: async (id, olderThanMs) => (await getBackend()).isPrunable(id, olderThanMs),
     pruneTombstoned: async (olderThanMs) => (await getBackend()).pruneTombstoned(olderThanMs),
     queueRecordWrite,
     // Under PG, report ok WITHOUT forcing backend selection (the early boot
@@ -798,18 +805,22 @@ export async function pruneTombstonedCommissions(olderThanMs) {
   // writeRaw corrects while leaving the JSON verbatim), so the set we tombstone
   // feedback for is exactly the set the delete would remove. Then each id is
   // revalidated and deleted INSIDE its per-id write queue — the same queue
-  // restoreCommission and the peer merge write through — so a restore that
-  // lands mid-sweep either runs before us (we see deleted:false and keep its
-  // feedback) or after (it finds the record gone and reports ERR_TARGET_GONE,
-  // exactly as if it raced the old bulk prune). Feedback is tombstoned before
+  // restoreCommission and the peer merge write through — so a restore or
+  // fresher tombstone landing mid-sweep either runs before us (the record no
+  // longer passes the prune predicate and keeps its feedback) or after (it
+  // finds the record gone and reports ERR_TARGET_GONE, exactly as if it raced
+  // the old bulk prune). Feedback is tombstoned before
   // the row delete: a failure there throws, the commission tombstone stays
   // put, and the next sweep retries both halves — never an orphaned rating.
   const candidates = await store.listPrunable(olderThanMs);
   const ids = [];
   for (const id of candidates) {
     const pruned = await store.queueRecordWrite(id, async () => {
-      const rec = await store.readRaw(id, { includeDeleted: true });
-      if (!rec || rec.deleted !== true) return false; // restored mid-sweep — keep its feedback
+      // Recheck the backend's FULL prune predicate, not just deleted:true — a
+      // peer merge that rewrote this tombstone with a fresher deletedAt mid-
+      // sweep restarted its GC grace period, and hard-deleting it early would
+      // let an offline peer resurrect the stale record.
+      if (!(await store.isPrunable(id, olderThanMs))) return false;
       await tombstoneFeedbackForCommission(id);
       await store.deleteRaw(id);
       return true;

@@ -114,6 +114,18 @@ export async function listPrunable(olderThanMs) {
   return rows.map((r) => r.id);
 }
 
+/** Whether ONE id currently satisfies the prune predicate (same column truth as listPrunable). */
+export async function isPrunable(id, olderThanMs) {
+  if (!Number.isFinite(olderThanMs)) return false;
+  const cutoffIso = new Date(olderThanMs).toISOString();
+  const { rows } = await query(
+    `SELECT 1 FROM creative_commissions
+     WHERE id = $1 AND deleted = TRUE AND deleted_at IS NOT NULL AND deleted_at < $2`,
+    [id, cutoffIso],
+  );
+  return rows.length > 0;
+}
+
 /** Hard-remove tombstoned commissions whose `deleted_at` is older than the cutoff; returns their ids. */
 export async function pruneTombstoned(olderThanMs) {
   if (!Number.isFinite(olderThanMs)) return { pruned: 0, ids: [] };
