@@ -47,6 +47,7 @@ import {
   computeExecutionByDomain,
   computeProposalExecutionAwareness,
   computeCrossReferenceAnalysis,
+  computeHandoffRouting,
   PROPOSAL_EXECUTION_MIN_SAMPLE,
   SCOPE_AVOID_SUCCESS_THRESHOLD,
   SCOPE_PREFER_SUCCESS_THRESHOLD,
@@ -591,6 +592,79 @@ describe('computeCrossReferenceAnalysis (#2764 §3)', () => {
     expect(computeCrossReferenceAnalysis({ outcomes: [] })).toBe('');
     expect(computeCrossReferenceAnalysis({ outcomes: null })).toBe('');
     expect(computeCrossReferenceAnalysis()).toBe('');
+  });
+});
+
+describe('computeHandoffRouting (#2764 §4)', () => {
+  const execRecords = (scope, successes, failures, extraFail = {}) => [
+    ...Array.from({ length: successes }, () => ({ scope, executionOutcome: 'success' })),
+    ...Array.from({ length: failures }, () => ({ scope, executionOutcome: 'failure', ...extraFail }))
+  ];
+
+  it('allows the hand-off when the proposal has no scope (cannot judge)', () => {
+    expect(computeHandoffRouting({ proposal: {}, outcomes: [] })).toEqual({ handoff: true, reason: null });
+    expect(computeHandoffRouting({ proposal: { scope: '  ' }, outcomes: [] })).toEqual({ handoff: true, reason: null });
+    expect(computeHandoffRouting()).toEqual({ handoff: true, reason: null });
+  });
+
+  it('allows the hand-off for an unknown domain (no execution history)', () => {
+    expect(computeHandoffRouting({ proposal: { scope: 'loop-meta' }, outcomes: [] }))
+      .toEqual({ handoff: true, reason: null });
+  });
+
+  it('allows the hand-off below the sample floor even at 0%', () => {
+    // One failed execution is below PROPOSAL_EXECUTION_MIN_SAMPLE (2) — not evidence.
+    expect(computeHandoffRouting({ proposal: { scope: 'loop-meta' }, outcomes: execRecords('loop-meta', 0, 1) }))
+      .toEqual({ handoff: true, reason: null });
+  });
+
+  it('allows the hand-off when the rate is at/above the avoid threshold', () => {
+    // 2/3 ≈ 67% is at/above the 50% avoid line → not chronically failing.
+    expect(computeHandoffRouting({ proposal: { scope: 'loop-meta' }, outcomes: execRecords('loop-meta', 2, 1) }))
+      .toEqual({ handoff: true, reason: null });
+  });
+
+  it('suppresses the hand-off for a chronically-failing domain and names domain+rate+cause', () => {
+    const routing = computeHandoffRouting({
+      proposal: { scope: 'loop-meta' },
+      outcomes: [
+        { scope: 'loop-meta', executionOutcome: 'success' },              // 1 success
+        { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' },
+        { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' }  // 2 failures → 33%
+      ]
+    });
+    expect(routing.handoff).toBe(false);
+    expect(routing.domain).toBe('loop-meta');
+    expect(routing.rate).toBe(33);
+    expect(routing.n).toBe(3);
+    expect(routing.reason).toContain('loop-meta');
+    expect(routing.reason).toContain('33%');
+    expect(routing.reason).toContain('over 3 executed');
+    expect(routing.reason).toContain('filing for human review instead of auto-hand-off');
+    // Dominant cause is glossed and appended in parentheses.
+    expect(routing.reason).toContain('failing mostly on');
+    expect(routing.reason).toContain('the task was under-defined or already done (no correct change to make) (2)');
+    // Agrees with the reasoner-facing avoid list on WHICH domains are chronically failing.
+    expect(computeProposalExecutionAwareness({ outcomes: [
+      { scope: 'loop-meta', executionOutcome: 'success' },
+      { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' },
+      { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' }
+    ] })).toContain('loop-meta');
+  });
+
+  it('suppresses with NO trailing cause clause when failures are purely undiagnosed', () => {
+    const routing = computeHandoffRouting({
+      proposal: { scope: 'app-improvement' },
+      outcomes: execRecords('app-improvement', 0, 3) // 0%, all unclassified
+    });
+    expect(routing.handoff).toBe(false);
+    expect(routing.domain).toBe('app-improvement');
+    expect(routing.rate).toBe(0);
+    expect(routing.n).toBe(3);
+    expect(routing.cause).toBe('');
+    expect(routing.reason).toContain('app-improvement');
+    expect(routing.reason).not.toContain('failing mostly on');
+    expect(routing.reason).not.toContain('(');
   });
 });
 

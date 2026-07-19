@@ -1180,6 +1180,23 @@ function formatDominantFailureCause(failureSummary, limit = 2) {
 }
 
 /**
+ * Is this a proposal DOMAIN whose OWN hand-offs chronically fail — enough executed
+ * hand-offs to be evidence (PROPOSAL_EXECUTION_MIN_SAMPLE) AND a success rate below
+ * the coin-flip avoid line (SCOPE_AVOID_SUCCESS_THRESHOLD)? The single load-bearing
+ * definition of "on the avoid list", shared so the reasoner-facing prompt
+ * (computeProposalExecutionAwareness) and the deterministic hand-off gate
+ * (computeHandoffRouting) can NEVER disagree about which domains qualify — the
+ * design requires the prompt's avoid list and the gate to name the same set. Takes
+ * a per-domain bucket from computeExecutionByDomain (or undefined when the domain
+ * has no execution history → false).
+ */
+function isAvoidDomain(bucket) {
+  return !!bucket
+    && bucket.completed >= PROPOSAL_EXECUTION_MIN_SAMPLE
+    && bucket.successRate < SCOPE_AVOID_SUCCESS_THRESHOLD;
+}
+
+/**
  * Render the per-proposal-DOMAIN execution avoid/prefer split for the reasoning
  * prompt (#2765) — the real per-proposal signal the #2760 install-wide scope block
  * could only approximate. Returns '' when no domain clears the sample floor, so
@@ -1201,7 +1218,7 @@ export function computeProposalExecutionAwareness({ outcomes = [] } = {}) {
     // we do not also emit a one-sample per-domain cause here (it would read as a trend
     // off n=1).
     if (bucket.completed < PROPOSAL_EXECUTION_MIN_SAMPLE) continue; // not enough executions to judge this domain
-    if (bucket.successRate < SCOPE_AVOID_SUCCESS_THRESHOLD) avoid.push({ scope, rate: bucket.successRate, n: bucket.completed, cause: formatDominantFailureCause(bucket.failureSummary) });
+    if (isAvoidDomain(bucket)) avoid.push({ scope, rate: bucket.successRate, n: bucket.completed, cause: formatDominantFailureCause(bucket.failureSummary) });
     else if (bucket.successRate >= SCOPE_PREFER_SUCCESS_THRESHOLD) prefer.push({ scope, rate: bucket.successRate, n: bucket.completed });
   }
   return renderAvoidPreferSections({
@@ -1290,6 +1307,63 @@ export function computeCrossReferenceAnalysis({ outcomes = [] } = {}) {
   return `${CROSS_REFERENCE_HEADER}\n${lines.join('\n')}`;
 }
 
+/**
+ * Deterministic hand-off routing gate (#2764 §4). Given a proposal and the app's
+ * historical outcome records, decides whether a trivial+safe proposal may be
+ * auto-handed-off to a coding agent NOW, or must instead be filed for a human —
+ * because LI's OWN prior hand-offs in that domain chronically fail. This is the
+ * SYSTEM-side enforcement of the same signal the reasoner is merely WARNED about
+ * in the liProposalExecution / liCrossReference prompt blocks: even when the
+ * reasoner marks a proposal trivial+safe, the gate suppresses the auto-hand-off
+ * for a domain whose track record says the hand-off will just fail again.
+ *
+ * Pure + side-effect-free, like the sibling compute* report functions — derives
+ * only from the `li-outcomes` records already loaded (no new AI/tracker/store
+ * call). The just-filed proposal cannot skew this: computeExecutionByDomain only
+ * counts records carrying a resolved `executionOutcome`, which a freshly-filed
+ * proposal has not got yet.
+ *
+ * Shares the isAvoidDomain classifier with computeProposalExecutionAwareness so the
+ * gate and the reasoner-facing prompt can NEVER disagree about which domains are
+ * "chronically failing": a domain qualifies only when it has at least
+ * PROPOSAL_EXECUTION_MIN_SAMPLE executed hand-offs AND its success rate is below
+ * SCOPE_AVOID_SUCCESS_THRESHOLD — the SAME floor + threshold that puts a domain on
+ * the reasoner's avoid list.
+ *
+ * Returns:
+ *   - `{ handoff: true, reason: null }` — allow the auto-hand-off, when the
+ *     proposal has no scope (can't judge), the domain is below the sample floor,
+ *     the domain has no execution history, or its rate is at/above the threshold.
+ *   - `{ handoff: false, domain, rate, n, cause, reason }` — SUPPRESS: file for a
+ *     human instead. `reason` names the domain, rate, sample size, and (when a
+ *     dominant failure cause is diagnosed) the cause — reusing formatDominantFailureCause,
+ *     which returns '' for a purely unknown/unclassified domain so the cause clause
+ *     is simply omitted there.
+ *
+ * @param {object} args
+ * @param {object} args.proposal - the reasoner's proposal ({ scope, ... }).
+ * @param {Array}  [args.outcomes] - the app's li-outcomes records.
+ * @returns {{ handoff: boolean, reason: string|null, domain?: string, rate?: number, n?: number, cause?: string }}
+ */
+export function computeHandoffRouting({ proposal, outcomes = [] } = {}) {
+  // No scope → we can't map the proposal to a domain's track record, so we can't
+  // justify suppressing the hand-off. Allow, as before §4 existed.
+  const domain = typeof proposal?.scope === 'string' && proposal.scope.trim() ? proposal.scope.trim() : null;
+  if (!domain) return { handoff: true, reason: null };
+
+  const byDomain = computeExecutionByDomain(outcomes);
+  const bucket = byDomain[domain];
+  // Below the floor, no bucket, or at/above the threshold → no signal to suppress on,
+  // so allow the hand-off exactly as today. isAvoidDomain is the SAME predicate
+  // computeProposalExecutionAwareness uses for its avoid list, so the gate and the
+  // reasoner-facing prompt agree on which domains are "chronically failing".
+  if (!isAvoidDomain(bucket)) return { handoff: true, reason: null };
+
+  const cause = formatDominantFailureCause(bucket.failureSummary);
+  const reason = `${domain} hand-offs succeed ${bucket.successRate}% over ${bucket.completed} executed — filing for human review instead of auto-hand-off${cause ? ` (${cause})` : ''}`;
+  return { handoff: false, domain, rate: bucket.successRate, n: bucket.completed, cause, reason };
+}
+
 // Source keys that buildPrompt renders as their OWN dedicated block (with tailored
 // guidance) instead of dumping into the generic "### <key>\n<value>" source list.
 // Keeping them in one named set — rather than accreting `&& k !== 'x'` clauses on the
@@ -1344,7 +1418,7 @@ export function buildPrompt({ app, config, sources = {}, openIssues = [], isPort
     : '';
 
   const handoffNote = config.handoff?.enabled
-    ? '\nHand-off: a proposal you mark BOTH "complexity":"trivial" AND "safe":true may be handed directly to a coding agent to implement now (not just filed). Only mark a proposal trivial+safe when it is small, self-contained, and carries no regression or data-loss risk — when in doubt, use a higher complexity or "safe":false so a human triages it first.\n'
+    ? '\nHand-off: a proposal you mark BOTH "complexity":"trivial" AND "safe":true may be handed directly to a coding agent to implement now (not just filed). Only mark a proposal trivial+safe when it is small, self-contained, and carries no regression or data-loss risk — when in doubt, use a higher complexity or "safe":false so a human triages it first. Note: even a trivial+safe proposal is filed for a human (not auto-handed-off) when it falls in a domain where LI\'s own past hand-offs chronically fail, so prefer to narrow such a proposal to a slice an agent can actually finish.\n'
     : '';
 
   // The committed backlog (#2698) + the instruction to check against it. Emitted
