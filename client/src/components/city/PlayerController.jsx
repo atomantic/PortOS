@@ -1,7 +1,8 @@
-import { useRef, useEffect, useCallback, useMemo } from 'react';
+import { useRef, useEffect, useCallback, useMemo, Suspense } from 'react';
 import { useThree, useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import PlayerAvatar from './PlayerAvatar';
+import ErrorBoundary from '../ErrorBoundary';
 import {
   THIRD_PERSON, EYE_HEIGHT, BUILDING_COLLISION_RADIUS,
   thirdPersonCamera, resolveBoom,
@@ -12,6 +13,8 @@ import { isWalkable, WORLD } from '../../utils/cityPlan';
 const WALK_SPEED = 10;
 const SPRINT_SPEED = 20;
 const VERTICAL_SPEED = 8;
+const JUMP_SPEED = 10;  // initial upward velocity of a Space jump (units/s)
+const GRAVITY = -26;    // downward acceleration applied through the jump arc (units/s²)
 const PROXIMITY_DISTANCE = 6;
 const MAX_CAMERA_HEIGHT = 160;
 const BUILDING_FLYOVER_HEIGHT = 12; // above this the player clears rooftops, so skip collision
@@ -55,6 +58,7 @@ export default function PlayerController({
     pitch: 0,
     facing: 0, // the character's body heading (damped toward movement direction)
     bank: 0, // lean into turns
+    vy: 0, // vertical velocity for the Space jump arc (E/Q free-fly zeroes it)
     state: 'idle',
   });
   // Stable array view of the positions Map for the per-frame boom collision test —
@@ -151,6 +155,39 @@ export default function PlayerController({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [active, onBuildingClick, onToggleCameraView]);
 
+  // In exploration mode, Space is the jump key — capture it before it bubbles to the
+  // global voice push-to-talk hotkey (VoiceWidget listens for the same key on `window`).
+  // A CAPTURE-phase listener runs ahead of that bubble listener, so stopImmediatePropagation
+  // suppresses the voice toggle (and the page's default space-scroll). Because that also
+  // stops useKeyboardControls' own keydown, we record Space into keysRef here ourselves so
+  // the jump still reads it in the frame loop. Skipped while typing so a focused field keeps
+  // its spaces (matches VoiceWidget's own guard).
+  useEffect(() => {
+    if (!active) return undefined;
+    const isTypingTarget = (el) => {
+      if (!el) return false;
+      const tag = el.tagName;
+      return tag === 'INPUT' || tag === 'TEXTAREA' || el.isContentEditable;
+    };
+    const onKeyDownCapture = (e) => {
+      if (e.code !== 'Space' || isTypingTarget(document.activeElement)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      keysRef.current.add(' ');
+    };
+    const onKeyUpCapture = (e) => {
+      if (e.code !== 'Space') return;
+      keysRef.current.delete(' ');
+    };
+    window.addEventListener('keydown', onKeyDownCapture, true);
+    window.addEventListener('keyup', onKeyUpCapture, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDownCapture, true);
+      window.removeEventListener('keyup', onKeyUpCapture, true);
+      keysRef.current.delete(' ');
+    };
+  }, [active, keysRef]);
+
   useFrame((_, delta) => {
     if (!active) return;
     const rig = rigRef.current;
@@ -173,13 +210,32 @@ export default function PlayerController({
       .addScaledVector(right, strafeInput);
 
     const hasHorizontal = moveDir.lengthSq() > 0;
-    const verticalDir = (keys.has('e') ? 1 : 0) - (keys.has('q') ? 1 : 0);
-    const moving = hasHorizontal || verticalDir !== 0;
+
+    // Vertical: E/Q is direct free-fly and takes precedence (zeroing any jump arc);
+    // otherwise Space launches a gravity-based jump from the ground. The arc integrates
+    // rig.vy so the runner hops and lands rather than floating; landing (clamp to
+    // EYE_HEIGHT below) resets rig.vy. Holding Space re-jumps on touchdown.
+    const flyDir = (keys.has('e') ? 1 : 0) - (keys.has('q') ? 1 : 0);
+    const grounded = rig.position.y <= EYE_HEIGHT + 1e-3;
+    let dy = 0;
+    if (flyDir !== 0) {
+      rig.vy = 0;
+      dy = flyDir * verticalSpeed;
+    } else {
+      if (keys.has(' ') && grounded && rig.vy <= 0) rig.vy = JUMP_SPEED; // launch
+      if (!grounded || rig.vy > 0) {
+        rig.vy += GRAVITY * delta; // gravity through the arc
+        dy = rig.vy * delta;
+      } else {
+        rig.vy = 0;
+      }
+    }
+    const moving = hasHorizontal || dy !== 0;
 
     if (moving) {
       if (hasHorizontal) moveDir.normalize().multiplyScalar(speed);
       const nextPos = _nextPos.copy(rig.position).add(moveDir);
-      nextPos.y += verticalDir * verticalSpeed;
+      nextPos.y += dy;
 
       // Collision detection with buildings — skipped above rooftop height so the
       // player can fly over the city.
@@ -217,6 +273,8 @@ export default function PlayerController({
         nextPos.x = Math.max(-WORLD.bound, Math.min(WORLD.bound, nextPos.x));
         nextPos.y = Math.max(EYE_HEIGHT, Math.min(MAX_CAMERA_HEIGHT, nextPos.y));
         nextPos.z = Math.max(-WORLD.bound, Math.min(WORLD.bound, nextPos.z));
+        // Landed (or hit the ceiling): kill the jump's vertical velocity.
+        if (nextPos.y <= EYE_HEIGHT + 1e-3 || nextPos.y >= MAX_CAMERA_HEIGHT) rig.vy = 0;
         rig.position.copy(nextPos);
       }
     }
@@ -294,6 +352,17 @@ export default function PlayerController({
   if (!active) return null;
 
   // The visible character exists only in third person — first person stays the
-  // classic invisible camera (and can't self-clip).
-  return cameraView === 'third' ? <PlayerAvatar rigRef={rigRef} /> : null;
+  // classic invisible camera (and can't self-clip). PlayerAvatar loads a rigged GLB
+  // (useGLTF suspends), so it's wrapped: Suspense keeps the streaming model from
+  // blanking the whole city canvas, and the error boundary degrades to "no visible
+  // runner" if the GLB is missing/corrupt (e.g. a checkout without `npm run setup:data`)
+  // rather than crashing the scene.
+  if (cameraView !== 'third') return null;
+  return (
+    <ErrorBoundary fallback={null}>
+      <Suspense fallback={null}>
+        <PlayerAvatar rigRef={rigRef} />
+      </Suspense>
+    </ErrorBoundary>
+  );
 }
