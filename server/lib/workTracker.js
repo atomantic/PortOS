@@ -82,14 +82,15 @@ export function isGithubHost(host) {
  * Canonicalizes GitHub's SSH-over-443 alias: a `git@ssh.github.com:443/owner/repo`
  * remote parses to host `ssh.github.com`, but `gh --repo` reads the `HOST/` prefix
  * as the API host, so `ssh.github.com/owner/repo` would query the SSH endpoint and
- * silently return nothing. Strip a leading `ssh.` so the selector names the real
- * API host (`ssh.github.com`→`github.com`, `ssh.github.example.com`→`github.example.com`).
+ * silently return nothing. Only `github.com` has a documented `ssh.` alias, and an
+ * enterprise host may legitimately begin with `ssh.` (`ssh.github.acme.example`),
+ * so canonicalize the exact known alias rather than stripping `ssh.` from any host.
  * @param {{host?:string|null, fullName?:string|null}} origin
  * @returns {string|null}
  */
 export function githubRepoSpec(origin) {
   if (!origin?.fullName || !isGithubHost(origin.host)) return null;
-  const apiHost = origin.host.replace(/^ssh\./i, '');
+  const apiHost = /^ssh\.github\.com$/i.test(origin.host) ? 'github.com' : origin.host;
   return `${apiHost}/${origin.fullName}`;
 }
 
