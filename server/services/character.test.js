@@ -117,6 +117,11 @@ describe('birthDateStatusFrom (#2757)', () => {
     expect(characterService.birthDateStatusFrom('0', true, now)).toBe('invalid');
     expect(characterService.birthDateStatusFrom('1990/05/15', true, now)).toBe('invalid');
   });
+  it('reports invalid when a valid date prefix has unparseable trailing garbage', () => {
+    // The prefix regex alone passes this, but `new Date()` rejects the full
+    // string — status must not say 'ok' while the level derives null.
+    expect(characterService.birthDateStatusFrom('1990-05-10garbage', true, now)).toBe('invalid');
+  });
   it('accepts a full ISO timestamp (legacy/migrated storage), not just YYYY-MM-DD', () => {
     expect(characterService.birthDateStatusFrom('1984-01-01T00:00:00.000Z', true, now)).toBe('ok');
   });

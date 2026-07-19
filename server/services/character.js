@@ -61,7 +61,11 @@ export function usableBirthDate(birthDate) {
   if (!m) return false;
   const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3]);
   const dt = new Date(Date.UTC(y, mo - 1, d));
-  return dt.getUTCFullYear() === y && dt.getUTCMonth() + 1 === mo && dt.getUTCDate() === d;
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() + 1 !== mo || dt.getUTCDate() !== d) return false;
+  // The prefix regex alone would pass "1990-05-10garbage", which the consumers'
+  // full-string `new Date(birthDate)` rejects — status would say 'ok' while the
+  // level derives null, the exact disagreement this predicate exists to prevent.
+  return !Number.isNaN(new Date(birthDate).getTime());
 }
 
 // Pure: fractional years lived since birthDate (whole years + progress toward the next

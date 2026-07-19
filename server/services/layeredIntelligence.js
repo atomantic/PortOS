@@ -1144,7 +1144,11 @@ export function computeExecutionByDomain(outcomes = []) {
     if (!recordsByScope.has(scope)) recordsByScope.set(scope, []);
     recordsByScope.get(scope).push(r);
   }
-  const byDomain = {};
+  // Null prototype: `scope` is an LLM-authored free string, and a "__proto__"
+  // key on a plain object would silently rewrite the prototype instead of
+  // adding a bucket — vanishing from Object.entries while lookups read the
+  // prototype object.
+  const byDomain = Object.create(null);
   for (const [scope, records] of recordsByScope) {
     const completed = records.length;
     const succeeded = records.filter(r => r.executionOutcome === 'success').length;

@@ -457,6 +457,16 @@ describe('computeExecutionByDomain (#2765)', () => {
     });
   });
 
+  it('buckets a "__proto__" scope as data instead of rewriting the prototype', () => {
+    const byDomain = computeExecutionByDomain([
+      { scope: '__proto__', executionOutcome: 'success' }
+    ]);
+    // A plain {} would swallow this key into the prototype: absent from
+    // Object.entries yet truthy on lookup — inconsistent gate-vs-prompt views.
+    expect(Object.keys(byDomain)).toEqual(['__proto__']);
+    expect(byDomain['__proto__'].completed).toBe(1);
+  });
+
   it('carries the dominant per-domain failure causes in failureSummary (#2764 §3)', () => {
     const byDomain = computeExecutionByDomain([
       { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' },
