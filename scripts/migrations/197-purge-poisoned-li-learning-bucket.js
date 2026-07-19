@@ -64,7 +64,8 @@
  *   per-migration marker to drift.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { atomicWrite } from '../../server/lib/fileUtils.js';
 import { join } from 'path';
 
 import { removeTaskTypeFromLearningData } from '../../server/services/taskLearning/metrics.js';
@@ -120,7 +121,7 @@ export default {
     const previous = removeTaskTypeFromLearningData(data, LI_BUCKET);
     const purged = previous?.completed || 0;
 
-    await writeFile(path, JSON.stringify(data, null, 2) + '\n');
+    await atomicWrite(path, JSON.stringify(data, null, 2) + '\n');
     console.log(`🧹 LI learning: purged ${purged} mis-recorded layered-intelligence run(s) (#2700)`);
     return { purged };
   },

@@ -31,7 +31,8 @@
  *   common case) — the file is only rewritten when something actually matched.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { atomicWrite } from '../../server/lib/fileUtils.js';
 import { join } from 'path';
 
 import { isExtensionError } from '../../server/lib/extensionErrors.js';
@@ -101,7 +102,7 @@ export default {
       return { dismissed: 0 };
     }
 
-    await writeFile(path, JSON.stringify(next, null, 2) + '\n');
+    await atomicWrite(path, JSON.stringify(next, null, 2) + '\n');
     console.log(`🧹 Review alerts: dismissed ${dismissed} browser-extension alert(s)`);
     return { dismissed };
   },

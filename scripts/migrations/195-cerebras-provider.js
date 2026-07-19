@@ -29,7 +29,8 @@
  * own migrations rather than mutating this one.
  */
 
-import { readFile, writeFile } from 'fs/promises';
+import { readFile } from 'fs/promises';
+import { atomicWrite } from '../../server/lib/fileUtils.js';
 import { join } from 'path';
 
 const PROVIDERS_REL_PATH = 'data/providers.json';
@@ -86,6 +87,6 @@ export default {
     // objects included) so a later mutation of the install can't corrupt it.
     config.providers[CEREBRAS_API.id] = structuredClone(CEREBRAS_API);
     console.log(`📝 ${PROVIDERS_REL_PATH}: added ${CEREBRAS_API.id} provider`);
-    await writeFile(providersPath, `${JSON.stringify(config, null, 2)}\n`);
+    await atomicWrite(providersPath, `${JSON.stringify(config, null, 2)}\n`);
   },
 };
