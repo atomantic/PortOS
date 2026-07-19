@@ -6,6 +6,7 @@ import {
   workTrackerLabel,
   hostToWorkTracker,
   isGithubHost,
+  githubRepoSpec,
   forgeCliForTracker,
   trackerToClaimTaskType,
   resolveWorkTracker,
@@ -53,6 +54,22 @@ describe('isGithubHost', () => {
     expect(isGithubHost('')).toBe(false);
     expect(isGithubHost(null)).toBe(false);
     expect(isGithubHost(undefined)).toBe(false);
+  });
+});
+
+describe('githubRepoSpec', () => {
+  it('builds a host-qualified selector for github.com and enterprise hosts', () => {
+    expect(githubRepoSpec({ host: 'github.com', fullName: 'atomantic/PortOS' }))
+      .toBe('github.com/atomantic/PortOS');
+    expect(githubRepoSpec({ host: 'github.acme.example', fullName: 'acme/app' }))
+      .toBe('github.acme.example/acme/app');
+  });
+  it('returns null for a non-GitHub host, a missing owner/repo, or no origin', () => {
+    expect(githubRepoSpec({ host: 'gitlab.com', fullName: 'group/proj' })).toBeNull();
+    expect(githubRepoSpec({ host: 'bitbucket.org', fullName: 'team/proj' })).toBeNull();
+    expect(githubRepoSpec({ host: 'github.com', fullName: null })).toBeNull();
+    expect(githubRepoSpec({ host: null, fullName: null })).toBeNull();
+    expect(githubRepoSpec(null)).toBeNull();
   });
 });
 

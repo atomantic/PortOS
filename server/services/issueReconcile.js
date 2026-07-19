@@ -55,7 +55,7 @@ import { execGh } from './github.js';
 import { execGlab } from './gitlab.js';
 import { fetchMyCurrentSprintTickets } from './jira.js';
 import { getOriginInfo, readOriginRemoteUrl } from '../lib/gitRemote.js';
-import { hostToWorkTracker, hostFromOriginUrl, isGithubHost } from '../lib/workTracker.js';
+import { hostToWorkTracker, hostFromOriginUrl, githubRepoSpec } from '../lib/workTracker.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 
 // Bound the forge queries (single-user repos never realistically truncate at 200).
@@ -378,10 +378,10 @@ function gitlabProjectPath(originUrl) {
  * state. github.* → GitHub, gitlab.* → GitLab; any other remote (or no origin)
  * returns null so the caller skips without parking.
  *
- * GitHub is classified off the origin HOST via `isGithubHost` (github.com AND
- * enterprise github.*), mirroring prWatcher — `getOriginInfo().isGithub` is
- * github.com-only and silently skipped enterprise repos. It still needs a parsed
- * `owner/repo` for the host-qualified `--repo` selector. GitLab is classified
+ * GitHub is resolved via `githubRepoSpec` (github.com AND enterprise github.*),
+ * mirroring prWatcher — `getOriginInfo().isGithub` is github.com-only and
+ * silently skipped enterprise repos. That helper also needs a parsed `owner/repo`
+ * to build the host-qualified `--repo` selector. GitLab is classified
  * straight off the origin HOST via the
  * subgroup-safe `hostFromOriginUrl`, NOT `getOriginInfo().fullName`: the latter's
  * strict `owner/repo` parse returns null for a nested `group/subgroup/project`
@@ -392,11 +392,11 @@ function gitlabProjectPath(originUrl) {
  */
 async function getForgeState(repoPath) {
   const origin = await getOriginInfo(repoPath).catch(() => null);
-  // GitHub (incl. enterprise): needs a parsed owner/repo for the host-qualified
-  // `HOST/OWNER/REPO` --repo selector (deterministic on fork+upstream checkouts).
-  if (isGithubHost(origin?.host) && origin.fullName) {
-    return getGithubState(`${origin.host}/${origin.fullName}`, origin.fullName);
-  }
+  // GitHub (incl. enterprise): githubRepoSpec is the host-qualified
+  // `HOST/OWNER/REPO` --repo selector (deterministic on fork+upstream checkouts),
+  // or null when the origin isn't a resolvable GitHub repo.
+  const githubSpec = githubRepoSpec(origin);
+  if (githubSpec) return getGithubState(githubSpec, origin.fullName);
 
   // GitLab: classify off the host (subgroup-safe). `glab` is cwd-based, so a
   // display path is best-effort — prefer getOriginInfo's fullName, else derive the

@@ -27,7 +27,7 @@
 import { execGh } from './github.js';
 import { getAppById, updateApp } from './apps.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
-import { isGithubHost } from '../lib/workTracker.js';
+import { githubRepoSpec } from '../lib/workTracker.js';
 import { PR_AUTHOR_FILTERS } from '../lib/validation.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 
@@ -196,18 +196,14 @@ export async function checkPullRequests(app, { authorFilter = 'any' } = {}) {
   // Accept any GitHub-family host — github.com AND self-hosted GitHub Enterprise
   // (github.*) — not just github.com. `origin.isGithub` is github.com-only (it
   // drives PortOS's own fork/update flow), so gating on it silently excluded
-  // enterprise repos. isGithubHost classifies enterprise GitHub the same way the
-  // claim-issue router does; gitlab.* and non-forge hosts fall through.
-  if (!origin?.hasOrigin || !origin.fullName || !isGithubHost(origin.host)) {
+  // enterprise repos. githubRepoSpec pairs the GitHub-host gate with the
+  // host-qualified `HOST/OWNER/REPO` selector (null when not a resolvable GitHub
+  // repo); gitlab.* and non-forge hosts fall through.
+  const repoSpec = githubRepoSpec(origin);
+  if (!repoSpec) {
     return { ok: false, reason: 'not-a-github-repo' };
   }
   const repoFullName = origin.fullName;
-  // Host-qualified `HOST/OWNER/REPO` selector for gh's `--repo`. The host
-  // qualifier fixes the original bug (a bare `OWNER/REPO` defaults to
-  // github.com, so enterprise repos were silently queried against github.com)
-  // AND stays deterministic on a fork+upstream checkout, where relying on gh's
-  // cwd remote-detection would ambiguously resolve to the parent repo.
-  const repoSpec = `${origin.host}/${repoFullName}`;
 
   const defaultBranch = await getDefaultBranch(repoSpec);
   if (!defaultBranch) {
