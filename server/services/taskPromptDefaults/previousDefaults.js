@@ -6,6 +6,11 @@
  * "Distribution model" before editing.
  */
 
+// PORTOS_API_URL is interpolated into the claim-issue-jira previous default below,
+// mirroring how prompts.js renders the current default (so a stored jira prompt on
+// this install resolves to the same string for auto-upgrade recognition).
+import { PORTOS_API_URL } from '../../lib/ports.js';
+
 // Known previous default prompts for legacy migration.
 // When a schedule has no promptVersion, we check if the stored prompt matches
 // any known previous default. If so, it's safe to auto-upgrade (not user-customized).
@@ -1266,6 +1271,196 @@ If \`git branch -d\` refuses (the PR squash-merged on GitHub but local doesn't k
 **Do NOT \`git pull\` from inside this phase** (no \`--rebase\`, no \`--autostash\`, no plain \`pull\`). The agent's work is already integrated on GitHub via \`gh pr merge\`; pulling locally provides no functional benefit and risks rebasing the user's in-progress branch / shuffling their uncommitted changes through stash if the source repo HEAD happens to be on a tracking feature branch when the agent runs. Leave the user's working tree alone.
 
 _(Phase 3b is defined above, right after Phase 3 — see the "alternative exit from Phase 3" section.)_`,
+    // v9 default (Phase 3 jumped an *ambiguous* item to the Phase 3b clarification PR;
+    // superseded by v10, which decides and ships instead). Kept so a stored v9 prompt auto-upgrades.
+    `[Plan Task: {appName}] Claim and ship next PLAN.md item
+
+Pick the next available unclaimed PLAN.md item by its \`[<slug>]\` ID, **create your own worktree at \`claim/<slug>\`**, implement, ship a PR, and clean up. Mirrors the \`/claim\` slash command — same in-flight scan, same branch naming, same no-local-merge cleanup. **YOU pick the item in Phase 1 — the scheduler does not reserve one for you.** Picking at execution time and immediately creating the \`claim/<slug>\` branch **narrows** the window for two concurrent runs to collide on the same slug — it does NOT eliminate it: two runs can still complete Phase 1 before either creates a branch, then race at \`git worktree add\`. That race is handled in Phase 2 — the loser re-picks the next item. (A dispatch-time pre-pick is strictly worse: it commits both runs to the same slug long before any branch exists.) Do NOT modify files in the source repo directly; ALL editing happens inside the worktree you create.
+
+**How claiming works.** Every PLAN.md checkbox carries a \`[<slug>]\` ID. A slug is "in flight" when it appears as the slug-position segment in either a \`claim/<slug>\` ref (the human/TUI pattern) or a \`cos/<task>/<slug>/<agent>\` ref (the CoS sub-agent pattern) — across local branches, remote branches, or open PR head refs. The \`claim/<slug>\` branch you create IS the claim, visible to every other agent and to the human running \`/claim\` in a TUI.
+
+## Phase 1 — Pick the target slug
+
+Run steps 1–5 in order.
+
+1. Read PLAN.md from the repo root.
+2. **If any \`- [ ]\` line lacks an \`[<slug>]\` ID, stop and exit cleanly** — \`do-replan\` populates IDs in one pass; without IDs, this task has nothing to claim.
+3. Build the in-flight set. Collect every ref from these sources:
+   \`\`\`bash
+   git fetch --prune 2>/dev/null
+   git branch -a --no-color --format='%(refname:short)'
+   gh pr list --state open --json headRefName -q '.[].headRefName' 2>/dev/null
+   \`\`\`
+   For each ref, extract the slug **only when the ref matches one of these documented patterns** (after stripping any leading remote prefix like \`origin/\` or \`upstream/\`):
+   - \`claim/<slug>\` — the slug is everything after \`claim/\`.
+   - \`cos/<task>/<slug>/<agent>\` — the slug is the third \`/\`-separated segment.
+
+   A slug is "in flight" iff it appears in a ref matching one of those patterns AND is present in PLAN.md. **Do NOT** flag a slug just because the bare word appears as some other segment of a ref — that would falsely flag any slug literally named \`main\`, \`fix\`, \`feature\`, \`release\`, \`dev\`, etc. against virtually every branch in the repo.
+4. **Pick the target slug:** walk PLAN.md top-to-bottom and pick the FIRST \`- [ ]\` line where ALL of the following are true:
+   - The slug is NOT in the in-flight set.
+   - The immediately-preceding line does NOT start with \`> ⚠️ DRIFT:\`.
+   - The line does NOT carry the \`<!-- NEEDS_INPUT -->\` annotation.
+5. **If no eligible item exists**, exit cleanly — that's a healthy plan state, not a failure. Brainstorming is handled by the \`feature-ideas\` task; do NOT add new items here.
+
+Capture the exact text of the selected item (without the leading \`- [ ]\`) verbatim, **including its \`[<slug>]\` ID** — the changelog entry will reuse both.
+
+## Phase 2 — Claim (worktree)
+
+Create the worktree on a branch named \`claim/<slug>\`. This branch name is the claim — once created and pushed, no other agent or \`/claim\` session will pick the same slug. Do all editing inside the worktree, NEVER in the source repo's working tree (which may have the user's in-flight work).
+
+\`\`\`bash
+SLUG=<picked-slug>
+WORKTREE="data/cos/worktrees/claim-\${SLUG}"
+mkdir -p data/cos/worktrees
+git fetch origin main
+git worktree add -b "claim/\${SLUG}" "\${WORKTREE}" origin/main
+cd "\${WORKTREE}"
+\`\`\`
+
+**If the worktree-creation command fails because the claim/<slug> branch already exists** (a concurrent run won the branch-creation race, or a remote claim/<slug> is now visible), do NOT force or reuse it — that branch IS another run's claim. Treat the slug as in-flight, return to Phase 1, and pick the next eligible item; if nothing else is eligible, exit cleanly.
+
+Stash the worktree path; you'll need it for Phase 7 cleanup.
+
+## Phase 3 — Verify still valid
+
+Before writing any code, sanity-check that executing the item won't regress newer work. **If ANY of these are true, jump to Phase 3b** (clarification path, not implementation):
+
+- The picked line is preceded by a \`> ⚠️ DRIFT:\` blockquote (you should already have filtered it; double-check).
+- The item description references a function, file, or component that no longer exists. Run \`grep -rn\` for the named identifiers — if they're gone, the item is stale.
+- The item depends on a predecessor that hasn't shipped (e.g. "Phase B work" when Phase B isn't done).
+- The work would require touching files outside the inferred scope (>5 unrelated files), suggesting the item is bigger than originally estimated.
+
+Otherwise: can this be implemented without user clarification (requirements clear, no ambiguous design choices)? If NOT, jump to Phase 3b. If yes, proceed to Phase 4.
+
+## Phase 3b — Request Clarification (alternative exit from Phase 3)
+
+Done from INSIDE the worktree (you've already created \`claim/<slug>\` in Phase 2):
+
+1. Create \`.plan-questions.md\` in the worktree:
+   \`\`\`
+   # Plan Question: <short title summarizing the PLAN.md item>
+
+   ## PLAN.md Item
+   <the exact text of the unchecked item, including its [<slug>]>
+
+   ## Questions
+   - <question 1>
+   - <question 2>
+   \`\`\`
+2. **Move the unchecked item to the bottom of PLAN.md and annotate it with \` <!-- NEEDS_INPUT -->\`** — remove from its current position and append at the end with the annotation, **preserving the \`[<slug>]\` ID**. This keeps the queue moving so the next \`plan-task\` run picks a different actionable item.
+3. Commit, push the branch (\`git push -u origin claim/<slug>\`), and open a PR with \`gh pr create\` so the user can see the questions. **Do NOT merge** — the user resolves \`.plan-questions.md\` first.
+4. Then run the **Phase 3b cleanup** (which differs from Phase 7 — the PR is intentionally unmerged here, so the local branch must NOT be deleted):
+   \`\`\`bash
+   cd {repoPath}
+   git worktree remove "\${WORKTREE}"
+   \`\`\`
+   Leave the local \`claim/<slug>\` branch alone — \`git branch -d\` will refuse (PR not merged) and \`-D\` would discard work that's still in flight. The branch lives on locally and remotely until the user resolves the questions and the PR merges; \`git branch -d "claim/<slug>"\` becomes safe only after that point.
+
+After Phase 3b runs, **exit** — do NOT proceed to Phase 4. The implementing path resumes only when the user reopens the slug post-clarification.
+
+## Phase 4 — Implement
+
+Write the code, tests, and any docs the item requires. Follow the repo conventions in CLAUDE.md (no try/catch in route handlers, functional programming, Zod validation, Tailwind tokens, reactive UI updates).
+
+Run the relevant test suite as you go.
+
+**Commit messages reference the slug** so the work is grep-able across the changelog, branches, and PR titles:
+
+\`\`\`
+<type>([<slug>]): <one-line description>
+
+<optional body>
+\`\`\`
+
+Use \`feat:\` / \`fix:\` / \`refactor:\` / \`chore:\` / etc. (The bracketed-scope form \`([<slug>])\` is intentional and matches the project's existing convention — grep \`git log --oneline\` for prior examples. The brackets carry the PLAN.md \`[<slug>]\` ID syntax through to commits, branches, and PRs so a single slug grep finds the whole trail.)
+
+## Phase 5 — Update PLAN.md and the changelog
+
+**Remove the item from PLAN.md outright.** The audit trail for shipped work lives in \`git log\` and the project's changelog (e.g. \`.changelog/NEXT.md\`) — do NOT archive to a \`DONE.md\`, that file has been retired. Do NOT leave a checked \`- [x]\` behind in PLAN.md.
+
+1. Remove the picked \`- [ ]\` line from PLAN.md entirely. If removing it leaves a heading empty, leave the heading alone — section curation is \`do-replan\`'s job.
+2. Detect the repo's changelog convention (in this order — pick the first match):
+   - \`.changelog/NEXT.md\` (PortOS-style staged-release file)
+   - \`CHANGELOG.md\` at repo root with an \`## Unreleased\` or \`## [Unreleased]\` heading
+   - any other \`changelog\`-shaped file the repo already maintains (look at recent \`git log\` for examples of where prior entries landed)
+
+   If exactly one is found, append an entry there. Mirror the prose style of recent entries; lead with the slug in brackets so \`git log --grep='<slug>'\` and changelog greps line up:
+
+   \`\`\`markdown
+   - **[<slug>] <Title from the PLAN.md line>** — <1–3 sentences on what shipped, key files touched, any caveats>
+   \`\`\`
+
+   Remember the exact path you wrote to as \`CHANGELOG_FILE\` — you'll stage it in step 3. If no changelog convention exists, skip the changelog append and leave \`CHANGELOG_FILE\` unset; the commit message + \`git log\` becomes the audit trail.
+
+3. Stage PLAN.md plus the changelog file you actually edited (if any) and commit. **Do NOT use a glob or a swallow-on-failure fallback** — staging the exact file you edited is what keeps the audit trail honest:
+
+   \`\`\`bash
+   git add PLAN.md
+   [ -n "$CHANGELOG_FILE" ] && git add "$CHANGELOG_FILE"
+   git commit -m "docs([<slug>]): remove from PLAN.md and log to changelog"
+   \`\`\`
+
+## Phase 6 — Review and ship
+
+The configured reviewers for this task, in order, are \`{reviewers}\`. \`copilot\` waits for GitHub's auto-review; \`claude\` / \`codex\` / \`antigravity\` / \`grok\` invoke a local-CLI critique. When more than one is configured, run each in the listed order before merging — this mirrors slashdo's \`/do:pr --review-with <list>\` (the lone default \`copilot\` needs no flag; multi-reviewer runs may also carry \`--review-stop-on-*\` / \`--reviewer-applies\`).
+
+1. **Self-review your diff for reuse, quality, and efficiency** (DRY, dead code, naming, simpler equivalents, missed edge cases) and fix findings in the same diff — BEFORE opening the PR, not retroactively. Claude Code runs this as the three-agent \`/simplify\` pass; on other CLIs, do the equivalent review by hand.
+2. Push the branch: \`git push -u origin claim/<slug>\`
+3. Open the PR with \`gh pr create\` — title MUST encode the slug: \`<type>([<slug>]): <description>\`. Body should summarize what shipped + test plan.
+4. **Wait for each configured reviewer's findings BEFORE merging.** \`gh pr merge --auto\` only waits for required status checks; it does NOT wait for code-review feedback. Run the reviewers in the listed order (\`{reviewers}\`); for each one, apply the matching handling below before advancing to the next:
+
+   - **\`copilot\`** — This repo has GitHub Copilot Code Review configured to auto-run on every new PR. Poll until Copilot's review lands or a 10-minute timeout fires:
+     \`\`\`bash
+     PR=<num>
+     # Match both forms: GraphQL/\`gh pr view\` returns the login without \`[bot]\`;
+     # the REST request-a-reviewer endpoint requires the \`[bot]\` suffix. Future
+     # GitHub API changes could flip which form callers see — accept either.
+     for i in $(seq 1 20); do
+       REVIEW=$(gh pr view "$PR" --json reviews \\
+         -q '.reviews[] | select(.author.login | test("^copilot-pull-request-reviewer(\\\\[bot\\\\])?$")) | {state, submittedAt}')
+       [ -n "$REVIEW" ] && break
+       sleep 30
+     done
+     \`\`\`
+     - **No review within 10 min**: proceed to merge (Copilot was slow or skipped).
+     - **\`APPROVED\` with no inline comments**: proceed to merge.
+     - **\`COMMENTED\` or \`CHANGES_REQUESTED\`**: fetch findings with \`gh api "repos/{owner}/{repo}/pulls/$PR/comments"\` (\`gh\` substitutes \`{owner}\`/\`{repo}\` from the current git checkout — those are gh path-placeholders, not prompt template vars) and \`gh pr view "$PR" --json reviews\`. Address each finding inside the worktree, commit, \`git push\`. Re-poll — Copilot re-reviews the new head SHA. Cap re-iterations at **3 rounds**; if findings keep arriving past that, exit to the **review-stuck cleanup** below — do NOT route to Phase 3b. Phase 3b is reserved for items that are blocked on *requirements clarification* and would inappropriately mutate PLAN.md and write \`.plan-questions.md\` for a review-feedback stall.
+
+     **Review-stuck cleanup** (exit after 3 rounds of unresolved review feedback): add one final PR comment via \`gh pr comment $PR\` summarizing what was addressed across the rounds and what's still outstanding so the human picks up cold, then run the worktree-only cleanup (same shape as Phase 3b's, since the PR remains open and unmerged):
+     \`\`\`bash
+     cd {repoPath}
+     git worktree remove "\${WORKTREE}"
+     \`\`\`
+     Leave the local \`claim/<slug>\` branch and the open PR alone. Do NOT run Phase 7 — that phase assumes a merged PR. PLAN.md and \`.changelog/NEXT.md\` were already updated in Phase 5, and that's fine even though the merge didn't happen: the next \`plan-task\` run will see the slug as in-flight via the open PR and pick a different item.
+
+   - **\`claude\` / \`codex\` / \`antigravity\` / \`grok\`** — Invoke that CLI in headless mode against the PR diff to critique it, apply the fixes, run tests, and re-push. Iterate until the CLI reports no further blocking findings, then advance to the next configured reviewer (or merge if it's the last). Cap at **3 rounds** here — this inline claim flow is intentionally more conservative than the dedicated CoS-spawned review-loop follow-up (which allows up to 10 iterations per reviewer); after 3 rounds, leave the PR for human follow-up.
+
+5. **Merge via \`gh pr merge\`** — NEVER a local \`git merge\` into main or any other branch. The repo may allow only one of \`--merge\` / \`--squash\` / \`--rebase\`, so don't hardcode a method. Try in this order and use the first one that succeeds:
+   \`\`\`bash
+   gh pr merge <num> --auto --delete-branch \\
+     || gh pr merge <num> --merge --delete-branch \\
+     || gh pr merge <num> --squash --delete-branch \\
+     || gh pr merge <num> --rebase --delete-branch
+   \`\`\`
+   \`--auto\` lets GitHub apply the repo's configured default once required checks pass; the explicit-method fallbacks cover repos that disallow auto-merge or restrict to a single method. \`--delete-branch\` removes the remote branch atomically on merge.
+
+## Phase 7 — Clean up (post-merge ONLY)
+
+This phase runs only after the PR was merged via Phase 6. If you exited via Phase 3b instead, you already did the 3b-specific cleanup — do NOT also run Phase 7.
+
+From the **source repo** (cd back to {repoPath} first; you are currently inside the worktree):
+
+\`\`\`bash
+cd {repoPath}
+git worktree remove "\${WORKTREE}"
+git branch -d "claim/\${SLUG}"
+\`\`\`
+
+If \`git branch -d\` refuses (the PR squash-merged on GitHub but local doesn't know yet), use \`-D\` — the PR is confirmed merged via Phase 6, so the local branch is genuinely redundant.
+
+**Do NOT \`git pull\` from inside this phase** (no \`--rebase\`, no \`--autostash\`, no plain \`pull\`). The agent's work is already integrated on GitHub via \`gh pr merge\`; pulling locally provides no functional benefit and risks rebasing the user's in-progress branch / shuffling their uncommitted changes through stash if the source repo HEAD happens to be on a tracking feature branch when the agent runs. Leave the user's working tree alone.
+
+_(Phase 3b is defined above, right after Phase 3 — see the "alternative exit from Phase 3" section.)_`,
   ],
   'pr-reviewer': [
     // v1 default prompt (required global slash-do install)
@@ -1837,6 +2032,115 @@ The audit trail is the merged MR/PR + \`git log\`. Detect the forge from the git
 ## Phase 6 — Review and clean up
 
 The configured reviewers for this task, in order, are \`{reviewers}\`. \`claude\` / \`codex\` / \`antigravity\` invoke a local-CLI critique. (\`copilot\` is GitHub-only — skip it on GitLab.) When more than one is configured, run each in the listed order.
+
+1. **Self-review your diff for reuse, quality, and efficiency** (DRY, dead code, naming, simpler equivalents, missed edge cases) and fix findings in the same diff. Claude Code runs this as the three-agent \`/simplify\` pass; on other CLIs, do the equivalent by hand.
+2. **Run each configured CLI reviewer** headless against the MR/PR diff, apply fixes, run tests, re-push — capped at 3 rounds — then advance to the next reviewer.
+3. **Leave the MR/PR open for a human to land.** Unlike the GitHub/GitLab issue flows, this flow does NOT auto-merge — the ticket is "In Review" and a human reviews + merges. After the reviewers finish, run the worktree-only cleanup so the source checkout is left clean:
+   \`\`\`bash
+   cd {repoPath}
+   git worktree remove "\${WORKTREE}"
+   \`\`\`
+   Leave the local \`claim/<KEY>\` branch and the open MR/PR in place. **Do NOT \`git merge\`, \`gh pr merge\`, \`glab mr merge\`, or \`git pull\`** — landing the change and moving the ticket to Done is the human's call.
+
+## Phase 7 — Report
+
+Generate a short summary: the ticket KEY + summary worked, the MR/PR URL, the ticket's FINAL JIRA status (confirm it is "In Review"), reviewers run, and any status transition that failed and why.`,
+    // v3 default (Phase 3 parked an *ambiguous* ticket to a "Needs clarification" Review Hub
+    // todo; superseded by v4, which decides and ships instead). Kept so a stored v3 prompt auto-upgrades.
+    `[Claim Issue: {appName}] Claim and ship the next ready JIRA ticket
+
+Pick the next ready JIRA ticket assigned to me in the current sprint, move it to **In Progress**, **create your own worktree at \`claim/<KEY>\`**, implement it, open a merge/pull request that references the ticket, move the ticket to **In Review**, and clean up. This is the \`/claim --issues\` flow for JIRA: same self-managed worktree and no-local-merge cleanup, but the work source is the app's **JIRA** project (via the PortOS JIRA API) and the ticket *status* — not an assignee/label — is the claim. **YOU pick the ticket in Phase 1.** Do NOT modify files in the source repo directly; ALL editing happens inside the worktree you create.
+
+All PortOS API calls below are relative to this base URL: ${PORTOS_API_URL}
+
+**How claiming works.** A ticket is "in flight" when (a) a \`claim/<KEY>\` or \`cos/<task>/<KEY>/<agent>\` ref exists across local branches, remote branches, or open MR/PR source refs, OR (b) its JIRA status is anything other than a not-started status (so "In Progress", "In Review", "Done", etc. are already taken). Moving the ticket to **In Progress** + the \`claim/<KEY>\` branch ARE the claim, visible to every other agent and to the human looking at the sprint board.
+
+## Phase 1 — Pick the target ticket
+
+Run steps 1–5 in order.
+
+1. Resolve the app's JIRA config: GET ${PORTOS_API_URL}/api/apps and find the app whose \`id\` is \`{appId}\`. Read \`jira.enabled\`, \`jira.instanceId\`, and \`jira.projectKey\`. If \`jira.enabled\` is not true or either id is missing, exit cleanly — this task only works against JIRA-configured apps.
+2. Fetch my current-sprint tickets: GET ${PORTOS_API_URL}/api/jira/instances/<instanceId>/my-sprint-tickets/<projectKey>. This returns the tickets assigned to me in the active sprint.
+3. Build the in-flight set from git refs:
+   \`\`\`bash
+   cd {repoPath}
+   git fetch --prune 2>/dev/null
+   git branch -a --no-color --format='%(refname:short)'
+   \`\`\`
+   For each ref (after stripping any leading \`origin/\` / \`upstream/\` prefix), extract the ticket KEY **only when the ref matches** \`claim/<KEY>\` (the segment after \`claim/\`) or \`cos/<task>/<KEY>/<agent>\` (the \`<KEY>\` third segment). A KEY looks like \`PROJ-1234\`.
+4. **Pick the target ticket:** walk the sprint tickets and pick the FIRST where ALL of the following are true (prefer higher priority — Blocker/Highest/High — then oldest):
+   - Its status is a not-started status (e.g. "To Do", "Open", "Backlog", "Selected for Development", "Ready"). Skip tickets already "In Progress", "In Review", "Done", or any closed/resolved status — those are claimed or finished.
+   - Its KEY is NOT in the in-flight set from step 3.
+   - It is well-defined: a summary plus enough description/acceptance criteria to implement without further clarification.
+   - It is NOT an Epic (issue type "Epic", or a title ending in "(epic)"). Leave epics for a human to split.
+5. **If no eligible ticket exists**, exit cleanly — an empty actionable queue is a healthy state, not a failure. If a ticket is in the sprint but too vague or blocked to start, create a Review Hub todo (POST ${PORTOS_API_URL}/api/review/todo with title "[<KEY>] Needs clarification" or "[<KEY>] Blocked" and a description of what's missing) instead of claiming it.
+
+Capture the ticket KEY as \`KEY\`, its summary, and its full description — you'll reuse them in the branch, the MR/PR, and the commit trailer.
+
+## Phase 2 — Claim (In Progress + worktree)
+
+First move the ticket to **In Progress** (this is the claim, and it must happen BEFORE you start coding), then create the worktree. Transition names vary per project workflow, so resolve the id dynamically:
+
+1. GET ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>/transitions to list available transitions.
+2. Pick the transition whose target status best matches "In Progress" (e.g. "In Progress", "Start Progress", "Start Work"); match case-insensitively. If none clearly matches, pick the transition that moves the ticket out of the To Do / Backlog column.
+3. POST ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>/transition with body {"transitionId": "<id>"}. If this fails (the status is unreachable), the ticket may have been claimed concurrently — return to Phase 1 and pick the next eligible ticket.
+
+Then create the worktree on a branch named \`claim/<KEY>\`. Do all editing inside the worktree, NEVER in the source repo's working tree:
+
+\`\`\`bash
+KEY=<picked-key>
+DEFAULT_BRANCH="$(git -C {repoPath} symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')"
+DEFAULT_BRANCH="\${DEFAULT_BRANCH:-main}"
+WORKTREE="{repoPath}/data/cos/worktrees/claim-\${KEY}"
+mkdir -p "{repoPath}/data/cos/worktrees"
+git -C {repoPath} fetch origin "\${DEFAULT_BRANCH}"
+git -C {repoPath} worktree add -b "claim/\${KEY}" "\${WORKTREE}" "origin/\${DEFAULT_BRANCH}"
+cd "\${WORKTREE}"
+\`\`\`
+
+**If \`git worktree add\` fails because the \`claim/<KEY>\` branch already exists** (a concurrent run won the race), do NOT force or reuse it — that branch IS another run's claim. Move the ticket back to its prior status if you transitioned it, treat the ticket as in-flight, return to Phase 1, and pick the next eligible ticket. Stash \`WORKTREE\` — you'll need it for Phase 6 cleanup.
+
+## Phase 3 — Verify still valid
+
+Re-read the ticket (GET ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>) before writing any code. **If ANY of these are true, release the claim and re-pick** (transition the ticket back to its not-started status, remove the worktree, return to Phase 1):
+
+- The ticket references a function, file, or component that no longer exists (\`grep -rn\` the named identifiers — if they're gone, it's stale).
+- The work would require touching files far outside the ticket's scope (>5 unrelated files), suggesting it's bigger than a single claim.
+- The requirements are too ambiguous to implement without user clarification — in that case also create a Review Hub todo ("[<KEY>] Needs clarification") so a human can refine it.
+
+Do NOT leave a half-claimed ticket parked "In Progress" with no branch.
+
+## Phase 4 — Implement
+
+Write the code, tests, and any docs the ticket requires. Follow the repo conventions in CLAUDE.md (no try/catch in route handlers, functional programming, Zod validation, Tailwind tokens, reactive UI updates). Run the relevant test suite as you go.
+
+**Roll discovered backbone work INTO this MR/PR** — small supporting helpers, refactors, and tests the fix depends on belong here, not a follow-up. Only defer genuinely-large adjacent work.
+
+Commit with a conventional message referencing the ticket so the trail is grep-able:
+
+\`\`\`
+<type>: <one-line description> (<KEY>)
+\`\`\`
+
+## Phase 5 — Open the MR/PR and move to In Review
+
+The audit trail is the merged MR/PR + \`git log\`. Detect the forge from the git origin and use the matching CLI (\`gh\` for GitHub, \`glab\` for GitLab).
+
+1. If the repo maintains a changelog (\`.changelog/NEXT.md\`, or a \`## Unreleased\` section in \`CHANGELOG.md\`), append a one-line entry mirroring the repo's existing prose style. Otherwise skip it.
+2. Push the branch: \`git push -u origin "claim/\${KEY}"\`
+3. Open the MR/PR. Reference the JIRA \`KEY\` in the title and description (there is NO \`Closes\` auto-close for JIRA). Summarize what shipped + a short test plan.
+   - GitHub: \`gh pr create --fill --head "claim/\${KEY}"\` (then edit the body to mention \`KEY\` if \`--fill\` didn't).
+   - GitLab: \`glab mr create --fill --source-branch "claim/\${KEY}" --target-branch "\${DEFAULT_BRANCH}" --yes\`.
+   Capture the MR/PR URL as \`PR_URL\`.
+4. **Move the ticket to "In Review" — REQUIRED, not optional. Do not finish while it is still "In Progress":**
+   - GET ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>/transitions again (transitions change once In Progress).
+   - Pick the transition whose target status best matches "In Review" (e.g. "In Review", "Code Review", "Review", "Ready for Review"); match case-insensitively.
+   - POST ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>/transition with body {"transitionId": "<id>"}.
+5. Add the MR/PR link to the ticket: POST ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>/comments with body {"comment": "Implementation complete. MR/PR: \${PR_URL}\\n\\nReady for code review."}. **If you shipped only PART of the ticket's scope** (a valuable slice with real work remaining), make the comment a \`Done ✓ / Remaining ▢\` summary so the remaining scope is not lost when a human lands the MR/PR; when that remainder is a clean, separable chunk, ALSO file a new follow-up ticket for it (POST ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets with a summary + a description referencing \`KEY\`) so it re-enters the sprint queue. If a transition in step 4 failed (status unreachable), say so in this comment AND in the Phase 6 summary — do not silently drop it.
+
+## Phase 6 — Review and clean up
+
+The configured reviewers for this task, in order, are \`{reviewers}\`. \`claude\` / \`codex\` / \`antigravity\` / \`grok\` invoke a local-CLI critique. (\`copilot\` is GitHub-only — skip it on GitLab.) When more than one is configured, run each in the listed order.
 
 1. **Self-review your diff for reuse, quality, and efficiency** (DRY, dead code, naming, simpler equivalents, missed edge cases) and fix findings in the same diff. Claude Code runs this as the three-agent \`/simplify\` pass; on other CLIs, do the equivalent by hand.
 2. **Run each configured CLI reviewer** headless against the MR/PR diff, apply fixes, run tests, re-push — capped at 3 rounds — then advance to the next reviewer.
