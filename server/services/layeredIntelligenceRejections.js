@@ -36,7 +36,19 @@
  * gap it closes. The fix therefore needs a disposition/state split here plus a
  * change to `deriveOutcome`'s merge-rate semantics (#2620's territory), so it is
  * deliberately left to a follow-up rather than bolted on. Tracked on #2689.
+ *
+ * The tally + top-N-line render engine (the commonest-first sort with a
+ * taxonomy-order tie-break, the three-bucket `{entries, unknown, unclassified,
+ * diagnosed, total}` discipline, and `normalizeToken`) lives in the shared leaf
+ * `lib/taxonomyTally.js` (#2800); this module supplies only the vocabulary, gloss
+ * maps, and classifiers.
  */
+
+import {
+  normalizeToken,
+  formatTaxonomyToken,
+  createTaxonomyTally
+} from '../lib/taxonomyTally.js';
 
 // The rejection-reason vocabulary. Stored on the outcome record and rendered into
 // the reasoner's prompt, so these tokens are a persisted contract: rename one and
@@ -101,15 +113,7 @@ const REJECTION_REASON_LABELS = {
  * "classified, and we found nothing".
  */
 export function formatRejectionReason(reason) {
-  if (!reason) return '';
-  return REJECTION_REASON_LABELS[reason] || reason;
-}
-
-// Normalize a tracker token (label name or stateReason) for matching: lowercased,
-// with separators collapsed so `not_planned`, `not-planned` and `Not Planned` all
-// land on the same key.
-function normalizeToken(value) {
-  return typeof value === 'string' ? value.trim().toLowerCase().replace(/[\s_-]+/g, '-') : '';
+  return formatTaxonomyToken(reason, REJECTION_REASON_LABELS);
 }
 
 // Label → reason. Every key here must be a label that states a JUDGEMENT ABOUT THE
@@ -325,26 +329,52 @@ export function classifyRejection({ outcome = null, stateReason = null, labels =
  * can't crowd real diagnoses out of a caller's top-N list — they measure missing
  * data, they are not findings.
  */
-export function summarizeRejectionReasons(outcomes = []) {
-  const counts = new Map();
-  let unknown = 0;
-  let unclassified = 0;
-  for (const o of Array.isArray(outcomes) ? outcomes : []) {
-    if (!o || (o.outcome !== 'rejected' && o.outcome !== 'abandoned')) continue;
-    const reason = o.rejectionReason;
-    if (reason === UNKNOWN_REJECTION_REASON) { unknown += 1; continue; }
-    // Absent OR unrecognized (hand-edited, or a token from a newer version): both
-    // mean we hold no valid diagnosis for a proposal that demonstrably didn't merge.
-    if (!REJECTION_REASONS.includes(reason)) { unclassified += 1; continue; }
-    counts.set(reason, (counts.get(reason) || 0) + 1);
+// The shared tally + render engine, bound to the rejection taxonomy. The counting
+// rules, commonest-first sort, taxonomy-order tie-break, three-bucket discipline,
+// and top-N-line render live in `lib/taxonomyTally.js` (#2800); this module supplies
+// only the population predicate, the stored-token accessor, the vocabulary/sentinel,
+// the gloss, and the gap wording.
+const rejectionTally = createTaxonomyTally({
+  predicate: (o) => o.outcome === 'rejected' || o.outcome === 'abandoned',
+  select: (o) => o.rejectionReason,
+  field: 'reason',
+  vocabulary: REJECTION_REASONS,
+  sentinel: UNKNOWN_REJECTION_REASON,
+  glossFn: formatRejectionReason,
+  gapWording: {
+    // "3 of 3 closed with no recorded reason" is a real, actionable fact about the
+    // loop's own blind spot, and the honest line when it's all we have.
+    unknown: (n, total) => `${n} of ${total} closed with no recorded reason`,
+    unclassified: (n, total) => `${n} of ${total} not yet classified`
   }
-  const entries = [...counts.entries()]
-    // Commonest first; ties broken by taxonomy order so the output is stable
-    // rather than dependent on Map insertion (i.e. on record ordering).
-    .sort((a, b) => b[1] - a[1] || REJECTION_REASONS.indexOf(a[0]) - REJECTION_REASONS.indexOf(b[0]))
-    .map(([reason, count]) => ({ reason, count }));
-  const diagnosed = entries.reduce((n, e) => n + e.count, 0);
-  return { entries, unknown, unclassified, diagnosed, total: diagnosed + unknown + unclassified };
+});
+
+/**
+ * Tally rejection reasons across every non-merged RESOLVED proposal. A pending
+ * proposal is awaiting triage, not rejected, and a merged one has nothing to
+ * explain — neither is counted.
+ *
+ * Returns `{ entries, unknown, unclassified, diagnosed, total }`:
+ *   - `entries`      — `[{ reason, count }]` of REAL diagnoses only, commonest first.
+ *   - `unknown`      — classified as `unknown-reason`: we looked and no signal
+ *                      explained it. A MEASURED gap.
+ *   - `unclassified` — no valid diagnosis stored at all: written before the taxonomy
+ *                      existed, or reconcile hasn't reached it yet. An UNMEASURED
+ *                      gap — a different fact from `unknown`, with a different
+ *                      remedy (reconcile it vs. enrich the signals).
+ *   - `diagnosed`    — records carrying a real diagnosis (sum of `entries`).
+ *   - `total`        — every non-merged resolved proposal: the full population being
+ *                      diagnosed. `total === 0` means, and only means, "nothing has
+ *                      been closed unmerged".
+ *
+ * The three buckets stay apart for the same reason the record field is three-valued:
+ * collapsing them would either fabricate a diagnosis or hide the data gap this
+ * metric exists to track. `unknown`/`unclassified` stay OUT of `entries` so they
+ * can't crowd real diagnoses out of a caller's top-N list — they measure missing
+ * data, they are not findings.
+ */
+export function summarizeRejectionReasons(outcomes = []) {
+  return rejectionTally.summarize(outcomes);
 }
 
 /**
@@ -358,17 +388,5 @@ export function summarizeRejectionReasons(outcomes = []) {
  * is exactly the blindness this taxonomy exists to remove.
  */
 export function formatRejectionReasons(outcomes = [], limit = 3) {
-  const { entries, unknown, unclassified, total } = summarizeRejectionReasons(outcomes);
-  if (total === 0) return '';
-  const listed = entries
-    .slice(0, limit)
-    .map(({ reason, count }) => `${formatRejectionReason(reason)} (${count})`)
-    .join('; ');
-  // Name every gap: "3 of 3 closed with no recorded reason" is a real, actionable
-  // fact about the loop's own blind spot, and the honest line when it's all we have.
-  const gaps = [
-    unknown ? `${unknown} of ${total} closed with no recorded reason` : '',
-    unclassified ? `${unclassified} of ${total} not yet classified` : ''
-  ];
-  return [listed, ...gaps].filter(Boolean).join(' — ');
+  return rejectionTally.format(outcomes, limit);
 }

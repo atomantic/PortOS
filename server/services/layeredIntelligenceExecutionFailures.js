@@ -32,7 +32,19 @@
  * provider-outage category never lands here and never dents a domain's failure
  * shape. The remaining raw categories describe how LI's OWN implementation attempt
  * went wrong — which is what this taxonomy classifies.
+ *
+ * The tally + top-N-line render engine (the commonest-first sort with a
+ * taxonomy-order tie-break, the three-bucket `{entries, unknown, unclassified,
+ * diagnosed, total}` discipline, and `normalizeToken`) lives in the shared leaf
+ * `lib/taxonomyTally.js` (#2800); this module supplies only the vocabulary, gloss
+ * map, and classifier.
  */
+
+import {
+  normalizeToken,
+  formatTaxonomyToken,
+  createTaxonomyTally
+} from '../lib/taxonomyTally.js';
 
 // The execution-failure vocabulary (#2764 §1). Stored on the outcome record and
 // rendered into the reasoner's prompt, so these tokens are a persisted contract:
@@ -93,15 +105,7 @@ const EXECUTION_FAILURE_LABELS = {
  * "classified, and we found nothing".
  */
 export function formatExecutionFailure(category) {
-  if (!category) return '';
-  return EXECUTION_FAILURE_LABELS[category] || category;
-}
-
-// Normalize a raw error-category token for matching: lowercased, with separators
-// collapsed so `test_failure`, `test-failure`, and `Test Failure` all land on the
-// same key.
-function normalizeToken(value) {
-  return typeof value === 'string' ? value.trim().toLowerCase().replace(/[\s_-]+/g, '-') : '';
+  return formatTaxonomyToken(category, EXECUTION_FAILURE_LABELS);
 }
 
 // Raw agentErrorAnalysis category → execution-failure taxonomy. Every key is one of
@@ -226,26 +230,49 @@ export function classifyExecutionFailure({ success, errorCategory = null, valida
  * `unknown`/`unclassified` stay OUT of `entries` so they can't crowd real diagnoses
  * out of a caller's top-N list — they measure missing data, they are not findings.
  */
-export function summarizeExecutionFailures(outcomes = []) {
-  const counts = new Map();
-  let unknown = 0;
-  let unclassified = 0;
-  for (const o of Array.isArray(outcomes) ? outcomes : []) {
-    if (!o || o.executionOutcome !== 'failure') continue;
-    const category = o.failureCategory;
-    if (category === UNKNOWN_EXECUTION_FAILURE) { unknown += 1; continue; }
-    // Absent OR unrecognized (hand-edited, or a token from a newer version): both
-    // mean we hold no valid diagnosis for an execution that demonstrably failed.
-    if (!EXECUTION_FAILURE_CATEGORIES.includes(category)) { unclassified += 1; continue; }
-    counts.set(category, (counts.get(category) || 0) + 1);
+// The shared tally + render engine, bound to the execution-failure taxonomy. The
+// counting rules, commonest-first sort, taxonomy-order tie-break, three-bucket
+// discipline, and top-N-line render live in `lib/taxonomyTally.js` (#2800); this
+// module supplies only the population predicate, the stored-token accessor, the
+// vocabulary/sentinel, the gloss, and the gap wording.
+const executionFailureTally = createTaxonomyTally({
+  predicate: (o) => o.executionOutcome === 'failure',
+  select: (o) => o.failureCategory,
+  field: 'category',
+  vocabulary: EXECUTION_FAILURE_CATEGORIES,
+  sentinel: UNKNOWN_EXECUTION_FAILURE,
+  glossFn: formatExecutionFailure,
+  gapWording: {
+    // "2 of 3 failed with no recognized cause" is a real, actionable fact about LI's
+    // own blind spot, and the honest line when it's all we have.
+    unknown: (n, total) => `${n} of ${total} failed with no recognized cause`,
+    unclassified: (n, total) => `${n} of ${total} not yet classified`
   }
-  const entries = [...counts.entries()]
-    // Commonest first; ties broken by taxonomy order so the output is stable rather
-    // than dependent on Map insertion (i.e. on record ordering).
-    .sort((a, b) => b[1] - a[1] || EXECUTION_FAILURE_CATEGORIES.indexOf(a[0]) - EXECUTION_FAILURE_CATEGORIES.indexOf(b[0]))
-    .map(([category, count]) => ({ category, count }));
-  const diagnosed = entries.reduce((n, e) => n + e.count, 0);
-  return { entries, unknown, unclassified, diagnosed, total: diagnosed + unknown + unclassified };
+});
+
+/**
+ * Tally execution-failure categories across every FAILED-execution record. A
+ * successful execution has nothing to explain, and a record that was never handed
+ * off (executionOutcome null) never executed — neither is counted.
+ *
+ * Returns `{ entries, unknown, unclassified, diagnosed, total }` — the same shape,
+ * and the same three-bucket discipline, as summarizeRejectionReasons:
+ *   - `entries`      — `[{ category, count }]` of REAL diagnoses only, commonest first.
+ *   - `unknown`      — classified `unknown-failure`: we looked, no signal explained
+ *                      it. A MEASURED gap.
+ *   - `unclassified` — a failed execution with no valid category stored at all:
+ *                      recorded before this field existed, or by a path that passed
+ *                      no failure signal. An UNMEASURED gap — a different fact from
+ *                      `unknown`, with a different remedy.
+ *   - `diagnosed`    — records carrying a real diagnosis (sum of `entries`).
+ *   - `total`        — every failed-execution record: the population being diagnosed.
+ *                      `total === 0` means, and only means, "no hand-off has failed".
+ *
+ * `unknown`/`unclassified` stay OUT of `entries` so they can't crowd real diagnoses
+ * out of a caller's top-N list — they measure missing data, they are not findings.
+ */
+export function summarizeExecutionFailures(outcomes = []) {
+  return executionFailureTally.summarize(outcomes);
 }
 
 /**
@@ -258,17 +285,5 @@ export function summarizeExecutionFailures(outcomes = []) {
  * about why is exactly the blindness this taxonomy exists to remove.
  */
 export function formatExecutionFailures(outcomes = [], limit = 3) {
-  const { entries, unknown, unclassified, total } = summarizeExecutionFailures(outcomes);
-  if (total === 0) return '';
-  const listed = entries
-    .slice(0, limit)
-    .map(({ category, count }) => `${formatExecutionFailure(category)} (${count})`)
-    .join('; ');
-  // Name every gap: "2 of 3 failed with no recognized cause" is a real, actionable
-  // fact about LI's own blind spot, and the honest line when it's all we have.
-  const gaps = [
-    unknown ? `${unknown} of ${total} failed with no recognized cause` : '',
-    unclassified ? `${unclassified} of ${total} not yet classified` : ''
-  ];
-  return [listed, ...gaps].filter(Boolean).join(' — ');
+  return executionFailureTally.format(outcomes, limit);
 }
