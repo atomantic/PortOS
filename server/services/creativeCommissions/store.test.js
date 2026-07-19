@@ -54,6 +54,7 @@ const {
   getCommissionForSync,
   mergeCommissionsFromSync,
   pruneTombstonedCommissions,
+  commissionStore,
   ERR_VALIDATION,
   ERR_NOT_FOUND,
 } = await import('./store.js');
@@ -287,6 +288,37 @@ describe('pruneTombstonedCommissions', () => {
     const rows = [...feedbackRecords.values()].filter((f) => f.commissionId === created.id);
     expect(rows.length).toBeGreaterThan(0);
     for (const f of rows) expect(f.deleted).toBe(true);
+  });
+
+  it('a restore landing mid-sweep keeps its feedback (revalidated inside the per-id queue)', async () => {
+    const created = await createCommission(validInput());
+    await recordCommissionRun(created.id, { id: 'run-A', status: 'completed' });
+    await submitCommissionFeedback(created.id, { runId: 'run-A', rating: 'up', note: 'keep me' });
+    await deleteCommission(created.id);
+    records.set(created.id, { ...records.get(created.id), deletedAt: '2020-01-01T00:00:00.000Z' });
+
+    // Hold the commission's write queue with a gated "restore" so the sweep's
+    // eligibility listing sees the stale tombstone, then let the restore land
+    // FIRST — the sweep's queued revalidation must then skip the commission.
+    const store = commissionStore();
+    let releaseRestore;
+    const gate = new Promise((resolve) => { releaseRestore = resolve; });
+    const restoreDone = store.queueRecordWrite(created.id, async () => {
+      await gate;
+      const rec = await store.readRaw(created.id, { includeDeleted: true });
+      await store.writeRaw(created.id, { ...rec, deleted: false, deletedAt: null });
+    });
+    const prunePromise = pruneTombstonedCommissions(Date.parse('2021-01-01T00:00:00.000Z'));
+    await new Promise((resolve) => setTimeout(resolve, 10)); // let listPrunable observe the tombstone
+    releaseRestore();
+    const result = await prunePromise;
+    await restoreDone;
+
+    expect(result).toEqual({ pruned: 0, ids: [] });
+    expect(records.get(created.id)).toMatchObject({ deleted: false }); // restore won
+    const rows = [...feedbackRecords.values()].filter((f) => f.commissionId === created.id);
+    expect(rows.length).toBeGreaterThan(0);
+    for (const f of rows) expect(f.deleted).not.toBe(true); // ratings survived
   });
 });
 

@@ -96,6 +96,24 @@ export async function deleteRaw(id) {
   await query(`DELETE FROM creative_commissions WHERE id = $1`, [id]);
 }
 
+/**
+ * Ids eligible for pruneTombstoned, by the SAME `deleted_at` column predicate
+ * the DELETE uses. The column is the backend's truth — writeRaw normalizes
+ * malformed/out-of-range timestamps into it while preserving the JSON verbatim,
+ * so an eligibility check against the raw JSON `deletedAt` can diverge from
+ * what the DELETE would actually remove.
+ */
+export async function listPrunable(olderThanMs) {
+  if (!Number.isFinite(olderThanMs)) return [];
+  const cutoffIso = new Date(olderThanMs).toISOString();
+  const { rows } = await query(
+    `SELECT id FROM creative_commissions
+     WHERE deleted = TRUE AND deleted_at IS NOT NULL AND deleted_at < $1`,
+    [cutoffIso],
+  );
+  return rows.map((r) => r.id);
+}
+
 /** Hard-remove tombstoned commissions whose `deleted_at` is older than the cutoff; returns their ids. */
 export async function pruneTombstoned(olderThanMs) {
   if (!Number.isFinite(olderThanMs)) return { pruned: 0, ids: [] };

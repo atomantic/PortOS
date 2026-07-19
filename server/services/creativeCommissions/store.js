@@ -315,6 +315,13 @@ function makeFileBackend(dir) {
       (await cs.loadAll()).filter((r) => includeDeleted || live(r)).map((r) => r.id),
     writeRaw: async (id, record) => { await ensureTypeIndex(); await cs.saveOneNow(id, record); return record; },
     deleteRaw: (id) => cs.deleteOneNow(id),
+    // Same predicate as pruneTombstoned below — this backend's truth is the JSON.
+    listPrunable: async (olderThanMs) => {
+      if (!Number.isFinite(olderThanMs)) return [];
+      return (await cs.loadAll())
+        .filter((r) => r?.deleted === true && isStr(r.deletedAt) && Date.parse(r.deletedAt) < olderThanMs)
+        .map((r) => r.id);
+    },
     pruneTombstoned: async (olderThanMs) => {
       if (!Number.isFinite(olderThanMs)) return { pruned: 0, ids: [] };
       const stale = (await cs.loadAll()).filter((r) => r?.deleted === true && isStr(r.deletedAt) && Date.parse(r.deletedAt) < olderThanMs);
@@ -336,6 +343,7 @@ function makePgBackend(db) {
     listIds: db.listIds,
     writeRaw: db.writeRaw,
     deleteRaw: db.deleteRaw,
+    listPrunable: db.listPrunable,
     pruneTombstoned: db.pruneTombstoned,
   };
 }
@@ -379,6 +387,7 @@ function createFacade(dir) {
     listIds: async (opts) => (await getBackend()).listIds(opts),
     writeRaw: async (id, record) => (await getBackend()).writeRaw(id, record),
     deleteRaw: async (id) => (await getBackend()).deleteRaw(id),
+    listPrunable: async (olderThanMs) => (await getBackend()).listPrunable(olderThanMs),
     pruneTombstoned: async (olderThanMs) => (await getBackend()).pruneTombstoned(olderThanMs),
     queueRecordWrite,
     // Under PG, report ok WITHOUT forcing backend selection (the early boot
@@ -782,19 +791,34 @@ export async function mergeCommissionsFromSync(remoteRecords, { source = { via: 
 
 /** Hard-remove tombstoned commissions older than the cutoff; evicts each base hash. */
 export async function pruneTombstonedCommissions(olderThanMs) {
-  // Tombstone each stale commission's feedback BEFORE hard-pruning the
-  // commission. Once the prune removes the record there is nothing left for a
-  // later sweep to rediscover, so a failure after the prune would leave the
-  // feedback live (and peer-pushed) forever. In this order a failure throws,
-  // the commission tombstone stays put, and the next sweep retries both halves.
-  if (Number.isFinite(olderThanMs)) {
-    const stale = (await commissionStore().listRaw({ includeDeleted: true }))
-      .filter((r) => r?.deleted === true && isStr(r.deletedAt) && Date.parse(r.deletedAt) < olderThanMs);
-    for (const r of stale) await tombstoneFeedbackForCommission(r.id);
+  if (!Number.isFinite(olderThanMs)) return { pruned: 0, ids: [] };
+  const store = commissionStore();
+  // Eligibility comes from the BACKEND's own predicate (`listPrunable` mirrors
+  // pruneTombstoned's — on PG that is the normalized `deleted_at` column, which
+  // writeRaw corrects while leaving the JSON verbatim), so the set we tombstone
+  // feedback for is exactly the set the delete would remove. Then each id is
+  // revalidated and deleted INSIDE its per-id write queue — the same queue
+  // restoreCommission and the peer merge write through — so a restore that
+  // lands mid-sweep either runs before us (we see deleted:false and keep its
+  // feedback) or after (it finds the record gone and reports ERR_TARGET_GONE,
+  // exactly as if it raced the old bulk prune). Feedback is tombstoned before
+  // the row delete: a failure there throws, the commission tombstone stays
+  // put, and the next sweep retries both halves — never an orphaned rating.
+  const candidates = await store.listPrunable(olderThanMs);
+  const ids = [];
+  for (const id of candidates) {
+    const pruned = await store.queueRecordWrite(id, async () => {
+      const rec = await store.readRaw(id, { includeDeleted: true });
+      if (!rec || rec.deleted !== true) return false; // restored mid-sweep — keep its feedback
+      await tombstoneFeedbackForCommission(id);
+      await store.deleteRaw(id);
+      return true;
+    });
+    if (!pruned) continue;
+    ids.push(id);
+    await deleteSyncBaseHash(CREATIVE_COMMISSION_KIND, id).catch(() => {});
   }
-  const result = await commissionStore().pruneTombstoned(olderThanMs);
-  for (const id of result.ids || []) await deleteSyncBaseHash(CREATIVE_COMMISSION_KIND, id).catch(() => {});
-  return result;
+  return { pruned: ids.length, ids };
 }
 
 /**
