@@ -561,7 +561,10 @@ describe('recordProposalExecution (#2765)', () => {
     await recordProposalExecution({ appId: 'app-1', slug: 'meta-one', success: true }, store);
 
     const byDomain = computeExecutionByDomain(await listOutcomes({ appId: 'app-1' }, store));
-    expect(byDomain['loop-meta']).toEqual({ completed: 1, succeeded: 1, successRate: 100 });
+    expect(byDomain['loop-meta']).toEqual({
+      completed: 1, succeeded: 1, successRate: 100,
+      failureSummary: { entries: [], unknown: 0, unclassified: 0, diagnosed: 0, total: 0 } // no failed hand-off (#2764 §3)
+    });
     // The un-executed proposal's domain never appears — no executionOutcome to count.
     expect(byDomain['app-improvement']).toBeUndefined();
   });
@@ -606,6 +609,11 @@ describe('recordProposalExecution (#2765)', () => {
     await recordProposalExecution({ appId: 'app-1', slug: 'b', success: true }, store);
     await recordProposalExecution({ appId: 'app-1', slug: 'c', success: false }, store);
     const byDomain = computeExecutionByDomain(await listOutcomes({ appId: 'app-1' }, store));
-    expect(byDomain['loop-meta']).toEqual({ completed: 3, succeeded: 2, successRate: 67 });
+    expect(byDomain['loop-meta']).toEqual({
+      completed: 3, succeeded: 2, successRate: 67,
+      // The one failed hand-off carried no errorCategory, so it classifies as
+      // unknown-failure (a measured gap), not a diagnosis (#2764 §3).
+      failureSummary: { entries: [], unknown: 1, unclassified: 0, diagnosed: 0, total: 1 }
+    });
   });
 });

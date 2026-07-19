@@ -55,6 +55,7 @@ import {
   computeOutcomesReport,
   computeSelfEvalSummary,
   computeProposalExecutionAwareness,
+  computeCrossReferenceAnalysis,
   readLiTaskMetrics,
   hasPlannedWorkListing
 } from '../layeredIntelligence.js'
@@ -324,6 +325,11 @@ export async function buildTaskInput({ app } = {}) {
   // from the SAME outcome records loaded below (no extra store read), so it's gated on
   // the same outcomes source; stays '' until at least one domain clears the sample floor.
   let proposalExecutionReport = ''
+  // Cross-reference (#2764 §3): domains LI proposes well but executes poorly. Derived
+  // from the SAME outcome records as the two blocks above (no extra store read), so it
+  // rides the same outcomes gate and stays '' until a domain has both a merge and a
+  // diagnosed failed hand-off.
+  let crossReferenceReport = ''
   if (config.sources?.outcomes && outcomesTrackerSupported(filer)) {
     if (!trackerReadFailed) await reconcileOutcomes({ appId: app.id, existingIssues })
     // Discriminated read: an unreadable outcome store stays `null` here rather than
@@ -344,6 +350,7 @@ export async function buildTaskInput({ app } = {}) {
     // null) leaves the block empty rather than claiming "no domain has executed".
     if (Array.isArray(outcomes)) {
       proposalExecutionReport = computeProposalExecutionAwareness({ outcomes })
+      crossReferenceReport = computeCrossReferenceAnalysis({ outcomes })
     }
   }
 
@@ -370,7 +377,7 @@ export async function buildTaskInput({ app } = {}) {
     })
   }
 
-  const prompt = buildPrompt({ app, config, sources, openIssues, isPortos, outcomesReport, selfEvalReport, proposalExecutionReport }) + buildCompletionContract()
+  const prompt = buildPrompt({ app, config, sources, openIssues, isPortos, outcomesReport, selfEvalReport, proposalExecutionReport, crossReferenceReport }) + buildCompletionContract()
   // Option A: surface the fully-resolved LI agent provider/model (from
   // resolveLiAgentProvider — per-app override, else the resolved schedule pin) so
   // the generator pins the AGENT to it. Resolving the pin HERE (not delegating it
