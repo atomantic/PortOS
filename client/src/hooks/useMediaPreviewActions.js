@@ -40,9 +40,10 @@ function buildImageGenParams(item) {
  *
  * @param {object} [options]
  * @param {(cleaned: object) => any | Promise<any>} [options.onCleanComplete]
- *   Fires AFTER `cleanGalleryImage` resolves. Use it to splice the cleaned
- *   image into the consumer's local state (collection items, gallery list,
- *   variation imageRefs, etc.). Errors thrown from the callback bubble.
+ *   Fires AFTER a Clean (`handleClean`) or watermark-removal resolves. Use it to
+ *   splice the resulting variant into the consumer's local state (collection
+ *   items, gallery list, variation imageRefs, etc.). Errors thrown from the
+ *   callback bubble.
  *
  * Returns the four handlers shaped for direct use as MediaPreview props.
  */
