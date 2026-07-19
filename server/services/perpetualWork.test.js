@@ -480,20 +480,28 @@ describe('perpetualWork', () => {
       expect(issueCalls.every(([, a]) => !a.includes('--author'))).toBe(true);
     });
 
-    it('preserves a numeric namespace in an HTTPS remote (does not strip it as a port hop)', async () => {
-      // Regression: an all-numeric top-level namespace (`/1234/widget`) must NOT be
-      // mistaken for an SSH `:443/` port hop and dropped — GitLab numeric group/user
-      // paths are valid, so the probe must target groups/1234.
+    it('preserves an all-numeric namespace but skips the ambiguous group-ID probe (uses --author)', async () => {
+      // Regression + guard: an all-numeric top-level namespace (`/1234/widget`) must
+      // NOT be stripped as if it were an SSH `:443/` port hop (it is preserved as
+      // `1234`), AND it must NOT be probed as `groups/1234` — GitLab reads a numeric
+      // groups/:id as a database group ID, not a path, which could falsely match an
+      // unrelated group. So the guard skips the probe and takes the safe --author path.
       spawn.mockImplementation((cmd, args = []) => {
         if (cmd === 'git' && args[0] === 'remote') return fakeChild('https://gitlab.example/1234/widget.git\n');
-        if (cmd === 'glab' && args[0] === 'api' && String(args[1]).startsWith('groups/')) return fakeChild('{"kind":"group"}');
         if (cmd === 'glab' && args[0] === 'issue') return fakeChild(JSON.stringify([{ iid: 3, title: 'x', assignees: [], labels: [] }]));
+        if (cmd === 'git' && args[0] === 'branch') return fakeChild('main\n');
+        if (cmd === 'glab' && args[0] === 'mr') return fakeChild('[]');
         return fakeChild('');
       });
       const out = await detectGitlabIssues(app, { issueAuthorFilter: 'owner' });
-      expect(out).toMatchObject({ reason: 'owner-is-group', total: 1 });
+      expect(out.actionable).toBe(true);
+      // No ambiguous groups/ probe was issued for the numeric namespace.
       const probeCall = spawn.mock.calls.find(([cmd, a]) => cmd === 'glab' && a[0] === 'api' && String(a[1]).startsWith('groups/'));
-      expect(probeCall[1][1]).toBe('groups/1234');
+      expect(probeCall).toBeUndefined();
+      // The preserved `1234` namespace is used as the author filter (not stripped).
+      const listCall = spawn.mock.calls.find(([cmd, a]) => cmd === 'glab' && a[0] === 'issue');
+      expect(listCall[1]).toContain('--author');
+      expect(listCall[1]).toContain('1234');
     });
 
     it('parses a bracketed IPv6 host without leaking the address into the namespace', async () => {
