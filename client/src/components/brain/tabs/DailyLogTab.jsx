@@ -98,6 +98,12 @@ export default function DailyLogTab() {
   // Suppresses repeat failure toasts — a failing autosave retries on the next
   // keystroke, so an unreachable server would otherwise toast every tick.
   const autoSaveFailedRef = useRef(false);
+  // The body of the last FAILED save. The autosave effect refuses to re-arm
+  // while `content` still equals it — without this, a failed PUT flips
+  // `saving`, the effect re-runs, and an unreachable server gets a silent
+  // PUT every debounce tick. Cleared on success; a keystroke (content change),
+  // explicit save, or blur/visibility flush still retries.
+  const lastFailedBodyRef = useRef(null);
   // Which date the text in `content` actually belongs to. `date` flips before
   // the new entry loads, so this is the only safe answer to "what am I about
   // to overwrite?" — see the guard in saveRef.
@@ -321,9 +327,11 @@ export default function DailyLogTab() {
     if (!res?.entry) {
       if (!auto || !autoSaveFailedRef.current) toast.error('Save failed');
       autoSaveFailedRef.current = true;
+      lastFailedBodyRef.current = body;
       return;
     }
     autoSaveFailedRef.current = false;
+    lastFailedBodyRef.current = null;
     // Adopt the server's metadata but deliberately leave the textarea alone.
     // Anything typed during the in-flight PUT stays in `content` and stays
     // dirty against res.entry.content, so the next tick saves it — whereas
@@ -346,6 +354,13 @@ export default function DailyLogTab() {
   // work that arrived mid-PUT (or was skipped by the single-flight gate).
   useEffect(() => {
     if (!dirty || voiceConflict || loadedDateRef.current !== date) {
+      firstDirtyAtRef.current = null;
+      return undefined;
+    }
+    // A body that just failed doesn't get an automatic re-attempt — that loops
+    // a PUT per debounce tick against a down server. Wait for a content change
+    // (or an explicit save / blur / visibility flush, which bypass this effect).
+    if (lastFailedBodyRef.current !== null && content === lastFailedBodyRef.current) {
       firstDirtyAtRef.current = null;
       return undefined;
     }

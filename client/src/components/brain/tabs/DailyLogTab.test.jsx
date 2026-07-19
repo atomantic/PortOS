@@ -238,6 +238,34 @@ describe('DailyLogTab autosave', () => {
     expect(api.updateDailyLog).toHaveBeenCalledTimes(1);
   });
 
+  it('does not re-attempt a failed body until the content changes', async () => {
+    api.updateDailyLog.mockRejectedValue(new Error('offline'));
+    await renderTab();
+
+    fireEvent.change(editor(), { target: { value: 'stuck' } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
+    expect(api.updateDailyLog).toHaveBeenCalledTimes(1);
+
+    // Same body, server still down: the failure must not loop a silent PUT
+    // per debounce tick (`saving` flipping false re-runs the effect).
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(api.updateDailyLog).toHaveBeenCalledTimes(1);
+
+    // A keystroke changes the body and re-arms the autosave.
+    fireEvent.change(editor(), { target: { value: 'stuck plus more' } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
+    expect(api.updateDailyLog).toHaveBeenCalledTimes(2);
+
+    // Once a save succeeds, the gate clears and normal autosave resumes.
+    api.updateDailyLog.mockImplementation(async (date, content) => ({ date, entry: entryFor(date, content) }));
+    fireEvent.change(editor(), { target: { value: 'recovered' } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
+    expect(api.updateDailyLog).toHaveBeenCalledTimes(3);
+    fireEvent.change(editor(), { target: { value: 'recovered again' } });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
+    expect(api.updateDailyLog).toHaveBeenCalledTimes(4);
+  });
+
   it('keeps keystrokes typed while a save is in flight', async () => {
     let release;
     api.updateDailyLog.mockImplementation((date, content) => new Promise((resolve) => {
