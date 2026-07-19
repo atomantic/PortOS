@@ -53,9 +53,12 @@ export function resolveCleanersFromConfig(modeCfg, mode) {
 // covers reasonable photos (12000×8000) without allowing pathological inputs.
 const MAX_PIXELS = 96 * 1000 * 1000;
 
-// Exported as a single-value array so the Zod enum shape stays stable if a
+// Clean-level tags stamped on a cleaned gallery variant's sidecar (read by the
+// lightbox lineage row). `aggressive` = the legacy metadata+denoise clean;
+// `resize-squeeze` = the gallery Clean button's CPU resize-squeeze pass
+// (issue #1764). Kept as an array so the Zod enum shape stays stable if a
 // future variant is added.
-export const CLEAN_LEVELS = ['aggressive'];
+export const CLEAN_LEVELS = ['aggressive', 'resize-squeeze'];
 
 // Magic-byte sniff so we re-encode as the source format and emit the right
 // MIME type — extension/header is supplied by the client and not trustworthy.
