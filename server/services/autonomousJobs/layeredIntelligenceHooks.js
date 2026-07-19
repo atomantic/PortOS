@@ -56,10 +56,11 @@ import {
   computeSelfEvalSummary,
   computeProposalExecutionAwareness,
   computeCrossReferenceAnalysis,
+  computeHandoffRouting,
   readLiTaskMetrics,
   hasPlannedWorkListing
 } from '../layeredIntelligence.js'
-import { recordFiledProposal, listOutcomesResult, reconcileOutcomes } from '../layeredIntelligenceOutcomes.js'
+import { recordFiledProposal, listOutcomesResult, reconcileOutcomes, listOutcomes } from '../layeredIntelligenceOutcomes.js'
 
 // The outcome feedback loop (#2428) can only reconcile a proposal's fate on a
 // tracker that reports closed-state. All three now qualify: a forge (gh/glab
@@ -512,6 +513,10 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
   let filedAction = 'no-op'
   let reason = envelope == null || proposalAttemptedButInvalid ? 'unparseable-response' : 'no-proposal'
   let handedOff = false
+  // §4 (#2764): when the deterministic routing gate files-for-human instead of
+  // auto-handing-off a trivial+safe proposal, surface WHY on the returned result.
+  let handoffRouted = false
+  let handoffRoutingReason = null
 
   if (proposal) {
     // Re-read issues NOW (not at gather time) so dedup sees the freshest tracker
@@ -569,14 +574,32 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
         }
         const issueRef = filedKey || filedNumber
         if (isHandoffEligible({ proposal, config, filed: issueRef })) {
-          // Only mark the hand-off for per-domain execution recording (#2765) when the
-          // proposal itself was recorded above — same gate — so execution-tracking never
-          // creates an outcome row for a proposal the `outcomes` toggle says isn't tracked.
-          const task = await enqueueHandoff(buildHandoffTask({ app, proposal, issueRef, recordExecution: outcomesRecordable }))
-            .catch((err) => { console.error(`❌ Layered Intelligence: ${app.name} hand-off enqueue failed: ${err.message}`); return null })
-          if (task && !task.duplicate) {
-            handedOff = true
-            console.log(`🤝 Layered Intelligence: ${app.name} handed off ${ref} to a coding agent (task ${task.id})`)
+          // §4 (#2764): the reasoner-signal gate (isHandoffEligible) passed, but the
+          // SYSTEM still refuses to auto-hand-off a trivial+safe proposal in a domain
+          // where LI's OWN prior hand-offs chronically fail — it stays filed for a human
+          // instead. Load the app's historical outcomes lazily (only on the hand-off-
+          // eligible path) for computeHandoffRouting. An unreadable history degrades to
+          // "allow hand-off as before" (no-signal → handoff:true) — a store hiccup must
+          // never silently SUPPRESS a hand-off.
+          const outcomes = await listOutcomes({ appId: app.id }).catch(() => [])
+          const routing = computeHandoffRouting({ proposal, outcomes })
+          if (routing.handoff === false) {
+            // Filing-for-human IS the intended good outcome here, not a failure — the
+            // proposal WAS filed successfully, so `reason` stays null. Record the routing
+            // on the returned result for observability.
+            handoffRouted = true
+            handoffRoutingReason = routing.reason
+            console.log(`🧭 Layered Intelligence: ${app.name} routed ${ref} to human review instead of auto-hand-off — ${routing.reason}`)
+          } else {
+            // Only mark the hand-off for per-domain execution recording (#2765) when the
+            // proposal itself was recorded above — same gate — so execution-tracking never
+            // creates an outcome row for a proposal the `outcomes` toggle says isn't tracked.
+            const task = await enqueueHandoff(buildHandoffTask({ app, proposal, issueRef, recordExecution: outcomesRecordable }))
+              .catch((err) => { console.error(`❌ Layered Intelligence: ${app.name} hand-off enqueue failed: ${err.message}`); return null })
+            if (task && !task.duplicate) {
+              handedOff = true
+              console.log(`🤝 Layered Intelligence: ${app.name} handed off ${ref} to a coding agent (task ${task.id})`)
+            }
           }
         }
       } else {
@@ -604,5 +627,5 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
     }
   }
 
-  return settle({ action: filedAction, reason, filedNumber, filedKey, paused, handedOff })
+  return settle({ action: filedAction, reason, filedNumber, filedKey, paused, handedOff, handoffRouted, handoffRoutingReason })
 }

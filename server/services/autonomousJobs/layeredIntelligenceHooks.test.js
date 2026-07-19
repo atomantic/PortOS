@@ -68,6 +68,11 @@ vi.mock('../layeredIntelligence.js', () => ({
   // layeredIntelligence.test.js; a spy here so the hook's WIRING (computed from the
   // loaded outcomes and passed to buildPrompt) can be asserted.
   computeCrossReferenceAnalysis: vi.fn(() => ''),
+  // Hand-off routing gate (#2764 §4). Semantics are unit-tested in
+  // layeredIntelligence.test.js; here it's a spy so the hook's WIRING (consulted
+  // before enqueuing, suppressing on handoff:false) can be asserted. Defaults to
+  // "allow the hand-off" so the existing hand-off path is unaffected.
+  computeHandoffRouting: vi.fn(() => ({ handoff: true, reason: null })),
   readLiTaskMetrics: vi.fn().mockResolvedValue({ read: true, metrics: null }),
   // The predicate's own semantics (listing vs. either sentinel) are unit-tested in
   // layeredIntelligence.test.js; here it's a spy so the hook's WIRING can be
@@ -80,12 +85,14 @@ vi.mock('../layeredIntelligence.js', () => ({
 vi.mock('../layeredIntelligenceOutcomes.js', () => ({
   recordFiledProposal: vi.fn().mockResolvedValue(true),
   listOutcomesResult: vi.fn().mockResolvedValue({ read: true, outcomes: [] }),
-  reconcileOutcomes: vi.fn().mockResolvedValue(0)
+  reconcileOutcomes: vi.fn().mockResolvedValue(0),
+  // The routing gate (#2764 §4) reads the app's history lazily on the hand-off path.
+  listOutcomes: vi.fn().mockResolvedValue([])
 }));
 
 import { buildTaskInput, processTaskOutput } from './layeredIntelligenceHooks.js';
 import * as li from '../layeredIntelligence.js';
-import { recordFiledProposal, listOutcomesResult, reconcileOutcomes } from '../layeredIntelligenceOutcomes.js';
+import { recordFiledProposal, listOutcomesResult, reconcileOutcomes, listOutcomes } from '../layeredIntelligenceOutcomes.js';
 import * as apps from '../apps.js';
 import { resolveAppWorkTracker } from '../../lib/workTracker.js';
 import { tryReadFile } from '../../lib/fileUtils.js';
@@ -512,6 +519,56 @@ describe('processTaskOutput', () => {
     expect(recordFiledProposal).toHaveBeenCalledWith(expect.objectContaining({
       appId: 'app-1', slug: 'add-metrics', scope: 'app-improvement', tracker: 'plan'
     }));
+  });
+
+  it('hands off a trivial+safe proposal in a healthy domain (routing allows) (#2764 §4)', async () => {
+    li.validateReasonerResponse.mockReturnValue({
+      proposal: { scope: 'app-improvement', slug: 'quick-fix', title: 'Quick fix', body: 'x', complexity: 'trivial', safe: true },
+      pause: null
+    });
+    li.fileProposalToForge.mockResolvedValue({ success: true, number: 88 });
+    li.isHandoffEligible.mockReturnValue(true);
+    li.computeHandoffRouting.mockReturnValue({ handoff: true, reason: null });
+    li.getEffectiveConfig.mockReturnValue({ allowedScopes: ['app-improvement'], sources: { outcomes: true }, handoff: { enabled: true } });
+    const enqueueHandoff = vi.fn().mockResolvedValue({ id: 't-1', duplicate: false });
+    const out = await processTaskOutput({ appId: 'app-1', success: true, payload: { proposal: {} } }, { enqueueHandoff });
+    // The routing gate was consulted with the loaded history, then allowed the enqueue.
+    expect(listOutcomes).toHaveBeenCalledWith(expect.objectContaining({ appId: 'app-1' }));
+    expect(li.computeHandoffRouting).toHaveBeenCalled();
+    expect(enqueueHandoff).toHaveBeenCalled();
+    expect(out).toMatchObject({ action: 'filed', reason: null, handedOff: true, handoffRouted: false });
+  });
+
+  it('files but does NOT auto-hand-off a trivial+safe proposal in a chronically-failing domain (#2764 §4)', async () => {
+    li.validateReasonerResponse.mockReturnValue({
+      proposal: { scope: 'app-improvement', slug: 'risky-here', title: 'Risky here', body: 'x', complexity: 'trivial', safe: true },
+      pause: null
+    });
+    li.fileProposalToForge.mockResolvedValue({ success: true, number: 89 });
+    li.isHandoffEligible.mockReturnValue(true);
+    // The domain's own hand-offs chronically fail → route to a human instead.
+    li.computeHandoffRouting.mockReturnValue({
+      handoff: false,
+      domain: 'app-improvement',
+      rate: 33,
+      n: 3,
+      cause: 'failing mostly on planning (2)',
+      reason: 'app-improvement hand-offs succeed 33% over 3 executed — filing for human review instead of auto-hand-off (failing mostly on planning (2))'
+    });
+    li.getEffectiveConfig.mockReturnValue({ allowedScopes: ['app-improvement'], sources: { outcomes: true }, handoff: { enabled: true } });
+    const enqueueHandoff = vi.fn().mockResolvedValue({ id: 't-2', duplicate: false });
+    const out = await processTaskOutput({ appId: 'app-1', success: true, payload: { proposal: {} } }, { enqueueHandoff });
+    // Filed for a human, but the coding agent was NOT enqueued.
+    expect(li.fileProposalToForge).toHaveBeenCalled();
+    expect(enqueueHandoff).not.toHaveBeenCalled();
+    // The proposal WAS filed successfully — filing-for-human is the good outcome, not a failure.
+    expect(out).toMatchObject({
+      action: 'filed',
+      reason: null,
+      handedOff: false,
+      handoffRouted: true,
+      handoffRoutingReason: expect.stringContaining('filing for human review instead of auto-hand-off')
+    });
   });
 
   it('reports a re-proposed already-tracked PLAN slug as duplicate without resetting its outcome (#2435)', async () => {
