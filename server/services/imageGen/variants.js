@@ -22,7 +22,7 @@ import { readFile, writeFile } from 'fs/promises';
 import { join } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { atomicWrite, PATHS } from '../../lib/fileUtils.js';
-import { cleanImageBuffer } from '../../lib/imageClean.js';
+import { stripPngC2PAChunk } from '../../lib/imageClean.js';
 import { removeCornerWatermark } from '../../lib/imageWatermark.js';
 import { applyLightRegen, computePixelDelta } from './regen.js';
 import { listCollections, addItem, ERR_DUPLICATE } from '../mediaCollections.js';
@@ -118,9 +118,21 @@ export async function persistVariant({
 // ---------------------------------------------------------------------------
 
 /**
- * C2PA-strip + denoise clean for /:filename/clean.
- * Reads the source, applies cleanImageBuffer, builds the variant record,
- * and delegates to persistVariant.
+ * Gallery "clean" for /:filename/clean — the CPU resize-squeeze.
+ * Reads the source, applies `applyLightRegen` (a downscale→upscale resolution
+ * shift that re-encodes to PNG), builds the variant record, and delegates to
+ * persistVariant.
+ *
+ * Why resize-squeeze and not metadata+denoise: the old "aggressive" clean
+ * (metadata strip + median/sharpen) did NOT touch SynthID. The resize-squeeze
+ * still strips the C2PA provenance chunk (via the PNG re-encode) AND perturbs
+ * SynthID's resolution-dependent carriers — a best-effort disruption validated
+ * against OpenAI's SynthID detector (issue #1764; detector-dependent, never a
+ * guaranteed removal). It runs here (the /clean endpoint), NOT the Regenerate
+ * panel's `method:'light'` pass, so the result is tagged as a CLEAN
+ * (`cleanLevel: 'resize-squeeze'`) and its lineage reads "Cleaned
+ * (resize-squeeze)", distinct from the regen panel's "Regenerated (light)"
+ * even though both call the same underlying `applyLightRegen`.
  *
  * @param {object} opts
  * @param {string} opts.filename    - gallery basename
@@ -134,17 +146,18 @@ export async function applyImageClean({ filename, sourceMeta }) {
     throw err;
   });
 
-  // Gallery "clean" is the aggressive variant: metadata strip + denoise.
-  const result = await cleanImageBuffer(buffer, { metadata: true, denoise: true });
-  if (result.format !== 'png') {
-    throw new ServerError('Gallery images must be PNG', { status: 400, code: 'UNSUPPORTED_FORMAT' });
+  // Detect the C2PA chunk BEFORE the re-encode drops it, so the sidecar can
+  // report whether provenance was actually stripped (lossless walk, no decode).
+  const c2paStripped = stripPngC2PAChunk(buffer).stripped;
+
+  // Resize-squeeze (best-effort SynthID disruption + C2PA strip via re-encode).
+  const light = await applyLightRegen(buffer);
+  if (!light) {
+    throw new ServerError('Invalid or corrupt image', { status: 400, code: 'INVALID_IMAGE' });
   }
 
-  // The `_clean-aggressive` filename suffix and `cleanLevel: 'aggressive'`
-  // sidecar field survive the light/aggressive collapse so already-cleaned
-  // images on disk keep round-tripping through the gallery unchanged.
   const base = filename.slice(0, -'.png'.length);
-  const outFilename = `${base}_clean-aggressive.png`;
+  const outFilename = `${base}_clean-resize-squeeze.png`;
   const createdAt = new Date().toISOString();
 
   // Strip `hidden` so a clean of a hidden source still surfaces in the gallery
@@ -156,27 +169,27 @@ export async function applyImageClean({ filename, sourceMeta }) {
     ...sourceMetaForCleaned,
     createdAt,
     cleanedFrom: filename,
-    cleanLevel: 'aggressive',
-    c2paStripped: result.c2paStripped,
+    cleanLevel: 'resize-squeeze',
+    c2paStripped,
   };
 
   return persistVariant({
     sourceFilename: filename,
     outFilename,
-    data: result.data,
+    data: light.data,
     variantMeta,
-    width: result.width,
-    height: result.height,
-    sizeBefore: result.sizeBefore,
-    sizeAfter: result.sizeAfter,
-    logLine: `🧼 Cleaned ${filename} → ${outFilename} (${result.sizeBefore}B → ${result.sizeAfter}B, c2pa=${result.c2paStripped})`,
+    width: light.width,
+    height: light.height,
+    sizeBefore: buffer.length,
+    sizeAfter: light.data.length,
+    logLine: `🧼 Cleaned ${filename} → ${outFilename} (resize-squeeze, ${buffer.length}B → ${light.data.length}B, c2pa=${c2paStripped})`,
     extraFields: {
       // sourceMeta fields already in variantMeta; these explicit fields win on
       // key collisions so createdAt reflects the cleaning, not the original.
       createdAt,
       cleanedFrom: filename,
-      cleanLevel: 'aggressive',
-      c2paStripped: result.c2paStripped,
+      cleanLevel: 'resize-squeeze',
+      c2paStripped,
     },
   });
 }

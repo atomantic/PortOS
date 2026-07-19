@@ -6,12 +6,12 @@ const navigate = vi.fn();
 vi.mock('react-router-dom', () => ({ useNavigate: () => navigate }));
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('../services/apiImageVideo', () => ({
-  regenerateGalleryImage: vi.fn(),
+  cleanGalleryImage: vi.fn(),
   extractLastFrame: vi.fn(),
   removeImageWatermark: vi.fn(),
 }));
 
-import { removeImageWatermark, regenerateGalleryImage } from '../services/apiImageVideo';
+import { removeImageWatermark, cleanGalleryImage } from '../services/apiImageVideo';
 
 const parseNav = () => {
   const url = navigate.mock.calls.at(-1)?.[0] || '';
@@ -80,15 +80,15 @@ describe('useMediaPreviewActions.handleRemoveWatermark', () => {
 });
 
 describe('useMediaPreviewActions.handleClean', () => {
-  beforeEach(() => regenerateGalleryImage.mockReset());
+  beforeEach(() => cleanGalleryImage.mockReset());
 
-  it('runs the CPU resize-squeeze (light regen), not the aggressive denoise clean', async () => {
-    const variant = { filename: 'cat_regen-light.png', regenMethod: 'light-spatial' };
-    regenerateGalleryImage.mockResolvedValue(variant);
+  it('runs the gallery clean endpoint (resize-squeeze) and returns the cleaned variant', async () => {
+    const variant = { filename: 'cat_clean-resize-squeeze.png', cleanLevel: 'resize-squeeze' };
+    cleanGalleryImage.mockResolvedValue(variant);
     const onCleanComplete = vi.fn();
     const { result } = renderHook(() => useMediaPreviewActions({ onCleanComplete }));
     const returned = await result.current.handleClean({ filename: 'cat.png' });
-    expect(regenerateGalleryImage).toHaveBeenCalledWith('cat.png', { method: 'light' });
+    expect(cleanGalleryImage).toHaveBeenCalledWith('cat.png', { silent: true });
     expect(onCleanComplete).toHaveBeenCalledWith(variant);
     expect(returned).toBe(variant);
   });
@@ -96,6 +96,6 @@ describe('useMediaPreviewActions.handleClean', () => {
   it('throws when the image has no filename', async () => {
     const { result } = renderHook(() => useMediaPreviewActions());
     await expect(result.current.handleClean({})).rejects.toThrow('Missing filename');
-    expect(regenerateGalleryImage).not.toHaveBeenCalled();
+    expect(cleanGalleryImage).not.toHaveBeenCalled();
   });
 });

@@ -41,6 +41,17 @@ describe('computeImageVariantGroup', () => {
     expect(result.active.label).toBe('Cleaned (aggressive)');
   });
 
+  it('labels a resize-squeeze clean as "Cleaned (resize-squeeze)" (issue #1764)', () => {
+    const orig = img('a.png');
+    const cleaned = img('a_clean-resize-squeeze.png', { cleanedFrom: 'a.png', cleanLevel: 'resize-squeeze' });
+    const result = computeImageVariantGroup(orig, [orig, cleaned]);
+    expect(result).not.toBeNull();
+    expect(result.group).toEqual([
+      { label: 'Original', item: orig },
+      { label: 'Cleaned (resize-squeeze)', item: cleaned },
+    ]);
+  });
+
   it('orders light before aggressive when both legacy clean variants exist', () => {
     const orig = img('a.png');
     const aggressive = img('a_clean-aggressive.png', { cleanedFrom: 'a.png', cleanLevel: 'aggressive' });
