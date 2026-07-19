@@ -1236,17 +1236,20 @@ const CROSS_REFERENCE_HEADER = "Domains where LI PROPOSES well but EXECUTES poor
  * liProposalExecution already covers) AND at least one DIAGNOSED failed hand-off (the
  * "executes poorly" side, with a concrete cause to name — a purely `unknown`/
  * `unclassified` failure history has no actionable mode to cross-reference). Merge rate
- * is measured over RESOLVED proposals only, mirroring computeOutcomesReport's per-scope
- * math. Sorted sharpest-execution-problem first; bounded like the avoid/prefer lists.
- * Returns '' when no domain qualifies, so buildPrompt omits the block.
+ * is measured over RESOLVED proposals only — the same denominator summarizeOutcomeStats
+ * uses for its rawMergeRate (pending ≠ a merge verdict), not computeOutcomesReport's
+ * per-scope rate, which divides by all filed. Sorted sharpest-execution-problem first;
+ * bounded like the avoid/prefer lists. Returns '' when no domain qualifies, so
+ * buildPrompt omits the block.
  */
 export function computeCrossReferenceAnalysis({ outcomes = [] } = {}) {
-  const records = (Array.isArray(outcomes) ? outcomes : []).filter(o => o && typeof o === 'object');
-  const byDomain = computeExecutionByDomain(records); // per-domain failure taxonomy
+  const records = Array.isArray(outcomes) ? outcomes : [];
+  const byDomain = computeExecutionByDomain(records); // per-domain failure taxonomy (self-guards bad records)
 
   // Per-domain merge stats over RESOLVED proposals (pending ≠ a merge verdict).
   const mergeByScope = new Map();
   for (const o of records) {
+    if (!o || typeof o !== 'object') continue;
     const scope = typeof o.scope === 'string' && o.scope.trim() ? o.scope.trim() : null;
     if (!scope) continue;
     if (!PROPOSAL_OUTCOMES.includes(o.outcome)) continue; // unresolved: no verdict yet
