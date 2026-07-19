@@ -461,6 +461,25 @@ describe('perpetualWork', () => {
       expect(issueCalls.every(([, a]) => !a.includes('--author'))).toBe(true);
     });
 
+    it('owner filter on a nested SUBGROUP project resolves the full namespace and reports owner-is-group', async () => {
+      // Nested subgroups are the common GitLab layout: parseGitRemoteUrl rejects a
+      // >2-segment remote, so the namespace must be resolved from the raw path and
+      // URL-encoded (`parent/subgroup` → `parent%2Fsubgroup`) before the group probe.
+      spawn.mockImplementation((cmd, args = []) => {
+        if (cmd === 'git' && args[0] === 'remote') return fakeChild('git@gitlab.com:parent/subgroup/widget.git\n');
+        if (cmd === 'glab' && args[0] === 'api' && String(args[1]).startsWith('groups/')) return fakeChild('{"kind":"group"}');
+        if (cmd === 'glab' && args[0] === 'issue') return fakeChild(JSON.stringify([{ iid: 9, title: 'x', assignees: [], labels: [] }]));
+        return fakeChild('');
+      });
+      const out = await detectGitlabIssues(app, { issueAuthorFilter: 'owner' });
+      expect(out).toMatchObject({ reason: 'owner-is-group', total: 1, count: 0 });
+      const probeCall = spawn.mock.calls.find(([cmd, a]) => cmd === 'glab' && a[0] === 'api' && String(a[1]).startsWith('groups/'));
+      expect(probeCall[1][1]).toBe('groups/parent%2Fsubgroup');
+      // Never issues the guaranteed-empty `--author <group>` query.
+      const issueCalls = spawn.mock.calls.filter(([cmd, a]) => cmd === 'glab' && a[0] === 'issue');
+      expect(issueCalls.every(([, a]) => !a.includes('--author'))).toBe(true);
+    });
+
     it('owner filter on a USER-owned project passes --author <namespace> (groups probe 404)', async () => {
       // A user namespace: `glab api groups/<namespace>` 404s (non-zero exit) → not
       // a group, so owner-mode filters by the namespace login as before.

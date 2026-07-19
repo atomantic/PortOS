@@ -27,7 +27,7 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { emitLog } from './cosEvents.js';
 import { parsePlanItems, extractAllIds, findInProgressIds, pickFirstAvailable, extractSlugFromRef } from '../lib/planIds.js';
-import { readOriginRemoteUrl, parseGitRemoteUrl } from '../lib/gitRemote.js';
+import { readOriginRemoteUrl } from '../lib/gitRemote.js';
 
 // Labels that make a GitHub issue non-actionable for autonomous claiming. MUST
 // stay in sync with the claim-issue prompt's Phase 1 skip-list
@@ -73,16 +73,36 @@ export function issueNumberFromRef(ref) {
 }
 
 /**
- * Resolve the repo owner from the git origin remote (host-agnostic — works for
- * GitHub and GitLab). For a personal repo the owner segment is the user; for an
- * org/group it's the org/group name. The GitHub detector prefers the
- * authoritative `gh repo view` owner instead; this is used for GitLab, whose
- * claim prompt resolves the author filter from the project namespace.
+ * Resolve the FULL GitLab project namespace (every path segment before the final
+ * repo segment) from the git origin remote — INCLUDING nested subgroups. The
+ * shared `parseGitRemoteUrl` only accepts a two-segment `owner/repo`, so a
+ * subgroup-nested project (`parent/subgroup/project`) resolves to null there and
+ * never reaches the group probe below; parse the raw path here so nested subgroups
+ * get the same owner-is-group short-circuit as a top-level group. GitLab subgroups
+ * are the common layout, so this is the difference between the short-circuit
+ * working and silently never firing for real GitLab projects. Returns null when
+ * there's no origin remote or the URL has no namespace segment (a bare `repo`).
+ * For a single-owner remote (`alice/repo`) this returns just `alice`, so the
+ * user-namespace `--author` path keeps its old value.
  */
-async function resolveRemoteOwner(repoPath) {
+async function resolveGitlabNamespace(repoPath) {
   const url = await readOriginRemoteUrl(repoPath).catch(() => null);
-  const parsed = url ? parseGitRemoteUrl(url) : null;
-  return parsed?.owner || null;
+  if (typeof url !== 'string' || !url.trim()) return null;
+  // Strip `scheme://`, an optional `user@`, and a trailing `.git`, then split off
+  // the host (the segment before the first ':' or '/') to leave the repo path.
+  const afterHostPrefix = url.trim()
+    .replace(/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//, '')
+    .replace(/^[^@/]+@/, '')
+    .replace(/\.git$/i, '');
+  const sepIdx = afterHostPrefix.search(/[:/]/);
+  if (sepIdx === -1) return null;
+  const rawPath = afterHostPrefix.slice(sepIdx + 1)
+    .replace(/^\/+/, '')    // strip leading slash(es) after `host:` / `host/`
+    .replace(/^\d+\//, ''); // strip an SSH `host:443/owner/repo` port hop
+  const segments = rawPath.split('/').filter(Boolean);
+  if (segments.length < 2) return null; // need at least namespace + repo
+  segments.pop(); // drop the repo segment; the rest is the (possibly nested) namespace
+  return segments.join('/');
 }
 
 /**
@@ -214,17 +234,20 @@ const FORGE_ISSUE_CONFIG = {
     // GitLab has no authoritative `gh repo view` equivalent here; resolve the
     // author filter from the project namespace (git remote owner), matching the
     // claim-issue-gitlab prompt. GitLab can't tell a user namespace from a GROUP
-    // namespace from the remote URL alone, so probe: `glab api groups/<namespace>`
-    // returns 200 for a group and 404 for a user namespace. A group is never an
-    // issue author, so populate `isOrg: true` for groups and let detectForgeIssues
-    // fire the same owner-filter short-circuit GitHub uses — no new branch logic.
-    // A probe failure (network/unauth/non-200) degrades to isOrg:false → the
-    // pre-existing `--author <owner>` behavior, so no new transient park appears.
+    // (or nested subgroup) from the remote URL alone, so probe:
+    // `glab api groups/<url-encoded-namespace>` returns 200 for a group/subgroup
+    // and 404 for a user namespace. A group is never an issue author, so populate
+    // `isOrg: true` for groups and let detectForgeIssues fire the same owner-filter
+    // short-circuit GitHub uses — no new branch logic. The namespace is URL-encoded
+    // so a nested subgroup path (`parent/subgroup`) hits the group endpoint as
+    // `groups/parent%2Fsubgroup`. A probe failure (network/unauth/non-200) degrades
+    // to isOrg:false → the pre-existing `--author <owner>` behavior, so no new
+    // transient park appears.
     resolveOwner: async (repoPath) => {
-      const owner = await resolveRemoteOwner(repoPath);
-      if (!owner) return { error: 'glab-owner-unresolved' };
-      const probe = await runCli('glab', ['api', `groups/${owner}`], repoPath);
-      return { owner, isOrg: probe.code === 0 };
+      const namespace = await resolveGitlabNamespace(repoPath);
+      if (!namespace) return { error: 'glab-owner-unresolved' };
+      const probe = await runCli('glab', ['api', `groups/${encodeURIComponent(namespace)}`], repoPath);
+      return { owner: namespace, isOrg: probe.code === 0 };
     },
     // `--self` mode: glab's `--author` expects a username (no `@me` token), so
     // resolve the authenticated account via the API; transient if glab is
