@@ -30,7 +30,6 @@ import {
   isApiProvider,
   isProcessProvider,
   isOllamaBackedProvider,
-  isClaudeCodePlanCli,
   isGrokBuildCli,
   isLocalEndpoint,
   enabledApiProviderFilter,
@@ -146,39 +145,6 @@ describe('isLocalEndpoint', () => {
     expect(isLocalEndpoint('https://localhost.evil.com/v1')).toBe(false);
     expect(isLocalEndpoint('')).toBe(false);
     expect(isLocalEndpoint(undefined)).toBe(false);
-  });
-});
-
-describe('isClaudeCodePlanCli', () => {
-  it('matches a headless claude CLI provider on the plan', () => {
-    expect(isClaudeCodePlanCli({ type: 'cli', command: 'claude', envVars: {} })).toBe(true);
-    expect(isClaudeCodePlanCli({ type: 'cli', command: 'claude' })).toBe(true);
-  });
-
-  it('does not match the interactive Claude Code TUI provider', () => {
-    expect(isClaudeCodePlanCli({ type: 'tui', command: 'claude' })).toBe(false);
-  });
-
-  it('does not match non-claude CLI providers', () => {
-    expect(isClaudeCodePlanCli({ type: 'cli', command: 'gemini' })).toBe(false);
-    expect(isClaudeCodePlanCli({ type: 'cli', command: 'codex' })).toBe(false);
-  });
-
-  it('excludes Bedrock/Vertex-routed claude CLIs (billed via cloud, not the plan)', () => {
-    expect(isClaudeCodePlanCli({ type: 'cli', command: 'claude', envVars: { CLAUDE_CODE_USE_BEDROCK: '1' } })).toBe(false);
-    expect(isClaudeCodePlanCli({ type: 'cli', command: 'claude', envVars: { CLAUDE_CODE_USE_VERTEX: '1' } })).toBe(false);
-  });
-
-  it('excludes Ollama-backed Claude (local model — never plan/API-billed)', () => {
-    // Claude Ollama CLI carries the ollamaBacked marker + ANTHROPIC_BASE_URL
-    expect(isClaudeCodePlanCli({ type: 'cli', command: 'claude', ollamaBacked: true, envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434' } })).toBe(false);
-    // inferred purely from the base URL too
-    expect(isClaudeCodePlanCli({ type: 'cli', command: 'claude', envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434' } })).toBe(false);
-  });
-
-  it('safely returns false for nullish input', () => {
-    expect(isClaudeCodePlanCli(null)).toBe(false);
-    expect(isClaudeCodePlanCli(undefined)).toBe(false);
   });
 });
 

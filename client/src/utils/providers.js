@@ -413,33 +413,6 @@ export const isOllamaBackedProvider = (provider) => {
 };
 
 /**
- * Check if a provider is the headless Claude Code CLI (`claude --print`) whose
- * *provider-level config* points it at a Claude Code subscription plan — i.e. the
- * provider's own `envVars` do NOT route it through Bedrock or Vertex (those bill
- * via the cloud account, not the plan). Used to surface the billing-change warning:
- * starting 2026-06-15 Anthropic clocks this non-interactive usage under API billing
- * (consuming API credits) instead of the Claude Code plan, so it should be avoided
- * in favor of the interactive Claude Code TUI provider.
- *
- * Contract is intentionally provider-level only: this is a client-side heuristic
- * that sees just the saved provider record. A user who routes the spawn to
- * Bedrock/Vertex *globally* via `~/.claude/settings.json` (merged below
- * `provider.envVars` in `server/services/agentCliSpawning.js`) rather than on the
- * provider would be cloud-billed but still match here. Configure Bedrock/Vertex on
- * the provider's `envVars` (as the shipped `claude-code-bedrock` sample does) to
- * suppress the warning.
- */
-export const isClaudeCodePlanCli = (provider) =>
-  isCliProvider(provider) &&
-  provider?.command === 'claude' &&
-  // Ollama-backed Claude (the "Claude Ollama" sample) routes generation to a
-  // local daemon via ANTHROPIC_BASE_URL — it's never plan/API-billed, so the
-  // billing warning would be misleading and discourage the shipped local setup.
-  !isOllamaBackedProvider(provider) &&
-  !provider?.envVars?.CLAUDE_CODE_USE_BEDROCK &&
-  !provider?.envVars?.CLAUDE_CODE_USE_VERTEX;
-
-/**
  * Check if a provider is the Grok Build CLI/TUI (the `grok` command harness).
  * Mirrors the Grok detection in `knownProviderContextWindow`: matches the shipped
  * `grok-cli` / `grok-tui` samples or any process provider whose command basename
