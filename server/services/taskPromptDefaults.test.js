@@ -84,25 +84,28 @@ describe('taskPromptDefaults integrity snapshot', () => {
     expect(v9).not.toBe(current);
   });
 
-  // claim-issue v6 / claim-issue-gitlab v5: Phase 1 epic skip also recognizes a
-  // leading bracketed `[epic]` title tag (the "[Epic] …" convention), fixing the
-  // perpetual-swarm churn where a `[Epic]`-titled issue with no `epic` label
-  // read as actionable forever. Pins the version-bump pairing + preserved
-  // outgoing defaults for cross-install auto-upgrade.
+  // claim-issue v7 / claim-issue-gitlab v6: Phase 3 no longer parks an *ambiguous*
+  // issue to `needs-input` and re-picks — the agent decides (picks the most
+  // reasonable reading, records it in an issue comment/note, ships) instead of
+  // punting the choice back to a human. `needs-input` is reserved for
+  // destructive/irreversible or genuinely human-gated (hardware/credentials)
+  // cases. Mirrors CLAUDE.md "Decide, don't defer". Pins the version-bump pairing
+  // + preserved outgoing defaults for cross-install auto-upgrade.
   it.each([
-    ['claim-issue', 6],
-    ['claim-issue-gitlab', 5],
-  ])('%s v%d recognizes an "[epic]"/"Epic:" title prefix, preserving the outgoing default', (key, version) => {
+    ['claim-issue', 7],
+    ['claim-issue-gitlab', 6],
+  ])('%s v%d decides an ambiguous issue instead of parking it, preserving the outgoing default', (key, version) => {
     const current = DEFAULT_TASK_PROMPTS[key];
-    expect(current).toContain('beginning with an `[epic]` bracket or `Epic:` tag');
+    expect(current).toContain('Ambiguity is NOT a release trigger');
+    expect(current).not.toContain('so it\'s excluded from future autonomous claims');
     expect(PROMPT_VERSIONS[key]).toBe(version);
 
     const previous = PREVIOUS_DEFAULT_PROMPTS[key];
     const outgoing = previous[previous.length - 1];
-    // The outgoing default only knew the `epic` label + "(epic)" suffix; it is
+    // The outgoing default parked an ambiguous issue to `needs-input`; it is
     // preserved verbatim so installs holding it are recognized and upgraded.
-    expect(outgoing).not.toContain('beginning with an `[epic]` bracket');
-    expect(outgoing).toContain('a title ending in "(epic)"');
+    expect(outgoing).not.toContain('Ambiguity is NOT a release trigger');
+    expect(outgoing).toContain('so it\'s excluded from future autonomous claims');
     expect(outgoing).not.toBe(current);
   });
 

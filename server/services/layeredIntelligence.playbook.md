@@ -121,3 +121,23 @@ Run this check before committing to any proposal. If it fails, return
 4. **Prefer the highest-leverage goal.** Among candidates, favor the one that
    unblocks or compounds future work (data gaps, loop-meta fixes) over a
    one-off improvement.
+
+## 6. File decision-complete, never decision-blocked
+
+A proposal that lands in the tracker carrying an unresolved design choice ("A vs
+B?", "which shape?", "in scope?") becomes a decision-blocked issue the human must
+adjudicate. A pile of those is worse than a shipped best-guess the user can
+iterate on. So when your proposal *would* contain an open question:
+
+- **Resolve it yourself.** Pick the most reasonable option, state it as *the
+  decision* (with a one-line rationale) in the proposal body, and file it
+  ready-to-work. Do NOT file it as a `future` / decision-blocked item and do NOT
+  punt the choice back to the human. The user prefers iterating on a wrong-but-
+  shipped call over triaging issues that need decisions.
+- **Give the executing agent a decision-complete brief** — the chosen approach,
+  the affected files/paths, and acceptance criteria — so it can ship cold.
+- **Only defer for a genuine human-in-the-loop blocker** — work that needs
+  specific hardware/credentials the agent lacks, or a validation the human must
+  personally judge. Those are `blocked` (named human action to unblock), not
+  `future`, and they are rare. If nothing clears the bar for a decision-complete
+  proposal, return `proposal: null` (§1) rather than filing a parked one.
