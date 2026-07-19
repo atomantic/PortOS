@@ -46,6 +46,7 @@ import {
   computeScopeAwareness,
   computeExecutionByDomain,
   computeProposalExecutionAwareness,
+  computeCrossReferenceAnalysis,
   PROPOSAL_EXECUTION_MIN_SAMPLE,
   SCOPE_AVOID_SUCCESS_THRESHOLD,
   SCOPE_PREFER_SUCCESS_THRESHOLD,
@@ -443,8 +444,29 @@ describe('computeExecutionByDomain (#2765)', () => {
       { scope: 'loop-meta', executionOutcome: 'failure' },
       { scope: 'app-improvement', executionOutcome: 'success' }
     ]);
-    expect(byDomain['loop-meta']).toEqual({ completed: 2, succeeded: 1, successRate: 50 });
-    expect(byDomain['app-improvement']).toEqual({ completed: 1, succeeded: 1, successRate: 100 });
+    // The loop-meta failure carries no failureCategory, so it lands in `unclassified`
+    // rather than as a diagnosis; app-improvement had no failure at all.
+    expect(byDomain['loop-meta']).toEqual({
+      completed: 2, succeeded: 1, successRate: 50,
+      failureSummary: { entries: [], unknown: 0, unclassified: 1, diagnosed: 0, total: 1 }
+    });
+    expect(byDomain['app-improvement']).toEqual({
+      completed: 1, succeeded: 1, successRate: 100,
+      failureSummary: { entries: [], unknown: 0, unclassified: 0, diagnosed: 0, total: 0 }
+    });
+  });
+
+  it('carries the dominant per-domain failure causes in failureSummary (#2764 §3)', () => {
+    const byDomain = computeExecutionByDomain([
+      { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' },
+      { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' },
+      { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'execution' },
+      { scope: 'loop-meta', executionOutcome: 'success' }
+    ]);
+    expect(byDomain['loop-meta'].failureSummary).toEqual({
+      entries: [{ category: 'planning', count: 2 }, { category: 'execution', count: 1 }],
+      unknown: 0, unclassified: 0, diagnosed: 3, total: 3
+    });
   });
 
   it('ignores records with no executionOutcome or no scope', () => {
@@ -498,6 +520,77 @@ describe('computeProposalExecutionAwareness (#2765)', () => {
     // 2/3 ≈ 67%: above the 50% avoid line, below the 75% prefer line.
     expect(computeProposalExecutionAwareness({ outcomes: execRecords('loop-meta', 2, 1) })).toBe('');
     expect(PROPOSAL_EXECUTION_MIN_SAMPLE).toBe(2);
+  });
+
+  it('names the dominant failure cause on a low-execution AVOID line (#2764 §3)', () => {
+    const out = computeProposalExecutionAwareness({
+      outcomes: [
+        { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' },
+        { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' },
+        { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'execution' }
+      ]
+    });
+    expect(out).toContain('LOW-EXECUTION proposal domains');
+    expect(out).toContain('loop-meta');
+    // The glossed dominant cause is appended to the avoid line, commonest first.
+    expect(out).toContain('failing mostly on');
+    expect(out).toContain('the task was under-defined or already done (no correct change to make) (2)');
+  });
+
+  it('omits the cause clause when no failure carries a diagnosis', () => {
+    // All failures are unclassified (no failureCategory), so there is no cause to name.
+    const out = computeProposalExecutionAwareness({ outcomes: execRecords('app-improvement', 0, 3) });
+    expect(out).toContain('app-improvement');
+    expect(out).not.toContain('failing mostly on');
+  });
+});
+
+describe('computeCrossReferenceAnalysis (#2764 §3)', () => {
+  it('surfaces a domain that merges well but executes poorly', () => {
+    const out = computeCrossReferenceAnalysis({
+      outcomes: [
+        // loop-meta: 2 of 4 resolved proposals merged (50%)...
+        { scope: 'loop-meta', outcome: 'merged' },
+        { scope: 'loop-meta', outcome: 'merged' },
+        { scope: 'loop-meta', outcome: 'rejected' },
+        { scope: 'loop-meta', outcome: 'abandoned' },
+        // ...but its hand-offs fail: planning 3, execution 1 (planning dominant)
+        { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' },
+        { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' },
+        { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' },
+        { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'execution' }
+      ]
+    });
+    expect(out).toContain('PROPOSES well but EXECUTES poorly');
+    expect(out).toContain('loop-meta: proposals merge at 50% (2/4) but hand-offs here fail on planning (3 of 4)');
+  });
+
+  it('excludes a domain with no merged proposal (proposes poorly too)', () => {
+    // Domain fails execution but never merged — liProposalExecution already covers it,
+    // so the cross-reference (which is about the CONTRAST) stays silent.
+    expect(computeCrossReferenceAnalysis({
+      outcomes: [
+        { scope: 'loop-meta', outcome: 'rejected' },
+        { scope: 'loop-meta', executionOutcome: 'failure', failureCategory: 'planning' }
+      ]
+    })).toBe('');
+  });
+
+  it('excludes a domain whose failures are all undiagnosed', () => {
+    // Merges well, but the failed hand-offs carry no recognized cause — nothing to
+    // cross-reference, so no line (unknown/unclassified are not findings).
+    expect(computeCrossReferenceAnalysis({
+      outcomes: [
+        { scope: 'loop-meta', outcome: 'merged' },
+        { scope: 'loop-meta', executionOutcome: 'failure' } // unclassified
+      ]
+    })).toBe('');
+  });
+
+  it('returns "" for empty / non-array input', () => {
+    expect(computeCrossReferenceAnalysis({ outcomes: [] })).toBe('');
+    expect(computeCrossReferenceAnalysis({ outcomes: null })).toBe('');
+    expect(computeCrossReferenceAnalysis()).toBe('');
   });
 });
 
@@ -702,6 +795,17 @@ describe('buildPrompt', () => {
     expect(withExec).toContain('### liProposalExecution');
     expect(withExec).toContain('loop-meta');
     expect(withExec).toContain('DIRECT record'); // framed as authoritative, not directional
+  });
+
+  it('injects the cross-reference block only when a report is passed (#2764 §3)', () => {
+    const base = { app, isPortos: true, config: { allowedScopes: ['loop-meta'], rules: '' } };
+    expect(buildPrompt(base)).not.toContain('### liCrossReference');
+    const withXref = buildPrompt({
+      ...base,
+      crossReferenceReport: "Domains where LI PROPOSES well but EXECUTES poorly:\n- loop-meta: proposals merge at 50% (2/4) but hand-offs here fail on planning (3 of 4)"
+    });
+    expect(withXref).toContain('### liCrossReference');
+    expect(withXref).toContain('hand-offs here fail on planning (3 of 4)');
   });
 
   it('suppresses the scope-awareness block on a managed (non-PortOS) app (#2760 codex P2)', () => {

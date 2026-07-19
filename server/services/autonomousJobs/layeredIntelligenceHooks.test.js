@@ -64,6 +64,10 @@ vi.mock('../layeredIntelligence.js', () => ({
   // layeredIntelligence.test.js; a spy here so the hook's WIRING (computed from the
   // loaded outcomes and passed to buildPrompt) can be asserted.
   computeProposalExecutionAwareness: vi.fn(() => ''),
+  // Cross-reference analysis (#2764 §3). Semantics are unit-tested in
+  // layeredIntelligence.test.js; a spy here so the hook's WIRING (computed from the
+  // loaded outcomes and passed to buildPrompt) can be asserted.
+  computeCrossReferenceAnalysis: vi.fn(() => ''),
   readLiTaskMetrics: vi.fn().mockResolvedValue({ read: true, metrics: null }),
   // The predicate's own semantics (listing vs. either sentinel) are unit-tested in
   // layeredIntelligence.test.js; here it's a spy so the hook's WIRING can be
