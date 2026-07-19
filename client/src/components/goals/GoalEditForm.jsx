@@ -21,8 +21,15 @@ export default function GoalEditForm({
   toggleFeatureArea, parentOptions, saveEdit, onCancel
 }) {
   const selectedAreas = form.featureAreas || [];
-  // Category default shown (greyed) when no per-goal override is set, so the
-  // user sees which areas the Daily Driver will deep-link to by default.
+  // Gate the greyed category-default hint on whether any LOCALLY-KNOWN area is
+  // selected — not on raw array length. A version-skewed goal can carry only
+  // forward-unknown ids (from a newer peer); those render no visible button and
+  // getGoalFeatureAreas filters them, so the Daily Driver still falls back to the
+  // category default. Keying on length would hide the hint in that case and lie
+  // about the actual behavior (issue #2679).
+  const hasKnownSelection = selectedAreas.some(id => FEATURE_AREAS[id]);
+  // Category default shown (greyed) when no known override is set, so the user
+  // sees which areas the Daily Driver will deep-link to by default.
   const categoryDefaultLabels = (GOAL_CATEGORY_FEATURE_MAP[form.category] || [])
     .map(id => FEATURE_AREAS[id]?.label)
     .filter(Boolean);
@@ -205,7 +212,7 @@ export default function GoalEditForm({
             );
           })}
         </div>
-        {selectedAreas.length === 0 && (
+        {!hasKnownSelection && (
           <p className="text-[10px] text-gray-600 mt-1">
             Default ({CATEGORY_CONFIG[form.category]?.label || form.category}):{' '}
             {categoryDefaultLabels.length > 0 ? categoryDefaultLabels.join(', ') : 'none for this category'}

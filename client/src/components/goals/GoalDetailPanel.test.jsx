@@ -190,11 +190,11 @@ describe('GoalDetailPanel Daily Driver feature-area override (issue #2679)', () 
     );
   });
 
-  it('omits featureAreas from the payload when the override was not touched (forward-compat)', async () => {
-    // Editing an unrelated field must NOT round-trip featureAreas — otherwise a
-    // goal synced from a newer federated peer carrying a forward-unknown area id
-    // would 400 against the strict updateGoalInputSchema enum. Omitting the key
-    // lets the service preserve the stored value (unknown ids included).
+  it('preserves forward-unknown ids when editing an unrelated field (no data loss on federated installs)', async () => {
+    // A goal synced from a newer peer carries a feature-area id this install
+    // doesn't know. Editing an unrelated field must round-trip that id intact —
+    // dropping it would LWW-propagate a truncated array back and erase the newer
+    // peer's config. The (non-strict) server schema accepts the unknown id.
     await renderPanel({ ...baseGoal, featureAreas: ['someFutureAreaFromANewerPeer'] });
     fireEvent.click(screen.getByText('Edit'));
     // Change only the title; never touch the feature-area buttons.
@@ -205,15 +205,14 @@ describe('GoalDetailPanel Daily Driver feature-area override (issue #2679)', () 
       await Promise.resolve();
     });
     const [, payload] = api.updateGoal.mock.calls[0];
-    expect(payload).not.toHaveProperty('featureAreas');
+    expect(payload.featureAreas).toEqual(['someFutureAreaFromANewerPeer']);
     expect(payload.title).toBe('Master the craft, revised');
   });
 
-  it('strips locally-unknown ids when the override IS changed', async () => {
-    // A goal carries a forward-unknown id plus a known one; the user toggles a
-    // known area, so the override is "changed" and gets sent — but the unknown
-    // id (invisible in this install's UI) must be stripped so the update still
-    // validates.
+  it('preserves forward-unknown ids when the override IS changed', async () => {
+    // A goal carries a forward-unknown id plus a known one; the user toggles
+    // another known area. The unknown id (invisible in this install's UI) must
+    // ride along untouched so it is never erased across federation.
     await renderPanel({ ...baseGoal, featureAreas: ['someFutureAreaFromANewerPeer', 'universes'] });
     fireEvent.click(screen.getByText('Edit'));
     // Toggle a different known area on → override changed.
@@ -223,7 +222,16 @@ describe('GoalDetailPanel Daily Driver feature-area override (issue #2679)', () 
       await Promise.resolve();
     });
     const [, payload] = api.updateGoal.mock.calls[0];
-    expect(payload.featureAreas).toEqual(['universes', 'tribe']);
-    expect(payload.featureAreas).not.toContain('someFutureAreaFromANewerPeer');
+    expect(payload.featureAreas).toEqual(['someFutureAreaFromANewerPeer', 'universes', 'tribe']);
+  });
+
+  it('shows the category-default hint for an override of only forward-unknown ids', async () => {
+    // Only forward-unknown ids selected → no visible button is active and the
+    // Daily Driver falls back to the category default at read time, so the hint
+    // must be shown (gating on known-selection, not raw array length).
+    await renderPanel({ ...baseGoal, featureAreas: ['someFutureAreaFromANewerPeer'] });
+    fireEvent.click(screen.getByText('Edit'));
+    expect(screen.getByText(/Default \(Mastery\):/)).toBeTruthy();
+    expect(screen.getByText(/Daily POST, Memory/)).toBeTruthy();
   });
 });

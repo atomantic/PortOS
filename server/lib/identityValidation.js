@@ -1,10 +1,21 @@
 import { z } from 'zod';
-import { FEATURE_AREA_IDS } from './goalFeatureMap.js';
 
 // Per-goal feature-area override (issue #2666): an ordered list of feature-area
 // ids the Daily Driver deep-links to for this goal, overriding the category
 // default. Absent/empty → the goal falls back to its category's default map.
-const featureAreasSchema = z.array(z.enum(FEATURE_AREA_IDS)).max(FEATURE_AREA_IDS.length);
+//
+// Forward-compat (issue #2679): this is deliberately NOT `z.enum(FEATURE_AREA_IDS)`.
+// Goals sync between federated peers as whole records (no schema-version gate),
+// so an older install can receive — and store, via dataSync's direct file write
+// which bypasses this route validation — a goal carrying a feature-area id a
+// newer peer introduced. If the edit path rejected those ids, saving that goal
+// would 400; if the client stripped them, the truncated array would LWW-propagate
+// back and erase the newer peer's config. So we accept any non-empty string id
+// here and let `getGoalFeatureAreas` filter ids this install doesn't know at read
+// time — unknown ids are preserved in storage, ignored when resolving areas. The
+// cap stays generous (not tied to this install's FEATURE_AREA_IDS.length) so a
+// goal pinning more areas than this version knows still validates.
+const featureAreasSchema = z.array(z.string().min(1)).max(64);
 
 export const sectionStatusEnum = z.enum(['active', 'pending', 'unavailable']);
 
