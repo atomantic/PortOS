@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import toast from '../components/ui/Toast';
-import { cleanGalleryImage, extractLastFrame, removeImageWatermark } from '../services/apiImageVideo';
+import { regenerateGalleryImage, extractLastFrame, removeImageWatermark } from '../services/apiImageVideo';
 import { VIDEO_TILING_ENUM_SET } from '../lib/videoTilingOptions';
 
 // Common image render-setting params shared by the image branch of Remix and by
@@ -143,15 +143,20 @@ export default function useMediaPreviewActions({ onCleanComplete = null } = {}) 
     navigate(`/media/video?${params}`);
   }, [navigate]);
 
-  // Clean: re-encode + denoise via the gallery clean endpoint to strip C2PA
-  // provenance and reduce AI artifacts. Returns the resulting gallery item so
-  // consumers can splice it into local state. `onCleanComplete` is the
-  // consumer-specific post-step (add-to-collection / prepend-to-history /
-  // etc.) — fired AFTER the success toast so a failing post-step still shows
-  // the user the clean succeeded server-side.
+  // Clean: run the CPU resize-squeeze (light regen). This downscale→upscale
+  // resolution shift re-encodes to PNG — so it still strips the C2PA provenance
+  // chunk and ancillary metadata as a side effect — AND perturbs SynthID's
+  // resolution-dependent carriers (issue #1764: validated best-effort against
+  // OpenAI's SynthID detector — it makes the detector fail to return a positive;
+  // best-effort/detector-dependent, never a guaranteed removal). This replaces
+  // the old metadata+denoise "aggressive" clean, which did NOT touch SynthID.
+  // The light method is synchronous and returns the new gallery variant directly
+  // (no FLUX runner / GPU needed). `onCleanComplete` is the consumer-specific
+  // post-step (add-to-collection / prepend-to-history / etc.) — fired AFTER the
+  // success toast so a failing post-step still shows the user it succeeded.
   const handleClean = useCallback(async (img) => {
     if (!img?.filename) throw new Error('Missing filename');
-    const cleaned = await cleanGalleryImage(img.filename, { silent: true }).catch((err) => {
+    const cleaned = await regenerateGalleryImage(img.filename, { method: 'light' }).catch((err) => {
       toast.error(err.message || 'Failed to clean image');
       throw err;
     });

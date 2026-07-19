@@ -6,12 +6,12 @@ const navigate = vi.fn();
 vi.mock('react-router-dom', () => ({ useNavigate: () => navigate }));
 vi.mock('../components/ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('../services/apiImageVideo', () => ({
-  cleanGalleryImage: vi.fn(),
+  regenerateGalleryImage: vi.fn(),
   extractLastFrame: vi.fn(),
   removeImageWatermark: vi.fn(),
 }));
 
-import { removeImageWatermark } from '../services/apiImageVideo';
+import { removeImageWatermark, regenerateGalleryImage } from '../services/apiImageVideo';
 
 const parseNav = () => {
   const url = navigate.mock.calls.at(-1)?.[0] || '';
@@ -76,5 +76,26 @@ describe('useMediaPreviewActions.handleRemoveWatermark', () => {
     const { result } = renderHook(() => useMediaPreviewActions());
     await expect(result.current.handleRemoveWatermark({})).rejects.toThrow('Missing filename');
     expect(removeImageWatermark).not.toHaveBeenCalled();
+  });
+});
+
+describe('useMediaPreviewActions.handleClean', () => {
+  beforeEach(() => regenerateGalleryImage.mockReset());
+
+  it('runs the CPU resize-squeeze (light regen), not the aggressive denoise clean', async () => {
+    const variant = { filename: 'cat_regen-light.png', regenMethod: 'light-spatial' };
+    regenerateGalleryImage.mockResolvedValue(variant);
+    const onCleanComplete = vi.fn();
+    const { result } = renderHook(() => useMediaPreviewActions({ onCleanComplete }));
+    const returned = await result.current.handleClean({ filename: 'cat.png' });
+    expect(regenerateGalleryImage).toHaveBeenCalledWith('cat.png', { method: 'light' });
+    expect(onCleanComplete).toHaveBeenCalledWith(variant);
+    expect(returned).toBe(variant);
+  });
+
+  it('throws when the image has no filename', async () => {
+    const { result } = renderHook(() => useMediaPreviewActions());
+    await expect(result.current.handleClean({})).rejects.toThrow('Missing filename');
+    expect(regenerateGalleryImage).not.toHaveBeenCalled();
   });
 });
