@@ -64,13 +64,19 @@ describe('githubRepoSpec', () => {
     expect(githubRepoSpec({ host: 'github.acme.example', fullName: 'acme/app' }))
       .toBe('github.acme.example/acme/app');
   });
-  it('canonicalizes the SSH-over-443 alias to the API host', () => {
+  it('canonicalizes only the documented github.com SSH-over-443 alias', () => {
     // git@ssh.github.com:443/owner/repo → getOriginInfo host 'ssh.github.com';
     // gh --repo reads the HOST/ prefix as the API host, so it must be github.com.
     expect(githubRepoSpec({ host: 'ssh.github.com', fullName: 'atomantic/PortOS' }))
       .toBe('github.com/atomantic/PortOS');
-    expect(githubRepoSpec({ host: 'ssh.github.example.com', fullName: 'acme/app' }))
-      .toBe('github.example.com/acme/app');
+    expect(githubRepoSpec({ host: 'SSH.GitHub.com', fullName: 'atomantic/PortOS' }))
+      .toBe('github.com/atomantic/PortOS');
+  });
+  it('preserves a genuine enterprise host that legitimately begins with ssh.', () => {
+    // Not the documented alias — its real API host IS ssh.github.acme.example,
+    // so stripping ssh. would misroute to a different/nonexistent server.
+    expect(githubRepoSpec({ host: 'ssh.github.acme.example', fullName: 'acme/app' }))
+      .toBe('ssh.github.acme.example/acme/app');
   });
   it('returns null for a non-GitHub host, a missing owner/repo, or no origin', () => {
     expect(githubRepoSpec({ host: 'gitlab.com', fullName: 'group/proj' })).toBeNull();
