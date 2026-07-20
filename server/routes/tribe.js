@@ -65,6 +65,9 @@ const memoryLinkSchema = z.object({
 const outreachDraftSchema = z.object({
   personId: z.string().guid().nullable().optional(),
   source: z.string().max(60).nullable().optional(),
+  // Message-account id (#2820) — scopes the email grounding query so a threadId
+  // shared across accounts can't merge conversations. Optional/back-compat.
+  accountId: z.string().max(200).nullable().optional(),
   threadId: z.string().max(500).nullable().optional(),
   chatGuid: z.string().max(500).nullable().optional(),
   conversationId: z.string().max(500).nullable().optional(),

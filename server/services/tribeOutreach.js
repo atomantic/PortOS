@@ -86,7 +86,9 @@ const SENT_INGEST_SOURCES = new Set(['gmail']);
  *
  * @param {Array} accounts message-account records ({ id, type, email, enabled, syncConfig, sentIngestedAt })
  * @param {{ now?: number, coverageMs?: number }} opts staleness bound for the watermark
- * @returns {{ sources: string[], isTwoWay: (ev: object) => boolean }}
+ * @returns {{ sources: string[], emailAccounts: Array<{ id: string, source: string }>, isTwoWay: (ev: object) => boolean }}
+ *   `emailAccounts` are the two-way email accounts to query PER ACCOUNT (#2820) so
+ *   one high-volume account can't fill a shared cap and suppress another's nudges.
  */
 export function buildTwoWayGate(accounts = [], { now = Date.now(), coverageMs = Infinity } = {}) {
   const twoWayEmailAccountIds = new Set(
@@ -104,15 +106,19 @@ export function buildTwoWayGate(accounts = [], { now = Date.now(), coverageMs = 
   );
   // Only scan an email source when at least one of its accounts is two-way — a
   // one-way-only provider is never queried, so a high-volume inbox can't burn the
-  // per-source 2000-row cap on data we'd discard anyway.
+  // per-account 2000-row cap on data we'd discard anyway.
   const sources = new Set(TWO_WAY_CHAT_SOURCES);
+  const emailAccounts = [];
   for (const a of accounts || []) {
-    if (twoWayEmailAccountIds.has(a?.id)) sources.add(a.type);
+    if (twoWayEmailAccountIds.has(a?.id)) {
+      sources.add(a.type);
+      emailAccounts.push({ id: a.id, source: a.type });
+    }
   }
   const isTwoWay = (ev) =>
     TWO_WAY_CHAT_SOURCES.has(ev?.source) ||
     (ev?.accountId != null && twoWayEmailAccountIds.has(ev.accountId));
-  return { sources: [...sources], isTwoWay };
+  return { sources: [...sources], emailAccounts, isTwoWay };
 }
 
 // Channel-appropriate reply prompt for chat outreach — generateReplyBody's default
@@ -143,11 +149,17 @@ export function outreachTemplateForSource(source) {
 // handle-less inbound groupable, but is deliberately last so that sent + received
 // turns of the SAME thread always share a key (a person fallback would split them
 // whenever one side lacks a person match — e.g. an iMessage/Signal sent turn).
+//
+// Email threadId is namespaced by accountId (#2820): a Gmail threadId is only
+// unique WITHIN one account, so two accounts that happen to share a threadId value
+// would otherwise merge into one (false) conversation — one account's sent turn
+// could then "answer" the other's inbound. chatGuid/conversationId are already
+// globally unique (iMessage/Signal), so they stay un-namespaced.
 function conversationKey(event) {
   const m = event?.metadata || {};
   if (m.chatGuid) return `chat:${m.chatGuid}`;
   if (m.conversationId) return `convo:${m.conversationId}`;
-  if (m.threadId) return `thread:${m.threadId}`;
+  if (m.threadId) return `thread:${event?.accountId ?? 'x'}:${m.threadId}`;
   if (m.handle) return `handle:${String(m.handle).toLowerCase()}`;
   if (event?.personId) return `person:${event.personId}`;
   return null;
@@ -169,6 +181,9 @@ function threadFields(inbound, eventCount, ageMs) {
     chatGuid: m.chatGuid || null,
     conversationId: m.conversationId || null,
     handle: m.handle || null,
+    // Round-trips to draft generation so the grounding query can scope to this
+    // account (#2820) — an email threadId is only unique within its account.
+    accountId: inbound.accountId || null,
     lastInboundAt: inbound.happenedAt,
     daysAgo: Math.floor(ageMs / DAY_MS),
     // Only the real message text — NOT `title`, which for an attachment-only/
@@ -258,10 +273,11 @@ export async function findUnansweredTribeThreads({
   if (!ctx) return [];
   const now = Date.now();
   const withinMs = withinDays * DAY_MS;
-  // Per-account two-way gate: which sources to scan, and which inbound events are
-  // trustworthy (chat source-wide, email only from sent-ingesting accounts whose
-  // reply-evidence watermark covers the detection window).
-  const { sources: twoWaySources, isTwoWay } = buildTwoWayGate(
+  // Per-account two-way gate: which chat sources to scan source-wide, which email
+  // accounts to scan per-account, and which inbound events are trustworthy (chat
+  // source-wide, email only from sent-ingesting accounts whose reply-evidence
+  // watermark covers the detection window).
+  const { emailAccounts: twoWayEmailAccounts, isTwoWay } = buildTwoWayGate(
     await listAccounts().catch(() => []),
     { now, coverageMs: withinMs }
   );
@@ -272,43 +288,54 @@ export async function findUnansweredTribeThreads({
   if (!hasTribe) return [];
 
   const from = new Date(now - withinMs).toISOString();
-  // Query each two-way source × kind separately, each with its own 2000-row cap.
-  // A single shared query would let a high-volume source (e.g. thousands of
-  // imported email events) fill the newest-2000 slice and push older iMessage /
-  // Signal turns out of range — missing an alert, or hiding the reply that would
-  // mark a thread answered.
+  const EVENT_CAP = 2000;
   const received = [];
   const sent = [];
-  await Promise.all(twoWaySources.map((src) =>
-    // Fail CLOSED per source: if EITHER direction's query fails, drop this source's
-    // turns entirely. Substituting [] for only the failed direction would leave
-    // received without its sent counterpart, making every inbound look unanswered
-    // and emitting false nudges — the function's contract is to stay quiet on a
-    // read failure, not to nudge on half the data.
+  // Fetch one scope's received + sent turns under its OWN cap, failing CLOSED.
+  // `label` is source-only (never the account id) so nothing sensitive is logged.
+  //
+  // Fail CLOSED on a read error: if EITHER direction's query fails, drop this
+  // scope's turns entirely. Substituting [] for only the failed direction would
+  // leave received without its sent counterpart, making every inbound look
+  // unanswered and emitting false nudges — the contract is to stay quiet on a read
+  // failure, not to nudge on half the data.
+  //
+  // Fail CLOSED on the cap too: the two directions are capped independently, so a
+  // truncated `sent` result could omit an older reply while its inbound survives in
+  // `received` — reporting an answered thread as unanswered. Better no nudge for
+  // that (very heavy) scope than a false one. (received-cap is a false-negative
+  // only, but skip either to be safe.)
+  const fetchScope = (label, filter) =>
     Promise.all([
-      listEvents({ from, source: src, kind: 'message.received', limit: 2000 }),
-      listEvents({ from, source: src, kind: 'message.sent', limit: 2000 }),
+      listEvents({ ...filter, from, kind: 'message.received', limit: EVENT_CAP }),
+      listEvents({ ...filter, from, kind: 'message.sent', limit: EVENT_CAP }),
     ]).then(([r, s]) => {
-      // Fail CLOSED when either direction hits the 2000-row cap: the two queries
-      // are capped independently, so a truncated `sent` result could omit an older
-      // reply while its inbound survives in `received` — reporting an answered
-      // thread as unanswered. Better no nudge for that (very heavy) source than a
-      // false one. (received-cap is a false-negative only, but skip either to be safe.)
-      if (r.length >= 2000 || s.length >= 2000) {
-        console.warn(`🤝 Skipping ${src} outreach scan — timeline query hit the 2000-row cap (can't verify reply state)`);
+      if (r.length >= EVENT_CAP || s.length >= EVENT_CAP) {
+        console.warn(`🤝 Skipping ${label} outreach scan — timeline query hit the ${EVENT_CAP}-row cap (can't verify reply state)`);
         return;
       }
       received.push(...r); sent.push(...s);
-    }).catch(() => { /* partial read → drop this source to avoid false nudges */ })
-  ));
+    }).catch(() => { /* partial read → drop this scope to avoid false nudges */ });
+
+  // Chat sources are queried source-wide (both directions carry the same source,
+  // and their conversation keys are globally unique). Email accounts are queried
+  // PER ACCOUNT (#2820) under their own cap — a shared per-source query let one
+  // high-volume opted-out/heavy account fill the newest-2000 slice and suppress a
+  // legitimately opted-in account's nudges.
+  await Promise.all([
+    ...[...TWO_WAY_CHAT_SOURCES].map((src) => fetchScope(src, { source: src })),
+    ...twoWayEmailAccounts.map((acct) =>
+      fetchScope(acct.source, { source: acct.source, accountId: acct.id })),
+  ]);
 
   // Drop Tapbacks/reactions from both directions — a reaction is not a message
   // awaiting a reply (it must not anchor an "unanswered" thread), and a sent
-  // reaction is not a real reply (it must not mark a thread answered). Also drop any
-  // event from a non-two-way account: querying source `gmail` returns events from
-  // ALL gmail accounts, but only the sent-ingesting ones are trustworthy — a reply
-  // from a one-way account is invisible, so its inbound must not surface (and its
-  // sent turns, if any lingered, must not vouch for another account's thread).
+  // reaction is not a real reply (it must not mark a thread answered). The
+  // `isTwoWay` filter is now a defensive backstop: email is queried per two-way
+  // accountId (#2820) so only trustworthy accounts' events are fetched, but the
+  // guard still drops any stray one-way event — a reply from a one-way account is
+  // invisible, so its inbound must not surface (and its sent turns must not vouch
+  // for another account's thread).
   const tagged = sent.filter((ev) => !ev.metadata?.isReaction && isTwoWay(ev));
   for (const ev of received) {
     if (ev.metadata?.isReaction) continue;
@@ -375,7 +402,9 @@ export async function generateOutreachDraft(params = {}) {
   const conversationKey = params.chatGuid || params.conversationId || params.threadId || params.handle || null;
   // No key to guard on (validated away at the route, but defensive) → run directly.
   if (!conversationKey) return generateOutreachDraftImpl(params);
-  const guardKey = `${conversationKey}::${params.lastInboundAt || ''}`;
+  // Prefix the accountId (#2820): an email threadId is only unique within its
+  // account, so two accounts sharing a threadId must not coalesce onto one guard.
+  const guardKey = `${params.accountId ?? ''}::${conversationKey}::${params.lastInboundAt || ''}`;
   const pending = inflightOutreach.get(guardKey);
   if (pending) return pending;
   const promise = generateOutreachDraftImpl(params);
@@ -389,6 +418,7 @@ export async function generateOutreachDraft(params = {}) {
 async function generateOutreachDraftImpl({
   personId = null,
   source = null,
+  accountId = null,
   chatGuid = null,
   conversationId = null,
   threadId = null,
@@ -405,15 +435,23 @@ async function generateOutreachDraftImpl({
   ]);
 
   const person = personId ? await getPerson(personId).catch(() => null) : null;
-  const conversationKey = chatGuid || conversationId || threadId || handle || null;
+  // The draft-reuse / guard key. Email threadId is namespaced by accountId (#2820)
+  // — it's only unique within its account — while chatGuid/conversationId are
+  // globally unique and stay raw. Kept consistent with the detection grouping key.
+  const conversationKey = chatGuid || conversationId
+    || (threadId ? (accountId ? `thread:${accountId}:${threadId}` : threadId) : null)
+    || handle || null;
 
   // Ground the reply in the actual conversation, pulled from the timeline by the
   // DETECTED conversation key — chatGuid (iMessage) / conversationId (Signal) /
   // threadId (email) / handle (counterpart). NOT personId: message events don't
   // persist it on their participants, so a personId query returns nothing. Pass
-  // exactly the most-selective key present (listEvents ANDs its filters).
+  // exactly the most-selective key present (listEvents ANDs its filters). For email,
+  // also scope by accountId (#2820) so a threadId shared across accounts can't pull
+  // another account's turns into the grounding context.
   const convoEvents = await listEvents({
     source: source || undefined,
+    accountId: accountId || undefined,
     chatGuid: chatGuid || undefined,
     conversationId: chatGuid ? undefined : (conversationId || undefined),
     threadId: (chatGuid || conversationId) ? undefined : (threadId || undefined),

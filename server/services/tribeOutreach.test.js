@@ -1,19 +1,23 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-import { groupUnansweredThreads, generateOutreachDraft, buildTwoWayGate, outreachTemplateForSource } from './tribeOutreach.js';
+import { groupUnansweredThreads, generateOutreachDraft, findUnansweredTribeThreads, buildTwoWayGate, outreachTemplateForSource } from './tribeOutreach.js';
 
-// generateOutreachDraft dynamically imports these — mock them so the draft-side
-// logic (idempotent reuse, anchoring the reply to the detected inbound) is
-// testable without a DB or a live LLM.
+// generateOutreachDraft / findUnansweredTribeThreads dynamically import these —
+// mock them so the draft-side logic (idempotent reuse, anchoring the reply to the
+// detected inbound) and the detector are testable without a DB or a live LLM.
 vi.mock('./tribe.js', () => ({ getPerson: vi.fn() }));
 vi.mock('./humanActivity.js', () => ({ listEvents: vi.fn() }));
 vi.mock('./messageEvaluator.js', () => ({ generateReplyBody: vi.fn() }));
 vi.mock('./messageDrafts.js', () => ({ createDraft: vi.fn(), listDrafts: vi.fn() }));
+vi.mock('./identityResolve.js', () => ({ loadResolverContext: vi.fn(), enrichActivityEvent: vi.fn() }));
+vi.mock('./messageAccounts.js', () => ({ listAccounts: vi.fn() }));
 
 import { getPerson } from './tribe.js';
 import { listEvents } from './humanActivity.js';
 import { generateReplyBody } from './messageEvaluator.js';
 import { createDraft, listDrafts } from './messageDrafts.js';
+import { loadResolverContext, enrichActivityEvent } from './identityResolve.js';
+import { listAccounts } from './messageAccounts.js';
 
 // `groupUnansweredThreads` is the pure detection core — no DB, no LLM. These
 // tests pin the "unanswered inbound from a Tribe person, within the actionable
@@ -138,11 +142,26 @@ describe('groupUnansweredThreads', () => {
 
   it('keys email conversations by threadId so sent + received turns unify', () => {
     const out = groupUnansweredThreads([
-      { kind: 'message.received', source: 'gmail', personId: 'p1', personName: 'Alex', ring: 'tribe',
+      { kind: 'message.received', source: 'gmail', accountId: 'acct-a', personId: 'p1', personName: 'Alex', ring: 'tribe',
         happenedAt: daysAgo(4), summary: 'proposal attached', metadata: { threadId: 't-9' } },
-      { kind: 'message.sent', source: 'gmail', happenedAt: daysAgo(3), metadata: { threadId: 't-9' } },
+      { kind: 'message.sent', source: 'gmail', accountId: 'acct-a', happenedAt: daysAgo(3), metadata: { threadId: 't-9' } },
     ], WINDOW);
     expect(out).toHaveLength(0); // replied within the same email thread
+  });
+
+  it('does NOT merge two accounts that share a threadId value (#2820)', () => {
+    // A Gmail threadId is only unique within one account. Account A got an inbound;
+    // account B sent a reply on ITS OWN thread that happens to share the id value.
+    // Namespacing by accountId keeps them separate so B's reply can't answer A's
+    // inbound — A's thread must still surface as unanswered.
+    const out = groupUnansweredThreads([
+      { kind: 'message.received', source: 'gmail', accountId: 'acct-a', personId: 'p1', personName: 'Alex', ring: 'tribe',
+        happenedAt: daysAgo(4), summary: 'proposal attached', metadata: { threadId: 'shared-id' } },
+      { kind: 'message.sent', source: 'gmail', accountId: 'acct-b', happenedAt: daysAgo(3), metadata: { threadId: 'shared-id' } },
+    ], WINDOW);
+    expect(out).toHaveLength(1);
+    expect(out[0].conversationKey).toBe('thread:acct-a:shared-id');
+    expect(out[0].accountId).toBe('acct-a');
   });
 
   it('ignores Tapback/reaction turns — a reaction neither anchors nor answers', () => {
@@ -215,6 +234,8 @@ describe('buildTwoWayGate (per-account #2796)', () => {
     expect(gate.sources).toContain('gmail'); // scanned because g1 is two-way
     expect(gate.isTwoWay({ source: 'gmail', accountId: 'g1' })).toBe(true);
     expect(gate.isTwoWay({ source: 'gmail', accountId: 'g2' })).toBe(false);
+    // Only g1 is surfaced for per-account querying (#2820) — g2 is never queried.
+    expect(gate.emailAccounts).toEqual([{ id: 'g1', source: 'gmail' }]);
   });
 
   it('Outlook is never two-way (no sent-fetch path yet), even with ingestSent:true', () => {
@@ -238,6 +259,61 @@ describe('outreachTemplateForSource (#2796)', () => {
     expect(t).toContain('email reply');
     expect(t).toContain('sign-off');
     expect(t).not.toContain('no formal salutation');
+  });
+});
+
+describe('findUnansweredTribeThreads — per-account email querying (#2820)', () => {
+  const RECENT = new Date(NOW - 3600000).toISOString();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // One tribe person, resolved from the inbound's handle.
+    loadResolverContext.mockResolvedValue({ people: [{ id: 'p1', ring: 'tribe', name: 'Alex' }] });
+    enrichActivityEvent.mockReturnValue({ personId: 'p1', displayName: 'Alex' });
+  });
+
+  it('queries each two-way Gmail account under its OWN cap so a noisy account cannot suppress an opted-in one', async () => {
+    // acct-opted is two-way; acct-noisy opted out (high volume, never trustworthy).
+    listAccounts.mockResolvedValue([
+      { id: 'acct-opted', type: 'gmail', email: 'me@example.com', enabled: true, syncConfig: {}, sentIngestedAt: RECENT },
+      { id: 'acct-noisy', type: 'gmail', email: 'noisy@example.com', enabled: true, syncConfig: { ingestSent: false }, sentIngestedAt: RECENT },
+    ]);
+
+    const openInbound = {
+      kind: 'message.received', source: 'gmail', accountId: 'acct-opted',
+      happenedAt: daysAgo(3), summary: 'lunch soon?',
+      metadata: { threadId: 't-opted', handle: 'friend@example.com' },
+    };
+
+    // Per-account query returns the opted account's unanswered inbound; a source-wide
+    // gmail query (no accountId — the OLD, cap-sharing path) would return a full
+    // noisy slice with NO opted inbound, suppressing the nudge. Chat sources empty.
+    listEvents.mockImplementation(async ({ source, accountId, kind }) => {
+      if (source === 'gmail' && accountId === 'acct-opted') {
+        return kind === 'message.received' ? [openInbound] : [];
+      }
+      if (source === 'gmail' && accountId == null) {
+        // Simulate the pre-#2820 cap-filling noise (2000 rows, none from acct-opted).
+        return kind === 'message.received'
+          ? Array.from({ length: 2000 }, (_, i) => ({
+            kind: 'message.received', source: 'gmail', accountId: 'acct-noisy',
+            happenedAt: daysAgo(1), summary: `noise ${i}`, metadata: { threadId: `n-${i}` },
+          }))
+          : [];
+      }
+      return [];
+    });
+
+    const threads = await findUnansweredTribeThreads();
+
+    // The opted-in account's nudge surfaces despite the noisy account's volume.
+    expect(threads).toHaveLength(1);
+    expect(threads[0]).toMatchObject({ personId: 'p1', source: 'gmail', threadId: 't-opted', accountId: 'acct-opted' });
+    // It queried the opted account PER ACCOUNT and never ran a cap-sharing
+    // source-wide gmail query.
+    const gmailCalls = listEvents.mock.calls.map(([a]) => a).filter((a) => a.source === 'gmail');
+    expect(gmailCalls.every((a) => a.accountId === 'acct-opted')).toBe(true);
+    expect(gmailCalls.length).toBeGreaterThan(0);
   });
 });
 

@@ -23,11 +23,15 @@ export const SENT_INGEST_DAYS = 14;
 
 // Sent mail gets its OWN fetch budget (a separate list pass), never a share of the
 // inbox cap — sent is activity-only and must not crowd inbox out of the primary
-// sync. This also bounds the per-sync detail-fetch cost (sent isn't cached, so it's
-// re-fetched each sync). 14 days of a normal person's replies fit under this; a
-// heavier sender whose replies fall beyond it is a filed follow-up (full date-bounded
-// pagination / fail-closed) — see the issue linked from the changelog.
-export const SENT_INGEST_MAX = 100;
+// sync. The sent pass paginates the ENTIRE `in:sent newer_than:14d` window up to
+// this generous ceiling (#2820) so a heavy sender's reply beyond the first page
+// still gets ingested and can cancel its inbound — a reply un-ingested here would
+// falsely read as unanswered. The ceiling only bounds the pathological case (>1000
+// sent in 14 days); if it's actually hit, coverage is partial for that sync — the
+// per-account reliability watermark (`sentIngestedAt`) plus the detector's own
+// row-cap fail-closed keep a truncated window from producing false nudges. Sent
+// isn't cached, so this also bounds the per-sync detail-fetch cost.
+export const SENT_INGEST_MAX = 1000;
 
 // The inbox search query for a sync mode. `unread` scopes to unread inbox; `full`
 // takes the whole inbox (capped downstream).
@@ -53,6 +57,42 @@ export function gmailSyncPasses(mode, ingestSent, inboxCap) {
   const passes = [{ query: inboxQuery(mode), cap: inboxCap }];
   if (ingestSent) passes.push({ query: sentQuery(), cap: SENT_INGEST_MAX });
   return passes;
+}
+
+/**
+ * List message ids across every pass, paginating each pass FULLY up to its cap
+ * (#2820) — the sent pass must walk past the first page or a heavy sender's reply
+ * beyond page 1 goes un-ingested and its inbound falsely reads as unanswered.
+ * Dedupes by gmail id across passes (a thread can appear in both inbox and sent).
+ *
+ * `listFn({ q, maxResults, pageToken })` returns `{ messages: [{ id }], nextPageToken }`.
+ * Injected so the pagination is unit-testable without a live Gmail client.
+ *
+ * @returns {Promise<Array<{ id: string }>>} deduped message-id items, in fetch order
+ */
+export async function collectMessageIds(passes, listFn, { onProgress } = {}) {
+  const messageIds = [];
+  const seen = new Set();
+  for (const pass of passes) {
+    let pageToken = null;
+    let fetched = 0;
+    do {
+      onProgress?.(messageIds.length);
+      const { messages = [], nextPageToken = null } = await listFn({
+        q: pass.query,
+        maxResults: Math.min(100, pass.cap - fetched),
+        pageToken,
+      });
+      fetched += messages.length;
+      for (const item of messages) {
+        if (seen.has(item.id)) continue;
+        seen.add(item.id);
+        messageIds.push(item);
+      }
+      pageToken = nextPageToken;
+    } while (pageToken && fetched < pass.cap);
+  }
+  return messageIds;
 }
 
 function getHeader(headers, name) {
@@ -172,35 +212,22 @@ export async function syncGmail(account, cache, io, options = {}) {
 
   console.log(`📧 Gmail API sync (${mode}${ingestSent ? '+sent' : ''}) for ${account.email}`);
 
-  // Step 1: List message IDs — one pass per (query, cap). Dedupe across passes by
-  // gmail id (a thread can appear in both inbox and sent) so a message is fetched
-  // and recorded once.
-  const messageIds = [];
-  const seenGmailIds = new Set();
-
-  for (const pass of passes) {
-    let pageToken = null;
-    let fetched = 0;
-    do {
-      io?.emit('messages:sync:progress', { accountId: account.id, current: messageIds.length, total: totalCap });
-
+  // Step 1: List message IDs — one pass per (query, cap), each paginated fully up
+  // to its cap and deduped across passes (a thread can appear in both inbox and
+  // sent). See `collectMessageIds` for the pagination contract (#2820).
+  const messageIds = await collectMessageIds(
+    passes,
+    async ({ q, maxResults, pageToken }) => {
       const listResult = await gmailClient.users.messages.list({
         userId: 'me',
-        q: pass.query,
-        maxResults: Math.min(100, pass.cap - fetched),
-        ...(pageToken && { pageToken })
+        q,
+        maxResults,
+        ...(pageToken && { pageToken }),
       });
-
-      const items = listResult.data.messages || [];
-      fetched += items.length;
-      for (const item of items) {
-        if (seenGmailIds.has(item.id)) continue;
-        seenGmailIds.add(item.id);
-        messageIds.push(item);
-      }
-      pageToken = listResult.data.nextPageToken;
-    } while (pageToken && fetched < pass.cap);
-  }
+      return { messages: listResult.data.messages || [], nextPageToken: listResult.data.nextPageToken || null };
+    },
+    { onProgress: (current) => io?.emit('messages:sync:progress', { accountId: account.id, current, total: totalCap }) },
+  );
 
   console.log(`📧 Gmail: found ${messageIds.length} message IDs, fetching details`);
 
