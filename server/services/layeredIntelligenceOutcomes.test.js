@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { createCollectionStore } from '../lib/collectionStore.js';
@@ -465,13 +465,27 @@ describe('listOutcomesResult read sentinel (#2700)', () => {
   });
 
   it('reports read:false when the store read throws — never a fabricated empty history', async () => {
-    const broken = { loadAll: () => Promise.reject(new Error('disk on fire')), deleteOne: () => Promise.resolve() };
+    const broken = { loadAllResult: () => Promise.reject(new Error('disk on fire')), deleteOne: () => Promise.resolve() };
     expect(await listOutcomesResult({ appId: 'app-1' }, broken)).toEqual({ read: false, outcomes: [] });
   });
 
   it('reports read:false when the store returns a non-array', async () => {
-    const broken = { loadAll: () => Promise.resolve(null), deleteOne: () => Promise.resolve() };
+    const broken = { loadAllResult: () => Promise.resolve(null), deleteOne: () => Promise.resolve() };
     expect(await listOutcomesResult({ appId: 'app-1' }, broken)).toEqual({ read: false, outcomes: [] });
+  });
+
+  it('reports read:false + partial + failedIds when a record fails to load (#2728)', async () => {
+    // One clean record for this app plus a corrupt record dir the store can't parse —
+    // the surviving list is an undercount, so the read must NOT report as clean.
+    await recordFiledProposal({ appId: 'app-1', slug: 'add-metrics', tracker: 'github', issueRef: '#42' }, store);
+    await mkdir(join(dir, 'app-1--broken-slug'), { recursive: true });
+    await writeFile(join(dir, 'app-1--broken-slug', 'index.json'), '{not valid json');
+    const res = await listOutcomesResult({ appId: 'app-1' }, store);
+    expect(res.read).toBe(false);
+    expect(res.partial).toBe(true);
+    expect(res.failedIds).toEqual(['app-1--broken-slug']);
+    // The record that DID load is still returned for the best-effort flatten path.
+    expect(res.outcomes.map(r => r.slug)).toEqual(['add-metrics']);
   });
 
   it('treats a missing appId as an empty successful read, not a store failure', async () => {
@@ -481,7 +495,7 @@ describe('listOutcomesResult read sentinel (#2700)', () => {
   it('listOutcomes still flattens to the bare array for back-compat', async () => {
     await recordFiledProposal({ appId: 'app-1', slug: 'add-metrics', tracker: 'github', issueRef: '#42' }, store);
     expect(await listOutcomes({ appId: 'app-1' }, store)).toHaveLength(1);
-    const broken = { loadAll: () => Promise.reject(new Error('nope')), deleteOne: () => Promise.resolve() };
+    const broken = { loadAllResult: () => Promise.reject(new Error('nope')), deleteOne: () => Promise.resolve() };
     expect(await listOutcomes({ appId: 'app-1' }, broken)).toEqual([]);
   });
 });

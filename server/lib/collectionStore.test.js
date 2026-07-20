@@ -296,6 +296,51 @@ describe('loadAll', () => {
   });
 });
 
+describe('loadAllResult (#2728)', () => {
+  it('returns every record with an empty failedIds when all load cleanly', async () => {
+    const store = createCollectionStore({ dir, type: 'widgets', schemaVersion: 1 });
+    await store.saveOne('a', { id: 'a', n: 1 });
+    await store.saveOne('b', { id: 'b', n: 2 });
+    const { records, failedIds } = await store.loadAllResult();
+    expect(records.map((r) => r.id).sort()).toEqual(['a', 'b']);
+    expect(failedIds).toEqual([]);
+  });
+
+  it('surfaces a corrupt record in failedIds while still returning the readable ones', async () => {
+    const store = createCollectionStore({ dir, type: 'widgets', schemaVersion: 1 });
+    await store.saveOne('good', { id: 'good' });
+    // A record dir whose index.json is unparseable — loadOne(id) → null.
+    mkdirSync(join(dir, 'broken'), { recursive: true });
+    writeFileSync(join(dir, 'broken', 'index.json'), '{not valid json');
+    const { records, failedIds } = await store.loadAllResult();
+    expect(records.map((r) => r.id)).toEqual(['good']);
+    expect(failedIds).toEqual(['broken']);
+  });
+
+  it('reports sanitizer-rejected records as failedIds (distinct from absent ones)', async () => {
+    const store = createCollectionStore({
+      dir, type: 'widgets', schemaVersion: 1,
+      sanitizeRecord: (r) => r.n > 1 ? r : null,
+    });
+    await store.saveOne('a', { id: 'a', n: 1 });
+    await store.saveOne('b', { id: 'b', n: 2 });
+    const { records, failedIds } = await store.loadAllResult();
+    expect(records.map((r) => r.id)).toEqual(['b']);
+    expect(failedIds).toEqual(['a']);
+  });
+
+  it('loadAll stays a back-compat flatten of loadAllResult.records', async () => {
+    const store = createCollectionStore({ dir, type: 'widgets', schemaVersion: 1 });
+    await store.saveOne('good', { id: 'good' });
+    mkdirSync(join(dir, 'broken'), { recursive: true });
+    writeFileSync(join(dir, 'broken', 'index.json'), 'nope');
+    const all = await store.loadAll();
+    const { records } = await store.loadAllResult();
+    expect(all.map((r) => r.id)).toEqual(['good']);
+    expect(all).toEqual(records);
+  });
+});
+
 describe('per-id write queue', () => {
   it('two saves to the same id serialize in submission order', async () => {
     const store = createCollectionStore({ dir, type: 'widgets', schemaVersion: 1 });
