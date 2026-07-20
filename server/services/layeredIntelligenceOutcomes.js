@@ -380,14 +380,17 @@ export async function reconcileOutcomes({ appId, existingIssues = [], now = Date
     // label / specific close-reason / prose rationale already wins and skips the read.
     const implementingPr = Number.isInteger(issue.implementingPr) && issue.implementingPr > 0 ? issue.implementingPr : null;
     if (implementingPr && cli && isPrRefinableReason(rejectionReason)) {
-      if (isPrFailureReason(r.rejectionReason)) {
-        // Already diagnosed from THIS PR on a prior tick, and the free signals still
-        // don't supersede it — a new authoritative label/close-reason would have made
-        // the free classification specific (not refinable), taking the branch above.
-        // Keep the settled diagnosis instead of re-spawning `gh pr view` on every tick
-        // for the record's whole 30-day retention (codex P2). Preserving it here (rather
-        // than just skipping the fetch) also stops the write-guard below from downgrading
-        // the stored PR token back to the generic free reason.
+      if (isPrFailureReason(r.rejectionReason) && r.implementingPr === implementingPr) {
+        // Already diagnosed from THIS SAME PR on a prior tick, and the free signals
+        // still don't supersede it — a new authoritative label/close-reason would have
+        // made the free classification specific (not refinable), taking the branch
+        // above. Keep the settled diagnosis instead of re-spawning `gh pr view` on every
+        // tick for the record's whole 30-day retention (codex P2). Preserving it here
+        // (rather than just skipping the fetch) also stops the write-guard below from
+        // downgrading the stored PR token back to the generic free reason. The PR-number
+        // match is required: if the issue was RE-LINKED to a different implementing PR
+        // (`r.implementingPr !== implementingPr`), the old diagnosis no longer applies —
+        // fall through and read the replacement PR (codex P2, follow-up).
         rejectionReason = r.rejectionReason;
       } else {
         const prView = await readPrState({ cli, cwd, env, number: implementingPr }).catch(() => null);

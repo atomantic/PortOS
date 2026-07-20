@@ -567,6 +567,30 @@ describe('reconcileOutcomes', () => {
       expect((await rowsBySlug())['settled'].rejectionReason).toBe('validation-failed');
     });
 
+    it('re-reads the replacement PR when the issue is re-linked to a different PR (codex P2 follow-up)', async () => {
+      await recordFiledProposal({ appId: 'app-1', slug: 'relinked' }, store);
+      // Settle on PR 920 as merge-conflict.
+      const readA = vi.fn().mockResolvedValue({ state: 'OPEN', mergeStateStatus: 'DIRTY' });
+      await reconcileOutcomes({
+        appId: 'app-1', cli: 'gh', readPrState: readA,
+        existingIssues: [{ slug: 'relinked', state: 'closed', stateReason: 'not_planned', implementingPr: 920, closedAt: '2026-07-01T00:00:00Z' }]
+      }, store);
+      expect((await rowsBySlug())['relinked'].rejectionReason).toBe('merge-conflict');
+
+      // Re-linked to PR 921 (CI-failed): the stale merge-conflict must NOT be inherited —
+      // the new PR is read and re-diagnosed, and the stored ref advances.
+      const readB = vi.fn().mockResolvedValue({ state: 'CLOSED', statusCheckRollup: [{ conclusion: 'FAILURE' }] });
+      const updated = await reconcileOutcomes({
+        appId: 'app-1', cli: 'gh', readPrState: readB,
+        existingIssues: [{ slug: 'relinked', state: 'closed', stateReason: 'not_planned', implementingPr: 921, closedAt: '2026-07-01T00:00:00Z' }]
+      }, store);
+      expect(readB).toHaveBeenCalledWith({ cli: 'gh', cwd: null, env: undefined, number: 921 });
+      expect(updated).toBe(1);
+      const row = (await rowsBySlug())['relinked'];
+      expect(row.rejectionReason).toBe('validation-failed');
+      expect(row.implementingPr).toBe(921);
+    });
+
     it('lets a newly-added authoritative label supersede a settled PR-failure token', async () => {
       await recordFiledProposal({ appId: 'app-1', slug: 'relabelled' }, store);
       const firstRead = vi.fn().mockResolvedValue({ state: 'OPEN', mergeStateStatus: 'DIRTY' });
