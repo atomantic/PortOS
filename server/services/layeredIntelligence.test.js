@@ -65,6 +65,7 @@ import {
   listForgeIssues,
   extractClosingComment,
   extractImplementingPr,
+  repoSlugFromUrl,
   readImplementingPrState,
   listBlockingIssues,
   fileProposalToForge,
@@ -1948,6 +1949,32 @@ describe('forge I/O (injected exec)', () => {
     expect(extractImplementingPr([])).toBeNull();
     expect(extractImplementingPr(null)).toBeNull();
     expect(extractImplementingPr([{ number: 0 }, { number: -3 }])).toBeNull();
+  });
+
+  it('extractImplementingPr skips a cross-repo reference when the issue repo is known (codex P2)', () => {
+    const refs = [
+      { number: 55, repository: { owner: { login: 'someone' }, name: 'other-repo' } },
+      { number: 56, repository: { owner: { login: 'atomantic' }, name: 'PortOS' } }
+    ];
+    // Same-repo ref wins even though the cross-repo one is later in the list.
+    expect(extractImplementingPr(refs, 'atomantic/PortOS')).toBe(56);
+    // A ref from another repo alone is rejected — `gh pr view 55` in cwd would read the
+    // wrong PR. Falls through to null rather than mis-diagnosing.
+    expect(extractImplementingPr([refs[0]], 'atomantic/PortOS')).toBeNull();
+    // Repo match is case-insensitive (GitHub slugs are).
+    expect(extractImplementingPr([{ number: 57, url: 'https://github.com/Atomantic/portos/pull/57' }], 'atomantic/PortOS')).toBe(57);
+    // Unknown self-repo, or a ref with no repo info, degrades to accepting (same-repo
+    // is the common case) — preserves prior behavior.
+    expect(extractImplementingPr(refs, null)).toBe(56);
+    expect(extractImplementingPr([{ number: 58 }], 'atomantic/PortOS')).toBe(58);
+  });
+
+  it('repoSlugFromUrl parses owner/repo from an issue or PR URL, host-agnostic', () => {
+    expect(repoSlugFromUrl('https://github.com/atomantic/PortOS/issues/2748')).toBe('atomantic/portos');
+    expect(repoSlugFromUrl('https://github.com/owner/repo/pull/5')).toBe('owner/repo');
+    expect(repoSlugFromUrl('https://github.example.com/org/proj/issues/9')).toBe('org/proj');
+    expect(repoSlugFromUrl('https://github.com/owner/repo')).toBeNull();
+    expect(repoSlugFromUrl(null)).toBeNull();
   });
 
   it('readImplementingPrState parses gh pr view, and is gh-only (#2748)', async () => {

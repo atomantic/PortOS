@@ -23,7 +23,7 @@ import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { createCollectionStore } from '../lib/collectionStore.js';
 import { normalizeSlug, deriveOutcome, readImplementingPrState, PROPOSAL_OUTCOMES, PROPOSAL_EXECUTION_OUTCOMES, CLOSED_SUPPRESSION_MS } from './layeredIntelligence.js';
-import { classifyRejection, classifyPrFailure, isPrRefinableReason, REJECTION_REASON_VALUES } from './layeredIntelligenceRejections.js';
+import { classifyRejection, classifyPrFailure, isPrRefinableReason, isPrFailureReason, REJECTION_REASON_VALUES } from './layeredIntelligenceRejections.js';
 import { classifyExecutionFailure, EXECUTION_FAILURE_VALUES } from './layeredIntelligenceExecutionFailures.js';
 
 // Longest raw failure-signal token stored on a record. The signal is one of
@@ -380,9 +380,20 @@ export async function reconcileOutcomes({ appId, existingIssues = [], now = Date
     // label / specific close-reason / prose rationale already wins and skips the read.
     const implementingPr = Number.isInteger(issue.implementingPr) && issue.implementingPr > 0 ? issue.implementingPr : null;
     if (implementingPr && cli && isPrRefinableReason(rejectionReason)) {
-      const prView = await readPrState({ cli, cwd, env, number: implementingPr }).catch(() => null);
-      const prFailure = classifyPrFailure(prView);
-      if (prFailure) rejectionReason = classifyRejection({ ...base, prFailure });
+      if (isPrFailureReason(r.rejectionReason)) {
+        // Already diagnosed from THIS PR on a prior tick, and the free signals still
+        // don't supersede it — a new authoritative label/close-reason would have made
+        // the free classification specific (not refinable), taking the branch above.
+        // Keep the settled diagnosis instead of re-spawning `gh pr view` on every tick
+        // for the record's whole 30-day retention (codex P2). Preserving it here (rather
+        // than just skipping the fetch) also stops the write-guard below from downgrading
+        // the stored PR token back to the generic free reason.
+        rejectionReason = r.rejectionReason;
+      } else {
+        const prView = await readPrState({ cli, cwd, env, number: implementingPr }).catch(() => null);
+        const prFailure = classifyPrFailure(prView);
+        if (prFailure) rejectionReason = classifyRejection({ ...base, prFailure });
+      }
     }
     // A same-outcome record is only rewritten when the tracker reports a NEWER
     // close time (closed → reopened → re-closed): outcomeAt drives retention/GC,

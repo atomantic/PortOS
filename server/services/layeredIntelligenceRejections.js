@@ -241,6 +241,18 @@ export function classifyPrFailure(prView) {
   return null;
 }
 
+// The REJECTION_REASONS subset that classifyPrFailure produces (#2748, deliverable 2).
+// Once a record carries one of these it was already diagnosed from its implementing
+// PR's state, so re-reading that PR on a later reconcile can only reproduce the same
+// token — the reconciler consults this to STOP re-spawning `gh pr view` for an
+// already-settled PR diagnosis on every scheduler tick across the 30-day retention.
+export const PR_FAILURE_REASONS = ['merge-conflict', 'validation-failed'];
+
+/** Whether `reason` is a PR-state-derived diagnosis (merge-conflict / validation-failed). */
+export function isPrFailureReason(reason) {
+  return PR_FAILURE_REASONS.includes(reason);
+}
+
 // Closing-comment keyword pass (#2748). Some closures state their rationale only in
 // prose — a human declines in a comment without applying a matching label or (on
 // glab/jira) any close reason at all. This is a DETERMINISTIC keyword/heuristic

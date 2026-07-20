@@ -549,6 +549,45 @@ describe('reconcileOutcomes', () => {
       expect((await rowsBySlug())['boom'].rejectionReason).toBe('user-rejected');
     });
 
+    it('does NOT re-read the PR once a record is already settled to a PR-failure token (codex P2)', async () => {
+      await recordFiledProposal({ appId: 'app-1', slug: 'settled' }, store);
+      const issue = { slug: 'settled', state: 'closed', stateReason: 'not_planned', implementingPr: 910, closedAt: '2026-07-01T00:00:00Z' };
+      // First tick: the generic decline is refined to validation-failed via the PR read.
+      const firstRead = vi.fn().mockResolvedValue({ state: 'CLOSED', statusCheckRollup: [{ conclusion: 'FAILURE' }] });
+      await reconcileOutcomes({ appId: 'app-1', cli: 'gh', readPrState: firstRead, existingIssues: [issue] }, store);
+      expect(firstRead).toHaveBeenCalledTimes(1);
+      expect((await rowsBySlug())['settled'].rejectionReason).toBe('validation-failed');
+
+      // Second tick (same generic free signal, same ref): the settled PR diagnosis is
+      // kept WITHOUT re-spawning gh pr view, and the record is not rewritten/downgraded.
+      const secondRead = vi.fn().mockResolvedValue({ state: 'CLOSED', statusCheckRollup: [{ conclusion: 'FAILURE' }] });
+      const updated = await reconcileOutcomes({ appId: 'app-1', cli: 'gh', readPrState: secondRead, existingIssues: [issue] }, store);
+      expect(secondRead).not.toHaveBeenCalled();
+      expect(updated).toBe(0);
+      expect((await rowsBySlug())['settled'].rejectionReason).toBe('validation-failed');
+    });
+
+    it('lets a newly-added authoritative label supersede a settled PR-failure token', async () => {
+      await recordFiledProposal({ appId: 'app-1', slug: 'relabelled' }, store);
+      const firstRead = vi.fn().mockResolvedValue({ state: 'OPEN', mergeStateStatus: 'DIRTY' });
+      await reconcileOutcomes({
+        appId: 'app-1', cli: 'gh', readPrState: firstRead,
+        existingIssues: [{ slug: 'relabelled', state: 'closed', stateReason: 'not_planned', implementingPr: 911, closedAt: '2026-07-01T00:00:00Z' }]
+      }, store);
+      expect((await rowsBySlug())['relabelled'].rejectionReason).toBe('merge-conflict');
+
+      // A human later adds a `duplicate` label: the free classification is now specific
+      // (not refinable), so the PR read is skipped and the label wins over the PR token.
+      const secondRead = vi.fn();
+      const updated = await reconcileOutcomes({
+        appId: 'app-1', cli: 'gh', readPrState: secondRead,
+        existingIssues: [{ slug: 'relabelled', state: 'closed', stateReason: 'not_planned', labels: ['duplicate'], implementingPr: 911, closedAt: '2026-07-01T00:00:00Z' }]
+      }, store);
+      expect(secondRead).not.toHaveBeenCalled();
+      expect(updated).toBe(1);
+      expect((await rowsBySlug())['relabelled'].rejectionReason).toBe('duplicate');
+    });
+
     it('backfills the implementing-PR ref on an already-settled record without changing its reason', async () => {
       await recordFiledProposal({ appId: 'app-1', slug: 'backfill' }, store);
       // First pass: a duplicate close with no PR ref yet.

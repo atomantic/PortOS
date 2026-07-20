@@ -2105,11 +2105,35 @@ export async function listForgeIssues({ cli, cwd, env, label = LI_LABEL, state =
       // closes/references this issue in `closedByPullRequestsReferences`. Additive
       // and null-defaulted — glab's `-F json` omits it, so its rows carry null and
       // fall through to the label/comment signals, and the reconciler only reads a
-      // PR's state when it holds a number here.
-      implementingPr: extractImplementingPr(i.closedByPullRequestsReferences),
+      // PR's state when it holds a number here. Scoped to the issue's own repo (parsed
+      // from its url) so a cross-repo closing PR can't resolve to the wrong number.
+      implementingPr: extractImplementingPr(i.closedByPullRequestsReferences, repoSlugFromUrl(i.url || i.web_url)),
       slug: extractSlugFromBody(i.body || i.description || '') || extractSlugFromBody(i.title || '')
     }))
   };
+}
+
+/**
+ * Parse an `owner/repo` slug (lower-cased for case-insensitive compare) from a GitHub
+ * issue/PR URL — `https://HOST/owner/repo/(issues|pull)/N` — host-agnostic so it works
+ * on github.com and Enterprise. Returns null when the shape doesn't match.
+ */
+export function repoSlugFromUrl(url) {
+  if (typeof url !== 'string') return null;
+  const m = url.match(/^https?:\/\/[^/]+\/([^/]+)\/([^/]+)\/(?:issues|pull)\/\d+/);
+  return m ? `${m[1]}/${m[2]}`.toLowerCase() : null;
+}
+
+/**
+ * The `owner/repo` a `closedByPullRequestsReferences` entry belongs to — from its
+ * structured `repository { owner { login }, name }`, falling back to parsing its `url`.
+ * Null when neither is present. Lower-cased to match `repoSlugFromUrl`.
+ */
+function refRepoSlug(ref) {
+  const owner = ref?.repository?.owner?.login;
+  const name = ref?.repository?.name;
+  if (typeof owner === 'string' && typeof name === 'string') return `${owner}/${name}`.toLowerCase();
+  return repoSlugFromUrl(ref?.url);
 }
 
 /**
@@ -2117,12 +2141,24 @@ export async function listForgeIssues({ cli, cwd, env, label = LI_LABEL, state =
  * `closedByPullRequestsReferences` (#2748, deliverable 2). Takes the LAST reference —
  * the most recent PR linked to the issue — and returns its number, or null when there
  * is none (glab, or an issue closed by hand). Pure.
+ *
+ * `selfRepo` (the issue's own `owner/repo`) scopes the match: the reconciler later runs
+ * `gh pr view <number>` in the issue's checkout, so a reference from a DIFFERENT repo
+ * (a cross-repo/fork PR that closed the issue) would resolve to the wrong PR number in
+ * cwd's repo — or none — and mis-diagnose the rejection. So a ref whose repo is known
+ * and differs from `selfRepo` is skipped. When `selfRepo` is unknown or a ref carries
+ * no repo, it is accepted (same-repo is the overwhelmingly common case for an LI
+ * proposal implemented in its own repo), preserving prior behavior.
  */
-export function extractImplementingPr(refs) {
+export function extractImplementingPr(refs, selfRepo = null) {
   if (!Array.isArray(refs)) return null;
+  const self = typeof selfRepo === 'string' ? selfRepo.toLowerCase() : null;
   for (let i = refs.length - 1; i >= 0; i -= 1) {
     const n = refs[i]?.number;
-    if (Number.isInteger(n) && n > 0) return n;
+    if (!Number.isInteger(n) || n <= 0) continue;
+    const refRepo = refRepoSlug(refs[i]);
+    if (self && refRepo && refRepo !== self) continue;
+    return n;
   }
   return null;
 }
