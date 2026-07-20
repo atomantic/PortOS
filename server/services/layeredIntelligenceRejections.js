@@ -182,12 +182,20 @@ const GENERIC_REJECTION_REASONS = new Set(['user-rejected']);
 
 /**
  * The reasons a PR-state read (#2748, deliverable 2) is ALLOWED to refine: the honest
- * `unknown-reason` and the generic user-rejection. A more authoritative signal — a
- * human-applied label, a specific close reason (duplicate), or a closing-comment
- * rationale — already states WHY, and a mechanical fact about the implementing PR
- * must never override a human's explicit judgement. The reconciler consults this so it
- * can SKIP the extra `gh pr view` round-trip whenever the free signals already
- * diagnosed the close (the read is bounded to the records it could actually change).
+ * `unknown-reason` and the generic user-rejection. A SPECIFIC diagnosis — a
+ * scope/quality/duplicate label, a `duplicate` close reason, or a closing-comment
+ * rationale — already states WHY, so the reconciler skips the `gh pr view` round-trip
+ * for those (the read is bounded to the records prFailure could actually change).
+ *
+ * The gate is intentionally coarse: `user-rejected` also comes from a `wontfix`/
+ * `declined` LABEL, not only the generic `not_planned` state, and this predicate can't
+ * tell those apart from the reason token alone. So a labeled-wontfix record that also
+ * carries a PR ref pays one superfluous fetch — but NOT a wrong diagnosis: on the
+ * refine pass, `classifyRejection`'s step-1 label precedence returns `user-rejected`
+ * before it ever reaches the step-4 `prFailure`, so the human's label still wins and
+ * the stored token is unchanged. Distinguishing label- from state-derived
+ * `user-rejected` here would need threading the signal source through, which isn't
+ * worth it to save a bounded, harmless round-trip.
  */
 export function isPrRefinableReason(reason) {
   return reason === UNKNOWN_REJECTION_REASON || GENERIC_REJECTION_REASONS.has(reason);
