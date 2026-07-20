@@ -1331,6 +1331,18 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
           // Import handleOrphanedTask dynamically to avoid circular dep with agentManagement
           const { handleOrphanedTask } = await import('./agentManagement.js');
           await handleOrphanedTask(cosAgent.taskId, agentId, getTaskById);
+          // If orphan recovery settled the task into a terminal `blocked` state (retry budget
+          // exhausted), the local completion already recorded the proposal failure — so stamp
+          // the LI failure verdict here too (#2779, codex P2) or the originating peer would
+          // receive a terminal task with no verdict. A revived (pending) task carries no
+          // settled outcome yet, so it is intentionally left unstamped until it re-completes.
+          const settled = await getTaskById(cosAgent.taskId).catch(() => null);
+          if (settled && settled.status === 'blocked' && settled.metadata?.liProposal) {
+            const stamp = await stampLiExecutionVerdict({}, settled, { success: false });
+            if (stamp.metadata) {
+              await updateTask(cosAgent.taskId, stamp, settled.taskType || 'user').catch(() => {});
+            }
+          }
         }
       }
     }

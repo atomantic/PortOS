@@ -270,8 +270,13 @@ describe('agentLifecycle — guard wiring', () => {
     // finalizeAgent — it must still stamp so the outcome federates to the originating peer.
     const idx = AGENT_LIFECYCLE_SRC.indexOf('Completing untracked agent');
     expect(idx, 'post-restart recovery branch must exist').toBeGreaterThan(-1);
-    const body = AGENT_LIFECYCLE_SRC.slice(idx, idx + 1200);
+    const body = AGENT_LIFECYCLE_SRC.slice(idx, idx + 2000);
+    // Success path stamps a clean completion…
     expect(body).toMatch(/await stampLiExecutionVerdict\(\{ status: 'completed' \}, task, \{ success \}\)/);
+    // …and the FAILURE path re-reads the task after orphan recovery and stamps the failure
+    // verdict when recovery settled it into terminal `blocked` (codex P2 round 2).
+    expect(body).toMatch(/settled\.status === 'blocked' && settled\.metadata\?\.liProposal/);
+    expect(body).toMatch(/await stampLiExecutionVerdict\(\{\}, settled, \{ success: false \}\)/);
   });
 });
 

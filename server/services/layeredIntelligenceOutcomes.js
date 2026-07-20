@@ -256,6 +256,17 @@ export async function recordProposalExecution({ appId, slug, scope = null, succe
     // (never filed it) has no record, so `requireExisting` makes it a no-op there
     // instead of minting a stray minimal record on every full-sync peer.
     if (!hasExisting && requireExisting) return false;
+    // Stale-filing-generation gate (#2779, codex P2): when a proposal is re-filed after the
+    // dedup window, recordFiledProposal stamps a fresh `filedAt` and clears the execution
+    // fields — but the OLD completed hand-off task still rides the federated task list and is
+    // re-offered on every merge. An execution can only legitimately happen AFTER its filing,
+    // so a verdict whose `executedAt` predates the current `filedAt` belongs to a prior filing
+    // generation and must NOT be inherited by the new proposal. The re-file gap is the 30-day
+    // dedup window, which dwarfs any cross-peer clock skew, so a strict `<` is safe here.
+    if (requireExisting && hasExisting && existing.filedAt) {
+      const filedMs = Date.parse(existing.filedAt);
+      if (Number.isFinite(filedMs) && Number.isFinite(executionAtMs) && executionAtMs < filedMs) return false;
+    }
     // Durable idempotency for the federated consume (#2779, codex P2): the record's own
     // executionOutcome/executionAt IS the consumed-marker, so a re-synced terminal task is
     // a no-op WITHOUT relying on the in-memory status transition (which a crash between the

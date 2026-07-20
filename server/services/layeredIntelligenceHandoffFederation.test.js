@@ -204,7 +204,7 @@ describe('recordProposalExecutionFromVerdict (#2779) — the originating peer de
   });
 
   it('is a durable no-op when the same verdict re-syncs (idempotency, codex P2)', async () => {
-    await recordFiledProposal({ appId: 'app-x', slug: 'add-metrics', scope: 'refactor' }, store);
+    await recordFiledProposal({ appId: 'app-x', slug: 'add-metrics', scope: 'refactor', now: Date.parse('2026-07-20T08:00:00.000Z') }, store);
     const verdict = { appId: 'app-x', slug: 'add-metrics', scope: 'refactor', success: true, executedAt: '2026-07-20T10:00:00.000Z' };
     expect(await recordProposalExecutionFromVerdict(verdict, store)).toBe(true);
     const [first] = await listOutcomes({ appId: 'app-x' }, store);
@@ -217,7 +217,7 @@ describe('recordProposalExecutionFromVerdict (#2779) — the originating peer de
   });
 
   it('overwrites with a genuinely NEWER (re-executed) verdict — latest wins (parity)', async () => {
-    await recordFiledProposal({ appId: 'app-x', slug: 'add-metrics', scope: 'refactor' }, store);
+    await recordFiledProposal({ appId: 'app-x', slug: 'add-metrics', scope: 'refactor', now: Date.parse('2026-07-20T08:00:00.000Z') }, store);
     // First hand-off failed on a peer.
     expect(await recordProposalExecutionFromVerdict(
       { appId: 'app-x', slug: 'add-metrics', scope: 'refactor', success: false, errorCategory: 'test-failure', executedAt: '2026-07-20T10:00:00.000Z' },
@@ -229,6 +229,25 @@ describe('recordProposalExecutionFromVerdict (#2779) — the originating peer de
       { appId: 'app-x', slug: 'add-metrics', scope: 'refactor', success: true, executedAt: '2026-07-20T12:00:00.000Z' },
       store
     )).toBe(true);
+    expect((await listOutcomes({ appId: 'app-x' }, store))[0].executionOutcome).toBe('success');
+  });
+
+  it('rejects a stale verdict from an EARLIER filing after a re-file (codex P2)', async () => {
+    // Proposal re-filed after the dedup window: recordFiledProposal stamps a fresh filedAt and
+    // clears execution state, but the old completed hand-off still rides the federated task list
+    // and is re-offered. A verdict whose execution predates the CURRENT filing must not be
+    // inherited by the new proposal (it belongs to the prior filing generation).
+    await recordFiledProposal(
+      { appId: 'app-x', slug: 'add-metrics', scope: 'refactor', now: Date.parse('2026-07-20T11:00:00.000Z') },
+      store
+    );
+    const staleVerdict = { appId: 'app-x', slug: 'add-metrics', scope: 'refactor', success: true, executedAt: '2026-07-20T09:00:00.000Z' };
+    expect(await recordProposalExecutionFromVerdict(staleVerdict, store)).toBe(false);
+    const [rec] = await listOutcomes({ appId: 'app-x' }, store);
+    expect(rec.executionOutcome).toBeNull(); // new proposal keeps a clean execution slate
+    // A verdict from the CURRENT filing generation (executed after the re-file) is still accepted.
+    const freshVerdict = { appId: 'app-x', slug: 'add-metrics', scope: 'refactor', success: true, executedAt: '2026-07-20T12:00:00.000Z' };
+    expect(await recordProposalExecutionFromVerdict(freshVerdict, store)).toBe(true);
     expect((await listOutcomes({ appId: 'app-x' }, store))[0].executionOutcome).toBe('success');
   });
 
