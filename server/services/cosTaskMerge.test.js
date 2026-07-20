@@ -310,6 +310,7 @@ describe('mergeTaskLists', () => {
           ...(overrides.metadata || {}),
         },
         ...(overrides.priority ? { priority: overrides.priority } : {}),
+        ...(overrides.description ? { description: overrides.description } : {}),
       });
 
     it('collapses two same-fingerprint OPEN investigations from two peers to one active row', () => {
@@ -403,6 +404,63 @@ describe('mergeTaskLists', () => {
         expect(open.every((t) => t.metadata.claimedBy)).toBe(true); // claims untouched
         expect(open.every((t) => t.metadata.supersededBy === undefined)).toBe(true);
       }
+    });
+
+    it('collapses two blocked same-fingerprint copies (blocked is an OPEN investigation status)', () => {
+      // agentErrorAnalysis treats `blocked` as an open investigation, so two blocked
+      // copies for one cause are the same pile-up — they must collapse, not escape.
+      const local = [inv('sys-a', 'blocked', 'fp-1', { affectedTasks: ['task-1'] })];
+      const remote = [inv('sys-b', 'blocked', 'fp-1', { affectedTasks: ['task-2'] })];
+      for (const merged of [
+        mergeTaskLists(local, remote, { now: NOW }),
+        mergeTaskLists(remote, local, { now: NOW }),
+      ]) {
+        const byId = Object.fromEntries(merged.map((t) => [t.id, t]));
+        expect(byId['sys-a'].status).toBe('blocked'); // lower id survives, still blocked
+        expect(byId['sys-b'].status).toBe('completed'); // loser superseded
+        expect(byId['sys-b'].metadata.supersededBy).toBe('sys-a');
+        expect(byId['sys-a'].metadata.affectedTasks).toEqual(['task-1', 'task-2']);
+      }
+    });
+
+    it('collapses a blocked + pending same-fingerprint pair', () => {
+      const local = [inv('sys-a', 'blocked', 'fp-1')];
+      const remote = [inv('sys-b', 'pending', 'fp-1')];
+      const merged = mergeTaskLists(local, remote, { now: NOW });
+      const open = merged.filter((t) => t.metadata?.investigationFingerprint === 'fp-1' && t.status !== 'completed');
+      expect(open).toHaveLength(1);
+    });
+
+    it('surfaces peer-contributed affected tasks in the survivor DESCRIPTION (not just metadata)', () => {
+      // The investigation agent/user reads the body; the local path appends an
+      // "Also blocks" line per new id. The federation collapse mirrors that so the
+      // survivor names every blocked task, deterministically and idempotently.
+      const local = [inv('sys-a', 'pending', 'fp-1', { affectedTasks: ['task-1'] })]; // default body `desc sys-a`
+      const remote = [inv('sys-b', 'pending', 'fp-1', { affectedTasks: ['task-2'] })];
+      const once = mergeTaskLists(local, remote, { now: NOW });
+      const survivor = once.find((t) => t.id === 'sys-a');
+      expect(survivor.description).toContain('Also blocks task `task-2`');
+      // task-1 is the survivor's own id — not re-appended as a peer contribution
+      // unless it was already absent from the body; the default body doesn't mention
+      // it, so it IS appended once. Re-merging must NOT append it (or task-2) again.
+      const twice = mergeTaskLists(once, [], { now: NOW });
+      const survivor2 = twice.find((t) => t.id === 'sys-a');
+      expect(survivor2.description).toBe(survivor.description); // idempotent
+      const occurrences = (survivor2.description.match(/Also blocks task `task-2`/g) || []).length;
+      expect(occurrences).toBe(1);
+    });
+
+    it('does not append a description line already present in the body', () => {
+      // The survivor's body already mentions task-2 — the collapse must not duplicate it.
+      const local = [inv('sys-a', 'pending', 'fp-1', {
+        affectedTasks: ['task-1'],
+        description: 'Investigate failure. Original task `task-2` is affected.',
+      })];
+      const remote = [inv('sys-b', 'pending', 'fp-1', { affectedTasks: ['task-2'] })];
+      const merged = mergeTaskLists(local, remote, { now: NOW });
+      const survivor = merged.find((t) => t.id === 'sys-a');
+      const occurrences = (survivor.description.match(/`task-2`/g) || []).length;
+      expect(occurrences).toBe(1); // already present — not re-appended
     });
 
     it('does not collapse a single open investigation (no duplicate)', () => {

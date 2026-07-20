@@ -278,11 +278,24 @@ function normalizeAdopted(task) {
   };
 }
 
-// (rule 4) The terminal status an OPEN investigation loser is flipped to when a
-// same-fingerprint winner is chosen. `completed` (not `blocked`) — the duplicate
-// is subsumed, not stuck; it needs no further work. Marked with `supersededBy` so
-// the collapse is auditable and the pass stays idempotent (a superseded copy is
-// terminal, so it never re-enters the open-duplicate set on the next sweep).
+// (rule 4) The statuses at which an investigation is still OPEN — a live dedup
+// candidate that suppresses new same-cause creates. MUST mirror
+// agentErrorAnalysis.OPEN_INVESTIGATION_STATUSES (can't import it — that module
+// depends on cosTaskStore, which imports THIS module, so the import would cycle;
+// kept in sync by this comment). Crucially this INCLUDES `blocked`: a blocked
+// investigation still tracks its failure cause, so two `blocked` (or blocked +
+// pending) same-fingerprint copies are exactly the pile-up this pass must collapse
+// — filtering on the merge module's terminal set (completed AND blocked) would let
+// them escape. Only `completed` (the status a superseded loser is flipped to) is
+// settled, which keeps the pass idempotent: a collapsed loser never re-enters the
+// open set on the next sweep.
+const OPEN_INVESTIGATION_STATUSES = new Set(['pending', 'in_progress', 'challenged', 'blocked']);
+const isOpenInvestigation = (task) => OPEN_INVESTIGATION_STATUSES.has(task.status);
+
+// The terminal status an OPEN investigation loser is flipped to when a
+// same-fingerprint winner is chosen. `completed` — the duplicate is subsumed, not
+// stuck; it needs no further work. Marked with `supersededBy` so the collapse is
+// auditable and the pass stays idempotent (see the open-status note above).
 const SUPERSEDED_STATUS = 'completed';
 const SUPERSEDED_BY_KEY = 'supersededBy';
 
@@ -297,8 +310,9 @@ const affectedTaskIds = (task) => {
 };
 
 /**
- * Choose the surviving row among the OPEN (non-terminal) copies of one
- * investigation fingerprint. An `in_progress` copy wins outright so an in-flight
+ * Choose the surviving row among the OPEN copies (pending/in_progress/challenged/
+ * blocked — see OPEN_INVESTIGATION_STATUSES) of one investigation fingerprint. An
+ * `in_progress` copy wins outright so an in-flight
  * investigation (an agent is running it) is never orphaned by the collapse; if
  * MORE than one is `in_progress` (two peers both spawned in the sub-second claim
  * window), return null to skip the collapse this sweep — both run to completion
@@ -337,7 +351,7 @@ function dedupeInvestigations(tasks) {
 
   const rewrites = new Map(); // original task ref -> replacement
   for (const group of groups.values()) {
-    const open = group.filter((t) => !isTerminalStatus(t.status));
+    const open = group.filter(isOpenInvestigation);
     if (open.length === 0) continue;
     // Act on a genuine open duplicate, OR to re-fold a prior collapse whose
     // survivor a mid-propagation per-id LWW may have reverted to a partial
@@ -359,9 +373,26 @@ function dedupeInvestigations(tasks) {
     const affectedChanged =
       unionAffected.length !== currentAffected.length ||
       unionAffected.some((id, i) => id !== currentAffected[i]);
-    if (affectedChanged && unionAffected.length > 0) {
+
+    // Also surface the peer-contributed ids in the survivor's DESCRIPTION, not
+    // just metadata: the investigation agent/user reads the body (the metadata
+    // union is what the isReapableInvestigation reaper consumes, but "What
+    // unblocks" only lists ids the body mentions). Mirrors agentErrorAnalysis's
+    // local same-fingerprint path, which appends an "Also blocks" line per new id.
+    // Append only ids not already textually present (idempotent), in the sorted
+    // union order (deterministic) — so both peers reach the identical body and no
+    // agentId/timestamp enters the text to break convergence.
+    const currentDesc = survivor.description || '';
+    const missingMentions = unionAffected.filter((id) => !currentDesc.includes(`\`${id}\``));
+    const appended = missingMentions
+      .map((id) => `\n- Also blocks task \`${id}\` (same cause; merged across federated peers).`)
+      .join('');
+    const newDesc = currentDesc + appended;
+
+    if ((affectedChanged || appended) && unionAffected.length > 0) {
       rewrites.set(survivor, {
         ...survivor,
+        description: newDesc,
         metadata: { ...(survivor.metadata || {}), [AFFECTED_TASKS_KEY]: unionAffected },
       });
     }
