@@ -185,6 +185,16 @@ describe('messageActivityCandidates', () => {
     // Sent turns carry no counterpart handle (mirrors iMessage); email groups by threadId.
     expect(sent.metadata.handle).toBeNull();
   });
+  it('classifies a reply as sent via the Gmail SENT label even from a send-as alias (#2796)', () => {
+    // From (alias@example.com) != account owner (me@example.com), but the SENT label
+    // is authoritative — without it the reply is misclassified received and never
+    // cancels its inbound.
+    const [c] = messageActivityCandidates(account, [
+      { externalId: 'e9', date: '2026-07-04T12:00:00Z', from: 'alias@example.com', to: ['friend@x.io'], subject: 'Re: Hey', labels: ['SENT'] },
+    ]);
+    expect(c.kind).toBe('message.sent');
+    expect(c.metadata.handle).toBeNull();
+  });
 });
 
 describe('calendarActivityCandidates', () => {

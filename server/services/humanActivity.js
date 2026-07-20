@@ -178,11 +178,15 @@ export function messageActivityCandidates(account, messages = []) {
     const externalId = message.externalId || message.id;
     if (!externalId) continue;
     const fromEmail = participantEmail(message.from);
-    // Direction by exact From-vs-owner match. NOTE: a reply sent from a Gmail
-    // "send-as" alias (From ≠ account.email) is classified as received, not sent —
-    // send-as aliases aren't stored per account, so we can't recognize them here.
-    // Bounded impact: such a reply won't cancel its inbound in outreach detection.
-    const sent = Boolean(selfEmail) && fromEmail === selfEmail;
+    // Direction: prefer Gmail's authoritative SENT label when the provider supplies
+    // labels — it correctly marks mail sent from a "send-as" alias (where From ≠
+    // account.email), which a bare From-vs-owner match would misclassify as received
+    // and so never cancel its inbound in outreach detection (#2796). Sources without
+    // labels (Outlook/other) fall back to matching the sender against the owner.
+    const labels = Array.isArray(message.labels) ? message.labels : null;
+    const sent = labels
+      ? labels.includes('SENT')
+      : (Boolean(selfEmail) && fromEmail === selfEmail);
     const participants = normalizeParticipants([
       message.from,
       ...(message.to || []),

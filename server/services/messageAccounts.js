@@ -88,3 +88,15 @@ export async function updateSyncStatus(id, status) {
   await saveAccounts(accounts);
   return accounts[id];
 }
+
+// Stamp the reply-detection watermark (#2796): the last time this account
+// successfully ingested sent mail into the activity timeline. The Tribe-outreach
+// detector trusts an account as two-way only when this is set and recent, so an
+// account is never trusted before its sent history actually exists.
+export async function markSentIngested(id, at = new Date().toISOString()) {
+  const accounts = await loadAccounts();
+  if (!accounts[id]) return null;
+  accounts[id].sentIngestedAt = at;
+  await saveAccounts(accounts);
+  return accounts[id];
+}

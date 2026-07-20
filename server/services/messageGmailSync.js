@@ -21,11 +21,13 @@ function makeExternalId(gmailId) {
 // by a test in messageGmailSync.test.js.
 export const SENT_INGEST_DAYS = 14;
 
-// Sent mail gets its OWN fetch budget (a separate list pass), NOT a share of the
-// inbox cap: a heavy sender can send >100 mails in 14 days, and folding sent into
-// one shared-cap query would evict unread-inbox messages from the primary sync.
-// 14 days of a normal person's replies fit comfortably under this.
-export const SENT_INGEST_MAX = 50;
+// Sent mail gets its OWN fetch budget (a separate list pass), never a share of the
+// inbox cap — sent is activity-only and must not crowd inbox out of the primary
+// sync. This also bounds the per-sync detail-fetch cost (sent isn't cached, so it's
+// re-fetched each sync). 14 days of a normal person's replies fit under this; a
+// heavier sender whose replies fall beyond it is a filed follow-up (full date-bounded
+// pagination / fail-closed) — see the issue linked from the changelog.
+export const SENT_INGEST_MAX = 100;
 
 // The inbox search query for a sync mode. `unread` scopes to unread inbox; `full`
 // takes the whole inbox (capped downstream).
@@ -254,12 +256,27 @@ export async function syncGmail(account, cache, io, options = {}) {
     }
   }
 
-  if (io && messages.length > 0) {
-    io.emit('messages:sync:message', { accountId: account.id, messages });
+  // Split inbox vs sent: sent mail is ingested ONLY for the human-activity timeline
+  // (reply detection, #2796) — it must NOT enter the inbox cache, or it would show
+  // up in /api/messages/inbox, run through triage/eval, and compete with real inbox
+  // mail under the maxMessages trim (which could evict a message before its activity
+  // is recorded). A message the user sent carries Gmail's SENT label and no INBOX
+  // label; anything with INBOX (including a self-addressed SENT+INBOX message) stays
+  // inbox. syncAccount records sent activity from `sentMessages` separately.
+  const inboxMessages = [];
+  const sentMessages = [];
+  for (const m of messages) {
+    const lbl = m.labels || [];
+    if (lbl.includes('SENT') && !lbl.includes('INBOX')) sentMessages.push(m);
+    else inboxMessages.push(m);
   }
 
-  console.log(`📧 Gmail API sync complete: ${messages.length} messages fetched`);
-  return { messages, status: 'success', syncMethod: 'api' };
+  if (io && inboxMessages.length > 0) {
+    io.emit('messages:sync:message', { accountId: account.id, messages: inboxMessages });
+  }
+
+  console.log(`📧 Gmail API sync complete: ${inboxMessages.length} inbox, ${sentMessages.length} sent (activity-only)`);
+  return { messages: inboxMessages, sentMessages, status: 'success', syncMethod: 'api' };
 }
 
 /**

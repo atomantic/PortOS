@@ -22,7 +22,7 @@
 
 ## Tribe outreach
 
-- **[issue-2796]** Tribe unanswered-thread nudges now cover Gmail, not just iMessage/Signal: Gmail sync ingests your recent sent mail into the activity timeline (per-account, default-on, opt out via a new "Reply detection" toggle in Messages > Config), so a thread you've already replied to is no longer surfaced as needing outreach while a genuinely unanswered email within the window still is.
+- **[issue-2796]** Tribe unanswered-thread nudges now cover Gmail, not just iMessage/Signal: Gmail sync ingests your recent sent mail into the activity timeline (as activity only — sent mail never enters your inbox), so a thread you've already replied to is no longer surfaced as needing outreach while a genuinely unanswered email within the window still is. Reply detection is per-account (default-on for Gmail, opt out via a new "Reply detection" toggle in Messages > Config), only trusts an account once its sent history is actually present and current (so a just-upgraded or sync-failing account can't emit false nudges), honors Gmail's send-as aliases, and drafts email replies in an email tone rather than a text-message one. Follow-on hardening (per-account event querying, full sent-window coverage) tracked in #2820.
 
 ## Changed
 
