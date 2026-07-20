@@ -5,6 +5,8 @@ import {
   UNKNOWN_REJECTION_REASON,
   classifyRejection,
   classifyClosingComment,
+  classifyPrFailure,
+  isPrRefinableReason,
   formatRejectionReason,
   formatRejectionReasons,
   summarizeRejectionReasons
@@ -184,6 +186,114 @@ describe('classifyRejection', () => {
     expect(REJECTION_REASON_VALUES).toContain(got);
     const fromComment = classifyRejection({ outcome: 'rejected', closingComment: 'out of scope' });
     expect(REJECTION_REASON_VALUES).toContain(fromComment);
+  });
+
+  describe('implementing-PR failure precedence (#2748, deliverable 2)', () => {
+    it('refines a generic not_planned decline into the PR-failure token', () => {
+      // The primary reachable case: an abandoned/rejected proposal whose implementing
+      // PR failed CI. The bare not_planned says only THAT it was declined.
+      expect(classifyRejection({
+        outcome: 'rejected', stateReason: 'not_planned', prFailure: 'validation-failed'
+      })).toBe('validation-failed');
+      expect(classifyRejection({
+        outcome: 'abandoned', prFailure: 'merge-conflict'
+      })).toBe('merge-conflict');
+    });
+
+    it('diagnoses an otherwise-unknown close from the PR failure', () => {
+      expect(classifyRejection({
+        outcome: 'rejected', stateReason: null, labels: [], prFailure: 'merge-conflict'
+      })).toBe('merge-conflict');
+    });
+
+    it('never overrides a human label or a specific close reason', () => {
+      // A human wontfix / a duplicate close is a deliberate disposition; the mechanical
+      // fact that the PR had a conflict must not outrank it.
+      expect(classifyRejection({
+        outcome: 'rejected', labels: ['wontfix'], prFailure: 'validation-failed'
+      })).toBe('user-rejected');
+      expect(classifyRejection({
+        outcome: 'abandoned', stateReason: 'duplicate', prFailure: 'merge-conflict'
+      })).toBe('duplicate');
+    });
+
+    it('sits BELOW the closing-comment rationale', () => {
+      // A human who stated "out of scope" in prose outranks a mechanical PR conflict.
+      expect(classifyRejection({
+        outcome: 'rejected', stateReason: 'not_planned',
+        closingComment: 'this is out of scope', prFailure: 'merge-conflict'
+      })).toBe('scope-mismatch');
+    });
+
+    it('ignores a foreign / non-vocabulary prFailure token', () => {
+      // Only a REJECTION_REASONS member is honoured, so a caller can't inject junk.
+      expect(classifyRejection({
+        outcome: 'rejected', stateReason: 'not_planned', prFailure: 'not-a-real-token'
+      })).toBe('user-rejected');
+      expect(classifyRejection({
+        outcome: 'rejected', prFailure: 'not-a-real-token'
+      })).toBe(UNKNOWN_REJECTION_REASON);
+    });
+  });
+});
+
+describe('classifyPrFailure (#2748, deliverable 2)', () => {
+  it('returns null for a nullish or non-object input', () => {
+    expect(classifyPrFailure(null)).toBeNull();
+    expect(classifyPrFailure(undefined)).toBeNull();
+    expect(classifyPrFailure('MERGED')).toBeNull();
+  });
+
+  it('never treats a merged PR as a failure', () => {
+    // If it merged, the proposal is `merged` and there is nothing to diagnose.
+    expect(classifyPrFailure({ state: 'MERGED', mergeStateStatus: 'DIRTY' })).toBeNull();
+    expect(classifyPrFailure({ state: 'merged', statusCheckRollup: [{ conclusion: 'FAILURE' }] })).toBeNull();
+  });
+
+  it('reads a DIRTY merge state as a merge conflict, ahead of a failed check', () => {
+    expect(classifyPrFailure({ state: 'CLOSED', mergeStateStatus: 'DIRTY' })).toBe('merge-conflict');
+    // A conflicted branch is the more fundamental blocker, so it wins over a check fail.
+    expect(classifyPrFailure({
+      state: 'OPEN', mergeStateStatus: 'DIRTY', statusCheckRollup: [{ conclusion: 'FAILURE' }]
+    })).toBe('merge-conflict');
+  });
+
+  it('reads a failing check verdict as validation-failed (CheckRun or StatusContext shape)', () => {
+    expect(classifyPrFailure({ state: 'CLOSED', statusCheckRollup: [{ conclusion: 'SUCCESS' }, { conclusion: 'FAILURE' }] }))
+      .toBe('validation-failed');
+    // StatusContext rows carry `state`, not `conclusion`.
+    expect(classifyPrFailure({ state: 'CLOSED', statusCheckRollup: [{ state: 'ERROR' }] })).toBe('validation-failed');
+    expect(classifyPrFailure({ state: 'CLOSED', statusCheckRollup: [{ conclusion: 'TIMED_OUT' }] })).toBe('validation-failed');
+  });
+
+  it('returns null when checks all passed or are ambiguous (conservative)', () => {
+    expect(classifyPrFailure({ state: 'CLOSED', mergeStateStatus: 'CLEAN', statusCheckRollup: [{ conclusion: 'SUCCESS' }] }))
+      .toBeNull();
+    // CANCELLED/SKIPPED/NEUTRAL are ambiguous (superseded/opt-out) → honest null.
+    expect(classifyPrFailure({ state: 'CLOSED', statusCheckRollup: [{ conclusion: 'CANCELLED' }, { conclusion: 'SKIPPED' }] }))
+      .toBeNull();
+  });
+
+  it('only ever yields a storable rejection token', () => {
+    for (const view of [
+      { state: 'CLOSED', mergeStateStatus: 'DIRTY' },
+      { state: 'CLOSED', statusCheckRollup: [{ conclusion: 'FAILURE' }] }
+    ]) {
+      expect(REJECTION_REASONS).toContain(classifyPrFailure(view));
+    }
+  });
+});
+
+describe('isPrRefinableReason (#2748, deliverable 2)', () => {
+  it('is true only for the generic decline and the unknown sentinel', () => {
+    expect(isPrRefinableReason('user-rejected')).toBe(true);
+    expect(isPrRefinableReason(UNKNOWN_REJECTION_REASON)).toBe(true);
+  });
+
+  it('is false for every diagnosis a more authoritative signal already made', () => {
+    for (const r of ['duplicate', 'scope-mismatch', 'missing-context', 'quality-issue', 'merge-conflict', 'validation-failed', null]) {
+      expect(isPrRefinableReason(r)).toBe(false);
+    }
   });
 });
 

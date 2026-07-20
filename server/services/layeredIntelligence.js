@@ -2073,7 +2073,7 @@ export async function listForgeIssues({ cli, cwd, env, label = LI_LABEL, state =
   // gh takes the state explicitly.
   const args = cli === 'glab'
     ? ['issue', 'list', '--label', label, ...(state === 'all' ? ['--all'] : []), '-P', '100', '-F', 'json']
-    : ['issue', 'list', '--label', label, '--state', state, '--limit', '100', '--json', 'number,title,body,state,stateReason,closedAt,url,labels,comments'];
+    : ['issue', 'list', '--label', label, '--state', state, '--limit', '100', '--json', 'number,title,body,state,stateReason,closedAt,url,labels,comments,closedByPullRequestsReferences'];
   const { code, stdout } = await exec(cli, args, { cwd, env });
   if (code !== 0) return { ok: false, issues: [] };
   if (!stdout.trim()) return { ok: true, issues: [] };
@@ -2101,8 +2101,52 @@ export async function listForgeIssues({ cli, cwd, env, label = LI_LABEL, state =
       // `-F json` omits them, so its rows carry null and fall through to label/
       // stateReason only (tracked in the issue's Remaining).
       closingComment: extractClosingComment(i.comments),
+      // The implementing-PR handle (#2748, deliverable 2): gh reports every PR that
+      // closes/references this issue in `closedByPullRequestsReferences`. Additive
+      // and null-defaulted — glab's `-F json` omits it, so its rows carry null and
+      // fall through to the label/comment signals, and the reconciler only reads a
+      // PR's state when it holds a number here.
+      implementingPr: extractImplementingPr(i.closedByPullRequestsReferences),
       slug: extractSlugFromBody(i.body || i.description || '') || extractSlugFromBody(i.title || '')
     }))
+  };
+}
+
+/**
+ * The number of the PR that implements a proposal, from gh's
+ * `closedByPullRequestsReferences` (#2748, deliverable 2). Takes the LAST reference —
+ * the most recent PR linked to the issue — and returns its number, or null when there
+ * is none (glab, or an issue closed by hand). Pure.
+ */
+export function extractImplementingPr(refs) {
+  if (!Array.isArray(refs)) return null;
+  for (let i = refs.length - 1; i >= 0; i -= 1) {
+    const n = refs[i]?.number;
+    if (Number.isInteger(n) && n > 0) return n;
+  }
+  return null;
+}
+
+/**
+ * Read the merge state + check rollup of an implementing PR (#2748, deliverable 2),
+ * so the rejection reconciler can classify `merge-conflict` / `validation-failed`.
+ * gh-only (glab carries no PR handle) and bounded by the caller to the small set of
+ * non-merged proposals that both hold a PR ref and were left undiagnosed by the free
+ * signals — this is the ONE tracker fetch classification adds, and it never runs at
+ * boot (only the scheduler-tick reconcile, gated behind `sources.outcomes`).
+ * Returns `{ state, mergeStateStatus, statusCheckRollup }`, or null on any failure
+ * (a null read simply leaves the proposal on its existing, honest fallback reason).
+ */
+export async function readImplementingPrState({ cli, cwd, env, number, exec = runCli } = {}) {
+  if (cli !== 'gh' || !Number.isInteger(number)) return null;
+  const { code, stdout } = await exec(cli, ['pr', 'view', String(number), '--json', 'state,mergeStateStatus,statusCheckRollup'], { cwd, env });
+  if (code !== 0 || !stdout.trim()) return null;
+  const parsed = safeJSONParse(stdout, null, { logError: false });
+  if (!parsed || typeof parsed !== 'object') return null;
+  return {
+    state: parsed.state ?? null,
+    mergeStateStatus: parsed.mergeStateStatus ?? null,
+    statusCheckRollup: Array.isArray(parsed.statusCheckRollup) ? parsed.statusCheckRollup : []
   };
 }
 

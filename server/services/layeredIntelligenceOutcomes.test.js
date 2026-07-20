@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -53,6 +53,21 @@ describe('sanitizeOutcomeRecord', () => {
     const unresolved = sanitizeOutcomeRecord({ appId: 'a', slug: 's', outcome: null, outcomeAt: 'x', outcomeReason: 'y' });
     expect(unresolved.outcomeAt).toBeNull();
     expect(unresolved.outcomeReason).toBeNull();
+  });
+
+  describe('implementingPr (#2748, deliverable 2)', () => {
+    it('keeps a positive integer PR ref and null-defaults everything else', () => {
+      expect(sanitizeOutcomeRecord({ appId: 'a', slug: 's', implementingPr: 902 }).implementingPr).toBe(902);
+      // Additive/null default: absent, non-int, zero, or negative all coerce to null.
+      expect(sanitizeOutcomeRecord({ appId: 'a', slug: 's' }).implementingPr).toBeNull();
+      expect(sanitizeOutcomeRecord({ appId: 'a', slug: 's', implementingPr: '902' }).implementingPr).toBeNull();
+      expect(sanitizeOutcomeRecord({ appId: 'a', slug: 's', implementingPr: 0 }).implementingPr).toBeNull();
+      expect(sanitizeOutcomeRecord({ appId: 'a', slug: 's', implementingPr: -1 }).implementingPr).toBeNull();
+    });
+
+    it('is preserved regardless of outcome (a fact about the proposal, not the rejection)', () => {
+      expect(sanitizeOutcomeRecord({ appId: 'a', slug: 's', outcome: 'merged', implementingPr: 903 }).implementingPr).toBe(903);
+    });
   });
 
   describe('rejectionReason (#2689)', () => {
@@ -447,6 +462,113 @@ describe('reconcileOutcomes', () => {
       const issue = { slug: 's', state: 'closed', stateReason: 'not_planned', closedAt: '2026-07-01T00:00:00Z' };
       expect(await reconcileOutcomes({ appId: 'app-1', existingIssues: [issue] }, store)).toBe(1);
       expect(await reconcileOutcomes({ appId: 'app-1', existingIssues: [issue] }, store)).toBe(0);
+    });
+  });
+
+  describe('implementing-PR failure classification (#2748, deliverable 2)', () => {
+    const rowsBySlug = async () =>
+      Object.fromEntries((await listOutcomes({ appId: 'app-1' }, store)).map(r => [r.slug, r]));
+
+    it('refines a generic decline to validation-failed from the implementing PR checks', async () => {
+      await recordFiledProposal({ appId: 'app-1', slug: 'ci-failed' }, store);
+      const readPrState = vi.fn().mockResolvedValue({ state: 'CLOSED', mergeStateStatus: 'UNKNOWN', statusCheckRollup: [{ conclusion: 'FAILURE' }] });
+      const updated = await reconcileOutcomes({
+        appId: 'app-1', cli: 'gh', cwd: '/x', readPrState,
+        existingIssues: [{ slug: 'ci-failed', state: 'closed', stateReason: 'not_planned', implementingPr: 900, closedAt: '2026-07-01T00:00:00Z' }]
+      }, store);
+      expect(updated).toBe(1);
+      expect(readPrState).toHaveBeenCalledWith({ cli: 'gh', cwd: '/x', env: undefined, number: 900 });
+      const row = (await rowsBySlug())['ci-failed'];
+      expect(row.rejectionReason).toBe('validation-failed');
+      // The implementing-PR ref is persisted (additive field).
+      expect(row.implementingPr).toBe(900);
+    });
+
+    it('refines an otherwise-unknown close to merge-conflict from the PR merge state', async () => {
+      await recordFiledProposal({ appId: 'app-1', slug: 'dirty-branch' }, store);
+      const readPrState = vi.fn().mockResolvedValue({ state: 'OPEN', mergeStateStatus: 'DIRTY', statusCheckRollup: [] });
+      await reconcileOutcomes({
+        appId: 'app-1', cli: 'gh', readPrState,
+        existingIssues: [{ slug: 'dirty-branch', state: 'closed', stateReason: 'reopened', implementingPr: 901, closedAt: '2026-07-01T00:00:00Z' }]
+      }, store);
+      expect((await rowsBySlug())['dirty-branch'].rejectionReason).toBe('merge-conflict');
+    });
+
+    it('does NOT read the PR when a more authoritative signal already diagnosed the close', async () => {
+      // A human label wins; the bounded fetch is skipped entirely.
+      await recordFiledProposal({ appId: 'app-1', slug: 'labelled' }, store);
+      const readPrState = vi.fn();
+      await reconcileOutcomes({
+        appId: 'app-1', cli: 'gh', readPrState,
+        existingIssues: [{ slug: 'labelled', state: 'closed', stateReason: 'not_planned', labels: ['duplicate'], implementingPr: 902, closedAt: '2026-07-01T00:00:00Z' }]
+      }, store);
+      expect(readPrState).not.toHaveBeenCalled();
+      expect((await rowsBySlug())['labelled'].rejectionReason).toBe('duplicate');
+      // But the PR ref is still persisted so it's available if the label is later removed.
+      expect((await rowsBySlug())['labelled'].implementingPr).toBe(902);
+    });
+
+    it('does NOT read the PR when there is no implementing ref or no forge handle', async () => {
+      await recordFiledProposal({ appId: 'app-1', slug: 'no-pr' }, store);
+      await recordFiledProposal({ appId: 'app-1', slug: 'no-cli' }, store);
+      const readPrState = vi.fn();
+      await reconcileOutcomes({
+        appId: 'app-1', cli: 'gh', readPrState,
+        existingIssues: [{ slug: 'no-pr', state: 'closed', stateReason: 'not_planned', closedAt: '2026-07-01T00:00:00Z' }]
+      }, store);
+      // No cli (plan/jira path) — even with a ref there's no PR to read.
+      await reconcileOutcomes({
+        appId: 'app-1', readPrState,
+        existingIssues: [{ slug: 'no-cli', state: 'closed', stateReason: 'not_planned', implementingPr: 903, closedAt: '2026-07-01T00:00:00Z' }]
+      }, store);
+      expect(readPrState).not.toHaveBeenCalled();
+      const rows = await rowsBySlug();
+      expect(rows['no-pr'].rejectionReason).toBe('user-rejected');
+      expect(rows['no-cli'].rejectionReason).toBe('user-rejected');
+    });
+
+    it('falls back to the free-signal reason when the PR read is inconclusive', async () => {
+      await recordFiledProposal({ appId: 'app-1', slug: 'clean-pr' }, store);
+      // PR merged / clean → classifyPrFailure returns null → keep the generic decline.
+      const readPrState = vi.fn().mockResolvedValue({ state: 'CLOSED', mergeStateStatus: 'CLEAN', statusCheckRollup: [{ conclusion: 'SUCCESS' }] });
+      await reconcileOutcomes({
+        appId: 'app-1', cli: 'gh', readPrState,
+        existingIssues: [{ slug: 'clean-pr', state: 'closed', stateReason: 'not_planned', implementingPr: 904, closedAt: '2026-07-01T00:00:00Z' }]
+      }, store);
+      expect((await rowsBySlug())['clean-pr'].rejectionReason).toBe('user-rejected');
+    });
+
+    it('survives a throwing PR read, keeping the free-signal reason (never throws)', async () => {
+      await recordFiledProposal({ appId: 'app-1', slug: 'boom' }, store);
+      const readPrState = vi.fn().mockRejectedValue(new Error('gh exploded'));
+      const updated = await reconcileOutcomes({
+        appId: 'app-1', cli: 'gh', readPrState,
+        existingIssues: [{ slug: 'boom', state: 'closed', stateReason: 'not_planned', implementingPr: 905, closedAt: '2026-07-01T00:00:00Z' }]
+      }, store);
+      expect(updated).toBe(1);
+      expect((await rowsBySlug())['boom'].rejectionReason).toBe('user-rejected');
+    });
+
+    it('backfills the implementing-PR ref on an already-settled record without changing its reason', async () => {
+      await recordFiledProposal({ appId: 'app-1', slug: 'backfill' }, store);
+      // First pass: a duplicate close with no PR ref yet.
+      await reconcileOutcomes({
+        appId: 'app-1',
+        existingIssues: [{ slug: 'backfill', state: 'closed', stateReason: 'duplicate', closedAt: '2026-07-01T00:00:00Z' }]
+      }, store);
+      expect((await rowsBySlug())['backfill'].implementingPr).toBeNull();
+      // Second pass: the ref is now known. Reason is unchanged (duplicate wins), but
+      // learning the ref is itself a reason to rewrite.
+      const readPrState = vi.fn();
+      const updated = await reconcileOutcomes({
+        appId: 'app-1', cli: 'gh', readPrState,
+        existingIssues: [{ slug: 'backfill', state: 'closed', stateReason: 'duplicate', implementingPr: 906, closedAt: '2026-07-01T00:00:00Z' }]
+      }, store);
+      expect(updated).toBe(1);
+      expect(readPrState).not.toHaveBeenCalled(); // duplicate is not refinable → no fetch
+      const row = (await rowsBySlug())['backfill'];
+      expect(row.rejectionReason).toBe('duplicate');
+      expect(row.implementingPr).toBe(906);
     });
   });
 });
