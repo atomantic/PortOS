@@ -40,6 +40,12 @@ export const PRIORITY_VALUES = {
 
 const CLAIM_KEY_SET = new Set(CLAIM_METADATA_KEYS);
 
+// A task is terminal once it is completed or blocked — the same set cosTaskMerge's
+// release-on-transition uses. Consumed by the LI cross-peer verdict consume (#2779) to
+// spot a non-terminal→terminal ADOPTION (a failed hand-off blocks, a clean one completes;
+// both are legitimate execution outcomes worth recording).
+const isTerminalTaskStatus = (status) => status === 'completed' || status === 'blocked';
+
 // Legacy fields an `updateTask` patch may carry directly (vs nested under
 // `metadata`); they're normalized into `metadata` on write. Listed once so the
 // content-edit detector and the normalizer below can't drift apart.
@@ -507,7 +513,7 @@ export async function reviveBlockedTask(taskId, { priority, metadata } = {}, tas
  * @returns {Promise<{ changed: boolean, count?: number }>}
  */
 export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now() } = {}) {
-  return withStateLock(async () => {
+  const { changed, count, merged, localTerminalIds } = await withStateLock(async () => {
     const state = await loadState();
     const filePath = taskType === 'user'
       ? join(ROOT_DIR, state.config.userTasksFile)
@@ -528,8 +534,35 @@ export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now() }
 
     await writeFile(filePath, mergedMarkdown);
     cosEvents.emit('tasks:changed', { type: taskType, action: 'peer-merged' });
-    return { changed: true, count: merged.length };
+    // Return the merged set + which local ids were ALREADY terminal so the post-lock
+    // LI-verdict consume (#2779) can spot non-terminal→terminal adoptions. Kept out of
+    // the lock — recordProposalExecution touches a different store (li-outcomes), and
+    // the LI import graph stays off cosTaskStore's static chain (lazy below).
+    const localTerminalIds = localTasks.filter(t => t && isTerminalTaskStatus(t.status)).map(t => t.id);
+    return { changed: true, count: merged.length, merged, localTerminalIds };
   });
+
+  // Post-lock, best-effort: derive recordProposalExecution from each hand-off task that
+  // this merge just ADOPTED into a terminal state carrying an LI execution verdict (#2779) —
+  // a task filed here but executed on a peer, whose terminal state (with the stamped
+  // LI_EXECUTION_VERDICT_KEY) has now synced back. The non-terminal→terminal transition is
+  // the idempotency guard: the next sweep sees the task already terminal locally and skips
+  // it, so a repeatedly-synced completion is consumed exactly once. `requireExisting` inside
+  // the consumer scopes the write to a proposal THIS peer filed, so a non-originating peer
+  // that also adopts the task is a no-op.
+  if (changed) {
+    const { LI_EXECUTION_VERDICT_KEY, recordProposalExecutionFromVerdict } = await import('./layeredIntelligenceOutcomes.js');
+    const alreadyTerminal = new Set(localTerminalIds);
+    const verdicts = merged
+      .filter(t => isTerminalTaskStatus(t?.status) && t?.metadata?.[LI_EXECUTION_VERDICT_KEY] && !alreadyTerminal.has(t.id))
+      .map(t => t.metadata[LI_EXECUTION_VERDICT_KEY]);
+    for (const verdict of verdicts) {
+      await recordProposalExecutionFromVerdict(verdict)
+        .catch(err => console.error(`❌ 📚 cosTaskStore: failed to consume LI execution verdict: ${err.message}`));
+    }
+  }
+
+  return changed ? { changed, count } : { changed: false };
 }
 
 /**

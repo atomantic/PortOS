@@ -319,6 +319,50 @@ function deriveLiExecutionPayload(task, success, { errorCategory = null, validat
 }
 
 /**
+ * Build the cross-peer LI hand-off EXECUTION verdict (#2779) from a completing agent's
+ * raw signals — the SAME small payload `recordProposalExecution` consumes, stamped by the
+ * executing peer into the federated task metadata (LI_EXECUTION_VERDICT_KEY) so the
+ * originating peer can derive the outcome from the terminal synced task.
+ *
+ * Exported (unlike the private `deriveLiExecutionPayload`) so the completion chokepoint in
+ * agentLifecycle.finalizeAgent can stamp the verdict as part of the task's completion write
+ * — the reconstructed-task learning hook there projects `taskLiProposal`, but the persisted
+ * task carries `metadata.liProposal`, so this takes the proposal object directly to stay
+ * agnostic to the field name.
+ *
+ * Parity with the LOCAL write: it computes the validation-authoritative `outcomeSuccess`
+ * (a declared verdict overrides the exit code, #2344) and applies the SAME environmental
+ * gate (#2618) the local recordTaskCompletion path uses — a rate-limit/outage says nothing
+ * about the proposal's domain, so it yields null (no stamp) exactly as it yields no local
+ * write. Returns null for a non-hand-off task (no `liProposal`) or a proposal missing its
+ * (appId, slug) identity. Pure.
+ *
+ * @param {{ liProposal?:object|null, success?:boolean, validationPassed?:boolean|null,
+ *           errorAnalysis?:{category?:string|null, origin?:string|null}|null }} args
+ * @returns {{ appId:string, slug:string, scope:string|null, success:boolean,
+ *             errorCategory:string|null, validationPassed:boolean|null } | null}
+ */
+export function buildLiExecutionVerdict({ liProposal, success, validationPassed, errorAnalysis } = {}) {
+  if (!liProposal || typeof liProposal !== 'object' || Array.isArray(liProposal)) return null;
+  if (!liProposal.appId || !liProposal.slug) return null;
+  const vp = typeof validationPassed === 'boolean' ? validationPassed : null;
+  const outcomeSuccess = vp === null ? !!success : vp;
+  const errorCategory = errorAnalysis?.category || null;
+  // `?? null` (not `|| null`) preserves a malformed falsy origin ('') so the gate's
+  // allowlist rejects it, mirroring recordTaskCompletion's handling (#2642).
+  const errorOrigin = errorAnalysis?.origin ?? null;
+  if (shouldDivertToEnvironmental(outcomeSuccess, errorCategory, errorOrigin)) return null;
+  return {
+    appId: liProposal.appId,
+    slug: liProposal.slug,
+    scope: liProposal.scope ?? null,
+    success: outcomeSuccess,
+    errorCategory,
+    validationPassed: vp
+  };
+}
+
+/**
  * Record a completed task for learning
  */
 export async function recordTaskCompletion(agent, task) {

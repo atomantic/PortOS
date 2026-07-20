@@ -40,6 +40,19 @@ export const OUTCOME_RETENTION_MS = CLOSED_SUPPRESSION_MS;
 // changes the record directory shape (there is none yet).
 export const LI_OUTCOMES_SCHEMA_VERSION = 1;
 
+// The federated-task metadata key that carries a hand-off's per-proposal EXECUTION
+// verdict across peers (#2779). A CoS LI hand-off task filed on peer A can be claimed
+// and executed on peer B; #2765 only records the outcome into whichever peer RAN the
+// agent, so the originating peer never learns. The executing peer stamps this small
+// verdict (the same payload `recordProposalExecution` consumes) into the terminal
+// task's metadata; when that terminal state syncs back, the originating peer derives
+// `recordProposalExecution` from it (see cosTaskStore.mergePeerTasks) so its
+// `computeProposalExecutionAwareness` reflects the cross-peer execution. Kept local:
+// the li-outcomes collection itself is NOT federated — only this verdict rides the
+// already-federated task. Additive metadata on an existing federated task shape → no
+// schema bump (the wire metadata record is permissive; the listHash covers it).
+export const LI_EXECUTION_VERDICT_KEY = 'liExecution';
+
 /**
  * Normalize one on-disk outcome record. Drops anything without a usable
  * appId+slug (the identity), coerces the outcome to a known value or null, and
@@ -203,7 +216,7 @@ export async function recordFiledProposal({ appId, slug, tracker = null, issueRe
  * nothing about the domain — same gate as #2618); this helper records whatever it is
  * given.
  */
-export async function recordProposalExecution({ appId, slug, scope = null, success, errorCategory = null, validationPassed = null, now = Date.now() } = {}, store = outcomesStore()) {
+export async function recordProposalExecution({ appId, slug, scope = null, success, errorCategory = null, validationPassed = null, requireExisting = false, now = Date.now() } = {}, store = outcomesStore()) {
   const normSlug = normalizeSlug(slug);
   if (!appId || !normSlug || typeof success !== 'boolean') return false;
   const id = outcomeId(appId, normSlug);
@@ -230,7 +243,15 @@ export async function recordProposalExecution({ appId, slug, scope = null, succe
   // rather than throwing into the completion hook.
   return store.queueRecordWrite(id, async () => {
     const existing = await store.loadOne(id).catch(() => null);
-    const base = existing && typeof existing === 'object'
+    const hasExisting = existing && typeof existing === 'object';
+    // Cross-peer consume gate (#2779): when the verdict arrives via a synced task
+    // rather than a locally-run agent, ONLY the originating peer — the one that
+    // filed the proposal and therefore already carries an li-outcomes record for
+    // (app, slug) — should record it. A peer that merely ADOPTED the terminal task
+    // (never filed it) has no record, so `requireExisting` makes it a no-op there
+    // instead of minting a stray minimal record on every full-sync peer.
+    if (!hasExisting && requireExisting) return false;
+    const base = hasExisting
       ? existing
       : {
           appId, slug: normSlug, tracker: null, issueRef: null,
@@ -257,6 +278,30 @@ export async function recordProposalExecution({ appId, slug, scope = null, succe
     console.error(`❌ Layered Intelligence: failed to record execution outcome for ${appId}/${normSlug}: ${err.message}`);
     return false;
   });
+}
+
+/**
+ * Derive `recordProposalExecution` from a hand-off task's federated EXECUTION verdict
+ * (#2779) — the receiver side of the cross-peer loop. When a hand-off task that peer B
+ * executed syncs its terminal state back to peer A (the originating peer), A calls this
+ * with the `LI_EXECUTION_VERDICT_KEY` metadata the executing peer stamped, so A's
+ * `computeProposalExecutionAwareness` reflects the execution B ran.
+ *
+ * `requireExisting: true` — A only records for a proposal it actually FILED (it has the
+ * li-outcomes record); a third full-sync peer that merely adopts the terminal task never
+ * mints a stray record. Idempotency is owned by the CALLER (cosTaskStore.mergePeerTasks
+ * only consumes on a non-terminal→terminal adoption, once per task), so a task re-syncing
+ * doesn't re-record. Pure input validation (a hand-corrupt/foreign verdict is dropped);
+ * best-effort like the sibling recorders (never throws into the merge path).
+ */
+export async function recordProposalExecutionFromVerdict(verdict, store = outcomesStore()) {
+  if (!verdict || typeof verdict !== 'object' || Array.isArray(verdict)) return false;
+  const { appId, slug, scope = null, success, errorCategory = null, validationPassed = null } = verdict;
+  if (typeof success !== 'boolean') return false;
+  return recordProposalExecution(
+    { appId, slug, scope, success, errorCategory, validationPassed, requireExisting: true },
+    store
+  );
 }
 
 /**

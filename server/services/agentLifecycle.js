@@ -1080,6 +1080,27 @@ export async function finalizeAgent({
     await completeAgentRun(runId, outputBuffer, exitCode, duration, errorAnalysis);
   }
 
+  // LI hand-off execution verdict (#2779): stamp the per-proposal execution outcome
+  // into the task's FEDERATED metadata as part of this completion write, so the
+  // originating peer (which filed the proposal and runs LI for that app) can derive
+  // `recordProposalExecution` from the terminal synced task — cross-peer parity for the
+  // #2765 LOCAL write, which only lands on the peer that ran the agent. `buildLiExecutionVerdict`
+  // reuses the exact validation-authoritative outcome + environmental gate the local write
+  // uses, so both peers record the identical verdict; a non-hand-off/environmental completion
+  // yields null (no stamp). Lazy imports keep the taskLearning/LI graphs off finalize's
+  // static chain. `updateTask` merges metadata, so this composes with `taskUpdate`.
+  const liProposal = task?.metadata?.liProposal || null;
+  if (liProposal) {
+    const [{ buildLiExecutionVerdict }, { LI_EXECUTION_VERDICT_KEY }] = await Promise.all([
+      import('./taskLearning/metrics.js'),
+      import('./layeredIntelligenceOutcomes.js')
+    ]);
+    const verdict = buildLiExecutionVerdict({ liProposal, success, validationPassed, errorAnalysis });
+    if (verdict) {
+      taskUpdate.metadata = { ...(taskUpdate.metadata || {}), [LI_EXECUTION_VERDICT_KEY]: verdict };
+    }
+  }
+
   const taskResult = await updateTask(task.id, taskUpdate, taskType);
   if (taskResult?.error) {
     const label = terminatedByUser ? 'blocked' : success ? 'completed' : 'failed';

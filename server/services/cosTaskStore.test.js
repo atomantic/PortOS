@@ -21,7 +21,9 @@ const mock = vi.hoisted(() => ({
   // Controls the mocked codeReview.js for resolveTaskChallengeWithRecheck (#2471).
   review: { ok: true, findings: 'No findings.' },
   reviewDefaults: { lmstudioModel: 'default-lmstudio', ollamaModel: 'default-ollama' },
-  reviewCalls: []
+  reviewCalls: [],
+  // Captures cross-peer LI execution verdicts consumed by mergePeerTasks (#2779).
+  liVerdicts: []
 }));
 
 // existsSync is driven by the in-memory file map; readFileSync stays real so
@@ -55,6 +57,15 @@ vi.mock('./cosEvents.js', () => ({
 vi.mock('./codeReview.js', () => ({
   runLocalCodeReview: vi.fn(async (opts) => { mock.reviewCalls.push(opts); return mock.review; }),
   getCodeReviewDefaults: vi.fn(async () => mock.reviewDefaults)
+}));
+
+// The LI cross-peer verdict consumer (#2779). Mocked so mergePeerTasks's post-lock
+// consume never touches the real li-outcomes store, and so the tests can assert which
+// verdicts were consumed. The key literal MUST mirror layeredIntelligenceOutcomes.js's
+// LI_EXECUTION_VERDICT_KEY (a stamp/consume metadata contract).
+vi.mock('./layeredIntelligenceOutcomes.js', () => ({
+  LI_EXECUTION_VERDICT_KEY: 'liExecution',
+  recordProposalExecutionFromVerdict: vi.fn(async (verdict) => { mock.liVerdicts.push(verdict); return true; })
 }));
 
 import {
@@ -691,6 +702,59 @@ describe('cosTaskStore.mergePeerTasks', () => {
     const adopted = after.tasks.find(t => t.id === 'task-nometa');
     expect(adopted).toBeTruthy();
     expect(adopted.description).toBe('no metadata here');
+  });
+
+  describe('LI cross-peer execution verdict consume (#2779)', () => {
+    const verdict = { appId: 'app-x', slug: 'add-metrics', scope: 'refactor', success: true, errorCategory: null, validationPassed: null };
+    const handoff = (status, extraMeta = {}) => ([{
+      id: 'task-handoff',
+      taskType: 'internal',
+      status,
+      priority: 'HIGH',
+      description: 'implement LI proposal',
+      metadata: { liExecution: verdict, ...extraMeta }
+    }]);
+
+    beforeEach(() => { mock.liVerdicts = []; });
+
+    it('derives recordProposalExecution when a terminal hand-off verdict is newly adopted', async () => {
+      // Peer A holds the task in_progress (it filed + handed it off); peer B executed it
+      // and its terminal state syncs back carrying the stamped verdict.
+      await addTask({ description: 'implement LI proposal', id: 'task-handoff', priority: 'HIGH' }, 'internal');
+      await updateTask('task-handoff', { status: 'in_progress' }, 'internal');
+      const res = await mergePeerTasks('internal', handoff('completed'), { now: NOW });
+      expect(res.changed).toBe(true);
+      expect(mock.liVerdicts).toHaveLength(1);
+      expect(mock.liVerdicts[0]).toMatchObject({ appId: 'app-x', slug: 'add-metrics', success: true });
+    });
+
+    it('consumes exactly once — a re-sync of the already-terminal task does not re-record', async () => {
+      await addTask({ description: 'implement LI proposal', id: 'task-handoff', priority: 'HIGH' }, 'internal');
+      await updateTask('task-handoff', { status: 'in_progress' }, 'internal');
+      await mergePeerTasks('internal', handoff('completed'), { now: NOW }); // adoption → consume
+      expect(mock.liVerdicts).toHaveLength(1);
+      mock.liVerdicts = [];
+      // Re-sync the same completed task. The local copy is ALREADY terminal, so the
+      // non-terminal→terminal adoption never re-fires — the verdict is not re-consumed
+      // even if an unrelated re-serialization flips `changed`.
+      await mergePeerTasks('internal', handoff('completed'), { now: NOW });
+      expect(mock.liVerdicts).toHaveLength(0);
+    });
+
+    it('ignores a stale verdict on a NON-terminal synced task', async () => {
+      // A verdict riding a pending/in_progress task (e.g. a failed attempt that will
+      // retry) is not a settled execution — only a terminal adoption is consumed.
+      const res = await mergePeerTasks('internal', handoff('in_progress'), { now: NOW });
+      expect(res.changed).toBe(true); // task adopted
+      expect(mock.liVerdicts).toHaveLength(0);
+    });
+
+    it('does not consume a terminal task that carries no verdict', async () => {
+      const remote = [{ id: 'plain-done', taskType: 'internal', status: 'completed', priority: 'LOW', description: 'unrelated', metadata: {} }];
+      const res = await mergePeerTasks('internal', remote, { now: NOW });
+      expect(res.changed).toBe(true);
+      expect(mock.liVerdicts).toHaveLength(0);
+    });
   });
 });
 

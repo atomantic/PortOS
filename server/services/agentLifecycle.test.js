@@ -242,6 +242,21 @@ describe('agentLifecycle — guard wiring', () => {
     const body = AGENT_LIFECYCLE_SRC.slice(idx, idx + 60_000);
     expect(body).toMatch(/withMapEntryCleanup\(\s*runnerAgents\s*,\s*agentId\s*,/);
   });
+
+  it('finalizeAgent stamps the LI execution verdict into the completion task write (#2779)', () => {
+    const idx = AGENT_LIFECYCLE_SRC.indexOf('export async function finalizeAgent');
+    expect(idx, 'finalizeAgent must exist').toBeGreaterThan(-1);
+    const updateIdx = AGENT_LIFECYCLE_SRC.indexOf('await updateTask(task.id, taskUpdate, taskType)', idx);
+    expect(updateIdx, 'finalizeAgent must persist the task via updateTask').toBeGreaterThan(idx);
+    const body = AGENT_LIFECYCLE_SRC.slice(idx, updateIdx);
+    // Verdict is derived from the persisted task's liProposal marker via the shared
+    // builder (parity with the local #2765 write) and merged into taskUpdate.metadata
+    // under LI_EXECUTION_VERDICT_KEY — BEFORE the updateTask call, so it federates in
+    // the same write that marks the task terminal.
+    expect(body).toMatch(/task\?\.metadata\?\.liProposal/);
+    expect(body).toMatch(/buildLiExecutionVerdict\(/);
+    expect(body).toMatch(/\[LI_EXECUTION_VERDICT_KEY\]:\s*verdict/);
+  });
 });
 
 // ─── Non-negotiable orderings inside runAgentSpawn (no behavioral seam) ──────
