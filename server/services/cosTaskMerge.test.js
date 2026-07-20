@@ -346,32 +346,63 @@ describe('mergeTaskLists', () => {
       expect(survivor.metadata.affectedTasks).toEqual(['task-1', 'task-2', 'task-3']);
     });
 
-    it('never orphans an in-flight investigation: a live-leased loser survives over a lower idle id', () => {
-      // The lower id (sys-a) is idle; the higher id (sys-b) holds a live lease —
-      // an agent is actively investigating it. The live copy must survive so its
-      // execution is not orphaned, even though its id sorts later.
+    it('never orphans an in-flight investigation: an in_progress loser survives over a lower idle id', () => {
+      // The lower id (sys-a) is idle; the higher id (sys-b) is in_progress —
+      // an agent is actively investigating it. The in-flight copy must survive so
+      // its execution is not orphaned, even though its id sorts later. Symmetric:
+      // both peers converge on the same survivor regardless of who sweeps.
       const local = [inv('sys-a', 'pending', 'fp-1', { affectedTasks: ['task-1'] })];
       const remote = [
         inv('sys-b', 'in_progress', 'fp-1', { affectedTasks: ['task-2'], metadata: liveClaim('instance-B') }),
       ];
-      const merged = mergeTaskLists(local, remote, { now: NOW });
-      const byId = Object.fromEntries(merged.map((t) => [t.id, t]));
-      expect(byId['sys-b'].status).toBe('in_progress');
-      expect(byId['sys-b'].metadata.claimedBy).toBe('instance-B');
-      expect(byId['sys-b'].metadata.affectedTasks).toEqual(['task-1', 'task-2']);
-      expect(byId['sys-a'].status).toBe('completed');
-      expect(byId['sys-a'].metadata.supersededBy).toBe('sys-b');
+      for (const merged of [
+        mergeTaskLists(local, remote, { now: NOW }),
+        mergeTaskLists(remote, local, { now: NOW }),
+      ]) {
+        const byId = Object.fromEntries(merged.map((t) => [t.id, t]));
+        expect(byId['sys-b'].status).toBe('in_progress');
+        expect(byId['sys-b'].metadata.claimedBy).toBe('instance-B');
+        expect(byId['sys-b'].metadata.affectedTasks).toEqual(['task-1', 'task-2']);
+        expect(byId['sys-a'].status).toBe('completed');
+        expect(byId['sys-a'].metadata.supersededBy).toBe('sys-b');
+      }
     });
 
-    it('does NOT collapse when both copies hold a live lease (two in-flight agents)', () => {
+    it('keeps an in_progress survivor even when its lease timestamp looks expired (stale-lease-proof)', () => {
+      // The no-orphan guard keys on the in_progress STATUS, not lease liveness: a
+      // peer whose view of sys-b's lease has gone stale (agent still running, but
+      // the renewal hasn't replicated) must NOT flip the running copy to completed
+      // just because the lower-id sys-a sorts first. Status survives that staleness.
+      const expiredLease = { claimedBy: 'instance-B', claimedAt: past(LEASE_DURATION_MS * 2), leaseExpiresAt: past(1000) };
+      const local = [inv('sys-a', 'pending', 'fp-1', { affectedTasks: ['task-1'] })];
+      const remote = [inv('sys-b', 'in_progress', 'fp-1', { affectedTasks: ['task-2'], metadata: expiredLease })];
+      for (const merged of [
+        mergeTaskLists(local, remote, { now: NOW }),
+        mergeTaskLists(remote, local, { now: NOW }),
+      ]) {
+        const byId = Object.fromEntries(merged.map((t) => [t.id, t]));
+        expect(byId['sys-b'].status).toBe('in_progress'); // running copy survives
+        expect(byId['sys-a'].status).toBe('completed');
+        expect(byId['sys-a'].metadata.supersededBy).toBe('sys-b');
+      }
+    });
+
+    it('does NOT collapse when both copies are in_progress (two in-flight agents)', () => {
       // Sub-second claim race: both peers spawned. Killing either orphans a running
       // agent, so the collapse is skipped this sweep — the group self-heals as each
       // investigation completes (turns terminal) and drops out of the open set.
+      // Symmetric, and both live claims survive untouched.
       const local = [inv('sys-a', 'in_progress', 'fp-1', { metadata: liveClaim('instance-A') })];
       const remote = [inv('sys-b', 'in_progress', 'fp-1', { metadata: liveClaim('instance-B') })];
-      const merged = mergeTaskLists(local, remote, { now: NOW });
-      const open = merged.filter((t) => t.status === 'in_progress');
-      expect(open.map((t) => t.id).sort()).toEqual(['sys-a', 'sys-b']);
+      for (const merged of [
+        mergeTaskLists(local, remote, { now: NOW }),
+        mergeTaskLists(remote, local, { now: NOW }),
+      ]) {
+        const open = merged.filter((t) => t.status === 'in_progress');
+        expect(open.map((t) => t.id).sort()).toEqual(['sys-a', 'sys-b']);
+        expect(open.every((t) => t.metadata.claimedBy)).toBe(true); // claims untouched
+        expect(open.every((t) => t.metadata.supersededBy === undefined)).toBe(true);
+      }
     });
 
     it('does not collapse a single open investigation (no duplicate)', () => {

@@ -47,13 +47,25 @@
  *     install never mints two open investigations for one failure cause — but two
  *     federated peers can each mint one before the next sweep, and rule 1's
  *     union-by-id keeps BOTH. A deterministic, side-independent post-pass folds
- *     them to a single active row: keep the older/lower-id copy (or the copy
- *     holding a live lease, so an in-flight investigation is never orphaned),
- *     union every duplicate's `metadata.affectedTasks` onto it, and flip the
- *     other open copies to `completed` (never delete — LWW sync never propagates
- *     deletions; a terminal status converges via rule 2's status rank). Runs
- *     identically on both peers over the converged per-id set, so they reach the
- *     same single survivor regardless of which side sweeps.
+ *     them to a single active row: keep the copy that is `in_progress` (an agent
+ *     is running it — never orphan an in-flight investigation) or, when none is,
+ *     the older/lower-id copy; union every duplicate's `metadata.affectedTasks`
+ *     onto it, and flip the other open copies to `completed` (never delete — LWW
+ *     sync never propagates deletions; a terminal status converges via rule 2's
+ *     status rank). Runs identically on both peers over the converged per-id set,
+ *     so they reach the same single survivor regardless of which side sweeps.
+ *
+ *     The no-orphan guarantee keys on the `in_progress` STATUS rather than lease
+ *     liveness on purpose: status propagates through rule 2's rank, so once both
+ *     peers have the converged view they agree an actively-worked copy is the
+ *     survivor even if its lease timestamp hasn't replicated yet — whereas keying
+ *     on `isLeaseLive` would let a peer whose copy still shows an (unexpired-
+ *     elsewhere) lease as expired flip a running investigation to `completed`. It
+ *     is still best-effort across ≥3 peers: a peer holding a pre-claim snapshot
+ *     (never yet saw the `in_progress` transition) can supersede a copy another
+ *     peer is running. That residual race is acceptable — investigation tasks are
+ *     approval-gated diagnostics that execute nothing on their own, and the storm
+ *     is already bounded to at most one per peer per cause.
  */
 
 import { isLeaseLive, getClaimOwner, CLAIM_METADATA_KEYS, parseTimestampMs } from './cosTaskClaim.js';
@@ -286,18 +298,25 @@ const affectedTaskIds = (task) => {
 
 /**
  * Choose the surviving row among the OPEN (non-terminal) copies of one
- * investigation fingerprint. A copy holding a live lease wins outright so an
- * in-flight investigation is never orphaned by the collapse; if MORE than one is
- * live-leased (two peers both spawned in the sub-second claim window), return null
- * to skip the collapse this sweep — both run to completion and the group self-heals
- * as each turns terminal, rather than killing a running agent. With no live lease,
- * the older/lower-id copy wins deterministically (investigation ids embed a base36
- * creation timestamp, so lower id == older), side-independent so both peers agree.
+ * investigation fingerprint. An `in_progress` copy wins outright so an in-flight
+ * investigation (an agent is running it) is never orphaned by the collapse; if
+ * MORE than one is `in_progress` (two peers both spawned in the sub-second claim
+ * window), return null to skip the collapse this sweep — both run to completion
+ * and the group self-heals as each turns terminal, rather than killing a running
+ * agent. With no `in_progress` copy, the older/lower-id copy wins deterministically
+ * (investigation ids embed a base36 creation timestamp, so lower id == older),
+ * side-independent so both peers agree.
+ *
+ * Keys on the `in_progress` STATUS, not lease liveness: the status replicates via
+ * rule 2's rank, so a peer whose lease timestamp is stale still recognizes an
+ * actively-worked copy and won't flip it to terminal. See the rule-4 note in the
+ * module header for the residual (pre-claim-snapshot) race this narrows but can't
+ * fully close across ≥3 peers.
  */
-function pickInvestigationSurvivor(openCopies, now) {
-  const leased = openCopies.filter((t) => isLeaseLive(t.metadata, now));
-  if (leased.length > 1) return null;
-  if (leased.length === 1) return leased[0];
+function pickInvestigationSurvivor(openCopies) {
+  const active = openCopies.filter((t) => t.status === 'in_progress');
+  if (active.length > 1) return null;
+  if (active.length === 1) return active[0];
   return openCopies.reduce((a, b) => (a.id <= b.id ? a : b));
 }
 
@@ -307,7 +326,7 @@ function pickInvestigationSurvivor(openCopies, now) {
  * only for the rows it rewrites), never mutates inputs. Deterministic over the
  * converged per-id merge output, so both peers reach the same single survivor.
  */
-function dedupeInvestigations(tasks, now) {
+function dedupeInvestigations(tasks) {
   const groups = new Map();
   for (const t of tasks) {
     const fp = t?.metadata?.[FINGERPRINT_KEY];
@@ -326,8 +345,8 @@ function dedupeInvestigations(tasks, now) {
     const collapsedBefore = group.some((t) => t?.metadata?.[SUPERSEDED_BY_KEY]);
     if (open.length < 2 && !collapsedBefore) continue;
 
-    const survivor = pickInvestigationSurvivor(open, now);
-    if (!survivor) continue; // multiple live leases — don't orphan; wait a sweep
+    const survivor = pickInvestigationSurvivor(open);
+    if (!survivor) continue; // multiple in-flight copies — don't orphan; wait a sweep
 
     // Union affectedTasks across EVERY copy (open + already-superseded) so the one
     // surviving row names every task blocked on this cause. Sorted so both peers
@@ -393,5 +412,5 @@ export function mergeTaskLists(localTasks, remoteTasks, { now = Date.now() } = {
   }
   // (rule 4) Collapse same-fingerprint OPEN investigation duplicates that the
   // per-id union above let survive across two peers (#2628).
-  return dedupeInvestigations(merged, now);
+  return dedupeInvestigations(merged);
 }
