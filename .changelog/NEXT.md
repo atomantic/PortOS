@@ -1,5 +1,9 @@
 # Unreleased Changes
 
+## Federation
+
+- [issue-2628] Same-cause auto-investigation tasks no longer pile up across federated machines. The per-machine "one open investigation per failure fingerprint" guard couldn't see a second machine that minted its own investigation for the same cause before the next sync, so both survived the peer merge. The CoS task merge now collapses same-fingerprint OPEN investigations to a single active row: it keeps the older copy (or, if one is already being worked, the in-progress copy so a running investigation is never cut off), folds every duplicate's list of blocked tasks onto the survivor, and marks the others done rather than deleting them (so the collapse converges the same way on every peer). Two machines that each opened an investigation for one failure now settle on one.
+
 ## Enterprise GitHub support
 
 - [issue-2650] The CoS branch reconciler and issue reconciler now work on self-hosted GitHub Enterprise (`github.*`) repos, not just `github.com`. Both previously gated on the github.com-only `isGithub` origin flag (which drives PortOS's own fork/update flow), so their scans silently skipped enterprise repos even though the sibling PR-watcher already handled them. All three services now share an `isGithubHost(host)` classifier and target `gh` via a host-qualified `HOST/OWNER/REPO` selector, so enterprise repos reconcile correctly and detection stays deterministic on a fork+upstream checkout. Existing github.com behavior is unchanged.
