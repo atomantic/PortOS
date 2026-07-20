@@ -234,7 +234,6 @@ export async function findUnansweredTribeThreads({
   const { sources: twoWaySources, isTwoWay } = buildTwoWayGate(
     await listAccounts().catch(() => [])
   );
-  if (twoWaySources.length === 0) return [];
   const ringById = new Map((ctx.people || []).map((p) => [p.id, p.ring]));
   const nameById = new Map((ctx.people || []).map((p) => [p.id, p.name]));
   // No non-external Tribe people → nothing to nudge about; skip the timeline scan.
