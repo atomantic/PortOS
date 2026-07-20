@@ -242,6 +242,42 @@ describe('agentLifecycle — guard wiring', () => {
     const body = AGENT_LIFECYCLE_SRC.slice(idx, idx + 60_000);
     expect(body).toMatch(/withMapEntryCleanup\(\s*runnerAgents\s*,\s*agentId\s*,/);
   });
+
+  it('finalizeAgent stamps the LI execution verdict into the completion task write (#2779)', () => {
+    const idx = AGENT_LIFECYCLE_SRC.indexOf('export async function finalizeAgent');
+    expect(idx, 'finalizeAgent must exist').toBeGreaterThan(-1);
+    const updateIdx = AGENT_LIFECYCLE_SRC.indexOf('await updateTask(task.id, taskUpdate, taskType)', idx);
+    expect(updateIdx, 'finalizeAgent must persist the task via updateTask').toBeGreaterThan(idx);
+    const body = AGENT_LIFECYCLE_SRC.slice(idx, updateIdx);
+    // The verdict is stamped into taskUpdate via the shared helper BEFORE the updateTask
+    // call, so it federates in the same write that marks the task terminal.
+    expect(body).toMatch(/await stampLiExecutionVerdict\(taskUpdate, task, \{ success, validationPassed, errorAnalysis \}\)/);
+  });
+
+  it('stampLiExecutionVerdict builds the verdict from the task liProposal marker via the shared builder (#2779)', () => {
+    const idx = AGENT_LIFECYCLE_SRC.indexOf('async function stampLiExecutionVerdict');
+    expect(idx, 'stampLiExecutionVerdict must exist').toBeGreaterThan(-1);
+    const body = AGENT_LIFECYCLE_SRC.slice(idx, idx + 1500);
+    // Derived from the persisted task's liProposal marker via the shared builder (parity
+    // with the local #2765 write) and merged into taskUpdate.metadata under the verdict key.
+    expect(body).toMatch(/task\?\.metadata\?\.liProposal/);
+    expect(body).toMatch(/buildLiExecutionVerdict\(/);
+    expect(body).toMatch(/\[LI_EXECUTION_VERDICT_KEY\]:\s*verdict/);
+  });
+
+  it('the post-restart recovery completion path also stamps the LI verdict (#2779, codex P2)', () => {
+    // A hand-off that finished while the server was down completes via this bypass, not
+    // finalizeAgent — it must still stamp so the outcome federates to the originating peer.
+    const idx = AGENT_LIFECYCLE_SRC.indexOf('Completing untracked agent');
+    expect(idx, 'post-restart recovery branch must exist').toBeGreaterThan(-1);
+    const body = AGENT_LIFECYCLE_SRC.slice(idx, idx + 2000);
+    // Success path stamps a clean completion…
+    expect(body).toMatch(/await stampLiExecutionVerdict\(\{ status: 'completed' \}, task, \{ success \}\)/);
+    // …and the FAILURE path re-reads the task after orphan recovery and stamps the failure
+    // verdict when recovery settled it into terminal `blocked` (codex P2 round 2).
+    expect(body).toMatch(/settled\.status === 'blocked' && settled\.metadata\?\.liProposal/);
+    expect(body).toMatch(/await stampLiExecutionVerdict\(\{\}, settled, \{ success: false \}\)/);
+  });
 });
 
 // ─── Non-negotiable orderings inside runAgentSpawn (no behavioral seam) ──────

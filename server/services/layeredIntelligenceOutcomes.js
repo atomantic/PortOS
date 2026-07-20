@@ -40,6 +40,19 @@ export const OUTCOME_RETENTION_MS = CLOSED_SUPPRESSION_MS;
 // changes the record directory shape (there is none yet).
 export const LI_OUTCOMES_SCHEMA_VERSION = 1;
 
+// The federated-task metadata key that carries a hand-off's per-proposal EXECUTION
+// verdict across peers (#2779). A CoS LI hand-off task filed on peer A can be claimed
+// and executed on peer B; #2765 only records the outcome into whichever peer RAN the
+// agent, so the originating peer never learns. The executing peer stamps this small
+// verdict (the same payload `recordProposalExecution` consumes) into the terminal
+// task's metadata; when that terminal state syncs back, the originating peer derives
+// `recordProposalExecution` from it (see cosTaskStore.mergePeerTasks) so its
+// `computeProposalExecutionAwareness` reflects the cross-peer execution. Kept local:
+// the li-outcomes collection itself is NOT federated — only this verdict rides the
+// already-federated task. Additive metadata on an existing federated task shape → no
+// schema bump (the wire metadata record is permissive; the listHash covers it).
+export const LI_EXECUTION_VERDICT_KEY = 'liExecution';
+
 /**
  * Normalize one on-disk outcome record. Drops anything without a usable
  * appId+slug (the identity), coerces the outcome to a known value or null, and
@@ -203,10 +216,15 @@ export async function recordFiledProposal({ appId, slug, tracker = null, issueRe
  * nothing about the domain — same gate as #2618); this helper records whatever it is
  * given.
  */
-export async function recordProposalExecution({ appId, slug, scope = null, success, errorCategory = null, validationPassed = null, now = Date.now() } = {}, store = outcomesStore()) {
+export async function recordProposalExecution({ appId, slug, scope = null, success, errorCategory = null, validationPassed = null, requireExisting = false, executedAt = null, now = Date.now() } = {}, store = outcomesStore()) {
   const normSlug = normalizeSlug(slug);
   if (!appId || !normSlug || typeof success !== 'boolean') return false;
   const id = outcomeId(appId, normSlug);
+  // The execution's completion time. For the federated consume it rides the verdict
+  // (`executedAt`) so idempotency/retry can compare it against the stored record; the
+  // local #2765 path passes none and uses `now`. Stored as `executionAt` either way.
+  const executionAtIso = (typeof executedAt === 'string' && executedAt) ? executedAt : new Date(now).toISOString();
+  const executionAtMs = Date.parse(executionAtIso);
   // The domain to adopt when we don't already have one — the load-bearing field for
   // per-domain aggregation. Normalized once and reused by both the missing-record
   // fallback and the scope-preservation merge below.
@@ -230,7 +248,39 @@ export async function recordProposalExecution({ appId, slug, scope = null, succe
   // rather than throwing into the completion hook.
   return store.queueRecordWrite(id, async () => {
     const existing = await store.loadOne(id).catch(() => null);
-    const base = existing && typeof existing === 'object'
+    const hasExisting = existing && typeof existing === 'object';
+    // Cross-peer consume gate (#2779): when the verdict arrives via a synced task
+    // rather than a locally-run agent, ONLY the originating peer — the one that
+    // filed the proposal and therefore already carries an li-outcomes record for
+    // (app, slug) — should record it. A peer that merely ADOPTED the terminal task
+    // (never filed it) has no record, so `requireExisting` makes it a no-op there
+    // instead of minting a stray minimal record on every full-sync peer.
+    if (!hasExisting && requireExisting) return false;
+    // Stale-filing-generation gate (#2779, codex P2): when a proposal is re-filed after the
+    // dedup window, recordFiledProposal stamps a fresh `filedAt` and clears the execution
+    // fields — but the OLD completed hand-off task still rides the federated task list and is
+    // re-offered on every merge. An execution can only legitimately happen AFTER its filing,
+    // so a verdict whose `executedAt` predates the current `filedAt` belongs to a prior filing
+    // generation and must NOT be inherited by the new proposal. The re-file gap is the 30-day
+    // dedup window, which dwarfs any cross-peer clock skew, so a strict `<` is safe here.
+    if (requireExisting && hasExisting && existing.filedAt) {
+      const filedMs = Date.parse(existing.filedAt);
+      if (Number.isFinite(filedMs) && Number.isFinite(executionAtMs) && executionAtMs < filedMs) return false;
+    }
+    // Durable idempotency for the federated consume (#2779, codex P2): the record's own
+    // executionOutcome/executionAt IS the consumed-marker, so a re-synced terminal task is
+    // a no-op WITHOUT relying on the in-memory status transition (which a crash between the
+    // task-file write and this call, or an old peer that stored the terminal task before
+    // upgrading, would otherwise skip forever). Only skip when the stored execution is at
+    // least as new — a genuinely NEWER (re-executed) hand-off still overwrites, matching the
+    // local latest-wins. The marker lives in THIS peer's (unfederated) li-outcomes record, so
+    // one peer consuming never blocks another. Applies only to the federated path
+    // (requireExisting); the local write always overwrites, unchanged.
+    if (requireExisting && hasExisting && existing.executionOutcome && existing.executionAt) {
+      const storedMs = Date.parse(existing.executionAt);
+      if (Number.isFinite(storedMs) && Number.isFinite(executionAtMs) && executionAtMs <= storedMs) return false;
+    }
+    const base = hasExisting
       ? existing
       : {
           appId, slug: normSlug, tracker: null, issueRef: null,
@@ -245,7 +295,7 @@ export async function recordProposalExecution({ appId, slug, scope = null, succe
       // the domain the completion hook passed (a missing-record fallback).
       scope: (typeof base.scope === 'string' && base.scope.trim()) ? base.scope : normScope,
       executionOutcome: success ? 'success' : 'failure',
-      executionAt: new Date(now).toISOString(),
+      executionAt: executionAtIso,
       // Set the failure diagnosis (#2764 §1) unconditionally so a success overwrites
       // any stale failure fields from a prior failed run that later re-ran and passed.
       failureCategory,
@@ -257,6 +307,33 @@ export async function recordProposalExecution({ appId, slug, scope = null, succe
     console.error(`❌ Layered Intelligence: failed to record execution outcome for ${appId}/${normSlug}: ${err.message}`);
     return false;
   });
+}
+
+/**
+ * Derive `recordProposalExecution` from a hand-off task's federated EXECUTION verdict
+ * (#2779) — the receiver side of the cross-peer loop. When a hand-off task that peer B
+ * executed syncs its terminal state back to peer A (the originating peer), A calls this
+ * with the `LI_EXECUTION_VERDICT_KEY` metadata the executing peer stamped, so A's
+ * `computeProposalExecutionAwareness` reflects the execution B ran.
+ *
+ * `requireExisting: true` — A only records for a proposal it actually FILED (it has the
+ * li-outcomes record); a third full-sync peer that merely adopts the terminal task never
+ * mints a stray record. Idempotency is DURABLE and record-level: recordProposalExecution
+ * skips a verdict no newer than the stored executionAt, so mergePeerTasks can safely re-offer
+ * every terminal verdict on every sweep (surviving a crash between the task-file write and the
+ * consume, or an older peer that stored the terminal task before upgrading) while a re-sync
+ * stays a no-op and a genuinely re-executed hand-off (newer `executedAt`) still overwrites.
+ * Pure input validation (a hand-corrupt/foreign verdict is dropped); best-effort like the
+ * sibling recorders (never throws into the merge path).
+ */
+export async function recordProposalExecutionFromVerdict(verdict, store = outcomesStore()) {
+  if (!verdict || typeof verdict !== 'object' || Array.isArray(verdict)) return false;
+  const { appId, slug, scope = null, success, errorCategory = null, validationPassed = null, executedAt = null } = verdict;
+  if (typeof success !== 'boolean') return false;
+  return recordProposalExecution(
+    { appId, slug, scope, success, errorCategory, validationPassed, executedAt, requireExisting: true },
+    store
+  );
 }
 
 /**
