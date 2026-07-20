@@ -121,6 +121,7 @@ export const DEFAULT_LARGE_CONTEXT_WINDOW = 128_000;
 export const CODEX_CONTEXT_WINDOW = 1_000_000;
 export const GEMINI_CONTEXT_WINDOW = 1_048_576;
 export const GROK_CONTEXT_WINDOW = 256_000;
+export const KIMI_CONTEXT_WINDOW = 256_000;
 
 // Keep in sync with client/src/utils/providers.js.
 const KNOWN_MODEL_CONTEXT_WINDOWS = Object.freeze([
@@ -153,6 +154,7 @@ export function knownProviderContextWindow(provider) {
   if (isCodexProvider(provider)) return CODEX_CONTEXT_WINDOW;
   if (id === 'antigravity-cli' || id === 'antigravity-tui' || command === 'agy') return GEMINI_CONTEXT_WINDOW;
   if (id === 'grok-cli' || id === 'grok-tui' || command === 'grok') return GROK_CONTEXT_WINDOW;
+  if (id === 'kimi-cli' || id === 'kimi-tui' || command === 'kimi') return KIMI_CONTEXT_WINDOW;
   return null;
 }
 

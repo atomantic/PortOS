@@ -14,12 +14,14 @@
  *   - Antigravity: `agy --print` with prompt piped to stdin
  *   - Gemini CLI:  legacy prompt piped to stdin (+ `-m <model>`)
  *   - Grok Build:  `grok --prompt-file /dev/stdin` (+ `--model <id>`, see grok.js)
+ *   - Kimi Code:   `kimi --print --prompt <value>` (argv value, not stdin; see kimi.js)
  *   - Claude Code: `-p -`                (+ `--model <id>`)
  */
 
 import { resolveCliModel, hasModelFlag, resolveBedrockCliModel, prefixOpencodeModel, isOpencodeCommand, buildCodexStartupArgs } from './providerModels.js';
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider, isAntigravityCommand, prepareAntigravityPrompt } from './antigravity.js';
 import { isGrokCommand, ensureGrokHeadlessArgs, prepareGrokPromptFile } from './grok.js';
+import { isKimiCommand, ensureKimiHeadlessArgs, prepareKimiPrompt } from './kimi.js';
 
 /**
  * Build CLI args based on provider type. Each CLI provider has different
@@ -75,6 +77,15 @@ export function buildCliArgs(provider) {
   // there unless the user pinned their own. Model flag gated like the others.
   if (isGrokCommand(provider?.command)) {
     return ensureGrokHeadlessArgs(baseArgs, effectiveDefaultModel);
+  }
+
+  // Kimi Code CLI (`kimi`): headless one-shot. `--print` runs non-interactive
+  // print mode (implies `--afk`, so tool calls auto-approve). The prompt is NOT
+  // over stdin — it's spliced in as the `--prompt <value>` at spawn time by
+  // prepareKimiPrompt (see below). Model flag gated like the others; the
+  // configured-default sentinel resolves to null so `--model` is omitted.
+  if (isKimiCommand(provider?.command)) {
+    return ensureKimiHeadlessArgs(baseArgs, effectiveDefaultModel);
   }
 
   // OpenCode CLI (`opencode run`): the headless, non-interactive subcommand. It
@@ -133,6 +144,8 @@ export function buildCliArgs(provider) {
  *
  *   - Antigravity (`agy`): the prompt is spliced in as the VALUE of --print
  *     (agy does NOT read stdin) → `useStdin: false`.
+ *   - Kimi (`kimi`): the prompt is spliced in as the VALUE of --prompt
+ *     (kimi does NOT read stdin in --print mode) → `useStdin: false`.
  *   - Grok on Windows: the `/dev/stdin` prompt-file is rewritten to a temp file
  *     → `useStdin: false` with a real `cleanup`.
  *   - Every other provider (Claude Code `-p -`, Codex `exec -`, OpenCode `run`):
@@ -146,6 +159,9 @@ export function buildCliArgs(provider) {
 export function prepareCliPrompt(command, args, prompt) {
   if (isAntigravityCommand(command)) {
     return prepareAntigravityPrompt(args, prompt);
+  }
+  if (isKimiCommand(command)) {
+    return prepareKimiPrompt(args, prompt);
   }
   return prepareGrokPromptFile(args, prompt);
 }

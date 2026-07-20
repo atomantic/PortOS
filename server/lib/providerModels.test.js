@@ -3,6 +3,7 @@ import {
   ANTIGRAVITY_CONFIGURED_DEFAULT,
   CODEX_CONFIGURED_DEFAULT,
   GROK_CONFIGURED_DEFAULT,
+  KIMI_CONFIGURED_DEFAULT,
   isCodexConfiguredDefault,
   isConfiguredDefaultModel,
   resolveCliModel,
@@ -31,7 +32,8 @@ import {
   CODEX_UPDATE_CHECK_KEY,
   hasCodexUpdateCheckConfig,
   buildCodexStartupArgs,
-  isCodexProvider
+  isCodexProvider,
+  isKimiProvider
 } from './providerModels.js';
 
 describe('providerModels', () => {
@@ -146,6 +148,7 @@ describe('providerModels', () => {
       expect(resolveCliModel(CODEX_CONFIGURED_DEFAULT)).toBeNull();
       expect(resolveCliModel(ANTIGRAVITY_CONFIGURED_DEFAULT)).toBeNull();
       expect(resolveCliModel(GROK_CONFIGURED_DEFAULT)).toBeNull();
+      expect(resolveCliModel(KIMI_CONFIGURED_DEFAULT)).toBeNull();
     });
 
     it('returns null for empty / nullish values', () => {
@@ -191,6 +194,17 @@ describe('providerModels', () => {
       expect(isCodexProvider({ id: 'custom', command: '/opt/homebrew/bin/codex' })).toBe(true);
       expect(isCodexProvider({ id: 'claude-code', command: 'claude' })).toBe(false);
       expect(isCodexProvider(null)).toBe(false);
+    });
+  });
+
+  describe('isKimiProvider', () => {
+    it('matches the shipped ids and a path/exe command, rejects others', () => {
+      expect(isKimiProvider({ id: 'kimi-cli' })).toBe(true);
+      expect(isKimiProvider({ id: 'kimi-tui' })).toBe(true);
+      expect(isKimiProvider({ id: 'custom', command: '/opt/homebrew/bin/kimi' })).toBe(true);
+      expect(isKimiProvider({ id: 'custom', command: 'C:\\tools\\Kimi.exe' })).toBe(true);
+      expect(isKimiProvider({ id: 'grok-cli', command: 'grok' })).toBe(false);
+      expect(isKimiProvider(null)).toBe(false);
     });
   });
 
@@ -287,6 +301,7 @@ describe('providerModels', () => {
       expect(isConfiguredDefaultModel(CODEX_CONFIGURED_DEFAULT)).toBe(true);
       expect(isConfiguredDefaultModel(ANTIGRAVITY_CONFIGURED_DEFAULT)).toBe(true);
       expect(isConfiguredDefaultModel(GROK_CONFIGURED_DEFAULT)).toBe(true);
+      expect(isConfiguredDefaultModel(KIMI_CONFIGURED_DEFAULT)).toBe(true);
       expect(isConfiguredDefaultModel('gpt-5')).toBe(false);
     });
   });

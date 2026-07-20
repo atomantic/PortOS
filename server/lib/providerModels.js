@@ -9,11 +9,16 @@ export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
 // uses its own latest default. Stored as a sentinel so pickers hide the model
 // dropdown (same UX as Codex / Antigravity).
 export const GROK_CONFIGURED_DEFAULT = 'grok-configured-default';
+// Kimi Code CLI/TUI: same posture as Grok/Antigravity — PortOS does not select a
+// model; the local `kimi` binary uses its own configured default. Stored as a
+// sentinel so pickers hide the model dropdown.
+export const KIMI_CONFIGURED_DEFAULT = 'kimi-configured-default';
 
 const CONFIGURED_DEFAULT_SENTINELS = new Set([
   CODEX_CONFIGURED_DEFAULT,
   ANTIGRAVITY_CONFIGURED_DEFAULT,
   GROK_CONFIGURED_DEFAULT,
+  KIMI_CONFIGURED_DEFAULT,
 ]);
 
 export const isCodexConfiguredDefault = (model) => model === CODEX_CONFIGURED_DEFAULT;
@@ -71,6 +76,19 @@ export const EFFORT_LEVELS = Object.freeze([...new Set([...CODEX_EFFORT_LEVELS, 
 export function isCodexProvider(provider) {
   const id = String(provider?.id || '').toLowerCase();
   return id === 'codex' || id === 'codex-tui' || commandBasename(provider?.command) === 'codex';
+}
+
+/**
+ * True when a provider is Kimi-Code-flavored — the shipped `kimi-cli`/`kimi-tui`
+ * ids or any provider whose launch command basename is `kimi` (path/exe tolerant).
+ * The single home for the kimi signature, same posture as `isCodexProvider`.
+ * Mirrored in client/src/utils/providers.js — keep in lockstep.
+ * @param {{id?:string, command?:string}|null|undefined} provider
+ * @returns {boolean}
+ */
+export function isKimiProvider(provider) {
+  const id = String(provider?.id || '').toLowerCase();
+  return id === 'kimi-cli' || id === 'kimi-tui' || commandBasename(provider?.command) === 'kimi';
 }
 
 /**

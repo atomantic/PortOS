@@ -183,6 +183,9 @@ describe('Provider Service', () => {
       expect(bedrock.name).toBe('Claude Code CLI: Bedrock');
       expect(samples.find(p => p.id === 'codex-tui')?.contextWindow).toBe(1000000);
       expect(samples.find(p => p.id === 'antigravity-cli')?.contextWindow).toBe(1048576);
+      // Kimi Code process providers ship disabled with the K2 256K window.
+      expect(samples.find(p => p.id === 'kimi-cli')?.contextWindow).toBe(256000);
+      expect(samples.find(p => p.id === 'kimi-tui')?.command).toBe('kimi');
     });
 
     it('should exclude providers already in user config', async () => {

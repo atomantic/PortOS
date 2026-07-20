@@ -1,5 +1,9 @@
 # Unreleased Changes
 
+## AI providers
+
+- `[issue-2815]` Added **Kimi Code** (Moonshot AI's `kimi` binary) as a first-class agentic-coding provider in both CLI (headless one-shot) and TUI (interactive PTY) flavors — `kimi-cli` and `kimi-tui`, mirroring the Grok/Antigravity/Codex process providers. Both ship disabled (opt-in) and are harness-capable, so once enabled they're selectable as CoS-agent / reviewer / runner / TUI providers. The headless path runs `kimi --print` (which implies `--afk`, auto-approving tool calls) and delivers the prompt as the `--prompt <value>` argv; the TUI path runs `kimi --yolo`. Model selection uses a `kimi-configured-default` sentinel — PortOS omits `--model` so the local `kimi` binary uses your own configured default (set via `/model`), while a real model id you pin is passed through as `--model <id>`. The context window is mapped to Kimi K2's 256K. Existing installs pick the pair up on restart via migration `201-kimi-providers`. The pre-existing `nvidia-kimi` HTTP API entry is unchanged. (Prompt-delivery path defaults to the argv value and should be confirmed against a live `kimi` binary.)
+
 ## Enterprise GitHub support
 
 - [issue-2650] The CoS branch reconciler and issue reconciler now work on self-hosted GitHub Enterprise (`github.*`) repos, not just `github.com`. Both previously gated on the github.com-only `isGithub` origin flag (which drives PortOS's own fork/update flow), so their scans silently skipped enterprise repos even though the sibling PR-watcher already handled them. All three services now share an `isGithubHost(host)` classifier and target `gh` via a host-qualified `HOST/OWNER/REPO` selector, so enterprise repos reconcile correctly and detection stays deterministic on a fork+upstream checkout. Existing github.com behavior is unchanged.

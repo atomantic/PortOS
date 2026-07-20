@@ -97,6 +97,7 @@ export * from './hfDownload.js';
 export * from './sseDownload.js';
 export * from './sseHeaders.js';
 export * from './installLogger.js';
+export * from './kimi.js';
 export * from './mediaModels.js';
 export * from './promptPartials.js';
 export * from './promptRunner.js';
