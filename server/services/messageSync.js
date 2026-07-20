@@ -194,6 +194,9 @@ export async function syncAccount(accountId, io, options = {}) {
     // Sent mail (Gmail reply-detection ingest, #2796) is activity-only: recorded to
     // the timeline but never added to the inbox cache/eval/trim. Kept separate here.
     const sentMessages = Array.isArray(providerResult) ? [] : (providerResult?.sentMessages ?? []);
+    // Whether the sent window truncated at its ceiling this sync (#2820) — coverage
+    // is then partial, so the reply-detection watermark is marked partial (fail closed).
+    const sentTruncated = Array.isArray(providerResult) ? false : Boolean(providerResult?.sentTruncated);
 
     // Deduplicate by externalId; update flags and body on existing messages
     const existingMap = new Map(cache.messages.filter(m => m.externalId).map(m => [m.externalId, m]));
@@ -264,7 +267,9 @@ export async function syncAccount(accountId, io, options = {}) {
     // account default-on at upgrade (or after an OAuth/sync failure) would be trusted
     // before any reply evidence exists, producing false "unanswered" nudges.
     if (providerStatus === 'success' && account.type === 'gmail' && account.syncConfig?.ingestSent !== false) {
-      await markSentIngested(accountId).catch((err) =>
+      // `partial` fails the account closed for the outreach detector when the sent
+      // window truncated at its ceiling this sync (#2820) — incomplete reply evidence.
+      await markSentIngested(accountId, { partial: sentTruncated }).catch((err) =>
         console.error(`🤝 Sent-ingest watermark failed for account ${accountId}: ${err.message}`));
     }
 

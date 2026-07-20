@@ -366,14 +366,21 @@ async function insertActivityChunk(rows) {
 // Query events with optional filters. `from`/`to` are ISO timestamps (inclusive
 // lower, exclusive upper); `personId` matches a participant via the JSONB
 // containment operator. `chatGuid` / `handle` match iMessage-style metadata
-// pointers. Newest first, capped by `limit` (default 500, max 2000).
-export async function listEvents({ from, to, source, kind, personId, chatGuid, conversationId, threadId, handle, limit } = {}) {
+// pointers. `accountId` scopes to one source account (#2820). Newest first,
+// capped by `limit` (default 500, max 2000).
+export async function listEvents({ from, to, source, accountId, kind, personId, chatGuid, conversationId, threadId, handle, limit } = {}) {
   await ensureReady();
   const clauses = [];
   const params = [];
   if (from) { params.push(new Date(from).toISOString()); clauses.push(`happened_at >= $${params.length}`); }
   if (to) { params.push(new Date(to).toISOString()); clauses.push(`happened_at < $${params.length}`); }
   if (source) { params.push(source); clauses.push(`source = $${params.length}`); }
+  // Optional per-account scope (#2820): lets a caller cap events one account at a
+  // time so a high-volume account can't fill a shared cap and starve another.
+  if (accountId != null && String(accountId).length > 0) {
+    params.push(String(accountId));
+    clauses.push(`account_id = $${params.length}`);
+  }
   if (kind) { params.push(kind); clauses.push(`kind = $${params.length}`); }
   if (personId) {
     params.push(JSON.stringify([{ personId: String(personId) }]));

@@ -93,10 +93,17 @@ export async function updateSyncStatus(id, status) {
 // successfully ingested sent mail into the activity timeline. The Tribe-outreach
 // detector trusts an account as two-way only when this is set and recent, so an
 // account is never trusted before its sent history actually exists.
-export async function markSentIngested(id, at = new Date().toISOString()) {
+//
+// `partial` (#2820) records whether the sent window was FULLY covered this sync.
+// When the sent pass truncates at its ceiling (>SENT_INGEST_MAX sent in the
+// window) coverage is incomplete, so the detector must NOT trust this account's
+// reply evidence — `sentCoveragePartial:true` drops it from the two-way set for
+// the scan (fail closed). A later full sync clears it back to false.
+export async function markSentIngested(id, { at = new Date().toISOString(), partial = false } = {}) {
   const accounts = await loadAccounts();
   if (!accounts[id]) return null;
   accounts[id].sentIngestedAt = at;
+  accounts[id].sentCoveragePartial = partial;
   await saveAccounts(accounts);
   return accounts[id];
 }
