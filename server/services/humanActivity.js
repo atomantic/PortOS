@@ -178,6 +178,10 @@ export function messageActivityCandidates(account, messages = []) {
     const externalId = message.externalId || message.id;
     if (!externalId) continue;
     const fromEmail = participantEmail(message.from);
+    // Direction by exact From-vs-owner match. NOTE: a reply sent from a Gmail
+    // "send-as" alias (From ≠ account.email) is classified as received, not sent —
+    // send-as aliases aren't stored per account, so we can't recognize them here.
+    // Bounded impact: such a reply won't cancel its inbound in outreach detection.
     const sent = Boolean(selfEmail) && fromEmail === selfEmail;
     const participants = normalizeParticipants([
       message.from,
@@ -197,6 +201,14 @@ export function messageActivityCandidates(account, messages = []) {
         threadId: message.threadId || null,
         externalId,
         channel: source,
+        // The counterpart handle for a RECEIVED message is the sender's email —
+        // set it so `enrichActivityEvent` (which resolves the top-level personId
+        // from `metadata.handle`) can tag the Tribe sender, exactly as the iMessage
+        // mapper does. Without this, email inbound never resolves to a person and
+        // Tribe-outreach detection (#2796) drops every Gmail thread. Sent turns
+        // carry no counterpart handle (mirrors iMessage); email threads group by
+        // `threadId`, so handle is never the grouping key here.
+        handle: sent ? null : (fromEmail || null),
       },
     });
   }
