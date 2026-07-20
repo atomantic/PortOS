@@ -78,17 +78,25 @@ describe('collectMessageIds — full pagination', () => {
     // 250 sent messages — a reply at index 200 lives well beyond the first page.
     const sentQ = sentQuery();
     const passes = [{ query: sentQ, cap: SENT_INGEST_MAX }];
-    const ids = await collectMessageIds(passes, pagingListFn({ [sentQ]: 250 }));
-    expect(ids).toHaveLength(250);
-    expect(ids.some((m) => m.id === `${sentQ}#200`)).toBe(true); // the far reply is fetched
+    const { items, truncated } = await collectMessageIds(passes, pagingListFn({ [sentQ]: 250 }));
+    expect(items).toHaveLength(250);
+    expect(items.some((m) => m.id === `${sentQ}#200`)).toBe(true); // the far reply is fetched
+    expect(truncated).toEqual([]); // fully covered — under the ceiling
   });
 
-  it('stops at the pass cap when the window exceeds the ceiling (bounded fail-safe)', async () => {
+  it('stops at the pass cap AND reports truncation when the window exceeds the ceiling', async () => {
     const sentQ = sentQuery();
     const passes = [{ query: sentQ, cap: SENT_INGEST_MAX }];
-    const ids = await collectMessageIds(passes, pagingListFn({ [sentQ]: SENT_INGEST_MAX + 500 }));
-    expect(ids.length).toBeLessThanOrEqual(SENT_INGEST_MAX);
-    expect(ids.length).toBeGreaterThanOrEqual(SENT_INGEST_MAX); // fills exactly to the ceiling
+    const { items, truncated } = await collectMessageIds(passes, pagingListFn({ [sentQ]: SENT_INGEST_MAX + 500 }));
+    expect(items).toHaveLength(SENT_INGEST_MAX); // fills exactly to the ceiling
+    expect(truncated).toEqual([sentQ]); // fail-closed signal — coverage incomplete
+  });
+
+  it('does not report truncation when the last page exactly fills the cap with no more pages', async () => {
+    const sentQ = sentQuery();
+    const passes = [{ query: sentQ, cap: SENT_INGEST_MAX }];
+    const { truncated } = await collectMessageIds(passes, pagingListFn({ [sentQ]: SENT_INGEST_MAX }));
+    expect(truncated).toEqual([]); // exhausted the window exactly — not truncated
   });
 
   it('dedupes an id that appears in both the inbox and sent passes', async () => {
@@ -99,8 +107,8 @@ describe('collectMessageIds — full pagination', () => {
       if (call === 1) return { messages: [{ id: 'a' }, { id: 'b' }], nextPageToken: null };
       return { messages: [{ id: 'b' }, { id: 'c' }], nextPageToken: null };
     };
-    const ids = await collectMessageIds([{ query: 'in:inbox', cap: 100 }, { query: 'in:sent', cap: 100 }], listFn);
-    expect(ids.map((m) => m.id)).toEqual(['a', 'b', 'c']);
+    const { items } = await collectMessageIds([{ query: 'in:inbox', cap: 100 }, { query: 'in:sent', cap: 100 }], listFn);
+    expect(items.map((m) => m.id)).toEqual(['a', 'b', 'c']);
   });
 
   it('SENT_INGEST_MAX is a generous ceiling well past the old first-page limit of 100', () => {

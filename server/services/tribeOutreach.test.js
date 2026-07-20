@@ -224,6 +224,15 @@ describe('buildTwoWayGate (per-account #2796)', () => {
     expect(buildTwoWayGate([gmail({ sentIngestedAt: stale })], OPTS).isTwoWay({ source: 'gmail', accountId: 'g1' })).toBe(false);
   });
 
+  it('a PARTIAL sent-coverage watermark drops the account (#2820 — truncated sent window)', () => {
+    // The last sync hit the sent ceiling → incomplete reply evidence → fail closed,
+    // even with a fresh watermark, until a full sync clears the flag.
+    const gate = buildTwoWayGate([gmail({ sentCoveragePartial: true })], OPTS);
+    expect(gate.sources).not.toContain('gmail');
+    expect(gate.emailAccounts).toEqual([]);
+    expect(gate.isTwoWay({ source: 'gmail', accountId: 'g1' })).toBe(false);
+  });
+
   it('does NOT let one Gmail account vouch for another (per-account, not source-wide)', () => {
     // g1 ingests sent; g2 opted out. Both are source `gmail`, but only g1's events
     // are trustworthy — a source-wide gate would wrongly trust g2's inbound too.

@@ -77,6 +77,10 @@ const SENT_INGEST_SOURCES = new Set(['gmail']);
  *     so every inbound would read as unanswered);
  *   - it is enabled (a disabled account never syncs, so its sent history never
  *     updates — trusting it would nudge on stale/absent reply evidence);
+ *   - its last sent sync was NOT truncated (`sentCoveragePartial !== true`, #2820):
+ *     a sync that hit the sent ceiling (>SENT_INGEST_MAX in the window) has an
+ *     incomplete sent window, so an un-ingested older reply could read as
+ *     unanswered — fail closed until a full sync clears the flag;
  *   - it has a RECENT sent-ingest watermark (`sentIngestedAt` within `coverageMs`).
  *     This is the reliability guard: an account default-on at upgrade, or one whose
  *     OAuth/sync has been failing, has no current sent evidence — trusting it on
@@ -98,6 +102,10 @@ export function buildTwoWayGate(accounts = [], { now = Date.now(), coverageMs = 
         if (a?.syncConfig?.ingestSent === false) return false;
         if (String(a?.email || '').trim() === '') return false;
         if (a?.enabled === false) return false;
+        // The last sent sync truncated at its ceiling (>SENT_INGEST_MAX in the
+        // window, #2820) → an older reply may be un-ingested, so its reply evidence
+        // is incomplete and can't be trusted until a full sync clears the flag.
+        if (a?.sentCoveragePartial === true) return false;
         const at = Date.parse(a?.sentIngestedAt);
         if (Number.isNaN(at)) return false; // never successfully ingested sent mail
         return (now - at) <= coverageMs; // stale watermark → coverage can't be trusted
