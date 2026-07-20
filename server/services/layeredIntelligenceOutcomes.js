@@ -22,8 +22,8 @@
 import { join } from 'path';
 import { PATHS } from '../lib/fileUtils.js';
 import { createCollectionStore } from '../lib/collectionStore.js';
-import { normalizeSlug, deriveOutcome, PROPOSAL_OUTCOMES, PROPOSAL_EXECUTION_OUTCOMES, CLOSED_SUPPRESSION_MS } from './layeredIntelligence.js';
-import { classifyRejection, REJECTION_REASON_VALUES } from './layeredIntelligenceRejections.js';
+import { normalizeSlug, deriveOutcome, readImplementingPrState, PROPOSAL_OUTCOMES, PROPOSAL_EXECUTION_OUTCOMES, CLOSED_SUPPRESSION_MS } from './layeredIntelligence.js';
+import { classifyRejection, classifyPrFailure, isPrRefinableReason, isPrFailureReason, REJECTION_REASON_VALUES } from './layeredIntelligenceRejections.js';
 import { classifyExecutionFailure, EXECUTION_FAILURE_VALUES } from './layeredIntelligenceExecutionFailures.js';
 
 // Longest raw failure-signal token stored on a record. The signal is one of
@@ -79,6 +79,13 @@ export function sanitizeOutcomeRecord(raw) {
     outcomeAt: outcome && typeof raw.outcomeAt === 'string' ? raw.outcomeAt : null,
     outcomeReason: outcome && typeof raw.outcomeReason === 'string' ? raw.outcomeReason : null,
     rejectionReason: rejectable && REJECTION_REASON_VALUES.includes(raw.rejectionReason) ? raw.rejectionReason : null,
+    // Implementing-PR handle (#2748, deliverable 2) — the number of the PR that was
+    // meant to implement this proposal, so a later reconcile can read its merge
+    // state/checks and classify `merge-conflict`/`validation-failed`. Additive with a
+    // null default (no record-shape migration): a positive integer or null. Kept
+    // regardless of outcome — it is a fact about the proposal, and a merged proposal's
+    // PR ref is harmless — so a coerced non-int/absent value simply reads as null.
+    implementingPr: Number.isInteger(raw.implementingPr) && raw.implementingPr > 0 ? raw.implementingPr : null,
     // Per-proposal-domain EXECUTION record (#2765) — orthogonal to `outcome` (the
     // FILING fate): whether LI's own coding agent implemented the proposal after the
     // Engine-A hand-off. `null` = never handed off / not yet executed; a token only
@@ -163,6 +170,9 @@ export async function recordFiledProposal({ appId, slug, tracker = null, issueRe
     outcomeReason: null,
     // Unresolved: nothing has rejected it yet, so there is nothing to diagnose.
     rejectionReason: null,
+    // Learned at reconcile time from the tracker's closedByPullRequestsReferences
+    // (#2748, deliverable 2); unknown at filing.
+    implementingPr: null,
     // Not executed yet — set only if this proposal is later handed off and its agent
     // run completes (recordProposalExecution, #2765).
     executionOutcome: null,
@@ -226,7 +236,8 @@ export async function recordProposalExecution({ appId, slug, scope = null, succe
           appId, slug: normSlug, tracker: null, issueRef: null,
           scope: normScope,
           filedAt: new Date(now).toISOString(),
-          outcome: null, outcomeAt: null, outcomeReason: null, rejectionReason: null
+          outcome: null, outcomeAt: null, outcomeReason: null, rejectionReason: null,
+          implementingPr: null
         };
     const next = {
       ...base,
@@ -327,8 +338,14 @@ export async function listOutcomesResult({ appId, now = Date.now() } = {}, store
  * from the latest closure, not the first. Returns the number of records
  * updated. Never throws — a per-record write failure is swallowed so one bad
  * row can't abort the whole reconciliation.
+ *
+ * When a forge handle (`cli`/`cwd`) is supplied, a non-merged proposal that carries
+ * an `implementingPr` ref and was left undiagnosed by the free signals gets ONE
+ * bounded `gh pr view` read (`readPrState`, gh-only) to classify
+ * `merge-conflict`/`validation-failed` from the implementing PR's merge state/checks
+ * (#2748, deliverable 2). `readPrState` is injectable so tests never hit the network.
  */
-export async function reconcileOutcomes({ appId, existingIssues = [], now = Date.now() } = {}, store = outcomesStore()) {
+export async function reconcileOutcomes({ appId, existingIssues = [], now = Date.now(), cli = null, cwd = null, env = undefined, readPrState = readImplementingPrState } = {}, store = outcomesStore()) {
   if (!appId || !Array.isArray(existingIssues) || existingIssues.length === 0) return 0;
   // Index existing issues by normalized slug for O(1) lookup.
   const bySlug = new Map();
@@ -348,12 +365,39 @@ export async function reconcileOutcomes({ appId, existingIssues = [], now = Date
     // tracker call. Merged/unresolved → null. `closingComment` (#2748) is the
     // deterministic last-resort signal for a close stated only in prose; forges
     // that don't surface comments simply pass null.
-    const rejectionReason = classifyRejection({
+    const base = {
       outcome,
       stateReason: issue.stateReason,
       labels: issue.labels,
       closingComment: issue.closingComment
-    });
+    };
+    let rejectionReason = classifyRejection(base);
+    // Implementing-PR failure refinement (#2748, deliverable 2). Only read the PR's
+    // merge state/checks when it could actually change the answer: there is a PR ref
+    // (gh-only), and the free signals left the proposal on a generic/undiagnosed
+    // reason a mechanical PR fact is allowed to sharpen. This bounds the one extra
+    // tracker fetch classification makes to the small set of records it can move — a
+    // label / specific close-reason / prose rationale already wins and skips the read.
+    const implementingPr = Number.isInteger(issue.implementingPr) && issue.implementingPr > 0 ? issue.implementingPr : null;
+    if (implementingPr && cli && isPrRefinableReason(rejectionReason)) {
+      if (isPrFailureReason(r.rejectionReason) && r.implementingPr === implementingPr) {
+        // Already diagnosed from THIS SAME PR on a prior tick, and the free signals
+        // still don't supersede it — a new authoritative label/close-reason would have
+        // made the free classification specific (not refinable), taking the branch
+        // above. Keep the settled diagnosis instead of re-spawning `gh pr view` on every
+        // tick for the record's whole 30-day retention (codex P2). Preserving it here
+        // (rather than just skipping the fetch) also stops the write-guard below from
+        // downgrading the stored PR token back to the generic free reason. The PR-number
+        // match is required: if the issue was RE-LINKED to a different implementing PR
+        // (`r.implementingPr !== implementingPr`), the old diagnosis no longer applies —
+        // fall through and read the replacement PR (codex P2, follow-up).
+        rejectionReason = r.rejectionReason;
+      } else {
+        const prView = await readPrState({ cli, cwd, env, number: implementingPr }).catch(() => null);
+        const prFailure = classifyPrFailure(prView);
+        if (prFailure) rejectionReason = classifyRejection({ ...base, prFailure });
+      }
+    }
     // A same-outcome record is only rewritten when the tracker reports a NEWER
     // close time (closed → reopened → re-closed): outcomeAt drives retention/GC,
     // so it must track the latest closure. Timestampless trackers (plan) and an
@@ -367,7 +411,11 @@ export async function reconcileOutcomes({ appId, existingIssues = [], now = Date
     // `unknown-reason` record once someone finally labels the issue. Comparing the
     // derived token to the stored one (rather than writing unconditionally) keeps
     // a settled record from churning on every reconcile.
-    if (outcome === r.outcome && rejectionReason === r.rejectionReason && !newerClose) continue;
+    // Learning the implementing-PR ref (#2748, deliverable 2) is itself a reason to
+    // rewrite — it BACKFILLS the additive field on records filed before it existed,
+    // and prefers the freshly-read ref over a stored one so a re-linked PR updates.
+    const nextImplementingPr = implementingPr ?? (r.implementingPr ?? null);
+    if (outcome === r.outcome && rejectionReason === r.rejectionReason && nextImplementingPr === (r.implementingPr ?? null) && !newerClose) continue;
     const id = outcomeId(appId, r.slug);
     // Fence the per-record write in the same per-id queue recordProposalExecution uses
     // (#2765, codex P2), and re-read INSIDE the fence: `records` came from an upfront
@@ -383,7 +431,8 @@ export async function reconcileOutcomes({ appId, existingIssues = [], now = Date
         outcome,
         outcomeAt: issue.closedAt || fresh.outcomeAt || new Date(now).toISOString(),
         outcomeReason: issue.stateReason || 'auto-derived from tracker state',
-        rejectionReason
+        rejectionReason,
+        implementingPr: nextImplementingPr
       };
       await store.saveOneNow(id, next);
       return true;

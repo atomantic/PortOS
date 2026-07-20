@@ -64,6 +64,9 @@ import {
   normalizeIssueState,
   listForgeIssues,
   extractClosingComment,
+  extractImplementingPr,
+  repoSlugFromUrl,
+  readImplementingPrState,
   listBlockingIssues,
   fileProposalToForge,
   ensureForgeLabels,
@@ -1892,8 +1895,10 @@ describe('forge I/O (injected exec)', () => {
     });
     const { ok, issues } = await listForgeIssues({ cli: 'gh', cwd: '/x', exec });
     expect(ok).toBe(true);
-    // The batched list call must ask gh for `comments` so no extra fetch is needed.
-    expect(exec.mock.calls[0][1]).toContain('number,title,body,state,stateReason,closedAt,url,labels,comments');
+    // The batched list call must ask gh for `comments` (closing-comment signal) and
+    // `closedByPullRequestsReferences` (implementing-PR ref, #2748 deliverable 2) so
+    // no extra fetch is needed for either.
+    expect(exec.mock.calls[0][1]).toContain('number,title,body,state,stateReason,closedAt,url,labels,comments,closedByPullRequestsReferences');
     // The LAST comment (closest to the close) becomes the classifier's signal.
     expect(issues[0].closingComment).toBe('Closing — this is out of scope for the app.');
   });
@@ -1913,6 +1918,86 @@ describe('forge I/O (injected exec)', () => {
     expect(extractClosingComment([])).toBeNull();
     expect(extractClosingComment(null)).toBeNull();
     expect(extractClosingComment([{ body: '   ' }, { body: null }])).toBeNull();
+  });
+
+  it('listForgeIssues threads the implementing-PR number from closedByPullRequestsReferences (#2748)', async () => {
+    const exec = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify([
+        {
+          number: 5,
+          title: 'E',
+          body: `x ${slugMarker('slug-e')}`,
+          state: 'CLOSED',
+          closedByPullRequestsReferences: [{ number: 900 }, { number: 901 }]
+        },
+        { number: 6, title: 'F', body: `x ${slugMarker('slug-f')}`, state: 'CLOSED' }
+      ])
+    });
+    const { issues } = await listForgeIssues({ cli: 'gh', cwd: '/x', exec });
+    // The batched call must ALSO ask gh for the closing-PR refs — no extra round-trip.
+    expect(exec.mock.calls[0][1]).toContain('number,title,body,state,stateReason,closedAt,url,labels,comments,closedByPullRequestsReferences');
+    // The LAST ref (most recent linked PR) is the implementing handle.
+    expect(issues[0].implementingPr).toBe(901);
+    // No refs ⇒ null (glab rows, or a hand-closed issue) — falls through cleanly.
+    expect(issues[1].implementingPr).toBeNull();
+  });
+
+  it('extractImplementingPr returns the last positive-integer ref, else null', () => {
+    expect(extractImplementingPr([{ number: 10 }, { number: 11 }])).toBe(11);
+    expect(extractImplementingPr([{ number: 12 }, { number: null }])).toBe(12);
+    expect(extractImplementingPr([])).toBeNull();
+    expect(extractImplementingPr(null)).toBeNull();
+    expect(extractImplementingPr([{ number: 0 }, { number: -3 }])).toBeNull();
+  });
+
+  it('extractImplementingPr skips a cross-repo reference when the issue repo is known (codex P2)', () => {
+    const refs = [
+      { number: 55, repository: { owner: { login: 'someone' }, name: 'other-repo' } },
+      { number: 56, repository: { owner: { login: 'atomantic' }, name: 'PortOS' } }
+    ];
+    // Same-repo ref wins even though the cross-repo one is later in the list.
+    expect(extractImplementingPr(refs, 'atomantic/PortOS')).toBe(56);
+    // A ref from another repo alone is rejected — `gh pr view 55` in cwd would read the
+    // wrong PR. Falls through to null rather than mis-diagnosing.
+    expect(extractImplementingPr([refs[0]], 'atomantic/PortOS')).toBeNull();
+    // Repo match is case-insensitive (GitHub slugs are).
+    expect(extractImplementingPr([{ number: 57, url: 'https://github.com/Atomantic/portos/pull/57' }], 'atomantic/PortOS')).toBe(57);
+    // Unknown self-repo, or a ref with no repo info, degrades to accepting (same-repo
+    // is the common case) — preserves prior behavior.
+    expect(extractImplementingPr(refs, null)).toBe(56);
+    expect(extractImplementingPr([{ number: 58 }], 'atomantic/PortOS')).toBe(58);
+  });
+
+  it('repoSlugFromUrl parses owner/repo from an issue or PR URL, host-agnostic', () => {
+    expect(repoSlugFromUrl('https://github.com/atomantic/PortOS/issues/2748')).toBe('atomantic/portos');
+    expect(repoSlugFromUrl('https://github.com/owner/repo/pull/5')).toBe('owner/repo');
+    expect(repoSlugFromUrl('https://github.example.com/org/proj/issues/9')).toBe('org/proj');
+    expect(repoSlugFromUrl('https://github.com/owner/repo')).toBeNull();
+    expect(repoSlugFromUrl(null)).toBeNull();
+  });
+
+  it('readImplementingPrState parses gh pr view, and is gh-only (#2748)', async () => {
+    const exec = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({ state: 'CLOSED', mergeStateStatus: 'DIRTY', statusCheckRollup: [{ conclusion: 'FAILURE' }] })
+    });
+    const view = await readImplementingPrState({ cli: 'gh', cwd: '/x', number: 42, exec });
+    expect(exec).toHaveBeenCalledWith('gh', ['pr', 'view', '42', '--json', 'state,mergeStateStatus,statusCheckRollup'], { cwd: '/x', env: undefined });
+    expect(view).toEqual({ state: 'CLOSED', mergeStateStatus: 'DIRTY', statusCheckRollup: [{ conclusion: 'FAILURE' }] });
+
+    // glab carries no PR handle → no fetch, null.
+    const glabExec = vi.fn();
+    expect(await readImplementingPrState({ cli: 'glab', number: 42, exec: glabExec })).toBeNull();
+    expect(glabExec).not.toHaveBeenCalled();
+    // A non-integer number is a caller bug → null without fetching.
+    expect(await readImplementingPrState({ cli: 'gh', number: null, exec: glabExec })).toBeNull();
+  });
+
+  it('readImplementingPrState returns null on a CLI error or unparseable output (#2748)', async () => {
+    expect(await readImplementingPrState({ cli: 'gh', number: 1, exec: vi.fn().mockResolvedValue({ code: 1, stdout: '' }) })).toBeNull();
+    expect(await readImplementingPrState({ cli: 'gh', number: 1, exec: vi.fn().mockResolvedValue({ code: 0, stdout: 'not json' }) })).toBeNull();
+    expect(await readImplementingPrState({ cli: 'gh', number: 1, exec: vi.fn().mockResolvedValue({ code: 0, stdout: '   ' }) })).toBeNull();
   });
 
   it('listForgeIssues normalizes GitLab "opened" state to open', async () => {

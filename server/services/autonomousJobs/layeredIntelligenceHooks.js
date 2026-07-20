@@ -332,7 +332,10 @@ export async function buildTaskInput({ app } = {}) {
   // diagnosed failed hand-off.
   let crossReferenceReport = ''
   if (config.sources?.outcomes && outcomesTrackerSupported(filer)) {
-    if (!trackerReadFailed) await reconcileOutcomes({ appId: app.id, existingIssues })
+    // Pass the forge handle so the reconciler can read an implementing PR's merge
+    // state/checks (#2748, deliverable 2) to classify merge-conflict/validation-failed.
+    // gh-only + bounded inside reconcileOutcomes; glab/plan carry no PR ref so no read.
+    if (!trackerReadFailed) await reconcileOutcomes({ appId: app.id, existingIssues, cli: forgeCli, cwd })
     // Discriminated read: an unreadable outcome store stays `null` here rather than
     // collapsing to `[]`, so selfEval reports its merge rate as UNAVAILABLE instead
     // of telling the reasoner it has never filed a proposal.
