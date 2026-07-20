@@ -27,6 +27,23 @@
  * NOTE: `kimi` was not installed in the dev environment where this shipped, so the
  * argv-value prompt path (`--prompt <value>`, like `agy --print <value>`) was
  * chosen as the documented default and should be confirmed against a live binary.
+ * Two follow-ups to reconcile once a live `kimi` is available (raised in review,
+ * deferred because they can't be validated blind and both risk regressing the
+ * happy path if guessed wrong):
+ *   1. Argv length limits. A large CoS operating-contract prompt on the argv can
+ *      exceed Windows' ~32K command-line limit (and eventually POSIX ARG_MAX). If
+ *      the live `kimi --print` accepts the prompt from stdin (or from a
+ *      `--prompt-file <path>` that can point at `/dev/stdin`, as grok does), switch
+ *      this delivery to stdin to lift the cap. It is NOT switched now because the
+ *      antigravity analog (`agy --print`) takes the prompt as an argv VALUE and
+ *      does NOT read stdin at all — guessing stdin against an agy-like `kimi` would
+ *      silently deliver an empty prompt, a worse failure than the length ceiling.
+ *   2. Structured-output contamination. If plain `--print` interleaves intermediate
+ *      tool/assistant activity with the final message, a pipeline stage that parses
+ *      stdout as JSON could choke on the chatter. If the live `kimi` exposes a
+ *      "final message only" flag, add it to `ensureKimiHeadlessArgs`. It is NOT
+ *      added now because passing a flag the binary doesn't recognize would make
+ *      every headless run fail at startup.
  */
 
 import { commandBasename, hasModelFlag } from './providerModels.js';

@@ -454,6 +454,8 @@ describe('tuiHandshake.inferTuiCommand', () => {
     ['google-gemini-2', 'gemini'],
     ['claude', 'claude'],
     ['anthropic-claude-code', 'claude'],
+    ['kimi-tui', 'kimi'],
+    ['moonshot-kimi-2', 'kimi'],
   ])('inferTuiCommand(%p) → %p', (id, expected) => {
     expect(inferTuiCommand(id)).toBe(expected);
   });
@@ -525,6 +527,14 @@ describe('tuiHandshake.applyCommandDefaults', () => {
     const pinned = ['--permission-mode', 'auto'];
     expect(applyCommandDefaults('grok', pinned)).toEqual(['--permission-mode', 'auto']);
   });
+
+  it('adds the Kimi TUI --yolo auto-approve and is idempotent when an approval posture is already pinned', () => {
+    expect(applyCommandDefaults('kimi', [])).toEqual(['--yolo']);
+    // Seeded default already carries --yolo — no duplicate.
+    expect(applyCommandDefaults('kimi', ['--yolo'])).toEqual(['--yolo']);
+    // A user-pinned posture (-y / --afk) is respected.
+    expect(applyCommandDefaults('kimi', ['--afk'])).toEqual(['--afk']);
+  });
 });
 
 describe('tuiHandshake.buildTuiInvocation', () => {
@@ -564,6 +574,21 @@ describe('tuiHandshake.buildTuiInvocation', () => {
     const out = buildTuiInvocation(provider, null);
     expect(out.command).toBe('codex');
     expect(out.args).toEqual(['--dangerously-bypass-approvals-and-sandbox', '-c', 'check_for_update_on_startup=false']);
+  });
+
+  it('builds the Kimi TUI with --yolo and no --model for the configured-default sentinel', () => {
+    const provider = { id: 'kimi-tui', command: 'kimi', args: ['--yolo'] };
+    const out = buildTuiInvocation(provider, 'kimi-configured-default');
+    expect(out.command).toBe('kimi');
+    // --yolo is already seeded; sentinel resolves to null so no --model is appended.
+    expect(out.args).toEqual(['--yolo']);
+    expect(out.args).not.toContain('--model');
+  });
+
+  it('appends --model for a concrete kimi model id', () => {
+    const provider = { id: 'kimi-tui', command: 'kimi', args: ['--yolo'] };
+    const out = buildTuiInvocation(provider, 'kimi-k2');
+    expect(out.args).toEqual(['--yolo', '--model', 'kimi-k2']);
   });
 
   it('appends --model when caller passes a model and provider.args has no model flag', () => {
