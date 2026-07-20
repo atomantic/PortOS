@@ -1,5 +1,9 @@
 # Unreleased Changes
 
+## AI providers
+
+- `[issue-2815]` Added **Kimi Code** (Moonshot AI's `kimi` binary) as a first-class agentic-coding provider in both CLI (headless one-shot) and TUI (interactive PTY) flavors — `kimi-cli` and `kimi-tui`, mirroring the Grok/Antigravity/Codex process providers. Both ship disabled (opt-in) and are harness-capable, so once enabled they're selectable as CoS-agent / reviewer / runner / TUI providers. The headless path runs `kimi --print` (which implies `--afk`, auto-approving tool calls) and delivers the prompt as the `--prompt <value>` argv; the TUI path runs `kimi --yolo`. Model selection uses a `kimi-configured-default` sentinel — PortOS omits `--model` so the local `kimi` binary uses your own configured default (set via `/model`), while a real model id you pin is passed through as `--model <id>`. The context window is mapped to Kimi K2's 256K. Existing installs pick the pair up on restart via migration `201-kimi-providers`. The pre-existing `nvidia-kimi` HTTP API entry is unchanged. (Prompt-delivery path defaults to the argv value and should be confirmed against a live `kimi` binary.)
+
 ## Federation
 
 - [issue-2628] Same-cause auto-investigation tasks no longer pile up across federated machines. The per-machine "one open investigation per failure fingerprint" guard couldn't see a second machine that minted its own investigation for the same cause before the next sync, so both survived the peer merge. The CoS task merge now collapses same-fingerprint OPEN investigations to a single active row: it keeps the older copy (or, if one is already being worked, the in-progress copy so a running investigation is never cut off), folds every duplicate's list of blocked tasks onto the survivor, and marks the others done rather than deleting them (so the collapse converges the same way on every peer). Two machines that each opened an investigation for one failure now settle on one.

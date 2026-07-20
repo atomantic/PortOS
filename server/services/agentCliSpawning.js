@@ -28,6 +28,7 @@ import { createImmediateFallbackSignalDetector } from '../lib/aiToolkit/errorDet
 import { ensureAntigravityPrintArgs, isAntigravityCliProvider } from '../lib/antigravity.js';
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { isGrokCommand, ensureGrokHeadlessArgs } from '../lib/grok.js';
+import { isKimiCommand, ensureKimiHeadlessArgs } from '../lib/kimi.js';
 import { resolveCliModel, buildEffortArgs, buildCodexStartupArgs, resolveBedrockCliModel, prefixOpencodeModel, hasModelFlag, isOpencodeCommand, applyLeanClaudeArgs, providerSuppliesGithubToken } from '../lib/providerModels.js';
 import { agentGuardEnv } from '../lib/agentGuard/index.js';
 import { resolveForgeTokenEnv } from './git.js';
@@ -334,6 +335,22 @@ export function buildCliSpawnConfig(provider, model, settingsEnv = {}, { systemP
     };
   }
 
+  // Kimi Code CLI (`kimi`): headless one-shot agent. `--print` runs non-
+  // interactive print mode (implies `--afk`, so tool calls auto-approve). The
+  // combined contract+task prompt is delivered as the `--prompt <value>` argv
+  // (kimi does NOT read stdin in print mode) — spliced in at the spawn site via
+  // prepareCliPrompt. Emits plain text (the live-output handler falls through to
+  // its default text path, like grok/opencode). A non-Claude command, so
+  // agentLifecycle keeps the operating contract in the prompt (no system-prompt-
+  // file split) — matching codex/antigravity/grok/opencode.
+  if (isKimiCommand(provider?.command)) {
+    return {
+      command: provider?.command || 'kimi',
+      args: ensureKimiHeadlessArgs(provider?.args || [], effectiveModel),
+      stdinMode: 'prompt',
+    };
+  }
+
   // Default: Claude Code CLI. applyLeanClaudeArgs adds `--bare
   // --strict-mcp-config` for Ollama-backed claude sessions (no-op otherwise,
   // idempotent against user-baked flags); the system-prompt contract file
@@ -480,8 +497,9 @@ export async function spawnDirectly({
   // working "Run Prompt" path (server/services/runner.js); resolved against
   // childEnv so a provider PATH override is honored. See issue #2243.
   // Deliver the prompt per provider convention: antigravity as the --print
-  // VALUE (no stdin); grok's `--prompt-file /dev/stdin` via stdin (POSIX) / temp
-  // file (Windows); every other provider via stdin (writePromptToStdin=true).
+  // VALUE and kimi as the --prompt VALUE (no stdin); grok's `--prompt-file
+  // /dev/stdin` via stdin (POSIX) / temp file (Windows); every other provider via
+  // stdin (writePromptToStdin=true).
   const { args: deliveredArgs, useStdin: writePromptToStdin, cleanup: cleanupPromptFile } = prepareCliPrompt(cliConfig.command, cliConfig.args, prompt);
   const { command: spawnCommand, args: spawnArgs } = prepareCliSpawn(cliConfig.command, deliveredArgs, childEnv);
 

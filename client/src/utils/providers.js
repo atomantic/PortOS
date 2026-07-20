@@ -8,11 +8,13 @@ import { formatContextLength } from './formatters.js';
 export const CODEX_CONFIGURED_DEFAULT = 'codex-configured-default';
 export const ANTIGRAVITY_CONFIGURED_DEFAULT = 'antigravity-configured-default';
 export const GROK_CONFIGURED_DEFAULT = 'grok-configured-default';
+export const KIMI_CONFIGURED_DEFAULT = 'kimi-configured-default';
 
 const CONFIGURED_DEFAULT_SENTINELS = new Set([
   CODEX_CONFIGURED_DEFAULT,
   ANTIGRAVITY_CONFIGURED_DEFAULT,
   GROK_CONFIGURED_DEFAULT,
+  KIMI_CONFIGURED_DEFAULT,
 ]);
 
 /** True for any provider "use CLI's own default" sentinel. Mirror of server `isConfiguredDefaultModel`. */
@@ -22,6 +24,7 @@ export const DEFAULT_LARGE_CONTEXT_WINDOW = 128_000;
 export const CODEX_CONTEXT_WINDOW = 1_000_000;
 export const GEMINI_CONTEXT_WINDOW = 1_048_576;
 export const GROK_CONTEXT_WINDOW = 256_000;
+export const KIMI_CONTEXT_WINDOW = 256_000;
 
 // Keep in sync with server/lib/stageRunner.js.
 const KNOWN_MODEL_CONTEXT_WINDOWS = Object.freeze([
@@ -65,6 +68,18 @@ export const isCodexProvider = (provider) => {
   return id === 'codex' || id === 'codex-tui' || commandBasename(provider?.command) === 'codex';
 };
 
+/**
+ * True when a provider is Kimi-Code-flavored — the shipped `kimi-cli`/`kimi-tui`
+ * ids or any provider whose launch command basename is `kimi` (path/exe tolerant).
+ * MIRROR of `isKimiProvider` in server/lib/providerModels.js — keep in lockstep.
+ * @param {{id?:string, command?:string}|null|undefined} provider
+ * @returns {boolean}
+ */
+export const isKimiProvider = (provider) => {
+  const id = String(provider?.id || '').toLowerCase();
+  return id === 'kimi-cli' || id === 'kimi-tui' || commandBasename(provider?.command) === 'kimi';
+};
+
 export const knownProviderContextWindow = (provider) => {
   if (!isProcessProvider(provider)) return null;
   const id = String(provider?.id || '').toLowerCase();
@@ -72,6 +87,7 @@ export const knownProviderContextWindow = (provider) => {
   if (isCodexProvider(provider)) return CODEX_CONTEXT_WINDOW;
   if (id === 'antigravity-cli' || id === 'antigravity-tui' || command === 'agy') return GEMINI_CONTEXT_WINDOW;
   if (id === 'grok-cli' || id === 'grok-tui' || command === 'grok') return GROK_CONTEXT_WINDOW;
+  if (id === 'kimi-cli' || id === 'kimi-tui' || command === 'kimi') return KIMI_CONTEXT_WINDOW;
   return null;
 };
 

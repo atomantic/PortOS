@@ -15,6 +15,7 @@
 import { resolveCliModel, hasModelFlag, resolveBedrockCliModel, prefixOpencodeModel, isOpencodeCommand, buildCodexStartupArgs, commandBasename } from './providerModels.js';
 import { ensureAntigravityTuiArgs, isAntigravityCommand } from './antigravity.js';
 import { ensureGrokTuiArgs, isGrokCommand } from './grok.js';
+import { ensureKimiTuiArgs, isKimiCommand } from './kimi.js';
 
 // ─── Paste handshake constants ────────────────────────────────────────────
 
@@ -765,6 +766,7 @@ export function inferTuiCommand(id) {
   if (id.includes('codex')) return 'codex';
   if (id.includes('antigravity')) return 'agy';
   if (id.includes('gemini')) return 'gemini';
+  if (id.includes('kimi')) return 'kimi';
   return 'claude';
 }
 
@@ -812,6 +814,9 @@ export function applyCommandDefaults(command, args) {
   }
   if (isGrokCommand(command)) {
     return ensureGrokTuiArgs(args);
+  }
+  if (isKimiCommand(command)) {
+    return ensureKimiTuiArgs(args);
   }
   return args;
 }
