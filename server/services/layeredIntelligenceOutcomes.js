@@ -266,23 +266,34 @@ export async function listOutcomes(args = {}, store = outcomesStore()) {
 }
 
 /**
- * `listOutcomes` with a discriminated read status (#2700):
- *   `{ read: true,  outcomes: [...] }` — the store was read; the list is the truth
- *                                        (an empty one means nothing was ever filed).
- *   `{ read: false, outcomes: [] }`    — the store could NOT be read.
+ * `listOutcomes` with a discriminated read status (#2700, #2728):
+ *   `{ read: true,  outcomes: [...] }`                       — the store was read
+ *       cleanly; the list is the truth (an empty one means nothing was ever filed).
+ *   `{ read: false, outcomes: [] }`                          — the store could NOT
+ *       be read at all (a total failure).
+ *   `{ read: false, partial: true, outcomes: [...], failedIds: [...] }` — the store
+ *       was read but ONE OR MORE records failed to load (corrupt/unparseable/
+ *       sanitizer-rejected). The `outcomes` we DID load are returned for the
+ *       best-effort flatten path, but `read` is false because the list is an
+ *       untrustworthy undercount.
  *
  * The distinction is load-bearing for selfEval, which reports LI's merge rate to the
- * reasoner: a corrupt/unreadable store flattened to `[]` would tell the loop "you
- * have never filed a proposal" and invite it to re-file work it already filed, on
- * evidence that doesn't exist. Same sentinel rule as readLiTaskMetrics.
+ * reasoner: a corrupt/unreadable store flattened to `[]` (or silently short) would
+ * tell the loop "you have never filed a proposal" (or fewer than you did) and invite
+ * it to re-file work it already filed, on evidence that doesn't exist. Same sentinel
+ * rule as readLiTaskMetrics — a partial read is NOT a clean `read: true`, so a
+ * single corrupt record taints the whole read (we can't know which app's history it
+ * belonged to). Built on `collectionStore.loadAllResult` (#2728), which surfaces the
+ * `failedIds` `loadAll` throws away.
  */
 export async function listOutcomesResult({ appId, now = Date.now() } = {}, store = outcomesStore()) {
   // No appId is a caller bug, not a store failure: nothing was asked for, so the
   // honest answer is an empty (successful) read, not "the store is broken".
   if (!appId) return { read: true, outcomes: [] };
-  const all = await store.loadAll().catch(() => null);
-  if (!Array.isArray(all)) return { read: false, outcomes: [] };
-  const mine = all.filter(r => r && r.appId === appId);
+  const result = await store.loadAllResult().catch(() => null);
+  if (!result || !Array.isArray(result.records)) return { read: false, outcomes: [] };
+  const failedIds = Array.isArray(result.failedIds) ? result.failedIds : [];
+  const mine = result.records.filter(r => r && r.appId === appId);
   const kept = [];
   for (const r of mine) {
     if (r.outcome) {
@@ -294,7 +305,12 @@ export async function listOutcomesResult({ appId, now = Date.now() } = {}, store
     }
     kept.push(r);
   }
-  return { read: true, outcomes: kept.sort((a, b) => (Date.parse(b.filedAt) || 0) - (Date.parse(a.filedAt) || 0)) };
+  const outcomes = kept.sort((a, b) => (Date.parse(b.filedAt) || 0) - (Date.parse(a.filedAt) || 0));
+  // A corrupt record makes the surviving list an untrustworthy undercount — signal
+  // partial (read:false) so callers reasoning over the whole history don't treat a
+  // short list as "these are all the proposals ever filed".
+  if (failedIds.length > 0) return { read: false, partial: true, outcomes, failedIds };
+  return { read: true, outcomes };
 }
 
 /**
