@@ -431,6 +431,31 @@ describe('generateOutreachDraft', () => {
     expect(opts.templateOverride).not.toMatch(/professional reply to this email/i);
   });
 
+  it('fails closed (400) for an email thread keyed only by threadId with no accountId (#2820)', async () => {
+    // A legacy-queued / older-client / direct request omits accountId — grounding by
+    // an account-unscoped threadId could merge accounts, so refuse rather than guess.
+    await expect(generateOutreachDraft({
+      personId: 'p1', source: 'gmail', threadId: 't-ambiguous', lastInboundAt: '2026-07-15T00:00:00.000Z',
+    })).rejects.toMatchObject({ status: 400, code: 'ACCOUNT_ID_REQUIRED' });
+    expect(generateReplyBody).not.toHaveBeenCalled();
+  });
+
+  it('allows an email thread when accountId disambiguates it (#2820)', async () => {
+    listEvents.mockResolvedValue([
+      { kind: 'message.received', accountId: 'acct-a', happenedAt: '2026-07-15T00:00:00.000Z', summary: 'proposal?', metadata: { threadId: 't-9' } },
+    ]);
+    getPerson.mockResolvedValue({ id: 'p1', name: 'Alex', phones: [], emails: ['alex@example.com'] });
+    const result = await generateOutreachDraft({
+      personId: 'p1', source: 'gmail', accountId: 'acct-a', threadId: 't-9', lastInboundAt: '2026-07-15T00:00:00.000Z',
+    });
+    expect(generateReplyBody).toHaveBeenCalled();
+    // The grounding query is scoped to the account.
+    expect(listEvents).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'acct-a', threadId: 't-9' }));
+    // The stored draft key is account-namespaced.
+    expect(createDraft).toHaveBeenCalledWith(expect.objectContaining({ conversationKey: 'thread:acct-a:t-9' }));
+    expect(result.draft).toBeDefined();
+  });
+
   it('prefers the chat handle over a person email in the review-only recipient', async () => {
     getPerson.mockResolvedValue({ id: 'p1', name: 'Alex', phones: [], emails: ['alex@example.com'] });
     listEvents.mockResolvedValue([

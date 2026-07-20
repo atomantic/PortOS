@@ -435,6 +435,16 @@ async function generateOutreachDraftImpl({
   instructions = '',
   useVoice,
 } = {}) {
+  // Fail closed (#2820): when threadId is THE selective grounding key (email — no
+  // chatGuid/conversationId), it's only unique within one account. Without accountId
+  // the grounding query would be account-unscoped and could merge same-valued
+  // threadIds across accounts (wrong conversation grounded/reused). A detected Gmail
+  // thread always carries accountId; a legacy-queued/older-client/direct request
+  // that omits it is refused rather than grounded ambiguously.
+  if (threadId && !chatGuid && !conversationId && !accountId) {
+    throw new ServerError('An email outreach draft requires accountId to disambiguate the thread — reload the outreach list', { status: 400, code: 'ACCOUNT_ID_REQUIRED' });
+  }
+
   const [{ getPerson }, { listEvents }, { generateReplyBody }, { createDraft, listDrafts }] = await Promise.all([
     import('./tribe.js'),
     import('./humanActivity.js'),
