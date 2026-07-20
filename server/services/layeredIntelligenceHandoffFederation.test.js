@@ -66,16 +66,23 @@ describe('buildLiExecutionVerdict (#2779) — the executing peer stamp', () => {
     expect(buildLiExecutionVerdict({ liProposal: { slug: 's' }, success: true })).toBeNull();
   });
 
-  it('carries the proposal identity + domain and a clean-exit success', () => {
-    const v = buildLiExecutionVerdict({ liProposal: proposal, success: true });
+  it('carries the proposal identity + domain, a clean-exit success, and the execution time', () => {
+    const v = buildLiExecutionVerdict({ liProposal: proposal, success: true, executedAt: '2026-07-20T10:00:00.000Z' });
     expect(v).toEqual({
       appId: 'app-x',
       slug: 'Add Metrics',
       scope: 'refactor',
       success: true,
       errorCategory: null,
-      validationPassed: null
+      validationPassed: null,
+      executedAt: '2026-07-20T10:00:00.000Z'
     });
+  });
+
+  it('defaults executedAt to a timestamp when the caller omits it', () => {
+    const v = buildLiExecutionVerdict({ liProposal: proposal, success: true });
+    expect(typeof v.executedAt).toBe('string');
+    expect(Number.isFinite(Date.parse(v.executedAt))).toBe(true);
   });
 
   it('is validation-authoritative — a declared verdict overrides the exit code (#2344)', () => {
@@ -194,6 +201,35 @@ describe('recordProposalExecutionFromVerdict (#2779) — the originating peer de
     // proof the cross-peer execution reached A's computeProposalExecutionAwareness.
     const awareness = computeProposalExecutionAwareness({ outcomes });
     expect(awareness).toContain('refactor');
+  });
+
+  it('is a durable no-op when the same verdict re-syncs (idempotency, codex P2)', async () => {
+    await recordFiledProposal({ appId: 'app-x', slug: 'add-metrics', scope: 'refactor' }, store);
+    const verdict = { appId: 'app-x', slug: 'add-metrics', scope: 'refactor', success: true, executedAt: '2026-07-20T10:00:00.000Z' };
+    expect(await recordProposalExecutionFromVerdict(verdict, store)).toBe(true);
+    const [first] = await listOutcomes({ appId: 'app-x' }, store);
+    expect(first.executionOutcome).toBe('success');
+    // Re-offering the identical verdict (the merge re-scans terminal tasks every sweep) does
+    // NOT rewrite — the stored execution is not older than the incoming one.
+    expect(await recordProposalExecutionFromVerdict(verdict, store)).toBe(false);
+    const [again] = await listOutcomes({ appId: 'app-x' }, store);
+    expect(again.executionAt).toBe(first.executionAt); // unchanged, no churn
+  });
+
+  it('overwrites with a genuinely NEWER (re-executed) verdict — latest wins (parity)', async () => {
+    await recordFiledProposal({ appId: 'app-x', slug: 'add-metrics', scope: 'refactor' }, store);
+    // First hand-off failed on a peer.
+    expect(await recordProposalExecutionFromVerdict(
+      { appId: 'app-x', slug: 'add-metrics', scope: 'refactor', success: false, errorCategory: 'test-failure', executedAt: '2026-07-20T10:00:00.000Z' },
+      store
+    )).toBe(true);
+    expect((await listOutcomes({ appId: 'app-x' }, store))[0].executionOutcome).toBe('failure');
+    // Re-executed later and passed — a newer executedAt overwrites the stale failure.
+    expect(await recordProposalExecutionFromVerdict(
+      { appId: 'app-x', slug: 'add-metrics', scope: 'refactor', success: true, executedAt: '2026-07-20T12:00:00.000Z' },
+      store
+    )).toBe(true);
+    expect((await listOutcomes({ appId: 'app-x' }, store))[0].executionOutcome).toBe('success');
   });
 
   it('records a cross-peer FAILURE so a failing domain surfaces to A', async () => {

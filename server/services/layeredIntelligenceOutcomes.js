@@ -216,10 +216,15 @@ export async function recordFiledProposal({ appId, slug, tracker = null, issueRe
  * nothing about the domain — same gate as #2618); this helper records whatever it is
  * given.
  */
-export async function recordProposalExecution({ appId, slug, scope = null, success, errorCategory = null, validationPassed = null, requireExisting = false, now = Date.now() } = {}, store = outcomesStore()) {
+export async function recordProposalExecution({ appId, slug, scope = null, success, errorCategory = null, validationPassed = null, requireExisting = false, executedAt = null, now = Date.now() } = {}, store = outcomesStore()) {
   const normSlug = normalizeSlug(slug);
   if (!appId || !normSlug || typeof success !== 'boolean') return false;
   const id = outcomeId(appId, normSlug);
+  // The execution's completion time. For the federated consume it rides the verdict
+  // (`executedAt`) so idempotency/retry can compare it against the stored record; the
+  // local #2765 path passes none and uses `now`. Stored as `executionAt` either way.
+  const executionAtIso = (typeof executedAt === 'string' && executedAt) ? executedAt : new Date(now).toISOString();
+  const executionAtMs = Date.parse(executionAtIso);
   // The domain to adopt when we don't already have one — the load-bearing field for
   // per-domain aggregation. Normalized once and reused by both the missing-record
   // fallback and the scope-preservation merge below.
@@ -251,6 +256,19 @@ export async function recordProposalExecution({ appId, slug, scope = null, succe
     // (never filed it) has no record, so `requireExisting` makes it a no-op there
     // instead of minting a stray minimal record on every full-sync peer.
     if (!hasExisting && requireExisting) return false;
+    // Durable idempotency for the federated consume (#2779, codex P2): the record's own
+    // executionOutcome/executionAt IS the consumed-marker, so a re-synced terminal task is
+    // a no-op WITHOUT relying on the in-memory status transition (which a crash between the
+    // task-file write and this call, or an old peer that stored the terminal task before
+    // upgrading, would otherwise skip forever). Only skip when the stored execution is at
+    // least as new — a genuinely NEWER (re-executed) hand-off still overwrites, matching the
+    // local latest-wins. The marker lives in THIS peer's (unfederated) li-outcomes record, so
+    // one peer consuming never blocks another. Applies only to the federated path
+    // (requireExisting); the local write always overwrites, unchanged.
+    if (requireExisting && hasExisting && existing.executionOutcome && existing.executionAt) {
+      const storedMs = Date.parse(existing.executionAt);
+      if (Number.isFinite(storedMs) && Number.isFinite(executionAtMs) && executionAtMs <= storedMs) return false;
+    }
     const base = hasExisting
       ? existing
       : {
@@ -266,7 +284,7 @@ export async function recordProposalExecution({ appId, slug, scope = null, succe
       // the domain the completion hook passed (a missing-record fallback).
       scope: (typeof base.scope === 'string' && base.scope.trim()) ? base.scope : normScope,
       executionOutcome: success ? 'success' : 'failure',
-      executionAt: new Date(now).toISOString(),
+      executionAt: executionAtIso,
       // Set the failure diagnosis (#2764 §1) unconditionally so a success overwrites
       // any stale failure fields from a prior failed run that later re-ran and passed.
       failureCategory,
@@ -289,17 +307,20 @@ export async function recordProposalExecution({ appId, slug, scope = null, succe
  *
  * `requireExisting: true` — A only records for a proposal it actually FILED (it has the
  * li-outcomes record); a third full-sync peer that merely adopts the terminal task never
- * mints a stray record. Idempotency is owned by the CALLER (cosTaskStore.mergePeerTasks
- * only consumes on a non-terminal→terminal adoption, once per task), so a task re-syncing
- * doesn't re-record. Pure input validation (a hand-corrupt/foreign verdict is dropped);
- * best-effort like the sibling recorders (never throws into the merge path).
+ * mints a stray record. Idempotency is DURABLE and record-level: recordProposalExecution
+ * skips a verdict no newer than the stored executionAt, so mergePeerTasks can safely re-offer
+ * every terminal verdict on every sweep (surviving a crash between the task-file write and the
+ * consume, or an older peer that stored the terminal task before upgrading) while a re-sync
+ * stays a no-op and a genuinely re-executed hand-off (newer `executedAt`) still overwrites.
+ * Pure input validation (a hand-corrupt/foreign verdict is dropped); best-effort like the
+ * sibling recorders (never throws into the merge path).
  */
 export async function recordProposalExecutionFromVerdict(verdict, store = outcomesStore()) {
   if (!verdict || typeof verdict !== 'object' || Array.isArray(verdict)) return false;
-  const { appId, slug, scope = null, success, errorCategory = null, validationPassed = null } = verdict;
+  const { appId, slug, scope = null, success, errorCategory = null, validationPassed = null, executedAt = null } = verdict;
   if (typeof success !== 'boolean') return false;
   return recordProposalExecution(
-    { appId, slug, scope, success, errorCategory, validationPassed, requireExisting: true },
+    { appId, slug, scope, success, errorCategory, validationPassed, executedAt, requireExisting: true },
     store
   );
 }

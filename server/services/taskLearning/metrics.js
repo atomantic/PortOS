@@ -337,12 +337,19 @@ function deriveLiExecutionPayload(task, success, { errorCategory = null, validat
  * write. Returns null for a non-hand-off task (no `liProposal`) or a proposal missing its
  * (appId, slug) identity. Pure.
  *
+ * `executedAt` (ISO) stamps WHEN this execution completed. It rides the verdict so the
+ * originating peer's consume can be durably idempotent AND retry-correct: it records only
+ * when its li-outcomes record has no execution yet OR this verdict is NEWER than the stored
+ * one (a re-synced terminal task is a no-op; a genuinely re-executed hand-off overwrites,
+ * matching the local latest-wins). Defaults to now so a caller that omits it still gets a
+ * usable stamp.
+ *
  * @param {{ liProposal?:object|null, success?:boolean, validationPassed?:boolean|null,
- *           errorAnalysis?:{category?:string|null, origin?:string|null}|null }} args
+ *           errorAnalysis?:{category?:string|null, origin?:string|null}|null, executedAt?:string }} args
  * @returns {{ appId:string, slug:string, scope:string|null, success:boolean,
- *             errorCategory:string|null, validationPassed:boolean|null } | null}
+ *             errorCategory:string|null, validationPassed:boolean|null, executedAt:string } | null}
  */
-export function buildLiExecutionVerdict({ liProposal, success, validationPassed, errorAnalysis } = {}) {
+export function buildLiExecutionVerdict({ liProposal, success, validationPassed, errorAnalysis, executedAt } = {}) {
   if (!liProposal || typeof liProposal !== 'object' || Array.isArray(liProposal)) return null;
   if (!liProposal.appId || !liProposal.slug) return null;
   const vp = typeof validationPassed === 'boolean' ? validationPassed : null;
@@ -358,7 +365,8 @@ export function buildLiExecutionVerdict({ liProposal, success, validationPassed,
     scope: liProposal.scope ?? null,
     success: outcomeSuccess,
     errorCategory,
-    validationPassed: vp
+    validationPassed: vp,
+    executedAt: typeof executedAt === 'string' && executedAt ? executedAt : new Date().toISOString()
   };
 }
 

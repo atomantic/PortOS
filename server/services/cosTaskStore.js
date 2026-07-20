@@ -513,7 +513,7 @@ export async function reviveBlockedTask(taskId, { priority, metadata } = {}, tas
  * @returns {Promise<{ changed: boolean, count?: number }>}
  */
 export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now() } = {}) {
-  const { changed, count, merged, localTerminalIds } = await withStateLock(async () => {
+  const { changed, count, merged } = await withStateLock(async () => {
     const state = await loadState();
     const filePath = taskType === 'user'
       ? join(ROOT_DIR, state.config.userTasksFile)
@@ -528,38 +528,35 @@ export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now() }
     const includeApprovalFlags = taskType === 'internal';
     const localMarkdown = generateTasksMarkdown(localTasks, includeApprovalFlags);
     const mergedMarkdown = generateTasksMarkdown(merged, includeApprovalFlags);
-    // Nothing the peer sent changed our state — skip the write (and the event
-    // that would wake the scheduler) so a steady-state sweep is a pure no-op.
-    if (mergedMarkdown === localMarkdown) return { changed: false };
+    // Nothing the peer sent changed our state — skip the write (and the event that would
+    // wake the scheduler). `merged` is still returned so the post-lock LI-verdict consume
+    // (#2779) can run even on a no-op sweep — durability requires it (an old peer that
+    // stored a terminal verdict before upgrading, or a crash before a prior consume, leaves
+    // the task terminal with the merge producing no change, so a changed-only consume would
+    // never catch up). Re-offering is cheap: the consumer is a durable no-op after the first.
+    if (mergedMarkdown === localMarkdown) return { changed: false, merged };
 
     await writeFile(filePath, mergedMarkdown);
     cosEvents.emit('tasks:changed', { type: taskType, action: 'peer-merged' });
-    // Return the merged set + which local ids were ALREADY terminal so the post-lock
-    // LI-verdict consume (#2779) can spot non-terminal→terminal adoptions. Kept out of
-    // the lock — recordProposalExecution touches a different store (li-outcomes), and
-    // the LI import graph stays off cosTaskStore's static chain (lazy below).
-    const localTerminalIds = localTasks.filter(t => t && isTerminalTaskStatus(t.status)).map(t => t.id);
-    return { changed: true, count: merged.length, merged, localTerminalIds };
+    return { changed: true, count: merged.length, merged };
   });
 
-  // Post-lock, best-effort: derive recordProposalExecution from each hand-off task that
-  // this merge just ADOPTED into a terminal state carrying an LI execution verdict (#2779) —
-  // a task filed here but executed on a peer, whose terminal state (with the stamped
-  // LI_EXECUTION_VERDICT_KEY) has now synced back. The non-terminal→terminal transition is
-  // the idempotency guard: the next sweep sees the task already terminal locally and skips
-  // it, so a repeatedly-synced completion is consumed exactly once. `requireExisting` inside
-  // the consumer scopes the write to a proposal THIS peer filed, so a non-originating peer
-  // that also adopts the task is a no-op.
-  if (changed) {
-    const { LI_EXECUTION_VERDICT_KEY, recordProposalExecutionFromVerdict } = await import('./layeredIntelligenceOutcomes.js');
-    const alreadyTerminal = new Set(localTerminalIds);
-    const verdicts = merged
-      .filter(t => isTerminalTaskStatus(t?.status) && t?.metadata?.[LI_EXECUTION_VERDICT_KEY] && !alreadyTerminal.has(t.id))
-      .map(t => t.metadata[LI_EXECUTION_VERDICT_KEY]);
-    for (const verdict of verdicts) {
-      await recordProposalExecutionFromVerdict(verdict)
-        .catch(err => console.error(`❌ 📚 cosTaskStore: failed to consume LI execution verdict: ${err.message}`));
-    }
+  // Post-lock, best-effort: derive recordProposalExecution from every terminal hand-off task
+  // carrying an LI execution verdict (#2779) — a task filed here but executed on a peer, whose
+  // terminal state (with the stamped LI_EXECUTION_VERDICT_KEY) has synced back. Runs on EVERY
+  // sweep (changed or not); idempotency + retry-correctness are durable and record-level in the
+  // consumer (skips a verdict no newer than the stored execution), so re-offering the same
+  // verdict is a no-op while a genuinely re-executed hand-off overwrites. `requireExisting`
+  // there scopes the write to a proposal THIS peer filed, so a non-originating peer is a no-op.
+  // Kept out of the lock — recordProposalExecution touches a different store (li-outcomes) — and
+  // the LI import graph stays off cosTaskStore's static chain (lazy import).
+  const { LI_EXECUTION_VERDICT_KEY, recordProposalExecutionFromVerdict } = await import('./layeredIntelligenceOutcomes.js');
+  for (const task of merged || []) {
+    if (!isTerminalTaskStatus(task?.status)) continue;
+    const verdict = task?.metadata?.[LI_EXECUTION_VERDICT_KEY];
+    if (!verdict) continue;
+    await recordProposalExecutionFromVerdict(verdict)
+      .catch(err => console.error(`❌ 📚 cosTaskStore: failed to consume LI execution verdict: ${err.message}`));
   }
 
   return changed ? { changed, count } : { changed: false };

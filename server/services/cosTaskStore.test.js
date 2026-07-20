@@ -717,7 +717,7 @@ describe('cosTaskStore.mergePeerTasks', () => {
 
     beforeEach(() => { mock.liVerdicts = []; });
 
-    it('derives recordProposalExecution when a terminal hand-off verdict is newly adopted', async () => {
+    it('derives recordProposalExecution when a terminal hand-off verdict is adopted', async () => {
       // Peer A holds the task in_progress (it filed + handed it off); peer B executed it
       // and its terminal state syncs back carrying the stamped verdict.
       await addTask({ description: 'implement LI proposal', id: 'task-handoff', priority: 'HIGH' }, 'internal');
@@ -728,17 +728,18 @@ describe('cosTaskStore.mergePeerTasks', () => {
       expect(mock.liVerdicts[0]).toMatchObject({ appId: 'app-x', slug: 'add-metrics', success: true });
     });
 
-    it('consumes exactly once — a re-sync of the already-terminal task does not re-record', async () => {
+    it('re-offers the terminal verdict on EVERY sweep, including a no-op (durability replay, codex P2)', async () => {
+      // The consumer owns durable, record-level idempotency, so mergePeerTasks re-offers every
+      // terminal verdict each sweep — this catches a verdict a crash (or an old peer that stored
+      // the terminal task before upgrading) left unconsumed, which a changed-only consume would
+      // miss because the merge produces no change once the task is already terminal locally.
       await addTask({ description: 'implement LI proposal', id: 'task-handoff', priority: 'HIGH' }, 'internal');
-      await updateTask('task-handoff', { status: 'in_progress' }, 'internal');
-      await mergePeerTasks('internal', handoff('completed'), { now: NOW }); // adoption → consume
-      expect(mock.liVerdicts).toHaveLength(1);
+      await updateTask('task-handoff', { status: 'completed', metadata: { liExecution: verdict } }, 'internal');
       mock.liVerdicts = [];
-      // Re-sync the same completed task. The local copy is ALREADY terminal, so the
-      // non-terminal→terminal adoption never re-fires — the verdict is not re-consumed
-      // even if an unrelated re-serialization flips `changed`.
-      await mergePeerTasks('internal', handoff('completed'), { now: NOW });
-      expect(mock.liVerdicts).toHaveLength(0);
+      const res = await mergePeerTasks('internal', handoff('completed'), { now: NOW });
+      expect(res.changed).toBe(false); // already terminal locally → no file write
+      expect(mock.liVerdicts).toHaveLength(1); // …but the verdict is still re-offered
+      expect(mock.liVerdicts[0]).toMatchObject({ appId: 'app-x', slug: 'add-metrics' });
     });
 
     it('ignores a stale verdict on a NON-terminal synced task', async () => {

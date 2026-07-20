@@ -974,6 +974,44 @@ export function withOutputHookTimeout(promise, { agentId, timeoutMs = OUTPUT_HOO
 }
 
 /**
+ * Stamp an LI hand-off's per-proposal execution verdict into a completion `taskUpdate`'s
+ * federated metadata (#2779), mutating `taskUpdate.metadata` in place. Shared by every
+ * agent-completion path that marks an LI hand-off task terminal — finalizeAgent (the main
+ * path) AND the post-restart recovery path in handleAgentCompletion — so a hand-off that
+ * completes through a bypass still federates its outcome to the originating peer (codex P2);
+ * without this only finalizeAgent-completed hand-offs would ever reach peer A.
+ *
+ * `buildLiExecutionVerdict` reuses the exact validation-authoritative outcome + environmental
+ * gate the LOCAL #2765 write uses, so both peers record the identical verdict; a non-hand-off
+ * task (no `liProposal`) or an environmental completion yields null (no stamp). Best-effort
+ * and defensive (runs outside the request lifecycle): a lazy-import/build failure logs and
+ * leaves `taskUpdate` unstamped rather than throwing into the completion path. Lazy imports
+ * keep the taskLearning/LI graphs off agentLifecycle's static chain.
+ *
+ * @param {object} taskUpdate  the update object about to be passed to updateTask (mutated)
+ * @param {object} task        the persisted task (carries `metadata.liProposal` when a hand-off)
+ * @param {{ success:boolean, validationPassed?:boolean|null, errorAnalysis?:object|null }} signals
+ * @returns {Promise<object>} the same `taskUpdate` (stamped when applicable)
+ */
+async function stampLiExecutionVerdict(taskUpdate, task, { success, validationPassed = null, errorAnalysis = null } = {}) {
+  const liProposal = task?.metadata?.liProposal || null;
+  if (!liProposal) return taskUpdate;
+  try {
+    const [{ buildLiExecutionVerdict }, { LI_EXECUTION_VERDICT_KEY }] = await Promise.all([
+      import('./taskLearning/metrics.js'),
+      import('./layeredIntelligenceOutcomes.js')
+    ]);
+    const verdict = buildLiExecutionVerdict({ liProposal, success, validationPassed, errorAnalysis, executedAt: new Date().toISOString() });
+    if (verdict) {
+      taskUpdate.metadata = { ...(taskUpdate.metadata || {}), [LI_EXECUTION_VERDICT_KEY]: verdict };
+    }
+  } catch (err) {
+    emitLog('warn', `⚠️ Failed to stamp LI execution verdict for task ${task?.id}: ${err.message}`, { taskId: task?.id });
+  }
+  return taskUpdate;
+}
+
+/**
  * Shared end-of-run state writes for all three spawn paths
  * (`handleAgentCompletion` runner-mode, TUI `finish`, direct-CLI `close`).
  * Path-specific cleanup (worktree, sentinel removal, pty kill, in-memory
@@ -1080,26 +1118,12 @@ export async function finalizeAgent({
     await completeAgentRun(runId, outputBuffer, exitCode, duration, errorAnalysis);
   }
 
-  // LI hand-off execution verdict (#2779): stamp the per-proposal execution outcome
-  // into the task's FEDERATED metadata as part of this completion write, so the
-  // originating peer (which filed the proposal and runs LI for that app) can derive
-  // `recordProposalExecution` from the terminal synced task — cross-peer parity for the
-  // #2765 LOCAL write, which only lands on the peer that ran the agent. `buildLiExecutionVerdict`
-  // reuses the exact validation-authoritative outcome + environmental gate the local write
-  // uses, so both peers record the identical verdict; a non-hand-off/environmental completion
-  // yields null (no stamp). Lazy imports keep the taskLearning/LI graphs off finalize's
-  // static chain. `updateTask` merges metadata, so this composes with `taskUpdate`.
-  const liProposal = task?.metadata?.liProposal || null;
-  if (liProposal) {
-    const [{ buildLiExecutionVerdict }, { LI_EXECUTION_VERDICT_KEY }] = await Promise.all([
-      import('./taskLearning/metrics.js'),
-      import('./layeredIntelligenceOutcomes.js')
-    ]);
-    const verdict = buildLiExecutionVerdict({ liProposal, success, validationPassed, errorAnalysis });
-    if (verdict) {
-      taskUpdate.metadata = { ...(taskUpdate.metadata || {}), [LI_EXECUTION_VERDICT_KEY]: verdict };
-    }
-  }
+  // LI hand-off execution verdict (#2779): stamp the per-proposal execution outcome into
+  // the task's FEDERATED metadata as part of this completion write, so the originating peer
+  // (which filed the proposal and runs LI for that app) can derive `recordProposalExecution`
+  // from the terminal synced task — cross-peer parity for the #2765 LOCAL write, which only
+  // lands on the peer that ran the agent.
+  await stampLiExecutionVerdict(taskUpdate, task, { success, validationPassed, errorAnalysis });
 
   const taskResult = await updateTask(task.id, taskUpdate, taskType);
   if (taskResult?.error) {
@@ -1297,7 +1321,12 @@ export async function handleAgentCompletion(agentId, exitCode, success, duration
       const task = await getTaskById(cosAgent.taskId).catch(() => null);
       if (task && task.status !== 'completed') {
         if (success) {
-          await updateTask(cosAgent.taskId, { status: 'completed' }, task.taskType || 'user');
+          // Stamp the LI hand-off verdict here too (#2779, codex P2) — this post-restart
+          // recovery bypasses finalizeAgent, so without it a hand-off that finished while
+          // the server was down would never federate its outcome. Only `success` is known
+          // on this path (no validationPassed/errorAnalysis), so it records a clean success.
+          const taskUpdate = await stampLiExecutionVerdict({ status: 'completed' }, task, { success });
+          await updateTask(cosAgent.taskId, taskUpdate, task.taskType || 'user');
         } else {
           // Import handleOrphanedTask dynamically to avoid circular dep with agentManagement
           const { handleOrphanedTask } = await import('./agentManagement.js');
