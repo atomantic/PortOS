@@ -17,10 +17,11 @@
  *      and files a DRAFT through `messageDrafts.createDraft`. It NEVER auto-sends —
  *      the user reviews/approves/sends through the existing draft pipeline.
  *
- * The detection layer is source-agnostic: it works across every message source
- * that records `message.sent`/`message.received` activity events — Gmail/Outlook
- * (#2033), iMessage (#2151), Signal (#2154) — because it keys off the timeline,
- * not any one provider's cache.
+ * The detection layer is source-agnostic in shape but gated to sources whose
+ * ingestion records BOTH directions per conversation, so an "unanswered" verdict is
+ * trustworthy: iMessage (#2151) and Signal (#2154) source-wide, and Gmail (#2033)
+ * PER ACCOUNT once its sent mail is ingested as `message.sent` (#2796). See
+ * `buildTwoWayGate` for the per-account gate.
  */
 
 import { ServerError } from '../lib/errorHandler.js';
@@ -47,13 +48,72 @@ const MESSAGE_KINDS = new Set(['message.sent', 'message.received']);
 // retroactive backfill would need to re-read chat.db by rowid (macOS + Full Disk
 // Access only), so it's deliberately not attempted here.
 //
-// Sources whose ingestion records BOTH directions per conversation, so an
-// "unanswered" verdict is trustworthy. iMessage (#2151) and Signal (#2154) emit a
-// `message.sent` for every outgoing turn; email sync ingests the inbox only (no
-// `message.sent`), so a reply is invisible to the timeline and every stale inbound
-// would read as unanswered forever. Email/other one-way sources are deferred until
-// per-account sent/replied ingestion exists — see #2796.
-const TWO_WAY_SOURCES = new Set(['imessage', 'signal']);
+// Chat sources ingest BOTH directions per conversation intrinsically — iMessage
+// (#2151) and Signal (#2154) emit a `message.sent` for every outgoing turn — so an
+// "unanswered" verdict is always trustworthy regardless of which account it came
+// through. They are two-way source-wide.
+const TWO_WAY_CHAT_SOURCES = new Set(['imessage', 'signal']);
+
+// Email sources can ALSO be two-way, but only PER ACCOUNT (#2796). Gmail's API
+// sync gained an opt-out `syncConfig.ingestSent` (default on) that pulls `in:sent`
+// into the same cache the timeline ingest reads, so a replied thread cancels its
+// own inbound via the existing `lastSentT >= inbound` answered-check. The gate must
+// key on the specific accountId, NOT the source: a source-wide gate would let ONE
+// gmail account's sent import vouch for EVERY gmail account — including ones with no
+// sent evidence, whose every stale inbound would then read as unanswered forever.
+// Outlook/Teams ingest the inbox only (no sent-fetch path yet), so they stay
+// one-way until one is added — an inbound from them is never surfaced.
+const SENT_INGEST_SOURCES = new Set(['gmail']);
+
+/**
+ * Pure per-account two-way gate (unit-tested without a DB). Given the message-
+ * account list, returns the sources worth scanning and an `isTwoWay(event)`
+ * predicate. An email account counts as two-way only when ALL of:
+ *   - its provider has a sent-ingest path (`SENT_INGEST_SOURCES`);
+ *   - it isn't opted out (`syncConfig.ingestSent !== false` — absent means the
+ *     default-on capability);
+ *   - it has an owner email set (sent-vs-received direction needs it — see
+ *     `messageActivityCandidates`; without it no `message.sent` events are produced,
+ *     so every inbound would read as unanswered);
+ *   - it is enabled (a disabled account never syncs, so its sent history never
+ *     updates — trusting it would nudge on stale/absent reply evidence);
+ *   - it has a RECENT sent-ingest watermark (`sentIngestedAt` within `coverageMs`).
+ *     This is the reliability guard: an account default-on at upgrade, or one whose
+ *     OAuth/sync has been failing, has no current sent evidence — trusting it on
+ *     config alone would produce false "unanswered" nudges for already-replied
+ *     threads. `coverageMs` defaults to Infinity (presence-only) for pure tests; the
+ *     real caller passes the detection window.
+ *
+ * @param {Array} accounts message-account records ({ id, type, email, enabled, syncConfig, sentIngestedAt })
+ * @param {{ now?: number, coverageMs?: number }} opts staleness bound for the watermark
+ * @returns {{ sources: string[], isTwoWay: (ev: object) => boolean }}
+ */
+export function buildTwoWayGate(accounts = [], { now = Date.now(), coverageMs = Infinity } = {}) {
+  const twoWayEmailAccountIds = new Set(
+    (accounts || [])
+      .filter((a) => {
+        if (!SENT_INGEST_SOURCES.has(a?.type)) return false;
+        if (a?.syncConfig?.ingestSent === false) return false;
+        if (String(a?.email || '').trim() === '') return false;
+        if (a?.enabled === false) return false;
+        const at = Date.parse(a?.sentIngestedAt);
+        if (Number.isNaN(at)) return false; // never successfully ingested sent mail
+        return (now - at) <= coverageMs; // stale watermark → coverage can't be trusted
+      })
+      .map((a) => a.id)
+  );
+  // Only scan an email source when at least one of its accounts is two-way — a
+  // one-way-only provider is never queried, so a high-volume inbox can't burn the
+  // per-source 2000-row cap on data we'd discard anyway.
+  const sources = new Set(TWO_WAY_CHAT_SOURCES);
+  for (const a of accounts || []) {
+    if (twoWayEmailAccountIds.has(a?.id)) sources.add(a.type);
+  }
+  const isTwoWay = (ev) =>
+    TWO_WAY_CHAT_SOURCES.has(ev?.source) ||
+    (ev?.accountId != null && twoWayEmailAccountIds.has(ev.accountId));
+  return { sources: [...sources], isTwoWay };
+}
 
 // Channel-appropriate reply prompt for chat outreach — generateReplyBody's default
 // template is email-toned ("Write a professional reply to this email"), which reads
@@ -61,6 +121,19 @@ const TWO_WAY_SOURCES = new Set(['imessage', 'signal']);
 // resolves the {{#instructions}} conditional block, so any caller-supplied guidance
 // actually reaches the model (the default template omits it and drops it silently).
 const OUTREACH_CHAT_TEMPLATE = 'Write a brief, warm, casual reply to reconnect over a text message. Keep it short and personal — no email subject line, no formal salutation or sign-off.{{#instructions}}\n\nAdditional guidance: {{instructions}}{{/instructions}}\n\nFrom: {{from}}\nTheir message:\n{{body}}';
+
+// Channel-appropriate reply prompt for EMAIL outreach (#2796). Email threads can now
+// reach draft generation, and the chat template above explicitly forbids a salutation/
+// sign-off — wrong for email. This one asks for a natural greeting + sign-off while
+// staying warm and concise, and (like the chat one) resolves the {{#instructions}}
+// block so caller guidance reaches the model (the default template drops it silently).
+const OUTREACH_EMAIL_TEMPLATE = 'Write a brief, warm, personal email reply to reconnect. Keep it genuine and concise, with a natural greeting and a friendly sign-off.{{#instructions}}\n\nAdditional guidance: {{instructions}}{{/instructions}}\n\nFrom: {{from}}\nTheir message:\n{{body}}';
+
+// Chat sources are the two-way messaging apps; everything else here is email-shaped.
+// Picks the channel-appropriate outreach reply template.
+export function outreachTemplateForSource(source) {
+  return TWO_WAY_CHAT_SOURCES.has(source) ? OUTREACH_CHAT_TEMPLATE : OUTREACH_EMAIL_TEMPLATE;
+}
 
 // A conversation is keyed by the most specific stable identifier available:
 // chatGuid (iMessage), conversationId (Signal — its outbound turns carry no
@@ -175,21 +248,30 @@ export async function findUnansweredTribeThreads({
   staleAfterHours = DEFAULT_STALE_HOURS,
   limit = DEFAULT_LIMIT,
 } = {}) {
-  const [{ listEvents }, { loadResolverContext, enrichActivityEvent }] = await Promise.all([
+  const [{ listEvents }, { loadResolverContext, enrichActivityEvent }, { listAccounts }] = await Promise.all([
     import('./humanActivity.js'),
     import('./identityResolve.js'),
+    import('./messageAccounts.js'),
   ]);
 
   const ctx = await loadResolverContext().catch(() => null);
   if (!ctx) return [];
+  const now = Date.now();
+  const withinMs = withinDays * DAY_MS;
+  // Per-account two-way gate: which sources to scan, and which inbound events are
+  // trustworthy (chat source-wide, email only from sent-ingesting accounts whose
+  // reply-evidence watermark covers the detection window).
+  const { sources: twoWaySources, isTwoWay } = buildTwoWayGate(
+    await listAccounts().catch(() => []),
+    { now, coverageMs: withinMs }
+  );
   const ringById = new Map((ctx.people || []).map((p) => [p.id, p.ring]));
   const nameById = new Map((ctx.people || []).map((p) => [p.id, p.name]));
   // No non-external Tribe people → nothing to nudge about; skip the timeline scan.
   const hasTribe = (ctx.people || []).some((p) => p.ring && p.ring !== 'external');
   if (!hasTribe) return [];
 
-  const now = Date.now();
-  const from = new Date(now - withinDays * DAY_MS).toISOString();
+  const from = new Date(now - withinMs).toISOString();
   // Query each two-way source × kind separately, each with its own 2000-row cap.
   // A single shared query would let a high-volume source (e.g. thousands of
   // imported email events) fill the newest-2000 slice and push older iMessage /
@@ -197,7 +279,7 @@ export async function findUnansweredTribeThreads({
   // mark a thread answered.
   const received = [];
   const sent = [];
-  await Promise.all([...TWO_WAY_SOURCES].map((src) =>
+  await Promise.all(twoWaySources.map((src) =>
     // Fail CLOSED per source: if EITHER direction's query fails, drop this source's
     // turns entirely. Substituting [] for only the failed direction would leave
     // received without its sent counterpart, making every inbound look unanswered
@@ -222,10 +304,15 @@ export async function findUnansweredTribeThreads({
 
   // Drop Tapbacks/reactions from both directions — a reaction is not a message
   // awaiting a reply (it must not anchor an "unanswered" thread), and a sent
-  // reaction is not a real reply (it must not mark a thread answered).
-  const tagged = sent.filter((ev) => !ev.metadata?.isReaction);
+  // reaction is not a real reply (it must not mark a thread answered). Also drop any
+  // event from a non-two-way account: querying source `gmail` returns events from
+  // ALL gmail accounts, but only the sent-ingesting ones are trustworthy — a reply
+  // from a one-way account is invisible, so its inbound must not surface (and its
+  // sent turns, if any lingered, must not vouch for another account's thread).
+  const tagged = sent.filter((ev) => !ev.metadata?.isReaction && isTwoWay(ev));
   for (const ev of received) {
     if (ev.metadata?.isReaction) continue;
+    if (!isTwoWay(ev)) continue;
     // Scope to 1:1 conversations — a chat with more than one counterpart is a
     // group, where "you never replied" rarely means a personal obligation and
     // multi-sender turns can't be cleanly attributed or anchored. A 1:1 chat's
@@ -245,7 +332,7 @@ export async function findUnansweredTribeThreads({
   const threads = groupUnansweredThreads(tagged, {
     now,
     staleAfterMs: staleAfterHours * HOUR_MS,
-    withinMs: withinDays * DAY_MS,
+    withinMs,
   });
   return threads.slice(0, Math.max(0, limit));
 }
@@ -276,9 +363,11 @@ const inflightOutreach = new Map();
  * it through the existing draft-then-approve pipeline. USER-ACTION-GATED: only ever
  * called from an explicit request (the Tribe Outreach panel / an opt-in automation)
  * — it is the single LLM entry point here and must never be wired into a boot/sweep
- * path. Detection only surfaces the two-way chat sources (iMessage/Signal), which
- * carry no message account and no programmatic send channel, so the draft is always
- * grounded from the timeline and filed as review-only — never auto-sent.
+ * path. Detection surfaces the two-way sources — chat (iMessage/Signal) plus
+ * sent-ingesting Gmail accounts (#2796) — grounding the reply from the timeline by
+ * the detected conversation key (chatGuid / conversationId / threadId / handle). The
+ * draft is always filed as review-only (`sendVia: 'review'`) — never auto-sent, even
+ * for email, which the user approves/sends through the existing draft pipeline.
  *
  * @returns {Promise<{ draft, person: { id, name } | null }>}
  */
@@ -392,7 +481,9 @@ async function generateOutreachDraftImpl({
   const aiResult = await generateReplyBody(replyTo, instructions, {
     useVoice,
     threadMessages,
-    templateOverride: OUTREACH_CHAT_TEMPLATE,
+    // Channel-appropriate template: casual/no-signoff for chat, greeting+signoff for
+    // email (Gmail threads now reach here via #2796).
+    templateOverride: outreachTemplateForSource(source),
   }).catch((err) => {
     console.error(`❌ Outreach draft generation failed: ${err.message}`);
     return null;

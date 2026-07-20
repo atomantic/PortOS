@@ -174,6 +174,27 @@ describe('messageActivityCandidates', () => {
     expect(messageActivityCandidates(account, [{ subject: 'no date' }])).toEqual([]);
     expect(messageActivityCandidates(account, [{ date: '2026-07-04T10:00:00Z' }])).toEqual([]);
   });
+  it('sets metadata.handle to the sender email on received mail so the Tribe sender resolves (#2796)', () => {
+    // enrichActivityEvent derives the top-level personId from metadata.handle; without
+    // it, every email inbound is dropped and Tribe-outreach detection surfaces nothing.
+    const [received, sent] = messageActivityCandidates(account, [
+      { externalId: 'e1', date: '2026-07-04T10:00:00Z', from: 'friend@x.io', to: ['me@example.com'], subject: 'Hey' },
+      { externalId: 'e2', date: '2026-07-04T11:00:00Z', from: 'me@example.com', to: ['friend@x.io'], subject: 'Re: Hey' },
+    ]);
+    expect(received.metadata.handle).toBe('friend@x.io');
+    // Sent turns carry no counterpart handle (mirrors iMessage); email groups by threadId.
+    expect(sent.metadata.handle).toBeNull();
+  });
+  it('classifies a reply as sent via the Gmail SENT label even from a send-as alias (#2796)', () => {
+    // From (alias@example.com) != account owner (me@example.com), but the SENT label
+    // is authoritative — without it the reply is misclassified received and never
+    // cancels its inbound.
+    const [c] = messageActivityCandidates(account, [
+      { externalId: 'e9', date: '2026-07-04T12:00:00Z', from: 'alias@example.com', to: ['friend@x.io'], subject: 'Re: Hey', labels: ['SENT'] },
+    ]);
+    expect(c.kind).toBe('message.sent');
+    expect(c.metadata.handle).toBeNull();
+  });
 });
 
 describe('calendarActivityCandidates', () => {

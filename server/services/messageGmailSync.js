@@ -13,6 +13,48 @@ function makeExternalId(gmailId) {
   return 'api-gmail-' + crypto.createHash('md5').update(gmailId).digest('hex').slice(0, 12);
 }
 
+// How far back to pull sent mail when reply-detection ingestion is on. Must stay
+// >= tribeOutreach's DEFAULT_WITHIN_DAYS (14) — a reply older than the detection
+// window can't answer an inbound that's still actionable, so no need to ingest it;
+// but if this were SHORTER than the window, a reply inside the window would be
+// missed and its inbound would falsely read as unanswered. The coupling is pinned
+// by a test in messageGmailSync.test.js.
+export const SENT_INGEST_DAYS = 14;
+
+// Sent mail gets its OWN fetch budget (a separate list pass), never a share of the
+// inbox cap — sent is activity-only and must not crowd inbox out of the primary
+// sync. This also bounds the per-sync detail-fetch cost (sent isn't cached, so it's
+// re-fetched each sync). 14 days of a normal person's replies fit under this; a
+// heavier sender whose replies fall beyond it is a filed follow-up (full date-bounded
+// pagination / fail-closed) — see the issue linked from the changelog.
+export const SENT_INGEST_MAX = 100;
+
+// The inbox search query for a sync mode. `unread` scopes to unread inbox; `full`
+// takes the whole inbox (capped downstream).
+export function inboxQuery(mode) {
+  return mode === 'unread' ? 'is:unread in:inbox' : 'in:inbox';
+}
+
+// Recent sent mail — no unread state, bounded by date instead. Ingested so it lands
+// in the same cache the human-activity timeline reads, recording `message.sent`
+// events that let Tribe-outreach detection see a Gmail thread as replied (#2796).
+export function sentQuery() {
+  return `in:sent newer_than:${SENT_INGEST_DAYS}d`;
+}
+
+/**
+ * The ordered (query, cap) list-passes for one Gmail sync. Inbox always runs with
+ * the full `inboxCap`; recent sent mail runs as a SEPARATE pass with its own
+ * `SENT_INGEST_MAX` budget when the account opts into reply-detection ingestion
+ * (the per-account default, opt out via `syncConfig.ingestSent === false`). Separate
+ * passes mean sent volume never crowds the inbox out of a shared cap.
+ */
+export function gmailSyncPasses(mode, ingestSent, inboxCap) {
+  const passes = [{ query: inboxQuery(mode), cap: inboxCap }];
+  if (ingestSent) passes.push({ query: sentQuery(), cap: SENT_INGEST_MAX });
+  return passes;
+}
+
 function getHeader(headers, name) {
   return headers?.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
 }
@@ -122,28 +164,43 @@ export async function syncGmail(account, cache, io, options = {}) {
 
   const gmailClient = gmail({ version: 'v1', auth });
   const maxMessages = mode === 'full' ? 200 : 100;
-  const query = mode === 'unread' ? 'is:unread in:inbox' : 'in:inbox';
+  // Ingest sent mail unless the account explicitly opted out — the default-on
+  // capability powers per-account Tribe-outreach reply detection (#2796).
+  const ingestSent = account?.syncConfig?.ingestSent !== false;
+  const passes = gmailSyncPasses(mode, ingestSent, maxMessages);
+  const totalCap = passes.reduce((sum, p) => sum + p.cap, 0);
 
-  console.log(`📧 Gmail API sync (${mode}) for ${account.email}`);
+  console.log(`📧 Gmail API sync (${mode}${ingestSent ? '+sent' : ''}) for ${account.email}`);
 
-  // Step 1: List message IDs
+  // Step 1: List message IDs — one pass per (query, cap). Dedupe across passes by
+  // gmail id (a thread can appear in both inbox and sent) so a message is fetched
+  // and recorded once.
   const messageIds = [];
-  let pageToken = null;
+  const seenGmailIds = new Set();
 
-  do {
-    io?.emit('messages:sync:progress', { accountId: account.id, current: messageIds.length, total: maxMessages });
+  for (const pass of passes) {
+    let pageToken = null;
+    let fetched = 0;
+    do {
+      io?.emit('messages:sync:progress', { accountId: account.id, current: messageIds.length, total: totalCap });
 
-    const listResult = await gmailClient.users.messages.list({
-      userId: 'me',
-      q: query,
-      maxResults: Math.min(100, maxMessages - messageIds.length),
-      ...(pageToken && { pageToken })
-    });
+      const listResult = await gmailClient.users.messages.list({
+        userId: 'me',
+        q: pass.query,
+        maxResults: Math.min(100, pass.cap - fetched),
+        ...(pageToken && { pageToken })
+      });
 
-    const items = listResult.data.messages || [];
-    messageIds.push(...items);
-    pageToken = listResult.data.nextPageToken;
-  } while (pageToken && messageIds.length < maxMessages);
+      const items = listResult.data.messages || [];
+      fetched += items.length;
+      for (const item of items) {
+        if (seenGmailIds.has(item.id)) continue;
+        seenGmailIds.add(item.id);
+        messageIds.push(item);
+      }
+      pageToken = listResult.data.nextPageToken;
+    } while (pageToken && fetched < pass.cap);
+  }
 
   console.log(`📧 Gmail: found ${messageIds.length} message IDs, fetching details`);
 
@@ -199,12 +256,27 @@ export async function syncGmail(account, cache, io, options = {}) {
     }
   }
 
-  if (io && messages.length > 0) {
-    io.emit('messages:sync:message', { accountId: account.id, messages });
+  // Split inbox vs sent: sent mail is ingested ONLY for the human-activity timeline
+  // (reply detection, #2796) — it must NOT enter the inbox cache, or it would show
+  // up in /api/messages/inbox, run through triage/eval, and compete with real inbox
+  // mail under the maxMessages trim (which could evict a message before its activity
+  // is recorded). A message the user sent carries Gmail's SENT label and no INBOX
+  // label; anything with INBOX (including a self-addressed SENT+INBOX message) stays
+  // inbox. syncAccount records sent activity from `sentMessages` separately.
+  const inboxMessages = [];
+  const sentMessages = [];
+  for (const m of messages) {
+    const lbl = m.labels || [];
+    if (lbl.includes('SENT') && !lbl.includes('INBOX')) sentMessages.push(m);
+    else inboxMessages.push(m);
   }
 
-  console.log(`📧 Gmail API sync complete: ${messages.length} messages fetched`);
-  return { messages, status: 'success', syncMethod: 'api' };
+  if (io && inboxMessages.length > 0) {
+    io.emit('messages:sync:message', { accountId: account.id, messages: inboxMessages });
+  }
+
+  console.log(`📧 Gmail API sync complete: ${inboxMessages.length} inbox, ${sentMessages.length} sent (activity-only)`);
+  return { messages: inboxMessages, sentMessages, status: 'success', syncMethod: 'api' };
 }
 
 /**

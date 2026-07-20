@@ -41,7 +41,13 @@ export async function createAccount(data) {
     syncConfig: {
       maxAge: data.syncConfig?.maxAge || '30d',
       maxMessages: data.syncConfig?.maxMessages || 500,
-      syncInterval: data.syncConfig?.syncInterval || 300000
+      syncInterval: data.syncConfig?.syncInterval || 300000,
+      // Ingest sent mail into the human-activity timeline as `message.sent` events
+      // so Tribe-outreach reply detection can see a thread as answered (#2796).
+      // Only Gmail has a sent-fetch path today; default it on there, off elsewhere.
+      // Absent (existing accounts) is treated as on for Gmail by the readers, so a
+      // migration isn't needed — this only makes new accounts' stored state explicit.
+      ingestSent: data.syncConfig?.ingestSent ?? (data.type === 'gmail')
     },
     lastSyncAt: null,
     lastSyncStatus: null,
@@ -79,6 +85,18 @@ export async function updateSyncStatus(id, status) {
   if (!accounts[id]) return null;
   accounts[id].lastSyncAt = new Date().toISOString();
   accounts[id].lastSyncStatus = status;
+  await saveAccounts(accounts);
+  return accounts[id];
+}
+
+// Stamp the reply-detection watermark (#2796): the last time this account
+// successfully ingested sent mail into the activity timeline. The Tribe-outreach
+// detector trusts an account as two-way only when this is set and recent, so an
+// account is never trusted before its sent history actually exists.
+export async function markSentIngested(id, at = new Date().toISOString()) {
+  const accounts = await loadAccounts();
+  if (!accounts[id]) return null;
+  accounts[id].sentIngestedAt = at;
   await saveAccounts(accounts);
   return accounts[id];
 }

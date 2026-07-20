@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-import { groupUnansweredThreads, generateOutreachDraft } from './tribeOutreach.js';
+import { groupUnansweredThreads, generateOutreachDraft, buildTwoWayGate, outreachTemplateForSource } from './tribeOutreach.js';
 
 // generateOutreachDraft dynamically imports these — mock them so the draft-side
 // logic (idempotent reuse, anchoring the reply to the detected inbound) is
@@ -158,6 +158,86 @@ describe('groupUnansweredThreads', () => {
   it('drops events with unparseable timestamps without throwing', () => {
     const out = groupUnansweredThreads([inbound({ happenedAt: 'not-a-date' })], WINDOW);
     expect(out).toHaveLength(0);
+  });
+});
+
+describe('buildTwoWayGate (per-account #2796)', () => {
+  const NOW = Date.parse('2026-07-18T12:00:00Z');
+  const recent = new Date(NOW - 3600000).toISOString(); // 1h ago — fresh watermark
+  const OPTS = { now: NOW, coverageMs: 14 * 86400000 };
+  // A trustworthy Gmail account: email set, enabled, sent-ingest on, recent watermark.
+  const gmail = (over) => ({ id: 'g1', type: 'gmail', email: 'me@example.com', enabled: true, syncConfig: {}, sentIngestedAt: recent, ...over });
+
+  it('chat sources are always two-way, no account needed', () => {
+    const { sources, isTwoWay } = buildTwoWayGate([], OPTS);
+    expect(sources).toEqual(expect.arrayContaining(['imessage', 'signal']));
+    expect(isTwoWay({ source: 'imessage' })).toBe(true);
+    expect(isTwoWay({ source: 'signal', accountId: null })).toBe(true);
+  });
+
+  it('a Gmail account with email, default ingestSent, and a recent watermark is two-way', () => {
+    const { sources, isTwoWay } = buildTwoWayGate([gmail()], OPTS);
+    expect(sources).toContain('gmail');
+    expect(isTwoWay({ source: 'gmail', accountId: 'g1' })).toBe(true);
+  });
+
+  it('opting a Gmail account out (ingestSent:false) drops it from the gate', () => {
+    const { sources, isTwoWay } = buildTwoWayGate([gmail({ syncConfig: { ingestSent: false } })], OPTS);
+    expect(sources).not.toContain('gmail');
+    expect(isTwoWay({ source: 'gmail', accountId: 'g1' })).toBe(false);
+  });
+
+  it('a Gmail account with no owner email is NOT two-way (sent direction underivable)', () => {
+    expect(buildTwoWayGate([gmail({ email: '' })], OPTS).isTwoWay({ source: 'gmail', accountId: 'g1' })).toBe(false);
+  });
+
+  it('a disabled Gmail account is NOT two-way (its sent history never syncs)', () => {
+    expect(buildTwoWayGate([gmail({ enabled: false })], OPTS).isTwoWay({ source: 'gmail', accountId: 'g1' })).toBe(false);
+  });
+
+  it('a Gmail account with NO sent-ingest watermark is NOT two-way (upgrade/first-sync window)', () => {
+    // Default-on at upgrade but no sync yet → no reply evidence → must not be trusted.
+    expect(buildTwoWayGate([gmail({ sentIngestedAt: undefined })], OPTS).isTwoWay({ source: 'gmail', accountId: 'g1' })).toBe(false);
+  });
+
+  it('a STALE watermark (older than the detection window) drops the account (sync failing)', () => {
+    const stale = new Date(NOW - 20 * 86400000).toISOString(); // 20d ago > 14d window
+    expect(buildTwoWayGate([gmail({ sentIngestedAt: stale })], OPTS).isTwoWay({ source: 'gmail', accountId: 'g1' })).toBe(false);
+  });
+
+  it('does NOT let one Gmail account vouch for another (per-account, not source-wide)', () => {
+    // g1 ingests sent; g2 opted out. Both are source `gmail`, but only g1's events
+    // are trustworthy — a source-wide gate would wrongly trust g2's inbound too.
+    const gate = buildTwoWayGate([
+      gmail({ id: 'g1' }),
+      gmail({ id: 'g2', email: 'other@example.com', syncConfig: { ingestSent: false } }),
+    ], OPTS);
+    expect(gate.sources).toContain('gmail'); // scanned because g1 is two-way
+    expect(gate.isTwoWay({ source: 'gmail', accountId: 'g1' })).toBe(true);
+    expect(gate.isTwoWay({ source: 'gmail', accountId: 'g2' })).toBe(false);
+  });
+
+  it('Outlook is never two-way (no sent-fetch path yet), even with ingestSent:true', () => {
+    const { sources, isTwoWay } = buildTwoWayGate([
+      { id: 'o1', type: 'outlook', email: 'me@example.com', enabled: true, syncConfig: { ingestSent: true }, sentIngestedAt: recent },
+    ], OPTS);
+    expect(sources).not.toContain('outlook');
+    expect(isTwoWay({ source: 'outlook', accountId: 'o1' })).toBe(false);
+  });
+});
+
+describe('outreachTemplateForSource (#2796)', () => {
+  it('uses a no-signoff casual template for chat sources', () => {
+    const t = outreachTemplateForSource('imessage');
+    expect(t).toContain('text message');
+    expect(t).toContain('no formal salutation or sign-off');
+    expect(outreachTemplateForSource('signal')).toBe(t);
+  });
+  it('uses a greeting+signoff email template for Gmail (not the chat template)', () => {
+    const t = outreachTemplateForSource('gmail');
+    expect(t).toContain('email reply');
+    expect(t).toContain('sign-off');
+    expect(t).not.toContain('no formal salutation');
   });
 });
 
