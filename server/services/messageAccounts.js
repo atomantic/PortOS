@@ -41,7 +41,13 @@ export async function createAccount(data) {
     syncConfig: {
       maxAge: data.syncConfig?.maxAge || '30d',
       maxMessages: data.syncConfig?.maxMessages || 500,
-      syncInterval: data.syncConfig?.syncInterval || 300000
+      syncInterval: data.syncConfig?.syncInterval || 300000,
+      // Ingest sent mail into the human-activity timeline as `message.sent` events
+      // so Tribe-outreach reply detection can see a thread as answered (#2796).
+      // Only Gmail has a sent-fetch path today; default it on there, off elsewhere.
+      // Absent (existing accounts) is treated as on for Gmail by the readers, so a
+      // migration isn't needed — this only makes new accounts' stored state explicit.
+      ingestSent: data.syncConfig?.ingestSent ?? (data.type === 'gmail')
     },
     lastSyncAt: null,
     lastSyncStatus: null,

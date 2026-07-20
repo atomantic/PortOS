@@ -174,6 +174,22 @@ export default function ConfigTab({ accounts, setAccounts }) {
     setAccounts(prev => prev.map(a => a.id === account.id ? { ...a, enabled: !a.enabled } : a));
   };
 
+  // Per-account reply detection: ingest sent mail so Tribe-outreach won't nudge an
+  // already-replied thread (#2796). Default-on for Gmail (absent === on).
+  const handleToggleIngestSent = async (account) => {
+    const next = account.syncConfig?.ingestSent === false; // flipping to enabled
+    const result = await api.updateMessageAccount(
+      account.id,
+      { syncConfig: { ...account.syncConfig, ingestSent: next } },
+      { silent: true }
+    ).catch(() => null);
+    if (!result) return toast.error('Failed to update account');
+    toast.success(next ? 'Reply detection enabled' : 'Reply detection disabled');
+    setAccounts(prev => prev.map(a => a.id === account.id
+      ? { ...a, syncConfig: { ...a.syncConfig, ingestSent: next } }
+      : a));
+  };
+
   const handleClearCache = async (accountId) => {
     if (confirmClear !== accountId) {
       setConfirmClear(accountId);
@@ -355,6 +371,19 @@ export default function ConfigTab({ accounts, setAccounts }) {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  {account.type === 'gmail' && (
+                    <button
+                      onClick={() => handleToggleIngestSent(account)}
+                      className={`px-2 py-1 rounded text-xs transition-colors ${
+                        account.syncConfig?.ingestSent !== false
+                          ? 'bg-port-accent/20 text-port-accent'
+                          : 'bg-gray-700 text-gray-400'
+                      }`}
+                      title="Ingest sent mail so Tribe outreach won't nudge threads you've already replied to"
+                    >
+                      {account.syncConfig?.ingestSent !== false ? 'Reply detection: on' : 'Reply detection: off'}
+                    </button>
+                  )}
                   <button
                     onClick={() => handleToggle(account)}
                     className={`px-2 py-1 rounded text-xs transition-colors ${

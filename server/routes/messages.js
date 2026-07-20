@@ -28,7 +28,9 @@ const createAccountSchema = z.object({
   syncConfig: z.object({
     maxAge: z.string().optional(),
     maxMessages: z.number().int().positive().optional(),
-    syncInterval: z.number().int().positive().optional()
+    syncInterval: z.number().int().positive().optional(),
+    // Per-account reply-detection ingestion (Gmail sent mail → timeline). #2796.
+    ingestSent: z.boolean().optional()
   }).optional()
 });
 
@@ -39,7 +41,9 @@ const updateAccountSchema = z.object({
   syncConfig: z.object({
     maxAge: z.string().optional(),
     maxMessages: z.number().int().positive().optional(),
-    syncInterval: z.number().int().positive().optional()
+    syncInterval: z.number().int().positive().optional(),
+    // Per-account reply-detection ingestion (Gmail sent mail → timeline). #2796.
+    ingestSent: z.boolean().optional()
   }).optional()
 });
 

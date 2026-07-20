@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-import { groupUnansweredThreads, generateOutreachDraft } from './tribeOutreach.js';
+import { groupUnansweredThreads, generateOutreachDraft, buildTwoWayGate } from './tribeOutreach.js';
 
 // generateOutreachDraft dynamically imports these — mock them so the draft-side
 // logic (idempotent reuse, anchoring the reply to the detected inbound) is
@@ -158,6 +158,54 @@ describe('groupUnansweredThreads', () => {
   it('drops events with unparseable timestamps without throwing', () => {
     const out = groupUnansweredThreads([inbound({ happenedAt: 'not-a-date' })], WINDOW);
     expect(out).toHaveLength(0);
+  });
+});
+
+describe('buildTwoWayGate (per-account #2796)', () => {
+  const gmail = (over) => ({ id: 'g1', type: 'gmail', email: 'me@example.com', syncConfig: {}, ...over });
+
+  it('chat sources are always two-way, no account needed', () => {
+    const { sources, isTwoWay } = buildTwoWayGate([]);
+    expect(sources).toEqual(expect.arrayContaining(['imessage', 'signal']));
+    expect(isTwoWay({ source: 'imessage' })).toBe(true);
+    expect(isTwoWay({ source: 'signal', accountId: null })).toBe(true);
+  });
+
+  it('a Gmail account with an email and default (absent) ingestSent is two-way', () => {
+    const { sources, isTwoWay } = buildTwoWayGate([gmail()]);
+    expect(sources).toContain('gmail');
+    expect(isTwoWay({ source: 'gmail', accountId: 'g1' })).toBe(true);
+  });
+
+  it('opting a Gmail account out (ingestSent:false) drops it from the gate', () => {
+    const { sources, isTwoWay } = buildTwoWayGate([gmail({ syncConfig: { ingestSent: false } })]);
+    expect(sources).not.toContain('gmail');
+    expect(isTwoWay({ source: 'gmail', accountId: 'g1' })).toBe(false);
+  });
+
+  it('a Gmail account with no owner email is NOT two-way (sent direction underivable)', () => {
+    const { isTwoWay } = buildTwoWayGate([gmail({ email: '' })]);
+    expect(isTwoWay({ source: 'gmail', accountId: 'g1' })).toBe(false);
+  });
+
+  it('does NOT let one Gmail account vouch for another (per-account, not source-wide)', () => {
+    // g1 ingests sent; g2 opted out. Both are source `gmail`, but only g1's events
+    // are trustworthy — a source-wide gate would wrongly trust g2's inbound too.
+    const gate = buildTwoWayGate([
+      gmail({ id: 'g1' }),
+      gmail({ id: 'g2', email: 'other@example.com', syncConfig: { ingestSent: false } }),
+    ]);
+    expect(gate.sources).toContain('gmail'); // scanned because g1 is two-way
+    expect(gate.isTwoWay({ source: 'gmail', accountId: 'g1' })).toBe(true);
+    expect(gate.isTwoWay({ source: 'gmail', accountId: 'g2' })).toBe(false);
+  });
+
+  it('Outlook is never two-way (no sent-fetch path yet), even with ingestSent:true', () => {
+    const { sources, isTwoWay } = buildTwoWayGate([
+      { id: 'o1', type: 'outlook', email: 'me@example.com', syncConfig: { ingestSent: true } },
+    ]);
+    expect(sources).not.toContain('outlook');
+    expect(isTwoWay({ source: 'outlook', accountId: 'o1' })).toBe(false);
   });
 });
 

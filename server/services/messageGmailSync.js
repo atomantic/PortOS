@@ -13,6 +13,27 @@ function makeExternalId(gmailId) {
   return 'api-gmail-' + crypto.createHash('md5').update(gmailId).digest('hex').slice(0, 12);
 }
 
+// How far back to pull sent mail when reply-detection ingestion is on. Bounds the
+// sent-folder fetch to the Tribe-outreach detection window (DEFAULT_WITHIN_DAYS=14
+// in tribeOutreach.js) so a large sent folder can't crowd out inbox results — sent
+// mail older than the window can't answer an inbound that's still actionable.
+export const SENT_INGEST_DAYS = 14;
+
+/**
+ * Build the Gmail search query. Inbox is always fetched; when `ingestSent` is on
+ * (the per-account default, opt out via `syncConfig.ingestSent === false`) recent
+ * sent mail is ALSO fetched so it lands in the same cache the human-activity
+ * timeline ingests — recording `message.sent` events that let Tribe-outreach
+ * detection see a Gmail thread as replied (#2796). `unread` mode still only scopes
+ * the INBOX half to unread; sent mail has no unread state and is bounded by
+ * `newer_than` instead.
+ */
+export function buildGmailQuery(mode, ingestSent) {
+  const inbox = mode === 'unread' ? 'is:unread in:inbox' : 'in:inbox';
+  if (!ingestSent) return inbox;
+  return `(${inbox}) OR (in:sent newer_than:${SENT_INGEST_DAYS}d)`;
+}
+
 function getHeader(headers, name) {
   return headers?.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
 }
@@ -122,9 +143,12 @@ export async function syncGmail(account, cache, io, options = {}) {
 
   const gmailClient = gmail({ version: 'v1', auth });
   const maxMessages = mode === 'full' ? 200 : 100;
-  const query = mode === 'unread' ? 'is:unread in:inbox' : 'in:inbox';
+  // Ingest sent mail unless the account explicitly opted out — the default-on
+  // capability powers per-account Tribe-outreach reply detection (#2796).
+  const ingestSent = account?.syncConfig?.ingestSent !== false;
+  const query = buildGmailQuery(mode, ingestSent);
 
-  console.log(`📧 Gmail API sync (${mode}) for ${account.email}`);
+  console.log(`📧 Gmail API sync (${mode}${ingestSent ? '+sent' : ''}) for ${account.email}`);
 
   // Step 1: List message IDs
   const messageIds = [];
