@@ -255,7 +255,7 @@ const enqueueImageJob = ({ prompt, world, settings, options, mode, owner, logLin
   // effect on storyboard, comic-panel, or cover renders.
   const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, mode);
   const params = mode === IMAGE_GEN_MODE.CODEX
-    ? { mode: IMAGE_GEN_MODE.CODEX, codexPath: settings.imageGen?.codex?.codexPath, model: settings.imageGen?.codex?.model, cleanC2PA, denoise, ...baseParams }
+    ? { mode: IMAGE_GEN_MODE.CODEX, codexPath: settings.imageGen?.codex?.codexPath, model: settings.imageGen?.codex?.model, effort: settings.imageGen?.codex?.effort, cleanC2PA, denoise, ...baseParams }
     : { pythonPath: settings.imageGen?.local?.pythonPath || null, modelId: options.modelId, cleanC2PA, denoise, ...baseParams };
   const { jobId } = enqueueJob({ kind: 'image', params, owner });
   console.log(`${logLine} mode=${mode} jobId=${jobId.slice(0, 8)}`);

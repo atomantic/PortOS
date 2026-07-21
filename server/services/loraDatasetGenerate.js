@@ -36,7 +36,7 @@ import {
 } from './universeCharacterSheet.js';
 import { getImageModels } from '../lib/mediaModels.js';
 import { enqueueJob, mediaJobEvents } from './mediaJobQueue/index.js';
-import { IMAGE_GEN_MODE } from './imageGen/modes.js';
+import { IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_MODEL } from './imageGen/modes.js';
 import {
   datasetImagePath,
   datasetImagesDir,
@@ -352,7 +352,7 @@ async function resolveRenderParams({ modelId: modelOverride = null } = {}) {
         { status: 400, code: 'CODEX_IMAGEGEN_DISABLED' },
       );
     }
-    return { base: { ...base, codexPath: c.codexPath, model: c.model }, activeMode, modelId: c.model || 'codex' };
+    return { base: { ...base, codexPath: c.codexPath, model: c.model, effort: c.effort }, activeMode, modelId: c.model || CODEX_IMAGEGEN_DEFAULT_MODEL };
   }
   if (activeMode === IMAGE_GEN_MODE.LOCAL) {
     const allModels = getImageModels();

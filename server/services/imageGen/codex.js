@@ -32,8 +32,8 @@ import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
-import { buildCodexStartupArgs } from '../../lib/providerModels.js';
-import { IMAGE_GEN_MODE } from './modes.js';
+import { buildCodexStartupArgs, buildEffortArgs, CODEX_EFFORT_LEVELS } from '../../lib/providerModels.js';
+import { IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT } from './modes.js';
 
 // 20 minutes — built-in `image_gen` typically returns in 30–90s, but with the
 // parallel codex lane several renders share OpenAI throughput and a single
@@ -137,13 +137,27 @@ const describeFidelity = (strength) => {
 // `initImageStrength` is mapped to a fidelity phrase via describeFidelity —
 // codex CLI exposes no numeric denoise knob.
 export async function generateImage({
-  codexPath, model, prompt = '', width, height, negativePrompt,
+  codexPath, model, effort, prompt = '', width, height, negativePrompt,
   initImagePath, initImageStrength,
   jobId: providedJobId = null,
   cleanC2PA = false,
   denoise = false,
 }) {
   await ensureDir(PATHS.images);
+
+  // Ship the cheap gpt-5.6-luna / low-effort path by default (see modes.js).
+  // A caller-supplied model/effort (an explicit Settings → Image Gen override,
+  // threaded through the dispatcher) wins; `null`/`''`/absent falls back to the
+  // shipped default so a bare install never runs Codex's heaviest tier.
+  const effectiveModel = (typeof model === 'string' && model.trim()) ? model.trim() : CODEX_IMAGEGEN_DEFAULT_MODEL;
+  // Validate the effort against the known codex levels before use: an
+  // unrecognized non-empty value (a hand-edited settings.json / the unvalidated
+  // settings PUT) would otherwise pass through, buildEffortArgs would emit no
+  // override for it, and the child would silently inherit Codex's own configured
+  // effort instead of the promised cheap `low` default. Fall back to the default
+  // so the low-effort guarantee holds even for garbage input.
+  const requestedEffort = (typeof effort === 'string' && effort.trim()) ? effort.trim() : CODEX_IMAGEGEN_DEFAULT_EFFORT;
+  const effectiveEffort = CODEX_EFFORT_LEVELS.includes(requestedEffort) ? requestedEffort : CODEX_IMAGEGEN_DEFAULT_EFFORT;
 
   // Defense-in-depth: HTTP routes already resolve basenames to absolute paths,
   // but re-anchor here so any future caller can't attach an arbitrary local
@@ -193,8 +207,12 @@ export async function generateImage({
     // or an unattended `brew upgrade`. Placed before the variadic `-i` so it
     // can't be swallowed as an image path.
     ...buildCodexStartupArgs(),
+    // Reasoning-effort override (`-c model_reasoning_effort=<level>`), defaulting
+    // to `low` — also before the variadic `-i`. A user who baked an effort pin
+    // into their config is respected via hasEffortFlag inside buildEffortArgs.
+    ...buildEffortArgs(effectiveEffort, { command: 'codex' }),
     ...(validInitImagePath ? ['-i', validInitImagePath] : []),
-    ...(model ? ['-m', String(model)] : []),
+    '-m', effectiveModel,
     ...(validInitImagePath ? ['--'] : []),
     fullPrompt,
   ];
@@ -202,7 +220,7 @@ export async function generateImage({
   const meta = {
     id: jobId, prompt: prompt.trim(), negativePrompt: negativePrompt || '',
     width: width ? Number(width) : null, height: height ? Number(height) : null,
-    filename, mode: IMAGE_GEN_MODE.CODEX, model: model || 'codex',
+    filename, mode: IMAGE_GEN_MODE.CODEX, model: effectiveModel,
     createdAt: new Date().toISOString(),
   };
   const job = { ...meta, clients: [], status: 'running' };
@@ -222,7 +240,7 @@ export async function generateImage({
 
   return {
     jobId, filename, path: `/data/images/${filename}`, generationId: jobId,
-    mode: IMAGE_GEN_MODE.CODEX, model: model || null,
+    mode: IMAGE_GEN_MODE.CODEX, model: effectiveModel,
     // Async callers gate UI state on `status`; without 'running' they flip
     // to 'done' before the PNG lands. SSE / socket 'completed' fires later.
     status: 'running',

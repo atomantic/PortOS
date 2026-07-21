@@ -105,7 +105,9 @@ export async function generateImage(params) {
         { status: 400, code: 'CODEX_IMAGEGEN_DISABLED' },
       );
     }
-    return codex.generateImage({ codexPath: c.codexPath, model: c.model, cleanC2PA, denoise, ...normalized });
+    // model/effort default to the cheap gpt-5.6-luna / low path inside
+    // codex.generateImage when unset here; a saved override wins.
+    return codex.generateImage({ codexPath: c.codexPath, model: c.model, effort: c.effort, cleanC2PA, denoise, ...normalized });
   }
   if (mode === IMAGE_GEN_MODE.LOCAL) {
     return local.generateImage({ pythonPath: pythonPath(s), cleanC2PA, denoise, ...normalized });
