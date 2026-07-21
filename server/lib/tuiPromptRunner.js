@@ -279,43 +279,54 @@ ${prompt}`;
     const finish = async ({ success, exitCode = 0, error = null, reason = 'completed' }) => {
       if (finalized) return;
       finalized = true;
-      cleanupTimers();
-      unregisterActiveRun(runId);
-      // Drop the live Shell view the moment the run ends (notifies any attached
-      // viewer via shell:exit). Idempotent — safe even if no viewer ever
-      // attached. Runs before the kill below so the session disappears from the
-      // list immediately rather than waiting on PTY teardown.
-      unregisterExternalSession(runId, { exitCode });
+      // finish() is invoked fire-and-forget from PTY/timer callbacks outside the
+      // request lifecycle (onData, onExit, sendPrompt's write-catch,
+      // responseFileWatchTimer, hardTimeoutTimer) — none of them await or
+      // .catch() this call. try/finally guarantees `resolve` below always fires
+      // exactly once even if a step throws (including the caller-supplied
+      // `onComplete` callback), so executeTuiRun's Promise can never hang forever.
+      try {
+        cleanupTimers();
+        unregisterActiveRun(runId);
+        // Drop the live Shell view the moment the run ends (notifies any attached
+        // viewer via shell:exit). Idempotent — safe even if no viewer ever
+        // attached. Runs before the kill below so the session disappears from the
+        // list immediately rather than waiting on PTY teardown.
+        unregisterExternalSession(runId, { exitCode });
 
-      // Kill the PTY if still alive — one-shot runs don't leave a session
-      // behind for the user to interact with.
-      try { if (ptyProcess && !ptyProcess.killed) ptyProcess.kill(); } catch { /* already gone */ }
+        // Kill the PTY if still alive — one-shot runs don't leave a session
+        // behind for the user to interact with.
+        try { if (ptyProcess && !ptyProcess.killed) ptyProcess.kill(); } catch { /* already gone */ }
 
-      // Prefer the response file the TUI was directed to write; fall back
-      // to the ANSI-stripped screen scrape when the file is missing/empty
-      // or the run didn't succeed. Logic lives in `resolveTuiResponseText`
-      // so it can be unit-tested without a live PTY.
-      const { text: responseText, usedResponseFile } = await resolveTuiResponseText({
-        success, responseFilePath, outputBuffer, wrappedPrompt,
-      });
+        // Prefer the response file the TUI was directed to write; fall back
+        // to the ANSI-stripped screen scrape when the file is missing/empty
+        // or the run didn't succeed. Logic lives in `resolveTuiResponseText`
+        // so it can be unit-tested without a live PTY.
+        const { text: responseText, usedResponseFile } = await resolveTuiResponseText({
+          success, responseFilePath, outputBuffer, wrappedPrompt,
+        });
 
-      // Delegate run-record finalization (output.txt + metadata.json merge
-      // + onRunCompleted/onRunFailed hooks + toolkit error analysis) to the
-      // shared runner helper. `completionReason` lands in `extras` so it
-      // gets persisted to metadata.json BEFORE the write (was previously
-      // set post-write and never made it to disk → /runs replay missed it).
-      const metadata = await finalizeRunRecord({
-        runId, output: responseText, exitCode, success, error, startTime,
-        extras: { completionReason: reason, usedResponseFile, outputTruncated: outputBufferTruncated },
-      }).catch((err) => {
-        console.error(`❌ TUI run ${runId} finalize failed: ${err.message}`);
-        return {
-          exitCode, success, error: error || err.message,
-          duration: Date.now() - startTime, completionReason: reason,
-        };
-      });
-      onComplete?.({ ...metadata, text: responseText, usedResponseFile, outputTruncated: outputBufferTruncated });
-      resolve();
+        // Delegate run-record finalization (output.txt + metadata.json merge
+        // + onRunCompleted/onRunFailed hooks + toolkit error analysis) to the
+        // shared runner helper. `completionReason` lands in `extras` so it
+        // gets persisted to metadata.json BEFORE the write (was previously
+        // set post-write and never made it to disk → /runs replay missed it).
+        const metadata = await finalizeRunRecord({
+          runId, output: responseText, exitCode, success, error, startTime,
+          extras: { completionReason: reason, usedResponseFile, outputTruncated: outputBufferTruncated },
+        }).catch((err) => {
+          console.error(`❌ TUI run ${runId} finalize failed: ${err.message}`);
+          return {
+            exitCode, success, error: error || err.message,
+            duration: Date.now() - startTime, completionReason: reason,
+          };
+        });
+        onComplete?.({ ...metadata, text: responseText, usedResponseFile, outputTruncated: outputBufferTruncated });
+      } catch (err) {
+        console.error(`❌ TUI run ${runId} finish() failed: ${err?.message || err}`);
+      } finally {
+        resolve();
+      }
     };
 
     ptyProcess.onData((data) => {
