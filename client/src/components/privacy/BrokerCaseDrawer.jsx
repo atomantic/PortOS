@@ -2,6 +2,7 @@ import { RotateCw, ExternalLink, CheckCircle2, XCircle, ListChecks } from 'lucid
 import Drawer from '../Drawer';
 import { timeAgo, formatDateShort } from '../../utils/formatters';
 import { CASE_STATE_TONE, ACTION_TONES, manualCaseActions, labelFor, CASE_STATES } from './constants';
+import { isHttpUrl } from '../../utils/urlNormalize';
 
 // Action icon by descriptor `icon` token (positive resolution vs dismiss).
 const ACTION_ICONS = { check: CheckCircle2, x: XCircle };
@@ -82,7 +83,7 @@ export default function BrokerCaseDrawer({
                 not confirmed. Open the same search in your own browser (real browsers pass these walls),
                 then record what you find below.
               </p>
-              {searchUrl && (
+              {searchUrl && isHttpUrl(searchUrl) && (
                 <a
                   href={searchUrl}
                   target="_blank"
@@ -111,16 +112,20 @@ export default function BrokerCaseDrawer({
               <ul className="space-y-1">
                 {listingUrls.map((u) => (
                   <li key={u}>
-                    <a href={u} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline break-all">
-                      <ExternalLink size={12} /> {u}
-                    </a>
+                    {isHttpUrl(u) ? (
+                      <a href={u} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline break-all">
+                        <ExternalLink size={12} /> {u}
+                      </a>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-xs text-gray-400 break-all">{u}</span>
+                    )}
                   </li>
                 ))}
               </ul>
             ) : (
               <span className="text-gray-500 text-xs">No listing URLs recorded</span>
             )}
-            {evidence.screenshot && (
+            {evidence.screenshot && isHttpUrl(evidence.screenshot) && (
               <a href={evidence.screenshot} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-xs text-port-accent hover:underline mt-1">
                 <ExternalLink size={12} /> Confirmation screenshot
               </a>
@@ -159,7 +164,7 @@ export default function BrokerCaseDrawer({
                 </button>
               );
             })}
-            {optoutUrl && (
+            {optoutUrl && isHttpUrl(optoutUrl) && (
               <a
                 href={optoutUrl}
                 target="_blank"

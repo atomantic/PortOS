@@ -184,6 +184,7 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 | `syncWire.js` | Single source of truth for what fields cross the federated-peer wire (snapshot loop + per-record push agree). |
 | `tailscale.js` | Locate the Tailscale CLI binary, flag the sandboxed macOS App-bundle build (which can't write `tailscale cert` output outside its container), and read backend state (`getTailscaleStatus` / `isTailscaleUp`) to know whether we're actually connected to the tailnet. |
 | `httpsState.js` | Captures whether PortOS booted with HTTPS active. |
+| `isSafeHref.js` | Pure http(s)-only scheme check (`isSafeHref`) for user-supplied URL fields that get rendered as a clickable `<a href>` — rejects `javascript:`/`data:`/etc. stored-XSS payloads. Mirrors client `urlNormalize.js`'s `isHttpUrl`. |
 | `networkExposure.js` | Snapshot of scheme + bind + cert mode for the dashboard's Network Exposure widget. |
 
 ## Search & indexing

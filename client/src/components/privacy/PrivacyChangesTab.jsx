@@ -9,6 +9,7 @@ import {
 import toast from '../ui/Toast';
 import DeclareChangeDrawer from './DeclareChangeDrawer';
 import { VAULT_TYPES, CHANGE_KINDS, labelFor } from './constants';
+import { isHttpUrl } from '../../utils/urlNormalize';
 
 // A slim progress bar over pending/updated/removed. Done = zero pending.
 function ProgressBar({ progress }) {
@@ -49,7 +50,7 @@ function OrgRow({ org, status, eventId, hasReplacement, onChanged }) {
         {org.contactEmail && <span className="ml-2 text-[11px] text-gray-500">{org.contactEmail}</span>}
       </div>
       <div className="flex items-center gap-1 shrink-0">
-        {org.website && (
+        {org.website && isHttpUrl(org.website) && (
           <a href={org.website} target="_blank" rel="noreferrer" title="Open website" aria-label="Open website"
             className="p-1.5 rounded text-gray-400 hover:text-white hover:bg-port-border/50">
             <ExternalLink size={14} />
