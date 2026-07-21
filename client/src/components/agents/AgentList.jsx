@@ -335,16 +335,18 @@ export default function AgentList() {
             </FormField>
 
             <div className="flex items-center gap-4 mb-4">
-              <label className="block text-sm text-gray-400">Avatar Emoji</label>
+              <label htmlFor="agent-avatar-emoji" className="block text-sm text-gray-400">Avatar Emoji</label>
               <input
+                id="agent-avatar-emoji"
                 type="text"
                 value={formData.avatar.emoji || ''}
                 onChange={(e) => setFormData({ ...formData, avatar: { ...formData.avatar, emoji: e.target.value } })}
                 className="w-16 px-3 py-2 bg-port-bg border border-port-border rounded text-white text-center"
                 maxLength={2}
               />
-              <label className="block text-sm text-gray-400">Color</label>
+              <label htmlFor="agent-avatar-color" className="block text-sm text-gray-400">Color</label>
               <input
+                id="agent-avatar-color"
                 type="color"
                 value={formData.avatar.color || '#3b82f6'}
                 onChange={(e) => setFormData({ ...formData, avatar: { ...formData.avatar, color: e.target.value } })}

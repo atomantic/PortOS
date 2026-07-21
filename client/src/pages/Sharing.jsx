@@ -367,11 +367,12 @@ function SharingBuckets({ selectedId }) {
             </FormField>
           </div>
           <div>
-            <label className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
+            <label htmlFor="share-folder-path" className="block text-xs uppercase tracking-wider text-gray-500 mb-1">
               Folder path
             </label>
             <div className="flex gap-2 items-stretch">
               <input
+                id="share-folder-path"
                 type="text"
                 value={form.path}
                 onChange={(e) => setForm((f) => ({ ...f, path: e.target.value }))}
