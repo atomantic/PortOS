@@ -24,7 +24,7 @@ import { getPerformanceSummary, checkAndRehabilitateSkippedTasks, getLearningIns
 import { schedule as scheduleEvent, cancel as cancelEvent, getStats as getSchedulerStats } from './eventScheduler.js';
 import { generateProactiveTasks as generateMissionTasks } from './missions.js';
 import { recordJobExecution } from './autonomousJobs.js';
-import { atomicWrite, safeJSONParse } from '../lib/fileUtils.js';
+import { atomicWrite, safeJSONParse, sleep } from '../lib/fileUtils.js';
 import { addNotification, NOTIFICATION_TYPES } from './notifications.js';
 import { getUserTimezone, todayInTimezone } from '../lib/timezone.js';
 import { normalizeDomainAutonomy, getDomainMode } from '../lib/domainAutonomy.js';
@@ -232,7 +232,7 @@ export async function start() {
   const { cdRecoveryDone } = await import('./creativeDirector/recovery.js');
   await Promise.race([
     cdRecoveryDone,
-    new Promise((resolve) => setTimeout(resolve, CD_RECOVERY_BOOT_TIMEOUT_MS)),
+    sleep(CD_RECOVERY_BOOT_TIMEOUT_MS),
   ]);
 
   // Then reset any orphaned in_progress tasks (no running agent)

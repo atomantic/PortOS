@@ -25,20 +25,16 @@
  *   records. The agreed shape (see the `TypeIndexConfig` typedef below):
  *
  *     config: {
- *       runs?:         [],   // append-mostly cross-record history/audit log,
- *                            //   capped by the consumer (universeBuilder caps
- *                            //   at the last 200) — the established slot
- *       featureFlags?: {},   // reserved: per-collection toggles
- *       lockPolicies?: {},   // reserved: per-collection lock rules
- *       …                    // consumers MAY add their own keys; document the
- *                            //   shape next to the consumer that owns it
+ *       runs?: [],   // append-mostly cross-record history/audit log,
+ *                    //   capped by the consumer (universeBuilder caps
+ *                    //   at the last 200) — the established slot
+ *       …            // consumers MAY add their own keys; document the
+ *                    //   shape next to the consumer that owns it
  *     }
  *
- *   `runs` is the only slot with a shipped consumer; `featureFlags` /
- *   `lockPolicies` are reserved names so the next consumer reuses them instead
- *   of inventing a synonym. Treat the slot as open-but-conventional: prefer a
- *   reserved name when one fits, and keep each key's value an object or array
- *   so the shallow-merge semantics below stay predictable.
+ *   `runs` is the only slot with a shipped consumer today. Treat the slot as
+ *   open-but-conventional: each key's value should be an object or array so
+ *   the shallow-merge semantics below stay predictable.
  *
  *   Merge semantics: `saveTypeIndex({ config })` shallow-merges at the TOP
  *   level of `config` — `{ ...current.config, ...patch.config }`. A patch that
@@ -104,19 +100,14 @@ const RESERVED_IDS = new Set(['__proto__', 'constructor', 'prototype']);
  * The type-index `config` slot — cross-record state owned by the collection as
  * a whole. See the header doc block for the convention. All keys are optional;
  * a consumer that needs a slot not listed here MAY add its own (document it
- * next to the consumer), but should prefer a reserved name when one fits. Each
- * value should be an array or plain object so the top-level shallow-merge in
- * `saveTypeIndex` stays predictable.
+ * next to the consumer). Each value should be an array or plain object so the
+ * top-level shallow-merge in `saveTypeIndex` stays predictable.
  *
  * @typedef {object} TypeIndexConfig
  * @property {Array<object>} [runs]
  *   Append-mostly cross-record history/audit log. The consumer is responsible
  *   for capping growth (universeBuilder keeps the last 200) and for sanitizing
  *   each entry on read/write. The only slot with a shipped consumer today.
- * @property {Object<string, boolean>} [featureFlags]
- *   Reserved: per-collection on/off toggles.
- * @property {Object<string, object>} [lockPolicies]
- *   Reserved: per-collection lock rules.
  */
 
 /**

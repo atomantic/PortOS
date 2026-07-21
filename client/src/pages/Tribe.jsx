@@ -29,6 +29,7 @@ import toast from '../components/ui/Toast';
 import TabPills from '../components/ui/TabPills';
 import TribeCircleMap from '../components/tribe/TribeCircleMap.jsx';
 import { copyToClipboard } from '../lib/clipboard.js';
+import { safeReadStorage, safeRemoveStorage } from '../lib/safeStorage.js';
 import {
   RINGS,
   ENERGY,
@@ -82,21 +83,11 @@ function parseStoredContacts(value) {
 }
 
 function getLegacyContacts() {
-  if (typeof window === 'undefined') return [];
-  try {
-    return parseStoredContacts(window.localStorage.getItem(STORAGE_KEY));
-  } catch {
-    return [];
-  }
+  return parseStoredContacts(safeReadStorage(STORAGE_KEY));
 }
 
 function clearLegacyContacts() {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.removeItem(STORAGE_KEY);
-  } catch {
-    // Storage can be unavailable in restricted browser contexts.
-  }
+  safeRemoveStorage(STORAGE_KEY);
 }
 
 function StatTile({ icon: Icon, label, value, detail, className = '' }) {

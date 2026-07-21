@@ -4,6 +4,7 @@ import useDrawerTab from '../../../hooks/useDrawerTab';
 import { submitTrainingEntry, getTrainingStats, submitMorseRound, getMorseProgress, updateMorseLevel } from '../../../services/api';
 import MorseProgressPanel from './MorseProgressPanel';
 import { streakGlyph } from '../../../lib/streakGlyph.js';
+import { safeReadJsonStorage, safeWriteStorage } from '../../../lib/safeStorage';
 
 export const MORSE_TABLE = {
   A: '.-',     B: '-...',   C: '-.-.',   D: '-..',    E: '.',      F: '..-.',
@@ -134,15 +135,12 @@ export const MODES = [
 const TRAINING_MODULE = 'morse';
 
 function loadPrefs() {
-  const raw = typeof window !== 'undefined' ? window.localStorage.getItem(PREFS_KEY) : null;
-  if (!raw) return { ...DEFAULT_PREFS };
-  const parsed = JSON.parse(raw);
+  const parsed = safeReadJsonStorage(PREFS_KEY);
   return { ...DEFAULT_PREFS, ...parsed };
 }
 
 function savePrefs(prefs) {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
+  safeWriteStorage(PREFS_KEY, JSON.stringify(prefs));
 }
 
 function scheduleTone(gain, startSec, durationSec) {

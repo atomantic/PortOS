@@ -95,6 +95,7 @@ import {
   Clapperboard
 } from 'lucide-react';
 /* global __APP_VERSION__ */
+import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
 import Logo from './Logo';
 import { useErrorNotifications } from '../hooks/useErrorNotifications';
 import { useNotifications } from '../hooks/useNotifications';
@@ -455,10 +456,7 @@ export function SingleNavRow({ item, collapsed, active, badgeCount, pinned, onTo
 export default function Layout() {
   const location = useLocation();
   const navigate = useNavigate();
-  const [collapsed, setCollapsed] = useState(() => {
-    const saved = localStorage.getItem(SIDEBAR_KEY);
-    return saved === 'true';
-  });
+  const [collapsed, setCollapsed] = useState(() => safeReadStorage(SIDEBAR_KEY) === 'true');
   const [mobileOpen, setMobileOpen] = useState(false);
   const [expandedSections, setExpandedSections] = useState({});
   // Collapsed-sidebar flyout: hovering or focusing a section icon opens a
@@ -559,7 +557,7 @@ export default function Layout() {
   }, [manifestNav]);
 
   useEffect(() => {
-    localStorage.setItem(SIDEBAR_KEY, String(collapsed));
+    safeWriteStorage(SIDEBAR_KEY, String(collapsed));
   }, [collapsed]);
 
   // Build dynamic nav items with app children + pipeline series.

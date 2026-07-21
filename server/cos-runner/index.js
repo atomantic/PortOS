@@ -15,7 +15,7 @@ import { writeFile, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import http from 'http';
 import { Server as SocketServer } from 'socket.io';
-import { ensureDir, PATHS } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, sleep } from '../lib/fileUtils.js';
 import { prepareCliSpawn, killProcessTree } from '../lib/bufferedSpawn.js';
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { createCodexStderrFormatter } from '../lib/codexCliOutput.js';
@@ -656,7 +656,7 @@ process.on('SIGTERM', async () => {
   }
 
   // Wait for agents to terminate
-  await new Promise(resolve => setTimeout(resolve, SHUTDOWN_DRAIN_MS));
+  await sleep(SHUTDOWN_DRAIN_MS);
 
   server.close(() => {
     console.log('👋 CoS Agent Runner stopped');

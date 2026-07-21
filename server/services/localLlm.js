@@ -28,7 +28,7 @@ import { join } from 'path'
 import { tmpdir } from 'os'
 import { pipeline } from 'stream/promises'
 import { Readable } from 'stream'
-import { PATHS, atomicWrite, ensureDir, pathExists } from '../lib/fileUtils.js'
+import { PATHS, atomicWrite, ensureDir, pathExists, sleep } from '../lib/fileUtils.js'
 import { compareSemver } from '../lib/versionUtils.js'
 import { isBackend, mapModelToBackend } from '../lib/localLlmCatalog.js'
 import { sanitizeOllamaName } from '../lib/localLlmDisk.js'
@@ -412,7 +412,7 @@ async function waitForOllamaVersion(timeoutMs = 30_000) {
   while (Date.now() < deadline) {
     const v = await readOllamaVersion()
     if (v) return v
-    await new Promise((resolve) => setTimeout(resolve, 500))
+    await sleep(500)
   }
   return null
 }
@@ -475,7 +475,7 @@ async function upgradeOllamaMacApp(emit) {
   await runStreaming('pkill', ['-x', 'Ollama'], () => {}, 10_000).catch(() => null)
   await runStreaming('pkill', ['-x', 'ollama'], () => {}, 10_000).catch(() => null)
   // Brief settle so the OS releases the bundle before we replace it.
-  await new Promise((resolve) => setTimeout(resolve, 1500))
+  await sleep(1500)
 
   emit('Extracting…')
   const unzip = await runStreaming('unzip', ['-q', '-o', zipPath, '-d', tmpDir], emit, 5 * 60 * 1000)

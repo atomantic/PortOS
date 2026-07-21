@@ -10,6 +10,7 @@
 import { checkRateLimit, recordAction, syncFromExternal } from './rateLimits.js';
 import { solveChallenge } from './challengeSolver.js';
 import { fetchWithTimeout } from '../../lib/fetchWithTimeout.js';
+import { sleep } from '../../lib/fileUtils.js';
 
 const API_BASE = 'https://www.moltbook.com/api/v1';
 const MOLTBOOK_TIMEOUT_MS = 10000;
@@ -501,7 +502,7 @@ export async function heartbeat(apiKey, options = {}) {
     engagements++;
 
     // Small delay between actions
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await sleep(1000);
   }
 
   console.log(`💓 Moltbook: Heartbeat complete - ${engagements} engagements`);
