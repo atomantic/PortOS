@@ -57,6 +57,8 @@ import {
   computeProposalExecutionAwareness,
   computeCrossReferenceAnalysis,
   computeHandoffRouting,
+  computeHardExclusionGate,
+  computeHardExclusionNotice,
   readLiTaskMetrics,
   hasPlannedWorkListing
 } from '../layeredIntelligence.js'
@@ -372,16 +374,27 @@ export async function buildTaskInput({ app } = {}) {
   // will actually do. Do NOT "fix" this by marking a missing PLAN.md as a failed
   // read: an app with no PLAN.md yet genuinely has nothing filed, and suppressing
   // its proposals would park the loop on every such app permanently.
+  // Read LI's own execution-health stats ONCE and feed BOTH the selfEval Signal-3 line
+  // and the hard-exclusion notice (#2824) — they must judge health off the same number.
+  const liTaskStats = (config.sources?.selfEval) ? await readLiTaskMetrics() : null
   let selfEvalReport = ''
   if (config.sources?.selfEval) {
     selfEvalReport = computeSelfEvalSummary({
       outcomes,
       existingIssues: trackerReadFailed ? null : existingIssues,
-      liTaskStats: await readLiTaskMetrics()
+      liTaskStats
     })
   }
 
-  const prompt = buildPrompt({ app, config, sources, openIssues, isPortos, outcomesReport, selfEvalReport, proposalExecutionReport, crossReferenceReport }) + buildCompletionContract()
+  // Hard-exclusion notice (#2824): the reasoner-facing mirror of the deterministic
+  // filing gate. '' unless LI's execution health is degraded (gate armed), so a healthy
+  // loop's prompt is unchanged. Enforcement runs in processTaskOutput regardless.
+  const hardExclusionNotice = computeHardExclusionNotice({
+    liTaskStats,
+    outcomes: Array.isArray(outcomes) ? outcomes : []
+  })
+
+  const prompt = buildPrompt({ app, config, sources, openIssues, isPortos, outcomesReport, selfEvalReport, proposalExecutionReport, crossReferenceReport, hardExclusionNotice }) + buildCompletionContract()
   // Option A: surface the fully-resolved LI agent provider/model (from
   // resolveLiAgentProvider — per-app override, else the resolved schedule pin) so
   // the generator pins the AGENT to it. Resolving the pin HERE (not delegating it
@@ -530,9 +543,28 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
     // finalize timeout on a run whose verdict is already known).
     const { existingIssues, trackerReadFailed } = await readIssues({ filer, forgeCli, cwd, jira, config })
     const scopeOk = isScopeAllowed({ scope: proposal.scope, allowedScopes: config.allowedScopes, isPortos })
+    // Hard exclusion gate (#2824): deterministic pre-filing suppression, enforced
+    // independent of what the reasoner returned. Reads LI's own execution health + this
+    // app's outcome records; suppresses when the loop is degraded AND the proposal maps
+    // to self-improve scope or a chronically-failing domain. Only computed on the
+    // scope-allowed path (an out-of-scope proposal is already suppressed). An unreadable
+    // outcome store degrades to [] → the domain rule simply can't fire, never a false
+    // exclusion.
+    const hardExclusion = scopeOk
+      ? computeHardExclusionGate({
+        proposal,
+        liTaskStats: await readLiTaskMetrics(),
+        outcomes: await listOutcomes({ appId: app.id }).catch(() => []),
+        now
+      })
+      : { excluded: false, reason: null }
     if (!scopeOk) {
       console.log(`🚫 Layered Intelligence: ${app.name} proposal scope "${proposal.scope}" not allowed — suppressed`)
       reason = 'scope-suppressed'
+    } else if (hardExclusion.excluded) {
+      console.log(`🚫 Layered Intelligence: ${app.name} proposal "${proposal.slug}" hard-excluded before filing — ${hardExclusion.reason}`)
+      filedAction = 'excluded'
+      reason = 'hard-gate-excluded'
     } else if (trackerReadFailed) {
       console.warn(`⚠️ Layered Intelligence: ${app.name} tracker read failed — suppressing proposal to avoid a blind duplicate`)
       filedAction = 'tracker-read-failed'

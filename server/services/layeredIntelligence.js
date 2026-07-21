@@ -180,6 +180,18 @@ export const LI_DEGRADED_SUCCESS_THRESHOLD = 50;
 // reported as-is but is NOT treated as a confidence signal either way.
 export const LI_DEGRADED_MIN_SAMPLE = 4;
 
+// LI execution health (%) below which the deterministic HARD PRE-FILING EXCLUSION
+// gate (#2824) arms. Distinct from LI_DEGRADED_SUCCESS_THRESHOLD (50 — the "your
+// loop is failing, hold a higher bar" ADVISORY line surfaced to the reasoner): the
+// hard gate does not advise, it SUPPRESSES filing, so it opens a WIDER, more cautious
+// net. Once LI's own runs dip below three-quarters success it stops FILING self-
+// directed work it demonstrably cannot see through, rather than merely being warned.
+// Reuses the SCOPE_PREFER value (75) intentionally: the same "reliably executes" bar
+// that marks a proposal DOMAIN preferable is the bar LI's own execution health must
+// clear before it is trusted to file self-improvement work. The gate arms only on a
+// CONFIDENT read (>= LI_DEGRADED_MIN_SAMPLE runs) — a cold loop is never locked out.
+export const LI_HARD_GATE_EXECUTION_THRESHOLD = 75;
+
 // The resolved outcomes a filed proposal can reach (the feedback loop, #2428).
 // A record with a null outcome is still open/unresolved. All three are
 // auto-derived from the tracker's closed state by deriveOutcome: completed →
@@ -861,6 +873,33 @@ export function describeSuppressedIssue(issue, reasonBySlug = null) {
  * @param {number} [args.now] - clock seam for the suppression window.
  * @returns {string} the liSelfEval block body.
  */
+/**
+ * Resolve LI's own EXECUTION HEALTH — the loop's reasoning-run success rate — into a
+ * single structured read, so every consumer (the selfEval Signal 3 line AND the hard
+ * exclusion gate, #2824) judges LI's health off the SAME number instead of each
+ * re-deriving it and risking drift. Reads the LI-task metrics bucket
+ * (readLiTaskMetrics) through the effective (recency-windowed-or-lifetime) success
+ * rate, exactly as Signal 3 did inline.
+ *
+ * @param {{ read: boolean, metrics: Object|null }|null} liTaskStats - from
+ *   readLiTaskMetrics. `null`/`read:false` = the learning store was unreadable;
+ *   `read:true, metrics:null` = read fine and LI has simply never run a task.
+ * @param {{ now?: number }} [opts] - clock seam forwarded to computeEffectiveSuccessRate.
+ * @returns {{ rate: number|null, sample: number, source: string|null, confident: boolean }}
+ *   `rate` is null when health is UNKNOWN (store unreadable, no runs, or no completed
+ *   runs). `confident` is true only at >= LI_DEGRADED_MIN_SAMPLE runs — the floor
+ *   below which a rate (0-of-1 vs 0-of-N) is not yet evidence.
+ */
+export function computeLiExecutionHealth(liTaskStats = null, { now = Date.now() } = {}) {
+  if (!liTaskStats?.read || !liTaskStats.metrics) {
+    return { rate: null, sample: 0, source: null, confident: false };
+  }
+  const { successRate, source, windowedCompleted } = computeEffectiveSuccessRate(liTaskStats.metrics, { now });
+  if (successRate === null) return { rate: null, sample: 0, source: null, confident: false };
+  const sample = source === 'windowed' ? windowedCompleted : (liTaskStats.metrics.completed || 0);
+  return { rate: successRate, sample, source, confident: sample >= LI_DEGRADED_MIN_SAMPLE };
+}
+
 export function computeSelfEvalSummary({
   outcomes = null,
   existingIssues = null,
@@ -951,19 +990,19 @@ export function computeSelfEvalSummary({
   } else if (!liTaskStats.metrics) {
     lines.push('- LI execution health: no LI runs recorded yet — this loop has no execution history.');
   } else {
-    // Forward the clock seam: computeEffectiveSuccessRate age-filters the recent
-    // ring, so without `now` this branch would read the real wall clock while the
-    // suppression-window branch above uses the injected one — the same summary
-    // reasoning against two different "nows", and a non-pure "pure" function.
-    const { successRate, source, windowedCompleted } = computeEffectiveSuccessRate(liTaskStats.metrics, { now });
-    const sample = source === 'windowed' ? windowedCompleted : (liTaskStats.metrics.completed || 0);
-    if (successRate === null) {
+    // Forward the clock seam via the shared helper (computeLiExecutionHealth), which
+    // the hard exclusion gate (#2824) reads too — so the DEGRADED line and the gate can
+    // never disagree about LI's own success rate. Without `now` computeEffectiveSuccessRate
+    // would read the real wall clock while the suppression-window branch above uses the
+    // injected one — the same summary reasoning against two different "nows".
+    const health = computeLiExecutionHealth(liTaskStats, { now });
+    if (health.rate === null) {
       lines.push('- LI execution health: no completed LI runs recorded yet — success rate unknown.');
     } else {
-      taskSignal = sample >= LI_DEGRADED_MIN_SAMPLE;
-      liDegraded = taskSignal && successRate < LI_DEGRADED_SUCCESS_THRESHOLD;
+      taskSignal = health.confident;
+      liDegraded = taskSignal && health.rate < LI_DEGRADED_SUCCESS_THRESHOLD;
       lines.push(
-        `- LI execution health: ${successRate}% of ${sample} ${source} LI runs succeeded`
+        `- LI execution health: ${health.rate}% of ${health.sample} ${health.source} LI runs succeeded`
         + `${taskSignal ? '' : ' — too small a sample to judge'}${liDegraded ? ' — DEGRADED' : ''}.`
       );
     }
@@ -987,7 +1026,7 @@ export function computeSelfEvalSummary({
   if (liDegraded) {
     guidance.push(
       '',
-      `GUIDANCE — your own execution is degraded (LI run success is under ${LI_DEGRADED_SUCCESS_THRESHOLD}%): the problem may be THIS LOOP, not the app. Favor a narrowly-scoped, low-risk proposal that a coding agent can finish, and do not mark anything trivial+safe for hand-off while your runs are failing this often. A loop-meta proposal that fixes the failure mode may be the highest-value item this run.`
+      `GUIDANCE — your own execution is degraded (LI run success is under ${LI_DEGRADED_SUCCESS_THRESHOLD}%): the problem may be THIS LOOP, not the app. Favor a narrowly-scoped, low-risk app-improvement / app-data-gap proposal that a coding agent can finish, and do not mark anything trivial+safe for hand-off while your runs are failing this often. Self-improve-scoped work (loop-meta / portos-self) is HARD-EXCLUDED while your execution health is below ${LI_HARD_GATE_EXECUTION_THRESHOLD}% (#2824): a degraded loop cannot repair itself, so that work is deferred to a human — return proposal: null rather than filing it.`
     );
   }
 
@@ -1368,6 +1407,115 @@ export function computeHandoffRouting({ proposal, outcomes = [] } = {}) {
   return { handoff: false, domain, rate: bucket.successRate, n: bucket.completed, cause, reason };
 }
 
+// The proposal scopes treated as LI "self-improve" work by the hard exclusion gate
+// (#2824): the PortOS-only meta/self scopes. These are the proposals that improve LI /
+// PortOS itself and execute under self-improve:* task types — the exact execution class
+// whose chronic failure motivated the gate. Reuses PORTOS_ONLY_SCOPES as the single
+// definition so "self-improve scope" can never drift from "the PortOS-only scopes".
+export const SELF_IMPROVE_SCOPES = PORTOS_ONLY_SCOPES;
+
+/**
+ * Deterministic HARD PRE-FILING EXCLUSION gate (#2824). Given a validated proposal,
+ * LI's own execution-health stats, and the app's outcome records, decides whether the
+ * proposal must be SUPPRESSED before it is ever filed — because LI's own execution is
+ * degraded and the proposal maps to work LI cannot see through. This is the SYSTEM-side
+ * enforcement of the exclusion the reasoner is merely WARNED about in the prompt notice
+ * (computeHardExclusionNotice): even when the reasoner "wants" to file, this gate drops
+ * the proposal to null.
+ *
+ * Pure + side-effect-free like the sibling compute* gates. Two independent exclusion
+ * rules, both ARMED only when LI's execution health is CONFIDENTLY below
+ * LI_HARD_GATE_EXECUTION_THRESHOLD (75%) — unknown or below-sample-floor health leaves
+ * the gate DISARMED, so a cold loop with no track record is never locked out:
+ *   1. Self-improve scope — any proposal in a SELF_IMPROVE_SCOPES scope (loop-meta /
+ *      portos-self) is excluded regardless of domain. A degraded loop cannot repair
+ *      itself; that work is deferred to a human.
+ *   2. Chronically-failing domain — a proposal whose OWN scope's hand-offs chronically
+ *      fail (the SAME isAvoidDomain classifier the hand-off gate + reasoner avoid list
+ *      use, so all three agree on which domains qualify) is excluded from FILING, not
+ *      just from auto-hand-off.
+ *
+ * @param {object} args
+ * @param {object} args.proposal - the validated proposal ({ scope, ... }).
+ * @param {{ read: boolean, metrics: Object|null }|null} [args.liTaskStats] - readLiTaskMetrics output.
+ * @param {Array} [args.outcomes] - the app's li-outcomes records (for rule 2's domain lookup).
+ * @param {number} [args.now] - clock seam for the effective-rate window.
+ * @returns {{ excluded: boolean, reason: string|null, rule?: 'self-improve-scope'|'failing-domain' }}
+ */
+export function computeHardExclusionGate({ proposal, liTaskStats = null, outcomes = [], now = Date.now() } = {}) {
+  if (!proposal || typeof proposal !== 'object') return { excluded: false, reason: null };
+
+  // The gate is ARMED only on a confident read of degraded execution health. Unknown
+  // health (store unreadable / no runs) or a below-floor sample disarms it — the same
+  // 0-of-1-vs-0-of-N reasoning as LI_DEGRADED_MIN_SAMPLE. A healthy loop (>= 75%) files
+  // exactly as before this gate existed.
+  const health = computeLiExecutionHealth(liTaskStats, { now });
+  if (!health.confident || health.rate >= LI_HARD_GATE_EXECUTION_THRESHOLD) {
+    return { excluded: false, reason: null };
+  }
+
+  const scope = typeof proposal.scope === 'string' && proposal.scope.trim() ? proposal.scope.trim() : null;
+  const healthClause = `LI execution health ${health.rate}% (< ${LI_HARD_GATE_EXECUTION_THRESHOLD}%)`;
+
+  // Rule 1: self-improve scope — excluded wholesale while armed.
+  if (scope && SELF_IMPROVE_SCOPES.includes(scope)) {
+    return {
+      excluded: true,
+      rule: 'self-improve-scope',
+      reason: `${healthClause} — self-improve-scoped proposals (${scope}) are excluded while the loop's own runs are failing; a degraded loop cannot repair itself, so this is deferred to a human`
+    };
+  }
+
+  // Rule 2: chronically-failing execution domain — same isAvoidDomain classifier the
+  // hand-off routing gate uses, so a domain on the reasoner's avoid list is the same
+  // set the gate blocks. Only reached for non-self-improve scopes with a scope present.
+  if (scope) {
+    const bucket = computeExecutionByDomain(outcomes)[scope];
+    if (isAvoidDomain(bucket)) {
+      const cause = formatDominantFailureCause(bucket.failureSummary);
+      return {
+        excluded: true,
+        rule: 'failing-domain',
+        reason: `${healthClause} and ${scope} hand-offs succeed only ${bucket.successRate}% over ${bucket.completed} executed — excluded from filing${cause ? ` (${cause})` : ''}`
+      };
+    }
+  }
+
+  return { excluded: false, reason: null };
+}
+
+/**
+ * Render the reasoner-facing HARD EXCLUSION notice block (#2824). Computed from the
+ * SAME health + outcome inputs the enforcement gate (computeHardExclusionGate) reads,
+ * so the prompt's stated exclusions and what the gate actually suppresses can never
+ * disagree. Returns '' when the gate is DISARMED (health unknown, below sample floor,
+ * or at/above the threshold), so buildPrompt omits the block entirely on a healthy loop.
+ * Names both the self-improve scopes and any currently chronically-failing domain, and
+ * carries the explicit GATE CHECK step the reasoner must run before committing.
+ */
+export function computeHardExclusionNotice({ liTaskStats = null, outcomes = [], now = Date.now() } = {}) {
+  const health = computeLiExecutionHealth(liTaskStats, { now });
+  if (!health.confident || health.rate >= LI_HARD_GATE_EXECUTION_THRESHOLD) return '';
+
+  const lines = [
+    `HARD EXCLUSION GATE ARMED — your execution health is ${health.rate}% (below ${LI_HARD_GATE_EXECUTION_THRESHOLD}%). The following work is EXCLUDED this run and will be dropped BEFORE filing even if your reasoning leads you to it:`,
+    `- Any self-improve-scoped proposal (${SELF_IMPROVE_SCOPES.join(', ')}). A degraded loop cannot repair itself — that work is deferred to a human.`
+  ];
+
+  // Surface each currently chronically-failing domain by name so the reasoner can route
+  // around it explicitly — the same isAvoidDomain set rule 2 of the gate enforces.
+  const byDomain = computeExecutionByDomain(outcomes);
+  const failing = Object.entries(byDomain)
+    .filter(([, bucket]) => isAvoidDomain(bucket))
+    .map(([scope, bucket]) => `${clampScopeLabel(scope)} (${bucket.successRate}% over ${bucket.completed})`);
+  if (failing.length) {
+    lines.push(`- Any proposal in a chronically-failing execution domain: ${failing.join('; ')}.`);
+  }
+
+  lines.push('', 'GATE CHECK: If your proposal maps to an excluded scope or domain above → return proposal: null. Do not reason past this gate.');
+  return lines.join('\n');
+}
+
 // Source keys that buildPrompt renders as their OWN dedicated block (with tailored
 // guidance) instead of dumping into the generic "### <key>\n<value>" source list.
 // Keeping them in one named set — rather than accreting `&& k !== 'x'` clauses on the
@@ -1388,11 +1536,14 @@ const BESPOKE_SOURCE_BLOCK_KEYS = new Set(['plannedWork', 'scopeGuidance']);
  * the TRUE per-proposal-domain execution record #2760 could only approximate (#2765).
  * `crossReferenceReport` (from computeCrossReferenceAnalysis) is injected as a
  * `liCrossReference` block that names domains LI proposes well but executes poorly (#2764 §3).
+ * `hardExclusionNotice` (from computeHardExclusionNotice, #2824) is injected as a
+ * prominent `liHardExclusions` block ABOVE the allowed scopes when LI's execution
+ * health is degraded — the reasoner-facing mirror of the deterministic filing gate.
  * Finally, the static `liPlaybook` block (LI_PROPOSAL_PLAYBOOK, #2763) is ALWAYS
  * appended: the a-priori scope/task-type/goal rule set LI needs from run one, before
  * any per-app outcome data exists.
  */
-export function buildPrompt({ app, config, sources = {}, openIssues = [], isPortos = false, outcomesReport = '', selfEvalReport = '', proposalExecutionReport = '', crossReferenceReport = '' }) {
+export function buildPrompt({ app, config, sources = {}, openIssues = [], isPortos = false, outcomesReport = '', selfEvalReport = '', proposalExecutionReport = '', crossReferenceReport = '', hardExclusionNotice = '' }) {
   const allowed = (config.allowedScopes || []).filter(s =>
     isScopeAllowed({ scope: s, allowedScopes: config.allowedScopes, isPortos })
   );
@@ -1490,8 +1641,17 @@ export function buildPrompt({ app, config, sources = {}, openIssues = [], isPort
     ? `\n### liPlaybook\n${LI_PROPOSAL_PLAYBOOK}\n\n${LI_PLAYBOOK_GUIDANCE}\n`
     : '';
 
+  // Hard exclusion gate (#2824): rendered ABOVE the allowed scopes and sources as a
+  // hard constraint so the reasoner sees what is off-limits before it picks a scope.
+  // Non-empty only when the deterministic filing gate is armed (execution health
+  // degraded), so a healthy loop's prompt is unchanged. Even if the reasoner reasons
+  // past this, computeHardExclusionGate drops the proposal before it is filed.
+  const hardExclusionBlock = (typeof hardExclusionNotice === 'string' && hardExclusionNotice.trim())
+    ? `\n### liHardExclusions\n${hardExclusionNotice.trim()}\n`
+    : '';
+
   return `You are the Layered Intelligence reasoner for the app "${app.name}". Your job is to evaluate how THIS app is performing against its OWN goals and purpose${isPortos ? '' : ', not how well PortOS\'s tooling manages it'}. Decide the SINGLE highest-value improvement to propose this run (signal, not noise), grounded in the app's own goals and its own performance metrics (user success, KPIs, production telemetry). You never write code; you return structured JSON that a deterministic system files as ONE tracker issue.
-${handoffNote}${metricsGuidance}
+${handoffNote}${metricsGuidance}${hardExclusionBlock}
 Rules & guidance from the operator:
 ${config.rules?.trim() || '(none)'}
 
