@@ -90,8 +90,25 @@ export function isGithubHost(host) {
  */
 export function githubRepoSpec(origin) {
   if (!origin?.fullName || !isGithubHost(origin.host)) return null;
-  const apiHost = /^ssh\.github\.com$/i.test(origin.host) ? 'github.com' : origin.host;
-  return `${apiHost}/${origin.fullName}`;
+  return `${githubApiHost(origin.host)}/${origin.fullName}`;
+}
+
+/**
+ * Canonicalize a GitHub origin host to the API host `gh --hostname` / `gh --repo`
+ * expects. GitHub's SSH-over-443 alias (`git@ssh.github.com:443/owner/repo`) parses
+ * to host `ssh.github.com`, but the API endpoint is `github.com` — querying
+ * `ssh.github.com` as an API host silently fails. Only `github.com` has a documented
+ * `ssh.` alias, so canonicalize the exact known alias and pass every other host
+ * (github.com, `ssh.github.acme.example`, and other enterprise hosts) through
+ * unchanged. Callers that hand a host to a `gh` `--hostname` (e.g. prWatcher's
+ * `getSelfLogin`) MUST canonicalize through here, or an ssh-alias origin resolves
+ * the wrong API host — the same trap `githubRepoSpec` avoids for the repo selector.
+ * @param {string|null|undefined} host
+ * @returns {string|null}
+ */
+export function githubApiHost(host) {
+  if (!host) return null;
+  return /^ssh\.github\.com$/i.test(host) ? 'github.com' : host;
 }
 
 /**

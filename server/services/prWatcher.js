@@ -27,7 +27,7 @@
 import { execGh } from './github.js';
 import { getAppById, updateApp } from './apps.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
-import { githubRepoSpec } from '../lib/workTracker.js';
+import { githubRepoSpec, githubApiHost } from '../lib/workTracker.js';
 import { PR_AUTHOR_FILTERS } from '../lib/validation.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 
@@ -214,7 +214,11 @@ export async function checkPullRequests(app, { authorFilter = 'any' } = {}) {
   // blindly if gh can't tell us who "self" is on THIS repo's host.
   let selfLogin = null;
   if (filter !== 'any') {
-    selfLogin = await getSelfLogin(origin.host);
+    // Canonicalize the host: an `ssh.github.com` alias origin must resolve "self"
+    // against the github.com API host, matching githubRepoSpec's repo selector.
+    // Passing origin.host raw would query the SSH endpoint and always return
+    // self-login-unavailable, so self/others gates would never fire (#2650).
+    selfLogin = await getSelfLogin(githubApiHost(origin.host));
     if (!selfLogin) {
       return { ok: false, reason: 'self-login-unavailable', repoFullName, defaultBranch };
     }

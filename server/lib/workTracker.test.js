@@ -7,6 +7,7 @@ import {
   hostToWorkTracker,
   isGithubHost,
   githubRepoSpec,
+  githubApiHost,
   forgeCliForTracker,
   trackerToClaimTaskType,
   resolveWorkTracker,
@@ -84,6 +85,26 @@ describe('githubRepoSpec', () => {
     expect(githubRepoSpec({ host: 'github.com', fullName: null })).toBeNull();
     expect(githubRepoSpec({ host: null, fullName: null })).toBeNull();
     expect(githubRepoSpec(null)).toBeNull();
+  });
+});
+
+describe('githubApiHost', () => {
+  it('canonicalizes the documented github.com SSH-over-443 alias to github.com (#2650)', () => {
+    // prWatcher hands this host to getSelfLogin's `gh --hostname`; a raw
+    // ssh.github.com would query the SSH endpoint and always return null,
+    // wedging every self/others PR gate into self-login-unavailable.
+    expect(githubApiHost('ssh.github.com')).toBe('github.com');
+    expect(githubApiHost('SSH.GitHub.com')).toBe('github.com');
+  });
+  it('passes github.com and enterprise hosts (including a genuine ssh.* one) through unchanged', () => {
+    expect(githubApiHost('github.com')).toBe('github.com');
+    expect(githubApiHost('github.acme.example')).toBe('github.acme.example');
+    expect(githubApiHost('ssh.github.acme.example')).toBe('ssh.github.acme.example');
+  });
+  it('returns null for a falsy host', () => {
+    expect(githubApiHost(null)).toBeNull();
+    expect(githubApiHost(undefined)).toBeNull();
+    expect(githubApiHost('')).toBeNull();
   });
 });
 
