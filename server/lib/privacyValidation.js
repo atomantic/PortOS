@@ -1,4 +1,12 @@
 import { z } from 'zod';
+import { isSafeHref } from './isSafeHref.js';
+
+// Reject non-http(s) schemes (`javascript:`/`data:`/etc.) on a URL field while
+// preserving the field's existing empty/absent handling — an empty string or
+// undefined value was allowed before and must stay allowed here; only a
+// non-empty, non-http(s) value is a new rejection.
+const safeUrlRefine = (val) => !val || isSafeHref(val);
+const SAFE_URL_MESSAGE = 'must be an http(s) URL';
 
 // =============================================================================
 // PRIVACY CENTER SCHEMAS (issue #2140, epic #2138)
@@ -112,14 +120,14 @@ export const PRIVACY_ORG_HOLDING_STATUSES = Object.freeze([
 const privacyOrgContactSchema = z.object({
   email: z.string().max(320).optional(),
   phone: z.string().max(64).optional(),
-  portalUrl: z.string().max(2000).optional(),
+  portalUrl: z.string().max(2000).optional().refine(safeUrlRefine, SAFE_URL_MESSAGE),
   mailingAddress: z.string().max(2000).optional(),
 }).strict();
 
 export const privacyOrgCreateSchema = z.object({
   name: z.string().trim().min(1).max(200),
   category: z.enum(PRIVACY_ORG_CATEGORIES).optional(),
-  website: z.string().max(2000).optional(),
+  website: z.string().max(2000).optional().refine(safeUrlRefine, SAFE_URL_MESSAGE),
   trust: z.enum(PRIVACY_ORG_TRUST_LEVELS).optional(),
   status: z.enum(PRIVACY_ORG_STATUSES).optional(),
   contact: privacyOrgContactSchema.optional(),
@@ -131,7 +139,7 @@ export const privacyOrgCreateSchema = z.object({
 export const privacyOrgUpdateSchema = z.object({
   name: z.string().trim().min(1).max(200).optional(),
   category: z.enum(PRIVACY_ORG_CATEGORIES).optional(),
-  website: z.string().max(2000).optional(),
+  website: z.string().max(2000).optional().refine(safeUrlRefine, SAFE_URL_MESSAGE),
   trust: z.enum(PRIVACY_ORG_TRUST_LEVELS).optional(),
   status: z.enum(PRIVACY_ORG_STATUSES).optional(),
   contact: privacyOrgContactSchema.optional(),

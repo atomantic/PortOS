@@ -161,6 +161,7 @@ export * from './fetchWithTimeout.js';
 export * from './requestAbort.js';
 export * from './httpClient.js';
 export * from './httpsState.js';
+export * from './isSafeHref.js';
 export * from './networkExposure.js';
 export * from './peerHttpClient.js';
 export * from './peerSelfHost.js';

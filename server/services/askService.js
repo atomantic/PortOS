@@ -37,6 +37,7 @@ import { isGrokCommand, ensureGrokHeadlessArgs } from '../lib/grok.js';
 import { prepareCliPrompt } from '../lib/cliProviderArgs.js';
 import { prepareCliSpawn } from '../lib/bufferedSpawn.js';
 import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
+import { evaluateSecretEndpoint } from '../lib/aiToolkit/internal/endpointGuard.js';
 
 // Re-export so the route can keep importing modes via askService — but
 // askConversations is the source of truth (it owns the persistence schema).
@@ -444,6 +445,16 @@ async function pickProvider(providerId) {
  */
 async function* streamCompletion(provider, model, prompt, signal) {
   if (provider.type === 'api') {
+    // Never send the API key to an arbitrary/metadata host (SSRF / key
+    // exfiltration). Keyless local-LLM calls skip this guard entirely.
+    if (provider.apiKey) {
+      const guard = evaluateSecretEndpoint(provider.endpoint, {
+        allowCustomEndpoint: provider.allowCustomEndpoint === true,
+      });
+      if (!guard.allowed) {
+        throw new Error(`Provider endpoint blocked: ${guard.reason}`);
+      }
+    }
     const headers = { 'Content-Type': 'application/json' };
     if (provider.apiKey) headers['Authorization'] = `Bearer ${provider.apiKey}`;
     // Combine the per-provider timeout with the caller's abort signal so

@@ -202,6 +202,7 @@ describe('resolveLlmEndpoint', () => {
     getProviderById.mockResolvedValue({
       id: 'nvidia-kimi', type: 'api', endpoint: 'https://integrate.api.nvidia.com/v1',
       apiKey: 'secret', defaultModel: 'moonshotai/kimi-k2-5', name: 'NVIDIA Kimi',
+      allowCustomEndpoint: true,
     });
     const ep = await resolveLlmEndpoint('nvidia-kimi');
     expect(ep.apiBase).toBe('https://integrate.api.nvidia.com/v1');

@@ -10,6 +10,7 @@ import {
   ORG_CATEGORIES, ORG_TRUST_LEVELS, ORG_STATUSES, ORG_HOLDING_STATUSES,
   TRUST_TONE, HOLDING_TONE, labelFor,
 } from './constants';
+import { isHttpUrl } from '../../utils/urlNormalize';
 
 // Filter chip row — a single-select toggle group over a list of {id,label}.
 function ChipFilter({ label, options, value, onChange }) {
@@ -155,7 +156,7 @@ export default function PrivacyOrgsTab() {
                     </div>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    {org.website && (
+                    {org.website && isHttpUrl(org.website) && (
                       <a
                         href={org.website}
                         target="_blank"

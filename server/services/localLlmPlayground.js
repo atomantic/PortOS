@@ -6,6 +6,7 @@ import { markProviderAvailable } from './providerStatus.js';
 import { ensureProviderReady as ensureOllamaProviderReady } from './ollamaManager.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
 import { anyAbortSignal } from '../lib/requestAbort.js';
+import { assertSecretEndpoint } from '../lib/aiToolkit/internal/endpointGuard.js';
 
 const PROVIDER_BY_BACKEND = { ollama: 'ollama', lmstudio: 'lmstudio' };
 
@@ -100,6 +101,14 @@ async function streamChatCompletion({ provider, backend, modelId, prompt, system
       throw new Error(`Ollama is not running and PortOS could not start it: ${ready.error || 'unknown error'}`);
     }
   }
+
+  // Guard before attaching the API key so a hostile/mistyped endpoint on the
+  // (normally keyless) ollama/lmstudio provider records can't harvest a key
+  // or reach a cloud-metadata service (SSRF). No-ops when apiKey is unset.
+  assertSecretEndpoint(provider.endpoint, {
+    hasSecret: Boolean(provider.apiKey),
+    allowCustomEndpoint: provider.allowCustomEndpoint === true,
+  });
 
   const headers = { 'Content-Type': 'application/json' };
   if (provider.apiKey) headers.Authorization = `Bearer ${provider.apiKey}`;

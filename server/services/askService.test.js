@@ -237,6 +237,7 @@ describe('runAsk', () => {
       endpoint: 'https://example.test/v1',
       defaultModel: 'fake-model',
       timeout: 5000,
+      allowCustomEndpoint: true,
     };
   }
 
@@ -458,5 +459,84 @@ describe('runAsk', () => {
     const [, args] = spawn.mock.calls.at(-1);
     expect(args[0]).toBe('run');
     expect(args[args.indexOf('--model') + 1]).toBe('ollama/qwen2.5:7b');
+  });
+
+  describe('endpoint guard (SSRF / key-exfiltration)', () => {
+    it('blocks a keyed api provider pointed at a cloud-metadata endpoint and never calls fetch', async () => {
+      providers.getActiveProvider.mockResolvedValue({
+        id: 'fake', type: 'api', enabled: true, apiKey: 'secret-key',
+        endpoint: 'http://169.254.169.254/latest/meta-data/', defaultModel: 'fake-model', timeout: 5000,
+        // allowCustomEndpoint intentionally absent — must not matter for a
+        // metadata endpoint (it's never overridable).
+      });
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(buildSSEResponse(['should not reach here']));
+
+      const events = [];
+      for await (const evt of askService.runAsk({ question: 'hi' })) events.push(evt);
+      const callCount = fetchSpy.mock.calls.length;
+      fetchSpy.mockRestore();
+
+      const errorEvt = events.find((e) => e.type === 'error');
+      expect(errorEvt).toBeDefined();
+      expect(errorEvt.error).toContain('Provider endpoint blocked');
+      expect(errorEvt.error).toContain('cloud-metadata endpoint blocked');
+      expect(events.find((e) => e.type === 'done')).toBeUndefined();
+      expect(callCount).toBe(0);
+    });
+
+    it('blocks a keyed api provider on a non-allowlisted host when allowCustomEndpoint is not set', async () => {
+      providers.getActiveProvider.mockResolvedValue({
+        id: 'fake', type: 'api', enabled: true, apiKey: 'secret-key',
+        endpoint: 'https://not-an-allowlisted-host.example', defaultModel: 'fake-model', timeout: 5000,
+      });
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(buildSSEResponse(['should not reach here']));
+
+      const events = [];
+      for await (const evt of askService.runAsk({ question: 'hi' })) events.push(evt);
+      const callCount = fetchSpy.mock.calls.length;
+      fetchSpy.mockRestore();
+
+      const errorEvt = events.find((e) => e.type === 'error');
+      expect(errorEvt).toBeDefined();
+      expect(errorEvt.error).toContain('Provider endpoint blocked');
+      expect(errorEvt.error).toContain('refusing to send API key to non-allowlisted host');
+      expect(events.find((e) => e.type === 'done')).toBeUndefined();
+      expect(callCount).toBe(0);
+    });
+
+    it('allows a keyed api provider on a non-allowlisted host through when allowCustomEndpoint is true', async () => {
+      providers.getActiveProvider.mockResolvedValue({
+        id: 'fake', type: 'api', enabled: true, apiKey: 'secret-key',
+        endpoint: 'https://not-an-allowlisted-host.example', defaultModel: 'fake-model', timeout: 5000,
+        allowCustomEndpoint: true,
+      });
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(buildSSEResponse(['Hello.']));
+
+      const events = [];
+      for await (const evt of askService.runAsk({ question: 'hi' })) events.push(evt);
+      const callCount = fetchSpy.mock.calls.length;
+      fetchSpy.mockRestore();
+
+      expect(events.find((e) => e.type === 'error')).toBeUndefined();
+      expect(events.find((e) => e.type === 'done')).toBeDefined();
+      expect(callCount).toBe(1);
+    });
+
+    it('allows a keyless api provider on a non-allowlisted host through (guard only applies when apiKey is set)', async () => {
+      providers.getActiveProvider.mockResolvedValue({
+        id: 'fake-local', type: 'api', enabled: true, apiKey: undefined,
+        endpoint: 'https://not-an-allowlisted-host.example', defaultModel: 'fake-model', timeout: 5000,
+      });
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(buildSSEResponse(['Hello.']));
+
+      const events = [];
+      for await (const evt of askService.runAsk({ question: 'hi' })) events.push(evt);
+      const callCount = fetchSpy.mock.calls.length;
+      fetchSpy.mockRestore();
+
+      expect(events.find((e) => e.type === 'error')).toBeUndefined();
+      expect(events.find((e) => e.type === 'done')).toBeDefined();
+      expect(callCount).toBe(1);
+    });
   });
 });
