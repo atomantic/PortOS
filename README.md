@@ -60,7 +60,7 @@ Bring your entire portfolio of projects under one roof.
 
 An autonomous AI agent orchestrator that manages your development workflow. Submit a task, and CoS dispatches the right AI agent to handle it — then learns from the result. ([Full docs](./docs/features/chief-of-staff.md))
 
-- **Multi-Agent Orchestration** — Run Claude Code, Codex, Antigravity CLI, Ollama, and LM Studio concurrently with global and per-project limits, capacity management, and fair scheduling ([Agent Runner docs](./docs/features/cos-agent-runner.md))
+- **Multi-Agent Orchestration** — Run Claude Code, Codex, Antigravity CLI, Kimi Code, Ollama, and LM Studio concurrently with global and per-project limits, capacity management, and fair scheduling ([Agent Runner docs](./docs/features/cos-agent-runner.md))
 - **Intelligent Routing** — 6 agent skill templates (bug-fix, feature, security-audit, refactor, docs, mobile) route tasks to the best model based on complexity ([Agent Skills docs](./docs/features/agent-skills.md))
 - **Task Learning** — Tracks success rates, error patterns, and model performance to dynamically improve routing decisions ([Memory System docs](./docs/features/memory-system.md))
 - **Goal Tracking** — Define goals and track progress across hundreds of completed tasks with success rate metrics
@@ -282,7 +282,7 @@ PortOS binds to `0.0.0.0` so you can access it from any device on your Tailscale
 | **Frontend** | React 18, Vite, Tailwind CSS, Three.js, xterm.js |
 | **Backend** | Express.js, Socket.IO, PM2, Zod validation |
 | **Data** | PostgreSQL + pgvector (primary datastore — mandatory), JSON files for binary assets and synced/ephemeral state ([storage contract](./docs/STORAGE.md)) |
-| **AI** | Claude Code, Codex, Antigravity CLI, Ollama, LM Studio (via the in-tree AI toolkit, `server/lib/aiToolkit/`) |
+| **AI** | Claude Code, Codex, Antigravity CLI, Kimi Code, Ollama, LM Studio (via the in-tree AI toolkit, `server/lib/aiToolkit/`) |
 
 ## Project Structure
 
@@ -321,7 +321,7 @@ Each registered app includes:
 
 ### AI Providers (`data/providers.json`)
 Configure AI providers for the runner and Chief of Staff:
-- **CLI-based**: Claude Code, Codex, Antigravity CLI
+- **CLI-based**: Claude Code, Codex, Antigravity CLI, Kimi Code
 - **API-based**: OpenAI, Anthropic, Google (with model tier management)
 - **Local models**: Ollama, LM Studio (OpenAI-compatible endpoints)
 

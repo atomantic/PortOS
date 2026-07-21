@@ -134,6 +134,65 @@ describe('codex provider — generateImage', () => {
     await flush();
   });
 
+  it('defaults to the cheap gpt-5.6-luna model at low effort when none is configured', async () => {
+    const job = await codex.generateImage({ prompt: 'a small fox' });
+    // The resolved default surfaces on the job descriptor so the gallery/UI reflects it.
+    expect(job.model).toBe('gpt-5.6-luna');
+    const { args } = spawnCalls[0];
+    // Model default → `-m gpt-5.6-luna`.
+    const mIdx = args.indexOf('-m');
+    expect(mIdx).toBeGreaterThan(-1);
+    expect(args[mIdx + 1]).toBe('gpt-5.6-luna');
+    // Effort default → `-c model_reasoning_effort=low`.
+    expect(args).toEqual(expect.arrayContaining(['-c', 'model_reasoning_effort=low']));
+    spawnCalls[0].child.exitCode = 1;
+    spawnCalls[0].child.emit('close', 1, null);
+    await flush();
+  });
+
+  it('honors an explicit model and effort override', async () => {
+    const job = await codex.generateImage({ prompt: 'a fox', model: 'gpt-5.6-terra', effort: 'high' });
+    expect(job.model).toBe('gpt-5.6-terra');
+    const { args } = spawnCalls[0];
+    const mIdx = args.indexOf('-m');
+    expect(args[mIdx + 1]).toBe('gpt-5.6-terra');
+    expect(args).toEqual(expect.arrayContaining(['-c', 'model_reasoning_effort=high']));
+    // The shipped defaults must NOT leak in when an override is set.
+    expect(args).not.toContain('gpt-5.6-luna');
+    expect(args).not.toEqual(expect.arrayContaining(['model_reasoning_effort=low']));
+    spawnCalls[0].child.exitCode = 1;
+    spawnCalls[0].child.emit('close', 1, null);
+    await flush();
+  });
+
+  it('falls back to low when a stored effort value is unrecognized', async () => {
+    // A hand-edited settings.json / the unvalidated settings PUT could carry a
+    // garbage effort; it must not silently disable the cheap-default guarantee.
+    await codex.generateImage({ prompt: 'a fox', effort: 'banana' });
+    const { args } = spawnCalls[0];
+    expect(args).toEqual(expect.arrayContaining(['-c', 'model_reasoning_effort=low']));
+    expect(args).not.toContain('model_reasoning_effort=banana');
+    spawnCalls[0].child.exitCode = 1;
+    spawnCalls[0].child.emit('close', 1, null);
+    await flush();
+  });
+
+  it('places the effort arg before the variadic -i so it is not swallowed as an image path', async () => {
+    await mkdir(FAKE_IMAGES_DIR, { recursive: true });
+    await writeFile(join(FAKE_IMAGES_DIR, 'ref.png'), 'fake');
+    await codex.generateImage({ prompt: 'edit', initImagePath: 'ref.png', initImageStrength: 0.2 });
+    const { args } = spawnCalls[0];
+    const effortValIdx = args.indexOf('model_reasoning_effort=low');
+    const iIdx = args.indexOf('-i');
+    expect(effortValIdx).toBeGreaterThan(-1);
+    expect(iIdx).toBeGreaterThan(-1);
+    // Effort config pair sits ahead of the variadic image flag.
+    expect(effortValIdx).toBeLessThan(iIdx);
+    spawnCalls[0].child.exitCode = 1;
+    spawnCalls[0].child.emit('close', 1, null);
+    await flush();
+  });
+
   it('rejects when prompt is empty and there is no init image', async () => {
     await expect(codex.generateImage({ prompt: '   ' })).rejects.toThrow(/Prompt is required/);
   });

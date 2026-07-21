@@ -55,7 +55,7 @@ import { execGh } from './github.js';
 import { execGlab } from './gitlab.js';
 import { fetchMyCurrentSprintTickets } from './jira.js';
 import { getOriginInfo, readOriginRemoteUrl } from '../lib/gitRemote.js';
-import { hostToWorkTracker, hostFromOriginUrl } from '../lib/workTracker.js';
+import { hostToWorkTracker, hostFromOriginUrl, githubRepoSpec } from '../lib/workTracker.js';
 import { safeJSONParse, PATHS } from '../lib/fileUtils.js';
 
 // Bound the forge queries (single-user repos never realistically truncate at 200).
@@ -258,19 +258,23 @@ function normalizeGithubIssue(issue) {
  * on any gh failure (degrade: the caller treats null as "nothing to reconcile /
  * transient"). `fullName` is resolved by the dispatcher, not re-queried here.
  * Unlike `getGitlabState`, this needs no `repoPath` — `gh` targets the repo via
- * `--repo <fullName>` rather than resolving from the working directory.
- * @param {string} fullName
+ * `--repo <repoSpec>` rather than resolving from the working directory.
+ * `repoSpec` is the host-qualified `HOST/OWNER/REPO` selector (mirroring
+ * prWatcher) so gh targets enterprise repos correctly and stays deterministic on
+ * a fork+upstream checkout; `fullName` is the plain `OWNER/REPO` for display.
+ * @param {string} repoSpec - host-qualified `HOST/OWNER/REPO` selector for gh
+ * @param {string} fullName - plain `OWNER/REPO`, returned for display/logging
  * @returns {Promise<{forge:'github', fullName:string, inProgress:object[], mergedPrs:object[], openPrs:object[]}|null>}
  */
-async function getGithubState(fullName) {
+async function getGithubState(repoSpec, fullName) {
   const [issuesRaw, mergedRaw, openRaw] = await Promise.all([
-    execGh(['issue', 'list', '--repo', fullName, '--state', 'open',
+    execGh(['issue', 'list', '--repo', repoSpec, '--state', 'open',
       '--label', IN_PROGRESS_LABEL, '--limit', String(GH_LIST_LIMIT),
       '--json', 'number,title,labels,assignees,url']).catch(() => null),
-    execGh(['pr', 'list', '--repo', fullName, '--state', 'merged',
+    execGh(['pr', 'list', '--repo', repoSpec, '--state', 'merged',
       '--limit', String(GH_LIST_LIMIT),
       '--json', 'number,headRefName,body,url,mergedAt']).catch(() => null),
-    execGh(['pr', 'list', '--repo', fullName, '--state', 'open',
+    execGh(['pr', 'list', '--repo', repoSpec, '--state', 'open',
       '--limit', String(GH_LIST_LIMIT),
       '--json', 'number,headRefName,body']).catch(() => null),
   ]);
@@ -371,11 +375,14 @@ function gitlabProjectPath(originUrl) {
 
 /**
  * Resolve the app's forge from its git origin host and fetch the corresponding
- * state. github.com → GitHub, gitlab.* → GitLab; any other remote (or no origin)
+ * state. github.* → GitHub, gitlab.* → GitLab; any other remote (or no origin)
  * returns null so the caller skips without parking.
  *
- * GitHub uses `getOriginInfo().isGithub` (authoritative, github.com-only — same
- * scope as v1). GitLab is classified straight off the origin HOST via the
+ * GitHub is resolved via `githubRepoSpec` (github.com AND enterprise github.*),
+ * mirroring prWatcher — `getOriginInfo().isGithub` is github.com-only and
+ * silently skipped enterprise repos. That helper also needs a parsed `owner/repo`
+ * to build the host-qualified `--repo` selector. GitLab is classified
+ * straight off the origin HOST via the
  * subgroup-safe `hostFromOriginUrl`, NOT `getOriginInfo().fullName`: the latter's
  * strict `owner/repo` parse returns null for a nested `group/subgroup/project`
  * remote (the common GitLab layout), which would silently skip the scan even
@@ -385,8 +392,11 @@ function gitlabProjectPath(originUrl) {
  */
 async function getForgeState(repoPath) {
   const origin = await getOriginInfo(repoPath).catch(() => null);
-  // GitHub: authoritative, github.com-only, needs a parsed owner/repo for --repo.
-  if (origin?.isGithub && origin.fullName) return getGithubState(origin.fullName);
+  // GitHub (incl. enterprise): githubRepoSpec is the host-qualified
+  // `HOST/OWNER/REPO` --repo selector (deterministic on fork+upstream checkouts),
+  // or null when the origin isn't a resolvable GitHub repo.
+  const githubSpec = githubRepoSpec(origin);
+  if (githubSpec) return getGithubState(githubSpec, origin.fullName);
 
   // GitLab: classify off the host (subgroup-safe). `glab` is cwd-based, so a
   // display path is best-effort — prefer getOriginInfo's fullName, else derive the

@@ -19,6 +19,7 @@ import {
 import { optionalUploadFields } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
 import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
+import { CODEX_IMAGEGEN_DEFAULT_MODEL } from '../services/imageGen/modes.js';
 import setupRouter from './imageGenSetup.js';
 import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { getImageModels, isFlux2, isEditOnly, repoForModel, requiredReposForModel } from '../lib/mediaModels.js';
@@ -398,6 +399,10 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
         { status: 400, code: 'CODEX_IMAGEGEN_DISABLED' },
       );
     }
+    // Resolve the effective model so the queue row + response metadata report
+    // what actually renders (gpt-5.6-luna by default) instead of "codex"/null.
+    // codex.generateImage applies the same default, so this is display parity.
+    const codexModel = c.model || CODEX_IMAGEGEN_DEFAULT_MODEL;
     const queued = enqueueJob({
       kind: 'image',
       // `mode: IMAGE_GEN_MODE.CODEX` is the queue's discriminator —
@@ -406,11 +411,12 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
       params: {
         mode: IMAGE_GEN_MODE.CODEX,
         codexPath: c.codexPath,
-        model: c.model,
+        model: codexModel,
+        effort: c.effort,
         ...params,
       },
     });
-    return res.json(queuedImageResponse({ ...queued, mode: IMAGE_GEN_MODE.CODEX, model: c.model || null }));
+    return res.json(queuedImageResponse({ ...queued, mode: IMAGE_GEN_MODE.CODEX, model: codexModel }));
   }
   if (mode === IMAGE_GEN_MODE.LOCAL) {
     const py = settings.imageGen?.local?.pythonPath || null;

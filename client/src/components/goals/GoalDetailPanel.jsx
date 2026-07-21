@@ -95,6 +95,7 @@ export default function GoalDetailPanel({ goal, allGoals, onClose, onRefresh }) 
           setTagInput={s.setTagInput}
           addTag={s.addTag}
           removeTag={s.removeTag}
+          toggleFeatureArea={s.toggleFeatureArea}
           parentOptions={parentOptions}
           saveEdit={s.saveEdit}
           onCancel={() => s.setEditing(false)}

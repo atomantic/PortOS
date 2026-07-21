@@ -178,7 +178,15 @@ export function messageActivityCandidates(account, messages = []) {
     const externalId = message.externalId || message.id;
     if (!externalId) continue;
     const fromEmail = participantEmail(message.from);
-    const sent = Boolean(selfEmail) && fromEmail === selfEmail;
+    // Direction: prefer Gmail's authoritative SENT label when the provider supplies
+    // labels — it correctly marks mail sent from a "send-as" alias (where From ≠
+    // account.email), which a bare From-vs-owner match would misclassify as received
+    // and so never cancel its inbound in outreach detection (#2796). Sources without
+    // labels (Outlook/other) fall back to matching the sender against the owner.
+    const labels = Array.isArray(message.labels) ? message.labels : null;
+    const sent = labels
+      ? labels.includes('SENT')
+      : (Boolean(selfEmail) && fromEmail === selfEmail);
     const participants = normalizeParticipants([
       message.from,
       ...(message.to || []),
@@ -197,6 +205,14 @@ export function messageActivityCandidates(account, messages = []) {
         threadId: message.threadId || null,
         externalId,
         channel: source,
+        // The counterpart handle for a RECEIVED message is the sender's email —
+        // set it so `enrichActivityEvent` (which resolves the top-level personId
+        // from `metadata.handle`) can tag the Tribe sender, exactly as the iMessage
+        // mapper does. Without this, email inbound never resolves to a person and
+        // Tribe-outreach detection (#2796) drops every Gmail thread. Sent turns
+        // carry no counterpart handle (mirrors iMessage); email threads group by
+        // `threadId`, so handle is never the grouping key here.
+        handle: sent ? null : (fromEmail || null),
       },
     });
   }
@@ -350,14 +366,21 @@ async function insertActivityChunk(rows) {
 // Query events with optional filters. `from`/`to` are ISO timestamps (inclusive
 // lower, exclusive upper); `personId` matches a participant via the JSONB
 // containment operator. `chatGuid` / `handle` match iMessage-style metadata
-// pointers. Newest first, capped by `limit` (default 500, max 2000).
-export async function listEvents({ from, to, source, kind, personId, chatGuid, conversationId, threadId, handle, limit } = {}) {
+// pointers. `accountId` scopes to one source account (#2820). Newest first,
+// capped by `limit` (default 500, max 2000).
+export async function listEvents({ from, to, source, accountId, kind, personId, chatGuid, conversationId, threadId, handle, limit } = {}) {
   await ensureReady();
   const clauses = [];
   const params = [];
   if (from) { params.push(new Date(from).toISOString()); clauses.push(`happened_at >= $${params.length}`); }
   if (to) { params.push(new Date(to).toISOString()); clauses.push(`happened_at < $${params.length}`); }
   if (source) { params.push(source); clauses.push(`source = $${params.length}`); }
+  // Optional per-account scope (#2820): lets a caller cap events one account at a
+  // time so a high-volume account can't fill a shared cap and starve another.
+  if (accountId != null && String(accountId).length > 0) {
+    params.push(String(accountId));
+    clauses.push(`account_id = $${params.length}`);
+  }
   if (kind) { params.push(kind); clauses.push(`kind = $${params.length}`); }
   if (personId) {
     params.push(JSON.stringify([{ personId: String(personId) }]));

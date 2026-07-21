@@ -25,9 +25,15 @@ import {
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
 import { useMediaJobSse } from '../../hooks/useMediaJobSse';
+import { CODEX_EFFORT_LEVELS } from '../../utils/providers';
 
 const SDAPI_TOOL_ID = 'sdapi';
 const CODEX_TOOL_ID = 'codex-imagegen';
+// Mirror of server/services/imageGen/modes.js — shown as placeholder/default
+// hints so the user sees what a blank Model / Effort field will actually use.
+// The server owns the real default; these are display-only.
+const CODEX_IMAGEGEN_DEFAULT_MODEL = 'gpt-5.6-luna';
+const CODEX_IMAGEGEN_DEFAULT_EFFORT = 'low';
 const DEFAULT_TEST_PROMPT = 'a small cyberpunk fox sitting on a neon-lit rooftop at night, cinematic, highly detailed';
 const normalizeUrl = (url) => (url || '').trim().replace(/\/+$/, '');
 
@@ -85,6 +91,8 @@ export function ImageGenTab() {
   const [codexEnabled, setCodexEnabled] = useState(false);
   const [codexPath, setCodexPath] = useState('');
   const [codexModel, setCodexModel] = useState('');
+  // Empty = use the shipped default effort (CODEX_IMAGEGEN_DEFAULT_EFFORT).
+  const [codexEffort, setCodexEffort] = useState('');
   const [codexParallelLimit, setCodexParallelLimit] = useState(1);
   // Per-provider cleaner toggles. Both run after the PNG lands and before
   // the SSE complete event so subscribers see the cleaned bytes. SynthID
@@ -110,12 +118,13 @@ export function ImageGenTab() {
   // Stable ids for label/input associations
   const codexPathId = useId();
   const codexModelId = useId();
+  const codexEffortId = useId();
   const codexParallelId = useId();
 
   // Snapshot of saved values so we can show the "dirty" state
   const [saved, setSaved] = useState({
     mode: IMAGE_GEN_MODE.EXTERNAL, sdapiUrl: '', pythonPath: '', exposeA1111: false,
-    codexEnabled: false, codexPath: '', codexModel: '', codexParallelLimit: 1,
+    codexEnabled: false, codexPath: '', codexModel: '', codexEffort: '', codexParallelLimit: 1,
     cleanC2PAByMode: { external: true, local: true, codex: true },
     denoiseByMode: { external: false, local: false, codex: false },
   });
@@ -187,6 +196,7 @@ export function ImageGenTab() {
         const cxEnabled = cx.enabled === true;
         const cxPath = cx.codexPath || '';
         const cxModel = cx.model || '';
+        const cxEffort = cx.effort || '';
         const bounds = cx.parallelLimitBounds && Number.isFinite(cx.parallelLimitBounds.max)
           ? cx.parallelLimitBounds
           : PARALLEL_FALLBACK;
@@ -206,13 +216,14 @@ export function ImageGenTab() {
         setCodexEnabled(cxEnabled);
         setCodexPath(cxPath);
         setCodexModel(cxModel);
+        setCodexEffort(cxEffort);
         setCodexParallelLimit(cxParallel);
         setParallelLimitDraft(String(cxParallel));
         setCleanC2PAByMode(c2);
         setDenoiseByMode(dn);
         setSaved({
           mode: m, sdapiUrl: url, pythonPath: py, exposeA1111: expose,
-          codexEnabled: cxEnabled, codexPath: cxPath, codexModel: cxModel,
+          codexEnabled: cxEnabled, codexPath: cxPath, codexModel: cxModel, codexEffort: cxEffort,
           codexParallelLimit: cxParallel,
           cleanC2PAByMode: c2, denoiseByMode: dn,
         });
@@ -238,6 +249,7 @@ export function ImageGenTab() {
     || codexEnabled !== saved.codexEnabled
     || codexPath !== saved.codexPath
     || codexModel !== saved.codexModel
+    || codexEffort !== saved.codexEffort
     || codexParallelLimit !== saved.codexParallelLimit
     || cleanC2PAByMode.codex !== saved.cleanC2PAByMode.codex
     || cleanC2PAByMode.local !== saved.cleanC2PAByMode.local
@@ -251,6 +263,7 @@ export function ImageGenTab() {
     const url = normalizeUrl(sdapiUrl) || undefined;
     const cxPath = codexPath?.trim() || undefined;
     const cxModel = codexModel?.trim() || undefined;
+    const cxEffort = codexEffort?.trim() || undefined;
     const cxParallel = clampParallel(codexParallelLimit, parallelBounds);
     const patch = {
       imageGen: {
@@ -258,7 +271,7 @@ export function ImageGenTab() {
         external: { sdapiUrl: url, cleanC2PA: cleanC2PAByMode.external, denoise: denoiseByMode.external },
         local: { pythonPath: pythonPath || undefined, cleanC2PA: cleanC2PAByMode.local, denoise: denoiseByMode.local },
         codex: {
-          enabled: codexEnabled, codexPath: cxPath, model: cxModel, parallelLimit: cxParallel,
+          enabled: codexEnabled, codexPath: cxPath, model: cxModel, effort: cxEffort, parallelLimit: cxParallel,
           cleanC2PA: cleanC2PAByMode.codex, denoise: denoiseByMode.codex,
         },
         expose: { a1111: exposeA1111 },
@@ -275,7 +288,7 @@ export function ImageGenTab() {
       // updated with the trimmed "codex").
       setSaved({
         mode, sdapiUrl: url || '', pythonPath, exposeA1111,
-        codexEnabled, codexPath: cxPath || '', codexModel: cxModel || '',
+        codexEnabled, codexPath: cxPath || '', codexModel: cxModel || '', codexEffort: cxEffort || '',
         codexParallelLimit: cxParallel,
         cleanC2PAByMode, denoiseByMode,
       });
@@ -287,6 +300,7 @@ export function ImageGenTab() {
       // sees matches what was saved.
       if (cxPath !== codexPath) setCodexPath(cxPath || '');
       if (cxModel !== codexModel) setCodexModel(cxModel || '');
+      if (cxEffort !== codexEffort) setCodexEffort(cxEffort || '');
       toast.success('Image gen settings saved');
     } catch (err) {
       toast.error(err.message || 'Failed to save settings');
@@ -310,7 +324,7 @@ export function ImageGenTab() {
       category: 'image-generation',
       description: 'Generate images via the Codex CLI built-in image_gen tool ($imagegen prompt prefix). Requires a Codex plan that includes image_gen.',
       enabled: codexEnabled,
-      config: { codexPath: cxPath, model: cxModel },
+      config: { codexPath: cxPath, model: cxModel, effort: cxEffort },
       promptHints: 'Use POST /api/image-gen/generate with { prompt, mode: "codex" } — or call the image_generate voice tool with provider: "codex".',
     };
 
@@ -569,9 +583,24 @@ export function ImageGenTab() {
                 value={codexModel}
                 onChange={(e) => setCodexModel(e.target.value)}
                 className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
-                placeholder="gpt-5.4"
+                placeholder={`${CODEX_IMAGEGEN_DEFAULT_MODEL} (default)`}
               />
-              <p className="text-xs text-gray-500 mt-1">Passed as <code>codex exec -m &lt;model&gt;</code>. Leave empty to use Codex's default.</p>
+              <p className="text-xs text-gray-500 mt-1">Passed as <code>codex exec -m &lt;model&gt;</code>. Leave empty to use the cheap default (<code>{CODEX_IMAGEGEN_DEFAULT_MODEL}</code>).</p>
+            </div>
+            <div>
+              <label htmlFor={codexEffortId} className="block text-xs font-medium text-gray-400 mb-1">Reasoning effort (optional)</label>
+              <select
+                id={codexEffortId}
+                value={codexEffort}
+                onChange={(e) => setCodexEffort(e.target.value)}
+                className="w-full bg-port-bg border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
+              >
+                <option value="">Default ({CODEX_IMAGEGEN_DEFAULT_EFFORT})</option>
+                {CODEX_EFFORT_LEVELS.map((lvl) => (
+                  <option key={lvl} value={lvl}>{lvl}</option>
+                ))}
+              </select>
+              <p className="text-xs text-gray-500 mt-1">Passed as <code>codex exec -c model_reasoning_effort=&lt;level&gt;</code>. Lower effort is cheaper; leave on the shipped default (<code>{CODEX_IMAGEGEN_DEFAULT_EFFORT}</code>) or drop to <code>minimal</code> for the cheapest possible renders.</p>
             </div>
             <div>
               <label htmlFor={codexParallelId} className="block text-xs font-medium text-gray-400 mb-1">Parallel render limit</label>

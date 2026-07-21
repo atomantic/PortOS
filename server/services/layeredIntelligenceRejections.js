@@ -10,9 +10,13 @@
  * outcome rather than diagnosing it.
  *
  * This module owns the structured vocabulary and the deterministic mapping onto
- * it. Pure, no I/O, no LLM call — every token is derived from data the reconciler
- * already holds, so classification never adds a provider round-trip (the
- * "no cold-bootstrap LLM calls" policy) and never adds a tracker fetch.
+ * it. Pure, no I/O, no LLM call — every classifier here derives its token from data
+ * handed to it, so classification never adds a provider round-trip (the
+ * "no cold-bootstrap LLM calls" policy). One signal, the implementing-PR failure
+ * (#2748, deliverable 2), needs a `gh pr view` read the pure classifiers can't do —
+ * the RECONCILER owns that I/O (bounded to non-merged proposals that carry a PR ref
+ * and whose free signals left them undiagnosed) and passes the resolved token in, so
+ * this module stays pure.
  *
  * A LEAF module by design: it imports nothing from the LI graph, so both
  * `layeredIntelligence.js` (which formats the reports) and
@@ -73,8 +77,12 @@ export const REJECTION_REASONS = [
   'quality-issue',
   // Label-only today.
   'environment-blocker',
-  // Label-only today. These are properties of the PR that IMPLEMENTS a proposal,
-  // and LI tracks proposals as issues — it has no PR handle to read checks from.
+  // (live) From a human-applied label, OR the implementing-PR state read (#2748,
+  // deliverable 2): these are properties of the PR that IMPLEMENTS a proposal, and
+  // LI tracks proposals as issues. The reconciler now threads the implementing-PR ref
+  // (`closedByPullRequestsReferences`, additive/null-default) and reads its merge
+  // state / checks via `classifyPrFailure`, so a conflicted or CI-failed implementing
+  // PR is reachable without a record-shape migration.
   'merge-conflict',
   'validation-failed'
 ];
@@ -172,6 +180,79 @@ const STATE_REASON_REASONS = new Map(Object.entries({
 // already fixed that), so the merge rate the reasoner calibrates on is untouched.
 const GENERIC_REJECTION_REASONS = new Set(['user-rejected']);
 
+/**
+ * The reasons a PR-state read (#2748, deliverable 2) is ALLOWED to refine: the honest
+ * `unknown-reason` and the generic user-rejection. A SPECIFIC diagnosis — a
+ * scope/quality/duplicate label, a `duplicate` close reason, or a closing-comment
+ * rationale — already states WHY, so the reconciler skips the `gh pr view` round-trip
+ * for those (the read is bounded to the records prFailure could actually change).
+ *
+ * The gate is intentionally coarse: `user-rejected` also comes from a `wontfix`/
+ * `declined` LABEL, not only the generic `not_planned` state, and this predicate can't
+ * tell those apart from the reason token alone. So a labeled-wontfix record that also
+ * carries a PR ref pays one superfluous fetch — but NOT a wrong diagnosis: on the
+ * refine pass, `classifyRejection`'s step-1 label precedence returns `user-rejected`
+ * before it ever reaches the step-4 `prFailure`, so the human's label still wins and
+ * the stored token is unchanged. Distinguishing label- from state-derived
+ * `user-rejected` here would need threading the signal source through, which isn't
+ * worth it to save a bounded, harmless round-trip.
+ */
+export function isPrRefinableReason(reason) {
+  return reason === UNKNOWN_REJECTION_REASON || GENERIC_REJECTION_REASONS.has(reason);
+}
+
+// PR-check verdicts that mean the implementing change FAILED validation. gh's
+// statusCheckRollup mixes CheckRun (`conclusion`) and StatusContext (`state`) rows;
+// both are normalized to upper-case and tested against this set. Deliberately
+// conservative — CANCELLED/SKIPPED/NEUTRAL are ambiguous (superseded runs, opt-out
+// checks) and excluded, so a miss falls through to the honest `unknown-reason`
+// rather than a fabricated validation-failed.
+const FAILED_CHECK_VERDICTS = new Set(['FAILURE', 'ERROR', 'TIMED_OUT', 'STARTUP_FAILURE', 'ACTION_REQUIRED']);
+
+/**
+ * Classify why the PR that was meant to IMPLEMENT a proposal failed, from a
+ * `gh pr view --json state,mergeStateStatus,statusCheckRollup` read (#2748,
+ * deliverable 2). Pure, total, deterministic — the reconciler owns the I/O and hands
+ * the parsed object here. Returns a REJECTION_REASONS token, or null when the PR
+ * merged or nothing indicates a failure (→ the caller keeps the honest fallback).
+ *
+ *   - `merge-conflict`    — the branch could not be merged (`mergeStateStatus` DIRTY).
+ *                           GitHub only computes mergeability while the PR is open, so
+ *                           this fires on an open/last-known-dirty PR; it is checked
+ *                           first because a conflicted branch is the more fundamental
+ *                           blocker than a failed check on top of it.
+ *   - `validation-failed` — a required check reported a failing verdict. Readable even
+ *                           on a CLOSED (abandoned) PR from its last recorded rollup,
+ *                           which is the common terminal state for a proposal whose
+ *                           implementing PR was given up on.
+ *
+ * A MERGED PR is never a failure (returns null): if it merged, the proposal's outcome
+ * is `merged` and there is no rejection to diagnose.
+ */
+export function classifyPrFailure(prView) {
+  if (!prView || typeof prView !== 'object') return null;
+  if (String(prView.state || '').toUpperCase() === 'MERGED') return null;
+  if (String(prView.mergeStateStatus || '').toUpperCase() === 'DIRTY') return 'merge-conflict';
+  const rollup = Array.isArray(prView.statusCheckRollup) ? prView.statusCheckRollup : [];
+  for (const check of rollup) {
+    const verdict = String(check?.conclusion || check?.state || '').toUpperCase();
+    if (FAILED_CHECK_VERDICTS.has(verdict)) return 'validation-failed';
+  }
+  return null;
+}
+
+// The REJECTION_REASONS subset that classifyPrFailure produces (#2748, deliverable 2).
+// Once a record carries one of these it was already diagnosed from its implementing
+// PR's state, so re-reading that PR on a later reconcile can only reproduce the same
+// token — the reconciler consults this to STOP re-spawning `gh pr view` for an
+// already-settled PR diagnosis on every scheduler tick across the 30-day retention.
+export const PR_FAILURE_REASONS = ['merge-conflict', 'validation-failed'];
+
+/** Whether `reason` is a PR-state-derived diagnosis (merge-conflict / validation-failed). */
+export function isPrFailureReason(reason) {
+  return PR_FAILURE_REASONS.includes(reason);
+}
+
 // Closing-comment keyword pass (#2748). Some closures state their rationale only in
 // prose — a human declines in a comment without applying a matching label or (on
 // glab/jira) any close reason at all. This is a DETERMINISTIC keyword/heuristic
@@ -267,19 +348,25 @@ export function classifyClosingComment(text) {
  *   1. a human-applied label (the most deliberate signal);
  *   2. a SPECIFIC tracker close reason (duplicate);
  *   3. the deterministic closing-comment keyword pass (#2748);
- *   4. a GENERIC tracker close reason (GitHub `not_planned` → user-rejected: it
+ *   4. an implementing-PR failure token (#2748, deliverable 2) — a mechanical fact
+ *      about the PR that was meant to implement the proposal (`merge-conflict` /
+ *      `validation-failed`), pre-resolved by the reconciler from a `gh pr view` read;
+ *   5. a GENERIC tracker close reason (GitHub `not_planned` → user-rejected: it
  *      says the proposal was declined, but not why).
- * The comment sits BELOW a label/specific reason but ABOVE the generic decline, so
- * a prose rationale REFINES a bare not_planned into a precise token instead of
- * being shadowed by it — the refinement changes only the reason, never the
- * outcome deriveOutcome already fixed, so it can't move the merge rate. The comment
- * NEVER overrides the merged fallback (deriveOutcome runs first and never reaches
- * here for a merge), so the reasonless-close-reads-as-merged gap the module header
- * documents is untouched by this pass.
+ * The comment and the PR-failure both sit BELOW a label/specific reason but ABOVE the
+ * generic decline, so each REFINES a bare not_planned into a precise token instead of
+ * being shadowed by it. The PR-failure sits below the closing comment on purpose: a
+ * human who stated a rationale in prose ("out of scope") outranks the mechanical fact
+ * that the implementing PR happened to have a conflict — the PR-failure only speaks
+ * for the records a human left otherwise undiagnosed. Every refinement changes only
+ * the reason token, never the outcome deriveOutcome already fixed, so none can move
+ * the merge rate. The pass NEVER overrides the merged fallback (deriveOutcome runs
+ * first and never reaches here for a merge), so the reasonless-close-reads-as-merged
+ * gap the module header documents is untouched.
  *
  * Deterministic and total: same inputs always yield the same token.
  */
-export function classifyRejection({ outcome = null, stateReason = null, labels = [], closingComment = null } = {}) {
+export function classifyRejection({ outcome = null, stateReason = null, labels = [], closingComment = null, prFailure = null } = {}) {
   // Only a resolved, non-merged proposal has a rejection to explain.
   if (outcome !== 'rejected' && outcome !== 'abandoned') return null;
 
@@ -299,7 +386,11 @@ export function classifyRejection({ outcome = null, stateReason = null, labels =
   const commentHit = classifyClosingComment(closingComment);
   if (commentHit) return commentHit;
 
-  // 4. The generic close reason, when the comment named nothing specific.
+  // 4. The implementing-PR failure (#2748, deliverable 2) — only a member of
+  //    REJECTION_REASONS is honoured, so a caller can't inject a foreign token.
+  if (prFailure && REJECTION_REASONS.includes(prFailure)) return prFailure;
+
+  // 5. The generic close reason, when nothing more specific named the rationale.
   if (stateHit) return stateHit;
 
   return UNKNOWN_REJECTION_REASON;

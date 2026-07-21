@@ -2,7 +2,7 @@
 import { createHash } from 'crypto';
 import { join } from 'path';
 import { atomicWrite, ensureDir, filterBySearch as genericFilterBySearch, PATHS, safeDate, safeJSONParse, UUID_RE, tryReadFile } from '../lib/fileUtils.js';
-import { getAccount, updateSyncStatus } from './messageAccounts.js';
+import { getAccount, updateSyncStatus, markSentIngested } from './messageAccounts.js';
 import { getUserTimezone, getLocalParts } from '../lib/timezone.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
@@ -191,6 +191,12 @@ export async function syncAccount(accountId, io, options = {}) {
     // Support structured result { messages, status } or plain array
     const newMessages = Array.isArray(providerResult) ? providerResult : providerResult?.messages ?? [];
     const providerStatus = Array.isArray(providerResult) ? 'success' : providerResult?.status ?? 'success';
+    // Sent mail (Gmail reply-detection ingest, #2796) is activity-only: recorded to
+    // the timeline but never added to the inbox cache/eval/trim. Kept separate here.
+    const sentMessages = Array.isArray(providerResult) ? [] : (providerResult?.sentMessages ?? []);
+    // Whether the sent window truncated at its ceiling this sync (#2820) — coverage
+    // is then partial, so the reply-detection watermark is marked partial (fail closed).
+    const sentTruncated = Array.isArray(providerResult) ? false : Boolean(providerResult?.sentTruncated);
 
     // Deduplicate by externalId; update flags and body on existing messages
     const existingMap = new Map(cache.messages.filter(m => m.externalId).map(m => [m.externalId, m]));
@@ -250,8 +256,29 @@ export async function syncAccount(accountId, io, options = {}) {
     // Populate the human-activity timeline (#2150) — secondary effect, must NOT
     // fail the sync. Idempotent on (source, dedupe_key), so re-scanning the full
     // cache each sync is a no-op for already-recorded messages. Machine-local.
-    await recordMessageActivity(account, cache.messages).catch((err) =>
-      console.error(`🗓️  Activity ingest failed for account ${accountId}: ${err.message}`));
+    // Sent mail (activity-only, #2796) is fed IN ADDITION to the cached inbox mail
+    // so it records `message.sent` events without ever entering the inbox cache.
+    let activityIngestFailed = false;
+    await recordMessageActivity(account, [...cache.messages, ...sentMessages]).catch((err) => {
+      activityIngestFailed = true;
+      console.error(`🗓️  Activity ingest failed for account ${accountId}: ${err.message}`);
+    });
+
+    // Reply-detection watermark (#2796): stamp when a Gmail account with sent-ingest
+    // enabled completes a successful sync, so the outreach detector only trusts an
+    // account whose sent history is actually present and recent. Without this, an
+    // account default-on at upgrade (or after an OAuth/sync failure) would be trusted
+    // before any reply evidence exists, producing false "unanswered" nudges.
+    if (providerStatus === 'success' && account.type === 'gmail' && account.syncConfig?.ingestSent !== false) {
+      // `partial` fails the account closed for the outreach detector when reply
+      // evidence for this sync is incomplete: either the sent window truncated at
+      // its ceiling (#2820) OR activity ingestion itself failed — in which case the
+      // freshly-fetched `message.sent` rows never reached the timeline, so trusting a
+      // full watermark (or a stale recent one) would let a replied thread look
+      // unanswered. Stamping partial keeps the account fail-closed until a clean sync.
+      await markSentIngested(accountId, { partial: sentTruncated || activityIngestFailed }).catch((err) =>
+        console.error(`🤝 Sent-ingest watermark failed for account ${accountId}: ${err.message}`));
+    }
 
     io?.emit('messages:sync:completed', { accountId, newMessages: uniqueNew.length, pruned, status: providerStatus });
     if (providerStatus === 'success') {

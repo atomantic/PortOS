@@ -22,6 +22,8 @@ import {
   CODEX_CONTEXT_WINDOW,
   GEMINI_CONTEXT_WINDOW,
   GROK_CONTEXT_WINDOW,
+  KIMI_CONTEXT_WINDOW,
+  KIMI_CONFIGURED_DEFAULT,
   effectiveModelContextWindow,
   mergeModelLists,
   modelOptionLabel,
@@ -31,6 +33,8 @@ import {
   isProcessProvider,
   isOllamaBackedProvider,
   isGrokBuildCli,
+  isKimiProvider,
+  isConfiguredDefaultModel,
   isLocalEndpoint,
   enabledApiProviderFilter,
   providerTypeClass,
@@ -379,10 +383,13 @@ describe('knownProviderContextWindow (mirror of server stageRunner)', () => {
     expect(knownProviderContextWindow({ id: 'antigravity-cli', type: 'cli', command: 'agy' })).toBe(GEMINI_CONTEXT_WINDOW);
     expect(knownProviderContextWindow({ id: 'grok-cli', type: 'cli', command: 'grok' })).toBe(GROK_CONTEXT_WINDOW);
     expect(knownProviderContextWindow({ id: 'grok-tui', type: 'tui', command: 'grok' })).toBe(GROK_CONTEXT_WINDOW);
+    expect(knownProviderContextWindow({ id: 'kimi-cli', type: 'cli', command: 'kimi' })).toBe(KIMI_CONTEXT_WINDOW);
+    expect(knownProviderContextWindow({ id: 'kimi-tui', type: 'tui', command: 'kimi' })).toBe(KIMI_CONTEXT_WINDOW);
   });
 
   it('normalizes command paths to the basename for vendor windows (#2337)', () => {
     expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: '/opt/homebrew/bin/grok' })).toBe(GROK_CONTEXT_WINDOW);
+    expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: '/opt/homebrew/bin/kimi' })).toBe(KIMI_CONTEXT_WINDOW);
     expect(knownProviderContextWindow({ id: 'custom', type: 'tui', command: '/usr/local/bin/codex' })).toBe(CODEX_CONTEXT_WINDOW);
     expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: '/opt/homebrew/bin/agy' })).toBe(GEMINI_CONTEXT_WINDOW);
     expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: './bin/codex' })).toBe(CODEX_CONTEXT_WINDOW);
@@ -392,6 +399,22 @@ describe('knownProviderContextWindow (mirror of server stageRunner)', () => {
 
   it('returns null for non-process providers', () => {
     expect(knownProviderContextWindow({ id: 'codex', type: 'api', command: 'codex' })).toBeNull();
+  });
+});
+
+describe('isKimiProvider (mirror of server providerModels)', () => {
+  it('matches the shipped ids and a path/exe command, rejects others', () => {
+    expect(isKimiProvider({ id: 'kimi-cli' })).toBe(true);
+    expect(isKimiProvider({ id: 'kimi-tui' })).toBe(true);
+    expect(isKimiProvider({ id: 'custom', command: '/opt/homebrew/bin/kimi' })).toBe(true);
+    expect(isKimiProvider({ id: 'custom', command: 'C:\\tools\\Kimi.exe' })).toBe(true);
+    expect(isKimiProvider({ id: 'grok-cli', command: 'grok' })).toBe(false);
+    expect(isKimiProvider(null)).toBe(false);
+  });
+
+  it('treats the kimi configured-default sentinel as a configured default', () => {
+    expect(isConfiguredDefaultModel(KIMI_CONFIGURED_DEFAULT)).toBe(true);
+    expect(filterSelectableModels([KIMI_CONFIGURED_DEFAULT, 'kimi-k2'])).toEqual(['kimi-k2']);
   });
 });
 

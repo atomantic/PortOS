@@ -34,7 +34,8 @@ vi.mock('../lib/fileUtils.js', () => ({
 
 vi.mock('./messageAccounts.js', () => ({
   getAccount: vi.fn(),
-  updateSyncStatus: vi.fn()
+  updateSyncStatus: vi.fn(),
+  markSentIngested: vi.fn(() => Promise.resolve())
 }));
 
 vi.mock('./messageGmailSync.js', () => ({

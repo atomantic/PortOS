@@ -5,6 +5,9 @@ import {
   DEFAULT_WORK_TRACKER,
   workTrackerLabel,
   hostToWorkTracker,
+  isGithubHost,
+  githubRepoSpec,
+  githubApiHost,
   forgeCliForTracker,
   trackerToClaimTaskType,
   resolveWorkTracker,
@@ -35,6 +38,73 @@ describe('hostToWorkTracker', () => {
     expect(hostToWorkTracker('')).toBeNull();
     expect(hostToWorkTracker(null)).toBeNull();
     expect(hostToWorkTracker(undefined)).toBeNull();
+  });
+});
+
+describe('isGithubHost', () => {
+  it('is true for github.com AND enterprise github.* hosts', () => {
+    expect(isGithubHost('github.com')).toBe(true);
+    expect(isGithubHost('GitHub.com')).toBe(true);
+    expect(isGithubHost('github.mycorp.com')).toBe(true);
+    expect(isGithubHost('github.acme.example')).toBe(true);
+  });
+  it('is false for gitlab, other forges, and empty/invalid hosts', () => {
+    expect(isGithubHost('gitlab.com')).toBe(false);
+    expect(isGithubHost('gitlab.example.com')).toBe(false);
+    expect(isGithubHost('bitbucket.org')).toBe(false);
+    expect(isGithubHost('')).toBe(false);
+    expect(isGithubHost(null)).toBe(false);
+    expect(isGithubHost(undefined)).toBe(false);
+  });
+});
+
+describe('githubRepoSpec', () => {
+  it('builds a host-qualified selector for github.com and enterprise hosts', () => {
+    expect(githubRepoSpec({ host: 'github.com', fullName: 'atomantic/PortOS' }))
+      .toBe('github.com/atomantic/PortOS');
+    expect(githubRepoSpec({ host: 'github.acme.example', fullName: 'acme/app' }))
+      .toBe('github.acme.example/acme/app');
+  });
+  it('canonicalizes only the documented github.com SSH-over-443 alias', () => {
+    // git@ssh.github.com:443/owner/repo → getOriginInfo host 'ssh.github.com';
+    // gh --repo reads the HOST/ prefix as the API host, so it must be github.com.
+    expect(githubRepoSpec({ host: 'ssh.github.com', fullName: 'atomantic/PortOS' }))
+      .toBe('github.com/atomantic/PortOS');
+    expect(githubRepoSpec({ host: 'SSH.GitHub.com', fullName: 'atomantic/PortOS' }))
+      .toBe('github.com/atomantic/PortOS');
+  });
+  it('preserves a genuine enterprise host that legitimately begins with ssh.', () => {
+    // Not the documented alias — its real API host IS ssh.github.acme.example,
+    // so stripping ssh. would misroute to a different/nonexistent server.
+    expect(githubRepoSpec({ host: 'ssh.github.acme.example', fullName: 'acme/app' }))
+      .toBe('ssh.github.acme.example/acme/app');
+  });
+  it('returns null for a non-GitHub host, a missing owner/repo, or no origin', () => {
+    expect(githubRepoSpec({ host: 'gitlab.com', fullName: 'group/proj' })).toBeNull();
+    expect(githubRepoSpec({ host: 'bitbucket.org', fullName: 'team/proj' })).toBeNull();
+    expect(githubRepoSpec({ host: 'github.com', fullName: null })).toBeNull();
+    expect(githubRepoSpec({ host: null, fullName: null })).toBeNull();
+    expect(githubRepoSpec(null)).toBeNull();
+  });
+});
+
+describe('githubApiHost', () => {
+  it('canonicalizes the documented github.com SSH-over-443 alias to github.com (#2650)', () => {
+    // prWatcher hands this host to getSelfLogin's `gh --hostname`; a raw
+    // ssh.github.com would query the SSH endpoint and always return null,
+    // wedging every self/others PR gate into self-login-unavailable.
+    expect(githubApiHost('ssh.github.com')).toBe('github.com');
+    expect(githubApiHost('SSH.GitHub.com')).toBe('github.com');
+  });
+  it('passes github.com and enterprise hosts (including a genuine ssh.* one) through unchanged', () => {
+    expect(githubApiHost('github.com')).toBe('github.com');
+    expect(githubApiHost('github.acme.example')).toBe('github.acme.example');
+    expect(githubApiHost('ssh.github.acme.example')).toBe('ssh.github.acme.example');
+  });
+  it('returns null for a falsy host', () => {
+    expect(githubApiHost(null)).toBeNull();
+    expect(githubApiHost(undefined)).toBeNull();
+    expect(githubApiHost('')).toBeNull();
   });
 });
 

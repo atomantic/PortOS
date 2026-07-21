@@ -621,6 +621,9 @@ function OutreachQueue() {
     const seed = {
       personId: thread.personId,
       source: thread.source,
+      // Scopes the email grounding query to the right account (#2820) — a Gmail
+      // threadId is only unique within its account.
+      accountId: thread.accountId,
       threadId: thread.threadId,
       chatGuid: thread.chatGuid,
       conversationId: thread.conversationId,

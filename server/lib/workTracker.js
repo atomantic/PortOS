@@ -54,6 +54,64 @@ export function hostToWorkTracker(host) {
 }
 
 /**
+ * True when `host` is a GitHub-family host — github.com AND self-hosted GitHub
+ * Enterprise (github.*). This is the enterprise-aware replacement for the
+ * github.com-only `getOriginInfo().isGithub` gate: `isGithub` drives PortOS's
+ * own fork/update flow (upstream lives on github.com), so reusing it to decide
+ * whether a repo's issues/PRs live on GitHub silently excluded enterprise repos.
+ * Shared by prWatcher, branchReconcile, and issueReconcile so the three stay
+ * consistent about what counts as "a GitHub repo".
+ */
+export function isGithubHost(host) {
+  return hostToWorkTracker(host) === 'github';
+}
+
+/**
+ * Build the host-qualified `HOST/OWNER/REPO` selector for `gh --repo` from a
+ * `getOriginInfo()` result, or null when the origin isn't a usable GitHub repo
+ * (no origin, unparsed owner/repo, or a non-GitHub host). The host qualifier is
+ * load-bearing: a bare `OWNER/REPO` defaults `gh` to github.com, so enterprise
+ * repos would be silently queried against github.com — and it stays
+ * deterministic on a fork+upstream checkout where gh's cwd remote-detection
+ * ambiguously resolves to the parent repo. Pairs the isGithubHost gate with the
+ * selector so prWatcher, branchReconcile, and issueReconcile share one
+ * definition of "a resolvable GitHub repo" instead of three hand-copied ones.
+ * (No separate `hasOrigin` check: isGithubHost is true only for a real GitHub
+ * host string, which getOriginInfo returns only when an origin exists.)
+ *
+ * Canonicalizes GitHub's SSH-over-443 alias: a `git@ssh.github.com:443/owner/repo`
+ * remote parses to host `ssh.github.com`, but `gh --repo` reads the `HOST/` prefix
+ * as the API host, so `ssh.github.com/owner/repo` would query the SSH endpoint and
+ * silently return nothing. Only `github.com` has a documented `ssh.` alias, and an
+ * enterprise host may legitimately begin with `ssh.` (`ssh.github.acme.example`),
+ * so canonicalize the exact known alias rather than stripping `ssh.` from any host.
+ * @param {{host?:string|null, fullName?:string|null}} origin
+ * @returns {string|null}
+ */
+export function githubRepoSpec(origin) {
+  if (!origin?.fullName || !isGithubHost(origin.host)) return null;
+  return `${githubApiHost(origin.host)}/${origin.fullName}`;
+}
+
+/**
+ * Canonicalize a GitHub origin host to the API host `gh --hostname` / `gh --repo`
+ * expects. GitHub's SSH-over-443 alias (`git@ssh.github.com:443/owner/repo`) parses
+ * to host `ssh.github.com`, but the API endpoint is `github.com` — querying
+ * `ssh.github.com` as an API host silently fails. Only `github.com` has a documented
+ * `ssh.` alias, so canonicalize the exact known alias and pass every other host
+ * (github.com, `ssh.github.acme.example`, and other enterprise hosts) through
+ * unchanged. Callers that hand a host to a `gh` `--hostname` (e.g. prWatcher's
+ * `getSelfLogin`) MUST canonicalize through here, or an ssh-alias origin resolves
+ * the wrong API host — the same trap `githubRepoSpec` avoids for the repo selector.
+ * @param {string|null|undefined} host
+ * @returns {string|null}
+ */
+export function githubApiHost(host) {
+  if (!host) return null;
+  return /^ssh\.github\.com$/i.test(host) ? 'github.com' : host;
+}
+
+/**
  * Which forge CLI a concrete tracker drives: github → `gh`, gitlab → `glab`.
  * PLAN.md and JIRA have no forge CLI, so they return null.
  */

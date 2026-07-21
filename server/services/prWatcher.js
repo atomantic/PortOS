@@ -27,7 +27,7 @@
 import { execGh } from './github.js';
 import { getAppById, updateApp } from './apps.js';
 import { getOriginInfo } from '../lib/gitRemote.js';
-import { hostToWorkTracker } from '../lib/workTracker.js';
+import { githubRepoSpec, githubApiHost } from '../lib/workTracker.js';
 import { PR_AUTHOR_FILTERS } from '../lib/validation.js';
 import { safeJSONParse } from '../lib/fileUtils.js';
 
@@ -196,18 +196,14 @@ export async function checkPullRequests(app, { authorFilter = 'any' } = {}) {
   // Accept any GitHub-family host — github.com AND self-hosted GitHub Enterprise
   // (github.*) — not just github.com. `origin.isGithub` is github.com-only (it
   // drives PortOS's own fork/update flow), so gating on it silently excluded
-  // enterprise repos. hostToWorkTracker classifies enterprise GitHub the same
-  // way the claim-issue router does; gitlab.* and non-forge hosts fall through.
-  if (!origin?.hasOrigin || !origin.fullName || hostToWorkTracker(origin.host) !== 'github') {
+  // enterprise repos. githubRepoSpec pairs the GitHub-host gate with the
+  // host-qualified `HOST/OWNER/REPO` selector (null when not a resolvable GitHub
+  // repo); gitlab.* and non-forge hosts fall through.
+  const repoSpec = githubRepoSpec(origin);
+  if (!repoSpec) {
     return { ok: false, reason: 'not-a-github-repo' };
   }
   const repoFullName = origin.fullName;
-  // Host-qualified `HOST/OWNER/REPO` selector for gh's `--repo`. The host
-  // qualifier fixes the original bug (a bare `OWNER/REPO` defaults to
-  // github.com, so enterprise repos were silently queried against github.com)
-  // AND stays deterministic on a fork+upstream checkout, where relying on gh's
-  // cwd remote-detection would ambiguously resolve to the parent repo.
-  const repoSpec = `${origin.host}/${repoFullName}`;
 
   const defaultBranch = await getDefaultBranch(repoSpec);
   if (!defaultBranch) {
@@ -218,7 +214,11 @@ export async function checkPullRequests(app, { authorFilter = 'any' } = {}) {
   // blindly if gh can't tell us who "self" is on THIS repo's host.
   let selfLogin = null;
   if (filter !== 'any') {
-    selfLogin = await getSelfLogin(origin.host);
+    // Canonicalize the host: an `ssh.github.com` alias origin must resolve "self"
+    // against the github.com API host, matching githubRepoSpec's repo selector.
+    // Passing origin.host raw would query the SSH endpoint and always return
+    // self-login-unavailable, so self/others gates would never fire (#2650).
+    selfLogin = await getSelfLogin(githubApiHost(origin.host));
     if (!selfLogin) {
       return { ok: false, reason: 'self-login-unavailable', repoFullName, defaultBranch };
     }

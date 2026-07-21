@@ -13,6 +13,97 @@ function makeExternalId(gmailId) {
   return 'api-gmail-' + crypto.createHash('md5').update(gmailId).digest('hex').slice(0, 12);
 }
 
+// How far back to pull sent mail when reply-detection ingestion is on. Must stay
+// >= tribeOutreach's DEFAULT_WITHIN_DAYS (14) — a reply older than the detection
+// window can't answer an inbound that's still actionable, so no need to ingest it;
+// but if this were SHORTER than the window, a reply inside the window would be
+// missed and its inbound would falsely read as unanswered. The coupling is pinned
+// by a test in messageGmailSync.test.js.
+export const SENT_INGEST_DAYS = 14;
+
+// Sent mail gets its OWN fetch budget (a separate list pass), never a share of the
+// inbox cap — sent is activity-only and must not crowd inbox out of the primary
+// sync. The sent pass paginates the ENTIRE `in:sent newer_than:14d` window up to
+// this generous ceiling (#2820) so a heavy sender's reply beyond the first page
+// still gets ingested and can cancel its inbound — a reply un-ingested here would
+// falsely read as unanswered. The ceiling only bounds the pathological case (>1000
+// sent in 14 days); if it's actually hit the sync reports `sentTruncated`, which
+// marks the reply-detection watermark PARTIAL (`sentCoveragePartial`) so the
+// outreach detector drops that account for the scan rather than trusting an
+// incomplete sent window (fail closed). Sent isn't cached, so this also bounds the
+// per-sync detail-fetch cost.
+export const SENT_INGEST_MAX = 1000;
+
+// The inbox search query for a sync mode. `unread` scopes to unread inbox; `full`
+// takes the whole inbox (capped downstream).
+export function inboxQuery(mode) {
+  return mode === 'unread' ? 'is:unread in:inbox' : 'in:inbox';
+}
+
+// Recent sent mail — no unread state, bounded by date instead. Ingested so it lands
+// in the same cache the human-activity timeline reads, recording `message.sent`
+// events that let Tribe-outreach detection see a Gmail thread as replied (#2796).
+export function sentQuery() {
+  return `in:sent newer_than:${SENT_INGEST_DAYS}d`;
+}
+
+/**
+ * The ordered (query, cap) list-passes for one Gmail sync. Inbox always runs with
+ * the full `inboxCap`; recent sent mail runs as a SEPARATE pass with its own
+ * `SENT_INGEST_MAX` budget when the account opts into reply-detection ingestion
+ * (the per-account default, opt out via `syncConfig.ingestSent === false`). Separate
+ * passes mean sent volume never crowds the inbox out of a shared cap.
+ */
+export function gmailSyncPasses(mode, ingestSent, inboxCap) {
+  const passes = [{ query: inboxQuery(mode), cap: inboxCap }];
+  if (ingestSent) passes.push({ query: sentQuery(), cap: SENT_INGEST_MAX });
+  return passes;
+}
+
+/**
+ * List message ids across every pass, paginating each pass FULLY up to its cap
+ * (#2820) — the sent pass must walk past the first page or a heavy sender's reply
+ * beyond page 1 goes un-ingested and its inbound falsely reads as unanswered.
+ * Dedupes by gmail id across passes (a thread can appear in both inbox and sent).
+ *
+ * `listFn({ q, maxResults, pageToken })` returns `{ messages: [{ id }], nextPageToken }`.
+ * Injected so the pagination is unit-testable without a live Gmail client.
+ *
+ * `truncated` lists the queries that hit their cap with MORE pages remaining — i.e.
+ * coverage of that query's window is incomplete. The caller must fail CLOSED on a
+ * truncated sent pass (don't trust that account's reply evidence for this scan),
+ * or an un-ingested older reply would falsely read as unanswered.
+ *
+ * @returns {Promise<{ items: Array<{ id: string }>, truncated: string[] }>}
+ */
+export async function collectMessageIds(passes, listFn, { onProgress } = {}) {
+  const items = [];
+  const seen = new Set();
+  const truncated = [];
+  for (const pass of passes) {
+    let pageToken = null;
+    let fetched = 0;
+    do {
+      onProgress?.(items.length);
+      const { messages = [], nextPageToken = null } = await listFn({
+        q: pass.query,
+        maxResults: Math.min(100, pass.cap - fetched),
+        pageToken,
+      });
+      fetched += messages.length;
+      for (const item of messages) {
+        if (seen.has(item.id)) continue;
+        seen.add(item.id);
+        items.push(item);
+      }
+      pageToken = nextPageToken;
+      // Stopped by the cap while a next page still exists → incomplete coverage.
+      if (pageToken && fetched >= pass.cap) { truncated.push(pass.query); break; }
+    } while (pageToken);
+  }
+  return { items, truncated };
+}
+
 function getHeader(headers, name) {
   return headers?.find(h => h.name.toLowerCase() === name.toLowerCase())?.value || '';
 }
@@ -122,34 +213,45 @@ export async function syncGmail(account, cache, io, options = {}) {
 
   const gmailClient = gmail({ version: 'v1', auth });
   const maxMessages = mode === 'full' ? 200 : 100;
-  const query = mode === 'unread' ? 'is:unread in:inbox' : 'in:inbox';
+  // Ingest sent mail unless the account explicitly opted out — the default-on
+  // capability powers per-account Tribe-outreach reply detection (#2796).
+  const ingestSent = account?.syncConfig?.ingestSent !== false;
+  const passes = gmailSyncPasses(mode, ingestSent, maxMessages);
+  const totalCap = passes.reduce((sum, p) => sum + p.cap, 0);
 
-  console.log(`📧 Gmail API sync (${mode}) for ${account.email}`);
+  console.log(`📧 Gmail API sync (${mode}${ingestSent ? '+sent' : ''}) for ${account.email}`);
 
-  // Step 1: List message IDs
-  const messageIds = [];
-  let pageToken = null;
-
-  do {
-    io?.emit('messages:sync:progress', { accountId: account.id, current: messageIds.length, total: maxMessages });
-
-    const listResult = await gmailClient.users.messages.list({
-      userId: 'me',
-      q: query,
-      maxResults: Math.min(100, maxMessages - messageIds.length),
-      ...(pageToken && { pageToken })
-    });
-
-    const items = listResult.data.messages || [];
-    messageIds.push(...items);
-    pageToken = listResult.data.nextPageToken;
-  } while (pageToken && messageIds.length < maxMessages);
+  // Step 1: List message IDs — one pass per (query, cap), each paginated fully up
+  // to its cap and deduped across passes (a thread can appear in both inbox and
+  // sent). See `collectMessageIds` for the pagination contract (#2820).
+  const { items: messageIds, truncated } = await collectMessageIds(
+    passes,
+    async ({ q, maxResults, pageToken }) => {
+      const listResult = await gmailClient.users.messages.list({
+        userId: 'me',
+        q,
+        maxResults,
+        ...(pageToken && { pageToken }),
+      });
+      return { messages: listResult.data.messages || [], nextPageToken: listResult.data.nextPageToken || null };
+    },
+    { onProgress: (current) => io?.emit('messages:sync:progress', { accountId: account.id, current, total: totalCap }) },
+  );
+  // Sent-coverage fail-closed signal (#2820): the sent pass hit its ceiling with
+  // more pages remaining, so an older reply may be un-ingested this scan. Reported
+  // up so the reply-detection watermark is marked partial and the outreach detector
+  // drops the account rather than nudging on incomplete reply evidence.
+  const sentTruncated = ingestSent && truncated.includes(sentQuery());
+  if (sentTruncated) {
+    console.warn(`📧 Gmail sent-mail coverage partial for ${account.email} — >${SENT_INGEST_MAX} sent in ${SENT_INGEST_DAYS}d; reply detection paused for this account until a full sync`);
+  }
 
   console.log(`📧 Gmail: found ${messageIds.length} message IDs, fetching details`);
 
   // Step 2: Fetch full message details in parallel batches
   const messages = [];
   const BATCH_SIZE = 10;
+  let detailFetchFailures = 0;
 
   for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
     io?.emit('messages:sync:progress', { accountId: account.id, current: i, total: messageIds.length });
@@ -161,7 +263,7 @@ export async function syncGmail(account, cache, io, options = {}) {
     ));
 
     for (let j = 0; j < results.length; j++) {
-      if (!results[j]) continue;
+      if (!results[j]) { detailFetchFailures++; continue; }
       const data = results[j].data;
       const { id: gmailId, threadId: gmailThreadId } = batch[j];
       const headers = data.payload?.headers || [];
@@ -199,12 +301,41 @@ export async function syncGmail(account, cache, io, options = {}) {
     }
   }
 
-  if (io && messages.length > 0) {
-    io.emit('messages:sync:message', { accountId: account.id, messages });
+  // Split inbox vs sent: sent mail is ingested ONLY for the human-activity timeline
+  // (reply detection, #2796) — it must NOT enter the inbox cache, or it would show
+  // up in /api/messages/inbox, run through triage/eval, and compete with real inbox
+  // mail under the maxMessages trim (which could evict a message before its activity
+  // is recorded). A message the user sent carries Gmail's SENT label and no INBOX
+  // label; anything with INBOX (including a self-addressed SENT+INBOX message) stays
+  // inbox. syncAccount records sent activity from `sentMessages` separately.
+  const inboxMessages = [];
+  const sentMessages = [];
+  for (const m of messages) {
+    const lbl = m.labels || [];
+    if (lbl.includes('SENT') && !lbl.includes('INBOX')) sentMessages.push(m);
+    else inboxMessages.push(m);
   }
 
-  console.log(`📧 Gmail API sync complete: ${messages.length} messages fetched`);
-  return { messages, status: 'success', syncMethod: 'api' };
+  if (io && inboxMessages.length > 0) {
+    io.emit('messages:sync:message', { accountId: account.id, messages: inboxMessages });
+  }
+
+  // Sent-coverage fail-closed also covers a dropped detail fetch (#2820): a
+  // `users.messages.get` that failed above was skipped, but `sentTruncated` only
+  // reflects LIST pagination — so a dropped message (possibly the user's reply)
+  // would otherwise be certified as full coverage. We can't read a failed fetch's
+  // SENT label to know whether the dropped message was a reply, so when the account
+  // is ingesting sent mail we fail closed on ANY detail-fetch failure: the outreach
+  // detector pauses this account for the scan rather than nudging on incomplete
+  // reply evidence. Self-heals on the next clean sync. (When ingestSent is off,
+  // reply detection isn't trusted for this account anyway, so don't over-signal.)
+  const sentCoveragePartial = sentTruncated || (ingestSent && detailFetchFailures > 0);
+  if (ingestSent && detailFetchFailures > 0 && !sentTruncated) {
+    console.warn(`📧 Gmail: ${detailFetchFailures} message detail fetch(es) failed for ${account.email} — reply detection paused for this account this sync (incomplete coverage)`);
+  }
+
+  console.log(`📧 Gmail API sync complete: ${inboxMessages.length} inbox, ${sentMessages.length} sent (activity-only)`);
+  return { messages: inboxMessages, sentMessages, sentTruncated: sentCoveragePartial, status: 'success', syncMethod: 'api' };
 }
 
 /**

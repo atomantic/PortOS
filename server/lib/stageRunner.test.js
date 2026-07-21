@@ -31,6 +31,7 @@ const {
   CODEX_CONTEXT_WINDOW,
   GEMINI_CONTEXT_WINDOW,
   GROK_CONTEXT_WINDOW,
+  KIMI_CONTEXT_WINDOW,
   effectiveContextWindow,
   knownModelContextWindow,
   knownProviderContextWindow,
@@ -109,6 +110,9 @@ describe('stageRunner — context windows', () => {
     // explicit contextWindow must resolve the same 256K on both sides.
     expect(knownProviderContextWindow({ id: 'grok-cli', type: 'cli', command: 'grok' })).toBe(GROK_CONTEXT_WINDOW);
     expect(knownProviderContextWindow({ id: 'grok-tui', type: 'tui', command: 'grok' })).toBe(GROK_CONTEXT_WINDOW);
+    // Kimi Code (K2's 256K window) — same on both server + client mirrors.
+    expect(knownProviderContextWindow({ id: 'kimi-cli', type: 'cli', command: 'kimi' })).toBe(KIMI_CONTEXT_WINDOW);
+    expect(knownProviderContextWindow({ id: 'kimi-tui', type: 'tui', command: 'kimi' })).toBe(KIMI_CONTEXT_WINDOW);
   });
 
   it('normalizes command paths to the basename for vendor windows (#2337)', () => {
@@ -120,6 +124,7 @@ describe('stageRunner — context windows', () => {
     expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: './bin/codex' })).toBe(CODEX_CONTEXT_WINDOW);
     // Windows .exe suffix + backslash separators.
     expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: 'C:\\tools\\grok.exe' })).toBe(GROK_CONTEXT_WINDOW);
+    expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: '/opt/homebrew/bin/kimi' })).toBe(KIMI_CONTEXT_WINDOW);
     // Unrelated custom command still falls through to null.
     expect(knownProviderContextWindow({ id: 'custom', type: 'cli', command: '/opt/homebrew/bin/mycli' })).toBeNull();
   });

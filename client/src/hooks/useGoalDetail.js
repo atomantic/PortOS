@@ -58,18 +58,45 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
       parentId: goal.parentId || '',
       tags: [...(goal.tags || [])],
       targetDate: goal.targetDate || '',
-      timeBlockConfig: goal.timeBlockConfig || null
+      timeBlockConfig: goal.timeBlockConfig || null,
+      // Per-goal Daily Driver feature-area override (issue #2679). An empty
+      // array = "no override" — getGoalFeatureAreas falls back to the category
+      // default, so we don't need a separate null sentinel here.
+      featureAreas: [...(goal.featureAreas || [])]
     });
     setEditing(true);
   };
 
   const saveEdit = async () => {
-    await api.updateGoal(goal.id, {
-      ...form,
+    // featureAreas handling (issue #2679):
+    //  - When the user did NOT touch the selector, OMIT featureAreas from the
+    //    PATCH. The whole editor sends a startEdit snapshot, so re-sending an
+    //    untouched featureAreas would let a stale value win the whole-record LWW
+    //    merge and clobber a concurrent featureAreas edit from a federated peer.
+    //    Omitting it lets the service preserve whatever is currently stored. (The
+    //    pre-#2679 editor never sent this field at all, so this restores that
+    //    immunity for the untouched case.)
+    //  - When the user DID change it, send the full array — INCLUDING any
+    //    forward-unknown ids preserved from startEdit (the known-id-only
+    //    multi-select leaves them untouched). The update schema accepts unknown
+    //    ids and getGoalFeatureAreas filters them at read time, so they are never
+    //    dropped.
+    const { featureAreas, ...rest } = form;
+    const original = goal.featureAreas || [];
+    const current = featureAreas || [];
+    const featureAreasChanged =
+      current.length !== original.length ||
+      current.some((id, i) => id !== original[i]);
+    const payload = {
+      ...rest,
       parentId: form.parentId || null,
       targetDate: form.targetDate || null,
       timeBlockConfig: form.timeBlockConfig || null
-    });
+    };
+    if (featureAreasChanged) {
+      payload.featureAreas = current;
+    }
+    await api.updateGoal(goal.id, payload);
     setEditing(false);
     onRefresh();
   };
@@ -259,6 +286,18 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     setForm({ ...form, tags: form.tags.filter(t => t !== tag) });
   };
 
+  // Toggle a Daily Driver feature-area id in the per-goal override (issue #2679).
+  // Mirrors addTag/removeTag: the form owns the list, the hook owns the mutation.
+  const toggleFeatureArea = (areaId) => {
+    setForm(prev => {
+      const current = prev.featureAreas || [];
+      const next = current.includes(areaId)
+        ? current.filter(a => a !== areaId)
+        : [...current, areaId];
+      return { ...prev, featureAreas: next };
+    });
+  };
+
   // Exclude self and descendants from parent options to prevent cycles
   const getDescendantIds = (id) => {
     const ids = new Set([id]);
@@ -307,6 +346,6 @@ export function useGoalDetail({ goal, allGoals, onClose, onRefresh }) {
     handleLinkActivity, handleAddProgress, resetProgressForm, handleDeleteProgress,
     handleUnlinkActivity, handleLinkCalendar, handleUnlinkCalendar,
     handleProgressChange, handleAddTodo, handleToggleTodo, handleDeleteTodo,
-    addTag, removeTag, getDescendantIds
+    addTag, removeTag, toggleFeatureArea, getDescendantIds
   };
 }

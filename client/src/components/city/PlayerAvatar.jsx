@@ -1,231 +1,190 @@
-import { useRef, useMemo, useEffect } from 'react';
+import { useRef, useMemo, useEffect, useCallback } from 'react';
 import { useFrame } from '@react-three/fiber';
+import { useGLTF, useAnimations } from '@react-three/drei';
 import * as THREE from 'three';
+import { SkeletonUtils } from 'three-stdlib';
 import { useCityPalette } from './CityPaletteContext';
-import { dampFactor, dampAngle, EYE_HEIGHT } from '../../utils/cityPlayerRig';
+import { dampFactor, EYE_HEIGHT } from '../../utils/cityPlayerRig';
+import { withInPlaceClips, inPlaceClipName } from '../../utils/animationClips';
+// The root-motion clip set + treadmill suffix are model-level facts about the bundled
+// RobotExpressive GLB, so import the single source of truth rather than redeclaring it —
+// a divergent copy would silently break in-place routing in one avatar and not the other.
+import { MUSE_ROOT_MOTION_CLIPS as ROOT_MOTION_CLIPS, MUSE_IN_PLACE_SUFFIX as IN_PLACE_SUFFIX } from '../cos/constants';
 
-// The exploration-mode cyber-runner: a stylized articulated character (~1.7 units tall)
-// rendered in third person. Reads the PlayerController's mutable rig every frame — no
-// React state on the hot path — and animates by rig.state:
-//   idle  — soft bob, visor breathing, slow head scan
-//   walk  — opposing hip/shoulder swing with elbow/knee follow-through
-//   run   — faster phase, bigger amplitude, torso pitched into the sprint
-//   hover — flyover: legs tuck, jet vents flare, glow disc brightens (a flying runner,
-//           not a mid-air walker)
-// Body color tracks the theme's structural dark; visor/trim/soles glow the theme accent.
-// Geometry is shared at module scope; materials are per-mount (theme-tinted).
+// The exploration-mode player, rendered in third person with the bundled rigged GLB
+// (three.js's RobotExpressive by default — data/avatar/model.glb, the same model the CoS
+// "Cyber Muse" avatar uses). The character keeps its own textures/colors; the only city
+// tint is a themed ground-glow disc under its feet so it still reads as "our runner."
+//
+// It reads the PlayerController's mutable rig every frame (no React state on the hot path)
+// and crossfades the GLB's skeletal clips by rig.state:
+//   idle  → Idle
+//   walk  → Walking (in place)
+//   run   → Running (in place)
+//   hover → Jump (flyover: legs off the ground, body floated toward the camera anchor)
+// Walking/Running carry root translation (they'd walk the model out from under the rig,
+// which OWNS world position); we route them to the synthesized "in place" treadmill
+// variants (see withInPlaceClips) so the gait animates while the rig drives movement.
 
-const EYE_COLOR = '#ff3366'; // semantic sensor red — not themed
+const MODEL_URL = '/api/avatar/model.glb';
+const TARGET_HEIGHT = 1.7; // world units, matches the old procedural runner
+const FADE = 0.25;         // crossfade seconds between state clips
+// The bundled RobotExpressive model is authored facing +Z; the rig's forward is -Z
+// (rig.facing 0 → -z), so we add a 180° yaw so the runner faces its travel direction.
+// If a user swaps in a GLB with a different forward axis, the runner would face the wrong
+// way — this offset is the one model-orientation assumption, called out so it's greppable.
+const MODEL_FACING_OFFSET = Math.PI;
 
-const GEO = {
-  helmet: new THREE.IcosahedronGeometry(0.16, 1),
-  visor: new THREE.BoxGeometry(0.26, 0.07, 0.08),
-  sensor: new THREE.BoxGeometry(0.05, 0.02, 0.02),
-  torso: new THREE.BoxGeometry(0.42, 0.5, 0.26),
-  core: new THREE.CylinderGeometry(0.09, 0.09, 0.03, 6),
-  pauldron: new THREE.OctahedronGeometry(0.12, 0),
-  upperArm: new THREE.CylinderGeometry(0.05, 0.045, 0.28, 6),
-  forearm: new THREE.CylinderGeometry(0.045, 0.04, 0.26, 6),
-  fist: new THREE.SphereGeometry(0.055, 6, 6),
-  pelvis: new THREE.BoxGeometry(0.3, 0.16, 0.2),
-  thigh: new THREE.CylinderGeometry(0.06, 0.055, 0.32, 6),
-  shin: new THREE.CylinderGeometry(0.05, 0.045, 0.3, 6),
-  boot: new THREE.BoxGeometry(0.11, 0.08, 0.22),
-  sole: new THREE.BoxGeometry(0.11, 0.02, 0.22),
-  backUnit: new THREE.BoxGeometry(0.22, 0.28, 0.1),
-  vent: new THREE.CylinderGeometry(0.035, 0.05, 0.1, 6),
-  disc: new THREE.CircleGeometry(0.45, 18),
+// rig.state → { desired GLB clip, playback rate }. The clip is auto-routed to its
+// in-place variant when it's a root-motion clip. Rates lean a touch fast so the gait
+// reads energetic and foot-skate against the rig's move speed stays subtle.
+const STATE_CLIP = {
+  idle:  { clip: 'Idle',    timeScale: 1.0 },
+  walk:  { clip: 'Walking', timeScale: 1.3 },
+  run:   { clip: 'Running', timeScale: 1.5 },
+  hover: { clip: 'Jump',    timeScale: 1.0 },
 };
-GEO.helmet.computeVertexNormals();
-
-// Joint heights (feet at 0): knee 0.31, hip 0.76, torso center 1.08, shoulder 1.3, head 1.55.
-const HIP_Y = 0.76;
-const SHOULDER_Y = 1.3;
 
 export default function PlayerAvatar({ rigRef }) {
-  const { accent, buildingBody, tintStructure } = useCityPalette();
+  const { accent } = useCityPalette();
+  const gltf = useGLTF(MODEL_URL);
 
-  // Theme-tinted materials. Trim/visor glow the accent; the animated ones (visor, vents,
-  // disc) are separate instances so per-frame intensity writes don't bleed across parts.
-  const mats = useMemo(() => {
-    const body = new THREE.MeshStandardMaterial({
-      color: buildingBody, roughness: 0.45, metalness: 0.5, flatShading: true,
-    });
-    const dark = new THREE.MeshStandardMaterial({
-      color: tintStructure('#0b101e'), roughness: 0.6, metalness: 0.4,
-    });
-    const trim = new THREE.MeshStandardMaterial({
-      color: accent, emissive: accent, emissiveIntensity: 0.55, toneMapped: false,
-      roughness: 0.3, metalness: 0.3,
-    });
-    const visor = trim.clone();
-    const vents = new THREE.MeshStandardMaterial({
-      color: accent, emissive: accent, emissiveIntensity: 0.0, toneMapped: false,
-    });
-    const sensor = new THREE.MeshBasicMaterial({ color: EYE_COLOR, toneMapped: false });
-    const disc = new THREE.MeshBasicMaterial({
-      color: accent, transparent: true, opacity: 0.16,
-      blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
-    });
-    return { body, dark, trim, visor, vents, sensor, disc };
-  }, [accent, buildingBody, tintStructure]);
+  // SkeletonUtils.clone rebinds SkinnedMeshes to the cloned skeleton so the mixer
+  // actually deforms the visible mesh (a plain scene.clone would animate bones the
+  // rendered mesh no longer references). Memoized on the source scene.
+  const scene = useMemo(() => SkeletonUtils.clone(gltf.scene), [gltf.scene]);
 
-  // R3F doesn't dispose materials handed in via the `material` prop — free the prior
-  // set when a theme switch rebuilds them, and on unmount.
-  useEffect(() => () => { Object.values(mats).forEach((m) => m.dispose()); }, [mats]);
+  // Append neutralized in-place variants of the root-motion clips so walk/run cycle
+  // the legs without translating the model off the rig-driven position.
+  const animations = useMemo(
+    () => withInPlaceClips(gltf.animations, ROOT_MOTION_CLIPS, IN_PLACE_SUFFIX),
+    [gltf.animations]
+  );
+  const { actions, names } = useAnimations(animations, scene);
+  const hasClips = names.length > 0;
 
   const rootRef = useRef();
-  const headRef = useRef();
-  const torsoRef = useRef();
-  const hipL = useRef();
-  const hipR = useRef();
-  const kneeL = useRef();
-  const kneeR = useRef();
-  const shoulderL = useRef();
-  const shoulderR = useRef();
-  const elbowL = useRef();
-  const elbowR = useRef();
-  const phaseRef = useRef(0);
   const groundOffsetRef = useRef(-EYE_HEIGHT);
+  const activeClipRef = useRef(null);
+  const discMatRef = useRef();
+
+  // Fit the model to TARGET_HEIGHT with feet at y=0 and centered on x/z, mutating the
+  // scene directly. This MUST run in an effect (not a render-time useMemo): the bounding
+  // box is only correct after useAnimations has set up the skeleton/mixer — measuring
+  // during render sees an unposed rig and yields a wildly wrong (≈34×) size, shrinking the
+  // model to an invisible speck. Frustum culling is off because animated poses (jump, arms
+  // out) exceed the bind-pose box; shadows off to match the CoS avatar. Runs once per
+  // loaded scene (absolute transform — re-running on state changes would pop the size).
+  useEffect(() => {
+    scene.traverse((obj) => {
+      if (!obj.isMesh) return;
+      obj.frustumCulled = false;
+      obj.castShadow = false;
+      obj.receiveShadow = false;
+    });
+    // Reset to the source transform before measuring so this is idempotent: under
+    // StrictMode the mount effect runs twice on the same scene, and measuring an
+    // already-fitted scene would compute scale≈1 and blow the model back up to source size.
+    scene.scale.setScalar(1);
+    scene.position.set(0, 0, 0);
+    scene.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(scene);
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    const scale = TARGET_HEIGHT / Math.max(size.y, 1e-3);
+    scene.scale.setScalar(scale);
+    scene.position.set(-center.x * scale, -box.min.y * scale, -center.z * scale);
+  }, [scene]);
+
+  // Precompute each rig.state → the concrete clip present on the loaded GLB (root-motion →
+  // in-place variant; fall back through the routed name → Idle → first clip). This only
+  // depends on the loaded clip set, so resolving it once here keeps the per-frame loop to a
+  // single object lookup instead of re-scanning `names` every frame.
+  const clipByState = useMemo(() => {
+    if (!hasClips) return null;
+    const resolve = (state) => {
+      const wanted = (STATE_CLIP[state] || STATE_CLIP.idle).clip;
+      const routed = inPlaceClipName(wanted, ROOT_MOTION_CLIPS, IN_PLACE_SUFFIX);
+      if (names.includes(routed)) return routed;
+      if (names.includes('Idle')) return 'Idle';
+      return names[0] || null;
+    };
+    return Object.fromEntries(Object.keys(STATE_CLIP).map((s) => [s, resolve(s)]));
+  }, [hasClips, names]);
+
+  // Crossfade to `clipName` at the given rate. No-op if it's already the active clip,
+  // so this is safe to call every frame.
+  const fadeTo = useCallback((clipName, timeScale) => {
+    if (!clipName || clipName === activeClipRef.current) return;
+    const next = actions[clipName];
+    if (!next) return;
+    const prev = actions[activeClipRef.current];
+    next.reset();
+    next.enabled = true;
+    next.setEffectiveTimeScale(timeScale ?? 1);
+    next.setEffectiveWeight(1);
+    next.setLoop(THREE.LoopRepeat, Infinity);
+    next.fadeIn(FADE).play();
+    if (prev && prev !== next) prev.fadeOut(FADE);
+    activeClipRef.current = clipName;
+  }, [actions]);
 
   useFrame(({ clock }, delta) => {
     const root = rootRef.current;
     const rig = rigRef?.current;
     if (!root || !rig) return;
-    const t = clock.getElapsedTime();
     const f = dampFactor(8, delta);
     const state = rig.state;
     const hovering = state === 'hover';
-    const running = state === 'run';
-    const moving = state === 'walk' || running;
 
-    // Root follows the rig: feet on the ground normally; in hover the body floats
-    // closer to the camera anchor with legs tucked.
+    // Root follows the rig: feet on the ground normally (rig.position.y is eye height, so
+    // subtract EYE_HEIGHT to drop the feet to the plane); in hover the body floats up
+    // toward the camera anchor with a gentle bob so a flyover reads as airborne.
+    const t = clock.getElapsedTime();
     const targetOffset = hovering ? -1.05 : -EYE_HEIGHT;
     groundOffsetRef.current += (targetOffset - groundOffsetRef.current) * f;
-    const bob = state === 'idle' ? Math.sin(t * 1.6) * 0.03 : hovering ? Math.sin(t * 2.2) * 0.06 : 0;
+    const bob = hovering ? Math.sin(t * 2.2) * 0.06 : 0;
     root.position.set(rig.position.x, rig.position.y + groundOffsetRef.current + bob, rig.position.z);
-    // The avatar geometry is modeled facing +Z (visor/chest/toes at +z, jet vents at -z),
-    // but the rig's forward convention is -Z (rig.facing's 0 points toward -z). Bridge the
-    // model-vs-rig 180° with a +π yaw offset so the runner faces its direction of travel
-    // instead of walking backward toward the camera.
-    root.rotation.y = rig.facing + Math.PI;
+
+    // Face the travel direction (see MODEL_FACING_OFFSET); bank leans into turns.
+    root.rotation.y = rig.facing + MODEL_FACING_OFFSET;
     root.rotation.z = rig.bank;
 
-    // Gait phase advances while moving, settles to neutral at rest.
-    if (moving) phaseRef.current += delta * (running ? 14 : 9);
-    else phaseRef.current *= 1 - Math.min(1, f * 1.4);
-    const amp = running ? 0.9 : 0.55;
-    const swing = moving ? Math.sin(phaseRef.current) * amp : 0;
-    const counter = -swing;
-
-    const lerpRot = (ref, x) => {
-      if (ref.current) ref.current.rotation.x += (x - ref.current.rotation.x) * f;
-    };
-
-    if (hovering) {
-      // Tuck: thighs forward, knees folded, arms slightly out and back.
-      lerpRot(hipL, 0.65);
-      lerpRot(hipR, 0.65);
-      lerpRot(kneeL, -1.2);
-      lerpRot(kneeR, -1.2);
-      lerpRot(shoulderL, -0.35);
-      lerpRot(shoulderR, -0.35);
-      lerpRot(elbowL, -0.5);
-      lerpRot(elbowR, -0.5);
-    } else {
-      // Gait: hips/shoulders oppose; knees and elbows follow through a half-beat later.
-      const follow = moving ? Math.max(0, Math.sin(phaseRef.current + 0.5)) * amp * 0.9 : 0;
-      const followR = moving ? Math.max(0, Math.sin(phaseRef.current + Math.PI + 0.5)) * amp * 0.9 : 0;
-      const elbowBase = running ? -0.8 : moving ? -0.3 : -0.12;
-      lerpRot(hipL, swing);
-      lerpRot(hipR, counter);
-      lerpRot(kneeL, -follow);
-      lerpRot(kneeR, -followR);
-      lerpRot(shoulderL, counter * 0.8);
-      lerpRot(shoulderR, swing * 0.8);
-      lerpRot(elbowL, elbowBase - Math.max(0, counter) * 0.4);
-      lerpRot(elbowR, elbowBase - Math.max(0, swing) * 0.4);
+    // Drive the skeleton from the mutable rig state (crossfades only on change).
+    if (clipByState) {
+      const cfg = STATE_CLIP[state] || STATE_CLIP.idle;
+      fadeTo(clipByState[state] || clipByState.idle, cfg.timeScale);
     }
 
-    // Torso pitches into a sprint; head scans slowly at idle.
-    if (torsoRef.current) {
-      torsoRef.current.rotation.x += ((running ? 0.18 : hovering ? -0.1 : 0) - torsoRef.current.rotation.x) * f;
-    }
-    if (headRef.current) {
-      const scan = state === 'idle' ? Math.sin(t * 0.4) * 0.22 : 0;
-      headRef.current.rotation.y = dampAngle(headRef.current.rotation.y, scan, f);
-    }
-
-    // Emissive life: visor breathes at idle, vents flare in hover, disc brightens in hover.
-    mats.visor.emissiveIntensity = 0.55 + (state === 'idle' ? (Math.sin(t * 1.8) + 1) * 0.12 : 0.15);
-    const ventTarget = hovering ? 0.9 + (Math.sin(t * 6) + 1) * 0.25 : moving ? 0.25 : 0.05;
-    mats.vents.emissiveIntensity += (ventTarget - mats.vents.emissiveIntensity) * f;
-    mats.disc.opacity = hovering ? 0.3 : 0.16;
+    // Brighten the footprint disc slightly while flying.
+    if (discMatRef.current) discMatRef.current.opacity = hovering ? 0.3 : 0.16;
   });
 
   return (
     <group ref={rootRef}>
-      <group ref={torsoRef} position={[0, HIP_Y + 0.08, 0]}>
-        {/* Torso + chest core */}
-        <mesh geometry={GEO.torso} material={mats.body} position={[0, 0.26, 0]} />
-        <mesh geometry={GEO.core} material={mats.trim} rotation={[Math.PI / 2, 0, 0]} position={[0, 0.3, 0.14]} />
-        {/* Back unit + jet vents */}
-        <mesh geometry={GEO.backUnit} material={mats.dark} position={[0, 0.28, -0.17]} />
-        <mesh geometry={GEO.vent} material={mats.vents} position={[-0.07, 0.12, -0.18]} />
-        <mesh geometry={GEO.vent} material={mats.vents} position={[0.07, 0.12, -0.18]} />
-
-        {/* Head */}
-        <group ref={headRef} position={[0, SHOULDER_Y - HIP_Y + 0.17, 0]}>
-          <mesh geometry={GEO.helmet} material={mats.body} />
-          <mesh geometry={GEO.visor} material={mats.visor} position={[0, 0.01, 0.12]} />
-          <mesh geometry={GEO.sensor} material={mats.sensor} position={[0, -0.07, 0.14]} />
-        </group>
-
-        {/* Pauldrons */}
-        <mesh geometry={GEO.pauldron} material={mats.trim} position={[-0.27, 0.48, 0]} scale={[1, 0.7, 1]} />
-        <mesh geometry={GEO.pauldron} material={mats.trim} position={[0.27, 0.48, 0]} scale={[1, 0.7, 1]} />
-
-        {/* Arms: shoulder → elbow, two segments each */}
-        <group ref={shoulderL} position={[-0.3, 0.44, 0]}>
-          <mesh geometry={GEO.upperArm} material={mats.body} position={[0, -0.14, 0]} />
-          <group ref={elbowL} position={[0, -0.28, 0]}>
-            <mesh geometry={GEO.forearm} material={mats.dark} position={[0, -0.13, 0]} />
-            <mesh geometry={GEO.fist} material={mats.dark} position={[0, -0.28, 0]} />
-          </group>
-        </group>
-        <group ref={shoulderR} position={[0.3, 0.44, 0]}>
-          <mesh geometry={GEO.upperArm} material={mats.body} position={[0, -0.14, 0]} />
-          <group ref={elbowR} position={[0, -0.28, 0]}>
-            <mesh geometry={GEO.forearm} material={mats.dark} position={[0, -0.13, 0]} />
-            <mesh geometry={GEO.fist} material={mats.dark} position={[0, -0.28, 0]} />
-          </group>
-        </group>
-      </group>
-
-      {/* Pelvis */}
-      <mesh geometry={GEO.pelvis} material={mats.dark} position={[0, HIP_Y, 0]} />
-
-      {/* Legs: hip → knee, two segments each, boots with glowing soles */}
-      <group ref={hipL} position={[-0.1, HIP_Y - 0.04, 0]}>
-        <mesh geometry={GEO.thigh} material={mats.body} position={[0, -0.16, 0]} />
-        <group ref={kneeL} position={[0, -0.32, 0]}>
-          <mesh geometry={GEO.shin} material={mats.dark} position={[0, -0.15, 0]} />
-          <mesh geometry={GEO.boot} material={mats.dark} position={[0, -0.32, 0.04]} />
-          <mesh geometry={GEO.sole} material={mats.trim} position={[0, -0.37, 0.04]} />
-        </group>
-      </group>
-      <group ref={hipR} position={[0.1, HIP_Y - 0.04, 0]}>
-        <mesh geometry={GEO.thigh} material={mats.body} position={[0, -0.16, 0]} />
-        <group ref={kneeR} position={[0, -0.32, 0]}>
-          <mesh geometry={GEO.shin} material={mats.dark} position={[0, -0.15, 0]} />
-          <mesh geometry={GEO.boot} material={mats.dark} position={[0, -0.32, 0.04]} />
-          <mesh geometry={GEO.sole} material={mats.trim} position={[0, -0.37, 0.04]} />
-        </group>
-      </group>
-
-      {/* Ground glow disc */}
-      <mesh geometry={GEO.disc} material={mats.disc} rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 0]} />
+      {/* scene carries its own fit scale/position (applied in the effect above).
+          dispose={null}: the clone shares geometry/material refs with the useGLTF cache
+          (SkeletonUtils.clone is shallow for those), so letting r3f dispose them on unmount
+          would corrupt the cache for the next mount / the CoS Muse avatar. */}
+      <primitive object={scene} dispose={null} />
+      {/* Accent-tinted ground glow — the runner's neon footprint. Declared as JSX so R3F
+          owns the geometry/material lifecycle; `color` tracks the theme reactively and the
+          per-frame opacity write goes through discMatRef. */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.02, 0]}>
+        <circleGeometry args={[0.45, 18]} />
+        <meshBasicMaterial
+          ref={discMatRef}
+          color={accent}
+          transparent
+          opacity={0.16}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+          side={THREE.DoubleSide}
+        />
+      </mesh>
     </group>
   );
 }
+
+// Warm the loader cache once the URL is known (matches MuseCoSAvatar).
+useGLTF.preload(MODEL_URL);

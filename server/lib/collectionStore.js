@@ -299,15 +299,43 @@ export function createCollectionStore({
   }
 
   /**
+   * Load every record in parallel, keeping the "which ids failed to load" signal
+   * that `loadAll` throws away. A record `id` returned by `listIds()` whose
+   * `loadOne(id)` resolves to `null` means the on-disk file is
+   * missing/unreadable/unparseable or was rejected by `sanitizeRecord` — i.e. a
+   * corrupt record in an otherwise-readable collection. Callers that reason over
+   * the whole set (merge-rate stats, adoption reports) need to distinguish
+   * "N records" from "N-of-M records, K corrupt" so a silent undercount can't
+   * masquerade as complete truth — the same sentinel-vs-empty rule the CLAUDE.md
+   * conventions call out. Mirrors the `loadAll`/`listOutcomesResult` precedent.
+   *
+   * @returns {Promise<{ records: any[], failedIds: string[] }>}
+   *   `records` — the successfully-loaded, sanitized records (nulls dropped).
+   *   `failedIds` — the ids `listIds()` surfaced that failed to load (empty when
+   *   every record loaded cleanly).
+   */
+  async function loadAllResult() {
+    const ids = await listIds();
+    const loaded = await Promise.all(ids.map((id) => loadOne(id)));
+    const records = [];
+    const failedIds = [];
+    ids.forEach((id, i) => {
+      if (loaded[i] != null) records.push(loaded[i]);
+      else failedIds.push(id);
+    });
+    return { records, failedIds };
+  }
+
+  /**
    * Load every record in parallel. O(N) cost — acceptable while record counts
    * are bounded (typical PortOS collections sit in the tens-to-hundreds), but
    * callers iterating very large collections should prefer `listIds` +
-   * targeted `loadOne` rather than slurping the whole set.
+   * targeted `loadOne` rather than slurping the whole set. Back-compat flattening
+   * wrapper over `loadAllResult` — silently drops corrupt records; reach for
+   * `loadAllResult` when the caller must be able to tell a partial set apart.
    */
   async function loadAll() {
-    const ids = await listIds();
-    const records = await Promise.all(ids.map((id) => loadOne(id)));
-    return records.filter((r) => r != null);
+    return (await loadAllResult()).records;
   }
 
   /**
@@ -434,6 +462,7 @@ export function createCollectionStore({
     loadOne,
     loadOneRaw,
     loadAll,
+    loadAllResult,
     saveOneNow,
     saveOne,
     deleteOneNow,

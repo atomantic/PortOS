@@ -332,6 +332,42 @@
       "secretEnvVars": [],
       "tuiPromptDelayMs": 2500,
       "tuiIdleTimeoutMs": 180000
+    },
+    "kimi-cli": {
+      "id": "kimi-cli",
+      "name": "Kimi Code CLI",
+      "type": "cli",
+      "command": "kimi",
+      "args": ["--print"],
+      "models": ["kimi-configured-default"],
+      "defaultModel": "kimi-configured-default",
+      "lightModel": "kimi-configured-default",
+      "mediumModel": "kimi-configured-default",
+      "heavyModel": "kimi-configured-default",
+      "contextWindow": 256000,
+      "timeout": 300000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": []
+    },
+    "kimi-tui": {
+      "id": "kimi-tui",
+      "name": "Kimi Code TUI",
+      "type": "tui",
+      "command": "kimi",
+      "args": ["--yolo"],
+      "models": ["kimi-configured-default"],
+      "defaultModel": "kimi-configured-default",
+      "lightModel": "kimi-configured-default",
+      "mediumModel": "kimi-configured-default",
+      "heavyModel": "kimi-configured-default",
+      "contextWindow": 256000,
+      "timeout": 600000,
+      "enabled": false,
+      "envVars": {},
+      "secretEnvVars": [],
+      "tuiPromptDelayMs": 2500,
+      "tuiIdleTimeoutMs": 180000
     }
   }
 }

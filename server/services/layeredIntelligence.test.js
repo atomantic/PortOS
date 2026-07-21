@@ -48,6 +48,11 @@ import {
   computeProposalExecutionAwareness,
   computeCrossReferenceAnalysis,
   computeHandoffRouting,
+  computeHardExclusionGate,
+  computeHardExclusionNotice,
+  computeLiExecutionHealth,
+  LI_HARD_GATE_EXECUTION_THRESHOLD,
+  SELF_IMPROVE_SCOPES,
   PROPOSAL_EXECUTION_MIN_SAMPLE,
   SCOPE_AVOID_SUCCESS_THRESHOLD,
   SCOPE_PREFER_SUCCESS_THRESHOLD,
@@ -64,6 +69,9 @@ import {
   normalizeIssueState,
   listForgeIssues,
   extractClosingComment,
+  extractImplementingPr,
+  repoSlugFromUrl,
+  readImplementingPrState,
   listBlockingIssues,
   fileProposalToForge,
   ensureForgeLabels,
@@ -675,6 +683,129 @@ describe('computeHandoffRouting (#2764 §4)', () => {
     expect(routing.reason).toContain('app-improvement');
     expect(routing.reason).not.toContain('failing mostly on');
     expect(routing.reason).not.toContain('(');
+  });
+});
+
+describe('computeLiExecutionHealth (#2824)', () => {
+  const stats = (over = {}) => ({ read: true, metrics: { completed: 10, succeeded: 3, failed: 7, successRate: 30, recentOutcomes: [], ...over } });
+
+  it('reports UNKNOWN (rate null) when the store is unreadable or has no runs', () => {
+    expect(computeLiExecutionHealth(null)).toEqual({ rate: null, sample: 0, source: null, confident: false });
+    expect(computeLiExecutionHealth({ read: false })).toMatchObject({ rate: null, confident: false });
+    expect(computeLiExecutionHealth({ read: true, metrics: null })).toMatchObject({ rate: null, confident: false });
+  });
+
+  it('reads the effective lifetime rate + sample and marks it confident above the floor', () => {
+    const health = computeLiExecutionHealth(stats());
+    expect(health.rate).toBe(30);
+    expect(health.sample).toBe(10);
+    expect(health.confident).toBe(true);
+  });
+
+  it('is NOT confident below LI_DEGRADED_MIN_SAMPLE runs', () => {
+    const health = computeLiExecutionHealth(stats({ completed: 2, succeeded: 0, failed: 2, successRate: 0 }));
+    expect(health.rate).toBe(0);
+    expect(health.sample).toBe(2);
+    expect(health.confident).toBe(false);
+  });
+});
+
+describe('computeHardExclusionGate (#2824)', () => {
+  // Degraded (below the 75% gate line) AND confident (>= LI_DEGRADED_MIN_SAMPLE runs).
+  const degraded = { read: true, metrics: { completed: 10, succeeded: 3, failed: 7, successRate: 30, recentOutcomes: [] } };
+  // Healthy: at/above the gate line.
+  const healthy = { read: true, metrics: { completed: 10, succeeded: 9, failed: 1, successRate: 90, recentOutcomes: [] } };
+  // Below the sample floor even though 0%.
+  const thinSample = { read: true, metrics: { completed: 2, succeeded: 0, failed: 2, successRate: 0, recentOutcomes: [] } };
+
+  it('never excludes a null/invalid proposal', () => {
+    expect(computeHardExclusionGate({ proposal: null, liTaskStats: degraded })).toEqual({ excluded: false, reason: null });
+    expect(computeHardExclusionGate({ liTaskStats: degraded })).toEqual({ excluded: false, reason: null });
+  });
+
+  it('is DISARMED when execution health is unknown, healthy, or below the sample floor', () => {
+    const p = { scope: 'loop-meta' };
+    expect(computeHardExclusionGate({ proposal: p, liTaskStats: null }).excluded).toBe(false);
+    expect(computeHardExclusionGate({ proposal: p, liTaskStats: healthy }).excluded).toBe(false);
+    expect(computeHardExclusionGate({ proposal: p, liTaskStats: thinSample }).excluded).toBe(false);
+  });
+
+  it('excludes EVERY self-improve scope when armed, regardless of domain history', () => {
+    for (const scope of SELF_IMPROVE_SCOPES) {
+      const res = computeHardExclusionGate({ proposal: { scope }, liTaskStats: degraded, outcomes: [] });
+      expect(res.excluded).toBe(true);
+      expect(res.rule).toBe('self-improve-scope');
+      expect(res.reason).toContain(scope);
+      expect(res.reason).toContain(`< ${LI_HARD_GATE_EXECUTION_THRESHOLD}%`);
+    }
+  });
+
+  it('excludes a non-self-improve proposal in a chronically-failing domain when armed', () => {
+    const outcomes = [
+      { scope: 'app-improvement', executionOutcome: 'success' },
+      { scope: 'app-improvement', executionOutcome: 'failure', failureCategory: 'planning' },
+      { scope: 'app-improvement', executionOutcome: 'failure', failureCategory: 'planning' } // 1/3 = 33% < 50%
+    ];
+    const res = computeHardExclusionGate({ proposal: { scope: 'app-improvement' }, liTaskStats: degraded, outcomes });
+    expect(res.excluded).toBe(true);
+    expect(res.rule).toBe('failing-domain');
+    expect(res.reason).toContain('app-improvement');
+    expect(res.reason).toContain('33%');
+  });
+
+  it('does NOT exclude a non-self-improve proposal in a healthy/unknown domain even when armed', () => {
+    // app-data-gap has no failing execution history → domain rule can't fire.
+    expect(computeHardExclusionGate({ proposal: { scope: 'app-data-gap' }, liTaskStats: degraded, outcomes: [] }).excluded).toBe(false);
+    // A domain at/above the avoid line is not chronically failing.
+    const okOutcomes = [
+      { scope: 'app-improvement', executionOutcome: 'success' },
+      { scope: 'app-improvement', executionOutcome: 'success' },
+      { scope: 'app-improvement', executionOutcome: 'failure' } // 2/3 = 67% >= 50%
+    ];
+    expect(computeHardExclusionGate({ proposal: { scope: 'app-improvement' }, liTaskStats: degraded, outcomes: okOutcomes }).excluded).toBe(false);
+  });
+
+  it('agrees with computeHandoffRouting on which non-self-improve domains are chronically failing', () => {
+    const outcomes = [
+      { scope: 'app-improvement', executionOutcome: 'failure' },
+      { scope: 'app-improvement', executionOutcome: 'failure' } // 0/2 = 0%
+    ];
+    // Both the hand-off gate and the filing gate flag the same domain; the filing gate
+    // additionally requires degraded overall health to fire.
+    expect(computeHandoffRouting({ proposal: { scope: 'app-improvement' }, outcomes }).handoff).toBe(false);
+    expect(computeHardExclusionGate({ proposal: { scope: 'app-improvement' }, liTaskStats: degraded, outcomes }).excluded).toBe(true);
+    // …but with healthy execution health, the filing gate stays disarmed.
+    expect(computeHardExclusionGate({ proposal: { scope: 'app-improvement' }, liTaskStats: healthy, outcomes }).excluded).toBe(false);
+  });
+});
+
+describe('computeHardExclusionNotice (#2824)', () => {
+  const degraded = { read: true, metrics: { completed: 10, succeeded: 3, failed: 7, successRate: 30, recentOutcomes: [] } };
+  const healthy = { read: true, metrics: { completed: 10, succeeded: 9, failed: 1, successRate: 90, recentOutcomes: [] } };
+
+  it('is empty when the gate is disarmed (healthy / unknown health)', () => {
+    expect(computeHardExclusionNotice({ liTaskStats: healthy })).toBe('');
+    expect(computeHardExclusionNotice({ liTaskStats: null })).toBe('');
+  });
+
+  it('names the self-improve scopes, the armed health, and the GATE CHECK step', () => {
+    const notice = computeHardExclusionNotice({ liTaskStats: degraded, outcomes: [] });
+    expect(notice).toContain('HARD EXCLUSION GATE ARMED');
+    expect(notice).toContain('30%');
+    expect(notice).toContain(`below ${LI_HARD_GATE_EXECUTION_THRESHOLD}%`);
+    for (const scope of SELF_IMPROVE_SCOPES) expect(notice).toContain(scope);
+    expect(notice).toContain('GATE CHECK');
+    expect(notice).toContain('return proposal: null');
+  });
+
+  it('names a currently chronically-failing domain when one exists', () => {
+    const outcomes = [
+      { scope: 'app-improvement', executionOutcome: 'failure' },
+      { scope: 'app-improvement', executionOutcome: 'failure' } // 0% over 2
+    ];
+    const notice = computeHardExclusionNotice({ liTaskStats: degraded, outcomes });
+    expect(notice).toContain('chronically-failing execution domain');
+    expect(notice).toContain('app-improvement');
   });
 });
 
@@ -1892,8 +2023,10 @@ describe('forge I/O (injected exec)', () => {
     });
     const { ok, issues } = await listForgeIssues({ cli: 'gh', cwd: '/x', exec });
     expect(ok).toBe(true);
-    // The batched list call must ask gh for `comments` so no extra fetch is needed.
-    expect(exec.mock.calls[0][1]).toContain('number,title,body,state,stateReason,closedAt,url,labels,comments');
+    // The batched list call must ask gh for `comments` (closing-comment signal) and
+    // `closedByPullRequestsReferences` (implementing-PR ref, #2748 deliverable 2) so
+    // no extra fetch is needed for either.
+    expect(exec.mock.calls[0][1]).toContain('number,title,body,state,stateReason,closedAt,url,labels,comments,closedByPullRequestsReferences');
     // The LAST comment (closest to the close) becomes the classifier's signal.
     expect(issues[0].closingComment).toBe('Closing — this is out of scope for the app.');
   });
@@ -1913,6 +2046,86 @@ describe('forge I/O (injected exec)', () => {
     expect(extractClosingComment([])).toBeNull();
     expect(extractClosingComment(null)).toBeNull();
     expect(extractClosingComment([{ body: '   ' }, { body: null }])).toBeNull();
+  });
+
+  it('listForgeIssues threads the implementing-PR number from closedByPullRequestsReferences (#2748)', async () => {
+    const exec = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify([
+        {
+          number: 5,
+          title: 'E',
+          body: `x ${slugMarker('slug-e')}`,
+          state: 'CLOSED',
+          closedByPullRequestsReferences: [{ number: 900 }, { number: 901 }]
+        },
+        { number: 6, title: 'F', body: `x ${slugMarker('slug-f')}`, state: 'CLOSED' }
+      ])
+    });
+    const { issues } = await listForgeIssues({ cli: 'gh', cwd: '/x', exec });
+    // The batched call must ALSO ask gh for the closing-PR refs — no extra round-trip.
+    expect(exec.mock.calls[0][1]).toContain('number,title,body,state,stateReason,closedAt,url,labels,comments,closedByPullRequestsReferences');
+    // The LAST ref (most recent linked PR) is the implementing handle.
+    expect(issues[0].implementingPr).toBe(901);
+    // No refs ⇒ null (glab rows, or a hand-closed issue) — falls through cleanly.
+    expect(issues[1].implementingPr).toBeNull();
+  });
+
+  it('extractImplementingPr returns the last positive-integer ref, else null', () => {
+    expect(extractImplementingPr([{ number: 10 }, { number: 11 }])).toBe(11);
+    expect(extractImplementingPr([{ number: 12 }, { number: null }])).toBe(12);
+    expect(extractImplementingPr([])).toBeNull();
+    expect(extractImplementingPr(null)).toBeNull();
+    expect(extractImplementingPr([{ number: 0 }, { number: -3 }])).toBeNull();
+  });
+
+  it('extractImplementingPr skips a cross-repo reference when the issue repo is known (codex P2)', () => {
+    const refs = [
+      { number: 55, repository: { owner: { login: 'someone' }, name: 'other-repo' } },
+      { number: 56, repository: { owner: { login: 'atomantic' }, name: 'PortOS' } }
+    ];
+    // Same-repo ref wins even though the cross-repo one is later in the list.
+    expect(extractImplementingPr(refs, 'atomantic/PortOS')).toBe(56);
+    // A ref from another repo alone is rejected — `gh pr view 55` in cwd would read the
+    // wrong PR. Falls through to null rather than mis-diagnosing.
+    expect(extractImplementingPr([refs[0]], 'atomantic/PortOS')).toBeNull();
+    // Repo match is case-insensitive (GitHub slugs are).
+    expect(extractImplementingPr([{ number: 57, url: 'https://github.com/Atomantic/portos/pull/57' }], 'atomantic/PortOS')).toBe(57);
+    // Unknown self-repo, or a ref with no repo info, degrades to accepting (same-repo
+    // is the common case) — preserves prior behavior.
+    expect(extractImplementingPr(refs, null)).toBe(56);
+    expect(extractImplementingPr([{ number: 58 }], 'atomantic/PortOS')).toBe(58);
+  });
+
+  it('repoSlugFromUrl parses owner/repo from an issue or PR URL, host-agnostic', () => {
+    expect(repoSlugFromUrl('https://github.com/atomantic/PortOS/issues/2748')).toBe('atomantic/portos');
+    expect(repoSlugFromUrl('https://github.com/owner/repo/pull/5')).toBe('owner/repo');
+    expect(repoSlugFromUrl('https://github.example.com/org/proj/issues/9')).toBe('org/proj');
+    expect(repoSlugFromUrl('https://github.com/owner/repo')).toBeNull();
+    expect(repoSlugFromUrl(null)).toBeNull();
+  });
+
+  it('readImplementingPrState parses gh pr view, and is gh-only (#2748)', async () => {
+    const exec = vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({ state: 'CLOSED', mergeStateStatus: 'DIRTY', statusCheckRollup: [{ conclusion: 'FAILURE' }] })
+    });
+    const view = await readImplementingPrState({ cli: 'gh', cwd: '/x', number: 42, exec });
+    expect(exec).toHaveBeenCalledWith('gh', ['pr', 'view', '42', '--json', 'state,mergeStateStatus,statusCheckRollup'], { cwd: '/x', env: undefined });
+    expect(view).toEqual({ state: 'CLOSED', mergeStateStatus: 'DIRTY', statusCheckRollup: [{ conclusion: 'FAILURE' }] });
+
+    // glab carries no PR handle → no fetch, null.
+    const glabExec = vi.fn();
+    expect(await readImplementingPrState({ cli: 'glab', number: 42, exec: glabExec })).toBeNull();
+    expect(glabExec).not.toHaveBeenCalled();
+    // A non-integer number is a caller bug → null without fetching.
+    expect(await readImplementingPrState({ cli: 'gh', number: null, exec: glabExec })).toBeNull();
+  });
+
+  it('readImplementingPrState returns null on a CLI error or unparseable output (#2748)', async () => {
+    expect(await readImplementingPrState({ cli: 'gh', number: 1, exec: vi.fn().mockResolvedValue({ code: 1, stdout: '' }) })).toBeNull();
+    expect(await readImplementingPrState({ cli: 'gh', number: 1, exec: vi.fn().mockResolvedValue({ code: 0, stdout: 'not json' }) })).toBeNull();
+    expect(await readImplementingPrState({ cli: 'gh', number: 1, exec: vi.fn().mockResolvedValue({ code: 0, stdout: '   ' }) })).toBeNull();
   });
 
   it('listForgeIssues normalizes GitLab "opened" state to open', async () => {

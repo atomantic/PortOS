@@ -296,4 +296,215 @@ describe('mergeTaskLists', () => {
       expect(merged.metadata.claimedBy).toBe('peer-A');
     });
   });
+
+  describe('cross-peer investigation fingerprint dedup (#2628)', () => {
+    // An investigation task carries a durable fingerprint marker (#2615). Two
+    // federated peers can each mint one for the SAME failure cause before syncing;
+    // rule 1 unions them by id so both survive. `inv` builds one.
+    const inv = (id, status, fp, overrides = {}) =>
+      task(id, status, {
+        metadata: {
+          isInvestigation: true,
+          investigationFingerprint: fp,
+          ...(overrides.affectedTasks ? { affectedTasks: overrides.affectedTasks } : {}),
+          ...(overrides.metadata || {}),
+        },
+        ...(overrides.priority ? { priority: overrides.priority } : {}),
+        ...(overrides.description ? { description: overrides.description } : {}),
+      });
+
+    it('collapses two same-fingerprint OPEN investigations from two peers to one active row', () => {
+      const local = [inv('sys-a', 'pending', 'fp-1', { affectedTasks: ['task-1'] })];
+      const remote = [inv('sys-b', 'pending', 'fp-1', { affectedTasks: ['task-2'] })];
+
+      // Symmetric: same survivor regardless of which side initiates the sweep.
+      for (const merged of [
+        mergeTaskLists(local, remote, { now: NOW }),
+        mergeTaskLists(remote, local, { now: NOW }),
+      ]) {
+        const byId = Object.fromEntries(merged.map((t) => [t.id, t]));
+        // Older/lower id survives as the single OPEN row.
+        expect(byId['sys-a'].status).toBe('pending');
+        // Loser flipped to a terminal status — NOT deleted (LWW never propagates a
+        // delete), and marked so the collapse is auditable + idempotent.
+        expect(byId['sys-b'].status).toBe('completed');
+        expect(byId['sys-b'].metadata.supersededBy).toBe('sys-a');
+        // affectedTasks unioned (deduped, sorted) onto the survivor.
+        expect(byId['sys-a'].metadata.affectedTasks).toEqual(['task-1', 'task-2']);
+        // Exactly one non-terminal investigation remains for this fingerprint.
+        const open = merged.filter(
+          (t) => t.metadata?.investigationFingerprint === 'fp-1' && t.status !== 'completed'
+        );
+        expect(open).toHaveLength(1);
+      }
+    });
+
+    it('unions affectedTasks by id (no duplicates)', () => {
+      const local = [inv('sys-a', 'pending', 'fp-1', { affectedTasks: ['task-1', 'task-2'] })];
+      const remote = [inv('sys-b', 'pending', 'fp-1', { affectedTasks: ['task-2', 'task-3'] })];
+      const merged = mergeTaskLists(local, remote, { now: NOW });
+      const survivor = merged.find((t) => t.id === 'sys-a');
+      expect(survivor.metadata.affectedTasks).toEqual(['task-1', 'task-2', 'task-3']);
+    });
+
+    it('never orphans an in-flight investigation: an in_progress loser survives over a lower idle id', () => {
+      // The lower id (sys-a) is idle; the higher id (sys-b) is in_progress —
+      // an agent is actively investigating it. The in-flight copy must survive so
+      // its execution is not orphaned, even though its id sorts later. Symmetric:
+      // both peers converge on the same survivor regardless of who sweeps.
+      const local = [inv('sys-a', 'pending', 'fp-1', { affectedTasks: ['task-1'] })];
+      const remote = [
+        inv('sys-b', 'in_progress', 'fp-1', { affectedTasks: ['task-2'], metadata: liveClaim('instance-B') }),
+      ];
+      for (const merged of [
+        mergeTaskLists(local, remote, { now: NOW }),
+        mergeTaskLists(remote, local, { now: NOW }),
+      ]) {
+        const byId = Object.fromEntries(merged.map((t) => [t.id, t]));
+        expect(byId['sys-b'].status).toBe('in_progress');
+        expect(byId['sys-b'].metadata.claimedBy).toBe('instance-B');
+        expect(byId['sys-b'].metadata.affectedTasks).toEqual(['task-1', 'task-2']);
+        expect(byId['sys-a'].status).toBe('completed');
+        expect(byId['sys-a'].metadata.supersededBy).toBe('sys-b');
+      }
+    });
+
+    it('keeps an in_progress survivor even when its lease timestamp looks expired (stale-lease-proof)', () => {
+      // The no-orphan guard keys on the in_progress STATUS, not lease liveness: a
+      // peer whose view of sys-b's lease has gone stale (agent still running, but
+      // the renewal hasn't replicated) must NOT flip the running copy to completed
+      // just because the lower-id sys-a sorts first. Status survives that staleness.
+      const expiredLease = { claimedBy: 'instance-B', claimedAt: past(LEASE_DURATION_MS * 2), leaseExpiresAt: past(1000) };
+      const local = [inv('sys-a', 'pending', 'fp-1', { affectedTasks: ['task-1'] })];
+      const remote = [inv('sys-b', 'in_progress', 'fp-1', { affectedTasks: ['task-2'], metadata: expiredLease })];
+      for (const merged of [
+        mergeTaskLists(local, remote, { now: NOW }),
+        mergeTaskLists(remote, local, { now: NOW }),
+      ]) {
+        const byId = Object.fromEntries(merged.map((t) => [t.id, t]));
+        expect(byId['sys-b'].status).toBe('in_progress'); // running copy survives
+        expect(byId['sys-a'].status).toBe('completed');
+        expect(byId['sys-a'].metadata.supersededBy).toBe('sys-b');
+      }
+    });
+
+    it('does NOT collapse when both copies are in_progress (two in-flight agents)', () => {
+      // Sub-second claim race: both peers spawned. Killing either orphans a running
+      // agent, so the collapse is skipped this sweep — the group self-heals as each
+      // investigation completes (turns terminal) and drops out of the open set.
+      // Symmetric, and both live claims survive untouched.
+      const local = [inv('sys-a', 'in_progress', 'fp-1', { metadata: liveClaim('instance-A') })];
+      const remote = [inv('sys-b', 'in_progress', 'fp-1', { metadata: liveClaim('instance-B') })];
+      for (const merged of [
+        mergeTaskLists(local, remote, { now: NOW }),
+        mergeTaskLists(remote, local, { now: NOW }),
+      ]) {
+        const open = merged.filter((t) => t.status === 'in_progress');
+        expect(open.map((t) => t.id).sort()).toEqual(['sys-a', 'sys-b']);
+        expect(open.every((t) => t.metadata.claimedBy)).toBe(true); // claims untouched
+        expect(open.every((t) => t.metadata.supersededBy === undefined)).toBe(true);
+      }
+    });
+
+    it('collapses two blocked same-fingerprint copies (blocked is an OPEN investigation status)', () => {
+      // agentErrorAnalysis treats `blocked` as an open investigation, so two blocked
+      // copies for one cause are the same pile-up — they must collapse, not escape.
+      const local = [inv('sys-a', 'blocked', 'fp-1', { affectedTasks: ['task-1'] })];
+      const remote = [inv('sys-b', 'blocked', 'fp-1', { affectedTasks: ['task-2'] })];
+      for (const merged of [
+        mergeTaskLists(local, remote, { now: NOW }),
+        mergeTaskLists(remote, local, { now: NOW }),
+      ]) {
+        const byId = Object.fromEntries(merged.map((t) => [t.id, t]));
+        expect(byId['sys-a'].status).toBe('blocked'); // lower id survives, still blocked
+        expect(byId['sys-b'].status).toBe('completed'); // loser superseded
+        expect(byId['sys-b'].metadata.supersededBy).toBe('sys-a');
+        expect(byId['sys-a'].metadata.affectedTasks).toEqual(['task-1', 'task-2']);
+      }
+    });
+
+    it('collapses a blocked + pending same-fingerprint pair', () => {
+      const local = [inv('sys-a', 'blocked', 'fp-1')];
+      const remote = [inv('sys-b', 'pending', 'fp-1')];
+      const merged = mergeTaskLists(local, remote, { now: NOW });
+      const open = merged.filter((t) => t.metadata?.investigationFingerprint === 'fp-1' && t.status !== 'completed');
+      expect(open).toHaveLength(1);
+    });
+
+    it('surfaces peer-contributed affected tasks in the survivor DESCRIPTION (not just metadata)', () => {
+      // The investigation agent/user reads the body; the local path appends an
+      // "Also blocks" line per new id. The federation collapse mirrors that so the
+      // survivor names every blocked task, deterministically and idempotently.
+      const local = [inv('sys-a', 'pending', 'fp-1', { affectedTasks: ['task-1'] })]; // default body `desc sys-a`
+      const remote = [inv('sys-b', 'pending', 'fp-1', { affectedTasks: ['task-2'] })];
+      const once = mergeTaskLists(local, remote, { now: NOW });
+      const survivor = once.find((t) => t.id === 'sys-a');
+      expect(survivor.description).toContain('Also blocks task `task-2`');
+      // task-1 is the survivor's own id — not re-appended as a peer contribution
+      // unless it was already absent from the body; the default body doesn't mention
+      // it, so it IS appended once. Re-merging must NOT append it (or task-2) again.
+      const twice = mergeTaskLists(once, [], { now: NOW });
+      const survivor2 = twice.find((t) => t.id === 'sys-a');
+      expect(survivor2.description).toBe(survivor.description); // idempotent
+      const occurrences = (survivor2.description.match(/Also blocks task `task-2`/g) || []).length;
+      expect(occurrences).toBe(1);
+    });
+
+    it('does not append a description line already present in the body', () => {
+      // The survivor's body already mentions task-2 — the collapse must not duplicate it.
+      const local = [inv('sys-a', 'pending', 'fp-1', {
+        affectedTasks: ['task-1'],
+        description: 'Investigate failure. Original task `task-2` is affected.',
+      })];
+      const remote = [inv('sys-b', 'pending', 'fp-1', { affectedTasks: ['task-2'] })];
+      const merged = mergeTaskLists(local, remote, { now: NOW });
+      const survivor = merged.find((t) => t.id === 'sys-a');
+      const occurrences = (survivor.description.match(/`task-2`/g) || []).length;
+      expect(occurrences).toBe(1); // already present — not re-appended
+    });
+
+    it('does not collapse a single open investigation (no duplicate)', () => {
+      const local = [inv('sys-a', 'pending', 'fp-1', { affectedTasks: ['task-1'] })];
+      const merged = mergeTaskLists(local, [], { now: NOW });
+      expect(merged).toHaveLength(1);
+      expect(merged[0].status).toBe('pending');
+      expect(merged[0].metadata.supersededBy).toBeUndefined();
+    });
+
+    it('does not collapse investigations with DIFFERENT fingerprints', () => {
+      const local = [inv('sys-a', 'pending', 'fp-1')];
+      const remote = [inv('sys-b', 'pending', 'fp-2')];
+      const merged = mergeTaskLists(local, remote, { now: NOW });
+      expect(merged.every((t) => t.status === 'pending')).toBe(true);
+    });
+
+    it('ignores non-investigation tasks (no fingerprint) entirely', () => {
+      const local = [task('task-a', 'pending'), task('task-b', 'pending')];
+      const merged = mergeTaskLists(local, [], { now: NOW });
+      expect(merged.every((t) => t.status === 'pending')).toBe(true);
+      expect(merged.every((t) => t.metadata.supersededBy === undefined)).toBe(true);
+    });
+
+    it('is idempotent — re-merging the collapsed result changes nothing', () => {
+      const local = [inv('sys-a', 'pending', 'fp-1', { affectedTasks: ['task-1'] })];
+      const remote = [inv('sys-b', 'pending', 'fp-1', { affectedTasks: ['task-2'] })];
+      const once = mergeTaskLists(local, remote, { now: NOW });
+      const twice = mergeTaskLists(once, [], { now: NOW });
+      expect(twice).toEqual(once);
+    });
+
+    it('re-folds affectedTasks onto the survivor after a partial per-id revert', () => {
+      // Mid-propagation, a peer can hold the survivor with a stale (partial)
+      // affectedTasks while a terminal `supersededBy` sibling records the collapse.
+      // The pass must re-fold the full union rather than leave the survivor partial.
+      const partialSurvivor = inv('sys-a', 'pending', 'fp-1', { affectedTasks: ['task-1'] });
+      const supersededSibling = inv('sys-b', 'completed', 'fp-1', {
+        affectedTasks: ['task-2'],
+        metadata: { supersededBy: 'sys-a' },
+      });
+      const merged = mergeTaskLists([partialSurvivor, supersededSibling], [], { now: NOW });
+      const survivor = merged.find((t) => t.id === 'sys-a');
+      expect(survivor.metadata.affectedTasks).toEqual(['task-1', 'task-2']);
+    });
+  });
 });

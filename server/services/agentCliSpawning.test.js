@@ -256,6 +256,23 @@ describe('buildCliSpawnConfig', () => {
     expect(config.args).not.toContain('--append-system-prompt-file');
   });
 
+  it('runs `kimi` headless with --print, no --model for the configured-default sentinel', () => {
+    const config = buildCliSpawnConfig({ id: 'kimi-cli', command: 'kimi', args: ['--print'] }, 'kimi-configured-default');
+    expect(config.command).toBe('kimi');
+    expect(config.stdinMode).toBe('prompt');
+    expect(config.args).toEqual(['--print']);
+    expect(config.args).not.toContain('--model');
+    // Kimi is non-Claude, so no claude-only flags leak in.
+    expect(config.args).not.toContain('--dangerously-skip-permissions');
+    expect(config.args).not.toContain('--append-system-prompt-file');
+  });
+
+  it('injects --model for a concrete kimi model id', () => {
+    const config = buildCliSpawnConfig({ id: 'kimi-cli', command: 'kimi', args: ['--print'] }, 'kimi-k2');
+    expect(config.command).toBe('kimi');
+    expect(config.args).toEqual(['--print', '--model', 'kimi-k2']);
+  });
+
   it('adds lean-mode flags and the system-prompt file for an Ollama-backed claude CLI', () => {
     const config = buildCliSpawnConfig(
       { id: 'claude-ollama', command: 'claude', ollamaBacked: true },

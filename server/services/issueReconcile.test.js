@@ -32,6 +32,7 @@ vi.mock('../lib/workTracker.js', async (importActual) => {
   return {
     hostToWorkTracker: actual.hostToWorkTracker,
     hostFromOriginUrl: actual.hostFromOriginUrl,
+    githubRepoSpec: actual.githubRepoSpec,
   };
 });
 vi.mock('../lib/fileUtils.js', () => ({
@@ -271,6 +272,27 @@ describe('reconcile', () => {
     expect(result).toBeNull();
     expect(execGh).not.toHaveBeenCalled();
     expect(execGlab).not.toHaveBeenCalled();
+  });
+
+  it('scans a GitHub Enterprise host (isGithub=false) via a host-qualified --repo selector', async () => {
+    // isGithub is github.com-only, but github.acme.example classifies as GitHub —
+    // the scan must run and target HOST/OWNER/REPO so gh hits the enterprise repo
+    // rather than defaulting a bare OWNER/REPO to github.com.
+    getOriginInfo.mockResolvedValue({ isGithub: false, host: 'github.acme.example', fullName: 'acme/app' });
+    readOriginRemoteUrl.mockResolvedValue('git@github.acme.example:acme/app.git');
+    mockGh({
+      issues: [{ number: 42, title: 't', labels: [{ name: 'in-progress' }], assignees: [], url: 'u' }],
+      merged: [{ number: 50, headRefName: 'x', body: 'Refs #42' }],
+      open: [],
+    });
+    execGit.mockResolvedValue({ stdout: '', exitCode: 0 });
+
+    const result = await reconcile('/repo');
+    expect(result.forge).toBe('github');
+    expect(result.fullName).toBe('acme/app');
+    expect(result.zombies.map((z) => z.number)).toEqual([42]);
+    const repoArgs = execGh.mock.calls.map((c) => c[0][c[0].indexOf('--repo') + 1]);
+    expect(repoArgs.every((r) => r === 'github.acme.example/acme/app')).toBe(true);
   });
 
   it('returns null (transient) when the issue list query fails', async () => {

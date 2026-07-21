@@ -40,6 +40,12 @@ export const PRIORITY_VALUES = {
 
 const CLAIM_KEY_SET = new Set(CLAIM_METADATA_KEYS);
 
+// A task is terminal once it is completed or blocked — the same set cosTaskMerge's
+// release-on-transition uses. Consumed by the LI cross-peer verdict consume (#2779) to
+// spot a non-terminal→terminal ADOPTION (a failed hand-off blocks, a clean one completes;
+// both are legitimate execution outcomes worth recording).
+const isTerminalTaskStatus = (status) => status === 'completed' || status === 'blocked';
+
 // Legacy fields an `updateTask` patch may carry directly (vs nested under
 // `metadata`); they're normalized into `metadata` on write. Listed once so the
 // content-edit detector and the normalizer below can't drift apart.
@@ -507,7 +513,7 @@ export async function reviveBlockedTask(taskId, { priority, metadata } = {}, tas
  * @returns {Promise<{ changed: boolean, count?: number }>}
  */
 export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now() } = {}) {
-  return withStateLock(async () => {
+  const { changed, count, merged } = await withStateLock(async () => {
     const state = await loadState();
     const filePath = taskType === 'user'
       ? join(ROOT_DIR, state.config.userTasksFile)
@@ -522,14 +528,38 @@ export async function mergePeerTasks(taskType, remoteTasks, { now = Date.now() }
     const includeApprovalFlags = taskType === 'internal';
     const localMarkdown = generateTasksMarkdown(localTasks, includeApprovalFlags);
     const mergedMarkdown = generateTasksMarkdown(merged, includeApprovalFlags);
-    // Nothing the peer sent changed our state — skip the write (and the event
-    // that would wake the scheduler) so a steady-state sweep is a pure no-op.
-    if (mergedMarkdown === localMarkdown) return { changed: false };
+    // Nothing the peer sent changed our state — skip the write (and the event that would
+    // wake the scheduler). `merged` is still returned so the post-lock LI-verdict consume
+    // (#2779) can run even on a no-op sweep — durability requires it (an old peer that
+    // stored a terminal verdict before upgrading, or a crash before a prior consume, leaves
+    // the task terminal with the merge producing no change, so a changed-only consume would
+    // never catch up). Re-offering is cheap: the consumer is a durable no-op after the first.
+    if (mergedMarkdown === localMarkdown) return { changed: false, merged };
 
     await writeFile(filePath, mergedMarkdown);
     cosEvents.emit('tasks:changed', { type: taskType, action: 'peer-merged' });
-    return { changed: true, count: merged.length };
+    return { changed: true, count: merged.length, merged };
   });
+
+  // Post-lock, best-effort: derive recordProposalExecution from every terminal hand-off task
+  // carrying an LI execution verdict (#2779) — a task filed here but executed on a peer, whose
+  // terminal state (with the stamped LI_EXECUTION_VERDICT_KEY) has synced back. Runs on EVERY
+  // sweep (changed or not); idempotency + retry-correctness are durable and record-level in the
+  // consumer (skips a verdict no newer than the stored execution), so re-offering the same
+  // verdict is a no-op while a genuinely re-executed hand-off overwrites. `requireExisting`
+  // there scopes the write to a proposal THIS peer filed, so a non-originating peer is a no-op.
+  // Kept out of the lock — recordProposalExecution touches a different store (li-outcomes) — and
+  // the LI import graph stays off cosTaskStore's static chain (lazy import).
+  const { LI_EXECUTION_VERDICT_KEY, recordProposalExecutionFromVerdict } = await import('./layeredIntelligenceOutcomes.js');
+  for (const task of merged || []) {
+    if (!isTerminalTaskStatus(task?.status)) continue;
+    const verdict = task?.metadata?.[LI_EXECUTION_VERDICT_KEY];
+    if (!verdict) continue;
+    await recordProposalExecutionFromVerdict(verdict)
+      .catch(err => console.error(`❌ 📚 cosTaskStore: failed to consume LI execution verdict: ${err.message}`));
+  }
+
+  return changed ? { changed, count } : { changed: false };
 }
 
 /**

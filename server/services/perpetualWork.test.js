@@ -442,5 +442,99 @@ describe('perpetualWork', () => {
       const out = await detectGitlabIssues(app, { issueAuthorFilter: 'self' });
       expect(out).toMatchObject({ actionable: false, reason: 'no-authored-issues', total: 1, filteredCount: 0 });
     });
+
+    it('owner filter on a GROUP-owned project reports owner-is-group (probe 200) with the real open count', async () => {
+      // The GitLab twin of the GitHub org trap: the namespace is a group, which
+      // never authors issues. `glab api groups/<namespace>` returning 200 (code 0)
+      // marks it a group → the shared owner-filter short-circuit parks with the
+      // GitLab-flavored `owner-is-group` reason and never runs `--author <group>`.
+      spawn.mockImplementation((cmd, args = []) => {
+        if (cmd === 'git' && args[0] === 'remote') return fakeChild('git@gitlab.com:acme-group/widget.git\n');
+        if (cmd === 'glab' && args[0] === 'api' && String(args[1]).startsWith('groups/')) return fakeChild('{"kind":"group"}');
+        if (cmd === 'glab' && args[0] === 'issue') return fakeChild(JSON.stringify([{ iid: 7, title: 'x', assignees: [], labels: [] }]));
+        return fakeChild('');
+      });
+      const out = await detectGitlabIssues(app, { issueAuthorFilter: 'owner' });
+      expect(out).toMatchObject({ reason: 'owner-is-group', total: 1, count: 0, filteredCount: 0 });
+      // The guaranteed-empty `--author <group>` query is never issued.
+      const issueCalls = spawn.mock.calls.filter(([cmd, a]) => cmd === 'glab' && a[0] === 'issue');
+      expect(issueCalls.every(([, a]) => !a.includes('--author'))).toBe(true);
+    });
+
+    it('owner filter on a nested SUBGROUP project resolves the full namespace and reports owner-is-group', async () => {
+      // Nested subgroups are the common GitLab layout: parseGitRemoteUrl rejects a
+      // >2-segment remote, so the namespace must be resolved from the raw path and
+      // URL-encoded (`parent/subgroup` → `parent%2Fsubgroup`) before the group probe.
+      spawn.mockImplementation((cmd, args = []) => {
+        if (cmd === 'git' && args[0] === 'remote') return fakeChild('git@gitlab.com:parent/subgroup/widget.git\n');
+        if (cmd === 'glab' && args[0] === 'api' && String(args[1]).startsWith('groups/')) return fakeChild('{"kind":"group"}');
+        if (cmd === 'glab' && args[0] === 'issue') return fakeChild(JSON.stringify([{ iid: 9, title: 'x', assignees: [], labels: [] }]));
+        return fakeChild('');
+      });
+      const out = await detectGitlabIssues(app, { issueAuthorFilter: 'owner' });
+      expect(out).toMatchObject({ reason: 'owner-is-group', total: 1, count: 0 });
+      const probeCall = spawn.mock.calls.find(([cmd, a]) => cmd === 'glab' && a[0] === 'api' && String(a[1]).startsWith('groups/'));
+      expect(probeCall[1][1]).toBe('groups/parent%2Fsubgroup');
+      // Never issues the guaranteed-empty `--author <group>` query.
+      const issueCalls = spawn.mock.calls.filter(([cmd, a]) => cmd === 'glab' && a[0] === 'issue');
+      expect(issueCalls.every(([, a]) => !a.includes('--author'))).toBe(true);
+    });
+
+    it('preserves an all-numeric namespace but skips the ambiguous group-ID probe (uses --author)', async () => {
+      // Regression + guard: an all-numeric top-level namespace (`/1234/widget`) must
+      // NOT be stripped as if it were an SSH `:443/` port hop (it is preserved as
+      // `1234`), AND it must NOT be probed as `groups/1234` — GitLab reads a numeric
+      // groups/:id as a database group ID, not a path, which could falsely match an
+      // unrelated group. So the guard skips the probe and takes the safe --author path.
+      spawn.mockImplementation((cmd, args = []) => {
+        if (cmd === 'git' && args[0] === 'remote') return fakeChild('https://gitlab.example/1234/widget.git\n');
+        if (cmd === 'glab' && args[0] === 'issue') return fakeChild(JSON.stringify([{ iid: 3, title: 'x', assignees: [], labels: [] }]));
+        if (cmd === 'git' && args[0] === 'branch') return fakeChild('main\n');
+        if (cmd === 'glab' && args[0] === 'mr') return fakeChild('[]');
+        return fakeChild('');
+      });
+      const out = await detectGitlabIssues(app, { issueAuthorFilter: 'owner' });
+      expect(out.actionable).toBe(true);
+      // No ambiguous groups/ probe was issued for the numeric namespace.
+      const probeCall = spawn.mock.calls.find(([cmd, a]) => cmd === 'glab' && a[0] === 'api' && String(a[1]).startsWith('groups/'));
+      expect(probeCall).toBeUndefined();
+      // The preserved `1234` namespace is used as the author filter (not stripped).
+      const listCall = spawn.mock.calls.find(([cmd, a]) => cmd === 'glab' && a[0] === 'issue');
+      expect(listCall[1]).toContain('--author');
+      expect(listCall[1]).toContain('1234');
+    });
+
+    it('parses a bracketed IPv6 host without leaking the address into the namespace', async () => {
+      // Regression: the host/path split must not trip on the colons inside a
+      // bracketed IPv6 literal — the namespace is `group`, not part of the address.
+      spawn.mockImplementation((cmd, args = []) => {
+        if (cmd === 'git' && args[0] === 'remote') return fakeChild('https://[2001:db8::1]/group/widget.git\n');
+        if (cmd === 'glab' && args[0] === 'api' && String(args[1]).startsWith('groups/')) return fakeChild('{"kind":"group"}');
+        if (cmd === 'glab' && args[0] === 'issue') return fakeChild(JSON.stringify([{ iid: 4, title: 'x', assignees: [], labels: [] }]));
+        return fakeChild('');
+      });
+      const out = await detectGitlabIssues(app, { issueAuthorFilter: 'owner' });
+      expect(out).toMatchObject({ reason: 'owner-is-group', total: 1 });
+      const probeCall = spawn.mock.calls.find(([cmd, a]) => cmd === 'glab' && a[0] === 'api' && String(a[1]).startsWith('groups/'));
+      expect(probeCall[1][1]).toBe('groups/group');
+    });
+
+    it('owner filter on a USER-owned project passes --author <namespace> (groups probe 404)', async () => {
+      // A user namespace: `glab api groups/<namespace>` 404s (non-zero exit) → not
+      // a group, so owner-mode filters by the namespace login as before.
+      spawn.mockImplementation((cmd, args = []) => {
+        if (cmd === 'git' && args[0] === 'remote') return fakeChild('git@gitlab.com:alice/widget.git\n');
+        if (cmd === 'git' && args[0] === 'branch') return fakeChild('main\n');
+        if (cmd === 'glab' && args[0] === 'api' && String(args[1]).startsWith('groups/')) return fakeChild('', 22); // glab 404 → non-zero
+        if (cmd === 'glab' && args[0] === 'issue') return fakeChild(JSON.stringify([{ iid: 7, title: 'x', assignees: [], labels: [] }]));
+        if (cmd === 'glab' && args[0] === 'mr') return fakeChild('[]');
+        return fakeChild('');
+      });
+      const out = await detectGitlabIssues(app, { issueAuthorFilter: 'owner' });
+      expect(out.actionable).toBe(true);
+      const listCall = spawn.mock.calls.find(([cmd, a]) => cmd === 'glab' && a[0] === 'issue');
+      expect(listCall[1]).toContain('--author');
+      expect(listCall[1]).toContain('alice');
+    });
   });
 });

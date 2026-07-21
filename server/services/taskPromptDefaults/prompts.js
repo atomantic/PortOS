@@ -358,7 +358,7 @@ Before writing any code, sanity-check that executing the item won't regress newe
 - The item depends on a predecessor that hasn't shipped (e.g. "Phase B work" when Phase B isn't done).
 - The work would require touching files outside the inferred scope (>5 unrelated files), suggesting the item is bigger than originally estimated.
 
-Otherwise: can this be implemented without user clarification (requirements clear, no ambiguous design choices)? If NOT, jump to Phase 3b. If yes, proceed to Phase 4.
+Otherwise: **ambiguity is not a reason to jump to Phase 3b — decide.** If the item merely leaves a design choice unstated or is open to more than one reasonable reading, pick the most reasonable interpretation, note the approach you chose in the commit/PR, and proceed to Phase 4. Jump to Phase 3b ONLY when proceeding would be destructive/irreversible, or genuinely requires the human — specific hardware/credentials you don't have, or a judgment only they can make (the same narrow bar as a \`blocked\` item). The user would rather iterate on top of a shipped best-guess than have the item parked waiting on a decision they didn't ask to make.
 
 ## Phase 3b — Request Clarification (alternative exit from Phase 3)
 
@@ -555,10 +555,12 @@ Read the full issue (\`gh issue view "\${NUM}" --comments\`) before writing any 
 
 - A comment indicates the issue was already fixed, superseded, or closed-then-reopened-for-tracking.
 - The request references a function, file, or component that no longer exists (\`grep -rn\` the named identifiers — if they're gone, the issue is stale).
-- The work would require touching files far outside the issue's scope (>5 unrelated files), suggesting it's bigger than a single claim.
-- The requirements are too ambiguous to implement without user clarification.
 
-If the issue is too ambiguous or large, post a brief comment on the issue explaining exactly what decision or clarification a human must provide (\`gh issue comment "\${NUM}" --body "..."\`), then **tag it \`needs-input\` so it's excluded from future autonomous claims** (\`gh issue edit "\${NUM}" --add-label needs-input\`), release the claim markers (\`gh issue edit "\${NUM}" --remove-assignee @me --remove-label in-progress\`), remove the worktree, and exit cleanly so a human can refine it. **The \`needs-input\` label is what lets an autonomous drain converge** — Phase 1 step 4 skips \`needs-input\` issues, so without the tag this same un-actionable issue would be re-picked on the next pass forever. Do NOT leave a half-claimed issue.
+(A too-large scope is NOT in this release-and-re-pick list — releasing it just lets the next pass re-pick the same oversized issue. It has its own park path below.)
+
+**A genuinely too-large issue needs parking so the drain converges.** If the work is bigger than one coherent claim — it would touch files far outside the issue's scope (>5 unrelated files) — and you can't carve a valuable standalone slice to partial-ship via Phase 5's \`Refs\` path, post a brief comment naming the split you'd suggest, **tag it \`needs-input\`** (\`gh issue edit "\${NUM}" --add-label needs-input\`), release the claim markers (\`gh issue edit "\${NUM}" --remove-assignee @me --remove-label in-progress\`), remove the worktree, and exit — splitting an omnibus issue is a human call, and parking it is what stops a perpetual drain from re-picking the same un-shippable issue every pass (Phase 1 step 4 skips \`needs-input\`).
+
+**Ambiguity is NOT a release trigger — decide, don't defer.** If the issue is merely open to more than one reasonable reading, or leaves a design choice unstated, do NOT bail to \`needs-input\`. Pick the most reasonable interpretation, record the approach you chose in a brief issue comment (\`gh issue comment "\${NUM}" --body "..."\`) so the decision is on the record, and implement it. The user would rather iterate on top of a shipped best-guess than have the issue parked waiting on a decision they didn't ask to make. Reserve \`needs-input\` — which pulls the issue out of the autonomous queue — for the narrow cases where proceeding would be **destructive or irreversible**, or genuinely requires the human: specific hardware/credentials you don't have, or a judgment only they can make. In those cases only, post the explaining comment, **tag it \`needs-input\`** (\`gh issue edit "\${NUM}" --add-label needs-input\`), release the claim markers (\`gh issue edit "\${NUM}" --remove-assignee @me --remove-label in-progress\`), remove the worktree, and exit cleanly. **That label is what lets an autonomous drain converge** — Phase 1 step 4 skips \`needs-input\` issues. Never leave a half-claimed issue.
 
 ## Phase 4 — Implement
 
@@ -686,10 +688,12 @@ Read the full issue (\`glab issue view "\${NUM}"\`) before writing any code. **I
 
 - A note indicates the issue was already fixed, superseded, or closed-then-reopened-for-tracking.
 - The request references a function, file, or component that no longer exists (\`grep -rn\` the named identifiers — if they're gone, the issue is stale).
-- The work would require touching files far outside the issue's scope (>5 unrelated files).
-- The requirements are too ambiguous to implement without user clarification.
 
-If too ambiguous or large, post a brief note explaining exactly what decision or clarification a human must provide (\`glab issue note "\${NUM}" -m "..."\`), then **tag it \`needs-input\` so it's excluded from future autonomous claims** (\`glab issue update "\${NUM}" --label needs-input\`), release the claim markers (\`glab issue update "\${NUM}" --unassign --unlabel in-progress\`), remove the worktree, and exit cleanly so a human can refine it. **The \`needs-input\` label is what lets an autonomous drain converge** — Phase 1 step 4 skips \`needs-input\` issues, so without the tag this same un-actionable issue would be re-picked on the next pass forever. Do NOT leave a half-claimed issue.
+(A too-large scope is NOT in this release-and-re-pick list — releasing it just lets the next pass re-pick the same oversized issue. It has its own park path below.)
+
+**A genuinely too-large issue needs parking so the drain converges.** If the work is bigger than one coherent claim — it would touch files far outside the issue's scope (>5 unrelated files) — and you can't carve a valuable standalone slice to partial-ship via Phase 5's \`Refs\` path, post a brief note naming the split you'd suggest, **tag it \`needs-input\`** (\`glab issue update "\${NUM}" --label needs-input\`), release the claim markers (\`glab issue update "\${NUM}" --unassign --unlabel in-progress\`), remove the worktree, and exit — splitting an omnibus issue is a human call, and parking it stops a perpetual drain from re-picking the same un-shippable issue every pass (Phase 1 step 4 skips \`needs-input\`).
+
+**Ambiguity is NOT a release trigger — decide, don't defer.** If the issue is merely open to more than one reasonable reading, or leaves a design choice unstated, do NOT bail to \`needs-input\`. Pick the most reasonable interpretation, record the approach you chose in a brief issue note (\`glab issue note "\${NUM}" -m "..."\`) so the decision is on the record, and implement it. The user would rather iterate on top of a shipped best-guess than have the issue parked waiting on a decision they didn't ask to make. Reserve \`needs-input\` — which pulls the issue out of the autonomous queue — for the narrow cases where proceeding would be **destructive or irreversible**, or genuinely requires the human: specific hardware/credentials you don't have, or a judgment only they can make. In those cases only, post the explaining note, **tag it \`needs-input\`** (\`glab issue update "\${NUM}" --label needs-input\`), release the claim markers (\`glab issue update "\${NUM}" --unassign --unlabel in-progress\`), remove the worktree, and exit cleanly. **That label is what lets an autonomous drain converge** — Phase 1 step 4 skips \`needs-input\` issues. Never leave a half-claimed issue.
 
 ## Phase 4 — Implement
 
@@ -780,7 +784,7 @@ Run steps 1–5 in order.
 4. **Pick the target ticket:** walk the sprint tickets and pick the FIRST where ALL of the following are true (prefer higher priority — Blocker/Highest/High — then oldest):
    - Its status is a not-started status (e.g. "To Do", "Open", "Backlog", "Selected for Development", "Ready"). Skip tickets already "In Progress", "In Review", "Done", or any closed/resolved status — those are claimed or finished.
    - Its KEY is NOT in the in-flight set from step 3.
-   - It is well-defined: a summary plus enough description/acceptance criteria to implement without further clarification.
+   - It has enough of a summary/description to act on. A ticket that merely leaves a design choice unstated is still eligible — you'll decide the reading in Phase 3, not skip it here. Skip only a ticket with essentially no actionable content (bare title, no description or acceptance criteria).
    - It is NOT an Epic (issue type "Epic", or a title ending in "(epic)"). Leave epics for a human to split.
 5. **If no eligible ticket exists**, exit cleanly — an empty actionable queue is a healthy state, not a failure. If a ticket is in the sprint but too vague or blocked to start, create a Review Hub todo (POST ${PORTOS_API_URL}/api/review/todo with title "[<KEY>] Needs clarification" or "[<KEY>] Blocked" and a description of what's missing) instead of claiming it.
 
@@ -814,10 +818,13 @@ cd "\${WORKTREE}"
 Re-read the ticket (GET ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>) before writing any code. **If ANY of these are true, release the claim and re-pick** (transition the ticket back to its not-started status, remove the worktree, return to Phase 1):
 
 - The ticket references a function, file, or component that no longer exists (\`grep -rn\` the named identifiers — if they're gone, it's stale).
-- The work would require touching files far outside the ticket's scope (>5 unrelated files), suggesting it's bigger than a single claim.
-- The requirements are too ambiguous to implement without user clarification — in that case also create a Review Hub todo ("[<KEY>] Needs clarification") so a human can refine it.
+(A too-large scope is NOT in this release-and-re-pick list — releasing it just lets the next pass re-pick the same oversized ticket. It has its own park path below.)
 
-Do NOT leave a half-claimed ticket parked "In Progress" with no branch.
+**A genuinely too-large ticket needs parking so the queue converges.** If the work is bigger than one coherent claim — it would touch files far outside the ticket's scope (>5 unrelated files) — and you can't carve a valuable standalone slice to ship first, splitting the omnibus is a human call: create a Review Hub todo (POST ${PORTOS_API_URL}/api/review/todo with title "[<KEY>] Needs clarification" and the split you'd suggest), transition the ticket to a **Blocked/On Hold status if the workflow has one — NOT back to a not-started status**, which would re-queue it under Phase 1 (ticket selection never consults Review Hub todos, so a not-started ticket is immediately re-eligible and the run would re-park it every pass); if the workflow has no held status, leave it **In Progress**. Phase 1's not-started-only filter keeps a non-not-started ticket out of the ready queue, and the Review Hub todo is the durable human signal — together they let the claim run converge. Then remove the worktree and exit.
+
+**Ambiguity is NOT a release trigger — decide, don't defer.** If the ticket is merely open to more than one reasonable reading, or leaves a design choice unstated, do NOT bail to a "Needs clarification" todo. Pick the most reasonable interpretation, record the approach you chose in a ticket comment (POST ${PORTOS_API_URL}/api/jira/instances/<instanceId>/tickets/<KEY>/comments) so the decision is on the record, and implement it. The user would rather iterate on top of a shipped best-guess than have the ticket parked waiting on a decision they didn't ask to make. Reserve the "Needs clarification" todo for cases where proceeding would be **destructive or irreversible**, or genuinely requires the human: specific hardware/credentials you don't have, or a judgment only they can make. In those cases only, create the todo (POST ${PORTOS_API_URL}/api/review/todo with title "[<KEY>] Needs clarification" and what a human must resolve), transition the ticket to a **Blocked/On Hold status if the workflow has one — NOT back to a not-started status** (which would re-queue it under Phase 1, since ticket selection never consults Review Hub todos); if the workflow has no held status, leave it **In Progress** so Phase 1's not-started-only filter excludes it. Then remove the worktree and **exit — do NOT proceed to Phase 4**.
+
+Do NOT leave an *unexplained* ticket in "In Progress" with no branch — that is the zombie to avoid. A deliberate park above is different: it always carries a Review Hub todo saying why (and a Blocked/On Hold status where the workflow supports one), so it reads as intentionally held, not abandoned.
 
 ## Phase 4 — Implement
 

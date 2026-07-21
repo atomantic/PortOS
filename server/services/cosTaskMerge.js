@@ -40,6 +40,32 @@
  *     guard. A claim is never kept on a terminal (completed/blocked) task —
  *     that mirrors cosTaskStore's release-on-transition so a finished task is
  *     freely re-claimable.
+ *
+ *  4. After the per-id merge, collapse same-`investigationFingerprint` OPEN
+ *     investigation duplicates (#2628). The per-process fingerprint dedup in
+ *     agentErrorAnalysis (#2615) is serialized on a module-level tail, so a single
+ *     install never mints two open investigations for one failure cause — but two
+ *     federated peers can each mint one before the next sweep, and rule 1's
+ *     union-by-id keeps BOTH. A deterministic, side-independent post-pass folds
+ *     them to a single active row: keep the copy that is `in_progress` (an agent
+ *     is running it — never orphan an in-flight investigation) or, when none is,
+ *     the older/lower-id copy; union every duplicate's `metadata.affectedTasks`
+ *     onto it, and flip the other open copies to `completed` (never delete — LWW
+ *     sync never propagates deletions; a terminal status converges via rule 2's
+ *     status rank). Runs identically on both peers over the converged per-id set,
+ *     so they reach the same single survivor regardless of which side sweeps.
+ *
+ *     The no-orphan guarantee keys on the `in_progress` STATUS rather than lease
+ *     liveness on purpose: status propagates through rule 2's rank, so once both
+ *     peers have the converged view they agree an actively-worked copy is the
+ *     survivor even if its lease timestamp hasn't replicated yet — whereas keying
+ *     on `isLeaseLive` would let a peer whose copy still shows an (unexpired-
+ *     elsewhere) lease as expired flip a running investigation to `completed`. It
+ *     is still best-effort across ≥3 peers: a peer holding a pre-claim snapshot
+ *     (never yet saw the `in_progress` transition) can supersede a copy another
+ *     peer is running. That residual race is acceptable — investigation tasks are
+ *     approval-gated diagnostics that execute nothing on their own, and the storm
+ *     is already bounded to at most one per peer per cause.
  */
 
 import { isLeaseLive, getClaimOwner, CLAIM_METADATA_KEYS, parseTimestampMs } from './cosTaskClaim.js';
@@ -252,6 +278,138 @@ function normalizeAdopted(task) {
   };
 }
 
+// (rule 4) The statuses at which an investigation is still OPEN — a live dedup
+// candidate that suppresses new same-cause creates. MUST mirror
+// agentErrorAnalysis.OPEN_INVESTIGATION_STATUSES (can't import it — that module
+// depends on cosTaskStore, which imports THIS module, so the import would cycle;
+// kept in sync by this comment). Crucially this INCLUDES `blocked`: a blocked
+// investigation still tracks its failure cause, so two `blocked` (or blocked +
+// pending) same-fingerprint copies are exactly the pile-up this pass must collapse
+// — filtering on the merge module's terminal set (completed AND blocked) would let
+// them escape. Only `completed` (the status a superseded loser is flipped to) is
+// settled, which keeps the pass idempotent: a collapsed loser never re-enters the
+// open set on the next sweep.
+const OPEN_INVESTIGATION_STATUSES = new Set(['pending', 'in_progress', 'challenged', 'blocked']);
+const isOpenInvestigation = (task) => OPEN_INVESTIGATION_STATUSES.has(task.status);
+
+// The terminal status an OPEN investigation loser is flipped to when a
+// same-fingerprint winner is chosen. `completed` — the duplicate is subsumed, not
+// stuck; it needs no further work. Marked with `supersededBy` so the collapse is
+// auditable and the pass stays idempotent (see the open-status note above).
+const SUPERSEDED_STATUS = 'completed';
+const SUPERSEDED_BY_KEY = 'supersededBy';
+
+// The metadata marker every investigation task carries (#2615). Grouping keys off
+// this so only real investigation duplicates are ever collapsed.
+const FINGERPRINT_KEY = 'investigationFingerprint';
+const AFFECTED_TASKS_KEY = 'affectedTasks';
+
+const affectedTaskIds = (task) => {
+  const arr = task?.metadata?.[AFFECTED_TASKS_KEY];
+  return Array.isArray(arr) ? arr.filter((id) => typeof id === 'string' && id) : [];
+};
+
+/**
+ * Choose the surviving row among the OPEN copies (pending/in_progress/challenged/
+ * blocked — see OPEN_INVESTIGATION_STATUSES) of one investigation fingerprint. An
+ * `in_progress` copy wins outright so an in-flight
+ * investigation (an agent is running it) is never orphaned by the collapse; if
+ * MORE than one is `in_progress` (two peers both spawned in the sub-second claim
+ * window), return null to skip the collapse this sweep — both run to completion
+ * and the group self-heals as each turns terminal, rather than killing a running
+ * agent. With no `in_progress` copy, the older/lower-id copy wins deterministically
+ * (investigation ids embed a base36 creation timestamp, so lower id == older),
+ * side-independent so both peers agree.
+ *
+ * Keys on the `in_progress` STATUS, not lease liveness: the status replicates via
+ * rule 2's rank, so a peer whose lease timestamp is stale still recognizes an
+ * actively-worked copy and won't flip it to terminal. See the rule-4 note in the
+ * module header for the residual (pre-claim-snapshot) race this narrows but can't
+ * fully close across ≥3 peers.
+ */
+function pickInvestigationSurvivor(openCopies) {
+  const active = openCopies.filter((t) => t.status === 'in_progress');
+  if (active.length > 1) return null;
+  if (active.length === 1) return active[0];
+  return openCopies.reduce((a, b) => (a.id <= b.id ? a : b));
+}
+
+/**
+ * (rule 4) Collapse same-fingerprint OPEN investigation duplicates that rule 1's
+ * union-by-id let survive across two peers. Pure: returns a new array (new objects
+ * only for the rows it rewrites), never mutates inputs. Deterministic over the
+ * converged per-id merge output, so both peers reach the same single survivor.
+ */
+function dedupeInvestigations(tasks) {
+  const groups = new Map();
+  for (const t of tasks) {
+    const fp = t?.metadata?.[FINGERPRINT_KEY];
+    if (typeof fp !== 'string' || !fp) continue;
+    if (!groups.has(fp)) groups.set(fp, []);
+    groups.get(fp).push(t);
+  }
+
+  const rewrites = new Map(); // original task ref -> replacement
+  for (const group of groups.values()) {
+    const open = group.filter(isOpenInvestigation);
+    if (open.length === 0) continue;
+    // Act on a genuine open duplicate, OR to re-fold a prior collapse whose
+    // survivor a mid-propagation per-id LWW may have reverted to a partial
+    // affectedTasks set (a terminal `supersededBy` sibling marks that history).
+    const collapsedBefore = group.some((t) => t?.metadata?.[SUPERSEDED_BY_KEY]);
+    if (open.length < 2 && !collapsedBefore) continue;
+
+    const survivor = pickInvestigationSurvivor(open);
+    if (!survivor) continue; // multiple in-flight copies — don't orphan; wait a sweep
+
+    // Union affectedTasks across EVERY copy (open + already-superseded) so the one
+    // surviving row names every task blocked on this cause. Sorted so both peers
+    // serialize an identical set (their group order differs by local-first).
+    const affected = new Set();
+    for (const t of group) for (const id of affectedTaskIds(t)) affected.add(id);
+    const unionAffected = [...affected].sort();
+
+    const currentAffected = affectedTaskIds(survivor);
+    const affectedChanged =
+      unionAffected.length !== currentAffected.length ||
+      unionAffected.some((id, i) => id !== currentAffected[i]);
+
+    // Also surface the peer-contributed ids in the survivor's DESCRIPTION, not
+    // just metadata: the investigation agent/user reads the body (the metadata
+    // union is what the isReapableInvestigation reaper consumes, but "What
+    // unblocks" only lists ids the body mentions). Mirrors agentErrorAnalysis's
+    // local same-fingerprint path, which appends an "Also blocks" line per new id.
+    // Append only ids not already textually present (idempotent), in the sorted
+    // union order (deterministic) — so both peers reach the identical body and no
+    // agentId/timestamp enters the text to break convergence.
+    const currentDesc = survivor.description || '';
+    const missingMentions = unionAffected.filter((id) => !currentDesc.includes(`\`${id}\``));
+    const appended = missingMentions
+      .map((id) => `\n- Also blocks task \`${id}\` (same cause; merged across federated peers).`)
+      .join('');
+    const newDesc = currentDesc + appended;
+
+    if ((affectedChanged || appended) && unionAffected.length > 0) {
+      rewrites.set(survivor, {
+        ...survivor,
+        description: newDesc,
+        metadata: { ...(survivor.metadata || {}), [AFFECTED_TASKS_KEY]: unionAffected },
+      });
+    }
+
+    for (const loser of open) {
+      if (loser === survivor) continue;
+      const metadata = { ...(loser.metadata || {}) };
+      for (const key of CLAIM_METADATA_KEYS) delete metadata[key]; // terminal → no claim
+      metadata[SUPERSEDED_BY_KEY] = survivor.id;
+      rewrites.set(loser, { ...loser, status: SUPERSEDED_STATUS, metadata });
+    }
+  }
+
+  if (rewrites.size === 0) return tasks;
+  return tasks.map((t) => rewrites.get(t) || t);
+}
+
 /**
  * Merge a peer's task list into the local one. Pure: returns a new array, never
  * mutates the inputs. `now` is injectable for deterministic tests.
@@ -283,5 +441,7 @@ export function mergeTaskLists(localTasks, remoteTasks, { now = Date.now() } = {
     seen.add(r.id);
     merged.push(normalizeAdopted(r));
   }
-  return merged;
+  // (rule 4) Collapse same-fingerprint OPEN investigation duplicates that the
+  // per-id union above let survive across two peers (#2628).
+  return dedupeInvestigations(merged);
 }

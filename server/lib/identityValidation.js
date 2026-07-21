@@ -4,7 +4,24 @@ import { FEATURE_AREA_IDS } from './goalFeatureMap.js';
 // Per-goal feature-area override (issue #2666): an ordered list of feature-area
 // ids the Daily Driver deep-links to for this goal, overriding the category
 // default. Absent/empty → the goal falls back to its category's default map.
-const featureAreasSchema = z.array(z.enum(FEATURE_AREA_IDS)).max(FEATURE_AREA_IDS.length);
+//
+// Two schemas, because create and update have different forward-compat needs
+// (issue #2679):
+//   - CREATE stays strict (`z.enum(FEATURE_AREA_IDS)`): a brand-new goal is
+//     authored on THIS install, so an id outside this version's set is a typo or
+//     a bug worth rejecting — `getGoalFeatureAreas` would silently discard it.
+//   - UPDATE is lenient (any non-empty string): goals sync between federated
+//     peers as whole records (no schema-version gate), so an older install can
+//     receive — and store, via dataSync's direct file write which bypasses this
+//     route validation — a goal carrying a feature-area id a newer peer
+//     introduced. If the edit path rejected those ids, saving that goal would
+//     400; so we accept unknown ids on update and let `getGoalFeatureAreas`
+//     filter ids this install doesn't know at read time (preserved in storage,
+//     ignored when resolving areas). The cap stays generous (not tied to this
+//     install's FEATURE_AREA_IDS.length) so a goal pinning more areas than this
+//     version knows still validates.
+const createFeatureAreasSchema = z.array(z.enum(FEATURE_AREA_IDS)).max(FEATURE_AREA_IDS.length);
+const updateFeatureAreasSchema = z.array(z.string().min(1)).max(64);
 
 export const sectionStatusEnum = z.enum(['active', 'pending', 'unavailable']);
 
@@ -76,7 +93,7 @@ export const createGoalInputSchema = z.object({
   tags: z.array(z.string().min(1).max(50)).max(20).optional().default([]),
   targetDate: validCalendarDate.optional(),
   timeBlockConfig: timeBlockConfigSchema.optional(),
-  featureAreas: featureAreasSchema.optional()
+  featureAreas: createFeatureAreasSchema.optional()
 });
 
 export const updateGoalInputSchema = z.object({
@@ -90,7 +107,7 @@ export const updateGoalInputSchema = z.object({
   tags: z.array(z.string().min(1).max(50)).max(20).optional(),
   targetDate: validCalendarDate.nullable().optional(),
   timeBlockConfig: timeBlockConfigSchema.nullable().optional(),
-  featureAreas: featureAreasSchema.optional()
+  featureAreas: updateFeatureAreasSchema.optional()
 });
 
 export const addMilestoneInputSchema = z.object({

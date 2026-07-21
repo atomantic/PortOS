@@ -28,7 +28,9 @@ vi.mock('./worktreeManager.js', () => ({
 }));
 vi.mock('./github.js', () => ({ execGh: vi.fn(async () => '[]') }));
 vi.mock('../lib/gitRemote.js', () => ({
-  getOriginInfo: vi.fn(async () => ({ isGithub: true, fullName: 'atomantic/PortOS' }))
+  getOriginInfo: vi.fn(async () => ({
+    hasOrigin: true, isGithub: true, host: 'github.com', fullName: 'atomantic/PortOS'
+  }))
 }));
 vi.mock('../lib/fileUtils.js', () => ({
   PATHS: { root: '/repo' },
@@ -43,6 +45,7 @@ import * as git from './git.js';
 import * as wt from './worktreeManager.js';
 import { execGit } from '../lib/execGit.js';
 import { execGh } from './github.js';
+import { getOriginInfo } from '../lib/gitRemote.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -210,6 +213,45 @@ describe('gatherBranchState', () => {
     expect(i2199.hasWorktree).toBe(true);
     expect(i2199.openPr.number).toBe(2206);
     expect(inputs.find((i) => i.branch === 'next/issue-2190').isMerged).toBe(true);
+  });
+
+  it('resolves PRs on a GitHub Enterprise host via a host-qualified --repo selector', async () => {
+    // isGithub is github.com-only, but the enterprise host classifies as GitHub —
+    // the scan must still run, targeting HOST/OWNER/REPO (not a bare OWNER/REPO,
+    // which gh would resolve against github.com).
+    getOriginInfo.mockResolvedValueOnce({
+      hasOrigin: true, isGithub: false, host: 'github.acme.example', fullName: 'acme/app'
+    });
+    git.getBranches.mockResolvedValue([
+      { name: 'next/issue-77', isDefault: false, current: false, tracking: 'origin/next/issue-77', merged: false }
+    ]);
+    wt.listWorktrees.mockResolvedValue([]);
+    git.isBranchMergedInto.mockResolvedValue(false);
+    execGh.mockResolvedValueOnce(JSON.stringify([
+      { number: 77, headRefName: 'next/issue-77', mergeable: 'MERGEABLE', isDraft: false, url: 'u' }
+    ]));
+
+    const inputs = await gatherBranchState('/repo', { defaultBranch: 'main' });
+    expect(inputs.find((i) => i.branch === 'next/issue-77').openPr.number).toBe(77);
+    const args = execGh.mock.calls[0][0];
+    const repoIdx = args.indexOf('--repo');
+    expect(args[repoIdx + 1]).toBe('github.acme.example/acme/app');
+  });
+
+  it('returns no PR facts on a non-GitHub host (GitLab origin)', async () => {
+    getOriginInfo.mockResolvedValueOnce({
+      hasOrigin: true, isGithub: false, host: 'gitlab.com', fullName: 'acme/app'
+    });
+    git.getBranches.mockResolvedValue([
+      { name: 'next/issue-88', isDefault: false, current: false, tracking: 'origin/next/issue-88', merged: false }
+    ]);
+    wt.listWorktrees.mockResolvedValue([]);
+    git.isBranchMergedInto.mockResolvedValue(false);
+    execGh.mockClear();
+
+    const inputs = await gatherBranchState('/repo', { defaultBranch: 'main' });
+    expect(inputs.find((i) => i.branch === 'next/issue-88').openPr).toBeNull();
+    expect(execGh).not.toHaveBeenCalled();
   });
 });
 
