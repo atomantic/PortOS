@@ -559,6 +559,14 @@ export async function processTaskOutput({ appId, success, payload, agentId } = {
     // scope-allowed path (an out-of-scope proposal is already suppressed). An unreadable
     // outcome store degrades to [] → the domain rule simply can't fire, never a false
     // exclusion.
+    //
+    // Health/outcomes are re-read HERE (freshest state), deliberately NOT reusing the
+    // snapshot buildTaskInput built the prompt notice from — the SAME freshness choice as
+    // the readIssues re-read above (the agent may have run for minutes). A hard gate must
+    // enforce against current reality; the notice is best-effort guidance. Within one
+    // install LI runs are serialized and this run's own outcome isn't recorded until after
+    // this point, so the two reads agree in practice — but if reality shifted mid-run,
+    // enforcing on the fresher read is correct, exactly as dedup/scope do.
     const hardExclusion = scopeOk
       ? computeHardExclusionGate({
         proposal,
