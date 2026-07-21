@@ -35,24 +35,45 @@ async function save(data) {
   cacheTimestamp = Date.now();
 }
 
+const DEFAULT_EXEC_GH_TIMEOUT_MS = 60000;
+
 /**
- * Execute a gh CLI command safely using spawn
+ * Execute a gh CLI command safely using spawn. `gh` hits the network, so a
+ * stalled call (bad credentials prompt, hung network) would otherwise leave
+ * the returned promise pending forever and wedge scheduled jobs (prWatcher,
+ * issueReconcile, branchReconcile, updateChecker) while orphaning the child
+ * process. `timeoutMs` kills the child and rejects with a clear error; it's
+ * cleared on normal exit so it never fires for a completed run.
  */
-export function execGh(args) {
+export function execGh(args, timeoutMs = DEFAULT_EXEC_GH_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     const child = spawn('gh', args, { shell: false, windowsHide: true });
     let stdout = '';
     let stderr = '';
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      // setTimeout callback boundary — guard so a kill() throw can't crash
+      // the process (e.g. the child already exited between checks).
+      try { child.kill('SIGKILL'); } catch (err) { console.error(`❌ execGh: failed to kill timed-out 'gh ${args.join(' ')}': ${err.message}`); }
+      reject(new Error(`gh ${args.join(' ')} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
     child.stdout.on('data', (d) => { stdout += d.toString(); });
     child.stderr.on('data', (d) => { stderr += d.toString(); });
     child.on('close', (code) => {
+      if (timedOut) return;
+      clearTimeout(timer);
       if (code !== 0) {
         reject(new Error(stderr.trim() || `gh exited with code ${code}`));
       } else {
         resolve(stdout.trim());
       }
     });
-    child.on('error', (err) => reject(err));
+    child.on('error', (err) => {
+      if (timedOut) return;
+      clearTimeout(timer);
+      reject(err);
+    });
   });
 }
 
