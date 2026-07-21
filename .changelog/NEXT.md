@@ -1,5 +1,9 @@
 # Unreleased
 
+## Render Queue
+
+- **[issue-2827] Inspect and change Codex reasoning effort when retrying a render** — a failed Codex image job now shows the reasoning-effort level it used in the Render Queue, and the Edit & Retry editor gains a Codex-only Reasoning-effort control so you can pin a different level or reset it to the default before re-queuing.
+
 ## Security
 
 - Guard paid-provider API keys against SSRF / key-exfiltration: `streamCompletion` (askService), voice-LLM endpoint resolution, and the local-LLM playground now validate a provider's endpoint through the shared endpoint guard before attaching the `Authorization: Bearer` header, so a mistyped or malicious custom endpoint (including cloud-metadata hosts) never receives the key unless the provider opts in via `allowCustomEndpoint`.

@@ -6,6 +6,7 @@ import { FormField } from '../ui/FormField';
 import { listMediaJobs, cancelMediaJob, cancelQueuedMediaJobs, deleteMediaJob, retryMediaJob, runMediaJobNow } from '../../services/apiMediaJobs.js';
 import { listLoraTrainingCheckpoints } from '../../services/apiLoraTraining.js';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
+import { CODEX_EFFORT_LEVELS } from '../../utils/providers';
 import { lossSparklineGeometry } from '../../lib/lossSparkline';
 import { useAutoRefetch } from '../../hooks/useAutoRefetch';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
@@ -33,7 +34,9 @@ function modelLabel(params) {
   }
   if (params.mode === IMAGE_GEN_MODE.CODEX) {
     const m = (params.model || '').trim();
-    return m ? `codex / ${m}` : 'codex';
+    const eff = (params.effort || '').trim();
+    const base = m ? `codex / ${m}` : 'codex';
+    return eff ? `${base} · ${eff}` : base;
   }
   const id = (params.modelId || '').trim();
   if (!id) return 'local';
@@ -440,8 +443,15 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
   );
 }
 
+// Clear-to-default sentinel for the Codex reasoning-effort control — mirrors the
+// server's EFFORT_CLEAR_SENTINEL in routes/mediaJobs.js. A job with no explicit
+// effort is "using the shipped default", represented in the <select> by this value;
+// submitting it against a job that HAD an explicit effort tells the server to reset
+// to the default (drop params.effort).
+const EFFORT_DEFAULT_OPTION = 'default';
+
 // Inline form for the Edit-and-retry flow. Shows the fields the server's
-// retry override schema accepts (prompt, negative, model, dimensions, steps)
+// retry override schema accepts (prompt, negative, model, dimensions, steps, effort)
 // and submits only the keys the user actually changed — leaving unchanged
 // fields out of the patch so the original job's values ride through.
 function EditRetryForm({ job, onSubmit, onCancel }) {
@@ -454,6 +464,11 @@ function EditRetryForm({ job, onSubmit, onCancel }) {
   const [width, setWidth] = useState(p.width ?? '');
   const [height, setHeight] = useState(p.height ?? '');
   const [steps, setSteps] = useState(p.steps ?? '');
+  // The job's stored effort (a CODEX_EFFORT_LEVELS value) or the "default" option
+  // when it carried none. On submit we only send `effort` when this differs from
+  // the original — the sentinel resets to default, a level pins that level.
+  const originalEffort = (p.effort || '').trim() || EFFORT_DEFAULT_OPTION;
+  const [effort, setEffort] = useState(originalEffort);
 
   const submit = (e) => {
     e.preventDefault();
@@ -467,6 +482,9 @@ function EditRetryForm({ job, onSubmit, onCancel }) {
     if (!numEq(width, p.width) && width !== '') overrides.width = Number(width);
     if (!numEq(height, p.height) && height !== '') overrides.height = Number(height);
     if (!numEq(steps, p.steps) && steps !== '') overrides.steps = Number(steps);
+    // Codex-only: send effort only when changed. The sentinel ('default') resets
+    // to the shipped default; a concrete level pins the retry to that level.
+    if (isCodex && effort !== originalEffort) overrides.effort = effort;
     onSubmit(Object.keys(overrides).length ? overrides : null);
   };
 
@@ -526,6 +544,21 @@ function EditRetryForm({ job, onSubmit, onCancel }) {
           />
         </FormField>
       </div>
+      {isCodex && (
+        <FormField label="Reasoning effort" labelClassName="block text-[10px] uppercase tracking-wide text-port-text-muted">
+          <select
+            id="retry-codex-effort"
+            value={effort}
+            onChange={(e) => setEffort(e.target.value)}
+            className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
+          >
+            <option value={EFFORT_DEFAULT_OPTION}>Default (low)</option>
+            {CODEX_EFFORT_LEVELS.map((lvl) => (
+              <option key={lvl} value={lvl}>{lvl}</option>
+            ))}
+          </select>
+        </FormField>
+      )}
       <div className="flex items-center justify-end gap-2 pt-1">
         <button
           type="button"
