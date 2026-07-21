@@ -5,7 +5,8 @@ import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import { FormField } from '../ui/FormField';
 import { listMediaJobs, cancelMediaJob, cancelQueuedMediaJobs, deleteMediaJob, retryMediaJob, runMediaJobNow } from '../../services/apiMediaJobs.js';
 import { listLoraTrainingCheckpoints } from '../../services/apiLoraTraining.js';
-import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
+import { IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_EFFORT } from '../../lib/imageGenBackends';
+import { CODEX_EFFORT_LEVELS } from '../../utils/providers';
 import { lossSparklineGeometry } from '../../lib/lossSparkline';
 import { useAutoRefetch } from '../../hooks/useAutoRefetch';
 import { useConfirmDelete } from '../../hooks/useConfirmDelete';
@@ -20,6 +21,13 @@ const STATUS_BADGE = {
 
 const KIND_ICON = { video: Film, image: ImageIcon, training: Cpu };
 
+// Safe-read a Codex job's stored reasoning effort. Mirrors codex.js's server-side
+// guard (`typeof effort === 'string' && effort.trim()`): a non-string value from
+// hand-edited media-jobs.json returns '' instead of throwing on `.trim()`, and a
+// blank/absent value returns '' so callers can apply their own fallback (the row
+// resolves to the shipped default level; the retry editor to its 'default' option).
+const codexEffortOf = (raw) => (typeof raw === 'string' ? raw.trim() : '');
+
 // Compact "engine / model" badge so a failed row tells the user *what* failed,
 // not just that it failed. Codex jobs carry `params.model`; local image/video
 // jobs carry `params.modelId`; training jobs carry a runtime + character.
@@ -33,7 +41,13 @@ function modelLabel(params) {
   }
   if (params.mode === IMAGE_GEN_MODE.CODEX) {
     const m = (params.model || '').trim();
-    return m ? `codex / ${m}` : 'codex';
+    // Resolve the effective effort. `codexEffortOf` mirrors codex.js's own guard
+    // (`typeof === 'string' && trim`) so a non-string effort from hand-edited
+    // media-jobs.json can't throw on `.trim()`; an absent/blank value resolves to
+    // the shipped default the server actually rendered at.
+    const eff = codexEffortOf(params.effort) || CODEX_IMAGEGEN_DEFAULT_EFFORT;
+    const base = m ? `codex / ${m}` : 'codex';
+    return `${base} · ${eff}`;
   }
   const id = (params.modelId || '').trim();
   if (!id) return 'local';
@@ -440,8 +454,15 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
   );
 }
 
+// Clear-to-default sentinel for the Codex reasoning-effort control — mirrors the
+// server's EFFORT_CLEAR_SENTINEL in routes/mediaJobs.js. A job with no explicit
+// effort is "using the shipped default", represented in the <select> by this value;
+// submitting it against a job that HAD an explicit effort tells the server to reset
+// to the default (drop params.effort).
+const EFFORT_DEFAULT_OPTION = 'default';
+
 // Inline form for the Edit-and-retry flow. Shows the fields the server's
-// retry override schema accepts (prompt, negative, model, dimensions, steps)
+// retry override schema accepts (prompt, negative, model, dimensions, steps, effort)
 // and submits only the keys the user actually changed — leaving unchanged
 // fields out of the patch so the original job's values ride through.
 function EditRetryForm({ job, onSubmit, onCancel }) {
@@ -454,6 +475,11 @@ function EditRetryForm({ job, onSubmit, onCancel }) {
   const [width, setWidth] = useState(p.width ?? '');
   const [height, setHeight] = useState(p.height ?? '');
   const [steps, setSteps] = useState(p.steps ?? '');
+  // The job's stored effort (a CODEX_EFFORT_LEVELS value) or the "default" option
+  // when it carried none. On submit we only send `effort` when this differs from
+  // the original — the sentinel resets to default, a level pins that level.
+  const originalEffort = codexEffortOf(p.effort) || EFFORT_DEFAULT_OPTION;
+  const [effort, setEffort] = useState(originalEffort);
 
   const submit = (e) => {
     e.preventDefault();
@@ -467,6 +493,9 @@ function EditRetryForm({ job, onSubmit, onCancel }) {
     if (!numEq(width, p.width) && width !== '') overrides.width = Number(width);
     if (!numEq(height, p.height) && height !== '') overrides.height = Number(height);
     if (!numEq(steps, p.steps) && steps !== '') overrides.steps = Number(steps);
+    // Codex-only: send effort only when changed. The sentinel ('default') resets
+    // to the shipped default; a concrete level pins the retry to that level.
+    if (isCodex && effort !== originalEffort) overrides.effort = effort;
     onSubmit(Object.keys(overrides).length ? overrides : null);
   };
 
@@ -526,6 +555,22 @@ function EditRetryForm({ job, onSubmit, onCancel }) {
           />
         </FormField>
       </div>
+      {isCodex && (
+        <FormField label="Reasoning effort" labelClassName="block text-[10px] uppercase tracking-wide text-port-text-muted">
+          {/* No fixed id — FormField wires the label to a useId()-generated id,
+              so two retry editors open at once don't collide on one shared id. */}
+          <select
+            value={effort}
+            onChange={(e) => setEffort(e.target.value)}
+            className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
+          >
+            <option value={EFFORT_DEFAULT_OPTION}>Default ({CODEX_IMAGEGEN_DEFAULT_EFFORT})</option>
+            {CODEX_EFFORT_LEVELS.map((lvl) => (
+              <option key={lvl} value={lvl}>{lvl}</option>
+            ))}
+          </select>
+        </FormField>
+      )}
       <div className="flex items-center justify-end gap-2 pt-1">
         <button
           type="button"

@@ -11,6 +11,7 @@ import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import { listJobs, getJob, cancelJob, cancelQueuedJobs, enqueueJob, removeArchivedJob, runJobNow, JOB_KINDS, JOB_STATUSES } from '../services/mediaJobQueue/index.js';
 import { refineMediaPrompt } from '../services/mediaPromptRefiner.js';
+import { CODEX_EFFORT_LEVELS } from '../lib/providerModels.js';
 
 const router = Router();
 
@@ -73,6 +74,11 @@ const PARAM_ALLOWLIST = new Set([
   // video providers carry a registry-id). Without it the UI can't tell which
   // codex model a failed job tried to use — the row would just say "codex".
   'model',
+  // `effort` is the Codex per-render reasoning-effort level (`low` by default).
+  // Surfacing it lets the Render Queue row show which effort a failed job used
+  // and lets the retry editor pre-fill the current level (see the retry-editor
+  // Reasoning-effort control). Codex-only; local/external/video jobs never set it.
+  'effort',
   'width', 'height', 'numFrames', 'fps', 'steps', 'guidanceScale',
   'seed', 'tiling', 'disableAudio', 'mode', 'imageStrength',
   'cfgScale', 'guidance', 'quantize',
@@ -181,11 +187,29 @@ const emptyToUndef = (s) => {
   const v = (s ?? '').trim();
   return v.length > 0 ? v : undefined;
 };
+
+// Clear-to-default sentinel for the Codex reasoning-effort override. Unlike the
+// string fields above, an absent (`undefined`) effort override means "keep the
+// job's original effort" — so `emptyToUndef` alone can NEVER express "reset the
+// effort back to the shipped default", because the drop-undefined merge below
+// would silently retain the old value. This sentinel is a distinct signal: when
+// the retry payload sends `effort: 'default'`, the handler DELETES `params.effort`
+// so the render falls back to CODEX_IMAGEGEN_DEFAULT_EFFORT (`low`). A real job
+// never stores `'default'` as an effort (it's always a CODEX_EFFORT_LEVELS value),
+// so the sentinel can't collide with a legitimate level.
+const EFFORT_CLEAR_SENTINEL = 'default';
 const RETRY_OVERRIDE_SCHEMA = z.object({
   prompt: z.string().trim().min(1).max(8000).optional(),
   negativePrompt: z.string().trim().max(8000).optional(),
   model: z.string().max(200).optional().transform(emptyToUndef),
   modelId: z.string().max(200).optional().transform(emptyToUndef),
+  // Codex reasoning-effort override: a valid CODEX_EFFORT_LEVELS value pins the
+  // retry to that level; the EFFORT_CLEAR_SENTINEL (`'default'`) resets it to the
+  // shipped default; empty/whitespace → undefined (keep the original job's effort).
+  effort: z.string().max(20).optional().transform(emptyToUndef).refine(
+    (v) => v === undefined || v === EFFORT_CLEAR_SENTINEL || CODEX_EFFORT_LEVELS.includes(v),
+    { message: `effort must be one of ${CODEX_EFFORT_LEVELS.join(', ')} or '${EFFORT_CLEAR_SENTINEL}'` },
+  ),
   width: z.number().int().min(64).max(4096).optional(),
   height: z.number().int().min(64).max(4096).optional(),
   steps: z.number().int().min(1).max(200).optional(),
@@ -226,14 +250,25 @@ router.post('/:id/retry', asyncHandler(async (req, res) => {
     );
   }
   const body = validateRequest(retryBodySchema, req.body ?? {}) ?? {};
+  const rawOverrides = body.params ?? {};
+  // A `effort: 'default'` override is a clear-to-default signal, not a value to
+  // merge — handled by deleting params.effort below so the render falls back to
+  // the shipped CODEX_IMAGEGEN_DEFAULT_EFFORT. Exclude it from the merge set.
+  const clearEffort = rawOverrides.effort === EFFORT_CLEAR_SENTINEL;
   // Strip undefined override values before merging — Zod's emptyToUndef
-  // transform turns "" → undefined for model/modelId, and a naive spread
+  // transform turns "" → undefined for model/modelId/effort, and a naive spread
   // would still set those keys to undefined on the merged params (clobbering
   // the original job's values). Filtering keeps unchanged fields intact.
   const overrides = Object.fromEntries(
-    Object.entries(body.params ?? {}).filter(([, v]) => v !== undefined),
+    Object.entries(rawOverrides).filter(
+      ([k, v]) => v !== undefined && !(k === 'effort' && clearEffort),
+    ),
   );
   const params = { ...job.params, ...overrides };
+  // Reset Codex effort to the shipped default: dropping the key lets codex.js's
+  // fallback (CODEX_IMAGEGEN_DEFAULT_EFFORT) take over, which a merged sentinel
+  // string could not do (it would fail the CODEX_EFFORT_LEVELS validation).
+  if (clearEffort) delete params.effort;
   const result = enqueueJob({ kind: job.kind, params, owner: job.owner });
   // Drop the original failed/canceled row from archive — the new job inherits
   // its work, and leaving both visible just lets users keep clicking Retry on
