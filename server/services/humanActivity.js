@@ -169,6 +169,17 @@ function participantEmail(p) {
 // received) is derived deterministically from the sender vs the account owner.
 export function messageActivityCandidates(account, messages = []) {
   const selfEmail = String(account?.email || '').trim().toLowerCase();
+  // Owner-address set: the primary account email PLUS every Gmail "send-as" alias
+  // (#2831). A received 1:1 message delivered to an alias (not account.email) would
+  // otherwise keep the alias as a second participant, making the thread look like a
+  // group and suppressing its Tribe-outreach nudge. Aliases are refreshed on sync
+  // (messageGmailSync → messageAccounts.sendAsAliases); absent/failed fetch leaves the
+  // set as just the primary email, i.e. today's behavior.
+  const ownerEmails = new Set(
+    [selfEmail, ...(Array.isArray(account?.sendAsAliases) ? account.sendAsAliases : [])]
+      .map((e) => String(e || '').trim().toLowerCase())
+      .filter(Boolean)
+  );
   const source = account?.type || 'message';
   const accountId = account?.id || null;
   const out = [];
@@ -191,7 +202,7 @@ export function messageActivityCandidates(account, messages = []) {
       message.from,
       ...(message.to || []),
       ...(message.cc || []),
-    ]).filter((p) => !(p.email && p.email === selfEmail));
+    ]).filter((p) => !(p.email && ownerEmails.has(p.email)));
     out.push({
       source,
       accountId,

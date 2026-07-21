@@ -1,5 +1,9 @@
 # Unreleased
 
+## Tribe outreach
+
+- **[issue-2831] Unanswered 1:1 emails to a Gmail alias now surface as outreach nudges** — a message delivered to one of your Gmail send-as aliases (not your primary address) is correctly treated as a one-on-one conversation instead of a group thread, so a genuinely unanswered email to an alias no longer gets silently skipped. Your own alias addresses never appear as a Tribe contact.
+
 ## Security
 
 - Guard paid-provider API keys against SSRF / key-exfiltration: `streamCompletion` (askService), voice-LLM endpoint resolution, and the local-LLM playground now validate a provider's endpoint through the shared endpoint guard before attaching the `Authorization: Bearer` header, so a mistyped or malicious custom endpoint (including cloud-metadata hosts) never receives the key unless the provider opts in via `allowCustomEndpoint`.

@@ -2,7 +2,7 @@
 import { createHash } from 'crypto';
 import { join } from 'path';
 import { atomicWrite, ensureDir, filterBySearch as genericFilterBySearch, PATHS, safeDate, safeJSONParse, UUID_RE, tryReadFile } from '../lib/fileUtils.js';
-import { getAccount, updateSyncStatus, markSentIngested } from './messageAccounts.js';
+import { getAccount, updateSyncStatus, markSentIngested, updateSendAsAliases } from './messageAccounts.js';
 import { getUserTimezone, getLocalParts } from '../lib/timezone.js';
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
@@ -197,6 +197,11 @@ export async function syncAccount(accountId, io, options = {}) {
     // Whether the sent window truncated at its ceiling this sync (#2820) — coverage
     // is then partial, so the reply-detection watermark is marked partial (fail closed).
     const sentTruncated = Array.isArray(providerResult) ? false : Boolean(providerResult?.sentTruncated);
+    // Gmail send-as aliases fetched this sync (#2831). `null` = fetch failed/not supplied
+    // (keep the stored set); an array = authoritative refresh. Applied in-memory below so
+    // the SAME sync's activity ingest excludes every owner address, and persisted for the
+    // next sync + the outreach detector's own reads.
+    const sendAsAliases = Array.isArray(providerResult) ? null : (providerResult?.sendAsAliases ?? null);
 
     // Deduplicate by externalId; update flags and body on existing messages
     const existingMap = new Map(cache.messages.filter(m => m.externalId).map(m => [m.externalId, m]));
@@ -252,6 +257,17 @@ export async function syncAccount(accountId, io, options = {}) {
     // (partial unique index), so re-scanning already-logged messages is a no-op.
     await logMessageTouchpoints(account, cache.messages).catch((err) =>
       console.error(`🤝 Tribe auto-log failed for account ${accountId}: ${err.message}`));
+
+    // Apply + persist the owner's Gmail send-as aliases (#2831) BEFORE the activity
+    // ingest below, so THIS sync's `messageActivityCandidates` already excludes every
+    // owner address (not just the primary email) from received-message participants.
+    // Best-effort: a `null` sentinel (fetch failed / non-Gmail provider) leaves the
+    // stored set untouched; persist failure must not fail the sync.
+    if (Array.isArray(sendAsAliases)) {
+      account.sendAsAliases = sendAsAliases;
+      await updateSendAsAliases(accountId, sendAsAliases).catch((err) =>
+        console.error(`📧 Send-as alias persist failed for account ${accountId}: ${err.message}`));
+    }
 
     // Populate the human-activity timeline (#2150) — secondary effect, must NOT
     // fail the sync. Idempotent on (source, dedupe_key), so re-scanning the full
