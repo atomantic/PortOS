@@ -723,6 +723,30 @@ describe('executeTuiRun', () => {
       }));
     });
 
+    it('still resolves the run promise exactly once when a step inside finish() throws synchronously', async () => {
+      // unregisterExternalSession is invoked un-awaited inside finish()'s try
+      // block, with no per-call try/catch of its own — unlike the PTY kill
+      // (own try/catch) and finalizeRunRecord (own .catch()). If it throws,
+      // finish()'s outer try/catch/finally must still guarantee `resolve()`
+      // fires — otherwise executeTuiRun's promise hangs forever and any
+      // caller awaiting it (pipeline stages, /runs) wedges.
+      shellMocks.unregisterExternalSession.mockImplementationOnce(() => {
+        throw new Error('boom: session registry corrupted');
+      });
+      const provider = { id: 'claude', type: 'tui', command: 'echo' };
+      const onComplete = vi.fn();
+      const promise = executeTuiRun({ runId: 'run-finish-throws', provider, prompt: 'a prompt long enough', workspacePath: '/cwd', onComplete, timeout: 60000 });
+      await flushAsync();
+
+      ptyInstances[0].emitExit({ exitCode: 0 });
+
+      await expect(promise).resolves.toBeUndefined();
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('finish() failed'));
+      // The throw happens before onComplete is reached in finish()'s body,
+      // so onComplete must never fire for this run.
+      expect(onComplete).not.toHaveBeenCalled();
+    });
+
     it('finishes with reason "killed" and surfaces the signal in the error when the PTY is terminated', async () => {
       const provider = { id: 'claude', type: 'tui', command: 'echo' };
       const promise = executeTuiRun({ runId: 'run-killed', provider, prompt: 'a prompt long enough', workspacePath: '/cwd', onData: undefined, onComplete: undefined, timeout: 60000 });
