@@ -21,6 +21,13 @@ const STATUS_BADGE = {
 
 const KIND_ICON = { video: Film, image: ImageIcon, training: Cpu };
 
+// Safe-read a Codex job's stored reasoning effort. Mirrors codex.js's server-side
+// guard (`typeof effort === 'string' && effort.trim()`): a non-string value from
+// hand-edited media-jobs.json returns '' instead of throwing on `.trim()`, and a
+// blank/absent value returns '' so callers can apply their own fallback (the row
+// resolves to the shipped default level; the retry editor to its 'default' option).
+const codexEffortOf = (raw) => (typeof raw === 'string' ? raw.trim() : '');
+
 // Compact "engine / model" badge so a failed row tells the user *what* failed,
 // not just that it failed. Codex jobs carry `params.model`; local image/video
 // jobs carry `params.modelId`; training jobs carry a runtime + character.
@@ -34,10 +41,11 @@ function modelLabel(params) {
   }
   if (params.mode === IMAGE_GEN_MODE.CODEX) {
     const m = (params.model || '').trim();
-    // Resolve an absent effort to the shipped default — a job that ran on the
-    // default stores no `effort`, but codex.js still rendered it at `low`, so
-    // the row must show the effective level, not a blank.
-    const eff = (params.effort || '').trim() || CODEX_IMAGEGEN_DEFAULT_EFFORT;
+    // Resolve the effective effort. `codexEffortOf` mirrors codex.js's own guard
+    // (`typeof === 'string' && trim`) so a non-string effort from hand-edited
+    // media-jobs.json can't throw on `.trim()`; an absent/blank value resolves to
+    // the shipped default the server actually rendered at.
+    const eff = codexEffortOf(params.effort) || CODEX_IMAGEGEN_DEFAULT_EFFORT;
     const base = m ? `codex / ${m}` : 'codex';
     return `${base} · ${eff}`;
   }
@@ -470,7 +478,7 @@ function EditRetryForm({ job, onSubmit, onCancel }) {
   // The job's stored effort (a CODEX_EFFORT_LEVELS value) or the "default" option
   // when it carried none. On submit we only send `effort` when this differs from
   // the original — the sentinel resets to default, a level pins that level.
-  const originalEffort = (p.effort || '').trim() || EFFORT_DEFAULT_OPTION;
+  const originalEffort = codexEffortOf(p.effort) || EFFORT_DEFAULT_OPTION;
   const [effort, setEffort] = useState(originalEffort);
 
   const submit = (e) => {
