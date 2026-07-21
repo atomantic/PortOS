@@ -71,6 +71,16 @@ async function expandReel(user) {
   await user.click(toggle);
 }
 
+const failedCodexDefaultEffortJob = {
+  id: 'codexdef00000dead',
+  kind: 'image',
+  status: 'failed',
+  error: 'boom',
+  queuedAt: '2026-06-19T10:00:00Z',
+  // No explicit effort → ran on the shipped default.
+  params: { prompt: 'a fox', mode: 'codex', model: 'gpt-5.6-luna' },
+};
+
 describe('MediaJobsQueue — Codex reasoning-effort retry control', () => {
   it('surfaces the job effort in the row label', async () => {
     const user = userEvent.setup();
@@ -78,6 +88,28 @@ describe('MediaJobsQueue — Codex reasoning-effort retry control', () => {
     render(<MediaJobsQueue kind="image" />);
     await expandReel(user);
     await waitFor(() => expect(screen.getByText(/codex \/ gpt-5.6-luna · high/)).toBeInTheDocument());
+  });
+
+  it('shows the effective default effort in the row label when the job stored none', async () => {
+    const user = userEvent.setup();
+    listMediaJobs.mockResolvedValue([failedCodexDefaultEffortJob]);
+    render(<MediaJobsQueue kind="image" />);
+    await expandReel(user);
+    // Default-effort jobs store no `effort`, but codex still rendered at `low`.
+    await waitFor(() => expect(screen.getByText(/codex \/ gpt-5.6-luna · low/)).toBeInTheDocument());
+  });
+
+  it('pre-fills the retry editor to Default for a job that stored no effort', async () => {
+    const user = userEvent.setup();
+    listMediaJobs.mockResolvedValue([failedCodexDefaultEffortJob]);
+    render(<MediaJobsQueue kind="image" />);
+    await expandReel(user);
+    await user.click(await screen.findByLabelText('Edit and retry'));
+    const select = await screen.findByLabelText('Reasoning effort');
+    expect(select.value).toBe('default');
+    // Leaving it on Default and retrying sends no effort override (nothing changed).
+    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
+    expect(retryMediaJob).toHaveBeenCalledWith('codexdef00000dead', null, { silent: true });
   });
 
   it('renders the effort select (Codex only) and pins a new level on retry', async () => {

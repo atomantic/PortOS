@@ -22,7 +22,7 @@ import {
   registerTool, updateTool, getToolsList,
   getHfTokenStatus, saveHfToken, clearHfToken,
 } from '../../services/api';
-import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
+import { IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_EFFORT } from '../../lib/imageGenBackends';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
 import { useMediaJobSse } from '../../hooks/useMediaJobSse';
 import { CODEX_EFFORT_LEVELS } from '../../utils/providers';
@@ -31,9 +31,11 @@ const SDAPI_TOOL_ID = 'sdapi';
 const CODEX_TOOL_ID = 'codex-imagegen';
 // Mirror of server/services/imageGen/modes.js — shown as placeholder/default
 // hints so the user sees what a blank Model / Effort field will actually use.
-// The server owns the real default; these are display-only.
+// The server owns the real default; these are display-only. The effort default
+// lives in the shared imageGenBackends lib (imported above) so the Render Queue
+// and this settings form don't drift; the model default stays local (only used
+// here as a placeholder string).
 const CODEX_IMAGEGEN_DEFAULT_MODEL = 'gpt-5.6-luna';
-const CODEX_IMAGEGEN_DEFAULT_EFFORT = 'low';
 const DEFAULT_TEST_PROMPT = 'a small cyberpunk fox sitting on a neon-lit rooftop at night, cinematic, highly detailed';
 const normalizeUrl = (url) => (url || '').trim().replace(/\/+$/, '');
 
