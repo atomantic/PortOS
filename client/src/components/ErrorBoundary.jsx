@@ -25,7 +25,7 @@ export default class ErrorBoundary extends Component {
       // full-screen DOM error UI can't render.
       if (this.props.fallback !== undefined) return this.props.fallback;
       return (
-        <div className="min-h-screen bg-port-bg flex items-center justify-center p-4">
+        <div className="min-h-dvh-cap bg-port-bg flex items-center justify-center p-4">
           <div className="bg-port-card border border-port-border rounded-xl p-8 max-w-md w-full">
             <div className="flex items-center justify-center mb-4">
               <AlertTriangle size={32} className="text-port-error" />
