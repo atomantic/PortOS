@@ -324,6 +324,25 @@ ${prompt}`;
         onComplete?.({ ...metadata, text: responseText, usedResponseFile, outputTruncated: outputBufferTruncated });
       } catch (err) {
         console.error(`❌ TUI run ${runId} finish() failed: ${err?.message || err}`);
+        // A step BEFORE onComplete threw, so the caller's onComplete-driven
+        // settle never fired. executeProviderRunOnce (promptRunner.js) settles
+        // its OUTER Promise only via onComplete (→ safeReject) or the returned
+        // promise rejecting — and our try/finally always resolves (never
+        // rejects), so `.catch(safeReject)` won't fire either. Without this,
+        // resolving the inner promise leaves the central-prompt/pipeline caller
+        // pending forever — the exact hang this patch exists to prevent. Deliver
+        // failure metadata so onComplete → safeReject settles the caller. Guard
+        // the callback itself: if IT was the throw source, don't re-throw out of
+        // finish() (which is un-awaited — an escape would become an unhandled
+        // rejection) and still fall through to resolve().
+        try {
+          onComplete?.({
+            runId, success: false, exitCode, error: `finish() failed: ${err?.message || err}`,
+            duration: Date.now() - startTime, completionReason: reason,
+          });
+        } catch (cbErr) {
+          console.error(`❌ TUI run ${runId} onComplete threw during finish() error handling: ${cbErr?.message || cbErr}`);
+        }
       } finally {
         resolve();
       }
