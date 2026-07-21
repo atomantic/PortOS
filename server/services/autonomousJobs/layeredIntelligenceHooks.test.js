@@ -73,6 +73,13 @@ vi.mock('../layeredIntelligence.js', () => ({
   // before enqueuing, suppressing on handoff:false) can be asserted. Defaults to
   // "allow the hand-off" so the existing hand-off path is unaffected.
   computeHandoffRouting: vi.fn(() => ({ handoff: true, reason: null })),
+  // Hard exclusion gate (#2824). Semantics are unit-tested in
+  // layeredIntelligence.test.js; here spies so the hook's WIRING (the notice fed to
+  // buildPrompt, the gate consulted before filing and suppressing on excluded:true)
+  // can be asserted. Default to "not excluded" / "no notice" so the existing filing
+  // path is unaffected.
+  computeHardExclusionGate: vi.fn(() => ({ excluded: false, reason: null })),
+  computeHardExclusionNotice: vi.fn(() => ''),
   readLiTaskMetrics: vi.fn().mockResolvedValue({ read: true, metrics: null }),
   // The predicate's own semantics (listing vs. either sentinel) are unit-tested in
   // layeredIntelligence.test.js; here it's a spy so the hook's WIRING can be
@@ -112,6 +119,11 @@ beforeEach(() => {
   li.listBlockingIssues.mockResolvedValue({ ok: true, issues: [] });
   li.listForgeIssues.mockResolvedValue({ ok: true, issues: [] });
   li.isAppParked.mockReturnValue(false);
+  // Hard exclusion gate (#2824): re-establish "disarmed" defaults each test —
+  // clearAllMocks resets call history but NOT a mockReturnValue an individual test set,
+  // so without this a test that arms the gate would leak into later ones.
+  li.computeHardExclusionGate.mockReturnValue({ excluded: false, reason: null });
+  li.computeHardExclusionNotice.mockReturnValue('');
 });
 
 describe('buildTaskInput', () => {
@@ -321,6 +333,20 @@ describe('buildTaskInput', () => {
     }));
   });
 
+  it('folds the hard-exclusion notice into the prompt from the same liTaskStats (#2824)', async () => {
+    li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { selfEval: true } });
+    li.computeHardExclusionNotice.mockReturnValue('HARD EXCLUSION GATE ARMED — 30%');
+    await buildTaskInput({ app: APP });
+    // Health stats are read once and fed to BOTH selfEval and the notice.
+    expect(li.readLiTaskMetrics).toHaveBeenCalledTimes(1);
+    expect(li.computeHardExclusionNotice).toHaveBeenCalledWith(expect.objectContaining({
+      liTaskStats: expect.objectContaining({ read: true })
+    }));
+    expect(li.buildPrompt).toHaveBeenCalledWith(expect.objectContaining({
+      hardExclusionNotice: 'HARD EXCLUSION GATE ARMED — 30%'
+    }));
+  });
+
   it('passes outcomes to selfEval as null (not []) when the outcomes source is off (#2700)', async () => {
     // The sentinel that keeps "we never gathered outcomes" from reaching the
     // reasoner as "this app has never had a proposal merged".
@@ -481,6 +507,22 @@ describe('processTaskOutput', () => {
     expect(li.fileProposalToForge).toHaveBeenCalled();
     expect(out).toMatchObject({ action: 'filed', filedNumber: 77, reason: null });
     expect(apps.updateAppLayeredIntelligence).toHaveBeenCalledWith('app-1', expect.objectContaining({ lastRunAction: 'filed', lastRunRef: '#77' }));
+  });
+
+  it('hard-excludes a proposal before filing when the gate fires (#2824)', async () => {
+    li.validateReasonerResponse.mockReturnValue({
+      proposal: { scope: 'loop-meta', slug: 'fix-loop', title: 'Fix the loop', body: 'do it' },
+      pause: null
+    });
+    li.computeHardExclusionGate.mockReturnValue({ excluded: true, rule: 'self-improve-scope', reason: 'LI execution health 30% (< 75%) — self-improve-scoped proposals (loop-meta) are excluded' });
+    const out = await processTaskOutput({ appId: 'app-1', success: true, payload: { proposal: {} } });
+    // The gate was consulted with the validated proposal…
+    expect(li.computeHardExclusionGate).toHaveBeenCalledWith(expect.objectContaining({
+      proposal: expect.objectContaining({ scope: 'loop-meta' })
+    }));
+    // …and filing was suppressed entirely.
+    expect(li.fileProposalToForge).not.toHaveBeenCalled();
+    expect(out).toMatchObject({ action: 'excluded', reason: 'hard-gate-excluded' });
   });
 
   it('records the filed proposal for the feedback loop only when outcomes is enabled', async () => {

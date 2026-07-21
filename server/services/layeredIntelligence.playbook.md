@@ -34,7 +34,10 @@ require extra justification for scopes that historically get rejected.
 - **Prefer `loop-meta`** (PortOS install only). Improvements to the LI loop
   itself — better dedup, better calibration, clearer prompts, fixing a failure
   mode you can see in your own reports — merge at a high rate because they are
-  concrete, verifiable, and self-contained.
+  concrete, verifiable, and self-contained. **BUT** when a live `liHardExclusions`
+  block appears above (your execution health is degraded), `loop-meta` and
+  `portos-self` are HARD-EXCLUDED and will be dropped before filing — a degraded
+  loop cannot repair itself, so that work is deferred to a human (see §4).
 - **Prefer `app-data-gap`.** Adding the telemetry / metrics / instrumentation
   needed to reason well (e.g. a missing METRICS.md, an unmeasured KPI) lands
   reliably: it is unambiguous, low-risk, and unblocks future higher-value work.
@@ -85,17 +88,23 @@ not one of these:
 
 An LI proposal is later EXECUTED as a coding-agent task. Proposing work that maps
 to a task type that reliably FAILS to complete is systematic waste, even when the
-idea is good.
+idea is good. Some of these rules are MANDATORY, not advisory: when a live
+`liHardExclusions` block appears above, the named scopes/domains are excluded and
+a matching proposal is dropped BEFORE it is filed — reasoning past the block does
+not get the proposal through.
 
-- **Avoid your own worst scope.** Self-improvement work that maps to LI's own
-  reasoning-run task type (`self-improve:layered-intelligence`) has historically
-  had ~0% completion. Do not propose more of it while your own execution is
-  degraded — the highest-value loop-meta fix is usually the one that repairs
-  the failure mode itself, framed so it is genuinely finishable.
-- **Avoid chronically-failing types** surfaced in `liScopeAwareness` /
-  `liProposalExecution` (e.g. types sitting at 0% completion). If the live block
-  above lists a low-completion type, treat a proposal resembling it as needing a
-  narrower scope or a different framing.
+- **Do NOT propose self-improve-scoped work while your execution is degraded.**
+  When the `liHardExclusions` block is present (your reasoning-run success is below
+  the hard-gate threshold), `loop-meta` and `portos-self` proposals are hard-
+  excluded — LI's own reasoning-run task type (`self-improve:layered-intelligence`)
+  has historically sat near ~0% completion, so a degraded loop cannot see its own
+  repair through. If your reasoning leads to self-improve work while degraded,
+  return `proposal: null`; loop repair is deferred to a human, not re-proposed.
+- **Do NOT propose into a chronically-failing execution domain.** Any domain the
+  `liHardExclusions` block names (or that `liScopeAwareness` / `liProposalExecution`
+  shows sitting below completion threshold) is off-limits while the gate is armed;
+  when the gate is NOT armed, still treat a low-completion domain as needing a
+  narrower scope or a different framing rather than a re-file of the same shape.
 - **Prefer reliably-completed types.** Work that resembles `plan-task`,
   `test-coverage`, or `performance` tends to complete near-reliably — bias
   proposals toward shapes an agent actually finishes.

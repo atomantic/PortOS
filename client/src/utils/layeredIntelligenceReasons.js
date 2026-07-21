@@ -2,8 +2,8 @@
 //
 // The reason vocabulary is authored server-side (server/services/autonomousJobs/
 // layeredIntelligenceHooks.js — `no-provider`, `unparseable-response`,
-// `no-proposal`, `scope-suppressed`, `file-failed`, `duplicate`,
-// `semantic-duplicate`, `tracker-read-failed`, `blocking-read-failed`,
+// `no-proposal`, `scope-suppressed`, `hard-gate-excluded`, `file-failed`,
+// `duplicate`, `semantic-duplicate`, `tracker-read-failed`, `blocking-read-failed`,
 // `jira-not-configured`, `provider-not-agent-capable`, `blocking-open`, plus the
 // synthesized `llm-error:<msg>`
 // prefix) and consumed by BOTH the on-demand toast (useOnDemandTaskToast) and the
@@ -15,7 +15,7 @@
 // Reasons that are a normal, non-alarming outcome (a run that simply had nothing
 // new to file) — rendered in a neutral tone rather than a warning.
 export const LI_NEUTRAL_REASONS = new Set([
-  'no-proposal', 'duplicate', 'semantic-duplicate', 'blocking-open'
+  'no-proposal', 'duplicate', 'semantic-duplicate', 'blocking-open', 'hard-gate-excluded'
 ]);
 
 const LI_REASON_LABELS = {
@@ -23,6 +23,7 @@ const LI_REASON_LABELS = {
   'unparseable-response': 'the reasoning model returned no usable JSON — try a non-reasoning model or an API provider',
   'no-proposal': 'the loop had nothing to propose',
   'scope-suppressed': "the proposal's scope isn't allowed for this app",
+  'hard-gate-excluded': "excluded before filing — the loop's own execution is degraded and this proposal maps to self-improve scope or a chronically-failing domain",
   'file-failed': 'filing the tracker issue failed',
   'duplicate': 'the proposal matched an existing open issue',
   'semantic-duplicate': 'the proposal closely matched an existing issue',
