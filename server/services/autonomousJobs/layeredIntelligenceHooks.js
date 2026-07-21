@@ -393,10 +393,15 @@ export async function buildTaskInput({ app } = {}) {
   // Hard-exclusion notice (#2824): the reasoner-facing mirror of the deterministic
   // filing gate. '' unless LI's execution health is degraded (gate armed), so a healthy
   // loop's prompt is unchanged. Armed off the same liTaskStats the enforcement gate reads.
-  const hardExclusionNotice = computeHardExclusionNotice({
-    liTaskStats,
-    outcomes: Array.isArray(outcomes) ? outcomes : []
-  })
+  // Its failing-domain list must be derived from the SAME outcomes the enforcement gate
+  // reads in processTaskOutput — which loads them DIRECTLY (independent of the `outcomes`
+  // prompt-source toggle). So when the gathered `outcomes` aren't an array (source off /
+  // store unreadable), read them directly here too; otherwise a domain the gate would
+  // exclude on could be silently absent from the notice.
+  const noticeOutcomes = Array.isArray(outcomes)
+    ? outcomes
+    : await listOutcomes({ appId: app.id }).catch(() => [])
+  const hardExclusionNotice = computeHardExclusionNotice({ liTaskStats, outcomes: noticeOutcomes })
 
   const prompt = buildPrompt({ app, config, sources, openIssues, isPortos, outcomesReport, selfEvalReport, proposalExecutionReport, crossReferenceReport, hardExclusionNotice }) + buildCompletionContract()
   // Option A: surface the fully-resolved LI agent provider/model (from
