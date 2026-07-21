@@ -353,6 +353,20 @@ describe('buildTaskInput', () => {
     }));
   });
 
+  it('reads outcomes DIRECTLY for the hard-exclusion notice when the outcomes source is off (#2824)', async () => {
+    // The enforcement gate reads outcomes directly (independent of the prompt-source
+    // toggle), so the notice's failing-domain list must too — else a domain the gate
+    // would exclude on is silently absent from the prompt. With the outcomes SOURCE off,
+    // the gathered `outcomes` is null, so the notice falls back to a direct listOutcomes read.
+    li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: { selfEval: true } });
+    listOutcomes.mockResolvedValue([{ scope: 'app-improvement', executionOutcome: 'failure' }]);
+    await buildTaskInput({ app: APP });
+    expect(listOutcomes).toHaveBeenCalledWith(expect.objectContaining({ appId: 'app-1' }));
+    expect(li.computeHardExclusionNotice).toHaveBeenCalledWith(expect.objectContaining({
+      outcomes: [{ scope: 'app-improvement', executionOutcome: 'failure' }]
+    }));
+  });
+
   it('passes outcomes to selfEval as null (not []) when the outcomes source is off (#2700)', async () => {
     // The sentinel that keeps "we never gathered outcomes" from reaching the
     // reasoner as "this app has never had a proposal merged".
