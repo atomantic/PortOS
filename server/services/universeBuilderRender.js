@@ -184,7 +184,7 @@ export async function renderUniverseJobs(universeId, body, mapServiceError) {
       const c = settings.imageGen?.codex || {};
       queued = enqueueJob({
         kind: 'image',
-        params: { mode: IMAGE_GEN_MODE.CODEX, codexPath: c.codexPath, model: c.model, cleanC2PA, denoise, ...params },
+        params: { mode: IMAGE_GEN_MODE.CODEX, codexPath: c.codexPath, model: c.model, effort: c.effort, cleanC2PA, denoise, ...params },
       });
     } else {
       // mode === IMAGE_GEN_MODE.LOCAL (validated upfront).

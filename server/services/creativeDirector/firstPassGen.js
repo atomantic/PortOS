@@ -79,7 +79,7 @@ async function resolveQueueModeParams() {
     return {
       mode,
       ready: true,
-      jobParams: { mode: IMAGE_GEN_MODE.CODEX, codexPath: c.codexPath, model: c.model, cleanC2PA, denoise },
+      jobParams: { mode: IMAGE_GEN_MODE.CODEX, codexPath: c.codexPath, model: c.model, effort: c.effort, cleanC2PA, denoise },
     };
   }
   if (mode === IMAGE_GEN_MODE.LOCAL) {
