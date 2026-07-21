@@ -251,6 +251,7 @@ export async function syncGmail(account, cache, io, options = {}) {
   // Step 2: Fetch full message details in parallel batches
   const messages = [];
   const BATCH_SIZE = 10;
+  let detailFetchFailures = 0;
 
   for (let i = 0; i < messageIds.length; i += BATCH_SIZE) {
     io?.emit('messages:sync:progress', { accountId: account.id, current: i, total: messageIds.length });
@@ -262,7 +263,7 @@ export async function syncGmail(account, cache, io, options = {}) {
     ));
 
     for (let j = 0; j < results.length; j++) {
-      if (!results[j]) continue;
+      if (!results[j]) { detailFetchFailures++; continue; }
       const data = results[j].data;
       const { id: gmailId, threadId: gmailThreadId } = batch[j];
       const headers = data.payload?.headers || [];
@@ -319,8 +320,22 @@ export async function syncGmail(account, cache, io, options = {}) {
     io.emit('messages:sync:message', { accountId: account.id, messages: inboxMessages });
   }
 
+  // Sent-coverage fail-closed also covers a dropped detail fetch (#2820): a
+  // `users.messages.get` that failed above was skipped, but `sentTruncated` only
+  // reflects LIST pagination — so a dropped message (possibly the user's reply)
+  // would otherwise be certified as full coverage. We can't read a failed fetch's
+  // SENT label to know whether the dropped message was a reply, so when the account
+  // is ingesting sent mail we fail closed on ANY detail-fetch failure: the outreach
+  // detector pauses this account for the scan rather than nudging on incomplete
+  // reply evidence. Self-heals on the next clean sync. (When ingestSent is off,
+  // reply detection isn't trusted for this account anyway, so don't over-signal.)
+  const sentCoveragePartial = sentTruncated || (ingestSent && detailFetchFailures > 0);
+  if (ingestSent && detailFetchFailures > 0 && !sentTruncated) {
+    console.warn(`📧 Gmail: ${detailFetchFailures} message detail fetch(es) failed for ${account.email} — reply detection paused for this account this sync (incomplete coverage)`);
+  }
+
   console.log(`📧 Gmail API sync complete: ${inboxMessages.length} inbox, ${sentMessages.length} sent (activity-only)`);
-  return { messages: inboxMessages, sentMessages, sentTruncated, status: 'success', syncMethod: 'api' };
+  return { messages: inboxMessages, sentMessages, sentTruncated: sentCoveragePartial, status: 'success', syncMethod: 'api' };
 }
 
 /**

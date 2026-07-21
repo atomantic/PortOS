@@ -258,8 +258,11 @@ export async function syncAccount(accountId, io, options = {}) {
     // cache each sync is a no-op for already-recorded messages. Machine-local.
     // Sent mail (activity-only, #2796) is fed IN ADDITION to the cached inbox mail
     // so it records `message.sent` events without ever entering the inbox cache.
-    await recordMessageActivity(account, [...cache.messages, ...sentMessages]).catch((err) =>
-      console.error(`🗓️  Activity ingest failed for account ${accountId}: ${err.message}`));
+    let activityIngestFailed = false;
+    await recordMessageActivity(account, [...cache.messages, ...sentMessages]).catch((err) => {
+      activityIngestFailed = true;
+      console.error(`🗓️  Activity ingest failed for account ${accountId}: ${err.message}`);
+    });
 
     // Reply-detection watermark (#2796): stamp when a Gmail account with sent-ingest
     // enabled completes a successful sync, so the outreach detector only trusts an
@@ -267,9 +270,13 @@ export async function syncAccount(accountId, io, options = {}) {
     // account default-on at upgrade (or after an OAuth/sync failure) would be trusted
     // before any reply evidence exists, producing false "unanswered" nudges.
     if (providerStatus === 'success' && account.type === 'gmail' && account.syncConfig?.ingestSent !== false) {
-      // `partial` fails the account closed for the outreach detector when the sent
-      // window truncated at its ceiling this sync (#2820) — incomplete reply evidence.
-      await markSentIngested(accountId, { partial: sentTruncated }).catch((err) =>
+      // `partial` fails the account closed for the outreach detector when reply
+      // evidence for this sync is incomplete: either the sent window truncated at
+      // its ceiling (#2820) OR activity ingestion itself failed — in which case the
+      // freshly-fetched `message.sent` rows never reached the timeline, so trusting a
+      // full watermark (or a stale recent one) would let a replied thread look
+      // unanswered. Stamping partial keeps the account fail-closed until a clean sync.
+      await markSentIngested(accountId, { partial: sentTruncated || activityIngestFailed }).catch((err) =>
         console.error(`🤝 Sent-ingest watermark failed for account ${accountId}: ${err.message}`));
     }
 
