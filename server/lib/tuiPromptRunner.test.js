@@ -753,6 +753,29 @@ describe('executeTuiRun', () => {
         success: false,
         error: expect.stringContaining('finish() failed'),
       }));
+      expect(onComplete).toHaveBeenCalledTimes(1);
+      // The PTY must still be torn down on the throw path — the failure we
+      // report spins up a fallback provider in the real caller, and a
+      // never-killed original PTY would run alongside it (two live runs).
+      expect(ptyInstances[0].kill).toHaveBeenCalled();
+    });
+
+    it('does not re-invoke onComplete when onComplete itself throws inside finish()', async () => {
+      // When the throw source is onComplete AFTER it has already been reached,
+      // the catch must NOT call onComplete a second time — that would violate
+      // the once-only completion contract and could emit a contradictory
+      // success-then-failure. The run promise must still resolve exactly once.
+      const provider = { id: 'claude', type: 'tui', command: 'echo' };
+      const onComplete = vi.fn(() => { throw new Error('boom: caller onComplete blew up'); });
+      const promise = executeTuiRun({ runId: 'run-oncomplete-throws', provider, prompt: 'a prompt long enough', workspacePath: '/cwd', onComplete, timeout: 60000 });
+      await flushAsync();
+
+      ptyInstances[0].emitExit({ exitCode: 0 });
+
+      await expect(promise).resolves.toBeUndefined();
+      expect(console.error).toHaveBeenCalledWith(expect.stringContaining('finish() failed'));
+      // Reached exactly once (the normal-path call), never re-invoked by the catch.
+      expect(onComplete).toHaveBeenCalledTimes(1);
     });
 
     it('finishes with reason "killed" and surfaces the signal in the error when the PTY is terminated', async () => {

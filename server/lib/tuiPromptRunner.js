@@ -279,6 +279,11 @@ ${prompt}`;
     const finish = async ({ success, exitCode = 0, error = null, reason = 'completed' }) => {
       if (finalized) return;
       finalized = true;
+      // Tracks whether the normal-path onComplete was reached, so the catch
+      // below re-surfaces failure ONLY when a step BEFORE onComplete threw —
+      // never re-invoking onComplete when onComplete itself was the throw
+      // source (that would violate the once-only completion contract).
+      let onCompleteInvoked = false;
       // finish() is invoked fire-and-forget from PTY/timer callbacks outside the
       // request lifecycle (onData, onExit, sendPrompt's write-catch,
       // responseFileWatchTimer, hardTimeoutTimer) — none of them await or
@@ -321,9 +326,16 @@ ${prompt}`;
             duration: Date.now() - startTime, completionReason: reason,
           };
         });
+        onCompleteInvoked = true;
         onComplete?.({ ...metadata, text: responseText, usedResponseFile, outputTruncated: outputBufferTruncated });
       } catch (err) {
         console.error(`❌ TUI run ${runId} finish() failed: ${err?.message || err}`);
+        // Ensure the original PTY is torn down even when a cleanup step BEFORE
+        // the kill above threw (e.g. unregisterExternalSession). Otherwise the
+        // failure we report below rejects executeProviderRunOnce and spins up a
+        // fallback provider while the original PTY keeps running — two live runs
+        // for one request. Idempotent: no-op if the kill above already fired.
+        try { if (ptyProcess && !ptyProcess.killed) ptyProcess.kill(); } catch { /* already gone */ }
         // A step BEFORE onComplete threw, so the caller's onComplete-driven
         // settle never fired. executeProviderRunOnce (promptRunner.js) settles
         // its OUTER Promise only via onComplete (→ safeReject) or the returned
@@ -331,17 +343,21 @@ ${prompt}`;
         // rejects), so `.catch(safeReject)` won't fire either. Without this,
         // resolving the inner promise leaves the central-prompt/pipeline caller
         // pending forever — the exact hang this patch exists to prevent. Deliver
-        // failure metadata so onComplete → safeReject settles the caller. Guard
-        // the callback itself: if IT was the throw source, don't re-throw out of
-        // finish() (which is un-awaited — an escape would become an unhandled
-        // rejection) and still fall through to resolve().
-        try {
-          onComplete?.({
-            runId, success: false, exitCode, error: `finish() failed: ${err?.message || err}`,
-            duration: Date.now() - startTime, completionReason: reason,
-          });
-        } catch (cbErr) {
-          console.error(`❌ TUI run ${runId} onComplete threw during finish() error handling: ${cbErr?.message || cbErr}`);
+        // failure metadata so onComplete → safeReject settles the caller. Skip
+        // this when onComplete itself was the throw source (onCompleteInvoked) —
+        // re-invoking it would break the once-only completion contract and could
+        // emit a contradictory success-then-failure. Guard the callback so a
+        // throw here doesn't escape finish() (un-awaited → unhandled rejection)
+        // and still fall through to resolve().
+        if (!onCompleteInvoked) {
+          try {
+            onComplete?.({
+              runId, success: false, exitCode, error: `finish() failed: ${err?.message || err}`,
+              duration: Date.now() - startTime, completionReason: reason,
+            });
+          } catch (cbErr) {
+            console.error(`❌ TUI run ${runId} onComplete threw during finish() error handling: ${cbErr?.message || cbErr}`);
+          }
         }
       } finally {
         resolve();
