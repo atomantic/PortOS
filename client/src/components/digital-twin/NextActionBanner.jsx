@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Sparkles,
@@ -79,9 +79,15 @@ export default function NextActionBanner({ gaps, status, traits, onRefresh }) {
     setQuestion(null);
   }, [gapKey]);
 
+  // Guards against an older in-flight request overwriting state after a newer
+  // one has already resolved (e.g. activeCategory changes again mid-fetch).
+  const requestIdRef = useRef(0);
+
   const loadQuestion = useCallback(async (category, skipList = []) => {
+    const requestId = ++requestIdRef.current;
     setLoading(true);
     const q = await api.getDigitalTwinEnrichQuestion(category, undefined, undefined, skipList.length ? skipList : undefined).catch(() => null);
+    if (requestId !== requestIdRef.current) return; // stale response — a newer request superseded this one
     if (!q) {
       // Category exhausted — advance to the next gap with available questions
       setCurrentGapIdx(prev => {

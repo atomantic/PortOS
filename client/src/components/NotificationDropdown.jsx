@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bell, X, CheckCheck, Trash2, Brain, ListTodo, AlertTriangle, Code, HelpCircle, BellRing, Sparkles } from 'lucide-react';
 import { timeAgo } from '../utils/formatters';
+import { clickableProps } from '../lib/a11yKeyboard';
 
 const NOTIFICATION_TYPE_CONFIG = {
   memory_approval: {
@@ -161,8 +162,6 @@ export default function NotificationDropdown({
                 return (
                   <div
                     key={notification.id}
-                    role="menuitem"
-                    tabIndex={0}
                     className={`
                       group px-4 py-3 border-b border-port-border last:border-b-0 cursor-pointer
                       hover:bg-port-border/50 transition-colors focus:outline-hidden focus:bg-port-border/50
@@ -170,7 +169,7 @@ export default function NotificationDropdown({
                       border-l-2 ${PRIORITY_COLORS[notification.priority] || PRIORITY_COLORS.medium}
                     `}
                     onClick={() => handleNotificationClick(notification)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleNotificationClick(notification)}
+                    {...clickableProps(() => handleNotificationClick(notification), { role: 'menuitem' })}
                   >
                     <div className="flex items-start gap-3">
                       <div className={`p-1.5 rounded ${config.bgColor}`} aria-hidden="true">

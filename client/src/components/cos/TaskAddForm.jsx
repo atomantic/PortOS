@@ -7,6 +7,7 @@ import { processScreenshotUploads, processAttachmentUploads } from '../../utils/
 import { formatBytes } from '../../utils/formatters';
 import { filterSelectableModels, isTuiProvider, isCliProvider, isProcessProvider, isCodexProvider, effortLevelsForProvider } from '../../utils/providers';
 import { DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE } from './constants';
+import { clickableProps } from '../../lib/a11yKeyboard';
 import ReviewerPicker from './ReviewerPicker';
 
 export default function TaskAddForm({ providers, apps, onTaskAdded, compact = false, defaultExpanded = false, defaultApp = '' }) {
@@ -374,10 +375,8 @@ export default function TaskAddForm({ providers, apps, onTaskAdded, compact = fa
               {templates.map(template => (
                 <div
                   key={template.id}
-                  role="button"
-                  tabIndex={0}
                   onClick={() => applyTemplate(template)}
-                  onKeyDown={(e) => e.key === 'Enter' && applyTemplate(template)}
+                  {...clickableProps(() => applyTemplate(template))}
                   className="group relative flex items-center gap-1.5 px-3 py-1.5 bg-port-card border border-port-border rounded-lg text-sm text-gray-300 hover:text-white hover:border-port-accent/50 transition-colors cursor-pointer"
                   title={template.description}
                 >

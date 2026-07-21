@@ -709,9 +709,10 @@ function RefineBox({ onRefine, disabled, busy, running, phase }) {
   const [feedback, setFeedback] = useState('');
   return (
     <div className="border-t border-port-border pt-3 mt-3">
-      <label className="block text-xs text-gray-500 mb-1">AI refinement feedback</label>
+      <label htmlFor="story-refine-feedback" className="block text-xs text-gray-500 mb-1">AI refinement feedback</label>
       <div className="flex gap-2">
         <input
+          id="story-refine-feedback"
           type="text" value={feedback} onChange={(e) => setFeedback(e.target.value)}
           placeholder="e.g. make the midpoint reveal land harder"
           disabled={disabled || busy}
