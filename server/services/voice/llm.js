@@ -27,17 +27,18 @@ export const resolveLlmEndpoint = async (providerId = 'lmstudio') => {
     // working without re-saving the provider endpoint.
     const useEnv = provider.id === 'lmstudio' && process.env.LM_STUDIO_URL;
     const apiBase = (useEnv ? LM_STUDIO_API_BASE() : provider.endpoint).replace(/\/+$/, '');
-    // Guard non-built-in providers before attaching their API key to the
-    // /models and /chat/completions fetches below — a hostile/mistyped
-    // endpoint could otherwise harvest a paid LLM key or reach a
-    // cloud-metadata service (SSRF). The built-in local `lmstudio` provider is
-    // exempt: it's the trusted local-LLM fallback and normally carries no key.
-    if (provider.id !== 'lmstudio') {
-      assertSecretEndpoint(apiBase, {
-        hasSecret: Boolean(provider.apiKey),
-        allowCustomEndpoint: provider.allowCustomEndpoint === true,
-      });
-    }
+    // Guard before attaching the provider's API key to the /models and
+    // /chat/completions fetches below — a hostile/mistyped endpoint could
+    // otherwise harvest a paid LLM key or reach a cloud-metadata service
+    // (SSRF). This no-ops when no key is attached, so the built-in local
+    // `lmstudio`/`ollama` fallbacks (normally keyless) are unaffected at any
+    // host; only a key-bearing request to a metadata / non-allowlisted host is
+    // blocked — keeping this path consistent with askService and
+    // localLlmPlayground, which never exempted lmstudio.
+    assertSecretEndpoint(apiBase, {
+      hasSecret: Boolean(provider.apiKey),
+      allowCustomEndpoint: provider.allowCustomEndpoint === true,
+    });
     return {
       apiBase,
       apiKey: provider.apiKey || '',

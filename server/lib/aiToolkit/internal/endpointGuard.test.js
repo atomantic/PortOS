@@ -81,6 +81,9 @@ describe('endpointGuard — evaluateSecretEndpoint', () => {
     it('allows generativelanguage.googleapis.com', () => {
       expect(evaluateSecretEndpoint('https://generativelanguage.googleapis.com/v1beta').allowed).toBe(true);
     });
+    it('allows the bundled NVIDIA NIM host without opt-in', () => {
+      expect(evaluateSecretEndpoint('https://integrate.api.nvidia.com/v1').allowed).toBe(true);
+    });
   });
 
   describe('arbitrary public hosts require explicit opt-in', () => {
