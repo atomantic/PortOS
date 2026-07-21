@@ -315,11 +315,17 @@ describe('buildTaskInput', () => {
     expect(li.buildPrompt).toHaveBeenCalledWith(expect.objectContaining({ outcomesReport: expect.stringContaining('Total filed: 1') }));
   });
 
-  it('skips selfEval when the source toggle is off (#2700)', async () => {
+  it('skips the selfEval REPORT when the source toggle is off, but still arms the hard-exclusion notice (#2700/#2824)', async () => {
     li.getEffectiveConfig.mockReturnValue({ providerId: 'ollama', model: 'qwen', allowedScopes: ['app-improvement'], sources: {} });
     await buildTaskInput({ app: APP });
     expect(li.computeSelfEvalSummary).not.toHaveBeenCalled();
-    expect(li.readLiTaskMetrics).not.toHaveBeenCalled();
+    // The selfEval source toggle no longer gates the execution-health read: the hard-
+    // exclusion gate (#2824) enforces regardless of any source toggle, so its reasoner-
+    // facing notice must arm under the same condition — which needs the health stats.
+    expect(li.readLiTaskMetrics).toHaveBeenCalled();
+    expect(li.computeHardExclusionNotice).toHaveBeenCalledWith(expect.objectContaining({
+      liTaskStats: expect.objectContaining({ read: true })
+    }));
     expect(li.buildPrompt).toHaveBeenCalledWith(expect.objectContaining({ selfEvalReport: '' }));
   });
 

@@ -1503,10 +1503,12 @@ export function computeHardExclusionNotice({ liTaskStats = null, outcomes = [], 
   ];
 
   // Surface each currently chronically-failing domain by name so the reasoner can route
-  // around it explicitly — the same isAvoidDomain set rule 2 of the gate enforces.
+  // around it explicitly — the same isAvoidDomain set rule 2 of the gate enforces. Skip
+  // any self-improve scope already named in the bullet above (gate rule 1 short-circuits
+  // rule 2 for those) so the notice never lists the same scope twice.
   const byDomain = computeExecutionByDomain(outcomes);
   const failing = Object.entries(byDomain)
-    .filter(([, bucket]) => isAvoidDomain(bucket))
+    .filter(([scope, bucket]) => isAvoidDomain(bucket) && !SELF_IMPROVE_SCOPES.includes(scope))
     .map(([scope, bucket]) => `${clampScopeLabel(scope)} (${bucket.successRate}% over ${bucket.completed})`);
   if (failing.length) {
     lines.push(`- Any proposal in a chronically-failing execution domain: ${failing.join('; ')}.`);
