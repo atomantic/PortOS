@@ -152,7 +152,7 @@ const ProactiveAlertsWidget = memo(function ProactiveAlertsWidget() {
                     {alert.detail}
                   </div>
                 </div>
-                <ChevronRight size={14} className="mt-0.5 shrink-0 text-gray-600 opacity-0 group-hover:opacity-100 transition-opacity" />
+                <ChevronRight size={14} className="mt-0.5 shrink-0 text-gray-600 opacity-40 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity" />
               </Link>
             );
           })}

@@ -224,7 +224,7 @@ export default function MemoryGraph() {
           <Canvas
             camera={{ position: [0, 0, 80], fov: 50 }}
             dpr={[1, 1.5]}
-            style={{ background: '#0f0f0f' }}
+            style={{ background: 'rgb(var(--port-bg))' }}
             gl={{ antialias: true }}
             onPointerMissed={handlePointerMissed}
           >

@@ -515,7 +515,7 @@ export default function GoalsTreeView({ data, onRefresh }) {
             camera={{ position: [0, 15, 40], fov: 60 }}
             onPointerDown={(e) => { dragStartRef.current = { x: e.clientX, y: e.clientY }; }}
             onPointerMissed={handlePointerMissed}
-            style={{ background: '#0f0f0f' }}
+            style={{ background: 'rgb(var(--port-bg))' }}
           >
             <GoalScene
               graph={graph}
