@@ -5,7 +5,7 @@ import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import { FormField } from '../ui/FormField';
 import { listMediaJobs, cancelMediaJob, cancelQueuedMediaJobs, deleteMediaJob, retryMediaJob, runMediaJobNow } from '../../services/apiMediaJobs.js';
 import { listLoraTrainingCheckpoints } from '../../services/apiLoraTraining.js';
-import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
+import { IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_EFFORT } from '../../lib/imageGenBackends';
 import { CODEX_EFFORT_LEVELS } from '../../utils/providers';
 import { lossSparklineGeometry } from '../../lib/lossSparkline';
 import { useAutoRefetch } from '../../hooks/useAutoRefetch';
@@ -34,9 +34,12 @@ function modelLabel(params) {
   }
   if (params.mode === IMAGE_GEN_MODE.CODEX) {
     const m = (params.model || '').trim();
-    const eff = (params.effort || '').trim();
+    // Resolve an absent effort to the shipped default — a job that ran on the
+    // default stores no `effort`, but codex.js still rendered it at `low`, so
+    // the row must show the effective level, not a blank.
+    const eff = (params.effort || '').trim() || CODEX_IMAGEGEN_DEFAULT_EFFORT;
     const base = m ? `codex / ${m}` : 'codex';
-    return eff ? `${base} · ${eff}` : base;
+    return `${base} · ${eff}`;
   }
   const id = (params.modelId || '').trim();
   if (!id) return 'local';
@@ -546,13 +549,14 @@ function EditRetryForm({ job, onSubmit, onCancel }) {
       </div>
       {isCodex && (
         <FormField label="Reasoning effort" labelClassName="block text-[10px] uppercase tracking-wide text-port-text-muted">
+          {/* No fixed id — FormField wires the label to a useId()-generated id,
+              so two retry editors open at once don't collide on one shared id. */}
           <select
-            id="retry-codex-effort"
             value={effort}
             onChange={(e) => setEffort(e.target.value)}
             className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-xs"
           >
-            <option value={EFFORT_DEFAULT_OPTION}>Default (low)</option>
+            <option value={EFFORT_DEFAULT_OPTION}>Default ({CODEX_IMAGEGEN_DEFAULT_EFFORT})</option>
             {CODEX_EFFORT_LEVELS.map((lvl) => (
               <option key={lvl} value={lvl}>{lvl}</option>
             ))}
