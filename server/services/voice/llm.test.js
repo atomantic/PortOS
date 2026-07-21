@@ -202,7 +202,6 @@ describe('resolveLlmEndpoint', () => {
     getProviderById.mockResolvedValue({
       id: 'nvidia-kimi', type: 'api', endpoint: 'https://integrate.api.nvidia.com/v1',
       apiKey: 'secret', defaultModel: 'moonshotai/kimi-k2-5', name: 'NVIDIA Kimi',
-      allowCustomEndpoint: true,
     });
     const ep = await resolveLlmEndpoint('nvidia-kimi');
     expect(ep.apiBase).toBe('https://integrate.api.nvidia.com/v1');
@@ -237,6 +236,21 @@ describe('resolveLlmEndpoint', () => {
     const ep = await resolveLlmEndpoint('lmstudio');
     // Env override wins over the registry endpoint for back-compat.
     expect(ep.apiBase).toBe('http://10.0.0.5:1234/v1');
+  });
+
+  it('blocks a key-bearing lmstudio provider pointed at a cloud-metadata host', async () => {
+    getProviderById.mockResolvedValue({
+      id: 'lmstudio', type: 'api', endpoint: 'http://169.254.169.254/v1', apiKey: 'leaked',
+    });
+    await expect(resolveLlmEndpoint('lmstudio')).rejects.toThrow(/Blocked outbound API-key request/);
+  });
+
+  it('allows a keyless lmstudio provider at any host (guard no-ops without a key)', async () => {
+    getProviderById.mockResolvedValue({
+      id: 'lmstudio', type: 'api', endpoint: 'http://192.0.2.10:1234/v1', apiKey: '',
+    });
+    const ep = await resolveLlmEndpoint('lmstudio');
+    expect(ep.apiBase).toBe('http://192.0.2.10:1234/v1');
   });
 
   it('does NOT apply the env override to non-lmstudio providers', async () => {
