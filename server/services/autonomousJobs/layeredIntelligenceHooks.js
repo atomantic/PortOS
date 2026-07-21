@@ -376,7 +376,11 @@ export async function buildTaskInput({ app } = {}) {
   // its proposals would park the loop on every such app permanently.
   // Read LI's own execution-health stats ONCE and feed BOTH the selfEval Signal-3 line
   // and the hard-exclusion notice (#2824) — they must judge health off the same number.
-  const liTaskStats = (config.sources?.selfEval) ? await readLiTaskMetrics() : null
+  // Read UNCONDITIONALLY (not gated on the selfEval source): the hard-exclusion gate in
+  // processTaskOutput enforces regardless of any source toggle, so the reasoner-facing
+  // notice must arm under the SAME condition — otherwise a selfEval-off app would get no
+  // warning yet still have its proposal silently dropped, wasting the whole run.
+  const liTaskStats = await readLiTaskMetrics()
   let selfEvalReport = ''
   if (config.sources?.selfEval) {
     selfEvalReport = computeSelfEvalSummary({
@@ -388,7 +392,7 @@ export async function buildTaskInput({ app } = {}) {
 
   // Hard-exclusion notice (#2824): the reasoner-facing mirror of the deterministic
   // filing gate. '' unless LI's execution health is degraded (gate armed), so a healthy
-  // loop's prompt is unchanged. Enforcement runs in processTaskOutput regardless.
+  // loop's prompt is unchanged. Armed off the same liTaskStats the enforcement gate reads.
   const hardExclusionNotice = computeHardExclusionNotice({
     liTaskStats,
     outcomes: Array.isArray(outcomes) ? outcomes : []
