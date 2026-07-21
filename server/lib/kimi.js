@@ -55,6 +55,12 @@ const NOOP_CLEANUP = () => {};
 const argvHasFlag = (args = [], flags) =>
   args.some((a) => typeof a === 'string' && flags.some((f) => a === f || a.startsWith(`${f}=`)));
 
+// True when a token looks like an option flag (leading `-`), so a prompt VALUE is
+// never mistaken for one when deciding whether a separated `--prompt` already
+// carries a value. A prompt beginning with `-` after a bare trailing `--prompt` is
+// ambiguous on any CLI, so treating a `-`-leading token as a flag here is correct.
+const isFlagToken = (a) => typeof a === 'string' && a.startsWith('-');
+
 export const KIMI_CLI_ID = 'kimi-cli';
 export const KIMI_TUI_ID = 'kimi-tui';
 
@@ -144,16 +150,33 @@ export function ensureKimiTuiArgs(args = []) {
  */
 export function prepareKimiPrompt(args = [], prompt = '') {
   const out = [...args];
-  // Find the LAST prompt flag so the value lands correctly even if a user baked
-  // one into provider.args; otherwise append a fresh `--prompt <value>` pair.
-  let idx = -1;
+  const value = typeof prompt === 'string' ? prompt : '';
+  // Find the LAST prompt flag so the value lands correctly even if a user baked one
+  // into provider.args — in BOTH forms: separated (`--prompt`/`-p`, value is the
+  // next token) and joined (`--prompt=<value>`). A separated flag that already has a
+  // value must be REPLACED, not inserted ahead of — `splice(idx+1, 0, value)` on
+  // `['--prompt','old']` yields `['--prompt', value, 'old']`, leaving `old` as a
+  // stray positional kimi would treat as a second prompt. Absent → append a fresh pair.
+  let sepIdx = -1;   // index of a separated flag token (`--prompt`); its value is out[idx+1]
+  let joinIdx = -1;  // index of a joined `--prompt=…` token
   for (let i = out.length - 1; i >= 0; i--) {
-    if (PROMPT_FLAGS.includes(out[i])) { idx = i; break; }
+    const a = out[i];
+    if (typeof a !== 'string') continue;
+    if (PROMPT_FLAGS.includes(a)) { sepIdx = i; break; }
+    if (PROMPT_FLAGS.some((f) => a.startsWith(`${f}=`))) { joinIdx = i; break; }
   }
-  if (idx === -1) {
-    out.push('--prompt', typeof prompt === 'string' ? prompt : '');
+  if (joinIdx !== -1) {
+    // Replace the joined token's value: `--prompt=old` → `--prompt=<value>`.
+    const flag = out[joinIdx].slice(0, out[joinIdx].indexOf('='));
+    out[joinIdx] = `${flag}=${value}`;
+  } else if (sepIdx === -1) {
+    out.push('--prompt', value);
+  } else if (sepIdx + 1 < out.length && !isFlagToken(out[sepIdx + 1])) {
+    // The separated flag already carries a value — replace it in place.
+    out[sepIdx + 1] = value;
   } else {
-    out.splice(idx + 1, 0, typeof prompt === 'string' ? prompt : '');
+    // Flag is last, or immediately followed by another flag — insert the value.
+    out.splice(sepIdx + 1, 0, value);
   }
   return { args: out, useStdin: false, cleanup: NOOP_CLEANUP };
 }

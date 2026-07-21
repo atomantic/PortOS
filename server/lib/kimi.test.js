@@ -90,5 +90,33 @@ describe('kimi.js', () => {
       const { args } = prepareKimiPrompt(['--print'], undefined);
       expect(args).toEqual(['--print', '--prompt', '']);
     });
+    it('REPLACES a user-baked separated prompt value instead of leaving it a stray positional (#2815)', () => {
+      // ['--print','--prompt','old'] must NOT become ['--print','--prompt','task','old'] —
+      // the trailing 'old' would reach kimi as a second, positional prompt.
+      const { args } = prepareKimiPrompt(['--print', '--prompt', 'old'], 'task');
+      expect(args).toEqual(['--print', '--prompt', 'task']);
+    });
+    it('replaces a baked -p short-flag value', () => {
+      const { args } = prepareKimiPrompt(['-p', 'old', '--print'], 'task');
+      expect(args).toEqual(['-p', 'task', '--print']);
+    });
+    it('replaces the value of a joined --prompt=old form (#2815)', () => {
+      const { args } = prepareKimiPrompt(['--print', '--prompt=old'], 'task');
+      expect(args).toEqual(['--print', '--prompt=task']);
+    });
+    it('replaces a joined -p=old short form', () => {
+      const { args } = prepareKimiPrompt(['-p=old'], 'task');
+      expect(args).toEqual(['-p=task']);
+    });
+    it('inserts a value after a trailing bare flag followed by another flag', () => {
+      // --prompt is immediately followed by another flag, so it has no value yet;
+      // insert (not replace) so the following flag is preserved.
+      const { args } = prepareKimiPrompt(['--prompt', '--print'], 'task');
+      expect(args).toEqual(['--prompt', 'task', '--print']);
+    });
+    it('uses the LAST prompt flag when more than one is baked in', () => {
+      const { args } = prepareKimiPrompt(['--prompt', 'a', '-p', 'b'], 'task');
+      expect(args).toEqual(['--prompt', 'a', '-p', 'task']);
+    });
   });
 });
