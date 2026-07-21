@@ -99,6 +99,19 @@ describe('MediaJobsQueue — Codex reasoning-effort retry control', () => {
     await waitFor(() => expect(screen.getByText(/codex \/ gpt-5.6-luna · low/)).toBeInTheDocument());
   });
 
+  it('does not crash on a non-string effort from hand-edited data', async () => {
+    const user = userEvent.setup();
+    // A hand-edited media-jobs.json could carry a numeric effort; the row label
+    // must coerce safely (mirror of codex.js) instead of throwing on .trim().
+    listMediaJobs.mockResolvedValue([{
+      ...failedCodexDefaultEffortJob, id: 'codexbadeff00dead', params: { ...failedCodexDefaultEffortJob.params, effort: 5 },
+    }]);
+    render(<MediaJobsQueue kind="image" />);
+    await expandReel(user);
+    // Non-string → treated as absent → resolves to the shipped default.
+    await waitFor(() => expect(screen.getByText(/codex \/ gpt-5.6-luna · low/)).toBeInTheDocument());
+  });
+
   it('pre-fills the retry editor to Default for a job that stored no effort', async () => {
     const user = userEvent.setup();
     listMediaJobs.mockResolvedValue([failedCodexDefaultEffortJob]);
