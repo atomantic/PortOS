@@ -16,7 +16,7 @@ import { getActiveProvider } from './providers.js';
 import { markProviderUsageLimit, markProviderRateLimited } from './providerStatus.js';
 import { MAX_TOTAL_SPAWNS, normalizeReviewers } from '../lib/validation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
-import { ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, sleep, tryReadFile } from '../lib/fileUtils.js';
 import { createToolExecution, startExecution, completeExecution, errorExecution } from './toolStateMachine.js';
 import { determineLane, acquire, release } from './executionLanes.js';
 import { analyzeAgentFailure, resolveFailedTaskUpdate, resolveTypeFailureSignal } from './agentErrorAnalysis.js';
@@ -650,7 +650,7 @@ export async function waitForRunnerStability() {
       const waitTime = Math.ceil(RUNNER_MIN_UPTIME_SECONDS - health.uptime);
       emitLog('info', `Waiting ${waitTime}s for runner stability (uptime: ${Math.floor(health.uptime)}s)`, { uptime: health.uptime });
     }
-    await new Promise(resolve => setTimeout(resolve, checkIntervalMs));
+    await sleep(checkIntervalMs);
   }
 
   emitLog('warn', 'Runner stability check timed out, proceeding anyway', {});

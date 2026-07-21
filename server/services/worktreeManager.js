@@ -12,7 +12,7 @@
 import { existsSync, realpathSync } from 'fs';
 import { readdir, rm, stat } from 'fs/promises';
 import { join } from 'path';
-import { ensureDir, PATHS, tryReadFile } from '../lib/fileUtils.js';
+import { ensureDir, PATHS, sleep, tryReadFile } from '../lib/fileUtils.js';
 import { execGit } from '../lib/execGit.js';
 import { createKeyCachedQueue } from '../lib/createKeyCachedQueue.js';
 import { ensureInstanceId } from './instances.js';
@@ -67,7 +67,7 @@ export function addWorktreeWithRetry(args, repo, attempt = 1, firstError = null)
       throw err;
     }
     console.log(`🌳 Worktree add lock contention (attempt ${attempt}/${WORKTREE_ADD_MAX_ATTEMPTS}), retrying in ${WORKTREE_ADD_RETRY_DELAY_MS}ms: ${err.message}`);
-    return new Promise(resolve => setTimeout(resolve, WORKTREE_ADD_RETRY_DELAY_MS))
+    return sleep(WORKTREE_ADD_RETRY_DELAY_MS)
       .then(() => addWorktreeWithRetry(args, repo, attempt + 1, originalError));
   });
 }

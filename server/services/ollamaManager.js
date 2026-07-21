@@ -21,7 +21,7 @@ import { execFile, spawn } from 'child_process'
 import { promisify } from 'util'
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js'
 import { readResponseJson } from '../lib/readResponseJson.js'
-import { readJSONFile, sha256File, safeJSONParse, ensureDir } from '../lib/fileUtils.js'
+import { readJSONFile, sha256File, safeJSONParse, ensureDir, sleep } from '../lib/fileUtils.js'
 import {
   parseOllamaManifest, parseOllamaModelRef, ollamaManifestRelPath, digestToBlobFilename, buildModelfile
 } from '../lib/localLlmDisk.js'
@@ -188,7 +188,7 @@ async function waitForAvailability(expected, timeoutMs) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if ((await checkOllamaAvailable(true)) === expected) return true
-    await new Promise((resolve) => setTimeout(resolve, 400))
+    await sleep(400)
   }
   return (await checkOllamaAvailable(true)) === expected
 }
@@ -672,7 +672,7 @@ async function pullModel(modelId, onProgress) {
     const delayMs = PULL_RETRY_BASE_DELAY_MS * attempt
     console.warn(`🔁 Ollama pull ${modelId} hit transient error "${lastError}" (attempt ${attempt}/${PULL_MAX_ATTEMPTS}); retrying in ${delayMs}ms`)
     if (typeof onProgress === 'function') onProgress({ status: 'retrying after network error', percent: null, retrying: true })
-    await new Promise((resolve) => setTimeout(resolve, delayMs))
+    await sleep(delayMs)
   }
 
   console.error(`⚠️ Ollama pull failed for ${modelId}: ${lastError}`)

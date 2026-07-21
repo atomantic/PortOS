@@ -1,15 +1,14 @@
 import { useCallback, useState } from 'react';
+import { safeReadJsonStorage, safeWriteStorage } from '../../../../lib/safeStorage';
 
 const STORAGE_KEY = 'portos:life-calendar';
 
 function loadGridPrefs() {
-  const raw = localStorage.getItem(STORAGE_KEY);
-  if (!raw) return {};
-  return JSON.parse(raw);
+  return safeReadJsonStorage(STORAGE_KEY, {});
 }
 
 function saveGridPrefs(prefs) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(prefs));
+  safeWriteStorage(STORAGE_KEY, JSON.stringify(prefs));
 }
 
 // Per-key state persisted into a single localStorage blob shared by the Life Calendar.

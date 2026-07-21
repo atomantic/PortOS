@@ -20,6 +20,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { LayoutGrid, ChevronDown, ChevronRight, ExternalLink, ImageIcon } from 'lucide-react';
 import { listMoodBoards, getMoodBoard } from '../../services/api';
 import { moodBoardItemSrc } from '../../lib/moodBoardItemSrc';
+import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 
 const MAX_THUMBS = 12;
 
@@ -27,9 +28,7 @@ export default function MoodBoardReferenceStrip({ storageKey = 'create', classNa
   const lsKey = `portos.moodBoardRef.${storageKey}`;
   const [expanded, setExpanded] = useState(false);
   const [boards, setBoards] = useState(null); // null = not loaded, [] = loaded-empty
-  const [selectedId, setSelectedId] = useState(() => {
-    try { return localStorage.getItem(lsKey) || ''; } catch { return ''; }
-  });
+  const [selectedId, setSelectedId] = useState(() => safeReadStorage(lsKey) || '');
   const [detail, setDetail] = useState(null); // full board (with items) for selectedId
   const [loadingDetail, setLoadingDetail] = useState(false);
 
@@ -71,7 +70,7 @@ export default function MoodBoardReferenceStrip({ storageKey = 'create', classNa
 
   const handleSelect = useCallback((id) => {
     setSelectedId(id);
-    try { if (id) localStorage.setItem(lsKey, id); } catch { /* ignore quota/denied */ }
+    if (id) safeWriteStorage(lsKey, id);
   }, [lsKey]);
 
   const thumbs = useMemo(() => {

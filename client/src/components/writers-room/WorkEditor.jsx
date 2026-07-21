@@ -44,6 +44,7 @@ import {
   promoteWritersRoomWorkToPipeline,
 } from '../../services/apiWritersRoom';
 import { listCatalogIngredientsForRef } from '../../services/apiCatalog';
+import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 import { STATUS_LABELS } from './labels';
 import { countWords } from '../../utils/formatters';
 import StoryboardPanel, { STORYBOARD_TAB, STORYBOARD_TAB_VALUES } from './StoryboardPanel';
@@ -80,24 +81,21 @@ const READING_THEME_KEY = 'wr.readingTheme';
 const SIDEBAR_TAB_KEY = 'wr.sidebarTab';
 
 function readReadingTheme() {
-  if (typeof window === 'undefined') return 'dark';
-  return window.localStorage.getItem(READING_THEME_KEY) === 'light' ? 'light' : 'dark';
+  return safeReadStorage(READING_THEME_KEY) === 'light' ? 'light' : 'dark';
 }
 
 function readSidebarWidth() {
-  if (typeof window === 'undefined') return SIDEBAR_DEFAULT;
-  const raw = window.localStorage.getItem(SIDEBAR_WIDTH_KEY);
+  const raw = safeReadStorage(SIDEBAR_WIDTH_KEY);
   const n = raw ? parseInt(raw, 10) : NaN;
   return Number.isFinite(n) && n >= SIDEBAR_MIN ? n : SIDEBAR_DEFAULT;
 }
 
 function persistSidebarWidth(width) {
-  try { window.localStorage.setItem(SIDEBAR_WIDTH_KEY, String(Math.round(width))); } catch { return undefined; }
+  safeWriteStorage(SIDEBAR_WIDTH_KEY, String(Math.round(width)));
 }
 
 function readSidebarTab() {
-  if (typeof window === 'undefined') return STORYBOARD_TAB.BOARDS;
-  const stored = window.localStorage.getItem(SIDEBAR_TAB_KEY);
+  const stored = safeReadStorage(SIDEBAR_TAB_KEY);
   return STORYBOARD_TAB_VALUES.includes(stored) ? stored : STORYBOARD_TAB.BOARDS;
 }
 
@@ -205,7 +203,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   }, [setSearchParams]);
 
   useEffect(() => {
-    try { window.localStorage.setItem(SIDEBAR_TAB_KEY, sidebarTab); } catch { /* sandboxed storage */ }
+    safeWriteStorage(SIDEBAR_TAB_KEY, sidebarTab);
   }, [sidebarTab]);
 
   const textareaRef = useRef(null);
@@ -820,7 +818,7 @@ export default function WorkEditor({ work, onChange, onToggleExercise, exerciseO
   const toggleReadingTheme = useCallback(() => {
     setReadingTheme((prev) => {
       const next = prev === 'dark' ? 'light' : 'dark';
-      try { window.localStorage.setItem(READING_THEME_KEY, next); } catch { return next; }
+      safeWriteStorage(READING_THEME_KEY, next);
       return next;
     });
   }, []);

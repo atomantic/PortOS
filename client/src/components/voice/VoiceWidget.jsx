@@ -25,6 +25,7 @@ import {
   isVoiceHiddenStorageEvent,
 } from '../../services/voiceVisibility';
 import { MicroGlyph } from '../micrographics';
+import { safeReadStorage, safeWriteStorage } from '../../lib/safeStorage';
 
 // Peak below this (0..1) is usually whisper's [BLANK_AUDIO] territory.
 const QUIET_MIC_THRESHOLD = 0.02;
@@ -84,8 +85,7 @@ export default function VoiceWidget() {
   // stop can tear down tracks from the freshly-started capture.
   const cancelInFlightRef = useRef(null);
   const [handsFree, setHandsFree] = useState(() => {
-    if (typeof window === 'undefined') return true;
-    const stored = window.localStorage.getItem(HANDS_FREE_KEY);
+    const stored = safeReadStorage(HANDS_FREE_KEY);
     return stored === null ? true : stored === '1';
   });
   const [hidden, setHidden] = useState(readVoiceHidden);
@@ -550,7 +550,7 @@ export default function VoiceWidget() {
   const toggleHandsFree = useCallback(() => {
     setHandsFree((prev) => {
       const next = !prev;
-      window.localStorage.setItem(HANDS_FREE_KEY, next ? '1' : '0');
+      safeWriteStorage(HANDS_FREE_KEY, next ? '1' : '0');
       // Discard any in-flight PTT recording — toggling modes mid-utterance
       // shouldn't send a partial turn to the server.
       if (isCapturing()) stopCapture({ submit: false });

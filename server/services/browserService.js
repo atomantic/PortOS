@@ -9,7 +9,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { join, basename, resolve, extname } from 'path';
 import { EventEmitter } from 'events';
-import { ensureDir, safeJSONParse, PATHS, tryReadFile, atomicWrite } from '../lib/fileUtils.js';
+import { ensureDir, safeJSONParse, PATHS, tryReadFile, atomicWrite, sleep } from '../lib/fileUtils.js';
 import { normalizeBrowserConfig } from '../lib/browserConfig.js';
 import { fetchWithTimeout } from '../lib/fetchWithTimeout.js';
 import { readResponseJson } from '../lib/readResponseJson.js';
@@ -130,7 +130,7 @@ async function pm2Action(action, args) {
   console.log(`✅ Browser PM2 ${action} complete`);
 
   // Give PM2 a moment to settle
-  await new Promise(resolve => setTimeout(resolve, PM2_SETTLE_MS));
+  await sleep(PM2_SETTLE_MS);
 
   const status = await getHealthStatus();
   browserEvents.emit('status:changed', status);
