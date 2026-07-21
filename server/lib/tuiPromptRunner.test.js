@@ -742,9 +742,17 @@ describe('executeTuiRun', () => {
 
       await expect(promise).resolves.toBeUndefined();
       expect(console.error).toHaveBeenCalledWith(expect.stringContaining('finish() failed'));
-      // The throw happens before onComplete is reached in finish()'s body,
-      // so onComplete must never fire for this run.
-      expect(onComplete).not.toHaveBeenCalled();
+      // The throw happens before onComplete is reached in finish()'s normal
+      // path, but resolving the inner promise alone is not enough: the sole
+      // caller (executeProviderRunOnce) settles its OUTER promise only via
+      // onComplete (→ safeReject) or a rejected promise. Since finish() always
+      // resolves, the catch must still surface the failure through onComplete
+      // with failure metadata, or the pipeline/central-prompt caller hangs
+      // forever despite the inner promise settling.
+      expect(onComplete).toHaveBeenCalledWith(expect.objectContaining({
+        success: false,
+        error: expect.stringContaining('finish() failed'),
+      }));
     });
 
     it('finishes with reason "killed" and surfaces the signal in the error when the PTY is terminated', async () => {
