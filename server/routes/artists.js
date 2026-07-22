@@ -1,7 +1,8 @@
 /**
  * Music artist routes.
  *
- *   GET    /api/artists        → Artist[]   (live, sorted by name)
+ *   GET    /api/artists        → Artist[]   (live, sorted by name; `?limit`/`?offset`
+ *                                            switches to the bounded envelope)
  *   POST   /api/artists        → Artist
  *   GET    /api/artists/:id     → Artist
  *   PATCH  /api/artists/:id     → Artist
@@ -48,6 +49,9 @@ const patchSchema = z.object({
   portraitImageUrl: portraitImageUrlField.optional(),
 }).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
 
+// Backward-compatible by default: returns the full artists array. When a client
+// passes `limit`/`offset`, the response becomes the bounded
+// `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
 router.get('/', asyncHandler(async (req, res) => {
   const list = await artists.listArtists();
   if (!isPaginationRequested(req.query)) return res.json(list);
