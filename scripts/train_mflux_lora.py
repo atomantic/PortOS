@@ -527,6 +527,10 @@ def run_segment(cmd, *, segment_target, state, last_reported, output_tail,
     segment) — no boundary kill is armed.
     """
     global CHILD
+    # `cmd` is always list-form (see build_command) and `shell` stays at its
+    # False default, so argv never reaches a shell — there is no injection
+    # surface here. Scanners periodically flag this line anyway; an explicit
+    # `shell=False` would be a no-op. See PR #2882 (closed).
     CHILD = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )

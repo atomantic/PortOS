@@ -21,28 +21,28 @@
     "@xterm/addon-fit": "0.11.0",
     "@xterm/addon-web-links": "0.12.0",
     "@xterm/xterm": "6.0.0",
-    "lucide-react": "1.21.0",
-    "react": "19.2.7",
-    "react-dom": "19.2.7",
-    "react-router-dom": "7.18.0",
+    "lucide-react": "1.25.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-router-dom": "7.18.1",
     "recharts": "3.8.1",
     "socket.io-client": "4.8.3",
-    "three": "0.184.0"
+    "three": "0.185.1"
   },
   "devDependencies": {
     "@eslint/js": "9.39.4",
-    "@tailwindcss/postcss": "4.3.1",
+    "@tailwindcss/postcss": "4.3.3",
     "@testing-library/jest-dom": "6.9.1",
     "@testing-library/react": "16.3.2",
     "@testing-library/user-event": "14.6.1",
-    "@vitejs/plugin-react": "6.0.2",
+    "@vitejs/plugin-react": "6.0.4",
     "eslint": "9.39.4",
     "eslint-plugin-react": "7.37.5",
     "eslint-plugin-react-hooks": "7.1.1",
     "jsdom": "29.1.1",
     "rollup-plugin-visualizer": "7.0.1",
-    "tailwindcss": "4.3.1",
-    "vite": "8.0.16",
+    "tailwindcss": "4.3.3",
+    "vite": "8.1.5",
     "vitest": "4.1.9"
   },
   "overrides": {
@@ -53,6 +53,6 @@
     "minimatch@3": {
       "brace-expansion": "1.1.15"
     },
-    "three": "0.184.0"
+    "three": "0.185.1"
   }
 }

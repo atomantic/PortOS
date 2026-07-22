@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
 import { extractToken, isAuthEnabled, verifyPassword, verifySession } from '../services/auth.js';
+// Shared with sidecar processes (lib/sidecarAuthGate.js) so the Autofixer UI
+// on :5560 applies byte-identical credential extraction and CSRF rules.
+import { extractBasicPassword, isCrossOrigin } from '../../lib/portosAuthCore.js';
 import { getSettings, settingsEvents } from '../services/settings.js';
 import { isRegistryPublic } from './apiRegistry.js';
 
@@ -24,20 +27,6 @@ const PUBLIC_API_PATHS = new Set([
 // network reach but no auth must NOT be able to hit it. Add to this list any
 // future routes that live outside `/api`.
 const GATED_NON_API_PREFIXES = ['/sdapi/'];
-
-// Extract the password from an `Authorization: Basic <base64>` header.
-// PortOS is single-user so the username is ignored; only the password is
-// validated. Used by peer-to-peer federation: a remote PortOS instance probes
-// us with HTTP Basic credentials (set in the Instances UI) rather than a
-// browser session cookie.
-const extractBasicPassword = (req) => {
-  const authHeader = req.headers?.authorization;
-  if (typeof authHeader !== 'string') return null;
-  if (authHeader.slice(0, 6).toLowerCase() !== 'basic ') return null;
-  const decoded = Buffer.from(authHeader.slice(6), 'base64').toString('utf8');
-  const colonIdx = decoded.indexOf(':');
-  return colonIdx === -1 ? decoded : decoded.slice(colonIdx + 1);
-};
 
 // Short-lived cache for Basic-auth scrypt results so probe cycles (3 parallel
 // HTTP requests every 30s) don't re-run scrypt each time. Keyed by sha256 of
@@ -67,53 +56,6 @@ const isPublicPath = (path) => {
   for (const prefix of GATED_NON_API_PREFIXES) {
     if (path.startsWith(prefix)) return false;
   }
-  return true;
-};
-
-// Reject cross-origin requests when auth is on. PortOS's CORS middleware
-// reflects `Origin` with `Access-Control-Allow-Credentials: true` so the UI
-// works from any tailnet hostname / IP — but combined with the session
-// cookie that becomes a CSRF surface: a malicious page on another tailnet
-// host can fetch PortOS APIs with `credentials: 'include'` after the user
-// has logged in (Tailscale's `ts.net` is on the Public Suffix List, so
-// SameSite=Lax doesn't help — same-tailnet hosts are same-site). Match the
-// `Origin` header's host:port against the request's own `Host` header; any
-// mismatch is a cross-origin attempt and gets 403 before the session is
-// even consulted. Requests with no `Origin` header (server-to-server,
-// curl, the loopback mirror) pass through.
-// Hostnames are case-insensitive (RFC 3986 §3.2.2). Node's `URL` already
-// lowercases the parsed authority; lowercase the raw `Host` header too so a
-// client that sends mixed-case isn't 403'd as cross-origin.
-const stripPort = (hostHeader) => {
-  // Bracketed IPv6 host: `[::1]:port` → `[::1]`.
-  if (hostHeader.startsWith('[')) {
-    const close = hostHeader.indexOf(']');
-    return close === -1 ? hostHeader : hostHeader.slice(0, close + 1);
-  }
-  const colon = hostHeader.indexOf(':');
-  return colon === -1 ? hostHeader : hostHeader.slice(0, colon);
-};
-const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
-const isLoopback = (hostname) => LOOPBACK_HOSTS.has(hostname.toLowerCase());
-
-const isCrossOrigin = (req) => {
-  const origin = req.headers?.origin;
-  if (!origin || origin === 'null') return false;
-  const host = req.headers?.host;
-  if (!host) return false;
-  // URL parses scheme://authority — we only compare the authority. A
-  // malformed Origin (URL constructor throws) is treated as cross-origin.
-  let parsed;
-  try { parsed = new URL(origin); }
-  catch { return true; }
-  if (parsed.host.toLowerCase() === host.toLowerCase()) return false;
-  // Dev workflow exemption: Vite proxies :5554 → :5555 with changeOrigin,
-  // so a real same-origin browser request arrives as
-  // `Origin: http://localhost:5554` / `Host: localhost:5555`. Treat any
-  // loopback-to-loopback pairing as same-origin regardless of port — the
-  // CSRF threat is from attackers on OTHER machines, not from a local
-  // dev server on the same loopback interface.
-  if (isLoopback(stripPort(parsed.host)) && isLoopback(stripPort(host))) return false;
   return true;
 };
 

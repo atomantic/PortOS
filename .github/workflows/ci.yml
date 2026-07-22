@@ -53,15 +53,19 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+            client/package-lock.json
 
       - name: Install root dependencies
         run: npm ci
 
       - name: Install server dependencies
-        run: npm install --prefix server
+        run: npm ci --prefix server
 
       - name: Install client dependencies
-        run: npm install --prefix client
+        run: npm ci --prefix client
 
       # Main server suite runs WITHOUT PGDATABASE pointing at a test DB, so the
       # DB-backed suites skip here (they'd see the non-test `portos` name). They
@@ -98,15 +102,19 @@ jobs:
         with:
           node-version: 24.x
           cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+            client/package-lock.json
 
       - name: Install root dependencies
         run: npm ci
 
       - name: Install server dependencies
-        run: npm install --prefix server
+        run: npm ci --prefix server
 
       - name: Install client dependencies
-        run: npm install --prefix client
+        run: npm ci --prefix client
 
       - name: Check for syntax errors
         run: node --check server/index.js
