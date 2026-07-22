@@ -58,6 +58,7 @@ export * from './compareHelpers.js';
 export * from './consoleFilters.js';
 export * from './diffLines.js';
 export * from './diffWords.js';
+export * from './dndTransform.js';
 export * from './downloadBlob.js';
 export * from './extensionErrors.js';
 export * from './genUtils.js';
