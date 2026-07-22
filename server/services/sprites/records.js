@@ -72,6 +72,13 @@ export async function createCharacter({ id, name, spec = null }) {
   if (!isValidSpriteId(recordId)) {
     throw new ServerError(`Cannot derive a valid sprite id from "${name}" — pass an explicit id`, { status: 400, code: 'INVALID_SPRITE_ID' });
   }
+  // Tombstoned ids stay taken: the old data/sprites/<id> tree (possibly a
+  // LOCKED reference set) is still on disk, so a re-created record would
+  // silently inherit a frozen identity it can never regenerate.
+  const existing = await getRecord(recordId, { includeDeleted: true });
+  if (existing?.deleted) {
+    throw new ServerError(`A deleted record still holds the id "${recordId}" (its assets remain on disk) — pass a different id`, { status: 409, code: 'ID_TOMBSTONED' });
+  }
   return createRecord({ kind: 'character', name, spec }, recordId);
 }
 

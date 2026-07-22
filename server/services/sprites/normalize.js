@@ -12,8 +12,10 @@
  * Geometry contract (verbatim from the source): character height is 80% of
  * the square side (or width fits inside 10% side margins, whichever needs a
  * bigger canvas), feet baseline sits 7% above the bottom edge, pixels are
- * never rescaled — only the canvas is sized around them. Mask threshold:
- * a pixel is foreground when luma(|pixel − key|) > 40 (Pillow's L convert).
+ * never rescaled — only the canvas is sized around them. Mask threshold: a
+ * pixel is foreground when max-channel |pixel − key| > 40 — a DELIBERATE
+ * deviation from the source's luma metric, which is blind to black-vs-blue
+ * (see MASK_CHANNEL_THRESHOLD).
  */
 
 import sharp from 'sharp';
@@ -23,7 +25,14 @@ import { hexToRgb } from './chromaKey.js';
 const FRAME_HEIGHT_FRAC = 0.80;
 const FRAME_BOTTOM_FRAC = 0.07;
 const FRAME_SIDE_FRAC = 0.10;
-const MASK_LUMA_THRESHOLD = 40;
+// Max-channel distance from the key, NOT the source pipeline's luma-of-diff:
+// luma weights blue at 0.114, so against the blue key a BLACK pixel scores
+// 255·0.114 ≈ 29 — under any usable threshold — and black outlines/hair
+// would be silently erased. Luma was safe only because the source pipeline
+// hardcoded magenta; the dynamic key set (#2895) makes the metric wrong.
+// Max-channel treats all three keys symmetrically (black vs any pure key
+// differs by 255 in at least one channel).
+const MASK_CHANNEL_THRESHOLD = 40;
 
 // Re-export for existing consumers/tests; the definition lives in the pure
 // color-math module so chromaKey.js can use it without importing sharp.
@@ -51,9 +60,7 @@ export async function analyzeForeground(src, maskKeyHex) {
       const dr = Math.abs(data[i] - key.r);
       const dg = Math.abs(data[i + 1] - key.g);
       const db = Math.abs(data[i + 2] - key.b);
-      // Pillow convert("L") luminance of the difference image.
-      const luma = (dr * 299 + dg * 587 + db * 114) / 1000;
-      if (luma > MASK_LUMA_THRESHOLD) {
+      if (Math.max(dr, dg, db) > MASK_CHANNEL_THRESHOLD) {
         mask[y * width + x] = 1;
         if (x < left) left = x;
         if (x > right) right = x;

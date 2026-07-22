@@ -18,6 +18,7 @@ vi.mock('../services/sprites/reference.js', () => ({
   getReferenceSet: vi.fn(async () => ({ manifest: null, candidates: [] })),
   startReferenceGeneration: vi.fn(async () => ({ jobId: 'j1', mode: 'codex', target: 'main', anchorId: 'walk-south' })),
   lockReference: vi.fn(async () => ({ manifest: { status: 'in-progress' }, candidates: [] })),
+  patchSpriteRecord: vi.fn(async (id, patch) => ({ id, ...patch })),
 }));
 
 import * as records from '../services/sprites/records.js';
@@ -185,25 +186,21 @@ describe('sprites routes', () => {
     expect(r.status).toBe(400);
   });
 
-  it('PATCH /:id accepts the three standard chroma keys and null', async () => {
+  it('PATCH /:id accepts the three standard chroma keys and null, delegating to the lock-aware patch', async () => {
     for (const chromaKey of ['#FF00FF', '#00FF00', '#0000FF', null]) {
       const r = await request(app).patch('/api/sprites/pioneer').send({ chromaKey });
       expect(r.status, String(chromaKey)).toBe(200);
     }
+    expect(reference.patchSpriteRecord).toHaveBeenCalledTimes(4);
+    expect(reference.patchSpriteRecord).toHaveBeenLastCalledWith('pioneer', { chromaKey: null });
   });
 
-  it('PATCH /:id 409s a chroma-key change once the main reference is locked', async () => {
-    reference.getReferenceSet.mockResolvedValueOnce({ manifest: { mainReference: { locked: true } }, candidates: [] });
+  it('PATCH /:id surfaces the service 409 for a post-lock chroma-key change', async () => {
+    const err = Object.assign(new Error('Chroma key is frozen with the locked reference set'), { status: 409, code: 'CHROMA_KEY_LOCKED' });
+    reference.patchSpriteRecord.mockRejectedValueOnce(err);
     const r = await request(app).patch('/api/sprites/pioneer').send({ chromaKey: '#00FF00' });
     expect(r.status).toBe(409);
     expect(r.body.code).toBe('CHROMA_KEY_LOCKED');
-    expect(records.updateRecord).not.toHaveBeenCalled();
-  });
-
-  it('PATCH /:id without a chromaKey change skips the reference lookup', async () => {
-    const r = await request(app).patch('/api/sprites/pioneer').send({ notes: 'n' });
-    expect(r.status).toBe(200);
-    expect(reference.getReferenceSet).not.toHaveBeenCalled();
   });
 
   it('PATCH /:id rejects hex colors outside the three-key set', async () => {

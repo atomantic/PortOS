@@ -24,7 +24,10 @@ import {
 import { ServerError } from '../../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
-import { IMAGE_GEN_MODE, resolveQueueImageMode, CODEX_IMAGEGEN_DEFAULT_MODEL } from '../imageGen/modes.js';
+import {
+  IMAGE_GEN_MODE, resolveQueueImageMode,
+  CODEX_IMAGEGEN_DEFAULT_MODEL, LOCAL_IMAGEGEN_DEFAULT_MODEL,
+} from '../imageGen/modes.js';
 import { resolveImageCleaners } from '../imageGen/index.js';
 import { getSettings } from '../settings.js';
 import { getRecord, updateRecord } from './records.js';
@@ -154,6 +157,24 @@ function combinedClipWarning(palette, maskKeyHex, canvasKeyHex) {
 }
 
 /**
+ * Record patch that is safe against a concurrent lock: a chromaKey change
+ * must re-check the manifest INSIDE the per-record write tail, or a PATCH
+ * racing `/reference/lock` could observe an unlocked manifest and then land
+ * a pin that disagrees with the just-frozen canonical key (permanently,
+ * since post-lock changes 409). Non-key patches pass straight through.
+ */
+export function patchSpriteRecord(recordId, patch) {
+  if (!('chromaKey' in patch)) return updateRecord(recordId, patch);
+  return manifestWriteTail(recordId, async () => {
+    const manifest = await loadManifest(recordId);
+    if (manifest?.mainReference?.locked) {
+      throw new ServerError('Chroma key is frozen with the locked reference set', { status: 409, code: 'CHROMA_KEY_LOCKED' });
+    }
+    return updateRecord(recordId, patch);
+  });
+}
+
+/**
  * Reference-set view for the detail endpoint: the manifest (null until the
  * first generate) plus the reviewable candidates parsed from their
  * generation sidecars, newest first per target.
@@ -261,7 +282,7 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
   const effectiveModel = mode === IMAGE_GEN_MODE.CODEX
     ? codexModel
     : mode === IMAGE_GEN_MODE.LOCAL
-      ? (body.model || settings.imageGen?.local?.modelId || null)
+      ? (body.model || settings.imageGen?.local?.modelId || LOCAL_IMAGEGEN_DEFAULT_MODEL)
       : null;
   const baseParams = {
     prompt,

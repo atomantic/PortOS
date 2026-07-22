@@ -130,7 +130,8 @@ export default function ReferenceWorkflow({ record, reference, onChanged }) {
   useEffect(() => {
     if (Object.keys(pendingJobs).length === 0) return undefined;
     const timer = setInterval(async () => {
-      const results = await Promise.all(Object.entries(pendingJobs).map(async ([target, jobId]) => {
+      const entries = Object.entries(pendingJobs).filter(([, jobId]) => jobId !== 'submitting');
+      const results = await Promise.all(entries.map(async ([target, jobId]) => {
         try {
           return { target, job: await getMediaJob(jobId) };
         } catch (err) {
@@ -164,7 +165,13 @@ export default function ReferenceWorkflow({ record, reference, onChanged }) {
     return acc;
   }, {}), [candidates]);
 
+  // Sentinel jobId while the enqueue request is in flight — reserves the
+  // target immediately so a double-click (or a slow multipart upload) can't
+  // submit two paid renders. The poll skips sentinel entries.
+  const SUBMITTING = 'submitting';
+
   const generate = async (target) => {
+    setPendingJobs((prev) => ({ ...prev, [target]: SUBMITTING }));
     try {
       const { jobId } = await generateSpriteReference(recordId, {
         target,
@@ -175,6 +182,11 @@ export default function ReferenceWorkflow({ record, reference, onChanged }) {
       setUploadFile(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     } catch (err) {
+      setPendingJobs((prev) => {
+        const next = { ...prev };
+        if (next[target] === SUBMITTING) delete next[target];
+        return next;
+      });
       toast.error(err?.message || `Failed to queue ${target} render`);
     }
   };
