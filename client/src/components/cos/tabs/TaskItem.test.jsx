@@ -107,10 +107,10 @@ describe('TaskItem long-text clamping', () => {
     const withContext = { ...task, id: 'sys-long-context', metadata: { context: longPrompt } };
     render(<TaskItem task={withContext} isSystem onRefresh={vi.fn()} providers={providers} />);
 
-    const context = document.getElementById('task-context-sys-long-context');
+    const context = document.getElementById('task-context-sys-sys-long-context');
     expect(context).toHaveClass('line-clamp-2');
 
-    fireEvent.click(toggleFor('task-context-sys-long-context'));
+    fireEvent.click(toggleFor('task-context-sys-sys-long-context'));
     expect(context).not.toHaveClass('line-clamp-2');
   });
 
@@ -124,8 +124,8 @@ describe('TaskItem long-text clamping', () => {
     };
     render(<TaskItem task={blocked} isSystem onRefresh={vi.fn()} providers={providers} />);
 
-    expect(document.getElementById('task-blocker-sys-long-block')).toHaveClass('line-clamp-2');
-    expect(toggleFor('task-blocker-sys-long-block')).toBeInTheDocument();
+    expect(document.getElementById('task-blocker-sys-sys-long-block')).toHaveClass('line-clamp-2');
+    expect(toggleFor('task-blocker-sys-sys-long-block')).toBeInTheDocument();
   });
 
   it('omits the toggle when the context fits within the clamp', () => {
@@ -133,6 +133,31 @@ describe('TaskItem long-text clamping', () => {
     render(<TaskItem task={withContext} isSystem onRefresh={vi.fn()} providers={providers} />);
 
     expect(screen.queryByRole('button', { name: /Show more/ })).not.toBeInTheDocument();
+  });
+
+  it('scopes the text ids so an approval-gated task rendered twice does not collide', () => {
+    // TasksTab renders `pendingSystemTasks` (status === 'pending') AND the
+    // "Awaiting Approval" subset (approvalRequired && pending), so one
+    // approval-gated task mounts two cards. Unscoped ids would duplicate, and
+    // aria-controls resolves by first match — pointing the approval card's
+    // toggle at the pending card's paragraph.
+    forceOverflow();
+    const gated = {
+      ...task,
+      id: 'sys-gated',
+      approvalRequired: true,
+      metadata: { context: longPrompt },
+    };
+    const { container: pending } = render(
+      <TaskItem task={gated} isSystem onRefresh={vi.fn()} providers={providers} />);
+    const { container: approval } = render(
+      <TaskItem task={gated} awaitingApproval onRefresh={vi.fn()} providers={providers} />);
+
+    const pendingId = pending.querySelector('[id^="task-context-"]').id;
+    const approvalId = approval.querySelector('[id^="task-context-"]').id;
+    expect(pendingId).not.toBe(approvalId);
+    expect(document.querySelectorAll(`[id="${pendingId}"]`)).toHaveLength(1);
+    expect(document.querySelectorAll(`[id="${approvalId}"]`)).toHaveLength(1);
   });
 
   it('edits the context in a multi-line textarea, not a single-line input', () => {

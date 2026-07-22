@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import CollapsibleText from './CollapsibleText';
 
 // jsdom reports 0 for both scrollHeight and clientHeight, so nothing measures as
@@ -37,6 +37,31 @@ describe('CollapsibleText', () => {
 
     spy.mockReturnValue(0);
     fireEvent.click(screen.getByRole('button', { name: /Show more/ }));
+
+    expect(screen.getByRole('button', { name: /Show less/ })).toBeInTheDocument();
+  });
+
+  it('keeps the toggle when a resize fires against the unclamped element', () => {
+    // Expanding IS a resize of the observed <p>, and the observer is still
+    // connected at that moment (disconnect runs in passive-effect cleanup, which
+    // the scheduler may flush after the browser delivers the notification). A
+    // callback that lands then measures an unclamped element, sees no overflow,
+    // and — without the `|| expanded` render guard — would drop the toggle,
+    // stranding the user in the expanded wall of text with no way back.
+    let fire;
+    const observers = [];
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(cb) { fire = cb; observers.push(this); }
+      observe() {}
+      disconnect() {}
+    });
+    const spy = forceOverflow();
+    render(<CollapsibleText id="t7" text={'long '.repeat(500)} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /Show more/ }));
+    // The clamp is gone, so a late measurement reports no overflow.
+    spy.mockReturnValue(0);
+    act(() => fire());
 
     expect(screen.getByRole('button', { name: /Show less/ })).toBeInTheDocument();
   });

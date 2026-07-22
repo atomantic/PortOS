@@ -100,6 +100,13 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
   // mutation must name that source; otherwise the API's user-queue default
   // searches TASKS.md and reports the system task as missing.
   const taskSource = isSystem || awaitingApproval ? 'internal' : 'user';
+  // DOM-id scope. An approval-gated pending task renders TWICE — TasksTab's
+  // `pendingSystemTasks` filters only on `status === 'pending'`, and the
+  // "Awaiting Approval" section renders the `approvalRequired && pending`
+  // subset again — so a bare `task-desc-${task.id}` would be duplicated across
+  // the two cards. `aria-controls` resolves by first match, which would point
+  // the approval card's toggle at the pending card's paragraph.
+  const idScope = awaitingApproval ? 'approval' : isSystem ? 'sys' : 'user';
   const [editing, setEditingInternal] = useState(false);
   const setEditing = useCallback((val) => {
     setEditingInternal(val);
@@ -367,7 +374,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
           ) : (
             <>
               <CollapsibleText
-                id={`task-desc-${task.id}`}
+                id={`task-desc-${idScope}-${task.id}`}
                 text={task.description}
                 className="text-white"
               />
@@ -377,7 +384,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
                   wall of text the user has to scroll past. */}
               {task.metadata?.context && (
                 <CollapsibleText
-                  id={`task-context-${task.id}`}
+                  id={`task-context-${idScope}-${task.id}`}
                   text={task.metadata.context}
                   className="text-sm text-gray-500 mt-1"
                 />
@@ -427,7 +434,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
                       LLM error analysis / raw stderr, which can run very long. */}
                   <div className="min-w-0 flex-1">
                     <CollapsibleText
-                      id={`task-blocker-${task.id}`}
+                      id={`task-blocker-${idScope}-${task.id}`}
                       text={task.metadata.blocker || task.metadata.blockedReason}
                       className="text-port-error/90"
                     />
@@ -446,7 +453,7 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
                     {/* Clamped: the reason is free text a worker agent writes to
                         argue its case, so multi-paragraph is the expected shape. */}
                     <CollapsibleText
-                      id={`task-challenge-${task.id}`}
+                      id={`task-challenge-${idScope}-${task.id}`}
                       text={task.metadata.challenge.reason}
                     />
                     {task.metadata.challengeResolution?.outcome && (
