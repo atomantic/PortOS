@@ -63,9 +63,9 @@ describe('FeatureAgentDetail load race', () => {
       </MemoryRouter>,
     );
 
-    // A's fetch is in flight; spinner shown.
+    // A's fetch is in flight; the loading skeleton is up.
     expect(api.getFeatureAgent).toHaveBeenCalledWith('agent-a');
-    expect(screen.getByText(/Loading agent/)).toBeInTheDocument();
+    expect(screen.getByRole('status', { name: 'Loading' })).toBeInTheDocument();
 
     // Navigate A→B before A resolves.
     await act(async () => {
@@ -101,9 +101,9 @@ describe('FeatureAgentDetail load race', () => {
     await act(async () => {
       screen.getByText('go-b').click();
     });
-    // B is still loading — the old agent name must be gone, spinner up.
+    // B is still loading — the old agent name must be gone, skeleton up.
     expect(screen.queryByText('Agent Alpha')).not.toBeInTheDocument();
-    expect(screen.getByText(/Loading agent/)).toBeInTheDocument();
+    expect(screen.getByRole('status', { name: 'Loading' })).toBeInTheDocument();
   });
 
   it('still renders the agent under StrictMode (mount→cleanup→remount must not strand the mounted guard)', async () => {

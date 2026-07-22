@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import * as api from '../services/api';
 import { Heart } from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import TabPills from '../components/ui/TabPills';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import { sameJsonShape } from '../lib/sameJsonShape';
@@ -104,8 +105,17 @@ export default function DigitalTwin() {
 
   if (loading) {
     return (
-      <div className="absolute inset-0 flex items-center justify-center">
-        <BrailleSpinner text="Loading" />
+      <div className="absolute inset-0">
+        <PageSkeleton
+          header="bar"
+          fullHeight
+          padded
+          titleWidthClass="w-40"
+          showSubtitle
+          tabs={TABS.length}
+          cards={3}
+          sidebar={false}
+        />
       </div>
     );
   }

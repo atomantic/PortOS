@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import * as api from '../services/api';
 import { BookOpen, Search, Network, FileText, BarChart3, Activity } from 'lucide-react';
-import BrailleSpinner from '../components/BrailleSpinner';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
 
@@ -109,9 +109,16 @@ export default function Wiki() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <BrailleSpinner text="Loading" />
-      </div>
+      <PageSkeleton
+        header="bar"
+        fullHeight
+        padded
+        titleWidthClass="w-24"
+        showSubtitle
+        tabs={TABS.length}
+        cards={3}
+        sidebar={false}
+      />
     );
   }
 

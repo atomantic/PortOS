@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { birthDateCta } from '../utils/characterXp';
 import BrailleSpinner from '../components/BrailleSpinner';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import GoalsCard from '../components/character/GoalsCard';
 import toast from '../components/ui/Toast';
 import { timeAgo, formatCompactCount } from '../utils/formatters';
@@ -384,9 +385,14 @@ export default function CharacterSheet() {
 
   if (loading) {
     return (
-      <div className="h-full flex items-center justify-center text-gray-400">
-        <BrailleSpinner text="Loading" />
-      </div>
+      <PageSkeleton
+        header="bar"
+        fullHeight
+        padded
+        titleWidthClass="w-32"
+        cards={4}
+        sidebar={false}
+      />
     );
   }
 

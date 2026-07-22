@@ -3,6 +3,7 @@ import { HardDrive, RefreshCw, Archive, Trash2, ChevronDown, ChevronRight, Folde
 import * as api from '../services/api';
 import { formatBytes } from '../utils/formatters';
 import BrailleSpinner from '../components/BrailleSpinner';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import toast from '../components/ui/Toast';
 import socket from '../services/socket';
 import { useAsyncAction } from '../hooks/useAsyncAction';
@@ -350,9 +351,16 @@ export default function DataManager() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <BrailleSpinner text="Loading" />
-      </div>
+      <PageSkeleton
+        header="bar"
+        fullHeight
+        padded
+        titleWidthClass="w-40"
+        showSubtitle
+        layout="grid"
+        gridColsClass="grid-cols-2 sm:grid-cols-4"
+        cards={4}
+      />
     );
   }
 
