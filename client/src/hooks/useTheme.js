@@ -11,6 +11,7 @@ import {
   TIME_OF_DAY_AUTO_EVENT as CITY_TIME_OF_DAY_AUTO_EVENT,
 } from './useCitySettings';
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage.js';
+import { getSettings, updateSettings } from '../services/apiSystem.js';
 
 const STORAGE_KEY = 'portos-theme';
 
@@ -61,8 +62,9 @@ export default function useTheme() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch('/api/settings', { signal: controller.signal })
-      .then(r => r.ok ? r.json() : null)
+    // Silent — a failed read just falls back to localStorage (handled below),
+    // so the request() helper must not toast on top of our own warn.
+    getSettings({ silent: true, signal: controller.signal })
       .then(settings => {
         if (userPickedRef.current) return;
         const serverTheme = settings?.theme ? normalizeThemeId(settings.theme) : null;
@@ -77,7 +79,9 @@ export default function useTheme() {
         }
       })
       .catch((err) => {
-        if (err.name === 'AbortError') return;
+        // request() collapses an aborted fetch into a generic error, so check
+        // the controller too — an unmount/StrictMode remount isn't a failure.
+        if (controller.signal.aborted || err.name === 'AbortError') return;
         console.warn(`⚠️ Theme fetch failed, using localStorage fallback: ${err.message}`);
       });
     return () => controller.abort();
@@ -92,11 +96,10 @@ export default function useTheme() {
     setThemeId(normalized);
     safeWriteStorage(STORAGE_KEY, normalized);
     resetCityTimeOfDayOverride();
-    fetch('/api/settings', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ theme: normalized }),
-    }).catch(() => console.warn('Theme sync to server failed'));
+    // Silent — the theme is already applied locally; a failed sync only warrants
+    // a console warning, not a toast on every theme switch.
+    updateSettings({ theme: normalized }, { silent: true })
+      .catch(() => console.warn('⚠️ Theme sync to server failed'));
   }, []);
 
   const toggleMode = useCallback(() => {
