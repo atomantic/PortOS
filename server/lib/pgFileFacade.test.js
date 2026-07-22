@@ -7,7 +7,7 @@ const checkHealth = vi.fn();
 const ensureSchema = vi.fn(async () => {});
 vi.mock('./db.js', () => ({ checkHealth: (...a) => checkHealth(...a), ensureSchema: (...a) => ensureSchema(...a) }));
 
-const { isFileBackend, resolvePgBackend, createPgFileFacade } = await import('./pgFileFacade.js');
+const { isFileBackend, resolvePgBackend, createPgFileFacade, createRecordStoreBackendSelector } = await import('./pgFileFacade.js');
 
 const tick = () => new Promise((r) => setImmediate(r));
 
@@ -122,5 +122,136 @@ describe('resolvePgBackend', () => {
       makePg: () => ({ name: 'postgres' }),
     });
     expect(backend.name).toBe('postgres');
+  });
+});
+
+describe('createRecordStoreBackendSelector', () => {
+  const orig = { MEMORY_BACKEND: process.env.MEMORY_BACKEND, NODE_ENV: process.env.NODE_ENV };
+  beforeEach(() => { checkHealth.mockReset(); ensureSchema.mockClear(); });
+  afterEach(() => {
+    process.env.NODE_ENV = orig.NODE_ENV;
+    if (orig.MEMORY_BACKEND === undefined) delete process.env.MEMORY_BACKEND;
+    else process.env.MEMORY_BACKEND = orig.MEMORY_BACKEND;
+  });
+
+  const loaders = () => ({
+    loadFileBackend: vi.fn(async () => ({ listRecords: async () => ['file'] })),
+    loadDbBackend: vi.fn(async () => ({ listRecords: async () => ['db'] })),
+  });
+
+  it('selects the file backend under NODE_ENV=test without touching the DB', async () => {
+    process.env.NODE_ENV = 'test';
+    delete process.env.MEMORY_BACKEND;
+    const { loadFileBackend, loadDbBackend } = loaders();
+    const { selectBackend, getBackendName } = createRecordStoreBackendSelector({ label: 'Demo', loadFileBackend, loadDbBackend });
+    expect(getBackendName()).toBe(null);
+    expect(await (await selectBackend()).listRecords()).toEqual(['file']);
+    expect(getBackendName()).toBe('file');
+    expect(checkHealth).not.toHaveBeenCalled();
+    expect(loadDbBackend).not.toHaveBeenCalled();
+  });
+
+  it('selects the file backend under MEMORY_BACKEND=file outside test mode', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.MEMORY_BACKEND = 'file';
+    const { loadFileBackend, loadDbBackend } = loaders();
+    const { selectBackend, getBackendName } = createRecordStoreBackendSelector({ label: 'Demo', loadFileBackend, loadDbBackend });
+    await selectBackend();
+    expect(getBackendName()).toBe('file');
+    expect(checkHealth).not.toHaveBeenCalled();
+  });
+
+  it('honors a custom isTestMode predicate (the isTestRunner posture) and keeps the file escape hatch', async () => {
+    process.env.NODE_ENV = 'production';
+    delete process.env.MEMORY_BACKEND;
+    const { loadFileBackend, loadDbBackend } = loaders();
+    const { selectBackend, getBackendName } = createRecordStoreBackendSelector({
+      label: 'Demo', loadFileBackend, loadDbBackend, isTestMode: () => true,
+    });
+    await selectBackend();
+    expect(getBackendName()).toBe('file');
+    expect(checkHealth).not.toHaveBeenCalled();
+  });
+
+  it('still honors MEMORY_BACKEND=file when a custom isTestMode says "not a test"', async () => {
+    process.env.NODE_ENV = 'production';
+    process.env.MEMORY_BACKEND = 'file';
+    const { loadFileBackend, loadDbBackend } = loaders();
+    const { selectBackend, getBackendName } = createRecordStoreBackendSelector({
+      label: 'Demo', loadFileBackend, loadDbBackend, isTestMode: () => false,
+    });
+    await selectBackend();
+    expect(getBackendName()).toBe('file');
+    expect(checkHealth).not.toHaveBeenCalled();
+  });
+
+  it('brings Postgres up (ensureSchema → onDbReady → import) and memoizes the selection', async () => {
+    process.env.NODE_ENV = 'production';
+    delete process.env.MEMORY_BACKEND;
+    checkHealth.mockResolvedValue({ connected: true });
+    const order = [];
+    ensureSchema.mockImplementation(async () => { order.push('ensureSchema'); });
+    const onDbReady = vi.fn(async () => { order.push('onDbReady'); });
+    const loadFileBackend = vi.fn();
+    const loadDbBackend = vi.fn(async () => { order.push('loadDb'); return { listRecords: async () => ['db'] }; });
+
+    const { selectBackend, getBackendName } = createRecordStoreBackendSelector({ label: 'Demo', loadFileBackend, loadDbBackend, onDbReady });
+    expect(await (await selectBackend()).listRecords()).toEqual(['db']);
+    await selectBackend();
+
+    expect(order).toEqual(['ensureSchema', 'onDbReady', 'loadDb']);
+    expect(getBackendName()).toBe('postgres');
+    expect(loadFileBackend).not.toHaveBeenCalled();
+    expect(checkHealth).toHaveBeenCalledTimes(1);
+  });
+
+  it('throws the store-specific requirement message when Postgres is unreachable', async () => {
+    process.env.NODE_ENV = 'production';
+    delete process.env.MEMORY_BACKEND;
+    checkHealth.mockResolvedValue({ connected: false });
+    const { loadFileBackend, loadDbBackend } = loaders();
+    const { selectBackend, getBackendName } = createRecordStoreBackendSelector({
+      label: 'Demo', loadFileBackend, loadDbBackend, requireDbMessage: 'Demo requires PostgreSQL — custom',
+    });
+    await expect(selectBackend()).rejects.toThrow('Demo requires PostgreSQL — custom');
+    expect(ensureSchema).not.toHaveBeenCalled();
+    expect(getBackendName()).toBe(null);
+  });
+
+  it('falls back to a labeled default requirement message', async () => {
+    process.env.NODE_ENV = 'production';
+    delete process.env.MEMORY_BACKEND;
+    checkHealth.mockResolvedValue({ connected: false });
+    const { loadFileBackend, loadDbBackend } = loaders();
+    const { selectBackend } = createRecordStoreBackendSelector({ label: 'Demo', loadFileBackend, loadDbBackend });
+    await expect(selectBackend()).rejects.toThrow(/^Demo requires PostgreSQL/);
+  });
+
+  it('retries selection after a failed Postgres bring-up instead of caching the failure', async () => {
+    process.env.NODE_ENV = 'production';
+    delete process.env.MEMORY_BACKEND;
+    checkHealth.mockResolvedValueOnce({ connected: false }).mockResolvedValueOnce({ connected: true });
+    const { loadFileBackend, loadDbBackend } = loaders();
+    const { selectBackend, getBackendName } = createRecordStoreBackendSelector({ label: 'Demo', loadFileBackend, loadDbBackend });
+    await expect(selectBackend()).rejects.toThrow(/requires PostgreSQL/);
+    expect(await (await selectBackend()).listRecords()).toEqual(['db']);
+    expect(getBackendName()).toBe('postgres');
+  });
+
+  it('reset() drops the memoized selection and the reported name', async () => {
+    process.env.NODE_ENV = 'test';
+    delete process.env.MEMORY_BACKEND;
+    const { loadFileBackend, loadDbBackend } = loaders();
+    const { selectBackend, getBackendName, reset } = createRecordStoreBackendSelector({ label: 'Demo', loadFileBackend, loadDbBackend });
+    await selectBackend();
+    expect(getBackendName()).toBe('file');
+    reset();
+    expect(getBackendName()).toBe(null);
+    await selectBackend();
+    expect(loadFileBackend).toHaveBeenCalledTimes(2);
+  });
+
+  it('fails fast when the loaders are missing', () => {
+    expect(() => createRecordStoreBackendSelector({ label: 'Demo' })).toThrow(/loadFileBackend/);
   });
 });

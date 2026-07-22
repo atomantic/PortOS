@@ -14,33 +14,21 @@
  * #2895's scope); the tombstone trio on the record keeps peer-sync additive.
  */
 
-import { checkHealth, ensureSchema, isTestRunner } from '../../lib/db.js';
+import { isTestRunner } from '../../lib/db.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { createRecordStoreBackendSelector } from '../../lib/pgFileFacade.js';
 import { listSpriteAssets } from './paths.js';
 import { deriveSpriteId, isValidSpriteId } from './recordsLogic.js';
 
-let backend = null;
-
-async function selectBackend() {
-  if (backend) return backend;
-
-  // isTestRunner (NODE_ENV==='test' OR VITEST) is the repo's supported test
-  // detection — a wrapper that drops NODE_ENV must still select the file
-  // backend instead of hitting the real DB's test gate.
-  const envBackend = process.env.MEMORY_BACKEND;
-  if (envBackend === 'file' || isTestRunner()) {
-    backend = await import('./recordsFile.js');
-    return backend;
-  }
-
-  const health = await checkHealth();
-  if (!health.connected) {
-    throw new Error('Sprites requires PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file in .env)');
-  }
-  await ensureSchema();
-  backend = await import('./recordsDB.js');
-  return backend;
-}
+// Shared dispatcher (#2899). isTestRunner (NODE_ENV==='test' OR VITEST) is the
+// repo's supported test detection — a wrapper that drops NODE_ENV must still
+// select the file backend instead of hitting the real DB's test gate.
+const { selectBackend } = createRecordStoreBackendSelector({
+  label: 'Sprites',
+  loadFileBackend: () => import('./recordsFile.js'),
+  loadDbBackend: () => import('./recordsDB.js'),
+  isTestMode: isTestRunner,
+});
 
 export async function listRecords(options = {}) {
   return (await selectBackend()).listRecords(options);
