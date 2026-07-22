@@ -66,12 +66,16 @@ const applyWorldStyle = (prompt, world, series = null) => {
 //      local diffusion (flux-1) the way the original default behaved.
 const resolveMode = (options, settings) => {
   const codexEnabled = settings?.imageGen?.codex?.enabled === true;
+  const grokEnabled = settings?.imageGen?.grok?.enabled === true;
   if (options.mode === IMAGE_GEN_MODE.CODEX && codexEnabled) return IMAGE_GEN_MODE.CODEX;
+  if (options.mode === IMAGE_GEN_MODE.GROK && grokEnabled) return IMAGE_GEN_MODE.GROK;
   if (options.mode === IMAGE_GEN_MODE.LOCAL) return IMAGE_GEN_MODE.LOCAL;
   const settingsMode = settings?.imageGen?.mode;
   if (settingsMode === IMAGE_GEN_MODE.CODEX && codexEnabled) return IMAGE_GEN_MODE.CODEX;
+  if (settingsMode === IMAGE_GEN_MODE.GROK && grokEnabled) return IMAGE_GEN_MODE.GROK;
   if (settingsMode === IMAGE_GEN_MODE.LOCAL) return IMAGE_GEN_MODE.LOCAL;
   if (codexEnabled) return IMAGE_GEN_MODE.CODEX;
+  if (grokEnabled) return IMAGE_GEN_MODE.GROK;
   return IMAGE_GEN_MODE.LOCAL;
 };
 
@@ -256,7 +260,9 @@ const enqueueImageJob = ({ prompt, world, settings, options, mode, owner, logLin
   const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, mode);
   const params = mode === IMAGE_GEN_MODE.CODEX
     ? { mode: IMAGE_GEN_MODE.CODEX, codexPath: settings.imageGen?.codex?.codexPath, model: settings.imageGen?.codex?.model, effort: settings.imageGen?.codex?.effort, cleanC2PA, denoise, ...baseParams }
-    : { pythonPath: settings.imageGen?.local?.pythonPath || null, modelId: options.modelId, cleanC2PA, denoise, ...baseParams };
+    : mode === IMAGE_GEN_MODE.GROK
+      ? { mode: IMAGE_GEN_MODE.GROK, grokPath: settings.imageGen?.grok?.grokPath, aspectRatio: settings.imageGen?.grok?.aspectRatio, cleanC2PA, denoise, ...baseParams }
+      : { pythonPath: settings.imageGen?.local?.pythonPath || null, modelId: options.modelId, cleanC2PA, denoise, ...baseParams };
   const { jobId } = enqueueJob({ kind: 'image', params, owner });
   console.log(`${logLine} mode=${mode} jobId=${jobId.slice(0, 8)}`);
   return jobId;

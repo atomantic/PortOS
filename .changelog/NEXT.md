@@ -1,5 +1,9 @@
 # Unreleased
 
+## Image generation
+
+- **[issue-2859] xAI Grok (Grok Build CLI) is a new image-generation backend** — enable it in Settings → Image Gen → Grok CLI and every image surface (Image Gen page, pipeline renders, character sheets, universe builder batches, avatars, voice `image_generate`) can route through the Grok CLI's built-in `image_gen` tool, including image-to-image editing via `image_edit`. Configuration is just the binary path and an optional default aspect ratio — Grok picks the model internally. Grok renders run in the same parallel queue lane as Codex, and Grok video generation is planned as a follow-up phase.
+
 ## Tribe outreach
 
 - **[issue-2831] Unanswered 1:1 emails to a Gmail alias now surface as outreach nudges** — a message delivered to one of your Gmail send-as aliases (not your primary address) is correctly treated as a one-on-one conversation instead of a group thread, so a genuinely unanswered email to an alias no longer gets silently skipped. Your own alias addresses never appear as a Tribe contact.

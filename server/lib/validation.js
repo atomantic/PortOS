@@ -863,6 +863,21 @@ export const locationSettingsSchema = z.object({
   { message: 'Provide both lat and lon, or neither.' },
 );
 
+// Grok Imagegen settings slice (`imageGen.grok`) — the Grok Build CLI backend
+// (#2859). No model/effort knobs: grok's image tools run on xAI's fixed image
+// backend, so only the enable gate, binary path, default aspect ratio, and
+// per-mode cleaner flags are stored. `''` sentinels from the UI preprocess to
+// undefined (same convention as other CLI provider slices); aspectRatio is
+// constrained to the `N:M` shape the grok tool accepts so a hand-edited
+// settings.json can't inject arbitrary prompt text.
+export const imageGenGrokSettingsSchema = z.object({
+  enabled: z.boolean().optional(),
+  grokPath: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().max(500).optional()),
+  aspectRatio: z.preprocess((v) => (v === '' ? undefined : v), z.string().trim().regex(/^\d{1,2}:\d{1,2}$/, 'aspect ratio must look like 16:9').optional()),
+  cleanC2PA: z.boolean().optional(),
+  denoise: z.boolean().optional(),
+});
+
 // Provider-agnostic embeddings settings. `provider: 'none'` is the default and
 // makes embedText() a no-op — rows persist without an embedding and a future
 // admin "Re-embed missing" action backfills. Model is optional so the user can

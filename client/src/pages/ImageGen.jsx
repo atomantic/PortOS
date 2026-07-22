@@ -37,7 +37,7 @@ import {
   AlertTriangle, X, Film,
 } from 'lucide-react';
 import { composeStyledPrompt } from '../lib/composeStyledPrompt';
-import { deriveAvailableBackends, IMAGE_GEN_MODE, isI2iCapableMode, pickI2iMode } from '../lib/imageGenBackends';
+import { isCloudCliMode, deriveAvailableBackends, IMAGE_GEN_MODE, isI2iCapableMode, pickI2iMode } from '../lib/imageGenBackends';
 import { clampImageDimensions, clampImageEdge } from '../lib/imageGenResolutions';
 import { DEFAULT_NEGATIVE_PROMPT } from '../lib/imageGenDefaults';
 import { resolveCleanersFromConfig } from '../lib/imageCleaners';
@@ -223,8 +223,9 @@ export default function ImageGen() {
   // so the form doesn't flicker between defaults.
   const effectiveMode = selectedMode || status?.mode || IMAGE_GEN_MODE.EXTERNAL;
   const isLocalMode = effectiveMode === IMAGE_GEN_MODE.LOCAL;
-  const isCodexMode = effectiveMode === IMAGE_GEN_MODE.CODEX;
-  const isAsyncMode = isLocalMode || isCodexMode;
+  const isGrokMode = effectiveMode === IMAGE_GEN_MODE.GROK;
+  const isCloudMode = isCloudCliMode(effectiveMode);
+  const isAsyncMode = isLocalMode || isCloudMode;
   // Whether the active backend supports image-to-image (init image). Distinct
   // concept from isAsyncMode (queued vs sync) even though they coincide today.
   const i2iCapable = isI2iCapableMode(effectiveMode);
@@ -292,9 +293,10 @@ export default function ImageGen() {
         external: resolveCleanersFromConfig(s?.imageGen?.external, IMAGE_GEN_MODE.EXTERNAL),
         local: resolveCleanersFromConfig(s?.imageGen?.local, IMAGE_GEN_MODE.LOCAL),
         codex: resolveCleanersFromConfig(s?.imageGen?.codex, IMAGE_GEN_MODE.CODEX),
+        grok: resolveCleanersFromConfig(s?.imageGen?.grok, IMAGE_GEN_MODE.GROK),
       };
-      const c2 = { external: perMode.external.cleanC2PA, local: perMode.local.cleanC2PA, codex: perMode.codex.cleanC2PA };
-      const dn = { external: perMode.external.denoise, local: perMode.local.denoise, codex: perMode.codex.denoise };
+      const c2 = { external: perMode.external.cleanC2PA, local: perMode.local.cleanC2PA, codex: perMode.codex.cleanC2PA, grok: perMode.grok.cleanC2PA };
+      const dn = { external: perMode.external.denoise, local: perMode.local.denoise, codex: perMode.codex.denoise, grok: perMode.grok.denoise };
       const saved = s?.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
       // If the user just disabled the currently-selected backend, fall
       // through to the first viable one — a just-toggled provider should
@@ -609,7 +611,7 @@ export default function ImageGen() {
   // rule (codex.js requires a prompt only when there's no init image) so the user
   // sees a disabled button + hint instead of a failed job toast. Local runs
   // unconditionally and external (A1111) accepts an empty prompt, so neither gates.
-  const codexNeedsPrompt = isCodexMode && initImage.source == null && !prompt.trim();
+  const cloudNeedsPrompt = isCloudMode && initImage.source == null && !prompt.trim();
   // mflux is the default runner for entries with no explicit `runner` field.
   // LoraPicker filters compatible weights itself; we pass the family (for the
   // "install one matching X" copy) and the fine-grained compat key (which
@@ -721,11 +723,11 @@ export default function ImageGen() {
     // payload hits imageEdgeSchema.
     const w = clampImageEdge(width);
     const h = clampImageEdge(height);
-    const payload = isCodexMode ? {
+    const payload = isCloudMode ? {
       prompt: composed.prompt,
       negativePrompt: composed.negativePrompt || undefined,
       width: w, height: h,
-      mode: IMAGE_GEN_MODE.CODEX,
+      mode: isGrokMode ? IMAGE_GEN_MODE.GROK : IMAGE_GEN_MODE.CODEX,
       cleanC2PA, denoise,
     } : {
       prompt: composed.prompt,
@@ -784,7 +786,7 @@ export default function ImageGen() {
         // The gallery / sidecar would otherwise show steps=20,
         // guidance=3.5 (Flux 1 Dev defaults) on every codex image,
         // misleading the user about what actually produced it.
-        const localOnlyMeta = isCodexMode ? {} : {
+        const localOnlyMeta = isCloudMode ? {} : {
           steps: payload.steps ?? currentModel?.steps,
           guidance: payload.guidance ?? currentModel?.guidance,
         };
@@ -838,7 +840,7 @@ export default function ImageGen() {
     // submit button blocks clicks, but an Enter keypress in a number input still
     // fires onSubmit — gate here too so an edit-only model without a source image
     // (or codex text-to-image with no prompt) hits the inline hint, not a 400 toast.
-    if (editImageMissing || codexNeedsPrompt) return;
+    if (editImageMissing || cloudNeedsPrompt) return;
     const batchN = isAsyncMode ? Math.max(1, batchCount) : 1;
     if (generating) return queueAdditional(batchN);
     // Snap the custom-dimension state to the server's per-edge bounds up front
@@ -1064,7 +1066,7 @@ export default function ImageGen() {
                 : 'border-port-error/40 bg-port-error/10 text-port-error'
             }`}>
               {status.connected ? (
-                <><span className="w-2 h-2 rounded-full bg-port-success" /> {status.model || (status.mode === IMAGE_GEN_MODE.LOCAL ? 'mflux/local' : status.mode === IMAGE_GEN_MODE.CODEX ? 'codex CLI' : 'external SD API')}</>
+                <><span className="w-2 h-2 rounded-full bg-port-success" /> {status.model || (status.mode === IMAGE_GEN_MODE.LOCAL ? 'mflux/local' : status.mode === IMAGE_GEN_MODE.CODEX ? 'codex CLI' : status.mode === IMAGE_GEN_MODE.GROK ? 'grok CLI' : 'external SD API')}</>
               ) : (
                 <>
                   <AlertTriangle className="w-3 h-3" />
@@ -1231,8 +1233,8 @@ export default function ImageGen() {
           <div className="flex items-center gap-2 pt-1 flex-wrap">
             <button
               type="submit"
-              disabled={notConnected || editImageMissing || codexNeedsPrompt}
-              title={editImageMissing ? 'This image-edit model needs a source image — upload one below first' : codexNeedsPrompt ? 'Codex text-to-image needs a prompt — add one, or attach a source image to edit' : undefined}
+              disabled={notConnected || editImageMissing || cloudNeedsPrompt}
+              title={editImageMissing ? 'This image-edit model needs a source image — upload one below first' : cloudNeedsPrompt ? `${isGrokMode ? 'Grok' : 'Codex'} text-to-image needs a prompt — add one, or attach a source image to edit` : undefined}
               className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg min-h-[40px]"
             >
               <Sparkles className="w-4 h-4" /> {generating ? 'Queue' : 'Generate'}
@@ -1241,7 +1243,7 @@ export default function ImageGen() {
             {editImageMissing && (
               <span className="text-xs text-port-warning">Upload a source image to use this edit model</span>
             )}
-            {codexNeedsPrompt && (
+            {cloudNeedsPrompt && (
               <span className="text-xs text-port-warning">Codex needs a prompt, or attach a source image to edit</span>
             )}
             {isAsyncMode && (

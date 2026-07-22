@@ -56,6 +56,7 @@ export default function ImageGenSettingsForm({
   const cfg = value || {};
   const merge = (patch) => onChange?.({ ...cfg, ...patch });
   const isCodex = cfg.mode === IMAGE_GEN_MODE.CODEX;
+  const isGrok = cfg.mode === IMAGE_GEN_MODE.GROK;
   const isLocal = cfg.mode === IMAGE_GEN_MODE.LOCAL;
   const labelCls = 'block text-xs font-medium text-gray-400 mb-1';
   const textareaCls = 'w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50 resize-y';
@@ -81,6 +82,10 @@ export default function ImageGenSettingsForm({
       {isCodex ? (
         <p className="text-[10px] text-gray-500 mt-1">
           Codex's <code className="text-gray-400">$imagegen</code> picks model, steps, and seed internally. Only resolution + style fields apply.
+        </p>
+      ) : isGrok ? (
+        <p className="text-[10px] text-gray-500 mt-1">
+          Grok's <code className="text-gray-400">image_gen</code> picks model, steps, and seed internally. Resolution maps to the nearest supported aspect ratio; style fields apply.
         </p>
       ) : null}
     </div>

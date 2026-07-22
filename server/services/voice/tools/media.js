@@ -16,7 +16,7 @@ export const MEDIA_TOOLS = [
   {
     name: 'image_generate',
     description:
-      'Generate an image from a text prompt and save it to the user\'s gallery. Defaults to the user\'s saved Image Gen backend (Local mflux, External SD API, or Codex CLI). Pass `provider` to override per-call: "local" for fast Flux drafts, "external" for an A1111-compatible server, "codex" for the Codex CLI built-in image_gen tool (subject to the user enabling it in Settings). Returns the saved file path.',
+      'Generate an image from a text prompt and save it to the user\'s gallery. Defaults to the user\'s saved Image Gen backend (Local mflux, External SD API, or Codex CLI). Pass `provider` to override per-call: "local" for fast Flux drafts, "external" for an A1111-compatible server, "codex" for the Codex CLI built-in image_gen tool, or "grok" for the Grok Build CLI built-in image_gen tool (both subject to the user enabling them in Settings). Returns the saved file path.',
     parameters: {
       type: 'object',
       properties: {
@@ -51,14 +51,16 @@ export const MEDIA_TOOLS = [
         return { ok: false, summary: 'prompt must be 2000 characters or fewer' };
       }
       const requestedMode = (provider && provider !== 'auto') ? provider : undefined;
-      // Codex is gated separately — it costs against the user's Codex plan,
-      // and not every plan exposes image_gen. The dispatcher would also
-      // reject this, but catching it here lets us return a friendlier
-      // summary to the voice agent / palette.
-      if (requestedMode === imageGen.IMAGE_GEN_MODE.CODEX) {
+      // Cloud-CLI providers (codex/grok) are gated separately — each costs
+      // against the user's plan, and not every plan exposes the image tool.
+      // The dispatcher would also reject this, but catching it here lets us
+      // return a friendlier summary to the voice agent / palette. The
+      // settings key equals the mode string for both.
+      if (imageGen.CLOUD_IMAGE_GEN_MODES.includes(requestedMode)) {
         const s = await getSettings();
-        if (!s?.imageGen?.codex?.enabled) {
-          return { ok: false, summary: 'Codex Imagegen is disabled — enable it in Settings → Image Gen first.' };
+        if (!s?.imageGen?.[requestedMode]?.enabled) {
+          const label = requestedMode === imageGen.IMAGE_GEN_MODE.CODEX ? 'Codex' : 'Grok';
+          return { ok: false, summary: `${label} Imagegen is disabled — enable it in Settings → Image Gen first.` };
         }
       }
       // LLMs/tool callers often hand back numeric args as strings ("512").
@@ -84,9 +86,11 @@ export const MEDIA_TOOLS = [
       // emit 'completed' before we attach. External backends await the
       // upstream HTTP call internally and the file is on disk by the time
       // generateImage resolves — wait() is a no-op there.
-      // 5-min cap mirrors the codex provider's own timeout — a stuck job
-      // shouldn't leak listeners into the voice/palette dispatcher forever.
-      const waiter = createImageGenWaiter({ timeoutMs: 5 * 60 * 1000 });
+      // 21-min cap sits just past the cloud providers' own 20-minute
+      // wall-clock timeouts (CODEX_TIMEOUT_MS / GROK_TIMEOUT_MS) so a slow
+      // but valid render isn't reported as a timeout while the job keeps
+      // running; a stuck job still can't leak listeners forever.
+      const waiter = createImageGenWaiter({ timeoutMs: 21 * 60 * 1000 });
 
       let result;
       try {
@@ -103,7 +107,7 @@ export const MEDIA_TOOLS = [
       }
 
       const usedMode = result?.mode || requestedMode || 'default';
-      const isAsync = usedMode === imageGen.IMAGE_GEN_MODE.LOCAL || usedMode === imageGen.IMAGE_GEN_MODE.CODEX;
+      const isAsync = usedMode === imageGen.IMAGE_GEN_MODE.LOCAL || imageGen.CLOUD_IMAGE_GEN_MODES.includes(usedMode);
       // External resolves with the file already on disk — short-circuit.
       if (!isAsync) {
         waiter.cleanup();

@@ -22,7 +22,7 @@ import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
 import { PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { getSettings } from '../services/settings.js';
-import { generateImage, getMode, getActiveJob, IMAGE_GEN_MODE } from '../services/imageGen/index.js';
+import { generateImage, getMode, getActiveJob, IMAGE_GEN_MODE, CLOUD_IMAGE_GEN_MODES } from '../services/imageGen/index.js';
 import { local as localImage } from '../services/imageGen/index.js';
 import { createImageGenWaiter } from '../services/imageGenWaiter.js';
 import { listVideoModels, defaultVideoModelId } from '../services/videoGen/local.js';
@@ -34,7 +34,11 @@ const router = Router();
 // status + code on the HTTP response.
 function createCompletionWaiter() {
   return createImageGenWaiter({
-    timeoutMs: 5 * 60 * 1000,
+    // Cloud-CLI providers (codex/grok) allow 20 minutes wall-clock
+    // (CODEX_TIMEOUT_MS / GROK_TIMEOUT_MS) — wait slightly past that so a
+    // slow-but-valid render doesn't return a timeout while the job keeps
+    // running (which invites a duplicate billed render).
+    timeoutMs: 21 * 60 * 1000,
     onTimeout: () => new ServerError('Generation timed out', { status: 504, code: 'GEN_TIMEOUT' }),
     onFailed: (ev) => new ServerError(ev?.error || 'Generation failed', { status: 500, code: 'GEN_FAILED' }),
   });
@@ -168,14 +172,14 @@ router.post('/txt2img', asyncHandler(async (req, res) => {
     modelId = sd_model_checkpoint.replace(/^portos-local-/, '').split(' ')[0];
   }
 
-  // In local + codex modes generateImage returns the moment the child is
+  // In local + cloud-CLI (codex/grok) modes generateImage returns the moment the child is
   // spawned — the file isn't on disk yet. Subscribe to the completion event
   // BEFORE calling generateImage so a fast job (cached weights, low steps)
   // can't fire before we attach. External mode awaits internally and the
   // file is on disk by the time generateImage resolves, so the wait is a
   // no-op there.
   const mode = await getMode();
-  const isAsyncMode = mode === IMAGE_GEN_MODE.LOCAL || mode === IMAGE_GEN_MODE.CODEX;
+  const isAsyncMode = mode === IMAGE_GEN_MODE.LOCAL || CLOUD_IMAGE_GEN_MODES.includes(mode);
   const localWait = isAsyncMode
     ? createCompletionWaiter()
     : { register: () => {}, promise: Promise.resolve(), cleanup: () => {} };

@@ -82,6 +82,16 @@ async function resolveQueueModeParams() {
       jobParams: { mode: IMAGE_GEN_MODE.CODEX, codexPath: c.codexPath, model: c.model, effort: c.effort, cleanC2PA, denoise },
     };
   }
+  if (mode === IMAGE_GEN_MODE.GROK) {
+    const g = settings.imageGen?.grok || {};
+    if (!g.enabled) return { mode, ready: false, reason: 'grok-disabled' };
+    const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, mode);
+    return {
+      mode,
+      ready: true,
+      jobParams: { mode: IMAGE_GEN_MODE.GROK, grokPath: g.grokPath, aspectRatio: g.aspectRatio, cleanC2PA, denoise },
+    };
+  }
   if (mode === IMAGE_GEN_MODE.LOCAL) {
     // We pass no modelId, so the worker renders with its default ('dev') model —
     // an mflux model that REQUIRES a configured pythonPath (the imageGen route

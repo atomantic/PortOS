@@ -60,10 +60,10 @@ beforeEach(() => {
 });
 
 describe('ImageGenTab grouped tabs', () => {
-  it('renders a pills sub-nav with all seven media-settings groups', async () => {
+  it('renders a pills sub-nav with all eight media-settings groups', async () => {
     await renderTab();
     const tabs = screen.getAllByRole('tab').map((t) => t.textContent);
-    for (const label of ['Backend', 'External', 'Local', 'Codex CLI', 'Tokens', 'Expose', 'Test']) {
+    for (const label of ['Backend', 'External', 'Local', 'Codex CLI', 'Grok CLI', 'Tokens', 'Expose', 'Test']) {
       expect(tabs.some((t) => t.includes(label))).toBe(true);
     }
   });
@@ -136,6 +136,62 @@ describe('ImageGenTab grouped tabs', () => {
     expect(patch.imageGen.external.sdapiUrl).toBe('http://localhost:9999');
     expect(patch.imageGen.mode).toBe('external');
     expect(patch.imageGen).toHaveProperty('codex');
+    expect(patch.imageGen).toHaveProperty('grok');
     expect(patch.imageGen).toHaveProperty('expose');
+  });
+});
+
+describe('ImageGenTab — Grok CLI section (#2859)', () => {
+  it('shows the enable toggle and hides the config fields until enabled', async () => {
+    await renderTab();
+    fireEvent.click(screen.getByRole('tab', { name: /Grok CLI/i }));
+    expect(screen.getByRole('heading', { name: 'Grok CLI Imagegen' })).toBeTruthy();
+    const toggle = screen.getByLabelText(/Enable Grok Imagegen/i);
+    expect(toggle.checked).toBe(false);
+    expect(screen.queryByPlaceholderText('grok (uses $PATH)')).toBeNull();
+    fireEvent.click(toggle);
+    expect(screen.getByPlaceholderText('grok (uses $PATH)')).toBeTruthy();
+    expect(screen.getByLabelText(/Default aspect ratio/i)).toBeTruthy();
+  });
+
+  it('adds a Grok backend tile only when enabled, and saves the grok slice', async () => {
+    getSettings.mockResolvedValue({
+      imageGen: {
+        mode: 'external',
+        external: { sdapiUrl: 'http://localhost:7860' },
+        grok: { enabled: true, grokPath: '/opt/grok', aspectRatio: '16:9' },
+      },
+    });
+    await renderTab();
+    // Enabled grok surfaces a backend tile on the Backend tab (scope the
+    // query to the tile description — the tab bar also says "Grok CLI").
+    expect(screen.getByText(/Route through the Grok Build CLI/i)).toBeTruthy();
+    // Dirty the grok path and save — the patch carries the grok slice.
+    fireEvent.click(screen.getByRole('tab', { name: /Grok CLI/i }));
+    fireEvent.change(screen.getByPlaceholderText('grok (uses $PATH)'), { target: { value: '/usr/local/bin/grok' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+    const patch = updateSettings.mock.calls[0][0];
+    expect(patch.imageGen.grok).toEqual(expect.objectContaining({
+      enabled: true, grokPath: '/usr/local/bin/grok', aspectRatio: '16:9',
+    }));
+  });
+
+  it('falls the mode back to local when grok is disabled while active', async () => {
+    getSettings.mockResolvedValue({
+      imageGen: {
+        mode: 'grok',
+        local: { pythonPath: '/usr/bin/python3' },
+        grok: { enabled: true },
+      },
+    });
+    await renderTab();
+    fireEvent.click(screen.getByRole('tab', { name: /Grok CLI/i }));
+    fireEvent.click(screen.getByLabelText(/Enable Grok Imagegen/i));
+    fireEvent.click(screen.getByRole('button', { name: /^Save$/ }));
+    await waitFor(() => expect(updateSettings).toHaveBeenCalled());
+    const patch = updateSettings.mock.calls[0][0];
+    expect(patch.imageGen.grok.enabled).toBe(false);
+    expect(patch.imageGen.mode).toBe('local');
   });
 });

@@ -418,6 +418,30 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
     });
     return res.json(queuedImageResponse({ ...queued, mode: IMAGE_GEN_MODE.CODEX, model: codexModel }));
   }
+  if (mode === IMAGE_GEN_MODE.GROK) {
+    // Same up-front gate as codex — grok spends the user's Grok quota, so
+    // it's opt-in via an explicit settings toggle.
+    const g = settings.imageGen?.grok || {};
+    if (!g.enabled) {
+      throw new ServerError(
+        'Grok Imagegen is disabled — enable it in Settings → Image Gen first',
+        { status: 400, code: 'GROK_IMAGEGEN_DISABLED' },
+      );
+    }
+    const queued = enqueueJob({
+      kind: 'image',
+      // `mode: IMAGE_GEN_MODE.GROK` is the queue's discriminator — the cloud
+      // lane routes it alongside codex, and runJob's image branch dispatches
+      // to imageGen/grok.js when it sees this flag.
+      params: {
+        mode: IMAGE_GEN_MODE.GROK,
+        grokPath: g.grokPath,
+        aspectRatio: g.aspectRatio,
+        ...params,
+      },
+    });
+    return res.json(queuedImageResponse({ ...queued, mode: IMAGE_GEN_MODE.GROK }));
+  }
   if (mode === IMAGE_GEN_MODE.LOCAL) {
     const py = settings.imageGen?.local?.pythonPath || null;
     // Pre-validate config: mflux models need pythonPath, FLUX.2 doesn't

@@ -8,10 +8,11 @@ import {
 } from './imageGenBackends';
 
 describe('I2I_CAPABLE_MODES / isI2iCapableMode', () => {
-  it('treats local and codex as i2i-capable, external as not', () => {
-    expect(I2I_CAPABLE_MODES).toEqual([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX]);
+  it('treats local, codex, and grok as i2i-capable, external as not', () => {
+    expect(I2I_CAPABLE_MODES).toEqual([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK]);
     expect(isI2iCapableMode(IMAGE_GEN_MODE.LOCAL)).toBe(true);
     expect(isI2iCapableMode(IMAGE_GEN_MODE.CODEX)).toBe(true);
+    expect(isI2iCapableMode(IMAGE_GEN_MODE.GROK)).toBe(true);
     expect(isI2iCapableMode(IMAGE_GEN_MODE.EXTERNAL)).toBe(false);
     expect(isI2iCapableMode(undefined)).toBe(false);
   });

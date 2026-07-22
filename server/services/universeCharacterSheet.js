@@ -451,6 +451,16 @@ export async function renderCharacterReferenceSheet(universeId, entryId, options
     }
     modelId = c.model || CODEX_IMAGEGEN_DEFAULT_MODEL;
     params = { ...baseParams, codexPath: c.codexPath, model: c.model, effort: c.effort };
+  } else if (activeMode === IMAGE_GEN_MODE.GROK) {
+    const g = settings.imageGen?.grok || {};
+    if (!g.enabled) {
+      throw new ServerError(
+        'Grok Imagegen is disabled — enable it in Settings → Image Gen first',
+        { status: 400, code: 'GROK_IMAGEGEN_DISABLED' },
+      );
+    }
+    modelId = 'grok-imagegen';
+    params = { ...baseParams, grokPath: g.grokPath, aspectRatio: g.aspectRatio };
   } else if (activeMode === IMAGE_GEN_MODE.LOCAL) {
     const allModels = getImageModels();
     modelId = resolveSheetModelId({ override: options.modelId, settings, allModels });

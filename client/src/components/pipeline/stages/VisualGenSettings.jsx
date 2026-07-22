@@ -77,19 +77,23 @@ const loadLookups = () => {
 // this panel must match what the server will actually dispatch — otherwise
 // the modal tells the user "Auto is currently Codex" while the render flows
 // to local diffusion (or vice versa). Priority:
-//   1. settings.imageGen.mode pinned to 'codex' AND codex.enabled   → 'codex'
+//   1. settings.imageGen.mode pinned to 'codex'/'grok' AND enabled  → that backend
 //   2. settings.imageGen.mode pinned to 'local'                      → 'local'
-//   3. settings.imageGen.codex.enabled (auto-default)               → 'codex'
+//   3. codex enabled, else grok enabled (auto-default)               → that backend
 //   4. local pythonPath configured                                   → 'local'
 //   5. otherwise                                                     → not configured
-// Codex is gated on the enabled flag at every step — a stale 'codex' pin
-// from before the toggle was turned off must resolve as local, not Codex.
+// Mirrors the server's resolveMode in pipeline/visualStageHelpers.js — a
+// cloud backend is gated on its enabled flag at every step, so a stale pin
+// from before a toggle was turned off resolves as local, not that backend.
 const resolveAutoLabel = (s) => {
   const codexEnabled = s?.imageGen?.codex?.enabled === true;
+  const grokEnabled = s?.imageGen?.grok?.enabled === true;
   const pinned = s?.imageGen?.mode;
   if (pinned === IMAGE_GEN_MODE.CODEX && codexEnabled) return 'Codex';
+  if (pinned === IMAGE_GEN_MODE.GROK && grokEnabled) return 'Grok';
   if (pinned === IMAGE_GEN_MODE.LOCAL) return 'Local diffusion';
   if (codexEnabled) return 'Codex';
+  if (grokEnabled) return 'Grok';
   if (s?.imageGen?.local?.pythonPath) return 'Local diffusion';
   return 'Local diffusion (not configured)';
 };

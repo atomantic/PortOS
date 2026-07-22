@@ -354,6 +354,17 @@ async function resolveRenderParams({ modelId: modelOverride = null } = {}) {
     }
     return { base: { ...base, codexPath: c.codexPath, model: c.model, effort: c.effort }, activeMode, modelId: c.model || CODEX_IMAGEGEN_DEFAULT_MODEL };
   }
+  if (activeMode === IMAGE_GEN_MODE.GROK) {
+    const g = settings.imageGen?.grok || {};
+    if (!g.enabled) {
+      throw new ServerError(
+        'Grok Imagegen is disabled — enable it in Settings → Image Gen first',
+        { status: 400, code: 'GROK_IMAGEGEN_DISABLED' },
+      );
+    }
+    // Grok's image tools run on xAI's fixed image backend — no model knob.
+    return { base: { ...base, grokPath: g.grokPath, aspectRatio: g.aspectRatio }, activeMode, modelId: 'grok-imagegen' };
+  }
   if (activeMode === IMAGE_GEN_MODE.LOCAL) {
     const allModels = getImageModels();
     const modelId = resolveSheetModelId({ override: modelOverride, settings, allModels });
