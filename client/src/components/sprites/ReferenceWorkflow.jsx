@@ -44,7 +44,7 @@ function CandidateTile({ recordId, candidate, locking, onLock }) {
       {confirming ? (
         <div className="flex items-center gap-1 text-xs">
           <span className="text-port-warning">Freeze forever?</span>
-          <button onClick={() => { setConfirming(false); onLock(candidate); }} className="px-1.5 py-0.5 bg-port-accent text-white rounded">Lock</button>
+          <button onClick={() => { setConfirming(false); onLock(candidate); }} disabled={locking} className="px-1.5 py-0.5 bg-port-accent text-white rounded disabled:opacity-50">Lock</button>
           <button onClick={() => setConfirming(false)} className="px-1.5 py-0.5 text-gray-400 hover:text-white">Cancel</button>
         </div>
       ) : (
@@ -92,10 +92,17 @@ export default function ReferenceWorkflow({ record, reference, onChanged }) {
   useEffect(() => {
     if (Object.keys(pendingJobs).length === 0) return undefined;
     const timer = setInterval(async () => {
-      const results = await Promise.all(Object.entries(pendingJobs).map(async ([target, jobId]) => ({
-        target, job: await getMediaJob(jobId).catch(() => null),
-      })));
-      const finished = results.filter(({ job }) => !job || ['completed', 'failed', 'canceled'].includes(job.status));
+      const results = await Promise.all(Object.entries(pendingJobs).map(async ([target, jobId]) => {
+        try {
+          return { target, job: await getMediaJob(jobId) };
+        } catch (err) {
+          // Only a 404 means the job is truly gone — a transient fetch
+          // failure must NOT drop the entry (that would re-enable Generate
+          // mid-render and stop the auto-refresh); retry on the next tick.
+          return { target, job: null, gone: err?.status === 404 };
+        }
+      }));
+      const finished = results.filter(({ job, gone }) => (job ? ['completed', 'failed', 'canceled'].includes(job.status) : gone));
       if (finished.length === 0) return;
       setPendingJobs((prev) => {
         const next = { ...prev };

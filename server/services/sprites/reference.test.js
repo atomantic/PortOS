@@ -15,17 +15,18 @@ import { mkdir, writeFile, readFile } from 'fs/promises';
 
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-reference-test-'));
 
+// MUTATE actual.PATHS (don't replace the object): fileUtils' internal
+// resolvers (resolveImageInputPath / resolveSpriteImageInput) close over the
+// module-level PATHS reference, and the initImagePath assertion below needs
+// them to see the test roots.
 vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   const actual = await importOriginal();
-  return {
-    ...actual,
-    PATHS: {
-      ...actual.PATHS,
-      data: TEST_ROOT,
-      sprites: join(TEST_ROOT, 'sprites'),
-      images: join(TEST_ROOT, 'images'),
-    },
-  };
+  Object.assign(actual.PATHS, {
+    data: TEST_ROOT,
+    sprites: join(TEST_ROOT, 'sprites'),
+    images: join(TEST_ROOT, 'images'),
+  });
+  return actual;
 });
 
 const enqueueJob = vi.fn(() => ({ jobId: 'job-1234567890', position: 0, status: 'queued' }));
@@ -154,6 +155,11 @@ describe('startReferenceGeneration', () => {
     expect(result.anchorId).toBe('walk-east');
     const call = enqueueJob.mock.calls[0][0];
     expect(call.params.initImagePath).toContain(`${id}-walk-south-v1.png`);
+    // The queue's providers re-validate initImagePath through the approved
+    // image-input roots — a sprite path must survive that gate or the i2i
+    // silently degrades to text-to-image (identity drift).
+    const { resolveImageInputPath } = await import('../../lib/fileUtils.js');
+    expect(resolveImageInputPath(call.params.initImagePath)).toBe(call.params.initImagePath);
     expect(call.params.initImageStrength).toBe(0.8);
     expect(call.params.prompt).toContain('strict right-facing side profile');
     expect(call.params.prompt).toContain('magenta (#FF00FF)'); // green char kept magenta

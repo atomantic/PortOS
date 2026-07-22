@@ -34,7 +34,9 @@ const ACCEPTED_REFERENCE_MIME = new Set(['image/png', 'image/jpeg', 'image/webp'
 
 const referenceUpload = optionalUploadFields(['referenceImage'], {
   limits: { fileSize: MAX_REFERENCE_UPLOAD_BYTES },
-  fileFilter: (file) => ACCEPTED_REFERENCE_MIME.has(file.mimetype),
+  // multer-style (req, file, cb) — streamMultipart requires the callback to
+  // be invoked synchronously (see routes/imageGen.js for the sibling).
+  fileFilter: (_req, file, cb) => cb(null, ACCEPTED_REFERENCE_MIME.has((file.mimetype || '').toLowerCase())),
 });
 
 router.get('/', asyncHandler(async (_req, res) => {
