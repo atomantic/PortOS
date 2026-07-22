@@ -255,6 +255,7 @@ describe('videoGen routes', () => {
         kind: 'video',
         params: expect.objectContaining({
           mode: 'grok',
+          videoMode: 'text',
           grokPath: '/opt/grok',
           aspectRatio: '16:9',
           prompt: 'a fox running through snow',

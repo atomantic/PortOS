@@ -98,7 +98,12 @@ export default function VideoGen() {
   const incomingHeight = searchParams.get('h');
   const settingsOpen = searchParams.get('settings') === '1';
   const openSettings = () => setSearchParams(prev => { const n = new URLSearchParams(prev); n.set('settings', '1'); return n; });
-  const closeSettings = () => setSearchParams(prev => { const n = new URLSearchParams(prev); n.delete('settings'); return n; });
+  const closeSettings = () => {
+    setSearchParams(prev => { const n = new URLSearchParams(prev); n.delete('settings'); return n; });
+    // The drawer hosts the Grok enable toggle — re-read it so the
+    // Local/Grok backend switch appears/disappears without a reload.
+    refreshGrokEnabled();
+  };
 
   const [status, setStatus] = useState(null);
   const [statusLoading, setStatusLoading] = useState(true);
@@ -106,14 +111,18 @@ export default function VideoGen() {
   // user enabled Grok in Settings → Image Gen (one toggle covers image +
   // video). 'local' keeps every existing flow untouched.
   const [grokEnabled, setGrokEnabled] = useState(false);
+  // The jobId of the render this tab's Generate button currently owns —
+  // threaded into cancelVideoGen so cancellation is job-scoped.
+  const activeJobIdRef = useRef(null);
   const [backend, setBackend] = useState('local');
   const [grokDuration, setGrokDuration] = useState(6);
   const [models, setModels] = useState([]);
-  useEffect(() => {
+  const refreshGrokEnabled = useCallback(() => {
     getSettings({ silent: true })
       .then((sv) => setGrokEnabled(sv?.imageGen?.grok?.enabled === true))
       .catch(() => {});
   }, []);
+  useEffect(() => { refreshGrokEnabled(); }, [refreshGrokEnabled]);
 
   const [mode, setMode] = useState(incomingSourceImage ? 'image' : 'text');
   const [prompt, setPrompt] = useState(incomingPrompt || '');
@@ -604,7 +613,12 @@ export default function VideoGen() {
       if (p.seed != null) setSeed(String(p.seed));
       if (p.tiling) setTiling(p.tiling);
       if (typeof p.disableAudio === 'boolean') setDisableAudio(p.disableAudio);
-      if (p.mode) setMode(p.mode);
+      if (p.mode === 'grok') {
+        // Grok job: 'grok' is the queue discriminator, not a semantic video
+        // mode — restore the backend switch and the real t2v/i2v mode.
+        setBackend('grok');
+        setMode(p.videoMode === 'image' ? 'image' : 'text');
+      } else if (p.mode) setMode(p.mode);
       if (p.chunks && p.chunks > 1) setChunks(p.chunks);
       // Multi-keyframe FFLF: the route maps the stored { path, index } back to
       // { file, index } (gallery basename) for us, so restore the picker
@@ -1151,6 +1165,11 @@ export default function VideoGen() {
       // earlier handleCancel() already settled the Promise via runRejectRef.
       if (!isCurrent()) return;
       const jobId = data.jobId || data.generationId;
+      // Remember which job this run owns — with the cloud lane, video
+      // renders are no longer single-flight, so Cancel must target exactly
+      // this job instead of "the first running video" (which could be an
+      // unrelated local or grok render).
+      activeJobIdRef.current = jobId;
       attachJobEvents(jobId, { isCurrent, settleResolve, settleReject, withToast: true });
     }).catch((err) => {
       if (!isCurrent()) return;
@@ -1213,7 +1232,8 @@ export default function VideoGen() {
     // EventSource for a job we've already declared cancelled.
     runTokenRef.current += 1;
     eventSourceRef.current?.close();
-    await cancelVideoGen().catch(() => {});
+    await cancelVideoGen(activeJobIdRef.current || undefined).catch(() => {});
+    activeJobIdRef.current = null;
     setGenerating(false);
     setStatusMsg('Cancelled');
     // Settle the in-flight runGeneration Promise so the queue worker's
@@ -1840,8 +1860,8 @@ export default function VideoGen() {
         onClear={clearFinishedQueue}
         summarize={(item) => (
           <>
-            <span className="uppercase mr-2">{item.params.mode}</span>
-            {item.params.width}×{item.params.height} · {item.params.numFrames}f
+            <span className="uppercase mr-2">{item.params.backend === 'grok' ? `grok ${item.params.mode}` : item.params.mode}</span>
+            {item.params.width}×{item.params.height} · {item.params.backend === 'grok' ? `${item.params.grokDuration || 6}s` : `${item.params.numFrames}f`}
           </>
         )}
       />

@@ -749,6 +749,10 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
         // the t2v/i2v semantic (text/image/fflf/…), which never collides
         // with the literal 'grok'.
         mode: IMAGE_GEN_MODE.GROK,
+        // Semantic t2v/i2v mode, kept separate from the discriminator so a
+        // client restoring form state from /active never feeds 'grok' back
+        // into its mode selector.
+        videoMode: sourceImagePath ? 'image' : 'text',
         grokPath: g.grokPath,
         aspectRatio: g.aspectRatio,
         prompt: body.prompt,
