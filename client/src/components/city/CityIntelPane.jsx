@@ -339,9 +339,9 @@ function TimelineView({ logs }) {
 // `cityPane` values so the desktop tab and the compact disclosure sheet address the
 // same surface through one URL param.
 export const CITY_INTEL_TABS = [
-  { id: 'attention', label: 'ATTENTION' },
-  { id: 'timeline', label: 'TIMELINE' },
-  { id: 'activity', label: 'ACTIVITY' },
+  { id: 'attention', label: 'ATTENTION', hint: 'Things needing your attention' },
+  { id: 'timeline', label: 'TIMELINE', hint: 'Recent-action timeline' },
+  { id: 'activity', label: 'ACTIVITY', hint: 'Live event log' },
 ];
 
 // Renders just the body for a given intel tab — reused by the desktop cockpit pane
@@ -352,12 +352,6 @@ export function CityIntelContent({ tab, items, eventLogs }) {
   if (tab === 'activity') return <ActivityLogList logs={eventLogs} />;
   return <AttentionList items={items} />;
 }
-
-const INTEL_TAB_HINTS = {
-  attention: 'Things needing your attention',
-  timeline: 'Recent-action timeline',
-  activity: 'Live event log',
-};
 
 export default function CityIntelPane({ apps, cosAgents, reviewCounts, instances, systemHealth, notificationCounts, eventLogs }) {
   // The active tab is URL-addressable via `cityPane` (shared with the compact
@@ -429,7 +423,7 @@ export default function CityIntelPane({ apps, cosAgents, reviewCounts, instances
                   className={`flex-1 min-w-0 flex items-center justify-center gap-1.5 px-2 py-2 transition-colors ${
                     i > 0 ? 'border-l border-cyan-500/20' : ''
                   } ${active ? 'bg-cyan-500/10 text-cyan-400' : 'text-cyan-500/50 hover:bg-cyan-500/5'}`}
-                  title={INTEL_TAB_HINTS[t.id]}
+                  title={t.hint}
                 >
                   <span className="font-pixel text-[10px] tracking-wider font-bold">{t.label}</span>
                   {count > 0 && (t.id === 'attention' ? (
