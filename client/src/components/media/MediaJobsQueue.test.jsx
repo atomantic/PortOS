@@ -1,15 +1,17 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 
 // Mock the media-jobs API so the queue renders a controlled job list without
 // the network. useAutoRefetch calls the fetcher on mount.
 const listMediaJobs = vi.fn();
+const retryMediaJob = vi.fn();
 vi.mock('../../services/apiMediaJobs.js', () => ({
   listMediaJobs: (...a) => listMediaJobs(...a),
   cancelMediaJob: vi.fn(),
   cancelQueuedMediaJobs: vi.fn(),
   deleteMediaJob: vi.fn(),
-  retryMediaJob: vi.fn(),
+  retryMediaJob: (...a) => retryMediaJob(...a),
   runMediaJobNow: vi.fn(),
 }));
 
@@ -40,6 +42,130 @@ const trainingJob = {
 beforeEach(() => {
   listMediaJobs.mockReset();
   listLoraTrainingCheckpoints.mockReset();
+  retryMediaJob.mockReset();
+  retryMediaJob.mockResolvedValue({ jobId: 'new-job-1234' });
+});
+
+const failedCodexJob = {
+  id: 'codexfail0000dead',
+  kind: 'image',
+  status: 'failed',
+  error: 'boom',
+  queuedAt: '2026-06-19T10:00:00Z',
+  params: { prompt: 'a fox', mode: 'codex', model: 'gpt-5.6-luna', effort: 'high' },
+};
+
+const failedLocalJob = {
+  id: 'localfail0000beef',
+  kind: 'image',
+  status: 'failed',
+  error: 'boom',
+  queuedAt: '2026-06-19T10:00:00Z',
+  params: { prompt: 'a fox', mode: 'local', modelId: 'z-image-turbo' },
+};
+
+// Failed/canceled jobs live in the collapsed "recent" reel — expand it so the
+// JobRow (and its Edit-and-retry control) renders.
+async function expandReel(user) {
+  const toggle = await screen.findByText(/Show failed \/ canceled/);
+  await user.click(toggle);
+}
+
+const failedCodexDefaultEffortJob = {
+  id: 'codexdef00000dead',
+  kind: 'image',
+  status: 'failed',
+  error: 'boom',
+  queuedAt: '2026-06-19T10:00:00Z',
+  // No explicit effort → ran on the shipped default.
+  params: { prompt: 'a fox', mode: 'codex', model: 'gpt-5.6-luna' },
+};
+
+describe('MediaJobsQueue — Codex reasoning-effort retry control', () => {
+  it('surfaces the job effort in the row label', async () => {
+    const user = userEvent.setup();
+    listMediaJobs.mockResolvedValue([failedCodexJob]);
+    render(<MediaJobsQueue kind="image" />);
+    await expandReel(user);
+    await waitFor(() => expect(screen.getByText(/codex \/ gpt-5.6-luna · high/)).toBeInTheDocument());
+  });
+
+  it('shows the effective default effort in the row label when the job stored none', async () => {
+    const user = userEvent.setup();
+    listMediaJobs.mockResolvedValue([failedCodexDefaultEffortJob]);
+    render(<MediaJobsQueue kind="image" />);
+    await expandReel(user);
+    // Default-effort jobs store no `effort`, but codex still rendered at `low`.
+    await waitFor(() => expect(screen.getByText(/codex \/ gpt-5.6-luna · low/)).toBeInTheDocument());
+  });
+
+  it('does not crash on a non-string effort from hand-edited data', async () => {
+    const user = userEvent.setup();
+    // A hand-edited media-jobs.json could carry a numeric effort; the row label
+    // must coerce safely (mirror of codex.js) instead of throwing on .trim().
+    listMediaJobs.mockResolvedValue([{
+      ...failedCodexDefaultEffortJob, id: 'codexbadeff00dead', params: { ...failedCodexDefaultEffortJob.params, effort: 5 },
+    }]);
+    render(<MediaJobsQueue kind="image" />);
+    await expandReel(user);
+    // Non-string → treated as absent → resolves to the shipped default.
+    await waitFor(() => expect(screen.getByText(/codex \/ gpt-5.6-luna · low/)).toBeInTheDocument());
+  });
+
+  it('pre-fills the retry editor to Default for a job that stored no effort', async () => {
+    const user = userEvent.setup();
+    listMediaJobs.mockResolvedValue([failedCodexDefaultEffortJob]);
+    render(<MediaJobsQueue kind="image" />);
+    await expandReel(user);
+    await user.click(await screen.findByLabelText('Edit and retry'));
+    const select = await screen.findByLabelText('Reasoning effort');
+    expect(select.value).toBe('default');
+    // Leaving it on Default and retrying sends no effort override (nothing changed).
+    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
+    expect(retryMediaJob).toHaveBeenCalledWith('codexdef00000dead', null, { silent: true });
+  });
+
+  it('renders the effort select (Codex only) and pins a new level on retry', async () => {
+    const user = userEvent.setup();
+    listMediaJobs.mockResolvedValue([failedCodexJob]);
+    render(<MediaJobsQueue kind="image" />);
+    await expandReel(user);
+    await user.click(await screen.findByLabelText('Edit and retry'));
+
+    const select = await screen.findByLabelText('Reasoning effort');
+    // Pre-filled with the job's stored effort.
+    expect(select.value).toBe('high');
+    await user.selectOptions(select, 'medium');
+    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
+
+    expect(retryMediaJob).toHaveBeenCalledWith('codexfail0000dead', { effort: 'medium' }, { silent: true });
+  });
+
+  it('sends the clear sentinel when the effort is reset to Default', async () => {
+    const user = userEvent.setup();
+    listMediaJobs.mockResolvedValue([failedCodexJob]);
+    render(<MediaJobsQueue kind="image" />);
+    await expandReel(user);
+    await user.click(await screen.findByLabelText('Edit and retry'));
+
+    const select = await screen.findByLabelText('Reasoning effort');
+    await user.selectOptions(select, 'default');
+    await user.click(screen.getByRole('button', { name: /Retry with changes/i }));
+
+    expect(retryMediaJob).toHaveBeenCalledWith('codexfail0000dead', { effort: 'default' }, { silent: true });
+  });
+
+  it('does not render the effort control for non-Codex jobs', async () => {
+    const user = userEvent.setup();
+    listMediaJobs.mockResolvedValue([failedLocalJob]);
+    render(<MediaJobsQueue kind="image" />);
+    await expandReel(user);
+    await user.click(await screen.findByLabelText('Edit and retry'));
+
+    // Edit form is open (Prompt field visible) but no effort control.
+    await waitFor(() => expect(screen.getByText('Prompt')).toBeInTheDocument());
+    expect(screen.queryByLabelText('Reasoning effort')).not.toBeInTheDocument();
+  });
 });
 
 describe('MediaJobsQueue — training rows', () => {

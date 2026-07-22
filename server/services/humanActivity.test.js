@@ -185,6 +185,29 @@ describe('messageActivityCandidates', () => {
     // Sent turns carry no counterpart handle (mirrors iMessage); email groups by threadId.
     expect(sent.metadata.handle).toBeNull();
   });
+  it('excludes send-as aliases from participants so a received 1:1-to-alias stays 1:1 (#2831)', () => {
+    // A 1:1 email delivered to the owner's alias (not account.email). Without alias
+    // filtering the alias survives as a second participant and the thread looks like a
+    // group, suppressing its outreach nudge.
+    const aliasAccount = { id: 'acct-1', type: 'gmail', email: 'me@example.com', sendAsAliases: ['alias@example.com'] };
+    const [c] = messageActivityCandidates(aliasAccount, [
+      { externalId: 'e1', date: '2026-07-04T10:00:00Z', from: 'friend@x.io', to: ['Alias@example.com'], subject: 'Hey' },
+    ]);
+    const emails = c.participants.map((p) => p.email);
+    expect(emails).toEqual(['friend@x.io']); // exactly one counterpart — a true 1:1
+    expect(emails).not.toContain('alias@example.com');
+    expect(c.metadata.handle).toBe('friend@x.io');
+  });
+  it('still filters only the primary email when no aliases are stored (back-compat, #2831)', () => {
+    // Absent sendAsAliases → today's behavior: only account.email is dropped.
+    const [c] = messageActivityCandidates(account, [
+      { externalId: 'e1', date: '2026-07-04T10:00:00Z', from: 'friend@x.io', to: ['me@example.com', 'alias@example.com'], subject: 'Hey' },
+    ]);
+    const emails = c.participants.map((p) => p.email);
+    expect(emails).toContain('friend@x.io');
+    expect(emails).toContain('alias@example.com'); // not a known alias → kept
+    expect(emails).not.toContain('me@example.com');
+  });
   it('classifies a reply as sent via the Gmail SENT label even from a send-as alias (#2796)', () => {
     // From (alias@example.com) != account owner (me@example.com), but the SENT label
     // is authoritative — without it the reply is misclassified received and never

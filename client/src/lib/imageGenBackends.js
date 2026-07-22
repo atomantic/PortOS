@@ -2,6 +2,13 @@ import { Cpu, Terminal, Cloud } from 'lucide-react';
 
 export const IMAGE_GEN_MODE = Object.freeze({ LOCAL: 'local', CODEX: 'codex', EXTERNAL: 'external' });
 
+// Shipped default Codex reasoning-effort level — the client mirror of the
+// server's CODEX_IMAGEGEN_DEFAULT_EFFORT (server/services/imageGen/modes.js).
+// A Codex job with no explicit effort renders at this level, so any UI that
+// displays or pre-fills "the effort a job used" must resolve an absent value to
+// this default rather than showing a blank.
+export const CODEX_IMAGEGEN_DEFAULT_EFFORT = 'low';
+
 const META = {
   [IMAGE_GEN_MODE.LOCAL]:    { label: 'Local',    icon: Cpu },
   [IMAGE_GEN_MODE.CODEX]:    { label: 'Codex',    icon: Terminal },

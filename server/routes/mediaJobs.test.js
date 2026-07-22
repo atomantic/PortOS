@@ -145,6 +145,67 @@ describe('mediaJobs routes', () => {
     expect(call.params.steps).toBe(40);
   });
 
+  it('GET /:id surfaces the Codex reasoning effort a job used (allowlisted)', async () => {
+    jobStore.set('j-eff', {
+      id: 'j-eff', kind: 'image', owner: null, status: 'failed',
+      params: { prompt: 'cat', mode: 'codex', model: 'gpt-5.6-luna', effort: 'high' },
+    });
+    const r = await request(makeApp()).get('/api/media-jobs/j-eff');
+    expect(r.status).toBe(200);
+    expect(r.body.params.effort).toBe('high');
+  });
+
+  it('POST /:id/retry preserves an explicit Codex effort on a plain retry', async () => {
+    jobStore.set('j-eff-keep', {
+      id: 'j-eff-keep', kind: 'image', owner: null, status: 'failed',
+      params: { prompt: 'cat', mode: 'codex', model: 'gpt-5.6-luna', effort: 'high' },
+    });
+    const r = await request(makeApp()).post('/api/media-jobs/j-eff-keep/retry').send({});
+    expect(r.status).toBe(200);
+    expect(stubs.enqueueJob.mock.calls[0][0].params.effort).toBe('high');
+  });
+
+  it('POST /:id/retry pins a new Codex effort when overridden', async () => {
+    jobStore.set('j-eff-pin', {
+      id: 'j-eff-pin', kind: 'image', owner: null, status: 'failed',
+      params: { prompt: 'cat', mode: 'codex', effort: 'low' },
+    });
+    const r = await request(makeApp())
+      .post('/api/media-jobs/j-eff-pin/retry')
+      .send({ params: { effort: 'medium' } });
+    expect(r.status).toBe(200);
+    expect(stubs.enqueueJob.mock.calls[0][0].params.effort).toBe('medium');
+  });
+
+  it('POST /:id/retry resets Codex effort to the default when the clear sentinel is sent', async () => {
+    jobStore.set('j-eff-clear', {
+      id: 'j-eff-clear', kind: 'image', owner: null, status: 'failed',
+      params: { prompt: 'cat', mode: 'codex', model: 'gpt-5.6-luna', effort: 'high' },
+    });
+    const r = await request(makeApp())
+      .post('/api/media-jobs/j-eff-clear/retry')
+      .send({ params: { effort: 'default' } });
+    expect(r.status).toBe(200);
+    const call = stubs.enqueueJob.mock.calls[0][0];
+    // The key is DROPPED (not set to the sentinel or to undefined) so codex.js's
+    // CODEX_IMAGEGEN_DEFAULT_EFFORT fallback takes over.
+    expect('effort' in call.params).toBe(false);
+    // other params are untouched by the clear
+    expect(call.params.model).toBe('gpt-5.6-luna');
+  });
+
+  it('POST /:id/retry rejects an invalid Codex effort override', async () => {
+    jobStore.set('j-eff-bad', {
+      id: 'j-eff-bad', kind: 'image', owner: null, status: 'failed',
+      params: { prompt: 'cat', mode: 'codex' },
+    });
+    const r = await request(makeApp())
+      .post('/api/media-jobs/j-eff-bad/retry')
+      .send({ params: { effort: 'turbo' } });
+    expect(r.status).toBe(400);
+    expect(stubs.enqueueJob).not.toHaveBeenCalled();
+  });
+
   it('POST /:id/retry rejects override fields outside the whitelist', async () => {
     jobStore.set('j-bad', {
       id: 'j-bad', kind: 'image', owner: null, status: 'failed',
