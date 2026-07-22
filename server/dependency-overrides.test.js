@@ -66,7 +66,12 @@ describe('dependency override parity across manifests (#2848)', () => {
       'protobufjs': '7.6.5', // GHSA-j3f2-48v5-ccww
       'body-parser': '2.3.0', // GHSA-v422-hmwv-36x6
       'js-yaml': '4.3.0', // GHSA-52cp-r559-cp3m
-      'tar': '7.5.21' // GHSA-vmf3-w455-68vh et al
+      'tar': '7.5.21', // GHSA-vmf3-w455-68vh et al
+      // GHSA-f88m-g3jw-g9cj (libvips CVE-2026-33327/33328/35590/35591). Pinned in
+      // server/ only, so the parity assertion above never sees it — this floor is
+      // the sole guard against a downgrade back onto the vulnerable 0.34.x line
+      // that @huggingface/transformers still requests.
+      'sharp': '0.35.0'
     };
 
     const EXACT_VERSION = /^\d+\.\d+\.\d+$/;
