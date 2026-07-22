@@ -63,6 +63,14 @@ beforeAll(() => {
           runManifest: 'art-source/sprites/hero/grok/run-1/south-manifest.json',
           runManifestSha256: sha256(runManifest),
         },
+        // Traversal attempt: a crafted runPath must be rejected, never joined
+        // into a write destination outside data/sprites/.
+        north: {
+          status: 'approved',
+          runPath: 'art-source/sprites/hero/../../../../tmp/sprite-escape',
+          runManifest: 'art-source/sprites/hero/../../../../tmp/sprite-escape/x.json',
+          runManifestSha256: sha256('x'),
+        },
       },
     },
     'art-source/sprites/hero/grok/run-1/south-manifest.json': runManifest,
@@ -90,7 +98,11 @@ describe('importFromSource', () => {
     expect(hero.kind).toBe('character');
     // one good anchor + the run manifest verify; the tampered east anchor errors
     expect(hero.verified).toBe(2);
-    expect(hero.errors).toEqual(['sha256 mismatch: reference/hero-anchor-east.png']);
+    expect(hero.errors).toEqual([
+      'walk set north: unsafe run path rejected: art-source/sprites/hero/../../../../tmp/sprite-escape',
+      'sha256 mismatch: reference/hero-anchor-east.png',
+    ]);
+    expect(existsSync('/tmp/sprite-escape')).toBe(false);
 
     const heroDir = join(SPRITES_ROOT, 'hero');
     expect(existsSync(join(heroDir, 'character-spec.json'))).toBe(true);
@@ -111,7 +123,7 @@ describe('importFromSource', () => {
     expect(results.some((r) => r.id === 'hero' && r.kind === 'props')).toBe(false);
 
     expect(totals.subjects).toBe(2);
-    expect(totals.errors).toBe(1);
+    expect(totals.errors).toBe(2);
 
     const record = await getRecord('hero');
     expect(record).toMatchObject({ kind: 'character', name: 'Hero', status: 'imported', chromaKey: '#FF00FF' });
