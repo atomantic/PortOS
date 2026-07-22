@@ -20,7 +20,7 @@
     "express": "5.2.1",
     "google-auth-library": "^10.7.0",
     "kokoro-js": "1.2.1",
-    "node-pty": "1.2.0-beta.10",
+    "node-pty": "1.2.0-beta.14",
     "pdf-lib": "^1.17.1",
     "pg": "8.22.0",
     "pm2": "7.0.3",
