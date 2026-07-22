@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   CHROMA_KEYS, CHROMA_KEY_HEXES, MIN_HUE_SEPARATION,
-  rgbToHsv, hueDistance, pickChromaKey,
+  rgbToHsv, hueDistance, pickChromaKey, keyProximityWarning,
 } from './chromaKey.js';
 
 describe('chroma key set', () => {
@@ -84,5 +84,23 @@ describe('pickChromaKey', () => {
     const pick = pickChromaKey([]);
     expect(pick.hex).toBe('#FF00FF');
     expect(pick.warning).toBeNull();
+  });
+});
+
+describe('keyProximityWarning', () => {
+  const solid = (r, g, b, count = 1000) => ({ r, g, b, count });
+
+  it('warns when surviving palette hues sit near the generation key', () => {
+    const warning = keyProximityWarning([solid(255, 80, 230)], '#FF00FF'); // pink near magenta
+    expect(warning).toMatch(/generation key #FF00FF/);
+  });
+
+  it('stays quiet for a palette far from the generation key', () => {
+    expect(keyProximityWarning([solid(23, 107, 101)], '#FF00FF')).toBeNull(); // teal vs magenta
+  });
+
+  it('stays quiet for achromatic/empty palettes', () => {
+    expect(keyProximityWarning([solid(40, 40, 40)], '#FF00FF')).toBeNull();
+    expect(keyProximityWarning([], '#FF00FF')).toBeNull();
   });
 });

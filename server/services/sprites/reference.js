@@ -33,7 +33,7 @@ import {
   SPRITE_DIRECTIONS, ANCHOR_DIRECTIONS, anchorIdForDirection,
   buildMainReferencePrompt, buildAnchorPrompt,
 } from './prompts.js';
-import { pickChromaKey, CHROMA_KEY_HEXES, DEFAULT_CHROMA_KEY } from './chromaKey.js';
+import { pickChromaKey, keyProximityWarning, CHROMA_KEY_HEXES, DEFAULT_CHROMA_KEY } from './chromaKey.js';
 import { analyzeForeground, paletteFromAnalysis, normalizeFromAnalysis, normalizeAnchorFrame } from './normalize.js';
 
 // Default i2i strengths: anchors redraw a NEW facing from the main (mostly
@@ -52,8 +52,27 @@ const manifestRelPath = (id) => `reference/${id}-reference-set-v1.json`;
 // hook's per-record queue.
 const manifestWriteTail = createKeyCachedQueue();
 
+// Phase-1 imported manifests are copied verbatim from the source pipeline
+// and carry repo-root paths (`art-source/sprites/<id>/reference/...`), while
+// the files themselves live record-relative under data/sprites/<id>/.
+// Rebase on read so imported characters render and derive anchors correctly.
+function rebaseLegacyPath(p, recordId) {
+  const marker = `art-source/sprites/${recordId}/`;
+  return typeof p === 'string' && p.startsWith(marker) ? p.slice(marker.length) : p;
+}
+
 async function loadManifest(recordId) {
-  return readJSONFile(join(spriteDir(recordId), manifestRelPath(recordId)), null);
+  const manifest = await readJSONFile(join(spriteDir(recordId), manifestRelPath(recordId)), null);
+  if (!manifest) return null;
+  if (manifest.mainReference) {
+    manifest.mainReference.path = rebaseLegacyPath(manifest.mainReference.path, recordId);
+    manifest.mainReference.lockedFrom = rebaseLegacyPath(manifest.mainReference.lockedFrom, recordId);
+  }
+  for (const anchor of manifest.anchors || []) {
+    anchor.path = rebaseLegacyPath(anchor.path, recordId);
+    anchor.lockedFrom = rebaseLegacyPath(anchor.lockedFrom, recordId);
+  }
+  return manifest;
 }
 
 async function saveManifest(recordId, manifest) {
@@ -326,19 +345,26 @@ async function lockReferenceImpl(recordId, { target, candidate }) {
     }
     // Dynamic key selection (#2895): histogram the character's own palette
     // and pick the standard key farthest from it in hue — unless the user
-    // already pinned a key on the record (then skip the histogram entirely).
-    // One analyzeForeground decode feeds both the palette and the composite.
+    // already pinned a key on the record. One analyzeForeground decode feeds
+    // the palette and the composite; the palette is computed even when
+    // pinned because the clip warning below needs it.
     const analysis = await analyzeForeground(candAbs, maskKey);
+    const palette = paletteFromAnalysis(analysis);
     const userPinned = CHROMA_KEY_HEXES.includes(record.chromaKey);
-    const auto = userPinned ? null : pickChromaKey(paletteFromAnalysis(analysis));
+    const auto = userPinned ? null : pickChromaKey(palette);
     const selectedKey = userPinned ? record.chromaKey : auto.hex;
+    // Selection only sees pixels that SURVIVED the generation-key mask —
+    // exact-key details (magenta garment on the magenta default) are already
+    // gone from the palette, so surface the risk instead of silently locking
+    // a clipped identity root.
+    const clipWarning = keyProximityWarning(palette, maskKey);
     const rel = `reference/${await nextVersionPath(refDir, `${recordId}-walk-south`)}`;
     const destAbs = join(spriteDir(recordId), rel);
     await normalizeFromAnalysis(analysis, candAbs, destAbs, selectedKey);
     const sha256 = await sha256File(destAbs);
     manifest.chromaKey = selectedKey;
     manifest.chromaKeyAutoSelected = !userPinned;
-    manifest.chromaKeyWarning = auto?.warning ?? null;
+    manifest.chromaKeyWarning = [auto?.warning, clipWarning].filter(Boolean).join(' — ') || null;
     manifest.mainReference = {
       ...manifest.mainReference,
       path: rel,

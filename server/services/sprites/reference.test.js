@@ -239,7 +239,7 @@ describe('lockReference', () => {
     expect(record.status).toBe('reference');
   });
 
-  it('auto-selects AWAY from the key a magenta-clothed character would clash with', async () => {
+  it('auto-selects AWAY from the key a magenta-clothed character would clash with, and warns about clip risk', async () => {
     const id = newId();
     await createCharacter(id);
     const rel = await placeCandidate(id, 'main', 'walk-south-candidate-01.png', {
@@ -249,6 +249,36 @@ describe('lockReference', () => {
     expect(result.manifest.chromaKey).not.toBe('#FF00FF');
     const record = await records.getRecord(id);
     expect(record.chromaKey).toBe(result.manifest.chromaKey);
+    // Near-generation-key palette ⇒ exact-key details may already be masked
+    // out of the locked artifact — the manifest must say so.
+    expect(result.manifest.chromaKeyWarning).toMatch(/generation key #FF00FF/);
+  });
+
+  it('rebases legacy repo-root manifest paths from a phase-1 import', async () => {
+    const id = newId();
+    await createCharacter(id);
+    const refDir = join(TEST_ROOT, 'sprites', id, 'reference');
+    await mkdir(refDir, { recursive: true });
+    await writeCandidatePng(join(refDir, `${id}-walk-south-v1.png`));
+    await writeFile(join(refDir, `${id}-reference-set-v1.json`), JSON.stringify({
+      schemaVersion: 1,
+      status: 'in-progress',
+      chromaKey: '#FF00FF',
+      mainReference: { path: `art-source/sprites/${id}/reference/${id}-walk-south-v1.png`, locked: true },
+      anchors: [
+        { id: 'walk-south', direction: 'south', status: 'locked', path: `art-source/sprites/${id}/reference/${id}-walk-south-v1.png` },
+        { id: 'walk-east', direction: 'east', status: 'pending', source: 'derive-from-main' },
+      ],
+    }));
+
+    const { manifest } = await getReferenceSet(id);
+    expect(manifest.mainReference.path).toBe(`reference/${id}-walk-south-v1.png`);
+    expect(manifest.anchors[0].path).toBe(`reference/${id}-walk-south-v1.png`);
+
+    // Anchor derivation must resolve the rebased main as its i2i init.
+    const result = await startReferenceGeneration(id, { target: 'east' });
+    expect(result.anchorId).toBe('walk-east');
+    expect(enqueueJob.mock.calls[0][0].params.initImagePath).toBe(join(TEST_ROOT, 'sprites', id, `reference/${id}-walk-south-v1.png`));
   });
 
   it('respects a user-pinned key instead of auto-selecting', async () => {

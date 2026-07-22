@@ -66,7 +66,8 @@ export default function ReferenceWorkflow({ record, reference, onChanged }) {
   const candidates = reference?.candidates || [];
   const mainLocked = manifest?.mainReference?.locked === true;
 
-  const [backends, setBackends] = useState([]);
+  // null = settings not loaded yet; [] = loaded, no queue backend configured.
+  const [backends, setBackends] = useState(null);
   const [mode, setMode] = useState('');
   const [designPrompt, setDesignPrompt] = useState(manifest?.designPrompt || '');
   const [uploadFile, setUploadFile] = useState(null);
@@ -79,7 +80,11 @@ export default function ReferenceWorkflow({ record, reference, onChanged }) {
       .then((settings) => {
         const available = deriveAvailableBackends(settings, { excludeExternal: true });
         setBackends(available);
-        setMode((m) => m || available[0]?.id || '');
+        // Prefer the configured dispatcher default when it's available —
+        // defaulting to the first list entry would silently send an explicit
+        // `local` override on installs configured for codex/grok.
+        const configured = available.find((b) => b.id === settings?.imageGen?.mode)?.id;
+        setMode((m) => m || configured || available[0]?.id || '');
       })
       .catch(() => setBackends([]));
   }, []);
@@ -113,6 +118,9 @@ export default function ReferenceWorkflow({ record, reference, onChanged }) {
         if (job?.status === 'failed') toast.error(`Render failed for ${target}: ${job.error || 'see media jobs'}`);
       }
       setTimeout(onChanged, 500);
+      // Several jobs finishing in one tick attach serially server-side — a
+      // later attach can land after the first refetch, so sweep once more.
+      if (finished.length > 1) setTimeout(onChanged, 2500);
     }, 4000);
     return () => clearInterval(timer);
   }, [pendingJobs, onChanged]);
@@ -149,7 +157,8 @@ export default function ReferenceWorkflow({ record, reference, onChanged }) {
     onChanged();
   }, { errorMessage: 'Failed to set chroma key' });
 
-  const modePicker = backends.length > 0 && (
+  const noBackend = Array.isArray(backends) && backends.length === 0;
+  const modePicker = Array.isArray(backends) && backends.length > 0 && (
     <label className="flex items-center gap-2 text-xs text-gray-400">
       Backend
       <select
@@ -186,6 +195,11 @@ export default function ReferenceWorkflow({ record, reference, onChanged }) {
       {manifest?.chromaKeyWarning && (
         <p className="text-xs text-port-warning">{manifest.chromaKeyWarning}</p>
       )}
+      {noBackend && (
+        <p className="text-xs text-port-warning">
+          No image backend configured — enable Codex or Grok, or set a local Python path, in Settings → Image Gen to generate references.
+        </p>
+      )}
 
       {/* Main reference — the immutable identity root */}
       <div className="space-y-2">
@@ -219,7 +233,7 @@ export default function ReferenceWorkflow({ record, reference, onChanged }) {
               {modePicker}
               <button
                 onClick={() => generate('main')}
-                disabled={!!pendingJobs.main || (!designPrompt.trim() && !uploadFile)}
+                disabled={!mode || !!pendingJobs.main || (!designPrompt.trim() && !uploadFile)}
                 className="flex items-center gap-1.5 px-3 py-1 bg-port-accent hover:bg-blue-600 disabled:opacity-50 text-white rounded text-sm"
               >
                 {pendingJobs.main ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
@@ -257,7 +271,7 @@ export default function ReferenceWorkflow({ record, reference, onChanged }) {
                   <div className="space-y-1.5">
                     <button
                       onClick={() => generate(anchor.direction)}
-                      disabled={!!pendingJobs[anchor.direction]}
+                      disabled={!mode || !!pendingJobs[anchor.direction]}
                       className="flex items-center gap-1 w-full justify-center px-2 py-1 text-xs bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent disabled:opacity-50"
                     >
                       {pendingJobs[anchor.direction]
