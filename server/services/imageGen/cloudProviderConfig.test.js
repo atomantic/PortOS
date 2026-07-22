@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import {
-  isCloudImageMode,
   isModeUsable,
   pickUsableMode,
   resolveCloudProviderConfig,
@@ -74,15 +73,6 @@ describe('resolveCloudProviderConfig', () => {
   it('only counts a strict `true` toggle as enabled', () => {
     const cloud = resolveCloudProviderConfig(settingsWith({ codex: { enabled: 'yes' } }), IMAGE_GEN_MODE.CODEX);
     expect(cloud.enabled).toBe(false);
-  });
-});
-
-describe('isCloudImageMode', () => {
-  it('is true for the cloud CLIs only', () => {
-    expect(isCloudImageMode(IMAGE_GEN_MODE.CODEX)).toBe(true);
-    expect(isCloudImageMode(IMAGE_GEN_MODE.GROK)).toBe(true);
-    expect(isCloudImageMode(IMAGE_GEN_MODE.LOCAL)).toBe(false);
-    expect(isCloudImageMode(IMAGE_GEN_MODE.EXTERNAL)).toBe(false);
   });
 });
 

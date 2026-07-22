@@ -50,8 +50,6 @@ export const CLOUD_PROVIDER_SPECS = Object.freeze({
   }),
 });
 
-export const isCloudImageMode = (mode) => Boolean(CLOUD_PROVIDER_SPECS[mode]);
-
 /**
  * Resolve a cloud-CLI provider's settings slice into everything a call site
  * needs. Returns `null` for non-cloud modes (local / external) so callers can
