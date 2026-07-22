@@ -13,13 +13,17 @@
  */
 
 import { getSettings } from '../settings.js';
-import { ServerError } from '../../lib/errorHandler.js';
 import { resolveCleanersFromConfig } from '../../lib/imageClean.js';
 import * as external from './external.js';
 import * as local from './local.js';
 import * as codex from './codex.js';
 import * as grok from './grok.js';
 import { IMAGE_GEN_MODE, IMAGE_GEN_MODES, CLOUD_IMAGE_GEN_MODES } from './modes.js';
+import { resolveCloudProviderConfig } from './cloudProviderConfig.js';
+
+// Cloud-CLI provider modules keyed by mode, so the shared gate in
+// checkConnection/generateImage dispatches without a per-provider branch.
+const CLOUD_PROVIDERS = { [IMAGE_GEN_MODE.CODEX]: codex, [IMAGE_GEN_MODE.GROK]: grok };
 
 // Re-export the enum + array so the existing import surface from this module
 // keeps working. `IMAGE_GEN_MODE.X` is the preferred form at dispatch sites
@@ -32,8 +36,6 @@ const DEFAULT_MODE = IMAGE_GEN_MODE.EXTERNAL;
 const cfg = (s) => s?.imageGen || {};
 const sdapiUrl = (s) => cfg(s).external?.sdapiUrl || cfg(s).sdapiUrl || null;
 const pythonPath = (s) => cfg(s).local?.pythonPath || null;
-const codexCfg = (s) => cfg(s).codex || {};
-const grokCfg = (s) => cfg(s).grok || {};
 
 // Resolve the cleaner flags from body overrides + saved per-mode settings.
 // Body fields win when explicit (per-render checkbox); otherwise inherit
@@ -61,15 +63,10 @@ export async function checkConnection({ mode: modeOverride } = {}) {
     if (!py) return { connected: false, mode, reason: 'Python path not configured' };
     return { connected: true, mode, model: 'mflux/local', pythonPath: py };
   }
-  if (mode === IMAGE_GEN_MODE.CODEX) {
-    const c = codexCfg(s);
-    if (!c.enabled) return { connected: false, mode, reason: 'Codex Imagegen is disabled in settings' };
-    return codex.checkConnection({ codexPath: c.codexPath });
-  }
-  if (mode === IMAGE_GEN_MODE.GROK) {
-    const g = grokCfg(s);
-    if (!g.enabled) return { connected: false, mode, reason: 'Grok Imagegen is disabled in settings' };
-    return grok.checkConnection({ grokPath: g.grokPath });
+  const cloudCheck = resolveCloudProviderConfig(s, mode);
+  if (cloudCheck) {
+    if (!cloudCheck.enabled) return { connected: false, mode, reason: cloudCheck.connectionReason };
+    return CLOUD_PROVIDERS[mode].checkConnection(cloudCheck.providerParams);
   }
   const status = await external.checkConnection(sdapiUrl(s));
   return { ...status, mode };
@@ -105,29 +102,14 @@ export async function generateImage(params) {
   delete normalized.cleanC2PA;
   delete normalized.denoise;
   delete normalized.autoClean; // legacy body field — accept-and-ignore
-  if (mode === IMAGE_GEN_MODE.CODEX) {
-    const c = codexCfg(s);
-    if (!c.enabled) {
-      throw new ServerError(
-        'Codex Imagegen is disabled — enable it in Settings → Image Gen first',
-        { status: 400, code: 'CODEX_IMAGEGEN_DISABLED' },
-      );
-    }
-    // model/effort default to the cheap gpt-5.6-luna / low path inside
-    // codex.generateImage when unset here; a saved override wins.
-    return codex.generateImage({ codexPath: c.codexPath, model: c.model, effort: c.effort, cleanC2PA, denoise, ...normalized });
-  }
-  if (mode === IMAGE_GEN_MODE.GROK) {
-    const g = grokCfg(s);
-    if (!g.enabled) {
-      throw new ServerError(
-        'Grok Imagegen is disabled — enable it in Settings → Image Gen first',
-        { status: 400, code: 'GROK_IMAGEGEN_DISABLED' },
-      );
-    }
-    // No model/effort knobs — grok's image tools run on xAI's fixed image
-    // backend; only the binary path and a default aspect ratio are saved.
-    return grok.generateImage({ grokPath: g.grokPath, aspectRatio: g.aspectRatio, cleanC2PA, denoise, ...normalized });
+  // Cloud CLIs (codex, grok) share one gate + param bundle — the per-provider
+  // knobs (codexPath/model/effort vs grokPath/aspectRatio) come from the
+  // resolver's spec, so a saved override always wins over the provider's own
+  // internal defaults.
+  const cloud = resolveCloudProviderConfig(s, mode);
+  if (cloud) {
+    if (!cloud.enabled) throw cloud.disabledError;
+    return CLOUD_PROVIDERS[mode].generateImage({ ...cloud.providerParams, cleanC2PA, denoise, ...normalized });
   }
   if (mode === IMAGE_GEN_MODE.LOCAL) {
     return local.generateImage({ pythonPath: pythonPath(s), cleanC2PA, denoise, ...normalized });

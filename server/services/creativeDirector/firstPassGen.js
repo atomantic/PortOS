@@ -32,6 +32,7 @@ import { enqueueJob } from '../mediaJobQueue/index.js';
 import { getSettings } from '../settings.js';
 import { resolveImageCleaners } from '../imageGen/index.js';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
+import { resolveCloudProviderConfig } from '../imageGen/cloudProviderConfig.js';
 import { getIngredient, listMediaForIngredient } from '../catalogDB.js';
 import { resolveAspectDimensions } from '../../lib/creativeDirectorPresets.js';
 import { payloadSnippet, getActiveCatalogType } from '../../lib/catalogTypes.js';
@@ -72,25 +73,11 @@ export function buildPortraitPrompt(ingredient) {
 async function resolveQueueModeParams() {
   const settings = await getSettings();
   const mode = settings.imageGen?.mode || IMAGE_GEN_MODE.EXTERNAL;
-  if (mode === IMAGE_GEN_MODE.CODEX) {
-    const c = settings.imageGen?.codex || {};
-    if (!c.enabled) return { mode, ready: false, reason: 'codex-disabled' };
+  const cloud = resolveCloudProviderConfig(settings, mode);
+  if (cloud) {
+    if (!cloud.enabled) return { mode, ready: false, reason: cloud.disabledReason };
     const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, mode);
-    return {
-      mode,
-      ready: true,
-      jobParams: { mode: IMAGE_GEN_MODE.CODEX, codexPath: c.codexPath, model: c.model, effort: c.effort, cleanC2PA, denoise },
-    };
-  }
-  if (mode === IMAGE_GEN_MODE.GROK) {
-    const g = settings.imageGen?.grok || {};
-    if (!g.enabled) return { mode, ready: false, reason: 'grok-disabled' };
-    const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, mode);
-    return {
-      mode,
-      ready: true,
-      jobParams: { mode: IMAGE_GEN_MODE.GROK, grokPath: g.grokPath, aspectRatio: g.aspectRatio, cleanC2PA, denoise },
-    };
+    return { mode, ready: true, jobParams: { ...cloud.jobParams, cleanC2PA, denoise } };
   }
   if (mode === IMAGE_GEN_MODE.LOCAL) {
     // We pass no modelId, so the worker renders with its default ('dev') model —

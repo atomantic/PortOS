@@ -34,6 +34,7 @@ import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { buildCodexStartupArgs, buildEffortArgs, CODEX_EFFORT_LEVELS } from '../../lib/providerModels.js';
 import { IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, describeFidelity } from './modes.js';
+import { buildNoImageReason } from './noImageReason.js';
 
 // 20 minutes — built-in `image_gen` typically returns in 30–90s, but with the
 // parallel codex lane several renders share OpenAI throughput and a single
@@ -240,28 +241,24 @@ export async function generateImage({
 // into the most useful error we can — surfacing the model's own words (#imagegen
 // declines, content refusals, "generated" claims with no file) instead of a
 // fixed guess. The legacy account/enablement hint is kept as a fallback when
-// codex said nothing usable.
-// eslint-disable-next-line no-control-regex
-const ANSI_RE = /\u001b\[[0-9;]*m/g;
+// codex said nothing usable. The line walk itself lives in the shared
+// `buildNoImageReason` so the codex and grok narrations cannot drift.
 const CODEX_NO_IMAGE_HINT =
   'Codex returned no image — your Codex account may not allow image_gen, or the model declined. Check Settings → Image Gen → Enable Codex Imagegen.';
-export function noImageReason(stdoutTail = '') {
-  const clean = String(stdoutTail).replace(ANSI_RE, '').trim();
-  // Keep the model's last few non-empty narration lines, dropping codex's own
-  // structural labels (`codex`, `user`, `tokens used`, dashed rules).
-  const lines = clean.split('\n')
-    .map((l) => l.trim())
-    .filter((l) => l && !/^(codex|user|-{2,})$/i.test(l) && !/^tokens used\b/i.test(l) && !/^[\d,]+$/.test(l));
-  const said = lines.slice(-4).join(' ').slice(-600);
-  if (!said) return CODEX_NO_IMAGE_HINT;
-  // Codex claims success but no file landed → the image tool wasn't actually
-  // run (image-gen unavailable / rate-limited on the account), even though the
-  // turn narrated a generation. Call that out specifically.
-  if (/\b(generated|created|here(?:'|’)s|i(?:'|’)ve (?:made|generated))\b/i.test(said)) {
-    return `Codex reported success but wrote no image file — the built-in image tool likely didn't run (image generation may be unavailable or rate-limited on your account, even though the feature is enabled). Codex said: "${said}"`;
-  }
-  return `Codex did not produce an image. Codex said: "${said}"`;
-}
+export const noImageReason = (stdoutTail = '') => buildNoImageReason(stdoutTail, {
+  hint: CODEX_NO_IMAGE_HINT,
+  // Codex's own structural labels, on top of the shared dashed-rule /
+  // bare-token-count filter.
+  dropLine: (l) => /^(codex|user)$/i.test(l) || /^tokens used\b/i.test(l),
+  describe: (said) => (
+    // Codex claims success but no file landed → the image tool wasn't actually
+    // run (image-gen unavailable / rate-limited on the account), even though the
+    // turn narrated a generation. Call that out specifically.
+    /\b(generated|created|here(?:'|’)s|i(?:'|’)ve (?:made|generated))\b/i.test(said)
+      ? `Codex reported success but wrote no image file — the built-in image tool likely didn't run (image generation may be unavailable or rate-limited on your account, even though the feature is enabled). Codex said: "${said}"`
+      : `Codex did not produce an image. Codex said: "${said}"`
+  ),
+});
 
 async function runCodex(job, jobId, bin, args, outputPath, filename, meta, { cleanC2PA = false, denoise = false } = {}) {
   const proc = spawn(bin, args, { shell: false, stdio: ['ignore', 'pipe', 'pipe'] });

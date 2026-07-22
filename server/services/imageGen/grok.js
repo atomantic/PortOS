@@ -41,7 +41,7 @@ import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
-import { stripAnsi } from '../../lib/ansiStrip.js';
+import { buildNoImageReason } from './noImageReason.js';
 import sharp from 'sharp';
 import { bufferedSpawn, killProcessTree, prepareCliSpawn } from '../../lib/bufferedSpawn.js';
 import { ensureGrokHeadlessArgs, prepareGrokPromptFile } from '../../lib/grok.js';
@@ -163,15 +163,10 @@ export async function checkConnection({ grokPath } = {}) {
 // own words (content declines, tool-failure notes) instead of a fixed guess.
 const GROK_NO_IMAGE_HINT =
   'Grok returned no image — the image_gen tool may be unavailable on your Grok plan, or the model declined. Check Settings → Image Gen → Enable Grok Imagegen.';
-export function noImageReason(stdoutTail = '') {
-  const clean = stripAnsi(String(stdoutTail)).trim();
-  const lines = clean.split('\n')
-    .map((l) => l.trim())
-    .filter((l) => l && !/^-{2,}$/.test(l) && !/^[\d,]+$/.test(l));
-  const said = lines.slice(-4).join(' ').slice(-600);
-  if (!said) return GROK_NO_IMAGE_HINT;
-  return `Grok did not produce an image at the directed path. Grok said: "${said}"`;
-}
+export const noImageReason = (stdoutTail = '') => buildNoImageReason(stdoutTail, {
+  hint: GROK_NO_IMAGE_HINT,
+  describe: (said) => `Grok did not produce an image at the directed path. Grok said: "${said}"`,
+});
 
 // Build the single-turn agent prompt that triggers image_gen (or image_edit
 // for i2i) and directs the output to a PortOS-chosen path. Grok is a general

@@ -19,6 +19,7 @@ import { registerUniverseBuilderRun } from './universeBuilderCollectionHook.js';
 import { getImageModels, isFlux2 } from '../lib/mediaModels.js';
 import { usesDiffusersRunner } from '../lib/runners.js';
 import { IMAGE_GEN_MODE, QUEUEABLE_IMAGE_MODES } from './imageGen/modes.js';
+import { resolveCloudProviderConfig } from './imageGen/cloudProviderConfig.js';
 import { resolveImageCleaners } from './imageGen/index.js';
 import { getStylePresetById } from '../lib/writersRoomStylePresets.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -72,18 +73,8 @@ export async function renderUniverseJobs(universeId, body, mapServiceError) {
 
   // Mirror the upfront validation /api/image-gen/generate does so a doomed
   // batch fails before any jobs land in the queue.
-  if (mode === IMAGE_GEN_MODE.CODEX && !settings.imageGen?.codex?.enabled) {
-    throw new ServerError(
-      'Codex Imagegen is disabled — enable it in Settings → Image Gen first',
-      { status: 400, code: 'CODEX_IMAGEGEN_DISABLED' },
-    );
-  }
-  if (mode === IMAGE_GEN_MODE.GROK && !settings.imageGen?.grok?.enabled) {
-    throw new ServerError(
-      'Grok Imagegen is disabled — enable it in Settings → Image Gen first',
-      { status: 400, code: 'GROK_IMAGEGEN_DISABLED' },
-    );
-  }
+  const cloud = resolveCloudProviderConfig(settings, mode);
+  if (cloud && !cloud.enabled) throw cloud.disabledError;
   if (mode === IMAGE_GEN_MODE.LOCAL) {
     const py = settings.imageGen?.local?.pythonPath || null;
     const allModels = getImageModels();
@@ -186,17 +177,10 @@ export async function renderUniverseJobs(universeId, body, mapServiceError) {
     // settings apply to Universe Builder batch renders the same way they
     // do for /api/image-gen/generate and pipeline renders.
     const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, mode);
-    if (mode === IMAGE_GEN_MODE.CODEX) {
-      const c = settings.imageGen?.codex || {};
+    if (cloud) {
       queued = enqueueJob({
         kind: 'image',
-        params: { mode: IMAGE_GEN_MODE.CODEX, codexPath: c.codexPath, model: c.model, effort: c.effort, cleanC2PA, denoise, ...params },
-      });
-    } else if (mode === IMAGE_GEN_MODE.GROK) {
-      const g = settings.imageGen?.grok || {};
-      queued = enqueueJob({
-        kind: 'image',
-        params: { mode: IMAGE_GEN_MODE.GROK, grokPath: g.grokPath, aspectRatio: g.aspectRatio, cleanC2PA, denoise, ...params },
+        params: { ...cloud.jobParams, cleanC2PA, denoise, ...params },
       });
     } else {
       // mode === IMAGE_GEN_MODE.LOCAL (validated upfront).
