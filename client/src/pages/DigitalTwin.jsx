@@ -108,8 +108,11 @@ export default function DigitalTwin() {
       <div className="absolute inset-0">
         <PageSkeleton
           header="bar"
+          label="Loading digital twin"
           fullHeight
           padded
+          barClassName="p-4"
+          bodyClassName="p-4"
           titleWidthClass="w-40"
           showSubtitle
           tabs={TABS.length}

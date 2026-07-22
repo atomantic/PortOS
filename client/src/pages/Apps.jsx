@@ -137,7 +137,7 @@ export default function Apps() {
     .slice().sort((a, b) => a.name.localeCompare(b.name));
 
   if (loading) {
-    return <PageSkeleton titleWidthClass="w-24" showSubtitle cards={4} sidebar={false} />;
+    return <PageSkeleton label="Loading apps" titleWidthClass="w-24" showSubtitle cards={4} sidebar={false} />;
   }
 
   return (

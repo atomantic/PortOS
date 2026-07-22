@@ -145,7 +145,7 @@ export function RunsHistoryPage() {
   };
 
   if (loading) {
-    return <PageSkeleton titleWidthClass="w-48" showAction={false} cards={4} sidebar={false} />;
+    return <PageSkeleton label="Loading runs history" titleWidthClass="w-48" showAction={false} cards={4} sidebar={false} />;
   }
 
   const failedCount = runs.filter(r => r.success === false).length;

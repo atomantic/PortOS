@@ -103,6 +103,7 @@ export default function FeatureAgents() {
         {loading ? (
           <PageSkeleton
             header="none"
+            label="Loading agents"
             layout="grid"
             gridColsClass="lg:grid-cols-2 xl:grid-cols-3"
             cards={3}

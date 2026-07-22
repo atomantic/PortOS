@@ -89,11 +89,16 @@ export default function FeatureAgentDetail() {
     return (
       <PageSkeleton
         header="bar"
+        label="Loading agent"
         fullHeight
         padded
+        // Hand-rolled header block (not PageHeader) with the tab row inside it.
+        barClassName="px-6 pt-6 pb-4"
+        bodyClassName="p-6"
         titleWidthClass="w-56"
         showSubtitle
         showAction={false}
+        tabs={isCreate ? 0 : TABS.length}
         cards={3}
         sidebar={false}
       />

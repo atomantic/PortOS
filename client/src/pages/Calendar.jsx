@@ -76,8 +76,10 @@ export default function Calendar() {
     return (
       <PageSkeleton
         header="bar"
+        label="Loading calendar"
         fullHeight
         padded
+        bodyClassName="p-4"
         titleWidthClass="w-32"
         showSubtitle
         tabs={TABS.length}

@@ -330,7 +330,7 @@ export default function Dashboard() {
         <div className="mb-3">
           <SchematicLabel module="DASH" status="BOOTING" glyph="orbit" state="active" />
         </div>
-        <PageSkeleton titleWidthClass="w-40" layout="grid" cards={6} />
+        <PageSkeleton label="Loading dashboard" titleWidthClass="w-40" layout="grid" cards={6} />
       </div>
     );
   }

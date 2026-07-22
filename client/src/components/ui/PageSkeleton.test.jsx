@@ -16,6 +16,16 @@ describe('PageSkeleton', () => {
     expect(status()).toHaveAttribute('aria-label', 'Loading');
   });
 
+  it('announces the caller-supplied label so the busy state names what is loading', () => {
+    render(<PageSkeleton label="Loading apps" />);
+    expect(status()).toHaveAttribute('aria-label', 'Loading apps');
+  });
+
+  it('passes the label through in bar-header mode too', () => {
+    render(<PageSkeleton header="bar" label="Loading brain" />);
+    expect(status()).toHaveAttribute('aria-label', 'Loading brain');
+  });
+
   it('defaults to an unpadded inline header so it does not double-pad Layout main', () => {
     render(<PageSkeleton />);
     expect(status().className).not.toContain('p-4');
@@ -67,6 +77,21 @@ describe('PageSkeleton', () => {
     expect(container.innerHTML).toContain('border-b border-port-border');
   });
 
+  it('lets a hand-rolled header override the bar and body padding', () => {
+    const { container } = render(
+      <PageSkeleton header="bar" padded barClassName="px-6 py-4 bg-port-card" bodyClassName="p-6" />
+    );
+    expect(container.innerHTML).toContain('px-6 py-4 bg-port-card');
+    expect(container.innerHTML).toContain('p-6');
+    expect(container.innerHTML).not.toContain('px-3 py-2 sm:px-4 sm:py-3');
+  });
+
+  it('omits body padding on a full-bleed tab even in bar mode', () => {
+    const { container } = render(<PageSkeleton header="bar" padded={false} bodyClassName="p-4" />);
+    const bodyRegion = container.querySelector('.flex-1.min-h-0');
+    expect(bodyRegion.className).not.toContain('p-4');
+  });
+
   it('reserves one strip row per tab, matching TabPills touch-target height', () => {
     const { container } = render(<PageSkeleton header="bar" tabs={5} />);
     const tabRows = container.querySelectorAll('.h-\\[44px\\]');
@@ -87,5 +112,14 @@ describe('PageSkeleton', () => {
   it('treats a negative card count as zero rather than throwing', () => {
     const { container } = render(<PageSkeleton cards={-3} sidebar={false} />);
     expect(cardCount(container)).toBe(0);
+  });
+
+  it('clamps a negative or fractional tab count instead of throwing on Array.from', () => {
+    const negative = render(<PageSkeleton header="bar" tabs={-2} />);
+    expect(negative.container.querySelectorAll('.h-\\[44px\\]')).toHaveLength(0);
+    negative.unmount();
+
+    const fractional = render(<PageSkeleton header="bar" tabs={3.7} />);
+    expect(fractional.container.querySelectorAll('.h-\\[44px\\]')).toHaveLength(3);
   });
 });

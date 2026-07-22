@@ -263,7 +263,7 @@ export default function Review() {
     }), [pendingItems]);
 
   if (loading) {
-    return <PageSkeleton padded fullHeight titleWidthClass="w-40" cards={4} sidebar={false} />;
+    return <PageSkeleton label="Loading review hub" padded fullHeight titleWidthClass="w-40" cards={4} sidebar={false} />;
   }
 
   // Cheap derivations off the memoized `pendingItems`/`actionableItems` — plain

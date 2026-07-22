@@ -111,8 +111,11 @@ export default function Wiki() {
     return (
       <PageSkeleton
         header="bar"
+        label="Loading wiki"
         fullHeight
-        padded
+        // Browse owns its own list/detail scroll and takes no body padding.
+        padded={activeTab !== 'browse'}
+        bodyClassName="p-4"
         titleWidthClass="w-24"
         showSubtitle
         tabs={TABS.length}

@@ -387,8 +387,12 @@ export default function CharacterSheet() {
     return (
       <PageSkeleton
         header="bar"
+        label="Loading character sheet"
         fullHeight
         padded
+        // The Character bar is hand-rolled (not PageHeader): taller and card-tinted.
+        barClassName="px-6 py-4 bg-port-card"
+        bodyClassName="p-4 md:p-6"
         titleWidthClass="w-32"
         cards={4}
         sidebar={false}
