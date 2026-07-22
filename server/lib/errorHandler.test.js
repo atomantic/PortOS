@@ -6,7 +6,9 @@ import {
   errorEvents,
   errorMiddleware,
   createServiceErrorMapper,
-  asyncHandler
+  asyncHandler,
+  buildErrorEnvelope,
+  sendErrorResponse
 } from './errorHandler.js';
 
 // Build a fake Express req/res pair. `res.status()` and `res.json()` are
@@ -380,6 +382,69 @@ describe('errorHandler.js', () => {
       expect(res.status).toHaveBeenCalledWith(404);
       // status→code derivation still runs even without an io channel.
       expect(res.json.mock.calls[0][0].code).toBe('NOT_FOUND');
+    });
+  });
+
+  describe('sendErrorResponse', () => {
+    const makeRes = (overrides = {}) => {
+      const res = { headersSent: false, ...overrides };
+      res.status = vi.fn(() => res);
+      res.json = vi.fn(() => res);
+      return res;
+    };
+
+    it('emits the standard envelope for callers outside a handler catch', () => {
+      const res = makeRes();
+      sendErrorResponse(res, new ServerError('Sample not found', { status: 404 }));
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      const body = res.json.mock.calls[0][0];
+      expect(body.error).toBe('Sample not found');
+      expect(body.code).toBe('NOT_FOUND');
+      expect(typeof body.timestamp).toBe('number');
+    });
+
+    it('normalizes a plain Error and returns the ServerError to the caller', () => {
+      const res = makeRes();
+      const error = sendErrorResponse(res, new Error('kaboom'));
+
+      expect(error).toBeInstanceOf(ServerError);
+      expect(res.status).toHaveBeenCalledWith(500);
+      expect(res.json.mock.calls[0][0].code).toBe('INTERNAL_ERROR');
+    });
+
+    it('does not write once headers are already sent', () => {
+      const res = makeRes({ headersSent: true });
+      sendErrorResponse(res, new ServerError('too late', { status: 404 }));
+
+      expect(res.status).not.toHaveBeenCalled();
+      expect(res.json).not.toHaveBeenCalled();
+    });
+
+    it('emits the socket event with the sanitized context when io is supplied', () => {
+      const res = makeRes();
+      const io = { emit: vi.fn() };
+      // `errorEvents` is an EventEmitter — an 'error' emit with no listener
+      // re-throws, so subscribe for the duration of this assertion.
+      const listener = vi.fn();
+      errorEvents.on('error', listener);
+      sendErrorResponse(
+        res,
+        new ServerError('boom', { status: 400, context: { modelId: 'm', apiKey: 'secret' } }),
+        { io }
+      );
+
+      const payload = io.emit.mock.calls.find(([event]) => event === 'error:occurred')[1];
+      expect(payload.context).toEqual({ modelId: 'm' });
+      expect(res.json.mock.calls[0][0].context).toEqual({ modelId: 'm' });
+      errorEvents.off('error', listener);
+    });
+  });
+
+  describe('buildErrorEnvelope', () => {
+    it('omits context when the sanitized context is empty', () => {
+      const body = buildErrorEnvelope(new ServerError('nope', { status: 400 }), {});
+      expect(body).toEqual({ error: 'nope', code: 'BAD_REQUEST', timestamp: expect.any(Number) });
     });
   });
 });

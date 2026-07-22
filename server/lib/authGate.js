@@ -5,6 +5,7 @@ import { extractToken, isAuthEnabled, verifyPassword, verifySession } from '../s
 import { extractBasicPassword, isCrossOrigin } from '../../lib/portosAuthCore.js';
 import { getSettings, settingsEvents } from '../services/settings.js';
 import { isRegistryPublic } from './apiRegistry.js';
+import { sendErrorResponse, ServerError } from './errorHandler.js';
 
 // Paths that bypass the auth gate even when a password is set:
 //   - /api/auth/status, /api/auth/whoami, /api/auth/login → the login UI
@@ -70,7 +71,9 @@ export const authGate = async (req, res, next) => {
   // session), so a same-tailnet attacker could force-logout a user
   // cross-origin if the guard sat behind the public-path bypass.
   if (isCrossOrigin(req)) {
-    res.status(403).json({ error: 'Cross-origin request rejected', code: 'CROSS_ORIGIN_BLOCKED' });
+    sendErrorResponse(res, new ServerError('Cross-origin request rejected', {
+      status: 403, code: 'CROSS_ORIGIN_BLOCKED',
+    }));
     return;
   }
   const path = req.path;
@@ -101,7 +104,9 @@ export const authGate = async (req, res, next) => {
     res.status(401).type('text/plain').send('Unauthorized');
     return;
   }
-  res.status(401).json({ error: 'Authentication required', code: 'AUTH_REQUIRED' });
+  sendErrorResponse(res, new ServerError('Authentication required', {
+    status: 401, code: 'AUTH_REQUIRED',
+  }));
 };
 
 // Socket.IO middleware. Run after a successful HTTP-side handshake — same

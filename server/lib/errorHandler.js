@@ -127,20 +127,48 @@ export function asyncHandler(fn) {
         console.error(details ? `${logMsg}: ${JSON.stringify(details)}` : logMsg);
       }
 
-      const safeContext = sanitizeContext(error.context);
-
-      if (io) {
-        emitErrorEvent(io, error, safeContext);
-      }
-
-      return res.status(error.status).json({
-        error: error.message,
-        code: error.code,
-        timestamp: error.timestamp,
-        ...(safeContext && Object.keys(safeContext).length > 0 && { context: safeContext })
-      });
+      return sendErrorResponse(res, error, { io });
     });
   };
+}
+
+/**
+ * Build the standard PortOS error body: `{ error, code, timestamp }` plus a
+ * `context` when the sanitized context has anything left in it. Every error
+ * response the API emits goes through here so no route can invent its own
+ * envelope shape.
+ */
+export function buildErrorEnvelope(error, safeContext) {
+  return {
+    error: error.message,
+    code: error.code,
+    timestamp: error.timestamp,
+    ...(safeContext && Object.keys(safeContext).length > 0 && { context: safeContext })
+  };
+}
+
+/**
+ * Send an error as the standard envelope, sanitizing context once and (when an
+ * `io` is supplied) emitting the matching socket event so the two channels
+ * can't drift on what's stripped.
+ *
+ * Use this from anywhere that must answer a request OUTSIDE `asyncHandler`'s
+ * catch — `res.sendFile` callbacks, middleware that short-circuits, PTY/timer
+ * callbacks — where `throw` has nothing to bubble to. It never throws and
+ * no-ops the write once headers are sent.
+ *
+ * @returns {ServerError} the normalized error, for callers that want to log it.
+ */
+export function sendErrorResponse(res, err, { io } = {}) {
+  const error = normalizeError(err);
+  const safeContext = sanitizeContext(error.context);
+  if (io) {
+    emitErrorEvent(io, error, safeContext);
+  }
+  if (!res.headersSent) {
+    res.status(error.status).json(buildErrorEnvelope(error, safeContext));
+  }
+  return error;
 }
 
 /**
@@ -295,24 +323,10 @@ export function errorMiddleware(err, req, res, next) {
     console.error(logMsg);
   }
 
-  // Sanitize once and share with both the socket event and the HTTP body so
-  // the two channels can't drift on what's stripped — mirrors asyncHandler.
-  const safeContext = sanitizeContext(error.context);
-
-  // Emit Socket.IO event
-  if (io) {
-    emitErrorEvent(io, error, safeContext);
-  }
-
-  // Send response. Include `context` (e.g. a service's `details` / `modelId`)
-  // when present, matching the envelope asyncHandler emits — synchronous
-  // handlers that throw a ServerError land here, not in asyncHandler.
-  res.status(error.status).json({
-    error: error.message,
-    code: error.code,
-    timestamp: error.timestamp,
-    ...(safeContext && Object.keys(safeContext).length > 0 && { context: safeContext })
-  });
+  // Emit the socket event and send the shared envelope — synchronous handlers
+  // that throw a ServerError land here, not in asyncHandler, so both paths must
+  // produce the same body.
+  sendErrorResponse(res, error, { io });
 }
 
 /**
