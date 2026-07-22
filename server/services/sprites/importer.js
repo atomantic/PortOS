@@ -114,7 +114,72 @@ function relToCharacterDir(manifestPath, characterId) {
   return rel;
 }
 
-async function importCharacter({ sourceRoot, characterId, spec, specPath }) {
+// Asset references worth importing from a run's manifests: images, previews,
+// and packaged manifests — never raw/extracted intermediates or source video.
+const ASSET_REF = /\.(png|gif|json)$/i;
+const EXCLUDED_RUN_SEGMENTS = /(^|\/)(raw|frames|review)\//;
+
+// Recursively collect importable asset paths referenced anywhere in a
+// manifest's JSON (string values that normalize into the character dir).
+function collectManifestRefs(node, characterId, out) {
+  if (typeof node === 'string') {
+    const rel = relToCharacterDir(node, characterId);
+    if (rel && ASSET_REF.test(rel) && !EXCLUDED_RUN_SEGMENTS.test(rel)) out.add(rel);
+  } else if (Array.isArray(node)) {
+    for (const v of node) collectManifestRefs(v, characterId, out);
+  } else if (node && typeof node === 'object') {
+    for (const v of Object.values(node)) collectManifestRefs(v, characterId, out);
+  }
+}
+
+async function copyCharFile(srcCharDir, destDir, rel) {
+  const src = join(srcCharDir, rel);
+  if (!(await pathExists(src))) return false;
+  const dest = join(destDir, rel);
+  await ensureDir(dirname(dest));
+  await copyFile(src, dest);
+  return true;
+}
+
+/**
+ * Import one APPROVED direction of a finalized walk set: the run manifest
+ * (hash-verified), then only the assets the run's manifests declare — packed
+ * strips, packaged manifests, previews. Works for both grok runs (record at
+ * run root, assets under generated/) and imagegen redraw runs (manifest +
+ * strips at the version root, surrounded by unselected candidates that must
+ * stay behind).
+ */
+async function importApprovedDirection({ srcCharDir, destDir, characterId, direction, dir, result, hashExpectations }) {
+  const manifestRel = relToCharacterDir(dir.runManifest, characterId);
+  if (!manifestRel) {
+    result.errors.push(`walk set ${direction}: unsafe run path rejected: ${dir.runManifest || dir.runPath}`);
+    return;
+  }
+  if (!(await copyCharFile(srcCharDir, destDir, manifestRel))) {
+    result.errors.push(`walk set ${direction}: run manifest missing: ${manifestRel}`);
+    return;
+  }
+  result.files += 1;
+  if (dir.runManifestSha256) hashExpectations.push({ relPath: manifestRel, sha256: dir.runManifestSha256 });
+
+  const refs = new Set();
+  collectManifestRefs(await readJson(join(srcCharDir, manifestRel)), characterId, refs);
+  const runRel = relToCharacterDir(dir.runPath, characterId);
+  if (runRel && (await pathExists(join(srcCharDir, `${runRel}/generated/review-preview.json`)))) {
+    refs.add(`${runRel}/generated/review-preview.json`);
+  }
+  // One extra expansion level: packaged manifests / previews the run record
+  // names in turn declare the strip files.
+  for (const rel of [...refs]) {
+    if (rel.endsWith('.json')) collectManifestRefs(await readJson(join(srcCharDir, rel)), characterId, refs);
+  }
+  refs.delete(manifestRel);
+  for (const rel of [...refs].sort()) {
+    if (await copyCharFile(srcCharDir, destDir, rel)) result.files += 1;
+  }
+}
+
+async function importCharacter({ sourceRoot, characterId, spec, specPath, selection }) {
   const result = { id: characterId, kind: 'character', files: 0, verified: 0, errors: [] };
   const srcCharDir = join(sourceRoot, 'art-source', 'sprites', characterId);
   const destDir = spriteDir(characterId);
@@ -144,8 +209,9 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath }) {
     }
   }
 
-  // walk/ — finalized walk-set manifests, then the run files each direction
-  // references (manifest + packed strip + previews; never raw/ or frames/).
+  // walk/ — the manifests themselves are small provenance and copy whole,
+  // but ASSETS import only for APPROVED directions of a FINALIZED set. Draft
+  // selections / publication records / pending directions contribute nothing.
   const walkDir = join(srcCharDir, 'walk');
   if (await pathExists(walkDir)) {
     const copied = await copyTree(walkDir, join(destDir, 'walk'));
@@ -153,35 +219,33 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath }) {
     for (const rel of copied) {
       if (!rel.endsWith('.json')) continue;
       const walkSet = await readJson(join(destDir, 'walk', rel));
-      for (const [direction, dir] of Object.entries(walkSet?.directions || {})) {
-        const runRel = relToCharacterDir(dir?.runPath, characterId);
-        if (!runRel) {
-          if (dir?.runPath) result.errors.push(`walk set ${direction}: unsafe run path rejected: ${dir.runPath}`);
+      if (walkSet?.kind !== 'finalized-eight-direction-walk-set' || walkSet?.status !== 'final') continue;
+      for (const [direction, dir] of Object.entries(walkSet.directions || {})) {
+        if (dir?.status !== 'approved') {
+          result.errors.push(`walk set ${direction}: not approved (${dir?.status ?? 'missing'}) — skipped`);
           continue;
         }
-        const srcRunDir = join(srcCharDir, runRel);
-        if (!(await pathExists(srcRunDir))) {
-          result.errors.push(`walk set references missing run: ${runRel}`);
-          continue;
-        }
-        // Root-level files only — manifests, packed strips, previews. The
-        // run's raw/, frames/, review/, generated/ intermediates stay behind.
-        const runCopied = await copyTree(srcRunDir, join(destDir, runRel), (r, isDir) => !isDir && !r.includes('/'));
-        result.files += runCopied.length;
-        if (dir?.runManifest && dir?.runManifestSha256) {
-          const manifestRel = relToCharacterDir(dir.runManifest, characterId);
-          if (manifestRel) hashExpectations.push({ relPath: manifestRel, sha256: dir.runManifestSha256 });
-        }
+        await importApprovedDirection({ srcCharDir, destDir, characterId, direction, dir, result, hashExpectations });
       }
     }
   }
 
-  // runtime/ (immutable atlas archives) + imagegen/ (approved redraw sources).
-  for (const sub of ['runtime', 'imagegen']) {
-    if (await pathExists(join(srcCharDir, sub))) {
-      const copied = await copyTree(join(srcCharDir, sub), join(destDir, sub));
-      result.files += copied.length;
-    }
+  // runtime/ — immutable published atlas archives. (No wholesale imagegen/
+  // copy: approved redraw outputs arrive via the walk-set expansion above;
+  // the rest of imagegen/ is unselected candidates and raw intermediates.)
+  if (await pathExists(join(srcCharDir, 'runtime'))) {
+    const copied = await copyTree(join(srcCharDir, 'runtime'), join(destDir, 'runtime'));
+    result.files += copied.length;
+  }
+
+  // Published-selection provenance: verify the immutable runtime atlas the
+  // catalog hash-pins, and bring the published keyed source along.
+  if (selection?.characterId === characterId) {
+    const imm = selection.selected?.immutableRuntimeArtifact;
+    const immRel = relToCharacterDir(imm?.path, characterId);
+    if (immRel && imm?.sha256) hashExpectations.push({ relPath: immRel, sha256: imm.sha256 });
+    const keyedRel = relToCharacterDir(selection.selected?.keyedSourcePath, characterId);
+    if (keyedRel && (await copyCharFile(srcCharDir, destDir, keyedRel))) result.files += 1;
   }
 
   result.verified = await verifyHashes(destDir, hashExpectations, result.errors);
@@ -240,6 +304,9 @@ export async function importFromSource({ sourceRoot, characters, includeProps = 
   }
 
   await ensureDir(PATHS.sprites);
+  // Read the published-selection pointer up front so the matching character's
+  // import can verify the hash-pinned runtime artifacts it declares.
+  const selection = await readJson(join(sourceRoot, 'art-pipeline', 'catalog', 'runtime-selection.json'));
   const results = [];
   // Ids imported THIS run (drives the runtime-selection provenance copy) vs
   // every character id the specs dir declares (drives the props-loop skip). A
@@ -266,7 +333,7 @@ export async function importFromSource({ sourceRoot, characters, includeProps = 
       allSpecCharacterIds.add(characterId);
       if (wanted && !wanted.has(characterId)) continue;
       characterIds.add(characterId);
-      results.push(await importCharacter({ sourceRoot, characterId, spec, specPath }));
+      results.push(await importCharacter({ sourceRoot, characterId, spec, specPath, selection }));
     }
   }
 
@@ -284,7 +351,6 @@ export async function importFromSource({ sourceRoot, characters, includeProps = 
 
   // Published-atlas pointer — provenance for the current selection, kept with
   // the character it points at.
-  const selection = await readJson(join(sourceRoot, 'art-pipeline', 'catalog', 'runtime-selection.json'));
   if (selection?.characterId && characterIds.has(selection.characterId)) {
     const destDir = join(spriteDir(selection.characterId), 'catalog');
     await ensureDir(destDir);

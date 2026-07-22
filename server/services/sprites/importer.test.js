@@ -1,9 +1,11 @@
 /**
  * Sprite importer against a synthetic source tree (#2895, phase 1). Builds an
- * ElsewhereAcres-layout fixture in a tmpdir, imports it into a tmp data root,
- * and asserts the selective-copy rules (candidates/raw intermediates stay
- * behind), the manifest sha256 verification, and the record upserts. Also
- * covers the path-confinement gate in paths.js.
+ * ElsewhereAcres-layout fixture in a tmpdir — including the REAL run shape
+ * (run record at the run root, assets under generated/, unselected imagegen
+ * candidates beside the approved manifest) — imports it into a tmp data root,
+ * and asserts the manifest-driven approved-only copy rules, the sha256
+ * verification (walk manifests + the catalog's hash-pinned runtime atlas),
+ * and the record upserts. Also covers the path-confinement gate in paths.js.
  */
 
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
@@ -35,9 +37,31 @@ function writeTree(root, files) {
   }
 }
 
+const anchorBytes = 'FAKE-PNG-ANCHOR-SOUTH';
+// Grok-style run: record at the run root referencing packaged assets under
+// generated/ (exact strings so runManifestSha256 matches the copied bytes).
+const southRunRecord = JSON.stringify({
+  kind: 'grok-walk-animation-run', status: 'candidate', characterId: 'hero', direction: 'south',
+  anchorPath: 'art-source/sprites/hero/reference/hero-anchor-south.png',
+  stripPreview: 'art-source/sprites/hero/grok/run-1/generated/south-strip.png',
+  postprocessManifest: 'art-source/sprites/hero/grok/run-1/generated/south-manifest.json',
+}, null, 2);
+const southPackagedManifest = JSON.stringify({
+  kind: 'deterministically-packaged-grok-walk-video', direction: 'south',
+  sourceVideoPath: 'art-source/sprites/hero/grok/run-1/generated/source-video.mp4',
+  frames: [{ path: 'art-source/sprites/hero/grok/run-1/generated/frames/f0.png' }],
+}, null, 2);
+const southReviewPreview = JSON.stringify({
+  stripPath: 'art-source/sprites/hero/grok/run-1/generated/south-strip.png', frameCount: 8, fps: 12,
+}, null, 2);
+// Imagegen-style run (the v19-east shape): manifest + strips at the version
+// root, surrounded by unselected candidates that must stay behind.
+const eastManifest = JSON.stringify({
+  kind: 'imagegen-redraw-manifest', direction: 'east',
+  stripPath: 'art-source/sprites/hero/imagegen/v2/east-strip.png',
+}, null, 2);
+
 beforeAll(() => {
-  const anchorBytes = 'FAKE-PNG-ANCHOR-SOUTH';
-  const runManifest = JSON.stringify({ kind: 'deterministically-packaged-grok-walk-video', direction: 'south' }, null, 2);
   writeTree(SOURCE_ROOT, {
     'art-pipeline/characters/hero.json': {
       schemaVersion: 1, characterId: 'hero', displayName: 'Hero', archetype: 'adult-humanoid-v1',
@@ -45,6 +69,7 @@ beforeAll(() => {
     'art-pipeline/characters/buddy.json': {
       schemaVersion: 1, characterId: 'buddy', displayName: 'Buddy', archetype: 'adult-humanoid-v1',
     },
+    'art-pipeline/characters/character-schema-v1.json': { $schema: 'https://json-schema.org/draft/2020-12/schema' },
     'game/assets/sprites/buddy/buddy-animation-atlas.png': 'BUDDY-PUBLISHED-COPY',
     'art-source/sprites/hero/reference/hero-reference-set-v1.json': {
       schemaVersion: 1,
@@ -64,10 +89,21 @@ beforeAll(() => {
         south: {
           status: 'approved',
           runPath: 'art-source/sprites/hero/grok/run-1',
-          runManifest: 'art-source/sprites/hero/grok/run-1/south-manifest.json',
-          runManifestSha256: sha256(runManifest),
+          runManifest: 'art-source/sprites/hero/grok/run-1/animation-run.json',
+          runManifestSha256: sha256(southRunRecord),
         },
-        // Traversal attempt: a crafted runPath must be rejected, never joined
+        east: {
+          status: 'approved',
+          runPath: 'art-source/sprites/hero/imagegen/v2',
+          runManifest: 'art-source/sprites/hero/imagegen/v2/east-manifest.json',
+          runManifestSha256: sha256(eastManifest),
+        },
+        west: {
+          status: 'pending',
+          runPath: 'art-source/sprites/hero/grok/run-3',
+          runManifest: 'art-source/sprites/hero/grok/run-3/animation-run.json',
+        },
+        // Traversal attempt: a crafted path must be rejected, never joined
         // into a write destination outside data/sprites/.
         north: {
           status: 'approved',
@@ -77,11 +113,43 @@ beforeAll(() => {
         },
       },
     },
-    'art-source/sprites/hero/grok/run-1/south-manifest.json': runManifest,
-    'art-source/sprites/hero/grok/run-1/south-strip.png': 'FAKE-STRIP',
-    'art-source/sprites/hero/grok/run-1/raw/frame-000.png': 'RAW-INTERMEDIATE',
+    // Non-final manifest kinds in walk/: the files copy as provenance, but
+    // their directions must contribute NO assets.
+    'art-source/sprites/hero/walk/hero-walk-selection-v1.json': {
+      schemaVersion: 1, kind: 'reviewed-directional-walk-selection', characterId: 'hero', status: 'complete',
+      directions: {
+        south: {
+          status: 'approved',
+          runPath: 'art-source/sprites/hero/grok/run-decoy',
+          runManifest: 'art-source/sprites/hero/grok/run-decoy/animation-run.json',
+        },
+      },
+    },
+    'art-source/sprites/hero/grok/run-1/animation-run.json': southRunRecord,
+    'art-source/sprites/hero/grok/run-1/generated/south-manifest.json': southPackagedManifest,
+    'art-source/sprites/hero/grok/run-1/generated/south-strip.png': 'FAKE-STRIP',
+    'art-source/sprites/hero/grok/run-1/generated/review-preview.json': southReviewPreview,
+    'art-source/sprites/hero/grok/run-1/generated/source-video.mp4': 'FAKE-VIDEO',
+    'art-source/sprites/hero/grok/run-1/generated/raw/frame-000.png': 'RAW-INTERMEDIATE',
+    'art-source/sprites/hero/grok/run-1/generated/frames/f0.png': 'EXTRACTED-FRAME',
+    'art-source/sprites/hero/grok/run-3/animation-run.json': '{"status":"pending-run"}',
+    'art-source/sprites/hero/grok/run-decoy/animation-run.json': '{"status":"decoy"}',
+    'art-source/sprites/hero/grok/run-decoy/generated/decoy-strip.png': 'DECOY-STRIP',
+    'art-source/sprites/hero/imagegen/v2/east-manifest.json': eastManifest,
+    'art-source/sprites/hero/imagegen/v2/east-strip.png': 'FAKE-EAST-STRIP',
+    'art-source/sprites/hero/imagegen/v2/east-candidate-02.png': 'UNSELECTED-CANDIDATE',
     'art-source/sprites/hero/runtime/v1/hero-animation-atlas-v1.png': 'FAKE-ATLAS',
-    'art-pipeline/catalog/runtime-selection.json': { selectionId: 's1', characterId: 'hero', status: 'selected' },
+    'art-source/sprites/hero/hero-atlas-keyed.png': 'FAKE-KEYED',
+    'art-pipeline/catalog/runtime-selection.json': {
+      selectionId: 's1', characterId: 'hero', status: 'selected',
+      selected: {
+        keyedSourcePath: 'art-source/sprites/hero/hero-atlas-keyed.png',
+        immutableRuntimeArtifact: {
+          path: 'art-source/sprites/hero/runtime/v1/hero-animation-atlas-v1.png',
+          sha256: sha256('FAKE-ATLAS'),
+        },
+      },
+    },
     'game/assets/sprites/flora/flora-atlas.png': 'FAKE-FLORA-ATLAS',
     'game/assets/sprites/flora/flora-atlas.png.import': 'GODOT-IMPORT-SIDECAR',
     'game/assets/sprites/flora/README.md': '# flora',
@@ -95,39 +163,57 @@ afterAll(() => {
 });
 
 describe('importFromSource', () => {
-  it('imports approved assets, skips intermediates, verifies hashes, upserts records', async () => {
+  it('imports approved assets manifest-driven, skips intermediates/candidates, verifies hashes', async () => {
     const { results, totals } = await importFromSource({ sourceRoot: SOURCE_ROOT });
 
     const hero = results.find((r) => r.id === 'hero');
     expect(hero.kind).toBe('character');
-    // one good anchor + the run manifest verify; the tampered east anchor errors
-    expect(hero.verified).toBe(2);
+    // south anchor + south run record + east manifest + hash-pinned runtime atlas
+    expect(hero.verified).toBe(4);
     expect(hero.errors).toEqual([
-      'walk set north: unsafe run path rejected: art-source/sprites/hero/../../../../tmp/sprite-escape',
+      'walk set west: not approved (pending) — skipped',
+      'walk set north: unsafe run path rejected: art-source/sprites/hero/../../../../tmp/sprite-escape/x.json',
       'sha256 mismatch: reference/hero-anchor-east.png',
     ]);
-    expect(existsSync('/tmp/sprite-escape')).toBe(false);
 
     const heroDir = join(SPRITES_ROOT, 'hero');
-    expect(existsSync(join(heroDir, 'character-spec.json'))).toBe(true);
+    // reference: locked set without candidates
     expect(existsSync(join(heroDir, 'reference/hero-anchor-south.png'))).toBe(true);
     expect(existsSync(join(heroDir, 'reference/candidates/reject-1.png'))).toBe(false);
+    // walk manifests copy as provenance
     expect(existsSync(join(heroDir, 'walk/hero-walk-set-v1.json'))).toBe(true);
-    expect(existsSync(join(heroDir, 'grok/run-1/south-strip.png'))).toBe(true);
-    expect(existsSync(join(heroDir, 'grok/run-1/raw/frame-000.png'))).toBe(false);
+    expect(existsSync(join(heroDir, 'walk/hero-walk-selection-v1.json'))).toBe(true);
+    // approved grok run: record + manifest-declared assets, never intermediates
+    expect(existsSync(join(heroDir, 'grok/run-1/animation-run.json'))).toBe(true);
+    expect(existsSync(join(heroDir, 'grok/run-1/generated/south-manifest.json'))).toBe(true);
+    expect(existsSync(join(heroDir, 'grok/run-1/generated/south-strip.png'))).toBe(true);
+    expect(existsSync(join(heroDir, 'grok/run-1/generated/review-preview.json'))).toBe(true);
+    expect(existsSync(join(heroDir, 'grok/run-1/generated/source-video.mp4'))).toBe(false);
+    expect(existsSync(join(heroDir, 'grok/run-1/generated/raw/frame-000.png'))).toBe(false);
+    expect(existsSync(join(heroDir, 'grok/run-1/generated/frames/f0.png'))).toBe(false);
+    // approved imagegen run: manifest + selected strip only
+    expect(existsSync(join(heroDir, 'imagegen/v2/east-manifest.json'))).toBe(true);
+    expect(existsSync(join(heroDir, 'imagegen/v2/east-strip.png'))).toBe(true);
+    expect(existsSync(join(heroDir, 'imagegen/v2/east-candidate-02.png'))).toBe(false);
+    // pending direction and non-final manifest contribute nothing
+    expect(existsSync(join(heroDir, 'grok/run-3/animation-run.json'))).toBe(false);
+    expect(existsSync(join(heroDir, 'grok/run-decoy'))).toBe(false);
+    // published artifacts: immutable archive + keyed source + selection copy
     expect(existsSync(join(heroDir, 'runtime/v1/hero-animation-atlas-v1.png'))).toBe(true);
+    expect(existsSync(join(heroDir, 'hero-atlas-keyed.png'))).toBe(true);
     expect(existsSync(join(heroDir, 'catalog/runtime-selection.json'))).toBe(true);
 
     // props family imported (PNG + README, never the Godot .import sidecar);
-    // the character's published game dir is NOT double-imported as props.
+    // character game dirs are NOT double-imported as props; schema file skipped.
     const flora = results.find((r) => r.id === 'flora');
     expect(flora.kind).toBe('props');
     expect(existsSync(join(SPRITES_ROOT, 'flora/atlas/flora-atlas.png'))).toBe(true);
     expect(existsSync(join(SPRITES_ROOT, 'flora/atlas/flora-atlas.png.import'))).toBe(false);
-    expect(results.some((r) => r.id === 'hero' && r.kind === 'props')).toBe(false);
+    expect(results.some((r) => r.kind === 'props' && (r.id === 'hero' || r.id === 'buddy'))).toBe(false);
+    expect(results.some((r) => r.id === 'character-schema-v1')).toBe(false);
 
     expect(totals.subjects).toBe(3); // hero + buddy characters, flora props
-    expect(totals.errors).toBe(2);
+    expect(totals.errors).toBe(3);
 
     const record = await getRecord('hero');
     expect(record).toMatchObject({ kind: 'character', name: 'Hero', status: 'imported', chromaKey: '#FF00FF' });
@@ -163,6 +249,7 @@ describe('paths confinement', () => {
     expect(abs.startsWith(join(SPRITES_ROOT, 'hero'))).toBe(true);
     const assets = await listSpriteAssets('hero');
     expect(assets.some((a) => a.path === 'reference/hero-main.png')).toBe(true);
+    expect(assets.some((a) => a.path === 'grok/run-1/generated/south-strip.png')).toBe(true);
   });
 
   it('getRecordWithAssets pairs the record with its disk listing', async () => {
