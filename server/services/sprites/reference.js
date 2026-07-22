@@ -34,7 +34,7 @@ import {
   buildMainReferencePrompt, buildAnchorPrompt,
 } from './prompts.js';
 import { pickChromaKey, keyProximityWarning, CHROMA_KEY_HEXES, DEFAULT_CHROMA_KEY } from './chromaKey.js';
-import { analyzeForeground, paletteFromAnalysis, normalizeFromAnalysis, normalizeAnchorFrame } from './normalize.js';
+import { analyzeForeground, paletteFromAnalysis, normalizeFromAnalysis } from './normalize.js';
 
 // Default i2i strengths: anchors redraw a NEW facing from the main (mostly
 // follow the prompt, borrow identity), an uploaded visual reference guides
@@ -138,6 +138,19 @@ async function nextCandidateName(candidatesDir, anchorId) {
 
 function findAnchor(manifest, anchorId) {
   return manifest.anchors.find((a) => a.id === anchorId) || null;
+}
+
+// Clip risk against BOTH keys a lock touches: the generation key (near-key
+// details are already masked away) and, when different, the canvas key the
+// artifact is composited onto (runtime keying on it would clip character
+// pixels — e.g. green clothing locked onto a user-pinned green key).
+function combinedClipWarning(palette, maskKeyHex, canvasKeyHex) {
+  return [
+    keyProximityWarning(palette, maskKeyHex),
+    canvasKeyHex.toUpperCase() !== maskKeyHex.toUpperCase()
+      ? keyProximityWarning(palette, canvasKeyHex, { role: 'selected' })
+      : null,
+  ].filter(Boolean).join(' — ') || null;
 }
 
 /**
@@ -364,9 +377,10 @@ async function lockReferenceImpl(recordId, { target, candidate, acceptClipRisk =
     const selectedKey = userPinned ? record.chromaKey : auto.hex;
     // Selection only sees pixels that SURVIVED the generation-key mask —
     // exact-key details (magenta garment on the magenta default) are already
-    // gone from the palette, so surface the risk instead of silently locking
-    // a clipped identity root.
-    const clipWarning = keyProximityWarning(palette, maskKey);
+    // gone from the palette — and a pinned key can collide with the palette
+    // that DID survive. Surface both risks instead of silently locking a
+    // clipped identity root.
+    const clipWarning = combinedClipWarning(palette, maskKey, selectedKey);
     // A clip-risk lock is irreversible (the frozen root may already be
     // missing exact-key details) — refuse unless the caller explicitly
     // accepts, so the user learns BEFORE the 409 wall goes up, not after.
@@ -409,11 +423,20 @@ async function lockReferenceImpl(recordId, { target, candidate, acceptClipRisk =
     }
     // Manifest key is canonical after main lock — see startReferenceGeneration.
     const canvasKey = manifest.chromaKey || record.chromaKey || DEFAULT_CHROMA_KEY;
+    // A direction can reveal key-colored detail the front view never showed
+    // (a green backpack on a green key) — anchors get the same clip gate as
+    // the main.
+    const analysis = await analyzeForeground(candAbs, maskKey);
+    const clipWarning = combinedClipWarning(paletteFromAnalysis(analysis), maskKey, canvasKey);
+    if (clipWarning && !acceptClipRisk) {
+      throw new ServerError(`${clipWarning}. Re-send with acceptClipRisk to lock anyway.`, { status: 409, code: 'CHROMA_CLIP_RISK' });
+    }
     const rel = `reference/${await nextVersionPath(refDir, `${recordId}-${anchorId}`)}`;
     const destAbs = join(spriteDir(recordId), rel);
-    await normalizeAnchorFrame(candAbs, destAbs, { maskKeyHex: maskKey, canvasKeyHex: canvasKey });
+    await normalizeFromAnalysis(analysis, candAbs, destAbs, canvasKey);
     Object.assign(anchor, {
       status: 'locked', path: rel, lockedFrom: candidate, lockedAt: now, sha256: await sha256File(destAbs),
+      ...(clipWarning ? { clipWarning } : {}),
     });
     const allLocked = manifest.anchors.every((a) => a.status === 'locked');
     if (allLocked) manifest.status = 'complete';

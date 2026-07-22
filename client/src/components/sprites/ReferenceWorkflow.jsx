@@ -343,7 +343,7 @@ export default function ReferenceWorkflow({ record, reference, onChanged }) {
                         : <><Sparkles className="w-3 h-3" /> Generate</>}
                     </button>
                     {(candidatesByTarget[anchor.direction] || []).map((c) => (
-                      <CandidateTile key={c.path} recordId={recordId} candidate={c} locking={locking} onLock={(cand) => lock(anchor.direction, cand)} />
+                      <CandidateTile key={c.path} recordId={recordId} candidate={c} locking={locking} clipRisk={clipRisks[c.path]} onLock={(cand, accept) => lock(anchor.direction, cand, accept)} />
                     ))}
                   </div>
                 )}

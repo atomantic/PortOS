@@ -83,15 +83,19 @@ function significantHues(palette, { minCountFrac = 0.005, minSaturation = 0.25, 
  * silently clipped from the immutable locked artifact. Returns a warning
  * string or null.
  */
-export function keyProximityWarning(palette, genKeyHex, opts = {}) {
-  const { r, g, b } = hexToRgb(genKeyHex);
+export function keyProximityWarning(palette, keyHex, { role = 'generation', ...opts } = {}) {
+  const { r, g, b } = hexToRgb(keyHex);
   const keyHue = rgbToHsv(r, g, b).h;
   const significant = significantHues(palette, opts);
   if (!significant.length) return null;
   const minDist = Math.min(...significant.map((c) => hueDistance(keyHue, c.h)));
-  return minDist < MIN_HUE_SEPARATION
-    ? `Character palette sits within ${Math.round(minDist)}° of the generation key ${genKeyHex} — exact-key details may have been clipped by the mask; consider pinning a different key and regenerating before locking`
-    : null;
+  if (minDist >= MIN_HUE_SEPARATION) return null;
+  // `selected` = the key the artifact will be COMPOSITED onto (runtime keying
+  // would clip character pixels); `generation` = the key it was RENDERED on
+  // (exact-key details are already gone from the mask).
+  return role === 'selected'
+    ? `Character palette sits within ${Math.round(minDist)}° of the selected key ${keyHex} — runtime keying on it would clip character pixels; pick a different key before locking`
+    : `Character palette sits within ${Math.round(minDist)}° of the generation key ${keyHex} — exact-key details may have been clipped by the mask; consider pinning a different key and regenerating before locking`;
 }
 
 export function pickChromaKey(palette, opts = {}) {
