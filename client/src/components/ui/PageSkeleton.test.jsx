@@ -138,5 +138,10 @@ describe('PageSkeleton', () => {
 
     const fractional = render(<PageSkeleton header="bar" tabs={3.7} />);
     expect(fractional.container.querySelectorAll('.h-\\[44px\\]')).toHaveLength(3);
+    fractional.unmount();
+
+    // Infinity would also throw RangeError without the upper clamp.
+    const infinite = render(<PageSkeleton cards={Infinity} sidebar={false} />);
+    expect(cardCount(infinite.container)).toBe(64);
   });
 });

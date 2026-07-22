@@ -55,8 +55,9 @@ export default function PageSkeleton({
   bodyClassName = 'p-3 sm:p-4',
 }) {
   // Callers derive counts from live data (`TABS.length`, a config value), so
-  // clamp rather than trusting them: `Array.from({ length: -1 })` throws.
-  const repeat = (n) => Array.from({ length: Math.max(0, Math.floor(n) || 0) });
+  // clamp rather than trusting them: `Array.from` throws on a negative or
+  // infinite length, and no page shell ever needs more than a few dozen blocks.
+  const repeat = (n) => Array.from({ length: Math.min(64, Math.max(0, Math.floor(n) || 0)) });
 
   const cardBlocks = repeat(cards).map((_, i) => (
     <div
