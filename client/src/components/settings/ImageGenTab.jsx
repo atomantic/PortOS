@@ -22,7 +22,7 @@ import {
   registerTool, updateTool, getToolsList,
   getHfTokenStatus, saveHfToken, clearHfToken,
 } from '../../services/api';
-import { IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_EFFORT, GROK_ASPECT_RATIOS } from '../../lib/imageGenBackends';
+import { isCloudCliMode, IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_EFFORT, GROK_ASPECT_RATIOS } from '../../lib/imageGenBackends';
 import { resolveCleanersFromConfig } from '../../lib/imageCleaners';
 import { useMediaJobSse } from '../../hooks/useMediaJobSse';
 import { CODEX_EFFORT_LEVELS } from '../../utils/providers';
@@ -427,7 +427,7 @@ export function ImageGenTab() {
       // mark the render complete on the `complete` event (or fail on
       // `error`). External mode awaits internally and the file is on disk
       // by the time generateImage resolves, so we can short-circuit.
-      const isAsync = (result?.mode === IMAGE_GEN_MODE.LOCAL || result?.mode === IMAGE_GEN_MODE.CODEX || result?.mode === IMAGE_GEN_MODE.GROK);
+      const isAsync = (result?.mode === IMAGE_GEN_MODE.LOCAL || isCloudCliMode(result?.mode));
       if (isAsync && result?.generationId) {
         const jobResult = await attachRenderSse(result.generationId, {
           onError: (msg) => new Error(msg.error || 'Generation failed'),

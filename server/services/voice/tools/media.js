@@ -51,20 +51,16 @@ export const MEDIA_TOOLS = [
         return { ok: false, summary: 'prompt must be 2000 characters or fewer' };
       }
       const requestedMode = (provider && provider !== 'auto') ? provider : undefined;
-      // Codex is gated separately — it costs against the user's Codex plan,
-      // and not every plan exposes image_gen. The dispatcher would also
-      // reject this, but catching it here lets us return a friendlier
-      // summary to the voice agent / palette.
-      if (requestedMode === imageGen.IMAGE_GEN_MODE.CODEX) {
+      // Cloud-CLI providers (codex/grok) are gated separately — each costs
+      // against the user's plan, and not every plan exposes the image tool.
+      // The dispatcher would also reject this, but catching it here lets us
+      // return a friendlier summary to the voice agent / palette. The
+      // settings key equals the mode string for both.
+      if (imageGen.CLOUD_IMAGE_GEN_MODES.includes(requestedMode)) {
         const s = await getSettings();
-        if (!s?.imageGen?.codex?.enabled) {
-          return { ok: false, summary: 'Codex Imagegen is disabled — enable it in Settings → Image Gen first.' };
-        }
-      }
-      if (requestedMode === imageGen.IMAGE_GEN_MODE.GROK) {
-        const s = await getSettings();
-        if (!s?.imageGen?.grok?.enabled) {
-          return { ok: false, summary: 'Grok Imagegen is disabled — enable it in Settings → Image Gen first.' };
+        if (!s?.imageGen?.[requestedMode]?.enabled) {
+          const label = requestedMode === imageGen.IMAGE_GEN_MODE.CODEX ? 'Codex' : 'Grok';
+          return { ok: false, summary: `${label} Imagegen is disabled — enable it in Settings → Image Gen first.` };
         }
       }
       // LLMs/tool callers often hand back numeric args as strings ("512").

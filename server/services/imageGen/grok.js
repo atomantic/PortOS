@@ -23,8 +23,7 @@
  */
 
 import { spawn } from 'child_process';
-import { copyFile, stat, unlink } from 'fs/promises';
-import { existsSync } from 'fs';
+import { copyFile, rename, stat, unlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
@@ -34,9 +33,10 @@ import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { stripAnsi } from '../../lib/ansiStrip.js';
+import { bufferedSpawn } from '../../lib/bufferedSpawn.js';
 import { ensureGrokHeadlessArgs, prepareGrokPromptFile } from '../../lib/grok.js';
-import { IMAGE_GEN_MODE } from './modes.js';
-import { describeFidelity } from './codex.js';
+import { IMAGE_GEN_MODE, describeFidelity } from './modes.js';
 
 // 20 minutes — grok's image_gen typically returns in well under a minute, but
 // the agent turn wrapping it (skill load, tool call, file write) has no
@@ -56,6 +56,10 @@ const DEFAULT_BIN = 'grok';
 // PortOS callers are mapped to the closest of these; a configured default
 // (`imageGen.grok.aspectRatio`) applies when the caller sent no dimensions.
 export const GROK_ASPECT_RATIOS = Object.freeze(['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3']);
+const RATIO_VALUES = GROK_ASPECT_RATIOS.map((ratio) => {
+  const [rw, rh] = ratio.split(':').map(Number);
+  return { ratio, value: rw / rh };
+});
 
 // Map a width/height pair to the closest supported grok aspect ratio, or null
 // when dimensions are absent/invalid (the tool then uses its own default).
@@ -66,9 +70,8 @@ export function deriveAspectRatio(width, height) {
   const target = w / h;
   let best = null;
   let bestDelta = Infinity;
-  for (const ratio of GROK_ASPECT_RATIOS) {
-    const [rw, rh] = ratio.split(':').map(Number);
-    const delta = Math.abs(rw / rh - target);
+  for (const { ratio, value } of RATIO_VALUES) {
+    const delta = Math.abs(value - target);
     if (delta < bestDelta) {
       best = ratio;
       bestDelta = delta;
@@ -119,33 +122,32 @@ export const cancelAll = () => {
 };
 
 export async function checkConnection({ grokPath } = {}) {
-  // Cheap probe: spawn `grok --version`. Avoids actually invoking image_gen
-  // (which would spend the user's Grok quota); the settings UI just wants
-  // "yes the binary exists and is reachable".
+  // Cheap probe: `grok --version` via the shared bufferedSpawn (never
+  // rejects; timeout-kills a hung binary so the settings "Test Connection"
+  // can't pend forever). Avoids actually invoking image_gen, which would
+  // spend the user's Grok quota.
   const bin = grokPath || DEFAULT_BIN;
-  const proc = spawn(bin, ['--version'], { shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
-  let out = '';
-  proc.stdout.on('data', (c) => { out += c.toString(); });
-  proc.stderr.on('data', (c) => { out += c.toString(); });
-  return new Promise((resolve) => {
-    proc.on('error', (err) => resolve({ connected: false, mode: IMAGE_GEN_MODE.GROK, reason: `Grok CLI not found (${err.message})` }));
-    proc.on('close', (code) => {
-      if (code !== 0) return resolve({ connected: false, mode: IMAGE_GEN_MODE.GROK, reason: `grok --version exited ${code}` });
-      const versionMatch = out.match(/(\d+\.\d+\.\d+)/);
-      resolve({ connected: true, mode: IMAGE_GEN_MODE.GROK, model: versionMatch ? `grok-cli ${versionMatch[1]}` : 'grok-cli' });
-    });
-  });
+  const result = await bufferedSpawn(bin, ['--version'], { timeoutMs: 15_000 });
+  if (result.error) {
+    return { connected: false, mode: IMAGE_GEN_MODE.GROK, reason: `Grok CLI not found (${result.error})` };
+  }
+  if (result.timedOut) {
+    return { connected: false, mode: IMAGE_GEN_MODE.GROK, reason: 'grok --version timed out' };
+  }
+  if (result.code !== 0) {
+    return { connected: false, mode: IMAGE_GEN_MODE.GROK, reason: `grok --version exited ${result.code}` };
+  }
+  const versionMatch = `${result.stdout}${result.stderr}`.match(/(\d+\.\d+\.\d+)/);
+  return { connected: true, mode: IMAGE_GEN_MODE.GROK, model: versionMatch ? `grok-cli ${versionMatch[1]}` : 'grok-cli' };
 }
 
 // Grok narrates its turn on stdout. Turn the tail into the most useful error
 // we can when the directed output file never landed — surfacing the model's
 // own words (content declines, tool-failure notes) instead of a fixed guess.
-// eslint-disable-next-line no-control-regex
-const ANSI_RE = /\u001b\[[0-9;]*m/g;
 const GROK_NO_IMAGE_HINT =
   'Grok returned no image — the image_gen tool may be unavailable on your Grok plan, or the model declined. Check Settings → Image Gen → Enable Grok Imagegen.';
 export function noImageReason(stdoutTail = '') {
-  const clean = String(stdoutTail).replace(ANSI_RE, '').trim();
+  const clean = stripAnsi(String(stdoutTail)).trim();
   const lines = clean.split('\n')
     .map((l) => l.trim())
     .filter((l) => l && !/^-{2,}$/.test(l) && !/^[\d,]+$/.test(l));
@@ -274,8 +276,7 @@ async function runGrok(job, jobId, bin, args, {
   const timeoutTimer = setTimeout(() => {
     if (activeProcs.get(jobId) === proc) {
       console.log(`⏱️ grok timed out after ${GROK_TIMEOUT_MS}ms [${jobId.slice(0, 8)}]`);
-      proc.kill('SIGTERM');
-      setTimeout(() => { if (proc.exitCode === null) proc.kill('SIGKILL'); }, 5000);
+      sigtermWithEscalation(jobId, proc);
     }
   }, GROK_TIMEOUT_MS);
 
@@ -314,8 +315,13 @@ async function runGrok(job, jobId, bin, args, {
       if (!harvested) {
         return finalizeError(job, jobId, proc, noImageReason(stdoutTail));
       }
-      await copyFile(stagingPath, outputPath);
-      await unlink(stagingPath).catch(() => {});
+      // Move, not copy — the staging file is PortOS-owned and disposable, so
+      // rename is a metadata-only op when tmpdir and the gallery share a
+      // filesystem. copyFile+unlink is the cross-device (EXDEV) fallback.
+      await rename(stagingPath, outputPath).catch(async () => {
+        await copyFile(stagingPath, outputPath);
+        await unlink(stagingPath).catch(() => {});
+      });
       // Sidecar metadata so the gallery can recover prompt/ratio/etc.
       const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
       await atomicWrite(sidecar, meta).catch(() => {});
@@ -352,14 +358,13 @@ const finalizeError = (job, jobId, proc, reason) => {
 };
 
 // Poll for the directed output file until it exists non-empty or timeoutMs
-// elapses. Returns true when the file is ready.
+// elapses. Returns true when the file is ready. A single stat() answers both
+// "exists" and "non-empty" per tick.
 async function harvestStagedImage(stagingPath, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if (existsSync(stagingPath)) {
-      const s = await stat(stagingPath).catch(() => null);
-      if (s && s.size > 0) return true;
-    }
+    const s = await stat(stagingPath).catch(() => null);
+    if (s && s.size > 0) return true;
     await new Promise((r) => setTimeout(r, 250));
   }
   return false;

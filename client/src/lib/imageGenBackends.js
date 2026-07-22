@@ -21,6 +21,14 @@ const META = {
   [IMAGE_GEN_MODE.EXTERNAL]: { label: 'External', icon: Cloud },
 };
 
+// Client mirror of the server's CLOUD_IMAGE_GEN_MODES (imageGen/modes.js) —
+// cloud-CLI backends (codex, grok) that pick model/steps/seed internally,
+// run through the media queue's parallel cloud lane, and need a prompt for
+// text-to-image. Use `isCloudCliMode` instead of hand-rolled
+// `mode === CODEX || mode === GROK` disjunctions.
+export const CLOUD_IMAGE_GEN_MODES = Object.freeze([IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK]);
+export const isCloudCliMode = (mode) => CLOUD_IMAGE_GEN_MODES.includes(mode);
+
 // Backends that support image-to-image (init image / reference editing). The
 // external SD-API path does not. Single source of truth for i2i gating in the UI.
 export const I2I_CAPABLE_MODES = Object.freeze([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK]);

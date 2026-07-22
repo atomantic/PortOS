@@ -26,6 +26,26 @@ export const IMAGE_GEN_MODES = Object.freeze(Object.values(IMAGE_GEN_MODE));
 // generateImage returns a job descriptor before the file lands.
 export const CLOUD_IMAGE_GEN_MODES = Object.freeze([IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK]);
 
+// Modes the mediaJobQueue can run (external SD-API stays synchronous — a
+// remote HTTP call with no local single-flight constraint to absorb). Single
+// source for the pipeline routes' Zod enums and batch-render guards, so a
+// future backend is one edit here instead of a sweep of enum literals.
+export const QUEUEABLE_IMAGE_MODES = Object.freeze([IMAGE_GEN_MODE.LOCAL, ...CLOUD_IMAGE_GEN_MODES]);
+
+// Cloud-CLI providers expose no numeric i2i denoise knob, so map the
+// local-runner-style strength (0..1, lower = more faithful to the source)
+// onto a phrase the model reliably honors. Mirrors
+// PROOF_AS_BASE_DEFAULT_STRENGTH (0.25) defaulting toward
+// composition-preserving edits. Lives here (the shared no-dependency module)
+// so codex.js and grok.js both import it without a provider→provider import.
+export const describeFidelity = (strength) => {
+  const n = Number.isFinite(strength) ? Math.max(0, Math.min(1, Number(strength))) : 0.25;
+  if (n <= 0.2) return 'preserve composition, characters, and layout exactly — only refine detail and resolution';
+  if (n <= 0.4) return 'preserve composition and characters while adding rendered detail at higher fidelity';
+  if (n <= 0.7) return 'use the attached image as a strong reference while refining art and detail';
+  return 'use the attached image as a loose reference; you may reinterpret freely';
+};
+
 // Shipped defaults for the Codex imagegen backend. Codex's built-in image_gen
 // tool otherwise runs whatever model its logged-in session defaults to — often
 // the heaviest, most expensive tier — at default reasoning effort. Pin the cheap

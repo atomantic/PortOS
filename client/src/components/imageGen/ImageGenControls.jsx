@@ -12,7 +12,7 @@ import { Dice5 } from 'lucide-react';
 import { filterResolutions, MAX_IMAGE_EDGE, MAX_IMAGE_PIXELS } from '../../lib/imageGenResolutions';
 import { randomSeed } from '../../lib/genUtils';
 import { RUNNER_FAMILIES } from '../../lib/runnerFamilies';
-import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
+import { IMAGE_GEN_MODE, isCloudCliMode } from '../../lib/imageGenBackends';
 import ModelDownloadBadge, { deriveSizeEstimate } from '../media/ModelDownloadBadge';
 import ResolutionField from '../media/ResolutionField';
 import { FormField } from '../ui/FormField';
@@ -54,7 +54,7 @@ export default function ImageGenControls({
   const isLocal = mode === IMAGE_GEN_MODE.LOCAL;
   // Cloud-CLI backends (codex, grok) pick model/steps/seed internally — only
   // resolution + style fields apply, so the local-only knobs are hidden.
-  const isCodex = mode === IMAGE_GEN_MODE.CODEX || mode === IMAGE_GEN_MODE.GROK;
+  const isCloudCli = isCloudCliMode(mode);
 
   const currentModel = models.find((m) => m.id === modelId);
   const isFlux2 = currentModel?.runner === RUNNER_FAMILIES.FLUX2;
@@ -112,7 +112,7 @@ export default function ImageGenControls({
 
       {/* Codex's image_gen tool ignores seed/steps/guidance — only resolution
           is honored, so the rest of the knobs are hidden in that mode. */}
-      {!isCodex && showSeed && (
+      {!isCloudCli && showSeed && (
         <div>
           <label htmlFor="image-gen-seed" className="block text-xs font-medium text-gray-400 mb-1">Seed</label>
           <div className="flex items-center gap-1">
@@ -138,7 +138,7 @@ export default function ImageGenControls({
         </div>
       )}
 
-      {!isCodex && (
+      {!isCloudCli && (
         <FormField
           label={<>Steps {currentModel?.steps && `(default: ${currentModel.steps})`}</>}
           labelClassName="block text-xs font-medium text-gray-400 mb-1"
@@ -158,7 +158,7 @@ export default function ImageGenControls({
           have classifier-free guidance baked in — the diffusers runner ignores
           any guidance scale we pass and prints a warning. Hide the input for
           those models so the user doesn't waste a knob-turn on a no-op. */}
-      {!isCodex && isLocal && !currentModel?.cfgDisabled && (
+      {!isCloudCli && isLocal && !currentModel?.cfgDisabled && (
         <FormField
           label={<>Guidance {currentModel?.guidance != null && `(default: ${currentModel.guidance})`}</>}
           labelClassName="block text-xs font-medium text-gray-400 mb-1"
@@ -174,7 +174,7 @@ export default function ImageGenControls({
         </FormField>
       )}
 
-      {!isCodex && isLocal && showQuantize && !isFlux2 && (
+      {!isCloudCli && isLocal && showQuantize && !isFlux2 && (
         <FormField label="Quantize (bits)" labelClassName="block text-xs font-medium text-gray-400 mb-1">
           <select
             value={quantize ?? '8'}
@@ -187,7 +187,7 @@ export default function ImageGenControls({
         </FormField>
       )}
 
-      {!isCodex && !isLocal && onCfgScaleChange && (
+      {!isCloudCli && !isLocal && onCfgScaleChange && (
         <FormField
           label={<>CFG Scale ({cfgScale})</>}
           labelClassName="block text-xs font-medium text-gray-400 mb-1"

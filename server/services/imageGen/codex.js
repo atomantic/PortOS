@@ -33,7 +33,7 @@ import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { buildCodexStartupArgs, buildEffortArgs, CODEX_EFFORT_LEVELS } from '../../lib/providerModels.js';
-import { IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT } from './modes.js';
+import { IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_MODEL, CODEX_IMAGEGEN_DEFAULT_EFFORT, describeFidelity } from './modes.js';
 
 // 20 minutes — built-in `image_gen` typically returns in 30–90s, but with the
 // parallel codex lane several renders share OpenAI throughput and a single
@@ -119,19 +119,6 @@ export async function checkConnection({ codexPath } = {}) {
 
 const SESSION_ID_RE = /^session id:\s*([0-9a-f-]{36})/im;
 
-// Codex CLI exposes no numeric i2i denoise knob, so map the local-runner-style
-// strength (0..1, lower = more faithful to the source) onto a phrase the model
-// reliably honors inside `$imagegen`. Mirrors PROOF_AS_BASE_DEFAULT_STRENGTH
-// (0.25) defaulting toward composition-preserving edits. Exported for the
-// grok provider, which faces the same "prompt phrase, not numeric knob"
-// constraint for its image_edit tool.
-export const describeFidelity = (strength) => {
-  const n = Number.isFinite(strength) ? Math.max(0, Math.min(1, Number(strength))) : 0.25;
-  if (n <= 0.2) return 'preserve composition, characters, and layout exactly — only refine detail and resolution';
-  if (n <= 0.4) return 'preserve composition and characters while adding rendered detail at higher fidelity';
-  if (n <= 0.7) return 'use the attached image as a strong reference while refining art and detail';
-  return 'use the attached image as a loose reference; you may reinterpret freely';
-};
 
 // When `initImagePath` is set we attach the file via codex CLI's `-i <FILE>`
 // flag and reshape the prompt so the `$imagegen` skill feeds the attachment

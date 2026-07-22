@@ -20,7 +20,7 @@
 
 import { getIssuesStore } from './issuesStore/store.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
-import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
+import { IMAGE_GEN_MODE, QUEUEABLE_IMAGE_MODES } from '../imageGen/modes.js';
 import {
   LENGTH_PROFILE_NAMES, DEFAULT_LENGTH_PROFILE,
   CUSTOM_PAGE_MIN, CUSTOM_PAGE_MAX, CUSTOM_MINUTE_MIN, CUSTOM_MINUTE_MAX,
@@ -356,7 +356,7 @@ const QUALITY_VALUES = new Set(['draft', 'standard', 'high']);
 // `imageMode: 'auto'` defers to the server resolver (codex when enabled,
 // local otherwise). Returns null when nothing was set so the persisted
 // JSON stays clean for issues that never opened the panel.
-const IMAGE_MODE_VALUES = new Set(['auto', IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK]);
+const IMAGE_MODE_VALUES = new Set(['auto', ...QUEUEABLE_IMAGE_MODES]);
 const GEN_CONFIG_STR_MAX = 200;
 const sanitizeGenConfig = (raw) => {
   if (!raw || typeof raw !== 'object') return null;

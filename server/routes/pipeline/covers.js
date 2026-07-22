@@ -23,7 +23,7 @@ import {
   renderVolumeBackCover,
 } from '../../services/pipeline/visualStages.js';
 import { COMIC_PAGE_VARIANTS } from '../../services/pipeline/owners.js';
-import { IMAGE_GEN_MODE } from '../../services/imageGen/modes.js';
+import { QUEUEABLE_IMAGE_MODES } from '../../services/imageGen/modes.js';
 import { buildComicPdf, PAGE_SIZES, DEFAULT_PAGE_SIZE } from '../../services/pipeline/comicPdf.js';
 import { buildVolumePdf } from '../../services/pipeline/volumePdf.js';
 import { mapServiceError } from './shared.js';
@@ -47,7 +47,7 @@ const makeCoverRenderSchema = (scriptField) => z.object({
   [scriptField]: z.string().max(8000).optional(),
   negativePrompt: z.string().trim().max(2000).optional(),
   extraStyle: z.string().trim().max(2000).optional(),
-  mode: z.enum([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK]).optional(),
+  mode: z.enum(QUEUEABLE_IMAGE_MODES).optional(),
   modelId: z.string().trim().max(64).optional(),
   width: imageEdgeSchema,
   height: imageEdgeSchema,

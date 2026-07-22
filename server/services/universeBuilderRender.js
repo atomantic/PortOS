@@ -18,7 +18,7 @@ import { buildUniverseRunTag } from './universeRunTag.js';
 import { registerUniverseBuilderRun } from './universeBuilderCollectionHook.js';
 import { getImageModels, isFlux2 } from '../lib/mediaModels.js';
 import { usesDiffusersRunner } from '../lib/runners.js';
-import { IMAGE_GEN_MODE } from './imageGen/modes.js';
+import { IMAGE_GEN_MODE, QUEUEABLE_IMAGE_MODES } from './imageGen/modes.js';
 import { resolveImageCleaners } from './imageGen/index.js';
 import { getStylePresetById } from '../lib/writersRoomStylePresets.js';
 import { ServerError } from '../lib/errorHandler.js';
@@ -63,7 +63,7 @@ export async function renderUniverseJobs(universeId, body, mapServiceError) {
   // Reject `external` mode upfront — batch rendering against a remote SD-API
   // would block this request for the entire batch, and we don't want to leave
   // an orphaned media collection behind when we discover this mid-loop below.
-  if (mode !== IMAGE_GEN_MODE.LOCAL && mode !== IMAGE_GEN_MODE.CODEX && mode !== IMAGE_GEN_MODE.GROK) {
+  if (!QUEUEABLE_IMAGE_MODES.includes(mode)) {
     throw new ServerError(
       'Batch render requires local, codex, or grok mode — switch image-gen mode in Settings → Image Gen',
       { status: 400, code: 'WORLD_BUILDER_EXTERNAL_UNSUPPORTED' },

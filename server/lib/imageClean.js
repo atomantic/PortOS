@@ -32,9 +32,17 @@ import { tryReadFile, safeJSONParse, atomicWrite, detectImageFormat } from './fi
  * Mirrored verbatim in `client/src/lib/imageCleaners.js` — keep the two
  * copies in sync; the client tree can't import from server/lib.
  */
+// Backends that stamp a C2PA `caBX` chunk in current production. Grok
+// (xAI Aurora) is deliberately NOT listed: unconfirmed as a C2PA emitter, so
+// its renders skip the standalone strip walk even when the toggle is on —
+// add it here (and flip its default) if/when confirmed. This set feeds both
+// the per-mode cleanC2PA default below and the standalone-strip short-circuit
+// in autoCleanGeneratedImage.
+const C2PA_EMITTING_MODES = ['codex', 'external'];
+
 export function resolveCleanersFromConfig(modeCfg, mode) {
   const cfg = modeCfg || {};
-  const cleanC2PADefault = mode === 'codex' || mode === 'external';
+  const cleanC2PADefault = C2PA_EMITTING_MODES.includes(mode);
   return {
     cleanC2PA: typeof cfg.cleanC2PA === 'boolean' ? cfg.cleanC2PA : cleanC2PADefault,
     denoise: typeof cfg.denoise === 'boolean' ? cfg.denoise : false,
@@ -468,16 +476,18 @@ export async function cleanImageBuffer(buffer, options = {}) {
 //
 // When `denoise` is on, C2PA is stripped implicitly by sharp's re-encode
 // regardless of `cleanC2PA` — both flags off short-circuits to a no-op.
-// `mode` is one of 'codex' | 'local' | 'external'; only used in log lines.
+// `mode` is one of 'codex' | 'grok' | 'local' | 'external'; used in log lines
+// and the C2PA short-circuit below.
 // Logs and swallows errors — a clean failure must never fail the underlying
 // generation (the un-cleaned PNG stays on disk).
 export async function autoCleanGeneratedImage({ cleanC2PA = false, denoise = false, pngPath, sidecarPath, mode = 'unknown' }) {
   if (!cleanC2PA && !denoise) return { cleaned: false };
-  // Backends that can't produce a `caBX` chunk (local FLUX, external SD-API)
-  // shouldn't pay readFile + walk on every render when the user enabled
-  // cleanC2PA defensively. Only codex (gpt-image-2) emits the chunk in
-  // current production. Denoise still has to run regardless because it's a
-  // pixel pass, not a metadata pass.
+  // Backends that can't produce a `caBX` chunk shouldn't pay readFile + walk
+  // on every render when the user enabled cleanC2PA defensively. Only codex
+  // (gpt-image-2) emits the chunk in current production — external is IN
+  // C2PA_EMITTING_MODES for its default but its proxied output has never
+  // carried the chunk here, so the walk-skip keys on codex alone. Denoise
+  // still runs regardless because it's a pixel pass, not a metadata pass.
   if (!denoise && cleanC2PA && mode !== 'codex') return { cleaned: false };
 
   // Sidecar read has no data dependency on the PNG read/write — kick it off

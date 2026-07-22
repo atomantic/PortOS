@@ -5,7 +5,7 @@ import ConfirmButtonPair from '../ui/ConfirmButtonPair';
 import { FormField } from '../ui/FormField';
 import { listMediaJobs, cancelMediaJob, cancelQueuedMediaJobs, deleteMediaJob, retryMediaJob, runMediaJobNow } from '../../services/apiMediaJobs.js';
 import { listLoraTrainingCheckpoints } from '../../services/apiLoraTraining.js';
-import { IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_EFFORT } from '../../lib/imageGenBackends';
+import { isCloudCliMode, IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_EFFORT } from '../../lib/imageGenBackends';
 import { CODEX_EFFORT_LEVELS } from '../../utils/providers';
 import { lossSparklineGeometry } from '../../lib/lossSparkline';
 import { useAutoRefetch } from '../../hooks/useAutoRefetch';
@@ -320,8 +320,8 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
   const canDelete = (job.status === 'failed' || job.status === 'canceled' || job.status === 'completed')
     && typeof onDelete === 'function';
   // Run-now is codex-only — GPU jobs serialize on the single MLX runtime.
-  const isQueuedCodex = job.status === 'queued' && job.kind === 'image' && (job.params?.mode === IMAGE_GEN_MODE.CODEX || job.params?.mode === IMAGE_GEN_MODE.GROK);
-  const canRunNow = isQueuedCodex && typeof onRunNow === 'function';
+  const isQueuedCloud = job.status === 'queued' && job.kind === 'image' && isCloudCliMode(job.params?.mode);
+  const canRunNow = isQueuedCloud && typeof onRunNow === 'function';
   // Number.isFinite (not typeof === 'number') so a NaN from a hand-edited
   // media-jobs.json can't render as `NaN%` / `width: NaN%`.
   const progressPct = Number.isFinite(job.progress)
