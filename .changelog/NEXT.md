@@ -32,6 +32,7 @@
 
 ## Fixed
 
+- **CoS task cards no longer render a wall of prompt text** — a task's `context`, `blockedReason`/`blocker`, and challenge `reason` are now clamped to two lines with a Show more/Show less toggle, matching the description. Orchestrator tasks (e.g. the Creative Director production plan) store their entire prompt in `metadata.context`, so one pending task previously rendered as thousands of pixels of unclamped text the user had to scroll past to reach the rest of the queue; auto-blocked tasks had the same problem with LLM/stderr-derived block reasons, and a challenge reason is free text a worker agent writes to argue its case. The clamp+toggle (measured overflow, so the toggle only appears when the text actually spills) is extracted from `TaskItem` into a shared `client/src/components/ui/CollapsibleText.jsx`. Editing a task's context also moves from a single-line `<input>` to a bounded scrolling `<textarea>`, which was unusable for a multi-thousand-character prompt.
 - `executeTuiRun`'s `finish()` now always settles its run promise even if a finalization step throws, so a one-shot TUI run can no longer hang forever (leaking the PTY and wedging `/runs`).
 - `execGh` now times out (60s default, overridable) and kills a stalled `gh` CLI child, so a hung network/credential prompt can't wedge the scheduled PR-watcher / issue- and branch-reconcile / update-check jobs or orphan `gh` processes.
 - `NextActionBanner`'s question fetch is guarded against stale responses, so a slow earlier request can no longer overwrite a newer question.

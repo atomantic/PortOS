@@ -16,8 +16,6 @@ import {
   AlertCircle,
   TrendingUp,
   Play,
-  ChevronDown,
-  ChevronUp,
   Scale
 } from 'lucide-react';
 import toast from '../../ui/Toast';
@@ -27,6 +25,7 @@ import { formatDurationMin, formatBytes } from '../../../utils/formatters';
 import ConfirmButtonPair from '../../ui/ConfirmButtonPair';
 import { useConfirmDelete } from '../../../hooks/useConfirmDelete';
 import Modal from '../../ui/Modal';
+import CollapsibleText from '../../ui/CollapsibleText';
 
 const statusIcons = {
   pending: <Clock size={16} aria-hidden="true" className="text-yellow-500" />,
@@ -117,38 +116,12 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
   const { isConfirming, requestDelete, cancelDelete, confirmDelete } = useConfirmDelete();
   const blockedInputRef = useRef(null);
 
-  // Collapse long task prompts to the first couple of lines with an expand
-  // toggle. `isOverflowing` is measured against the clamped element so the
-  // toggle only appears when the description actually spills past two lines.
-  const [promptExpanded, setPromptExpanded] = useState(false);
-  const [isOverflowing, setIsOverflowing] = useState(false);
-  const descRef = useRef(null);
-
   // Focus input when modal opens
   useEffect(() => {
     if (showBlockedModal && blockedInputRef.current) {
       blockedInputRef.current.focus();
     }
   }, [showBlockedModal]);
-
-  // Measure overflow while the prompt is collapsed. Kept sticky when expanded
-  // (removing the clamp collapses scrollHeight, which would otherwise hide the
-  // toggle mid-expand); recomputed only on the collapsed path when the text
-  // changes so an edit that shortens the prompt clears a stale toggle. A
-  // ResizeObserver re-measures on width changes (sidebar collapse, rotation,
-  // window resize) so a prompt that wraps to a new line at a narrower width
-  // still surfaces the toggle instead of silently clamping with no affordance.
-  useEffect(() => {
-    if (promptExpanded) return;
-    const el = descRef.current;
-    if (!el) return;
-    const measure = () => setIsOverflowing(el.scrollHeight > el.clientHeight + 1);
-    measure();
-    if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [task.description, promptExpanded, editing]);
 
   // Get models for selected provider in edit mode
   const editProvider = providers?.find(p => p.id === editData.provider);
@@ -341,12 +314,16 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
                 onChange={e => setEditData(d => ({ ...d, description: e.target.value }))}
                 className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
               />
-              <input
-                type="text"
+              {/* A textarea, not an input: for orchestrator tasks the context
+                  holds the task's entire multi-line prompt, which is unreadable
+                  and unnavigable in a single-line field. Bounded rows + its own
+                  scroll so editing a long prompt doesn't stretch the card. */}
+              <textarea
+                rows={4}
                 placeholder="Context"
                 value={editData.context}
                 onChange={e => setEditData(d => ({ ...d, context: e.target.value }))}
-                className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm"
+                className="w-full px-2 py-1 bg-port-bg border border-port-border rounded text-white text-sm font-mono resize-y overflow-auto"
               />
               <div className="flex gap-2">
                 <select
@@ -389,30 +366,21 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
             </div>
           ) : (
             <>
-              <p
-                ref={descRef}
+              <CollapsibleText
                 id={`task-desc-${task.id}`}
-                className={`text-white whitespace-pre-wrap break-words ${promptExpanded ? '' : 'line-clamp-2'}`}
-              >
-                {task.description}
-              </p>
-              {(isOverflowing || promptExpanded) && (
-                <button
-                  type="button"
-                  onClick={() => setPromptExpanded(v => !v)}
-                  className="flex items-center gap-0.5 mt-0.5 text-xs text-port-accent hover:text-port-accent/80 transition-colors"
-                  aria-expanded={promptExpanded}
-                  aria-controls={`task-desc-${task.id}`}
-                >
-                  {promptExpanded ? (
-                    <><ChevronUp size={12} aria-hidden="true" /> Show less</>
-                  ) : (
-                    <><ChevronDown size={12} aria-hidden="true" /> Show more</>
-                  )}
-                </button>
-              )}
+                text={task.description}
+                className="text-white"
+              />
+              {/* The context often carries the task's full prompt (hundreds of
+                  lines for orchestrator tasks), so it gets the same clamp as the
+                  description — an unclamped one turns the pending list into a
+                  wall of text the user has to scroll past. */}
               {task.metadata?.context && (
-                <p className="text-sm text-gray-500 mt-1">{task.metadata.context}</p>
+                <CollapsibleText
+                  id={`task-context-${task.id}`}
+                  text={task.metadata.context}
+                  className="text-sm text-gray-500 mt-1"
+                />
               )}
               {(task.metadata?.model || task.metadata?.provider) && (
                 <div className="flex items-center gap-2 mt-1">
@@ -455,7 +423,15 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
               {task.status === 'blocked' && (task.metadata?.blocker || task.metadata?.blockedReason) && (
                 <div className="flex items-start gap-2 mt-2 px-2 py-1.5 bg-port-error/10 border border-port-error/20 rounded text-sm">
                   <AlertCircle size={14} className="text-port-error shrink-0 mt-0.5" aria-hidden="true" />
-                  <span className="text-port-error/90">{task.metadata.blocker || task.metadata.blockedReason}</span>
+                  {/* Clamped: server-side auto-blocks write `blockedReason` from
+                      LLM error analysis / raw stderr, which can run very long. */}
+                  <div className="min-w-0 flex-1">
+                    <CollapsibleText
+                      id={`task-blocker-${task.id}`}
+                      text={task.metadata.blocker || task.metadata.blockedReason}
+                      className="text-port-error/90"
+                    />
+                  </div>
                 </div>
               )}
               {/* Challenge case + resolution (#2441). Both sides of a disputed
@@ -466,8 +442,13 @@ export default function TaskItem({ task, isSystem, awaitingApproval, onRefresh, 
                 <div className="flex items-start gap-2 mt-2 px-2 py-1.5 bg-port-warning/10 border border-port-warning/20 rounded text-sm">
                   <Scale size={14} className="text-port-warning shrink-0 mt-0.5" aria-hidden="true" />
                   <div className="text-port-warning/90 min-w-0">
-                    <span className="font-medium">Challenge{task.metadata.challenge.reviewer ? ` (${task.metadata.challenge.reviewer})` : ''}:</span>{' '}
-                    <span className="break-words">{task.metadata.challenge.reason}</span>
+                    <span className="font-medium">Challenge{task.metadata.challenge.reviewer ? ` (${task.metadata.challenge.reviewer})` : ''}:</span>
+                    {/* Clamped: the reason is free text a worker agent writes to
+                        argue its case, so multi-paragraph is the expected shape. */}
+                    <CollapsibleText
+                      id={`task-challenge-${task.id}`}
+                      text={task.metadata.challenge.reason}
+                    />
                     {task.metadata.challengeResolution?.outcome && (
                       <div className="mt-1 text-gray-400">
                         Resolved: {task.metadata.challengeResolution.outcome}
