@@ -208,11 +208,28 @@ describe('attachReferenceCandidate', () => {
       kind: 'sprite-reference-generation', characterId: id, target: 'main',
       anchorId: 'walk-south', chromaKey: '#FF00FF', jobId: 'j1', designPrompt: 'a ranger',
     });
+    expect(sidecar.model).toBe('m'); // tag model when the job carries none
     expect(sidecar.candidateSha256).toMatch(/^[0-9a-f]{64}$/);
 
     const { candidates } = await getReferenceSet(id);
     expect(candidates).toHaveLength(2);
     expect(candidates[0].target).toBe('main');
+  });
+
+  it('prefers the completed job\'s live model over the tag (Edit & Retry provenance)', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await mkdir(join(TEST_ROOT, 'images'), { recursive: true });
+    await writeCandidatePng(join(TEST_ROOT, 'images', 'render-2.png'));
+    await attachReferenceCandidate({
+      recordId: id, target: 'main', direction: 'south', anchorId: 'walk-south',
+      chromaKey: '#FF00FF', mode: 'codex', model: 'stale-tag-model', jobId: 'j2',
+      filename: 'render-2.png', job: { params: { model: 'retried-model' } },
+    });
+    const sidecar = JSON.parse(await readFile(
+      join(TEST_ROOT, 'sprites', id, 'reference', 'candidates', 'walk-south-candidate-01.generation.json'), 'utf8',
+    ));
+    expect(sidecar.model).toBe('retried-model');
   });
 
   it('returns null when the gallery file is gone', async () => {
@@ -356,6 +373,21 @@ describe('lockReference', () => {
     const eastRel = await placeCandidate(id, 'east', 'walk-east-candidate-01.png');
     await expect(lockReference(id, { target: 'west', candidate: eastRel }))
       .rejects.toMatchObject({ code: 'CANDIDATE_TARGET_MISMATCH' });
+  });
+
+  it('refuses a sidecarless candidate whose filename does not match the target', async () => {
+    const id = newId();
+    await createCharacter(id);
+    // Crash between PNG copy and sidecar write: PNG exists, no provenance.
+    const candDir = join(TEST_ROOT, 'sprites', id, 'reference', 'candidates');
+    await mkdir(candDir, { recursive: true });
+    await writeCandidatePng(join(candDir, 'walk-east-candidate-01.png'));
+    await expect(lockReference(id, { target: 'main', candidate: 'reference/candidates/walk-east-candidate-01.png' }))
+      .rejects.toMatchObject({ code: 'CANDIDATE_TARGET_MISMATCH' });
+    // And the reference-set view infers its target from the filename so the
+    // client can't group it under main.
+    const { candidates } = await getReferenceSet(id);
+    expect(candidates[0].target).toBe('east');
   });
 
   it('refuses candidates outside reference/candidates/ and traversal paths', async () => {

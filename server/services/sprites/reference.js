@@ -186,9 +186,12 @@ export async function getReferenceSet(recordId) {
     extensions: ['.png'],
     mapEntry: async (name) => {
       const sidecar = await readJSONFile(join(candidatesDir, `${name.replace(/\.png$/, '')}.generation.json`), null);
+      // Sidecarless (crash between copy and sidecar write): infer the target
+      // from the filename so the client can't group it under the wrong slot.
+      const inferred = /^walk-(.+)-candidate-\d+\.png$/.exec(name)?.[1] || null;
       return {
         path: `reference/candidates/${name}`,
-        target: sidecar?.target || null,
+        target: sidecar?.target || (inferred === 'south' ? 'main' : inferred),
         anchorId: sidecar?.anchorId || null,
         chromaKey: sidecar?.chromaKey || null,
         mode: sidecar?.mode || null,
@@ -273,6 +276,10 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
       throw new ServerError('Locked main reference file is missing on disk', { status: 500, code: 'MAIN_REFERENCE_MISSING' });
     }
     initImageStrength ??= ANCHOR_DEFAULT_STRENGTH;
+    // Known limitation shared with every i2i surface (proof-as-base, refine):
+    // the WINDOWS local runner (imagine_win.py) has no i2i and drops the
+    // init image — anchors there degrade to text-to-image, like all other
+    // pipeline i2i renders on that platform. Cloud modes are unaffected.
   }
 
   const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, mode);
@@ -333,7 +340,10 @@ export async function attachReferenceCandidate(ctx) {
     direction: ctx.direction,
     chromaKey: ctx.chromaKey || null,
     mode: ctx.mode || null,
-    model: ctx.model || null,
+    // Prefer the completed job's live params — Render Queue's Edit & Retry
+    // rewrites top-level params but carries the original tag through, so the
+    // tag's model can be stale provenance.
+    model: ctx.job?.params?.model || ctx.job?.params?.modelId || ctx.model || null,
     jobId: ctx.jobId || null,
     ...(ctx.designPrompt ? { designPrompt: ctx.designPrompt } : {}),
     generatedAt: new Date().toISOString(),
@@ -373,9 +383,16 @@ async function lockReferenceImpl(recordId, { target, candidate, acceptClipRisk =
   const refDir = join(spriteDir(recordId), 'reference');
   const sidecar = await loadCandidateSidecar(candAbs);
   // A candidate generated for one facing must not land in another slot — a
-  // misclick would freeze the wrong pose as immutable evidence.
+  // misclick would freeze the wrong pose as immutable evidence. The filename
+  // prefix is checked as well as the sidecar: a crash between the PNG copy
+  // and the sidecar write leaves a sidecarless candidate whose target would
+  // otherwise be unverifiable.
   if (sidecar?.target && sidecar.target !== target) {
     throw new ServerError(`Candidate was generated for target "${sidecar.target}", not "${target}"`, { status: 400, code: 'CANDIDATE_TARGET_MISMATCH' });
+  }
+  const expectedPrefix = `${anchorIdForDirection(target === 'main' ? 'south' : target)}-candidate-`;
+  if (!candidate.slice('reference/candidates/'.length).startsWith(expectedPrefix)) {
+    throw new ServerError(`Candidate filename does not match target "${target}" (expected ${expectedPrefix}*)`, { status: 400, code: 'CANDIDATE_TARGET_MISMATCH' });
   }
   // Mask on the key the candidate was GENERATED against (its actual
   // background), which may differ from the key selected at lock time.
