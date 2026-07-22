@@ -42,6 +42,10 @@ beforeAll(() => {
     'art-pipeline/characters/hero.json': {
       schemaVersion: 1, characterId: 'hero', displayName: 'Hero', archetype: 'adult-humanoid-v1',
     },
+    'art-pipeline/characters/buddy.json': {
+      schemaVersion: 1, characterId: 'buddy', displayName: 'Buddy', archetype: 'adult-humanoid-v1',
+    },
+    'game/assets/sprites/buddy/buddy-animation-atlas.png': 'BUDDY-PUBLISHED-COPY',
     'art-source/sprites/hero/reference/hero-reference-set-v1.json': {
       schemaVersion: 1,
       mainReference: { path: 'art-source/sprites/hero/reference/hero-main.png' },
@@ -122,12 +126,20 @@ describe('importFromSource', () => {
     expect(existsSync(join(SPRITES_ROOT, 'flora/atlas/flora-atlas.png.import'))).toBe(false);
     expect(results.some((r) => r.id === 'hero' && r.kind === 'props')).toBe(false);
 
-    expect(totals.subjects).toBe(2);
+    expect(totals.subjects).toBe(3); // hero + buddy characters, flora props
     expect(totals.errors).toBe(2);
 
     const record = await getRecord('hero');
     expect(record).toMatchObject({ kind: 'character', name: 'Hero', status: 'imported', chromaKey: '#FF00FF' });
     expect(record.spec.archetype).toBe('adult-humanoid-v1');
+  });
+
+  it('a filtered character import never treats other characters\' game dirs as props', async () => {
+    const { results } = await importFromSource({ sourceRoot: SOURCE_ROOT, characters: ['hero'], includeProps: true });
+    expect(results.some((r) => r.id === 'buddy')).toBe(false);
+    const buddy = await getRecord('buddy');
+    expect(buddy.kind).toBe('character'); // not overwritten to a spec-less props record
+    expect(buddy.name).toBe('Buddy');
   });
 
   it('re-import preserves user-managed record fields', async () => {
