@@ -14,7 +14,7 @@
  * #2895's scope); the tombstone trio on the record keeps peer-sync additive.
  */
 
-import { checkHealth, ensureSchema } from '../../lib/db.js';
+import { checkHealth, ensureSchema, isTestRunner } from '../../lib/db.js';
 import { listSpriteAssets } from './paths.js';
 
 let backend = null;
@@ -22,8 +22,11 @@ let backend = null;
 async function selectBackend() {
   if (backend) return backend;
 
+  // isTestRunner (NODE_ENV==='test' OR VITEST) is the repo's supported test
+  // detection — a wrapper that drops NODE_ENV must still select the file
+  // backend instead of hitting the real DB's test gate.
   const envBackend = process.env.MEMORY_BACKEND;
-  if (envBackend === 'file' || process.env.NODE_ENV === 'test') {
+  if (envBackend === 'file' || isTestRunner()) {
     backend = await import('./recordsFile.js');
     return backend;
   }

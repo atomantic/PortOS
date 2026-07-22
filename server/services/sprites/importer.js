@@ -77,21 +77,28 @@ async function copyTree(srcDir, destDir, shouldCopy = () => true) {
 }
 
 /**
- * Verify copied files against the sha256 map a source manifest declares.
- * `expectations` is [{ relPath, sha256 }] relative to destDir; missing files
- * and hash mismatches land in the returned errors list.
+ * Verify hash-pinned files against the sha256s the source manifests declare.
+ * Only files copied by THIS run count — a stale copy left in the destination
+ * by an earlier import must not vouch for a file the current source no
+ * longer provides. Duplicate expectations (the same file pinned by more than
+ * one manifest) collapse to one check per (path, hash).
  */
-async function verifyHashes(destDir, expectations, errors) {
+async function verifyHashes(destDir, expectations, errors, copiedThisRun) {
+  const seen = new Set();
+  const unique = expectations.filter(({ relPath, sha256 }) => {
+    if (typeof sha256 !== 'string' || !sha256) return false;
+    const key = `${relPath}\n${sha256}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
   const outcomes = await Promise.all(
-    expectations
-      .filter(({ sha256 }) => typeof sha256 === 'string' && sha256)
-      .map(async ({ relPath, sha256 }) => {
-        const abs = join(destDir, relPath);
-        if (!(await pathExists(abs))) return { error: `missing after copy: ${relPath}` };
-        return (await sha256File(abs)) === sha256
-          ? { verified: true }
-          : { error: `sha256 mismatch: ${relPath}` };
-      }),
+    unique.map(async ({ relPath, sha256 }) => {
+      if (!copiedThisRun.has(relPath)) return { error: `missing from source: ${relPath}` };
+      return (await sha256File(join(destDir, relPath))) === sha256
+        ? { verified: true }
+        : { error: `sha256 mismatch: ${relPath}` };
+    }),
   );
   for (const o of outcomes) if (o.error) errors.push(o.error);
   return outcomes.filter((o) => o.verified).length;
@@ -118,17 +125,44 @@ function relToCharacterDir(manifestPath, characterId) {
 // and packaged manifests — never raw/extracted intermediates or source video.
 const ASSET_REF = /\.(png|gif|json)$/i;
 const EXCLUDED_RUN_SEGMENTS = /(^|\/)(raw|frames|review)\//;
+// Free-text log fields in run records can contain path-looking strings that
+// were never assets — don't traverse them.
+const NOISE_KEYS = /tail$|^stdout|^stderr|^log$/i;
 
-// Recursively collect importable asset paths referenced anywhere in a
-// manifest's JSON (string values that normalize into the character dir).
-function collectManifestRefs(node, characterId, out) {
+function importableRel(value, characterId) {
+  const rel = relToCharacterDir(value, characterId);
+  return rel && ASSET_REF.test(rel) && !EXCLUDED_RUN_SEGMENTS.test(rel) ? rel : null;
+}
+
+/**
+ * Recursively collect importable asset paths referenced anywhere in a
+ * manifest's JSON — and, when a manifest hash-pins a referenced file (a
+ * `{ path, sha256 }` record, or the `<base>Path`/`<base>Sha256` sibling-key
+ * convention), the expectation pair so the copied bytes get verified too.
+ */
+function collectManifestRefs(node, characterId, refs, expectations) {
   if (typeof node === 'string') {
-    const rel = relToCharacterDir(node, characterId);
-    if (rel && ASSET_REF.test(rel) && !EXCLUDED_RUN_SEGMENTS.test(rel)) out.add(rel);
+    const rel = importableRel(node, characterId);
+    if (rel) refs.add(rel);
   } else if (Array.isArray(node)) {
-    for (const v of node) collectManifestRefs(v, characterId, out);
+    for (const v of node) collectManifestRefs(v, characterId, refs, expectations);
   } else if (node && typeof node === 'object') {
-    for (const v of Object.values(node)) collectManifestRefs(v, characterId, out);
+    for (const [k, v] of Object.entries(node)) {
+      if (NOISE_KEYS.test(k)) continue;
+      collectManifestRefs(v, characterId, refs, expectations);
+    }
+    if (typeof node.sha256 === 'string' && typeof node.path === 'string') {
+      const rel = importableRel(node.path, characterId);
+      if (rel) expectations.push({ relPath: rel, sha256: node.sha256 });
+    }
+    for (const [k, v] of Object.entries(node)) {
+      if (!k.endsWith('Sha256') || typeof v !== 'string') continue;
+      const base = k.slice(0, -'Sha256'.length);
+      const pathVal = node[base] ?? node[`${base}Path`];
+      if (typeof pathVal !== 'string') continue;
+      const rel = importableRel(pathVal, characterId);
+      if (rel) expectations.push({ relPath: rel, sha256: v });
+    }
   }
 }
 
@@ -149,7 +183,7 @@ async function copyCharFile(srcCharDir, destDir, rel) {
  * strips at the version root, surrounded by unselected candidates that must
  * stay behind).
  */
-async function importApprovedDirection({ srcCharDir, destDir, characterId, direction, dir, result, hashExpectations }) {
+async function importApprovedDirection({ srcCharDir, destDir, characterId, direction, dir, result, hashExpectations, copiedThisRun }) {
   const manifestRel = relToCharacterDir(dir.runManifest, characterId);
   if (!manifestRel) {
     result.errors.push(`walk set ${direction}: unsafe run path rejected: ${dir.runManifest || dir.runPath}`);
@@ -160,22 +194,30 @@ async function importApprovedDirection({ srcCharDir, destDir, characterId, direc
     return;
   }
   result.files += 1;
+  copiedThisRun.add(manifestRel);
   if (dir.runManifestSha256) hashExpectations.push({ relPath: manifestRel, sha256: dir.runManifestSha256 });
 
   const refs = new Set();
-  collectManifestRefs(await readJson(join(srcCharDir, manifestRel)), characterId, refs);
+  collectManifestRefs(await readJson(join(srcCharDir, manifestRel)), characterId, refs, hashExpectations);
   const runRel = relToCharacterDir(dir.runPath, characterId);
   if (runRel && (await pathExists(join(srcCharDir, `${runRel}/generated/review-preview.json`)))) {
     refs.add(`${runRel}/generated/review-preview.json`);
   }
   // One extra expansion level: packaged manifests / previews the run record
-  // names in turn declare the strip files.
+  // names in turn declare the strip files (and their hash pins).
   for (const rel of [...refs]) {
-    if (rel.endsWith('.json')) collectManifestRefs(await readJson(join(srcCharDir, rel)), characterId, refs);
+    if (rel.endsWith('.json')) collectManifestRefs(await readJson(join(srcCharDir, rel)), characterId, refs, hashExpectations);
   }
   refs.delete(manifestRel);
   for (const rel of [...refs].sort()) {
-    if (await copyCharFile(srcCharDir, destDir, rel)) result.files += 1;
+    if (await copyCharFile(srcCharDir, destDir, rel)) {
+      result.files += 1;
+      copiedThisRun.add(rel);
+    } else {
+      // A manifest-declared asset the source no longer has is a real gap —
+      // an "imported" subject must not silently omit an approved artifact.
+      result.errors.push(`walk set ${direction}: referenced asset missing: ${rel}`);
+    }
   }
 }
 
@@ -190,6 +232,10 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath, select
   result.files += 1;
 
   const hashExpectations = [];
+  // Every file THIS run copied (dest-relative). Verification is scoped to
+  // this set so a stale destination copy can't vouch for a file the current
+  // source no longer provides.
+  const copiedThisRun = new Set(['character-spec.json']);
 
   // reference/ — locked main + anchors; candidates/ (unapproved) stay behind.
   if (await pathExists(join(srcCharDir, 'reference'))) {
@@ -199,6 +245,7 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath, select
       (rel, isDir) => !(isDir && basename(rel) === 'candidates') && !rel.includes('candidates/'),
     );
     result.files += copied.length;
+    for (const rel of copied) copiedThisRun.add(`reference/${rel}`);
     for (const rel of copied) {
       if (!rel.endsWith('.json')) continue;
       const manifest = await readJson(join(destDir, 'reference', rel));
@@ -216,6 +263,7 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath, select
   if (await pathExists(walkDir)) {
     const copied = await copyTree(walkDir, join(destDir, 'walk'));
     result.files += copied.length;
+    for (const rel of copied) copiedThisRun.add(`walk/${rel}`);
     for (const rel of copied) {
       if (!rel.endsWith('.json')) continue;
       const walkSet = await readJson(join(destDir, 'walk', rel));
@@ -225,7 +273,7 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath, select
           result.errors.push(`walk set ${direction}: not approved (${dir?.status ?? 'missing'}) — skipped`);
           continue;
         }
-        await importApprovedDirection({ srcCharDir, destDir, characterId, direction, dir, result, hashExpectations });
+        await importApprovedDirection({ srcCharDir, destDir, characterId, direction, dir, result, hashExpectations, copiedThisRun });
       }
     }
   }
@@ -236,6 +284,7 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath, select
   if (await pathExists(join(srcCharDir, 'runtime'))) {
     const copied = await copyTree(join(srcCharDir, 'runtime'), join(destDir, 'runtime'));
     result.files += copied.length;
+    for (const rel of copied) copiedThisRun.add(`runtime/${rel}`);
   }
 
   // Published-selection provenance: verify the immutable runtime atlas the
@@ -245,10 +294,16 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath, select
     const immRel = relToCharacterDir(imm?.path, characterId);
     if (immRel && imm?.sha256) hashExpectations.push({ relPath: immRel, sha256: imm.sha256 });
     const keyedRel = relToCharacterDir(selection.selected?.keyedSourcePath, characterId);
-    if (keyedRel && (await copyCharFile(srcCharDir, destDir, keyedRel))) result.files += 1;
+    if (keyedRel && (await copyCharFile(srcCharDir, destDir, keyedRel))) {
+      result.files += 1;
+      copiedThisRun.add(keyedRel);
+      if (selection.selected?.keyedSourceSha256) {
+        hashExpectations.push({ relPath: keyedRel, sha256: selection.selected.keyedSourceSha256 });
+      }
+    }
   }
 
-  result.verified = await verifyHashes(destDir, hashExpectations, result.errors);
+  result.verified = await verifyHashes(destDir, hashExpectations, result.errors, copiedThisRun);
 
   const record = await upsertImportedRecord(characterId, {
     kind: 'character',
