@@ -67,7 +67,7 @@ export default function SystemHealthPage() {
   if (loading) {
     return (
       <div className="max-w-5xl mx-auto">
-        <PageSkeleton label="Loading system health" titleWidthClass="w-48" cards={4} sidebar={false} />
+        <PageSkeleton label="Loading system health" titleWidthClass="w-48" layout="grid" gridColsClass="md:grid-cols-3" cards={3} />
       </div>
     );
   }

@@ -326,12 +326,9 @@ export default function Dashboard() {
 
   if (loading) {
     return (
-      <div>
-        <div className="mb-3">
-          <SchematicLabel module="DASH" status="BOOTING" glyph="orbit" state="active" />
-        </div>
-        <PageSkeleton label="Loading dashboard" titleWidthClass="w-40" layout="grid" cards={6} />
-      </div>
+      // No BOOTING SchematicLabel here: it exists only while loading, so its
+      // height is exactly the shift this skeleton is meant to eliminate.
+      <PageSkeleton label="Loading dashboard" titleWidthClass="w-40" layout="grid" cards={6} />
     );
   }
 

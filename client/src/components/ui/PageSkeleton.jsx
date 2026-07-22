@@ -17,14 +17,20 @@
 //   layout  'stack'  — vertically stacked cards, optional right sidebar.
 //           'grid'   — responsive card grid (dashboard widgets, tiles).
 //   tabs    n > 0    — reserves a `TabPills` (underline variant) strip under
-//                      the header, matching its `min-h-[44px] sm:min-h-[40px]`.
+//                      the header. A default-size TabPills button is `text-sm`
+//                      (20px line box) + `py-3`, i.e. 44px — its
+//                      `min-h-[44px] sm:min-h-[40px]` is a floor the content
+//                      already exceeds, so reserve a flat 44px at every width.
+//                      `tabsInBar` moves the strip INSIDE the header block for
+//                      pages that nest their tabs there (Feature Agent detail).
 //
 // Container flags:
-//   padded     — add page padding. Leave FALSE on routes that render inside
-//                Layout's default `overflow-auto p-4 md:p-6` main (padding
-//                twice is itself a layout pop) and on full-bleed tabs that
-//                render edge to edge; pass TRUE on `isFullWidth` routes, whose
-//                main is a bare `relative overflow-hidden`.
+//   padded     — add page padding. Match whatever the LOADED page does: leave
+//                FALSE when the page's own root is unpadded (its padding comes
+//                from Layout's `overflow-auto p-4 md:p-6` main) and on
+//                full-bleed tabs that render edge to edge; pass TRUE when the
+//                page root pads itself, and on `isFullWidth` routes, whose main
+//                is a bare `relative overflow-hidden`.
 //   fullHeight — fill the height and own the scroll, for `isFullWidth` routes.
 //
 // `label` is the screen-reader announcement — keep it specific ("Loading apps",
@@ -34,8 +40,11 @@ export default function PageSkeleton({
   label = 'Loading',
   titleWidthClass = 'w-48',
   showSubtitle = false,
+  // PageHeader hides its subtitle below `sm`; hand-rolled bars usually don't.
+  subtitleOnMobile = false,
   showAction = true,
   tabs = 0,
+  tabsInBar = false,
   cards = 3,
   sidebar = true,
   layout = 'stack',
@@ -79,10 +88,10 @@ export default function PageSkeleton({
     );
 
   const tabRows = repeat(tabs);
-  const tabStrip = tabRows.length > 0 ? (
-    <div className="shrink-0 flex gap-1 border-b border-port-border overflow-hidden">
+  const renderTabStrip = (bordered) => tabRows.length > 0 ? (
+    <div className={`shrink-0 flex gap-1 overflow-hidden ${bordered ? 'border-b border-port-border' : ''}`}>
       {tabRows.map((_, i) => (
-        <div key={i} className="h-[44px] sm:h-[40px] w-20 sm:w-24 flex items-center px-2">
+        <div key={i} className="h-[44px] w-20 sm:w-24 flex items-center px-2">
           <div className="h-4 w-full rounded bg-port-card animate-pulse" />
         </div>
       ))}
@@ -105,13 +114,16 @@ export default function PageSkeleton({
             <div className="min-w-0 flex-1">
               <div className={`h-6 sm:h-7 rounded bg-port-card animate-pulse ${titleWidthClass}`} />
               {showSubtitle && (
-                <div className="hidden sm:block h-4 w-64 max-w-full rounded bg-port-card animate-pulse mt-1" />
+                <div className={`${subtitleOnMobile ? '' : 'hidden sm:block'} h-4 w-64 max-w-full rounded bg-port-card animate-pulse mt-1`} />
               )}
             </div>
             {showAction && <div className="h-6 w-24 rounded bg-port-card animate-pulse" />}
           </div>
+          {/* Pages that nest their tab row inside the header block (no divider
+              between title and tabs) reserve it here rather than below the bar. */}
+          {tabsInBar && <div className="mt-3">{renderTabStrip(false)}</div>}
         </div>
-        {tabStrip}
+        {!tabsInBar && renderTabStrip(true)}
         <div className={`flex-1 min-h-0 ${fullHeight ? 'overflow-y-auto' : ''} ${padded ? bodyClassName : ''}`}>
           {body}
         </div>
@@ -137,7 +149,7 @@ export default function PageSkeleton({
           {showAction && <div className="h-10 w-full sm:w-48 rounded bg-port-card animate-pulse" />}
         </div>
       )}
-      {tabStrip && <div className="mb-4">{tabStrip}</div>}
+      {tabRows.length > 0 && <div className="mb-4">{renderTabStrip(true)}</div>}
       {body}
     </div>
   );

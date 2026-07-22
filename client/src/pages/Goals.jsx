@@ -74,7 +74,7 @@ export default function Goals() {
       {/* Content */}
       <div className="flex-1 overflow-hidden">
         {loading ? (
-          <PageSkeleton header="none" label="Loading goals" fullHeight padded cards={4} sidebar={false} />
+          <PageSkeleton header="none" label="Loading goals" fullHeight cards={4} sidebar={false} />
         ) : tab === 'list' ? (
           <GoalsListView data={data} onRefresh={loadData} />
         ) : (

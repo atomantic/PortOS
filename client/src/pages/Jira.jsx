@@ -179,7 +179,7 @@ export default function Jira() {
   };
 
   if (loading) {
-    return <PageSkeleton titleWidthClass="w-52" cards={2} />;
+    return <PageSkeleton label="Loading Jira" padded titleWidthClass="w-52" cards={2} />;
   }
 
   return (
