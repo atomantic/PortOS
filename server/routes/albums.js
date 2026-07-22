@@ -1,7 +1,8 @@
 /**
  * Music album routes.
  *
- *   GET    /api/albums        → Album[]   (live, sorted by title)
+ *   GET    /api/albums        → Album[]   (live, sorted by title; `?limit`/`?offset`
+ *                                          switches to the bounded envelope)
  *   POST   /api/albums        → Album
  *   GET    /api/albums/:id     → Album
  *   PATCH  /api/albums/:id     → Album
@@ -104,6 +105,9 @@ async function reconcileAlbumMembership(album) {
   }));
 }
 
+// Backward-compatible by default: returns the full albums array. When a client
+// passes `limit`/`offset`, the response becomes the bounded
+// `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
 router.get('/', asyncHandler(async (req, res) => {
   const list = await albums.listAlbums();
   if (!isPaginationRequested(req.query)) return res.json(list);

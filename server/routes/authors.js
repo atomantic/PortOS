@@ -1,7 +1,8 @@
 /**
  * Author persona routes.
  *
- *   GET    /api/authors        → Author[]   (live, sorted by name)
+ *   GET    /api/authors        → Author[]   (live, sorted by name; `?limit`/`?offset`
+ *                                            switches to the bounded envelope)
  *   POST   /api/authors        → Author
  *   GET    /api/authors/:id     → Author
  *   PATCH  /api/authors/:id     → Author
@@ -41,6 +42,9 @@ const patchSchema = z.object({
   headshotImageUrl: headshotImageUrlField.optional(),
 }).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
 
+// Backward-compatible by default: returns the full authors array. When a client
+// passes `limit`/`offset`, the response becomes the bounded
+// `{ items, total, limit, offset }` envelope every paginated PortOS list shares.
 router.get('/', asyncHandler(async (req, res) => {
   const list = await authors.listAuthors();
   if (!isPaginationRequested(req.query)) return res.json(list);
