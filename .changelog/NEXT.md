@@ -11,6 +11,7 @@
 ## Security
 
 - Guard paid-provider API keys against SSRF / key-exfiltration: `streamCompletion` (askService), voice-LLM endpoint resolution, and the local-LLM playground now validate a provider's endpoint through the shared endpoint guard before attaching the `Authorization: Bearer` header, so a mistyped or malicious custom endpoint (including cloud-metadata hosts) never receives the key unless the provider opts in via `allowCustomEndpoint`.
+- Bump the `js-yaml` override from 4.2.0 to 4.3.0 (root, server, client) to clear a high-severity advisory where chained YAML merge keys force quadratic CPU consumption.
 - Reject non-`http(s)` schemes on Privacy Center URL fields (org website/portal, broker search/opt-out/screenshot/listing URLs), closing a stored-XSS vector where a `javascript:`/`data:` value would execute when rendered as a link. Added a shared server `isSafeHref` helper mirroring the client's `isHttpUrl`, applied at the Zod write layer and at every render site.
 
 ## Fixed
