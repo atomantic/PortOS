@@ -27,6 +27,13 @@ export const DEFAULT_CHROMA_KEY = CHROMA_KEYS[0].hex;
 // selection still returns the best key but carries a warning.
 export const MIN_HUE_SEPARATION = 60;
 
+export function hexToRgb(hex) {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(typeof hex === 'string' ? hex : '');
+  if (!m) throw new Error(`Invalid hex color: ${hex}`);
+  const n = parseInt(m[1], 16);
+  return { r: (n >> 16) & 0xff, g: (n >> 8) & 0xff, b: n & 0xff };
+}
+
 export function rgbToHsv(r, g, b) {
   const rn = r / 255; const gn = g / 255; const bn = b / 255;
   const max = Math.max(rn, gn, bn);
@@ -60,16 +67,35 @@ export function hueDistance(a, b) {
  * achromatic palette conflicts with nothing, so the first key (magenta, the
  * legacy default) wins with distance Infinity.
  */
-export function pickChromaKey(palette, {
-  minCountFrac = 0.005,
-  minSaturation = 0.25,
-  minValue = 0.15,
-} = {}) {
+function significantHues(palette, { minCountFrac = 0.005, minSaturation = 0.25, minValue = 0.15 } = {}) {
   const entries = Array.isArray(palette) ? palette : [];
   const total = entries.reduce((sum, e) => sum + (e.count || 0), 0);
-  const significant = entries
+  return entries
     .map((e) => ({ ...rgbToHsv(e.r, e.g, e.b), count: e.count || 0 }))
     .filter((c) => c.count >= total * minCountFrac && c.s >= minSaturation && c.v >= minValue);
+}
+
+/**
+ * Warn when the character's surviving palette sits close in hue to the key
+ * it was GENERATED on: the normalize mask has already discarded any pixel
+ * within the luma threshold of that key, so near-key palette colors imply
+ * exact-key details (a magenta garment on the magenta default) may have been
+ * silently clipped from the immutable locked artifact. Returns a warning
+ * string or null.
+ */
+export function keyProximityWarning(palette, genKeyHex, opts = {}) {
+  const { r, g, b } = hexToRgb(genKeyHex);
+  const keyHue = rgbToHsv(r, g, b).h;
+  const significant = significantHues(palette, opts);
+  if (!significant.length) return null;
+  const minDist = Math.min(...significant.map((c) => hueDistance(keyHue, c.h)));
+  return minDist < MIN_HUE_SEPARATION
+    ? `Character palette sits within ${Math.round(minDist)}° of the generation key ${genKeyHex} — exact-key details may have been clipped by the mask; consider pinning a different key and regenerating before locking`
+    : null;
+}
+
+export function pickChromaKey(palette, opts = {}) {
+  const significant = significantHues(palette, opts);
 
   let best = null;
   for (const key of CHROMA_KEYS) {

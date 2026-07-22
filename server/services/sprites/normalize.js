@@ -18,18 +18,16 @@
 
 import sharp from 'sharp';
 import { copyFile } from 'fs/promises';
+import { hexToRgb } from './chromaKey.js';
 
 const FRAME_HEIGHT_FRAC = 0.80;
 const FRAME_BOTTOM_FRAC = 0.07;
 const FRAME_SIDE_FRAC = 0.10;
 const MASK_LUMA_THRESHOLD = 40;
 
-export function hexToRgb(hex) {
-  const m = /^#?([0-9a-fA-F]{6})$/.exec(typeof hex === 'string' ? hex : '');
-  if (!m) throw new Error(`Invalid hex color: ${hex}`);
-  const n = parseInt(m[1], 16);
-  return { r: (n >> 16) & 0xff, g: (n >> 8) & 0xff, b: n & 0xff };
-}
+// Re-export for existing consumers/tests; the definition lives in the pure
+// color-math module so chromaKey.js can use it without importing sharp.
+export { hexToRgb };
 
 /**
  * Decode `src` as flat RGB (alpha dropped over white like Pillow's

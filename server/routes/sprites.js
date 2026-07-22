@@ -69,13 +69,14 @@ router.get('/:id', asyncHandler(async (req, res) => {
 // Accepts JSON, or multipart with an optional `referenceImage` file for the
 // main target (an uploaded visual design reference → i2i).
 router.post('/:id/reference/generate', referenceUpload, asyncHandler(async (req, res) => {
-  const body = validateRequest(spriteReferenceGenerateSchema, req.body ?? {});
+  // Capture + register the temp-file sweep BEFORE validation — a 400 thrown
+  // by validateRequest would otherwise leak the already-finalized upload.
+  // The service moves the file on success, so the unlink is a harmless
+  // ENOENT there.
   const file = req.files?.referenceImage;
   const upload = file ? { tempPath: file.path, originalname: file.originalname } : null;
-  // Sweep the staged temp file whenever the request ends without the service
-  // having consumed it (validation failure, locked target, etc). The service
-  // moves it on success, so this unlink is a harmless ENOENT there.
   if (upload) res.on('close', () => { unlink(upload.tempPath).catch(() => {}); });
+  const body = validateRequest(spriteReferenceGenerateSchema, req.body ?? {});
   if (upload && body.target !== 'main') {
     throw new ServerError('Reference image uploads apply to the main target only — anchors always derive from the locked main', { status: 400, code: 'UPLOAD_MAIN_ONLY' });
   }
