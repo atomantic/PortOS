@@ -938,6 +938,23 @@ export const videoDownloadSchema = z.object({
   url: z.string().url().max(2048)
 });
 
+// Sprite Manager (issue #2895, phase 1). Import runs against a local
+// filesystem path the user supplies (the source pipeline checkout); the
+// importer validates the tree shape server-side.
+export const spriteImportRequestSchema = z.object({
+  sourceRoot: z.string().min(1).max(1024),
+  characters: z.array(z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/)).optional(),
+  includeProps: z.boolean().optional(),
+});
+
+export const spriteRecordUpdateSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  notes: z.string().max(10000).nullable().optional(),
+  // Phase 2 constrains this to the three standard keys; phase 1 stores any hex
+  // color so imported legacy magenta round-trips.
+  chromaKey: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().optional(),
+});
+
 // =============================================================================
 // TRANSITIONAL RE-EXPORTS (issue #1151 split)
 // =============================================================================

@@ -113,6 +113,10 @@ export const PATHS = {
   trainingRuns: join(INSTALL_ROOT, 'data/training-runs'),
   videos: join(INSTALL_ROOT, 'data/videos'),
   videoThumbnails: join(INSTALL_ROOT, 'data/video-thumbnails'),
+  // Sprite Manager (issue #2895): per-record asset trees
+  // (sprites/<id>/{reference,walk,runs,runtime,atlas}/...). Records live in
+  // Postgres (sprite_records); only binary artifacts + manifests live here.
+  sprites: join(INSTALL_ROOT, 'data/sprites'),
   // Persisted audio renders (voice-over lines). Kept distinct from
   // the in-memory voice-agent synthesis path in services/voice/ — that path
   // streams WAV over Socket.IO without ever touching disk.

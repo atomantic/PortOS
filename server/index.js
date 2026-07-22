@@ -120,6 +120,7 @@ import mediaJobsRoutes from './routes/mediaJobs.js';
 import creativeDirectorRoutes from './routes/creativeDirector.js';
 import creativeCommissionRoutes from './routes/creativeCommissions.js';
 import musicVideoRoutes from './routes/musicVideo.js';
+import spriteRoutes from './routes/sprites.js';
 import moodBoardRoutes from './routes/moodBoard.js';
 import privacyRoutes from './routes/privacy.js';
 import writersRoomRoutes from './routes/writersRoom.js';
@@ -554,6 +555,7 @@ app.use('/api/media-jobs', mediaJobsRoutes);
 app.use('/api/creative-director', creativeDirectorRoutes);
 app.use('/api/creative-commission', creativeCommissionRoutes);
 app.use('/api/music-video', musicVideoRoutes);
+app.use('/api/sprites', spriteRoutes);
 app.use('/api/mood-boards', moodBoardRoutes);
 app.use('/api/privacy', privacyRoutes);
 app.use('/api/writers-room', writersRoomRoutes);
@@ -744,6 +746,9 @@ app.use('/data/lora-datasets', express.static(PATHS.loraDatasets, ASSET_STATIC_O
 // can pull them by URL without going through an explicit download route.
 app.use('/data/videos', express.static(PATHS.videos, ASSET_STATIC_OPTS));
 app.use('/data/video-thumbnails', express.static(PATHS.videoThumbnails, ASSET_STATIC_OPTS));
+// Sprite Manager library previews (anchors, strips, atlases) render inline
+// via <img src="/data/sprites/<id>/<rel>"> (#2895).
+app.use('/data/sprites', express.static(PATHS.sprites, ASSET_STATIC_OPTS));
 // Voice-over WAVs rendered by the pipeline audio stage — the AudioStage UI
 // pulls them inline via <audio src="/data/audio/<filename>">.
 app.use('/data/audio', express.static(PATHS.audio));

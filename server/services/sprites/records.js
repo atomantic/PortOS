@@ -1,0 +1,69 @@
+/**
+ * Sprites — record store backend dispatcher (issue #2895, phase 1).
+ *
+ * Mirrors the Music Video dispatcher (services/musicVideo/projects.js): a thin
+ * layer that picks the backend so every import site + test mock targets one
+ * module.
+ *
+ * Backend selection (same posture as the memory backend):
+ *   - PostgreSQL (recordsDB.js) for normal installs.
+ *   - File (recordsFile.js) only via MEMORY_BACKEND=file (escape hatch) or
+ *     NODE_ENV=test — both UNSUPPORTED for production.
+ *
+ * No federation wiring: sprite records are machine-local in phase 1 (per
+ * #2895's scope); the tombstone trio on the record keeps peer-sync additive.
+ */
+
+import { checkHealth, ensureSchema } from '../../lib/db.js';
+
+let backend = null;
+let backendName = null;
+
+async function selectBackend() {
+  if (backend) return backend;
+
+  const envBackend = process.env.MEMORY_BACKEND;
+  if (envBackend === 'file' || process.env.NODE_ENV === 'test') {
+    backend = await import('./recordsFile.js');
+    backendName = 'file';
+    return backend;
+  }
+
+  const health = await checkHealth();
+  if (!health.connected) {
+    throw new Error('Sprites requires PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file in .env)');
+  }
+  await ensureSchema();
+  backend = await import('./recordsDB.js');
+  backendName = 'postgres';
+  return backend;
+}
+
+/** Name of the active backend, or null before first call (for diagnostics/tests). */
+export function getSpriteRecordsBackendName() {
+  return backendName;
+}
+
+export async function listRecords(options = {}) {
+  return (await selectBackend()).listRecords(options);
+}
+
+export async function getRecord(id, options = {}) {
+  return (await selectBackend()).getRecord(id, options);
+}
+
+export async function createRecord(input, id) {
+  return (await selectBackend()).createRecord(input, id);
+}
+
+export async function updateRecord(id, patch) {
+  return (await selectBackend()).updateRecord(id, patch);
+}
+
+export async function deleteRecord(id) {
+  return (await selectBackend()).deleteRecord(id);
+}
+
+export async function upsertImportedRecord(id, input) {
+  return (await selectBackend()).upsertImportedRecord(id, input);
+}

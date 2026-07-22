@@ -705,6 +705,24 @@ CREATE TABLE IF NOT EXISTS music_video_projects (
 -- Partial index for the live-list filter (deleted = FALSE).
 CREATE INDEX IF NOT EXISTS idx_music_video_projects_live ON music_video_projects (deleted) WHERE deleted = FALSE;
 
+-- Sprite records (issue #2895, phase 1). One row per sprite subject — a
+-- character or a props atlas family; the full record (spec, chromaKey,
+-- publishBinding, importedFrom) in `data` JSONB with kind/status mirrored for
+-- queries. Binary assets live under data/sprites/<id>/. Not federated in
+-- phase 1; the tombstone trio keeps peer-sync additive later. Mirrors the
+-- sprite_records block in db/schema/media.js.
+CREATE TABLE IF NOT EXISTS sprite_records (
+  id TEXT PRIMARY KEY,
+  kind VARCHAR(16) NOT NULL DEFAULT 'character',
+  status VARCHAR(32) NOT NULL DEFAULT 'draft',
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_sprite_records_live ON sprite_records (deleted) WHERE deleted = FALSE;
+
 -- Mood boards (issue #911). A dedicated inspiration/mood-board canvas, distinct
 -- from raw Media History, for collecting visual + textual references that feed
 -- the Create suite. One row per board, the full record (name/description/items[])
