@@ -13,6 +13,27 @@ function makeExternalId(gmailId) {
   return 'api-gmail-' + crypto.createHash('md5').update(gmailId).digest('hex').slice(0, 12);
 }
 
+/**
+ * Fetch the account's Gmail "send-as" alias addresses (#2831) — the primary address
+ * plus every configured alias the owner can send/receive as. Used to exclude ALL owner
+ * addresses (not just account.email) from received-message participants, so a 1:1 email
+ * delivered to an alias isn't misread as a group thread and dropped by outreach detection.
+ *
+ * Best-effort with a `null` sentinel vs `[]` distinction: a FAILED call returns `null`
+ * so the caller keeps the previously-stored alias set (degrade to the primary email),
+ * while a SUCCESSFUL call returns the fetched list (possibly empty). The primary email
+ * is normally itself a `sendAs` entry, so a healthy account returns at least `[primary]`.
+ */
+export async function fetchSendAsAliases(gmailClient) {
+  const res = await gmailClient.users.settings.sendAs.list({ userId: 'me' }).catch((err) => {
+    console.warn(`📧 Gmail send-as alias fetch failed: ${err.message}`);
+    return null;
+  });
+  if (!res) return null; // sentinel: fetch failed — do not clobber the stored aliases
+  const list = res?.data?.sendAs || [];
+  return list.map((a) => String(a?.sendAsEmail || '').trim().toLowerCase()).filter(Boolean);
+}
+
 // How far back to pull sent mail when reply-detection ingestion is on. Must stay
 // >= tribeOutreach's DEFAULT_WITHIN_DAYS (14) — a reply older than the detection
 // window can't answer an inbound that's still actionable, so no need to ingest it;
@@ -212,6 +233,11 @@ export async function syncGmail(account, cache, io, options = {}) {
   }
 
   const gmailClient = gmail({ version: 'v1', auth });
+  // Refresh the owner's send-as aliases opportunistically each sync (#2831) — one cheap
+  // settings call. Returned up to syncAccount so the activity timeline can exclude every
+  // owner address, not just the primary, from received-message participants. `null` on
+  // failure (keep prior stored set); an array (possibly empty) on success.
+  const sendAsAliases = await fetchSendAsAliases(gmailClient);
   const maxMessages = mode === 'full' ? 200 : 100;
   // Ingest sent mail unless the account explicitly opted out — the default-on
   // capability powers per-account Tribe-outreach reply detection (#2796).
@@ -335,7 +361,7 @@ export async function syncGmail(account, cache, io, options = {}) {
   }
 
   console.log(`📧 Gmail API sync complete: ${inboxMessages.length} inbox, ${sentMessages.length} sent (activity-only)`);
-  return { messages: inboxMessages, sentMessages, sentTruncated: sentCoveragePartial, status: 'success', syncMethod: 'api' };
+  return { messages: inboxMessages, sentMessages, sentTruncated: sentCoveragePartial, sendAsAliases, status: 'success', syncMethod: 'api' };
 }
 
 /**

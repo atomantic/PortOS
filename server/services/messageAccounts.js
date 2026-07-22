@@ -49,6 +49,11 @@ export async function createAccount(data) {
       // migration isn't needed — this only makes new accounts' stored state explicit.
       ingestSent: data.syncConfig?.ingestSent ?? (data.type === 'gmail')
     },
+    // Gmail send-as alias addresses (#2831), refreshed on each sync. Owner addresses
+    // beyond the primary `email`; used to exclude the owner from received-message
+    // participants so a 1:1 email delivered to an alias isn't misread as a group thread.
+    // Additive/back-compat: existing accounts lack the key and readers treat absent as [].
+    sendAsAliases: [],
     lastSyncAt: null,
     lastSyncStatus: null,
     createdAt: new Date().toISOString()
@@ -78,6 +83,20 @@ export async function deleteAccount(id) {
   await saveAccounts(accounts);
   console.log(`🗑️ Message account deleted: ${id}`);
   return true;
+}
+
+// Persist the account's Gmail send-as aliases (#2831), refreshed opportunistically on
+// each successful sync. Owner addresses beyond the primary `email`; consumed by
+// `messageActivityCandidates` to exclude ALL owner addresses (not just the primary)
+// from received-message participants. Lowercased + deduped; absent → [] for readers.
+export async function updateSendAsAliases(id, aliases = []) {
+  const accounts = await loadAccounts();
+  if (!accounts[id]) return null;
+  accounts[id].sendAsAliases = Array.isArray(aliases)
+    ? [...new Set(aliases.map((a) => String(a || '').trim().toLowerCase()).filter(Boolean))]
+    : [];
+  await saveAccounts(accounts);
+  return accounts[id];
 }
 
 export async function updateSyncStatus(id, status) {

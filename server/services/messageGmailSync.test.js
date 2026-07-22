@@ -5,6 +5,7 @@ import {
   sentQuery,
   gmailSyncPasses,
   collectMessageIds,
+  fetchSendAsAliases,
   SENT_INGEST_DAYS,
   SENT_INGEST_MAX,
 } from './messageGmailSync.js';
@@ -113,5 +114,30 @@ describe('collectMessageIds — full pagination', () => {
 
   it('SENT_INGEST_MAX is a generous ceiling well past the old first-page limit of 100', () => {
     expect(SENT_INGEST_MAX).toBeGreaterThanOrEqual(1000);
+  });
+});
+
+// Owner send-as alias fetch (#2831). Received 1:1 mail delivered to an alias must be
+// excludable from participants, so the sync fetches the account's send-as addresses.
+describe('fetchSendAsAliases', () => {
+  const clientReturning = (sendAs) => ({
+    users: { settings: { sendAs: { list: async () => ({ data: { sendAs } }) } } },
+  });
+
+  it('returns lowercased alias emails from the sendAs settings', async () => {
+    const client = clientReturning([
+      { sendAsEmail: 'Me@Example.com', isPrimary: true },
+      { sendAsEmail: 'Alias@Example.com' },
+    ]);
+    expect(await fetchSendAsAliases(client)).toEqual(['me@example.com', 'alias@example.com']);
+  });
+
+  it('returns an empty array (not null) when the account has no sendAs entries', async () => {
+    expect(await fetchSendAsAliases(clientReturning([]))).toEqual([]);
+  });
+
+  it('returns the null sentinel (keep stored aliases) when the API call fails', async () => {
+    const client = { users: { settings: { sendAs: { list: async () => { throw new Error('boom'); } } } } };
+    expect(await fetchSendAsAliases(client)).toBeNull();
   });
 });

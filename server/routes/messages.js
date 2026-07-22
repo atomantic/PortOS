@@ -38,6 +38,9 @@ const updateAccountSchema = z.object({
   name: z.string().min(1).optional(),
   email: z.union([z.string().email(), z.literal('')]).optional(),
   enabled: z.boolean().optional(),
+  // Gmail send-as aliases (#2831). Server-populated on sync, not typically set by the
+  // client; accepted here for schema parity so a round-tripped account payload validates.
+  sendAsAliases: z.array(z.string()).optional(),
   syncConfig: z.object({
     maxAge: z.string().optional(),
     maxMessages: z.number().int().positive().optional(),
