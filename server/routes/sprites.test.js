@@ -116,6 +116,55 @@ describe('sprites routes', () => {
     expect(reference.startReferenceGeneration).not.toHaveBeenCalled();
   });
 
+  // Build a multipart/form-data body with one file part + text fields —
+  // exercises the real streamMultipart path (the fileFilter signature bug
+  // class is invisible to JSON-only tests).
+  const buildMultipart = (boundary, { fileBytes = Buffer.from('\x89PNGfake'), mime = 'image/png', fields = {} } = {}) => {
+    const parts = [];
+    for (const [k, v] of Object.entries(fields)) {
+      parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`));
+    }
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="referenceImage"; filename="design.png"\r\nContent-Type: ${mime}\r\n\r\n`));
+    parts.push(fileBytes);
+    parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+    return Buffer.concat(parts);
+  };
+
+  it('POST /:id/reference/generate accepts a multipart design-image upload for main', async () => {
+    const boundary = '----spritetest';
+    const res = await request(app)
+      .post('/api/sprites/pioneer/reference/generate')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`)
+      .send(buildMultipart(boundary, { fields: { target: 'main', designPrompt: 'a ranger' } }));
+    expect(res.status).toBe(200);
+    expect(reference.startReferenceGeneration).toHaveBeenCalledWith(
+      'pioneer',
+      expect.objectContaining({ target: 'main', designPrompt: 'a ranger' }),
+      expect.objectContaining({ originalname: 'design.png', tempPath: expect.any(String) }),
+    );
+  });
+
+  it('POST /:id/reference/generate rejects an upload for a non-main target', async () => {
+    const boundary = '----spritetest2';
+    const res = await request(app)
+      .post('/api/sprites/pioneer/reference/generate')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`)
+      .send(buildMultipart(boundary, { fields: { target: 'east' } }));
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('UPLOAD_MAIN_ONLY');
+    expect(reference.startReferenceGeneration).not.toHaveBeenCalled();
+  });
+
+  it('POST /:id/reference/generate rejects a non-image mime upload', async () => {
+    const boundary = '----spritetest3';
+    const res = await request(app)
+      .post('/api/sprites/pioneer/reference/generate')
+      .set('content-type', `multipart/form-data; boundary=${boundary}`)
+      .send(buildMultipart(boundary, { mime: 'application/zip', fields: { target: 'main' } }));
+    expect(res.status).toBe(400);
+    expect(reference.startReferenceGeneration).not.toHaveBeenCalled();
+  });
+
   it('POST /:id/reference/generate rejects a non-queueable mode', async () => {
     const r = await request(app).post('/api/sprites/pioneer/reference/generate')
       .send({ target: 'main', mode: 'external' });

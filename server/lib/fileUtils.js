@@ -1396,6 +1396,20 @@ export const resolveImageRef = makePathResolver(() => PATHS.imageRefs);
 export const resolveImageCleanTmp = makePathResolver(() => PATHS.imageCleanTmp);
 
 /**
+ * Resolve a sprite reference asset used as an image-gen init image (issue
+ * #2896 — anchors i2i from the locked main reference; uploaded design
+ * references). `data/sprites/` is a server-managed NESTED tree, so unlike
+ * the single-level basename resolvers above this accepts only an absolute
+ * path already inside the sprites root (no basename fallback — a bare
+ * filename is ambiguous across records) and validates containment.
+ */
+export function resolveSpriteImageInput(rawPath) {
+  if (typeof rawPath !== 'string' || !rawPath) return null;
+  const resolved = resolvePath(rawPath);
+  return isPathInsideDir(PATHS.sprites, resolved) ? resolved : null;
+}
+
+/**
  * Resolve a shipped visual template filename (e.g. character reference-sheet
  * layout PNG) to an absolute path under `PATHS.visualTemplates`. Caches
  * successful resolutions because the template assets are shipped and stable
@@ -1448,6 +1462,10 @@ const IMAGE_INPUT_RESOLVERS = [
   // Image Cleaner temp init images (issue #2264) — the GPU FLUX round-trip
   // stages sync-cleaned bytes here as the img2img init.
   ['imageCleanTmp', resolveImageCleanTmp],
+  // Sprite reference assets (issue #2896) — the locked main reference /
+  // uploaded design reference as the anchors' i2i init. Absolute-only
+  // (returns null on basename input, so the fall-through loop skips it).
+  ['sprites', resolveSpriteImageInput],
 ];
 
 export function resolveImageInputPath(rawPath) {

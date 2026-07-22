@@ -22,6 +22,7 @@ import {
   importFileToDir, listDirectoryByExtension,
 } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
+import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
 import { IMAGE_GEN_MODE, resolveQueueImageMode } from '../imageGen/modes.js';
 import { resolveImageCleaners } from '../imageGen/index.js';
@@ -43,6 +44,13 @@ const ANCHOR_DEFAULT_STRENGTH = 0.8;
 const UPLOAD_DEFAULT_STRENGTH = 0.65;
 
 const manifestRelPath = (id) => `reference/${id}-reference-set-v1.json`;
+
+// Serialize the manifest read-modify-write per record: two overlapping locks
+// (or a generate racing a lock) would otherwise both load the pre-write
+// manifest and the second save would erase the first's locked state —
+// breaking the immutability contract. Same convention as the completion
+// hook's per-record queue.
+const manifestWriteTail = createKeyCachedQueue();
 
 async function loadManifest(recordId) {
   return readJSONFile(join(spriteDir(recordId), manifestRelPath(recordId)), null);
@@ -148,11 +156,18 @@ export async function getReferenceSet(recordId) {
  * multipart parse (main target only) — copied into the record's
  * reference/uploads/ so provenance survives the temp-file sweep.
  */
-export async function startReferenceGeneration(recordId, body, upload = null) {
+export function startReferenceGeneration(recordId, body, upload = null) {
+  return manifestWriteTail(recordId, () => startReferenceGenerationImpl(recordId, body, upload));
+}
+
+async function startReferenceGenerationImpl(recordId, body, upload = null) {
   const record = await requireCharacter(recordId);
   const manifest = (await loadManifest(recordId)) || seedManifest(recordId);
   const target = body.target;
-  const genKey = record.chromaKey || manifest.chromaKey || DEFAULT_CHROMA_KEY;
+  // Once the main is locked, the manifest's key is canonical (set at lock —
+  // possibly auto-selected); a later record-level repin must not fork
+  // subsequent anchors onto a different background than the frozen set.
+  const genKey = manifest.chromaKey || record.chromaKey || DEFAULT_CHROMA_KEY;
   const settings = await getSettings();
   const mode = resolveQueueImageMode(body.mode, settings);
 
@@ -277,7 +292,11 @@ async function loadCandidateSidecar(candAbs) {
  * main also runs the dynamic chroma-key selection (unless the user already
  * pinned one on the record).
  */
-export async function lockReference(recordId, { target, candidate }) {
+export function lockReference(recordId, args) {
+  return manifestWriteTail(recordId, () => lockReferenceImpl(recordId, args));
+}
+
+async function lockReferenceImpl(recordId, { target, candidate }) {
   const record = await requireCharacter(recordId);
   // Seed on demand — a candidate may predate the manifest (e.g. files placed
   // by an import or a crash-recovered tree); the lock is what makes it real.
@@ -347,7 +366,8 @@ export async function lockReference(recordId, { target, candidate }) {
     if (anchor.status === 'locked') {
       throw new ServerError(`Anchor ${anchorId} is already locked`, { status: 409, code: 'REFERENCE_LOCKED' });
     }
-    const canvasKey = record.chromaKey || manifest.chromaKey || DEFAULT_CHROMA_KEY;
+    // Manifest key is canonical after main lock — see startReferenceGeneration.
+    const canvasKey = manifest.chromaKey || record.chromaKey || DEFAULT_CHROMA_KEY;
     const rel = `reference/${await nextVersionPath(refDir, `${recordId}-${anchorId}`)}`;
     const destAbs = join(spriteDir(recordId), rel);
     await normalizeAnchorFrame(candAbs, destAbs, { maskKeyHex: maskKey, canvasKeyHex: canvasKey });
