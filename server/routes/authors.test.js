@@ -42,6 +42,19 @@ describe('authors routes', () => {
     expect(r.body).toEqual([{ id: 'auth-1', name: 'Jane' }]);
   });
 
+  it('GET / returns a bounded envelope when pagination is requested', async () => {
+    authors.listAuthors.mockResolvedValueOnce(
+      Array.from({ length: 5 }, (_, i) => ({ id: `auth-${i}`, name: `A${i}` }))
+    );
+    const r = await request(app).get('/api/authors?limit=2&offset=1');
+    expect(r.status).toBe(200);
+    expect(r.body.items).toHaveLength(2);
+    expect(r.body.items[0].id).toBe('auth-1');
+    expect(r.body.total).toBe(5);
+    expect(r.body.limit).toBe(2);
+    expect(r.body.offset).toBe(1);
+  });
+
   it('POST / creates an author', async () => {
     const r = await request(app).post('/api/authors').send({ name: 'Jane', bio: 'blurb' });
     expect(r.status).toBe(201);
