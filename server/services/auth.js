@@ -1,8 +1,19 @@
 import { join } from 'path';
 import { EventEmitter } from 'events';
-import { createHash, randomBytes, scrypt, timingSafeEqual } from 'crypto';
-import { promisify } from 'util';
+import { randomBytes } from 'crypto';
 import { atomicWrite, PATHS, safeJSONParse, tryReadFile } from '../lib/fileUtils.js';
+import {
+  COOKIE_NAME,
+  SESSION_TTL_MS,
+  SALT_BYTES,
+  TOKEN_BYTES,
+  constantEqual,
+  createLoginThrottle,
+  extractToken,
+  hashPassword,
+  hashToken,
+  parseCookieToken,
+} from '../../lib/portosAuthCore.js';
 import { getSettings, readSettingsStrict, settingsEvents, updateSettings } from './settings.js';
 import { ServerError } from '../lib/errorHandler.js';
 
@@ -12,8 +23,6 @@ import { ServerError } from '../lib/errorHandler.js';
 // `secrets.auth` in settings.json so the existing GET /api/settings sanitizer
 // (which strips `secrets`) keeps them off the wire.
 
-const scryptAsync = promisify(scrypt);
-
 // Event bus so the Socket.IO layer can react to auth-state changes (first-time
 // enable, password rotation, full disable) without coupling the auth service
 // to `io`. Consumers should kick every currently-connected socket and let
@@ -22,29 +31,11 @@ const scryptAsync = promisify(scrypt);
 export const authEvents = new EventEmitter();
 authEvents.setMaxListeners(50);
 
+// The wire/at-rest constants (cookie name, scrypt cost, session TTL) and the
+// crypto primitives live in `lib/portosAuthCore.js` so sidecar processes that
+// must honour the same password gate — see `lib/sidecarAuthGate.js`, used by
+// the Autofixer UI on :5560 — cannot drift from them.
 const SESSIONS_FILE = join(PATHS.data, 'auth-sessions.json');
-const TOKEN_BYTES = 32;
-const SALT_BYTES = 16;
-const HASH_BYTES = 64;
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
-const COOKIE_NAME = 'portos_auth';
-// Login throttle — auth is normally tailnet-only so this is defense in depth
-// against a sidecar burning server CPU on scrypt verifications. Per-IP
-// sliding window: at most LOGIN_MAX_ATTEMPTS failed POSTs in
-// LOGIN_WINDOW_MS, then 401s with no scrypt work until the window clears.
-const LOGIN_MAX_ATTEMPTS = 10;
-const LOGIN_WINDOW_MS = 60 * 1000;
-// scrypt cost parameters per OWASP 2023 password-storage guidance for
-// interactive logins. PortOS has no rate limiting and the password hash +
-// salt persist in `settings.json` (single-user trust model — local
-// filesystem access already exists), so the realistic threat is offline
-// cracking of an exfiltrated settings file. The higher N narrows the
-// GPU/ASIC margin without making a one-per-tab login feel slow.
-// Node's default `maxmem` of 32 MiB rejects this N. OpenSSL needs slightly
-// more headroom than the canonical 128·N·r working set (≈128 MiB for these
-// params), so allocate 256 MiB.
-const SCRYPT_PARAMS = { N: 131072, r: 8, p: 1, maxmem: 256 * 1024 * 1024 };
-
 // Delay before kicking sockets on auth-state change. `setImmediate` fires in
 // the same tick as the HTTP response flush — close enough that the
 // disconnect frame can reach the browser before the new Set-Cookie header
@@ -68,8 +59,6 @@ const sessions = new Map();
 let loadPromise = null;
 
 const now = () => Date.now();
-
-const hashToken = (token) => createHash('sha256').update(token).digest('hex');
 
 const readSessions = async () => {
   const raw = await tryReadFile(SESSIONS_FILE);
@@ -101,18 +90,6 @@ const ensureLoaded = async () => {
     });
   }
   return loadPromise;
-};
-
-const hashPassword = async (password, salt) => {
-  const buf = await scryptAsync(password, salt, HASH_BYTES, SCRYPT_PARAMS);
-  return buf.toString('hex');
-};
-
-const constantEqual = (aHex, bHex) => {
-  const a = Buffer.from(aHex, 'hex');
-  const b = Buffer.from(bHex, 'hex');
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
 };
 
 const readAuthConfig = async () => {
@@ -290,77 +267,18 @@ export const revokeAllSessions = async () => {
   setTimeout(() => authEvents.emit('sessions:revoked-all'), KICK_DELAY_MS);
 };
 
-// Sliding-window login-throttle map. Keys are client IPs; values are arrays
-// of recent failed-attempt timestamps. Trimmed lazily on each call so it
-// never grows unbounded. In-memory only (a sidecar restart resets the
-// counters — acceptable for a defense-in-depth control on a single-user
-// install, not the primary auth boundary).
-const loginAttempts = new Map();
+// Per-IP sliding-window login throttle — auth is normally tailnet-only, so
+// this is defense in depth against a sidecar burning server CPU on scrypt
+// verifications. Shared with sidecars so they throttle identically.
+const loginThrottle = createLoginThrottle();
 
-const trimLoginWindow = (timestamps, cutoff) => {
-  let i = 0;
-  while (i < timestamps.length && timestamps[i] < cutoff) i++;
-  return i === 0 ? timestamps : timestamps.slice(i);
-};
+export const isLoginRateLimited = (ip) => loginThrottle.isLimited(ip);
+export const recordLoginFailure = (ip) => loginThrottle.recordFailure(ip);
+export const clearLoginFailures = (ip) => loginThrottle.clear(ip);
 
-export const isLoginRateLimited = (ip) => {
-  if (typeof ip !== 'string' || ip.length === 0) return false;
-  const cutoff = now() - LOGIN_WINDOW_MS;
-  const recent = trimLoginWindow(loginAttempts.get(ip) || [], cutoff);
-  if (recent.length === 0) loginAttempts.delete(ip);
-  else loginAttempts.set(ip, recent);
-  return recent.length >= LOGIN_MAX_ATTEMPTS;
-};
-
-export const recordLoginFailure = (ip) => {
-  if (typeof ip !== 'string' || ip.length === 0) return;
-  const cutoff = now() - LOGIN_WINDOW_MS;
-  const recent = trimLoginWindow(loginAttempts.get(ip) || [], cutoff);
-  recent.push(now());
-  loginAttempts.set(ip, recent);
-};
-
-export const clearLoginFailures = (ip) => {
-  if (typeof ip === 'string') loginAttempts.delete(ip);
-};
-
-// Parse the `Cookie` header for our token. Express doesn't ship a cookie
-// parser and we only need one cookie name — manual parse keeps the dep tree
-// small (CLAUDE.md "Default to writing code yourself").
-export const parseCookieToken = (cookieHeader) => {
-  if (typeof cookieHeader !== 'string') return null;
-  const parts = cookieHeader.split(';');
-  for (const part of parts) {
-    const eq = part.indexOf('=');
-    if (eq === -1) continue;
-    const name = part.slice(0, eq).trim();
-    if (name !== COOKIE_NAME) continue;
-    const raw = part.slice(eq + 1).trim();
-    // decodeURIComponent throws on malformed %XX sequences. An attacker
-    // sending `portos_auth=%E0` would otherwise turn every gated request
-    // into a 500 via the error middleware instead of a clean 401. Treat
-    // a malformed cookie the same as "no token".
-    try { return decodeURIComponent(raw); }
-    catch { return null; }
-  }
-  return null;
-};
-
-// Pull the token from a request — cookie first, then Authorization: Bearer.
-// Bearer support lets curl/scripts authenticate without juggling cookies.
-// Header names are lowercased by both Node's HTTP parser and Socket.IO's
-// handshake — no uppercase fallback needed.
-export const extractToken = (req) => {
-  const cookie = parseCookieToken(req.headers?.cookie);
-  if (cookie) return cookie;
-  const authHeader = req.headers?.authorization;
-  // RFC 6750: Bearer scheme name is case-insensitive.
-  if (typeof authHeader === 'string' && authHeader.length > 7
-      && authHeader.slice(0, 7).toLowerCase() === 'bearer ') {
-    return authHeader.slice(7).trim();
-  }
-  return null;
-};
+// Cookie parsing + token extraction are shared with sidecars. Re-exported here
+// so existing importers of this module keep working unchanged.
+export { parseCookieToken, extractToken };
 
 export const buildSessionCookie = (token, { secure = false } = {}) => {
   // HttpOnly so XSS can't read it; SameSite=Lax so cross-origin GETs from the

@@ -15,6 +15,8 @@
 
 ## Security
 
+- **The Autofixer UI on `:5560` now honours the PortOS password gate** — when the install is password protected (Settings → Security), the Autofixer sidecar requires the same password before it will list apps, stream PM2 logs, or restart/stop a process. It listens on `0.0.0.0` for tailnet access, so it previously stayed wide open while `:5555` asked for a password. A browser already signed in to the PortOS dashboard on the same host is let straight through (the session cookie is port-agnostic); anything else gets a login prompt, and scripts can use `Authorization: Basic`/`Bearer`. Installs with no password set are unchanged.
+
 - Guard paid-provider API keys against SSRF / key-exfiltration: `streamCompletion` (askService), voice-LLM endpoint resolution, and the local-LLM playground now validate a provider's endpoint through the shared endpoint guard before attaching the `Authorization: Bearer` header, so a mistyped or malicious custom endpoint (including cloud-metadata hosts) never receives the key unless the provider opts in via `allowCustomEndpoint`.
 - Bump the `js-yaml` override from 4.2.0 to 4.3.0 (root, server, client) to clear a high-severity advisory where chained YAML merge keys force quadratic CPU consumption.
 - Pin server `tar` to 7.5.21 and `engine.io` to 6.6.9 via overrides, clearing a critical node-tar cluster (PAX header file smuggling, parse/decompression DoS, infinite loop on negative entry size) and an Engine.IO polling-transport connection-exhaustion advisory. These live only in `server/package-lock.json`, which is gitignored, so Dependabot never surfaced them.
