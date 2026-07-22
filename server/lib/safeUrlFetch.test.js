@@ -6,7 +6,6 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import http from 'node:http';
-import { Agent } from 'undici';
 
 const lookupMock = vi.fn();
 vi.mock('dns/promises', () => ({
@@ -21,6 +20,7 @@ vi.mock('./fetchWithTimeout.js', () => ({
 
 const {
   isPublicHttpUrlSafe, assertPublicHttpUrl, fetchPublicText, fetchPublicBinary, buildPinnedLookup,
+  buildPinnedDispatcher,
 } = await import('./safeUrlFetch.js');
 
 const res = ({ ok = true, status = 200, headers = {}, text = '', body = new ArrayBuffer(0) } = {}) => ({
@@ -193,11 +193,16 @@ describe('connect-time IP pinning (DNS-rebinding TOCTOU, #1859)', () => {
   // End-to-end proof the mechanism actually defeats rebinding: a hostname that
   // never resolves in real DNS still reaches the server, so undici MUST have
   // used our pinned address rather than re-resolving at connect time.
+  // Uses the PRODUCTION dispatcher factory (not a hand-rolled `new Agent(...)`)
+  // against the runtime's global fetch — the same pairing fetchWithTimeout makes
+  // — so this also proves the undici-8 dispatcher is accepted by the built-in
+  // fetch of whichever Node runs the suite (see buildPinnedDispatcher's note on
+  // the v7/v8 request-handler contract).
   it('undici connects to the pinned address for a non-resolving hostname', async () => {
     const server = http.createServer((req, res2) => res2.end(`host:${req.headers.host}`));
     await new Promise((r) => server.listen(0, '127.0.0.1', r));
     const { port } = server.address();
-    const dispatcher = new Agent({ connect: { lookup: buildPinnedLookup('127.0.0.1', 4) } });
+    const dispatcher = buildPinnedDispatcher('127.0.0.1', 4);
     const out = await fetch(`http://rebind.invalid:${port}/`, { dispatcher });
     expect(await out.text()).toBe(`host:rebind.invalid:${port}`); // Host preserved, IP pinned
     await dispatcher.close();
