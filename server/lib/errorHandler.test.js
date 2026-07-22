@@ -385,6 +385,19 @@ describe('errorHandler.js', () => {
       expect(body.error).toBe('kaboom');
     });
 
+    it('delegates to next(err) when the handler throws mid-stream', async () => {
+      const { req, res } = makeReqRes(null);
+      res.headersSent = true;
+      const next = vi.fn();
+      const boom = new ServerError('mid-stream', { status: 500 });
+
+      await asyncHandler(async () => { throw boom; })(req, res, next);
+      await flushMicrotasks();
+
+      expect(res.json).not.toHaveBeenCalled();
+      expect(next).toHaveBeenCalledWith(boom);
+    });
+
     it('does not touch res when the wrapped handler resolves successfully', async () => {
       const { req, res } = makeReqRes({ emit: vi.fn() });
 
