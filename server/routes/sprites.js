@@ -22,10 +22,12 @@ import {
 } from '../lib/validation.js';
 import { optionalUploadFields } from '../lib/multipart.js';
 import {
-  listRecords, getRecordWithAssets, createCharacter, updateRecord, deleteRecord,
+  listRecords, getRecordWithAssets, createCharacter, deleteRecord,
 } from '../services/sprites/records.js';
 import { importFromSource } from '../services/sprites/importer.js';
-import { getReferenceSet, startReferenceGeneration, lockReference } from '../services/sprites/reference.js';
+import {
+  getReferenceSet, startReferenceGeneration, lockReference, patchSpriteRecord,
+} from '../services/sprites/reference.js';
 
 const router = Router();
 
@@ -90,18 +92,12 @@ router.post('/:id/reference/lock', asyncHandler(async (req, res) => {
   res.json(await lockReference(req.params.id, body));
 }));
 
+// Chroma-key changes route through patchSpriteRecord, which re-checks the
+// lock state inside the same per-record write tail as `/reference/lock`
+// (409 CHROMA_KEY_LOCKED after the main freezes).
 router.patch('/:id', asyncHandler(async (req, res) => {
   const patch = validateRequest(spriteRecordUpdateSchema, req.body);
-  // Once the main reference is locked the manifest key is frozen with the
-  // artifacts — a record-level repin would only make the record/UI disagree
-  // with the immutable set.
-  if ('chromaKey' in patch) {
-    const reference = await getReferenceSet(req.params.id);
-    if (reference.manifest?.mainReference?.locked) {
-      throw new ServerError('Chroma key is frozen with the locked reference set', { status: 409, code: 'CHROMA_KEY_LOCKED' });
-    }
-  }
-  res.json(await updateRecord(req.params.id, patch));
+  res.json(await patchSpriteRecord(req.params.id, patch));
 }));
 
 router.delete('/:id', asyncHandler(async (req, res) => {

@@ -51,7 +51,7 @@ vi.mock('../settings.js', () => ({ getSettings: async () => settings }));
 
 const records = await import('./records.js');
 const {
-  getReferenceSet, startReferenceGeneration, attachReferenceCandidate, lockReference,
+  getReferenceSet, startReferenceGeneration, attachReferenceCandidate, lockReference, patchSpriteRecord,
 } = await import('./reference.js');
 
 let seq = 0;
@@ -365,6 +365,28 @@ describe('lockReference', () => {
       .rejects.toMatchObject({ code: 'INVALID_CANDIDATE' });
     await expect(lockReference(id, { target: 'main', candidate: 'reference/candidates/../../../escape.png' }))
       .rejects.toMatchObject({ code: 'INVALID_ASSET_PATH' });
+  });
+
+  it('patchSpriteRecord allows a key change pre-lock and 409s it post-lock', async () => {
+    const id = newId();
+    await createCharacter(id);
+    const patched = await patchSpriteRecord(id, { chromaKey: '#0000FF' });
+    expect(patched.chromaKey).toBe('#0000FF');
+    await patchSpriteRecord(id, { chromaKey: null }); // back to auto so lockMain selects
+    await lockMain(id);
+    await expect(patchSpriteRecord(id, { chromaKey: '#00FF00' }))
+      .rejects.toMatchObject({ status: 409, code: 'CHROMA_KEY_LOCKED' });
+    // Non-key fields stay patchable after lock.
+    const notes = await patchSpriteRecord(id, { notes: 'still editable' });
+    expect(notes.notes).toBe('still editable');
+  });
+
+  it('refuses to recreate a character over a tombstoned id', async () => {
+    const id = newId();
+    await records.createCharacter({ id, name: 'Hero' });
+    await records.deleteRecord(id);
+    await expect(records.createCharacter({ id, name: 'Hero' }))
+      .rejects.toMatchObject({ status: 409, code: 'ID_TOMBSTONED' });
   });
 
   it('never overwrites an existing versioned artifact (crash-recovery lands on v2)', async () => {

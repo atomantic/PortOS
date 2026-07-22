@@ -57,6 +57,12 @@ export const describeFidelity = (strength) => {
 export const CODEX_IMAGEGEN_DEFAULT_MODEL = 'gpt-5.6-luna';
 export const CODEX_IMAGEGEN_DEFAULT_EFFORT = 'low';
 
+// The local runner's fallback model id when neither the request nor
+// settings.imageGen.local.modelId names one (local.js's parameter default).
+// Exported so provenance writers (sprite candidate sidecars, #2896) can
+// record the model that actually ran without hardcoding a second copy.
+export const LOCAL_IMAGEGEN_DEFAULT_MODEL = 'dev';
+
 /**
  * Resolve the queue-capable image mode for a render request: the per-request
  * override (honored only when that backend is enabled/available), else the

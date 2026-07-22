@@ -74,6 +74,21 @@ describe('normalizeAnchorFrame', () => {
     expect(px(img, 7, 3)).toEqual(GREEN);                  // character pixels untouched
   });
 
+  it('preserves black pixels against the blue key (max-channel mask, not luma)', async () => {
+    const src = join(dir, 'blue-black.png');
+    const dest = join(dir, 'blue-black-out.png');
+    const BLUE = { r: 0, g: 0, b: 255 };
+    const BLACK = { r: 0, g: 0, b: 0 };
+    await writeCandidate(src, { bg: BLUE, fg: BLACK });
+    const result = await normalizeAnchorFrame(src, dest, { maskKeyHex: '#0000FF', canvasKeyHex: '#0000FF' });
+    // Under the source pipeline's luma metric this black rect scores
+    // 255·0.114 ≈ 29 < 40 and would vanish entirely (copiedThrough).
+    expect(result).toMatchObject({ charW: 10, charH: 20 });
+    const img = await readRaw(dest);
+    expect(px(img, 7, 3)).toEqual(BLACK);
+    expect(px(img, 0, 0)).toEqual(BLUE);
+  });
+
   it('copies through an image with no detectable foreground', async () => {
     const src = join(dir, 'blank.png');
     const dest = join(dir, 'blank-out.png');
