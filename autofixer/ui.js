@@ -98,8 +98,17 @@ async function isRegisteredProcess(processName) {
   return apps.some(app => (app.pm2ProcessNames || []).includes(processName));
 }
 
+// Restrict sensitive mutation endpoints to localhost only
+function requireLocalhost(req, res, next) {
+  const ip = req.ip || req.connection.remoteAddress;
+  if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') {
+    return next();
+  }
+  return res.status(403).json({ success: false, error: 'Forbidden: local access only' });
+}
+
 // API: Restart a PM2 process
-app.post('/api/restart/:process', async (req, res) => {
+app.post('/api/restart/:process', requireLocalhost, async (req, res) => {
   const processName = req.params.process;
   if (!(await isRegisteredProcess(processName))) {
     return res.status(400).json({ success: false, error: 'Unknown process' });
