@@ -4,13 +4,9 @@ import { request } from '../lib/testHelper.js';
 
 vi.mock('../services/sprites/records.js', () => ({
   listRecords: vi.fn(async () => [{ id: 'pioneer', kind: 'character', name: 'Pioneer' }]),
-  getRecord: vi.fn(),
+  getRecordWithAssets: vi.fn(),
   updateRecord: vi.fn(async (id, patch) => ({ id, ...patch })),
   deleteRecord: vi.fn(async () => ({ ok: true })),
-}));
-
-vi.mock('../services/sprites/paths.js', () => ({
-  listSpriteAssets: vi.fn(async () => [{ path: 'reference/main.png', size: 10, mtime: 1 }]),
 }));
 
 vi.mock('../services/sprites/importer.js', () => ({
@@ -18,7 +14,6 @@ vi.mock('../services/sprites/importer.js', () => ({
 }));
 
 import * as records from '../services/sprites/records.js';
-import * as paths from '../services/sprites/paths.js';
 import * as importer from '../services/sprites/importer.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import spriteRoutes from './sprites.js';
@@ -42,17 +37,19 @@ describe('sprites routes', () => {
   });
 
   it('GET /:id returns record + asset listing', async () => {
-    records.getRecord.mockResolvedValueOnce({ id: 'pioneer', kind: 'character' });
+    records.getRecordWithAssets.mockResolvedValueOnce({
+      record: { id: 'pioneer', kind: 'character' },
+      assets: [{ path: 'reference/main.png', size: 10, mtime: 1 }],
+    });
     const r = await request(app).get('/api/sprites/pioneer');
     expect(r.status).toBe(200);
     expect(r.body.record.id).toBe('pioneer');
     expect(r.body.assets).toHaveLength(1);
-    expect(records.getRecord).toHaveBeenCalledWith('pioneer');
-    expect(paths.listSpriteAssets).toHaveBeenCalledWith('pioneer');
+    expect(records.getRecordWithAssets).toHaveBeenCalledWith('pioneer');
   });
 
   it('GET /:id 404s on an unknown record', async () => {
-    records.getRecord.mockResolvedValueOnce(null);
+    records.getRecordWithAssets.mockResolvedValueOnce(null);
     const r = await request(app).get('/api/sprites/ghost');
     expect(r.status).toBe(404);
   });
