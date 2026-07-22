@@ -266,6 +266,39 @@ describe('lockReference', () => {
     expect(result.manifest.chromaKeyWarning).toMatch(/generation key #FF00FF/);
   });
 
+  it('409s a lock whose PINNED key collides with the surviving palette', async () => {
+    const id = newId();
+    await createCharacter(id);
+    // Leaf-green clothing (hue ~138 after quantization) + user pins the
+    // green key (hue 120): compositing onto green would make runtime keying
+    // eat the clothing.
+    await records.updateRecord(id, { chromaKey: '#00FF00' });
+    const rel = await placeCandidate(id, 'main', 'walk-south-candidate-01.png', {
+      fg: { r: 40, g: 200, b: 80 }, // green clothing on the magenta gen key
+    });
+    await expect(lockReference(id, { target: 'main', candidate: rel }))
+      .rejects.toMatchObject({ status: 409, code: 'CHROMA_CLIP_RISK' });
+    const accepted = await lockReference(id, { target: 'main', candidate: rel, acceptClipRisk: true });
+    expect(accepted.manifest.chromaKey).toBe('#00FF00');
+    expect(accepted.manifest.chromaKeyWarning).toMatch(/selected key #00FF00/);
+  });
+
+  it('gates anchor locks on clip risk against the canonical key', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await lockMain(id); // teal char → magenta key
+    // This facing reveals a pink feature near the magenta generation key.
+    const rel = await placeCandidate(id, 'east', 'walk-east-candidate-01.png', {
+      fg: { r: 255, g: 80, b: 230 },
+    });
+    await expect(lockReference(id, { target: 'east', candidate: rel }))
+      .rejects.toMatchObject({ status: 409, code: 'CHROMA_CLIP_RISK' });
+    const accepted = await lockReference(id, { target: 'east', candidate: rel, acceptClipRisk: true });
+    const east = accepted.manifest.anchors.find((a) => a.id === 'walk-east');
+    expect(east.status).toBe('locked');
+    expect(east.clipWarning).toMatch(/generation key #FF00FF/);
+  });
+
   it('threads the saved local model into local-mode renders and provenance', async () => {
     const id = newId();
     await createCharacter(id);
