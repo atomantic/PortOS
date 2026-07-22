@@ -73,6 +73,7 @@ const CreativeDirectorDetail = lazyWithReload(() => import('./pages/CreativeDire
 const CreativeCommissions = lazyWithReload(() => import('./pages/CreativeCommissions'));
 const CreativeCommissionDetail = lazyWithReload(() => import('./pages/CreativeCommissionDetail'));
 const MusicVideo = lazyWithReload(() => import('./pages/MusicVideo'));
+const Sprites = lazyWithReload(() => import('./pages/Sprites'));
 const MoodBoards = lazyWithReload(() => import('./pages/MoodBoards'));
 const MoodBoardDetail = lazyWithReload(() => import('./pages/MoodBoardDetail'));
 const CreateApp = lazyWithReload(() => import('./pages/CreateApp'));
@@ -326,6 +327,8 @@ export default function App() {
             <Route path="creative-director/:id/:tab" element={<CreativeDirectorLegacyRedirect />} />
             <Route path="music-video" element={<MusicVideo />} />
             <Route path="music-video/:projectId" element={<MusicVideo />} />
+            <Route path="sprites" element={<Sprites />} />
+            <Route path="sprites/:id" element={<Sprites />} />
             <Route path="timeline" element={<VideoTimeline />} />
             <Route path="timeline/:projectId" element={<VideoTimelineEditor />} />
             <Route path="models" element={<MediaModels />} />

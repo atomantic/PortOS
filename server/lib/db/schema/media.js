@@ -80,6 +80,24 @@ export const mediaDdl = [
     // Partial index for the live-list filter (deleted = FALSE).
     `CREATE INDEX IF NOT EXISTS idx_mood_boards_live ON mood_boards (deleted) WHERE deleted = FALSE`,
 
+    // Sprite records (issue #2895, phase 1). One row per sprite subject — a
+    // character or a props atlas family; the full record (spec, chromaKey,
+    // publishBinding, importedFrom) in `data` JSONB with kind/status mirrored
+    // for queries. Binary assets live under data/sprites/<id>/ — the row is
+    // metadata + workflow state only. Not federated in phase 1; the tombstone
+    // trio keeps peer-sync additive later.
+    `CREATE TABLE IF NOT EXISTS sprite_records (
+      id TEXT PRIMARY KEY,
+      kind VARCHAR(16) NOT NULL DEFAULT 'character',
+      status VARCHAR(32) NOT NULL DEFAULT 'draft',
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_sprite_records_live ON sprite_records (deleted) WHERE deleted = FALSE`,
+
     // Media asset index (Phase 3.2, issue #1000). One row per generated image
     // or video; the bytes stay on disk (data/images, data/videos) and the
     // sidecar/.json history files remain authoritative — this table is a
