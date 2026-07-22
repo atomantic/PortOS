@@ -32,7 +32,7 @@ import { PATHS, atomicWrite, ensureDir, pathExists, sleep } from '../lib/fileUti
 import { compareSemver } from '../lib/versionUtils.js'
 import { isBackend, mapModelToBackend } from '../lib/localLlmCatalog.js'
 import { sanitizeOllamaName } from '../lib/localLlmDisk.js'
-import { recommendEditorialModel, isVisionModel, isVisionCapableCliProvider } from '../lib/localModelHeuristics.js'
+import { recommendEditorialModel, isVisionModel, isVisionCapableCliProvider, isToolUseModel } from '../lib/localModelHeuristics.js'
 import * as ollamaManager from './ollamaManager.js'
 import * as lmStudioManager from './lmStudioManager.js'
 import { getProviderById, getAllProviders, updateProvider } from './providers.js'
@@ -614,6 +614,37 @@ export async function controlOllamaServer(action) {
   return { success: false, error: `Unknown Ollama action: ${action}` }
 }
 
+// Ollama's /api/show reports capabilities in its own vocabulary
+// (completion/tools/vision/embedding/thinking/insert). Map the ones that have
+// a home onto the badge vocabulary the Models catalog cards already render
+// (CAPABILITY_META in LocalLlmTab.jsx: chat/code/reasoning/vision/embeddings/
+// tools/audio) so installed models can show the same icons. Only capabilities
+// the daemon actually reported are surfaced — nothing is guessed here.
+const OLLAMA_CAPABILITY_BADGES = {
+  completion: 'chat',
+  tools: 'tools',
+  vision: 'vision',
+  embedding: 'embeddings',
+  thinking: 'reasoning'
+}
+
+function ollamaBadgeCapabilities(rawCapabilities) {
+  return (Array.isArray(rawCapabilities) ? rawCapabilities : [])
+    .map((c) => OLLAMA_CAPABILITY_BADGES[String(c).toLowerCase()])
+    .filter(Boolean)
+}
+
+// LM Studio's native model list tags each model's `type` (`llm` / `vlm` /
+// `embeddings`) — authoritative for chat/vision/embeddings. It reports no
+// tool-calling flag, so fall back to the shared id heuristic for `tools`.
+function lmStudioBadgeCapabilities(m) {
+  const type = m?.type ? String(m.type).toLowerCase() : null
+  const caps = type === 'embeddings' ? ['embeddings'] : ['chat']
+  if (type === 'vlm') caps.push('vision')
+  if (type !== 'embeddings' && isToolUseModel(m?.id)) caps.push('tools')
+  return caps
+}
+
 /** Normalize each backend's installed-model shape into one card shape. */
 function normalizeModels(backend, models) {
   if (backend === 'ollama') {
@@ -626,7 +657,8 @@ function normalizeModels(backend, models) {
       // path, or the listVisionModels enrichment below) prefer it; otherwise
       // fall back to the id heuristic. Passing the object lets a vision-capable
       // MoE like `qwen3.6:35b` (no `vl`/`vision` token in its id) resolve true.
-      vision: isVisionModel(Array.isArray(m.capabilities) ? { id: m.id, capabilities: m.capabilities } : m.id)
+      vision: isVisionModel(Array.isArray(m.capabilities) ? { id: m.id, capabilities: m.capabilities } : m.id),
+      capabilities: ollamaBadgeCapabilities(m.capabilities)
     }))
   }
   return models.map((m) => ({
@@ -635,7 +667,8 @@ function normalizeModels(backend, models) {
     contextLength: m.maxContextLength ?? null,
     // LM Studio's native model list tags vision models `type: 'vlm'` — prefer
     // that over the id regex.
-    vision: isVisionModel(m)
+    vision: isVisionModel(m),
+    capabilities: lmStudioBadgeCapabilities(m)
   }))
 }
 

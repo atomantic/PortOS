@@ -95,6 +95,28 @@ function summarizeMigrate(r) {
   return `${labelFor(r.from)} → ${labelFor(r.to)}: ${parts.join(', ') || 'nothing to move'}`;
 }
 
+// Shared capability-icon row for both catalog/search-result cards and the
+// installed-models list, so the two surfaces render the same badges the same way.
+function CapabilityBadges({ capabilities }) {
+  return (capabilities || []).map((capability) => {
+    const meta = CAPABILITY_META[capability];
+    if (!meta) {
+      return <span key={capability} className="px-1.5 py-0.5 bg-port-border/60 rounded">{capability}</span>;
+    }
+    const Icon = meta.Icon;
+    return (
+      <span
+        key={capability}
+        title={meta.label}
+        aria-label={meta.label}
+        className={`inline-flex items-center justify-center w-5 h-5 rounded border ${meta.cls}`}
+      >
+        <Icon size={12} />
+      </span>
+    );
+  });
+}
+
 function BackendCard({ backend, status, isDefault, busy, actionInProgress, runAction, setConfirmAction }) {
   const data = status?.[backend.id];
   const Icon = backend.icon;
@@ -897,23 +919,7 @@ export function LocalLlmTab() {
                           </span>
                         )}
                         {isHf && m.license && <span>{m.license}</span>}
-                        {(m.capabilities || []).map((capability) => {
-                          const meta = CAPABILITY_META[capability];
-                          if (!meta) {
-                            return <span key={capability} className="px-1.5 py-0.5 bg-port-border/60 rounded">{capability}</span>;
-                          }
-                          const Icon = meta.Icon;
-                          return (
-                            <span
-                              key={capability}
-                              title={meta.label}
-                              aria-label={meta.label}
-                              className={`inline-flex items-center justify-center w-5 h-5 rounded border ${meta.cls}`}
-                            >
-                              <Icon size={12} />
-                            </span>
-                          );
-                        })}
+                        <CapabilityBadges capabilities={m.capabilities} />
                       </div>
                     </div>
                     <div className="flex flex-col items-end gap-1 shrink-0">
@@ -1002,6 +1008,11 @@ export function LocalLlmTab() {
                 <div className="text-xs text-gray-500 truncate">
                   {[m.params, m.quantization, m.family, formatContextLength(m.contextLength)].filter(Boolean).join(' · ')}
                 </div>
+                {(m.capabilities || []).length > 0 && (
+                  <div className="flex items-center gap-1 flex-wrap mt-1">
+                    <CapabilityBadges capabilities={m.capabilities} />
+                  </div>
+                )}
               </div>
               {m.size != null && <span className="text-xs text-gray-400 shrink-0">{formatBytes(m.size)}</span>}
               <Link
