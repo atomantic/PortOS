@@ -39,6 +39,7 @@ import {
 import {
   startYoutubeImport, attachImportSseClient, cancelYoutubeImport, YOUTUBE_URL_RE,
 } from '../services/trackYoutubeImport.js';
+import { generateChiptuneScore, renderChiptuneTrack, publishChiptuneTrack } from '../services/chiptune.js';
 
 const router = Router();
 
@@ -257,6 +258,45 @@ router.post('/:id/audio/attach', asyncHandler(async (req, res) => {
 router.delete('/:id/audio', asyncHandler(async (req, res) => {
   await requireTrack(req.params.id);
   res.json({ track: await tracks.updateTrack(req.params.id, { audioFilename: '' }) });
+}));
+
+// --- Chiptune scores (#2911) — prompt-based looping 8-bit background music.
+// Generation is synchronous (a single LLM call, seconds) and strictly
+// user-triggered from the Track editor, per the AI-provider usage policy.
+
+const chiptuneGenerateSchema = z.object({
+  prompt: z.string().trim().min(1, 'prompt is required').max(tracks.PROMPT_MAX),
+  providerId: z.string().trim().max(120).optional(),
+  model: z.string().trim().max(120).optional(),
+  // true = ignore the track's existing score and compose from scratch
+  // (default is to iterate on it when one exists).
+  fresh: z.boolean().optional(),
+});
+
+const chiptunePublishSchema = z.object({
+  appId: z.string().trim().min(1).max(120),
+  subdir: z.string().trim().max(200).optional(),
+  slug: z.string().trim().max(64).optional(),
+});
+
+// Generate (or iterate on) the track's chiptune score with an AI provider.
+router.post('/:id/chiptune/generate', asyncHandler(async (req, res) => {
+  await requireTrack(req.params.id);
+  const body = validateRequest(chiptuneGenerateSchema, req.body ?? {});
+  res.json(await generateChiptuneScore({ trackId: req.params.id, ...body }));
+}));
+
+// Render the current score into the shared music library as a looping take.
+router.post('/:id/chiptune/render', asyncHandler(async (req, res) => {
+  await requireTrack(req.params.id);
+  res.json(await renderChiptuneTrack({ trackId: req.params.id }));
+}));
+
+// Publish the current score into a managed app's repo (OGG + score JSON).
+router.post('/:id/chiptune/publish', asyncHandler(async (req, res) => {
+  await requireTrack(req.params.id);
+  const body = validateRequest(chiptunePublishSchema, req.body ?? {});
+  res.json(await publishChiptuneTrack({ trackId: req.params.id, ...body }));
 }));
 
 // Make a past render the active one (re-point the player + gen-metadata badges

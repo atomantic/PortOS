@@ -10,7 +10,7 @@ import {
 } from '../services/mediaJobQueue/index.js';
 import { asyncHandler } from '../lib/errorHandler.js';
 import { isPlainObject } from '../lib/objects.js';
-import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, validateRequest } from '../lib/validation.js';
+import { backupConfigSchema, sharingSettingsPatchSchema, featureProviderConfigSchema, autofixerSettingsSchema, codeReviewSettingsSchema, locationSettingsSchema, settingsEmbeddingsSchema, citySnapshotConfigSchema, imessageConfigSchema, signalConfigSchema, spotifyConfigSchema, youtubeConfigSchema, apiAccessSettingsSchema, loraTrainingConfigSchema, pipelineEditorialChecksSettingsSchema, creativeDirectorSettingsSchema, musicSettingsSchema, privacySettingsSchema, seriesAutopilotSettingsSchema, layeredIntelligenceSettingsSchema, imageGenGrokSettingsSchema, validateRequest } from '../lib/validation.js';
 
 const router = Router();
 
@@ -138,6 +138,10 @@ router.put('/', asyncHandler(async (req, res) => {
   // write a bad provider config.
   if (req.body?.creativeDirector !== undefined) {
     validateRequest(creativeDirectorSettingsSchema.partial(), req.body.creativeDirector);
+  }
+  // Music studio slice (#2911) — the chiptune provider pin + publish prefs.
+  if (req.body?.music !== undefined) {
+    validateRequest(musicSettingsSchema.partial(), req.body.music);
   }
   // Home location ({ lat, lon }) read by the weather_now voice tool. The schema
   // already makes both fields optional + nullable (clearing falls back to the

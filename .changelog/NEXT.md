@@ -1,5 +1,9 @@
 # Unreleased
 
+## Music studio
+
+- **[issue-2911] Compose looping 8-bit game music from a prompt** — the Track editor gains a "Chiptune score" generation mode alongside the on-device audio models: describe the music, pick any configured AI provider/model, and it composes a structured NES-style score (two pulse channels, triangle bass, noise drums) that plays as a seamless loop right in the browser. Revise it conversationally ("more drums", "make it spookier") or start fresh, render takes into the track's regular render history as audio loops, and publish straight into a managed game app's repo (default `game/assets/music/`) as a game-ready OGG plus its editable score source — so a Godot game can drop the loop in as background music. The provider pin and publish target are remembered between sessions.
+
 ## Sprite Manager
 
 - **[issue-2895] Media Gen gains a Sprites section (phase 1: library + import)** — a new Sprites tab lists your game-sprite characters and prop atlas families, browses each one's locked reference set, walk-cycle strips, and published atlas versions (with pixel-perfect previews), and imports the approved production assets from an existing sprite-pipeline checkout in one click. Only final/approved artifacts import — rejected candidates and raw video intermediates stay behind — and every file the source manifests hash-pin is verified on the way in. Reachable from ⌘K and voice ("take me to sprites"). Generation (reference → anchors → walk videos → publish-to-game) lands in the follow-up phases.

@@ -174,4 +174,31 @@ describe('tracks logic', () => {
       expect(trackAudioFilename('sub/dir.mp3')).toBeNull();
     });
   });
+
+  describe('chiptune fields (#2911)', () => {
+    const score = {
+      version: 1, bpm: 120, stepsPerBeat: 4, beatsPerBar: 4,
+      channels: [{ id: 'pulse1', wave: 'square' }],
+      patterns: { A: { bars: 1, notes: { pulse1: [{ step: 0, pitch: 'C5', len: 4 }] } } },
+      order: ['A'],
+    };
+
+    it('sanitizes a valid score, nulls an invalid one, keeps the prompt', () => {
+      const track = sanitizeTrack({ id: 'track-1', title: 'X', chiptuneScore: score, chiptunePrompt: 'farm loop' });
+      expect(track.chiptuneScore).toMatchObject({ bpm: 120 });
+      expect(track.chiptunePrompt).toBe('farm loop');
+      const bad = sanitizeTrack({ id: 'track-1', title: 'X', chiptuneScore: { version: 99 } });
+      expect(bad.chiptuneScore).toBeNull();
+    });
+
+    it('is patchable — absent preserves, present overwrites', () => {
+      const base = sanitizeTrack({ id: 'track-1', title: 'X', chiptuneScore: score, chiptunePrompt: 'v1' });
+      const untouched = applyTrackPatch(base, { title: 'Y' });
+      expect(untouched.chiptuneScore).toMatchObject({ bpm: 120 });
+      expect(untouched.chiptunePrompt).toBe('v1');
+      const cleared = applyTrackPatch(base, { chiptuneScore: null, chiptunePrompt: '' });
+      expect(cleared.chiptuneScore).toBeNull();
+      expect(cleared.chiptunePrompt).toBe('');
+    });
+  });
 });

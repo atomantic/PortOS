@@ -86,6 +86,30 @@ export const uploadTrackAudio = (id, formData, requestOptions = {}) => request(`
   ...requestOptions,
 });
 
+// --- Chiptune scores (#2911) — prompt-based looping 8-bit background music.
+
+// Generate (or iterate on) the track's chiptune score with an AI provider.
+// `body`: { prompt, providerId?, model?, fresh? }.
+export const generateTrackChiptune = (id, body, requestOptions = {}) => request(`/tracks/${encodeURIComponent(id)}/chiptune/generate`, {
+  method: 'POST',
+  body: JSON.stringify(body),
+  ...requestOptions,
+});
+
+// Render the current score into the shared music library as a looping take.
+export const renderTrackChiptune = (id, requestOptions = {}) => request(`/tracks/${encodeURIComponent(id)}/chiptune/render`, {
+  method: 'POST',
+  ...requestOptions,
+});
+
+// Publish the current score into a managed app's repo (OGG + score JSON).
+// `body`: { appId, subdir?, slug? }.
+export const publishTrackChiptune = (id, body, requestOptions = {}) => request(`/tracks/${encodeURIComponent(id)}/chiptune/publish`, {
+  method: 'POST',
+  body: JSON.stringify(body),
+  ...requestOptions,
+});
+
 // Mirror server caps in server/services/tracks/logic.js — bump both sides.
 export const TRACK_TITLE_MAX = 200;
 export const TRACK_LYRICS_MAX = 20000;

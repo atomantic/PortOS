@@ -89,7 +89,12 @@ const MEDIA_COLLECTION_SCALAR_FIELDS = Object.freeze(['name', 'description', 'co
 // (local and remote both differ from a base computed without renders). Excluding
 // it from the hash keeps base-hash compatibility; render-only divergences are
 // LWW-ordered by `updatedAt` regardless, and renders stays restorable (below).
-const HASH_EXCLUDED_FIELDS = Object.freeze({ issue: ['number'], track: ['renders'] });
+// track: renders (server-managed take history) and the additive chiptune
+// fields (#2911) stay out of the content hash — an older peer's copy simply
+// lacks the keys, and including them would leave mixed-version peers with a
+// permanent base-hash mismatch (the churn the wire comments warn about).
+// Score changes still propagate via the whole-record LWW merge (updatedAt).
+const HASH_EXCLUDED_FIELDS = Object.freeze({ issue: ['number'], track: ['renders', 'chiptuneScore', 'chiptunePrompt'] });
 
 /**
  * sha256 of the canonical content projection. Reuses sanitizeRecordForWire +
