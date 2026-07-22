@@ -220,7 +220,9 @@ export default function Sprites() {
   return (
     <div className="flex flex-col md:flex-row gap-4 h-full">
       <aside className="md:w-64 shrink-0 space-y-3">
-        <ImportPanel onImported={refresh} />
+        {/* Re-import while a sprite is open must refresh the open detail too,
+            not just the sidebar list. */}
+        <ImportPanel onImported={() => { refresh(); if (id) setRetryTick((t) => t + 1); }} />
         {records === null ? (
           <p className="text-sm text-gray-500">Loading…</p>
         ) : records.length === 0 ? (
