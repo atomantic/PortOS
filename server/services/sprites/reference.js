@@ -24,7 +24,7 @@ import {
 import { ServerError } from '../../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
-import { IMAGE_GEN_MODE, resolveQueueImageMode } from '../imageGen/modes.js';
+import { IMAGE_GEN_MODE, resolveQueueImageMode, CODEX_IMAGEGEN_DEFAULT_MODEL } from '../imageGen/modes.js';
 import { resolveImageCleaners } from '../imageGen/index.js';
 import { getSettings } from '../settings.js';
 import { getRecord, updateRecord } from './records.js';
@@ -242,8 +242,14 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
   }
 
   const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, mode);
-  const model = body.model
-    || (mode === IMAGE_GEN_MODE.CODEX ? settings.imageGen?.codex?.model : undefined);
+  const codexModel = body.model || settings.imageGen?.codex?.model || CODEX_IMAGEGEN_DEFAULT_MODEL;
+  // The model the provider will ACTUALLY run, for candidate provenance —
+  // grok picks its model internally, so its sidecars record null.
+  const effectiveModel = mode === IMAGE_GEN_MODE.CODEX
+    ? codexModel
+    : mode === IMAGE_GEN_MODE.LOCAL
+      ? (body.model || settings.imageGen?.local?.modelId || null)
+      : null;
   const baseParams = {
     prompt,
     ...(initImagePath ? { initImagePath, initImageStrength } : {}),
@@ -251,12 +257,12 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
     denoise,
     // Destination tag the completion hook files the render by.
     spriteRef: {
-      recordId, target, direction, anchorId, chromaKey: genKey, mode, model: model || null,
+      recordId, target, direction, anchorId, chromaKey: genKey, mode, model: effectiveModel,
       ...(target === 'main' && body.designPrompt ? { designPrompt: body.designPrompt } : {}),
     },
   };
   const params = mode === IMAGE_GEN_MODE.CODEX
-    ? { mode, codexPath: settings.imageGen?.codex?.codexPath, model, effort: body.effort || settings.imageGen?.codex?.effort, ...baseParams }
+    ? { mode, codexPath: settings.imageGen?.codex?.codexPath, model: codexModel, effort: body.effort || settings.imageGen?.codex?.effort, ...baseParams }
     : mode === IMAGE_GEN_MODE.GROK
       ? { mode, grokPath: settings.imageGen?.grok?.grokPath, aspectRatio: settings.imageGen?.grok?.aspectRatio, ...baseParams }
       : { mode, pythonPath: settings.imageGen?.local?.pythonPath || null, ...(body.model ? { modelId: body.model } : {}), ...baseParams };

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Lock, Sparkles, RefreshCw, Upload } from 'lucide-react';
 import toast from '../ui/Toast';
 import { generateSpriteReference, lockSpriteReference, updateSpriteRecord } from '../../services/apiSprites.js';
-import { getMediaJob } from '../../services/apiMediaJobs.js';
+import { getMediaJob, listMediaJobs } from '../../services/apiMediaJobs.js';
 import { getSettings } from '../../services/apiSystem.js';
 import { deriveAvailableBackends } from '../../lib/imageGenBackends.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
@@ -88,6 +88,28 @@ export default function ReferenceWorkflow({ record, reference, onChanged }) {
       })
       .catch(() => setBackends([]));
   }, []);
+
+  // Rehydrate in-flight renders on mount/record switch — a reload or
+  // navigate-away-and-back would otherwise lose pendingJobs and re-enable
+  // Generate mid-render, inviting a duplicate paid render for the same
+  // target. Locally-started jobs win over the snapshot on key collision.
+  useEffect(() => {
+    let stale = false;
+    listMediaJobs({ kind: 'image', owner: 'sprites' }, { silent: true })
+      .then((jobs) => {
+        if (stale) return;
+        const active = {};
+        for (const job of jobs || []) {
+          const tag = job.params?.spriteRef;
+          if (tag?.recordId === recordId && ['queued', 'running'].includes(job.status)) {
+            active[tag.target] = job.id;
+          }
+        }
+        if (Object.keys(active).length > 0) setPendingJobs((prev) => ({ ...active, ...prev }));
+      })
+      .catch(() => {}); // best-effort — the poll and server guards still apply
+    return () => { stale = true; };
+  }, [recordId]);
 
   // Poll in-flight render jobs (parallel — they're independent); on a
   // terminal state drop the entry and refresh the detail once so the new
@@ -178,15 +200,27 @@ export default function ReferenceWorkflow({ record, reference, onChanged }) {
           <Sparkles className="w-4 h-4" /> Reference Set
           <span className="text-xs font-normal text-gray-500">{manifest?.status || 'not started'}</span>
         </h3>
-        <div className="flex items-center gap-1.5" title="Chroma key — auto-selected at main lock; override is limited to the three standard keys">
+        <div
+          className="flex items-center gap-1.5"
+          title={mainLocked
+            ? 'Chroma key is frozen with the locked reference set'
+            : 'Chroma key — auto-selected at main lock; pin one of the three standard keys, or auto to let the lock decide'}
+        >
           <span className="text-xs text-gray-500">key</span>
+          <button
+            onClick={() => setChromaKey(null)}
+            disabled={keySaving || mainLocked}
+            className={`px-1.5 h-5 rounded-sm border text-[10px] ${!record.chromaKey ? 'border-white ring-1 ring-port-accent text-white' : 'border-port-border text-gray-400 opacity-60 hover:opacity-100'} disabled:opacity-40`}
+          >
+            auto
+          </button>
           {CHROMA_KEYS.map((hex) => (
             <button
               key={hex}
               onClick={() => setChromaKey(hex)}
-              disabled={keySaving}
+              disabled={keySaving || mainLocked}
               aria-label={`Set chroma key ${hex}`}
-              className={`w-5 h-5 rounded-sm border ${record.chromaKey === hex ? 'border-white ring-1 ring-port-accent' : 'border-port-border opacity-60 hover:opacity-100'}`}
+              className={`w-5 h-5 rounded-sm border ${record.chromaKey === hex ? 'border-white ring-1 ring-port-accent' : 'border-port-border opacity-60 hover:opacity-100'} disabled:opacity-40`}
               style={{ backgroundColor: hex }}
             />
           ))}

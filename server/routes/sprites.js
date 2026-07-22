@@ -92,6 +92,15 @@ router.post('/:id/reference/lock', asyncHandler(async (req, res) => {
 
 router.patch('/:id', asyncHandler(async (req, res) => {
   const patch = validateRequest(spriteRecordUpdateSchema, req.body);
+  // Once the main reference is locked the manifest key is frozen with the
+  // artifacts — a record-level repin would only make the record/UI disagree
+  // with the immutable set.
+  if ('chromaKey' in patch) {
+    const reference = await getReferenceSet(req.params.id);
+    if (reference.manifest?.mainReference?.locked) {
+      throw new ServerError('Chroma key is frozen with the locked reference set', { status: 409, code: 'CHROMA_KEY_LOCKED' });
+    }
+  }
   res.json(await updateRecord(req.params.id, patch));
 }));
 
