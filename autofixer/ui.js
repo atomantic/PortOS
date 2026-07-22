@@ -6,6 +6,7 @@ import { fileURLToPath } from 'url';
 import { createRequire } from 'module';
 import { createTailscaleServers, watchCertReload } from '../lib/tailscale-https.js';
 import { certPaths } from '../lib/certPaths.js';
+import { createSidecarAuthGate } from '../lib/sidecarAuthGate.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -56,6 +57,28 @@ async function loadHistory() {
   const data = await readFile(INDEX_FILE, 'utf8').catch(() => '[]');
   return JSON.parse(data);
 }
+
+// When the install is password protected (Settings → Security on :5555), this
+// sidecar honours the same gate. It listens on 0.0.0.0 for tailnet access and
+// can restart/stop PM2 processes and stream logs, so leaving it open while
+// :5555 asks for a password would make the password meaningless. On an install
+// with no password set, the gate is a no-op — the documented single-user
+// trust model is unchanged.
+// `/` serves the static shell, which renders its own login overlay driven by
+// GET /api/auth/status — it carries no data, so it stays publicly reachable.
+const auth = createSidecarAuthGate({
+  dataDir: DATA_DIR,
+  cookieName: 'portos_autofixer_auth',
+  publicPaths: ['/'],
+});
+
+// The gate is mounted BEFORE the auth routes so its cross-origin (CSRF) check
+// covers them too — `publicPaths` is what lets them through, not route order.
+app.use(express.json({ limit: '16kb' }));
+app.use(auth.gate);
+app.get('/api/auth/status', auth.handleStatus);
+app.post('/api/auth/login', auth.handleLogin);
+app.post('/api/auth/logout', auth.handleLogout);
 
 // API: Get registered apps and their processes
 app.get('/api/apps', async (req, res) => {
@@ -245,8 +268,10 @@ app.get('/logs', async (req, res) => {
 const { dir: CERT_DIR } = certPaths(DATA_DIR);
 const { server, httpsEnabled } = createTailscaleServers(app, { certDir: CERT_DIR, httpMirror: false });
 const scheme = httpsEnabled ? 'https' : 'http';
-server.listen(PORT, '0.0.0.0', () => {
+server.listen(PORT, '0.0.0.0', async () => {
   console.log(`🚀 [Autofixer UI] Running on ${scheme}://localhost:${PORT}`);
+  const gated = await auth.isEnabled().catch(() => true);
+  console.log(`🔐 [Autofixer UI] Password gate ${gated ? 'ENABLED (PortOS password required)' : 'off (no PortOS password set)'}`);
 });
 if (httpsEnabled) watchCertReload(server, CERT_DIR);
 
