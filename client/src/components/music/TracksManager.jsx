@@ -19,6 +19,7 @@ import toast from '../ui/Toast';
 import { formatTimecode } from '../../utils/formatters';
 import ArtistPicker from './ArtistPicker';
 import MusicGenPanel from './MusicGenPanel';
+import ChiptunePanel from './ChiptunePanel';
 import TrackRenderCard from './TrackRenderCard';
 import TrackRenderModal from './TrackRenderModal';
 import MidiVisualization from '../songs/MidiVisualization.jsx';
@@ -77,9 +78,14 @@ export default function TracksManager() {
   // re-applies). See remixRender below.
   const [modalRender, setModalRender] = useState(null);
   const [remix, setRemix] = useState(null);
+  const [chiptuneRemix, setChiptuneRemix] = useState(null);
   // Music Video projects, for the MIDI read-through: MuScriptor transcriptions
   // are stored on the MV project that links a track, not on the track itself.
   const [mvProjects, setMvProjects] = useState([]);
+  // Which generator the editor shows: the on-device audio models or the
+  // LLM-composed chiptune score (#2911). Seeded per selection below — a track
+  // that already carries a score opens on the chiptune panel.
+  const [genMode, setGenMode] = useState('audio');
   const remixNonceRef = useRef(0);
   const fileInputRef = useRef(null);
   // Mirrors `selectedId` so async audio handlers can detect a selection change
@@ -121,6 +127,7 @@ export default function TracksManager() {
     setLibraryOpen(false);
     setModalRender(null);
     setRemix(null);
+    setChiptuneRemix(null);
   };
 
   const selectTrack = (t) => navigate(`/music/tracks/${encodeURIComponent(t.id)}`);
@@ -142,6 +149,7 @@ export default function TracksManager() {
     resetTrackViewState();
     if (isCreate) setForm(emptyForm());
     else if (selected) setForm(formFromTrack(selected));
+    setGenMode(selected?.chiptuneScore ? 'chiptune' : 'audio');
   }, [selectionKey, isCreate, selected, loading]);
 
   const upsertLocal = (track) => {
@@ -291,12 +299,20 @@ export default function TracksManager() {
   // model/duration, and close the modal so the panel is in view.
   const remixRender = (render) => {
     setModalRender(null);
+    remixNonceRef.current += 1;
+    // A chiptune take remixes in the chiptune panel: seed ITS prompt (not the
+    // audio-model form's prompt — that field belongs to the diffusion engines).
+    if (render.engine === 'chiptune') {
+      setGenMode('chiptune');
+      setChiptuneRemix({ prompt: render.prompt || '', nonce: remixNonceRef.current });
+      return;
+    }
+    setGenMode('audio');
     setForm((f) => ({
       ...f,
       ...(render.prompt ? { prompt: render.prompt } : {}),
       ...(render.lyrics ? { lyrics: render.lyrics } : {}),
     }));
-    remixNonceRef.current += 1;
     setRemix({ engineId: render.engine, modelId: render.modelId, durationSec: render.durationSec, nonce: remixNonceRef.current });
   };
 
@@ -410,27 +426,54 @@ export default function TracksManager() {
                 />
               </Field>
 
-              {/* On-device generation — available once the track is saved (the
-                  server attaches the audio + metadata to the persisted track).
-                  Uses the CURRENT prompt/lyrics in the form; `remix` seeds the
-                  engine/model/duration from a past take. */}
+              {/* Generation — available once the track is saved (the server
+                  attaches the audio + metadata to the persisted track). Two
+                  modes: the on-device audio models (MusicGen/AudioLDM2/ACE-Step)
+                  and the LLM-composed looping chiptune score (#2911). */}
               {persisted ? (
-                <MusicGenPanel
-                  track={persisted}
-                  prompt={form.prompt}
-                  lyrics={form.lyrics}
-                  remix={remix}
-                  onGenerated={(updated) => {
-                    upsertLocal(updated); // list update is id-keyed → always safe
-                    // Merge ONLY the server-set generation fields into the open
-                    // form (the active audio pointer mirrors onto the form) so any
-                    // UNSAVED edits the user made to title/artist/album/prompt/
-                    // lyrics before clicking Generate survive.
-                    if (selectedIdRef.current === updated.id) {
-                      setForm((f) => ({ ...f, audioFilename: updated.audioFilename || '' }));
-                    }
-                  }}
-                />
+                <div className="space-y-2">
+                  <div className="inline-flex rounded-lg border border-port-border overflow-hidden text-sm" role="group" aria-label="Generation mode">
+                    {[['audio', 'Audio model'], ['chiptune', 'Chiptune score']].map(([mode, label]) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setGenMode(mode)}
+                        className={`px-3 py-1.5 ${genMode === mode ? 'bg-port-accent/20 text-white' : 'bg-port-bg text-gray-400 hover:text-white'}`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  {genMode === 'chiptune' ? (
+                    <ChiptunePanel
+                      track={persisted}
+                      remix={chiptuneRemix}
+                      onTrackUpdate={(updated) => {
+                        upsertLocal(updated); // list update is id-keyed → always safe
+                        if (selectedIdRef.current === updated.id) {
+                          setForm((f) => ({ ...f, audioFilename: updated.audioFilename || f.audioFilename }));
+                        }
+                      }}
+                    />
+                  ) : (
+                    <MusicGenPanel
+                      track={persisted}
+                      prompt={form.prompt}
+                      lyrics={form.lyrics}
+                      remix={remix}
+                      onGenerated={(updated) => {
+                        upsertLocal(updated); // list update is id-keyed → always safe
+                        // Merge ONLY the server-set generation fields into the open
+                        // form (the active audio pointer mirrors onto the form) so any
+                        // UNSAVED edits the user made to title/artist/album/prompt/
+                        // lyrics before clicking Generate survive.
+                        if (selectedIdRef.current === updated.id) {
+                          setForm((f) => ({ ...f, audioFilename: updated.audioFilename || '' }));
+                        }
+                      }}
+                    />
+                  )}
+                </div>
               ) : null}
 
               {/* Render history — every generated/uploaded take as a card. The

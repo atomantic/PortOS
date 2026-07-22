@@ -1,5 +1,9 @@
 # Unreleased
 
+## Music studio
+
+- **[issue-2911] Compose looping 8-bit game music from a prompt** — the Track editor gains a "Chiptune score" generation mode alongside the on-device audio models: describe the music, pick any configured AI provider/model, and it composes a structured NES-style score (two pulse channels, triangle bass, noise drums) that plays as a seamless loop right in the browser. Revise it conversationally ("more drums", "make it spookier") or start fresh, render takes into the track's regular render history as audio loops, and publish straight into a managed game app's repo (default `game/assets/music/`) as a game-ready OGG plus its editable score source — so a Godot game can drop the loop in as background music. The provider pin and publish target are remembered between sessions.
+
 ## Sprite Manager
 
 - **[issue-2896] Create characters and build their reference sets with AI (phase 2)** — the Sprites tab can now create a character from a name plus a text description and/or an uploaded design image, generate main-reference candidates through your configured image backend (Codex, Grok, or local), and freeze the approved candidate as the character's immutable identity root. From the frozen main you then derive the 8 directional anchors (front/back/profiles/three-quarters), review each candidate, and lock the set. On lock, PortOS normalizes the art onto a clean key-color square and auto-picks the best chroma key for that character — magenta, green, or blue, whichever sits farthest from the character's own colors (with a manual override limited to the same three keys, and a warning when every key risks clipping). Locked references are server-side immutable: regeneration and replacement are refused, corrections always land as new versions.

@@ -567,6 +567,17 @@ export const autofixerSettingsSchema = featureProviderConfigSchema.extend({
   verifyCommand: z.preprocess(emptyToUndefined, z.string().max(500).optional()),
 });
 
+// Music settings slice (#2911). `chiptune` remembers the Track editor's last
+// chiptune generation provider/model pin plus the publish preferences (target
+// managed app + subdir inside its repo). Reuses the shared feature-provider
+// shape so an empty-string picker value normalizes to unset.
+export const musicSettingsSchema = z.object({
+  chiptune: featureProviderConfigSchema.extend({
+    publishAppId: z.preprocess(emptyToUndefined, z.string().max(120).optional()),
+    publishSubdir: z.preprocess(emptyToUndefined, z.string().max(200).optional()),
+  }).partial().optional(),
+});
+
 // Creative Director settings slice. Each LLM-backed stage can pin its own
 // provider/model instead of inheriting the system default. `evaluation` is a
 // direct vision API call (blank = auto-pick a local vision model, else fall

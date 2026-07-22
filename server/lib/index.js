@@ -195,6 +195,8 @@ export * from './songCraftRef.js';
 // === Domain utilities ===
 export * from './appResolver.js';
 export * from './capabilityMap.js';
+export * from './chiptuneRender.js';
+export * from './chiptuneScore.js';
 export * from './civitai.js';
 export * from './huggingfaceLora.js';
 export * from './huggingfaceModel.js';

@@ -220,6 +220,8 @@ The barrel `server/lib/index.js` is a machine-checkable enumeration of every pub
 |---|---|
 | `appResolver.js` | Fuzzy-match a spoken/typed phrase to a managed app (`{ id, name }`). Tiered exact → prefix → substring, used by voice tools that target a specific app. |
 | `capabilityMap.js` | Pure row builders for the Capability Map (per-integration status tiers + rollup); fed by `routes/capabilities.js`. |
+| `chiptuneRender.js` | Deterministic chiptune score → mono PCM → 16-bit WAV buffer (pure Node, no audio deps); `renderScoreToPcm` / `pcmToWavBuffer` / `renderScoreToWav`. |
+| `chiptuneScore.js` | Chiptune score contract (#2911): `chiptuneScoreSchema` (Zod) + `sanitizeChiptuneScore`, pitch math (`pitchToMidi`/`midiToFreq`), and `buildScoreEvents` — the pattern/order → absolute-time flatten mirrored by `client/src/lib/chiptunePlayback.js`. |
 | `civitai.js` | Civitai URL parsing + API client. |
 | `huggingfaceLora.js` | HuggingFace LoRA import helpers: parse HF ref → `{repo,revision}`, fetch `/api/models` metadata, pick the `.safetensors`, detect the video-LoRA family (`ltx-video`), build the sidecar + `resolve` download URL. The HF analogue of `civitai.js` for video LoRAs. Pure. |
 | `huggingfaceModel.js` | HuggingFace base-model (image/video) classifier for the self-service "add a model" flow (#2124): inspect repo siblings + card → decide the loadable runtime/runner, STRICTLY refuse GGUF-only / wan / hunyuan / unclassifiable repos (so a bad add can't wedge the picker), build the `media-models.json` entry (`source:'user'`), + a `searchHuggingfaceModels` Hub-search helper. Pure. |
