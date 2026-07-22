@@ -25,6 +25,7 @@
 
 ## Changed
 
+- **[issue-2833] Decompose the ~1000-line `spawnTuiAgent()`** — extract the output buffering/spooling pipeline into `agentTuiSpawning/outputSpooler.js` and the failure-analysis + worktree-inspection helpers into `agentTuiSpawning/finalizeHelpers.js`, leaving `spawnTuiAgent` as a thinner orchestrator. No behavior change to spawn/timeout/completion semantics; adds unit coverage for both extracted modules.
 - Route client `localStorage` access through the `safeStorage` helpers (Layout, MorseTrainer, calendar persisted-state, MoodBoard reference strip, VoiceWidget, WorkEditor, Tribe) — several sites previously threw uncaught in Safari private mode instead of degrading gracefully.
 - Replace inline `new Promise(r => setTimeout(r, …))` delays with the shared `sleep(ms)` helper across nine server modules.
 
