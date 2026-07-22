@@ -376,6 +376,36 @@ describe('localLlm', () => {
     });
   });
 
+  describe('listModels capability badges', () => {
+    it('maps Ollama /api/show capabilities onto the catalog badge vocabulary', async () => {
+      mocks.ollama.getInstalledModels.mockResolvedValueOnce([
+        { id: 'qwen3.6:35b', name: 'qwen3.6:35b', capabilities: ['completion', 'tools', 'vision', 'thinking'] },
+        { id: 'nomic-embed-text', name: 'nomic-embed-text', capabilities: ['embedding'] },
+        { id: 'legacy-model', name: 'legacy-model' },
+      ]);
+      const models = await svc.listModels('ollama');
+      expect(models.find((m) => m.id === 'qwen3.6:35b').capabilities.sort())
+        .toEqual(['chat', 'reasoning', 'tools', 'vision']);
+      expect(models.find((m) => m.id === 'nomic-embed-text').capabilities).toEqual(['embeddings']);
+      // No reported capabilities → no guessed badges (unlike the vision id heuristic).
+      expect(models.find((m) => m.id === 'legacy-model').capabilities).toEqual([]);
+    });
+
+    it('derives LM Studio badges from the native `type` field plus the shared tool-use id heuristic', async () => {
+      mocks.lmstudio.getAvailableModels.mockResolvedValueOnce([
+        { id: 'qwen2.5-7b-instruct', type: 'llm' },
+        { id: 'llava-1.5-7b', type: 'vlm' },
+        { id: 'nomic-embed-text', type: 'embeddings' },
+      ]);
+      const models = await svc.listModels('lmstudio');
+      expect(models.find((m) => m.id === 'qwen2.5-7b-instruct').capabilities.sort())
+        .toEqual(['chat', 'tools']);
+      expect(models.find((m) => m.id === 'llava-1.5-7b').capabilities.sort())
+        .toEqual(['chat', 'vision']);
+      expect(models.find((m) => m.id === 'nomic-embed-text').capabilities).toEqual(['embeddings']);
+    });
+  });
+
   describe('listVisionModels', () => {
     it('detects a vision-capable Ollama model whose id lacks a vl/vision token via /api/show capabilities', async () => {
       mocks.ollama.getInstalledModels.mockResolvedValueOnce([
