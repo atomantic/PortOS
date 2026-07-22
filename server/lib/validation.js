@@ -994,6 +994,8 @@ export const spriteReferenceGenerateSchema = z.object({
 export const spriteReferenceLockSchema = z.object({
   target: spriteReferenceTargetSchema,
   candidate: z.string().min(1).max(500),
+  // Confirm-through for a clip-risk main lock (409 CHROMA_CLIP_RISK otherwise).
+  acceptClipRisk: z.boolean().optional(),
 });
 
 // =============================================================================

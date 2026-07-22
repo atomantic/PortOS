@@ -33,7 +33,7 @@ function SpriteImg({ recordId, path, className }) {
 // Candidate thumbnail with an inline lock confirm (locking is irreversible —
 // per the repo's confirmation UX convention this is an inline confirm row,
 // not a browser dialog or a hidden two-click arm).
-function CandidateTile({ recordId, candidate, locking, onLock }) {
+function CandidateTile({ recordId, candidate, locking, onLock, clipRisk }) {
   const [confirming, setConfirming] = useState(false);
   return (
     <div className="bg-port-bg border border-port-border rounded p-1 space-y-1">
@@ -41,7 +41,18 @@ function CandidateTile({ recordId, candidate, locking, onLock }) {
       <p className="text-[10px] text-gray-500 truncate" title={candidate.path}>
         {candidate.path.split('/').pop()}{candidate.mode ? ` · ${candidate.mode}` : ''}
       </p>
-      {confirming ? (
+      {clipRisk ? (
+        <div className="space-y-1 text-[10px]">
+          <p className="text-port-warning">{clipRisk}</p>
+          <button
+            onClick={() => onLock(candidate, true)}
+            disabled={locking}
+            className="w-full px-1.5 py-0.5 text-xs bg-port-warning/20 border border-port-warning rounded text-port-warning disabled:opacity-50"
+          >
+            Lock anyway
+          </button>
+        </div>
+      ) : confirming ? (
         <div className="flex items-center gap-1 text-xs">
           <span className="text-port-warning">Freeze forever?</span>
           <button onClick={() => { setConfirming(false); onLock(candidate); }} disabled={locking} className="px-1.5 py-0.5 bg-port-accent text-white rounded disabled:opacity-50">Lock</button>
@@ -168,8 +179,27 @@ export default function ReferenceWorkflow({ record, reference, onChanged }) {
     }
   };
 
-  const [lock, locking] = useAsyncAction(async (target, candidate) => {
-    await lockSpriteReference(recordId, { target, candidate: candidate.path }, { silent: true });
+  // path → clip-risk message; a risky main lock 409s until the user
+  // explicitly locks through it from the candidate tile.
+  const [clipRisks, setClipRisks] = useState({});
+
+  const [lock, locking] = useAsyncAction(async (target, candidate, acceptClipRisk = false) => {
+    try {
+      await lockSpriteReference(recordId, {
+        target, candidate: candidate.path, ...(acceptClipRisk ? { acceptClipRisk: true } : {}),
+      }, { silent: true });
+    } catch (err) {
+      if (err?.code === 'CHROMA_CLIP_RISK') {
+        setClipRisks((prev) => ({ ...prev, [candidate.path]: err.message }));
+        return;
+      }
+      throw err; // useAsyncAction toasts
+    }
+    setClipRisks((prev) => {
+      const next = { ...prev };
+      delete next[candidate.path];
+      return next;
+    });
     toast.success(target === 'main' ? 'Main reference frozen' : `Anchor ${target} locked`);
     onChanged();
   }, { errorMessage: 'Lock failed' });
@@ -277,7 +307,7 @@ export default function ReferenceWorkflow({ record, reference, onChanged }) {
             {(candidatesByTarget.main || []).length > 0 && (
               <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-2">
                 {candidatesByTarget.main.map((c) => (
-                  <CandidateTile key={c.path} recordId={recordId} candidate={c} locking={locking} onLock={(cand) => lock('main', cand)} />
+                  <CandidateTile key={c.path} recordId={recordId} candidate={c} locking={locking} clipRisk={clipRisks[c.path]} onLock={(cand, accept) => lock('main', cand, accept)} />
                 ))}
               </div>
             )}

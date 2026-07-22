@@ -44,7 +44,7 @@ const settings = {
     mode: 'codex',
     codex: { enabled: true, codexPath: '/usr/local/bin/codex', model: 'gpt-5.6-luna', effort: 'low' },
     grok: { enabled: true, grokPath: '/usr/local/bin/grok', aspectRatio: '1:1' },
-    local: { pythonPath: '/usr/bin/python3' },
+    local: { pythonPath: '/usr/bin/python3', modelId: 'flux-dev-4bit' },
   },
 };
 vi.mock('../settings.js', () => ({ getSettings: async () => settings }));
@@ -244,19 +244,36 @@ describe('lockReference', () => {
     expect(record.status).toBe('reference');
   });
 
-  it('auto-selects AWAY from the key a magenta-clothed character would clash with, and warns about clip risk', async () => {
+  it('409s a clip-risk main lock until accepted, then selects away from the clashing key', async () => {
     const id = newId();
     await createCharacter(id);
     const rel = await placeCandidate(id, 'main', 'walk-south-candidate-01.png', {
-      fg: { r: 255, g: 80, b: 230 }, // pink/magenta outfit
+      fg: { r: 255, g: 80, b: 230 }, // pink/magenta outfit near the magenta key
     });
-    const result = await lockReference(id, { target: 'main', candidate: rel });
+    // The freeze is irreversible — a clip-risk lock must be refused until
+    // the user explicitly locks through it.
+    await expect(lockReference(id, { target: 'main', candidate: rel }))
+      .rejects.toMatchObject({ status: 409, code: 'CHROMA_CLIP_RISK' });
+    let manifest = (await getReferenceSet(id)).manifest;
+    expect(manifest?.mainReference?.locked ?? false).toBe(false);
+
+    const result = await lockReference(id, { target: 'main', candidate: rel, acceptClipRisk: true });
+    expect(result.manifest.mainReference.locked).toBe(true);
     expect(result.manifest.chromaKey).not.toBe('#FF00FF');
     const record = await records.getRecord(id);
     expect(record.chromaKey).toBe(result.manifest.chromaKey);
-    // Near-generation-key palette ⇒ exact-key details may already be masked
-    // out of the locked artifact — the manifest must say so.
+    // The accepted risk stays visible on the manifest.
     expect(result.manifest.chromaKeyWarning).toMatch(/generation key #FF00FF/);
+  });
+
+  it('threads the saved local model into local-mode renders and provenance', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await startReferenceGeneration(id, { target: 'main', designPrompt: 'x', mode: 'local' });
+    const call = enqueueJob.mock.calls[0][0];
+    expect(call.params.mode).toBe('local');
+    expect(call.params.modelId).toBe('flux-dev-4bit');
+    expect(call.params.spriteRef.model).toBe('flux-dev-4bit');
   });
 
   it('rebases legacy repo-root manifest paths from a phase-1 import', async () => {
