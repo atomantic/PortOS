@@ -142,7 +142,7 @@ export default function Uploads() {
   };
 
   if (loading) {
-    return <PageSkeleton titleWidthClass="w-44" showSubtitle cards={4} sidebar={false} />;
+    return <PageSkeleton label="Loading uploads" titleWidthClass="w-44" showSubtitle cards={4} sidebar={false} />;
   }
 
   return (

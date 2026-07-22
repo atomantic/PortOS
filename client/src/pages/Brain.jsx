@@ -89,8 +89,10 @@ export default function Brain() {
     return (
       <PageSkeleton
         header="bar"
+        label="Loading brain"
         fullHeight
-        padded
+        // Full-bleed tabs render edge to edge; padding them shifts the body on load.
+        padded={!fullBleed}
         titleWidthClass="w-28"
         showSubtitle
         tabs={TABS.length}

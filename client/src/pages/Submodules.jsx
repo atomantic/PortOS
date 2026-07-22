@@ -53,7 +53,7 @@ export default function Submodules() {
   };
 
   if (loading) {
-    return <PageSkeleton titleWidthClass="w-40" cards={3} sidebar={false} />;
+    return <PageSkeleton label="Loading submodules" titleWidthClass="w-40" cards={3} sidebar={false} />;
   }
 
   const hasUpdates = submodules.some(s => s.behind > 0 || s.outOfSync || !s.initialized);

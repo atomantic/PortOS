@@ -76,8 +76,11 @@ export default function Messages() {
     return (
       <PageSkeleton
         header="bar"
+        label="Loading messages"
         fullHeight
-        padded
+        // Full-bleed tabs (iMessage) render edge to edge — no body padding.
+        padded={!fullBleed}
+        bodyClassName="p-4"
         titleWidthClass="w-36"
         showSubtitle
         tabs={TABS.length}

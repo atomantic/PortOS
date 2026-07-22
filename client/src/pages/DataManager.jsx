@@ -353,8 +353,11 @@ export default function DataManager() {
     return (
       <PageSkeleton
         header="bar"
+        label="Loading data manager"
         fullHeight
         padded
+        barClassName="p-4"
+        bodyClassName="p-4"
         titleWidthClass="w-40"
         showSubtitle
         layout="grid"

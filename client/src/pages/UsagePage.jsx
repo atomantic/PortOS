@@ -344,6 +344,7 @@ function InternalUsageMetrics() {
   if (loading && !usage) {
     return (
       <PageSkeleton
+        label="Loading usage data"
         titleWidthClass="w-44"
         showAction={false}
         layout="grid"

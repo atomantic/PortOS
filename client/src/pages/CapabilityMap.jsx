@@ -51,7 +51,7 @@ export default function CapabilityMap() {
   );
 
   if (loading) {
-    return <PageSkeleton titleWidthClass="w-40" showSubtitle cards={5} sidebar={false} />;
+    return <PageSkeleton label="Loading capabilities" titleWidthClass="w-40" showSubtitle cards={5} sidebar={false} />;
   }
 
   if (!data) {
