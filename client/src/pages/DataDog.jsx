@@ -184,7 +184,7 @@ export default function DataDog() {
   };
 
   if (loading) {
-    return <PageSkeleton titleWidthClass="w-56" cards={2} />;
+    return <PageSkeleton label="Loading DataDog" padded titleWidthClass="w-56" cards={2} />;
   }
 
   return (

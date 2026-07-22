@@ -159,7 +159,7 @@ export default function GitHub() {
   const secretEntries = Object.entries(secrets);
 
   if (loading) {
-    return <PageSkeleton titleWidthClass="w-44" showAction={false} cards={3} />;
+    return <PageSkeleton label="Loading GitHub repos" padded titleWidthClass="w-44" showAction={false} cards={3} />;
   }
 
   return (

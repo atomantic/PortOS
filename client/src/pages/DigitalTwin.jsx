@@ -115,6 +115,7 @@ export default function DigitalTwin() {
           bodyClassName="p-4"
           titleWidthClass="w-40"
           showSubtitle
+          subtitleOnMobile
           tabs={TABS.length}
           cards={3}
           sidebar={false}

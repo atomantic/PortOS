@@ -360,6 +360,7 @@ export default function DataManager() {
         bodyClassName="p-4"
         titleWidthClass="w-40"
         showSubtitle
+        subtitleOnMobile
         layout="grid"
         gridColsClass="grid-cols-2 sm:grid-cols-4"
         cards={4}

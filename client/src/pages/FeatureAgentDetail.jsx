@@ -97,8 +97,10 @@ export default function FeatureAgentDetail() {
         bodyClassName="p-6"
         titleWidthClass="w-56"
         showSubtitle
+        subtitleOnMobile
         showAction={false}
         tabs={isCreate ? 0 : TABS.length}
+        tabsInBar
         cards={3}
         sidebar={false}
       />

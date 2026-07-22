@@ -92,10 +92,27 @@ describe('PageSkeleton', () => {
     expect(bodyRegion.className).not.toContain('p-4');
   });
 
-  it('reserves one strip row per tab, matching TabPills touch-target height', () => {
+  it('reserves one strip row per tab, matching a default TabPills button box', () => {
     const { container } = render(<PageSkeleton header="bar" tabs={5} />);
     const tabRows = container.querySelectorAll('.h-\\[44px\\]');
     expect(tabRows).toHaveLength(5);
+  });
+
+  it('nests the tab strip inside the header block (undivided) for tabsInBar', () => {
+    const { container } = render(<PageSkeleton header="bar" tabs={3} tabsInBar />);
+    const bar = container.querySelector('.border-b.border-port-border');
+    // The strip lives inside the bar, and carries no divider of its own.
+    expect(bar.querySelectorAll('.h-\\[44px\\]')).toHaveLength(3);
+    expect(container.querySelectorAll('.border-b.border-port-border')).toHaveLength(1);
+  });
+
+  it('keeps PageHeader subtitle-hiding by default and opts out with subtitleOnMobile', () => {
+    const hidden = render(<PageSkeleton header="bar" showSubtitle />);
+    expect(hidden.container.innerHTML).toContain('hidden sm:block');
+    hidden.unmount();
+
+    const shown = render(<PageSkeleton header="bar" showSubtitle subtitleOnMobile />);
+    expect(shown.container.innerHTML).not.toContain('hidden sm:block');
   });
 
   it('renders no tab strip when tabs is 0', () => {
