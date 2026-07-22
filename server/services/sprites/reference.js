@@ -265,7 +265,10 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
     ? { mode, codexPath: settings.imageGen?.codex?.codexPath, model: codexModel, effort: body.effort || settings.imageGen?.codex?.effort, ...baseParams }
     : mode === IMAGE_GEN_MODE.GROK
       ? { mode, grokPath: settings.imageGen?.grok?.grokPath, aspectRatio: settings.imageGen?.grok?.aspectRatio, ...baseParams }
-      : { mode, pythonPath: settings.imageGen?.local?.pythonPath || null, ...(body.model ? { modelId: body.model } : {}), ...baseParams };
+      // Thread the resolved model (request override → saved local model) —
+      // the queue dispatches straight to local.generateImage, which does NOT
+      // read settings and would otherwise fall back to its own default.
+      : { mode, pythonPath: settings.imageGen?.local?.pythonPath || null, ...(effectiveModel ? { modelId: effectiveModel } : {}), ...baseParams };
 
   const { jobId } = enqueueJob({ kind: 'image', params, owner: 'sprites' });
   console.log(`🧍 sprite reference render queued ${recordId}/${anchorId} mode=${mode} jobId=${jobId.slice(0, 8)}`);
@@ -321,7 +324,7 @@ export function lockReference(recordId, args) {
   return manifestWriteTail(recordId, () => lockReferenceImpl(recordId, args));
 }
 
-async function lockReferenceImpl(recordId, { target, candidate }) {
+async function lockReferenceImpl(recordId, { target, candidate, acceptClipRisk = false }) {
   const record = await requireCharacter(recordId);
   // Seed on demand — a candidate may predate the manifest (e.g. files placed
   // by an import or a crash-recovered tree); the lock is what makes it real.
@@ -364,6 +367,12 @@ async function lockReferenceImpl(recordId, { target, candidate }) {
     // gone from the palette, so surface the risk instead of silently locking
     // a clipped identity root.
     const clipWarning = keyProximityWarning(palette, maskKey);
+    // A clip-risk lock is irreversible (the frozen root may already be
+    // missing exact-key details) — refuse unless the caller explicitly
+    // accepts, so the user learns BEFORE the 409 wall goes up, not after.
+    if (clipWarning && !acceptClipRisk) {
+      throw new ServerError(`${clipWarning}. Re-send with acceptClipRisk to lock anyway.`, { status: 409, code: 'CHROMA_CLIP_RISK' });
+    }
     const rel = `reference/${await nextVersionPath(refDir, `${recordId}-walk-south`)}`;
     const destAbs = join(spriteDir(recordId), rel);
     await normalizeFromAnalysis(analysis, candAbs, destAbs, selectedKey);

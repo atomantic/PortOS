@@ -86,6 +86,11 @@ const PARAM_ALLOWLIST = new Set([
   // rows ("Training: Kessa · mflux · 1000 steps") without exposing paths.
   'runId', 'runtime', 'datasetId', 'characterId', 'characterName',
   'triggerWord', 'rank', 'baseModelId',
+  // Sprite reference destination tag (#2896) — pure identifiers (record id,
+  // target/direction, key hex, mode/model), no filesystem paths. The Sprites
+  // UI correlates queued/running renders by it to rehydrate its in-flight
+  // guard after a reload.
+  'spriteRef',
 ]);
 function sanitizeJob(job) {
   if (!job) return job;
