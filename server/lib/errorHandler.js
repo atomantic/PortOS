@@ -127,7 +127,13 @@ export function asyncHandler(fn) {
         console.error(details ? `${logMsg}: ${JSON.stringify(details)}` : logMsg);
       }
 
-      return sendErrorResponse(res, error, { io });
+      // Read BEFORE sending — a successful write flips the flag. A handler that
+      // throws after it started streaming (SSE routes) has no envelope left to
+      // write, so hand off to Express's finalhandler to destroy the socket
+      // instead of leaving the request hanging.
+      const alreadyStreaming = res.headersSent;
+      sendErrorResponse(res, error, { io });
+      if (alreadyStreaming) next(err);
     });
   };
 }
