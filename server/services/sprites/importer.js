@@ -99,13 +99,17 @@ async function verifyHashes(destDir, expectations, errors) {
 
 // Manifest paths reference files repo-relative (art-source/sprites/<id>/…) or
 // occasionally bare. Normalize to a path relative to the character's source
-// dir so it can be re-anchored under data/sprites/<id>/.
+// dir so it can be re-anchored under data/sprites/<id>/. Manifest content is
+// request-influenced data feeding join() as a WRITE destination, so a `..`
+// segment (or empty segment) rejects the whole path — a corrupt/crafted
+// manifest must not be able to copy outside data/sprites/.
 function relToCharacterDir(manifestPath, characterId) {
   if (typeof manifestPath !== 'string' || !manifestPath) return null;
   const marker = `sprites/${characterId}/`;
   const idx = manifestPath.indexOf(marker);
-  if (idx >= 0) return manifestPath.slice(idx + marker.length);
-  return manifestPath.replace(/^\/+/, '');
+  const rel = idx >= 0 ? manifestPath.slice(idx + marker.length) : manifestPath.replace(/^\/+/, '');
+  if (!rel || rel.split('/').some((seg) => seg === '..' || seg === '')) return null;
+  return rel;
 }
 
 async function importCharacter({ sourceRoot, characterId, spec, specPath }) {
@@ -147,9 +151,12 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath }) {
     for (const rel of copied) {
       if (!rel.endsWith('.json')) continue;
       const walkSet = await readJson(join(destDir, 'walk', rel));
-      for (const [, dir] of Object.entries(walkSet?.directions || {})) {
+      for (const [direction, dir] of Object.entries(walkSet?.directions || {})) {
         const runRel = relToCharacterDir(dir?.runPath, characterId);
-        if (!runRel) continue;
+        if (!runRel) {
+          if (dir?.runPath) result.errors.push(`walk set ${direction}: unsafe run path rejected: ${dir.runPath}`);
+          continue;
+        }
         const srcRunDir = join(srcCharDir, runRel);
         if (!(await pathExists(srcRunDir))) {
           result.errors.push(`walk set references missing run: ${runRel}`);
