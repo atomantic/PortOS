@@ -56,3 +56,32 @@ export const describeFidelity = (strength) => {
 // Settings still wins. Effort is one of providerModels' CODEX_EFFORT_LEVELS.
 export const CODEX_IMAGEGEN_DEFAULT_MODEL = 'gpt-5.6-luna';
 export const CODEX_IMAGEGEN_DEFAULT_EFFORT = 'low';
+
+// The local runner's fallback model id when neither the request nor
+// settings.imageGen.local.modelId names one (local.js's parameter default).
+// Exported so provenance writers (sprite candidate sidecars, #2896) can
+// record the model that actually ran without hardcoding a second copy.
+export const LOCAL_IMAGEGEN_DEFAULT_MODEL = 'dev';
+
+/**
+ * Resolve the queue-capable image mode for a render request: the per-request
+ * override (honored only when that backend is enabled/available), else the
+ * saved dispatcher default, else codex → grok → local. External never queues.
+ * Hoisted from the pipeline visual stages (#2896) so sprite renders and any
+ * future queued surface share one enable-gating ladder — see issue #2881 for
+ * the wider param-assembly consolidation.
+ */
+export function resolveQueueImageMode(requested, settings) {
+  const codexEnabled = settings?.imageGen?.codex?.enabled === true;
+  const grokEnabled = settings?.imageGen?.grok?.enabled === true;
+  if (requested === IMAGE_GEN_MODE.CODEX && codexEnabled) return IMAGE_GEN_MODE.CODEX;
+  if (requested === IMAGE_GEN_MODE.GROK && grokEnabled) return IMAGE_GEN_MODE.GROK;
+  if (requested === IMAGE_GEN_MODE.LOCAL) return IMAGE_GEN_MODE.LOCAL;
+  const settingsMode = settings?.imageGen?.mode;
+  if (settingsMode === IMAGE_GEN_MODE.CODEX && codexEnabled) return IMAGE_GEN_MODE.CODEX;
+  if (settingsMode === IMAGE_GEN_MODE.GROK && grokEnabled) return IMAGE_GEN_MODE.GROK;
+  if (settingsMode === IMAGE_GEN_MODE.LOCAL) return IMAGE_GEN_MODE.LOCAL;
+  if (codexEnabled) return IMAGE_GEN_MODE.CODEX;
+  if (grokEnabled) return IMAGE_GEN_MODE.GROK;
+  return IMAGE_GEN_MODE.LOCAL;
+}

@@ -1,15 +1,19 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { PersonStanding, Package, Download, FolderOpen, X, RefreshCw } from 'lucide-react';
+import { PersonStanding, Package, Download, FolderOpen, X, RefreshCw, Plus } from 'lucide-react';
 import toast from '../components/ui/Toast';
-import { listSpriteRecords, getSpriteRecord, importSprites } from '../services/apiSprites.js';
+import { listSpriteRecords, getSpriteRecord, importSprites, createSpriteRecord } from '../services/apiSprites.js';
+import ReferenceWorkflow from '../components/sprites/ReferenceWorkflow.jsx';
+import { spriteAssetUrl } from '../components/sprites/spriteAssets.js';
+import { useAsyncAction } from '../hooks/useAsyncAction.js';
 import { formatBytes, timeAgo } from '../utils/formatters.js';
 
-// Sprite Manager (issue #2895, phase 1): read-only library over imported
-// production sprites — characters (reference sets, walk strips, runtime
-// atlases) and props atlas families — plus the source-tree importer. The
-// generation workflow (reference → anchors → animation → publish) lands in
-// later phases.
+// Sprite Manager: library over imported production sprites — characters
+// (reference sets, walk strips, runtime atlases) and props atlas families —
+// plus the source-tree importer (#2895) and the phase-2 reference workflow
+// (create a character, generate + freeze the main reference, derive + lock
+// the 8 directional anchors — #2896). Animation and publish land in later
+// phases.
 
 const IMAGE_EXT = /\.(png|gif|webp|jpe?g)$/i;
 
@@ -107,6 +111,78 @@ function ImportPanel({ onImported }) {
   );
 }
 
+function NewCharacterPanel({ onCreated }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState('');
+  const [id, setId] = useState('');
+
+  const [create, creating] = useAsyncAction(async () => {
+    const record = await createSpriteRecord({
+      name: name.trim(),
+      ...(id.trim() ? { id: id.trim() } : {}),
+    }, { silent: true });
+    setOpen(false);
+    setName('');
+    setId('');
+    onCreated(record);
+  }, { errorMessage: 'Failed to create character' });
+
+  if (!open) {
+    return (
+      <button
+        onClick={() => setOpen(true)}
+        className="flex items-center gap-2 px-3 py-1.5 bg-port-card border border-port-border hover:border-port-accent text-gray-300 rounded text-sm"
+      >
+        <Plus className="w-4 h-4" /> New Character
+      </button>
+    );
+  }
+
+  return (
+    <div className="w-full bg-port-card border border-port-border rounded-lg p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-white">New character</h3>
+        <button onClick={() => setOpen(false)} aria-label="Close new character panel" className="text-gray-400 hover:text-white">
+          <X className="w-4 h-4" />
+        </button>
+      </div>
+      <div>
+        <label htmlFor="sprite-new-name" className="block text-xs text-gray-400 mb-1">Name</label>
+        <input
+          id="sprite-new-name"
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && name.trim()) create(); }}
+          placeholder="Trail Hand"
+          className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white"
+        />
+      </div>
+      <div>
+        <label htmlFor="sprite-new-id" className="block text-xs text-gray-400 mb-1">
+          Id <span className="text-gray-600">(optional — derived from the name; required for names with no a–z/0–9 characters)</span>
+        </label>
+        <input
+          id="sprite-new-id"
+          type="text"
+          value={id}
+          onChange={(e) => setId(e.target.value)}
+          placeholder="trail-hand"
+          className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white"
+        />
+      </div>
+      <button
+        onClick={create}
+        disabled={creating || !name.trim()}
+        className="flex items-center gap-2 px-3 py-1.5 bg-port-accent hover:bg-blue-600 disabled:opacity-50 text-white rounded text-sm"
+      >
+        {creating ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+        Create
+      </button>
+    </div>
+  );
+}
+
 function RecordSection({ title, icon: Icon, items, selectedId, onSelect }) {
   if (items.length === 0) return null;
   return (
@@ -157,7 +233,7 @@ function AssetGroups({ recordId, assets }) {
           </h4>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
             {files.map((a) => {
-              const url = `/data/sprites/${encodeURIComponent(recordId)}/${a.path.split('/').map(encodeURIComponent).join('/')}`;
+              const url = spriteAssetUrl(recordId, a.path);
               return IMAGE_EXT.test(a.path) ? (
                 <button
                   key={a.path}
@@ -218,12 +294,22 @@ export default function Sprites() {
     listSpriteRecords().then(setRecords).catch(() => setRecords([]));
   }, []);
 
+  // Stable identity — ReferenceWorkflow's poll effect depends on it, and an
+  // inline arrow would tear down/recreate the interval every parent render.
+  const onWorkflowChanged = useCallback(() => {
+    refresh();
+    setRetryTick((t) => t + 1);
+  }, [refresh]);
+
   useEffect(() => { refresh(); }, [refresh]);
 
+  // Same-id refetches (retryTick bumps from locks/renders/imports) keep the
+  // current detail rendered — nulling it would unmount ReferenceWorkflow and
+  // drop its in-flight render polling. Only an actual id switch clears.
   useEffect(() => {
     if (!id) { setDetail(null); setDetailState('idle'); return undefined; }
     let stale = false; // rapid A→B clicks: a late A response must not clobber B
-    setDetail(null);
+    setDetail((prev) => (prev?.record?.id === id ? prev : null));
     setDetailState('loading');
     getSpriteRecord(id, { silent: true })
       .then((d) => { if (!stale) { setDetail(d); setDetailState('loaded'); } })
@@ -234,6 +320,7 @@ export default function Sprites() {
   return (
     <div className="flex flex-col md:flex-row gap-4 h-full">
       <aside className="md:w-64 shrink-0 space-y-3">
+        <NewCharacterPanel onCreated={(record) => { refresh(); navigate(`/media/sprites/${record.id}`); }} />
         {/* Re-import while a sprite is open must refresh the open detail too,
             not just the sidebar list. */}
         <ImportPanel onImported={() => { refresh(); if (id) setRetryTick((t) => t + 1); }} />
@@ -284,6 +371,13 @@ export default function Sprites() {
                 <p className="text-xs text-gray-500">archetype: {detail.record.spec.archetype}</p>
               )}
             </div>
+            {detail.record.kind === 'character' && (
+              <ReferenceWorkflow
+                record={detail.record}
+                reference={detail.reference}
+                onChanged={onWorkflowChanged}
+              />
+            )}
             {detail.assets.length === 0 ? (
               <p className="text-sm text-gray-500">No assets on disk for this record.</p>
             ) : (

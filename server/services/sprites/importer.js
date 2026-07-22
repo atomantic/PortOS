@@ -232,6 +232,16 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath, select
   const result = { id: characterId, kind: 'character', files: 0, verified: 0, errors: [] };
   const srcCharDir = join(sourceRoot, 'art-source', 'sprites', characterId);
   const destDir = spriteDir(characterId);
+
+  // A destination with a LOCKED reference set (#2896) is immutable evidence
+  // — a same-id import would copy the source's reference tree straight over
+  // the frozen identity root, bypassing every lock check. Refuse the whole
+  // character; the user can delete the record or import under another id.
+  const destManifest = await readJSONFile(join(destDir, 'reference', `${characterId}-reference-set-v1.json`), null);
+  if (destManifest?.mainReference?.locked) {
+    result.errors.push('destination has a locked reference set — refusing to overwrite immutable artifacts (delete the record or import under a different id)');
+    return result;
+  }
   await ensureDir(destDir);
 
   // Character spec — verbatim copy for provenance alongside the record.

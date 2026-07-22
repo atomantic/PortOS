@@ -30,7 +30,7 @@ import { extractGatedRepo, isGatedRepoError } from '../../lib/hfErrors.js';
 import { safeChildProcessEnv } from '../../lib/processEnv.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { createLineReader } from '../../lib/streamLines.js';
-import { IMAGE_GEN_MODE } from './modes.js';
+import { IMAGE_GEN_MODE, LOCAL_IMAGEGEN_DEFAULT_MODEL } from './modes.js';
 import { computePixelDelta } from './regen.js';
 import { parseByteProgress, formatDownloadMessage } from '../videoGen/generateVideoHelpers.js';
 
@@ -456,7 +456,7 @@ export function resolveOutputPlacement(outputTarget) {
   return { outputDir, skipSidecar, isGallery };
 }
 
-export async function generateImage({ pythonPath, prompt = '', negativePrompt = '', modelId = 'dev', width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], jobId: providedJobId = null, cleanC2PA = false, denoise = false, regenOf = null, upscaleTo = null, outputTarget = null }) {
+export async function generateImage({ pythonPath, prompt = '', negativePrompt = '', modelId = LOCAL_IMAGEGEN_DEFAULT_MODEL, width = 1024, height = 1024, steps, guidance, seed, quantize = '8', loraFilenames = [], loraPaths = [], loraScales = [], initImagePath = null, initImageStrength = null, referenceImagePaths = [], referenceImageStrengths = [], jobId: providedJobId = null, cleanC2PA = false, denoise = false, regenOf = null, upscaleTo = null, outputTarget = null }) {
   // Empty prompt is allowed: img2img / edit / unconditional renders are driven
   // by the init image (or run unconditionally), so text isn't required. The
   // mflux/diffusers runners accept an empty `--prompt` — the regen pass (#912)
