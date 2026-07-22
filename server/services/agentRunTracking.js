@@ -16,6 +16,14 @@ const RUNS_DIR = PATHS.runs;
 
 /**
  * Create a run entry for usage tracking.
+ *
+ * @param {object} options
+ * @param {string} options.agentId
+ * @param {{ id: string, description?: string }} options.task
+ * @param {string} [options.model] - Falls back to the provider's default model.
+ * @param {{ id: string, name: string, defaultModel?: string }} options.provider
+ * @param {string} options.workspacePath
+ * @param {string} [options.appName] - Defaults to 'portos'.
  */
 export async function createAgentRun({ agentId, task, model, provider, workspacePath, appName }) {
   const runId = uuidv4();
