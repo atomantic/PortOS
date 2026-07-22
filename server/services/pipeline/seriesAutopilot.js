@@ -87,10 +87,26 @@ export * from './seriesAutopilot/orchestrator.js';
 
 // Export internals for tests. Pulled back together from their new home modules
 // so the existing `__testing` import contract survives the #2842 split.
-import { runs } from './seriesAutopilot/state.js';
-import { summarizePlanCost } from './seriesAutopilot/convergence.js';
-import { providerOverrideOpts, providerIdOpts } from './seriesAutopilot/session.js';
-import { meanQualityScore } from './seriesAutopilot/revisionSteps.js';
-import { buildDryRunPlan } from './seriesAutopilot/dryRun.js';
+//
+// The properties MUST be lazy getters, not eagerly-read values. `session.js`
+// reaches this barrel through a real import cycle
+// (session → autoRunner → episodeVideo → completionHook → planAdvance →
+// seriesAutopilot), so evaluating `providerOverrideOpts` at module-evaluation
+// time throws a TDZ ReferenceError on any cold import of a focused module. The
+// getters defer each read until a test actually touches the key, by which point
+// every binding is initialized. Behavior for callers is unchanged — `__testing`
+// is still a plain object whose keys resolve to the same functions.
+import * as state from './seriesAutopilot/state.js';
+import * as convergence from './seriesAutopilot/convergence.js';
+import * as session from './seriesAutopilot/session.js';
+import * as revisionSteps from './seriesAutopilot/revisionSteps.js';
+import * as dryRun from './seriesAutopilot/dryRun.js';
 
-export const __testing = { runs, buildDryRunPlan, summarizePlanCost, providerOverrideOpts, providerIdOpts, meanQualityScore };
+export const __testing = {
+  get runs() { return state.runs; },
+  get buildDryRunPlan() { return dryRun.buildDryRunPlan; },
+  get summarizePlanCost() { return convergence.summarizePlanCost; },
+  get providerOverrideOpts() { return session.providerOverrideOpts; },
+  get providerIdOpts() { return session.providerIdOpts; },
+  get meanQualityScore() { return revisionSteps.meanQualityScore; },
+};
