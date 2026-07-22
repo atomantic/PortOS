@@ -35,6 +35,10 @@ import { isInternalTaskId } from '../lib/taskParser.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const AGENT_LIFECYCLE_SRC = readFileSync(join(__dirname, 'agentLifecycle.js'), 'utf-8');
+// finalizeAgent + stampLiExecutionVerdict moved to their own module (issue #2837)
+// so both spawners can import them without cycling back through the lifecycle
+// orchestrator. The source-level assertions below follow them there.
+const AGENT_FINALIZATION_SRC = readFileSync(join(__dirname, 'agentFinalization.js'), 'utf-8');
 
 function deferred() {
   let resolve;
@@ -244,20 +248,20 @@ describe('agentLifecycle — guard wiring', () => {
   });
 
   it('finalizeAgent stamps the LI execution verdict into the completion task write (#2779)', () => {
-    const idx = AGENT_LIFECYCLE_SRC.indexOf('export async function finalizeAgent');
+    const idx = AGENT_FINALIZATION_SRC.indexOf('export async function finalizeAgent');
     expect(idx, 'finalizeAgent must exist').toBeGreaterThan(-1);
-    const updateIdx = AGENT_LIFECYCLE_SRC.indexOf('await updateTask(task.id, taskUpdate, taskType)', idx);
+    const updateIdx = AGENT_FINALIZATION_SRC.indexOf('await updateTask(task.id, taskUpdate, taskType)', idx);
     expect(updateIdx, 'finalizeAgent must persist the task via updateTask').toBeGreaterThan(idx);
-    const body = AGENT_LIFECYCLE_SRC.slice(idx, updateIdx);
+    const body = AGENT_FINALIZATION_SRC.slice(idx, updateIdx);
     // The verdict is stamped into taskUpdate via the shared helper BEFORE the updateTask
     // call, so it federates in the same write that marks the task terminal.
     expect(body).toMatch(/await stampLiExecutionVerdict\(taskUpdate, task, \{ success, validationPassed, errorAnalysis \}\)/);
   });
 
   it('stampLiExecutionVerdict builds the verdict from the task liProposal marker via the shared builder (#2779)', () => {
-    const idx = AGENT_LIFECYCLE_SRC.indexOf('async function stampLiExecutionVerdict');
+    const idx = AGENT_FINALIZATION_SRC.indexOf('async function stampLiExecutionVerdict');
     expect(idx, 'stampLiExecutionVerdict must exist').toBeGreaterThan(-1);
-    const body = AGENT_LIFECYCLE_SRC.slice(idx, idx + 1500);
+    const body = AGENT_FINALIZATION_SRC.slice(idx, idx + 1500);
     // Derived from the persisted task's liProposal marker via the shared builder (parity
     // with the local #2765 write) and merged into taskUpdate.metadata under the verdict key.
     expect(body).toMatch(/task\?\.metadata\?\.liProposal/);

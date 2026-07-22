@@ -5,7 +5,6 @@
  * and orphaned task retry logic.
  */
 
-import { join } from 'path';
 import { ServerError } from '../lib/errorHandler.js';
 import { emitLog } from './cosEvents.js';
 import { completeAgent, updateAgent } from './cosAgents.js';
@@ -15,7 +14,13 @@ import { unregisterSpawnedAgent } from './agents.js';
 import { MAX_TOTAL_SPAWNS } from '../lib/validation.js';
 import { isInternalTaskId } from '../lib/taskParser.js';
 import { activeAgents, runnerAgents, userTerminatedAgents, pausedAgents, useRunner } from './agentState.js';
-import { cleanupAgentWorktree, syncRunnerAgents } from './agentLifecycle.js';
+// Both were extracted out of agentLifecycle.js (issue #2837) so this module no
+// longer depends on the lifecycle orchestrator — which depends on THIS module
+// for handleOrphanedTask. Importing them from their own leaf modules is what
+// lets that edge be a plain static import instead of a dynamic-import dodge.
+import { cleanupAgentWorktree } from './agentWorktreeCleanup.js';
+import { syncRunnerAgents } from './agentRunnerSync.js';
+import { flushRunnerOutputBatcher } from './agentRunnerOutputBatchers.js';
 import { checkForTaskCommit } from './agentRunTracking.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { killProcessTree } from '../lib/bufferedSpawn.js';
@@ -60,10 +65,8 @@ async function terminateRunnerAgent(agentId, runnerFn, errorMessage, blockedReas
   if (result.success) {
     // Drain + drop this agent's runner output batcher before the terminal
     // record so pending ~250ms-batched output lands first, and the Map entry
-    // doesn't leak if the runner never emits a later completion event. Dynamic
-    // import avoids a static cycle (subAgentSpawner statically re-exports this
-    // module). flushRunnerOutputBatcher is a no-op if no batcher exists.
-    const { flushRunnerOutputBatcher } = await import('./subAgentSpawner.js');
+    // doesn't leak if the runner never emits a later completion event.
+    // flushRunnerOutputBatcher is a no-op if no batcher exists.
     await flushRunnerOutputBatcher(agentId);
     await completeAgent(agentId, { success: false, error: errorMessage });
     const task = agentInfo?.task;

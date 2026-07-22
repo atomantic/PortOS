@@ -365,14 +365,21 @@ export async function terminateAgent(agentId) {
 }
 
 // Pause an agent without completing its task or cleaning up its worktree.
+//
+// The three delegations below stay DYNAMIC on purpose (#2837): this module is
+// the agent STATE layer that `agentManagement.js` builds on (via the
+// `cosAgents.js` barrel), so a static import here would invert the layering and
+// reintroduce a cycle. They now target `agentManagement.js` directly rather than
+// the `subAgentSpawner.js` barrel, so the deferred load pulls in one module
+// instead of the entire spawner graph.
 export async function pauseAgent(agentId, reason = null) {
-  const { pauseAgent: pauseAgentFromSpawner } = await import('./subAgentSpawner.js');
+  const { pauseAgent: pauseAgentFromSpawner } = await import('./agentManagement.js');
   return pauseAgentFromSpawner(agentId, reason);
 }
 
 // Force kill an agent with SIGKILL (immediate, no graceful shutdown)
 export async function killAgent(agentId) {
-  const { killAgent: killAgentFromSpawner } = await import('./subAgentSpawner.js');
+  const { killAgent: killAgentFromSpawner } = await import('./agentManagement.js');
   return killAgentFromSpawner(agentId);
 }
 
@@ -444,7 +451,7 @@ export async function sendBtwToAgent(agentId, message) {
 
 // Get process stats for an agent (CPU, memory)
 export async function getAgentProcessStats(agentId) {
-  const { getAgentProcessStats: getStatsFromSpawner } = await import('./subAgentSpawner.js');
+  const { getAgentProcessStats: getStatsFromSpawner } = await import('./agentManagement.js');
   return getStatsFromSpawner(agentId);
 }
 

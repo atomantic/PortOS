@@ -15,7 +15,7 @@ import { updateAgent } from './cosAgents.js';
 import { registerSpawnedAgent, unregisterSpawnedAgent } from './agents.js';
 import { createOutputSpooler } from './agentTuiSpawning/outputSpooler.js';
 import { captureWorktreeDiff, worktreeHasChanges, resolveErrorAnalysis } from './agentTuiSpawning/finalizeHelpers.js';
-import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
+import { finalizeAgent, releaseAgentLane } from './agentFinalization.js';
 import { activeAgents, userTerminatedAgents, pausedAgents } from './agentState.js';
 import { PATHS } from '../lib/fileUtils.js';
 import { DONE_SENTINEL_NAME, parseSentinelPayload } from '../lib/agentSentinel.js';
