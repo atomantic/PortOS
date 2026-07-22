@@ -15,8 +15,7 @@ import {
   spriteImportRequestSchema,
   spriteRecordUpdateSchema,
 } from '../lib/validation.js';
-import { listRecords, getRecord, updateRecord, deleteRecord } from '../services/sprites/records.js';
-import { listSpriteAssets } from '../services/sprites/paths.js';
+import { listRecords, getRecordWithAssets, updateRecord, deleteRecord } from '../services/sprites/records.js';
 import { importFromSource } from '../services/sprites/importer.js';
 
 const router = Router();
@@ -34,10 +33,9 @@ router.post('/import', asyncHandler(async (req, res) => {
 }));
 
 router.get('/:id', asyncHandler(async (req, res) => {
-  const record = await getRecord(req.params.id);
-  if (!record) throw new ServerError('Sprite record not found', { status: 404, code: 'NOT_FOUND' });
-  const assets = await listSpriteAssets(record.id);
-  res.json({ record, assets });
+  const detail = await getRecordWithAssets(req.params.id);
+  if (!detail) throw new ServerError('Sprite record not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(detail);
 }));
 
 router.patch('/:id', asyncHandler(async (req, res) => {

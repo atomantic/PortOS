@@ -15,9 +15,9 @@
  */
 
 import { checkHealth, ensureSchema } from '../../lib/db.js';
+import { listSpriteAssets } from './paths.js';
 
 let backend = null;
-let backendName = null;
 
 async function selectBackend() {
   if (backend) return backend;
@@ -25,7 +25,6 @@ async function selectBackend() {
   const envBackend = process.env.MEMORY_BACKEND;
   if (envBackend === 'file' || process.env.NODE_ENV === 'test') {
     backend = await import('./recordsFile.js');
-    backendName = 'file';
     return backend;
   }
 
@@ -35,13 +34,7 @@ async function selectBackend() {
   }
   await ensureSchema();
   backend = await import('./recordsDB.js');
-  backendName = 'postgres';
   return backend;
-}
-
-/** Name of the active backend, or null before first call (for diagnostics/tests). */
-export function getSpriteRecordsBackendName() {
-  return backendName;
 }
 
 export async function listRecords(options = {}) {
@@ -50,6 +43,15 @@ export async function listRecords(options = {}) {
 
 export async function getRecord(id, options = {}) {
   return (await selectBackend()).getRecord(id, options);
+}
+
+/**
+ * Detail view: the record plus its on-disk asset listing, fetched in
+ * parallel. Returns null for an unknown/tombstoned record.
+ */
+export async function getRecordWithAssets(id) {
+  const [record, assets] = await Promise.all([getRecord(id), listSpriteAssets(id)]);
+  return record ? { record, assets } : null;
 }
 
 export async function createRecord(input, id) {

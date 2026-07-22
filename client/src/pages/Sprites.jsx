@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { PersonStanding, Package, Download, FolderOpen, X, RefreshCw } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -93,46 +93,46 @@ function ImportPanel({ onImported }) {
   );
 }
 
-function RecordList({ records, selectedId, onSelect }) {
-  const characters = records.filter((r) => r.kind === 'character');
-  const props = records.filter((r) => r.kind !== 'character');
-  const Section = ({ title, icon: Icon, items }) => (
-    items.length > 0 && (
-      <div>
-        <h3 className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-gray-500 mb-1.5">
-          <Icon className="w-3.5 h-3.5" /> {title}
-        </h3>
-        <ul className="space-y-1">
-          {items.map((r) => (
-            <li key={r.id}>
-              <button
-                onClick={() => onSelect(r.id)}
-                className={`w-full text-left px-3 py-2 rounded text-sm ${selectedId === r.id ? 'bg-port-accent/20 text-white border border-port-accent' : 'bg-port-card text-gray-300 border border-port-border hover:border-gray-500'}`}
-              >
-                <span className="font-medium">{r.name}</span>
-                <span className="block text-xs text-gray-500">{r.status}{r.chromaKey ? ` · key ${r.chromaKey}` : ''}</span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      </div>
-    )
+function RecordSection({ title, icon: Icon, items, selectedId, onSelect }) {
+  if (items.length === 0) return null;
+  return (
+    <div>
+      <h3 className="flex items-center gap-1.5 text-xs uppercase tracking-wide text-gray-500 mb-1.5">
+        <Icon className="w-3.5 h-3.5" /> {title}
+      </h3>
+      <ul className="space-y-1">
+        {items.map((r) => (
+          <li key={r.id}>
+            <button
+              onClick={() => onSelect(r.id)}
+              className={`w-full text-left px-3 py-2 rounded text-sm ${selectedId === r.id ? 'bg-port-accent/20 text-white border border-port-accent' : 'bg-port-card text-gray-300 border border-port-border hover:border-gray-500'}`}
+            >
+              <span className="font-medium">{r.name}</span>
+              <span className="block text-xs text-gray-500">{r.status}{r.chromaKey ? ` · key ${r.chromaKey}` : ''}</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
+}
+
+function RecordList({ records, selectedId, onSelect }) {
   return (
     <div className="space-y-4">
-      <Section title="Characters" icon={PersonStanding} items={characters} />
-      <Section title="Props" icon={Package} items={props} />
+      <RecordSection title="Characters" icon={PersonStanding} items={records.filter((r) => r.kind === 'character')} selectedId={selectedId} onSelect={onSelect} />
+      <RecordSection title="Props" icon={Package} items={records.filter((r) => r.kind !== 'character')} selectedId={selectedId} onSelect={onSelect} />
     </div>
   );
 }
 
 function AssetGroups({ recordId, assets }) {
   const [preview, setPreview] = useState(null);
-  const groups = assets.reduce((acc, a) => {
+  const groups = useMemo(() => assets.reduce((acc, a) => {
     const g = topLevelGroup(a.path) || 'files';
     (acc[g] ||= []).push(a);
     return acc;
-  }, {});
+  }, {}), [assets]);
   return (
     <div className="space-y-4">
       {Object.entries(groups).map(([group, files]) => (

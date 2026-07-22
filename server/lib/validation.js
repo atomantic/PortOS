@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { ServerError } from './errorHandler.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull } from './zodCompat.js';
 import { WORK_TRACKERS } from './workTracker.js';
+import { SPRITE_ID_PATTERN } from '../services/sprites/recordsLogic.js';
 
 // gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
 // pixels. Mirror the ceiling for every image-gen route. Local mflux can
@@ -940,10 +941,12 @@ export const videoDownloadSchema = z.object({
 
 // Sprite Manager (issue #2895, phase 1). Import runs against a local
 // filesystem path the user supplies (the source pipeline checkout); the
-// importer validates the tree shape server-side.
+// importer validates the tree shape server-side. The id pattern is owned by
+// recordsLogic.js (ids double as data/sprites/ directory names) — a pure,
+// dependency-free module, so importing it here can't disturb mocked suites.
 export const spriteImportRequestSchema = z.object({
   sourceRoot: z.string().min(1).max(1024),
-  characters: z.array(z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/)).optional(),
+  characters: z.array(z.string().regex(SPRITE_ID_PATTERN)).optional(),
   includeProps: z.boolean().optional(),
 });
 

@@ -7,12 +7,6 @@ import { request } from './apiCore.js';
 
 export const listSpriteRecords = (options = {}) => request('/sprites', options);
 export const getSpriteRecord = (id, options = {}) => request(`/sprites/${encodeURIComponent(id)}`, options);
-export const updateSpriteRecord = (id, patch, options = {}) => request(`/sprites/${encodeURIComponent(id)}`, {
-  method: 'PATCH', body: JSON.stringify(patch), ...options,
-});
-export const deleteSpriteRecord = (id, options = {}) => request(`/sprites/${encodeURIComponent(id)}`, {
-  method: 'DELETE', ...options,
-});
 
 // Import approved production assets from a source pipeline checkout.
 // Returns { results: [...perSubject], totals }.

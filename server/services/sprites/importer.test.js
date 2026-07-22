@@ -22,7 +22,7 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
 });
 
 const { importFromSource } = await import('./importer.js');
-const { getRecord, updateRecord } = await import('./records.js');
+const { getRecord, updateRecord, getRecordWithAssets } = await import('./records.js');
 const { resolveSpriteAssetPath, listSpriteAssets } = await import('./paths.js');
 
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
@@ -139,6 +139,13 @@ describe('paths confinement', () => {
     expect(abs.startsWith(join(SPRITES_ROOT, 'hero'))).toBe(true);
     const assets = await listSpriteAssets('hero');
     expect(assets.some((a) => a.path === 'reference/hero-main.png')).toBe(true);
+  });
+
+  it('getRecordWithAssets pairs the record with its disk listing', async () => {
+    const detail = await getRecordWithAssets('hero');
+    expect(detail.record.id).toBe('hero');
+    expect(detail.assets.length).toBeGreaterThan(0);
+    expect(await getRecordWithAssets('nobody')).toBeNull();
   });
 
   it('refuses traversal and bad ids', () => {

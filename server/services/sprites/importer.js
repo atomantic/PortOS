@@ -22,8 +22,8 @@
  */
 
 import { join, basename, dirname } from 'path';
-import { readdir, copyFile, stat } from 'fs/promises';
-import { PATHS, ensureDir, sha256File, tryReadFile, atomicWrite } from '../../lib/fileUtils.js';
+import { readdir, copyFile } from 'fs/promises';
+import { PATHS, ensureDir, sha256File, atomicWrite, pathExists, readJSONFile } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { upsertImportedRecord } from './records.js';
 import { spriteDir } from './paths.js';
@@ -35,24 +35,9 @@ const LEGACY_CHROMA_KEY = '#FF00FF';
 
 const PROP_FILE_EXTENSIONS = ['.png', '.md'];
 
-async function pathExists(p) {
-  try {
-    await stat(p);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function readJson(p) {
-  const raw = await tryReadFile(p);
-  if (raw === null) return null;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
+// Absent-or-corrupt manifest reads collapse to null — the importer treats both
+// as "nothing to import from this manifest."
+const readJson = (p) => readJSONFile(p, null, { logError: false });
 
 /**
  * Recursively copy `srcDir` into `destDir`, filtering by `shouldCopy(relPath,
@@ -60,6 +45,7 @@ async function readJson(p) {
  */
 async function copyTree(srcDir, destDir, shouldCopy = () => true) {
   const copied = [];
+  const ensuredDirs = new Set();
   async function walk(current, rel) {
     let entries;
     try {
@@ -76,7 +62,11 @@ async function copyTree(srcDir, destDir, shouldCopy = () => true) {
         await walk(srcPath, entryRel);
       } else if (entry.isFile()) {
         const destPath = join(destDir, entryRel);
-        await ensureDir(dirname(destPath));
+        const parent = dirname(destPath);
+        if (!ensuredDirs.has(parent)) {
+          await ensureDir(parent);
+          ensuredDirs.add(parent);
+        }
         await copyFile(srcPath, destPath);
         copied.push(entryRel);
       }
@@ -92,19 +82,19 @@ async function copyTree(srcDir, destDir, shouldCopy = () => true) {
  * and hash mismatches land in the returned errors list.
  */
 async function verifyHashes(destDir, expectations, errors) {
-  let verified = 0;
-  for (const { relPath, sha256 } of expectations) {
-    if (typeof sha256 !== 'string' || !sha256) continue;
-    const abs = join(destDir, relPath);
-    if (!(await pathExists(abs))) {
-      errors.push(`missing after copy: ${relPath}`);
-      continue;
-    }
-    const actual = await sha256File(abs);
-    if (actual !== sha256) errors.push(`sha256 mismatch: ${relPath}`);
-    else verified += 1;
-  }
-  return verified;
+  const outcomes = await Promise.all(
+    expectations
+      .filter(({ sha256 }) => typeof sha256 === 'string' && sha256)
+      .map(async ({ relPath, sha256 }) => {
+        const abs = join(destDir, relPath);
+        if (!(await pathExists(abs))) return { error: `missing after copy: ${relPath}` };
+        return (await sha256File(abs)) === sha256
+          ? { verified: true }
+          : { error: `sha256 mismatch: ${relPath}` };
+      }),
+  );
+  for (const o of outcomes) if (o.error) errors.push(o.error);
+  return outcomes.filter((o) => o.verified).length;
 }
 
 // Manifest paths reference files repo-relative (art-source/sprites/<id>/…) or
