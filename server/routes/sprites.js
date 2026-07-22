@@ -22,11 +22,10 @@ import {
 } from '../lib/validation.js';
 import { optionalUploadFields } from '../lib/multipart.js';
 import {
-  listRecords, getRecordWithAssets, createRecord, updateRecord, deleteRecord,
+  listRecords, getRecordWithAssets, createCharacter, updateRecord, deleteRecord,
 } from '../services/sprites/records.js';
 import { importFromSource } from '../services/sprites/importer.js';
 import { getReferenceSet, startReferenceGeneration, lockReference } from '../services/sprites/reference.js';
-import { SPRITE_ID_PATTERN } from '../services/sprites/recordsLogic.js';
 
 const router = Router();
 
@@ -38,21 +37,15 @@ const referenceUpload = optionalUploadFields(['referenceImage'], {
   fileFilter: (file) => ACCEPTED_REFERENCE_MIME.has(file.mimetype),
 });
 
-const slugify = (name) => name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
-
 router.get('/', asyncHandler(async (_req, res) => {
   res.json(await listRecords());
 }));
 
 // Create a character record — the entry point of the reference workflow.
-// Props families remain import-only.
+// Id derivation and the kind live in the service (createCharacter).
 router.post('/', asyncHandler(async (req, res) => {
   const input = validateRequest(spriteCreateSchema, req.body);
-  const id = input.id || slugify(input.name);
-  if (!SPRITE_ID_PATTERN.test(id)) {
-    throw new ServerError(`Cannot derive a valid sprite id from "${input.name}" — pass an explicit id`, { status: 400, code: 'INVALID_SPRITE_ID' });
-  }
-  res.status(201).json(await createRecord({ kind: 'character', name: input.name, spec: input.spec ?? null }, id));
+  res.status(201).json(await createCharacter(input));
 }));
 
 // Import approved production assets from a source tree. A direct user action

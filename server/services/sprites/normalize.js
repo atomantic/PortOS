@@ -12,19 +12,17 @@
  * Geometry contract (verbatim from the source): character height is 80% of
  * the square side (or width fits inside 10% side margins, whichever needs a
  * bigger canvas), feet baseline sits 7% above the bottom edge, pixels are
- * never rescaled — only the canvas is sized around them.
+ * never rescaled — only the canvas is sized around them. Mask threshold:
+ * a pixel is foreground when luma(|pixel − key|) > 40 (Pillow's L convert).
  */
 
 import sharp from 'sharp';
 import { copyFile } from 'fs/promises';
 
-export const REFERENCE_FRAME_HEIGHT_FRAC = 0.80;
-export const REFERENCE_FRAME_BOTTOM_FRAC = 0.07;
-export const REFERENCE_FRAME_SIDE_FRAC = 0.10;
-
-// Pillow's mask threshold: a pixel is foreground when the luminance of its
-// per-channel difference from the key color exceeds this.
-export const MASK_LUMA_THRESHOLD = 40;
+const FRAME_HEIGHT_FRAC = 0.80;
+const FRAME_BOTTOM_FRAC = 0.07;
+const FRAME_SIDE_FRAC = 0.10;
+const MASK_LUMA_THRESHOLD = 40;
 
 export function hexToRgb(hex) {
   const m = /^#?([0-9a-fA-F]{6})$/.exec(typeof hex === 'string' ? hex : '');
@@ -33,10 +31,14 @@ export function hexToRgb(hex) {
   return { r: (n >> 16) & 0xff, g: (n >> 8) & 0xff, b: n & 0xff };
 }
 
-// Load as flat RGB (alpha dropped over white like Pillow's convert("RGB")
-// after flatten; generated candidates are opaque PNGs so this is a no-op in
-// practice) plus a foreground mask + tight bounding box vs the key color.
-async function loadMasked(src, maskKeyHex) {
+/**
+ * Decode `src` as flat RGB (alpha dropped over white like Pillow's
+ * convert("RGB"); generated candidates are opaque PNGs so this is a no-op in
+ * practice) and compute the foreground mask + tight bounding box vs the key
+ * color. The lock path runs palette extraction AND normalization off ONE
+ * analysis so a multi-MP candidate is decoded and scanned once.
+ */
+export async function analyzeForeground(src, maskKeyHex) {
   const key = hexToRgb(maskKeyHex);
   const { data, info } = await sharp(src)
     .flatten({ background: { r: 255, g: 255, b: 255 } })
@@ -67,12 +69,11 @@ async function loadMasked(src, maskKeyHex) {
 }
 
 /**
- * Histogram the foreground (non-key) pixels of an image, quantized to 4 bits
- * per channel so anti-aliased shades collapse into their parent color.
+ * Histogram the foreground (non-key) pixels of an analysis, quantized to 4
+ * bits per channel so anti-aliased shades collapse into their parent color.
  * Returns `[{ r, g, b, count }]` sorted by count desc — pickChromaKey's input.
  */
-export async function extractForegroundPalette(src, maskKeyHex) {
-  const { data, width, height, mask } = await loadMasked(src, maskKeyHex);
+export function paletteFromAnalysis({ data, width, height, mask }) {
   const counts = new Map();
   for (let p = 0; p < width * height; p++) {
     if (!mask[p]) continue;
@@ -91,15 +92,17 @@ export async function extractForegroundPalette(src, maskKeyHex) {
     .sort((a, b) => b.count - a.count);
 }
 
+/** One-shot palette extraction (decode + histogram). */
+export async function extractForegroundPalette(src, maskKeyHex) {
+  return paletteFromAnalysis(await analyzeForeground(src, maskKeyHex));
+}
+
 /**
- * Normalize a candidate into the canonical key-color square described above.
- * `maskKeyHex` is the background the candidate was GENERATED on (what to key
- * out); `canvasKeyHex` is the key to composite onto (the selected key). An
- * image with no detectable foreground copies through unchanged, mirroring
- * the source behavior.
+ * Composite a pre-analyzed candidate onto the canonical key-color square.
+ * `src` is still needed for the no-foreground copy-through path.
  */
-export async function normalizeAnchorFrame(src, dest, { maskKeyHex, canvasKeyHex }) {
-  const { data, width, mask, bbox } = await loadMasked(src, maskKeyHex);
+export async function normalizeFromAnalysis(analysis, src, dest, canvasKeyHex) {
+  const { data, width, mask, bbox } = analysis;
   if (!bbox) {
     await copyFile(src, dest);
     return { copiedThrough: true };
@@ -107,18 +110,13 @@ export async function normalizeAnchorFrame(src, dest, { maskKeyHex, canvasKeyHex
   const charW = bbox.right - bbox.left;
   const charH = bbox.bottom - bbox.top;
   const side = Math.max(
-    Math.round(charH / REFERENCE_FRAME_HEIGHT_FRAC),
-    Math.round(charW / (1 - 2 * REFERENCE_FRAME_SIDE_FRAC)),
+    Math.round(charH / FRAME_HEIGHT_FRAC),
+    Math.round(charW / (1 - 2 * FRAME_SIDE_FRAC)),
   );
   const fill = hexToRgb(canvasKeyHex);
-  const canvas = Buffer.alloc(side * side * 3);
-  for (let p = 0; p < side * side; p++) {
-    canvas[p * 3] = fill.r;
-    canvas[p * 3 + 1] = fill.g;
-    canvas[p * 3 + 2] = fill.b;
-  }
+  const canvas = Buffer.alloc(side * side * 3, Buffer.from([fill.r, fill.g, fill.b]));
   const offsetX = Math.floor((side - charW) / 2);
-  const feetY = side - Math.round(side * REFERENCE_FRAME_BOTTOM_FRAC);
+  const feetY = side - Math.round(side * FRAME_BOTTOM_FRAC);
   const offsetY = feetY - charH;
   for (let y = bbox.top; y < bbox.bottom; y++) {
     for (let x = bbox.left; x < bbox.right; x++) {
@@ -132,4 +130,13 @@ export async function normalizeAnchorFrame(src, dest, { maskKeyHex, canvasKeyHex
   }
   await sharp(canvas, { raw: { width: side, height: side, channels: 3 } }).png().toFile(dest);
   return { side, charW, charH };
+}
+
+/**
+ * One-shot normalize: mask `src` against the key it was GENERATED on, then
+ * composite onto the SELECTED key. An image with no detectable foreground
+ * copies through unchanged, mirroring the source behavior.
+ */
+export async function normalizeAnchorFrame(src, dest, { maskKeyHex, canvasKeyHex }) {
+  return normalizeFromAnalysis(await analyzeForeground(src, maskKeyHex), src, dest, canvasKeyHex);
 }

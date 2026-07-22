@@ -4,6 +4,8 @@ import { PersonStanding, Package, Download, FolderOpen, X, RefreshCw, Plus } fro
 import toast from '../components/ui/Toast';
 import { listSpriteRecords, getSpriteRecord, importSprites, createSpriteRecord } from '../services/apiSprites.js';
 import ReferenceWorkflow from '../components/sprites/ReferenceWorkflow.jsx';
+import { spriteAssetUrl } from '../components/sprites/spriteAssets.js';
+import { useAsyncAction } from '../hooks/useAsyncAction.js';
 import { formatBytes, timeAgo } from '../utils/formatters.js';
 
 // Sprite Manager: library over imported production sprites — characters
@@ -112,21 +114,13 @@ function ImportPanel({ onImported }) {
 function NewCharacterPanel({ onCreated }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
-  const [creating, setCreating] = useState(false);
 
-  const create = async () => {
-    setCreating(true);
-    try {
-      const record = await createSpriteRecord({ name: name.trim() });
-      setOpen(false);
-      setName('');
-      onCreated(record);
-    } catch {
-      // request() already toasted — keep the panel open for a retry.
-    } finally {
-      setCreating(false);
-    }
-  };
+  const [create, creating] = useAsyncAction(async () => {
+    const record = await createSpriteRecord({ name: name.trim() }, { silent: true });
+    setOpen(false);
+    setName('');
+    onCreated(record);
+  }, { errorMessage: 'Failed to create character' });
 
   if (!open) {
     return (
@@ -221,7 +215,7 @@ function AssetGroups({ recordId, assets }) {
           </h4>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
             {files.map((a) => {
-              const url = `/data/sprites/${encodeURIComponent(recordId)}/${a.path.split('/').map(encodeURIComponent).join('/')}`;
+              const url = spriteAssetUrl(recordId, a.path);
               return IMAGE_EXT.test(a.path) ? (
                 <button
                   key={a.path}
@@ -282,12 +276,22 @@ export default function Sprites() {
     listSpriteRecords().then(setRecords).catch(() => setRecords([]));
   }, []);
 
+  // Stable identity — ReferenceWorkflow's poll effect depends on it, and an
+  // inline arrow would tear down/recreate the interval every parent render.
+  const onWorkflowChanged = useCallback(() => {
+    refresh();
+    setRetryTick((t) => t + 1);
+  }, [refresh]);
+
   useEffect(() => { refresh(); }, [refresh]);
 
+  // Same-id refetches (retryTick bumps from locks/renders/imports) keep the
+  // current detail rendered — nulling it would unmount ReferenceWorkflow and
+  // drop its in-flight render polling. Only an actual id switch clears.
   useEffect(() => {
     if (!id) { setDetail(null); setDetailState('idle'); return undefined; }
     let stale = false; // rapid A→B clicks: a late A response must not clobber B
-    setDetail(null);
+    setDetail((prev) => (prev?.record?.id === id ? prev : null));
     setDetailState('loading');
     getSpriteRecord(id, { silent: true })
       .then((d) => { if (!stale) { setDetail(d); setDetailState('loaded'); } })
@@ -353,7 +357,7 @@ export default function Sprites() {
               <ReferenceWorkflow
                 record={detail.record}
                 reference={detail.reference}
-                onChanged={() => { refresh(); setRetryTick((t) => t + 1); }}
+                onChanged={onWorkflowChanged}
               />
             )}
             {detail.assets.length === 0 ? (

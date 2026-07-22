@@ -15,7 +15,9 @@
  */
 
 import { checkHealth, ensureSchema, isTestRunner } from '../../lib/db.js';
+import { ServerError } from '../../lib/errorHandler.js';
 import { listSpriteAssets } from './paths.js';
+import { deriveSpriteId, isValidSpriteId } from './recordsLogic.js';
 
 let backend = null;
 
@@ -59,6 +61,18 @@ export async function getRecordWithAssets(id) {
 
 export async function createRecord(input, id) {
   return (await selectBackend()).createRecord(input, id);
+}
+
+/**
+ * Create a character record (the reference-workflow entry point) — derives
+ * the id from the name when not supplied. Props families stay import-only.
+ */
+export async function createCharacter({ id, name, spec = null }) {
+  const recordId = id || deriveSpriteId(name);
+  if (!isValidSpriteId(recordId)) {
+    throw new ServerError(`Cannot derive a valid sprite id from "${name}" — pass an explicit id`, { status: 400, code: 'INVALID_SPRITE_ID' });
+  }
+  return createRecord({ kind: 'character', name, spec }, recordId);
 }
 
 export async function updateRecord(id, patch) {

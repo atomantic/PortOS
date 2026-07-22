@@ -16,13 +16,14 @@
  */
 
 import { join } from 'path';
-import { readdir, copyFile, unlink } from 'fs/promises';
+import { readdir, copyFile } from 'fs/promises';
 import {
   PATHS, ensureDir, sha256File, atomicWrite, pathExists, readJSONFile,
+  importFileToDir, listDirectoryByExtension,
 } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { enqueueJob } from '../mediaJobQueue/index.js';
-import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
+import { IMAGE_GEN_MODE, resolveQueueImageMode } from '../imageGen/modes.js';
 import { resolveImageCleaners } from '../imageGen/index.js';
 import { getSettings } from '../settings.js';
 import { getRecord, updateRecord } from './records.js';
@@ -31,10 +32,8 @@ import {
   SPRITE_DIRECTIONS, ANCHOR_DIRECTIONS, anchorIdForDirection,
   buildMainReferencePrompt, buildAnchorPrompt,
 } from './prompts.js';
-import { pickChromaKey, CHROMA_KEY_HEXES } from './chromaKey.js';
-import { normalizeAnchorFrame, extractForegroundPalette } from './normalize.js';
-
-const LEGACY_KEY = '#FF00FF';
+import { pickChromaKey, CHROMA_KEY_HEXES, DEFAULT_CHROMA_KEY } from './chromaKey.js';
+import { analyzeForeground, paletteFromAnalysis, normalizeFromAnalysis, normalizeAnchorFrame } from './normalize.js';
 
 // Default i2i strengths: anchors redraw a NEW facing from the main (mostly
 // follow the prompt, borrow identity), an uploaded visual reference guides
@@ -110,24 +109,6 @@ async function nextCandidateName(candidatesDir, anchorId) {
   return `${anchorId}-candidate-${String(max + 1).padStart(2, '0')}.png`;
 }
 
-// Mirrors the pipeline visual stages' mode resolution: per-request override
-// (honored only when that backend is enabled), else the saved dispatcher
-// default, else codex → grok → local. External never queues.
-function resolveGenMode(requested, settings) {
-  const codexEnabled = settings?.imageGen?.codex?.enabled === true;
-  const grokEnabled = settings?.imageGen?.grok?.enabled === true;
-  if (requested === IMAGE_GEN_MODE.CODEX && codexEnabled) return IMAGE_GEN_MODE.CODEX;
-  if (requested === IMAGE_GEN_MODE.GROK && grokEnabled) return IMAGE_GEN_MODE.GROK;
-  if (requested === IMAGE_GEN_MODE.LOCAL) return IMAGE_GEN_MODE.LOCAL;
-  const settingsMode = settings?.imageGen?.mode;
-  if (settingsMode === IMAGE_GEN_MODE.CODEX && codexEnabled) return IMAGE_GEN_MODE.CODEX;
-  if (settingsMode === IMAGE_GEN_MODE.GROK && grokEnabled) return IMAGE_GEN_MODE.GROK;
-  if (settingsMode === IMAGE_GEN_MODE.LOCAL) return IMAGE_GEN_MODE.LOCAL;
-  if (codexEnabled) return IMAGE_GEN_MODE.CODEX;
-  if (grokEnabled) return IMAGE_GEN_MODE.GROK;
-  return IMAGE_GEN_MODE.LOCAL;
-}
-
 function findAnchor(manifest, anchorId) {
   return manifest.anchors.find((a) => a.id === anchorId) || null;
 }
@@ -140,15 +121,9 @@ function findAnchor(manifest, anchorId) {
 export async function getReferenceSet(recordId) {
   const manifest = await loadManifest(recordId);
   const candidatesDir = join(spriteDir(recordId), 'reference', 'candidates');
-  let entries = [];
-  try {
-    entries = await readdir(candidatesDir);
-  } catch {
-    // no candidates yet
-  }
-  const candidates = (await Promise.all(entries
-    .filter((name) => name.endsWith('.png'))
-    .map(async (name) => {
+  const candidates = (await listDirectoryByExtension(candidatesDir, {
+    extensions: ['.png'],
+    mapEntry: async (name) => {
       const sidecar = await readJSONFile(join(candidatesDir, `${name.replace(/\.png$/, '')}.generation.json`), null);
       return {
         path: `reference/candidates/${name}`,
@@ -159,7 +134,8 @@ export async function getReferenceSet(recordId) {
         model: sidecar?.model || null,
         generatedAt: sidecar?.generatedAt || null,
       };
-    })))
+    },
+  }))
     .sort((a, b) => (b.generatedAt || '').localeCompare(a.generatedAt || '') || a.path.localeCompare(b.path));
   return { manifest, candidates };
 }
@@ -176,9 +152,9 @@ export async function startReferenceGeneration(recordId, body, upload = null) {
   const record = await requireCharacter(recordId);
   const manifest = (await loadManifest(recordId)) || seedManifest(recordId);
   const target = body.target;
-  const genKey = record.chromaKey || manifest.chromaKey || LEGACY_KEY;
+  const genKey = record.chromaKey || manifest.chromaKey || DEFAULT_CHROMA_KEY;
   const settings = await getSettings();
-  const mode = resolveGenMode(body.mode, settings);
+  const mode = resolveQueueImageMode(body.mode, settings);
 
   let prompt;
   let initImagePath;
@@ -198,17 +174,18 @@ export async function startReferenceGeneration(recordId, body, upload = null) {
     direction = 'south';
     prompt = buildMainReferencePrompt({ name: record.name, designPrompt, chromaKey: genKey });
     if (upload) {
+      // Shared temp-import (uuid-prefixed name, EXDEV-safe copy+unlink) —
+      // the upload persists in the record dir as design provenance.
       const uploadsDir = join(spriteDir(recordId), 'reference', 'uploads');
-      await ensureDir(uploadsDir);
-      const ext = /\.(png|jpe?g|webp)$/i.exec(upload.originalname || '')?.[0]?.toLowerCase() || '.png';
-      // Timestamp-named (not -vN): uploads may mix extensions, which would
-      // defeat a .png-only version scan and overwrite an earlier upload.
-      initImagePath = join(uploadsDir, `design-reference-${Date.now()}${ext}`);
-      await copyFile(upload.tempPath, initImagePath);
-      await unlink(upload.tempPath).catch(() => {});
+      const { filename } = await importFileToDir(upload.tempPath, upload.originalname || 'design-reference.png', uploadsDir);
+      initImagePath = join(uploadsDir, filename);
       initImageStrength ??= UPLOAD_DEFAULT_STRENGTH;
     }
     if (designPrompt) manifest.designPrompt = designPrompt;
+    // Only the main branch mutates (or may have just seeded) the manifest —
+    // the anchor branch requires a locked main, so its manifest already
+    // exists on disk unchanged.
+    await saveManifest(recordId, manifest);
   } else {
     if (!ANCHOR_DIRECTIONS.includes(target)) {
       throw new ServerError(`Unknown reference target: ${target}`, { status: 400, code: 'INVALID_TARGET' });
@@ -250,7 +227,6 @@ export async function startReferenceGeneration(recordId, body, upload = null) {
       ? { mode, grokPath: settings.imageGen?.grok?.grokPath, aspectRatio: settings.imageGen?.grok?.aspectRatio, ...baseParams }
       : { mode, pythonPath: settings.imageGen?.local?.pythonPath || null, ...(body.model ? { modelId: body.model } : {}), ...baseParams };
 
-  await saveManifest(recordId, manifest);
   const { jobId } = enqueueJob({ kind: 'image', params, owner: 'sprites' });
   console.log(`🧍 sprite reference render queued ${recordId}/${anchorId} mode=${mode} jobId=${jobId.slice(0, 8)}`);
   return { jobId, mode, target, anchorId };
@@ -322,7 +298,7 @@ export async function lockReference(recordId, { target, candidate }) {
   }
   // Mask on the key the candidate was GENERATED against (its actual
   // background), which may differ from the key selected at lock time.
-  const maskKey = sidecar?.chromaKey || record.chromaKey || LEGACY_KEY;
+  const maskKey = sidecar?.chromaKey || record.chromaKey || DEFAULT_CHROMA_KEY;
   const now = new Date().toISOString();
 
   if (target === 'main') {
@@ -331,17 +307,19 @@ export async function lockReference(recordId, { target, candidate }) {
     }
     // Dynamic key selection (#2895): histogram the character's own palette
     // and pick the standard key farthest from it in hue — unless the user
-    // already pinned a key on the record.
-    const auto = pickChromaKey(await extractForegroundPalette(candAbs, maskKey));
+    // already pinned a key on the record (then skip the histogram entirely).
+    // One analyzeForeground decode feeds both the palette and the composite.
+    const analysis = await analyzeForeground(candAbs, maskKey);
     const userPinned = CHROMA_KEY_HEXES.includes(record.chromaKey);
+    const auto = userPinned ? null : pickChromaKey(paletteFromAnalysis(analysis));
     const selectedKey = userPinned ? record.chromaKey : auto.hex;
     const rel = `reference/${await nextVersionPath(refDir, `${recordId}-walk-south`)}`;
     const destAbs = join(spriteDir(recordId), rel);
-    await normalizeAnchorFrame(candAbs, destAbs, { maskKeyHex: maskKey, canvasKeyHex: selectedKey });
+    await normalizeFromAnalysis(analysis, candAbs, destAbs, selectedKey);
     const sha256 = await sha256File(destAbs);
     manifest.chromaKey = selectedKey;
     manifest.chromaKeyAutoSelected = !userPinned;
-    manifest.chromaKeyWarning = userPinned ? null : auto.warning;
+    manifest.chromaKeyWarning = auto?.warning ?? null;
     manifest.mainReference = {
       ...manifest.mainReference,
       path: rel,
@@ -369,7 +347,7 @@ export async function lockReference(recordId, { target, candidate }) {
     if (anchor.status === 'locked') {
       throw new ServerError(`Anchor ${anchorId} is already locked`, { status: 409, code: 'REFERENCE_LOCKED' });
     }
-    const canvasKey = record.chromaKey || manifest.chromaKey || LEGACY_KEY;
+    const canvasKey = record.chromaKey || manifest.chromaKey || DEFAULT_CHROMA_KEY;
     const rel = `reference/${await nextVersionPath(refDir, `${recordId}-${anchorId}`)}`;
     const destAbs = join(spriteDir(recordId), rel);
     await normalizeAnchorFrame(candAbs, destAbs, { maskKeyHex: maskKey, canvasKeyHex: canvasKey });
