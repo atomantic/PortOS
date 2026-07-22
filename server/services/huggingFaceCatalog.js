@@ -219,13 +219,21 @@ function quantFromFilename(filename) {
 function pickGgufFile(model) {
   const files = ggufFilesOf(model)
   if (files.length === 0) return null
-  return files
+  const ranked = files
     .map((file) => {
       const quant = quantFromFilename(file.name)
       const priority = quant ? QUANT_PRIORITY.findIndex((q) => q.toLowerCase() === quant.toLowerCase()) : -1
       return { ...file, quant, priority: priority === -1 ? 999 : priority }
     })
-    .sort((a, b) => a.priority - b.priority || (a.size || Number.MAX_SAFE_INTEGER) - (b.size || Number.MAX_SAFE_INTEGER))[0]
+    .sort((a, b) => a.priority - b.priority || (a.size || Number.MAX_SAFE_INTEGER) - (b.size || Number.MAX_SAFE_INTEGER))
+  const picked = ranked[0]
+  // A repo whose builds all use a non-standard scheme (`…-AVQ2.gguf`) parses to no
+  // quant, so the install id is the bare repo and the BACKEND decides which build
+  // to pull. With several such files the pick above is arbitrary (all tie at 999,
+  // so size-ascending wins) — advertising its size would promise "8.4 GB · fits
+  // comfortably" for an install that may fetch a much larger build. Drop the size
+  // so the card reports an unknown fit instead. A single-GGUF repo is unambiguous.
+  return !picked.quant && ranked.length > 1 ? { ...picked, size: null } : picked
 }
 
 // Delegates formatting to the shared fileUtils.formatBytes, but returns `null`

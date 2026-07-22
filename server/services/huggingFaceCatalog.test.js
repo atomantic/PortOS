@@ -243,6 +243,20 @@ describe('huggingFaceCatalog', () => {
       expect(result.variants || []).toEqual([])
     })
 
+    it('reports an unknown size when several custom-scheme builds leave the backend to choose', async () => {
+      // No file parses a quant, so the id is the bare repo and Ollama picks the
+      // build — pinning the card to one arbitrary file's size would advertise a
+      // fit verdict for a build the install may not fetch.
+      const repo = 'exampleorg/Example-3-Multi'
+      fetch
+        .mockResolvedValueOnce(listing(repo, ['Example-3-AVQ2.gguf', 'Example-3-AVQ8.gguf']))
+        .mockResolvedValueOnce(blobs(repo, { 'Example-3-AVQ2.gguf': 8_400_000_000, 'Example-3-AVQ8.gguf': 30_000_000_000 }))
+
+      const [result] = await searchHuggingFaceModels({ backend: 'ollama', query: 'example-3', systemMemoryBytes: 16 * 1024 ** 3 })
+
+      expect(result).toMatchObject({ id: `hf.co/${repo}`, quant: null, sizeBytes: null, size: 'GGUF' })
+    })
+
     it('defaults to a small quant on a low-memory machine', async () => {
       const repo = 'empero-ai/Qwythos-9B-Small-GGUF'
       fetch
