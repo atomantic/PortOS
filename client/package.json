@@ -27,7 +27,7 @@
     "react-router-dom": "7.18.0",
     "recharts": "3.8.1",
     "socket.io-client": "4.8.3",
-    "three": "0.184.0"
+    "three": "0.185.1"
   },
   "devDependencies": {
     "@eslint/js": "9.39.4",
@@ -53,6 +53,6 @@
     "minimatch@3": {
       "brace-expansion": "1.1.15"
     },
-    "three": "0.184.0"
+    "three": "0.185.1"
   }
 }
