@@ -36,6 +36,7 @@ export * from './muscriptorModels.js';
 export * from './pipelineImageDefaults.js';
 export * from './reverseOutlineGrid.js';
 export * from './runnerFamilies.js';
+export * from './videoGenParams.js';
 export * from './videoGenResolutions.js';
 export * from './videoTilingOptions.js';
 export * from './wrImageDefaults.js';

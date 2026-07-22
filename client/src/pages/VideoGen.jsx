@@ -25,9 +25,8 @@
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { useSearchParams, useNavigate, Link } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import Drawer from '../components/Drawer';
-import { uuidv4 } from '../lib/uuid.js';
 import { ImageGenTab } from '../components/settings/ImageGenTab';
 import LocalSetupPanel from '../components/settings/LocalSetupPanel';
 import RuntimeInstallModal from '../components/install/RuntimeInstallModal';
@@ -35,7 +34,10 @@ import FramePanel from '../components/videoGen/FramePanel';
 import KeyframePanel from '../components/videoGen/KeyframePanel';
 import AudioPanel from '../components/videoGen/AudioPanel';
 import ExtendPanel from '../components/videoGen/ExtendPanel';
-import MediaCard from '../components/media/MediaCard';
+import RuntimeFingerprint from '../components/videoGen/RuntimeFingerprint';
+import ModelRepairBanner from '../components/videoGen/ModelRepairBanner';
+import VideoPreviewPanel from '../components/videoGen/VideoPreviewPanel';
+import VideoGenGallery from '../components/videoGen/VideoGenGallery';
 import MediaPreview from '../components/media/MediaPreview';
 import StylePresetPicker from '../components/media/StylePresetPicker';
 import { normalizeVideo } from '../components/media/normalize';
@@ -45,10 +47,8 @@ import {
   Dice5, X, Type, Image as ImageIcon, GitBranch, ListPlus, Music,
 } from 'lucide-react';
 import toast from '../components/ui/Toast';
-import BrailleSpinner from '../components/BrailleSpinner';
 import BatchQueuePanel from '../components/media/BatchQueuePanel';
 import MediaJobsQueue from '../components/media/MediaJobsQueue';
-import FavoritesFilterChip from '../components/media/FavoritesFilterChip';
 import ModelSelect from '../components/ModelSelect';
 import { FormField } from '../components/ui/FormField';
 import ModelDownloadBadge, { deriveSizeEstimate } from '../components/media/ModelDownloadBadge';
@@ -57,7 +57,7 @@ import { useMediaJobSse } from '../hooks/useMediaJobSse';
 import { useMediaCompletionRefresh } from '../hooks/useMediaCompletionRefresh';
 import { useMediaAnnotations } from '../hooks/useMediaAnnotations';
 import usePreviewRoute from '../hooks/usePreviewRoute';
-import useMounted from '../hooks/useMounted';
+import { useVideoGenQueue } from '../hooks/useVideoGenQueue.js';
 import {
   getVideoGenStatus, generateVideo, cancelVideoGen,
   listVideoHistory, deleteVideoHistoryItem, setVideoHidden, extractLastFrame,
@@ -65,6 +65,7 @@ import {
   listImageGallery,
   patchSettingsSlice,
   getActiveVideoJob,
+  getVideoGenRuntimeStatus,
   listLorasFull,
 } from '../services/api';
 import LoraPicker from '../components/imageGen/LoraPicker';
@@ -74,15 +75,10 @@ import { VIDEO_RESOLUTIONS, snapAspectToImage } from '../lib/videoGenResolutions
 import { clampImageEdge } from '../lib/imageGenResolutions';
 import ResolutionField from '../components/media/ResolutionField';
 import { VIDEO_TILING_OPTIONS, VIDEO_TILING_ENUM_SET } from '../lib/videoTilingOptions';
-
-// Values follow LTX-2's 8k+1 latent boundary so the model doesn't silently
-// snap. 241 = 10s @ 24fps is the comfortable single-pass ceiling on 48 GB
-// at standard widths; the higher options (265–481) push past that and may
-// swap or OOM at 1280×704. For reliable clips longer than ~10s, use Extend
-// mode (renders past a source video, conditioning on its full latent) —
-// see the hint under the Frames dropdown.
-const FRAME_OPTIONS = [25, 49, 73, 97, 121, 145, 169, 193, 217, 241, 265, 313, 361, 481];
-const FPS_OPTIONS = [16, 24, 30];
+import {
+  FRAME_OPTIONS, FPS_OPTIONS, VIDEO_EDGE_BOUNDS,
+  videoModelMemoryGb, computeFflfSafeFrames, isModelAllowedForMode,
+} from '../lib/videoGenParams.js';
 
 const MODES = [
   { id: 'text',   label: 'Text',   icon: Type,       desc: 'Text-to-video' },
@@ -91,52 +87,6 @@ const MODES = [
   { id: 'extend', label: 'Extend', icon: Film,       desc: 'Continue from a prior render' },
   { id: 'a2v',    label: 'Audio',  icon: Music,      desc: 'Audio-to-video (audio drives motion + sync)' },
 ];
-
-const newQueueId = () => uuidv4();
-
-const videoModelMemoryGb = (model) => {
-  const explicit = Number(model?.memoryGb);
-  if (Number.isFinite(explicit) && explicit > 0) return explicit;
-  const match = String(model?.name || '').match(/~\s*(\d+(?:\.\d+)?)\s*GB/i);
-  return match ? Number(match[1]) : Number.POSITIVE_INFINITY;
-};
-
-// Per-edge bounds for video: mirrors the videoGen route (64..2048) and the
-// server's floor-to-multiple-of-64 (generateVideo in local.js). Shared by the
-// ResolutionField control and the submit-time clamp so a hand-typed / mid-edit
-// value can never POST an out-of-range or 0 dimension.
-const VIDEO_EDGE_BOUNDS = { min: 64, max: 2048, step: 64 };
-
-// Mirror of server computeFflfSafeFrames (server/services/videoGen/local.js):
-// the largest numFrames that fits the FFLF/ltx2 stage-2 pixel-frame budget at
-// this resolution, rounded down to the LTX 8k+1 latent boundary. The budget
-// itself comes from /status (`fflfLtx2PixelBudget`, which scales with the box's
-// unified memory and honors the env override) so only this back-solve arithmetic
-// is duplicated — not the constant. Lets the
-// multi-keyframe picker reject out-of-budget indices before submit instead of
-// letting the worker 400 mid-render. Returns numFrames when it already fits or
-// the budget is unknown (fail-open — the server still enforces the real cap).
-const computeFflfSafeFrames = (width, height, numFrames, budget) => {
-  const wh = Number(width) * Number(height);
-  const nf = Number(numFrames);
-  const b = Number(budget);
-  if (!(wh > 0) || !(nf > 0) || !(b > 0)) return nf;
-  if (wh * nf <= b) return nf;
-  const safeRaw = Math.floor(b / wh);
-  const safeLatent = Math.max(1, Math.floor((safeRaw - 1) / 8));
-  return safeLatent * 8 + 1;
-};
-
-// Mode-compatibility predicate for the Model dropdown. a2v requires the
-// ltx2 runtime (dgrauet's pipeline) — the legacy mlx_video pipeline has no
-// audio-conditioned mode, and Wan/Hunyuan don't either. Server enforces the
-// same rule in routes/videoGen.js (A2V_REQUIRES_LTX2); filtering client-side
-// keeps the dropdown honest so the user can't pick a doomed model.
-const isModelAllowedForMode = (model, mode) => {
-  if (!model) return false;
-  if (mode === 'a2v') return model.runtime === 'ltx2';
-  return true;
-};
 
 export default function VideoGen() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -552,36 +502,6 @@ export default function VideoGen() {
   // again on cancel; runGeneration captures the value at start and bails
   // when the token has moved on (e.g. POST resolves after cancel).
   const runTokenRef = useRef(0);
-  // BUSY-backoff retry timer for the queue worker, held on a ref so it can be
-  // cleared from a stable unmount cleanup regardless of how often the worker
-  // effect re-runs (setQueue/setRunningQueueId churn consumes the effect's own
-  // cleanup before the async .catch ever assigns the timer, so the effect
-  // cleanup alone can't be trusted to clear it).
-  const busyRetryTimerRef = useRef(null);
-  // Generation token for the queue-worker dispatch. Bumped only when a new item
-  // is actually dispatched; a stale async then/catch/finally (from a superseded
-  // dispatch or after unmount) sees a moved-on token and bails without touching
-  // state or re-releasing the running slot.
-  const queueWorkerGenRef = useRef(0);
-  // Unmount guard for the queue worker's deferred callbacks (StrictMode-safe:
-  // resets to true on mount, so the mount→cleanup→remount cycle can't strand it
-  // false and freeze the queue worker). A dedicated unmount cleanup clears any
-  // pending BUSY-retry timer — this is the authoritative clear (the worker
-  // effect's own cleanup is unreliable, see the queue-worker effect below).
-  const mountedRef = useMounted();
-  useEffect(() => () => {
-    if (busyRetryTimerRef.current) {
-      clearTimeout(busyRetryTimerRef.current);
-      busyRetryTimerRef.current = null;
-    }
-  }, []);
-
-  // Batch queue. Each item snapshots the params at enqueue time so the user
-  // can keep editing the form while jobs are in flight without affecting the
-  // queued ones. The active generation is held in `generating`/`progress`;
-  // `runningQueueId` (if set) marks which queued item it represents.
-  const [queue, setQueue] = useState([]);
-  const [runningQueueId, setRunningQueueId] = useState(null);
 
   const refreshStatus = useCallback(() => {
     setStatusLoading(true);
@@ -873,8 +793,7 @@ export default function VideoGen() {
   const needsByovProbe = byovRuntime && (status?.byovRuntimes || []).includes(byovRuntime);
   const refreshByovStatus = useCallback((signal) => {
     if (!needsByovProbe) { setByovStatus(null); return Promise.resolve(); }
-    return fetch(`/api/video-gen/setup/runtime-status?runtime=${encodeURIComponent(byovRuntime)}`, { signal })
-      .then((r) => r.ok ? r.json() : null)
+    return getVideoGenRuntimeStatus(byovRuntime, { signal })
       .then((s) => { if (s) setByovStatus(s); })
       .catch(() => {});
   }, [byovRuntime, needsByovProbe]);
@@ -1213,6 +1132,13 @@ export default function VideoGen() {
     });
   });
 
+  // Client-side serial batch queue. Owns the queue state + worker effect;
+  // the page supplies `generating` (parks the worker) and `runGeneration`
+  // (runs one payload through the SSE pipeline).
+  const {
+    queue, enqueue, removeFromQueue, clearFinishedQueue, cancelRunning,
+  } = useVideoGenQueue({ generating, runGeneration });
+
   // In Extend mode the source image is populated asynchronously after the
   // user picks a prior video — until that extraction lands, sourceImageFile
   // is empty and the request would silently fall back to T2V while still
@@ -1247,99 +1173,10 @@ export default function VideoGen() {
     // VENV_MISSING, hiding the installer banner from the user. Block at
     // enqueue time so the only path forward is the install banner above.
     if (!prompt.trim() || notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked || keyframesBlocked) return;
-    const payload = buildGeneratePayload();
-    // Strip File blobs for snapshot — re-using a File across multiple queued
-    // submissions is fine, but we need a stable JSON-ish summary for the
-    // queue UI display. Hold the Files in `_blobs` separately.
-    const { sourceImage, lastImage, audioFile: audioBlob, ...summary } = payload;
-    setQueue((q) => [...q, {
-      id: newQueueId(),
-      status: 'pending',
-      params: summary,
-      _blobs: {
-        sourceImage: sourceImage instanceof File ? sourceImage : null,
-        lastImage: lastImage instanceof File ? lastImage : null,
-        audioFile: audioBlob instanceof File ? audioBlob : null,
-      },
-      enqueuedAt: Date.now(),
-    }]);
-    toast.success('Added to queue');
+    // useVideoGenQueue strips the File blobs into `_blobs` and snapshots the
+    // rest as a stable summary for the queue UI.
+    enqueue(buildGeneratePayload());
   };
-
-  const removeFromQueue = (id) => {
-    setQueue((q) => q.filter((item) => item.id !== id || item.status === 'running'));
-  };
-  // Drops both successful and errored items — the panel surfaces this as
-  // "Clear finished" so the label matches the behavior.
-  const clearFinishedQueue = () => {
-    setQueue((q) => q.filter((item) => item.status !== 'complete' && item.status !== 'error'));
-  };
-
-  // Queue worker — pumps the head of the queue when nothing's running.
-  // Runs as an effect so it picks up any newly-enqueued item even while
-  // the user is interacting with the form.
-  //
-  // BUSY backoff: the server's `cancel()` keeps `activeProcess` set until
-  // the SIGKILL'd child actually exits (up to ~8s), so a freshly-cancelled
-  // item leaving the running slot here will often hit a 409 VIDEO_GEN_BUSY
-  // when the worker tries to dispatch the next pending item. Treat that as
-  // "not yet" (return the item to pending) instead of marking it errored.
-  useEffect(() => {
-    if (generating || runningQueueId) return;
-    const next = queue.find((item) => item.status === 'pending');
-    if (!next) return;
-    // Capture a generation token for this dispatch. Every deferred callback
-    // below re-checks it (via isCurrent) so a superseded dispatch or an
-    // unmount can't set state / re-release the running slot after teardown.
-    const myGen = ++queueWorkerGenRef.current;
-    const isCurrent = () => mountedRef.current && myGen === queueWorkerGenRef.current;
-    setRunningQueueId(next.id);
-    setQueue((q) => q.map((item) => item.id === next.id ? { ...item, status: 'running', startedAt: Date.now() } : item));
-    const payload = { ...next.params };
-    if (next._blobs?.sourceImage) payload.sourceImage = next._blobs.sourceImage;
-    if (next._blobs?.lastImage) payload.lastImage = next._blobs.lastImage;
-    if (next._blobs?.audioFile) payload.audioFile = next._blobs.audioFile;
-    let busyRetry = false;
-    runGeneration(payload).then((res) => {
-      if (!isCurrent()) return;
-      setQueue((q) => q.map((item) => item.id === next.id ? { ...item, status: 'complete', result: res } : item));
-    }).catch((err) => {
-      if (!isCurrent()) return;
-      const isBusy = /already in progress|VIDEO_GEN_BUSY|409/i.test(err?.message || '');
-      if (isBusy) {
-        // Bounce the item back to pending after a short delay so the worker
-        // re-tries once the server's previous child has finished cleaning up.
-        busyRetry = true;
-        setQueue((q) => q.map((item) => item.id === next.id ? { ...item, status: 'pending', startedAt: undefined } : item));
-        busyRetryTimerRef.current = setTimeout(() => {
-          busyRetryTimerRef.current = null;
-          // Stale/unmounted: a fresh dispatch (or teardown) already owns the
-          // slot, so don't release it out from under whatever runs now.
-          if (!isCurrent()) return;
-          setRunningQueueId((curr) => (curr === next.id ? null : curr));
-        }, 1500);
-        return;
-      }
-      setQueue((q) => q.map((item) => item.id === next.id ? { ...item, status: 'error', error: err.message } : item));
-    }).finally(() => {
-      // For the BUSY branch the timeout above releases the slot — releasing
-      // it here too would let the worker immediately re-fire and hit the
-      // same 409 before the server's old child has exited.
-      if (isCurrent() && !busyRetry) setRunningQueueId(null);
-    });
-    // Effect cleanup: cancel a pending BUSY-retry setTimeout. This is a
-    // best-effort clear; because the worker effect re-runs on every
-    // setQueue/setRunningQueueId, this cleanup is usually consumed before the
-    // async .catch assigns the timer — the authoritative clear lives in the
-    // dedicated unmount effect above, and the isCurrent()/mountedRef guards in
-    // the timer callback prevent any stale setState.
-    return () => {
-      if (busyRetryTimerRef.current) {
-        clearTimeout(busyRetryTimerRef.current);
-        busyRetryTimerRef.current = null;
-      }
-    };
-  }, [queue, generating, runningQueueId]);
 
   const handleCancel = async () => {
     // Bump the run token FIRST so any late `.then()` from the in-flight
@@ -1358,10 +1195,9 @@ export default function VideoGen() {
       runRejectRef.current = null;
       reject(new Error('Cancelled'));
     }
-    if (runningQueueId) {
-      setQueue((q) => q.map((item) => item.id === runningQueueId ? { ...item, status: 'error', error: 'Cancelled' } : item));
-      setRunningQueueId(null);
-    }
+    // Mark the running queue item errored + release the slot so the next
+    // pending item can dispatch (no-op when nothing's queued).
+    cancelRunning();
   };
 
   // `status.connected` reflects the LEGACY mlx_video pythonPath health. BYOV
@@ -1414,39 +1250,7 @@ export default function VideoGen() {
         </div>
       </div>
 
-      {/* Runtime fingerprint — host chip/OS + resolved ltx/mlx/torch versions
-          per installed runtime. Lets a user (or a bug report for garbled
-          output) see the exact numerical stack without running a render. */}
-      {status?.runtime && (() => {
-        const host = status.runtime.host || {};
-        const runtimes = status.runtime.runtimes || {};
-        const ids = Object.keys(runtimes);
-        if (!host.chip && !host.os && ids.length === 0) return null;
-        return (
-          <div className="text-[10px] text-gray-500 flex flex-wrap items-center gap-x-2 gap-y-0.5">
-            {(host.chip || host.os) && (
-              <span title="Host chip + OS">{[host.chip, host.os].filter(Boolean).join(' · ')}</span>
-            )}
-            {ids.map((id) => {
-              const fp = runtimes[id] || {};
-              if (fp.error) {
-                return (
-                  <span key={id} className="text-port-warning/70" title={`Version probe failed: ${fp.error}`}>
-                    · {id}: version probe failed
-                  </span>
-                );
-              }
-              const versions = fp.versions && typeof fp.versions === 'object' ? fp.versions : {};
-              const vers = Object.keys(versions).length
-                ? Object.entries(versions).map(([k, v]) => `${k} ${v}`).join(', ')
-                : 'no versions resolved';
-              return (
-                <span key={id} title={`${id} runtime`}>· {id}: {vers}</span>
-              );
-            })}
-          </div>
-        );
-      })()}
+      <RuntimeFingerprint runtime={status?.runtime} />
 
       {status && status.connected === false && (() => {
         const missingCount = status.missingPackages?.length || 0;
@@ -1520,62 +1324,30 @@ export default function VideoGen() {
             </div>
           )}
           {showIntegrityBanner && (
-            <div className="rounded-lg border border-port-error/40 bg-port-error/10 px-3 py-3 text-xs text-port-error flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-              <div className="flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                <div>
-                  <strong className="font-semibold">{currentModel?.name || modelId}</strong> has {integrityBadCount || 'corrupt'} damaged weight file{integrityBadCount === 1 ? '' : 's'} — renders may come out garbled.
-                  Repair deletes the bad file{integrityBadCount === 1 ? '' : 's'} and re-downloads clean copies.
-                </div>
-              </div>
-              <div className="flex items-center gap-2 self-start sm:self-auto">
-                <button
-                  type="button"
-                  onClick={() => { setDismissedIntegrityKey(integrityKey); modelDownload.repair(modelId); }}
-                  disabled={modelDownload.repairing || modelDownload.downloading}
-                  className="whitespace-nowrap inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-error text-white text-xs font-medium hover:bg-port-error/80 disabled:opacity-50"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${modelDownload.repairing ? 'animate-spin' : ''}`} />
-                  Repair model
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDismissedIntegrityKey(integrityKey)}
-                  className="text-gray-400 hover:text-gray-200 text-xs"
-                >
-                  Dismiss
-                </button>
-              </div>
-            </div>
+            <ModelRepairBanner
+              message={<>
+                <strong className="font-semibold">{currentModel?.name || modelId}</strong> has {integrityBadCount || 'corrupt'} damaged weight file{integrityBadCount === 1 ? '' : 's'} — renders may come out garbled.
+                Repair deletes the bad file{integrityBadCount === 1 ? '' : 's'} and re-downloads clean copies.
+              </>}
+              repairLabel="Repair model"
+              onRepair={() => { setDismissedIntegrityKey(integrityKey); modelDownload.repair(modelId); }}
+              onDismiss={() => setDismissedIntegrityKey(integrityKey)}
+              disabled={modelDownload.repairing || modelDownload.downloading}
+              repairing={modelDownload.repairing}
+            />
           )}
           {showEncoderIntegrityBanner && (
-            <div className="rounded-lg border border-port-error/40 bg-port-error/10 px-3 py-3 text-xs text-port-error flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-              <div className="flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
-                <div>
-                  The shared <strong className="font-semibold">text encoder</strong> ({textEncoderStatus?.repo}) has {encoderIntegrityBadCount || 'corrupt'} damaged weight file{encoderIntegrityBadCount === 1 ? '' : 's'} — renders may come out garbled.
-                  Repair deletes the bad file{encoderIntegrityBadCount === 1 ? '' : 's'} and re-downloads clean copies.
-                </div>
-              </div>
-              <div className="flex items-center gap-2 self-start sm:self-auto">
-                <button
-                  type="button"
-                  onClick={() => { setDismissedEncoderIntegrityKey(encoderIntegrityKey); modelDownload.repair(TEXT_ENCODER_DOWNLOAD_ID); }}
-                  disabled={modelDownload.repairing || modelDownload.downloading}
-                  className="whitespace-nowrap inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-port-error text-white text-xs font-medium hover:bg-port-error/80 disabled:opacity-50"
-                >
-                  <RefreshCw className={`w-3.5 h-3.5 ${modelDownload.repairing ? 'animate-spin' : ''}`} />
-                  Repair encoder
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDismissedEncoderIntegrityKey(encoderIntegrityKey)}
-                  className="text-gray-400 hover:text-gray-200 text-xs"
-                >
-                  Dismiss
-                </button>
-              </div>
-            </div>
+            <ModelRepairBanner
+              message={<>
+                The shared <strong className="font-semibold">text encoder</strong> ({textEncoderStatus?.repo}) has {encoderIntegrityBadCount || 'corrupt'} damaged weight file{encoderIntegrityBadCount === 1 ? '' : 's'} — renders may come out garbled.
+                Repair deletes the bad file{encoderIntegrityBadCount === 1 ? '' : 's'} and re-downloads clean copies.
+              </>}
+              repairLabel="Repair encoder"
+              onRepair={() => { setDismissedEncoderIntegrityKey(encoderIntegrityKey); modelDownload.repair(TEXT_ENCODER_DOWNLOAD_ID); }}
+              onDismiss={() => setDismissedEncoderIntegrityKey(encoderIntegrityKey)}
+              disabled={modelDownload.repairing || modelDownload.downloading}
+              repairing={modelDownload.repairing}
+            />
           )}
           <StylePresetPicker
             value={stylePreset?.id || ''}
@@ -1820,9 +1592,10 @@ export default function VideoGen() {
             </FormField>
 
             <div>
-              <label className="block text-xs font-medium text-gray-400 mb-1">Seed</label>
+              <label htmlFor="video-seed" className="block text-xs font-medium text-gray-400 mb-1">Seed</label>
               <div className="flex items-center gap-1">
                 <input
+                  id="video-seed"
                   type="number"
                   value={seed}
                   onChange={(e) => setSeed(e.target.value)}
@@ -1966,60 +1739,14 @@ export default function VideoGen() {
           </div>
         </div>
 
-        <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-2">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wide">Preview</h2>
-            {result && (
-              <a
-                href={result.path || `/data/videos/${result.filename}`}
-                download
-                className="text-xs text-port-accent hover:underline"
-              >
-                Download
-              </a>
-            )}
-          </div>
-          <div
-            className="mx-auto bg-port-bg border border-port-border rounded-lg overflow-hidden flex items-center justify-center relative max-w-full"
-            style={{ width: previewWidth, height: previewHeight }}
-          >
-            {result ? (
-              // muted so the clip autoplays under the mobile media-engagement
-              // policy (iOS/Android block unmuted autoplay outside a user
-              // gesture — otherwise it just shows black); poster paints the
-              // thumbnail while it buffers. Controls let the user unmute.
-              <video
-                src={result.path || `/data/videos/${result.filename}`}
-                poster={result.thumbnail ? `/data/video-thumbnails/${result.thumbnail}` : undefined}
-                controls
-                autoPlay
-                loop
-                muted
-                playsInline
-                preload="metadata"
-                className="w-full h-full"
-              />
-            ) : generating ? (
-              <div className="text-gray-500 text-xs flex flex-col items-center gap-1.5">
-                <BrailleSpinner />
-                <span>{statusMsg || 'Starting...'}</span>
-              </div>
-            ) : (
-              <div className="text-gray-600 text-xs flex flex-col items-center gap-1.5">
-                <Film className="w-8 h-8" />
-                <span>Generated video will appear here</span>
-              </div>
-            )}
-            {generating && progressPct != null && (
-              <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/50">
-                <div className="h-full bg-port-accent transition-all" style={{ width: `${progressPct}%` }} />
-              </div>
-            )}
-          </div>
-          {result && (
-            <div className="text-xs text-gray-400 truncate">{result.filename}</div>
-          )}
-        </div>
+        <VideoPreviewPanel
+          result={result}
+          generating={generating}
+          statusMsg={statusMsg}
+          progressPct={progressPct}
+          previewWidth={previewWidth}
+          previewHeight={previewHeight}
+        />
       </form>
 
       <BatchQueuePanel
@@ -2036,71 +1763,20 @@ export default function VideoGen() {
 
       <MediaJobsQueue kind="video" />
 
-      {(galleryVisible.length > 0 || favoritesOnly) && (
-        <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-2">
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-            <h2 className="text-xs font-medium text-gray-400 uppercase tracking-wide">Recent renders ({Math.min(galleryVisible.length, 5)} of {galleryVisible.length})</h2>
-            <div className="flex items-center gap-2">
-              <FavoritesFilterChip active={favoritesOnly} onToggle={() => setFavoritesOnly((v) => !v)} />
-              {galleryVisible.length > 5 && (
-                <Link to="/media/history" className="text-xs text-port-accent hover:underline">View all →</Link>
-              )}
-            </div>
-          </div>
-          {galleryVisible.length === 0 ? (
-            <div className="text-xs text-gray-500 py-3">No favorited videos yet.</div>
-          ) : (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-              {galleryVisible.slice(0, 5).map((v) => {
-                const item = normalizeVideo(v);
-                return (
-                  <MediaCard
-                    key={item.key}
-                    item={item}
-                    onPreview={() => setPreview(item)}
-                    onContinue={() => handleContinueHistory(v)}
-                    onUpscale={() => handleUpscaleHistory(v)}
-                    onDelete={() => handleDeleteHistory(v)}
-                    onToggleHidden={() => handleToggleHistoryHidden(v)}
-                    {...getCardProps(item.key)}
-                  />
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
-
-      {galleryHidden.length > 0 && (
-        <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-2">
-          <button
-            type="button"
-            onClick={() => setShowHidden((s) => !s)}
-            className="flex items-center justify-between w-full text-xs font-medium text-gray-400 uppercase tracking-wide hover:text-white"
-          >
-            <span>{showHidden ? 'Hide' : 'Show'} hidden ({galleryHidden.length})</span>
-            <span className="text-xs text-gray-500">{showHidden ? '▾' : '▸'}</span>
-          </button>
-          {showHidden && (
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-              {galleryHidden.map((v) => {
-                const item = normalizeVideo(v);
-                return (
-                  <MediaCard
-                    key={item.key}
-                    item={item}
-                    onPreview={() => setPreview(item)}
-                    onContinue={() => handleContinueHistory(v)}
-                    onDelete={() => handleDeleteHistory(v)}
-                    onToggleHidden={() => handleToggleHistoryHidden(v)}
-                    {...getCardProps(item.key)}
-                  />
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
+      <VideoGenGallery
+        galleryVisible={galleryVisible}
+        galleryHidden={galleryHidden}
+        favoritesOnly={favoritesOnly}
+        showHidden={showHidden}
+        onToggleFavorites={() => setFavoritesOnly((v) => !v)}
+        onToggleShowHidden={() => setShowHidden((s) => !s)}
+        onPreview={setPreview}
+        onContinue={handleContinueHistory}
+        onUpscale={handleUpscaleHistory}
+        onDelete={handleDeleteHistory}
+        onToggleHidden={handleToggleHistoryHidden}
+        getCardProps={getCardProps}
+      />
 
       <MediaPreview
         preview={preview}

@@ -25,6 +25,7 @@
 
 ## Changed
 
+- **[issue-2833] Decompose the ~1000-line `spawnTuiAgent()`** — extract the output buffering/spooling pipeline into `agentTuiSpawning/outputSpooler.js` and the failure-analysis + worktree-inspection helpers into `agentTuiSpawning/finalizeHelpers.js`, leaving `spawnTuiAgent` as a thinner orchestrator. No behavior change to spawn/timeout/completion semantics; adds unit coverage for both extracted modules.
 - Route client `localStorage` access through the `safeStorage` helpers (Layout, MorseTrainer, calendar persisted-state, MoodBoard reference strip, VoiceWidget, WorkEditor, Tribe) — several sites previously threw uncaught in Safari private mode instead of degrading gracefully.
 - Replace inline `new Promise(r => setTimeout(r, …))` delays with the shared `sleep(ms)` helper across nine server modules.
 
@@ -35,4 +36,5 @@
 ## Internal
 
 - **[issue-2832] Split the boot-schema DDL into per-domain modules** — the ~1265-line inline `CREATE TABLE`/`CREATE INDEX`/trigger block in `ensureSchemaImpl()` (`server/lib/db.js`) is extracted into per-domain modules under `server/lib/db/schema/` (catalog, media, universes, writers-room, pipeline, privacy, tribe, audit, …), each exporting a statement array; `ensureSchemaImpl` is now a thin composer. Statement text and order are byte-identical, so the composed schema is unchanged.
+- **[issue-2834] Split the ~1990-line `VideoGen.jsx` into hooks + subcomponents** — the client-side batch-queue orchestration moves into `useVideoGenQueue`, the pure model-memory / FFLF frame-budget / mode-compat helpers into `lib/videoGenParams.js`, and four presentational blocks into `components/videoGen/` (`RuntimeFingerprint`, `ModelRepairBanner`, `VideoPreviewPanel`, `VideoGenGallery`). The inline runtime-status `fetch()` now routes through a `getVideoGenRuntimeStatus` service wrapper, and the Seed input gains a proper `<label htmlFor>`/`id` pairing. Behavior and deep-link routing are unchanged.
 - **[issue-2835] Split the ~2875-line `ArcCanvas.jsx` into per-component files** — each of the 32 subcomponents/helpers (ArcHeader, EditorialRoadmapPanel, SeasonRow, IssueRow, VolumeCoversPanel, …) now lives in its own file under `client/src/components/pipeline/arcCanvas/`, with the shared severity-color map in `arcCanvas/shared.js`. `ArcCanvas.jsx` (default export) is now a thin 122-line composer and still re-exports `ArcRoadmapChart` so its public import path is unchanged. Pure mechanical, behavior-preserving refactor — no rendered-output change.

@@ -150,4 +150,5 @@ export * from './useSyncIntegrity.js';
 export * from './useTwinEvaluationSuite.js';
 export * from './useUniverseNav.js';
 export * from './useVideoFileSrc.js';
+export * from './useVideoGenQueue.js';
 export * from './useVoiceUiSync.js';
