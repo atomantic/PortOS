@@ -224,6 +224,7 @@ describe('errorHandler.js', () => {
       errorMiddleware(err, makeReq(), res, next);
 
       expect(res.json).not.toHaveBeenCalled();
+      // The normalized error is forwarded, so a falsy throw can't read as success.
       expect(next).toHaveBeenCalledWith(err);
     });
 
@@ -385,8 +386,12 @@ describe('errorHandler.js', () => {
       expect(body.error).toBe('kaboom');
     });
 
-    it('delegates to next(err) when the handler throws mid-stream', async () => {
-      const { req, res } = makeReqRes(null);
+    // Mid-stream the envelope can't land, so the catch hands off to the error
+    // chain WITHOUT reporting locally — errorMiddleware logs/emits it once and
+    // then lets finalhandler destroy the socket.
+    it('delegates to next() without reporting when the handler throws mid-stream', async () => {
+      const io = { emit: vi.fn() };
+      const { req, res } = makeReqRes(io);
       res.headersSent = true;
       const next = vi.fn();
       const boom = new ServerError('mid-stream', { status: 500 });
@@ -395,7 +400,21 @@ describe('errorHandler.js', () => {
       await flushMicrotasks();
 
       expect(res.json).not.toHaveBeenCalled();
+      expect(io.emit).not.toHaveBeenCalled();
       expect(next).toHaveBeenCalledWith(boom);
+    });
+
+    // `throw null` must not reach next() as a falsy value — Express would read
+    // that as "no error" and keep routing, hanging the request.
+    it('normalizes a falsy throw before delegating mid-stream', async () => {
+      const { req, res } = makeReqRes(null);
+      res.headersSent = true;
+      const next = vi.fn();
+
+      await asyncHandler(async () => { throw null; })(req, res, next);
+      await flushMicrotasks();
+
+      expect(next).toHaveBeenCalledWith(expect.any(ServerError));
     });
 
     it('does not touch res when the wrapped handler resolves successfully', async () => {

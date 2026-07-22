@@ -111,6 +111,14 @@ export function asyncHandler(fn) {
       const io = req.app.get('io');
       const error = normalizeError(err);
 
+      // A handler that throws after it started streaming (SSE routes) has no
+      // envelope left to write. Hand the NORMALIZED error to the error chain —
+      // `errorMiddleware` logs/emits it exactly once and then delegates to
+      // Express's finalhandler, which destroys the socket. Passing the raw
+      // value would let a falsy throw (`throw null`) read as success and leave
+      // the request hanging.
+      if (res.headersSent) return next(error);
+
       // Log the error (skip stack traces for upstream platform issues)
       const route = `${req.method} ${routePath(req)}`;
       const suffix = causeSuffix(error);
@@ -127,13 +135,7 @@ export function asyncHandler(fn) {
         console.error(details ? `${logMsg}: ${JSON.stringify(details)}` : logMsg);
       }
 
-      // Read BEFORE sending — a successful write flips the flag. A handler that
-      // throws after it started streaming (SSE routes) has no envelope left to
-      // write, so hand off to Express's finalhandler to destroy the socket
-      // instead of leaving the request hanging.
-      const alreadyStreaming = res.headersSent;
-      sendErrorResponse(res, error, { io });
-      if (alreadyStreaming) next(err);
+      return sendErrorResponse(res, error, { io });
     });
   };
 }
@@ -339,7 +341,7 @@ export function errorMiddleware(err, req, res, next) {
   // BEFORE sending: a successful write flips it to true.
   const alreadyStreaming = res.headersSent;
   sendErrorResponse(res, error, { io });
-  if (alreadyStreaming) next(err);
+  if (alreadyStreaming) next(error);
 }
 
 /**
