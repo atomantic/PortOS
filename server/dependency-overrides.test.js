@@ -55,6 +55,12 @@ describe('dependency override parity across manifests (#2848)', () => {
     // Minimum patched versions for advisories this repo has already remediated.
     // Add a row here when a new CVE is pinned, so a later careless downgrade of the
     // override (or a copy-paste of a stale pin into a new manifest) fails loudly.
+    //
+    // Each entry is scoped to the MAJOR LINE the flat override pins. `brace-expansion`
+    // is also pinned on the 1.x line, but only inside client/'s nested `minimatch@3`
+    // override — which this check skips along with every other nested pin, so the 5.x
+    // minimum below is never compared against a legitimate 1.1.x value. If a 1.x pin
+    // ever becomes a flat override, this table needs a per-major shape first.
     const MINIMUM_SAFE = {
       'brace-expansion': '5.0.7', // GHSA-3jxr-9vmj-r5cp (5.x line)
       'protobufjs': '7.6.5', // GHSA-j3f2-48v5-ccww
@@ -63,11 +69,13 @@ describe('dependency override parity across manifests (#2848)', () => {
       'tar': '7.5.21' // GHSA-vmf3-w455-68vh et al
     };
 
+    const EXACT_VERSION = /^\d+\.\d+\.\d+$/;
+
     const cmp = (a, b) => {
       const pa = a.split('.').map(Number);
       const pb = b.split('.').map(Number);
       for (let i = 0; i < 3; i += 1) {
-        if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) - (pb[i] ?? 0);
+        if (pa[i] !== pb[i]) return pa[i] - pb[i];
       }
       return 0;
     };
@@ -77,7 +85,16 @@ describe('dependency override parity across manifests (#2848)', () => {
       for (const [name, version] of Object.entries(readOverrides(rel))) {
         if (typeof version !== 'string') continue;
         const min = MINIMUM_SAFE[name];
-        if (min && cmp(version, min) < 0) stale.push(`${rel}: ${name}@${version} < ${min}`);
+        if (!min) continue;
+        // A security override must be an EXACT pin. A range (`^5.0.7`, `~5.0.7`,
+        // `>=5.0.7`) lets npm resolve anywhere in the range on a fresh install, which
+        // defeats the point of pinning a patched version — and would parse to NaN
+        // below and silently compare as "safe". Reject it outright.
+        if (!EXACT_VERSION.test(version)) {
+          stale.push(`${rel}: ${name}@${version} is not an exact version pin`);
+          continue;
+        }
+        if (cmp(version, min) < 0) stale.push(`${rel}: ${name}@${version} < ${min}`);
       }
     }
 
