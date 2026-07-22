@@ -112,7 +112,10 @@ async function verifyHashes(destDir, expectations, errors, copiedThisRun) {
 // manifest must not be able to copy outside data/sprites/.
 function relToCharacterDir(manifestPath, characterId) {
   if (typeof manifestPath !== 'string' || !manifestPath) return null;
-  const marker = `sprites/${characterId}/`;
+  // Anchor to the SOURCE tree — a published game-tree path
+  // (game/assets/sprites/<id>/…) or engine resource URI also contains
+  // "sprites/<id>/" but is not a character-dir asset.
+  const marker = `art-source/sprites/${characterId}/`;
   const idx = manifestPath.indexOf(marker);
   const rel = idx >= 0 ? manifestPath.slice(idx + marker.length) : manifestPath.replace(/^\/+/, '');
   // A repo-anchored path OUTSIDE the character dir (contract docs, pipeline
@@ -272,7 +275,21 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath, select
       if (!rel.endsWith('.json')) continue;
       const walkSet = await readJson(join(destDir, 'walk', rel));
       if (walkSet?.kind !== 'finalized-eight-direction-walk-set' || walkSet?.status !== 'final') continue;
-      for (const [direction, dir] of Object.entries(walkSet.directions || {})) {
+      // The set's own top-level references (selectionPath/selectionSha256 …)
+      // are hash-pinned provenance too. Harvest them from the metadata ONLY —
+      // never from `directions`, or non-approved directions' run files would
+      // ride in through the generic collector.
+      const { directions, ...walkSetMeta } = walkSet;
+      const metaRefs = new Set();
+      collectManifestRefs(walkSetMeta, characterId, metaRefs, hashExpectations);
+      for (const metaRel of [...metaRefs].sort()) {
+        if (copiedThisRun.has(metaRel)) continue;
+        if (await copyCharFile(srcCharDir, destDir, metaRel)) {
+          result.files += 1;
+          copiedThisRun.add(metaRel);
+        } else result.errors.push(`walk set: referenced file missing: ${metaRel}`);
+      }
+      for (const [direction, dir] of Object.entries(directions || {})) {
         if (dir?.status !== 'approved') {
           result.errors.push(`walk set ${direction}: not approved (${dir?.status ?? 'missing'}) — skipped`);
           continue;
@@ -291,19 +308,20 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath, select
     for (const rel of copied) copiedThisRun.add(`runtime/${rel}`);
   }
 
-  // Published-selection provenance: verify the immutable runtime atlas the
-  // catalog hash-pins, and bring the published keyed source along.
-  if (selection?.characterId === characterId) {
-    const imm = selection.selected?.immutableRuntimeArtifact;
-    const immRel = relToCharacterDir(imm?.path, characterId);
-    if (immRel && imm?.sha256) hashExpectations.push({ relPath: immRel, sha256: imm.sha256 });
-    const keyedRel = relToCharacterDir(selection.selected?.keyedSourcePath, characterId);
-    if (keyedRel && (await copyCharFile(srcCharDir, destDir, keyedRel))) {
-      result.files += 1;
-      copiedThisRun.add(keyedRel);
-      if (selection.selected?.keyedSourceSha256) {
-        hashExpectations.push({ relPath: keyedRel, sha256: selection.selected.keyedSourceSha256 });
-      }
+  // Published-selection provenance: copy and hash-verify every character-dir
+  // artifact the catalog's selection declares (immutable atlas archive, keyed
+  // source, publication manifest, …) via the generic collector — pins ride in
+  // through the {path,sha256} / <base>Path+<base>Sha256 conventions, and
+  // repo-anchored references outside the character dir are ignored.
+  if (selection?.characterId === characterId && selection.selected) {
+    const selRefs = new Set();
+    collectManifestRefs(selection.selected, characterId, selRefs, hashExpectations);
+    for (const rel of [...selRefs].sort()) {
+      if (copiedThisRun.has(rel)) continue;
+      if (await copyCharFile(srcCharDir, destDir, rel)) {
+        result.files += 1;
+        copiedThisRun.add(rel);
+      } else result.errors.push(`published selection: referenced asset missing: ${rel}`);
     }
   }
 

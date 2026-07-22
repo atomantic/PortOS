@@ -60,6 +60,18 @@ const southReviewPreview = JSON.stringify({
 }, null, 2);
 // Imagegen-style run (the v19-east shape): manifest + strips at the version
 // root, surrounded by unselected candidates that must stay behind.
+// Non-final manifest in walk/: copies as provenance, contributes no assets —
+// and the finalized set hash-pins it via selectionPath/selectionSha256.
+const heroWalkSelection = JSON.stringify({
+  schemaVersion: 1, kind: 'reviewed-directional-walk-selection', characterId: 'hero', status: 'complete',
+  directions: {
+    south: {
+      status: 'approved',
+      runPath: 'art-source/sprites/hero/grok/run-decoy',
+      runManifest: 'art-source/sprites/hero/grok/run-decoy/animation-run.json',
+    },
+  },
+}, null, 2);
 const eastManifest = JSON.stringify({
   kind: 'imagegen-redraw-manifest', direction: 'east',
   stripPath: 'art-source/sprites/hero/imagegen/v2/east-strip.png',
@@ -95,6 +107,8 @@ beforeAll(() => {
     'art-source/sprites/hero/reference/candidates/reject-1.png': 'UNAPPROVED',
     'art-source/sprites/hero/walk/hero-walk-set-v1.json': {
       schemaVersion: 1, kind: 'finalized-eight-direction-walk-set', characterId: 'hero', status: 'final',
+      selectionPath: 'art-source/sprites/hero/walk/hero-walk-selection-v1.json',
+      selectionSha256: sha256(heroWalkSelection),
       directions: {
         south: {
           status: 'approved',
@@ -123,18 +137,7 @@ beforeAll(() => {
         },
       },
     },
-    // Non-final manifest kinds in walk/: the files copy as provenance, but
-    // their directions must contribute NO assets.
-    'art-source/sprites/hero/walk/hero-walk-selection-v1.json': {
-      schemaVersion: 1, kind: 'reviewed-directional-walk-selection', characterId: 'hero', status: 'complete',
-      directions: {
-        south: {
-          status: 'approved',
-          runPath: 'art-source/sprites/hero/grok/run-decoy',
-          runManifest: 'art-source/sprites/hero/grok/run-decoy/animation-run.json',
-        },
-      },
-    },
+    'art-source/sprites/hero/walk/hero-walk-selection-v1.json': heroWalkSelection,
     'art-source/sprites/hero/grok/run-1/animation-run.json': southRunRecord,
     'art-source/sprites/hero/grok/run-1/generated/south-manifest.json': southPackagedManifest,
     'art-source/sprites/hero/grok/run-1/generated/south-strip.png': 'FAKE-STRIP',
@@ -154,6 +157,10 @@ beforeAll(() => {
       selectionId: 's1', characterId: 'hero', status: 'selected',
       selected: {
         keyedSourcePath: 'art-source/sprites/hero/hero-atlas-keyed.png',
+        // Game-tree publish target: also contains "sprites/hero/" but is NOT
+        // a character-dir asset — must be ignored, not reported missing.
+        runtimePath: 'game/assets/sprites/hero/hero-animation-atlas.png',
+        runtimeSha256: sha256('PUBLISHED-COPY'),
         immutableRuntimeArtifact: {
           path: 'art-source/sprites/hero/runtime/v1/hero-animation-atlas-v1.png',
           sha256: sha256('FAKE-ATLAS'),
@@ -178,9 +185,9 @@ describe('importFromSource', () => {
 
     const hero = results.find((r) => r.id === 'hero');
     expect(hero.kind).toBe('character');
-    // south anchor + south run record + pinned south strip + east manifest
-    // + hash-pinned runtime atlas
-    expect(hero.verified).toBe(5);
+    // south anchor + pinned walk selection + south run record + pinned south
+    // strip + east manifest + hash-pinned runtime atlas
+    expect(hero.verified).toBe(6);
     expect(hero.errors).toEqual([
       'walk set east: referenced asset missing: imagegen/v2/gone.png',
       'walk set west: not approved (pending) — skipped',

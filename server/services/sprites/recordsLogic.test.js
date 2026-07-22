@@ -86,4 +86,10 @@ describe('mergeImportedRecord', () => {
     expect(next.chromaKey).toBe('#FF00FF');
     expect(next.notes).toBeNull();
   });
+
+  it('an explicitly cleared chromaKey stays cleared on re-import', () => {
+    const cleared = { ...existing, chromaKey: null };
+    const next = mergeImportedRecord(cleared, imported, '2026-07-23T00:00:00.000Z');
+    expect(next.chromaKey).toBeNull(); // || would resurrect the import default
+  });
 });
