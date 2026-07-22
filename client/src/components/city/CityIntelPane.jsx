@@ -416,7 +416,10 @@ export default function CityIntelPane({ apps, cosAgents, reviewCounts, instances
                   role="tab"
                   id={`city-intel-tab-${t.id}`}
                   aria-selected={active}
-                  aria-controls={collapsed ? undefined : `city-intel-panel-${t.id}`}
+                  // Only one panel is mounted at a time, so only the selected tab
+                  // owns an `aria-controls` — an inactive tab would otherwise point
+                  // at an element that doesn't exist.
+                  aria-controls={active && !collapsed ? `city-intel-panel-${t.id}` : undefined}
                   tabIndex={active ? 0 : -1}
                   onKeyDown={onTabKeyDown}
                   onClick={() => selectTab(t.id)}
@@ -456,7 +459,10 @@ export default function CityIntelPane({ apps, cosAgents, reviewCounts, instances
             role="tabpanel"
             id={`city-intel-panel-${tab}`}
             aria-labelledby={`city-intel-tab-${tab}`}
-            className="flex-1 min-h-0 flex flex-col"
+            // An empty tab renders no focusable children, so the panel itself has to
+            // be a tab stop or keyboard users can't reach its content at all.
+            tabIndex={0}
+            className="flex-1 min-h-0 flex flex-col focus:outline-none focus-visible:ring-1 focus-visible:ring-cyan-400/60"
           >
             <CityIntelContent tab={tab} items={items} eventLogs={eventLogs} />
           </div>
