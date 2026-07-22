@@ -78,7 +78,7 @@ Rules:
 - pulse1 carries melody, pulse2 harmony/counter-melody, triangle the bassline, noise the drums.
 - Tonal pitches are scientific notation ("C5", "F#3", "Bb2"). Noise pitches are ONLY: ${CHIPTUNE_NOISE_PRESETS.join(', ')}.
 - "step" is the note's onset within its pattern (0-indexed, stepsPerBeat × beatsPerBar × bars steps per pattern); "len" is its length in steps. Notes must fit inside their pattern.
-- 1-${CHIPTUNE_LIMITS.PATTERNS_MAX} patterns, order length 1-${CHIPTUNE_LIMITS.ORDER_MAX}. Aim for a 15-40 second loop that ends back where it starts musically (the playback loops the whole order seamlessly).
+- 1-${CHIPTUNE_LIMITS.PATTERNS_MAX} patterns, order length 1-${CHIPTUNE_LIMITS.ORDER_MAX}, total loop under ${CHIPTUNE_LIMITS.MAX_LOOP_SEC}s. Aim for a 15-40 second loop that ends back where it starts musically (the playback loops the whole order seamlessly).
 - Write real music: a memorable melody, movement in the bass, drums that groove. Vary velocity for feel.`;
 }
 

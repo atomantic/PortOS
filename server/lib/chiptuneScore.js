@@ -32,6 +32,12 @@ export const CHIPTUNE_LIMITS = Object.freeze({
   ORDER_MAX: 32,
   NOTES_PER_CHANNEL_MAX: 512,
   TOTAL_STEPS_MAX: 8192,
+  // Wall-clock cap on the loop. Steps alone don't bound duration (40 BPM at
+  // 1 step/beat = 1.5s per step), and the offline renderer allocates
+  // ~176 KB/sec of PCM — an unbounded schema-valid score could demand
+  // gigabytes from one errant LLM response. 3 minutes is far beyond any
+  // sane background loop.
+  MAX_LOOP_SEC: 180,
   TITLE_MAX: 120,
 });
 
@@ -111,6 +117,10 @@ export const chiptuneScoreSchema = z.object({
   const totalSteps = scoreTotalSteps(score);
   if (totalSteps > CHIPTUNE_LIMITS.TOTAL_STEPS_MAX) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['order'], message: `loop is too long (${totalSteps} steps > ${CHIPTUNE_LIMITS.TOTAL_STEPS_MAX})` });
+  }
+  const totalSec = totalSteps * (60 / (score.bpm * score.stepsPerBeat));
+  if (totalSec > CHIPTUNE_LIMITS.MAX_LOOP_SEC) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['order'], message: `loop is too long (${Math.round(totalSec)}s > ${CHIPTUNE_LIMITS.MAX_LOOP_SEC}s)` });
   }
 });
 

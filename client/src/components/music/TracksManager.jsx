@@ -78,6 +78,7 @@ export default function TracksManager() {
   // re-applies). See remixRender below.
   const [modalRender, setModalRender] = useState(null);
   const [remix, setRemix] = useState(null);
+  const [chiptuneRemix, setChiptuneRemix] = useState(null);
   // Music Video projects, for the MIDI read-through: MuScriptor transcriptions
   // are stored on the MV project that links a track, not on the track itself.
   const [mvProjects, setMvProjects] = useState([]);
@@ -126,6 +127,7 @@ export default function TracksManager() {
     setLibraryOpen(false);
     setModalRender(null);
     setRemix(null);
+    setChiptuneRemix(null);
   };
 
   const selectTrack = (t) => navigate(`/music/tracks/${encodeURIComponent(t.id)}`);
@@ -297,15 +299,20 @@ export default function TracksManager() {
   // model/duration, and close the modal so the panel is in view.
   const remixRender = (render) => {
     setModalRender(null);
-    // A chiptune take remixes in the chiptune panel; everything else seeds the
-    // audio-model panel below.
-    setGenMode(render.engine === 'chiptune' ? 'chiptune' : 'audio');
+    remixNonceRef.current += 1;
+    // A chiptune take remixes in the chiptune panel: seed ITS prompt (not the
+    // audio-model form's prompt — that field belongs to the diffusion engines).
+    if (render.engine === 'chiptune') {
+      setGenMode('chiptune');
+      setChiptuneRemix({ prompt: render.prompt || '', nonce: remixNonceRef.current });
+      return;
+    }
+    setGenMode('audio');
     setForm((f) => ({
       ...f,
       ...(render.prompt ? { prompt: render.prompt } : {}),
       ...(render.lyrics ? { lyrics: render.lyrics } : {}),
     }));
-    remixNonceRef.current += 1;
     setRemix({ engineId: render.engine, modelId: render.modelId, durationSec: render.durationSec, nonce: remixNonceRef.current });
   };
 
@@ -440,6 +447,7 @@ export default function TracksManager() {
                   {genMode === 'chiptune' ? (
                     <ChiptunePanel
                       track={persisted}
+                      remix={chiptuneRemix}
                       onTrackUpdate={(updated) => {
                         upsertLocal(updated); // list update is id-keyed → always safe
                         if (selectedIdRef.current === updated.id) {

@@ -25,7 +25,7 @@ import {
 const slugify = (s) => String(s || '').toLowerCase().trim().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
 const DEFAULT_SUBDIR = 'game/assets/music';
 
-export default function ChiptunePanel({ track, onTrackUpdate }) {
+export default function ChiptunePanel({ track, onTrackUpdate, remix }) {
   const [prompt, setPrompt] = useState(track?.chiptunePrompt || '');
   const [fresh, setFresh] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -38,13 +38,17 @@ export default function ChiptunePanel({ track, onTrackUpdate }) {
   const [publishSubdir, setPublishSubdir] = useState(DEFAULT_SUBDIR);
   const [publishSlug, setPublishSlug] = useState('');
   const [publishedFiles, setPublishedFiles] = useState(null);
+  // Saved provider/model pin, held until the provider list has loaded — the
+  // hook auto-selects a default when its list arrives, so applying the pin
+  // immediately would race that load and be nondeterministically overwritten.
+  const [savedPin, setSavedPin] = useState(null);
   const musicSettingsRef = useRef({});
   const mountedRef = useRef(true);
   useEffect(() => () => { mountedRef.current = false; }, []);
 
   const {
     providers, selectedProviderId, selectedModel, availableModels,
-    setSelectedProviderId, setSelectedModel,
+    setSelectedProviderId, setSelectedModel, loading: providersLoading,
   } = useProviderModels({ silent: true });
 
   const score = track?.chiptuneScore || null;
@@ -68,21 +72,37 @@ export default function ChiptunePanel({ track, onTrackUpdate }) {
     setPublishSlug(slugify(track?.title));
   }, [track?.id]);
 
-  // Load saved prefs (provider pin + publish target) once. The provider pin is
-  // applied when the provider list has loaded; a stale saved id degrades to the
-  // hook's default selection.
+  // Remix from a chiptune take: seed the panel prompt with the take's prompt.
+  // Keyed on the nonce so re-remixing the same take re-applies.
+  useEffect(() => {
+    if (remix?.prompt) setPrompt(remix.prompt);
+  }, [remix?.nonce, remix?.prompt]);
+
+  // Load saved prefs once. Publish prefs apply immediately; the provider pin
+  // is parked in `savedPin` and applied by the effect below only after the
+  // provider list has loaded.
   useEffect(() => {
     getSettings({ silent: true }).then((settings) => {
       if (!mountedRef.current) return;
       const music = settings?.music || {};
       musicSettingsRef.current = music;
       const saved = music.chiptune || {};
-      if (saved.providerId) setSelectedProviderId(saved.providerId);
-      if (saved.model) setSelectedModel(saved.model);
+      if (saved.providerId) setSavedPin({ providerId: saved.providerId, model: saved.model || '' });
       if (saved.publishAppId) setPublishAppId(saved.publishAppId);
       if (saved.publishSubdir) setPublishSubdir(saved.publishSubdir);
     }).catch(() => {});
   }, []);
+
+  // Apply the saved provider pin once providers are loaded (a stale saved id
+  // that no longer exists degrades to the hook's own default selection).
+  useEffect(() => {
+    if (!savedPin || providersLoading || !providers.length) return;
+    if (providers.some((p) => p.id === savedPin.providerId)) {
+      setSelectedProviderId(savedPin.providerId);
+      if (savedPin.model) setSelectedModel(savedPin.model);
+    }
+    setSavedPin(null); // apply once
+  }, [savedPin, providersLoading, providers, setSelectedProviderId, setSelectedModel]);
 
   const summary = useMemo(() => {
     if (!score) return null;

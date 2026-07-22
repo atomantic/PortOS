@@ -53,13 +53,27 @@ describe('chiptuneScoreSchema', () => {
     expect(chiptuneScoreSchema.safeParse(score).success).toBe(false);
   });
 
-  it('rejects a loop that exceeds the total-step cap', () => {
+  it('accepts a long-but-bounded loop and rejects one past the caps', () => {
     const score = validScore();
+    score.bpm = 240; // stepSec 0.0625 — keeps a long order under the duration cap
     score.patterns.A.bars = 16; // 256 steps per order entry
-    score.order = Array(CHIPTUNE_LIMITS.ORDER_MAX).fill('A'); // 8192... exactly at cap
+    score.order = Array(11).fill('A'); // 2816 steps ≈ 176s — inside both caps
     expect(chiptuneScoreSchema.safeParse(score).success).toBe(true);
-    score.stepsPerBeat = 5; // push past the cap
+    score.order = Array(CHIPTUNE_LIMITS.ORDER_MAX).fill('A'); // 8192 steps / 512s — past both
     expect(chiptuneScoreSchema.safeParse(score).success).toBe(false);
+  });
+
+  it('rejects a schema-valid-shape score whose loop exceeds the duration cap', () => {
+    // 40 BPM at 1 step/beat = 1.5s/step: 16 bars × 4 steps/bar × 3 order
+    // entries = 192 steps = 288s — well under the step cap but over 180s.
+    const score = validScore();
+    score.bpm = 40;
+    score.stepsPerBeat = 1;
+    score.patterns.A.bars = 16;
+    score.order = ['A', 'A', 'A'];
+    const r = chiptuneScoreSchema.safeParse(score);
+    expect(r.success).toBe(false);
+    expect(JSON.stringify(r.error.issues)).toContain('loop is too long');
   });
 
   it('rejects a wrong version and non-integer steps', () => {

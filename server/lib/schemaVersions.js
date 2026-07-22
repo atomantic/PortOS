@@ -224,7 +224,13 @@ export const PORTOS_SCHEMA_VERSIONS = Object.freeze({
   // only track sync pauses with old peers; artists/albums keep flowing. The
   // backfill itself needs no migration — `sanitizeTrack` synthesizes a render
   // from the legacy active pointer on read (see services/tracks/logic.js).
-  tracks: 2,
+  // tracks v3 = `track.chiptuneScore`/`chiptunePrompt` (#2911, the LLM-composed
+  // looping 8-bit score). Version-gated for the identical strip-and-push-back
+  // reason as v2: a ≤v2 peer re-sanitizing through its chiptune-unaware
+  // `sanitizeTrack` would silently drop the score and LWW the loss back onto
+  // the composing peer. (The fields are also excluded from the conflict-journal
+  // content hash — see lib/conflictJournal.js HASH_EXCLUDED_FIELDS.)
+  tracks: 3,
   // v1 = creative ingredients catalog (Postgres tables: catalog_scraps,
   // catalog_ingredients, catalog_ingredient_sources, catalog_ingredient_refs).
   // v2 = `catalog_ingredients.search_tsv` expanded to also index the
