@@ -135,6 +135,12 @@ export const repairTextEncoder = ({ deep = false } = {}) => request('/video-gen/
   silent: true,
 });
 export const cancelVideoGen = () => request('/video-gen/cancel', { method: 'POST' });
+// Per-runtime BYOV setup probe (venv/deps present?) run BEFORE the user hits
+// Generate so a missing-runtime install banner can surface instead of a
+// buildArgs-time 500. Silent — VideoGen owns its own error handling and passes
+// an AbortController `signal` so a stale probe can be cancelled on model switch.
+export const getVideoGenRuntimeStatus = (runtime, { signal } = {}) =>
+  request(`/video-gen/setup/runtime-status?runtime=${encodeURIComponent(runtime)}`, { silent: true, signal });
 // Currently-running (or next-queued) video job — used on VideoGen mount to
 // resume progress display after a page reload. Silent so a 5xx during status
 // poll doesn't double-toast on every navigation.
