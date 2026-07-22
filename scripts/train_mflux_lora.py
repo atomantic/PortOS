@@ -529,6 +529,7 @@ def run_segment(cmd, *, segment_target, state, last_reported, output_tail,
     global CHILD
     CHILD = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        shell=False,
     )
     if STOP_REQUESTED:  # SIGTERM raced the spawn
         CHILD.terminate()
