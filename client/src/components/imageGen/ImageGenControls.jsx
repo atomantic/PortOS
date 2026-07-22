@@ -52,7 +52,9 @@ export default function ImageGenControls({
   onModelDownloadCancel,
 }) {
   const isLocal = mode === IMAGE_GEN_MODE.LOCAL;
-  const isCodex = mode === IMAGE_GEN_MODE.CODEX;
+  // Cloud-CLI backends (codex, grok) pick model/steps/seed internally — only
+  // resolution + style fields apply, so the local-only knobs are hidden.
+  const isCodex = mode === IMAGE_GEN_MODE.CODEX || mode === IMAGE_GEN_MODE.GROK;
 
   const currentModel = models.find((m) => m.id === modelId);
   const isFlux2 = currentModel?.runner === RUNNER_FAMILIES.FLUX2;

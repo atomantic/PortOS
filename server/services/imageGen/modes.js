@@ -14,9 +14,17 @@ export const IMAGE_GEN_MODE = Object.freeze({
   EXTERNAL: 'external',
   LOCAL: 'local',
   CODEX: 'codex',
+  GROK: 'grok',
 });
 
 export const IMAGE_GEN_MODES = Object.freeze(Object.values(IMAGE_GEN_MODE));
+
+// Cloud-CLI backends (codex `$imagegen`, grok `image_gen`) — each render
+// shells out to an external child that spends remote quota, not local GPU.
+// The mediaJobQueue routes these through its parallel cloud lane (they don't
+// serialize on the MLX runtime) and async callers treat them like local:
+// generateImage returns a job descriptor before the file lands.
+export const CLOUD_IMAGE_GEN_MODES = Object.freeze([IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK]);
 
 // Shipped defaults for the Codex imagegen backend. Codex's built-in image_gen
 // tool otherwise runs whatever model its logged-in session defaults to — often

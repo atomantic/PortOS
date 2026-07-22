@@ -103,7 +103,7 @@ const visualStageInputSchema = stageInputSchema.extend({
   // refine-LLM override. Sanitizer drops the field entirely when nothing
   // is set, so a `null` here clears it.
   genConfig: z.object({
-    imageMode: z.enum(['auto', IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX]).optional(),
+    imageMode: z.enum(['auto', IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK]).optional(),
     imageModelId: z.string().trim().max(200).nullable().optional(),
     refineProvider: z.string().trim().max(200).nullable().optional(),
     refineModel: z.string().trim().max(200).nullable().optional(),
@@ -192,7 +192,7 @@ const visualGenerateSchema = z.object({
   slugline: z.string().trim().max(200).optional(),
   negativePrompt: z.string().trim().max(2000).optional(),
   extraStyle: z.string().trim().max(2000).optional(),
-  mode: z.enum([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX]).optional(),
+  mode: z.enum([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK]).optional(),
   modelId: z.string().trim().max(64).optional(),
   width: imageEdgeSchema,
   height: imageEdgeSchema,
@@ -219,7 +219,7 @@ const visualGenerateSchema = z.object({
 const comicPageRenderSchema = z.object({
   negativePrompt: z.string().trim().max(2000).optional(),
   extraStyle: z.string().trim().max(2000).optional(),
-  mode: z.enum([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX]).optional(),
+  mode: z.enum([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK]).optional(),
   modelId: z.string().trim().max(64).optional(),
   width: imageEdgeSchema,
   height: imageEdgeSchema,
@@ -261,7 +261,7 @@ const comicPageRefineSchema = z.object({
   negativePrompt: z.string().trim().max(2000).optional(),
   // No `extraStyle`: the refine renders the LLM-adjusted prompt verbatim and
   // skips composeComicPagePrompt, so a style suffix would be silently dropped.
-  mode: z.enum([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX]).optional(),
+  mode: z.enum([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK]).optional(),
   modelId: z.string().trim().max(64).optional(),
   width: imageEdgeSchema,
   height: imageEdgeSchema,

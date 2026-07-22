@@ -47,7 +47,7 @@ const makeCoverRenderSchema = (scriptField) => z.object({
   [scriptField]: z.string().max(8000).optional(),
   negativePrompt: z.string().trim().max(2000).optional(),
   extraStyle: z.string().trim().max(2000).optional(),
-  mode: z.enum([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX]).optional(),
+  mode: z.enum([IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK]).optional(),
   modelId: z.string().trim().max(64).optional(),
   width: imageEdgeSchema,
   height: imageEdgeSchema,

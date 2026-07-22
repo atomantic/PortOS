@@ -16,8 +16,9 @@ vi.mock('../services/imageGen/index.js', () => ({
   generateAvatar: vi.fn(),
   attachSseClient: vi.fn(() => false),
   cancel: vi.fn(() => false),
-  IMAGE_GEN_MODE: { EXTERNAL: 'external', LOCAL: 'local', CODEX: 'codex' },
-  IMAGE_GEN_MODES: ['external', 'local', 'codex'],
+  IMAGE_GEN_MODE: { EXTERNAL: 'external', LOCAL: 'local', CODEX: 'codex', GROK: 'grok' },
+  IMAGE_GEN_MODES: ['external', 'local', 'codex', 'grok'],
+  CLOUD_IMAGE_GEN_MODES: ['codex', 'grok'],
   // Mirror the real precedence by delegating to the same helper the prod
   // resolver uses — keeps test mock and prod in lock-step automatically.
   // Legacy `autoClean: true` no longer carries into denoise (lossy, opt-in only).
@@ -717,6 +718,62 @@ describe('Image Gen Routes', () => {
 
       expect(response.status).toBe(400);
       expect(response.body.error).toMatch(/disabled/i);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('grok mode enqueues through mediaJobQueue with the saved grok params', async () => {
+      getSettings.mockResolvedValueOnce({
+        imageGen: { mode: 'grok', grok: { enabled: true, grokPath: '/usr/local/bin/grok', aspectRatio: '16:9' } },
+      });
+      mediaJobQueue.enqueueJob.mockReturnValueOnce({ jobId: 'queued-grok-001', position: 1, status: 'queued' });
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ prompt: 'a tavern at dusk' });
+
+      expect(response.status).toBe(200);
+      expect(response.body.status).toBe('queued');
+      expect(response.body.mode).toBe('grok');
+      expect(response.body.jobId).toBe('queued-grok-001');
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'image',
+        params: expect.objectContaining({
+          mode: 'grok',
+          grokPath: '/usr/local/bin/grok',
+          aspectRatio: '16:9',
+          prompt: 'a tavern at dusk',
+        }),
+      }));
+      // Synchronous generateImage MUST NOT be called in grok mode either —
+      // the queue takes ownership.
+      expect(imageGen.generateImage).not.toHaveBeenCalled();
+    });
+
+    it('grok mode with disabled toggle returns 400 GROK_IMAGEGEN_DISABLED', async () => {
+      getSettings.mockResolvedValueOnce({
+        imageGen: { mode: 'grok', grok: { enabled: false } },
+      });
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ prompt: 'a fox' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toMatch(/disabled/i);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('rejects a Grok text-to-image request with no prompt and no init image (synchronous 400)', async () => {
+      getSettings.mockResolvedValueOnce({
+        imageGen: { mode: 'grok', grok: { enabled: true } },
+      });
+
+      const response = await request(app)
+        .post('/api/image-gen/generate')
+        .send({ prompt: '' });
+
+      expect(response.status).toBe(400);
+      expect(response.body.error).toMatch(/prompt is required/i);
       expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
     });
   });

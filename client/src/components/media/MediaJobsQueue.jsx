@@ -49,6 +49,12 @@ function modelLabel(params) {
     const base = m ? `codex / ${m}` : 'codex';
     return `${base} · ${eff}`;
   }
+  if (params.mode === IMAGE_GEN_MODE.GROK) {
+    // No model/effort knobs — grok's image tools run on xAI's fixed backend;
+    // the aspect ratio is the only distinguishing render param.
+    const ratio = (typeof params.aspectRatio === 'string' ? params.aspectRatio.trim() : '');
+    return ratio ? `grok · ${ratio}` : 'grok';
+  }
   const id = (params.modelId || '').trim();
   if (!id) return 'local';
   const tail = id.includes('/') ? id.slice(id.lastIndexOf('/') + 1) : id;
@@ -314,7 +320,7 @@ function JobRow({ job, onCancel, onRetry, onRunNow, onDelete }) {
   const canDelete = (job.status === 'failed' || job.status === 'canceled' || job.status === 'completed')
     && typeof onDelete === 'function';
   // Run-now is codex-only — GPU jobs serialize on the single MLX runtime.
-  const isQueuedCodex = job.status === 'queued' && job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.CODEX;
+  const isQueuedCodex = job.status === 'queued' && job.kind === 'image' && (job.params?.mode === IMAGE_GEN_MODE.CODEX || job.params?.mode === IMAGE_GEN_MODE.GROK);
   const canRunNow = isQueuedCodex && typeof onRunNow === 'function';
   // Number.isFinite (not typeof === 'number') so a NaN from a hand-edited
   // media-jobs.json can't render as `NaN%` / `width: NaN%`.

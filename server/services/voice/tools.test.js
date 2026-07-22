@@ -105,8 +105,9 @@ const generateImageMock = vi.fn(async (params) => {
 });
 vi.mock('../imageGen/index.js', () => ({
   generateImage: (...args) => generateImageMock(...args),
-  IMAGE_GEN_MODE: { EXTERNAL: 'external', LOCAL: 'local', CODEX: 'codex' },
-  IMAGE_GEN_MODES: ['external', 'local', 'codex'],
+  IMAGE_GEN_MODE: { EXTERNAL: 'external', LOCAL: 'local', CODEX: 'codex', GROK: 'grok' },
+  CLOUD_IMAGE_GEN_MODES: ['codex', 'grok'],
+  IMAGE_GEN_MODES: ['external', 'local', 'codex', 'grok'],
 }));
 vi.mock('../settings.js', () => ({
   getSettings: vi.fn(async () => ({

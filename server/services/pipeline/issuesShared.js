@@ -356,7 +356,7 @@ const QUALITY_VALUES = new Set(['draft', 'standard', 'high']);
 // `imageMode: 'auto'` defers to the server resolver (codex when enabled,
 // local otherwise). Returns null when nothing was set so the persisted
 // JSON stays clean for issues that never opened the panel.
-const IMAGE_MODE_VALUES = new Set(['auto', IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX]);
+const IMAGE_MODE_VALUES = new Set(['auto', IMAGE_GEN_MODE.LOCAL, IMAGE_GEN_MODE.CODEX, IMAGE_GEN_MODE.GROK]);
 const GEN_CONFIG_STR_MAX = 200;
 const sanitizeGenConfig = (raw) => {
   if (!raw || typeof raw !== 'object') return null;

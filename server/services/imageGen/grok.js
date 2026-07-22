@@ -1,0 +1,373 @@
+/**
+ * Image Gen — xAI Grok Build CLI provider.
+ *
+ * Routes image generation through the user's locally-installed `grok` CLI
+ * (Grok Build). Grok ships built-in media tools — `image_gen` (text → image)
+ * and `image_edit` (source image + instruction → image) — guided by its
+ * bundled `imagine` skill, and runs them against the user's logged-in Grok
+ * session. No XAI_API_KEY required.
+ *
+ * Wire format: `grok --output-format plain --permission-mode bypassPermissions
+ * --prompt-file /dev/stdin` (built by `ensureGrokHeadlessArgs` in
+ * server/lib/grok.js; the /dev/stdin sentinel is rewritten to a temp file on
+ * Windows by `prepareGrokPromptFile`). Unlike Codex — which writes to a fixed
+ * `~/.codex/generated_images/<session-id>/` dir PortOS has to banner-scrape —
+ * grok is a general coding agent that can be *told where to write the file*:
+ * the prompt directs it to save the generated PNG to a staging path PortOS
+ * chose, and the post-exit handler just reads that file back.
+ *
+ * The user must explicitly enable this provider in Settings → Image Gen
+ * (mirrors the Codex gate — it spends the user's Grok quota). When disabled
+ * the dispatcher rejects up front; this module assumes it's enabled by the
+ * time generateImage() is called.
+ */
+
+import { spawn } from 'child_process';
+import { copyFile, stat, unlink } from 'fs/promises';
+import { existsSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import { randomUUID } from 'crypto';
+import { atomicWrite, ensureDir, PATHS, resolveImageInputPath } from '../../lib/fileUtils.js';
+import { ServerError } from '../../lib/errorHandler.js';
+import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
+import { imageGenEvents } from '../imageGenEvents.js';
+import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
+import { killWithEscalation } from '../../lib/killWithEscalation.js';
+import { ensureGrokHeadlessArgs, prepareGrokPromptFile } from '../../lib/grok.js';
+import { IMAGE_GEN_MODE } from './modes.js';
+import { describeFidelity } from './codex.js';
+
+// 20 minutes — grok's image_gen typically returns in well under a minute, but
+// the agent turn wrapping it (skill load, tool call, file write) has no
+// progress signal to short-circuit on, and a queued/over-subscribed session
+// can stall. Env-overridable for power users who want a tighter cap. Keep in
+// rough sync with the mediaJobQueue cloud-lane watchdog (WATCHDOG_CODEX_MS)
+// so the queue's watchdog and the child's wall-clock cap fire on a similar
+// budget.
+const GROK_TIMEOUT_MS = (() => {
+  const n = Number(process.env.GROK_TIMEOUT_MS);
+  return Number.isFinite(n) && n > 0 ? n : 20 * 60 * 1000;
+})();
+
+const DEFAULT_BIN = 'grok';
+
+// Aspect ratios grok's image_gen/image_edit tools accept. Width/height from
+// PortOS callers are mapped to the closest of these; a configured default
+// (`imageGen.grok.aspectRatio`) applies when the caller sent no dimensions.
+export const GROK_ASPECT_RATIOS = Object.freeze(['1:1', '16:9', '9:16', '4:3', '3:4', '3:2', '2:3']);
+
+// Map a width/height pair to the closest supported grok aspect ratio, or null
+// when dimensions are absent/invalid (the tool then uses its own default).
+export function deriveAspectRatio(width, height) {
+  const w = Number(width);
+  const h = Number(height);
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return null;
+  const target = w / h;
+  let best = null;
+  let bestDelta = Infinity;
+  for (const ratio of GROK_ASPECT_RATIOS) {
+    const [rw, rh] = ratio.split(':').map(Number);
+    const delta = Math.abs(rw / rh - target);
+    if (delta < bestDelta) {
+      best = ratio;
+      bestDelta = delta;
+    }
+  }
+  return best;
+}
+
+// Per-job state — keyed by jobId so multiple grok renders can run in parallel
+// under the mediaJobQueue's cloud lane. Same client shape as imageGen/codex.js
+// so attachSseClient/broadcastSse just work.
+const jobs = new Map();
+const activeProcs = new Map();
+const activeJobs = new Map();
+
+// Returns the most-recently-started job — used by status surfaces and the
+// settings test-render; not safe for cancel routing under parallel use.
+export const getActiveJob = () => {
+  const entries = [...activeJobs.values()];
+  return entries.length ? entries[entries.length - 1] : null;
+};
+
+export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
+
+const sigtermWithEscalation = (id, proc) =>
+  killWithEscalation(proc, { label: 'grok child', delayMs: 5000, stillRunning: () => activeProcs.get(id) === proc });
+
+// Cancel one specific grok render. jobId is required — with parallel renders
+// an "anonymous cancel" would nuke every in-flight render. Use `cancelAll()`
+// for the dispatcher's "stop everything" path.
+export const cancel = (jobId) => {
+  if (!jobId) {
+    throw new Error("grok.cancel requires a jobId — use grok.cancelAll() to terminate every in-flight render");
+  }
+  const proc = activeProcs.get(jobId);
+  if (!proc) return false;
+  sigtermWithEscalation(jobId, proc);
+  return true;
+};
+
+// Bulk terminate every in-flight grok render. Only used by the imageGen
+// dispatcher's "cancel everything" route.
+export const cancelAll = () => {
+  const entries = [...activeProcs.entries()];
+  if (entries.length === 0) return false;
+  for (const [id, proc] of entries) sigtermWithEscalation(id, proc);
+  return true;
+};
+
+export async function checkConnection({ grokPath } = {}) {
+  // Cheap probe: spawn `grok --version`. Avoids actually invoking image_gen
+  // (which would spend the user's Grok quota); the settings UI just wants
+  // "yes the binary exists and is reachable".
+  const bin = grokPath || DEFAULT_BIN;
+  const proc = spawn(bin, ['--version'], { shell: false, stdio: ['ignore', 'pipe', 'pipe'] });
+  let out = '';
+  proc.stdout.on('data', (c) => { out += c.toString(); });
+  proc.stderr.on('data', (c) => { out += c.toString(); });
+  return new Promise((resolve) => {
+    proc.on('error', (err) => resolve({ connected: false, mode: IMAGE_GEN_MODE.GROK, reason: `Grok CLI not found (${err.message})` }));
+    proc.on('close', (code) => {
+      if (code !== 0) return resolve({ connected: false, mode: IMAGE_GEN_MODE.GROK, reason: `grok --version exited ${code}` });
+      const versionMatch = out.match(/(\d+\.\d+\.\d+)/);
+      resolve({ connected: true, mode: IMAGE_GEN_MODE.GROK, model: versionMatch ? `grok-cli ${versionMatch[1]}` : 'grok-cli' });
+    });
+  });
+}
+
+// Grok narrates its turn on stdout. Turn the tail into the most useful error
+// we can when the directed output file never landed — surfacing the model's
+// own words (content declines, tool-failure notes) instead of a fixed guess.
+// eslint-disable-next-line no-control-regex
+const ANSI_RE = /\u001b\[[0-9;]*m/g;
+const GROK_NO_IMAGE_HINT =
+  'Grok returned no image — the image_gen tool may be unavailable on your Grok plan, or the model declined. Check Settings → Image Gen → Enable Grok Imagegen.';
+export function noImageReason(stdoutTail = '') {
+  const clean = String(stdoutTail).replace(ANSI_RE, '').trim();
+  const lines = clean.split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l && !/^-{2,}$/.test(l) && !/^[\d,]+$/.test(l));
+  const said = lines.slice(-4).join(' ').slice(-600);
+  if (!said) return GROK_NO_IMAGE_HINT;
+  return `Grok did not produce an image at the directed path. Grok said: "${said}"`;
+}
+
+// Build the single-turn agent prompt that triggers image_gen (or image_edit
+// for i2i) and directs the output to a PortOS-chosen path. Grok is a general
+// coding agent, so the prompt is explicit about the tool, the save path, and
+// staying out of everything else.
+export function buildGrokPrompt({ prompt, negativePrompt, aspectRatio, stagingPath, initImagePath, initImageStrength }) {
+  const avoid = negativePrompt?.trim() ? `\nAvoid: ${negativePrompt.trim()}` : '';
+  const ratio = aspectRatio ? `\nUse aspect_ratio "${aspectRatio}".` : '';
+  const task = initImagePath
+    ? `Use your built-in image_edit tool to transform the source image at ${initImagePath} — ${describeFidelity(initImageStrength)}.\nEdit instruction: ${prompt.trim()}${avoid}`
+    : `Use your built-in image_gen tool to generate exactly one image.\nImage prompt: ${prompt.trim()}${avoid}`;
+  return `${task}${ratio}\nSave the generated image as a PNG file at exactly this path: ${stagingPath}\nDo not create any other files, do not modify any code, and do not run any other tools beyond what is needed to generate the image and write it to that path. When the file is written, you are done.`;
+}
+
+// `initImageStrength` maps to a fidelity phrase (grok's image_edit has no
+// numeric denoise knob, same constraint as codex).
+export async function generateImage({
+  grokPath, aspectRatio, prompt = '', width, height, negativePrompt,
+  initImagePath, initImageStrength,
+  jobId: providedJobId = null,
+  cleanC2PA = false,
+  denoise = false,
+}) {
+  await ensureDir(PATHS.images);
+
+  // Defense-in-depth: re-anchor the init image to the allowed input roots so
+  // no caller can point grok's image_edit at an arbitrary local file. Mirrors
+  // imageGen/codex.js.
+  const validInitImagePath = (initImagePath && typeof initImagePath === 'string')
+    ? resolveImageInputPath(initImagePath)
+    : null;
+
+  // An empty prompt is fine when editing an init image; a pure text-to-image
+  // grok render still needs one.
+  if (!validInitImagePath && !prompt?.trim()) {
+    throw new ServerError('Prompt is required', { status: 400, code: 'VALIDATION_ERROR' });
+  }
+
+  const jobId = providedJobId || randomUUID();
+  const filename = `${jobId}.png`;
+  const outputPath = join(PATHS.images, filename);
+  // Grok writes to a tmp staging path, not straight into the gallery — a
+  // failed/partial run must never leave junk where the gallery scanner or a
+  // concurrent client can see it. The success path copies it over.
+  const stagingPath = join(tmpdir(), `portos-grok-${jobId}.png`);
+
+  // Caller dimensions win (mapped to the closest supported ratio); the saved
+  // per-provider default applies when no dimensions were sent; otherwise the
+  // tool's own default. Validate the saved value against the known ratios so
+  // a hand-edited settings.json can't inject arbitrary prompt text.
+  const derived = deriveAspectRatio(width, height);
+  const configured = GROK_ASPECT_RATIOS.includes(aspectRatio) ? aspectRatio : null;
+  const effectiveRatio = derived || configured;
+
+  const fullPrompt = buildGrokPrompt({
+    prompt, negativePrompt, aspectRatio: effectiveRatio, stagingPath,
+    initImagePath: validInitImagePath, initImageStrength,
+  });
+
+  const bin = grokPath || DEFAULT_BIN;
+  // No model arg — grok's image tools run on xAI's fixed image backend and
+  // the agent model is whatever the local `grok` install defaults to (see
+  // server/lib/grok.js: PortOS does not pick a grok model).
+  const baseArgs = ensureGrokHeadlessArgs([], null);
+  const { args, useStdin, cleanup: cleanupPromptFile } = prepareGrokPromptFile(baseArgs, fullPrompt);
+
+  const meta = {
+    id: jobId, prompt: prompt.trim(), negativePrompt: negativePrompt || '',
+    width: width ? Number(width) : null, height: height ? Number(height) : null,
+    filename, mode: IMAGE_GEN_MODE.GROK,
+    ...(effectiveRatio ? { aspectRatio: effectiveRatio } : {}),
+    createdAt: new Date().toISOString(),
+  };
+  const job = { ...meta, clients: [], status: 'running' };
+  jobs.set(jobId, job);
+
+  console.log(`🎨 Generating image [${jobId.slice(0, 8)}] grok: ${prompt.slice(0, 60)}…`);
+  imageGenEvents.emit('started', { generationId: jobId, totalSteps: 1 });
+  activeJobs.set(jobId, { ...meta, generationId: jobId, totalSteps: 1, step: 0, progress: 0, currentImage: null });
+  broadcastSse(job, { type: 'status', message: 'Spawning grok…' });
+
+  // generateImage returns a job descriptor synchronously; the actual grok
+  // child runs out-of-band so the HTTP response can ship while the client
+  // attaches to the per-job SSE stream (mirrors codex.js/local.js).
+  runGrok(job, jobId, bin, args, {
+    useStdin, fullPrompt, cleanupPromptFile, stagingPath, outputPath, filename, meta, cleanC2PA, denoise,
+  }).catch((err) => {
+    console.log(`❌ grok run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
+  });
+
+  return {
+    jobId, filename, path: `/data/images/${filename}`, generationId: jobId,
+    mode: IMAGE_GEN_MODE.GROK,
+    // Async callers gate UI state on `status`; without 'running' they flip
+    // to 'done' before the PNG lands. SSE / socket 'completed' fires later.
+    status: 'running',
+  };
+}
+
+async function runGrok(job, jobId, bin, args, {
+  useStdin, fullPrompt, cleanupPromptFile, stagingPath, outputPath, filename, meta, cleanC2PA = false, denoise = false,
+}) {
+  const proc = spawn(bin, args, { shell: false, stdio: [useStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+  activeProcs.set(jobId, proc);
+
+  if (useStdin) {
+    // POSIX: grok reads the prompt via --prompt-file /dev/stdin. EPIPE fires
+    // when the child dies before consuming stdin — the close handler reports
+    // the real failure, so just swallow the write error.
+    proc.stdin.on('error', () => {});
+    proc.stdin.write(fullPrompt);
+    proc.stdin.end();
+  }
+
+  let stdoutTail = '';
+  const STDOUT_TAIL_BYTES = 8 * 1024;
+  let stderrTail = '';
+  const STDERR_TAIL_BYTES = 32 * 1024;
+  const timeoutTimer = setTimeout(() => {
+    if (activeProcs.get(jobId) === proc) {
+      console.log(`⏱️ grok timed out after ${GROK_TIMEOUT_MS}ms [${jobId.slice(0, 8)}]`);
+      proc.kill('SIGTERM');
+      setTimeout(() => { if (proc.exitCode === null) proc.kill('SIGKILL'); }, 5000);
+    }
+  }, GROK_TIMEOUT_MS);
+
+  proc.on('error', (err) => {
+    clearTimeout(timeoutTimer);
+    cleanupPromptFile();
+    finalizeError(job, jobId, proc, `Failed to spawn ${bin}: ${err.message}`);
+  });
+
+  proc.stdout.on('data', (chunk) => {
+    stdoutTail += chunk.toString();
+    if (stdoutTail.length > STDOUT_TAIL_BYTES) stdoutTail = stdoutTail.slice(-STDOUT_TAIL_BYTES);
+    broadcastSse(job, { type: 'status', message: 'Running…' });
+  });
+
+  proc.stderr.on('data', (chunk) => {
+    stderrTail += chunk.toString();
+    if (stderrTail.length > STDERR_TAIL_BYTES) stderrTail = stderrTail.slice(-STDERR_TAIL_BYTES);
+  });
+
+  proc.on('close', async (code, signal) => {
+    clearTimeout(timeoutTimer);
+    cleanupPromptFile();
+    // EventEmitter doesn't await async listeners — without this try/catch,
+    // a throw from the harvest/copy would surface as an unhandled rejection
+    // and the job would be stuck in 'running' forever with no SSE error.
+    try {
+      if (code !== 0) {
+        const reason = signal ? `Killed by signal ${signal}` : `Exit code ${code}`;
+        const tail = stderrTail.trim().split('\n').slice(-6).join('\n');
+        return finalizeError(job, jobId, proc, `Grok generation failed: ${reason}\n${tail}`);
+      }
+      // Grok writes the file during the turn; empirically it's on disk by
+      // exit, but poll a few seconds in case of flush lag on slow disks.
+      const harvested = await harvestStagedImage(stagingPath, 5000);
+      if (!harvested) {
+        return finalizeError(job, jobId, proc, noImageReason(stdoutTail));
+      }
+      await copyFile(stagingPath, outputPath);
+      await unlink(stagingPath).catch(() => {});
+      // Sidecar metadata so the gallery can recover prompt/ratio/etc.
+      const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
+      await atomicWrite(sidecar, meta).catch(() => {});
+      // Cleaners run BEFORE the SSE complete + completed events so
+      // subscribers see the cleaned bytes.
+      await autoCleanGeneratedImage({ cleanC2PA, denoise, pngPath: outputPath, sidecarPath: sidecar, mode: IMAGE_GEN_MODE.GROK });
+      job.status = 'complete';
+      if (activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
+      activeJobs.delete(jobId);
+      console.log(`✅ Image generated [${jobId.slice(0, 8)}]: ${filename} (grok)`);
+      const result = { filename, path: `/data/images/${filename}` };
+      broadcastSse(job, { type: 'complete', result });
+      imageGenEvents.emit('completed', { generationId: jobId, path: `/data/images/${filename}`, filename });
+      closeJobAfterDelay(jobs, jobId);
+    } catch (err) {
+      finalizeError(job, jobId, proc, `Grok post-exit handler failed: ${err?.message || err}`);
+    }
+  });
+}
+
+// `proc` is the child this finalize belongs to — only clear module-scoped
+// state when it still belongs to *this* job (a late finalize from a stale run
+// must not wipe a newer active job).
+const finalizeError = (job, jobId, proc, reason) => {
+  // Idempotent — spawn failures fire 'error' AND a follow-up 'close'.
+  if (job.status === 'error' || job.status === 'complete') return;
+  if (proc == null || activeProcs.get(jobId) === proc) activeProcs.delete(jobId);
+  job.status = 'error';
+  activeJobs.delete(jobId);
+  console.log(`❌ grok image generation failed [${jobId.slice(0, 8)}]: ${reason.split('\n')[0]}`);
+  broadcastSse(job, { type: 'error', error: reason });
+  imageGenEvents.emit('failed', { generationId: jobId, error: reason });
+  closeJobAfterDelay(jobs, jobId);
+};
+
+// Poll for the directed output file until it exists non-empty or timeoutMs
+// elapses. Returns true when the file is ready.
+async function harvestStagedImage(stagingPath, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(stagingPath)) {
+      const s = await stat(stagingPath).catch(() => null);
+      if (s && s.size > 0) return true;
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return false;
+}
+
+// Test-only handles (mirrors codex.js's carve-out).
+export const _internals = {
+  harvestStagedImage,
+  deriveAspectRatio,
+  buildGrokPrompt,
+};

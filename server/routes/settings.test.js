@@ -81,3 +81,47 @@ describe('Settings routes — apiAccess slice', () => {
     expect(res.body.apiAccess.sdapi.exposed).toBe(true);
   });
 });
+
+describe('Settings routes — imageGen.grok slice (#2859)', () => {
+  beforeEach(() => {
+    store = {};
+    vi.clearAllMocks();
+  });
+
+  it('accepts a valid grok slice and persists it', async () => {
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ imageGen: { grok: { enabled: true, grokPath: '/usr/local/bin/grok', aspectRatio: '16:9' } } });
+    expect(res.status).toBe(200);
+    expect(res.body.imageGen.grok.enabled).toBe(true);
+    expect(res.body.imageGen.grok.aspectRatio).toBe('16:9');
+  });
+
+  it('accepts empty-string UI sentinels for path and ratio', async () => {
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ imageGen: { grok: { enabled: false, grokPath: '', aspectRatio: '' } } });
+    expect(res.status).toBe(200);
+  });
+
+  it('rejects a malformed aspect ratio (would land verbatim in the grok prompt)', async () => {
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ imageGen: { grok: { aspectRatio: '16:9; rm -rf /' } } });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects a non-boolean enabled gate', async () => {
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ imageGen: { grok: { enabled: 'yes' } } });
+    expect(res.status).toBe(400);
+  });
+
+  it('leaves an imageGen patch without a grok key unvalidated (polymorphic parent)', async () => {
+    const res = await request(buildApp())
+      .put('/api/settings')
+      .send({ imageGen: { mode: 'local' } });
+    expect(res.status).toBe(200);
+  });
+});

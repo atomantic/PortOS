@@ -63,9 +63,9 @@ export async function renderUniverseJobs(universeId, body, mapServiceError) {
   // Reject `external` mode upfront — batch rendering against a remote SD-API
   // would block this request for the entire batch, and we don't want to leave
   // an orphaned media collection behind when we discover this mid-loop below.
-  if (mode !== IMAGE_GEN_MODE.LOCAL && mode !== IMAGE_GEN_MODE.CODEX) {
+  if (mode !== IMAGE_GEN_MODE.LOCAL && mode !== IMAGE_GEN_MODE.CODEX && mode !== IMAGE_GEN_MODE.GROK) {
     throw new ServerError(
-      'Batch render requires local or codex mode — switch image-gen mode in Settings → Image Gen',
+      'Batch render requires local, codex, or grok mode — switch image-gen mode in Settings → Image Gen',
       { status: 400, code: 'WORLD_BUILDER_EXTERNAL_UNSUPPORTED' },
     );
   }
@@ -76,6 +76,12 @@ export async function renderUniverseJobs(universeId, body, mapServiceError) {
     throw new ServerError(
       'Codex Imagegen is disabled — enable it in Settings → Image Gen first',
       { status: 400, code: 'CODEX_IMAGEGEN_DISABLED' },
+    );
+  }
+  if (mode === IMAGE_GEN_MODE.GROK && !settings.imageGen?.grok?.enabled) {
+    throw new ServerError(
+      'Grok Imagegen is disabled — enable it in Settings → Image Gen first',
+      { status: 400, code: 'GROK_IMAGEGEN_DISABLED' },
     );
   }
   if (mode === IMAGE_GEN_MODE.LOCAL) {
@@ -185,6 +191,12 @@ export async function renderUniverseJobs(universeId, body, mapServiceError) {
       queued = enqueueJob({
         kind: 'image',
         params: { mode: IMAGE_GEN_MODE.CODEX, codexPath: c.codexPath, model: c.model, effort: c.effort, cleanC2PA, denoise, ...params },
+      });
+    } else if (mode === IMAGE_GEN_MODE.GROK) {
+      const g = settings.imageGen?.grok || {};
+      queued = enqueueJob({
+        kind: 'image',
+        params: { mode: IMAGE_GEN_MODE.GROK, grokPath: g.grokPath, aspectRatio: g.aspectRatio, cleanC2PA, denoise, ...params },
       });
     } else {
       // mode === IMAGE_GEN_MODE.LOCAL (validated upfront).

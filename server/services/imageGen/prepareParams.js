@@ -27,7 +27,7 @@ import { join } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, ensureDir, resolveGalleryImage } from '../../lib/fileUtils.js';
 import { getSettings } from '../settings.js';
-import { IMAGE_GEN_MODE, resolveImageCleaners } from './index.js';
+import { IMAGE_GEN_MODE, CLOUD_IMAGE_GEN_MODES, resolveImageCleaners } from './index.js';
 import { getImageModels, isFlux2 } from '../../lib/mediaModels.js';
 
 // Only the formats mflux can decode — mirrors the route's MIME_TO_EXT map
@@ -162,12 +162,13 @@ export async function prepareGenerateParams({ data, files, referenceImageFields 
     data.referenceImageStrengths = referenceImageStrengths;
   }
 
-  // Empty prompt is allowed for i2i / local / external, but Codex text-to-image
-  // (no init image) still needs one — reject synchronously here so direct API
-  // callers get a 400 instead of a 200-then-async-job-failure. Mirrors the guard
-  // in codex.js and the client's codexNeedsPrompt gate.
-  if (mode === IMAGE_GEN_MODE.CODEX && !initImagePath && !data.prompt?.trim()) {
-    throw new ServerError('Prompt is required for Codex text-to-image', { status: 400, code: 'VALIDATION_ERROR' });
+  // Empty prompt is allowed for i2i / local / external, but cloud-CLI
+  // text-to-image (codex/grok, no init image) still needs one — reject
+  // synchronously here so direct API callers get a 400 instead of a
+  // 200-then-async-job-failure. Mirrors the guards in codex.js/grok.js and
+  // the client's needs-prompt gate.
+  if (CLOUD_IMAGE_GEN_MODES.includes(mode) && !initImagePath && !data.prompt?.trim()) {
+    throw new ServerError(`Prompt is required for ${mode === IMAGE_GEN_MODE.CODEX ? 'Codex' : 'Grok'} text-to-image`, { status: 400, code: 'VALIDATION_ERROR' });
   }
 
   if (data.guidance == null && data.cfgScale != null) {

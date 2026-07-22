@@ -105,6 +105,10 @@ const NATIVE_RUNNER_KEYS = new Set([
 
 export const compatibilityKey = (mode, runner) => {
   if (mode === IMAGE_GEN_MODE.CODEX) return 'codex';
+  // Grok's image tools are prompt/aspect-ratio driven like codex — width and
+  // height are hints mapped to the nearest supported ratio, so it shares the
+  // codex preset list rather than getting its own compat key.
+  if (mode === IMAGE_GEN_MODE.GROK) return 'codex';
   if (mode === IMAGE_GEN_MODE.EXTERNAL) return 'external';
   if (NATIVE_RUNNER_KEYS.has(runner)) return runner;
   return 'flux1';

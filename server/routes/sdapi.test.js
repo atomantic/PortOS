@@ -10,7 +10,8 @@ vi.mock('../services/imageGen/index.js', () => ({
   generateImage: vi.fn(),
   getMode: vi.fn(),
   getActiveJob: vi.fn(),
-  IMAGE_GEN_MODE: { EXTERNAL: 'external', LOCAL: 'local', CODEX: 'codex' },
+  IMAGE_GEN_MODE: { EXTERNAL: 'external', LOCAL: 'local', CODEX: 'codex', GROK: 'grok' },
+  CLOUD_IMAGE_GEN_MODES: ['codex', 'grok'],
   local: { listImageModels: vi.fn(() => [{ id: 'dev', name: 'Flux 1 Dev' }]) },
 }));
 

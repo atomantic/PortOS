@@ -122,8 +122,10 @@ const SESSION_ID_RE = /^session id:\s*([0-9a-f-]{36})/im;
 // Codex CLI exposes no numeric i2i denoise knob, so map the local-runner-style
 // strength (0..1, lower = more faithful to the source) onto a phrase the model
 // reliably honors inside `$imagegen`. Mirrors PROOF_AS_BASE_DEFAULT_STRENGTH
-// (0.25) defaulting toward composition-preserving edits.
-const describeFidelity = (strength) => {
+// (0.25) defaulting toward composition-preserving edits. Exported for the
+// grok provider, which faces the same "prompt phrase, not numeric knob"
+// constraint for its image_edit tool.
+export const describeFidelity = (strength) => {
   const n = Number.isFinite(strength) ? Math.max(0, Math.min(1, Number(strength))) : 0.25;
   if (n <= 0.2) return 'preserve composition, characters, and layout exactly — only refine detail and resolution';
   if (n <= 0.4) return 'preserve composition and characters while adding rendered detail at higher fidelity';

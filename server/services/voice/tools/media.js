@@ -16,7 +16,7 @@ export const MEDIA_TOOLS = [
   {
     name: 'image_generate',
     description:
-      'Generate an image from a text prompt and save it to the user\'s gallery. Defaults to the user\'s saved Image Gen backend (Local mflux, External SD API, or Codex CLI). Pass `provider` to override per-call: "local" for fast Flux drafts, "external" for an A1111-compatible server, "codex" for the Codex CLI built-in image_gen tool (subject to the user enabling it in Settings). Returns the saved file path.',
+      'Generate an image from a text prompt and save it to the user\'s gallery. Defaults to the user\'s saved Image Gen backend (Local mflux, External SD API, or Codex CLI). Pass `provider` to override per-call: "local" for fast Flux drafts, "external" for an A1111-compatible server, "codex" for the Codex CLI built-in image_gen tool, or "grok" for the Grok Build CLI built-in image_gen tool (both subject to the user enabling them in Settings). Returns the saved file path.',
     parameters: {
       type: 'object',
       properties: {
@@ -61,6 +61,12 @@ export const MEDIA_TOOLS = [
           return { ok: false, summary: 'Codex Imagegen is disabled — enable it in Settings → Image Gen first.' };
         }
       }
+      if (requestedMode === imageGen.IMAGE_GEN_MODE.GROK) {
+        const s = await getSettings();
+        if (!s?.imageGen?.grok?.enabled) {
+          return { ok: false, summary: 'Grok Imagegen is disabled — enable it in Settings → Image Gen first.' };
+        }
+      }
       // LLMs/tool callers often hand back numeric args as strings ("512").
       // Coerce + bounds-check before forwarding — the route's Zod schema
       // also gates these, but voice tool calls bypass the route, so an
@@ -103,7 +109,7 @@ export const MEDIA_TOOLS = [
       }
 
       const usedMode = result?.mode || requestedMode || 'default';
-      const isAsync = usedMode === imageGen.IMAGE_GEN_MODE.LOCAL || usedMode === imageGen.IMAGE_GEN_MODE.CODEX;
+      const isAsync = usedMode === imageGen.IMAGE_GEN_MODE.LOCAL || imageGen.CLOUD_IMAGE_GEN_MODES.includes(usedMode);
       // External resolves with the file already on disk — short-circuit.
       if (!isAsync) {
         waiter.cleanup();

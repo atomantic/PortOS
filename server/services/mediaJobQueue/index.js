@@ -45,9 +45,15 @@ import { imageGenEvents } from '../imageGenEvents.js';
 import { trainingEvents } from '../loraTraining/events.js';
 import { audioGenEvents } from '../audioGen/events.js';
 import { getSettings } from '../settings.js';
-import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
+import { IMAGE_GEN_MODE, CLOUD_IMAGE_GEN_MODES } from '../imageGen/modes.js';
 
-const isCodexJob = (j) => j.kind === 'image' && j.params?.mode === IMAGE_GEN_MODE.CODEX;
+// Cloud-CLI image jobs (codex, grok) share one parallel lane — each render
+// shells out to its own external child spending remote quota, so they don't
+// serialize on the MLX runtime the way GPU jobs do. The lane's slot count is
+// `codexParallelLimit` (settings key `imageGen.codex.parallelLimit`, kept
+// under the codex name for backward compat — it now bounds codex + grok
+// renders combined).
+const isCloudImageJob = (j) => j.kind === 'image' && CLOUD_IMAGE_GEN_MODES.includes(j.params?.mode);
 
 const JOBS_FILE = join(PATHS.data, 'media-jobs.json');
 const COMPLETED_TTL_MS = 24 * 60 * 60 * 1000;
@@ -127,6 +133,7 @@ function getGenModuleForJob(job) {
   if (job.kind === 'training') return import('../loraTraining/index.js');
   if (job.kind === 'audio') return import('../audioGen/local.js');
   if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.CODEX) return import('../imageGen/codex.js');
+  if (job.kind === 'image' && job.params?.mode === IMAGE_GEN_MODE.GROK) return import('../imageGen/grok.js');
   if (job.kind === 'image') return import('../imageGen/local.js');
   return Promise.resolve(null);
 }
@@ -152,7 +159,7 @@ async function resolveLiveParams(job, safeParams) {
   // live settings pythonPath wins there too. flux2 training resolves its
   // own venv (resolveFlux2Python) inside runTraining — skip it here.
   const usesLocalPython = job.kind === 'video'
-    || (job.kind === 'image' && job.params?.mode !== IMAGE_GEN_MODE.CODEX)
+    || (job.kind === 'image' && !CLOUD_IMAGE_GEN_MODES.includes(job.params?.mode))
     || (job.kind === 'training' && job.params?.runtime === 'mflux');
   if (!usesLocalPython) return;
   const live = await getSettings().catch(() => null);
@@ -350,7 +357,7 @@ export async function initMediaJobQueue() {
     let codexCounter = 0;
     let gpuCounter = 0;
     for (const q of queue) {
-      if (isCodexJob(q)) {
+      if (isCloudImageJob(q)) {
         q.position = ++codexCounter;
       } else {
         q.position = ++gpuCounter;
@@ -399,7 +406,7 @@ function startWorker() {
 // running job. This lets a Codex job that arrives while a GPU render is in
 // flight be picked up immediately on the next 150 ms tick instead of having
 // to wait for the entire GPU job to finish first.
-function startLaneJob(job, { isCodex }) {
+function startLaneJob(job, { isCloud }) {
   // If the job isn't in the queue, it was already promoted (e.g. by a parallel
   // runJobNow). Skip — promoting again would double-start the job and corrupt
   // the lane (push it onto codexRunning/running twice). Silently splice(-1)
@@ -415,18 +422,17 @@ function startLaneJob(job, { isCodex }) {
   job.position = 1;
   job.progress = typeof job.progress === 'number' && Number.isFinite(job.progress) ? job.progress : 0;
   job.statusMsg = job.statusMsg || 'Starting';
-  if (isCodex) {
+  if (isCloud) {
     codexRunning.push(job);
   } else {
     running = job;
   }
   recomputeQueuePositions();
-  persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on ${isCodex ? 'codex' : 'gpu'} start failed: ${e.message}`));
+  const label = isCloud ? (job.params?.mode || 'cloud') : job.kind;
+  persist().catch((e) => console.log(`⚠️ mediaJobQueue persist on ${isCloud ? label : 'gpu'} start failed: ${e.message}`));
   broadcastSse(ensureSseEntry(job.id), { type: 'started', kind: job.kind });
   mediaJobEvents.emit('started', job);
-  console.log(`▶️  media-job [${job.id.slice(0, 8)}] ${isCodex ? 'codex' : job.kind} started`);
-
-  const label = isCodex ? 'codex' : job.kind;
+  console.log(`▶️  media-job [${job.id.slice(0, 8)}] ${label} started`);
   (async () => {
     try {
       await runJob(job);
@@ -443,7 +449,7 @@ function startLaneJob(job, { isCodex }) {
         mediaJobEvents.emit('failed', job);
       }
     }
-    if (isCodex) {
+    if (isCloud) {
       const idx = codexRunning.indexOf(job);
       if (idx >= 0) codexRunning.splice(idx, 1);
     } else {
@@ -466,13 +472,13 @@ async function drainLoop() {
     let codexSlots = codexParallelLimit - codexRunning.length;
     if ((gpuOpen || codexSlots > 0) && queue.length > 0) {
       for (const job of queue.slice()) {
-        if (isCodexJob(job)) {
+        if (isCloudImageJob(job)) {
           if (codexSlots > 0) {
-            startLaneJob(job, { isCodex: true });
+            startLaneJob(job, { isCloud: true });
             codexSlots -= 1;
           }
         } else if (gpuOpen) {
-          startLaneJob(job, { isCodex: false });
+          startLaneJob(job, { isCloud: false });
           gpuOpen = false;
         }
         if (!gpuOpen && codexSlots <= 0) break;
@@ -504,15 +510,16 @@ export function removeArchivedJob(jobId) {
   return true;
 }
 
-// "Run now" bypass — start a queued codex job immediately even if the lane is
-// at its limit. GPU jobs are rejected (single MLX runtime would OOM).
+// "Run now" bypass — start a queued cloud-CLI (codex/grok) job immediately
+// even if the lane is at its limit. GPU jobs are rejected (single MLX runtime
+// would OOM). The rejection code stays 'NOT_CODEX' for client back-compat.
 export function runJobNow(jobId) {
   const job = queue.find((j) => j.id === jobId);
   if (!job) return { ok: false, code: 'NOT_FOUND', error: 'Job not found in queue' };
-  if (!isCodexJob(job)) {
-    return { ok: false, code: 'NOT_CODEX', error: 'Only Codex image jobs can be run-now; GPU jobs serialize on the MLX runtime' };
+  if (!isCloudImageJob(job)) {
+    return { ok: false, code: 'NOT_CODEX', error: 'Only cloud-CLI (Codex/Grok) image jobs can be run-now; GPU jobs serialize on the MLX runtime' };
   }
-  startLaneJob(job, { isCodex: true });
+  startLaneJob(job, { isCloud: true });
   return { ok: true, status: 'running' };
 }
 
@@ -522,8 +529,8 @@ export function runJobNow(jobId) {
 // /:jobId/events would keep showing the position from its original enqueue
 // frame even after the line ahead of it cleared.
 function recomputeQueuePositions() {
-  const codexJobs = queue.filter(isCodexJob);
-  const gpuJobs = queue.filter((j) => !isCodexJob(j));
+  const codexJobs = queue.filter(isCloudImageJob);
+  const gpuJobs = queue.filter((j) => !isCloudImageJob(j));
 
   codexJobs.forEach((q, i) => {
     const newPosition = i + 1 + codexRunning.length;
@@ -782,7 +789,7 @@ async function runJob(job) {
     if (job.kind === 'video') return WATCHDOG_VIDEO_MS * Math.max(1, Number(safeParams.chunks) || 1);
     if (job.kind === 'training') return WATCHDOG_TRAINING_MS;
     if (job.kind === 'audio') return WATCHDOG_AUDIO_MS;
-    if (isCodexJob(job)) return WATCHDOG_CODEX_MS;
+    if (isCloudImageJob(job)) return WATCHDOG_CODEX_MS;
     return WATCHDOG_IMAGE_MS;
   })();
   let lastActivityAt = Date.now();
@@ -892,9 +899,9 @@ export function enqueueJob({ kind, params, owner = null }) {
     // same lane occupies slot 1, then same-lane queued jobs follow. Codex
     // jobs only count Codex ahead-of-them; GPU jobs only count GPU jobs.
     position: (() => {
-      const isCodex = isCodexJob({ kind, params });
-      const laneQueue = queue.filter((j) => isCodexJob(j) === isCodex);
-      return laneQueue.length + (isCodex ? codexRunning.length : (running ? 1 : 0)) + 1;
+      const isCloud = isCloudImageJob({ kind, params });
+      const laneQueue = queue.filter((j) => isCloudImageJob(j) === isCloud);
+      return laneQueue.length + (isCloud ? codexRunning.length : (running ? 1 : 0)) + 1;
     })(),
   };
   queue.push(job);
