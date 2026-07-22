@@ -53,7 +53,16 @@ export default function PageSkeleton({
   fullHeight = false,
   barClassName = 'px-3 py-2 sm:px-4 sm:py-3',
   bodyClassName = 'p-3 sm:p-4',
+  // Flex shape of the title/action row. The defaults are the common cases
+  // (PageHeader's wrapping row for `bar`, stack-then-row for `inline`); pages
+  // that break at a different width — or never stack at all — pass their own,
+  // otherwise the skeleton reserves one row where the page renders two.
+  headerRowClass,
 }) {
+  const headerRow = headerRowClass || (header === 'bar'
+    ? 'flex flex-wrap items-center justify-between gap-x-3 gap-y-2'
+    : 'flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4');
+
   // Callers derive counts from live data (`TABS.length`, a config value), so
   // clamp rather than trusting them: `Array.from` throws on a negative or
   // infinite length, and no page shell ever needs more than a few dozen blocks.
@@ -110,13 +119,18 @@ export default function PageSkeleton({
         aria-label={label}
       >
         <div className={`shrink-0 border-b border-port-border ${barClassName}`}>
-          <div className="flex items-center gap-2 sm:gap-3">
-            <div className="w-6 h-6 sm:w-7 sm:h-7 shrink-0 rounded bg-port-card animate-pulse" />
-            <div className="min-w-0 flex-1">
-              <div className={`h-6 sm:h-7 rounded bg-port-card animate-pulse ${titleWidthClass}`} />
-              {showSubtitle && (
-                <div className={`${subtitleOnMobile ? '' : 'hidden sm:block'} h-4 w-64 max-w-full rounded bg-port-card animate-pulse mt-1`} />
-              )}
+          <div className={headerRow}>
+            {/* Icon + title stay one unit, so a `flex-col` headerRowClass
+                stacks the ACTION under the title (what the page does) rather
+                than breaking the icon off onto its own line. */}
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              <div className="w-6 h-6 sm:w-7 sm:h-7 shrink-0 rounded bg-port-card animate-pulse" />
+              <div className="min-w-0">
+                <div className={`h-6 sm:h-7 rounded bg-port-card animate-pulse ${titleWidthClass}`} />
+                {showSubtitle && (
+                  <div className={`${subtitleOnMobile ? '' : 'hidden sm:block'} h-4 w-64 max-w-full rounded bg-port-card animate-pulse mt-1`} />
+                )}
+              </div>
             </div>
             {showAction && <div className="h-6 w-24 rounded bg-port-card animate-pulse" />}
           </div>
@@ -140,7 +154,7 @@ export default function PageSkeleton({
       aria-label={label}
     >
       {header !== 'none' && (
-        <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-6">
+        <div className={`${headerRow} mb-6`}>
           <div className="min-w-0">
             <div className={`h-8 rounded bg-port-card animate-pulse ${titleWidthClass}`} />
             {showSubtitle && (

@@ -115,6 +115,21 @@ describe('PageSkeleton', () => {
     expect(shown.container.innerHTML).not.toContain('hidden sm:block');
   });
 
+  it('defaults the header row per mode and lets a page override the break width', () => {
+    const inline = render(<PageSkeleton />);
+    expect(inline.container.innerHTML).toContain('flex flex-col sm:flex-row');
+    inline.unmount();
+
+    const bar = render(<PageSkeleton header="bar" />);
+    expect(bar.container.innerHTML).toContain('flex flex-wrap items-center justify-between');
+    bar.unmount();
+
+    // A page whose header only stacks at `lg` must not reserve an `sm` stack.
+    const override = render(<PageSkeleton headerRowClass="flex flex-col lg:flex-row gap-3" />);
+    expect(override.container.innerHTML).toContain('flex flex-col lg:flex-row gap-3');
+    expect(override.container.innerHTML).not.toContain('sm:flex-row');
+  });
+
   it('renders no tab strip when tabs is 0', () => {
     const { container } = render(<PageSkeleton tabs={0} />);
     expect(container.querySelectorAll('.h-\\[44px\\]')).toHaveLength(0);

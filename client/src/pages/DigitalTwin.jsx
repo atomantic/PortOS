@@ -111,6 +111,7 @@ export default function DigitalTwin() {
           label="Loading digital twin"
           fullHeight
           padded
+          headerRowClass="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
           barClassName="p-4"
           bodyClassName="p-4"
           titleWidthClass="w-40"
