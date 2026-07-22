@@ -216,6 +216,27 @@ describe('grok provider — directed-path harvest', () => {
     expect(existsSync(sidecar)).toBe(true);
   });
 
+  it('transcodes a staged JPEG to PNG instead of shipping mislabeled bytes', async () => {
+    const { default: sharp } = await import('sharp');
+    const completedListener = vi.fn();
+    imageGenEvents.on('completed', completedListener);
+
+    const job = await grok.generateImage({ prompt: 'a fox' });
+    const jpegBytes = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#fff' } }).jpeg().toBuffer();
+    await mkdir(join(tmpdir(), `portos-grok-${job.jobId}`), { recursive: true });
+    await writeFile(stagingPathFor(job.jobId), jpegBytes);
+    await closeChild(0, 0);
+
+    const deadline = Date.now() + 5000;
+    while (Date.now() < deadline && completedListener.mock.calls.length === 0) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(completedListener).toHaveBeenCalledTimes(1);
+    const written = await readFile(join(FAKE_IMAGES_DIR, job.filename));
+    // PNG magic — the gallery file matches its .png extension.
+    expect(written.subarray(0, 4)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  }, 10000);
+
   it('rejects a staged file that is not a real image (signature sniff)', async () => {
     const failedListener = vi.fn();
     imageGenEvents.on('failed', failedListener);

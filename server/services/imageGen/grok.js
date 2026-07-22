@@ -32,7 +32,7 @@
 
 import { spawn } from 'child_process';
 import { copyFile, mkdir, open, rename, rm, stat, unlink } from 'fs/promises';
-import { join } from 'path';
+import { isAbsolute, join, resolve as pathResolve, sep } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
 import { atomicWrite, detectImageFormat, ensureDir, PATHS, resolveImageInputPath } from '../../lib/fileUtils.js';
@@ -42,7 +42,8 @@ import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { stripAnsi } from '../../lib/ansiStrip.js';
-import { bufferedSpawn, prepareCliSpawn } from '../../lib/bufferedSpawn.js';
+import sharp from 'sharp';
+import { bufferedSpawn, killProcessTree, prepareCliSpawn } from '../../lib/bufferedSpawn.js';
 import { ensureGrokHeadlessArgs, prepareGrokPromptFile } from '../../lib/grok.js';
 import { IMAGE_GEN_MODE, describeFidelity } from './modes.js';
 
@@ -104,8 +105,16 @@ export const getActiveJob = () => {
 
 export const attachSseClient = (jobId, res) => attachSse(jobs, jobId, res);
 
-const sigtermWithEscalation = (id, proc) =>
+const sigtermWithEscalation = (id, proc) => {
+  if (process.platform === 'win32') {
+    // prepareCliSpawn wraps a .cmd shim in cmd.exe on Windows — killing just
+    // the wrapper leaves the real grok child running (still spending quota,
+    // still writing output). taskkill /T the whole tree instead.
+    killProcessTree(proc);
+    return;
+  }
   killWithEscalation(proc, { label: 'grok child', delayMs: 5000, stillRunning: () => activeProcs.get(id) === proc });
+};
 
 // Cancel one specific grok render. jobId is required — with parallel renders
 // an "anonymous cancel" would nuke every in-flight render. Use `cancelAll()`
@@ -269,9 +278,14 @@ export async function generateImage({
 async function runGrok(job, jobId, bin, args, {
   useStdin, fullPrompt, cleanupPromptFile, scratchDir, stagingPath, outputPath, filename, meta, cleanC2PA = false, denoise = false,
 }) {
-  // prepareCliSpawn resolves the Windows .cmd shim of an npm-installed grok
-  // and wraps it for a safe shell:false spawn — a no-op on POSIX.
-  const { command: spawnBin, args: spawnArgs } = prepareCliSpawn(bin, args);
+  // A path-shaped grokPath (contains a separator) must resolve against the
+  // PortOS working directory NOW — the child spawns with cwd set to the
+  // scratch dir, where a relative "./node_modules/.bin/grok" would ENOENT.
+  // Bare names stay bare for PATH lookup. prepareCliSpawn then resolves the
+  // Windows .cmd shim of an npm-installed grok and wraps it for a safe
+  // shell:false spawn — a no-op on POSIX.
+  const resolvedBin = (!isAbsolute(bin) && (bin.includes('/') || bin.includes(sep))) ? pathResolve(bin) : bin;
+  const { command: spawnBin, args: spawnArgs } = prepareCliSpawn(resolvedBin, args);
   const proc = spawn(spawnBin, spawnArgs, { cwd: scratchDir, shell: false, stdio: [useStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
   activeProcs.set(jobId, proc);
   const removeScratch = () => rm(scratchDir, { recursive: true, force: true }).catch(() => {});
@@ -337,13 +351,20 @@ async function runGrok(job, jobId, bin, args, {
         const prefix = harvested.invalid ? 'Grok wrote a non-image file at the directed path. ' : '';
         return finalizeError(job, jobId, proc, `${prefix}${noImageReason(stdoutTail)}`);
       }
-      // Move, not copy — the staging file is PortOS-owned and disposable, so
-      // rename is a metadata-only op when tmpdir and the gallery share a
-      // filesystem. copyFile+unlink is the cross-device (EXDEV) fallback.
-      await rename(stagingPath, outputPath).catch(async () => {
-        await copyFile(stagingPath, outputPath);
-        await unlink(stagingPath).catch(() => {});
-      });
+      if (harvested.format === 'png') {
+        // Move, not copy — the staging file is PortOS-owned and disposable,
+        // so rename is a metadata-only op when tmpdir and the gallery share
+        // a filesystem. copyFile+unlink is the cross-device (EXDEV) fallback.
+        await rename(stagingPath, outputPath).catch(async () => {
+          await copyFile(stagingPath, outputPath);
+          await unlink(stagingPath).catch(() => {});
+        });
+      } else {
+        // Grok wrote a real image but not a PNG (jpeg/webp/gif) despite the
+        // prompt. The gallery serves by extension and sidecars assume PNG,
+        // so transcode rather than shipping mislabeled bytes.
+        await sharp(stagingPath).png().toFile(outputPath);
+      }
       removeScratch();
       // Sidecar metadata so the gallery can recover prompt/ratio/etc.
       const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
@@ -398,7 +419,8 @@ async function harvestStagedImage(stagingPath, timeoutMs) {
       if (fh) {
         const { bytesRead } = await fh.read(head, 0, 16, 0).catch(() => ({ bytesRead: 0 }));
         await fh.close().catch(() => {});
-        if (detectImageFormat(head.subarray(0, bytesRead))) return { found: true, invalid: false };
+        const detected = detectImageFormat(head.subarray(0, bytesRead));
+        if (detected) return { found: true, invalid: false, format: detected.format };
         // Header may still be flushing — keep polling; only report invalid
         // if it never resolves into a real signature before the deadline.
         sawInvalid = true;
