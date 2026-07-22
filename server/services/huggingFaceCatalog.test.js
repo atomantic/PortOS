@@ -228,6 +228,21 @@ describe('huggingFaceCatalog', () => {
       expect(result.variants.find((v) => v.quant === 'BF16')).toMatchObject({ recommended: true, fit: 'comfortable' })
     })
 
+    it('does not mistake a custom quant scheme suffix for a standard quant tag', async () => {
+      // `…-AVQ2.gguf` is a repo-specific scheme, not `Q2`. Emitting `hf.co/<repo>:Q2`
+      // makes Ollama reject the pull ("not a valid quantization scheme"); the bare
+      // repo id resolves through Ollama's `latest` manifest instead.
+      const repo = 'exampleorg/Example-3-Compact'
+      fetch
+        .mockResolvedValueOnce(listing(repo, ['model/Example-3-Compact-AVQ2.gguf']))
+        .mockResolvedValueOnce(blobs(repo, { 'model/Example-3-Compact-AVQ2.gguf': 8_400_000_000 }))
+
+      const [result] = await searchHuggingFaceModels({ backend: 'ollama', query: 'example-3', systemMemoryBytes: 128 * 1024 ** 3 })
+
+      expect(result).toMatchObject({ id: `hf.co/${repo}`, quant: null, installable: true, sizeBytes: 8_400_000_000 })
+      expect(result.variants || []).toEqual([])
+    })
+
     it('defaults to a small quant on a low-memory machine', async () => {
       const repo = 'empero-ai/Qwythos-9B-Small-GGUF'
       fetch

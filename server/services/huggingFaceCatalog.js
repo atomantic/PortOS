@@ -206,8 +206,14 @@ function quantFromFilename(filename) {
     // shard suffix — strip it so BF16/F16 splits resolve to their real quant
     // instead of failing the match and being dropped from the variant list.
     .replace(/-\d{5}-of-\d{5}$/i, '')
-  const match = stem.match(/(?:UD-)?(?:IQ\d(?:_[A-Z0-9]+)*|Q\d(?:_[A-Z0-9]+)*|BF16|F16)$/i)
-  return match?.[0] || null
+  // The quant must be its own trailing token — start-of-name or after a `-`/`_`/`.`
+  // separator. Without that boundary a repo's custom scheme suffix bleeds into a
+  // bogus standard quant (`BTL-3-Compact-AVQ2` → `Q2`), and the resulting
+  // `hf.co/<repo>:Q2` pull is rejected by Ollama with "not a valid quantization
+  // scheme". An unparseable quant is better as null: the install id then falls
+  // back to the bare repo, which Ollama resolves via its `latest` manifest.
+  const match = stem.match(/(?:^|[-_.])((?:UD-)?(?:IQ\d(?:_[A-Z0-9]+)*|Q\d(?:_[A-Z0-9]+)*|BF16|F16))$/i)
+  return match?.[1] || null
 }
 
 function pickGgufFile(model) {
