@@ -193,22 +193,29 @@ export default function Sprites() {
   const navigate = useNavigate();
   const [records, setRecords] = useState(null);
   const [detail, setDetail] = useState(null);
-  const [detailMissing, setDetailMissing] = useState(false);
+  // 'missing' (404 — record really doesn't exist) vs 'error' (transient/server
+  // failure — the record may be fine, offer a retry instead of lying).
+  const [detailState, setDetailState] = useState('idle');
+  const [retryTick, setRetryTick] = useState(0);
 
   const refresh = useCallback(() => {
-    listSpriteRecords().then(setRecords);
+    // request() already toasted; settle to an empty list so the sidebar
+    // doesn't spin forever.
+    listSpriteRecords().then(setRecords).catch(() => setRecords([]));
   }, []);
 
   useEffect(() => { refresh(); }, [refresh]);
 
   useEffect(() => {
-    if (!id) { setDetail(null); setDetailMissing(false); return; }
+    if (!id) { setDetail(null); setDetailState('idle'); return undefined; }
+    let stale = false; // rapid A→B clicks: a late A response must not clobber B
     setDetail(null);
-    setDetailMissing(false);
+    setDetailState('loading');
     getSpriteRecord(id, { silent: true })
-      .then(setDetail)
-      .catch(() => setDetailMissing(true));
-  }, [id]);
+      .then((d) => { if (!stale) { setDetail(d); setDetailState('loaded'); } })
+      .catch((err) => { if (!stale) setDetailState(err?.status === 404 || err?.status === 400 ? 'missing' : 'error'); });
+    return () => { stale = true; };
+  }, [id, retryTick]);
 
   return (
     <div className="flex flex-col md:flex-row gap-4 h-full">
@@ -227,10 +234,15 @@ export default function Sprites() {
       <section className="flex-1 min-w-0">
         {!id ? (
           <p className="text-sm text-gray-500">Select a sprite to browse its reference set, animation strips, and atlases.</p>
-        ) : detailMissing ? (
+        ) : detailState === 'missing' ? (
           <div className="text-sm text-gray-400">
             Sprite not found.{' '}
             <button onClick={() => navigate('/media/sprites')} className="text-port-accent hover:underline">Back to library</button>
+          </div>
+        ) : detailState === 'error' ? (
+          <div className="text-sm text-gray-400">
+            Failed to load this sprite.{' '}
+            <button onClick={() => setRetryTick((t) => t + 1)} className="text-port-accent hover:underline">Retry</button>
           </div>
         ) : !detail ? (
           <p className="text-sm text-gray-500">Loading…</p>

@@ -23,7 +23,7 @@
 
 import { join, basename, dirname } from 'path';
 import { readdir, copyFile } from 'fs/promises';
-import { PATHS, ensureDir, sha256File, atomicWrite, pathExists, readJSONFile } from '../../lib/fileUtils.js';
+import { PATHS, ensureDir, sha256File, atomicWrite, pathExists, readJSONFile, expandHome } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { upsertImportedRecord } from './records.js';
 import { spriteDir } from './paths.js';
@@ -108,7 +108,9 @@ function relToCharacterDir(manifestPath, characterId) {
   const marker = `sprites/${characterId}/`;
   const idx = manifestPath.indexOf(marker);
   const rel = idx >= 0 ? manifestPath.slice(idx + marker.length) : manifestPath.replace(/^\/+/, '');
-  if (!rel || rel.split('/').some((seg) => seg === '..' || seg === '')) return null;
+  // Split on BOTH separators — on Windows a `..\` segment would otherwise ride
+  // through the check as one opaque segment and still traverse in join().
+  if (!rel || rel.split(/[\\/]/).some((seg) => seg === '..' || seg === '')) return null;
   return rel;
 }
 
@@ -223,6 +225,9 @@ async function importPropsFamily({ sourceRoot, familyId, srcFamilyDir }) {
  * Returns { results: [...perSubject], totals: { subjects, files, verified, errors } }.
  */
 export async function importFromSource({ sourceRoot, characters, includeProps = true }) {
+  // The UI placeholder suggests a ~/… path; resolve it before probing, or a
+  // correct tilde path 400s with a misleading "not a sprite pipeline".
+  sourceRoot = expandHome(sourceRoot);
   const specsDir = join(sourceRoot, 'art-pipeline', 'characters');
   const propsDir = join(sourceRoot, 'game', 'assets', 'sprites');
   const hasSpecs = await pathExists(specsDir);
@@ -236,7 +241,13 @@ export async function importFromSource({ sourceRoot, characters, includeProps = 
 
   await ensureDir(PATHS.sprites);
   const results = [];
+  // Ids imported THIS run (drives the runtime-selection provenance copy) vs
+  // every character id the specs dir declares (drives the props-loop skip). A
+  // filtered import must still exclude ALL characters' game dirs from the
+  // props walk — otherwise `characters: ['a']` treats character b's published
+  // atlas dir as a props family and overwrites b's record with kind:'props'.
   const characterIds = new Set();
+  const allSpecCharacterIds = new Set();
 
   if (hasSpecs) {
     const wanted = Array.isArray(characters) && characters.length ? new Set(characters) : null;
@@ -252,6 +263,7 @@ export async function importFromSource({ sourceRoot, characters, includeProps = 
         results.push({ id: characterId, kind: 'character', files: 0, verified: 0, errors: ['invalid character id'] });
         continue;
       }
+      allSpecCharacterIds.add(characterId);
       if (wanted && !wanted.has(characterId)) continue;
       characterIds.add(characterId);
       results.push(await importCharacter({ sourceRoot, characterId, spec, specPath }));
@@ -262,8 +274,9 @@ export async function importFromSource({ sourceRoot, characters, includeProps = 
     for (const entry of (await readdir(propsDir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
       if (!entry.isDirectory()) continue;
       // A character's published atlas dir duplicates what runtime/ archives —
-      // only non-character families import from the game tree.
-      if (characterIds.has(entry.name)) continue;
+      // only non-character families import from the game tree. Excludes every
+      // spec-declared character, imported this run or not.
+      if (allSpecCharacterIds.has(entry.name)) continue;
       if (!isValidSpriteId(entry.name)) continue;
       results.push(await importPropsFamily({ sourceRoot, familyId: entry.name, srcFamilyDir: join(propsDir, entry.name) }));
     }
