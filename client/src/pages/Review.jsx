@@ -25,7 +25,7 @@ import {
   Activity,
   DatabaseBackup
 } from 'lucide-react';
-import BrailleSpinner from '../components/BrailleSpinner';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import MarkdownOutput from '../components/cos/MarkdownOutput';
 import { timeAgo, formatDateTime } from '../utils/formatters';
 import { coalesce } from '../utils/coalesce';
@@ -263,11 +263,15 @@ export default function Review() {
     }), [pendingItems]);
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <BrailleSpinner text="Loading review hub" />
-      </div>
-    );
+    return <PageSkeleton
+        label="Loading review hub"
+        headerRowClass="flex flex-col lg:flex-row lg:items-center justify-between gap-3"
+        padded
+        fullHeight
+        titleWidthClass="w-40"
+        cards={4}
+        sidebar={false}
+      />;
   }
 
   // Cheap derivations off the memoized `pendingItems`/`actionableItems` — plain

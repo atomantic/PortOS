@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { RefreshCw, Clock, AlertTriangle } from 'lucide-react';
 import * as api from '../services/api';
 import BrailleSpinner from '../components/BrailleSpinner';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import Pill from '../components/ui/Pill';
 import { formatCompactCount } from '../utils/formatters';
 
@@ -341,7 +342,16 @@ function InternalUsageMetrics() {
   };
 
   if (loading && !usage) {
-    return <div className="text-center py-8"><BrailleSpinner text="Loading usage data" /></div>;
+    return (
+      <PageSkeleton
+        label="Loading usage data"
+        titleWidthClass="w-44"
+        showAction={false}
+        layout="grid"
+        gridColsClass="grid-cols-2 sm:grid-cols-4"
+        cards={4}
+      />
+    );
   }
 
   if (!usage) {

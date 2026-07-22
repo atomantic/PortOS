@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, Suspense } from 'react';
 import { Link } from 'react-router-dom';
 import BrailleSpinner from '../components/BrailleSpinner';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import LayoutPicker from '../components/dashboard/LayoutPicker';
 import LayoutEditor from '../components/dashboard/LayoutEditor';
 import WidgetSuggestions from '../components/dashboard/WidgetSuggestions';
@@ -325,10 +326,15 @@ export default function Dashboard() {
 
   if (loading) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 gap-3">
-        <SchematicLabel module="DASH" status="BOOTING" glyph="orbit" state="active" />
-        <BrailleSpinner text="Loading dashboard" />
-      </div>
+      // No BOOTING SchematicLabel here: it exists only while loading, so its
+      // height is exactly the shift this skeleton is meant to eliminate.
+      <PageSkeleton
+        label="Loading dashboard"
+        headerRowClass="flex flex-row items-center justify-between gap-2 sm:gap-4"
+        titleWidthClass="w-40"
+        layout="grid"
+        cards={6}
+      />
     );
   }
 

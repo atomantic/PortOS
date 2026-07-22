@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { RefreshCw, ArrowUpCircle, GitBranch, ExternalLink, Check } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import * as api from '../services/api';
-import BrailleSpinner from '../components/BrailleSpinner';
+import PageSkeleton from '../components/ui/PageSkeleton';
 
 export default function Submodules() {
   const [submodules, setSubmodules] = useState([]);
@@ -53,7 +53,7 @@ export default function Submodules() {
   };
 
   if (loading) {
-    return <div className="text-center py-8"><BrailleSpinner text="Loading submodules" /></div>;
+    return <PageSkeleton label="Loading submodules" titleWidthClass="w-40" cards={3} sidebar={false} />;
   }
 
   const hasUpdates = submodules.some(s => s.behind > 0 || s.outOfSync || !s.initialized);

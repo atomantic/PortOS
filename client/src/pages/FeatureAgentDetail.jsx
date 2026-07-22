@@ -12,7 +12,7 @@ import ConfigTab from '../components/feature-agents/ConfigTab';
 import RunsTab from '../components/feature-agents/RunsTab';
 import OutputTab from '../components/feature-agents/OutputTab';
 import GitTab from '../components/feature-agents/GitTab';
-import BrailleSpinner from '../components/BrailleSpinner';
+import PageSkeleton from '../components/ui/PageSkeleton';
 
 export default function FeatureAgentDetail() {
   const { id } = useParams();
@@ -87,9 +87,23 @@ export default function FeatureAgentDetail() {
 
   if (loading) {
     return (
-      <div className="flex flex-col h-full items-center justify-center">
-        <BrailleSpinner text="Loading agent" />
-      </div>
+      <PageSkeleton
+        header="bar"
+        label="Loading agent"
+        fullHeight
+        padded
+        // Hand-rolled header block (not PageHeader) with the tab row inside it.
+        barClassName="px-6 pt-6 pb-4"
+        bodyClassName="p-6"
+        titleWidthClass="w-56"
+        showSubtitle
+        subtitleOnMobile
+        showAction={false}
+        tabs={isCreate ? 0 : TABS.length}
+        tabsInBar
+        cards={3}
+        sidebar={false}
+      />
     );
   }
 

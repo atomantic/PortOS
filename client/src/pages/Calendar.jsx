@@ -2,7 +2,7 @@ import { useNavigate } from 'react-router-dom';
 import { CalendarDays, Calendar as CalendarIcon, ClipboardList, Clock, Columns, LayoutGrid, RefreshCw, Settings } from 'lucide-react';
 import { useState, useEffect, useCallback } from 'react';
 import * as api from '../services/api';
-import BrailleSpinner from '../components/BrailleSpinner';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
 import { useValidTab } from '../hooks/useValidTab';
@@ -74,9 +74,18 @@ export default function Calendar() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <BrailleSpinner text="Loading" />
-      </div>
+      <PageSkeleton
+        header="bar"
+        label="Loading calendar"
+        fullHeight
+        padded
+        bodyClassName="p-4"
+        titleWidthClass="w-32"
+        showSubtitle
+        tabs={TABS.length}
+        cards={3}
+        sidebar={false}
+      />
     );
   }
 

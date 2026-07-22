@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { Trash2 } from 'lucide-react';
 import * as api from '../services/api';
 import { formatTime, formatRuntime, formatDateTime } from '../utils/formatters';
-import BrailleSpinner from '../components/BrailleSpinner';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import Banner from '../components/ui/Banner';
 import { clickableProps } from '../lib/a11yKeyboard.js';
 
@@ -68,7 +68,16 @@ export function HistoryPage() {
   };
 
   if (loading) {
-    return <div className="text-center py-8"><BrailleSpinner text="Loading history" /></div>;
+    return (
+      <PageSkeleton
+        label="Loading history"
+        titleWidthClass="w-48"
+        showAction={false}
+        layout="grid"
+        gridColsClass="grid-cols-2 sm:grid-cols-4"
+        cards={4}
+      />
+    );
   }
 
   return (

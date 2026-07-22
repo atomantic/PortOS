@@ -1,33 +1,89 @@
-// Lightweight full-page loading skeleton for the DevTools integration pages
-// (DataDog / Jira / GitHub). Reserves the header + `[1fr_360px]` card-grid
-// dimensions those pages render once loaded so the first paint doesn't reflow.
-// Mirrors the WidgetSkeleton pattern (port design tokens + animate-pulse) and
-// renders inside Layout's scrolling main — no full-height wrapper.
+// Shared full-page loading skeleton. Reserves the dimensions a page renders
+// once loaded so the first paint doesn't reflow (issue #2843 — most pages used
+// to show a centered BrailleSpinner with no reserved layout, so content popped
+// in above the fold on every navigation).
+//
+// Three axes cover every primary page shape in PortOS:
+//
+//   header  'inline' — the page renders its own `<h2>` + action row inside the
+//                      padded scrolling main (Apps, DataDog, Jira, GitHub, …).
+//           'bar'    — the page renders a bordered title bar above a scrolling
+//                      body (Brain, Calendar, Messages, Wiki, …). Defaults to
+//                      the shared `PageHeader`'s compact
+//                      `px-3 py-2 sm:px-4 sm:py-3`; pages with a hand-rolled
+//                      bar pass their own via `barClassName`.
+//           'none'   — the page already rendered its own header and only the
+//                      body region is loading (Goals).
+//   layout  'stack'  — vertically stacked cards, optional right sidebar.
+//           'grid'   — responsive card grid (dashboard widgets, tiles).
+//   tabs    n > 0    — reserves a `TabPills` (underline variant) strip under
+//                      the header. A default-size TabPills button is `text-sm`
+//                      (20px line box) + `py-3`, i.e. 44px — its
+//                      `min-h-[44px] sm:min-h-[40px]` is a floor the content
+//                      already exceeds, so reserve a flat 44px at every width.
+//                      `tabsInBar` moves the strip INSIDE the header block for
+//                      pages that nest their tabs there (Feature Agent detail).
+//
+// Container flags:
+//   padded     — add page padding. Match whatever the LOADED page does: leave
+//                FALSE when the page's own root is unpadded (its padding comes
+//                from Layout's `overflow-auto p-4 md:p-6` main) and on
+//                full-bleed tabs that render edge to edge; pass TRUE when the
+//                page root pads itself, and on `isFullWidth` routes, whose main
+//                is a bare `relative overflow-hidden`.
+//   fullHeight — fill the height and own the scroll, for `isFullWidth` routes.
+//
+// `label` is the screen-reader announcement — keep it specific ("Loading apps",
+// not the bare default) so a page's busy state says WHAT is loading.
 export default function PageSkeleton({
+  header = 'inline',
+  label = 'Loading',
   titleWidthClass = 'w-48',
+  showSubtitle = false,
+  // PageHeader hides its subtitle below `sm`; hand-rolled bars usually don't.
+  subtitleOnMobile = false,
   showAction = true,
+  tabs = 0,
+  tabsInBar = false,
   cards = 3,
   sidebar = true,
+  layout = 'stack',
+  gridColsClass = 'sm:grid-cols-2 xl:grid-cols-3',
+  padded = false,
+  fullHeight = false,
+  barClassName = 'px-3 py-2 sm:px-4 sm:py-3',
+  bodyClassName = 'p-3 sm:p-4',
+  // Flex shape of the title/action row. The defaults are the common cases
+  // (PageHeader's wrapping row for `bar`, stack-then-row for `inline`); pages
+  // that break at a different width — or never stack at all — pass their own,
+  // otherwise the skeleton reserves one row where the page renders two.
+  headerRowClass,
 }) {
-  return (
-    <div className="p-4 sm:p-6" role="status" aria-busy="true" aria-label="Loading">
-      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4 mb-6">
-        <div className={`h-8 rounded bg-port-card animate-pulse ${titleWidthClass}`} />
-        {showAction && <div className="h-10 w-full sm:w-48 rounded bg-port-card animate-pulse" />}
-      </div>
+  const headerRow = headerRowClass || (header === 'bar'
+    ? 'flex flex-wrap items-center justify-between gap-x-3 gap-y-2'
+    : 'flex flex-col sm:flex-row sm:justify-between sm:items-center gap-4');
+
+  // Callers derive counts from live data (`TABS.length`, a config value), so
+  // clamp rather than trusting them: `Array.from` throws on a negative or
+  // infinite length, and no page shell ever needs more than a few dozen blocks.
+  const repeat = (n) => Array.from({ length: Math.min(64, Math.max(0, Math.floor(n) || 0)) });
+
+  const cardBlocks = repeat(cards).map((_, i) => (
+    <div
+      key={i}
+      className="rounded-lg border border-port-border bg-port-card p-4 sm:p-6 animate-pulse"
+    >
+      <div className="h-5 w-2/3 rounded bg-port-border mb-3" />
+      <div className="h-4 w-1/2 rounded bg-port-border mb-2" />
+      <div className="h-4 w-1/3 rounded bg-port-border" />
+    </div>
+  ));
+
+  const body = layout === 'grid'
+    ? <div className={`grid grid-cols-1 gap-4 items-start ${gridColsClass}`}>{cardBlocks}</div>
+    : (
       <div className={`grid grid-cols-1 gap-6 items-start ${sidebar ? 'lg:grid-cols-[1fr_360px]' : ''}`}>
-        <div className="space-y-4">
-          {Array.from({ length: cards }).map((_, i) => (
-            <div
-              key={i}
-              className="rounded-lg border border-port-border bg-port-card p-4 sm:p-6 animate-pulse"
-            >
-              <div className="h-5 w-2/3 rounded bg-port-border mb-3" />
-              <div className="h-4 w-1/2 rounded bg-port-border mb-2" />
-              <div className="h-4 w-1/3 rounded bg-port-border" />
-            </div>
-          ))}
-        </div>
+        <div className="space-y-4">{cardBlocks}</div>
         {sidebar && (
           <div className="rounded-lg border border-port-border bg-port-card p-4 sm:p-6 animate-pulse">
             <div className="h-5 w-1/3 rounded bg-port-border mb-4" />
@@ -39,6 +95,77 @@ export default function PageSkeleton({
           </div>
         )}
       </div>
+    );
+
+  const tabRows = repeat(tabs);
+  const renderTabStrip = (bordered) => tabRows.length > 0 ? (
+    <div className={`shrink-0 flex gap-1 overflow-hidden ${bordered ? 'border-b border-port-border' : ''}`}>
+      {tabRows.map((_, i) => (
+        <div key={i} className="h-[44px] w-20 sm:w-24 flex items-center px-2">
+          <div className="h-4 w-full rounded bg-port-card animate-pulse" />
+        </div>
+      ))}
+    </div>
+  ) : null;
+
+  // `bar` pages are the flex-column shells: the header bar and tab strip are
+  // full-bleed, only the body region takes padding and owns the scroll.
+  if (header === 'bar') {
+    return (
+      <div
+        className={`flex flex-col min-h-0 ${fullHeight ? 'h-full' : ''}`}
+        role="status"
+        aria-busy="true"
+        aria-label={label}
+      >
+        <div className={`shrink-0 border-b border-port-border ${barClassName}`}>
+          <div className={headerRow}>
+            {/* Icon + title stay one unit, so a `flex-col` headerRowClass
+                stacks the ACTION under the title (what the page does) rather
+                than breaking the icon off onto its own line. */}
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              <div className="w-6 h-6 sm:w-7 sm:h-7 shrink-0 rounded bg-port-card animate-pulse" />
+              <div className="min-w-0">
+                <div className={`h-6 sm:h-7 rounded bg-port-card animate-pulse ${titleWidthClass}`} />
+                {showSubtitle && (
+                  <div className={`${subtitleOnMobile ? '' : 'hidden sm:block'} h-4 w-64 max-w-full rounded bg-port-card animate-pulse mt-1`} />
+                )}
+              </div>
+            </div>
+            {showAction && <div className="h-6 w-24 rounded bg-port-card animate-pulse" />}
+          </div>
+          {/* Pages that nest their tab row inside the header block (no divider
+              between title and tabs) reserve it here rather than below the bar. */}
+          {tabsInBar && <div className="mt-3">{renderTabStrip(false)}</div>}
+        </div>
+        {!tabsInBar && renderTabStrip(true)}
+        <div className={`flex-1 min-h-0 ${fullHeight ? 'overflow-y-auto' : ''} ${padded ? bodyClassName : ''}`}>
+          {body}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      className={`${padded ? 'p-4 md:p-6' : ''} ${fullHeight ? 'h-full overflow-y-auto' : ''}`}
+      role="status"
+      aria-busy="true"
+      aria-label={label}
+    >
+      {header !== 'none' && (
+        <div className={`${headerRow} mb-6`}>
+          <div className="min-w-0">
+            <div className={`h-8 rounded bg-port-card animate-pulse ${titleWidthClass}`} />
+            {showSubtitle && (
+              <div className="h-4 w-56 max-w-full rounded bg-port-card animate-pulse mt-2" />
+            )}
+          </div>
+          {showAction && <div className="h-10 w-full sm:w-48 rounded bg-port-card animate-pulse" />}
+        </div>
+      )}
+      {tabRows.length > 0 && <div className="mb-4">{renderTabStrip(true)}</div>}
+      {body}
     </div>
   );
 }

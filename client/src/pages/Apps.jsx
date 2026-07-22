@@ -5,6 +5,7 @@ import toast from '../components/ui/Toast';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import AppIcon from '../components/AppIcon';
 import BrailleSpinner from '../components/BrailleSpinner';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import KanbanBoard from '../components/KanbanBoard';
 import StatusBadge from '../components/StatusBadge';
 import ActivityLog from '../components/apps/ActivityLog';
@@ -136,11 +137,7 @@ export default function Apps() {
     .slice().sort((a, b) => a.name.localeCompare(b.name));
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <BrailleSpinner text="Loading apps" />
-      </div>
-    );
+    return <PageSkeleton label="Loading apps" titleWidthClass="w-24" showSubtitle cards={4} sidebar={false} />;
   }
 
   return (

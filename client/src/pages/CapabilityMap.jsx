@@ -3,7 +3,7 @@ import {
   CheckCircle, AlertTriangle, XCircle, Circle, ChevronRight, LayoutGrid,
 } from 'lucide-react';
 import * as api from '../services/api';
-import BrailleSpinner from '../components/BrailleSpinner';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 
 // Status presentation. Mirrors the server's CAPABILITY_STATUS tiers.
@@ -51,11 +51,15 @@ export default function CapabilityMap() {
   );
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <BrailleSpinner text="Loading capabilities" />
-      </div>
-    );
+    return <PageSkeleton
+        label="Loading capabilities"
+        headerRowClass="flex flex-wrap items-center justify-between gap-3"
+        titleWidthClass="w-40"
+        showSubtitle
+        layout="grid"
+        gridColsClass="lg:grid-cols-2"
+        cards={6}
+      />;
   }
 
   if (!data) {
