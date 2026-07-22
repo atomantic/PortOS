@@ -17,7 +17,7 @@ const RUNS_DIR = PATHS.runs;
 /**
  * Create a run entry for usage tracking.
  */
-export async function createAgentRun(agentId, task, model, provider, workspacePath, appName) {
+export async function createAgentRun({ agentId, task, model, provider, workspacePath, appName }) {
   const runId = uuidv4();
   const runDir = join(RUNS_DIR, runId);
 

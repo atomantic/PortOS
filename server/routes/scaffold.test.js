@@ -54,6 +54,8 @@ import { ensureDir } from '../lib/fileUtils.js';
 import { writeFile } from 'fs/promises';
 import { spawn, exec } from 'child_process';
 import { createApp } from '../services/apps.js';
+import { scaffoldVite } from './scaffoldVite.js';
+import { scaffoldPortOS } from './scaffoldPortOS.js';
 
 function makeApp() {
   const app = express();
@@ -146,5 +148,41 @@ describe('POST /api/scaffold — request validation before filesystem mutation (
     // (directory creation) and registered the app.
     expect(ensureDir).toHaveBeenCalledWith('/tmp/workspace/my-app');
     expect(createApp).toHaveBeenCalledTimes(1);
+  });
+
+  // The scaffolders take a single options object (#2841) — a positional call
+  // would silently pass `dirName` as `repoPath` and scaffold into the wrong tree.
+  it('dispatches to scaffoldVite with a named-options object', async () => {
+    const res = await request(app)
+      .post('/api/scaffold')
+      .send({ ...validBody, template: 'vite-express', uiPort: 3100, apiPort: 3101 });
+
+    expect(res.status).toBe(200);
+    expect(scaffoldVite).toHaveBeenCalledTimes(1);
+    expect(scaffoldVite).toHaveBeenCalledWith(expect.objectContaining({
+      repoPath: '/tmp/workspace/my-app',
+      dirName: 'my-app',
+      parentDir: '/tmp/workspace',
+      template: 'vite-express',
+      uiPort: 3100,
+      apiPort: 3101,
+      addStep: expect.any(Function)
+    }));
+  });
+
+  it('dispatches to scaffoldPortOS with a named-options object', async () => {
+    const res = await request(app)
+      .post('/api/scaffold')
+      .send({ ...validBody, template: 'portos-stack', uiPort: 3100, apiPort: 3101 });
+
+    expect(res.status).toBe(200);
+    expect(scaffoldPortOS).toHaveBeenCalledWith(expect.objectContaining({
+      repoPath: '/tmp/workspace/my-app',
+      name: 'My App',
+      dirName: 'my-app',
+      uiPort: 3100,
+      apiPort: 3101,
+      addStep: expect.any(Function)
+    }));
   });
 });
