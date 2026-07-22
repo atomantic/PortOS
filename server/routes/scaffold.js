@@ -281,7 +281,7 @@ async function scaffoldApp(req, res) {
 
   // Generate project files based on template
   if (template === 'vite-react' || template === 'vite-express') {
-    await scaffoldVite(repoPath, dirName, parentDir, template, uiPort, apiPort, addStep);
+    await scaffoldVite({ repoPath, dirName, parentDir, template, uiPort, apiPort, addStep });
   } else if (template === 'express-api') {
     await scaffoldExpress(repoPath, dirName, apiPort, addStep);
   } else if (template === 'ios-native') {
@@ -289,7 +289,7 @@ async function scaffoldApp(req, res) {
   } else if (template === 'xcode-multiplatform') {
     await scaffoldXcode(repoPath, name, dirName, addStep);
   } else if (template === 'portos-stack') {
-    await scaffoldPortOS(repoPath, name, dirName, uiPort, apiPort, addStep);
+    await scaffoldPortOS({ repoPath, name, dirName, uiPort, apiPort, addStep });
   }
 
   // Create .env file
