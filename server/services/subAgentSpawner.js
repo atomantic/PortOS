@@ -11,13 +11,18 @@
  */
 
 import { join } from 'path';
-import { readFile, readdir, rm, stat } from 'fs/promises';
+import { readdir, rm, stat } from 'fs/promises';
 import { existsSync } from 'fs';
 import { emitLog, cosEvents } from './cosEvents.js';
-import { createAgentOutputBatcher, updateAgent, completeAgent } from './cosAgents.js';
+import { updateAgent, completeAgent } from './cosAgents.js';
 import { initProviderStatus } from './providerStatus.js';
 import { onCosRunnerEvent, initCosRunnerConnection, isRunnerAvailable } from './cosRunnerClient.js';
-import { ensureDir, loadSlashdoFile, PATHS } from '../lib/fileUtils.js';
+import { loadSlashdoFile, PATHS } from '../lib/fileUtils.js';
+import { getRunnerOutputBatcher, flushRunnerOutputBatcher } from './agentRunnerOutputBatchers.js';
+import { syncRunnerAgents } from './agentRunnerSync.js';
+import { handleAgentCompletion, spawnAgentForTask } from './agentLifecycle.js';
+import { cleanupOrphanedAgents, terminateAgent } from './agentManagement.js';
+import { completeAgentRun } from './agentRunTracking.js';
 
 // ─── Shared state (imported from agentState.js) ──────────────────────────────
 export { activeAgents, runnerAgents, userTerminatedAgents, spawningTasks, useRunner, isTruthyMeta, isFalsyMeta, getActiveAgentIds } from './agentState.js';
@@ -29,39 +34,19 @@ export { createAgentRun, completeAgentRun, checkForTaskCommit, extractErrorFromO
 export { ERROR_PATTERNS, analyzeAgentFailure, createInvestigationTask, API_ACCESS_ERROR_CATEGORIES, maybeCreateInvestigationTask, resolveFailedTaskUpdate, MAX_TASK_RETRIES } from './agentErrorAnalysis.js';
 export { buildAgentPrompt, getAppWorkspace, getAppDataForTask, generateJiraTitle, createJiraTicketForTask, getClaudeMdContext, buildCompactionSection, detectSkillTemplate, loadSkillTemplate } from './agentPromptBuilder.js';
 export { spawnDirectly, createStreamJsonParser, summarizeToolInput, safeParse, buildCliSpawnConfig, isClaudeCliProvider, isTuiProvider, getClaudeSettingsEnv } from './agentCliSpawning.js';
-export { syncRunnerAgents, spawnAgentForTask, waitForRunnerStability, spawnViaRunner, extractFinalSummary, extractPipelineOutputSummary, handlePipelineProgression, handleAgentCompletion, cleanupAgentWorktree, spawnMergeRecoveryTask, spawnReviewLoopFollowUp } from './agentLifecycle.js';
+export { spawnAgentForTask, waitForRunnerStability, spawnViaRunner, extractPipelineOutputSummary, handlePipelineProgression, handleAgentCompletion, cleanupAgentWorktree, spawnMergeRecoveryTask, spawnReviewLoopFollowUp } from './agentLifecycle.js';
+export { syncRunnerAgents } from './agentRunnerSync.js';
+export { extractFinalSummary } from './agentSummaryExtraction.js';
 export { terminateAgent, pauseAgent, getActiveAgents, killAgent, getAgentProcessStats, killAllAgents, isPidAlive, cleanupOrphanedAgents, handleOrphanedTask } from './agentManagement.js';
 export { processAgentCompletion } from './agentCompletion.js';
 
-const ROOT_DIR = PATHS.root;
 const RUNS_DIR = PATHS.runs;
 
-// Per-agent debounced output batchers for the CoS Runner stream path. The
-// runner emits `agent:output` per parsed line (see cos-runner/index.js), so a
-// chatty agent would otherwise trigger a full state load+save per line. Each
-// batcher coalesces a ~250ms window; we drain + drop it when the agent
-// completes/errors so the final lines persist before the completion event.
-const runnerOutputBatchers = new Map();
-
-function getRunnerOutputBatcher(agentId) {
-  let batcher = runnerOutputBatchers.get(agentId);
-  if (!batcher) {
-    batcher = createAgentOutputBatcher(agentId);
-    runnerOutputBatchers.set(agentId, batcher);
-  }
-  return batcher;
-}
-
-export async function flushRunnerOutputBatcher(agentId) {
-  const batcher = runnerOutputBatchers.get(agentId);
-  if (!batcher) return;
-  // Flush BEFORE deleting: the agent is still in `runnerAgents` at this point
-  // (handleAgentCompletion removes it afterwards), so a line racing in during
-  // the awaited flush lands in this same batcher instead of orphaning a new
-  // one. The `agent:output` guard below drops any truly post-completion stray.
-  await batcher.flush();
-  runnerOutputBatchers.delete(agentId);
-}
+// The runner output batchers moved to their own leaf module (issue #2837) so
+// agentManagement.js can import `flushRunnerOutputBatcher` statically instead of
+// dynamically reaching back through this barrel. Re-exported for consumers that
+// still import it from here.
+export { flushRunnerOutputBatcher } from './agentRunnerOutputBatchers.js';
 
 
 /**
@@ -122,11 +107,6 @@ async function runInitSpawner() {
   // Check if CoS Runner is available
   const runnerAvailable = await isRunnerAvailable();
   setUseRunner(runnerAvailable);
-
-  // Lazy-import lifecycle functions (avoids circular dep at module init time)
-  const { syncRunnerAgents, handleAgentCompletion, spawnAgentForTask } = await import('./agentLifecycle.js');
-  const { cleanupOrphanedAgents, terminateAgent } = await import('./agentManagement.js');
-  const { completeAgentRun } = await import('./agentRunTracking.js');
 
   if (runnerAvailable) {
     console.log('🤖 Sub-agent spawner initialized (using CoS Runner)');

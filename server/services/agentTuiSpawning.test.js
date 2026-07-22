@@ -58,7 +58,7 @@ vi.mock('./agentCompletion.js', () => ({
   processAgentCompletion: vi.fn().mockResolvedValue(undefined)
 }));
 
-vi.mock('./agentLifecycle.js', () => ({
+vi.mock('./agentFinalization.js', () => ({
   persistSimplifySummaries: vi.fn().mockResolvedValue(undefined),
   finalizeAgent: vi.fn().mockResolvedValue(undefined),
   releaseAgentLane: vi.fn()
@@ -164,7 +164,7 @@ import { readFile } from 'fs/promises';
 import { execFile } from 'child_process';
 import { buildTuiSpawnConfig, spawnTuiAgent } from './agentTuiSpawning.js';
 import * as shellService from './shell.js';
-import * as agentLifecycle from './agentLifecycle.js';
+import * as agentLifecycle from './agentFinalization.js';
 import * as agentErrorAnalysis from './agentErrorAnalysis.js';
 import * as cosAgents from './cosAgents.js';
 import * as gitService from './git.js';

@@ -49,7 +49,7 @@ vi.mock('./agentRunTracking.js', () => ({ completeAgentRun: vi.fn().mockResolved
 // pulling in the real worktreeManager → instances module graph. Default: no
 // owner-matched account → empty overlay (ambient gh auth untouched).
 vi.mock('./git.js', () => ({ resolveForgeTokenEnv: vi.fn().mockResolvedValue({}) }));
-vi.mock('./agentLifecycle.js', () => ({
+vi.mock('./agentFinalization.js', () => ({
   finalizeAgent: vi.fn().mockResolvedValue(undefined),
   releaseAgentLane: vi.fn(),
 }));
@@ -456,7 +456,7 @@ describe('stream error containment', () => {
     cosAgentsMocks.appendAgentOutput.mockResolvedValue(undefined);
     cosAgentsMocks.appendAgentOutputLines.mockResolvedValue(undefined);
     (await import('./agentRunTracking.js')).completeAgentRun.mockResolvedValue(undefined);
-    (await import('./agentLifecycle.js')).finalizeAgent.mockResolvedValue(undefined);
+    (await import('./agentFinalization.js')).finalizeAgent.mockResolvedValue(undefined);
     minimalArgs.cleanupWorktreeFn.mockResolvedValue(undefined);
     // Reset the resolve+wrap helper to its POSIX passthrough before each test
     // (afterEach's restoreAllMocks can clear the factory implementation).

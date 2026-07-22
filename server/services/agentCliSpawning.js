@@ -17,7 +17,7 @@ import { release } from './executionLanes.js';
 import { completeExecution, errorExecution } from './toolStateMachine.js';
 import { analyzeAgentFailure } from './agentErrorAnalysis.js';
 import { completeAgentRun } from './agentRunTracking.js';
-import { finalizeAgent, releaseAgentLane } from './agentLifecycle.js';
+import { finalizeAgent, releaseAgentLane } from './agentFinalization.js';
 import { activeAgents, userTerminatedAgents, pausedAgents } from './agentState.js';
 import { normalizeReviewers } from '../lib/validation.js';
 import { resolveReviewLoopOptions } from './codeReview.js';

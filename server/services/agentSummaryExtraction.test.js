@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { extractFinalSummary, extractSimplifySummaries } from './agentLifecycle.js';
+import { extractFinalSummary, extractSimplifySummaries } from './agentSummaryExtraction.js';
 
 describe('extractFinalSummary', () => {
   it('returns the last block of non-tool text', () => {

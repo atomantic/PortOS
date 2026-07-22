@@ -69,10 +69,9 @@ vi.mock('./agents.js', () => ({ unregisterSpawnedAgent: vi.fn() }));
 vi.mock('./executionLanes.js', () => ({ release: vi.fn() }));
 vi.mock('./toolStateMachine.js', () => ({ completeExecution: vi.fn(), errorExecution: vi.fn() }));
 vi.mock('./shell.js', () => ({ writeToSession: vi.fn(), killSession: vi.fn() }));
-vi.mock('./agentLifecycle.js', () => ({
-  cleanupAgentWorktree: vi.fn(),
-  syncRunnerAgents: vi.fn().mockResolvedValue(0)
-}));
+vi.mock('./agentWorktreeCleanup.js', () => ({ cleanupAgentWorktree: vi.fn() }));
+vi.mock('./agentRunnerSync.js', () => ({ syncRunnerAgents: vi.fn().mockResolvedValue(0) }));
+vi.mock('./agentRunnerOutputBatchers.js', () => ({ flushRunnerOutputBatcher: vi.fn().mockResolvedValue(undefined) }));
 vi.mock('./worktreeManager.js', () => ({ cleanupOrphanedWorktrees: vi.fn() }));
 vi.mock('./creativeDirector/local.js', () => ({
   updateRun: vi.fn().mockResolvedValue(undefined),

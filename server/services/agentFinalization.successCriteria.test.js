@@ -15,7 +15,7 @@ vi.mock('./agentRunTracking.js', () => ({
   completeAgentRun: vi.fn(),
 }));
 
-import { evaluateSuccessCriteria, resolveProgrammaticIoVerdict, withOutputHookTimeout } from './agentLifecycle.js';
+import { evaluateSuccessCriteria, resolveProgrammaticIoVerdict, withOutputHookTimeout } from './agentFinalization.js';
 import { checkForTaskCommit } from './agentRunTracking.js';
 
 describe('evaluateSuccessCriteria (#2344)', () => {
