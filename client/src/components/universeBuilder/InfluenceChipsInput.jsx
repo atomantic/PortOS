@@ -15,7 +15,7 @@ import {
   sortableKeyboardCoordinates,
   useSortable,
 } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
+import { dndTransformToCss } from '../../lib/dndTransform';
 import { WORLD_INFLUENCE_ENTRY_MAX, WORLD_INFLUENCES_PER_LIST_MAX } from '../../services/api';
 
 const TONE_CLASS = {
@@ -162,7 +162,7 @@ export default function InfluenceChipsInput({
 function SortableChip({ token, toneClass, onRemove }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: token });
   const style = {
-    transform: CSS.Transform.toString(transform),
+    transform: dndTransformToCss(transform),
     transition,
     opacity: isDragging ? 0.5 : 1,
     zIndex: isDragging ? 10 : 'auto',

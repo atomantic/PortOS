@@ -13,7 +13,7 @@ import {
   horizontalListSortingStrategy,
   useSortable,
 } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
+import { dndTransformToCss } from '../lib/dndTransform';
 import {
   Play, Pause, Plus, Trash2, X, Save, Film, Loader2, ArrowLeft, Volume2, VolumeX,
 } from 'lucide-react';
@@ -49,7 +49,7 @@ export function TimelineBlock({ clip, clipMeta, isSelected, isMissing, pxPerSec,
   const removeLabel = isMissing ? 'missing clip' : clipMeta?.prompt?.trim().slice(0, 40) || 'clip';
   const width = Math.max(60, dur * pxPerSec);
   const style = {
-    transform: CSS.Transform.toString(transform),
+    transform: dndTransformToCss(transform),
     transition,
     width: `${width}px`,
     opacity: isDragging ? 0.4 : 1,

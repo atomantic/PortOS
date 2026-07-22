@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useSortable } from '@dnd-kit/sortable';
-import { CSS } from '@dnd-kit/utilities';
+import { dndTransformToCss } from '../../../lib/dndTransform';
 import TaskItem from './TaskItem';
 
 export default function SortableTaskItem({ task, onRefresh, providers, durations, apps }) {
@@ -15,7 +15,7 @@ export default function SortableTaskItem({ task, onRefresh, providers, durations
   } = useSortable({ id: task.id, disabled: isEditing });
 
   const style = {
-    transform: CSS.Transform.toString(transform),
+    transform: dndTransformToCss(transform),
     transition,
     opacity: isDragging ? 0.5 : 1,
     zIndex: isDragging ? 1000 : 'auto',
