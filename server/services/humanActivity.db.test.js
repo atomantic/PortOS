@@ -3,6 +3,7 @@
  *   - recordEvents()   — idempotent insert via ON CONFLICT (source, dedupe_key)
  *   - listEvents()     — range / source / kind / personId filters
  *   - getDaySummary()  — local-day window + hourly histogram + tallies
+ *   - stripParticipantsForAccount() — scoped send-as-alias backfill (#2855)
  *
  * `*.db.test.js` → runs ONLY via `npm run test:db` against `portos_test`, never
  * the real `portos` DB (the db.js runner guard + the suite skip below enforce
@@ -12,7 +13,7 @@
  */
 import { describe, it, expect, afterAll } from 'vitest';
 import { checkHealth, ensureSchema, close, query } from '../lib/db.js';
-import { recordEvents, listEvents, getDaySummary } from './humanActivity.js';
+import { recordEvents, listEvents, getDaySummary, stripParticipantsForAccount } from './humanActivity.js';
 
 let dbReady = false;
 let skipReason = '';
@@ -30,10 +31,14 @@ if (!dbReady) console.log(`⏭️ humanActivity.db.test: skipping suite — ${sk
 const nonce = `ha${Date.now()}`;
 const SOURCE = `test-${nonce}`;
 const PERSON = `person-${nonce}`;
+// The alias-backfill tests need their own source: stripParticipantsForAccount is
+// scoped by (account_id, source), and a shared source would let one test's repair
+// touch another's rows.
+const ALIAS_SOURCE = `test-${nonce}-alias`;
 
 afterAll(async () => {
   if (dbReady) {
-    await query('DELETE FROM human_activity_events WHERE source = $1', [SOURCE]).catch(() => {});
+    await query('DELETE FROM human_activity_events WHERE source = ANY($1::text[])', [[SOURCE, ALIAS_SOURCE]]).catch(() => {});
     await close();
   }
 });
@@ -127,5 +132,99 @@ describe.skipIf(!dbReady)('humanActivity store (#2150)', () => {
     expect(summary.histogram).toHaveLength(24);
     expect(typeof summary.counts.total).toBe('number');
     expect(summary.counts.bySource).toBeTruthy();
+  });
+});
+
+describe.skipIf(!dbReady)('stripParticipantsForAccount — send-as alias backfill (#2855)', () => {
+  const ACCT = `acct-${nonce}`;
+  const OTHER_ACCT = `other-${nonce}`;
+  const ALIAS = 'alias@example.com';
+
+  const aliasRow = (over = {}) => ({
+    source: ALIAS_SOURCE,
+    accountId: ACCT,
+    kind: 'message.received',
+    happenedAt: '2026-07-04T15:00:00Z',
+    title: 'Hey',
+    metadata: { handle: 'friend@x.io', threadId: 't-1' },
+    ...over,
+  });
+
+  const fetchRow = async (dedupeKey) => {
+    const rows = await listEvents({ source: ALIAS_SOURCE, limit: 2000 });
+    return rows.find((r) => r.dedupeKey === dedupeKey);
+  };
+
+  it('strips the alias from an existing 1:1 row, leaving the sender and metadata.handle intact', async () => {
+    await recordEvents([aliasRow({
+      dedupeKey: 'alias-1',
+      participants: [{ email: 'friend@x.io' }, { email: ALIAS }],
+    })]);
+
+    const repaired = await stripParticipantsForAccount(ACCT, ALIAS_SOURCE, [ALIAS]);
+    expect(repaired).toBeGreaterThanOrEqual(1);
+
+    const row = await fetchRow('alias-1');
+    // Now a true 1:1 — exactly one counterpart, so outreach detection stops
+    // rejecting it as a group conversation.
+    expect(row.participants).toEqual([{ email: 'friend@x.io' }]);
+    // The sender pointer is untouched — it identifies the person, not the owner.
+    expect(row.metadata.handle).toBe('friend@x.io');
+  });
+
+  it('matches the alias case-insensitively and accepts an unnormalized input list', async () => {
+    await recordEvents([aliasRow({
+      dedupeKey: 'alias-case',
+      participants: [{ email: 'friend@x.io' }, { email: ALIAS }],
+    })]);
+    await stripParticipantsForAccount(ACCT, ALIAS_SOURCE, ['  Alias@EXAMPLE.com ']);
+    const row = await fetchRow('alias-case');
+    expect(row.participants).toEqual([{ email: 'friend@x.io' }]);
+  });
+
+  it('leaves rows with no alias participant untouched', async () => {
+    const participants = [{ name: 'Pat', email: 'pat@x.io' }, { email: 'sam@x.io' }];
+    await recordEvents([aliasRow({ dedupeKey: 'alias-none', participants })]);
+    await stripParticipantsForAccount(ACCT, ALIAS_SOURCE, [ALIAS]);
+    const row = await fetchRow('alias-none');
+    expect(row.participants).toEqual(participants);
+  });
+
+  it('is scoped to the account — another account keeping the same address is untouched', async () => {
+    await recordEvents([aliasRow({
+      dedupeKey: 'alias-other-acct',
+      accountId: OTHER_ACCT,
+      participants: [{ email: 'friend@x.io' }, { email: ALIAS }],
+    })]);
+    await stripParticipantsForAccount(ACCT, ALIAS_SOURCE, [ALIAS]);
+    const row = await fetchRow('alias-other-acct');
+    expect(row.participants.map((p) => p.email)).toContain(ALIAS);
+  });
+
+  it('yields an empty array (not NULL) when every participant was an owner address', async () => {
+    await recordEvents([aliasRow({
+      dedupeKey: 'alias-all',
+      participants: [{ email: ALIAS }],
+    })]);
+    await stripParticipantsForAccount(ACCT, ALIAS_SOURCE, [ALIAS]);
+    const row = await fetchRow('alias-all');
+    expect(row.participants).toEqual([]);
+  });
+
+  it('is idempotent — a second repair matches nothing and reports 0 rows', async () => {
+    await recordEvents([aliasRow({
+      dedupeKey: 'alias-idem',
+      participants: [{ email: 'friend@x.io' }, { email: ALIAS }],
+    })]);
+    await stripParticipantsForAccount(ACCT, ALIAS_SOURCE, [ALIAS]);
+    const second = await stripParticipantsForAccount(ACCT, ALIAS_SOURCE, [ALIAS]);
+    expect(second).toBe(0);
+  });
+
+  it('no-ops without touching the DB when the alias list is empty or the scope is missing', async () => {
+    expect(await stripParticipantsForAccount(ACCT, ALIAS_SOURCE, [])).toBe(0);
+    expect(await stripParticipantsForAccount(null, ALIAS_SOURCE, [ALIAS])).toBe(0);
+    expect(await stripParticipantsForAccount(ACCT, '', [ALIAS])).toBe(0);
+    expect(await stripParticipantsForAccount(ACCT, ALIAS_SOURCE, ['', null])).toBe(0);
   });
 });

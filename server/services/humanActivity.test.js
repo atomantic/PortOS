@@ -16,6 +16,7 @@ import {
   summarizeCounts,
   messageActivityCandidates,
   calendarActivityCandidates,
+  newlyLearnedAliases,
 } from './humanActivity.js';
 
 describe('shortSummary', () => {
@@ -259,5 +260,30 @@ describe('calendarActivityCandidates', () => {
       { externalId: 'ad2', title: 'Zoomed', startTime: '2026-07-04T09:00:00Z', endTime: '2026-07-04T09:30:00Z' },
     ], nowLate, 'America/Los_Angeles');
     expect(z.happenedAt).toBe('2026-07-04T09:00:00.000Z');
+  });
+});
+
+describe('newlyLearnedAliases (#2855)', () => {
+  it('returns only the aliases added since the previous set', () => {
+    expect(newlyLearnedAliases(['a@x.io'], ['a@x.io', 'b@x.io'])).toEqual(['b@x.io']);
+  });
+  it('treats a first-ever fetch (no prior set) as all-new', () => {
+    expect(newlyLearnedAliases(undefined, ['a@x.io', 'b@x.io'])).toEqual(['a@x.io', 'b@x.io']);
+    expect(newlyLearnedAliases([], ['a@x.io'])).toEqual(['a@x.io']);
+  });
+  it('is empty for an unchanged set, so a routine sync does no repair work', () => {
+    expect(newlyLearnedAliases(['a@x.io', 'b@x.io'], ['b@x.io', 'a@x.io'])).toEqual([]);
+  });
+  it('ignores casing and whitespace so a cosmetic refresh is not a change', () => {
+    expect(newlyLearnedAliases(['A@x.io'], [' a@X.io '])).toEqual([]);
+  });
+  it('ignores removals — a dropped alias needs no backfill', () => {
+    expect(newlyLearnedAliases(['a@x.io', 'b@x.io'], ['a@x.io'])).toEqual([]);
+  });
+  it('dedupes and drops empty entries', () => {
+    expect(newlyLearnedAliases([], ['a@x.io', 'a@x.io', '', null])).toEqual(['a@x.io']);
+  });
+  it('returns [] for non-array input', () => {
+    expect(newlyLearnedAliases(null, null)).toEqual([]);
   });
 });

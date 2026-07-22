@@ -230,6 +230,20 @@ export function messageActivityCandidates(account, messages = []) {
   return out;
 }
 
+// Owner addresses present in `next` but not in `previous` — the aliases an
+// account just LEARNED (#2855). Only these can appear as a stale participant on
+// already-stored rows, so the backfill repairs exactly this set; a removed alias
+// needs no repair, and an unchanged set means there is nothing to do (which keeps
+// every routine sync from re-UPDATEing the whole table). Lowercased + deduped so
+// a casing-only refresh doesn't read as a change.
+export function newlyLearnedAliases(previous, next) {
+  const norm = (list) => (Array.isArray(list) ? list : [])
+    .map((e) => String(e || '').trim().toLowerCase())
+    .filter(Boolean);
+  const before = new Set(norm(previous));
+  return [...new Set(norm(next))].filter((e) => !before.has(e));
+}
+
 // Resolve a calendar time value to a UTC instant, interpreting OFFSET-LESS
 // values in the given timezone instead of the Node process's OS timezone.
 // Google all-day events are normalized to "YYYY-MM-DDT00:00:00" (no offset) —
@@ -372,6 +386,54 @@ async function insertActivityChunk(rows) {
     values,
   );
   return result.rowCount || 0;
+}
+
+// Repair already-stored events whose participants still list an owner address
+// (#2855, follow-up to #2831). `messageActivityCandidates` strips every owner
+// address at INSERT time, but rows written BEFORE an account's send-as aliases
+// were learned kept the alias as a second participant — and since re-syncs are
+// no-ops (`ON CONFLICT (source, dedupe_key) DO NOTHING`, a deliberate contract
+// shared with `tribe_touchpoints`), they never self-correct. A 1:1 message
+// delivered to an alias therefore keeps looking like a group conversation to
+// `findUnansweredTribeThreads` until it ages out of the 14-day window.
+//
+// This is a SCOPED backfill, not a change to the insert contract: it rewrites
+// only rows for one account+source that actually contain one of the named
+// alias emails, and only removes those participant entries. `metadata.handle`
+// (the counterpart sender) is left untouched. Returns the number of rows
+// repaired. Emails are compared lowercased (participants are stored that way).
+export async function stripParticipantsForAccount(accountId, source, aliasEmails = []) {
+  const emails = [...new Set(
+    (Array.isArray(aliasEmails) ? aliasEmails : [])
+      .map((e) => String(e || '').trim().toLowerCase())
+      .filter(Boolean),
+  )];
+  if (!accountId || !source || emails.length === 0) return 0;
+  await ensureReady();
+  // jsonb_agg over the filtered elements rebuilds the array; COALESCE covers the
+  // case where every participant was an owner address (jsonb_agg returns NULL for
+  // an empty set, which would null out a NOT NULL column).
+  const result = await query(
+    `UPDATE human_activity_events
+        SET participants = COALESCE((
+              SELECT jsonb_agg(p)
+                FROM jsonb_array_elements(participants) AS p
+               WHERE lower(COALESCE(p->>'email', '')) <> ALL($3::text[])
+            ), '[]'::jsonb)
+      WHERE account_id = $1
+        AND source = $2
+        AND EXISTS (
+              SELECT 1
+                FROM jsonb_array_elements(participants) AS p
+               WHERE lower(COALESCE(p->>'email', '')) = ANY($3::text[])
+            )`,
+    [String(accountId), String(source), emails],
+  );
+  const repaired = result.rowCount || 0;
+  if (repaired > 0) {
+    console.log(`🗓️  Repaired ${repaired} activity event(s) for account ${accountId} (${emails.length} owner alias(es) stripped)`);
+  }
+  return repaired;
 }
 
 // Query events with optional filters. `from`/`to` are ISO timestamps (inclusive
