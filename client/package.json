@@ -24,7 +24,7 @@
     "lucide-react": "1.21.0",
     "react": "19.2.7",
     "react-dom": "19.2.7",
-    "react-router-dom": "7.18.0",
+    "react-router-dom": "7.18.1",
     "recharts": "3.8.1",
     "socket.io-client": "4.8.3",
     "three": "0.184.0"
