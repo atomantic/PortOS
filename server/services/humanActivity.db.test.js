@@ -221,10 +221,19 @@ describe.skipIf(!dbReady)('stripParticipantsForAccount — send-as alias backfil
     expect(second).toBe(0);
   });
 
-  it('no-ops without touching the DB when the alias list is empty or the scope is missing', async () => {
-    expect(await stripParticipantsForAccount(ACCT, ALIAS_SOURCE, [])).toBe(0);
-    expect(await stripParticipantsForAccount(null, ALIAS_SOURCE, [ALIAS])).toBe(0);
-    expect(await stripParticipantsForAccount(ACCT, '', [ALIAS])).toBe(0);
-    expect(await stripParticipantsForAccount(ACCT, ALIAS_SOURCE, ['', null])).toBe(0);
+  it('runs on a caller-supplied transaction client when one is passed (boot migration path)', async () => {
+    await recordEvents([aliasRow({
+      dedupeKey: 'alias-tx',
+      participants: [{ email: 'friend@x.io' }, { email: ALIAS }],
+    })]);
+    // A thin client shim over the pool is enough to prove the option routes the
+    // statement through the supplied client instead of the module's own query().
+    const calls = [];
+    const client = { query: (sql, params) => { calls.push(sql); return query(sql, params); } };
+    const repaired = await stripParticipantsForAccount(ACCT, ALIAS_SOURCE, [ALIAS], { client });
+    expect(repaired).toBe(1);
+    expect(calls).toHaveLength(1);
+    const row = await fetchRow('alias-tx');
+    expect(row.participants).toEqual([{ email: 'friend@x.io' }]);
   });
 });

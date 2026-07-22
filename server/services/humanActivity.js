@@ -22,6 +22,7 @@
  */
 import { v4 as uuidv4 } from '../lib/uuid.js';
 import { ensureSchema, query } from '../lib/db.js';
+import { normalizeIdentifier } from '../lib/tribeMatch.js';
 import { getUserTimezone, getLocalParts, getUtcOffsetMs, todayInTimezone } from '../lib/timezone.js';
 
 // ---------------------------------------------------------------------------
@@ -162,7 +163,14 @@ export function summarizeCounts(events) {
 
 function participantEmail(p) {
   if (!p) return '';
-  return String((typeof p === 'string' ? p : p.email) || '').trim().toLowerCase();
+  return normalizeIdentifier(typeof p === 'string' ? p : p.email);
+}
+
+// Lowercase + trim + dedupe a list of email addresses, dropping empties. Shares
+// `normalizeIdentifier` with the Tribe matcher so owner-address comparison here
+// can't drift from the identity matching that consumes these events.
+export function normalizeEmailList(list) {
+  return [...new Set((Array.isArray(list) ? list : []).map(normalizeIdentifier).filter(Boolean))];
 }
 
 // Map an account's cached messages to activity candidates. Direction (sent vs
@@ -176,9 +184,7 @@ export function messageActivityCandidates(account, messages = []) {
   // (messageGmailSync → messageAccounts.sendAsAliases); absent/failed fetch leaves the
   // set as just the primary email, i.e. today's behavior.
   const ownerEmails = new Set(
-    [selfEmail, ...(Array.isArray(account?.sendAsAliases) ? account.sendAsAliases : [])]
-      .map((e) => String(e || '').trim().toLowerCase())
-      .filter(Boolean)
+    normalizeEmailList([selfEmail, ...(Array.isArray(account?.sendAsAliases) ? account.sendAsAliases : [])])
   );
   const source = account?.type || 'message';
   const accountId = account?.id || null;
@@ -237,11 +243,8 @@ export function messageActivityCandidates(account, messages = []) {
 // every routine sync from re-UPDATEing the whole table). Lowercased + deduped so
 // a casing-only refresh doesn't read as a change.
 export function newlyLearnedAliases(previous, next) {
-  const norm = (list) => (Array.isArray(list) ? list : [])
-    .map((e) => String(e || '').trim().toLowerCase())
-    .filter(Boolean);
-  const before = new Set(norm(previous));
-  return [...new Set(norm(next))].filter((e) => !before.has(e));
+  const before = new Set(normalizeEmailList(previous));
+  return normalizeEmailList(next).filter((e) => !before.has(e));
 }
 
 // Resolve a calendar time value to a UTC instant, interpreting OFFSET-LESS
@@ -402,33 +405,50 @@ async function insertActivityChunk(rows) {
 // alias emails, and only removes those participant entries. `metadata.handle`
 // (the counterpart sender) is left untouched. Returns the number of rows
 // repaired. Emails are compared lowercased (participants are stored that way).
-export async function stripParticipantsForAccount(accountId, source, aliasEmails = []) {
-  const emails = [...new Set(
-    (Array.isArray(aliasEmails) ? aliasEmails : [])
-      .map((e) => String(e || '').trim().toLowerCase())
-      .filter(Boolean),
-  )];
+//
+// `client` (optional) runs the rewrite on a caller-supplied pg transaction client
+// instead of the pool — the boot db-migration that repairs already-known alias
+// sets passes its transaction client so the repair shares the migration's
+// all-or-nothing semantics, without re-stating the statement.
+//
+// The EXISTS gate keeps the rewrite off rows that don't need it (so a re-run is a
+// genuine no-op and reports 0 rows), and jsonb_agg over the filtered elements
+// rebuilds the array. COALESCE covers the all-owner row: jsonb_agg returns NULL
+// over an empty set, which would null the column.
+//
+// The predicate is deliberately stated twice (positive in EXISTS, negated in the
+// rebuild) rather than shared via one LATERAL unnest: Postgres rejects an
+// `UPDATE t … FROM LATERAL (… t.col …)` with "invalid reference to FROM-clause
+// entry", so the target row's participants can't be expanded once and reused.
+const STRIP_OWNER_PARTICIPANTS_SQL = `
+  UPDATE human_activity_events
+     SET participants = COALESCE((
+           SELECT jsonb_agg(p)
+             FROM jsonb_array_elements(participants) AS p
+            WHERE lower(COALESCE(p->>'email', '')) <> ALL($3::text[])
+         ), '[]'::jsonb)
+   WHERE account_id = $1
+     AND source = $2
+     AND EXISTS (
+           SELECT 1
+             FROM jsonb_array_elements(participants) AS p
+            WHERE lower(COALESCE(p->>'email', '')) = ANY($3::text[])
+         )`;
+
+export async function stripParticipantsForAccount(accountId, source, aliasEmails = [], { client } = {}) {
+  const emails = normalizeEmailList(aliasEmails);
   if (!accountId || !source || emails.length === 0) return 0;
-  await ensureReady();
-  // jsonb_agg over the filtered elements rebuilds the array; COALESCE covers the
-  // case where every participant was an owner address (jsonb_agg returns NULL for
-  // an empty set, which would null out a NOT NULL column).
-  const result = await query(
-    `UPDATE human_activity_events
-        SET participants = COALESCE((
-              SELECT jsonb_agg(p)
-                FROM jsonb_array_elements(participants) AS p
-               WHERE lower(COALESCE(p->>'email', '')) <> ALL($3::text[])
-            ), '[]'::jsonb)
-      WHERE account_id = $1
-        AND source = $2
-        AND EXISTS (
-              SELECT 1
-                FROM jsonb_array_elements(participants) AS p
-               WHERE lower(COALESCE(p->>'email', '')) = ANY($3::text[])
-            )`,
-    [String(accountId), String(source), emails],
-  );
+  const params = [String(accountId), String(source), emails];
+  let result;
+  if (client) {
+    // The migration runner ensures the base schema before applying migrations,
+    // so ensureReady() (which would go through the pool) is neither needed nor
+    // safe to run inside someone else's transaction.
+    result = await client.query(STRIP_OWNER_PARTICIPANTS_SQL, params);
+  } else {
+    await ensureReady();
+    result = await query(STRIP_OWNER_PARTICIPANTS_SQL, params);
+  }
   const repaired = result.rowCount || 0;
   if (repaired > 0) {
     console.log(`🗓️  Repaired ${repaired} activity event(s) for account ${accountId} (${emails.length} owner alias(es) stripped)`);
