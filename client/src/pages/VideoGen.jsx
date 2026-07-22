@@ -618,6 +618,7 @@ export default function VideoGen() {
         // mode — restore the backend switch and the real t2v/i2v mode.
         setBackend('grok');
         setMode(p.videoMode === 'image' ? 'image' : 'text');
+        if (p.duration) setGrokDuration(p.duration);
       } else if (p.mode) setMode(p.mode);
       if (p.chunks && p.chunks > 1) setChunks(p.chunks);
       // Multi-keyframe FFLF: the route maps the stored { path, index } back to
@@ -1143,6 +1144,9 @@ export default function VideoGen() {
   // runTokenRef; runGeneration captures the token at start and ignores the
   // POST response (and any SSE messages) when the token no longer matches.
   const runGeneration = (payload) => new Promise((resolve, reject) => {
+    // A new run owns no job yet — clear the previous run's id so a Cancel
+    // racing the POST can't target a stale (completed) job.
+    activeJobIdRef.current = null;
     setGenerating(true);
     setProgress({ progress: 0 });
     setStatusMsg('Starting...');
@@ -1155,16 +1159,23 @@ export default function VideoGen() {
     // Wrap settle so the cancel ref is cleared exactly once when the Promise
     // transitions to a final state — guarantees the queue worker's .finally()
     // always runs and stale rejects can't fire after a successful complete.
-    const settleResolve = (value) => { runRejectRef.current = null; resolve(value); };
-    const settleReject = (err) => { runRejectRef.current = null; reject(err); };
+    const settleResolve = (value) => { runRejectRef.current = null; activeJobIdRef.current = null; resolve(value); };
+    const settleReject = (err) => { runRejectRef.current = null; activeJobIdRef.current = null; reject(err); };
     runRejectRef.current = settleReject;
 
     generateVideo(payload).then((data) => {
       // The user cancelled while we were waiting for the POST to return —
       // don't open an EventSource at all, and don't touch any state. The
       // earlier handleCancel() already settled the Promise via runRejectRef.
-      if (!isCurrent()) return;
       const jobId = data.jobId || data.generationId;
+      if (!isCurrent()) {
+        // The user cancelled while this POST was in flight — the job was
+        // still created server-side, so cancel it by id now (handleCancel
+        // couldn't: it had no id yet, and an unscoped cancel could have
+        // killed an unrelated parallel render instead).
+        if (jobId) cancelVideoGen(jobId).catch(() => {});
+        return;
+      }
       // Remember which job this run owns — with the cloud lane, video
       // renders are no longer single-flight, so Cancel must target exactly
       // this job instead of "the first running video" (which could be an
@@ -1232,8 +1243,14 @@ export default function VideoGen() {
     // EventSource for a job we've already declared cancelled.
     runTokenRef.current += 1;
     eventSourceRef.current?.close();
-    await cancelVideoGen(activeJobIdRef.current || undefined).catch(() => {});
-    activeJobIdRef.current = null;
+    // Only cancel by id. When the id isn't known yet (Cancel raced the
+    // generation POST), skip the server call entirely — the POST's stale-
+    // token branch cancels the freshly-created job by id when it lands.
+    // An unscoped cancel here could kill an unrelated parallel render.
+    if (activeJobIdRef.current) {
+      await cancelVideoGen(activeJobIdRef.current).catch(() => {});
+      activeJobIdRef.current = null;
+    }
     setGenerating(false);
     setStatusMsg('Cancelled');
     // Settle the in-flight runGeneration Promise so the queue worker's

@@ -990,6 +990,10 @@ const ACTIVE_JOB_PARAM_FIELDS = [
   'width', 'height', 'numFrames', 'fps',
   'steps', 'guidanceScale', 'seed',
   'tiling', 'disableAudio', 'mode', 'chunks', 'imageStrength',
+  // Grok jobs (#2859 phase 2): the semantic t2v/i2v mode ('mode' holds the
+  // 'grok' discriminator for them) and the clip duration — both plain
+  // values, safe to echo for the reloading page's form restore.
+  'videoMode', 'duration',
   // loras are { filename, scale } basenames (no server filesystem paths), so
   // they're safe to echo back for the resuming picker to repopulate.
   'loras',
