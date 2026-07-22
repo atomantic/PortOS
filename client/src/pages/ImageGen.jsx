@@ -47,9 +47,10 @@ import { useImageGenProgress } from '../hooks/useImageGenProgress';
 import { useMediaJobSse } from '../hooks/useMediaJobSse';
 import { useModelDownloadStatus } from '../hooks/useModelDownloadStatus';
 import {
-  getImageGenStatus, generateImage, listImageModels, listLorasFull, listImageGallery,
+  getImageGenStatus, generateImage, generateImageMultipart, listImageModels, listLorasFull, listImageGallery,
   cancelImageGen, deleteImage, setImageHidden, cleanGalleryImage, getActiveImageJob, getSettings,
   buildFormData, listMediaJobs, regenerateGalleryImage, getRegenAvailability, removeImageWatermark,
+  getFlux2Status, getHfTokenStatus,
 } from '../services/api';
 
 // Multi-reference editing (FLUX.2 only) — 4 fixed slots, each carrying an
@@ -617,16 +618,13 @@ export default function ImageGen() {
   const currentCompatKey = loraCompatKey(currentModel);
 
   const refreshFlux2Status = useCallback((signal) => {
-    const qs = modelId ? `?modelId=${encodeURIComponent(modelId)}` : '';
-    return fetch(`/api/image-gen/setup/flux2-status${qs}`, { signal })
-      .then((r) => r.ok ? r.json() : null)
+    return getFlux2Status({ modelId, signal })
       .then((s) => { if (s) setFlux2Status(s); })
       .catch(() => {});
   }, [modelId]);
 
   const refreshHfTokenStatus = useCallback((signal) => {
-    return fetch('/api/image-gen/setup/hf-token-status', { signal })
-      .then((r) => r.ok ? r.json() : null)
+    return getHfTokenStatus({ signal })
       .then((s) => { if (s) setHfTokenPresent(!!s.hfTokenPresent); })
       .catch(() => {});
   }, []);
@@ -763,12 +761,7 @@ export default function ImageGen() {
         referenceStrengths: populatedRefs.map((s) => s.strength),
       } : {};
       const fd = buildFormData({ ...payload, ...initFields, ...refFields });
-      const res = await fetch('/api/image-gen/generate', { method: 'POST', body: fd });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-        throw new Error(body.error || `HTTP ${res.status}`);
-      }
-      return { payload, data: await res.json() };
+      return { payload, data: await generateImageMultipart(fd, { silent: true }) };
     }
     return { payload, data: await generateImage(payload, { silent: true }) };
   };

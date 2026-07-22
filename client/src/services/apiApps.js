@@ -112,7 +112,7 @@ export const installXcodeScripts = (id, scripts) => request(`/apps/${id}/xcode-s
   method: 'POST',
   body: JSON.stringify({ scripts })
 });
-export const getAppDocuments = (id) => request(`/apps/${id}/documents`);
+export const getAppDocuments = (id, options) => request(`/apps/${id}/documents`, options);
 export const getAppDocument = (id, filename) => request(`/apps/${id}/documents/${filename}`);
 export const saveAppDocument = (id, filename, content, commitMessage) =>
   request(`/apps/${id}/documents/${filename}`, {

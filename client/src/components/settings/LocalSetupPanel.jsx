@@ -6,6 +6,7 @@ import BrailleSpinner from '../BrailleSpinner';
 import { usePrevious } from '../../hooks/usePrevious.js';
 import { useInstallStream } from '../../hooks/useInstallStream.js';
 import useMounted from '../../hooks/useMounted.js';
+import { checkImageGenSetup, detectImageGenPython, createImageGenVenv } from '../../services/api';
 
 export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPackagesChanged }) {
   const [detecting, setDetecting] = useState(false);
@@ -54,10 +55,9 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
     checkAbortRef.current = controller;
     setChecking(true);
     try {
-      const res = await fetch(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(path)}`, { signal: controller.signal });
+      const data = await checkImageGenSetup({ pythonPath: path, signal: controller.signal });
       if (!mountedRef.current) return;
-      if (!res.ok) { setCheck(null); return; }
-      setCheck(await res.json());
+      setCheck(data);
     } catch (err) {
       // Aborted (unmount or superseded) — leave state alone.
       if (err?.name === 'AbortError') return;
@@ -120,9 +120,9 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
   const handleDetect = async () => {
     setDetecting(true);
     try {
-      const res = await fetch('/api/image-gen/setup/python');
-      if (!res.ok) { toast.error('Detection failed'); return; }
-      const { path } = await res.json();
+      const result = await detectImageGenPython();
+      if (!result) { toast.error('Detection failed'); return; }
+      const { path } = result;
       if (path) {
         onPythonPathChange(path);
         toast.success(`Detected ${path}`);
@@ -147,21 +147,11 @@ export default function LocalSetupPanel({ pythonPath, onPythonPathChange, onPack
   const handleCreateVenv = async () => {
     setCreatingVenv(true);
     try {
-      const res = await fetch('/api/image-gen/setup/create-venv', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      if (!res.ok) {
-        const json = await res.json().catch(() => ({}));
-        toast.error(json.error || 'Venv creation failed');
-        return;
-      }
-      const { pythonPath: venvPython } = await res.json();
+      const { pythonPath: venvPython } = await createImageGenVenv();
       onPythonPathChange(venvPython);
       toast.success(`Created venv at ${venvPython}`);
-    } catch {
-      toast.error('Failed to create venv');
+    } catch (err) {
+      toast.error(err.message || 'Failed to create venv');
     } finally {
       // Always clear so a fetch reject doesn't leave the button disabled.
       setCreatingVenv(false);

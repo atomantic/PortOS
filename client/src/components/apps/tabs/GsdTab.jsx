@@ -253,25 +253,18 @@ export default function GsdTab({ appId, repoPath }) {
     setLoading(true);
 
     // Fetch GSD status from documents endpoint (silent, no toast)
-    const docsResp = await fetch(`/api/apps/${appId}/documents`).catch(() => null);
-    const docsData = docsResp?.ok ? await docsResp.json().catch(() => null) : null;
+    const docsData = await api.getAppDocuments(appId, { silent: true }).catch(() => null);
     const gsd = docsData?.gsd || {};
     setGsdStatus(gsd);
 
     // Only fetch project data if we have a roadmap + state (full project)
     if (gsd.hasRoadmap && gsd.hasState) {
-      const [projectResp, phasesResp] = await Promise.all([
-        fetch(`/api/cos/gsd/projects/${appId}`).catch(() => null),
-        fetch(`/api/cos/gsd/projects/${appId}/phases`).catch(() => null),
+      const [projectData, phasesData] = await Promise.all([
+        api.getGsdProject(appId, { silent: true }).catch(() => null),
+        api.getGsdPhases(appId, { silent: true }).catch(() => null),
       ]);
-      if (projectResp?.ok) {
-        const data = await projectResp.json().catch(() => null);
-        setProject(data);
-      }
-      if (phasesResp?.ok) {
-        const data = await phasesResp.json().catch(() => null);
-        setPendingActions(data?.pendingActions || []);
-      }
+      if (projectData) setProject(projectData);
+      if (phasesData) setPendingActions(phasesData.pendingActions || []);
     } else {
       setProject(null);
       setPendingActions([]);
