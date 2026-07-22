@@ -50,6 +50,10 @@ const southPackagedManifest = JSON.stringify({
   kind: 'deterministically-packaged-grok-walk-video', direction: 'south',
   sourceVideoPath: 'art-source/sprites/hero/grok/run-1/generated/source-video.mp4',
   frames: [{ path: 'art-source/sprites/hero/grok/run-1/generated/frames/f0.png' }],
+  // Hash-pinned asset record: the copied strip must verify against this.
+  assets: [{ path: 'art-source/sprites/hero/grok/run-1/generated/south-strip.png', sha256: sha256('FAKE-STRIP') }],
+  // Path-looking strings in log tails must be ignored, not imported.
+  stdoutTail: 'wrote art-source/sprites/hero/grok/run-1/generated/raw/ghost.png',
 }, null, 2);
 const southReviewPreview = JSON.stringify({
   stripPath: 'art-source/sprites/hero/grok/run-1/generated/south-strip.png', frameCount: 8, fps: 12,
@@ -59,6 +63,9 @@ const southReviewPreview = JSON.stringify({
 const eastManifest = JSON.stringify({
   kind: 'imagegen-redraw-manifest', direction: 'east',
   stripPath: 'art-source/sprites/hero/imagegen/v2/east-strip.png',
+  // Declared but absent from the source — must surface as an error, not a
+  // silent skip that still reports a fully-imported subject.
+  overlayPath: 'art-source/sprites/hero/imagegen/v2/gone.png',
 }, null, 2);
 
 beforeAll(() => {
@@ -168,9 +175,11 @@ describe('importFromSource', () => {
 
     const hero = results.find((r) => r.id === 'hero');
     expect(hero.kind).toBe('character');
-    // south anchor + south run record + east manifest + hash-pinned runtime atlas
-    expect(hero.verified).toBe(4);
+    // south anchor + south run record + pinned south strip + east manifest
+    // + hash-pinned runtime atlas
+    expect(hero.verified).toBe(5);
     expect(hero.errors).toEqual([
+      'walk set east: referenced asset missing: imagegen/v2/gone.png',
       'walk set west: not approved (pending) — skipped',
       'walk set north: unsafe run path rejected: art-source/sprites/hero/../../../../tmp/sprite-escape/x.json',
       'sha256 mismatch: reference/hero-anchor-east.png',
@@ -213,7 +222,7 @@ describe('importFromSource', () => {
     expect(results.some((r) => r.id === 'character-schema-v1')).toBe(false);
 
     expect(totals.subjects).toBe(3); // hero + buddy characters, flora props
-    expect(totals.errors).toBe(3);
+    expect(totals.errors).toBe(4);
 
     const record = await getRecord('hero');
     expect(record).toMatchObject({ kind: 'character', name: 'Hero', status: 'imported', chromaKey: '#FF00FF' });
@@ -234,6 +243,15 @@ describe('importFromSource', () => {
     const record = await getRecord('hero');
     expect(record.notes).toBe('reviewed');
     expect(record.chromaKey).toBe('#00FF00');
+  });
+
+  it('re-import errors when a hash-pinned file disappears from the source (stale dest copy must not vouch)', async () => {
+    rmSync(join(SOURCE_ROOT, 'art-source/sprites/hero/reference/hero-anchor-south.png'));
+    const { results } = await importFromSource({ sourceRoot: SOURCE_ROOT, characters: ['hero'], includeProps: false });
+    const hero = results.find((r) => r.id === 'hero');
+    expect(hero.errors).toContain('missing from source: reference/hero-anchor-south.png');
+    // the destination still holds the earlier copy — it must not count as verified
+    expect(existsSync(join(SPRITES_ROOT, 'hero/reference/hero-anchor-south.png'))).toBe(true);
   });
 
   it('rejects a root that is not a sprite pipeline', async () => {
