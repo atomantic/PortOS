@@ -322,7 +322,10 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // `renders` IS restorable (a conflict restore must bring back the local render
   // history) but is EXCLUDED FROM THE CONTENT HASH — see HASH_EXCLUDED_FIELDS for
   // why (base-hash compatibility for this additive backfilled field).
-  track: ['title', 'albumId', 'artistId', 'artist', 'lyrics', 'prompt', 'engine', 'modelId', 'durationSec', 'audioFilename', 'renders'],
+  // `chiptuneScore`/`chiptunePrompt` (#2911) follow the `renders` pattern:
+  // restorable (a conflict restore must bring back the local composition) but
+  // excluded from the content hash for cross-version base-hash stability.
+  track: ['title', 'albumId', 'artistId', 'artist', 'lyrics', 'prompt', 'engine', 'modelId', 'durationSec', 'audioFilename', 'renders', 'chiptuneScore', 'chiptunePrompt'],
   // Issue: the user-authored content the merge can restore. `stages` carries
   // the bulk of the work (prose, comic pages, render metadata). Server-owned /
   // structural fields are excluded deliberately — `number` is renumber-managed,

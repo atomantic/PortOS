@@ -38,6 +38,14 @@ export const CHIPTUNE_LIMITS = Object.freeze({
   // gigabytes from one errant LLM response. 3 minutes is far beyond any
   // sane background loop.
   MAX_LOOP_SEC: 180,
+  // Aggregate cap on VOICED time (sum of every note's clamped length across
+  // the order walk). The loop-duration cap bounds the output buffer but not
+  // the render work: hundreds of full-loop overlapping notes would each spin
+  // the per-sample synth loop for the whole piece (billions of iterations
+  // from one errant response). 4 channels × MAX_LOOP_SEC fully voiced = 720s
+  // is the physical ceiling of distinct-channel audio; anything past it is
+  // pure overdraw.
+  NOTE_SECONDS_MAX: 720,
   TITLE_MAX: 120,
 });
 
@@ -95,6 +103,16 @@ export const chiptuneScoreSchema = z.object({
   if (channelIds.size !== score.channels.length) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['channels'], message: 'channel ids must be unique' });
   }
+  // The channel palette is fixed NES-style: the id determines the waveform.
+  // Left unbound, `{ id: 'pulse1', wave: 'noise' }` validates and then every
+  // melody note on that channel silently drops (pitches aren't drum presets) —
+  // persisting a broken score instead of triggering the runner's schema retry.
+  for (const [i, c] of score.channels.entries()) {
+    const expected = c.id === 'noise' ? 'noise' : c.id === 'triangle' ? 'triangle' : 'square';
+    if (c.wave !== expected) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['channels', i, 'wave'], message: `channel "${c.id}" must use wave "${expected}"` });
+    }
+  }
   for (const name of score.order) {
     if (!score.patterns[name]) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['order'], message: `order references unknown pattern "${name}"` });
@@ -118,9 +136,28 @@ export const chiptuneScoreSchema = z.object({
   if (totalSteps > CHIPTUNE_LIMITS.TOTAL_STEPS_MAX) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['order'], message: `loop is too long (${totalSteps} steps > ${CHIPTUNE_LIMITS.TOTAL_STEPS_MAX})` });
   }
-  const totalSec = totalSteps * (60 / (score.bpm * score.stepsPerBeat));
+  const stepSec = 60 / (score.bpm * score.stepsPerBeat);
+  const totalSec = totalSteps * stepSec;
   if (totalSec > CHIPTUNE_LIMITS.MAX_LOOP_SEC) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['order'], message: `loop is too long (${Math.round(totalSec)}s > ${CHIPTUNE_LIMITS.MAX_LOOP_SEC}s)` });
+  }
+  // Bound the aggregate VOICED time the renderer will synthesize (see
+  // NOTE_SECONDS_MAX) — the duration cap alone doesn't bound overlapping-note
+  // render work. Mirrors buildScoreEvents' clamp semantics (len clamped to the
+  // pattern end; out-of-pattern notes contribute nothing).
+  let voicedSteps = 0;
+  for (const name of score.order) {
+    const pattern = score.patterns[name];
+    const steps = pattern.bars * score.beatsPerBar * score.stepsPerBeat;
+    for (const notes of Object.values(pattern.notes || {})) {
+      for (const note of notes) {
+        if (note.step >= steps) continue;
+        voicedSteps += Math.min(note.len, steps - note.step);
+      }
+    }
+  }
+  if (voicedSteps * stepSec > CHIPTUNE_LIMITS.NOTE_SECONDS_MAX) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['patterns'], message: `too much voiced audio (${Math.round(voicedSteps * stepSec)}s of notes > ${CHIPTUNE_LIMITS.NOTE_SECONDS_MAX}s)` });
   }
 });
 

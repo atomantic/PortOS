@@ -63,6 +63,22 @@ describe('renderScoreToPcm', () => {
     const tail = Math.abs(pcm[pcm.length - 1]);
     expect(tail).toBeLessThan(0.2);
   });
+
+  it('a drum hit ending at the loop boundary tapers to ~zero (no loop click)', () => {
+    // A snare on the very last step: its 0.12s exponential decay alone would
+    // still be audibly non-zero after a 0.125s note — the release taper must
+    // bring the final sample to (near) silence so the loop restart is seamless.
+    const s = score();
+    s.patterns.A.notes.pulse1 = [];
+    s.patterns.A.notes.triangle = [];
+    s.patterns.A.notes.noise = [{ step: 15, pitch: 'snare', len: 1, vel: 1 }];
+    const pcm = renderScoreToPcm(s);
+    expect(Math.abs(pcm[pcm.length - 1])).toBeLessThan(0.005);
+    // The hit itself still sounds (the taper is a tail, not a mute).
+    let peak = 0;
+    for (const v of pcm) peak = Math.max(peak, Math.abs(v));
+    expect(peak).toBeGreaterThan(0.05);
+  });
 });
 
 describe('pcmToWavBuffer', () => {

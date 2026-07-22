@@ -75,9 +75,15 @@ export function renderScoreToPcm(score, { sampleRate = CHIPTUNE_SAMPLE_RATE } = 
       // Sweep constants are per-preset, not per-sample — hoist out of the loop.
       const k = preset.kind === 'sweep' ? Math.log(preset.toHz / preset.fromHz) / preset.decaySec : 0;
       const fromOverK = k ? preset.fromHz / k : 0;
+      // End-of-note release taper: exponential decay alone can leave a hit
+      // near the loop boundary audibly non-zero at its final sample (a click
+      // on loop restart). Mirror the tonal branch's inside-the-note release.
+      const noteDurSec = durSamples / sampleRate;
+      const release = Math.min(0.01, noteDurSec * 0.25);
       for (let i = 0; i < durSamples; i += 1) {
         const t = i / sampleRate;
-        const env = Math.exp(-t / preset.decaySec) * (t < ATTACK_SEC ? t / ATTACK_SEC : 1);
+        let env = Math.exp(-t / preset.decaySec) * (t < ATTACK_SEC ? t / ATTACK_SEC : 1);
+        if (t > noteDurSec - release) env *= Math.max(0, (noteDurSec - t) / release);
         let s;
         if (preset.kind === 'sweep') {
           // Exponential pitch sweep integrated in closed form keeps phase smooth.

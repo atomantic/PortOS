@@ -200,5 +200,26 @@ describe('tracks logic', () => {
       expect(cleared.chiptuneScore).toBeNull();
       expect(cleared.chiptunePrompt).toBe('');
     });
+
+    it('merge preserves the local score when a winning remote payload lacks the keys entirely', () => {
+      // A ≤v2 (chiptune-unaware) peer's payload has no chiptune keys — its
+      // newer unrelated edit must not erase the local composition.
+      const local = sanitizeTrack({ id: 'track-1', title: 'X', chiptuneScore: score, chiptunePrompt: 'v1', updatedAt: '2026-01-01T00:00:00.000Z' });
+      const behindPeer = { id: 'track-1', title: 'Renamed', updatedAt: '2026-02-01T00:00:00.000Z' };
+      const merged = mergeTrackRecord(local, behindPeer);
+      expect(merged.remoteWins).toBe(true);
+      expect(merged.next.title).toBe('Renamed');
+      expect(merged.next.chiptuneScore).toMatchObject({ bpm: 120 });
+      expect(merged.next.chiptunePrompt).toBe('v1');
+    });
+
+    it('merge applies an explicit remote clear (key present with null/empty)', () => {
+      const local = sanitizeTrack({ id: 'track-1', title: 'X', chiptuneScore: score, chiptunePrompt: 'v1', updatedAt: '2026-01-01T00:00:00.000Z' });
+      const v3Clear = { id: 'track-1', title: 'X', chiptuneScore: null, chiptunePrompt: '', updatedAt: '2026-02-01T00:00:00.000Z' };
+      const merged = mergeTrackRecord(local, v3Clear);
+      expect(merged.remoteWins).toBe(true);
+      expect(merged.next.chiptuneScore).toBeNull();
+      expect(merged.next.chiptunePrompt).toBe('');
+    });
   });
 });

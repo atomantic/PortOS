@@ -286,7 +286,20 @@ export function mergeTrackRecord(local, remoteRaw) {
   if (!remote) return { next: null, inserted: false, remoteWins: false, changed: false };
   if (!local) return { next: remote, inserted: true, remoteWins: true, changed: true };
   const remoteWins = compareNewerWins(remote.updatedAt, local.updatedAt);
-  const next = remoteWins ? remote : local;
+  let next = remoteWins ? remote : local;
+  // Absent-vs-cleared (#2911, per the CLAUDE.md merge convention): a payload
+  // from a chiptune-unaware (≤v2) peer lacks the chiptune KEYS entirely, while
+  // a v3 peer that intentionally cleared the score sends `chiptuneScore: null`
+  // explicitly. Sanitizing collapses both to null, so gate on key presence in
+  // the RAW payload — a winning key-absent remote must not erase the local
+  // composition. (The sender-ahead direction is already version-gated; this
+  // covers the accepted sender-behind direction.)
+  if (remoteWins && next === remote) {
+    const carry = {};
+    if (!('chiptuneScore' in remoteRaw) && local.chiptuneScore) carry.chiptuneScore = local.chiptuneScore;
+    if (!('chiptunePrompt' in remoteRaw) && local.chiptunePrompt) carry.chiptunePrompt = local.chiptunePrompt;
+    if (Object.keys(carry).length) next = { ...remote, ...carry };
+  }
   const changed = JSON.stringify(next) !== JSON.stringify(local);
   return { next, inserted: false, remoteWins, changed };
 }

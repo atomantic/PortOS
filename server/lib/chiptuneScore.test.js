@@ -47,6 +47,29 @@ describe('chiptuneScoreSchema', () => {
     expect(chiptuneScoreSchema.safeParse(score).success).toBe(false);
   });
 
+  it('binds each channel id to its fixed waveform', () => {
+    const score = validScore();
+    score.channels[0].wave = 'noise'; // pulse1 must be square
+    expect(chiptuneScoreSchema.safeParse(score).success).toBe(false);
+    const score2 = validScore();
+    score2.channels[2].wave = 'square'; // noise must be noise
+    expect(chiptuneScoreSchema.safeParse(score2).success).toBe(false);
+  });
+
+  it('rejects a score whose aggregate voiced time exceeds the note-seconds cap', () => {
+    // 60 BPM, 1 step/beat → 1s steps; one 4-step bar per pattern. 30 order
+    // entries × 4 steps = 120s loop (under 180s), but 512 full-pattern notes
+    // per channel push voiced time to 512×4×30 steps ≫ 720s.
+    const score = validScore();
+    score.bpm = 60;
+    score.stepsPerBeat = 1;
+    score.patterns.A.notes.pulse1 = Array.from({ length: 512 }, () => ({ step: 0, pitch: 'C5', len: 4 }));
+    score.order = Array(30).fill('A');
+    const r = chiptuneScoreSchema.safeParse(score);
+    expect(r.success).toBe(false);
+    expect(JSON.stringify(r.error.issues)).toContain('too much voiced audio');
+  });
+
   it('rejects duplicate channel ids', () => {
     const score = validScore();
     score.channels.push({ id: 'pulse1', wave: 'square' });
