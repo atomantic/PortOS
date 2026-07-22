@@ -264,9 +264,16 @@ export async function syncAccount(accountId, io, options = {}) {
     // Best-effort: a `null` sentinel (fetch failed / non-Gmail provider) leaves the
     // stored set untouched; persist failure must not fail the sync.
     if (Array.isArray(sendAsAliases)) {
+      // Aliases learned for the FIRST time this sync (#2855). Rows recorded before
+      // the alias set was known still carry the alias as a participant, and the
+      // `ON CONFLICT DO NOTHING` insert contract means they never self-correct —
+      // so repair exactly those rows once, right when the set changes.
+      const previousAliases = account.sendAsAliases;
       account.sendAsAliases = sendAsAliases;
       await updateSendAsAliases(accountId, sendAsAliases).catch((err) =>
         console.error(`📧 Send-as alias persist failed for account ${accountId}: ${err.message}`));
+      await repairActivityAliasParticipants(account, previousAliases, sendAsAliases).catch((err) =>
+        console.error(`🗓️  Activity alias backfill failed for account ${accountId}: ${err.message}`));
     }
 
     // Populate the human-activity timeline (#2150) — secondary effect, must NOT
@@ -520,4 +527,15 @@ export async function recordMessageActivity(account, messages = []) {
   const candidates = messageActivityCandidates(account, messages);
   if (candidates.length === 0) return { recorded: 0, skipped: 0 };
   return recordEvents(candidates);
+}
+
+// One-shot repair of activity rows recorded BEFORE this account's send-as aliases
+// were known (#2855). Runs only for the aliases newly learned this sync, so a
+// routine sync with an unchanged set does no DB work at all. Returns the number of
+// rows repaired. Secondary effect — the caller must not let it fail the sync.
+export async function repairActivityAliasParticipants(account, previousAliases, nextAliases) {
+  const { newlyLearnedAliases, stripParticipantsForAccount } = await import('./humanActivity.js');
+  const learned = newlyLearnedAliases(previousAliases, nextAliases);
+  if (learned.length === 0) return 0;
+  return stripParticipantsForAccount(account?.id, account?.type || 'message', learned);
 }
