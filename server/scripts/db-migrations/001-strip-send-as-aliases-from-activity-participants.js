@@ -18,16 +18,44 @@
  * Idempotent by construction (the `EXISTS` gate means a second run matches nothing),
  * and recorded in `schema_migrations` so it only runs once anyway.
  */
+import { readFile } from 'fs/promises';
 import { join } from 'path';
-import { PATHS, safeJSONParse, tryReadFile } from '../../lib/fileUtils.js';
+import { PATHS } from '../../lib/fileUtils.js';
 import { isPlainObject } from '../../lib/objects.js';
 import { stripParticipantsForAccount } from '../../services/humanActivity.js';
 
+// Repo-relative label for error messages — never interpolate the absolute path,
+// which embeds the OS username.
+const ACCOUNTS_LABEL = 'data/messages/accounts.json';
+
 export async function up(client) {
-  const content = await tryReadFile(join(PATHS.messages, 'accounts.json'));
-  if (!content) return; // no message accounts on this install — nothing to repair
-  const parsed = safeJSONParse(content, {}, { context: 'migration-001-send-as-aliases' });
-  if (!isPlainObject(parsed)) return;
+  // Read WITHOUT the usual `tryReadFile`/`safeJSONParse` swallowing: those collapse
+  // "file absent" and "read/parse FAILED" into the same empty result, and here the
+  // difference is permanent. This migration is recorded in `schema_migrations` the
+  // moment `up()` returns normally, so a transient unreadable/corrupt accounts file
+  // would mark the one-shot backfill done and it would never run — and the sync-time
+  // delta can't cover for it either (those aliases are already stored, so the delta
+  // is empty forever). Only a genuinely absent file means "no work"; any other
+  // failure throws, which rolls the migration back UNAPPLIED so the next boot
+  // retries it. (try/catch is sanctioned here — this runs at boot, outside the
+  // Express request lifecycle.)
+  let content;
+  try {
+    content = await readFile(join(PATHS.messages, 'accounts.json'), 'utf8');
+  } catch (err) {
+    if (err?.code === 'ENOENT') return; // no message accounts on this install — nothing to repair
+    throw new Error(`migration 001: cannot read ${ACCOUNTS_LABEL} (${err?.code || 'read error'}) — refusing to mark the send-as-alias backfill applied: ${err.message}`);
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(content);
+  } catch (err) {
+    throw new Error(`migration 001: ${ACCOUNTS_LABEL} is not valid JSON — refusing to mark the send-as-alias backfill applied: ${err.message}`);
+  }
+  if (!isPlainObject(parsed)) {
+    throw new Error(`migration 001: ${ACCOUNTS_LABEL} did not contain an account map — refusing to mark the send-as-alias backfill applied.`);
+  }
 
   let repaired = 0;
   for (const account of Object.values(parsed)) {
