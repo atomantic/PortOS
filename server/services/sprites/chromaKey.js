@@ -18,6 +18,10 @@ export const CHROMA_KEYS = [
 
 export const CHROMA_KEY_HEXES = CHROMA_KEYS.map((k) => k.hex);
 
+// Magenta — the source pipeline's only key; the fallback wherever no key has
+// been selected yet (pre-lock generation, legacy imports).
+export const DEFAULT_CHROMA_KEY = CHROMA_KEYS[0].hex;
+
 // Below this hue separation (degrees) between the chosen key and the nearest
 // significant palette color, keying will likely eat character pixels — the
 // selection still returns the best key but carries a warning.

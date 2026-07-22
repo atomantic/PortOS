@@ -7,8 +7,8 @@
  * background color is a parameter (the source hardcoded magenta) so the
  * per-character key selected at lock time flows into every later prompt.
  *
- * Pure module — no I/O, no imports from the rest of the server — so
- * validation.js and the client can lean on its constants safely.
+ * Pure module — no I/O, no imports outside the sibling pure sprite modules —
+ * so validation.js and the client can lean on its constants safely.
  */
 
 // Canonical 8-direction order (the source pipeline's RUNTIME_DIRECTION_ORDER)
@@ -42,7 +42,9 @@ export const REFERENCE_FACING = {
   'north-west': 'a three-quarter rear view angled up and to screen-left (no face)',
 };
 
-const KEY_NAMES = { '#FF00FF': 'magenta', '#00FF00': 'green', '#0000FF': 'blue' };
+import { CHROMA_KEYS } from './chromaKey.js';
+
+const KEY_NAMES = Object.fromEntries(CHROMA_KEYS.map((k) => [k.hex, k.name]));
 
 /** "magenta (#FF00FF)" — the phrase both prompt templates embed. */
 export function keyColorPhrase(hex) {

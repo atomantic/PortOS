@@ -5,7 +5,7 @@ import { request } from '../lib/testHelper.js';
 vi.mock('../services/sprites/records.js', () => ({
   listRecords: vi.fn(async () => [{ id: 'pioneer', kind: 'character', name: 'Pioneer' }]),
   getRecordWithAssets: vi.fn(),
-  createRecord: vi.fn(async (input, id) => ({ id, ...input })),
+  createCharacter: vi.fn(async (input) => ({ id: input.id || 'derived', kind: 'character', ...input })),
   updateRecord: vi.fn(async (id, patch) => ({ id, ...patch })),
   deleteRecord: vi.fn(async () => ({ ok: true })),
 }));
@@ -44,27 +44,16 @@ describe('sprites routes', () => {
     expect(r.body).toEqual([{ id: 'pioneer', kind: 'character', name: 'Pioneer' }]);
   });
 
-  it('POST / creates a character, slugifying the name into an id', async () => {
+  it('POST / validates and delegates to createCharacter', async () => {
     const r = await request(app).post('/api/sprites').send({ name: 'Trail Hand #2' });
     expect(r.status).toBe(201);
-    expect(records.createRecord).toHaveBeenCalledWith(
-      { kind: 'character', name: 'Trail Hand #2', spec: null },
-      'trail-hand-2',
-    );
+    expect(records.createCharacter).toHaveBeenCalledWith({ name: 'Trail Hand #2' });
   });
 
-  it('POST / honors an explicit id and rejects an invalid one', async () => {
-    await request(app).post('/api/sprites').send({ name: 'Hero', id: 'hero-alt' });
-    expect(records.createRecord).toHaveBeenCalledWith(expect.anything(), 'hero-alt');
-
+  it('POST / rejects an invalid explicit id at the schema', async () => {
     const bad = await request(app).post('/api/sprites').send({ name: 'Hero', id: 'Not A Slug' });
     expect(bad.status).toBe(400);
-  });
-
-  it('POST / 400s a name that slugifies to nothing', async () => {
-    const r = await request(app).post('/api/sprites').send({ name: '!!!' });
-    expect(r.status).toBe(400);
-    expect(r.body.error).toMatch(/explicit id/);
+    expect(records.createCharacter).not.toHaveBeenCalled();
   });
 
   it('GET /:id returns record + assets + reference set for characters', async () => {

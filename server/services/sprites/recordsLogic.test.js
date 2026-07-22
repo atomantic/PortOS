@@ -93,3 +93,18 @@ describe('mergeImportedRecord', () => {
     expect(next.chromaKey).toBeNull(); // || would resurrect the import default
   });
 });
+
+describe('deriveSpriteId', () => {
+  it('kebabs a display name into a valid id', async () => {
+    const { deriveSpriteId } = await import('./recordsLogic.js');
+    expect(deriveSpriteId('Trail Hand #2')).toBe('trail-hand-2');
+    expect(deriveSpriteId('  Pioneer  ')).toBe('pioneer');
+  });
+
+  it('returns null when nothing derivable remains', async () => {
+    const { deriveSpriteId } = await import('./recordsLogic.js');
+    expect(deriveSpriteId('!!!')).toBeNull();
+    expect(deriveSpriteId('')).toBeNull();
+    expect(deriveSpriteId(null)).toBeNull();
+  });
+});

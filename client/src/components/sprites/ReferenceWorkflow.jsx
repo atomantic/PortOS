@@ -5,6 +5,8 @@ import { generateSpriteReference, lockSpriteReference, updateSpriteRecord } from
 import { getMediaJob } from '../../services/apiMediaJobs.js';
 import { getSettings } from '../../services/apiSystem.js';
 import { deriveAvailableBackends } from '../../lib/imageGenBackends.js';
+import { useAsyncAction } from '../../hooks/useAsyncAction.js';
+import { spriteAssetUrl } from './spriteAssets.js';
 
 // Reference workflow (issue #2896): generate main-reference candidates from
 // text + optional uploaded design image, freeze the approved main, then
@@ -12,14 +14,14 @@ import { deriveAvailableBackends } from '../../lib/imageGenBackends.js';
 // source of truth for status; this component only renders it and fires the
 // generate/lock/override actions.
 
+// Mirrors server/services/sprites/chromaKey.js CHROMA_KEYS (client can't
+// import server modules).
 const CHROMA_KEYS = ['#FF00FF', '#00FF00', '#0000FF'];
-
-const assetUrl = (recordId, relPath) => `/data/sprites/${encodeURIComponent(recordId)}/${relPath.split('/').map(encodeURIComponent).join('/')}`;
 
 function SpriteImg({ recordId, path, className }) {
   return (
     <img
-      src={assetUrl(recordId, path)}
+      src={spriteAssetUrl(recordId, path)}
       alt={path}
       loading="lazy"
       className={className}
@@ -70,8 +72,6 @@ export default function ReferenceWorkflow({ record, reference, onChanged }) {
   const [uploadFile, setUploadFile] = useState(null);
   // target → jobId for in-flight renders; polled until the candidate lands.
   const [pendingJobs, setPendingJobs] = useState({});
-  const [locking, setLocking] = useState(false);
-  const [keySaving, setKeySaving] = useState(false);
   const fileInputRef = useRef(null);
 
   useEffect(() => {
@@ -84,26 +84,28 @@ export default function ReferenceWorkflow({ record, reference, onChanged }) {
       .catch(() => setBackends([]));
   }, []);
 
-  // Poll in-flight render jobs; on a terminal state drop the entry and
-  // refresh the detail so the new candidate (or the failure) shows up.
+  // Poll in-flight render jobs (parallel — they're independent); on a
+  // terminal state drop the entry and refresh the detail once so the new
+  // candidates (or the failure) show up. The completion hook's candidate
+  // copy is same-process and millisecond-fast against the 4s poll grain, so
+  // one short deferral covers the copy-vs-refetch ordering.
   useEffect(() => {
-    const jobIds = Object.values(pendingJobs);
-    if (jobIds.length === 0) return undefined;
+    if (Object.keys(pendingJobs).length === 0) return undefined;
     const timer = setInterval(async () => {
-      for (const [target, jobId] of Object.entries(pendingJobs)) {
-        const job = await getMediaJob(jobId).catch(() => null);
-        if (!job || ['completed', 'failed', 'canceled'].includes(job.status)) {
-          setPendingJobs((prev) => {
-            const next = { ...prev };
-            delete next[target];
-            return next;
-          });
-          if (job?.status === 'failed') toast.error(`Render failed for ${target}: ${job.error || 'see media jobs'}`);
-          // Completed candidates land server-side via the completion hook —
-          // small delay so the copy is on disk before the refetch.
-          setTimeout(onChanged, 500);
-        }
+      const results = await Promise.all(Object.entries(pendingJobs).map(async ([target, jobId]) => ({
+        target, job: await getMediaJob(jobId).catch(() => null),
+      })));
+      const finished = results.filter(({ job }) => !job || ['completed', 'failed', 'canceled'].includes(job.status));
+      if (finished.length === 0) return;
+      setPendingJobs((prev) => {
+        const next = { ...prev };
+        for (const { target } of finished) delete next[target];
+        return next;
+      });
+      for (const { target, job } of finished) {
+        if (job?.status === 'failed') toast.error(`Render failed for ${target}: ${job.error || 'see media jobs'}`);
       }
+      setTimeout(onChanged, 500);
     }, 4000);
     return () => clearInterval(timer);
   }, [pendingJobs, onChanged]);
@@ -129,30 +131,16 @@ export default function ReferenceWorkflow({ record, reference, onChanged }) {
     }
   };
 
-  const lock = async (target, candidate) => {
-    setLocking(true);
-    try {
-      await lockSpriteReference(recordId, { target, candidate: candidate.path }, { silent: true });
-      toast.success(target === 'main' ? 'Main reference frozen' : `Anchor ${target} locked`);
-      onChanged();
-    } catch (err) {
-      toast.error(err?.message || 'Lock failed');
-    } finally {
-      setLocking(false);
-    }
-  };
+  const [lock, locking] = useAsyncAction(async (target, candidate) => {
+    await lockSpriteReference(recordId, { target, candidate: candidate.path }, { silent: true });
+    toast.success(target === 'main' ? 'Main reference frozen' : `Anchor ${target} locked`);
+    onChanged();
+  }, { errorMessage: 'Lock failed' });
 
-  const setChromaKey = async (hex) => {
-    setKeySaving(true);
-    try {
-      await updateSpriteRecord(recordId, { chromaKey: hex }, { silent: true });
-      onChanged();
-    } catch (err) {
-      toast.error(err?.message || 'Failed to set chroma key');
-    } finally {
-      setKeySaving(false);
-    }
-  };
+  const [setChromaKey, keySaving] = useAsyncAction(async (hex) => {
+    await updateSpriteRecord(recordId, { chromaKey: hex }, { silent: true });
+    onChanged();
+  }, { errorMessage: 'Failed to set chroma key' });
 
   const modePicker = backends.length > 0 && (
     <label className="flex items-center gap-2 text-xs text-gray-400">

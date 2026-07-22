@@ -17,22 +17,15 @@ const hook = createMediaJobImageHook({
   label: 'sprite reference-candidate',
   initLog: '🧍 Sprite reference-candidate hook initialized',
   tagKey: 'spriteRef',
+  // The tag is authored by reference.js itself (startReferenceGeneration), so
+  // pass it through wholesale — new tag fields flow to the sidecar without
+  // touching this hook.
   identify: (tag, job) => (tag?.recordId && tag.target && tag.anchorId
-    ? {
-      recordId: tag.recordId,
-      target: tag.target,
-      direction: tag.direction,
-      anchorId: tag.anchorId,
-      chromaKey: tag.chromaKey,
-      mode: tag.mode,
-      model: tag.model,
-      designPrompt: tag.designPrompt,
-      jobId: job?.id || null,
-    }
+    ? { ...tag, jobId: job?.id || null }
     : null),
   serializeKey: ({ recordId }) => recordId,
   describe: ({ recordId, anchorId }) => `${recordId}/${anchorId}`,
-  attach: (ctx) => attachReferenceCandidate(ctx),
+  attach: attachReferenceCandidate,
   onAttached: ({ recordId, anchorId }, result) => {
     console.log(`🧍 sprite reference candidate ${recordId}/${anchorId} ← ${result.candidatePath}`);
   },

@@ -20,6 +20,17 @@ export function isValidSpriteId(id) {
   return typeof id === 'string' && SPRITE_ID_PATTERN.test(id);
 }
 
+/**
+ * Derive a record id from a display name (kebab, pattern-conformant), or
+ * null when nothing derivable remains. (lib/planIds' slugify was considered
+ * but its 'item' fallback and collision suffixing don't fit — sprite creation
+ * 400s on an underivable name and 409s on a duplicate id instead.)
+ */
+export function deriveSpriteId(name) {
+  const id = String(name || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64);
+  return isValidSpriteId(id) ? id : null;
+}
+
 export function mirrorTimestamp(value, fallback) {
   return typeof value === 'string' && value ? value : fallback;
 }
