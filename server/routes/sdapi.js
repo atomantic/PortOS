@@ -34,7 +34,11 @@ const router = Router();
 // status + code on the HTTP response.
 function createCompletionWaiter() {
   return createImageGenWaiter({
-    timeoutMs: 5 * 60 * 1000,
+    // Cloud-CLI providers (codex/grok) allow 20 minutes wall-clock
+    // (CODEX_TIMEOUT_MS / GROK_TIMEOUT_MS) — wait slightly past that so a
+    // slow-but-valid render doesn't return a timeout while the job keeps
+    // running (which invites a duplicate billed render).
+    timeoutMs: 21 * 60 * 1000,
     onTimeout: () => new ServerError('Generation timed out', { status: 504, code: 'GEN_TIMEOUT' }),
     onFailed: (ev) => new ServerError(ev?.error || 'Generation failed', { status: 500, code: 'GEN_FAILED' }),
   });

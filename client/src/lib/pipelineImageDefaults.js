@@ -5,7 +5,7 @@
 // models render multi-panel pages dramatically better than local diffusion,
 // so Codex is the right default whenever the user has it wired up.
 
-import { IMAGE_GEN_MODE } from './imageGenBackends';
+import { isCloudCliMode, IMAGE_GEN_MODE } from './imageGenBackends';
 
 // 1024×1536 = 2:3 portrait, the closest preset to a real comic-book trim
 // (~0.65 ratio). The "hi-res portrait" entry in imageGenResolutions is
@@ -29,7 +29,13 @@ export const PIPELINE_IMAGE_DEFAULTS = Object.freeze({
 export function readPipelineImageSettings(settings) {
   const stored = settings?.pipeline?.imageGen || {};
   const codexEnabled = settings?.imageGen?.codex?.enabled === true;
-  const defaultMode = codexEnabled ? IMAGE_GEN_MODE.CODEX : PIPELINE_IMAGE_DEFAULTS.mode;
+  const grokEnabled = settings?.imageGen?.grok?.enabled === true;
+  // Prefer an enabled cloud backend (codex first, then grok — the same order
+  // as the server's visual-stage resolver) so a cloud-only install doesn't
+  // default pipeline renders to an unconfigured local diffusion.
+  const defaultMode = codexEnabled ? IMAGE_GEN_MODE.CODEX
+    : grokEnabled ? IMAGE_GEN_MODE.GROK
+      : PIPELINE_IMAGE_DEFAULTS.mode;
   return {
     mode: stored.mode || defaultMode,
     modelId: stored.modelId || PIPELINE_IMAGE_DEFAULTS.modelId,
@@ -51,7 +57,7 @@ export function pipelineImageCfgToRenderOpts(cfg) {
   if (cfg.mode === IMAGE_GEN_MODE.LOCAL && cfg.modelId) opts.modelId = cfg.modelId;
   if (Number.isFinite(cfg.width)) opts.width = cfg.width;
   if (Number.isFinite(cfg.height)) opts.height = cfg.height;
-  if (cfg.mode !== IMAGE_GEN_MODE.CODEX) {
+  if (!isCloudCliMode(cfg.mode)) {
     const steps = Number(cfg.steps);
     if (Number.isFinite(steps) && steps > 0) opts.steps = steps;
     const guidance = Number(cfg.guidance);

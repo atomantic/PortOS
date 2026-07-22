@@ -86,9 +86,11 @@ export const MEDIA_TOOLS = [
       // emit 'completed' before we attach. External backends await the
       // upstream HTTP call internally and the file is on disk by the time
       // generateImage resolves — wait() is a no-op there.
-      // 5-min cap mirrors the codex provider's own timeout — a stuck job
-      // shouldn't leak listeners into the voice/palette dispatcher forever.
-      const waiter = createImageGenWaiter({ timeoutMs: 5 * 60 * 1000 });
+      // 21-min cap sits just past the cloud providers' own 20-minute
+      // wall-clock timeouts (CODEX_TIMEOUT_MS / GROK_TIMEOUT_MS) so a slow
+      // but valid render isn't reported as a timeout while the job keeps
+      // running; a stuck job still can't leak listeners forever.
+      const waiter = createImageGenWaiter({ timeoutMs: 21 * 60 * 1000 });
 
       let result;
       try {

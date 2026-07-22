@@ -20,21 +20,29 @@
  * (mirrors the Codex gate — it spends the user's Grok quota). When disabled
  * the dispatcher rejects up front; this module assumes it's enabled by the
  * time generateImage() is called.
+ *
+ * Containment: grok is a general coding agent and headless runs bypass its
+ * approval prompts, so a prompt-injected render could try to reach beyond
+ * image generation. Grok exposes no image-tool-only permission mode, so the
+ * child is confined the ways we can: it runs with cwd set to a throwaway
+ * per-job scratch directory (relative-path tool ops and default file writes
+ * land there, and the whole dir is removed on every terminal path), and the
+ * staged output is signature-sniffed before it is accepted into the gallery.
  */
 
 import { spawn } from 'child_process';
-import { copyFile, rename, stat, unlink } from 'fs/promises';
+import { copyFile, mkdir, open, rename, rm, stat, unlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { randomUUID } from 'crypto';
-import { atomicWrite, ensureDir, PATHS, resolveImageInputPath } from '../../lib/fileUtils.js';
+import { atomicWrite, detectImageFormat, ensureDir, PATHS, resolveImageInputPath } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { autoCleanGeneratedImage } from '../../lib/imageClean.js';
 import { imageGenEvents } from '../imageGenEvents.js';
 import { broadcastSse, attachSseClient as attachSse, closeJobAfterDelay } from '../../lib/sseUtils.js';
 import { killWithEscalation } from '../../lib/killWithEscalation.js';
 import { stripAnsi } from '../../lib/ansiStrip.js';
-import { bufferedSpawn } from '../../lib/bufferedSpawn.js';
+import { bufferedSpawn, prepareCliSpawn } from '../../lib/bufferedSpawn.js';
 import { ensureGrokHeadlessArgs, prepareGrokPromptFile } from '../../lib/grok.js';
 import { IMAGE_GEN_MODE, describeFidelity } from './modes.js';
 
@@ -196,10 +204,14 @@ export async function generateImage({
   const jobId = providedJobId || randomUUID();
   const filename = `${jobId}.png`;
   const outputPath = join(PATHS.images, filename);
-  // Grok writes to a tmp staging path, not straight into the gallery — a
-  // failed/partial run must never leave junk where the gallery scanner or a
-  // concurrent client can see it. The success path copies it over.
-  const stagingPath = join(tmpdir(), `portos-grok-${jobId}.png`);
+  // Grok writes into a per-job tmp scratch dir, not straight into the
+  // gallery — a failed/partial run must never leave junk where the gallery
+  // scanner or a concurrent client can see it, and the dir doubles as the
+  // child's cwd (see the containment note in the module header). Every
+  // terminal path removes the whole dir.
+  const scratchDir = join(tmpdir(), `portos-grok-${jobId}`);
+  const stagingPath = join(scratchDir, 'output.png');
+  await mkdir(scratchDir, { recursive: true });
 
   // Caller dimensions win (mapped to the closest supported ratio); the saved
   // per-provider default applies when no dimensions were sent; otherwise the
@@ -240,7 +252,7 @@ export async function generateImage({
   // child runs out-of-band so the HTTP response can ship while the client
   // attaches to the per-job SSE stream (mirrors codex.js/local.js).
   runGrok(job, jobId, bin, args, {
-    useStdin, fullPrompt, cleanupPromptFile, stagingPath, outputPath, filename, meta, cleanC2PA, denoise,
+    useStdin, fullPrompt, cleanupPromptFile, scratchDir, stagingPath, outputPath, filename, meta, cleanC2PA, denoise,
   }).catch((err) => {
     console.log(`❌ grok run failed [${jobId.slice(0, 8)}]: ${err?.message}`);
   });
@@ -255,10 +267,14 @@ export async function generateImage({
 }
 
 async function runGrok(job, jobId, bin, args, {
-  useStdin, fullPrompt, cleanupPromptFile, stagingPath, outputPath, filename, meta, cleanC2PA = false, denoise = false,
+  useStdin, fullPrompt, cleanupPromptFile, scratchDir, stagingPath, outputPath, filename, meta, cleanC2PA = false, denoise = false,
 }) {
-  const proc = spawn(bin, args, { shell: false, stdio: [useStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+  // prepareCliSpawn resolves the Windows .cmd shim of an npm-installed grok
+  // and wraps it for a safe shell:false spawn — a no-op on POSIX.
+  const { command: spawnBin, args: spawnArgs } = prepareCliSpawn(bin, args);
+  const proc = spawn(spawnBin, spawnArgs, { cwd: scratchDir, shell: false, stdio: [useStdin ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
   activeProcs.set(jobId, proc);
+  const removeScratch = () => rm(scratchDir, { recursive: true, force: true }).catch(() => {});
 
   if (useStdin) {
     // POSIX: grok reads the prompt via --prompt-file /dev/stdin. EPIPE fires
@@ -283,6 +299,7 @@ async function runGrok(job, jobId, bin, args, {
   proc.on('error', (err) => {
     clearTimeout(timeoutTimer);
     cleanupPromptFile();
+    removeScratch();
     finalizeError(job, jobId, proc, `Failed to spawn ${bin}: ${err.message}`);
   });
 
@@ -307,13 +324,18 @@ async function runGrok(job, jobId, bin, args, {
       if (code !== 0) {
         const reason = signal ? `Killed by signal ${signal}` : `Exit code ${code}`;
         const tail = stderrTail.trim().split('\n').slice(-6).join('\n');
+        removeScratch();
         return finalizeError(job, jobId, proc, `Grok generation failed: ${reason}\n${tail}`);
       }
       // Grok writes the file during the turn; empirically it's on disk by
-      // exit, but poll a few seconds in case of flush lag on slow disks.
+      // exit, but poll a few seconds in case of flush lag on slow disks. The
+      // harvest signature-sniffs the bytes so a text error, truncated file,
+      // or non-image payload is never accepted into the gallery as a PNG.
       const harvested = await harvestStagedImage(stagingPath, 5000);
-      if (!harvested) {
-        return finalizeError(job, jobId, proc, noImageReason(stdoutTail));
+      if (!harvested.found) {
+        removeScratch();
+        const prefix = harvested.invalid ? 'Grok wrote a non-image file at the directed path. ' : '';
+        return finalizeError(job, jobId, proc, `${prefix}${noImageReason(stdoutTail)}`);
       }
       // Move, not copy — the staging file is PortOS-owned and disposable, so
       // rename is a metadata-only op when tmpdir and the gallery share a
@@ -322,6 +344,7 @@ async function runGrok(job, jobId, bin, args, {
         await copyFile(stagingPath, outputPath);
         await unlink(stagingPath).catch(() => {});
       });
+      removeScratch();
       // Sidecar metadata so the gallery can recover prompt/ratio/etc.
       const sidecar = join(PATHS.images, `${jobId}.metadata.json`);
       await atomicWrite(sidecar, meta).catch(() => {});
@@ -337,6 +360,7 @@ async function runGrok(job, jobId, bin, args, {
       imageGenEvents.emit('completed', { generationId: jobId, path: `/data/images/${filename}`, filename });
       closeJobAfterDelay(jobs, jobId);
     } catch (err) {
+      removeScratch();
       finalizeError(job, jobId, proc, `Grok post-exit handler failed: ${err?.message || err}`);
     }
   });
@@ -357,17 +381,32 @@ const finalizeError = (job, jobId, proc, reason) => {
   closeJobAfterDelay(jobs, jobId);
 };
 
-// Poll for the directed output file until it exists non-empty or timeoutMs
-// elapses. Returns true when the file is ready. A single stat() answers both
-// "exists" and "non-empty" per tick.
+// Poll for the directed output file until it exists non-empty AND carries a
+// real image signature (PNG/JPEG/WebP/GIF via the shared detectImageFormat
+// sniffer), or timeoutMs elapses. Returns { found, invalid } — `invalid`
+// means a non-empty file appeared whose bytes never matched an image
+// signature (grok wrote a text error or other junk), which the caller
+// surfaces distinctly from "no file at all".
 async function harvestStagedImage(stagingPath, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
+  let sawInvalid = false;
   while (Date.now() < deadline) {
     const s = await stat(stagingPath).catch(() => null);
-    if (s && s.size > 0) return true;
+    if (s && s.size > 0) {
+      const head = Buffer.alloc(16);
+      const fh = await open(stagingPath, 'r').catch(() => null);
+      if (fh) {
+        const { bytesRead } = await fh.read(head, 0, 16, 0).catch(() => ({ bytesRead: 0 }));
+        await fh.close().catch(() => {});
+        if (detectImageFormat(head.subarray(0, bytesRead))) return { found: true, invalid: false };
+        // Header may still be flushing — keep polling; only report invalid
+        // if it never resolves into a real signature before the deadline.
+        sawInvalid = true;
+      }
+    }
     await new Promise((r) => setTimeout(r, 250));
   }
-  return false;
+  return { found: false, invalid: sawInvalid };
 }
 
 // Test-only handles (mirrors codex.js's carve-out).

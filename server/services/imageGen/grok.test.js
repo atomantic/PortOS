@@ -50,7 +50,7 @@ const grok = await import('./grok.js');
 const { imageGenEvents } = await import('../imageGenEvents.js');
 
 const flush = () => new Promise((r) => setImmediate(r));
-const stagingPathFor = (jobId) => join(tmpdir(), `portos-grok-${jobId}.png`);
+const stagingPathFor = (jobId) => join(tmpdir(), `portos-grok-${jobId}`, 'output.png');
 const promptOf = (i = 0) => spawnCalls[i].child.stdin.written;
 const closeChild = async (i = 0, code = 1) => {
   spawnCalls[i].child.exitCode = code;
@@ -188,8 +188,14 @@ describe('grok provider — directed-path harvest', () => {
     imageGenEvents.on('completed', completedListener);
 
     const job = await grok.generateImage({ prompt: 'a fox' });
-    // Grok "writes" the directed staging file before the child exits.
-    const fakePngBytes = Buffer.from('fakepngbytes');
+    // Grok "writes" the directed staging file before the child exits. The
+    // harvest signature-sniffs the bytes, so the fixture needs a real PNG
+    // magic header.
+    const fakePngBytes = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.from('fakepngbody'),
+    ]);
+    await mkdir(join(tmpdir(), `portos-grok-${job.jobId}`), { recursive: true });
     await writeFile(stagingPathFor(job.jobId), fakePngBytes);
     await closeChild(0, 0);
 
@@ -203,12 +209,33 @@ describe('grok provider — directed-path harvest', () => {
     expect(existsSync(finalPath)).toBe(true);
     const written = await readFile(finalPath);
     expect(Buffer.compare(written, fakePngBytes)).toBe(0);
-    // Staging file is cleaned up after the copy.
-    expect(existsSync(stagingPathFor(job.jobId))).toBe(false);
+    // The whole per-job scratch dir is cleaned up after the move.
+    expect(existsSync(join(tmpdir(), `portos-grok-${job.jobId}`))).toBe(false);
     // Sidecar metadata exists too.
     const sidecar = join(FAKE_IMAGES_DIR, `${job.generationId}.metadata.json`);
     expect(existsSync(sidecar)).toBe(true);
   });
+
+  it('rejects a staged file that is not a real image (signature sniff)', async () => {
+    const failedListener = vi.fn();
+    imageGenEvents.on('failed', failedListener);
+
+    const job = await grok.generateImage({ prompt: 'a fox' });
+    // Grok wrote a text error where the PNG should be.
+    await mkdir(join(tmpdir(), `portos-grok-${job.jobId}`), { recursive: true });
+    await writeFile(stagingPathFor(job.jobId), 'Error: could not generate');
+    await closeChild(0, 0);
+
+    const deadline = Date.now() + 8000;
+    while (Date.now() < deadline && failedListener.mock.calls.length === 0) {
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    expect(failedListener).toHaveBeenCalledTimes(1);
+    expect(failedListener.mock.calls[0][0].error).toMatch(/non-image file/);
+    // The rejected junk never reaches the gallery, and the scratch dir is gone.
+    expect(existsSync(join(FAKE_IMAGES_DIR, job.filename))).toBe(false);
+    expect(existsSync(join(tmpdir(), `portos-grok-${job.jobId}`))).toBe(false);
+  }, 12000);
 
   it('fails with the stdout narration when grok exits 0 but wrote no file', async () => {
     const failedListener = vi.fn();
