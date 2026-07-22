@@ -15,6 +15,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Wand2, Play, Square, Disc3, Gamepad2 } from 'lucide-react';
 import toast from '../ui/Toast';
 import useProviderModels from '../../hooks/useProviderModels';
+import useMounted from '../../hooks/useMounted';
 import ProviderModelSelector from '../ProviderModelSelector';
 import { buildChiptuneSchedule, createChiptunePlayer } from '../../lib/chiptunePlayback.js';
 import {
@@ -43,8 +44,10 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix }) {
   // immediately would race that load and be nondeterministically overwritten.
   const [savedPin, setSavedPin] = useState(null);
   const musicSettingsRef = useRef({});
-  const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  // StrictMode-safe (re-armed on remount) — a plain `useRef(true)` + cleanup
+  // would stay false after StrictMode's dev double-mount and wedge every
+  // post-await state update.
+  const mountedRef = useMounted();
 
   const {
     providers, selectedProviderId, selectedModel, availableModels,
@@ -93,13 +96,19 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix }) {
     }).catch(() => {});
   }, []);
 
-  // Apply the saved provider pin once providers are loaded (a stale saved id
-  // that no longer exists degrades to the hook's own default selection).
+  // Apply the saved provider pin once providers are loaded. A stale saved
+  // provider id degrades to the hook's own default selection; a stale saved
+  // MODEL (removed/renamed since it was pinned) is skipped too — the select
+  // doesn't render unmatched values, so applying it would silently send a
+  // model the provider no longer has while displaying a different one.
   useEffect(() => {
     if (!savedPin || providersLoading || !providers.length) return;
-    if (providers.some((p) => p.id === savedPin.providerId)) {
+    const provider = providers.find((p) => p.id === savedPin.providerId);
+    if (provider) {
       setSelectedProviderId(savedPin.providerId);
-      if (savedPin.model) setSelectedModel(savedPin.model);
+      const models = (provider.models?.length ? provider.models : [provider.defaultModel])
+        .map((m) => (typeof m === 'string' ? m : m?.id)).filter(Boolean);
+      if (savedPin.model && models.includes(savedPin.model)) setSelectedModel(savedPin.model);
     }
     setSavedPin(null); // apply once
   }, [savedPin, providersLoading, providers, setSelectedProviderId, setSelectedModel]);
@@ -174,8 +183,14 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix }) {
       const list = await getApps({ silent: true }).catch(() => []);
       if (!mountedRef.current) return;
       // Publishable targets are managed apps with a repo on disk — PortOS
-      // itself is excluded (its repo is not a game asset destination).
-      setApps((Array.isArray(list) ? list : []).filter((a) => a.repoPath && a.id !== 'portos-default' && !a.archived));
+      // itself is excluded (its repo is not a game asset destination); the
+      // server enforces the same policy.
+      const publishable = (Array.isArray(list) ? list : []).filter((a) => a.repoPath && a.id !== 'portos-default' && !a.archived);
+      setApps(publishable);
+      // A remembered target that is no longer publishable (deleted/archived/
+      // repo-less) would leave the select showing nothing while Publish sends
+      // the stale id — clear it so the user picks a live target.
+      setPublishAppId((id) => (id && !publishable.some((a) => a.id === id) ? '' : id));
     }
     setPublishOpen((o) => !o);
   };

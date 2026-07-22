@@ -114,7 +114,10 @@ export const chiptuneScoreSchema = z.object({
     }
   }
   for (const name of score.order) {
-    if (!score.patterns[name]) {
+    // Object.hasOwn, not truthiness: an order entry like "toString" or
+    // "constructor" resolves through the prototype chain to a function
+    // (truthy), then every downstream `.bars` read is undefined → NaN math.
+    if (!Object.hasOwn(score.patterns, name)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['order'], message: `order references unknown pattern "${name}"` });
       return;
     }

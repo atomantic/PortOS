@@ -41,6 +41,14 @@ describe('chiptuneScoreSchema', () => {
     expect(chiptuneScoreSchema.safeParse(score).success).toBe(false);
   });
 
+  it('rejects prototype-chain order entries that are not own pattern keys', () => {
+    for (const name of ['toString', 'constructor']) {
+      const score = validScore();
+      score.order = [name];
+      expect(chiptuneScoreSchema.safeParse(score).success).toBe(false);
+    }
+  });
+
   it('rejects notes on an undeclared channel', () => {
     const score = validScore();
     score.patterns.A.notes.pulse2 = [{ step: 0, pitch: 'G4', len: 2 }];
