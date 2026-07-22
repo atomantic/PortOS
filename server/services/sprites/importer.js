@@ -115,6 +115,10 @@ function relToCharacterDir(manifestPath, characterId) {
   const marker = `sprites/${characterId}/`;
   const idx = manifestPath.indexOf(marker);
   const rel = idx >= 0 ? manifestPath.slice(idx + marker.length) : manifestPath.replace(/^\/+/, '');
+  // A repo-anchored path OUTSIDE the character dir (contract docs, pipeline
+  // catalogs) is provenance, not a character asset — don't misread it as
+  // character-relative and then report it "missing".
+  if (idx < 0 && /^(art-pipeline|art-source|game)\//.test(rel)) return null;
   // Split on BOTH separators — on Windows a `..\` segment would otherwise ride
   // through the check as one opaque segment and still traverse in join().
   if (!rel || rel.split(/[\\/]/).some((seg) => seg === '..' || seg === '')) return null;
