@@ -2062,6 +2062,93 @@ async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedule) {
   return { skip: false, block, repoFullName: check.repoFullName, defaultBranch: check.defaultBranch };
 }
 
+/**
+ * Prompt resolution: resolve the `{reviewers}` / `{issueAuthorFilter}` /
+ * `{swarm}` directives from task metadata + the user's Code Review Defaults,
+ * then render every token in the prompt template. `blocks` carries the
+ * dynamically-assembled Markdown chunks produced by the deterministic
+ * pre-steps above (reference-watch, pr-watcher, branch-/issue-reconcile,
+ * PLAN gating). Pure string work — no gating, no early return.
+ */
+async function buildImprovementTaskDescription({ promptTemplate, app, promptTaskType, metadata, blocks }) {
+  // Resolve the `{reviewers}` the agent is told to run. When the task itself
+  // didn't pin reviewers, fall back to the user's PortOS Code Review Defaults
+  // (AI Providers → Code Review Defaults) rather than the hardcoded `copilot` —
+  // otherwise scheduled tasks like claim-issue, whose prompt drives the review
+  // loop directly, would always tell the agent to use Copilot regardless of the
+  // user's configured reviewers. Settings I/O failures degrade to the hardcoded
+  // default inside normalizeReviewers, so a read error never blocks dispatch.
+  const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
+  // Drop local-LLM reviewers (lmstudio/ollama) from the prompt's {reviewers}
+  // token: the claim/plan prompt templates only document how to drive copilot
+  // and the CLI reviewers (claude/codex/antigravity; grok flows through the same
+  // generic CLI path but isn't yet named in the per-kind bullet — see #2453).
+  // Unlike the system
+  // review-loop follow-up prompt (agentPromptBuilder.js), they carry no
+  // local-endpoint invocation instructions, so naming a local-LLM reviewer
+  // here would stall the agent's review step. Fall through to the hardcoded
+  // copilot default when filtering empties the list.
+  const promptReviewers = normalizeReviewers(metadata, codeReviewDefaults?.reviewers)
+    .filter((r) => !LOCAL_LLM_REVIEWERS.includes(r));
+  // Arbitrary GitHub reviewer usernames appended as `@user` tokens so the claim
+  // prompt's `/do:next --review-with` gates the merge on them too. A task-level
+  // list overrides the Code Review Defaults; forge-agnostic, so not filtered.
+  const promptUsernames = resolveReviewUsernames(metadata.usernames, codeReviewDefaults?.usernames);
+  const promptOptionalReviewers = resolveOptionalReviewers(metadata.optionalReviewers, codeReviewDefaults?.optionalReviewers);
+  const reviewersCsv = buildReviewersCsv(promptReviewers, promptUsernames, promptOptionalReviewers);
+  // {issueAuthorFilter} directive — the filter was already merged (global →
+  // per-app override) and value-constrained by sanitizeTaskMetadata, so read it
+  // from `metadata` (default 'self', the slashdo `/do:next --self` security
+  // boundary — only claim issues you filed).
+  const issueAuthorFilterBlock = resolveIssueAuthorFilterBlock(promptTaskType, metadata.issueAuthorFilter || 'self');
+  // Swarm directive — prepended (see buildClaimWorkTask note). swarmCount was
+  // merged (global → per-app override) + value-constrained by
+  // sanitizeTaskMetadata, so read it from `metadata`. Empty for non-issue
+  // trackers and when swarm is off.
+  const swarmBlock = resolveSwarmBlock(promptTaskType, metadata.swarmCount);
+
+  return `${swarmBlock}${promptTemplate}`
+    .replace(/\{appName\}/g, app.name)
+    .replace(/\{repoPath\}/g, app.repoPath)
+    .replace(/\{appId\}/g, app.id)
+    .replace(/\{reviewers\}/g, reviewersCsv)
+    .replace(/\{issueAuthorFilter\}/g, () => issueAuthorFilterBlock)
+    // Use a replacer function — String.replace with a replacement STRING
+    // interprets `$&`, `$1`, etc. as backreferences. Commit subjects/authors
+    // legitimately contain `$` (env-var docs, prices, awk snippets) and
+    // would get mangled. The function form passes the value verbatim.
+    .replace(/\{referenceData\}/g, () => blocks.referenceData)
+    .replace(/\{prData\}/g, () => blocks.prData)
+    .replace(/\{inFlightBranches\}/g, () => blocks.inFlightBranches)
+    .replace(/\{zombieIssues\}/g, () => blocks.zombieIssues)
+    .replace(/\{repoFullName\}/g, () => blocks.repoFullName)
+    .replace(/\{defaultBranch\}/g, () => blocks.defaultBranch)
+    .replace(/\{planConstraint\}/g, () => blocks.planConstraint);
+}
+
+/**
+ * Layer the provider/model/effort pins onto `metadata`: the global schedule
+ * interval first, then a buildTaskInput hook's per-app override (the more
+ * specific choice wins, so it is applied last). A model is only ever pinned
+ * when explicitly configured — otherwise it stays unset so selectModelForTask
+ * resolves the active provider's tier/default model at spawn time (see the
+ * note in generateSelfImprovementTaskForType).
+ */
+function applyProviderModelPins(metadata, interval, hookOverride) {
+  if (interval.providerId) {
+    metadata.provider = interval.providerId;
+    metadata.providerId = interval.providerId;
+  }
+  if (interval.model) {
+    metadata.model = interval.model;
+  }
+  if (interval.effort) {
+    metadata.effort = interval.effort;
+  }
+  if (hookOverride.providerId) { metadata.provider = hookOverride.providerId; metadata.providerId = hookOverride.providerId; }
+  if (hookOverride.model) { metadata.model = hookOverride.model; }
+}
+
 export async function generateManagedAppImprovementTaskForType(taskType, app, state, { skipPreconditions = false } = {}) {
   const { updateAppActivity } = await import('./appActivity.js');
   const taskSchedule = await import('./taskSchedule.js');
@@ -2162,82 +2249,22 @@ export async function generateManagedAppImprovementTaskForType(taskType, app, st
     return null;
   }
   const planConstraintBlock = buildPlanConstraintBlock(metadata.planId);
-  // Resolve the `{reviewers}` the agent is told to run. When the task itself
-  // didn't pin reviewers, fall back to the user's PortOS Code Review Defaults
-  // (AI Providers → Code Review Defaults) rather than the hardcoded `copilot` —
-  // otherwise scheduled tasks like claim-issue, whose prompt drives the review
-  // loop directly, would always tell the agent to use Copilot regardless of the
-  // user's configured reviewers. Settings I/O failures degrade to the hardcoded
-  // default inside normalizeReviewers, so a read error never blocks dispatch.
-  const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
-  // Drop local-LLM reviewers (lmstudio/ollama) from the prompt's {reviewers}
-  // token: the claim/plan prompt templates only document how to drive copilot
-  // and the CLI reviewers (claude/codex/antigravity; grok flows through the same
-  // generic CLI path but isn't yet named in the per-kind bullet — see #2453).
-  // Unlike the system
-  // review-loop follow-up prompt (agentPromptBuilder.js), they carry no
-  // local-endpoint invocation instructions, so naming a local-LLM reviewer
-  // here would stall the agent's review step. Fall through to the hardcoded
-  // copilot default when filtering empties the list.
-  const promptReviewers = normalizeReviewers(metadata, codeReviewDefaults?.reviewers)
-    .filter((r) => !LOCAL_LLM_REVIEWERS.includes(r));
-  // Arbitrary GitHub reviewer usernames appended as `@user` tokens so the claim
-  // prompt's `/do:next --review-with` gates the merge on them too. A task-level
-  // list overrides the Code Review Defaults; forge-agnostic, so not filtered.
-  const promptUsernames = resolveReviewUsernames(metadata.usernames, codeReviewDefaults?.usernames);
-  const promptOptionalReviewers = resolveOptionalReviewers(metadata.optionalReviewers, codeReviewDefaults?.optionalReviewers);
-  const reviewersCsv = buildReviewersCsv(promptReviewers, promptUsernames, promptOptionalReviewers);
-  // {issueAuthorFilter} directive — the filter was already merged (global →
-  // per-app override) and value-constrained by sanitizeTaskMetadata, so read it
-  // from `metadata` (default 'self', the slashdo `/do:next --self` security
-  // boundary — only claim issues you filed).
-  const issueAuthorFilterBlock = resolveIssueAuthorFilterBlock(promptTaskType, metadata.issueAuthorFilter || 'self');
-  // Swarm directive — prepended (see buildClaimWorkTask note). swarmCount was
-  // merged (global → per-app override) + value-constrained by
-  // sanitizeTaskMetadata, so read it from `metadata`. Empty for non-issue
-  // trackers and when swarm is off.
-  const swarmBlock = resolveSwarmBlock(promptTaskType, metadata.swarmCount);
 
-  const description = `${swarmBlock}${promptTemplate}`
-    .replace(/\{appName\}/g, app.name)
-    .replace(/\{repoPath\}/g, app.repoPath)
-    .replace(/\{appId\}/g, app.id)
-    .replace(/\{reviewers\}/g, reviewersCsv)
-    .replace(/\{issueAuthorFilter\}/g, () => issueAuthorFilterBlock)
-    // Use a replacer function — String.replace with a replacement STRING
-    // interprets `$&`, `$1`, etc. as backreferences. Commit subjects/authors
-    // legitimately contain `$` (env-var docs, prices, awk snippets) and
-    // would get mangled. The function form passes the value verbatim.
-    .replace(/\{referenceData\}/g, () => referenceDataBlock)
-    .replace(/\{prData\}/g, () => prDataBlock)
-    .replace(/\{inFlightBranches\}/g, () => inFlightBranchesBlock)
-    .replace(/\{zombieIssues\}/g, () => zombieIssuesBlock)
-    .replace(/\{repoFullName\}/g, () => prRepoFullName)
-    .replace(/\{defaultBranch\}/g, () => prDefaultBranch)
-    .replace(/\{planConstraint\}/g, () => planConstraintBlock);
+  const description = await buildImprovementTaskDescription({
+    promptTemplate, app, promptTaskType, metadata,
+    blocks: {
+      referenceData: referenceDataBlock,
+      prData: prDataBlock,
+      inFlightBranches: inFlightBranchesBlock,
+      zombieIssues: zombieIssuesBlock,
+      repoFullName: prRepoFullName,
+      defaultBranch: prDefaultBranch,
+      planConstraint: planConstraintBlock
+    }
+  });
 
   applyAppWorktreeDefault(metadata, app);
-
-  // Use configured model/provider if specified, otherwise use default
-  if (interval.providerId) {
-    metadata.provider = interval.providerId;
-    metadata.providerId = interval.providerId;
-  }
-  // Only pin a model when the schedule config explicitly sets one; otherwise
-  // leave it unset so selectModelForTask resolves the active provider's tier/
-  // default model at spawn time (see note in generateSelfImprovementTaskForType).
-  if (interval.model) {
-    metadata.model = interval.model;
-  }
-  if (interval.effort) {
-    metadata.effort = interval.effort;
-  }
-
-  // A buildTaskInput hook's per-app provider/model wins over the global interval
-  // pin above (per-app is the more specific choice). Applied last so a global
-  // schedule provider can't clobber the app's selection.
-  if (hookOverride.providerId) { metadata.provider = hookOverride.providerId; metadata.providerId = hookOverride.providerId; }
-  if (hookOverride.model) { metadata.model = hookOverride.model; }
+  applyProviderModelPins(metadata, interval, hookOverride);
 
   const approval = await resolveConfidenceApproval(state, `app-improve:${taskType}`, `Task app-improve:${taskType} for ${app.name}`, metadata);
 
