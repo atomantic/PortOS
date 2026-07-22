@@ -141,6 +141,18 @@ describe('startReferenceGeneration', () => {
     expect(manifest.designPrompt).toBe('a wiry ranger');
   });
 
+  it('persists an uploaded design reference and records it in the tag provenance', async () => {
+    const id = newId();
+    await createCharacter(id);
+    const tmp = join(TEST_ROOT, 'upload-tmp.png');
+    await writeCandidatePng(tmp);
+    await startReferenceGeneration(id, { target: 'main' }, { tempPath: tmp, originalname: 'concept.png' });
+    const call = enqueueJob.mock.calls[0][0];
+    expect(call.params.spriteRef.designReferencePath).toMatch(/^reference\/uploads\/.+concept\.png$/);
+    expect(call.params.initImagePath).toContain('/reference/uploads/');
+    expect(call.params.initImageStrength).toBe(0.65);
+  });
+
   it('refuses anchors before the main is locked, and south always', async () => {
     const id = newId();
     await createCharacter(id);
@@ -281,6 +293,15 @@ describe('lockReference', () => {
     expect(record.chromaKey).toBe(result.manifest.chromaKey);
     // The accepted risk stays visible on the manifest.
     expect(result.manifest.chromaKeyWarning).toMatch(/generation key #FF00FF/);
+  });
+
+  it('honors a legacy lowercase pinned key at lock time (phase-1 records)', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await records.updateRecord(id, { chromaKey: '#0000ff' }); // phase-1 stored any-case hex
+    const result = await lockMain(id);
+    expect(result.manifest.chromaKey).toBe('#0000FF');
+    expect(result.manifest.chromaKeyAutoSelected).toBe(false);
   });
 
   it('409s a lock whose PINNED key collides with the surviving palette', async () => {

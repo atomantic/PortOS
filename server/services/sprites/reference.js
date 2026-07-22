@@ -232,6 +232,7 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
   let initImageStrength = Number.isFinite(body.initImageStrength) ? body.initImageStrength : undefined;
   let anchorId;
   let direction;
+  let designReferencePath;
 
   if (target === 'main') {
     if (manifest.mainReference.locked) {
@@ -246,10 +247,13 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
     prompt = buildMainReferencePrompt({ name: record.name, designPrompt, chromaKey: genKey });
     if (upload) {
       // Shared temp-import (uuid-prefixed name, EXDEV-safe copy+unlink) —
-      // the upload persists in the record dir as design provenance.
+      // the upload persists in the record dir as design provenance, and its
+      // record-relative path rides the tag into the candidate sidecar so a
+      // locked candidate stays traceable to the upload that guided it.
       const uploadsDir = join(spriteDir(recordId), 'reference', 'uploads');
       const { filename } = await importFileToDir(upload.tempPath, upload.originalname || 'design-reference.png', uploadsDir);
       initImagePath = join(uploadsDir, filename);
+      designReferencePath = `reference/uploads/${filename}`;
       initImageStrength ??= UPLOAD_DEFAULT_STRENGTH;
     }
     if (designPrompt) manifest.designPrompt = designPrompt;
@@ -300,6 +304,7 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
     spriteRef: {
       recordId, target, direction, anchorId, chromaKey: genKey, mode, model: effectiveModel,
       ...(target === 'main' && body.designPrompt ? { designPrompt: body.designPrompt } : {}),
+      ...(designReferencePath ? { designReferencePath } : {}),
     },
   };
   const params = mode === IMAGE_GEN_MODE.CODEX
@@ -346,6 +351,7 @@ export async function attachReferenceCandidate(ctx) {
     model: ctx.job?.params?.model || ctx.job?.params?.modelId || ctx.model || null,
     jobId: ctx.jobId || null,
     ...(ctx.designPrompt ? { designPrompt: ctx.designPrompt } : {}),
+    ...(ctx.designReferencePath ? { designReferencePath: ctx.designReferencePath } : {}),
     generatedAt: new Date().toISOString(),
     candidatePath: relPath,
     candidateSha256: await sha256File(dest),
@@ -410,9 +416,12 @@ async function lockReferenceImpl(recordId, { target, candidate, acceptClipRisk =
     // pinned because the clip warning below needs it.
     const analysis = await analyzeForeground(candAbs, maskKey);
     const palette = paletteFromAnalysis(analysis);
-    const userPinned = CHROMA_KEY_HEXES.includes(record.chromaKey);
-    const auto = userPinned ? null : pickChromaKey(palette);
-    const selectedKey = userPinned ? record.chromaKey : auto.hex;
+    // Case-insensitive pin check: phase-1 accepted any-case hex, so an
+    // upgraded record can hold '#00ff00' — that is still a pin, not auto.
+    const pinnedKey = CHROMA_KEY_HEXES.find((k) => k === (record.chromaKey || '').toUpperCase()) || null;
+    const auto = pinnedKey ? null : pickChromaKey(palette);
+    const selectedKey = pinnedKey || auto.hex;
+    const userPinned = Boolean(pinnedKey);
     // Selection only sees pixels that SURVIVED the generation-key mask —
     // exact-key details (magenta garment on the magenta default) are already
     // gone from the palette — and a pinned key can collide with the palette
@@ -444,8 +453,12 @@ async function lockReferenceImpl(recordId, { target, candidate, acceptClipRisk =
     const south = findAnchor(manifest, anchorIdForDirection('south'));
     if (south) Object.assign(south, { status: 'locked', path: rel, lockedFrom: candidate, sha256 });
     manifest.status = 'in-progress';
-    await saveManifest(recordId, manifest);
+    // Record BEFORE manifest: a crash between the two leaves the record
+    // updated but the manifest unlocked — recoverable by re-locking. The
+    // reverse order would wedge (locked manifest + stale record, with both
+    // relock and key PATCH returning 409 forever).
     await updateRecord(recordId, { chromaKey: selectedKey, status: 'reference' });
+    await saveManifest(recordId, manifest);
   } else {
     if (!ANCHOR_DIRECTIONS.includes(target)) {
       throw new ServerError(`Unknown reference target: ${target}`, { status: 400, code: 'INVALID_TARGET' });
