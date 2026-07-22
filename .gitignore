@@ -65,13 +65,14 @@ browser/node_modules/
 browser/data/
 
 # Sub-package lock files. Root package.json does NOT declare these as
-# workspaces; `npm run setup` runs `npm install --prefix <pkg>` for each,
-# generating their own lockfiles locally. The root package-lock.json only
-# tracks root devDependencies (pm2) — the `client`/`server` entries you may
-# see there are stale `extraneous: true` leftovers and are not authoritative.
+# workspaces (npm workspaces were reverted in b743222be — exFAT has no
+# symlink support); `npm run setup` runs `npm install --prefix <pkg>` for
+# each. client/ and server/ lockfiles ARE committed and CI installs them
+# with `npm ci`: without them Dependabot only sees the ~45 deps declared in
+# their package.json files and is blind to ~560 transitive packages, and
+# every install/peer resolves a different tree. Only browser/ stays ignored
+# (its node_modules is committed instead).
 browser/package-lock.json
-client/package-lock.json
-server/package-lock.json
 __pycache__/
 
 # Temporary reference/scrape files created while building Freydis LoRA datasets
