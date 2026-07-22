@@ -1,3 +1,5 @@
+import { sleep } from './sleep.js';
+
 // Cross-browser detection for stale dynamic-import chunk errors that happen
 // after a rebuild changes Vite chunk hashes while a tab is still open.
 //
@@ -65,7 +67,7 @@ export const purgeOfflineCaches = async () => {
 const withTimeout = (promise, ms) =>
   Promise.race([
     Promise.resolve(promise).catch(() => {}),
-    new Promise((resolve) => setTimeout(resolve, ms)),
+    sleep(ms),
   ]);
 
 // A flaky or dead network produces the same import-error messages as a

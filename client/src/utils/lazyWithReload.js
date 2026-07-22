@@ -1,12 +1,11 @@
 import { lazy } from 'react';
 import { isStaleChunkError, reloadOnceForStaleChunk } from './staleChunkReload';
+import { sleep } from './sleep.js';
 
 // How many times to re-attempt a failed dynamic import before giving up, and
 // the base backoff between attempts (multiplied by the attempt number).
 const MAX_RETRIES = 2;
 const RETRY_BASE_DELAY_MS = 350;
-
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // Retry a dynamic import a few times before treating the failure as terminal.
 // On flaky mobile/cellular links a chunk fetch can fail on a transient blip
@@ -18,7 +17,7 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const importWithRetry = (importFn, retriesLeft = MAX_RETRIES) =>
   importFn().catch(async (err) => {
     if (retriesLeft > 0) {
-      await delay(RETRY_BASE_DELAY_MS * (MAX_RETRIES - retriesLeft + 1));
+      await sleep(RETRY_BASE_DELAY_MS * (MAX_RETRIES - retriesLeft + 1));
       return importWithRetry(importFn, retriesLeft - 1);
     }
     throw err;

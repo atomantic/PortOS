@@ -7,6 +7,7 @@
 
 import socket from './socket';
 import { subscribeVisibility } from '../hooks/useVisibilityEvent.js';
+import { sleep } from '../utils/sleep.js';
 
 let stream = null;
 let recorder = null;
@@ -641,7 +642,7 @@ export const captureScreenForVision = async () => {
   const playing = await video.play().then(() => true).catch(() => false);
   if (!playing) return null;
   // One frame is enough; give the decoder a tick to paint dimensions.
-  await new Promise((resolve) => setTimeout(resolve, 120));
+  await sleep(120);
   const w = video.videoWidth || 1280;
   const h = video.videoHeight || 720;
   const canvas = document.createElement('canvas');

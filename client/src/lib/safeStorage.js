@@ -37,6 +37,17 @@ export const safeWriteStorage = (key, value) => {
   }
 };
 
+// Best-effort JSON write. Serialization happens inside the guard because
+// JSON.stringify itself throws on circular/BigInt values — a caller that only
+// wrapped setItem would still crash on those.
+export const safeWriteJsonStorage = (key, value) => {
+  try {
+    globalThis.localStorage?.setItem(key, JSON.stringify(value));
+  } catch {
+    // Ignore — the value stays in memory when persistence is unavailable.
+  }
+};
+
 // Best-effort remove; silently no-ops when storage is unavailable.
 export const safeRemoveStorage = (key) => {
   try {
