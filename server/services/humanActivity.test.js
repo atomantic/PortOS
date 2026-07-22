@@ -17,6 +17,7 @@ import {
   messageActivityCandidates,
   calendarActivityCandidates,
   newlyLearnedAliases,
+  stripParticipantsForAccount,
 } from './humanActivity.js';
 
 describe('shortSummary', () => {
@@ -285,5 +286,21 @@ describe('newlyLearnedAliases (#2855)', () => {
   });
   it('returns [] for non-array input', () => {
     expect(newlyLearnedAliases(null, null)).toEqual([]);
+  });
+});
+
+describe('stripParticipantsForAccount guards (#2855)', () => {
+  // The DB round-trip lives in humanActivity.db.test.js; these cases never reach
+  // the database at all — they assert the early return that keeps a pointless
+  // UPDATE (and a pool connection) off every routine sync.
+  const noDbClient = { query: () => { throw new Error('should not query'); } };
+  it('no-ops when the alias list is empty or normalizes to empty', async () => {
+    expect(await stripParticipantsForAccount('acct-1', 'gmail', [], { client: noDbClient })).toBe(0);
+    expect(await stripParticipantsForAccount('acct-1', 'gmail', ['', null], { client: noDbClient })).toBe(0);
+    expect(await stripParticipantsForAccount('acct-1', 'gmail', 'not-an-array', { client: noDbClient })).toBe(0);
+  });
+  it('no-ops when the account or source scope is missing', async () => {
+    expect(await stripParticipantsForAccount(null, 'gmail', ['a@x.io'], { client: noDbClient })).toBe(0);
+    expect(await stripParticipantsForAccount('acct-1', '', ['a@x.io'], { client: noDbClient })).toBe(0);
   });
 });
