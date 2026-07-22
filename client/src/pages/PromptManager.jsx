@@ -260,19 +260,21 @@ export default function PromptManager() {
   const loadJobSkill = async (name) => {
     setSelectedJobSkill(name);
     setJobSkillPreview('');
-    const res = await getJobSkill(name, { silent: true });
+    const res = await getJobSkill(name, { silent: true }).catch(() => ({}));
     setJobSkillContent(res.content || '');
     setJobSkillMeta({ jobName: res.jobName, jobId: res.jobId, category: res.category, interval: res.interval });
   };
 
   const saveJobSkill = async () => {
     setSaving(true);
-    await apiSaveJobSkill(selectedJobSkill, jobSkillContent, { silent: true });
+    // Swallow errors (matches the prior fire-and-forget PUT) but always clear
+    // the saving flag so a failure can't leave the Save button stuck disabled.
+    await apiSaveJobSkill(selectedJobSkill, jobSkillContent, { silent: true }).catch(() => {});
     setSaving(false);
   };
 
   const previewJobSkill = async () => {
-    const res = await apiPreviewJobSkill(selectedJobSkill, { silent: true });
+    const res = await apiPreviewJobSkill(selectedJobSkill, { silent: true }).catch(() => ({}));
     setJobSkillPreview(res.preview || '');
   };
 
