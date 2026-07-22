@@ -243,6 +243,25 @@ describe('huggingFaceCatalog', () => {
       expect(result.variants || []).toEqual([])
     })
 
+    it('offers no variant for an `-fp16.gguf` build, which Ollama has no valid tag for', async () => {
+      // Verified against the HF/Ollama registry: `:FP16` → 400 "not a valid
+      // quantization scheme" and `:F16` → 400 "not available in the repository"
+      // when the file is named `…-fp16.gguf`. Neither tag installs, so the build
+      // must stay off the variant list rather than offering a 400 behind Install.
+      const repo = 'exampleorg/Example-0.5B-Instruct-GGUF'
+      fetch
+        .mockResolvedValueOnce(listing(repo, ['example-0.5b-instruct-fp16.gguf', 'example-0.5b-instruct-q4_k_m.gguf']))
+        .mockResolvedValueOnce(blobs(repo, {
+          'example-0.5b-instruct-fp16.gguf': 1_000_000_000,
+          'example-0.5b-instruct-q4_k_m.gguf': 400_000_000,
+        }))
+
+      const [result] = await searchHuggingFaceModels({ backend: 'ollama', query: 'example-0.5b', systemMemoryBytes: 128 * 1024 ** 3 })
+
+      expect(result.variants.map((v) => v.quant)).toEqual(['q4_k_m'])
+      expect(result.id).toBe(`hf.co/${repo}:q4_k_m`)
+    })
+
     it('reports an unknown size when several custom-scheme builds leave the backend to choose', async () => {
       // No file parses a quant, so the id is the bare repo and Ollama picks the
       // build — pinning the card to one arbitrary file's size would advertise a

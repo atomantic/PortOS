@@ -212,6 +212,11 @@ function quantFromFilename(filename) {
   // `hf.co/<repo>:Q2` pull is rejected by Ollama with "not a valid quantization
   // scheme". An unparseable quant is better as null: the install id then falls
   // back to the bare repo, which Ollama resolves via its `latest` manifest.
+  // `FP16` is deliberately NOT a token here (only `F16`/`BF16`): Ollama rejects
+  // an `:FP16` tag as an invalid scheme, and an `:F16` tag on a repo whose file
+  // is named `…-fp16.gguf` 404s ("tag is not available in the repository"), so a
+  // `…-fp16.gguf` build has no pullable tag at all — dropping it from the variant
+  // list and installing the repo's `latest` is the only form that works.
   const match = stem.match(/(?:^|[-_.])((?:UD-)?(?:IQ\d(?:_[A-Z0-9]+)*|Q\d(?:_[A-Z0-9]+)*|BF16|F16))$/i)
   return match?.[1] || null
 }
