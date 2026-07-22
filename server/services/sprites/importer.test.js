@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeAll, afterAll } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync } from 'fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from 'fs';
 import { createHash } from 'crypto';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -262,6 +262,21 @@ describe('importFromSource', () => {
     expect(hero.errors).toContain('missing from source: reference/hero-anchor-south.png');
     // the destination still holds the earlier copy — it must not count as verified
     expect(existsSync(join(SPRITES_ROOT, 'hero/reference/hero-anchor-south.png'))).toBe(true);
+  });
+
+  it('refuses to overwrite a destination whose reference set is locked (#2896 immutability)', async () => {
+    writeTree(SPRITES_ROOT, {
+      'hero/reference/hero-reference-set-v1.json': {
+        schemaVersion: 1, mainReference: { path: 'reference/hero-walk-south-v1.png', locked: true },
+      },
+    });
+    const { results } = await importFromSource({ sourceRoot: SOURCE_ROOT, characters: ['hero'], includeProps: false });
+    const hero = results.find((r) => r.id === 'hero');
+    expect(hero.errors.some((e) => e.includes('locked reference set'))).toBe(true);
+    expect(hero.files).toBe(0);
+    // The locked manifest survives untouched.
+    const manifest = JSON.parse(readFileSync(join(SPRITES_ROOT, 'hero/reference/hero-reference-set-v1.json'), 'utf8'));
+    expect(manifest.mainReference.locked).toBe(true);
   });
 
   it('rejects a root that is not a sprite pipeline', async () => {
