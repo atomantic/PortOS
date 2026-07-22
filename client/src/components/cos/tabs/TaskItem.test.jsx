@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 
 const api = vi.hoisted(() => ({
@@ -83,6 +83,91 @@ describe('TaskItem blocked reason', () => {
     render(<TaskItem task={blocked} isSystem onRefresh={vi.fn()} providers={providers} />);
     expect(screen.getByText('Paused by user')).toBeInTheDocument();
     expect(screen.queryByText(/Max total spawns/)).not.toBeInTheDocument();
+  });
+});
+
+describe('TaskItem long-text clamping', () => {
+  // The context often holds a task's entire prompt (orchestrator tasks put the
+  // whole thing there). Rendering it unclamped turned the pending list into a
+  // wall of text the user had to scroll past to reach the rest of the queue.
+  const longPrompt = 'You are the Creative Director. '.repeat(200);
+
+  // jsdom reports 0 for both scrollHeight and clientHeight, so nothing ever
+  // measures as overflowing without this. Restored in afterEach rather than at
+  // the end of the test body, so a failed assertion can't leak it into the next.
+  const forceOverflow = () =>
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(500);
+  afterEach(() => vi.restoreAllMocks());
+
+  const toggleFor = (id) => screen.getAllByRole('button', { name: /Show more/ })
+    .find(b => b.getAttribute('aria-controls') === id);
+
+  it('clamps the context and offers an expand toggle when it overflows', () => {
+    forceOverflow();
+    const withContext = { ...task, id: 'sys-long-context', metadata: { context: longPrompt } };
+    render(<TaskItem task={withContext} isSystem onRefresh={vi.fn()} providers={providers} />);
+
+    const context = document.getElementById('task-context-sys-sys-long-context');
+    expect(context).toHaveClass('line-clamp-2');
+
+    fireEvent.click(toggleFor('task-context-sys-sys-long-context'));
+    expect(context).not.toHaveClass('line-clamp-2');
+  });
+
+  it('clamps a long auto-written blockedReason', () => {
+    forceOverflow();
+    const blocked = {
+      ...task,
+      id: 'sys-long-block',
+      status: 'blocked',
+      metadata: { blockedReason: 'stderr dump '.repeat(200) },
+    };
+    render(<TaskItem task={blocked} isSystem onRefresh={vi.fn()} providers={providers} />);
+
+    expect(document.getElementById('task-blocker-sys-sys-long-block')).toHaveClass('line-clamp-2');
+    expect(toggleFor('task-blocker-sys-sys-long-block')).toBeInTheDocument();
+  });
+
+  it('omits the toggle when the context fits within the clamp', () => {
+    const withContext = { ...task, id: 'sys-short-context', metadata: { context: 'short note' } };
+    render(<TaskItem task={withContext} isSystem onRefresh={vi.fn()} providers={providers} />);
+
+    expect(screen.queryByRole('button', { name: /Show more/ })).not.toBeInTheDocument();
+  });
+
+  it('scopes the text ids so an approval-gated task rendered twice does not collide', () => {
+    // TasksTab renders `pendingSystemTasks` (status === 'pending') AND the
+    // "Awaiting Approval" subset (approvalRequired && pending), so one
+    // approval-gated task mounts two cards. Unscoped ids would duplicate, and
+    // aria-controls resolves by first match — pointing the approval card's
+    // toggle at the pending card's paragraph.
+    forceOverflow();
+    const gated = {
+      ...task,
+      id: 'sys-gated',
+      approvalRequired: true,
+      metadata: { context: longPrompt },
+    };
+    const { container: pending } = render(
+      <TaskItem task={gated} isSystem onRefresh={vi.fn()} providers={providers} />);
+    const { container: approval } = render(
+      <TaskItem task={gated} awaitingApproval onRefresh={vi.fn()} providers={providers} />);
+
+    const pendingId = pending.querySelector('[id^="task-context-"]').id;
+    const approvalId = approval.querySelector('[id^="task-context-"]').id;
+    expect(pendingId).not.toBe(approvalId);
+    expect(document.querySelectorAll(`[id="${pendingId}"]`)).toHaveLength(1);
+    expect(document.querySelectorAll(`[id="${approvalId}"]`)).toHaveLength(1);
+  });
+
+  it('edits the context in a multi-line textarea, not a single-line input', () => {
+    const withContext = { ...task, id: 'sys-edit-context', metadata: { context: longPrompt } };
+    render(<TaskItem task={withContext} isSystem onRefresh={vi.fn()} providers={providers} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Edit task' }));
+    const contextField = screen.getByPlaceholderText('Context');
+    expect(contextField.tagName).toBe('TEXTAREA');
+    expect(contextField).toHaveValue(longPrompt);
   });
 });
 
