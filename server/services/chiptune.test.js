@@ -28,6 +28,7 @@ vi.mock('../lib/promptRunner.js', () => ({
 
 vi.mock('./apps.js', () => ({
   getAppById: vi.fn(),
+  PORTOS_APP_ID: 'portos-default',
 }));
 
 // No ffmpeg in tests — the render path keeps the deterministic WAV output.
@@ -172,6 +173,16 @@ describe('publishChiptuneTrack', () => {
     apps.getAppById.mockResolvedValue({ id: 'app-1', name: 'Game', repoPath: '' });
     await expect(publishChiptuneTrack({ trackId: 'track-1', appId: 'app-1' }))
       .rejects.toMatchObject({ code: 'CHIPTUNE_APP_NOT_FOUND' });
+  });
+
+  it('refuses PortOS itself and archived apps as publish targets', async () => {
+    tracks.getTrack.mockResolvedValue(baseTrack({ chiptuneScore: validScore() }));
+    apps.getAppById.mockResolvedValue({ id: 'portos-default', name: 'PortOS', repoPath: '/tmp' });
+    await expect(publishChiptuneTrack({ trackId: 'track-1', appId: 'portos-default' }))
+      .rejects.toMatchObject({ code: 'CHIPTUNE_APP_NOT_PUBLISHABLE' });
+    apps.getAppById.mockResolvedValue({ id: 'app-1', name: 'Game', repoPath: '/tmp', archived: true });
+    await expect(publishChiptuneTrack({ trackId: 'track-1', appId: 'app-1' }))
+      .rejects.toMatchObject({ code: 'CHIPTUNE_APP_NOT_PUBLISHABLE' });
   });
 
   it('rejects traversal and absolute subdirs before touching the filesystem', async () => {

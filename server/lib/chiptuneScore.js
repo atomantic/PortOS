@@ -106,8 +106,9 @@ export const chiptuneScoreSchema = z.object({
       }
     }
   }
-  const stepsPerBar = score.beatsPerBar * score.stepsPerBeat;
-  const totalSteps = score.order.reduce((sum, name) => sum + (score.patterns[name]?.bars || 0) * stepsPerBar, 0);
+  // The order loop above already returned on any unknown pattern, so the
+  // shared step math is safe to reuse here (one formula, not two).
+  const totalSteps = scoreTotalSteps(score);
   if (totalSteps > CHIPTUNE_LIMITS.TOTAL_STEPS_MAX) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['order'], message: `loop is too long (${totalSteps} steps > ${CHIPTUNE_LIMITS.TOTAL_STEPS_MAX})` });
   }

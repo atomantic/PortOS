@@ -72,14 +72,16 @@ export function renderScoreToPcm(score, { sampleRate = CHIPTUNE_SAMPLE_RATE } = 
       const lfsr = makeLfsr();
       let held = 0;
       let heldFor = Infinity; // force a fresh LFSR value on the first sample
+      // Sweep constants are per-preset, not per-sample — hoist out of the loop.
+      const k = preset.kind === 'sweep' ? Math.log(preset.toHz / preset.fromHz) / preset.decaySec : 0;
+      const fromOverK = k ? preset.fromHz / k : 0;
       for (let i = 0; i < durSamples; i += 1) {
         const t = i / sampleRate;
         const env = Math.exp(-t / preset.decaySec) * (t < ATTACK_SEC ? t / ATTACK_SEC : 1);
         let s;
         if (preset.kind === 'sweep') {
           // Exponential pitch sweep integrated in closed form keeps phase smooth.
-          const k = Math.log(preset.toHz / preset.fromHz) / preset.decaySec;
-          const phase = (preset.fromHz / k) * (Math.exp(k * t) - 1);
+          const phase = fromOverK * (Math.exp(k * t) - 1);
           s = Math.sin(2 * Math.PI * phase);
         } else {
           if (heldFor >= preset.updateEvery) { held = lfsr(); heldFor = 0; }

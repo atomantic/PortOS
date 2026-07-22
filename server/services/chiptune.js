@@ -14,17 +14,17 @@
  *     repo owns its own git — we only write files.
  */
 
-import { mkdir, writeFile, unlink, stat } from 'fs/promises';
-import { join, resolve, sep, isAbsolute } from 'path';
+import { unlink, stat } from 'fs/promises';
+import { join, resolve, isAbsolute } from 'path';
 import { randomUUID } from 'crypto';
 import { ServerError } from '../lib/errorHandler.js';
-import { PATHS } from '../lib/fileUtils.js';
+import { PATHS, atomicWrite, isPathInsideDir } from '../lib/fileUtils.js';
 import { findFfmpeg, runFfmpegProcess } from '../lib/ffmpeg.js';
 import { chiptuneScoreSchema, CHIPTUNE_LIMITS, CHIPTUNE_NOISE_PRESETS, scoreDurationSec } from '../lib/chiptuneScore.js';
 import { renderScoreToWav } from '../lib/chiptuneRender.js';
 import { resolveProviderAndModel, assertProvider, runPromptThroughProvider } from '../lib/promptRunner.js';
 import * as tracks from './tracks/index.js';
-import { getAppById } from './apps.js';
+import { getAppById, PORTOS_APP_ID } from './apps.js';
 
 export const DEFAULT_PUBLISH_SUBDIR = 'game/assets/music';
 
@@ -120,9 +120,8 @@ export async function generateChiptuneScore({ trackId, prompt, providerId, model
 // Render the score to an audio file in `dir` as `<basename>.ogg` (via ffmpeg)
 // or `<basename>.wav` when ffmpeg isn't installed. Returns the filename used.
 async function renderScoreToFile(score, dir, basename) {
-  await mkdir(dir, { recursive: true });
   const wavPath = join(dir, `${basename}.wav`);
-  await writeFile(wavPath, renderScoreToWav(score));
+  await atomicWrite(wavPath, renderScoreToWav(score)); // ensureDir + temp-rename
   const bin = await findFfmpeg();
   if (!bin) return `${basename}.wav`;
   const oggPath = join(dir, `${basename}.ogg`);
@@ -189,6 +188,12 @@ export async function publishChiptuneTrack({ trackId, appId, subdir, slug }) {
   if (!app || !app.repoPath) {
     throw new ServerError('Managed app not found (or it has no repo path)', { status: 404, code: 'CHIPTUNE_APP_NOT_FOUND' });
   }
+  // Enforce the publishable-target policy server-side (the panel's app filter
+  // is just a mirror of this rule): never write generated assets into PortOS's
+  // own working tree, and archived apps aren't valid destinations.
+  if (app.id === PORTOS_APP_ID || app.archived) {
+    throw new ServerError('That app is not a publishable target', { status: 400, code: 'CHIPTUNE_APP_NOT_PUBLISHABLE' });
+  }
   const repoRoot = resolve(app.repoPath);
   const repoStat = await stat(repoRoot).catch(() => null);
   if (!repoStat?.isDirectory()) {
@@ -201,23 +206,24 @@ export async function publishChiptuneTrack({ trackId, appId, subdir, slug }) {
   assertSafeSubdir(rawSubdir);
   const cleanSubdir = rawSubdir.replace(/\/+$/g, '');
   const targetDir = resolve(repoRoot, cleanSubdir);
-  if (targetDir !== repoRoot && !targetDir.startsWith(repoRoot + sep)) {
+  if (targetDir !== repoRoot && !isPathInsideDir(repoRoot, targetDir)) {
     throw new ServerError('Publish target escapes the app repo', { status: 400, code: 'CHIPTUNE_BAD_SUBDIR' });
   }
 
   const name = slugify(slug) || slugify(track.title) || 'track';
   const audioFilename = await renderScoreToFile(score, targetDir, name);
   const scoreFilename = `${name}.score.json`;
-  await writeFile(join(targetDir, scoreFilename), `${JSON.stringify(score, null, 2)}\n`);
+  await atomicWrite(join(targetDir, scoreFilename), `${JSON.stringify(score, null, 2)}\n`);
 
   const rel = (f) => (cleanSubdir ? `${cleanSubdir}/${f}` : f);
+  const isOgg = audioFilename.endsWith('.ogg');
   console.log(`🎮 Published chiptune "${name}" to app ${app.name} (${rel(audioFilename)})`);
   return {
     appId: app.id,
     appName: app.name,
     files: [rel(audioFilename), rel(scoreFilename)],
-    format: audioFilename.endsWith('.ogg') ? 'ogg' : 'wav',
-    note: audioFilename.endsWith('.ogg')
+    format: isOgg ? 'ogg' : 'wav',
+    note: isOgg
       ? 'Godot auto-imports the OGG; enable "Loop" in its import settings for seamless background playback.'
       : 'ffmpeg was not found, so the loop was published as WAV. Install ffmpeg for OGG output.',
   };
