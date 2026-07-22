@@ -218,6 +218,10 @@ export default function ReferenceWorkflow({ record, reference, onChanged }) {
 
   const [setChromaKey, keySaving] = useAsyncAction(async (hex) => {
     await updateSpriteRecord(recordId, { chromaKey: hex }, { silent: true });
+    // A key change invalidates any clip-risk warning the user was shown —
+    // force a fresh 409/confirm cycle instead of letting a stale "Lock
+    // anyway" accept a risk computed for the old key.
+    setClipRisks({});
     onChanged();
   }, { errorMessage: 'Failed to set chroma key' });
 

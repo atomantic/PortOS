@@ -114,11 +114,16 @@ function ImportPanel({ onImported }) {
 function NewCharacterPanel({ onCreated }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
+  const [id, setId] = useState('');
 
   const [create, creating] = useAsyncAction(async () => {
-    const record = await createSpriteRecord({ name: name.trim() }, { silent: true });
+    const record = await createSpriteRecord({
+      name: name.trim(),
+      ...(id.trim() ? { id: id.trim() } : {}),
+    }, { silent: true });
     setOpen(false);
     setName('');
+    setId('');
     onCreated(record);
   }, { errorMessage: 'Failed to create character' });
 
@@ -150,6 +155,19 @@ function NewCharacterPanel({ onCreated }) {
           onChange={(e) => setName(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && name.trim()) create(); }}
           placeholder="Trail Hand"
+          className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white"
+        />
+      </div>
+      <div>
+        <label htmlFor="sprite-new-id" className="block text-xs text-gray-400 mb-1">
+          Id <span className="text-gray-600">(optional — derived from the name; required for names with no a–z/0–9 characters)</span>
+        </label>
+        <input
+          id="sprite-new-id"
+          type="text"
+          value={id}
+          onChange={(e) => setId(e.target.value)}
+          placeholder="trail-hand"
           className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white"
         />
       </div>
