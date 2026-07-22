@@ -66,6 +66,9 @@ const eastManifest = JSON.stringify({
   // Declared but absent from the source — must surface as an error, not a
   // silent skip that still reports a fully-imported subject.
   overlayPath: 'art-source/sprites/hero/imagegen/v2/gone.png',
+  // Repo-anchored provenance reference outside the character dir — ignored,
+  // never treated as a missing character asset.
+  contractPath: 'art-pipeline/contracts/player-sprite-standard-v2.json',
 }, null, 2);
 
 beforeAll(() => {
