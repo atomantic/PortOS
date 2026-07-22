@@ -25,7 +25,7 @@
  * so existing importers of taskPromptService are unaffected by the leaf split.
  */
 
-import { loadSlashdoFile } from '../lib/fileUtils.js';
+import { loadSlashdoFile, PATHS } from '../lib/fileUtils.js';
 import { getTaskInterval } from './taskSchedule.js';
 import {
   DEFAULT_TASK_PROMPTS,
@@ -62,6 +62,14 @@ async function loadSlashdoCommandBody(commandName) {
 }
 
 async function resolvePromptPlaceholders(prompt) {
+  // {worktreesRoot} → PortOS's shared worktrees dir (absolute). The claim flows
+  // (plan-task, claim-issue, claim-issue-gitlab, claim-issue-jira) create their
+  // agent worktree here rather than inside the managed app repo, so a worktree
+  // checkout never pollutes the target repo's working tree. Function-form
+  // replacer so a literal `$` in the path can't be read as a backreference.
+  if (prompt.includes('{worktreesRoot}')) {
+    prompt = prompt.replace(/\{worktreesRoot\}/g, () => PATHS.worktrees);
+  }
   if (prompt.includes('{reviewChecklist}')) {
     const checklist = await loadSlashdoCommandBody('review').catch(() => '');
     prompt = prompt.replace(/\{reviewChecklist\}/g, checklist);

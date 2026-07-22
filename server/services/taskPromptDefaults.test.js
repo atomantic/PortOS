@@ -92,21 +92,26 @@ describe('taskPromptDefaults integrity snapshot', () => {
   // cases. Mirrors CLAUDE.md "Decide, don't defer". Pins the version-bump pairing
   // + preserved outgoing defaults for cross-install auto-upgrade.
   it.each([
-    ['claim-issue', 7],
-    ['claim-issue-gitlab', 6],
+    ['claim-issue', 8],
+    ['claim-issue-gitlab', 7],
   ])('%s v%d decides an ambiguous issue instead of parking it, preserving the outgoing default', (key, version) => {
     const current = DEFAULT_TASK_PROMPTS[key];
     expect(current).toContain('Ambiguity is NOT a release trigger');
     expect(current).not.toContain('so it\'s excluded from future autonomous claims');
     expect(PROMPT_VERSIONS[key]).toBe(version);
 
-    const previous = PREVIOUS_DEFAULT_PROMPTS[key];
-    const outgoing = previous[previous.length - 1];
-    // The outgoing default parked an ambiguous issue to `needs-input`; it is
+    // The pre-"decide" default parked an ambiguous issue to `needs-input`; it is
     // preserved verbatim so installs holding it are recognized and upgraded.
-    expect(outgoing).not.toContain('Ambiguity is NOT a release trigger');
-    expect(outgoing).toContain('so it\'s excluded from future autonomous claims');
-    expect(outgoing).not.toBe(current);
+    // (The immediately-outgoing default — now that the "decide" body has shipped
+    // — is the "decide" body itself, so locate the pre-decide body by content
+    // rather than by array position.)
+    const previous = PREVIOUS_DEFAULT_PROMPTS[key];
+    const preDecide = previous.find(
+      (p) => p.includes('so it\'s excluded from future autonomous claims')
+        && !p.includes('Ambiguity is NOT a release trigger'),
+    );
+    expect(preDecide).toBeDefined();
+    expect(preDecide).not.toBe(current);
   });
 
   // NOTE: PROMPT_VERSIONS keys are SCHEDULE keys, not always prompt keys —
@@ -117,5 +122,32 @@ describe('taskPromptDefaults integrity snapshot', () => {
     for (const key of Object.keys(PREVIOUS_DEFAULT_PROMPTS)) {
       expect(PROMPT_VERSIONS[key], `PROMPT_VERSIONS['${key}']`).toBeTypeOf('number');
     }
+  });
+
+  // Claim worktrees are created under PortOS's shared worktrees dir
+  // ({worktreesRoot} → data/cos/worktrees, resolved in taskPromptService) rather
+  // than inside the managed app repo, so an agent's checkout no longer pollutes
+  // the target repo's working tree. Pins the version bump + preserved outgoing
+  // repo-relative default for each claim flow, for cross-install auto-upgrade.
+  it.each([
+    ['plan-task', 11, 'WORKTREE="data/cos/worktrees'],
+    ['claim-issue', 8, 'WORKTREE="data/cos/worktrees'],
+    ['claim-issue-gitlab', 7, 'WORKTREE="data/cos/worktrees'],
+    ['claim-issue-jira', 5, 'WORKTREE="{repoPath}/data/cos/worktrees'],
+  ])('%s v%d creates its worktree under {worktreesRoot}, preserving the outgoing default', (key, version, oldPathMarker) => {
+    const current = DEFAULT_TASK_PROMPTS[key];
+    // Current default points the worktree at PortOS's shared worktrees dir…
+    expect(current).toContain('{worktreesRoot}');
+    // …and no longer at a path inside the target repo.
+    expect(current).not.toContain(oldPathMarker);
+    expect(PROMPT_VERSIONS[key]).toBe(version);
+
+    // The outgoing default created the worktree inside the app repo; it is
+    // preserved verbatim so installs holding it are recognized and upgraded.
+    const previous = PREVIOUS_DEFAULT_PROMPTS[key];
+    const outgoing = previous[previous.length - 1];
+    expect(outgoing).toContain(oldPathMarker);
+    expect(outgoing).not.toContain('{worktreesRoot}');
+    expect(outgoing).not.toBe(current);
   });
 });
