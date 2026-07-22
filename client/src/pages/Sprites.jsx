@@ -23,13 +23,22 @@ function ImportPanel({ onImported }) {
   const [sourceRoot, setSourceRoot] = useState('');
   const [includeProps, setIncludeProps] = useState(true);
   const [importing, setImporting] = useState(false);
+  const [importErrors, setImportErrors] = useState([]);
 
   const runImport = async () => {
     setImporting(true);
+    setImportErrors([]);
     try {
-      const { totals } = await importSprites({ sourceRoot: sourceRoot.trim(), includeProps });
-      toast.success(`Imported ${totals.subjects} subjects (${totals.files} files, ${totals.verified} hash-verified${totals.errors ? `, ${totals.errors} errors` : ''})`);
-      setOpen(false);
+      const { results, totals } = await importSprites({ sourceRoot: sourceRoot.trim(), includeProps });
+      if (totals.errors > 0) {
+        // Keep the panel open and show WHICH files failed — a count alone
+        // gives the user nothing to repair.
+        setImportErrors(results.flatMap((r) => r.errors.map((e) => `${r.id}: ${e}`)));
+        toast.error(`Import finished with ${totals.errors} error${totals.errors === 1 ? '' : 's'} — details below`);
+      } else {
+        toast.success(`Imported ${totals.subjects} subjects (${totals.files} files, ${totals.verified} hash-verified)`);
+        setOpen(false);
+      }
       onImported();
     } catch {
       // request() already toasted the failure — keep the panel open for a retry.
@@ -89,6 +98,11 @@ function ImportPanel({ onImported }) {
         {importing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
         {importing ? 'Importing…' : 'Run Import'}
       </button>
+      {importErrors.length > 0 && (
+        <ul className="max-h-40 overflow-y-auto space-y-1 text-xs text-port-error border border-port-border rounded p-2">
+          {importErrors.map((e) => <li key={e}>{e}</li>)}
+        </ul>
+      )}
     </div>
   );
 }

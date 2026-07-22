@@ -87,7 +87,9 @@ export function mergeImportedRecord(existing, imported, now) {
     name: imported.name,
     status: imported.status,
     spec: imported.spec,
-    chromaKey: existing.chromaKey || imported.chromaKey,
+    // Preserve the existing value verbatim — including an intentional null
+    // clear; `||` would resurrect the legacy import default over a clear.
+    chromaKey: existing.chromaKey !== undefined ? existing.chromaKey : imported.chromaKey,
     importedFrom: imported.importedFrom,
     updatedAt: now,
   };
