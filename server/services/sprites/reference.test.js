@@ -128,7 +128,12 @@ describe('startReferenceGeneration', () => {
     expect(call.params.prompt).toContain('named Hero');
     expect(call.params.prompt).toContain('a wiry ranger');
     expect(call.params.prompt).toContain('magenta (#FF00FF)');
-    expect(call.params.spriteRef).toMatchObject({ recordId: id, target: 'main', anchorId: 'walk-south', chromaKey: '#FF00FF' });
+    expect(call.params.spriteRef).toMatchObject({
+      recordId: id, target: 'main', anchorId: 'walk-south', chromaKey: '#FF00FF',
+      // Provenance records the model the provider will actually run, not
+      // null on the default path.
+      model: 'gpt-5.6-luna',
+    });
 
     const { manifest } = await getReferenceSet(id);
     expect(manifest.status).toBe('needs-main-reference');

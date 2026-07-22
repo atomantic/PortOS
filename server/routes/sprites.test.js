@@ -192,6 +192,20 @@ describe('sprites routes', () => {
     }
   });
 
+  it('PATCH /:id 409s a chroma-key change once the main reference is locked', async () => {
+    reference.getReferenceSet.mockResolvedValueOnce({ manifest: { mainReference: { locked: true } }, candidates: [] });
+    const r = await request(app).patch('/api/sprites/pioneer').send({ chromaKey: '#00FF00' });
+    expect(r.status).toBe(409);
+    expect(r.body.code).toBe('CHROMA_KEY_LOCKED');
+    expect(records.updateRecord).not.toHaveBeenCalled();
+  });
+
+  it('PATCH /:id without a chromaKey change skips the reference lookup', async () => {
+    const r = await request(app).patch('/api/sprites/pioneer').send({ notes: 'n' });
+    expect(r.status).toBe(200);
+    expect(reference.getReferenceSet).not.toHaveBeenCalled();
+  });
+
   it('PATCH /:id rejects hex colors outside the three-key set', async () => {
     for (const chromaKey of ['#123456', 'magenta', '#ff00ff']) {
       const r = await request(app).patch('/api/sprites/pioneer').send({ chromaKey });

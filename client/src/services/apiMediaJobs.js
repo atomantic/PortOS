@@ -1,10 +1,10 @@
 import { request } from './apiCore.js';
 
-export const listMediaJobs = (filters = {}) => {
+export const listMediaJobs = (filters = {}, options = {}) => {
   const qs = new URLSearchParams(
     Object.entries(filters).filter(([, v]) => v != null && v !== ''),
   ).toString();
-  return request(`/media-jobs${qs ? `?${qs}` : ''}`);
+  return request(`/media-jobs${qs ? `?${qs}` : ''}`, options);
 };
 
 // `silent` so speculative lookups (e.g. MediaJobThumb hydration for old
