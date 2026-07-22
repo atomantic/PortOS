@@ -33,21 +33,26 @@ describe('CityIntelPane tab bar', () => {
     const panel = screen.getByRole('tabpanel');
     expect(attention.getAttribute('aria-controls')).toBe(panel.id);
     expect(panel.getAttribute('aria-labelledby')).toBe(attention.id);
+    // Only one panel is mounted, so an unselected tab must not point at a
+    // nonexistent element.
+    expect(timeline).not.toHaveAttribute('aria-controls');
+    // An empty panel has no focusable children — it must be its own tab stop.
+    expect(panel).toHaveAttribute('tabindex', '0');
   });
 
-  it('moves selection with arrow keys and wraps, and jumps with Home/End', () => {
+  it('moves selection and focus with arrow keys and wraps, and jumps with Home/End', () => {
     renderPane();
     const tabs = () => screen.getAllByRole('tab');
-    fireEvent.keyDown(tabs()[0], { key: 'ArrowRight' });
-    expect(tabs()[1]).toHaveAttribute('aria-selected', 'true');
-    fireEvent.keyDown(tabs()[1], { key: 'End' });
-    expect(tabs()[2]).toHaveAttribute('aria-selected', 'true');
-    fireEvent.keyDown(tabs()[2], { key: 'ArrowRight' });
-    expect(tabs()[0]).toHaveAttribute('aria-selected', 'true');
-    fireEvent.keyDown(tabs()[0], { key: 'ArrowLeft' });
-    expect(tabs()[2]).toHaveAttribute('aria-selected', 'true');
-    fireEvent.keyDown(tabs()[2], { key: 'Home' });
-    expect(tabs()[0]).toHaveAttribute('aria-selected', 'true');
+    const step = (from, key, to) => {
+      fireEvent.keyDown(tabs()[from], { key });
+      expect(tabs()[to]).toHaveAttribute('aria-selected', 'true');
+      expect(document.activeElement).toBe(tabs()[to]);
+    };
+    step(0, 'ArrowRight', 1);
+    step(1, 'End', 2);
+    step(2, 'ArrowRight', 0); // wraps forward
+    step(0, 'ArrowLeft', 2); // wraps backward
+    step(2, 'Home', 0);
   });
 
   it('collapses the panel and drops the stale aria-controls reference', () => {
