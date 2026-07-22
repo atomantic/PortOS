@@ -51,7 +51,15 @@ export default function CapabilityMap() {
   );
 
   if (loading) {
-    return <PageSkeleton label="Loading capabilities" titleWidthClass="w-40" showSubtitle layout="grid" gridColsClass="lg:grid-cols-2" cards={6} />;
+    return <PageSkeleton
+        label="Loading capabilities"
+        headerRowClass="flex flex-wrap items-center justify-between gap-3"
+        titleWidthClass="w-40"
+        showSubtitle
+        layout="grid"
+        gridColsClass="lg:grid-cols-2"
+        cards={6}
+      />;
   }
 
   if (!data) {

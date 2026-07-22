@@ -328,7 +328,13 @@ export default function Dashboard() {
     return (
       // No BOOTING SchematicLabel here: it exists only while loading, so its
       // height is exactly the shift this skeleton is meant to eliminate.
-      <PageSkeleton label="Loading dashboard" titleWidthClass="w-40" layout="grid" cards={6} />
+      <PageSkeleton
+        label="Loading dashboard"
+        headerRowClass="flex flex-row items-center justify-between gap-2 sm:gap-4"
+        titleWidthClass="w-40"
+        layout="grid"
+        cards={6}
+      />
     );
   }
 
