@@ -270,10 +270,24 @@ export async function syncAccount(accountId, io, options = {}) {
       // so repair exactly those rows once, right when the set changes.
       const previousAliases = account.sendAsAliases;
       account.sendAsAliases = sendAsAliases;
-      await updateSendAsAliases(accountId, sendAsAliases).catch((err) =>
-        console.error(`📧 Send-as alias persist failed for account ${accountId}: ${err.message}`));
-      await repairActivityAliasParticipants(account, previousAliases, sendAsAliases).catch((err) =>
-        console.error(`🗓️  Activity alias backfill failed for account ${accountId}: ${err.message}`));
+      // ORDER IS LOAD-BEARING: repair BEFORE persisting the new set. The repair is
+      // triggered by the delta between the stored set and this sync's set, so if we
+      // persisted first and the repair then failed transiently, the next sync would
+      // see an UNCHANGED set, compute an empty delta, and never retry — the stale
+      // rows would stay broken forever. Leaving the old set stored on failure means
+      // the next sync recomputes the same delta and tries again. The cost is that a
+      // failed repair also defers the persist by one sync interval; the in-memory
+      // set is already updated above, so THIS sync's activity ingest still excludes
+      // every owner address either way.
+      let repaired = true;
+      await repairActivityAliasParticipants(account, previousAliases, sendAsAliases).catch((err) => {
+        repaired = false;
+        console.error(`🗓️  Activity alias backfill failed for account ${accountId} — deferring alias persist so the next sync retries: ${err.message}`);
+      });
+      if (repaired) {
+        await updateSendAsAliases(accountId, sendAsAliases).catch((err) =>
+          console.error(`📧 Send-as alias persist failed for account ${accountId}: ${err.message}`));
+      }
     }
 
     // Populate the human-activity timeline (#2150) — secondary effect, must NOT
