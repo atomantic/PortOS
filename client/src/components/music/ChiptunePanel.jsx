@@ -75,10 +75,16 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix }) {
     setPublishSlug(slugify(track?.title));
   }, [track?.id]);
 
-  // Remix from a chiptune take: seed the panel prompt with the take's prompt.
-  // Keyed on the nonce so re-remixing the same take re-applies.
+  // Remix from a chiptune take: seed the panel prompt with the take's prompt
+  // and default to a FRESH composition — renders don't snapshot their score,
+  // so iterating would revise the track's LATEST score, not the selected take.
+  // The visible "start fresh" checkbox makes the choice overridable. Keyed on
+  // the nonce so re-remixing the same take re-applies.
   useEffect(() => {
-    if (remix?.prompt) setPrompt(remix.prompt);
+    if (remix?.prompt) {
+      setPrompt(remix.prompt);
+      setFresh(true);
+    }
   }, [remix?.nonce, remix?.prompt]);
 
   // Load saved prefs once. Publish prefs apply immediately; the provider pin
@@ -160,7 +166,12 @@ export default function ChiptunePanel({ track, onTrackUpdate, remix }) {
       return;
     }
     setPlaying(true);
-    await playerRef.current.play();
+    // A blocked/interrupted AudioContext.resume() rejects — swallow it so the
+    // state correction below still runs (otherwise the button wedges on
+    // "Stop" with an idle transport).
+    await playerRef.current.play().catch((err) => {
+      console.error(`🎹 Chiptune preview failed to start: ${err.message}`);
+    });
     if (mountedRef.current && !playerRef.current.isPlaying()) setPlaying(false);
   };
 

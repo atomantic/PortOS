@@ -46,6 +46,12 @@ export const CHIPTUNE_LIMITS = Object.freeze({
   // is the physical ceiling of distinct-channel audio; anything past it is
   // pure overdraw.
   NOTE_SECONDS_MAX: 720,
+  // Event-density ceiling (notes per second across the whole loop). The
+  // browser preview creates 1-2 AudioNodes per note per loop pass — a
+  // schema-valid quarter-second loop stuffed with 2 000 notes would mint
+  // thousands of nodes per second and freeze the Music studio. Real chiptune
+  // rarely exceeds ~20 notes/sec across four channels.
+  EVENTS_PER_SEC_MAX: 64,
   TITLE_MAX: 120,
 });
 
@@ -146,21 +152,42 @@ export const chiptuneScoreSchema = z.object({
   }
   // Bound the aggregate VOICED time the renderer will synthesize (see
   // NOTE_SECONDS_MAX) — the duration cap alone doesn't bound overlapping-note
-  // render work. Mirrors buildScoreEvents' clamp semantics (len clamped to the
-  // pattern end; out-of-pattern notes contribute nothing).
+  // render work — plus event density (see EVENTS_PER_SEC_MAX, the browser
+  // preview's AudioNode budget) and require at least one AUDIBLE event, so an
+  // all-rests / all-unparseable / all-muted response triggers the runner's
+  // schema retry instead of persisting a silent "successful" composition.
+  // Mirrors buildScoreEvents' semantics (len clamped to the pattern end;
+  // out-of-pattern notes contribute nothing; a tonal pitch must parse, a
+  // noise pitch must be a known preset).
+  const channelById = new Map(score.channels.map((c) => [c.id, c]));
   let voicedSteps = 0;
+  let eventCount = 0;
+  let audible = 0;
   for (const name of score.order) {
     const pattern = score.patterns[name];
     const steps = pattern.bars * score.beatsPerBar * score.stepsPerBeat;
-    for (const notes of Object.values(pattern.notes || {})) {
+    for (const [channelId, notes] of Object.entries(pattern.notes || {})) {
+      const channel = channelById.get(channelId);
       for (const note of notes) {
         if (note.step >= steps) continue;
         voicedSteps += Math.min(note.len, steps - note.step);
+        eventCount += 1;
+        if (!channel || (channel.gain ?? 0.5) === 0 || (note.vel ?? 0.8) === 0) continue;
+        const sounds = channel.wave === 'noise'
+          ? CHIPTUNE_NOISE_PRESETS.includes(note.pitch)
+          : pitchToMidi(note.pitch) != null;
+        if (sounds) audible += 1;
       }
     }
   }
   if (voicedSteps * stepSec > CHIPTUNE_LIMITS.NOTE_SECONDS_MAX) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['patterns'], message: `too much voiced audio (${Math.round(voicedSteps * stepSec)}s of notes > ${CHIPTUNE_LIMITS.NOTE_SECONDS_MAX}s)` });
+  }
+  if (totalSec > 0 && eventCount / totalSec > CHIPTUNE_LIMITS.EVENTS_PER_SEC_MAX) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['patterns'], message: `too many notes for the loop length (${Math.round(eventCount / totalSec)}/s > ${CHIPTUNE_LIMITS.EVENTS_PER_SEC_MAX}/s)` });
+  }
+  if (audible === 0) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['patterns'], message: 'score has no audible notes (every note is out of range, unparseable, or muted)' });
   }
 });
 

@@ -78,6 +78,26 @@ describe('chiptuneScoreSchema', () => {
     expect(JSON.stringify(r.error.issues)).toContain('too much voiced audio');
   });
 
+  it('rejects a score with no audible notes (all rests/unparseable/muted)', () => {
+    const silent = validScore();
+    silent.patterns.A.notes = { pulse1: [{ step: 0, pitch: 'nonsense', len: 4 }] };
+    const r = chiptuneScoreSchema.safeParse(silent);
+    expect(r.success).toBe(false);
+    expect(JSON.stringify(r.error.issues)).toContain('no audible notes');
+    const muted = validScore();
+    muted.patterns.A.notes = { pulse1: [{ step: 0, pitch: 'C5', len: 4, vel: 0 }] };
+    expect(chiptuneScoreSchema.safeParse(muted).success).toBe(false);
+  });
+
+  it('rejects an event density that would freeze the preview', () => {
+    // 16-step / 2s loop with 512 notes on one channel = 256 events/sec.
+    const score = validScore();
+    score.patterns.A.notes.pulse1 = Array.from({ length: 512 }, (_, i) => ({ step: i % 16, pitch: 'C5', len: 1 }));
+    const r = chiptuneScoreSchema.safeParse(score);
+    expect(r.success).toBe(false);
+    expect(JSON.stringify(r.error.issues)).toContain('too many notes');
+  });
+
   it('rejects duplicate channel ids', () => {
     const score = validScore();
     score.channels.push({ id: 'pulse1', wave: 'square' });
