@@ -212,6 +212,32 @@ describe('errorHandler.js', () => {
       const body = res.json.mock.calls[0][0];
       expect(body).not.toHaveProperty('context');
     });
+
+    // A streaming/SSE route that fails mid-response has no envelope left to
+    // write — delegate to Express's finalhandler so it destroys the socket
+    // rather than leaving the request hanging until a timeout.
+    it('delegates to next(err) when the response is already streaming', () => {
+      const res = makeRes();
+      res.headersSent = true;
+      const next = vi.fn();
+      const err = new ServerError('mid-stream', { status: 500 });
+      errorMiddleware(err, makeReq(), res, next);
+
+      expect(res.json).not.toHaveBeenCalled();
+      expect(next).toHaveBeenCalledWith(err);
+    });
+
+    it('does not delegate to next when the envelope was written', () => {
+      const res = makeRes();
+      // Express flips headersSent once the body is written — mirror that so the
+      // middleware can't mistake its own write for a mid-stream failure.
+      res.json = vi.fn(() => { res.headersSent = true; return res; });
+      const next = vi.fn();
+      errorMiddleware(new ServerError('nope', { status: 400 }), makeReq(), res, next);
+
+      expect(res.json).toHaveBeenCalled();
+      expect(next).not.toHaveBeenCalled();
+    });
   });
 
   describe('emitErrorEvent', () => {

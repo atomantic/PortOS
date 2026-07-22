@@ -159,7 +159,11 @@ router.get('/runs/:id/samples/:filename', asyncHandler(async (req, res) => {
   // promise has already resolved), so a throw here would have nothing to bubble
   // to — build the standard envelope directly instead.
   res.sendFile(join(runSamplesDir(run.id), req.params.filename), (err) => {
-    if (err) sendErrorResponse(res, new ServerError('Sample not found', { status: 404 }));
+    if (!err) return;
+    // A real I/O failure (EACCES/EIO) reads the same as a missing file to the
+    // client — log the cause so it isn't invisible server-side.
+    console.error(`❌ Sample send failed [${req.params.id}/${req.params.filename}]: ${err.message}`);
+    sendErrorResponse(res, new ServerError('Sample not found', { status: 404 }));
   });
 }));
 

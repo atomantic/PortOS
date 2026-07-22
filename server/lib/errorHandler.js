@@ -325,8 +325,15 @@ export function errorMiddleware(err, req, res, next) {
 
   // Emit the socket event and send the shared envelope — synchronous handlers
   // that throw a ServerError land here, not in asyncHandler, so both paths must
-  // produce the same body.
+  // produce the same body. `sendErrorResponse` still emits to the UI when the
+  // body can no longer be written.
+  // Mid-response failure (SSE / streaming route) — nothing can be written, so
+  // after emitting we hand back to Express's finalhandler, which destroys the
+  // socket. Without this the request hangs open until a timeout. Read the flag
+  // BEFORE sending: a successful write flips it to true.
+  const alreadyStreaming = res.headersSent;
   sendErrorResponse(res, error, { io });
+  if (alreadyStreaming) next(err);
 }
 
 /**

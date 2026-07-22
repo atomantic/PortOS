@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import express from 'express';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { mkdtemp, writeFile } from 'fs/promises';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { request } from '../lib/testHelper.js';
 
 // The route module pulls in the whole training service graph at import time —
@@ -50,6 +50,9 @@ describe('lora-training sample serving', () => {
   beforeEach(async () => {
     app = makeApp();
     svc.samplesDir = await mkdtemp(join(tmpdir(), 'portos-lora-samples-'));
+  });
+  afterEach(async () => {
+    await rm(svc.samplesDir, { recursive: true, force: true });
   });
 
   it('serves an existing sample', async () => {
