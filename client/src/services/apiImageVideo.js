@@ -101,12 +101,54 @@ export const rerenderWithAnnotations = (filename, { strength, steps, prompt } = 
 
 // HuggingFace token (gated local Flux models). Stored in settings.imageGen.hfToken;
 // reads fall back to HF_TOKEN env var and then ~/.cache/huggingface/token.
-export const getHfTokenStatus = () => request('/image-gen/setup/hf-token-status', { silent: true });
+// Silent — callers own their own error UI. `signal` lets a page cancel a stale
+// probe on unmount / model switch.
+export const getHfTokenStatus = ({ signal } = {}) => request('/image-gen/setup/hf-token-status', { silent: true, signal });
 export const saveHfToken = (token) => request('/image-gen/setup/hf-token', {
   method: 'POST',
   body: JSON.stringify({ token }),
 });
 export const clearHfToken = () => request('/image-gen/setup/hf-token', { method: 'DELETE' });
+
+// FLUX.2 setup probe (weights/deps present for the selected model?). Silent so a
+// stale poll doesn't toast; `signal` cancels it on model switch / unmount.
+export const getFlux2Status = ({ modelId, signal } = {}) =>
+  request(`/image-gen/setup/flux2-status${modelId ? `?modelId=${encodeURIComponent(modelId)}` : ''}`, { silent: true, signal });
+
+// External/local image generation with an init or reference image attached —
+// multipart because the payload carries File uploads. request() detects the
+// FormData body and lets the browser set the multipart boundary itself.
+export const generateImageMultipart = (formData, options = {}) => request('/image-gen/generate', {
+  method: 'POST',
+  body: formData,
+  ...options,
+});
+
+// Local Python-runtime setup probes (LocalSetupPanel). These use fetch() rather
+// than request() because the caller distinguishes intentional AbortError (a
+// superseded/unmounted probe) from a real failure — request()'s catch collapses
+// abort into a generic error. Return the parsed body on 2xx, null on a non-OK
+// response; abort/network rejections propagate so the caller can inspect them.
+export async function checkImageGenSetup({ pythonPath, signal } = {}) {
+  const res = await fetch(`/api/image-gen/setup/check?pythonPath=${encodeURIComponent(pythonPath)}`, { signal });
+  return res.ok ? res.json() : null;
+}
+
+export async function detectImageGenPython() {
+  const res = await fetch('/api/image-gen/setup/python');
+  return res.ok ? res.json() : null;
+}
+
+export async function createImageGenVenv() {
+  const res = await fetch('/api/image-gen/setup/create-venv', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  if (res.ok) return res.json();
+  const json = await res.json().catch(() => ({}));
+  throw new Error(json.error || 'Venv creation failed');
+}
 
 // Video gen
 export const getVideoGenStatus = () => request('/video-gen/status');

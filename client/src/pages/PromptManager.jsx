@@ -16,6 +16,12 @@ import useFieldDraft from '../hooks/useFieldDraft';
 import SettingsTabsHeader from '../components/settings/SettingsTabsHeader';
 import { FormField } from '../components/ui/FormField';
 import Modal from '../components/ui/Modal';
+import {
+  getPrompts, getPrompt, createPrompt, savePrompt, deletePrompt, previewPrompt, getPromptUsage,
+  getPromptVariables, createPromptVariable, savePromptVariable, deletePromptVariable,
+  getJobSkills, getJobSkill, saveJobSkill as apiSaveJobSkill, previewJobSkill as apiPreviewJobSkill,
+} from '../services/apiPrompts';
+import { getProviders } from '../services/apiProviders';
 
 const VALID_PROMPT_TABS = ['stages', 'variables', 'job-skills'];
 
@@ -93,10 +99,10 @@ export default function PromptManager() {
   const loadData = async () => {
     setLoading(true);
     const [stagesRes, varsRes, jobSkillsRes, providersRes] = await Promise.all([
-      fetch('/api/prompts').then(r => r.json()),
-      fetch('/api/prompts/variables').then(r => r.json()),
-      fetch('/api/prompts/skills/jobs').then(r => r.json()).catch(() => ({ skills: [] })),
-      fetch('/api/providers').then(r => r.json()).catch(() => ({ providers: [] }))
+      getPrompts({ silent: true }).catch(() => ({ stages: {} })),
+      getPromptVariables({ silent: true }).catch(() => ({ variables: {} })),
+      getJobSkills({ silent: true }).catch(() => ({ skills: [] })),
+      getProviders({ silent: true }).catch(() => ({ providers: [] }))
     ]);
     setStages(stagesRes.stages || {});
     setVariables(varsRes.variables || {});
@@ -111,8 +117,7 @@ export default function PromptManager() {
   useEffect(() => {
     if (!selectedStage) { setStageTemplate(''); setStageConfig({}); setPreview(''); return; }
     let cancelled = false;
-    fetch(`/api/prompts/${selectedStage}`)
-      .then(r => (r.ok ? r.json() : null))
+    getPrompt(selectedStage, { silent: true })
       .then(res => {
         if (cancelled || !res) return;
         setStageTemplate(res.template || '');
@@ -140,24 +145,18 @@ export default function PromptManager() {
     const payload = { template: stageTemplate, ...stageConfig };
     // Explicitly null provider when in tier mode so server clears any previous value
     if (!payload.provider) payload.provider = null;
-    const res = await fetch(`/api/prompts/${selectedStage}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-    if (!res.ok) { toast.error('Failed to save stage: ' + await res.text()); setSaving(false); return; }
+    const ok = await savePrompt(selectedStage, payload, { silent: true })
+      .then(() => true)
+      .catch((err) => { toast.error('Failed to save stage: ' + err.message); return false; });
+    if (!ok) { setSaving(false); return; }
     setSaving(false);
     await loadData();
   };
 
   const previewStage = async () => {
-    const res = await fetch(`/api/prompts/${selectedStage}/preview`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ testData: {} })
-    });
-    if (!res.ok) { toast.error('Failed to preview: ' + await res.text()); return; }
-    const data = await res.json();
+    const data = await previewPrompt(selectedStage, {}, { silent: true })
+      .catch((err) => { toast.error('Failed to preview: ' + err.message); return null; });
+    if (!data) return;
     setPreview(data.preview);
   };
 
@@ -183,14 +182,12 @@ export default function PromptManager() {
 
   const saveVariable = async () => {
     setSaving(true);
-    const url = selectedVar ? `/api/prompts/variables/${selectedVar}` : '/api/prompts/variables';
-    const method = selectedVar ? 'PUT' : 'POST';
-    const res = await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(varForm)
-    });
-    if (!res.ok) { toast.error('Failed to save variable: ' + await res.text()); setSaving(false); return; }
+    const ok = await (selectedVar
+      ? savePromptVariable(selectedVar, varForm, { silent: true })
+      : createPromptVariable(varForm, { silent: true }))
+      .then(() => true)
+      .catch((err) => { toast.error('Failed to save variable: ' + err.message); return false; });
+    if (!ok) { setSaving(false); return; }
     setSaving(false);
     setSelectedVar(null);
     setVarForm({ key: '', name: '', category: '', content: '' });
@@ -198,8 +195,10 @@ export default function PromptManager() {
   };
 
   const deleteVariable = async (key) => {
-    const res = await fetch(`/api/prompts/variables/${key}`, { method: 'DELETE' });
-    if (!res.ok) { toast.error('Failed to delete variable: ' + await res.text()); return; }
+    const ok = await deletePromptVariable(key, { silent: true })
+      .then(() => true)
+      .catch((err) => { toast.error('Failed to delete variable: ' + err.message); return false; });
+    if (!ok) return;
     if (selectedVar === key) setSelectedVar(null);
     await loadData();
   };
@@ -214,22 +213,10 @@ export default function PromptManager() {
     const payload = { ...newStageForm };
     // Strip provider field when in tier mode
     if (!payload.provider) delete payload.provider;
-    const res = await fetch('/api/prompts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
-
-    if (!res.ok) {
-      let message = 'Failed to create stage';
-      const errorBody = await res.json().catch(() => null);
-      if (errorBody?.error || errorBody?.message) {
-        message = errorBody.error || errorBody.message;
-      }
-      setSaving(false);
-      toast.error(message);
-      return;
-    }
+    const ok = await createPrompt(payload, { silent: true })
+      .then(() => true)
+      .catch((err) => { setSaving(false); toast.error(err.message || 'Failed to create stage'); return false; });
+    if (!ok) return;
 
     setSaving(false);
     setCreatingStage(false);
@@ -247,10 +234,8 @@ export default function PromptManager() {
 
   const requestDeleteStage = async (stageName) => {
     // Check if stage is in use
-    const usageResponse = await fetch(`/api/prompts/${stageName}/usage`).catch(() => null);
-    const usageRes = (!usageResponse || !usageResponse.ok)
-      ? { isSystemStage: false, usedBy: [] }
-      : await usageResponse.json().catch(() => ({ isSystemStage: false, usedBy: [] }));
+    const usageRes = await getPromptUsage(stageName, { silent: true })
+      .catch(() => ({ isSystemStage: false, usedBy: [] }));
 
     setDeleteConfirm({ stageName, ...usageRes });
   };
@@ -259,22 +244,11 @@ export default function PromptManager() {
     const { stageName, isSystemStage } = deleteConfirm;
     setDeleteConfirm(null);
 
-    const url = isSystemStage
-      ? `/api/prompts/${stageName}?force=true`
-      : `/api/prompts/${stageName}`;
+    const ok = await deletePrompt(stageName, { force: isSystemStage }, { silent: true })
+      .then(() => true)
+      .catch((err) => { toast.error(`Failed to delete: ${err.message || 'Unknown error'}`); return false; });
 
-    const res = await fetch(url, { method: 'DELETE' }).catch(err => {
-      toast.error(`Failed to delete: ${err.message}`);
-      return null;
-    });
-
-    if (!res) return;
-
-    if (!res.ok) {
-      const error = await res.json().catch(() => ({}));
-      toast.error(`Failed to delete: ${error.error || 'Unknown error'}`);
-      return;
-    }
+    if (!ok) return;
 
     if (selectedStage === stageName) {
       setSelectedStage(null);
@@ -286,23 +260,19 @@ export default function PromptManager() {
   const loadJobSkill = async (name) => {
     setSelectedJobSkill(name);
     setJobSkillPreview('');
-    const res = await fetch(`/api/prompts/skills/jobs/${name}`).then(r => r.json());
+    const res = await getJobSkill(name, { silent: true });
     setJobSkillContent(res.content || '');
     setJobSkillMeta({ jobName: res.jobName, jobId: res.jobId, category: res.category, interval: res.interval });
   };
 
   const saveJobSkill = async () => {
     setSaving(true);
-    await fetch(`/api/prompts/skills/jobs/${selectedJobSkill}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: jobSkillContent })
-    });
+    await apiSaveJobSkill(selectedJobSkill, jobSkillContent, { silent: true });
     setSaving(false);
   };
 
   const previewJobSkill = async () => {
-    const res = await fetch(`/api/prompts/skills/jobs/${selectedJobSkill}/preview`).then(r => r.json());
+    const res = await apiPreviewJobSkill(selectedJobSkill, { silent: true });
     setJobSkillPreview(res.preview || '');
   };
 

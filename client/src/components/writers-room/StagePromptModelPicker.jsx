@@ -11,6 +11,8 @@ import {
   TIMEOUT_INPUT_MAX_MS,
   TIMEOUT_INPUT_STEP_MS,
 } from '../../utils/formatters';
+import { getPrompt, savePrompt } from '../../services/apiPrompts';
+import { getProviders } from '../../services/apiProviders';
 
 /**
  * Inline picker for a prompt stage's provider+model. Mirrors the Tier/Specific
@@ -30,8 +32,8 @@ export default function StagePromptModelPicker({ stageName, label = 'Stage LLM',
     const controller = new AbortController();
     const { signal } = controller;
     Promise.all([
-      fetch(`/api/prompts/${encodeURIComponent(stageName)}`, { signal }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
-      fetch('/api/providers', { signal }).then((r) => (r.ok ? r.json() : null)).catch(() => null),
+      getPrompt(stageName, { signal, silent: true }).catch(() => null),
+      getProviders({ signal, silent: true }).catch(() => null),
     ]).then(([s, p]) => {
       if (cancelled) return;
       // Normalize stage.timeout through parseTimeoutMs so a legacy on-disk
@@ -65,17 +67,16 @@ export default function StagePromptModelPicker({ stageName, label = 'Stage LLM',
     if ('provider' in next) body.provider = next.provider ?? null;
     if ('model' in next) body.model = next.model;
     if ('timeout' in next) body.timeout = next.timeout;
-    const res = await fetch(`/api/prompts/${encodeURIComponent(stageName)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    let errMsg = null;
+    const ok = await savePrompt(stageName, body, { silent: true })
+      .then(() => true)
+      .catch((err) => { errMsg = err.message; return false; });
     setSaving(false);
-    if (!res.ok) {
+    if (!ok) {
       // Roll back the optimistic update so the picker UI doesn't show a
       // provider/model that wasn't actually persisted server-side.
       setStage(prevStage);
-      toast.error(`Failed to save ${label}: ${await res.text().catch(() => res.statusText)}`);
+      toast.error(`Failed to save ${label}: ${errMsg}`);
     }
   };
 

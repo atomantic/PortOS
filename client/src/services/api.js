@@ -10,6 +10,7 @@ export * from './apiReferenceRepos.js';
 export * from './apiPorts.js';
 export * from './apiScaffold.js';
 export * from './apiProviders.js';
+export * from './apiPrompts.js';
 export * from './apiRuns.js';
 export * from './apiHistory.js';
 export * from './apiLogs.js';

@@ -4,7 +4,7 @@ import { request } from './apiCore.js';
 export const getGsdProjects = () => request('/cos/gsd/projects');
 export const getGsdProject = (appId, options = {}) => request(`/cos/gsd/projects/${appId}`, options);
 export const getGsdConcerns = (appId) => request(`/cos/gsd/projects/${appId}/concerns`);
-export const getGsdPhases = (appId) => request(`/cos/gsd/projects/${appId}/phases`);
+export const getGsdPhases = (appId, options) => request(`/cos/gsd/projects/${appId}/phases`, options);
 export const getGsdPhase = (appId, phaseId) => request(`/cos/gsd/projects/${appId}/phases/${phaseId}`);
 export const createGsdConcernTasks = (appId, data, options = {}) => request(`/cos/gsd/projects/${appId}/concerns/tasks`, {
   method: 'POST',
