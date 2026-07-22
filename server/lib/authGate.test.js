@@ -79,7 +79,7 @@ describe('authGate middleware', () => {
     const gated = await runGate(authGate, { path: '/api/cos', headers: {} });
     expect(gated.called).toBe(false);
     expect(gated.res.statusCode).toBe(401);
-    expect(gated.res.body).toEqual({ error: 'Authentication required', code: 'AUTH_REQUIRED' });
+    expect(gated.res.body).toEqual({ error: 'Authentication required', code: 'AUTH_REQUIRED', timestamp: expect.any(Number) });
   });
 
   it('stays fail-closed when a corrupt settings.json is loaded via reloadSettings (#2684)', async () => {
@@ -116,7 +116,7 @@ describe('authGate middleware', () => {
     const result = await runGate(authGate, { path: '/api/cos', headers: {} });
     expect(result.called).toBe(false);
     expect(result.res.statusCode).toBe(401);
-    expect(result.res.body).toEqual({ error: 'Authentication required', code: 'AUTH_REQUIRED' });
+    expect(result.res.body).toEqual({ error: 'Authentication required', code: 'AUTH_REQUIRED', timestamp: expect.any(Number) });
   });
 
   it('allows /api routes when the cookie token is valid', async () => {
@@ -166,7 +166,7 @@ describe('authGate middleware', () => {
     const result = await runGate(authGate, { path: '/sdapi/v1/sd-models', headers: {} });
     expect(result.called).toBe(false);
     expect(result.res.statusCode).toBe(401);
-    expect(result.res.body).toEqual({ error: 'Authentication required', code: 'AUTH_REQUIRED' });
+    expect(result.res.body).toEqual({ error: 'Authentication required', code: 'AUTH_REQUIRED', timestamp: expect.any(Number) });
   });
 
   it('treats a malformed cookie value as no token (clean 401, not 500)', async () => {

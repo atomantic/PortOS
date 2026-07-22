@@ -10,7 +10,7 @@ import { Router } from 'express';
 import { rm } from 'fs/promises';
 import { join } from 'path';
 import { z } from 'zod';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { asyncHandler, sendErrorResponse, ServerError } from '../lib/errorHandler.js';
 import { startTrainingRunSchema, validateRequest } from '../lib/validation.js';
 import { assertSafeFilename } from '../lib/fileUtils.js';
 import { resolveFlux2Python, isFlux2VenvHealthy, resolveMfluxPython } from '../lib/pythonSetup.js';
@@ -155,8 +155,11 @@ router.get('/runs/:id/samples', asyncHandler(async (req, res) => {
 router.get('/runs/:id/samples/:filename', asyncHandler(async (req, res) => {
   const run = await getRunRequired(req.params.id);
   assertSafeFilename(req.params.filename, { extensions: ['.png'], subject: 'sample filename' });
+  // The sendFile callback fires outside asyncHandler's catch (the handler's
+  // promise has already resolved), so a throw here would have nothing to bubble
+  // to — build the standard envelope directly instead.
   res.sendFile(join(runSamplesDir(run.id), req.params.filename), (err) => {
-    if (err && !res.headersSent) res.status(404).json({ error: 'Sample not found' });
+    if (err) sendErrorResponse(res, new ServerError('Sample not found', { status: 404 }));
   });
 }));
 
