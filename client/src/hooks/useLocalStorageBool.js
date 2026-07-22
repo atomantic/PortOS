@@ -1,4 +1,10 @@
 import { useCallback, useState } from 'react';
+import {
+  safeReadJsonStorage,
+  safeReadStorage,
+  safeWriteJsonStorage,
+  safeWriteStorage,
+} from '../lib/safeStorage.js';
 
 // Boolean-valued `useState` mirror that round-trips through `localStorage`.
 //
@@ -53,41 +59,29 @@ export function useLocalStoragePersisted(key, defaultValue, { parse } = {}) {
 }
 
 function readBool(key, defaultValue) {
-  if (typeof window === 'undefined') return defaultValue;
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (raw === null) return defaultValue;
-    return raw === '1' || raw === 'true';
-  } catch {
-    return defaultValue;
-  }
+  const raw = safeReadStorage(key);
+  if (raw === null) return defaultValue;
+  return raw === '1' || raw === 'true';
 }
 
 function writeBool(key, bool, format) {
-  if (typeof window === 'undefined') return;
-  try {
-    const v = format === 'true' ? String(bool) : (bool ? '1' : '0');
-    window.localStorage.setItem(key, v);
-  } catch { /* sandboxed storage */ }
+  safeWriteStorage(key, format === 'true' ? String(bool) : (bool ? '1' : '0'));
 }
+
+// `safeReadJsonStorage` collapses "missing" and "corrupt" into its fallback, so
+// pass a private sentinel rather than `undefined` — `undefined` would hit the
+// helper's own `fallback = null` default and be indistinguishable from a stored
+// `null`, which we must return verbatim.
+const MISSING = Symbol('missing');
 
 // Returns `undefined` to distinguish "key missing / parse failed" (caller
 // applies the default) from a stored `null`. useLocalStoragePersisted uses
 // this so it can run an optional `parse` migration only on real stored data.
 function readJsonRaw(key) {
-  if (typeof window === 'undefined') return undefined;
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (raw === null) return undefined;
-    return JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
+  const value = safeReadJsonStorage(key, MISSING);
+  return value === MISSING ? undefined : value;
 }
 
 function writeJson(key, value) {
-  if (typeof window === 'undefined') return;
-  try {
-    window.localStorage.setItem(key, JSON.stringify(value));
-  } catch { /* sandboxed storage */ }
+  safeWriteJsonStorage(key, value);
 }

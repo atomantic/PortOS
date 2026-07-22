@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { safeReadStorage, safeReadJsonStorage, safeWriteStorage, safeRemoveStorage } from './safeStorage.js';
+import { safeReadStorage, safeReadJsonStorage, safeWriteStorage, safeWriteJsonStorage, safeRemoveStorage } from './safeStorage.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -34,6 +34,16 @@ describe('safeStorage', () => {
     expect(safeReadJsonStorage('valid', [])).toEqual(['/brain/inbox']);
     expect(safeReadJsonStorage('missing', [])).toEqual([]);
     expect(safeReadJsonStorage('corrupt', [])).toEqual([]);
+  });
+
+  it('writes JSON and swallows a circular-value serialization throw', () => {
+    safeWriteJsonStorage('obj', { a: 1 });
+    expect(safeReadJsonStorage('obj', null)).toEqual({ a: 1 });
+
+    const circular = {};
+    circular.self = circular;
+    expect(() => safeWriteJsonStorage('circular', circular)).not.toThrow();
+    expect(safeReadStorage('circular')).toBeNull();
   });
 
   it('swallows setItem / removeItem throws', () => {
