@@ -235,6 +235,59 @@ describe('videoGen routes', () => {
     });
   });
 
+  describe('POST / — grok backend (#2859 phase 2)', () => {
+    it('enqueues a grok video job with the saved grok config and no local-python dependency', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      // No local pythonPath at all — grok must not trip VIDEO_GEN_NOT_CONFIGURED.
+      getSettings.mockResolvedValueOnce({ imageGen: { grok: { enabled: true, grokPath: '/opt/grok', aspectRatio: '16:9' } } });
+      const r = await request(app).post('/api/video-gen/').send({
+        backend: 'grok',
+        prompt: 'a fox running through snow',
+        grokDuration: '10',
+        width: 1920,
+        height: 1080,
+      });
+      expect(r.status).toBe(200);
+      expect(r.body.status).toBe('queued');
+      expect(r.body.mode).toBe('grok');
+      expect(r.body.model).toBe('grok');
+      expect(mediaJobQueue.enqueueJob).toHaveBeenCalledWith(expect.objectContaining({
+        kind: 'video',
+        params: expect.objectContaining({
+          mode: 'grok',
+          grokPath: '/opt/grok',
+          aspectRatio: '16:9',
+          prompt: 'a fox running through snow',
+          duration: 10,
+          width: 1920,
+          height: 1080,
+        }),
+      }));
+    });
+
+    it('rejects when the grok toggle is disabled', async () => {
+      const { getSettings } = await import('../services/settings.js');
+      getSettings.mockResolvedValueOnce({ imageGen: { grok: { enabled: false } } });
+      const r = await request(app).post('/api/video-gen/').send({ backend: 'grok', prompt: 'a fox' });
+      expect(r.status).toBe(400);
+      expect(r.body.error).toMatch(/disabled/i);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('rejects an unsupported grokDuration', async () => {
+      const r = await request(app).post('/api/video-gen/').send({ backend: 'grok', prompt: 'a fox', grokDuration: 7 });
+      expect(r.status).toBe(400);
+      expect(mediaJobQueue.enqueueJob).not.toHaveBeenCalled();
+    });
+
+    it('does not touch the grok path for default local renders', async () => {
+      const r = await request(app).post('/api/video-gen/').send({ prompt: 'a cat' });
+      expect(r.status).toBe(200);
+      const [call] = mediaJobQueue.enqueueJob.mock.calls;
+      expect(call[0].params.mode).not.toBe('grok');
+    });
+  });
+
   describe('POST /', () => {
     it('rejects missing prompt', async () => {
       const r = await request(app).post('/api/video-gen/').send({ width: 512 });

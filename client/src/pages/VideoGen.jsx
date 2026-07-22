@@ -65,6 +65,7 @@ import {
   listImageGallery,
   patchSettingsSlice,
   getActiveVideoJob,
+  getSettings,
   getVideoGenRuntimeStatus,
   listLorasFull,
 } from '../services/api';
@@ -101,7 +102,18 @@ export default function VideoGen() {
 
   const [status, setStatus] = useState(null);
   const [statusLoading, setStatusLoading] = useState(true);
+  // Grok Build CLI video backend (#2859 phase 2) — surfaced only when the
+  // user enabled Grok in Settings → Image Gen (one toggle covers image +
+  // video). 'local' keeps every existing flow untouched.
+  const [grokEnabled, setGrokEnabled] = useState(false);
+  const [backend, setBackend] = useState('local');
+  const [grokDuration, setGrokDuration] = useState(6);
   const [models, setModels] = useState([]);
+  useEffect(() => {
+    getSettings({ silent: true })
+      .then((sv) => setGrokEnabled(sv?.imageGen?.grok?.enabled === true))
+      .catch(() => {});
+  }, []);
 
   const [mode, setMode] = useState(incomingSourceImage ? 'image' : 'text');
   const [prompt, setPrompt] = useState(incomingPrompt || '');
@@ -1023,8 +1035,25 @@ export default function VideoGen() {
 
   // Snapshot the current form into a generate-payload. Used both by the
   // inline Generate button and by enqueue, so the two paths stay in lockstep.
+  const isGrok = grokEnabled && backend === 'grok';
+
   const buildGeneratePayload = () => {
     const composed = composeStyledPrompt(prompt, negativePrompt, stylePreset);
+    if (isGrok) {
+      // Grok's image-first flow reads only these fields; width/height ride
+      // along so the server maps them to the closest supported aspect ratio.
+      return {
+        backend: 'grok',
+        prompt: composed.prompt,
+        negativePrompt: composed.negativePrompt,
+        grokDuration,
+        width: clampImageEdge(width, VIDEO_EDGE_BOUNDS),
+        height: clampImageEdge(height, VIDEO_EDGE_BOUNDS),
+        mode: mode === 'image' ? 'image' : 'text',
+        sourceImageFile: mode === 'image' ? (sourceImageFile || '') : '',
+        sourceImage: mode === 'image' ? (sourceImageUpload || '') : '',
+      };
+    }
     // Append "no music, no soundtrack" only when the toggle is on AND audio
     // generation is itself active — there's no point steering audio output
     // when audio is disabled outright. Idempotent: if the user already
@@ -1163,7 +1192,7 @@ export default function VideoGen() {
     // Without these guards the user could press Enter in the prompt
     // textarea and fire a request the disabled button would otherwise
     // have prevented.
-    if (!prompt.trim() || generating || notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked || keyframesBlocked) return;
+    if (!prompt.trim() || generating || (!isGrok && (notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked || keyframesBlocked))) return;
     await runGeneration(buildGeneratePayload()).catch(() => {});
   };
 
@@ -1172,7 +1201,7 @@ export default function VideoGen() {
     // would silently queue a doomed job that fails late in the worker with
     // VENV_MISSING, hiding the installer banner from the user. Block at
     // enqueue time so the only path forward is the install banner above.
-    if (!prompt.trim() || notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked || keyframesBlocked) return;
+    if (!prompt.trim() || (!isGrok && (notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked || keyframesBlocked))) return;
     // useVideoGenQueue strips the File blobs into `_blobs` and snapshots the
     // rest as a stable summary for the queue UI.
     enqueue(buildGeneratePayload());
@@ -1207,7 +1236,7 @@ export default function VideoGen() {
   // ONLY a BYOV runtime via the modal would stay stuck behind a "not
   // configured" error from the unrelated legacy probe.
   const notConnected = !!status && status.connected === false && !needsByovProbe;
-  const canEnqueue = prompt.trim() && !notConnected && !extendModeBlocked && !a2vModeBlocked && !byovGateBlocked && !keyframesBlocked;
+  const canEnqueue = prompt.trim() && (isGrok || (!notConnected && !extendModeBlocked && !a2vModeBlocked && !byovGateBlocked && !keyframesBlocked));
 
   return (
     <div className="space-y-3">
@@ -1276,13 +1305,41 @@ export default function VideoGen() {
         );
       })()}
 
+      {/* Backend switch — shown only when the user enabled Grok in Settings →
+          Image Gen. Grok's image_to_video supports text (image-first) and
+          image modes only, so switching to it snaps an unsupported mode back
+          to the nearest one. */}
+      {grokEnabled && (
+        <div className="bg-port-card border border-port-border rounded-xl p-1 flex gap-1" role="group" aria-label="Video generation backend">
+          {[{ id: 'local', label: 'Local' }, { id: 'grok', label: 'Grok' }].map(({ id, label }) => (
+            <button
+              key={id}
+              type="button"
+              aria-pressed={backend === id}
+              onClick={() => {
+                setBackend(id);
+                if (id === 'grok' && mode !== 'text' && mode !== 'image') {
+                  setMode((sourceImageFile || sourceImageUpload) ? 'image' : 'text');
+                }
+              }}
+              className={`flex-1 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                backend === id ? 'bg-port-accent text-white shadow' : 'text-gray-400 hover:text-white hover:bg-port-border/40'
+              }`}
+              title={id === 'grok' ? 'Render via the Grok Build CLI (image_gen → image_to_video). Counts against your Grok plan.' : 'Render on this machine with the local runtimes.'}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
       {/* Mode switch — segmented control above the form. Sets state that
           both the form rendering and the submit payload react to.
           Implemented as plain toggle buttons with `aria-pressed` rather than
           WAI-ARIA Tabs, since the mode-specific inputs aren't structured as
           tabpanels and we don't implement roving-tabindex/arrow-key focus. */}
       <div className="bg-port-card border border-port-border rounded-xl p-1 flex flex-wrap gap-1" role="group" aria-label="Video generation mode">
-        {MODES.map(({ id, label, icon: Icon, desc }) => {
+        {(isGrok ? MODES.filter((m) => m.id === 'text' || m.id === 'image') : MODES).map(({ id, label, icon: Icon, desc }) => {
           const active = mode === id;
           return (
             <button
@@ -1306,7 +1363,7 @@ export default function VideoGen() {
 
       <form onSubmit={handleGenerate} className="grid grid-cols-1 lg:grid-cols-[3fr_2fr] gap-4">
         <div className="bg-port-card border border-port-border rounded-xl p-4 space-y-3">
-          {byovRuntimeMissing && (
+          {!isGrok && byovRuntimeMissing && (
             <div className="rounded-lg border border-port-warning/40 bg-port-warning/10 px-3 py-3 text-xs text-port-warning flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
               <div>
                 <strong className="font-semibold">{byovStatus.label}</strong> isn't installed yet.
@@ -1472,6 +1529,33 @@ export default function VideoGen() {
             />
           )}
 
+          {isGrok ? (
+            <div className="grid grid-cols-2 gap-3">
+              <FormField label="Clip length" labelClassName="block text-xs font-medium text-gray-400 mb-1">
+                <select
+                  value={grokDuration}
+                  onChange={(e) => setGrokDuration(Number(e.target.value))}
+                  className="w-full bg-port-bg border border-port-border rounded-lg px-2 py-2 text-sm text-white focus:outline-none focus:border-port-accent disabled:opacity-50"
+                >
+                  <option value={6}>6 seconds</option>
+                  <option value={10}>10 seconds</option>
+                </select>
+              </FormField>
+              <ResolutionField
+                presets={VIDEO_RESOLUTIONS}
+                width={width}
+                height={height}
+                onChange={handleResolutionChange}
+                {...VIDEO_EDGE_BOUNDS}
+                snapOnBlur
+                note="Grok maps the size to its closest supported aspect ratio — exact pixel dimensions are chosen by the model."
+              />
+              <p className="col-span-2 text-[11px] text-gray-500 leading-snug">
+                Grok generates a base image first (or animates your source image in Image mode), then renders motion with its
+                <code className="text-gray-400"> image_to_video </code> tool. Model, frames, and seed are chosen by Grok; renders count against your Grok plan.
+              </p>
+            </div>
+          ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             {models.length > 0 && (
               <FormField className="col-span-2 sm:col-span-3" label="Model" labelClassName="block text-xs font-medium text-gray-400 mb-1">
@@ -1692,6 +1776,7 @@ export default function VideoGen() {
               </label>
             )}
           </div>
+          )}
 
           <div className="flex flex-wrap items-center gap-2 pt-1">
             {generating ? (
@@ -1705,7 +1790,7 @@ export default function VideoGen() {
             ) : (
               <button
                 type="submit"
-                disabled={!prompt.trim() || notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked || keyframesBlocked}
+                disabled={!prompt.trim() || (!isGrok && (notConnected || extendModeBlocked || a2vModeBlocked || byovGateBlocked || keyframesBlocked))}
                 className="flex items-center gap-2 px-4 py-2 bg-port-accent hover:bg-port-accent/80 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg min-h-[40px]"
                 title={
                   byovRuntimeMissing ? `${byovStatus?.label || byovRuntime} runtime is not installed — use the install banner above`
