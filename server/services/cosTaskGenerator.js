@@ -1914,8 +1914,9 @@ async function resolveBranchReconcileBlock(app, taskType, metadata, taskSchedule
   await taskSchedule.clearPerpetualPark(taskType, app.id);
   await taskSchedule.setPerpetualSignature(taskType, app.id, signature);
   metadata.perpetual = true;
+  const block = formatInFlightForPrompt(actionable, { defaultBranch: result.defaultBranch, actions });
   emitLog('info', `🔀 branch-reconcile dispatching for ${app.name}: ${actionable.length} in-flight branch(es)`, { appId: app.id, analysisType: taskType });
-  return { skip: false, block: formatInFlightForPrompt(actionable, { defaultBranch: result.defaultBranch, actions }) };
+  return { skip: false, block };
 }
 
 /**
@@ -1964,14 +1965,12 @@ async function resolveIssueReconcileBlock(app, taskType, metadata, taskSchedule)
   await taskSchedule.clearPerpetualPark(taskType, app.id);
   await taskSchedule.setPerpetualSignature(taskType, app.id, signature);
   metadata.perpetual = true;
+  const block = formatZombiesForPrompt(result.zombies, {
+    fullName: result.fullName, forge: result.forge, autoClose,
+    projectKey: jira?.projectKey, instanceId: jira?.instanceId,
+  });
   emitLog('info', `🧟 issue-reconcile dispatching for ${app.name}: ${result.zombies.length} zombie issue(s) on ${result.forge}`, { appId: app.id, analysisType: taskType });
-  return {
-    skip: false,
-    block: formatZombiesForPrompt(result.zombies, {
-      fullName: result.fullName, forge: result.forge, autoClose,
-      projectKey: jira?.projectKey, instanceId: jira?.instanceId,
-    })
-  };
+  return { skip: false, block };
 }
 
 /**
@@ -2056,15 +2055,11 @@ async function resolvePrWatcherBlock(app, taskType, metadata, taskSchedule) {
     return { skip: true };
   }
 
+  const block = prWatcher.formatPullRequestsForPrompt(check.newPrs, {
+    repoFullName: check.repoFullName, defaultBranch: check.defaultBranch
+  });
   emitLog('info', `pr-watcher dispatching for ${app.name}: ${check.newPrs.length} new PR(s)`, { appId: app.id, analysisType: taskType });
-  return {
-    skip: false,
-    block: prWatcher.formatPullRequestsForPrompt(check.newPrs, {
-      repoFullName: check.repoFullName, defaultBranch: check.defaultBranch
-    }),
-    repoFullName: check.repoFullName,
-    defaultBranch: check.defaultBranch
-  };
+  return { skip: false, block, repoFullName: check.repoFullName, defaultBranch: check.defaultBranch };
 }
 
 export async function generateManagedAppImprovementTaskForType(taskType, app, state, { skipPreconditions = false } = {}) {
