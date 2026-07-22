@@ -1,5 +1,9 @@
 # Unreleased
 
+## Sprite Manager
+
+- **[issue-2895] Media Gen gains a Sprites section (phase 1: library + import)** — a new Sprites tab lists your game-sprite characters and prop atlas families, browses each one's locked reference set, walk-cycle strips, and published atlas versions (with pixel-perfect previews), and imports the approved production assets from an existing sprite-pipeline checkout in one click. Only final/approved artifacts import — rejected candidates and raw video intermediates stay behind — and every file the source manifests hash-pin is verified on the way in. Reachable from ⌘K and voice ("take me to sprites"). Generation (reference → anchors → walk videos → publish-to-game) lands in the follow-up phases.
+
 ## Image generation
 
 - **[issue-2859] Grok can now generate videos too** — with Grok enabled, the Video Gen page gains a Local/Grok backend switch: Grok renders 6- or 10-second clips via its image-first flow (it generates a base image from your prompt, or animates a source image you pick, then runs its video tool). Clips land in the same render history with thumbnails, run in the parallel cloud queue lane alongside Grok/Codex image jobs, and never require local Python or GPU runtimes.
