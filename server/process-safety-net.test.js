@@ -29,11 +29,19 @@ describe('process-level safety net (#1878)', () => {
     expect(src).toMatch(/normalizeError/);
   });
 
-  for (const rel of ['index.js', 'cos-runner/index.js']) {
+  // The main server wires the net from its boot sequence (services/bootstrap.js,
+  // extracted from index.js in #2839) inside the httpServer.listen callback.
+  for (const rel of ['services/bootstrap.js', 'cos-runner/index.js']) {
     it(`${rel} wires up setupProcessErrorHandlers`, () => {
       expect(read(rel)).toMatch(/setupProcessErrorHandlers\s*\(/);
     });
   }
+
+  // ...and index.js must actually run that boot sequence, or the wiring above
+  // would be dead code the server never reaches.
+  it('index.js runs the bootstrap boot sequence', () => {
+    expect(read('index.js')).toMatch(/runBootSequence\s*\(/);
+  });
 
   // The net must never throw while handling a failure — a non-Error throw value
   // (`throw null`) has no `.stack`, and a deref there would mask the original and
