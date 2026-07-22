@@ -36,7 +36,8 @@ import {
 } from './universeCharacterSheet.js';
 import { getImageModels } from '../lib/mediaModels.js';
 import { enqueueJob, mediaJobEvents } from './mediaJobQueue/index.js';
-import { IMAGE_GEN_MODE, CODEX_IMAGEGEN_DEFAULT_MODEL } from './imageGen/modes.js';
+import { IMAGE_GEN_MODE } from './imageGen/modes.js';
+import { resolveCloudProviderConfig } from './imageGen/cloudProviderConfig.js';
 import {
   datasetImagePath,
   datasetImagesDir,
@@ -344,26 +345,10 @@ async function resolveRenderParams({ modelId: modelOverride = null } = {}) {
     cleanC2PA: true,
     denoise: false,
   };
-  if (activeMode === IMAGE_GEN_MODE.CODEX) {
-    const c = settings.imageGen?.codex || {};
-    if (!c.enabled) {
-      throw new ServerError(
-        'Codex Imagegen is disabled — enable it in Settings → Image Gen first',
-        { status: 400, code: 'CODEX_IMAGEGEN_DISABLED' },
-      );
-    }
-    return { base: { ...base, codexPath: c.codexPath, model: c.model, effort: c.effort }, activeMode, modelId: c.model || CODEX_IMAGEGEN_DEFAULT_MODEL };
-  }
-  if (activeMode === IMAGE_GEN_MODE.GROK) {
-    const g = settings.imageGen?.grok || {};
-    if (!g.enabled) {
-      throw new ServerError(
-        'Grok Imagegen is disabled — enable it in Settings → Image Gen first',
-        { status: 400, code: 'GROK_IMAGEGEN_DISABLED' },
-      );
-    }
-    // Grok's image tools run on xAI's fixed image backend — no model knob.
-    return { base: { ...base, grokPath: g.grokPath, aspectRatio: g.aspectRatio }, activeMode, modelId: 'grok-imagegen' };
+  const cloud = resolveCloudProviderConfig(settings, activeMode);
+  if (cloud) {
+    if (!cloud.enabled) throw cloud.disabledError;
+    return { base: { ...base, ...cloud.providerParams }, activeMode, modelId: cloud.modelId };
   }
   if (activeMode === IMAGE_GEN_MODE.LOCAL) {
     const allModels = getImageModels();

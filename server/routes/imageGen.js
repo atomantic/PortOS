@@ -19,7 +19,7 @@ import {
 import { optionalUploadFields } from '../lib/multipart.js';
 import * as imageGen from '../services/imageGen/index.js';
 import { local, IMAGE_GEN_MODE, IMAGE_GEN_MODES } from '../services/imageGen/index.js';
-import { CODEX_IMAGEGEN_DEFAULT_MODEL } from '../services/imageGen/modes.js';
+import { resolveCloudProviderConfig } from '../services/imageGen/cloudProviderConfig.js';
 import setupRouter from './imageGenSetup.js';
 import { enqueueJob, attachSseClient as attachQueueSseClient, cancelJob, listJobs } from '../services/mediaJobQueue/index.js';
 import { getImageModels, isFlux2, isEditOnly, repoForModel, requiredReposForModel } from '../lib/mediaModels.js';
@@ -388,59 +388,19 @@ router.post('/generate', imageGenUploads, asyncHandler(async (req, res) => {
   // call with no local single-flight constraint to absorb. `settings` and
   // `mode` were already resolved above (so the FLUX.2 + local-backend gate
   // could fire before staging any uploads).
-  if (mode === IMAGE_GEN_MODE.CODEX) {
-    // Reject up-front rather than enqueueing a doomed job — codex is gated
-    // behind an explicit toggle since not every Codex account has access to
-    // the image_gen tool.
-    const c = settings.imageGen?.codex || {};
-    if (!c.enabled) {
-      throw new ServerError(
-        'Codex Imagegen is disabled — enable it in Settings → Image Gen first',
-        { status: 400, code: 'CODEX_IMAGEGEN_DISABLED' },
-      );
-    }
-    // Resolve the effective model so the queue row + response metadata report
+  const cloud = resolveCloudProviderConfig(settings, mode);
+  if (cloud) {
+    // Reject up-front rather than enqueueing a doomed job — the cloud CLIs are
+    // gated behind an explicit toggle each (not every Codex account has access
+    // to the image_gen tool, and grok spends the user's Grok quota).
+    if (!cloud.enabled) throw cloud.disabledError;
+    // `mode` inside jobParams is the queue's discriminator — laneForJob()
+    // routes cloud jobs to the parallel cloud lane, and runJob's image branch
+    // dispatches to the matching imageGen provider module when it sees it.
+    // `cloud.modelId` is the *effective* model so the response metadata reports
     // what actually renders (gpt-5.6-luna by default) instead of "codex"/null.
-    // codex.generateImage applies the same default, so this is display parity.
-    const codexModel = c.model || CODEX_IMAGEGEN_DEFAULT_MODEL;
-    const queued = enqueueJob({
-      kind: 'image',
-      // `mode: IMAGE_GEN_MODE.CODEX` is the queue's discriminator —
-      // laneForJob() routes codex jobs to the codex lane, and runJob's image
-      // branch dispatches to imageGen/codex.js when it sees this flag.
-      params: {
-        mode: IMAGE_GEN_MODE.CODEX,
-        codexPath: c.codexPath,
-        model: codexModel,
-        effort: c.effort,
-        ...params,
-      },
-    });
-    return res.json(queuedImageResponse({ ...queued, mode: IMAGE_GEN_MODE.CODEX, model: codexModel }));
-  }
-  if (mode === IMAGE_GEN_MODE.GROK) {
-    // Same up-front gate as codex — grok spends the user's Grok quota, so
-    // it's opt-in via an explicit settings toggle.
-    const g = settings.imageGen?.grok || {};
-    if (!g.enabled) {
-      throw new ServerError(
-        'Grok Imagegen is disabled — enable it in Settings → Image Gen first',
-        { status: 400, code: 'GROK_IMAGEGEN_DISABLED' },
-      );
-    }
-    const queued = enqueueJob({
-      kind: 'image',
-      // `mode: IMAGE_GEN_MODE.GROK` is the queue's discriminator — the cloud
-      // lane routes it alongside codex, and runJob's image branch dispatches
-      // to imageGen/grok.js when it sees this flag.
-      params: {
-        mode: IMAGE_GEN_MODE.GROK,
-        grokPath: g.grokPath,
-        aspectRatio: g.aspectRatio,
-        ...params,
-      },
-    });
-    return res.json(queuedImageResponse({ ...queued, mode: IMAGE_GEN_MODE.GROK }));
+    const queued = enqueueJob({ kind: 'image', params: { ...cloud.jobParams, ...params } });
+    return res.json(queuedImageResponse({ ...queued, mode, model: cloud.modelId }));
   }
   if (mode === IMAGE_GEN_MODE.LOCAL) {
     const py = settings.imageGen?.local?.pythonPath || null;

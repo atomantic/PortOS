@@ -21,7 +21,8 @@ import { getImageModels } from '../../lib/mediaModels.js';
 import { loraCompatKey } from '../../lib/runners.js';
 import { resolveCharacterLoras } from '../characterLoraResolver.js';
 import { pickCanon } from './seriesCanon.js';
-import { IMAGE_GEN_MODE, resolveQueueImageMode } from '../imageGen/modes.js';
+import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
+import { pickUsableMode, resolveCloudProviderConfig } from '../imageGen/cloudProviderConfig.js';
 import { resolveImageCleaners } from '../imageGen/index.js';
 
 const joinStyleParts = (...parts) =>
@@ -52,12 +53,24 @@ const applyWorldStyle = (prompt, world, series = null) => {
   return composeStyledPrompt(prompt, '', { prompt: stylePrompt, negativePrompt: '' }).prompt;
 };
 
-// Resolution order for the image-gen mode on a pipeline visual stage:
-// per-request override (enable-gated) → saved dispatcher default → codex →
-// grok → local. The ladder itself is the shared `resolveQueueImageMode`
-// (imageGen/modes.js) — hoisted in #2896 so sprite renders use the same
-// policy; this wrapper just adapts the pipeline's `options` bag.
-const resolveMode = (options, settings) => resolveQueueImageMode(options.mode, settings);
+// Resolution order for the image-gen mode on a pipeline visual stage — a
+// candidate walk (first usable wins) rather than a pairwise ladder, so a new
+// cloud backend costs zero edits here:
+//   1. Per-request override (`options.mode`) — set by the stage's persisted
+//      `genConfig` or an explicit UI selection. A cloud mode is only honored
+//      when its `imageGen.<mode>.enabled` toggle is on; a stale 'codex'
+//      override from before the toggle was turned off falls through.
+//   2. Saved dispatcher default (`settings.imageGen.mode`) — same usability
+//      gate, and non-queueable modes (external SD-API, which this surface
+//      doesn't proxy) never qualify.
+//   3. Auto-default — prefer an enabled cloud backend, since cloud image gen
+//      produces print-quality comic pages out of the box. Otherwise fall back
+//      to local diffusion (flux-1) the way the original default behaved.
+// `pickUsableMode` appends the cloud-then-local tail, so this only lists the
+// two explicit candidates. (Sprite renders use the equivalent
+// `resolveQueueImageMode` ladder in imageGen/modes.js — #2896 hoisted that
+// one first; this is the wider param-assembly consolidation from #2881.)
+const resolveMode = (options, settings) => pickUsableMode(settings, [options.mode, settings?.imageGen?.mode]);
 
 /**
  * Resolve trained character LoRAs for a pipeline render. Local mode only —
@@ -238,11 +251,10 @@ const enqueueImageJob = ({ prompt, world, settings, options, mode, owner, logLin
   // the saved settings.imageGen[mode].{cleanC2PA,denoise} would have no
   // effect on storyboard, comic-panel, or cover renders.
   const { cleanC2PA, denoise } = resolveImageCleaners(undefined, settings, mode);
-  const params = mode === IMAGE_GEN_MODE.CODEX
-    ? { mode: IMAGE_GEN_MODE.CODEX, codexPath: settings.imageGen?.codex?.codexPath, model: settings.imageGen?.codex?.model, effort: settings.imageGen?.codex?.effort, cleanC2PA, denoise, ...baseParams }
-    : mode === IMAGE_GEN_MODE.GROK
-      ? { mode: IMAGE_GEN_MODE.GROK, grokPath: settings.imageGen?.grok?.grokPath, aspectRatio: settings.imageGen?.grok?.aspectRatio, cleanC2PA, denoise, ...baseParams }
-      : { pythonPath: settings.imageGen?.local?.pythonPath || null, modelId: options.modelId, cleanC2PA, denoise, ...baseParams };
+  const cloud = resolveCloudProviderConfig(settings, mode);
+  const params = cloud
+    ? { ...cloud.jobParams, cleanC2PA, denoise, ...baseParams }
+    : { pythonPath: settings.imageGen?.local?.pythonPath || null, modelId: options.modelId, cleanC2PA, denoise, ...baseParams };
   const { jobId } = enqueueJob({ kind: 'image', params, owner });
   console.log(`${logLine} mode=${mode} jobId=${jobId.slice(0, 8)}`);
   return jobId;
