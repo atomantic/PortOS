@@ -3,6 +3,9 @@ import { ServerError } from './errorHandler.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull } from './zodCompat.js';
 import { WORK_TRACKERS } from './workTracker.js';
 import { SPRITE_ID_PATTERN } from '../services/sprites/recordsLogic.js';
+import { ANCHOR_DIRECTIONS } from '../services/sprites/prompts.js';
+import { CHROMA_KEY_HEXES } from '../services/sprites/chromaKey.js';
+import { QUEUEABLE_IMAGE_MODES } from '../services/imageGen/modes.js';
 
 // gpt-image-2 (codex backend) caps at 3840px per edge and 8,294,400 total
 // pixels. Mirror the ceiling for every image-gen route. Local mflux can
@@ -953,9 +956,44 @@ export const spriteImportRequestSchema = z.object({
 export const spriteRecordUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   notes: z.string().max(10000).nullable().optional(),
-  // Phase 2 constrains this to the three standard keys; phase 1 stores any hex
-  // color so imported legacy magenta round-trips.
-  chromaKey: z.string().regex(/^#[0-9a-fA-F]{6}$/).nullable().optional(),
+  // Fixed three-key set (#2895 decision) — manual override is limited to the
+  // same keys the auto-selection picks from. Imported legacy records keep
+  // whatever hex they carried (the importer writes via upsert, not this
+  // schema); null clears back to auto-select-on-lock.
+  chromaKey: z.enum(CHROMA_KEY_HEXES).nullable().optional(),
+});
+
+// Phase 2 (issue #2896): reference workflow. prompts.js / chromaKey.js are
+// pure sprite modules (like recordsLogic.js) so importing their constants
+// here can't disturb mocked suites; modes.js is the dependency-free image-gen
+// enum module.
+export const spriteCreateSchema = z.object({
+  id: z.string().regex(SPRITE_ID_PATTERN).optional(),
+  name: z.string().trim().min(1).max(200),
+  spec: z.record(z.string(), z.unknown()).nullable().optional(),
+});
+
+const spriteReferenceTargetSchema = z.enum(['main', ...ANCHOR_DIRECTIONS]);
+
+// Multipart callers send numbers as form-field strings — coerce before range
+// checks ('' → undefined so an empty field doesn't become 0).
+const optionalUnitNumber = z.preprocess(
+  (v) => (v === '' || v === undefined || v === null ? undefined : Number(v)),
+  z.number().min(0).max(1).optional(),
+);
+
+export const spriteReferenceGenerateSchema = z.object({
+  target: spriteReferenceTargetSchema,
+  mode: z.enum(QUEUEABLE_IMAGE_MODES).optional(),
+  model: z.string().trim().max(64).optional(),
+  effort: z.string().trim().max(32).optional(),
+  designPrompt: z.string().max(4000).optional(),
+  initImageStrength: optionalUnitNumber,
+});
+
+export const spriteReferenceLockSchema = z.object({
+  target: spriteReferenceTargetSchema,
+  candidate: z.string().min(1).max(500),
 });
 
 // =============================================================================

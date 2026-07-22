@@ -135,6 +135,7 @@ import { initUniverseBuilderCollectionHook } from './services/universeBuilderCol
 import { initCatalogImageAttachHook } from './services/catalogImageAttachHook.js';
 import { initWritersRoomSceneImageHook } from './services/writersRoomSceneImageHook.js';
 import { initMusicVideoSceneImageHook } from './services/musicVideoSceneImageHook.js';
+import { initSpriteReferenceImageHook } from './services/spriteReferenceImageHook.js';
 import { initMusicVideoSceneVideoHook } from './services/musicVideoSceneVideoHook.js';
 import { initCreativeDirectorMusicBedHook } from './services/creativeDirectorMusicBedHook.js';
 import { initCreativeDirectorSceneImageHook } from './services/creativeDirectorSceneImageHook.js';
@@ -862,6 +863,10 @@ ensureSelf()
     // the requesting client unmounted mid-render (#1928). Also depends on the
     // queue being loaded.
     initCreativeDirectorMusicBedHook();
+    // Sprite reference-candidate hook — copies a completed reference/anchor
+    // render into the sprite record's reference/candidates/ with a generation
+    // sidecar (#2896). Also depends on the queue being loaded.
+    initSpriteReferenceImageHook();
     // Creative Director scene-frame hook — durably files a queued first-pass
     // reference-frame render onto its project scene's `sourceImageFile` on
     // completion, even if no client is watching (#1867). Also depends on the
