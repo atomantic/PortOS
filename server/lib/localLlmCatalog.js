@@ -132,6 +132,19 @@ export const LOCAL_LLM_CATALOG = [
     ollama: 'hf.co/sjakek/Nex-N2-mini-GGUF:UD-Q4_K_M',
     lmstudio: 'sjakek/Nex-N2-mini-GGUF'
   },
+  {
+    key: 'btl-3-compact',
+    name: 'BTL-3 Compact 27B',
+    category: 'coding',
+    params: '27B',
+    size: '8.4 GB',
+    family: 'btl-3',
+    description: 'BadTheoryLabs agentic coding model distilled from Qwen3.6-27B into a single custom-quant GGUF — built for local repo/terminal agents and structured tool use on modest hardware. The repo ships one non-standard quant (AVQ2, not a llama.cpp Q-scheme), so the install id is the bare repo and the backend resolves the single file itself; no per-quant tag is available.',
+    capabilities: ['chat', 'code', 'tools'],
+    context: 262144,
+    ollama: 'hf.co/badtheorylabs/BTL-3-Compact',
+    lmstudio: 'badtheorylabs/BTL-3-Compact'
+  },
   // ── Large narrative / long-context tier (workstation-class: 64–128GB unified memory) ──
   // Best suited for whole-manuscript editorial review, where prose quality and a
   // long context window matter most. To actually fit the manuscript, raise Ollama's
