@@ -11,7 +11,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest, isPaginationRequested, paginateArray } from '../lib/validation.js';
 import * as authors from '../services/authors/index.js';
 
 const router = Router();
@@ -41,8 +41,10 @@ const patchSchema = z.object({
   headshotImageUrl: headshotImageUrlField.optional(),
 }).refine((p) => Object.keys(p).length > 0, { message: 'patch must include at least one field' });
 
-router.get('/', asyncHandler(async (_req, res) => {
-  res.json(await authors.listAuthors());
+router.get('/', asyncHandler(async (req, res) => {
+  const list = await authors.listAuthors();
+  if (!isPaginationRequested(req.query)) return res.json(list);
+  res.json(paginateArray(list, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.post('/', asyncHandler(async (req, res) => {

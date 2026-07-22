@@ -14,7 +14,7 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import { asyncHandler, ServerError } from '../lib/errorHandler.js';
-import { validateRequest } from '../lib/validation.js';
+import { validateRequest, isPaginationRequested, paginateArray } from '../lib/validation.js';
 import * as albums from '../services/albums/index.js';
 import * as tracks from '../services/tracks/index.js';
 
@@ -104,8 +104,10 @@ async function reconcileAlbumMembership(album) {
   }));
 }
 
-router.get('/', asyncHandler(async (_req, res) => {
-  res.json(await albums.listAlbums());
+router.get('/', asyncHandler(async (req, res) => {
+  const list = await albums.listAlbums();
+  if (!isPaginationRequested(req.query)) return res.json(list);
+  res.json(paginateArray(list, req.query, { defaultLimit: 50, maxLimit: 500 }));
 }));
 
 router.post('/', asyncHandler(async (req, res) => {

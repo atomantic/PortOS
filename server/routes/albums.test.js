@@ -49,6 +49,19 @@ describe('albums routes', () => {
     expect(r.body).toEqual([{ id: 'album-1', title: 'Debut' }]);
   });
 
+  it('GET / returns a bounded envelope when pagination is requested', async () => {
+    albums.listAlbums.mockResolvedValueOnce(
+      Array.from({ length: 5 }, (_, i) => ({ id: `album-${i}`, title: `T${i}` }))
+    );
+    const r = await request(app).get('/api/albums?limit=2&offset=1');
+    expect(r.status).toBe(200);
+    expect(r.body.items).toHaveLength(2);
+    expect(r.body.items[0].id).toBe('album-1');
+    expect(r.body.total).toBe(5);
+    expect(r.body.limit).toBe(2);
+    expect(r.body.offset).toBe(1);
+  });
+
   it('POST / creates an album', async () => {
     const r = await request(app).post('/api/albums').send({ title: 'Debut', genre: 'folk' });
     expect(r.status).toBe(201);
