@@ -176,7 +176,13 @@ export const repairTextEncoder = ({ deep = false } = {}) => request('/video-gen/
   body: JSON.stringify({ deep }),
   silent: true,
 });
-export const cancelVideoGen = () => request('/video-gen/cancel', { method: 'POST' });
+// With the cloud lane, video renders are no longer single-flight — pass the
+// jobId so the server cancels exactly this render, not "the first running
+// video". Omitting it keeps the legacy cancel-the-running-one behavior.
+export const cancelVideoGen = (jobId) => request('/video-gen/cancel', {
+  method: 'POST',
+  ...(jobId ? { body: JSON.stringify({ jobId }) } : {}),
+});
 // Per-runtime BYOV setup probe (venv/deps present?) run BEFORE the user hits
 // Generate so a missing-runtime install banner can surface instead of a
 // buildArgs-time 500. Silent — VideoGen owns its own error handling and passes

@@ -47,13 +47,16 @@ import { audioGenEvents } from '../audioGen/events.js';
 import { getSettings } from '../settings.js';
 import { IMAGE_GEN_MODE, CLOUD_IMAGE_GEN_MODES } from '../imageGen/modes.js';
 
-// Cloud-CLI image jobs (codex, grok) share one parallel lane — each render
+// Cloud-CLI jobs (codex/grok images, grok videos) share one parallel lane —
+// each render
 // shells out to its own external child spending remote quota, so they don't
 // serialize on the MLX runtime the way GPU jobs do. The lane's slot count is
 // `codexParallelLimit` (settings key `imageGen.codex.parallelLimit`, kept
 // under the codex name for backward compat — it now bounds codex + grok
 // renders combined).
-const isCloudImageJob = (j) => j.kind === 'image' && CLOUD_IMAGE_GEN_MODES.includes(j.params?.mode);
+const isCloudImageJob = (j) =>
+  (j.kind === 'image' && CLOUD_IMAGE_GEN_MODES.includes(j.params?.mode))
+  || (j.kind === 'video' && j.params?.mode === IMAGE_GEN_MODE.GROK);
 
 const JOBS_FILE = join(PATHS.data, 'media-jobs.json');
 const COMPLETED_TTL_MS = 24 * 60 * 60 * 1000;
@@ -129,6 +132,7 @@ export const JOB_STATUSES = Object.freeze(['queued', 'running', 'completed', 'fa
 // of provider-dispatch truth — used by the watchdog, runJob, and cancelJob
 // so a new provider addition is one edit instead of three.
 function getGenModuleForJob(job) {
+  if (job.kind === 'video' && job.params?.mode === IMAGE_GEN_MODE.GROK) return import('../videoGen/grok.js');
   if (job.kind === 'video') return import('../videoGen/local.js');
   if (job.kind === 'training') return import('../loraTraining/index.js');
   if (job.kind === 'audio') return import('../audioGen/local.js');
@@ -158,7 +162,7 @@ async function resolveLiveParams(job, safeParams) {
   // mflux training runs in the same venv as local image renders, so the
   // live settings pythonPath wins there too. flux2 training resolves its
   // own venv (resolveFlux2Python) inside runTraining — skip it here.
-  const usesLocalPython = job.kind === 'video'
+  const usesLocalPython = (job.kind === 'video' && job.params?.mode !== IMAGE_GEN_MODE.GROK)
     || (job.kind === 'image' && !CLOUD_IMAGE_GEN_MODES.includes(job.params?.mode))
     || (job.kind === 'training' && job.params?.runtime === 'mflux');
   if (!usesLocalPython) return;
@@ -786,10 +790,13 @@ async function runJob(job) {
   // imageGen/videoGen/local.js#handleLine emits 'activity' which resets
   // lastActivityAt; only true hangs (process wedged, no output) trip it.
   const idleTimeoutMs = (() => {
+    // Cloud check first — a grok VIDEO job must take the cloud watchdog, not
+    // the chunk-scaled local-video one (the provider emits 'activity' on
+    // stdout so a long-but-active render never trips the idle cap).
+    if (isCloudImageJob(job)) return WATCHDOG_CODEX_MS;
     if (job.kind === 'video') return WATCHDOG_VIDEO_MS * Math.max(1, Number(safeParams.chunks) || 1);
     if (job.kind === 'training') return WATCHDOG_TRAINING_MS;
     if (job.kind === 'audio') return WATCHDOG_AUDIO_MS;
-    if (isCloudImageJob(job)) return WATCHDOG_CODEX_MS;
     return WATCHDOG_IMAGE_MS;
   })();
   let lastActivityAt = Date.now();

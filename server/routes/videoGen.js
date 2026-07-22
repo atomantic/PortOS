@@ -18,6 +18,7 @@ import { asyncHandler, ServerError, failValidation } from '../lib/errorHandler.j
 import { uploadFields } from '../lib/multipart.js';
 import { PATHS, ensureDir, resolveGalleryImage } from '../lib/fileUtils.js';
 import { safeUnder } from '../lib/ffmpeg.js';
+import { IMAGE_GEN_MODE } from '../services/imageGen/modes.js';
 import { getSettings } from '../services/settings.js';
 import { checkPackages, isAllowedPython } from '../lib/pythonSetup.js';
 import { safeChildProcessEnv } from '../lib/processEnv.js';
@@ -107,6 +108,18 @@ const optionalInt = (min, max, label) => z.preprocess(
   z.number().int().refine((n) => n >= min && n <= max, `${label} ${min}..${max}`).optional(),
 );
 const generateBodySchema = z.object({
+  // Render backend: the local runtimes (default) or the Grok Build CLI's
+  // image-first image_to_video flow (#2859 phase 2). Grok ignores the
+  // local-only knobs below; it reads prompt/negativePrompt, width/height
+  // (mapped to an aspect ratio), sourceImageFile/sourceImage, and
+  // grokDuration.
+  backend: z.enum(['local', 'grok']).optional(),
+  // Grok image_to_video clip length in seconds — the tool supports exactly
+  // 6 or 10. Multipart bodies arrive as strings, so coerce first.
+  grokDuration: z.preprocess(
+    (v) => (v == null || v === '' ? undefined : Number(v)),
+    z.union([z.literal(6), z.literal(10)]).optional(),
+  ),
   prompt: z.string().min(1).max(8000),
   negativePrompt: z.string().max(8000).optional(),
   modelId: z.string().max(64).optional(),
@@ -591,7 +604,7 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
   // shared with services/videoGen/local.js so the route and worker stay
   // in sync.
   const runtimeBringsOwnVenv = effectiveModel && BYOV_VIDEO_RUNTIMES.has(effectiveModel.runtime);
-  if (!pythonPath && !runtimeBringsOwnVenv) {
+  if (!pythonPath && !runtimeBringsOwnVenv && body.backend !== 'grok') {
     await cleanupTempUploads();
     throw new ServerError(
       'Local video generation is not configured (settings.imageGen.local.pythonPath is missing).',
@@ -713,6 +726,48 @@ router.post('/', frameImageUpload, asyncHandler(async (req, res) => {
       { status: 400, code: 'MUSIC_VIDEO_SOURCE_REQUIRED' },
     );
   }
+  // Grok backend short-circuit (#2859 phase 2): everything past this point —
+  // last-frame/keyframe staging, extend resolution, LoRA gating — is
+  // local-runtime machinery grok doesn't use. sourceImagePath (upload or
+  // gallery pick) is already resolved above, so an i2v render animates that
+  // frame and a plain prompt runs the image-first image_gen → image_to_video
+  // flow inside the provider.
+  if (body.backend === 'grok') {
+    const g = s.imageGen?.grok || {};
+    if (!g.enabled) {
+      await cleanupAllStaged();
+      throw new ServerError(
+        'Grok Imagegen is disabled — enable it in Settings → Image Gen first',
+        { status: 400, code: 'GROK_IMAGEGEN_DISABLED' },
+      );
+    }
+    const { jobId, position, status } = enqueueJob({
+      kind: 'video',
+      params: {
+        // `mode: 'grok'` is the queue's discriminator — the cloud lane and
+        // getGenModuleForJob route on it. Local video jobs use `mode` for
+        // the t2v/i2v semantic (text/image/fflf/…), which never collides
+        // with the literal 'grok'.
+        mode: IMAGE_GEN_MODE.GROK,
+        // Semantic t2v/i2v mode, kept separate from the discriminator so a
+        // client restoring form state from /active never feeds 'grok' back
+        // into its mode selector.
+        videoMode: sourceImagePath ? 'image' : 'text',
+        grokPath: g.grokPath,
+        aspectRatio: g.aspectRatio,
+        prompt: body.prompt,
+        negativePrompt: body.negativePrompt || '',
+        width: body.width,
+        height: body.height,
+        duration: body.grokDuration,
+        sourceImagePath,
+        uploadedTempPath,
+        ...(body.musicVideo ? { musicVideo: body.musicVideo } : {}),
+      },
+    });
+    return res.json({ jobId, generationId: jobId, filename: `${jobId}.mp4`, model: 'grok', mode: 'grok', status, position });
+  }
+
   if (uploads.lastImage) {
     lastImagePath = await stageUploadDurable(uploads.lastImage, 'last');
     extraUploadedTempPaths.push(lastImagePath);
@@ -935,6 +990,10 @@ const ACTIVE_JOB_PARAM_FIELDS = [
   'width', 'height', 'numFrames', 'fps',
   'steps', 'guidanceScale', 'seed',
   'tiling', 'disableAudio', 'mode', 'chunks', 'imageStrength',
+  // Grok jobs (#2859 phase 2): the semantic t2v/i2v mode ('mode' holds the
+  // 'grok' discriminator for them) and the clip duration — both plain
+  // values, safe to echo for the reloading page's form restore.
+  'videoMode', 'duration',
   // loras are { filename, scale } basenames (no server filesystem paths), so
   // they're safe to echo back for the resuming picker to repopulate.
   'loras',
