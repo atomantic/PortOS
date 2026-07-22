@@ -228,6 +228,54 @@ describe('huggingFaceCatalog', () => {
       expect(result.variants.find((v) => v.quant === 'BF16')).toMatchObject({ recommended: true, fit: 'comfortable' })
     })
 
+    it('does not mistake a custom quant scheme suffix for a standard quant tag', async () => {
+      // `…-AVQ2.gguf` is a repo-specific scheme, not `Q2`. Emitting `hf.co/<repo>:Q2`
+      // makes Ollama reject the pull ("not a valid quantization scheme"); the bare
+      // repo id resolves through Ollama's `latest` manifest instead.
+      const repo = 'exampleorg/Example-3-Compact'
+      fetch
+        .mockResolvedValueOnce(listing(repo, ['model/Example-3-Compact-AVQ2.gguf']))
+        .mockResolvedValueOnce(blobs(repo, { 'model/Example-3-Compact-AVQ2.gguf': 8_400_000_000 }))
+
+      const [result] = await searchHuggingFaceModels({ backend: 'ollama', query: 'example-3', systemMemoryBytes: 128 * 1024 ** 3 })
+
+      expect(result).toMatchObject({ id: `hf.co/${repo}`, quant: null, installable: true, sizeBytes: 8_400_000_000 })
+      expect(result.variants || []).toEqual([])
+    })
+
+    it('offers no variant for an `-fp16.gguf` build, which Ollama has no valid tag for', async () => {
+      // Verified against the HF/Ollama registry: `:FP16` → 400 "not a valid
+      // quantization scheme" and `:F16` → 400 "not available in the repository"
+      // when the file is named `…-fp16.gguf`. Neither tag installs, so the build
+      // must stay off the variant list rather than offering a 400 behind Install.
+      const repo = 'exampleorg/Example-0.5B-Instruct-GGUF'
+      fetch
+        .mockResolvedValueOnce(listing(repo, ['example-0.5b-instruct-fp16.gguf', 'example-0.5b-instruct-q4_k_m.gguf']))
+        .mockResolvedValueOnce(blobs(repo, {
+          'example-0.5b-instruct-fp16.gguf': 1_000_000_000,
+          'example-0.5b-instruct-q4_k_m.gguf': 400_000_000,
+        }))
+
+      const [result] = await searchHuggingFaceModels({ backend: 'ollama', query: 'example-0.5b', systemMemoryBytes: 128 * 1024 ** 3 })
+
+      expect(result.variants.map((v) => v.quant)).toEqual(['q4_k_m'])
+      expect(result.id).toBe(`hf.co/${repo}:q4_k_m`)
+    })
+
+    it('reports an unknown size when several custom-scheme builds leave the backend to choose', async () => {
+      // No file parses a quant, so the id is the bare repo and Ollama picks the
+      // build — pinning the card to one arbitrary file's size would advertise a
+      // fit verdict for a build the install may not fetch.
+      const repo = 'exampleorg/Example-3-Multi'
+      fetch
+        .mockResolvedValueOnce(listing(repo, ['Example-3-AVQ2.gguf', 'Example-3-AVQ8.gguf']))
+        .mockResolvedValueOnce(blobs(repo, { 'Example-3-AVQ2.gguf': 8_400_000_000, 'Example-3-AVQ8.gguf': 30_000_000_000 }))
+
+      const [result] = await searchHuggingFaceModels({ backend: 'ollama', query: 'example-3', systemMemoryBytes: 16 * 1024 ** 3 })
+
+      expect(result).toMatchObject({ id: `hf.co/${repo}`, quant: null, sizeBytes: null, size: 'GGUF' })
+    })
+
     it('defaults to a small quant on a low-memory machine', async () => {
       const repo = 'empero-ai/Qwythos-9B-Small-GGUF'
       fetch

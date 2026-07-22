@@ -206,20 +206,39 @@ function quantFromFilename(filename) {
     // shard suffix — strip it so BF16/F16 splits resolve to their real quant
     // instead of failing the match and being dropped from the variant list.
     .replace(/-\d{5}-of-\d{5}$/i, '')
-  const match = stem.match(/(?:UD-)?(?:IQ\d(?:_[A-Z0-9]+)*|Q\d(?:_[A-Z0-9]+)*|BF16|F16)$/i)
-  return match?.[0] || null
+  // The quant must be its own trailing token — start-of-name or after a `-`/`_`/`.`
+  // separator. Without that boundary a repo's custom scheme suffix bleeds into a
+  // bogus standard quant (`BTL-3-Compact-AVQ2` → `Q2`), and the resulting
+  // `hf.co/<repo>:Q2` pull is rejected by Ollama with "not a valid quantization
+  // scheme". An unparseable quant is better as null: the install id then falls
+  // back to the bare repo, which Ollama resolves via its `latest` manifest.
+  // `FP16` is deliberately NOT a token here (only `F16`/`BF16`): Ollama rejects
+  // an `:FP16` tag as an invalid scheme, and an `:F16` tag on a repo whose file
+  // is named `…-fp16.gguf` 404s ("tag is not available in the repository"), so a
+  // `…-fp16.gguf` build has no pullable tag at all — dropping it from the variant
+  // list and installing the repo's `latest` is the only form that works.
+  const match = stem.match(/(?:^|[-_.])((?:UD-)?(?:IQ\d(?:_[A-Z0-9]+)*|Q\d(?:_[A-Z0-9]+)*|BF16|F16))$/i)
+  return match?.[1] || null
 }
 
 function pickGgufFile(model) {
   const files = ggufFilesOf(model)
   if (files.length === 0) return null
-  return files
+  const ranked = files
     .map((file) => {
       const quant = quantFromFilename(file.name)
       const priority = quant ? QUANT_PRIORITY.findIndex((q) => q.toLowerCase() === quant.toLowerCase()) : -1
       return { ...file, quant, priority: priority === -1 ? 999 : priority }
     })
-    .sort((a, b) => a.priority - b.priority || (a.size || Number.MAX_SAFE_INTEGER) - (b.size || Number.MAX_SAFE_INTEGER))[0]
+    .sort((a, b) => a.priority - b.priority || (a.size || Number.MAX_SAFE_INTEGER) - (b.size || Number.MAX_SAFE_INTEGER))
+  const picked = ranked[0]
+  // A repo whose builds all use a non-standard scheme (`…-AVQ2.gguf`) parses to no
+  // quant, so the install id is the bare repo and the BACKEND decides which build
+  // to pull. With several such files the pick above is arbitrary (all tie at 999,
+  // so size-ascending wins) — advertising its size would promise "8.4 GB · fits
+  // comfortably" for an install that may fetch a much larger build. Drop the size
+  // so the card reports an unknown fit instead. A single-GGUF repo is unambiguous.
+  return !picked.quant && ranked.length > 1 ? { ...picked, size: null } : picked
 }
 
 // Delegates formatting to the shared fileUtils.formatBytes, but returns `null`
