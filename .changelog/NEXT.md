@@ -31,3 +31,7 @@
 ## Removed
 
 - Drop the unused `featureFlags`/`lockPolicies` reserved config slots from `collectionStore`'s typedef.
+
+## Internal
+
+- **[issue-2832] Split the boot-schema DDL into per-domain modules** — the ~1265-line inline `CREATE TABLE`/`CREATE INDEX`/trigger block in `ensureSchemaImpl()` (`server/lib/db.js`) is extracted into per-domain modules under `server/lib/db/schema/` (catalog, media, universes, writers-room, pipeline, privacy, tribe, audit, …), each exporting a statement array; `ensureSchemaImpl` is now a thin composer. Statement text and order are byte-identical, so the composed schema is unchanged.

@@ -1,8 +1,9 @@
 /**
  * Catalog DDL parity test — locks the schema definitions in
- * `server/scripts/init-db.sql` (fresh-install path) and the `catalogDDL`
- * array inside `server/lib/db.js` `ensureSchema()` (upgrade path) so a future
- * PR that updates one without the other surfaces here instead of in the wild.
+ * `server/scripts/init-db.sql` (fresh-install path) and the per-domain DDL
+ * modules under `server/lib/db/schema/` that `ensureSchema()` composes and runs
+ * (upgrade path — #2832 split them out of `db.js`) so a future PR that updates
+ * one without the other surfaces here instead of in the wild.
  *
  * Same risk exists for the `memories` / `memory_links` DDL but has been
  * tolerated since the memory system landed; this test only covers catalog.
@@ -16,13 +17,24 @@
 
 import { describe, it, expect } from 'vitest';
 import { FTS_PAYLOAD_FIELDS } from './catalogTypes.js';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const INIT_SQL = readFileSync(join(HERE, '..', 'scripts', 'init-db.sql'), 'utf8');
-const DB_JS = readFileSync(join(HERE, 'db.js'), 'utf8');
+// The ensureSchema() DDL now lives in per-domain modules under db/schema/ (#2832);
+// db.js is the thin composer. Concatenate the module sources (plus db.js itself)
+// so this structural parity check sees every CREATE TABLE / INDEX / trigger the
+// upgrade path runs, exactly as it did when the DDL was inlined in db.js. The
+// variable keeps the DB_JS name because it still represents "the JS-side DDL".
+const SCHEMA_DIR = join(HERE, 'db', 'schema');
+const DB_JS = [
+  readFileSync(join(HERE, 'db.js'), 'utf8'),
+  ...readdirSync(SCHEMA_DIR)
+    .filter((f) => f.endsWith('.js') && !f.endsWith('.test.js'))
+    .map((f) => readFileSync(join(SCHEMA_DIR, f), 'utf8')),
+].join('\n');
 
 const CATALOG_TABLES = [
   'catalog_scraps',

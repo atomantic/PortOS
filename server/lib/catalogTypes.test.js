@@ -13,7 +13,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
@@ -47,7 +47,17 @@ import { afterEach } from 'vitest';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const INIT_SQL = readFileSync(join(HERE, '..', 'scripts', 'init-db.sql'), 'utf8');
-const DB_JS = readFileSync(join(HERE, 'db.js'), 'utf8');
+// The ensureSchema() DDL (incl. the catalog search_tsv payload fields and any
+// type CHECK) now lives in per-domain modules under db/schema/ (#2832); db.js is
+// the thin composer. Concatenate the module sources (plus db.js) so this text
+// scan still sees the JS-side DDL literals it asserts against.
+const SCHEMA_DIR = join(HERE, 'db', 'schema');
+const DB_JS = [
+  readFileSync(join(HERE, 'db.js'), 'utf8'),
+  ...readdirSync(SCHEMA_DIR)
+    .filter((f) => f.endsWith('.js') && !f.endsWith('.test.js'))
+    .map((f) => readFileSync(join(SCHEMA_DIR, f), 'utf8')),
+].join('\n');
 
 describe('catalogTypes — registry shape', () => {
   it('exposes the six v1 types in order, frozen', () => {
