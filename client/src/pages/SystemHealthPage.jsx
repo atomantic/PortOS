@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { Activity, AlertTriangle, CheckCircle, XCircle, HardDrive, Cpu, Database, ServerCog, Zap } from 'lucide-react';
 import * as api from '../services/api';
 import toast from '../components/ui/Toast';
-import BrailleSpinner from '../components/BrailleSpinner';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import Banner from '../components/ui/Banner';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 
@@ -66,8 +66,8 @@ export default function SystemHealthPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <BrailleSpinner text="Loading system health" />
+      <div className="max-w-5xl mx-auto">
+        <PageSkeleton titleWidthClass="w-48" cards={4} sidebar={false} />
       </div>
     );
   }

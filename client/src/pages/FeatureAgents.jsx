@@ -5,7 +5,7 @@ import toast from '../components/ui/Toast';
 import * as api from '../services/api';
 import socket from '../services/socket';
 import FeatureAgentCard from '../components/feature-agents/FeatureAgentCard';
-import BrailleSpinner from '../components/BrailleSpinner';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
 
 export default function FeatureAgents() {
@@ -101,9 +101,12 @@ export default function FeatureAgents() {
 
       <div className="flex-1 overflow-auto p-6">
         {loading ? (
-          <div className="flex items-center justify-center h-32">
-            <BrailleSpinner text="Loading agents" />
-          </div>
+          <PageSkeleton
+            header="none"
+            layout="grid"
+            gridColsClass="lg:grid-cols-2 xl:grid-cols-3"
+            cards={3}
+          />
         ) : agents.length === 0 ? (
           <div className="text-center py-16">
             <Wand2 size={48} className="mx-auto text-gray-600 mb-4" />

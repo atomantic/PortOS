@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Trash2, RotateCcw, MessageSquarePlus, ScrollText } from 'lucide-react';
 import * as api from '../services/api';
 import { formatTime, formatRuntime, formatBytes, formatDateTime } from '../utils/formatters';
-import BrailleSpinner from '../components/BrailleSpinner';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import Banner from '../components/ui/Banner';
 import ProcessLogModal from '../components/ui/ProcessLogModal';
 import { writeClipboardSilently } from '../lib/clipboard';
@@ -145,7 +145,7 @@ export function RunsHistoryPage() {
   };
 
   if (loading) {
-    return <div className="text-center py-8"><BrailleSpinner text="Loading runs history" /></div>;
+    return <PageSkeleton titleWidthClass="w-48" showAction={false} cards={4} sidebar={false} />;
   }
 
   const failedCount = runs.filter(r => r.success === false).length;

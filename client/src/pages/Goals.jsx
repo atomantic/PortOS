@@ -7,6 +7,7 @@ import MortalLoomBanner from '../components/MortalLoomBanner';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
 import BrailleSpinner from '../components/BrailleSpinner';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import { useValidTab } from '../hooks/useValidTab';
 
 const GoalsTreeView = lazy(() => import('../components/goals/GoalsTreeView'));
@@ -73,9 +74,7 @@ export default function Goals() {
       {/* Content */}
       <div className="flex-1 overflow-hidden">
         {loading ? (
-          <div className="flex items-center justify-center h-full">
-            <BrailleSpinner text="Loading" />
-          </div>
+          <PageSkeleton header="none" fullHeight padded cards={4} sidebar={false} />
         ) : tab === 'list' ? (
           <GoalsListView data={data} onRefresh={loadData} />
         ) : (

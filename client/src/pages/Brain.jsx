@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import * as api from '../services/api';
 import {Brain as BrainIcon} from 'lucide-react';
 import BrailleSpinner from '../components/BrailleSpinner';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import PageHeader from '../components/PageHeader';
 import TabPills from '../components/ui/TabPills';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
@@ -86,9 +87,16 @@ export default function Brain() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <BrailleSpinner text="Loading" />
-      </div>
+      <PageSkeleton
+        header="bar"
+        fullHeight
+        padded
+        titleWidthClass="w-28"
+        showSubtitle
+        tabs={TABS.length}
+        cards={3}
+        sidebar={false}
+      />
     );
   }
 

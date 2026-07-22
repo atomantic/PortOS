@@ -4,7 +4,7 @@ import { useConfirmDelete } from '../hooks/useConfirmDelete';
 import ConfirmButtonPair from '../components/ui/ConfirmButtonPair';
 import { formatDateTime } from '../utils/formatters';
 import toast from '../components/ui/Toast';
-import BrailleSpinner from '../components/BrailleSpinner';
+import PageSkeleton from '../components/ui/PageSkeleton';
 import * as api from '../services/api';
 
 // File type icons based on MIME type
@@ -142,11 +142,7 @@ export default function Uploads() {
   };
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <BrailleSpinner text="Loading uploads" />
-      </div>
-    );
+    return <PageSkeleton titleWidthClass="w-44" showSubtitle cards={4} sidebar={false} />;
   }
 
   return (
