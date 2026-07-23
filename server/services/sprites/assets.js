@@ -19,7 +19,7 @@
  * with an in-flight compile/approve that reads the same version tree.
  */
 
-import { join, dirname } from 'path';
+import { join, dirname, relative, sep } from 'path';
 import { rm } from 'fs/promises';
 import { readJSONFile } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
@@ -51,7 +51,12 @@ async function deleteSpriteAssetImpl(recordId, relPath) {
   if (abs === dir) {
     throw new ServerError('Refusing to delete the record directory', { status: 400, code: 'INVALID_ASSET_PATH' });
   }
-  const normalized = relPath.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+  // Derive the record-relative form from the CONFINED absolute path, not by
+  // munging the raw input — so the protected-file / live-atlas guards below
+  // compare the exact canonical path that will actually be removed. A raw
+  // `./runtime/current.json` or `runtime//current.json` resolves to the
+  // protected file but wouldn't string-match the guard list otherwise.
+  const normalized = relative(dir, abs).split(sep).join('/');
 
   if (PROTECTED_STATE.has(normalized)) {
     throw new ServerError(

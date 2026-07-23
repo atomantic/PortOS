@@ -97,6 +97,12 @@ describe('deleteSpriteAsset', () => {
       await expect(deleteSpriteAsset(id, rel))
         .rejects.toMatchObject({ code: 'PROTECTED_STATE_FILE', status: 409 });
     }
+    // Non-canonical spellings that resolve to the same protected file must be
+    // refused too — the guard compares the confined path, not the raw input.
+    for (const rel of ['./runtime/current.json', 'runtime//current.json']) {
+      await expect(deleteSpriteAsset(id, rel))
+        .rejects.toMatchObject({ code: 'PROTECTED_STATE_FILE', status: 409 });
+    }
     expect(await exists(join(recDir(id), 'runtime/current.json'))).toBe(true);
   });
 
