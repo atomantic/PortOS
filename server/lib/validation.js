@@ -984,13 +984,21 @@ const spriteRepoRelativePath = z.string().min(1).max(1024)
 
 export const spritePublishBindingSchema = z.object({
   appId: z.string().min(1).max(200),
-  atlasDestPath: spriteRepoRelativePath,
+  atlasDestPath: spriteRepoRelativePath.refine((p) => p.toLowerCase().endsWith('.png'), {
+    message: 'atlasDestPath must point at a .png atlas file',
+  }),
   codeBinding: z.object({
     path: spriteRepoRelativePath,
     resourcePath: z.string().min(1).max(1024),
     requiredOccurrenceCount: z.number().int().min(1).max(1000).optional(),
   }).nullable().optional(),
 }).nullable();
+
+// acknowledgeOverwrite: explicit consent to replace a destination atlas
+// PortOS never published (409 PUBLISH_DEST_OCCUPIED otherwise).
+export const spriteAtlasPublishSchema = z.object({
+  acknowledgeOverwrite: z.boolean().optional(),
+});
 
 // Optional per-compile geometry overrides (player default: 96px cells,
 // pivot (48,88), 86×74 content bounds). Columns/rows are the fixed contract.

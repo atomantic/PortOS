@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react';
 import { Package, Rocket, RefreshCw } from 'lucide-react';
+import toast from '../ui/Toast';
 import {
   compileSpriteAtlas, setSpritePublishBinding, publishSpriteAtlas,
 } from '../../services/apiSprites.js';
-import { getApps } from '../../services/apiApps.js';
+import { useSidebarApps } from '../../hooks/useSidebarApps.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
+import AppContextPicker from '../AppContextPicker.jsx';
+import InlineConfirmRow from '../ui/InlineConfirmRow.jsx';
+import { FormField } from '../ui/FormField.jsx';
 import { spriteAssetUrl } from './spriteAssets.js';
 import { timeAgo } from '../../utils/formatters.js';
 
@@ -13,16 +17,8 @@ import { timeAgo } from '../../utils/formatters.js';
 // and publish (atomic replace, divergence-refusing) into the game repo.
 // Appears only once the walk set is finalized — the compile input.
 
-function Field({ label, children }) {
-  return (
-    <label className="block text-xs text-gray-400">
-      <span className="block mb-1">{label}</span>
-      {children}
-    </label>
-  );
-}
-
 const inputClass = 'w-full px-2 py-1 text-xs bg-port-bg border border-port-border rounded text-gray-200 focus:border-port-accent focus:outline-none';
+const fieldLabelClass = 'block text-xs text-gray-400 mb-1';
 
 export default function PublishWorkflow({ record, walk, atlas, onChanged }) {
   const finalized = Boolean(walk?.walkSet);
@@ -30,19 +26,14 @@ export default function PublishWorkflow({ record, walk, atlas, onChanged }) {
   const publications = atlas?.publications || [];
   const saved = record.publishBinding || null;
 
-  const [apps, setApps] = useState([]);
+  const apps = useSidebarApps();
   const [appId, setAppId] = useState(saved?.appId || '');
   const [destPath, setDestPath] = useState(saved?.atlasDestPath || '');
   const [codePath, setCodePath] = useState(saved?.codeBinding?.path || '');
   const [resourcePath, setResourcePath] = useState(saved?.codeBinding?.resourcePath || '');
-  const [confirming, setConfirming] = useState(false);
-
-  useEffect(() => {
-    if (!finalized) return;
-    getApps({ silent: true })
-      .then((list) => setApps((Array.isArray(list) ? list : []).filter((a) => !a.archived)))
-      .catch(() => {});
-  }, [finalized]);
+  // null → idle; 'publish' → normal confirm; 'overwrite' → the server
+  // refused with PUBLISH_DEST_OCCUPIED and needs explicit consent.
+  const [confirmStage, setConfirmStage] = useState(null);
 
   // Re-seed the form when the server-side binding changes (save round-trip).
   useEffect(() => {
@@ -59,7 +50,7 @@ export default function PublishWorkflow({ record, walk, atlas, onChanged }) {
   }, { errorMessage: 'Atlas compile failed' });
 
   const [saveBinding, savingBinding] = useAsyncAction(async () => {
-    const binding = appId && destPath
+    const binding = appId && destPath.trim()
       ? {
         appId,
         atlasDestPath: destPath.trim(),
@@ -73,10 +64,22 @@ export default function PublishWorkflow({ record, walk, atlas, onChanged }) {
     return result;
   }, { errorMessage: 'Could not save the publish binding' });
 
-  const [publish, publishing] = useAsyncAction(async () => {
-    setConfirming(false);
-    const result = await publishSpriteAtlas(record.id, { silent: true });
-    onChanged?.();
+  const [publish, publishing] = useAsyncAction(async (acknowledgeOverwrite) => {
+    setConfirmStage(null);
+    const body = acknowledgeOverwrite ? { acknowledgeOverwrite: true } : {};
+    const result = await publishSpriteAtlas(record.id, body, { silent: true }).catch((err) => {
+      // The destination holds an atlas PortOS never published — escalate to
+      // an explicit overwrite consent instead of toasting a dead end.
+      if (err?.code === 'PUBLISH_DEST_OCCUPIED') {
+        setConfirmStage('overwrite');
+        return null;
+      }
+      throw err;
+    });
+    if (result) {
+      toast.success(result.published ? `Atlas v${result.publication.version} published` : 'Destination already up to date');
+      onChanged?.();
+    }
     return result;
   }, { errorMessage: 'Publish failed' });
 
@@ -90,6 +93,7 @@ export default function PublishWorkflow({ record, walk, atlas, onChanged }) {
   // a binding save is in flight so a click can't race the PUT.
   const canPublish = Boolean(saved?.appId && saved?.atlasDestPath) && !bindingDirty && !savingBinding && !publishing;
   const boundApp = apps.find((a) => a.id === saved?.appId);
+  const destLabel = `${boundApp?.name || saved?.appId}: ${saved?.atlasDestPath}`;
 
   return (
     <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
@@ -124,21 +128,24 @@ export default function PublishWorkflow({ record, walk, atlas, onChanged }) {
 
         <div className="flex-1 space-y-2 min-w-0">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-            <Field label="Managed app">
-              <select value={appId} onChange={(e) => setAppId(e.target.value)} className={inputClass}>
-                <option value="">— none —</option>
-                {apps.map((app) => <option key={app.id} value={app.id}>{app.name}</option>)}
-              </select>
-            </Field>
-            <Field label="Atlas destination (repo-relative .png)">
+            <AppContextPicker
+              apps={apps}
+              value={appId}
+              onChange={setAppId}
+              label="Managed app"
+              placeholder="— none —"
+              selectClassName={inputClass}
+              className="sm:col-span-2"
+            />
+            <FormField label="Atlas destination (repo-relative .png)" labelClassName={fieldLabelClass}>
               <input value={destPath} onChange={(e) => setDestPath(e.target.value)} placeholder="assets/sprites/hero/hero-atlas.png" className={inputClass} />
-            </Field>
-            <Field label="Code binding file (optional)">
+            </FormField>
+            <FormField label="Code binding file (optional)" labelClassName={fieldLabelClass}>
               <input value={codePath} onChange={(e) => setCodePath(e.target.value)} placeholder="src/Hero.cs" className={inputClass} />
-            </Field>
-            <Field label="Resource path in code (optional)">
+            </FormField>
+            <FormField label="Resource path in code (optional)" labelClassName={fieldLabelClass} className="sm:col-span-2">
               <input value={resourcePath} onChange={(e) => setResourcePath(e.target.value)} placeholder="res://assets/sprites/hero/hero-atlas.png" className={inputClass} />
-            </Field>
+            </FormField>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <button
@@ -148,27 +155,35 @@ export default function PublishWorkflow({ record, walk, atlas, onChanged }) {
             >
               {savingBinding ? 'Saving…' : 'Save binding'}
             </button>
-            {!confirming ? (
+            {!confirmStage && (
               <button
-                onClick={() => setConfirming(true)}
+                onClick={() => setConfirmStage('publish')}
                 disabled={!canPublish}
                 title={bindingDirty ? 'Save the binding first' : undefined}
                 className="flex items-center gap-1 px-2 py-1 text-xs bg-port-accent/20 border border-port-accent rounded text-port-accent hover:bg-port-accent/30 disabled:opacity-50"
               >
                 <Rocket size={12} /> Publish to app
               </button>
-            ) : (
-              <span className="flex items-center gap-2 text-xs text-gray-300">
-                Replace <code className="text-port-warning">{saved?.atlasDestPath}</code> in {boundApp?.name || saved?.appId}?
-                <button onClick={publish} disabled={publishing} className="px-2 py-0.5 text-xs bg-port-error/20 border border-port-error rounded text-port-error hover:bg-port-error/30 disabled:opacity-50">
-                  {publishing ? 'Publishing…' : 'Confirm'}
-                </button>
-                <button onClick={() => setConfirming(false)} className="px-2 py-0.5 text-xs bg-port-bg border border-port-border rounded text-gray-400 hover:border-port-accent">
-                  Cancel
-                </button>
-              </span>
             )}
           </div>
+          {confirmStage === 'publish' && (
+            <InlineConfirmRow
+              question={`Replace ${destLabel}?`}
+              confirmText={publishing ? 'Publishing…' : 'Publish'}
+              tone="warning"
+              onConfirm={() => publish(false)}
+              onCancel={() => setConfirmStage(null)}
+            />
+          )}
+          {confirmStage === 'overwrite' && (
+            <InlineConfirmRow
+              question={`${destLabel} already contains an atlas PortOS did not publish. Overwrite it?`}
+              confirmText={publishing ? 'Publishing…' : 'Overwrite'}
+              tone="error"
+              onConfirm={() => publish(true)}
+              onCancel={() => setConfirmStage(null)}
+            />
+          )}
         </div>
       </div>
 

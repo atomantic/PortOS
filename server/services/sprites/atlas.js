@@ -23,22 +23,22 @@
  */
 
 import { join } from 'path';
-import { readdir } from 'fs/promises';
-import { createHash } from 'crypto';
+import { readdir, readFile } from 'fs/promises';
 import sharp from 'sharp';
 import {
-  atomicWrite, ensureDir, pathExists, readJSONFile, sha256File, tryReadFile,
+  atomicWrite, ensureDir, pathExists, readJSONFile, tryReadFile,
 } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { spriteDir } from './paths.js';
+import { spriteDir, RUNTIME_POINTER_REL, RUNTIME_PUBLICATIONS_REL } from './paths.js';
 import { requireCharacter, loadManifest } from './reference.js';
 import { SPRITE_DIRECTIONS } from './prompts.js';
 import { keyChannelSplit } from './chromaKey.js';
 import {
   WALK_PHASES, pyRound, pyRoundTo, median, decodeRgbaFrame, premultipliedResize,
   sampleBorderKey, validateMeasuredKey, recoverAlphaFrame, despillKeyFrame,
+  alphaBbox, compositeOnto, sha256Buffer,
 } from './walkPostprocess.js';
-import { withWalkWriteTail } from './walk.js';
+import { withWalkWriteTail, walkSetRelPath } from './walk.js';
 
 // Player atlas contract (source pipeline runtime_publish.py): 96px cells,
 // pivot (48,88) — silhouette centered on x=48, feet on the y=88 ground line —
@@ -62,46 +62,27 @@ const ALPHA_NOISE_FLOOR = 2;
 const IDLE_HEIGHT_TOLERANCE = 2;
 
 const RUNTIME_DIR = 'runtime';
-const CURRENT_POINTER = 'runtime/current.json';
 const atlasStem = (recordId) => `${recordId}-animation-atlas`;
 
 const compileError = (message, code = 'ATLAS_COMPILE_INVALID') =>
   new ServerError(message, { status: 422, code });
 
-const sha256Buffer = (buffer) => createHash('sha256').update(buffer).digest('hex');
-
-/** Tight bbox of pixels with alpha > threshold; exclusive right/bottom. */
-function thresholdBbox(frame, threshold) {
-  const { data, width, height } = frame;
-  let left = width; let top = height; let right = -1; let bottom = -1;
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      if (data[(y * width + x) * 4 + 3] > threshold) {
-        if (x < left) left = x;
-        if (x > right) right = x;
-        if (y < top) top = y;
-        if (y > bottom) bottom = y;
-      }
-    }
-  }
-  if (right < 0) return null;
-  return { left, top, right: right + 1, bottom: bottom + 1 };
-}
-
 function occupiedDimensions(frame, threshold, label) {
-  const bounds = thresholdBbox(frame, threshold);
+  const bounds = alphaBbox(frame, threshold);
   if (!bounds) throw compileError(`${label} has no visible pixels`);
   return { width: bounds.right - bounds.left, height: bounds.bottom - bounds.top };
 }
 
 /**
- * Load a source image as a straight-alpha transparent frame. Already-keyed
- * sources (packaged walk frames) get a despill safety pass; opaque key-matte
- * sources (locked anchors) go through measured-key alpha recovery first —
- * the same treatment the walk postprocess gives its raw frames.
+ * Decode a validated source buffer as a straight-alpha transparent frame.
+ * Already-keyed sources (packaged walk frames) get a despill safety pass;
+ * opaque key-matte sources (locked anchors) go through measured-key alpha
+ * recovery first — the same treatment the walk postprocess gives its raw
+ * frames. Takes the in-memory bytes validateForCompile already hashed, so
+ * the pixels compiled are provably the pixels verified.
  */
-async function transparentSource(absPath, split, keyHex) {
-  const frame = await decodeRgbaFrame(absPath);
+async function transparentSource(bytes, split, keyHex) {
+  const frame = await decodeRgbaFrame(bytes);
   const { data } = frame;
   let alphaMin = 255; let alphaMax = 0;
   for (let i = 3; i < data.length; i += 4) {
@@ -131,7 +112,7 @@ async function normalizeCellFrame(source, scale, label, geometry) {
       scaled.data[i - 3] = 0; scaled.data[i - 2] = 0; scaled.data[i - 1] = 0; scaled.data[i] = 0;
     }
   }
-  const bounds = thresholdBbox(scaled, ALPHA_THRESHOLD);
+  const bounds = alphaBbox(scaled, ALPHA_THRESHOLD);
   if (!bounds) throw compileError(`${label} has no visible pixels after scaling`);
   const centerX = (bounds.left + bounds.right - 1) / 2;
   const pasteX = pyRound(pivot[0] - centerX);
@@ -143,8 +124,11 @@ async function normalizeCellFrame(source, scale, label, geometry) {
     throw compileError(`${label} touches the right or bottom runtime cell edge`);
   }
   const cell = { data: Buffer.alloc(cellSize * cellSize * 4), width: cellSize, height: cellSize };
-  blitFrame(cell, scaled, pasteX, pasteY);
-  const final = thresholdBbox(cell, ALPHA_THRESHOLD);
+  compositeOnto(cell, scaled, pasteX, pasteY);
+  // Port-faithful belt-and-braces: re-measure the composed cell and verify
+  // the feet really sit on the ground line (runtime_publish.py does the same
+  // final _bounds check rather than trusting the placement math).
+  const final = alphaBbox(cell, ALPHA_THRESHOLD);
   if (!final || final.bottom - 1 !== pivot[1]) {
     throw compileError(`${label} misses the runtime ground line y=${pivot[1]}`);
   }
@@ -163,21 +147,6 @@ async function normalizeCellFrame(source, scale, label, geometry) {
   };
 }
 
-/** Copy a straight-alpha frame onto a transparent canvas (no overlap). */
-function blitFrame(canvas, frame, dx, dy) {
-  for (let y = 0; y < frame.height; y++) {
-    const ty = dy + y;
-    if (ty < 0 || ty >= canvas.height) continue;
-    for (let x = 0; x < frame.width; x++) {
-      const tx = dx + x;
-      if (tx < 0 || tx >= canvas.width) continue;
-      const si = (y * frame.width + x) * 4;
-      if (frame.data[si + 3] === 0) continue;
-      frame.data.copy(canvas.data, (ty * canvas.width + tx) * 4, si, si + 4);
-    }
-  }
-}
-
 /**
  * Revalidate the full evidence chain: finalized walk set → selection →
  * per-direction run manifests → packaged frame bytes, plus the locked
@@ -185,9 +154,26 @@ function blitFrame(canvas, frame, dx, dy) {
  */
 export async function validateForCompile(recordId) {
   const dir = spriteDir(recordId);
-  const walkSetAbs = join(dir, `walk/${recordId}-walk-set-v1.json`);
-  const walkSet = await readJSONFile(walkSetAbs, null);
-  if (!walkSet) throw compileError('No finalized walk set — approve all 8 directions first', 'WALK_SET_REQUIRED');
+  // Every hashed input is read exactly once: verify the bytes in memory and
+  // hand those same bytes to the compiler, so the pixels compiled are
+  // provably the pixels verified (no re-read between check and use).
+  const readVerified = async (relPath, expectedSha, label) => {
+    const bytes = await readFile(join(dir, relPath)).catch(() => null);
+    if (!bytes || sha256Buffer(bytes) !== expectedSha) {
+      throw compileError(`${label} no longer matches its recorded sha256`);
+    }
+    return bytes;
+  };
+
+  const walkSetRel = walkSetRelPath(recordId);
+  const walkSetBytes = await readFile(join(dir, walkSetRel)).catch(() => null);
+  if (!walkSetBytes) throw compileError('No finalized walk set — approve all 8 directions first', 'WALK_SET_REQUIRED');
+  let walkSet;
+  try {
+    walkSet = JSON.parse(walkSetBytes);
+  } catch {
+    throw compileError('Walk set manifest is unreadable');
+  }
   if (walkSet.kind !== 'finalized-eight-direction-walk-set' || walkSet.status !== 'final') {
     throw compileError('Walk set manifest is not a finalized eight-direction walk set');
   }
@@ -195,10 +181,7 @@ export async function validateForCompile(recordId) {
   if (JSON.stringify(walkSet.directionOrder) !== JSON.stringify(SPRITE_DIRECTIONS)) {
     throw compileError('Walk set direction order does not match the runtime contract');
   }
-  const selectionAbs = join(dir, walkSet.selectionPath);
-  if ((await sha256File(selectionAbs)) !== walkSet.selectionSha256) {
-    throw compileError('Walk selection file no longer matches its finalized sha256');
-  }
+  await readVerified(walkSet.selectionPath, walkSet.selectionSha256, 'Walk selection file');
 
   const referenceManifest = await loadManifest(recordId);
   if (!referenceManifest || referenceManifest.status !== 'complete') {
@@ -213,22 +196,21 @@ export async function validateForCompile(recordId) {
     if (!anchor || anchor.status !== 'locked' || !anchor.path) {
       throw compileError(`Anchor for ${direction} is not locked`);
     }
-    const anchorAbs = join(dir, anchor.path);
-    if ((await sha256File(anchorAbs)) !== anchor.sha256) {
-      throw compileError(`Anchor for ${direction} no longer matches its locked sha256`);
-    }
-    anchors[direction] = { ...anchor, abs: anchorAbs };
+    const bytes = await readVerified(anchor.path, anchor.sha256, `Anchor for ${direction}`);
+    anchors[direction] = { ...anchor, bytes };
   }
 
   const runs = {};
   for (const direction of SPRITE_DIRECTIONS) {
     const entry = walkSet.directions?.[direction];
     if (!entry || entry.status !== 'approved') throw compileError(`Direction ${direction} is not approved`);
-    const manifestAbs = join(dir, entry.runManifest);
-    if ((await sha256File(manifestAbs)) !== entry.runManifestSha256) {
-      throw compileError(`Run manifest for ${direction} no longer matches its approved sha256`);
+    const manifestBytes = await readVerified(entry.runManifest, entry.runManifestSha256, `Run manifest for ${direction}`);
+    let manifest;
+    try {
+      manifest = JSON.parse(manifestBytes);
+    } catch {
+      manifest = null;
     }
-    const manifest = await readJSONFile(manifestAbs, null);
     if (!manifest || manifest.direction !== direction) {
       throw compileError(`Run manifest for ${direction} is unreadable or mislabeled`);
     }
@@ -236,21 +218,20 @@ export async function validateForCompile(recordId) {
     if (frames.length !== WALK_PHASES.length) {
       throw compileError(`Direction ${direction} has ${frames.length} frames — expected ${WALK_PHASES.length}`);
     }
+    const frameBytes = [];
     for (let i = 0; i < frames.length; i++) {
       if (frames[i].phase !== WALK_PHASES[i] || frames[i].outputIndex !== i) {
         throw compileError(`Direction ${direction} frame ${i} is out of gait-phase order`);
       }
-      if ((await sha256File(join(dir, frames[i].path))) !== frames[i].sha256) {
-        throw compileError(`Direction ${direction} frame ${frames[i].phase} no longer matches its packaged sha256`);
-      }
+      frameBytes.push(await readVerified(frames[i].path, frames[i].sha256, `Direction ${direction} frame ${frames[i].phase}`));
     }
-    runs[direction] = { runId: entry.runId, manifestPath: entry.runManifest, manifest };
+    runs[direction] = { runId: entry.runId, manifestPath: entry.runManifest, manifest, frameBytes };
   }
 
   return {
     walkSet,
-    walkSetPath: `walk/${recordId}-walk-set-v1.json`,
-    walkSetSha256: await sha256File(walkSetAbs),
+    walkSetPath: walkSetRel,
+    walkSetSha256: sha256Buffer(walkSetBytes),
     referenceManifest,
     chromaKey,
     anchors,
@@ -259,13 +240,12 @@ export async function validateForCompile(recordId) {
 }
 
 async function compileDirectionRow(recordId, direction, validated, geometry) {
-  const dir = spriteDir(recordId);
   const split = keyChannelSplit(validated.chromaKey);
-  const { manifest, runId, manifestPath } = validated.runs[direction];
+  const { manifest, runId, manifestPath, frameBytes } = validated.runs[direction];
 
   const walkSources = [];
-  for (const frame of manifest.frames) {
-    walkSources.push(await transparentSource(join(dir, frame.path), split, validated.chromaKey));
+  for (const bytes of frameBytes) {
+    walkSources.push(await transparentSource(bytes, split, validated.chromaKey));
   }
   const dims = walkSources.map((f, i) => occupiedDimensions(f, ALPHA_THRESHOLD, `${direction}-${WALK_PHASES[i]}`));
   const directionScale = Math.min(
@@ -275,7 +255,7 @@ async function compileDirectionRow(recordId, direction, validated, geometry) {
 
   const cells = [];
   const anchor = validated.anchors[direction];
-  const idleSource = await transparentSource(anchor.abs, split, validated.chromaKey);
+  const idleSource = await transparentSource(anchor.bytes, split, validated.chromaKey);
   const idleDims = occupiedDimensions(idleSource, SILHOUETTE_ALPHA_THRESHOLD, `${direction}-idle`);
   const desiredIdleHeight = median(dims.map((d) => d.height)) * directionScale;
   const idleScale = Math.min(desiredIdleHeight / idleDims.height, geometry.targetMaxWidth / idleDims.width);
@@ -297,9 +277,11 @@ async function compileDirectionRow(recordId, direction, validated, geometry) {
     cells.push({ column: frame.phase, ...normalized, sourcePath: frame.path, sourceSha256: frame.sha256 });
   }
 
+  // Cell frames are read-only after normalization, so the scanner placeholder
+  // can share the idle cell's buffer outright.
   cells.push({
     column: 'scanner',
-    cell: { ...idle.cell, data: Buffer.from(idle.cell.data) },
+    cell: idle.cell,
     meta: idle.meta,
     sourcePath: anchor.path,
     sourceSha256: anchor.sha256,
@@ -375,6 +357,23 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
   const validated = await validateForCompile(recordId);
   const dir = spriteDir(recordId);
 
+  // Pre-pixel idempotency: the compile is deterministic, so an unchanged
+  // walk set + identical geometry means identical bytes by construction —
+  // skip the whole pixel pipeline. The evidence chain was still revalidated
+  // above; the post-encode sha comparison below stays as the fallback for a
+  // pointer whose geometry fields predate a shape change.
+  const current = await readJSONFile(join(dir, RUNTIME_POINTER_REL), null);
+  if (
+    current
+    && current.walkSetSha256 === validated.walkSetSha256
+    && current.geometry?.cellSize === geometry.cellSize
+    && JSON.stringify(current.geometry?.pivot) === JSON.stringify(geometry.pivot)
+    && current.geometry?.targetMaxHeight === geometry.targetMaxHeight
+    && current.geometry?.targetMaxWidth === geometry.targetMaxWidth
+  ) {
+    return { ...current, created: false };
+  }
+
   const rows = [];
   for (const direction of SPRITE_DIRECTIONS) {
     rows.push(await compileDirectionRow(recordId, direction, validated, geometry));
@@ -385,14 +384,13 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
   const atlasHeight = cellSize * SPRITE_DIRECTIONS.length;
   const atlas = { data: Buffer.alloc(atlasWidth * atlasHeight * 4), width: atlasWidth, height: atlasHeight };
   for (let r = 0; r < rows.length; r++) {
-    rows[r].cells.forEach((cell, c) => blitFrame(atlas, cell.cell, c * cellSize, r * cellSize));
+    rows[r].cells.forEach((cell, c) => compositeOnto(atlas, cell.cell, c * cellSize, r * cellSize));
   }
   const atlasBuffer = await sharp(atlas.data, { raw: { width: atlasWidth, height: atlasHeight, channels: 4 } })
     .png()
     .toBuffer();
   const atlasSha256 = sha256Buffer(atlasBuffer);
 
-  const current = await readJSONFile(join(dir, CURRENT_POINTER), null);
   if (current && current.walkSetSha256 === validated.walkSetSha256 && current.atlasSha256 === atlasSha256) {
     return { ...current, created: false };
   }
@@ -465,7 +463,7 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
     geometry: manifest.geometry,
     compiledAt: manifest.createdAt,
   };
-  await atomicWrite(join(dir, CURRENT_POINTER), pointer);
+  await atomicWrite(join(dir, RUNTIME_POINTER_REL), pointer);
   console.log(`🧩 sprite atlas compiled for ${recordId} → v${version}`);
   return { ...pointer, created: true };
 }
@@ -474,8 +472,8 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
 export async function getAtlasState(recordId) {
   const dir = spriteDir(recordId);
   const [current, publications] = await Promise.all([
-    readJSONFile(join(dir, CURRENT_POINTER), null),
-    readJSONFile(join(dir, 'runtime/publications.json'), []),
+    readJSONFile(join(dir, RUNTIME_POINTER_REL), null),
+    readJSONFile(join(dir, RUNTIME_PUBLICATIONS_REL), []),
   ]);
   return { current, publications: [...publications].reverse() };
 }

@@ -30,17 +30,18 @@ import {
 import { ServerError } from '../../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { getAppById } from '../apps.js';
-import { spriteDir } from './paths.js';
+import { isDeploying } from '../appDeployer.js';
+import { spriteDir, RUNTIME_PUBLICATIONS_REL } from './paths.js';
 import { requireCharacter } from './reference.js';
 import { updateRecord } from './records.js';
 import { withWalkWriteTail } from './walk.js';
 import { compileAtlasInTail } from './atlas.js';
 
-const PUBLICATIONS_REL = 'runtime/publications.json';
-
-// Per-app serialization: two records publishing into the same app repo queue
-// behind each other instead of interleaving reads/writes of the same tree.
-const appPublishTail = createKeyCachedQueue();
+// Per-repo serialization: keyed by the resolved repoPath (matching
+// appDeployer's `deployingApps` key), so two app records pointing at the
+// same checkout — or two characters publishing into one game — queue behind
+// each other instead of interleaving writes to the same tree.
+const repoPublishTail = createKeyCachedQueue();
 
 const bindingError = (message, code) => new ServerError(message, { status: 400, code });
 
@@ -59,19 +60,27 @@ function anchorRepoPath(repoRoot, relPath, label) {
   return abs;
 }
 
+/**
+ * Resolve a binding's app and confirm its repoPath is a real directory.
+ * Shared by save-time validation (400) and publish time (409) so the two
+ * checks can't drift.
+ */
+async function requireAppRepo(appId, status) {
+  const app = await getAppById(appId);
+  if (!app) throw new ServerError(`Unknown app: ${appId}`, { status, code: 'UNKNOWN_APP' });
+  const repoStat = app.repoPath ? await stat(app.repoPath).catch(() => null) : null;
+  if (!repoStat?.isDirectory()) {
+    throw new ServerError(`App ${app.name || appId} has no accessible repoPath`, { status, code: 'APP_REPO_MISSING' });
+  }
+  return { app, repoRoot: app.repoPath };
+}
+
 /** Validate a publishBinding shape (null clears it). */
 export async function validatePublishBinding(binding) {
   if (binding === null) return null;
   const { appId, atlasDestPath, codeBinding } = binding;
-  const app = await getAppById(appId);
-  if (!app) throw bindingError(`Unknown app: ${appId}`, 'UNKNOWN_APP');
-  if (!app.repoPath || !(await pathExists(app.repoPath))) {
-    throw bindingError(`App ${app.name || appId} has no accessible repoPath`, 'APP_REPO_MISSING');
-  }
+  const { app } = await requireAppRepo(appId, 400);
   anchorRepoPath(app.repoPath, atlasDestPath, 'atlasDestPath');
-  if (!atlasDestPath.toLowerCase().endsWith('.png')) {
-    throw bindingError('atlasDestPath must point at a .png atlas file', 'INVALID_PUBLISH_PATH');
-  }
   if (codeBinding) {
     anchorRepoPath(app.repoPath, codeBinding.path, 'codeBinding.path');
     if (typeof codeBinding.resourcePath !== 'string' || !codeBinding.resourcePath.trim()) {
@@ -132,36 +141,38 @@ async function applyCodeBinding(repoRoot, codeBinding, previousResourcePath) {
 
 /**
  * Compile (idempotently) and publish the runtime atlas into the bound
- * managed app. Refuses without a binding, on a diverged destination, and on
- * code-binding drift. Idempotent: a destination already holding the current
- * atlas bytes records nothing and touches nothing.
+ * managed app. Refuses without a binding, on a diverged destination, on an
+ * occupied destination PortOS never published (unless explicitly
+ * acknowledged), and on code-binding drift. Idempotent: a destination
+ * already holding the current atlas bytes records nothing and touches
+ * nothing.
  */
-export function publishAtlas(recordId) {
-  return withWalkWriteTail(recordId, () => publishAtlasImpl(recordId));
+export function publishAtlas(recordId, options = {}) {
+  return withWalkWriteTail(recordId, () => publishAtlasImpl(recordId, options));
 }
 
-async function publishAtlasImpl(recordId) {
+async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {}) {
   const record = await requireCharacter(recordId);
   const binding = record.publishBinding;
   if (!binding?.appId || !binding?.atlasDestPath) {
     throw new ServerError('No publish binding configured — set the target app and atlas path first', { status: 409, code: 'PUBLISH_BINDING_REQUIRED' });
   }
-  const app = await getAppById(binding.appId);
-  if (!app) throw new ServerError(`Bound app no longer exists: ${binding.appId}`, { status: 409, code: 'UNKNOWN_APP' });
-  const repoRoot = app.repoPath;
-  const repoStat = repoRoot ? await stat(repoRoot).catch(() => null) : null;
-  if (!repoStat?.isDirectory()) {
-    throw new ServerError(`App ${app.name || binding.appId} has no accessible repoPath`, { status: 409, code: 'APP_REPO_MISSING' });
-  }
+  const { app, repoRoot } = await requireAppRepo(binding.appId, 409);
 
   const compiled = await compileAtlasInTail(recordId);
 
-  return appPublishTail(binding.appId, async () => {
+  return repoPublishTail(resolve(repoRoot), async () => {
+    // Don't mutate a tree a deploy is currently building from — appDeployer
+    // keys its lock by repoPath, so honor it here (the reverse direction —
+    // deploy checking publishes — isn't needed; publishes are sub-second).
+    if (isDeploying(repoRoot)) {
+      throw new ServerError(`App ${app.name || binding.appId} is deploying — retry when the deploy finishes`, { status: 409, code: 'APP_DEPLOY_IN_PROGRESS' });
+    }
     const dir = spriteDir(recordId);
     const destAbs = anchorRepoPath(repoRoot, binding.atlasDestPath, 'atlasDestPath');
     const atlasBuffer = await readFile(join(dir, compiled.atlasPath));
 
-    const publications = await readJSONFile(join(dir, PUBLICATIONS_REL), []);
+    const publications = await readJSONFile(join(dir, RUNTIME_PUBLICATIONS_REL), []);
     const previous = [...publications].reverse().find(
       (p) => p.appId === binding.appId && p.atlasDestPath === binding.atlasDestPath,
     );
@@ -178,6 +189,15 @@ async function publishAtlasImpl(recordId) {
       throw new ServerError(
         'Destination atlas no longer matches the previous publish — it was changed outside PortOS. Resolve in the game repo, then re-publish.',
         { status: 409, code: 'PUBLISH_DEST_DIVERGED' },
+      );
+    }
+    // Never silently destroy bytes PortOS didn't write: a destination that
+    // already exists with no publication history needs an explicit overwrite
+    // acknowledgment from the caller.
+    if (!previous && destSha256 !== null && !acknowledgeOverwrite) {
+      throw new ServerError(
+        'Destination already contains an atlas PortOS did not publish — confirm the overwrite to replace it.',
+        { status: 409, code: 'PUBLISH_DEST_OCCUPIED' },
       );
     }
 
@@ -202,7 +222,7 @@ async function publishAtlasImpl(recordId) {
       codeBinding,
     };
     publications.push(publication);
-    await atomicWrite(join(dir, PUBLICATIONS_REL), publications);
+    await atomicWrite(join(dir, RUNTIME_PUBLICATIONS_REL), publications);
     console.log(`🚚 sprite atlas v${compiled.version} published for ${recordId} → ${app.name || binding.appId}:${binding.atlasDestPath}`);
     return { published: true, publication, compiled };
   });

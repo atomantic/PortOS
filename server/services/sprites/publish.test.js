@@ -30,6 +30,9 @@ const getAppById = vi.fn(async (id) => (id === 'game-app'
   : null));
 vi.mock('../apps.js', () => ({ getAppById: (...args) => getAppById(...args) }));
 
+const isDeploying = vi.fn(() => false);
+vi.mock('../appDeployer.js', () => ({ isDeploying: (...args) => isDeploying(...args) }));
+
 const compileAtlasInTail = vi.fn();
 vi.mock('./atlas.js', () => ({
   compileAtlasInTail: (...args) => compileAtlasInTail(...args),
@@ -61,6 +64,8 @@ const BINDING = { appId: 'game-app', atlasDestPath: 'assets/sprites/hero/hero-at
 
 beforeEach(async () => {
   getAppById.mockClear();
+  isDeploying.mockReset();
+  isDeploying.mockReturnValue(false);
   compileAtlasInTail.mockReset();
   rmSync(join(TEST_ROOT, 'sprite-records.json'), { force: true });
   rmSync(APP_REPO, { recursive: true, force: true });
@@ -100,8 +105,7 @@ describe('validatePublishBinding / setPublishBinding', () => {
       .rejects.toMatchObject({ code: 'INVALID_PUBLISH_PATH' });
     await expect(validatePublishBinding({ ...BINDING, atlasDestPath: '/abs/path.png' }))
       .rejects.toMatchObject({ code: 'INVALID_PUBLISH_PATH' });
-    await expect(validatePublishBinding({ ...BINDING, atlasDestPath: 'assets/atlas.jpg' }))
-      .rejects.toMatchObject({ code: 'INVALID_PUBLISH_PATH' });
+    // Non-.png destinations die at the route's Zod schema (spritePublishBindingSchema).
   });
 });
 
@@ -160,6 +164,28 @@ describe('publishAtlas', () => {
       created: true, version: 2, atlasPath: nextRel, atlasSha256: sha256(Buffer.from(nextBytes)),
     });
     await expect(publishAtlas(id)).rejects.toMatchObject({ status: 409, code: 'PUBLISH_DEST_DIVERGED' });
+  });
+
+  it('refuses an occupied destination it never published unless acknowledged', async () => {
+    const { id, atlasBytes } = await characterWithAtlas();
+    await setPublishBinding(id, BINDING);
+    await mkdir(join(APP_REPO, 'assets/sprites/hero'), { recursive: true });
+    await writeFile(join(APP_REPO, BINDING.atlasDestPath), 'hand-made-atlas-from-before-portos');
+
+    await expect(publishAtlas(id)).rejects.toMatchObject({ status: 409, code: 'PUBLISH_DEST_OCCUPIED' });
+    // Explicit acknowledgment replaces it and records the prior sha.
+    const acked = await publishAtlas(id, { acknowledgeOverwrite: true });
+    expect(acked.published).toBe(true);
+    expect(acked.publication.destPreviousSha256).toBe(sha256(Buffer.from('hand-made-atlas-from-before-portos')));
+    expect((await readFile(join(APP_REPO, BINDING.atlasDestPath))).toString()).toBe(atlasBytes);
+  });
+
+  it('refuses to publish while the app is deploying', async () => {
+    const { id } = await characterWithAtlas();
+    await setPublishBinding(id, BINDING);
+    isDeploying.mockReturnValue(true);
+    await expect(publishAtlas(id)).rejects.toMatchObject({ status: 409, code: 'APP_DEPLOY_IN_PROGRESS' });
+    expect(isDeploying).toHaveBeenCalledWith(APP_REPO);
   });
 
   it('verifies the code binding by occurrence count and refuses drift', async () => {

@@ -337,13 +337,18 @@ describe('sprites routes', () => {
       .send({ binding: { ...binding, atlasDestPath: '/abs.png' } })).status).toBe(400);
     expect((await request(app).put('/api/sprites/pioneer/publish-binding')
       .send({ binding: { ...binding, codeBinding: { path: 'src/Hero.cs', resourcePath: '' } } })).status).toBe(400);
+    expect((await request(app).put('/api/sprites/pioneer/publish-binding')
+      .send({ binding: { ...binding, atlasDestPath: 'assets/atlas.jpg' } })).status).toBe(400);
     expect(publish.setPublishBinding).toHaveBeenCalledTimes(2);
   });
 
-  it('POST /:id/atlas/publish delegates to publishAtlas', async () => {
+  it('POST /:id/atlas/publish delegates to publishAtlas with the acknowledge flag', async () => {
     const r = await request(app).post('/api/sprites/pioneer/atlas/publish').send({});
     expect(r.status).toBe(200);
-    expect(publish.publishAtlas).toHaveBeenCalledWith('pioneer');
+    expect(publish.publishAtlas).toHaveBeenCalledWith('pioneer', {});
     expect(r.body.published).toBe(true);
+
+    await request(app).post('/api/sprites/pioneer/atlas/publish').send({ acknowledgeOverwrite: true });
+    expect(publish.publishAtlas).toHaveBeenLastCalledWith('pioneer', { acknowledgeOverwrite: true });
   });
 });

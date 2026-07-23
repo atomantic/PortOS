@@ -25,6 +25,7 @@ import {
   spriteWalkTrimSchema,
   spritePublishBindingSchema,
   spriteAtlasCompileSchema,
+  spriteAtlasPublishSchema,
 } from '../lib/validation.js';
 import { z } from 'zod';
 import { optionalUploadFields } from '../lib/multipart.js';
@@ -158,7 +159,8 @@ router.put('/:id/publish-binding', asyncHandler(async (req, res) => {
 }));
 
 router.post('/:id/atlas/publish', asyncHandler(async (req, res) => {
-  res.json(await publishAtlas(req.params.id));
+  const body = validateRequest(spriteAtlasPublishSchema, req.body ?? {});
+  res.json(await publishAtlas(req.params.id, body));
 }));
 
 // Chroma-key changes route through patchSpriteRecord, which re-checks the
