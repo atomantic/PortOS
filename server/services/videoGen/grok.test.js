@@ -195,7 +195,15 @@ describe('videoGen/grok — harvest and finalize', () => {
     expect(failed).toHaveBeenCalledTimes(1);
     expect(failed.mock.calls[0][0].error).toMatch(/non-MP4 file/);
     expect(existsSync(join(FAKE_VIDEOS_DIR, job.filename))).toBe(false);
-    expect(existsSync(scratchDirFor(job.jobId))).toBe(false);
+    // Scratch-dir removal is fire-and-forget alongside the 'failed' event
+    // (not awaited before it), so give it a moment to land on disk rather
+    // than racing it.
+    const scratchDir = scratchDirFor(job.jobId);
+    const scratchDeadline = Date.now() + 3000;
+    while (Date.now() < scratchDeadline && existsSync(scratchDir)) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(existsSync(scratchDir)).toBe(false);
   }, 16000);
 
   it('fails with the narration tail when grok exits 0 with no file', async () => {
