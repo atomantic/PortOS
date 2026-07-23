@@ -29,7 +29,9 @@ import { enqueueJob } from '../mediaJobQueue/index.js';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
 import { getSettings } from '../settings.js';
 import { updateRecord } from './records.js';
-import { spriteDir, resolveSpriteAssetPath, toRecordRelativeAssetPath } from './paths.js';
+import {
+  spriteDir, resolveSpriteAssetPath, toRecordRelativeAssetPath, RUN_DIR_MATCH,
+} from './paths.js';
 import { requireCharacter, loadManifest } from './reference.js';
 import { SPRITE_DIRECTIONS, anchorIdForDirection, buildWalkVideoPrompt } from './prompts.js';
 import {
@@ -70,8 +72,14 @@ function seedSelection(recordId) {
   };
 }
 
+// Read a run record by its directory (record-relative), so `grok/<id>/` and
+// the importer's `runs/<id>/` share one reader.
+async function loadRunRecordAt(recordId, runDirRel) {
+  return readJSONFile(join(spriteDir(recordId), runDirRel, RUN_RECORD_NAME), null);
+}
+
 async function loadRunRecord(recordId, runId) {
-  return readJSONFile(join(spriteDir(recordId), runRelPath(runId), RUN_RECORD_NAME), null);
+  return loadRunRecordAt(recordId, runRelPath(runId));
 }
 
 async function saveRunRecord(recordId, run) {
@@ -108,6 +116,22 @@ function normalizeStripPreview(recordId, run) {
   const stripPath = toRecordRelativeAssetPath(recordId, raw);
   if (!stripPath) return run;
   return { ...run, stripPreview: { ...run.stripPreview, stripPath } };
+}
+
+// PortOS stamps `id` on every run record it writes; imported source-pipeline
+// records don't carry one at all (see importer.test.js's fixtures). The run
+// DIRECTORY is the run id under both layouts, so fall back to it. Two
+// consumers break on an undefined id, which is why this isn't cosmetic:
+//   - WalkWorkflow.jsx's `runs.find((r) => r.id === sel.runId)` — an imported
+//     entry's `sel.runId` is ALSO undefined, so `undefined === undefined`
+//     matches the first idless run in the list whatever its direction, and
+//     that run gets pinned to the wrong direction's card.
+//   - the `resolvedRunIds` dedup below, where every idless run collapses onto
+//     the single `undefined` key.
+// In-memory only, like normalizeStripPreview — never written back to disk.
+function normalizeRunRecord(recordId, run, runDirRel) {
+  const withId = run.id ? run : { ...run, id: runDirRel.split('/')[1] };
+  return normalizeStripPreview(recordId, withId);
 }
 
 // Strip candidates on an imported redraw manifest, in preference order. The
@@ -155,7 +179,10 @@ async function loadRedrawRun(recordId, direction, entry) {
     schemaVersion: 1,
     kind: 'imported-redraw-walk-cycle',
     status: 'approved',
-    id: entry.runId,
+    // Imported entries carry no runId (it is an approveWalkDirection field),
+    // so fall back to the manifest path — stable across reads and unique per
+    // direction, which is all the client's list key needs.
+    id: entry.runId || manifestRel,
     characterId: recordId,
     direction,
     createdAt: entry.approvedAt,
@@ -176,44 +203,80 @@ async function loadRedrawRun(recordId, direction, entry) {
 }
 
 /**
+ * Resolve the run behind ONE selection/walk-set entry (issue #2928). The
+ * entry names its own storage layout via `runPath`/`runManifest`, so this is
+ * the single dispatch point every walk source routes through — adding a
+ * fourth layout means another branch here, not another append-and-dedupe
+ * block in `getWalkState`:
+ *
+ *   grok/<run-id>/  → PortOS's own generations (animation-run.json)
+ *   runs/<run-id>/  → the source-pipeline importer's layout (same record)
+ *   anything else   → an imagegen/vN redraw manifest (#2924), synthesized
+ *
+ * Every branch returns the same run-shaped object, so routes and the client
+ * are layout-agnostic. Returns null when the entry names nothing readable.
+ */
+async function loadRunForEntry(recordId, direction, entry) {
+  // The run directory names the layout; fall back to the manifest's own path
+  // for an entry that carries only a manifest.
+  const layoutPath = toRecordRelativeAssetPath(recordId, entry.runPath)
+    || toRecordRelativeAssetPath(recordId, entry.runManifest);
+  if (!layoutPath) return null;
+  const runDirRel = RUN_DIR_MATCH.exec(layoutPath)?.[0];
+  if (runDirRel) {
+    const run = await loadRunRecordAt(recordId, runDirRel);
+    return run ? normalizeRunRecord(recordId, run, runDirRel) : null;
+  }
+  return loadRedrawRun(recordId, direction, entry);
+}
+
+/**
  * Walk-workflow view for the detail endpoint: every animation run (newest
  * first), the per-direction selection, and the finalized set when present.
+ *
+ * The selection (or the finalized walk set) is the index: each approved
+ * direction resolves through `loadRunForEntry`, whatever layout it names.
+ * The `grok/` directory scan then only has to cover runs that have NO
+ * selection entry by definition — unapproved candidates and in-flight
+ * generations, which PortOS always writes under `grok/`.
  */
 export async function getWalkState(recordId) {
-  const grokDir = join(spriteDir(recordId), 'grok');
-  let entries = [];
-  try {
-    entries = await readdir(grokDir, { withFileTypes: true });
-  } catch {
-    // no runs yet
-  }
-  const [runs, selection, walkSet] = await Promise.all([
-    Promise.all(
-      entries
-        .filter((e) => e.isDirectory() && e.name.startsWith('walk-'))
-        .map((e) => loadRunRecord(recordId, e.name)),
-    ).then((loaded) => loaded
-      .filter(Boolean)
-      .map((run) => normalizeStripPreview(recordId, run))),
-    loadSelection(recordId),
-    loadWalkSet(recordId),
-  ]);
+  // The scan is independent of the index — start it first so the two reads
+  // overlap, as they did when the scan WAS the entry point.
+  const scanPromise = readdir(join(spriteDir(recordId), 'grok'), { withFileTypes: true })
+    .catch(() => []); // no native runs yet
+  const [selection, walkSet] = await Promise.all([loadSelection(recordId), loadWalkSet(recordId)]);
 
-  // Directions approved from an imported redraw manifest have no grok run
-  // record to scan — synthesize their preview from the manifest (#2924).
   const approvedDirections = walkSet?.directions || selection?.directions || {};
-  const scannedRunIds = new Set(runs.map((run) => run.id));
-  const redrawRuns = (await Promise.all(
+  const entryRuns = (await Promise.all(
     Object.entries(approvedDirections)
       // Gate on `approved` because loadRedrawRun stamps that status
       // unconditionally — a rejected/pending entry must not surface as an
-      // approved run next to live Generate/Approve buttons.
-      .filter(([, entry]) => entry?.status === 'approved' && entry.runId && entry.runManifest
-        && !scannedRunIds.has(entry.runId))
-      .map(([direction, entry]) => loadRedrawRun(recordId, direction, entry)),
+      // approved run next to live Generate/Approve buttons. A rejected grok
+      // entry still surfaces via the scan below, with its own real status.
+      //
+      // Deliberately NOT gated on `entry.runId`: that field is written only by
+      // approveWalkDirection, so IMPORTED entries — the whole population this
+      // read path exists for — never carry one (importer.test.js's walk-set
+      // fixtures are runId-less). Gating on it filtered out every imported
+      // direction and made the layout dispatch below unreachable for them.
+      .filter(([, entry]) => entry?.status === 'approved'
+        && (entry.runPath || entry.runManifest))
+      .map(([direction, entry]) => loadRunForEntry(recordId, direction, entry)),
   )).filter(Boolean);
+  const resolvedRunIds = new Set(entryRuns.map((run) => run.id));
 
-  const allRuns = [...runs, ...redrawRuns]
+  const scannedRuns = (await Promise.all(
+    (await scanPromise)
+      .filter((e) => e.isDirectory() && e.name.startsWith('walk-') && !resolvedRunIds.has(e.name))
+      .map((e) => loadRunRecord(recordId, e.name)
+        .then((run) => (run ? normalizeRunRecord(recordId, run, runRelPath(e.name)) : null))),
+  )).filter(Boolean)
+    // Second pass: a record whose own `id` differs from its directory name is
+    // already covered by an entry that named it by id.
+    .filter((run) => !resolvedRunIds.has(run.id));
+
+  const allRuns = [...entryRuns, ...scannedRuns]
     .sort((a, b) => runCreatedAtMs(b.createdAt) - runCreatedAtMs(a.createdAt));
   return { runs: allRuns, selection, walkSet };
 }
