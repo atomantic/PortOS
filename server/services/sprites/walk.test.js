@@ -66,6 +66,7 @@ vi.mock('./walkPostprocess.js', async (importOriginal) => {
 });
 
 const records = await import('./records.js');
+const { listSpriteAssets } = await import('./paths.js');
 const { lockReference } = await import('./reference.js');
 const {
   getWalkState, startWalkGeneration, attachWalkVideo, approveWalkDirection, rerunWalkPostprocess,
@@ -329,6 +330,23 @@ describe('approveWalkDirection', () => {
       .rejects.toMatchObject({ code: 'WALK_SET_FINAL' });
     await expect(rerunWalkPostprocess(id, { runId: eastRun }))
       .rejects.toMatchObject({ code: 'WALK_SET_FINAL' });
+  });
+});
+
+describe('listSpriteAssets run-intermediate exclusion', () => {
+  it('omits raw extraction frames but keeps packaged frames and the review sheet', async () => {
+    const id = await characterWithLockedAnchors(newId(), []);
+    const gen = join(TEST_ROOT, 'sprites', id, 'grok', 'walk-east-00c0ffee', 'generated');
+    await mkdir(join(gen, 'raw'), { recursive: true });
+    await mkdir(join(gen, 'frames'), { recursive: true });
+    await mkdir(join(gen, 'review'), { recursive: true });
+    await writeFile(join(gen, 'raw', 'source-0001.png'), 'raw');
+    await writeFile(join(gen, 'frames', '00-left-contact.png'), 'frame');
+    await writeFile(join(gen, 'review', 'contrast.png'), 'sheet');
+    const paths = (await listSpriteAssets(id)).map((a) => a.path);
+    expect(paths).not.toContain('grok/walk-east-00c0ffee/generated/raw/source-0001.png');
+    expect(paths).toContain('grok/walk-east-00c0ffee/generated/frames/00-left-contact.png');
+    expect(paths).toContain('grok/walk-east-00c0ffee/generated/review/contrast.png');
   });
 });
 
