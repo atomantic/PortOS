@@ -279,12 +279,7 @@ describe('sprites routes', () => {
   });
 
   it('POST /:id/walk/trim validates and 201s', async () => {
-    const payload = {
-      slug: 'east-loop',
-      atlasPath: 'grok/walk-east-0a1b2c3d/generated/strip.png',
-      row: 0, cellWidth: 384, cellHeight: 384, fps: 12,
-      allColumns: [0, 1, 2, 3], enabledColumns: [0, 2],
-    };
+    const payload = { runId: 'walk-east-0a1b2c3d', enabledColumns: [0, 2] };
     const r = await request(app).post('/api/sprites/pioneer/walk/trim').send(payload);
     expect(r.status).toBe(201);
     expect(walkTrims.saveLoopTrim).toHaveBeenCalledWith('pioneer', payload);
@@ -294,7 +289,9 @@ describe('sprites routes', () => {
     expect((await request(app).post('/api/sprites/pioneer/walk/trim')
       .send({ ...payload, enabledColumns: [0] })).status).toBe(400);
     expect((await request(app).post('/api/sprites/pioneer/walk/trim')
-      .send({ ...payload, allColumns: [0, 0, 1, 2] })).status).toBe(400);
+      .send({ ...payload, enabledColumns: [0, 0, 2] })).status).toBe(400);
+    expect((await request(app).post('/api/sprites/pioneer/walk/trim')
+      .send({ runId: '../escape', enabledColumns: [0, 2] })).status).toBe(400);
     expect(walkTrims.saveLoopTrim).toHaveBeenCalledOnce();
   });
 });

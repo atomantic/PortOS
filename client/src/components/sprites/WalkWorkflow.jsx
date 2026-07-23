@@ -1,11 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Check, Film, RefreshCw, Scissors, Lock } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
   generateSpriteWalk, approveSpriteWalk, postprocessSpriteWalk, trimSpriteWalk,
 } from '../../services/apiSprites.js';
-import { getMediaJob, listMediaJobs } from '../../services/apiMediaJobs.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
+import { useSpritePendingRenders } from '../../hooks/useSpritePendingRenders.js';
 import { spriteAssetUrl } from './spriteAssets.js';
 
 // Walk workflow (issue #2897): one grok image_to_video clip per locked
@@ -19,12 +19,15 @@ const WALK_PHASES = [
   'left-contact', 'left-down', 'left-passing', 'left-up',
   'right-contact', 'right-down', 'right-passing', 'right-up',
 ];
+const ALL_COLUMNS = WALK_PHASES.map((_, i) => i);
 const CELL_PX = 96; // preview cell size — the strip animates at 96px/frame
 const LOOP_KEYFRAMES = `@keyframes sprite-walk-loop { to { background-position-x: -${CELL_PX * 8}px } }`;
+// Grok image_to_video clip lengths (videoGen/grok.js GROK_VIDEO_DURATIONS).
+const WALK_DURATIONS = [6, 10];
 
 // Animated preview of a packed 8-frame strip: the strip PNG as a stepped
 // background animation (8 frames at 12fps ≈ 0.67s per loop).
-function StripLoop({ recordId, stripPath, paused = false }) {
+function StripLoop({ recordId, stripPath }) {
   return (
     <div
       role="img"
@@ -36,16 +39,17 @@ function StripLoop({ recordId, stripPath, paused = false }) {
         backgroundImage: `url(${spriteAssetUrl(recordId, stripPath)})`,
         backgroundSize: `${CELL_PX * 8}px ${CELL_PX}px`,
         imageRendering: 'pixelated',
-        animation: paused ? 'none' : 'sprite-walk-loop 0.667s steps(8) infinite',
+        animation: 'sprite-walk-loop 0.667s steps(8) infinite',
       }}
     />
   );
 }
 
 // Frame enable/disable trimmer for one packaged run — non-destructive: the
-// server re-packs enabled frames into a versioned strip + GIF.
+// server derives the strip geometry from the run manifest and re-packs the
+// enabled frames into a versioned strip + GIF.
 function TrimPanel({ recordId, run, onClose }) {
-  const [enabled, setEnabled] = useState(() => new Set(WALK_PHASES.map((_, i) => i)));
+  const [enabled, setEnabled] = useState(() => new Set(ALL_COLUMNS));
   const [result, setResult] = useState(null);
   const toggle = (i) => setEnabled((prev) => {
     const next = new Set(prev);
@@ -54,15 +58,8 @@ function TrimPanel({ recordId, run, onClose }) {
   });
   const [save, saving] = useAsyncAction(async () => {
     const trim = await trimSpriteWalk(recordId, {
-      slug: `${run.direction}-loop`,
-      atlasPath: run.stripPreview.stripPath,
-      row: 0,
-      cellWidth: run.stripPreview.cellWidth,
-      cellHeight: run.stripPreview.cellHeight,
-      fps: run.stripPreview.fps,
-      allColumns: WALK_PHASES.map((_, i) => i),
+      runId: run.id,
       enabledColumns: [...enabled].sort((a, b) => a - b),
-      sourceFrameLabels: [...enabled].sort((a, b) => a - b).map((i) => WALK_PHASES[i]),
     }, { silent: true });
     setResult(trim);
     toast.success(`Trim saved (${trim.frameCount} frames)`);
@@ -185,61 +182,21 @@ export default function WalkWorkflow({ record, reference, walk, onChanged }) {
   const runs = walk?.runs || [];
   const selection = walk?.selection || null;
   const finalized = Boolean(walk?.walkSet);
-  // direction → jobId for in-flight video renders.
-  const [pendingJobs, setPendingJobs] = useState({});
+  const [duration, setDuration] = useState(WALK_DURATIONS[0]);
 
-  // Rehydrate in-flight walk renders on mount/record switch (same contract
-  // as ReferenceWorkflow's rehydrate — a reload must not re-enable Generate
-  // mid-render).
-  useEffect(() => {
-    let stale = false;
-    listMediaJobs({ kind: 'video', owner: 'sprites' }, { silent: true })
-      .then((jobs) => {
-        if (stale) return;
-        const active = {};
-        for (const job of jobs || []) {
-          const tag = job.params?.spriteWalk;
-          if (tag?.recordId === recordId && ['queued', 'running'].includes(job.status)) {
-            active[tag.direction] = job.id;
-          }
-        }
-        if (Object.keys(active).length > 0) setPendingJobs((prev) => ({ ...active, ...prev }));
-      })
-      .catch(() => {});
-    return () => { stale = true; };
-  }, [recordId]);
-
-  // Poll in-flight renders; the completion hook packages server-side, so a
-  // finished job needs one deferred refetch (plus a late sweep — the
-  // postprocess takes seconds, unlike the reference hook's instant copy).
-  useEffect(() => {
-    if (Object.keys(pendingJobs).length === 0) return undefined;
-    const timer = setInterval(async () => {
-      const entries = Object.entries(pendingJobs).filter(([, jobId]) => jobId !== 'submitting');
-      const results = await Promise.all(entries.map(async ([direction, jobId]) => {
-        try {
-          return { direction, job: await getMediaJob(jobId) };
-        } catch (err) {
-          return { direction, job: null, gone: err?.status === 404 };
-        }
-      }));
-      const finished = results.filter(({ job, gone }) => (job ? ['completed', 'failed', 'canceled'].includes(job.status) : gone));
-      if (finished.length === 0) return;
-      setPendingJobs((prev) => {
-        const next = { ...prev };
-        for (const { direction } of finished) delete next[direction];
-        return next;
-      });
-      for (const { direction, job } of finished) {
-        if (job?.status === 'failed') toast.error(`Walk render failed for ${direction}: ${job.error || 'see media jobs'}`);
-      }
-      // The deterministic postprocess runs after the job completes — sweep
-      // twice so the packaged candidate (or its error) lands in the UI.
-      setTimeout(onChanged, 1500);
-      setTimeout(onChanged, 8000);
-    }, 4000);
-    return () => clearInterval(timer);
-  }, [pendingJobs, onChanged]);
+  // direction → jobId for in-flight video renders — rehydrated + polled by
+  // the shared sprite render-tracking hook. The deterministic postprocess
+  // runs server-side after the job completes, so the sweeps land later (and
+  // twice) compared to the reference workflow's instant candidate copy.
+  const { pendingJobs, beginSubmit, resolveSubmit, cancelSubmit } = useSpritePendingRenders({
+    recordId,
+    kind: 'video',
+    tagKey: 'spriteWalk',
+    tagField: 'direction',
+    onChanged,
+    sweepDelays: () => [1500, 8000],
+    failMessage: (direction, job) => `Walk render failed for ${direction}: ${job?.error || 'see media jobs'}`,
+  });
 
   const latestRunByDirection = useMemo(() => {
     const byDir = {};
@@ -255,16 +212,12 @@ export default function WalkWorkflow({ record, reference, walk, onChanged }) {
   }, [runs, selection]);
 
   const generate = async (direction) => {
-    setPendingJobs((prev) => ({ ...prev, [direction]: 'submitting' }));
+    beginSubmit(direction);
     try {
-      const { jobId } = await generateSpriteWalk(recordId, { direction }, { silent: true });
-      setPendingJobs((prev) => ({ ...prev, [direction]: jobId }));
+      const { jobId } = await generateSpriteWalk(recordId, { direction, duration }, { silent: true });
+      resolveSubmit(direction, jobId);
     } catch (err) {
-      setPendingJobs((prev) => {
-        const next = { ...prev };
-        if (next[direction] === 'submitting') delete next[direction];
-        return next;
-      });
+      cancelSubmit(direction);
       toast.error(err?.message || `Failed to queue ${direction} walk`);
     }
   };
@@ -298,10 +251,21 @@ export default function WalkWorkflow({ record, reference, walk, onChanged }) {
             {finalized ? 'finalized' : `${approvedCount}/8 approved`}
           </span>
         </h3>
-        {finalized && (
+        {finalized ? (
           <p className="text-xs text-port-success flex items-center gap-1">
             <Lock className="w-3 h-3" /> walk set frozen · immutable
           </p>
+        ) : (
+          <label className="flex items-center gap-2 text-xs text-gray-400">
+            Clip length
+            <select
+              value={duration}
+              onChange={(e) => setDuration(Number(e.target.value))}
+              className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
+            >
+              {WALK_DURATIONS.map((d) => <option key={d} value={d}>{d}s</option>)}
+            </select>
+          </label>
         )}
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">

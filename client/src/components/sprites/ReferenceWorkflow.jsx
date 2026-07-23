@@ -2,10 +2,10 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Lock, Sparkles, RefreshCw, Upload } from 'lucide-react';
 import toast from '../ui/Toast';
 import { generateSpriteReference, lockSpriteReference, updateSpriteRecord } from '../../services/apiSprites.js';
-import { getMediaJob, listMediaJobs } from '../../services/apiMediaJobs.js';
 import { getSettings } from '../../services/apiSystem.js';
 import { deriveAvailableBackends } from '../../lib/imageGenBackends.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
+import { useSpritePendingRenders } from '../../hooks/useSpritePendingRenders.js';
 import { spriteAssetUrl } from './spriteAssets.js';
 
 // Reference workflow (issue #2896): generate main-reference candidates from
@@ -82,9 +82,12 @@ export default function ReferenceWorkflow({ record, reference, onChanged }) {
   const [mode, setMode] = useState('');
   const [designPrompt, setDesignPrompt] = useState(manifest?.designPrompt || '');
   const [uploadFile, setUploadFile] = useState(null);
-  // target → jobId for in-flight renders; polled until the candidate lands.
-  const [pendingJobs, setPendingJobs] = useState({});
   const fileInputRef = useRef(null);
+  // target → jobId for in-flight renders; rehydrated + polled by the shared
+  // sprite render-tracking hook until each candidate lands.
+  const { pendingJobs, beginSubmit, resolveSubmit, cancelSubmit } = useSpritePendingRenders({
+    recordId, kind: 'image', tagKey: 'spriteRef', tagField: 'target', onChanged,
+  });
 
   useEffect(() => {
     getSettings({ silent: true })
@@ -100,93 +103,25 @@ export default function ReferenceWorkflow({ record, reference, onChanged }) {
       .catch(() => setBackends([]));
   }, []);
 
-  // Rehydrate in-flight renders on mount/record switch — a reload or
-  // navigate-away-and-back would otherwise lose pendingJobs and re-enable
-  // Generate mid-render, inviting a duplicate paid render for the same
-  // target. Locally-started jobs win over the snapshot on key collision.
-  useEffect(() => {
-    let stale = false;
-    listMediaJobs({ kind: 'image', owner: 'sprites' }, { silent: true })
-      .then((jobs) => {
-        if (stale) return;
-        const active = {};
-        for (const job of jobs || []) {
-          const tag = job.params?.spriteRef;
-          if (tag?.recordId === recordId && ['queued', 'running'].includes(job.status)) {
-            active[tag.target] = job.id;
-          }
-        }
-        if (Object.keys(active).length > 0) setPendingJobs((prev) => ({ ...active, ...prev }));
-      })
-      .catch(() => {}); // best-effort — the poll and server guards still apply
-    return () => { stale = true; };
-  }, [recordId]);
-
-  // Poll in-flight render jobs (parallel — they're independent); on a
-  // terminal state drop the entry and refresh the detail once so the new
-  // candidates (or the failure) show up. The completion hook's candidate
-  // copy is same-process and millisecond-fast against the 4s poll grain, so
-  // one short deferral covers the copy-vs-refetch ordering.
-  useEffect(() => {
-    if (Object.keys(pendingJobs).length === 0) return undefined;
-    const timer = setInterval(async () => {
-      const entries = Object.entries(pendingJobs).filter(([, jobId]) => jobId !== 'submitting');
-      const results = await Promise.all(entries.map(async ([target, jobId]) => {
-        try {
-          return { target, job: await getMediaJob(jobId) };
-        } catch (err) {
-          // Only a 404 means the job is truly gone — a transient fetch
-          // failure must NOT drop the entry (that would re-enable Generate
-          // mid-render and stop the auto-refresh); retry on the next tick.
-          return { target, job: null, gone: err?.status === 404 };
-        }
-      }));
-      const finished = results.filter(({ job, gone }) => (job ? ['completed', 'failed', 'canceled'].includes(job.status) : gone));
-      if (finished.length === 0) return;
-      setPendingJobs((prev) => {
-        const next = { ...prev };
-        for (const { target } of finished) delete next[target];
-        return next;
-      });
-      for (const { target, job } of finished) {
-        if (job?.status === 'failed') toast.error(`Render failed for ${target}: ${job.error || 'see media jobs'}`);
-      }
-      setTimeout(onChanged, 500);
-      // Several jobs finishing in one tick attach serially server-side — a
-      // later attach can land after the first refetch, so sweep once more.
-      if (finished.length > 1) setTimeout(onChanged, 2500);
-    }, 4000);
-    return () => clearInterval(timer);
-  }, [pendingJobs, onChanged]);
-
   const candidatesByTarget = useMemo(() => candidates.reduce((acc, c) => {
     const t = c.target || 'main';
     (acc[t] ||= []).push(c);
     return acc;
   }, {}), [candidates]);
 
-  // Sentinel jobId while the enqueue request is in flight — reserves the
-  // target immediately so a double-click (or a slow multipart upload) can't
-  // submit two paid renders. The poll skips sentinel entries.
-  const SUBMITTING = 'submitting';
-
   const generate = async (target) => {
-    setPendingJobs((prev) => ({ ...prev, [target]: SUBMITTING }));
+    beginSubmit(target);
     try {
       const { jobId } = await generateSpriteReference(recordId, {
         target,
         ...(mode ? { mode } : {}),
         ...(target === 'main' ? { designPrompt, referenceImageFile: uploadFile || undefined } : {}),
       }, { silent: true });
-      setPendingJobs((prev) => ({ ...prev, [target]: jobId }));
+      resolveSubmit(target, jobId);
       setUploadFile(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     } catch (err) {
-      setPendingJobs((prev) => {
-        const next = { ...prev };
-        if (next[target] === SUBMITTING) delete next[target];
-        return next;
-      });
+      cancelSubmit(target);
       toast.error(err?.message || `Failed to queue ${target} render`);
     }
   };

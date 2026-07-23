@@ -41,11 +41,20 @@ export function resolveSpriteAssetPath(recordId, relPath) {
   return abs;
 }
 
+// Raw ffmpeg-extracted frame intermediates inside an animation run (30–96
+// near-identical PNGs per run, `grok|runs/<run>/generated/raw/`). Kept on
+// disk for the postprocessor but omitted from the asset listing — they'd
+// swamp the browser. Narrower than the importer's EXCLUDED_RUN_SEGMENTS
+// (which also skips frames/ and review/ to minimize cross-machine copies):
+// the packaged phase frames and the contrast review sheet exist FOR human
+// review, so the local browser keeps them.
+const RUN_RAW_INTERMEDIATE = /^(grok|runs)\/[^/]+\/generated\/raw\//;
+
 /**
  * Recursively list a record's on-disk assets as `[{ path, size, mtime }]`
- * with `path` relative (posix separators) to the record dir. Dotfiles are
- * skipped; per-directory stats and subdirectory descents run in parallel.
- * A record with no directory yet returns [].
+ * with `path` relative (posix separators) to the record dir. Dotfiles and
+ * raw run intermediates are skipped; per-directory stats and subdirectory
+ * descents run in parallel. A record with no directory yet returns [].
  */
 export async function listSpriteAssets(recordId) {
   const dir = spriteDir(recordId);
@@ -61,6 +70,7 @@ export async function listSpriteAssets(recordId) {
       if (entry.name.startsWith('.')) return;
       const rel = relPrefix ? `${relPrefix}/${entry.name}` : entry.name;
       if (entry.isDirectory()) {
+        if (RUN_RAW_INTERMEDIATE.test(`${rel}/`)) return;
         await walk(join(current, entry.name), rel);
       } else if (entry.isFile()) {
         const s = await stat(join(current, entry.name));
