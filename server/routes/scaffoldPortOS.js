@@ -11,7 +11,7 @@ const CORS_SNIPPET = `app.use((req, res, next) => {
   next();
 });`;
 
-export async function scaffoldPortOS(repoPath, name, dirName, uiPort, apiPort, addStep) {
+export async function scaffoldPortOS({ repoPath, name, dirName, uiPort, apiPort, addStep }) {
   const clientDir = join(repoPath, 'client');
   const serverDir = join(repoPath, 'server');
   const workflowsDir = join(repoPath, '.github/workflows');

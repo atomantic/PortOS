@@ -14,7 +14,7 @@ const CORS_SNIPPET = `app.use((req, res, next) => {
   next();
 });`;
 
-export async function scaffoldVite(repoPath, dirName, parentDir, template, uiPort, apiPort, addStep) {
+export async function scaffoldVite({ repoPath, dirName, parentDir, template, uiPort, apiPort, addStep }) {
   // Create using npm create vite
   // Security: Use spawn with array args instead of execAsync to prevent shell injection
   const { stderr } = await new Promise((resolve) => {

@@ -308,7 +308,16 @@ export function projectWorkflowTimeline(nodes, { start, end, timezone = 'UTC' })
       // When a due-now marker was emitted, start the projection strictly after
       // startMs so a cron slot landing exactly on the current minute doesn't
       // produce a duplicate occurrence id at the same instant.
-      appendCronOccurrences(node, schedule.cronExpression, startMs, endMs, timezone, occurrences, 'launch', { skipStart: dueNow });
+      appendCronOccurrences({
+        node,
+        expression: schedule.cronExpression,
+        startMs,
+        endMs,
+        timezone,
+        target: occurrences,
+        kind: 'launch',
+        skipStart: dueNow
+      });
       continue;
     }
 
@@ -332,7 +341,7 @@ export function projectWorkflowTimeline(nodes, { start, end, timezone = 'UTC' })
   };
 }
 
-function appendCronOccurrences(node, expression, startMs, endMs, timezone, target, kind, { skipStart = false } = {}) {
+function appendCronOccurrences({ node, expression, startMs, endMs, timezone, target, kind, skipStart = false }) {
   // parseCronToNextRun searches strictly after its cursor, so startMs - 60s
   // makes a slot exactly at startMs eligible (unless the caller already
   // emitted a due-now marker there — skipStart).
@@ -375,14 +384,31 @@ function projectPerpetual(node, startMs, endMs, timezone, occurrences, windows) 
 
   const recheckCron = node.schedule?.recheckCron;
   if (recheckCron) {
-    appendCronOccurrences(node, recheckCron, startMs, endMs, timezone, occurrences, 'recheck');
+    appendCronOccurrences({
+      node,
+      expression: recheckCron,
+      startMs,
+      endMs,
+      timezone,
+      target: occurrences,
+      kind: 'recheck'
+    });
     return;
   }
 
   const nextRecheckMs = node.nextRunAt ? new Date(node.nextRunAt).getTime() : NaN;
   const cadence = node.schedule?.recheckIntervalMs || DAY;
   if (Number.isFinite(nextRecheckMs)) {
-    appendIntervalOccurrences(node, nextRecheckMs, cadence, startMs, endMs, timezone, occurrences, 'recheck');
+    appendIntervalOccurrences({
+      node,
+      firstMs: nextRecheckMs,
+      cadence,
+      startMs,
+      endMs,
+      timezone,
+      target: occurrences,
+      kind: 'recheck'
+    });
   }
 }
 
@@ -412,7 +438,16 @@ function projectIntervalTask(node, startMs, endMs, timezone, occurrences) {
       nextMs = Number.isFinite(lastRunMs) ? lastRunMs + cadence : startMs;
     }
   }
-  appendIntervalOccurrences(node, nextMs, cadence, startMs, endMs, timezone, occurrences, 'launch');
+  appendIntervalOccurrences({
+    node,
+    firstMs: nextMs,
+    cadence,
+    startMs,
+    endMs,
+    timezone,
+    target: occurrences,
+    kind: 'launch'
+  });
 }
 
 function projectIntervalJob(node, startMs, endMs, timezone, occurrences) {
@@ -480,7 +515,7 @@ function isAllowedWeekday(node, atMs, timezone) {
   return day >= 1 && day <= 5;
 }
 
-function appendIntervalOccurrences(node, firstMs, cadence, startMs, endMs, timezone, target, kind) {
+function appendIntervalOccurrences({ node, firstMs, cadence, startMs, endMs, timezone, target, kind }) {
   if (!Number.isFinite(firstMs) || !Number.isFinite(cadence) || cadence <= 0) return;
   let nextMs = firstMs;
   if (nextMs < startMs) nextMs += Math.ceil((startMs - nextMs) / cadence) * cadence;

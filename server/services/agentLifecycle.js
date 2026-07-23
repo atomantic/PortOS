@@ -393,7 +393,14 @@ async function runAgentSpawn(task) {
     }
 
     // Create run entry for usage tracking
-    const { runId } = await createAgentRun(agentId, task, selectedModel, provider, workspacePath, resolvedAppName);
+    const { runId } = await createAgentRun({
+      agentId,
+      task,
+      model: selectedModel,
+      provider,
+      workspacePath,
+      appName: resolvedAppName
+    });
     const executionMode = isTui ? 'tui' : useRunner ? 'runner' : 'direct';
 
     // Register the agent with model info.

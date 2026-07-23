@@ -13,6 +13,11 @@
  * What stays in each store: its own `makeFile` / `makePg` backend factories
  * (the file layouts differ genuinely — collectionStore vs settings.json vs a
  * bespoke on-disk JSON format) and its public facade surface.
+ *
+ * A second family of stores (Creative Director, Music Video, Sprites) dispatches
+ * to whole backend MODULES rather than built objects, and hand-rolled the same
+ * selector a third time (#2899). `createRecordStoreBackendSelector` below wraps
+ * this backbone for that shape.
  */
 
 import { checkHealth, ensureSchema } from './db.js';
@@ -58,15 +63,18 @@ export async function resolvePgBackend({ requirement, migrate, loadDb, makePg })
  * @param {object} opts
  * @param {() => object|Promise<object>} opts.makeFile  Build the file backend.
  * @param {() => Promise<object>} opts.makePg           Build the PG backend.
+ * @param {() => boolean} [opts.isFile]  Escape-hatch predicate (default `isFileBackend`).
+ *   Overridden only by stores that use a stronger test-mode signal (see
+ *   `createRecordStoreBackendSelector`'s `isTestMode`).
  * @returns {{ getBackend: () => Promise<object>, getBackendName: () => (string|null), reset: () => void }}
  */
-export function createPgFileFacade({ makeFile, makePg }) {
+export function createPgFileFacade({ makeFile, makePg, isFile = isFileBackend }) {
   let backend = null;
   let selecting = null;
   const getBackend = () => {
     if (backend) return Promise.resolve(backend);
     if (!selecting) {
-      selecting = Promise.resolve(isFileBackend() ? makeFile() : makePg())
+      selecting = Promise.resolve(isFile() ? makeFile() : makePg())
         .then((b) => { backend = b; return b; })
         .finally(() => { selecting = null; });
     }
@@ -76,5 +84,87 @@ export function createPgFileFacade({ makeFile, makePg }) {
     getBackend,
     getBackendName: () => backend?.name ?? null,
     reset: () => { backend = null; selecting = null; },
+  };
+}
+
+/**
+ * Memoized backend selector for stores whose backends are whole MODULES
+ * (`import('./projectsFile.js')` vs `import('./projectsDB.js')`) rather than
+ * objects built from `db.js` — Creative Director, Music Video, Sprites (#2899).
+ * Each had hand-rolled the identical dispatcher, and they had already drifted
+ * (differing error text, differing test-mode predicate).
+ *
+ * Same posture as `createPgFileFacade` (do NOT weaken it): the dev/test escape
+ * hatch selects the file backend with NO database contact at all; otherwise
+ * `resolvePgBackend` health-checks, runs the idempotent `ensureSchema()` (a store
+ * may be called before the boot DB gate, e.g. CD's boot recovery scan), runs the
+ * optional one-time migration, then loads the PG module.
+ *
+ * Test-mode detection stays per-store (`isTestMode`) because the stores
+ * genuinely differ today: Sprites keys on `isTestRunner()` (`NODE_ENV==='test'`
+ * OR `VITEST` — the stronger signal), CD/Music Video on `NODE_ENV==='test'` only
+ * via the shared `isFileBackend()`. Unifying on `isTestRunner()` would be a
+ * strengthening, but it changes what their existing backend-selection suites
+ * observe (vitest always sets `VITEST`), so semantics are preserved exactly here
+ * and the unification is left as a separate decision.
+ *
+ * @param {object} opts
+ * @param {string} [opts.label]  Store name used in the default unreachable-DB error.
+ * @param {() => Promise<object>} opts.loadFileBackend  Loader for the file backend module.
+ * @param {() => Promise<object>} opts.loadDbBackend    Loader for the PostgreSQL backend module.
+ * @param {string} [opts.requireDbMessage]  Override for the unreachable-DB error message.
+ * @param {() => boolean} [opts.isTestMode]  Test-mode predicate; when omitted the shared
+ *   `isFileBackend()` (MEMORY_BACKEND=file OR NODE_ENV=test) is used as-is.
+ * @param {() => Promise<void>} [opts.onDbReady]  One-time migration run after `ensureSchema()`
+ *   and before the DB backend import (CD's legacy JSON → table import).
+ * @returns {{ selectBackend: () => Promise<object>, getBackendName: () => ('file'|'postgres'|null) }}
+ */
+export function createRecordStoreBackendSelector({
+  label,
+  loadFileBackend,
+  loadDbBackend,
+  requireDbMessage,
+  isTestMode,
+  onDbReady,
+} = {}) {
+  if (typeof loadFileBackend !== 'function' || typeof loadDbBackend !== 'function') {
+    throw new Error('createRecordStoreBackendSelector requires loadFileBackend + loadDbBackend loader functions');
+  }
+
+  const requirement = requireDbMessage
+    || `${label || 'This store'} requires PostgreSQL — run \`npm run setup:db\` (dev/test only: set MEMORY_BACKEND=file in .env)`;
+
+  let backendName = null;
+  const facade = createPgFileFacade({
+    isFile: isTestMode
+      ? () => process.env.MEMORY_BACKEND === 'file' || isTestMode()
+      : isFileBackend,
+    makeFile: async () => {
+      const mod = await loadFileBackend();
+      backendName = 'file';
+      return mod;
+    },
+    makePg: async () => {
+      const mod = await resolvePgBackend({
+        requirement,
+        migrate: onDbReady,
+        loadDb: loadDbBackend,
+        makePg: (m) => m,
+      });
+      backendName = 'postgres';
+      return mod;
+    },
+  });
+
+  return {
+    selectBackend: facade.getBackend,
+    /** Name of the active backend, or null before first selection (diagnostics/tests). */
+    getBackendName: () => backendName,
+    /**
+     * Test seam — drop the memoized selection so a suite can re-select. Mirrors
+     * the `_reset<X>Backend()` exports the artists/tracks/albums/authors stores
+     * carry, so folding those in later needs no new surface here.
+     */
+    reset: () => { facade.reset(); backendName = null; },
   };
 }

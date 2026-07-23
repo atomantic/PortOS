@@ -22,7 +22,7 @@
  * that imported it from here historically.
  */
 
-import { checkHealth, ensureSchema } from '../../lib/db.js';
+import { createRecordStoreBackendSelector } from '../../lib/pgFileFacade.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import { resolveIngredientsByIds, linkIngredientsToCreativeDirector } from '../catalogDB.js';
 import { buildCastFromIngredients } from './catalogSeed.js';
@@ -30,43 +30,28 @@ import { enqueueFirstPassSceneFrames } from './firstPassGen.js';
 
 export { trimRuns, startingImageFilename } from './projectsLogic.js';
 
-let backend = null;
-let backendName = null;
-
-async function selectBackend() {
-  if (backend) return backend;
-
-  const envBackend = process.env.MEMORY_BACKEND;
-
-  // Explicit file escape hatch, or test mode (no DB) → file backend.
-  if (envBackend === 'file' || process.env.NODE_ENV === 'test') {
-    backend = await import('./projectsFile.js');
-    backendName = 'file';
-    return backend;
-  }
-
-  // Default + explicit postgres → PostgreSQL. The boot DB gate in
-  // server/index.js fail-fasts when Postgres is required but missing, but the
-  // boot RECOVERY scan (recoverInFlightProjects) calls in here BEFORE that gate
-  // runs ensureSchema() — so an upgrade install may not have the
-  // creative_director_projects table yet at first call. Mirror memoryBackend.js
-  // and run ensureSchema() here ourselves (idempotent) so the backend is
-  // self-sufficient regardless of boot ordering.
-  const health = await checkHealth();
-  if (!health.connected) {
-    throw new Error('Creative Director requires PostgreSQL — run `npm run setup:db` (dev/test only: set PGMODE=file in .env; the launcher maps it to MEMORY_BACKEND=file for the unsupported file backend)');
-  }
-  await ensureSchema();
-  const { migrateCreativeDirectorToDB } = await import('../../scripts/migrateCreativeDirectorToDB.js');
-  await migrateCreativeDirectorToDB();
-  backend = await import('./projectsDB.js');
-  backendName = 'postgres';
-  return backend;
-}
+// Shared dispatcher (#2899). The boot DB gate in server/index.js fail-fasts when
+// Postgres is required but missing, but the boot RECOVERY scan
+// (recoverInFlightProjects) calls in here BEFORE that gate runs ensureSchema() —
+// so an upgrade install may not have the creative_director_projects table yet at
+// first call. The selector runs ensureSchema() itself (idempotent, mirroring
+// memoryBackend.js) so the backend is self-sufficient regardless of boot
+// ordering, then `onDbReady` runs the one-time legacy-JSON import before the PG
+// backend loads, so the first caller sees migrated projects.
+const { selectBackend, getBackendName } = createRecordStoreBackendSelector({
+  label: 'Creative Director',
+  loadFileBackend: () => import('./projectsFile.js'),
+  loadDbBackend: () => import('./projectsDB.js'),
+  requireDbMessage: 'Creative Director requires PostgreSQL — run `npm run setup:db` (dev/test only: set PGMODE=file in .env; the launcher maps it to MEMORY_BACKEND=file for the unsupported file backend)',
+  onDbReady: async () => {
+    const { migrateCreativeDirectorToDB } = await import('../../scripts/migrateCreativeDirectorToDB.js');
+    await migrateCreativeDirectorToDB();
+  },
+});
 
 /** Name of the active backend, or null before first call (for diagnostics/tests). */
 export function getProjectsBackendName() {
-  return backendName;
+  return getBackendName();
 }
 
 // Announce a newly-created project to the per-record peer-sync pipeline (#1564):
