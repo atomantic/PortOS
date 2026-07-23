@@ -328,6 +328,10 @@ describe('conflictJournal', () => {
       const remote1 = trk();
       await cj.maybeJournalBeforeOverwrite({ kind: 'track', id: 't-1', local: legacyBase, remote: remote1, source: { via: 'sync' } });
       expect(await pendingEntries()).toHaveLength(0);
+      // Directly pin the mechanism, not just the downstream symptom: the base
+      // must now be the UNRESTRICTED (current-version) hash of remote1 — the
+      // mislabeling bug stamped the version-restricted hash instead.
+      expect(await cj.getSyncBaseHash('track', 't-1')).toBe(cj.contentHashForRecord('track', remote1));
 
       // Now a SINGLE peer composes a chiptune score; the other side (`remote2`
       // here, standing in for what's already persisted) is untouched. This
