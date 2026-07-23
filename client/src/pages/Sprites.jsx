@@ -7,6 +7,8 @@ import {
   generateSpriteWalk, generateSpriteReference,
 } from '../services/apiSprites.js';
 import { getApps } from '../services/apiApps.js';
+import { getSettings } from '../services/apiSystem.js';
+import { deriveAvailableBackends } from '../lib/imageGenBackends.js';
 import AppContextPicker from '../components/AppContextPicker.jsx';
 import ReferenceWorkflow from '../components/sprites/ReferenceWorkflow.jsx';
 import WalkWorkflow, { WALK_WORKFLOW_DOM_ID, WALK_DURATIONS } from '../components/sprites/WalkWorkflow.jsx';
@@ -307,6 +309,43 @@ export default function Sprites() {
   // panel instead of silently falling back to the server default.
   const [duration, setDuration] = useState(WALK_DURATIONS[0]);
 
+  // Image-backend availability + the selected backend `mode` are page-owned
+  // (#2938): both ReferenceWorkflow's picker and the asset collection's anchor
+  // Regenerate must read ONE mode, or a card re-roll would use a different
+  // backend than the one the user picked in the workflow. `null` = settings not
+  // loaded yet; `[]` = loaded with no image backend configured.
+  const [imageBackends, setImageBackends] = useState(null);
+  const [imageMode, setImageMode] = useState('');
+  useEffect(() => {
+    getSettings({ silent: true })
+      .then((settings) => {
+        const available = deriveAvailableBackends(settings, { excludeExternal: true });
+        setImageBackends(available);
+        // Prefer the configured dispatcher default when it's available, else
+        // the first list entry — matching ReferenceWorkflow's prior logic.
+        const configured = available.find((b) => b.id === settings?.imageGen?.mode)?.id;
+        setImageMode((m) => m || configured || available[0]?.id || '');
+      })
+      .catch(() => setImageBackends([]));
+  }, []);
+  const hasImageBackend = Array.isArray(imageBackends) && imageBackends.length > 0;
+
+  // Run ids the walk selection has approved. An approved run's strip/frames
+  // never move on disk (approval is recorded in the selection, not the path),
+  // so the pure path classifier still reads them as `candidate` — the asset
+  // collection promotes them to `approved` for their badge from this set.
+  const approvedRunIds = useMemo(() => {
+    const set = new Set();
+    const collect = (dirs) => {
+      for (const d of Object.values(dirs || {})) {
+        if (d?.status === 'approved' && d.runId) set.add(d.runId);
+      }
+    };
+    collect(detail?.walk?.selection?.directions);
+    collect(detail?.walk?.walkSet?.directions);
+    return set;
+  }, [detail]);
+
   // Both generators share the reserve → submit → resolve/cancel dance; only
   // the endpoint, its args, and the fail message differ. The hook's setters
   // are stable identities, so depending on THEM (not the whole render-tracking
@@ -340,14 +379,17 @@ export default function Sprites() {
     `Failed to queue ${direction} walk`,
   ), [id, duration, walkBegin, walkResolve, walkCancel, submitRender]);
 
-  const generateAnchor = useCallback((direction) => submitRender(
+  // `mode` is the workflow-selected backend, threaded from the asset card via
+  // buildCollectionActions (#2938) so a re-roll uses the same backend the
+  // Reference workflow would, not the server default. Falls back to the
+  // page-level selection when a caller omits it.
+  const generateAnchor = useCallback((direction, mode) => submitRender(
     refBegin, refResolve, refCancel, direction,
-    // The server falls back to the install's configured image backend — the
-    // asset-card path deliberately doesn't thread ReferenceWorkflow's backend
-    // picker (that state lives in the workflow); a re-roll uses the default.
-    () => generateSpriteReference(id, { target: direction }, { silent: true }),
+    () => generateSpriteReference(id, {
+      target: direction, ...((mode || imageMode) ? { mode: mode || imageMode } : {}),
+    }, { silent: true }),
     `Failed to queue ${direction} render`,
-  ), [id, refBegin, refResolve, refCancel, submitRender]);
+  ), [id, imageMode, refBegin, refResolve, refCancel, submitRender]);
 
   const collectionActions = useMemo(() => {
     if (detail?.record?.kind !== 'character') return null;
@@ -357,6 +399,8 @@ export default function Sprites() {
       referencePending: referenceRenders.pendingJobs,
       generateWalk,
       generateAnchor,
+      hasBackend: hasImageBackend,
+      mode: imageMode,
       onRequestTrim: (runId) => {
         setTrimRunId(runId);
         // The trimmer lives inside WalkWorkflow further up the page; a request
@@ -365,7 +409,7 @@ export default function Sprites() {
         document.getElementById(WALK_WORKFLOW_DOM_ID)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       },
     });
-  }, [detail, walkRenders.pendingJobs, referenceRenders.pendingJobs, generateWalk, generateAnchor]);
+  }, [detail, walkRenders.pendingJobs, referenceRenders.pendingJobs, generateWalk, generateAnchor, hasImageBackend, imageMode]);
 
   return (
     <div className="space-y-4">
@@ -432,6 +476,9 @@ export default function Sprites() {
                     record={detail.record}
                     reference={detail.reference}
                     renders={referenceRenders}
+                    backends={imageBackends}
+                    mode={imageMode}
+                    onModeChange={setImageMode}
                     onChanged={onWorkflowChanged}
                   />
                   <WalkWorkflow
@@ -464,6 +511,7 @@ export default function Sprites() {
                   recordId={detail.record.id}
                   assets={detail.assets}
                   actions={collectionActions}
+                  approvedRunIds={approvedRunIds}
                 />
               )}
             </div>

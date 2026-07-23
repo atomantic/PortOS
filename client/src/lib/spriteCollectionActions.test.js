@@ -116,6 +116,30 @@ describe('regenerateFor — reference anchors', () => {
   });
 });
 
+describe('regenerateFor — backend gate (#2938)', () => {
+  const unlockedEast = { reference: { manifest: { anchors: [{ direction: 'east', status: 'pending' }] } } };
+
+  it('disables the anchor re-roll when no image backend is configured', () => {
+    const r = build(unlockedEast, { hasBackend: false }).regenerateFor(CANDIDATE_EAST);
+    expect(r).toMatchObject({ kind: 'reference', disabled: true });
+    expect(r.title).toMatch(/No image backend/);
+  });
+
+  it('keeps the re-roll enabled when a backend is available (default) ', () => {
+    expect(build(unlockedEast).regenerateFor(CANDIDATE_EAST).disabled).toBe(false);
+  });
+
+  it('threads the workflow-selected backend into the anchor re-roll', () => {
+    const generateAnchor = vi.fn();
+    buildCollectionActions({
+      detail: detailWith(unlockedEast),
+      generateWalk: vi.fn(), generateAnchor, onRequestTrim: vi.fn(),
+      mode: 'grok',
+    }).regenerateFor(CANDIDATE_EAST).onClick();
+    expect(generateAnchor).toHaveBeenCalledWith('east', 'grok');
+  });
+});
+
 describe('regenerateFor — non-actionable assets', () => {
   it.each([
     ['a manifest', 'grok/walk-east-abc12345/generated/example-walk-east-manifest.json'],

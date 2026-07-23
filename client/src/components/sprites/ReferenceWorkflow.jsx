@@ -1,9 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Lock, Sparkles, RefreshCw, Upload } from 'lucide-react';
 import toast from '../ui/Toast';
 import { generateSpriteReference, lockSpriteReference, updateSpriteRecord } from '../../services/apiSprites.js';
-import { getSettings } from '../../services/apiSystem.js';
-import { deriveAvailableBackends } from '../../lib/imageGenBackends.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import SpritePreview from './SpritePreview.jsx';
 
@@ -65,15 +63,17 @@ function CandidateTile({ recordId, candidate, locking, onLock, clipRisk }) {
   );
 }
 
-export default function ReferenceWorkflow({ record, reference, renders, onChanged }) {
+export default function ReferenceWorkflow({ record, reference, renders, backends, mode, onModeChange, onChanged }) {
   const recordId = record.id;
   const manifest = reference?.manifest || null;
   const candidates = reference?.candidates || [];
   const mainLocked = manifest?.mainReference?.locked === true;
 
-  // null = settings not loaded yet; [] = loaded, no queue backend configured.
-  const [backends, setBackends] = useState(null);
-  const [mode, setMode] = useState('');
+  // Image-backend availability + the selected `mode` are page-owned (#2938) so
+  // that the Sprites page's asset-card Regenerate re-rolls through the SAME
+  // backend this picker drives (a per-component fetch would let the two
+  // diverge). `backends`: null = settings not loaded yet; [] = loaded, no
+  // backend configured.
   const [designPrompt, setDesignPrompt] = useState(manifest?.designPrompt || '');
   const [uploadFile, setUploadFile] = useState(null);
   const fileInputRef = useRef(null);
@@ -81,20 +81,6 @@ export default function ReferenceWorkflow({ record, reference, renders, onChange
   // with the asset collection's anchor Regenerate buttons (#2931) so both gate
   // on one map — see the matching note in WalkWorkflow.
   const { pendingJobs, beginSubmit, resolveSubmit, cancelSubmit } = renders;
-
-  useEffect(() => {
-    getSettings({ silent: true })
-      .then((settings) => {
-        const available = deriveAvailableBackends(settings, { excludeExternal: true });
-        setBackends(available);
-        // Prefer the configured dispatcher default when it's available —
-        // defaulting to the first list entry would silently send an explicit
-        // `local` override on installs configured for codex/grok.
-        const configured = available.find((b) => b.id === settings?.imageGen?.mode)?.id;
-        setMode((m) => m || configured || available[0]?.id || '');
-      })
-      .catch(() => setBackends([]));
-  }, []);
 
   const candidatesByTarget = useMemo(() => candidates.reduce((acc, c) => {
     const t = c.target || 'main';
@@ -159,7 +145,7 @@ export default function ReferenceWorkflow({ record, reference, renders, onChange
       Backend
       <select
         value={mode}
-        onChange={(e) => setMode(e.target.value)}
+        onChange={(e) => onModeChange(e.target.value)}
         className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
       >
         {backends.map((b) => <option key={b.id} value={b.id}>{b.label || b.id}</option>)}

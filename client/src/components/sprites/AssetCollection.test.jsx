@@ -59,6 +59,27 @@ describe('AssetCollection grouping', () => {
     render(<AssetCollection recordId="example-walker" assets={[]} />);
     expect(screen.queryAllByRole('heading', { level: 4 })).toHaveLength(0);
   });
+
+  it('keeps an unapproved run\'s strip badged `candidate` (#2938)', () => {
+    render(<AssetCollection recordId="example-walker" assets={ASSETS} />);
+    const stripGroup = screen.getByRole('heading', { name: /Strips/ }).parentElement;
+    expect(within(stripGroup).getByText('candidate')).toBeTruthy();
+  });
+
+  it('promotes an approved run\'s assets to `approved` from the walk selection (#2938)', () => {
+    // The strip path is unchanged by approval — the pure classifier still reads
+    // it as `candidate`; the approvedRunIds set is what promotes the badge.
+    render(
+      <AssetCollection
+        recordId="example-walker"
+        assets={ASSETS}
+        approvedRunIds={new Set(['walk-east-abc12345'])}
+      />,
+    );
+    const stripGroup = screen.getByRole('heading', { name: /Strips/ }).parentElement;
+    expect(within(stripGroup).getByText('approved')).toBeTruthy();
+    expect(within(stripGroup).queryByText('candidate')).toBeNull();
+  });
 });
 
 describe('AssetCollection inline actions', () => {
