@@ -91,6 +91,9 @@ const PARAM_ALLOWLIST = new Set([
   // UI correlates queued/running renders by it to rehydrate its in-flight
   // guard after a reload.
   'spriteRef',
+  // Sprite walk-video destination tag (#2897) — record id, direction, run id,
+  // key hex; same rehydration contract as spriteRef, for kind:'video' jobs.
+  'spriteWalk',
 ]);
 function sanitizeJob(job) {
   if (!job) return job;

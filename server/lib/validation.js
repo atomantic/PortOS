@@ -3,7 +3,7 @@ import { ServerError } from './errorHandler.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull } from './zodCompat.js';
 import { WORK_TRACKERS } from './workTracker.js';
 import { SPRITE_ID_PATTERN } from '../services/sprites/recordsLogic.js';
-import { ANCHOR_DIRECTIONS } from '../services/sprites/prompts.js';
+import { ANCHOR_DIRECTIONS, SPRITE_DIRECTIONS } from '../services/sprites/prompts.js';
 import { CHROMA_KEY_HEXES } from '../services/sprites/chromaKey.js';
 import { QUEUEABLE_IMAGE_MODES } from '../services/imageGen/modes.js';
 
@@ -1007,6 +1007,44 @@ export const spriteReferenceLockSchema = z.object({
   candidate: z.string().min(1).max(500),
   // Confirm-through for a clip-risk main lock (409 CHROMA_CLIP_RISK otherwise).
   acceptClipRisk: z.boolean().optional(),
+});
+
+// Phase 3 (issue #2897): walk-animation workflow. All 8 directions are
+// animatable (south's anchor is the frozen main itself).
+const spriteWalkDirectionSchema = z.enum(SPRITE_DIRECTIONS);
+
+const spriteWalkRunIdSchema = z.string().regex(/^walk-[a-z-]+-[0-9a-f]{8}$/);
+
+export const spriteWalkGenerateSchema = z.object({
+  direction: spriteWalkDirectionSchema,
+  // Grok image_to_video accepts exactly these lengths; the service defaults
+  // to the shorter clip when omitted.
+  duration: z.union([z.literal(6), z.literal(10)]).optional(),
+});
+
+export const spriteWalkApproveSchema = z.object({
+  direction: spriteWalkDirectionSchema,
+  runId: spriteWalkRunIdSchema,
+});
+
+export const spriteWalkPostprocessSchema = z.object({
+  runId: spriteWalkRunIdSchema,
+});
+
+const trimColumnsSchema = z.array(z.number().int().min(0).max(255)).min(2).max(256)
+  .refine((cols) => new Set(cols).size === cols.length, { message: 'columns must be unique' });
+
+export const spriteWalkTrimSchema = z.object({
+  slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,79}$/),
+  atlasPath: z.string().min(1).max(500),
+  row: z.number().int().min(0).max(63),
+  cellWidth: z.number().int().min(1).max(4096),
+  cellHeight: z.number().int().min(1).max(4096),
+  fps: z.number().int().min(1).max(60),
+  allColumns: trimColumnsSchema,
+  enabledColumns: trimColumnsSchema,
+  sourceFrameIndices: z.array(z.number().int().min(0)).max(256).optional(),
+  sourceFrameLabels: z.array(z.string().max(200)).max(256).optional(),
 });
 
 // =============================================================================

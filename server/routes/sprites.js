@@ -19,6 +19,10 @@ import {
   spriteCreateSchema,
   spriteReferenceGenerateSchema,
   spriteReferenceLockSchema,
+  spriteWalkGenerateSchema,
+  spriteWalkApproveSchema,
+  spriteWalkPostprocessSchema,
+  spriteWalkTrimSchema,
 } from '../lib/validation.js';
 import { optionalUploadFields } from '../lib/multipart.js';
 import {
@@ -28,6 +32,10 @@ import { importFromSource } from '../services/sprites/importer.js';
 import {
   getReferenceSet, startReferenceGeneration, lockReference, patchSpriteRecord,
 } from '../services/sprites/reference.js';
+import {
+  getWalkState, startWalkGeneration, approveWalkDirection, rerunWalkPostprocess,
+} from '../services/sprites/walk.js';
+import { saveLoopTrim } from '../services/sprites/walkTrims.js';
 
 const router = Router();
 
@@ -63,8 +71,10 @@ router.post('/import', asyncHandler(async (req, res) => {
 router.get('/:id', asyncHandler(async (req, res) => {
   const detail = await getRecordWithAssets(req.params.id);
   if (!detail) throw new ServerError('Sprite record not found', { status: 404, code: 'NOT_FOUND' });
-  const reference = detail.record.kind === 'character' ? await getReferenceSet(req.params.id) : null;
-  res.json({ ...detail, reference });
+  const isCharacter = detail.record.kind === 'character';
+  const reference = isCharacter ? await getReferenceSet(req.params.id) : null;
+  const walk = isCharacter ? await getWalkState(req.params.id) : null;
+  res.json({ ...detail, reference, walk });
 }));
 
 // Queue one reference candidate render (main or a directional anchor).
@@ -90,6 +100,35 @@ router.post('/:id/reference/generate', referenceUpload, asyncHandler(async (req,
 router.post('/:id/reference/lock', asyncHandler(async (req, res) => {
   const body = validateRequest(spriteReferenceLockSchema, req.body);
   res.json(await lockReference(req.params.id, body));
+}));
+
+// Phase 3 (#2897): queue one grok walk video for a locked directional
+// anchor. User-triggered per the AI-provider policy; everything after the
+// clip is deterministic local postprocessing.
+router.post('/:id/walk/generate', asyncHandler(async (req, res) => {
+  const body = validateRequest(spriteWalkGenerateSchema, req.body);
+  res.json(await startWalkGeneration(req.params.id, body));
+}));
+
+// Approve one direction's packaged candidate; the 8th approval freezes the
+// finalized walk set (immutable — 409 on later generate/approve).
+router.post('/:id/walk/approve', asyncHandler(async (req, res) => {
+  const body = validateRequest(spriteWalkApproveSchema, req.body);
+  res.json(await approveWalkDirection(req.params.id, body));
+}));
+
+// Re-run the deterministic postprocess for a run whose video already landed
+// (crash recovery / determinism verification). No AI call involved.
+router.post('/:id/walk/postprocess', asyncHandler(async (req, res) => {
+  const body = validateRequest(spriteWalkPostprocessSchema, req.body);
+  res.json(await rerunWalkPostprocess(req.params.id, body));
+}));
+
+// Non-destructive loop trim: re-pack enabled frames from a packed strip into
+// a versioned trimmed strip + preview GIF. Never mutates the source atlas.
+router.post('/:id/walk/trim', asyncHandler(async (req, res) => {
+  const body = validateRequest(spriteWalkTrimSchema, req.body);
+  res.status(201).json(await saveLoopTrim(req.params.id, body));
 }));
 
 // Chroma-key changes route through patchSpriteRecord, which re-checks the
