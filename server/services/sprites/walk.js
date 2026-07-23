@@ -159,7 +159,10 @@ async function loadRedrawRun(recordId, direction, entry) {
     characterId: recordId,
     direction,
     createdAt: entry.approvedAt,
-    postprocessManifest: manifestRel,
+    // Deliberately NOT `postprocessManifest`: that field names a packaged grok
+    // manifest (frames[] + alignment), and approve/trim resolve it as one. A
+    // redraw manifest is a different schema, so it gets a distinct field.
+    redrawManifest: manifestRel,
     stripPreview: {
       stripPath,
       frameCount,

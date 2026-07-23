@@ -471,7 +471,7 @@ describe('getWalkState', () => {
         direction: 'east',
         status: 'approved',
         kind: 'imported-redraw-walk-cycle',
-        postprocessManifest: REDRAW_MANIFEST_REL,
+        redrawManifest: REDRAW_MANIFEST_REL,
         stripPreview: {
           stripPath: 'imagegen/v19/clean-alpha.png',
           frameCount: 12,
@@ -505,18 +505,12 @@ describe('getWalkState', () => {
       expect((await getWalkState(id)).runs).toEqual([]);
     });
 
+    // The selection is written by the real approval path, so the shadowing
+    // check runs against the entry shape production actually produces.
     it('does not shadow a direction that DOES have a scanned grok run', async () => {
       const id = await characterWithLockedAnchors(newId(), ['east']);
-      const { runId } = await startWalkGeneration(id, { direction: 'east' });
-      await mkdir(join(TEST_ROOT, 'sprites', id, 'walk'), { recursive: true });
-      await writeFile(join(TEST_ROOT, 'sprites', id, 'walk', `${id}-walk-selection-v1.json`), JSON.stringify({
-        schemaVersion: 1,
-        characterId: id,
-        status: 'in-progress',
-        directions: {
-          east: { status: 'approved', runId, runManifest: `grok/${runId}/animation-run.json` },
-        },
-      }));
+      const { runId } = await makeCandidateRun(id, 'east');
+      await approveWalkDirection(id, { direction: 'east', runId });
       const { runs } = await getWalkState(id);
       expect(runs).toHaveLength(1);
       expect(runs[0].kind).toBe('grok-game-animation-frames-run');
