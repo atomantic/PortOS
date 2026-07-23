@@ -1,5 +1,9 @@
 # Unreleased
 
+## Local LLMs
+
+- **Installing or removing an Ollama model now refreshes provider model pickers instantly** — the Ollama provider (and any Claude/Codex/Gemini CLI running against a local Ollama daemon) picks up the change immediately instead of waiting for a manual "Refresh Models" click. The scheduled-task model picker also stays in sync automatically, no app restart required.
+
 ## Music studio
 
 - **[issue-2911] Compose looping 8-bit game music from a prompt** — the Track editor gains a "Chiptune score" generation mode alongside the on-device audio models: describe the music, pick any configured AI provider/model, and it composes a structured NES-style score (two pulse channels, triangle bass, noise drums) that plays as a seamless loop right in the browser. Revise it conversationally ("more drums", "make it spookier") or start fresh, render takes into the track's regular render history as audio loops, and publish straight into a managed game app's repo (default `game/assets/music/`) as a game-ready OGG plus its editable score source — so a Godot game can drop the loop in as background music. The provider pin and publish target are remembered between sessions.
