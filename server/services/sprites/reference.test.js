@@ -12,6 +12,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import sharp from 'sharp';
 import { mkdir, writeFile, readFile } from 'fs/promises';
+import { writeCandidatePng, placeCandidate as placeCandidateFixture } from './spriteTestFixtures.js';
 
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-reference-test-'));
 
@@ -61,32 +62,7 @@ async function createCharacter(id, input = {}) {
   return records.createRecord({ kind: 'character', name: 'Hero', ...input }, id);
 }
 
-// A green character rectangle on a magenta background — the legacy Pioneer
-// shape, so auto-selection should keep magenta.
-async function writeCandidatePng(path, { bg = { r: 255, g: 0, b: 255 }, fg = { r: 23, g: 107, b: 101 } } = {}) {
-  const w = 64; const h = 64;
-  const buf = Buffer.alloc(w * h * 3);
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const inRect = x >= 20 && x < 30 && y >= 10 && y < 40;
-      const c = inRect ? fg : bg;
-      const i = (y * w + x) * 3;
-      buf[i] = c.r; buf[i + 1] = c.g; buf[i + 2] = c.b;
-    }
-  }
-  await mkdir(join(path, '..'), { recursive: true });
-  await sharp(buf, { raw: { width: w, height: h, channels: 3 } }).png().toFile(path);
-}
-
-async function placeCandidate(recordId, target, name, opts = {}) {
-  const candDir = join(TEST_ROOT, 'sprites', recordId, 'reference', 'candidates');
-  await mkdir(candDir, { recursive: true });
-  await writeCandidatePng(join(candDir, name), opts);
-  await writeFile(join(candDir, `${name.replace(/\.png$/, '')}.generation.json`), JSON.stringify({
-    schemaVersion: 1, target, chromaKey: opts.sidecarKey ?? '#FF00FF',
-  }));
-  return `reference/candidates/${name}`;
-}
+const placeCandidate = (recordId, target, name, opts) => placeCandidateFixture(TEST_ROOT, recordId, target, name, opts);
 
 async function lockMain(recordId) {
   const rel = await placeCandidate(recordId, 'main', 'walk-south-candidate-01.png');
