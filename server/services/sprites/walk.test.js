@@ -373,4 +373,47 @@ describe('getWalkState', () => {
     expect(runs).toHaveLength(2);
     expect(runs[0].id).toBe(second.runId);
   });
+
+  // Imported run records (issue #2895 importer, ElsewhereAcres source
+  // pipeline) stamp createdAt as a Python time.time() epoch-seconds float
+  // and stripPreview as { path: <source-repo-relative> } instead of
+  // PortOS's own { stripPath: <record-relative> } — sorting the former
+  // with .localeCompare threw and 500'd the whole detail endpoint, and
+  // rendering the latter through spriteAssetUrl() 404'd. Both must be
+  // tolerated without mutating the file on disk (its hash is pinned and
+  // verified against the source manifest at import time).
+  it('sorts an imported numeric-createdAt run behind a native run and normalizes its stripPreview', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const legacyRunId = 'walk-east-legacy01';
+    const legacyStripRel = `grok/${legacyRunId}/generated/${id}-walk-east-strip.png`;
+    const legacyDir = join(TEST_ROOT, 'sprites', id, 'grok', legacyRunId, 'generated');
+    await mkdir(legacyDir, { recursive: true });
+    await writeFile(join(legacyDir, `${id}-walk-east-strip.png`), 'legacy-strip');
+    const legacyPath = join(TEST_ROOT, 'sprites', id, 'grok', legacyRunId, 'animation-run.json');
+    await writeFile(legacyPath, JSON.stringify({
+      schemaVersion: 1,
+      kind: 'grok-game-animation-frames-run',
+      status: 'candidate',
+      id: legacyRunId,
+      characterId: id,
+      direction: 'east',
+      createdAt: 1700000000.123456, // source pipeline epoch-seconds float, well in the past
+      stripPreview: {
+        path: `art-source/sprites/${id}/${legacyStripRel}`,
+        frameCount: 8, fps: 12, cellWidth: 384, cellHeight: 384, row: 0, startColumn: 0,
+      },
+    }));
+    const legacyBytesBefore = await readFile(legacyPath);
+
+    const { runId: nativeRunId } = await startWalkGeneration(id, { direction: 'east' });
+    const { runs } = await getWalkState(id);
+
+    expect(runs).toHaveLength(2);
+    expect(runs[0].id).toBe(nativeRunId); // native ISO createdAt sorts first
+    const legacy = runs.find((r) => r.id === legacyRunId);
+    expect(legacy.stripPreview.stripPath).toBe(legacyStripRel);
+    // Normalization happens in memory only — the imported file (and its
+    // hash-pinned provenance) is never rewritten on disk.
+    expect(await readFile(legacyPath)).toEqual(legacyBytesBefore);
+  });
 });

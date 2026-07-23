@@ -32,6 +32,31 @@ export const RUNTIME_POINTER_REL = 'runtime/current.json';
 export const RUNTIME_PUBLICATIONS_REL = 'runtime/publications.json';
 
 /**
+ * Normalize an asset-path field read out of an imported manifest to the
+ * record-relative form `spriteAssetUrl`/`resolveSpriteAssetPath` expect. The
+ * source pipeline embeds paths anchored at ITS repo root
+ * (`art-source/sprites/<recordId>/...`) inside every manifest, and the
+ * importer copies those manifests byte-for-byte — their hashes are pinned
+ * and verified against the source, so importer.js never rewrites the copied
+ * JSON content. Readers that treat an embedded path as record-relative (the
+ * convention every PortOS-generated manifest already follows) must strip
+ * that source-repo prefix at read time instead. Returns null for a path
+ * that isn't inside this record (repo-anchored provenance, e.g. a pipeline
+ * script path) or for missing/empty/traversal-shaped input. A path with no
+ * repo-anchor segment is assumed already record-relative and passed through
+ * unchanged — this is what makes the helper a no-op for PortOS's own runs.
+ */
+export function toRecordRelativeAssetPath(recordId, rawPath) {
+  if (typeof rawPath !== 'string' || !rawPath) return null;
+  const marker = `art-source/sprites/${recordId}/`;
+  const idx = rawPath.indexOf(marker);
+  const rel = idx >= 0 ? rawPath.slice(idx + marker.length) : rawPath;
+  if (idx < 0 && /^(art-pipeline|art-source|game)\//.test(rel)) return null;
+  if (!rel || rel.split(/[\\/]/).some((seg) => seg === '..' || seg === '')) return null;
+  return rel;
+}
+
+/**
  * Resolve a relative asset path inside a record's directory, refusing any
  * path that escapes it (`..`, absolute paths).
  */

@@ -29,7 +29,7 @@ import { enqueueJob } from '../mediaJobQueue/index.js';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
 import { getSettings } from '../settings.js';
 import { updateRecord } from './records.js';
-import { spriteDir, resolveSpriteAssetPath } from './paths.js';
+import { spriteDir, resolveSpriteAssetPath, toRecordRelativeAssetPath } from './paths.js';
 import { requireCharacter, loadManifest } from './reference.js';
 import { SPRITE_DIRECTIONS, anchorIdForDirection, buildWalkVideoPrompt } from './prompts.js';
 import {
@@ -86,6 +86,30 @@ async function requireUnfinalized(recordId) {
   }
 }
 
+// PortOS stamps createdAt as an ISO string (Date.parse handles it); imported
+// source-pipeline run records (issue #2895 importer) stamp it as a Python
+// time.time() epoch-seconds float instead — .localeCompare on that throws
+// and 500s the whole detail endpoint. Normalize both to comparable ms.
+function runCreatedAtMs(createdAt) {
+  if (typeof createdAt === 'number') return createdAt * 1000;
+  const ms = Date.parse(createdAt);
+  return Number.isNaN(ms) ? 0 : ms;
+}
+
+// PortOS's own postprocess stamps `stripPreview.stripPath` record-relative
+// (walkPostprocess.js). The imported source pipeline stamps the same field
+// as `stripPreview.path`, anchored at ITS repo root — the importer copies
+// manifests byte-for-byte (hashes are pinned and verified against the
+// source, so importer.js never rewrites them), so the mismatch is fixed up
+// here, in memory, at read time instead. Never written back to disk.
+function normalizeStripPreview(recordId, run) {
+  if (!run?.stripPreview) return run;
+  const raw = run.stripPreview.stripPath ?? run.stripPreview.path;
+  const stripPath = toRecordRelativeAssetPath(recordId, raw);
+  if (!stripPath) return run;
+  return { ...run, stripPreview: { ...run.stripPreview, stripPath } };
+}
+
 /**
  * Walk-workflow view for the detail endpoint: every animation run (newest
  * first), the per-direction selection, and the finalized set when present.
@@ -105,7 +129,8 @@ export async function getWalkState(recordId) {
         .map((e) => loadRunRecord(recordId, e.name)),
     ).then((loaded) => loaded
       .filter(Boolean)
-      .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))),
+      .map((run) => normalizeStripPreview(recordId, run))
+      .sort((a, b) => runCreatedAtMs(b.createdAt) - runCreatedAtMs(a.createdAt))),
     loadSelection(recordId),
     loadWalkSet(recordId),
   ]);
