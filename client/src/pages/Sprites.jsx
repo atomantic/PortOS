@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { PersonStanding, Package, Download, X, RefreshCw, Plus } from 'lucide-react';
 import toast from '../components/ui/Toast';
@@ -314,13 +314,22 @@ export default function Sprites() {
   // closures below from rebuilding every render.
   const { beginSubmit: walkBegin, resolveSubmit: walkResolve, cancelSubmit: walkCancel } = walkRenders;
   const { beginSubmit: refBegin, resolveSubmit: refResolve, cancelSubmit: refCancel } = referenceRenders;
+  // Since the render-tracking hook is now page-owned and survives a record
+  // switch (it clears its map on switch), a submit started for record A that
+  // resolves AFTER navigating to B would otherwise land A's jobId in B's map
+  // (a spurious "Rendering…" on a direction B isn't rendering). Capture the
+  // record the submit belongs to and skip resolve/cancel if we've moved on —
+  // the switch already wiped A's sentinel, so there's nothing to clean up.
+  const idRef = useRef(id);
+  useEffect(() => { idRef.current = id; }, [id]);
   const submitRender = useCallback(async (begin, resolve, cancel, key, call, failMessage) => {
+    const startId = idRef.current;
     begin(key);
     try {
       const { jobId } = await call();
-      resolve(key, jobId);
+      if (idRef.current === startId) resolve(key, jobId);
     } catch (err) {
-      cancel(key);
+      if (idRef.current === startId) cancel(key);
       toast.error(err?.message || failMessage);
     }
   }, []);

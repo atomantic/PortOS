@@ -64,6 +64,12 @@ const TRIM_DIRECTION_MATCH = new RegExp(`^walk/trims/(${DIRECTION_ALTERNATION})-
 const RUN_DIR_MATCH = /^(?:grok|runs)\/([^/]+)\//;
 const MANIFEST_EXT = /\.(json|ya?ml|txt|md|csv)$/i;
 const ANIMATION_EXT = /\.(gif|mp4|webm|mov|m4v)$/i;
+// A packed walk strip's filename. Native runs write `<id>-walk-<dir>-strip.png`,
+// but imported layouts name theirs `strip.png` or `strip-video-12-clean-alpha.png`
+// — so match a `strip` token at a word boundary, not just the `-strip` infix
+// (which would drop every imported strip into the generic sprite bucket and
+// strip it of its Regenerate/Trim actions). `stripe.png` stays excluded.
+const STRIP_FILE = /(^|[-_])strips?([-_.]|$)/i;
 // `runtime/vN/` — the published-atlas version lives in the directory, not the
 // filename, so supersede detection has to read it from there.
 const RUNTIME_VERSION_DIR = /^runtime\/v(\d+)\//;
@@ -83,7 +89,7 @@ function roleFor(path) {
   if (ANIMATION_EXT.test(path)) return 'animation';
   if (path.includes('/review/') || fileOf(path).includes('contrast-review')) return 'evidence';
   if (path.includes('/generated/frames/')) return 'frame';
-  if (fileOf(path).includes('-strip')) return 'strip';
+  if (STRIP_FILE.test(fileOf(path))) return 'strip';
   if (path.startsWith('runtime/') || path.startsWith('atlas/')) return 'atlas';
   if (path.startsWith('reference/')) return 'reference';
   return 'sprite';
@@ -98,7 +104,11 @@ function statusFor(path) {
   if (path.startsWith('reference/candidates/')) return 'candidate';
   if (path.startsWith('reference/uploads/')) return 'source';
   if (path.startsWith('reference/')) return 'approved';
-  // A saved trim is a deliberate, named output — not a raw run intermediate.
+  // A saved trim is a derived DRAFT loop, not a finalized artifact — its own
+  // producer manifest carries `status: candidate` — so it must not badge as
+  // approved (that would read as reviewed/locked when it isn't).
+  if (path.startsWith('walk/trims/')) return 'candidate';
+  // Other imported `walk/` production assets are approved outputs.
   if (path.startsWith('walk/')) return 'approved';
   if (RUN_DIR_MATCH.test(path)) return 'candidate';
   return 'source';
