@@ -4,16 +4,18 @@ import { PersonStanding, Package, Download, FolderOpen, X, RefreshCw, Plus } fro
 import toast from '../components/ui/Toast';
 import { listSpriteRecords, getSpriteRecord, importSprites, createSpriteRecord } from '../services/apiSprites.js';
 import ReferenceWorkflow from '../components/sprites/ReferenceWorkflow.jsx';
+import WalkWorkflow from '../components/sprites/WalkWorkflow.jsx';
 import { spriteAssetUrl } from '../components/sprites/spriteAssets.js';
 import { useAsyncAction } from '../hooks/useAsyncAction.js';
 import { formatBytes, timeAgo } from '../utils/formatters.js';
 
 // Sprite Manager: library over imported production sprites — characters
 // (reference sets, walk strips, runtime atlases) and props atlas families —
-// plus the source-tree importer (#2895) and the phase-2 reference workflow
+// plus the source-tree importer (#2895), the phase-2 reference workflow
 // (create a character, generate + freeze the main reference, derive + lock
-// the 8 directional anchors — #2896). Animation and publish land in later
-// phases.
+// the 8 directional anchors — #2896), and the phase-3 walk workflow (one
+// grok i2v clip per anchor, deterministic packaging, per-direction approval
+// into the finalized walk set — #2897). Publish lands in phase 4.
 
 const IMAGE_EXT = /\.(png|gif|webp|jpe?g)$/i;
 
@@ -216,8 +218,17 @@ function RecordList({ records, selectedId, onSelect }) {
   );
 }
 
-function AssetGroups({ recordId, assets }) {
+// Raw ffmpeg-extracted frame intermediates (30–96 PNGs per walk run) would
+// swamp the asset browser — hide them, matching the importer's exclusion of
+// raw/ from cross-machine copies. They stay on disk for the postprocessor.
+const RUN_RAW_INTERMEDIATE = /^grok\/[^/]+\/generated\/raw\//;
+
+function AssetGroups({ recordId, assets: allAssets }) {
   const [preview, setPreview] = useState(null);
+  const assets = useMemo(
+    () => allAssets.filter((a) => !RUN_RAW_INTERMEDIATE.test(a.path)),
+    [allAssets],
+  );
   const groups = useMemo(() => assets.reduce((acc, a) => {
     const g = topLevelGroup(a.path) || 'files';
     (acc[g] ||= []).push(a);
@@ -372,11 +383,19 @@ export default function Sprites() {
               )}
             </div>
             {detail.record.kind === 'character' && (
-              <ReferenceWorkflow
-                record={detail.record}
-                reference={detail.reference}
-                onChanged={onWorkflowChanged}
-              />
+              <>
+                <ReferenceWorkflow
+                  record={detail.record}
+                  reference={detail.reference}
+                  onChanged={onWorkflowChanged}
+                />
+                <WalkWorkflow
+                  record={detail.record}
+                  reference={detail.reference}
+                  walk={detail.walk}
+                  onChanged={onWorkflowChanged}
+                />
+              </>
             )}
             {detail.assets.length === 0 ? (
               <p className="text-sm text-gray-500">No assets on disk for this record.</p>

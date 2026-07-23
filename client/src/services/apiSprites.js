@@ -45,3 +45,28 @@ export const generateSpriteReference = (id, { referenceImageFile, ...fields }, o
 export const lockSpriteReference = (id, body, options = {}) => request(`/sprites/${encodeURIComponent(id)}/reference/lock`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
+
+// Phase 3 (#2897): walk-animation workflow — one grok i2v clip per locked
+// directional anchor, deterministic server-side packaging, per-direction
+// approval into the finalized walk set.
+
+// Queue one walk video render. Returns { jobId, runId, direction, duration }.
+export const generateSpriteWalk = (id, body, options = {}) => request(`/sprites/${encodeURIComponent(id)}/walk/generate`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+
+// Approve a packaged candidate run for its direction. Returns the updated
+// { runs, selection, walkSet } walk state.
+export const approveSpriteWalk = (id, body, options = {}) => request(`/sprites/${encodeURIComponent(id)}/walk/approve`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+
+// Re-run the deterministic postprocess on a run whose video already landed.
+export const postprocessSpriteWalk = (id, body, options = {}) => request(`/sprites/${encodeURIComponent(id)}/walk/postprocess`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+
+// Save a non-destructive loop trim (strip + GIF + manifest, versioned).
+export const trimSpriteWalk = (id, body, options = {}) => request(`/sprites/${encodeURIComponent(id)}/walk/trim`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});

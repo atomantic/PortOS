@@ -1,0 +1,326 @@
+import { useEffect, useMemo, useState } from 'react';
+import { Check, Film, RefreshCw, Scissors, Lock } from 'lucide-react';
+import toast from '../ui/Toast';
+import {
+  generateSpriteWalk, approveSpriteWalk, postprocessSpriteWalk, trimSpriteWalk,
+} from '../../services/apiSprites.js';
+import { getMediaJob, listMediaJobs } from '../../services/apiMediaJobs.js';
+import { useAsyncAction } from '../../hooks/useAsyncAction.js';
+import { spriteAssetUrl } from './spriteAssets.js';
+
+// Walk workflow (issue #2897): one grok image_to_video clip per locked
+// directional anchor, deterministic server-side packaging into the 8-phase
+// strip, per-direction review (loop preview + optional trim) and approval.
+// The server's run records / selection / walk-set are the source of truth;
+// this component renders them and fires generate/approve/trim.
+
+// Mirrors server/services/sprites/walkPostprocess.js WALK_PHASES.
+const WALK_PHASES = [
+  'left-contact', 'left-down', 'left-passing', 'left-up',
+  'right-contact', 'right-down', 'right-passing', 'right-up',
+];
+const CELL_PX = 96; // preview cell size — the strip animates at 96px/frame
+const LOOP_KEYFRAMES = `@keyframes sprite-walk-loop { to { background-position-x: -${CELL_PX * 8}px } }`;
+
+// Animated preview of a packed 8-frame strip: the strip PNG as a stepped
+// background animation (8 frames at 12fps ≈ 0.67s per loop).
+function StripLoop({ recordId, stripPath, paused = false }) {
+  return (
+    <div
+      role="img"
+      aria-label="walk loop preview"
+      className="bg-port-bg border border-port-border rounded"
+      style={{
+        width: CELL_PX,
+        height: CELL_PX,
+        backgroundImage: `url(${spriteAssetUrl(recordId, stripPath)})`,
+        backgroundSize: `${CELL_PX * 8}px ${CELL_PX}px`,
+        imageRendering: 'pixelated',
+        animation: paused ? 'none' : 'sprite-walk-loop 0.667s steps(8) infinite',
+      }}
+    />
+  );
+}
+
+// Frame enable/disable trimmer for one packaged run — non-destructive: the
+// server re-packs enabled frames into a versioned strip + GIF.
+function TrimPanel({ recordId, run, onClose }) {
+  const [enabled, setEnabled] = useState(() => new Set(WALK_PHASES.map((_, i) => i)));
+  const [result, setResult] = useState(null);
+  const toggle = (i) => setEnabled((prev) => {
+    const next = new Set(prev);
+    if (next.has(i)) next.delete(i); else next.add(i);
+    return next;
+  });
+  const [save, saving] = useAsyncAction(async () => {
+    const trim = await trimSpriteWalk(recordId, {
+      slug: `${run.direction}-loop`,
+      atlasPath: run.stripPreview.stripPath,
+      row: 0,
+      cellWidth: run.stripPreview.cellWidth,
+      cellHeight: run.stripPreview.cellHeight,
+      fps: run.stripPreview.fps,
+      allColumns: WALK_PHASES.map((_, i) => i),
+      enabledColumns: [...enabled].sort((a, b) => a - b),
+      sourceFrameLabels: [...enabled].sort((a, b) => a - b).map((i) => WALK_PHASES[i]),
+    }, { silent: true });
+    setResult(trim);
+    toast.success(`Trim saved (${trim.frameCount} frames)`);
+  }, { errorMessage: 'Trim failed' });
+
+  return (
+    <div className="bg-port-bg border border-port-border rounded p-2 space-y-2">
+      <div className="grid grid-cols-4 gap-1">
+        {WALK_PHASES.map((phase, i) => (
+          <label key={phase} className="flex items-center gap-1 text-[10px] text-gray-400 cursor-pointer">
+            <input type="checkbox" checked={enabled.has(i)} onChange={() => toggle(i)} />
+            <span className="truncate" title={phase}>{i}·{phase}</span>
+          </label>
+        ))}
+      </div>
+      <div className="flex items-center gap-2">
+        <button
+          onClick={save}
+          disabled={saving || enabled.size < 2}
+          className="px-2 py-0.5 text-xs bg-port-accent text-white rounded disabled:opacity-50"
+        >
+          {saving ? 'Saving…' : `Save trim (${enabled.size}/8)`}
+        </button>
+        <button onClick={onClose} className="px-2 py-0.5 text-xs text-gray-400 hover:text-white">Close</button>
+      </div>
+      {result && (
+        <div className="flex items-center gap-2">
+          <img
+            src={spriteAssetUrl(recordId, result.loop)}
+            alt="trimmed loop"
+            className="w-24 h-24 object-contain bg-port-card border border-port-border rounded"
+            style={{ imageRendering: 'pixelated' }}
+          />
+          <p className="text-[10px] text-gray-500 break-all">{result.loop}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DirectionCard({
+  recordId, direction, anchorLocked, run, approved, finalized, pending, onGenerate, onApprove, onRetry,
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const [trimming, setTrimming] = useState(false);
+  const candidate = run?.status === 'candidate' ? run : null;
+  const statusLabel = approved ? 'approved'
+    : pending ? 'rendering…'
+      : run?.status === 'postprocessing' ? 'packaging…'
+        : run?.status || (anchorLocked ? 'ready' : 'anchor not locked');
+
+  return (
+    <div className="bg-port-bg border border-port-border rounded p-2 space-y-1.5">
+      <p className="text-xs text-gray-400 flex items-center justify-between">
+        {direction}
+        <span className={`text-[10px] ${approved ? 'text-port-success' : run?.status === 'error' ? 'text-port-error' : 'text-gray-500'}`}>
+          {approved && <Check className="w-3 h-3 inline mr-0.5" />}{statusLabel}
+        </span>
+      </p>
+
+      {(approved || candidate) && run?.stripPreview?.stripPath && (
+        <StripLoop recordId={recordId} stripPath={run.stripPreview.stripPath} />
+      )}
+
+      {run?.status === 'error' && (
+        <div className="space-y-1">
+          <p className="text-[10px] text-port-error break-words">{run.postprocessError || 'postprocess failed'}</p>
+          <button onClick={() => onRetry(run)} className="px-2 py-0.5 text-[10px] bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent">
+            Retry postprocess
+          </button>
+        </div>
+      )}
+
+      {!finalized && !approved && (
+        <div className="space-y-1.5">
+          <button
+            onClick={() => onGenerate(direction)}
+            disabled={!anchorLocked || pending}
+            title={anchorLocked ? undefined : 'Lock this direction\'s reference anchor first'}
+            className="flex items-center gap-1 w-full justify-center px-2 py-1 text-xs bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent disabled:opacity-50"
+          >
+            {pending
+              ? <><RefreshCw className="w-3 h-3 animate-spin" /> Rendering…</>
+              : <><Film className="w-3 h-3" /> {candidate ? 'Regenerate' : 'Generate walk'}</>}
+          </button>
+          {candidate && (
+            confirming ? (
+              <div className="flex items-center gap-1 text-xs">
+                <span className="text-port-warning">Approve?</span>
+                <button onClick={() => { setConfirming(false); onApprove(direction, candidate.id); }} className="px-1.5 py-0.5 bg-port-accent text-white rounded">Yes</button>
+                <button onClick={() => setConfirming(false)} className="px-1.5 py-0.5 text-gray-400 hover:text-white">No</button>
+              </div>
+            ) : (
+              <div className="flex gap-1">
+                <button onClick={() => setConfirming(true)} className="flex-1 px-2 py-0.5 text-xs bg-port-success/20 border border-port-success rounded text-port-success">
+                  Approve
+                </button>
+                <button
+                  onClick={() => setTrimming((t) => !t)}
+                  title="Trim loop frames"
+                  className="px-2 py-0.5 text-xs bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent"
+                >
+                  <Scissors className="w-3 h-3" />
+                </button>
+              </div>
+            )
+          )}
+          {trimming && candidate && (
+            <TrimPanel recordId={recordId} run={candidate} onClose={() => setTrimming(false)} />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function WalkWorkflow({ record, reference, walk, onChanged }) {
+  const recordId = record.id;
+  const manifest = reference?.manifest || null;
+  const runs = walk?.runs || [];
+  const selection = walk?.selection || null;
+  const finalized = Boolean(walk?.walkSet);
+  // direction → jobId for in-flight video renders.
+  const [pendingJobs, setPendingJobs] = useState({});
+
+  // Rehydrate in-flight walk renders on mount/record switch (same contract
+  // as ReferenceWorkflow's rehydrate — a reload must not re-enable Generate
+  // mid-render).
+  useEffect(() => {
+    let stale = false;
+    listMediaJobs({ kind: 'video', owner: 'sprites' }, { silent: true })
+      .then((jobs) => {
+        if (stale) return;
+        const active = {};
+        for (const job of jobs || []) {
+          const tag = job.params?.spriteWalk;
+          if (tag?.recordId === recordId && ['queued', 'running'].includes(job.status)) {
+            active[tag.direction] = job.id;
+          }
+        }
+        if (Object.keys(active).length > 0) setPendingJobs((prev) => ({ ...active, ...prev }));
+      })
+      .catch(() => {});
+    return () => { stale = true; };
+  }, [recordId]);
+
+  // Poll in-flight renders; the completion hook packages server-side, so a
+  // finished job needs one deferred refetch (plus a late sweep — the
+  // postprocess takes seconds, unlike the reference hook's instant copy).
+  useEffect(() => {
+    if (Object.keys(pendingJobs).length === 0) return undefined;
+    const timer = setInterval(async () => {
+      const entries = Object.entries(pendingJobs).filter(([, jobId]) => jobId !== 'submitting');
+      const results = await Promise.all(entries.map(async ([direction, jobId]) => {
+        try {
+          return { direction, job: await getMediaJob(jobId) };
+        } catch (err) {
+          return { direction, job: null, gone: err?.status === 404 };
+        }
+      }));
+      const finished = results.filter(({ job, gone }) => (job ? ['completed', 'failed', 'canceled'].includes(job.status) : gone));
+      if (finished.length === 0) return;
+      setPendingJobs((prev) => {
+        const next = { ...prev };
+        for (const { direction } of finished) delete next[direction];
+        return next;
+      });
+      for (const { direction, job } of finished) {
+        if (job?.status === 'failed') toast.error(`Walk render failed for ${direction}: ${job.error || 'see media jobs'}`);
+      }
+      // The deterministic postprocess runs after the job completes — sweep
+      // twice so the packaged candidate (or its error) lands in the UI.
+      setTimeout(onChanged, 1500);
+      setTimeout(onChanged, 8000);
+    }, 4000);
+    return () => clearInterval(timer);
+  }, [pendingJobs, onChanged]);
+
+  const latestRunByDirection = useMemo(() => {
+    const byDir = {};
+    for (const run of runs) {
+      // runs arrive newest-first; prefer the approved run when one exists.
+      if (!byDir[run.direction]) byDir[run.direction] = run;
+    }
+    for (const [direction, sel] of Object.entries(selection?.directions || {})) {
+      const approvedRun = runs.find((r) => r.id === sel.runId);
+      if (approvedRun) byDir[direction] = approvedRun;
+    }
+    return byDir;
+  }, [runs, selection]);
+
+  const generate = async (direction) => {
+    setPendingJobs((prev) => ({ ...prev, [direction]: 'submitting' }));
+    try {
+      const { jobId } = await generateSpriteWalk(recordId, { direction }, { silent: true });
+      setPendingJobs((prev) => ({ ...prev, [direction]: jobId }));
+    } catch (err) {
+      setPendingJobs((prev) => {
+        const next = { ...prev };
+        if (next[direction] === 'submitting') delete next[direction];
+        return next;
+      });
+      toast.error(err?.message || `Failed to queue ${direction} walk`);
+    }
+  };
+
+  const [approve] = useAsyncAction(async (direction, runId) => {
+    await approveSpriteWalk(recordId, { direction, runId }, { silent: true });
+    toast.success(`Walk ${direction} approved`);
+    onChanged();
+  }, { errorMessage: 'Approve failed' });
+
+  const [retryPostprocess] = useAsyncAction(async (run) => {
+    await postprocessSpriteWalk(recordId, { runId: run.id }, { silent: true });
+    toast.success('Postprocess complete');
+    onChanged();
+  }, { errorMessage: 'Postprocess failed' });
+
+  // The walk workflow only becomes actionable once the main is frozen (the
+  // south anchor IS the main); hide it entirely before that.
+  if (!manifest?.mainReference?.locked) return null;
+
+  const approvedCount = Object.values(selection?.directions || {})
+    .filter((d) => d?.status === 'approved').length;
+
+  return (
+    <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
+      <style>{LOOP_KEYFRAMES}</style>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-white flex items-center gap-1.5">
+          <Film className="w-4 h-4" /> Walk Cycles
+          <span className="text-xs font-normal text-gray-500">
+            {finalized ? 'finalized' : `${approvedCount}/8 approved`}
+          </span>
+        </h3>
+        {finalized && (
+          <p className="text-xs text-port-success flex items-center gap-1">
+            <Lock className="w-3 h-3" /> walk set frozen · immutable
+          </p>
+        )}
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+        {(manifest.anchors || []).map((anchor) => (
+          <DirectionCard
+            key={anchor.direction}
+            recordId={recordId}
+            direction={anchor.direction}
+            anchorLocked={anchor.status === 'locked'}
+            run={latestRunByDirection[anchor.direction] || null}
+            approved={selection?.directions?.[anchor.direction]?.status === 'approved'}
+            finalized={finalized}
+            pending={Boolean(pendingJobs[anchor.direction])}
+            onGenerate={generate}
+            onApprove={approve}
+            onRetry={retryPostprocess}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
