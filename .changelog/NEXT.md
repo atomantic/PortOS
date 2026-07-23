@@ -1,9 +1,5 @@
 # Unreleased
 
-## Local LLMs
-
-- **Installing or removing an Ollama model now refreshes provider model pickers instantly** — the Ollama provider (and any Claude/Codex/Gemini CLI running against a local Ollama daemon) picks up the change immediately instead of waiting for a manual "Refresh Models" click. The scheduled-task model picker also stays in sync automatically, no app restart required.
-
 ## Music studio
 
 - **[issue-2911] Compose looping 8-bit game music from a prompt** — the Track editor gains a "Chiptune score" generation mode alongside the on-device audio models: describe the music, pick any configured AI provider/model, and it composes a structured NES-style score (two pulse channels, triangle bass, noise drums) that plays as a seamless loop right in the browser. Revise it conversationally ("more drums", "make it spookier") or start fresh, render takes into the track's regular render history as audio loops, and publish straight into a managed game app's repo (default `game/assets/music/`) as a game-ready OGG plus its editable score source — so a Godot game can drop the loop in as background music. The provider pin and publish target are remembered between sessions.
@@ -43,6 +39,7 @@
 
 ## Fixed
 
+- **Installing or removing an Ollama model now refreshes provider model pickers instantly** — the Ollama provider (and any Claude/Codex/Gemini CLI running against a local Ollama daemon) picks up the change immediately instead of waiting for a manual "Refresh Models" click on the AI Providers page. The scheduled-task model picker also stays in sync automatically, no app restart required.
 - **Hugging Face models with a custom quant scheme no longer produce an uninstallable Ollama id** — `quantFromFilename` matched a standard quant anywhere at the end of a GGUF filename, so a repo-specific scheme suffix bled into a bogus tag (`BTL-3-Compact-AVQ2.gguf` → `Q2`) and the resulting `hf.co/<repo>:Q2` pull failed with Ollama's `400 The specified tag is not a valid quantization scheme`. The quant now has to be its own trailing token (start-of-name or after a `-`/`_`/`.`); when nothing parses, the install id falls back to the bare repo, which Ollama resolves through its `latest` manifest.
 - **CoS task cards no longer render a wall of prompt text** — a task's `context`, `blockedReason`/`blocker`, and challenge `reason` are now clamped to two lines with a Show more/Show less toggle, matching the description. Orchestrator tasks (e.g. the Creative Director production plan) store their entire prompt in `metadata.context`, so one pending task previously rendered as thousands of pixels of unclamped text the user had to scroll past to reach the rest of the queue; auto-blocked tasks had the same problem with LLM/stderr-derived block reasons, and a challenge reason is free text a worker agent writes to argue its case. The clamp+toggle (measured overflow, so the toggle only appears when the text actually spills) is extracted from `TaskItem` into a shared `client/src/components/ui/CollapsibleText.jsx`. Editing a task's context also moves from a single-line `<input>` to a bounded scrolling `<textarea>`, which was unusable for a multi-thousand-character prompt.
 - `executeTuiRun`'s `finish()` now always settles its run promise even if a finalization step throws, so a one-shot TUI run can no longer hang forever (leaking the PTY and wedging `/runs`).
