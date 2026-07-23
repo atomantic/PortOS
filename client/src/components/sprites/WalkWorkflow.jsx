@@ -53,8 +53,10 @@ function StripLoop({ recordId, stripPreview }) {
     // carry the checkerboard — that goes on a wrapper sized to match, and shows
     // through the frame's alpha (#2930). SpritePreview doesn't fit here: there
     // is no <img>, the animation is a stepped background scrub.
+    // `overflow-hidden` matters: the strip is painted by the INNER div, whose
+    // corners are square, so without clipping it covers the rounded corners.
     <div
-      className="border border-port-border rounded"
+      className="border border-port-border rounded overflow-hidden"
       style={{ width: CELL_PX, height, ...checkerboardStyle(6) }}
     >
       <div

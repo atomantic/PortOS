@@ -9,10 +9,10 @@
  * handling, focus trap, and focus restore to the thumbnail that opened it.
  */
 
-import { Download, ClipboardCopy, X } from 'lucide-react';
+import { Download, ClipboardCopy, ExternalLink, X } from 'lucide-react';
 import Modal from '../ui/Modal.jsx';
 import SpritePreview from './SpritePreview.jsx';
-import { spriteAssetUrl, hasSpritePreview } from './spriteAssets.js';
+import { spriteAssetUrl, hasSpritePreview, isVideoAsset } from './spriteAssets.js';
 import { formatBytes, timeAgo } from '../../utils/formatters.js';
 import { copyToClipboard } from '../../lib/clipboard.js';
 
@@ -58,6 +58,11 @@ export default function AssetInspector({ recordId, asset, onClose }) {
             cell={10}
             loading="eager"
           />
+        ) : isVideoAsset(asset) ? (
+          // A walk run's grok source clip lives in the listing; play it here
+          // rather than forcing a download just to review a render.
+          // eslint-disable-next-line jsx-a11y/media-has-caption
+          <video src={url} controls className="w-full max-h-[55vh] bg-port-bg rounded border border-port-border" />
         ) : (
           <p className="text-xs text-gray-500 border border-port-border rounded p-4 text-center">
             {/* `imageError` distinguishes "PortOS tried and failed" from "this
@@ -65,7 +70,7 @@ export default function AssetInspector({ recordId, asset, onClose }) {
                 a corrupt asset reads as broken rather than as a sidecar. */}
             {asset.imageError
               ? 'This looks like an image, but PortOS could not read it — it may be truncated or corrupt.'
-              : 'No inline preview for this file type — use Download to open it.'}
+              : 'No inline preview for this file type — use Open to view it.'}
           </p>
         )}
 
@@ -85,6 +90,16 @@ export default function AssetInspector({ recordId, asset, onClose }) {
             className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs bg-port-accent hover:bg-blue-600 text-white rounded"
           >
             <Download className="w-3.5 h-3.5" /> Download
+          </a>
+          {/* `download` forces a save, so Download alone can't replace the
+              open-in-a-tab the non-image rows used to have. */}
+          <a
+            href={url}
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs bg-port-bg border border-port-border hover:border-port-accent text-gray-300 rounded"
+          >
+            <ExternalLink className="w-3.5 h-3.5" /> Open
           </a>
           <button
             type="button"

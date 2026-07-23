@@ -6,7 +6,9 @@
  * PATHS mock) and this suite needs a real tmpdir sprite tree.
  */
 
-import { describe, it, expect, afterAll, vi } from 'vitest';
+import {
+  describe, it, expect, afterAll, beforeEach, vi,
+} from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
@@ -21,7 +23,12 @@ vi.mock('../../lib/fileUtils.js', async (importOriginal) => {
   return actual;
 });
 
-const { listSpriteAssets } = await import('./paths.js');
+const { listSpriteAssets, __resetSpriteMetadataCache } = await import('./paths.js');
+
+// Fixtures are rewritten in place within one suite run, so mtime+size could in
+// principle collide at coarse filesystem timestamp granularity — clear the
+// probe cache between tests so no assertion depends on that resolution.
+beforeEach(() => __resetSpriteMetadataCache());
 
 afterAll(() => rmSync(TEST_ROOT, { recursive: true, force: true }));
 

@@ -36,6 +36,13 @@ describe('hasSpritePreview', () => {
     expect(hasSpritePreview({ path: 'a.json', size: 3 })).toBe(false);
     expect(hasSpritePreview(null)).toBe(false);
   });
+
+  it('rejects a format sharp can probe but a browser cannot paint', () => {
+    // TIFF probes cleanly and yields real dimensions, so a probe-presence check
+    // alone would render a broken-image icon.
+    expect(hasSpritePreview({ path: 'a.tiff', width: 8, height: 8, format: 'tiff' })).toBe(false);
+    expect(hasSpritePreview({ path: 'a.webp', width: 8, height: 8, format: 'webp' })).toBe(true);
+  });
 });
 
 describe('AssetInspector', () => {
@@ -87,6 +94,32 @@ describe('AssetInspector', () => {
     expect(screen.queryByText(/no inline preview/i)).not.toBeInTheDocument();
     // Still downloadable — the user may want to inspect the broken bytes.
     expect(screen.getByRole('link', { name: /download/i })).toBeInTheDocument();
+  });
+
+  it('plays a walk run source clip inline instead of forcing a download', () => {
+    const { container } = render(
+      <AssetInspector
+        recordId="trail-hand"
+        asset={{ path: 'grok/walk-east-abc/generated/source-video.mp4', size: 900, mtime: Date.now() }}
+        onClose={() => {}}
+      />,
+    );
+    const video = container.querySelector('video');
+    expect(video).toHaveAttribute('src', '/data/sprites/trail-hand/grok/walk-east-abc/generated/source-video.mp4');
+    expect(video).toHaveAttribute('controls');
+  });
+
+  it('offers Open alongside Download, since download= forces a save', () => {
+    render(
+      <AssetInspector
+        recordId="trail-hand"
+        asset={{ path: 'reference/main.generation.json', size: 12, mtime: Date.now() }}
+        onClose={() => {}}
+      />,
+    );
+    const open = screen.getByRole('link', { name: /^open$/i });
+    expect(open).toHaveAttribute('target', '_blank');
+    expect(open).not.toHaveAttribute('download');
   });
 
   it('renders nothing when no asset is selected', () => {

@@ -350,16 +350,16 @@ export default function App() {
             <Route path="universe-builder/:universeId" element={<UniverseRouteRedirect fromPrefix={/^\/media\/universe-builder/} />} />
             <Route path="universe-builder/:universeId/canon" element={<UniverseRouteRedirect fromPrefix={/^\/media\/universe-builder/} canon />} />
           </Route>
-          {/* Creative Director — a top-level Create page (moved out of the
-              Media Gen tabs). :id with no tab redirects to the overview tab,
-              carrying any query string + hash (relative Navigate preserves the
-              :id in the path) so a deep-link like /creative-director/abc?x#y
-              lands on /creative-director/abc/overview?x#y intact. */}
           {/* Sprite Manager — a top-level Create page (moved out of the Media
               Gen tabs). The record id is the URL, per the ID-based deep-linking
               convention. */}
           <Route path="sprites" element={<Sprites />} />
           <Route path="sprites/:id" element={<Sprites />} />
+          {/* Creative Director — a top-level Create page (moved out of the
+              Media Gen tabs). :id with no tab redirects to the overview tab,
+              carrying any query string + hash (relative Navigate preserves the
+              :id in the path) so a deep-link like /creative-director/abc?x#y
+              lands on /creative-director/abc/overview?x#y intact. */}
           <Route path="creative-director" element={<CreativeDirector />} />
           <Route path="creative-director/:id" element={<CreativeDirectorOverviewRedirect />} />
           <Route path="creative-director/:id/:tab" element={<CreativeDirectorDetail />} />

@@ -38,12 +38,28 @@ export function checkerboardStyle(cell = 6) {
 // constant, and every consumer treats React style props as read-only.
 export const PIXELATED = Object.freeze({ imageRendering: 'pixelated' });
 
+// sharp can probe more formats than a browser can paint — a TIFF yields clean
+// metadata but renders as a broken-image icon in Chrome/Firefox. So the server
+// probe list (for metadata) and this list (for "can I put it in an <img>") are
+// deliberately different sets, not duplicates of each other.
+const RENDERABLE_FORMATS = new Set(['png', 'gif', 'webp', 'jpeg', 'jpg', 'svg']);
+
 /**
- * Can this asset row be previewed inline? Driven by the SERVER's probe result
- * (`listSpriteAssets` sets `format`/`width`/`height` only for images it read
- * successfully) rather than by a client-side extension list. Two reasons:
- * a second copy of the extension regex would silently drift from the server's,
- * and a truncated PNG passes any extension test but would render as a broken
- * <img> — here it correctly falls through to the plain file row.
+ * Can this asset row be previewed inline as an image? Driven by the SERVER's
+ * probe result (`listSpriteAssets` sets `format`/`width`/`height` only for
+ * images it read successfully) rather than by a client-side copy of the
+ * extension regex — that copy would silently drift, and a truncated PNG passes
+ * any extension test while rendering as a broken <img>. The extra
+ * RENDERABLE_FORMATS gate covers the opposite case: probed fine, but the
+ * browser still can't paint it.
  */
-export const hasSpritePreview = (asset) => Boolean(asset?.format && asset?.width && asset?.height);
+export const hasSpritePreview = (asset) => Boolean(
+  asset?.width && asset?.height && RENDERABLE_FORMATS.has(asset.format),
+);
+
+// Walk runs keep their grok i2v source clip (`generated/source-video.mp4`) in
+// the listing, so the inspector plays it inline rather than making the user
+// download it just to review a render.
+const VIDEO_EXT = /\.(mp4|webm|mov|m4v)$/i;
+
+export const isVideoAsset = (asset) => VIDEO_EXT.test(asset?.path || '');
