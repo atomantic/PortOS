@@ -648,7 +648,16 @@ export async function maybeJournalBeforeOverwrite({ kind, id, local, remote, sou
     if (isConflict && localHash != null && !localIsTombstone) {
       await journalConflict({ kind, id, local, remote, source, hashes: { baseHash, localHash, remoteHash } });
     }
-    if (remoteHash != null) await setSyncBaseHash(kind, id, remoteHash);
+    // Advance the base to an UNRESTRICTED (current-version) hash of `remote`,
+    // never the version-restricted `remoteHash` used for the comparison above.
+    // setSyncBaseHash tags whatever it's given with the CURRENT version (see
+    // its own doc comment) — stamping the restricted hash would mislabel it:
+    // the tag would claim current-version field coverage the hash bytes don't
+    // actually have, so every later comparison trusts a version the stored
+    // hash never earned and can never match again once a HASH_FIELDS field is
+    // added (guaranteed permanent churn — the exact bug #2912 exists to fix).
+    const stampHash = contentHashForRecord(kind, remote);
+    if (stampHash != null) await setSyncBaseHash(kind, id, stampHash);
   } catch (err) {
     console.error(`❌ conflictJournal: maybeJournalBeforeOverwrite(${kind}:${id}) failed (proceeding): ${err?.message || err}`);
   }
