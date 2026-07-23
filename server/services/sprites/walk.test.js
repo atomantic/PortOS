@@ -471,6 +471,51 @@ describe('getWalkState', () => {
     });
   });
 
+  // The shape the importer ACTUALLY writes: `runId` is stamped only by
+  // approveWalkDirection, so a copied source-pipeline walk set carries just
+  // status/runPath/runManifest (see importer.test.js's fixtures). Gating the
+  // entry walk on `entry.runId` would filter out every imported direction —
+  // exactly the population this read path exists for.
+  it('resolves an imported entry that carries no runId, keying the run by its directory', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const runId = 'walk-east-noid0001';
+    const runDir = join(TEST_ROOT, 'sprites', id, 'runs', runId, 'generated');
+    await mkdir(runDir, { recursive: true });
+    await writeFile(join(runDir, 'strip.png'), 'imported-strip');
+    // Imported run records carry no `id` field either.
+    await writeFile(join(TEST_ROOT, 'sprites', id, 'runs', runId, 'animation-run.json'), JSON.stringify({
+      kind: 'grok-walk-animation-run',
+      status: 'candidate',
+      characterId: id,
+      direction: 'east',
+      stripPreview: {
+        path: `art-source/sprites/${id}/runs/${runId}/generated/strip.png`,
+        frameCount: 8, fps: 12, cellWidth: 384, cellHeight: 384, row: 0, startColumn: 0,
+      },
+    }));
+    await mkdir(join(TEST_ROOT, 'sprites', id, 'walk'), { recursive: true });
+    await writeFile(join(TEST_ROOT, 'sprites', id, 'walk', `${id}-walk-selection-v1.json`), JSON.stringify({
+      schemaVersion: 1,
+      kind: 'reviewed-directional-walk-selection',
+      characterId: id,
+      status: 'in-progress',
+      directions: {
+        east: {
+          status: 'approved',
+          runPath: `art-source/sprites/${id}/runs/${runId}`,
+          runManifest: `art-source/sprites/${id}/runs/${runId}/generated/manifest.json`,
+        },
+      },
+    }));
+
+    const { runs } = await getWalkState(id);
+    expect(runs).toHaveLength(1);
+    // The run directory IS the run id under both layouts, so an idless
+    // imported record still gets a stable key for the client's list.
+    expect(runs[0].id).toBe(runId);
+    expect(runs[0].stripPreview.stripPath).toBe(`runs/${runId}/generated/strip.png`);
+  });
+
   // A `runs/`-layout entry whose record is missing on disk must surface
   // nothing rather than a half-shaped run — the grok scan can't cover it.
   it('surfaces nothing for a runs/<run-id>/ entry with no run record on disk', async () => {
@@ -575,6 +620,25 @@ describe('getWalkState', () => {
       // manifest does NOT land on postprocessManifest, which approve/trim
       // resolve as a packaged grok manifest (frames[] + alignment).
       expect(runs[0].postprocessManifest).toBeUndefined();
+    });
+
+    // Same importer-shape guard as the runs/ layout above: a copied redraw
+    // entry has no runId, so the synthesized run keys off its manifest path.
+    it('synthesizes a redraw run for an imported entry that carries no runId', async () => {
+      const id = newId();
+      await characterWithRedrawEast(id);
+      const selectionAbs = join(TEST_ROOT, 'sprites', id, 'walk', `${id}-walk-selection-v1.json`);
+      const selection = JSON.parse(await readFile(selectionAbs, 'utf8'));
+      delete selection.directions.east.runId;
+      await writeFile(selectionAbs, JSON.stringify(selection));
+
+      const { runs } = await getWalkState(id);
+      expect(runs).toHaveLength(1);
+      expect(runs[0]).toMatchObject({
+        id: REDRAW_MANIFEST_REL,
+        kind: 'imported-redraw-walk-cycle',
+        stripPreview: { stripPath: 'imagegen/v19/clean-alpha.png', frameCount: 12 },
+      });
     });
 
     it('ignores a traversal-shaped runManifest', async () => {
