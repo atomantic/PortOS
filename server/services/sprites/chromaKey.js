@@ -98,6 +98,40 @@ export function keyProximityWarning(palette, keyHex, { role = 'generation', ...o
     : `Character palette sits within ${Math.round(minDist)}° of the generation key ${keyHex} — exact-key details may have been clipped by the mask; consider pinning a different key and regenerating before locking`;
 }
 
+/**
+ * Split a key color into its saturated ("high", 255) and dark ("low", 0)
+ * channel indices — the structure every key-parameterized un-key/despill
+ * formula in walkPostprocess.js is written against. The source pipeline
+ * hardcoded magenta (highs r+b, low g); the three standard keys are all
+ * pure-channel colors, so highs/lows fully describe them:
+ *   magenta → highs [0,2], lows [1]
+ *   green   → highs [1],   lows [0,2]
+ *   blue    → highs [2],   lows [0,1]
+ * Channel indices are 0=r, 1=g, 2=b into an RGB(A) pixel.
+ */
+export function keyChannelSplit(hex) {
+  const { r, g, b } = hexToRgb(hex);
+  const values = [r, g, b];
+  const highs = [];
+  const lows = [];
+  values.forEach((v, i) => (v >= 128 ? highs : lows).push(i));
+  if (!highs.length || !lows.length) throw new Error(`Not a usable chroma key: ${hex}`);
+  return { rgb: values, highs, lows };
+}
+
+/**
+ * How key-like a pixel is: min(high channels) − max(low channels).
+ * Positive = the pixel leans toward the key color. For magenta this is the
+ * source pipeline's `min(r,b) − g` exactly.
+ */
+export function keyness(pixel, split) {
+  let minHigh = 255;
+  for (const h of split.highs) minHigh = Math.min(minHigh, pixel[h]);
+  let maxLow = 0;
+  for (const l of split.lows) maxLow = Math.max(maxLow, pixel[l]);
+  return minHigh - maxLow;
+}
+
 export function pickChromaKey(palette, opts = {}) {
   const significant = significantHues(palette, opts);
 
