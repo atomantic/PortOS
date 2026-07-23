@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import toast from '../components/ui/Toast';
 import { getMediaJob, listMediaJobs } from '../services/apiMediaJobs.js';
 
@@ -27,6 +27,10 @@ export function useSpritePendingRenders({
   failMessage = (key, job) => `Render failed for ${key}: ${job?.error || 'see media jobs'}`,
 }) {
   const [pendingJobs, setPendingJobs] = useState({});
+  // Unmount guard for the deferred sweeps (repo convention: deferred work
+  // respects unmount). Never reset to true — handles dev double-mount.
+  const mountedRef = useRef(true);
+  useEffect(() => () => { mountedRef.current = false; }, []);
 
   // Rehydrate in-flight renders on mount/record switch — a reload or
   // navigate-away-and-back would otherwise lose the map and re-enable
@@ -76,7 +80,12 @@ export function useSpritePendingRenders({
       for (const { key, job } of finished) {
         if (job?.status === 'failed') toast.error(failMessage(key, job));
       }
-      for (const delay of sweepDelays(finished.length)) setTimeout(onChanged, delay);
+      // Sweeps deliberately outlive this effect (dropping a finished entry
+      // re-runs it) but not the component — hence the mountedRef gate, not
+      // timer cleanup, per the repo's deferred-work convention.
+      for (const delay of sweepDelays(finished.length)) {
+        setTimeout(() => { if (mountedRef.current) onChanged(); }, delay);
+      }
     }, 4000);
     // sweepDelays/failMessage are per-workflow config, not reactive inputs.
     return () => clearInterval(timer);

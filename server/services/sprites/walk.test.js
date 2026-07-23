@@ -233,6 +233,39 @@ describe('attachWalkVideo (completion hook)', () => {
     expect(runs[0].postprocessError).toMatch(/walk cycle/);
   });
 
+  it('refuses to attach onto an approved run (Render Queue retry can re-fire the tag)', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const { runId } = await makeCandidateRun(id, 'east');
+    await approveWalkDirection(id, { direction: 'east', runId });
+    await mkdir(join(TEST_ROOT, 'videos'), { recursive: true });
+    await writeFile(join(TEST_ROOT, 'videos', 'retry-clip.mp4'), 'retried');
+    runWalkPostprocess.mockClear();
+    expect(await attachWalkVideo({ recordId: id, direction: 'east', runId, filename: 'retry-clip.mp4' })).toBeNull();
+    expect(runWalkPostprocess).not.toHaveBeenCalled();
+    // The frozen artifacts were not touched.
+    const { runs } = await getWalkState(id);
+    expect(runs.find((r) => r.id === runId).status).toBe('candidate');
+  });
+
+  it('refuses to attach after the walk set is finalized', async () => {
+    const id = await characterWithLockedAnchors(newId(), ANCHOR_DIRECTIONS);
+    for (const direction of SPRITE_DIRECTIONS) {
+      const { runId } = await makeCandidateRun(id, direction);
+      await approveWalkDirection(id, { direction, runId });
+    }
+    // A stale queued run whose clip lands after finalization must not attach.
+    const staleRunId = 'walk-east-0badc0de';
+    await mkdir(join(TEST_ROOT, 'sprites', id, 'grok', staleRunId), { recursive: true });
+    await writeFile(join(TEST_ROOT, 'sprites', id, 'grok', staleRunId, 'animation-run.json'), JSON.stringify({
+      schemaVersion: 1, id: staleRunId, status: 'queued', characterId: id, direction: 'east', chromaKey: '#FF00FF',
+    }));
+    await mkdir(join(TEST_ROOT, 'videos'), { recursive: true });
+    await writeFile(join(TEST_ROOT, 'videos', 'late-clip.mp4'), 'late');
+    runWalkPostprocess.mockClear();
+    expect(await attachWalkVideo({ recordId: id, direction: 'east', runId: staleRunId, filename: 'late-clip.mp4' })).toBeNull();
+    expect(runWalkPostprocess).not.toHaveBeenCalled();
+  });
+
   it('skips silently when the run record or video is missing', async () => {
     const id = await characterWithLockedAnchors(newId(), ['east']);
     expect(await attachWalkVideo({ recordId: id, direction: 'east', runId: 'walk-east-deadbeef', filename: 'x.mp4' })).toBeNull();
