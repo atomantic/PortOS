@@ -974,6 +974,43 @@ export const spriteRecordUpdateSchema = z.object({
   chromaKey: z.enum(CHROMA_KEY_HEXES).nullable().optional(),
 });
 
+// Phase 4 (issue #2898): publish binding — the shape check only; app
+// existence and repo path anchoring are the publish service's job (they need
+// filesystem + apps access). Repo-relative paths, no traversal, no absolutes.
+const spriteRepoRelativePath = z.string().min(1).max(1024)
+  .refine((p) => !p.startsWith('/') && !p.includes('\\') && !p.split('/').includes('..'), {
+    message: 'must be a repo-relative path with no traversal',
+  });
+
+export const spritePublishBindingSchema = z.object({
+  appId: z.string().min(1).max(200),
+  atlasDestPath: spriteRepoRelativePath.refine((p) => p.toLowerCase().endsWith('.png'), {
+    message: 'atlasDestPath must point at a .png atlas file',
+  }),
+  codeBinding: z.object({
+    path: spriteRepoRelativePath,
+    resourcePath: z.string().min(1).max(1024),
+    requiredOccurrenceCount: z.number().int().min(1).max(1000).optional(),
+  }).nullable().optional(),
+}).nullable();
+
+// acknowledgeOverwrite: explicit consent to replace a destination atlas
+// PortOS never published (409 PUBLISH_DEST_OCCUPIED otherwise).
+export const spriteAtlasPublishSchema = z.object({
+  acknowledgeOverwrite: z.boolean().optional(),
+});
+
+// Optional per-compile geometry overrides (player default: 96px cells,
+// pivot (48,88), 86×74 content bounds). Columns/rows are the fixed contract.
+export const spriteAtlasCompileSchema = z.object({
+  geometry: z.object({
+    cellSize: z.number().int().min(16).max(1024).optional(),
+    pivot: z.tuple([z.number().int().min(0), z.number().int().min(0)]).optional(),
+    targetMaxHeight: z.number().int().min(8).max(1024).optional(),
+    targetMaxWidth: z.number().int().min(8).max(1024).optional(),
+  }).optional(),
+});
+
 // Phase 2 (issue #2896): reference workflow. prompts.js / chromaKey.js are
 // pure sprite modules (like recordsLogic.js) so importing their constants
 // here can't disturb mocked suites; modes.js is the dependency-free image-gen

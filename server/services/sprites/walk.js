@@ -38,7 +38,8 @@ import {
 import { GROK_VIDEO_DURATIONS } from '../videoGen/grok.js';
 
 const selectionRelPath = (id) => `walk/${id}-walk-selection-v1.json`;
-const walkSetRelPath = (id) => `walk/${id}-walk-set-v1.json`;
+// Exported: atlas.js (phase 4) reads the finalized walk set as compile input.
+export const walkSetRelPath = (id) => `walk/${id}-walk-set-v1.json`;
 const runRelPath = (runId) => `grok/${runId}`;
 const RUN_RECORD_NAME = 'animation-run.json';
 

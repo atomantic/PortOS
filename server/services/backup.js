@@ -60,7 +60,14 @@ export const DEFAULT_EXCLUDES = [
   { path: '/training-runs/*/data/.mflux_cache/', reason: 'mflux low_ram disk-backed encode cache (written inside the staged training data dir) — regenerable', overridable: false },
   { path: '/repos/', reason: 'Cloned git repositories — large, re-cloneable from origin', overridable: true },
   { path: '/cos/reference-repos/', reason: 'Reference upstream repos used by agents — re-cloneable', overridable: true },
-  { path: '/browser-downloads/', reason: 'Browser downloads cache — large, re-downloadable', overridable: true }
+  { path: '/browser-downloads/', reason: 'Browser downloads cache — large, re-downloadable', overridable: true },
+  // Sprite animation-run raw intermediates: 30–96 ffmpeg-extracted PNGs per
+  // run, byte-for-byte regenerable from the archived source video by the
+  // deterministic postprocess (walkPostprocess.js). The source video, packaged
+  // frames, strips, manifests, and runtime atlases ARE backed up. `grok/` is
+  // the live layout; `runs/` covers imported legacy runs.
+  { path: '/sprites/*/grok/*/generated/raw/', reason: 'Sprite walk-run raw extracted frames — regenerable from the archived source video', overridable: true },
+  { path: '/sprites/*/runs/*/generated/raw/', reason: 'Imported sprite-run raw extracted frames — regenerable from the archived source video', overridable: true }
   // NOTE: legacy file→Postgres migration artifacts (`.imported` / `.bak-NNN`)
   // are intentionally NOT excluded here. They are deleted on disk by the
   // boot-time prune (pruneImportedLegacyFiles.js) the same boot the migration

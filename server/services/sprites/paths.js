@@ -25,6 +25,12 @@ export function spriteDir(recordId) {
   return join(PATHS.sprites, recordId);
 }
 
+// Runtime-atlas layout (phase 4): the mutable current-selection pointer and
+// the append-only publish history, shared by atlas.js and publish.js so a
+// rename can't half-land.
+export const RUNTIME_POINTER_REL = 'runtime/current.json';
+export const RUNTIME_PUBLICATIONS_REL = 'runtime/publications.json';
+
 /**
  * Resolve a relative asset path inside a record's directory, refusing any
  * path that escapes it (`..`, absolute paths).

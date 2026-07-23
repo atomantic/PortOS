@@ -79,7 +79,7 @@ export function median(values) {
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-const sha256Buffer = (buf) => createHash('sha256').update(buf).digest('hex');
+export const sha256Buffer = (buf) => createHash('sha256').update(buf).digest('hex');
 
 /** Decode a PNG to a raw RGBA frame `{ data, width, height }`. */
 export async function decodeRgbaFrame(src) {
@@ -320,13 +320,13 @@ export function selectCycleIndices(signatures) {
   };
 }
 
-/** Tight bbox of visible (alpha > 24) pixels; exclusive right/bottom. */
-export function alphaBbox(frame) {
+/** Tight bbox of visible (alpha > threshold) pixels; exclusive right/bottom. */
+export function alphaBbox(frame, threshold = BBOX_ALPHA_THRESHOLD) {
   const { data, width, height } = frame;
   let left = width; let top = height; let right = -1; let bottom = -1;
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      if (data[(y * width + x) * 4 + 3] > BBOX_ALPHA_THRESHOLD) {
+      if (data[(y * width + x) * 4 + 3] > threshold) {
         if (x < left) left = x;
         if (x > right) right = x;
         if (y < top) top = y;
@@ -369,7 +369,7 @@ function cropFrame(frame, bbox) {
 
 // sharp premultiplies alpha before resampling and unpremultiplies after —
 // the same alpha-weighted LANCZOS the source's premultiplied_resize does.
-async function premultipliedResize(frame, width, height) {
+export async function premultipliedResize(frame, width, height) {
   const data = await sharp(frame.data, { raw: { width: frame.width, height: frame.height, channels: 4 } })
     .resize(width, height, { kernel: 'lanczos3', fit: 'fill' })
     .raw()
@@ -377,7 +377,7 @@ async function premultipliedResize(frame, width, height) {
   return { data, width, height };
 }
 
-function compositeOnto(canvas, frame, dx, dy) {
+export function compositeOnto(canvas, frame, dx, dy) {
   // Straight-alpha source-over; destinations may be clipped at canvas edges.
   const { data, width, height } = frame;
   for (let y = 0; y < height; y++) {
