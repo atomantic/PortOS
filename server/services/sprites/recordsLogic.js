@@ -3,14 +3,20 @@
  * (issue #2895, phase 1). Mirrors musicVideo/projectsLogic.js: all mutation
  * semantics live here so the two backends can't drift.
  *
- * A sprite record is the db-primary metadata for one sprite subject — either a
- * `character` (identity reference → anchors → walk animations → atlas) or a
- * `props` family (a fixed-cell atlas of non-character sprites). Binary assets
- * (reference images, strips, atlases, manifests) live on disk under
- * data/sprites/<id>/ — the record holds only metadata and workflow state.
+ * A sprite record is the db-primary metadata for one sprite subject — a
+ * `character` (identity reference → anchors → walk animations → atlas), a
+ * `place`, a standalone `object`, or an imported `props` family (a fixed-cell
+ * atlas of non-character sprites). Binary assets (reference images, strips,
+ * atlases, manifests) live on disk under data/sprites/<id>/ — the record holds
+ * only metadata and workflow state.
+ *
+ * `props` is a legacy import-only value (#2932): imported prop atlas families
+ * keep `kind: 'props'` and the UI folds them under the same "Objects" heading
+ * as `object` — no migration, since the two are user-visibly identical. New
+ * records created through the UI only ever get `character`/`place`/`object`.
  */
 
-export const SPRITE_RECORD_KINDS = ['character', 'props'];
+export const SPRITE_RECORD_KINDS = ['character', 'place', 'object', 'props'];
 
 // Record ids double as the on-disk directory name under data/sprites/ — keep
 // them strict kebab-case so a record id can never traverse the filesystem.
@@ -68,7 +74,7 @@ export function buildSpriteRecord(input, { id, now }) {
 
 // Whitelist patch — key-absent preserves, key-present applies (including an
 // intentional clear via null/''), per the LLM/merge convention in CLAUDE.md.
-const PATCHABLE = ['name', 'status', 'spec', 'chromaKey', 'publishBinding', 'notes'];
+const PATCHABLE = ['name', 'status', 'kind', 'spec', 'chromaKey', 'publishBinding', 'notes'];
 
 export function applySpriteRecordPatch(record, patch) {
   const next = { ...record };
@@ -76,6 +82,10 @@ export function applySpriteRecordPatch(record, patch) {
     if (!(key in patch)) continue;
     if (key === 'name') next.name = trimOrNull(patch.name) || record.name;
     else if (key === 'status') next.status = trimOrNull(patch.status) || record.status;
+    // Reclassifying is allowed (e.g. fix a mis-imported record); an unknown
+    // kind is ignored rather than corrupting the record. The route's Zod
+    // schema already enum-gates it — this is the defense-in-depth backstop.
+    else if (key === 'kind') next.kind = SPRITE_RECORD_KINDS.includes(patch.kind) ? patch.kind : record.kind;
     else if (key === 'spec' || key === 'publishBinding') {
       next[key] = patch[key] && typeof patch[key] === 'object' ? patch[key] : null;
     } else next[key] = trimOrNull(patch[key]);

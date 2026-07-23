@@ -4,9 +4,16 @@ import {
   applySpriteRecordPatch,
   mergeImportedRecord,
   isValidSpriteId,
+  SPRITE_RECORD_KINDS,
 } from './recordsLogic.js';
 
 const NOW = '2026-07-22T00:00:00.000Z';
+
+describe('SPRITE_RECORD_KINDS', () => {
+  it('carries the noun taxonomy plus the legacy props value (#2932)', () => {
+    expect(SPRITE_RECORD_KINDS).toEqual(['character', 'place', 'object', 'props']);
+  });
+});
 
 describe('isValidSpriteId', () => {
   it('accepts kebab-case slugs', () => {
@@ -40,6 +47,15 @@ describe('buildSpriteRecord', () => {
     expect(r.chromaKey).toBe('#FF00FF');
     expect(r.importedFrom.sourceRoot).toBe('/x');
   });
+
+  it('accepts the new place/object noun kinds (#2932)', () => {
+    expect(buildSpriteRecord({ kind: 'place', name: 'Saloon' }, { id: 'saloon', now: NOW }).kind).toBe('place');
+    expect(buildSpriteRecord({ kind: 'object', name: 'Lantern' }, { id: 'lantern', now: NOW }).kind).toBe('object');
+  });
+
+  it('falls back to character for an unknown kind', () => {
+    expect(buildSpriteRecord({ kind: 'nonsense', name: 'X' }, { id: 'x', now: NOW }).kind).toBe('character');
+  });
 });
 
 describe('applySpriteRecordPatch', () => {
@@ -57,6 +73,11 @@ describe('applySpriteRecordPatch', () => {
     const next = applySpriteRecordPatch(base, { id: 'evil', deleted: true });
     expect(next.id).toBe('hero');
     expect(next.deleted).toBe(false);
+  });
+
+  it('reclassifies kind to a valid value but ignores an unknown one (#2932)', () => {
+    expect(applySpriteRecordPatch(base, { kind: 'place' }).kind).toBe('place');
+    expect(applySpriteRecordPatch(base, { kind: 'bogus' }).kind).toBe('character');
   });
 });
 

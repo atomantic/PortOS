@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { ServerError } from './errorHandler.js';
 import { partialWithoutDefaults, emptyToUndefined, emptyToNull } from './zodCompat.js';
 import { WORK_TRACKERS } from './workTracker.js';
-import { SPRITE_ID_PATTERN } from '../services/sprites/recordsLogic.js';
+import { SPRITE_ID_PATTERN, SPRITE_RECORD_KINDS } from '../services/sprites/recordsLogic.js';
 import { ANCHOR_DIRECTIONS, SPRITE_DIRECTIONS } from '../services/sprites/prompts.js';
 import { CHROMA_KEY_HEXES } from '../services/sprites/chromaKey.js';
 import { QUEUEABLE_IMAGE_MODES } from '../services/imageGen/modes.js';
@@ -966,6 +966,10 @@ export const spriteImportRequestSchema = z.object({
 
 export const spriteRecordUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
+  // Reclassify an existing record between the noun kinds (#2932). `props` is
+  // accepted so an imported family round-trips without a 400, but the UI never
+  // creates one. Schema-parity with spriteCreateSchema below.
+  kind: z.enum(SPRITE_RECORD_KINDS).optional(),
   notes: z.string().max(10000).nullable().optional(),
   // Fixed three-key set (#2895 decision) — manual override is limited to the
   // same keys the auto-selection picks from. Imported legacy records keep
@@ -1018,6 +1022,10 @@ export const spriteAtlasCompileSchema = z.object({
 export const spriteCreateSchema = z.object({
   id: z.string().regex(SPRITE_ID_PATTERN).optional(),
   name: z.string().trim().min(1).max(200),
+  // Noun taxonomy (#2932): the UI's New Sprite panel picks character/place/
+  // object. `props` is accepted for parity with the enum but stays import-only
+  // in practice. Absent → the service defaults to 'character'.
+  kind: z.enum(SPRITE_RECORD_KINDS).optional(),
   spec: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 

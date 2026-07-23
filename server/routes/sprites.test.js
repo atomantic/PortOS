@@ -82,6 +82,18 @@ describe('sprites routes', () => {
     expect(records.createCharacter).not.toHaveBeenCalled();
   });
 
+  it('POST / threads the noun kind through to createCharacter (#2932)', async () => {
+    const r = await request(app).post('/api/sprites').send({ name: 'Saloon', kind: 'place' });
+    expect(r.status).toBe(201);
+    expect(records.createCharacter).toHaveBeenCalledWith({ name: 'Saloon', kind: 'place' });
+  });
+
+  it('POST / rejects an unknown kind at the schema', async () => {
+    const bad = await request(app).post('/api/sprites').send({ name: 'Hero', kind: 'weapon' });
+    expect(bad.status).toBe(400);
+    expect(records.createCharacter).not.toHaveBeenCalled();
+  });
+
   it('GET /:id returns record + assets + reference set for characters', async () => {
     records.getRecordWithAssets.mockResolvedValueOnce({
       record: { id: 'pioneer', kind: 'character' },
