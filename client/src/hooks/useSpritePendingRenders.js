@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import toast from '../components/ui/Toast';
 import { getMediaJob, listMediaJobs } from '../services/apiMediaJobs.js';
+import useMounted from './useMounted.js';
 
 /**
  * Shared in-flight render tracking for the sprite workflows (#2896 reference
@@ -28,9 +29,10 @@ export function useSpritePendingRenders({
 }) {
   const [pendingJobs, setPendingJobs] = useState({});
   // Unmount guard for the deferred sweeps (repo convention: deferred work
-  // respects unmount). Never reset to true — handles dev double-mount.
-  const mountedRef = useRef(true);
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  // respects unmount). useMounted, NOT a bare ref — a bare ref stays false
+  // after StrictMode's dev mount→cleanup→remount and would suppress every
+  // sweep for the component's whole dev lifetime.
+  const mountedRef = useMounted();
 
   // Rehydrate in-flight renders on mount/record switch — a reload or
   // navigate-away-and-back would otherwise lose the map and re-enable

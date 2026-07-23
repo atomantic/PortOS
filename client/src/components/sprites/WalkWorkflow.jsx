@@ -207,12 +207,27 @@ export default function WalkWorkflow({ record, reference, walk, onChanged }) {
   // completes (frame extraction + per-pixel un-key can take many seconds on
   // slower machines) — the job-completion sweeps alone can both land while a
   // run is still 'postprocessing', which would strand the card on
-  // "packaging…" forever. Keep refreshing until no run is packaging.
+  // "packaging…" forever. Keep refreshing until no run is packaging. A run
+  // still 'queued' with no live job is an attach waiting behind the record's
+  // write tail (e.g. a long rerun ahead of it) — poll for that too, but give
+  // up after ~60s so a genuinely dead job doesn't poll indefinitely.
+  // Booleans (not the runs array) as deps: refetches produce fresh array
+  // identities every 4s, which would otherwise reset the bounded tick count.
+  const packaging = runs.some((r) => r.status === 'postprocessing');
+  const awaitingAttach = runs.some((r) => r.status === 'queued' && !pendingJobs[r.direction]);
   useEffect(() => {
-    if (!runs.some((r) => r.status === 'postprocessing')) return undefined;
-    const timer = setInterval(onChanged, 4000);
+    if (!packaging && !awaitingAttach) return undefined;
+    let ticks = 0;
+    const timer = setInterval(() => {
+      ticks += 1;
+      if (!packaging && ticks > 15) {
+        clearInterval(timer);
+        return;
+      }
+      onChanged();
+    }, 4000);
     return () => clearInterval(timer);
-  }, [runs, onChanged]);
+  }, [packaging, awaitingAttach, onChanged]);
 
   const latestRunByDirection = useMemo(() => {
     const byDir = {};
