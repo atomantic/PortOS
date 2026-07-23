@@ -502,7 +502,7 @@ ${prNumber !== '' ? `- **Number**: ${prNumber}` : ''}
 ${prOwner && prRepo ? `- **Repo**: ${prOwner}/${prRepo}` : ''}
 - **Source task**: ${sourceTaskId}
 - **Reviewers**: ${reviewerLabel}
-${cliReviewerProcedure}${(rprBody && (hasCopilot || hasGithubUser)) ? `\n### /do:rpr Reference — Copilot / @github reviewers (full procedure)\n\nThis is the PR-comment review loop for the **copilot** and **@github** reviewers only (request a review on the PR, poll for comments, resolve threads). It does NOT apply to the local CLI reviewers — for those, follow the **CLI Reviewer Procedure** above instead.\n\n${rprBody}\n` : ''}`;
+${cliReviewerProcedure}${(rprBody && (hasCopilot || hasGithubUser)) ? `\n### /do:rpr Reference — Copilot / @github reviewers (full procedure)\n\nThis is the PR-comment review loop for the **copilot** and **@github** reviewers only (request a review on the PR, poll for comments, resolve threads).${cliReviewerProcedure ? ' It does NOT apply to the local CLI reviewers — for those, follow the **CLI Reviewer Procedure** above instead.' : ''}\n\n${rprBody}\n` : ''}`;
   }
 
   // Compact light-path variant.
