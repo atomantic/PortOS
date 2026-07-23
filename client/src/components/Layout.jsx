@@ -93,7 +93,8 @@ import {
   Workflow as WorkflowIcon,
   ChartGantt,
   Clapperboard,
-  PersonStanding
+  PersonStanding,
+  Box
 } from 'lucide-react';
 /* global __APP_VERSION__ */
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
@@ -234,6 +235,7 @@ const navItems = [
       { to: '/sprites', label: 'Sprites', icon: PersonStanding },
       { to: '/start-story', label: 'Start a Story', icon: Rocket },
       { to: '/story-builder', label: 'Story Builder', icon: Wand2 },
+      { to: '/media/threejs', label: 'Three.js Models', icon: Box },
       { to: '/universes', label: 'Universes', icon: Globe, dynamic: 'universes' },
       { to: '/writers-room', label: 'Writers Room', icon: NotebookPen },
     ],

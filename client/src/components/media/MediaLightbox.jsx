@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   X, Copy, Sparkles, Film, Image as ImageIcon, Download, Eraser, Wand2,
-  ChevronLeft, ChevronRight, Maximize2, Minimize2, Star,
+  ChevronLeft, ChevronRight, Maximize2, Minimize2, Star, Box,
 } from 'lucide-react';
 import PromptRefineModal from './PromptRefineModal';
 import AddToCollectionMenu from './AddToCollectionMenu';
@@ -90,6 +90,7 @@ export default function MediaLightbox({
   onRemix,
   onSendToImage,
   onSendToVideo,
+  onSendToThreejs,
   onContinue,
   onClean,
   onRegenerate,
@@ -346,6 +347,7 @@ export default function MediaLightbox({
             onRemix={onRemix}
             onSendToImage={onSendToImage}
             onSendToVideo={onSendToVideo}
+            onSendToThreejs={onSendToThreejs}
             onContinue={onContinue}
             onClean={onClean}
             onRegenerate={onRegenerate}
@@ -393,7 +395,7 @@ function PeerNotes({ others }) {
 
 function SettingsPane({
   item, meta, isVideo,
-  onClose, onRemix, onSendToImage, onSendToVideo, onContinue, onClean, onRegenerate, onRemoveWatermark, regenAvailable, regenBounds,
+  onClose, onRemix, onSendToImage, onSendToVideo, onSendToThreejs, onContinue, onClean, onRegenerate, onRemoveWatermark, regenAvailable, regenBounds,
   copy, onRefine,
   annotation, onAnnotationChange,
   variantGroup, onSelectVariant,
@@ -666,6 +668,15 @@ function SettingsPane({
             className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-port-success text-white hover:opacity-90 rounded"
           >
             <Film className="w-3.5 h-3.5" /> Send to Video
+          </button>
+        )}
+        {!isVideo && onSendToThreejs && (
+          <button
+            type="button"
+            onClick={() => closeThenRun(onSendToThreejs)}
+            className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-purple-600/80 text-white hover:opacity-90 rounded"
+          >
+            <Box className="w-3.5 h-3.5" /> Send to 3D
           </button>
         )}
         {!isVideo && onClean && (

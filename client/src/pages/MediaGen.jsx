@@ -1,10 +1,11 @@
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
-import { Layers, Image as ImageIcon, Film, History, HardDrive, Scissors, FolderOpen, Sparkles, GraduationCap, Music } from 'lucide-react';
+import { Layers, Image as ImageIcon, Film, History, HardDrive, Scissors, FolderOpen, Sparkles, GraduationCap, Music, Box } from 'lucide-react';
 import TabPills from '../components/ui/TabPills';
 
 const TABS = [
   { id: 'image', label: 'Image', icon: ImageIcon },
   { id: 'video', label: 'Video', icon: Film },
+  { id: 'threejs', label: 'Three.js', icon: Box },
   { id: 'timeline', label: 'Timeline', icon: Scissors },
   { id: 'music-video', label: 'Music Video', icon: Music },
   { id: 'history', label: 'History', icon: History },

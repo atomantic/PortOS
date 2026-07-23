@@ -687,6 +687,21 @@ CREATE TABLE IF NOT EXISTS creative_director_projects (
 -- Partial index for the live-list filter (deleted = FALSE).
 CREATE INDEX IF NOT EXISTS idx_creative_director_projects_live ON creative_director_projects (deleted) WHERE deleted = FALSE;
 
+-- Three.js procedural models. Image bytes stay in data/images; each row owns
+-- the validated declarative scene spec, provider/model attribution, generation
+-- state, and refinement history.
+CREATE TABLE IF NOT EXISTS threejs_models (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'draft',
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_threejs_models_live_updated ON threejs_models (updated_at DESC) WHERE deleted = FALSE;
+
 -- Music Video projects (issue #1760). The director scene board's db-primary
 -- record: id/status/created_at/updated_at mirrored as columns, the full project
 -- (track link, cached audioAnalysis, scenes[]) in `data` JSONB — same shape as
@@ -1318,6 +1333,8 @@ DROP TRIGGER IF EXISTS trg_catalog_user_types_audit ON catalog_user_types;
 CREATE TRIGGER trg_catalog_user_types_audit AFTER UPDATE OR DELETE ON catalog_user_types FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_creative_director_projects_audit ON creative_director_projects;
 CREATE TRIGGER trg_creative_director_projects_audit AFTER UPDATE OR DELETE ON creative_director_projects FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_threejs_models_audit ON threejs_models;
+CREATE TRIGGER trg_threejs_models_audit AFTER UPDATE OR DELETE ON threejs_models FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_mood_boards_audit ON mood_boards;
 CREATE TRIGGER trg_mood_boards_audit AFTER UPDATE OR DELETE ON mood_boards FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_lora_training_runs_audit ON lora_training_runs;

@@ -1049,6 +1049,11 @@ export default function ImageGen() {
     setInitImageStrength(0.4);
   };
 
+  const handleSendToThreejs = (img) => {
+    if (!img?.filename) return;
+    navigate(`/media/threejs?image=${encodeURIComponent(img.filename)}`);
+  };
+
   const notConnected = status && status.connected === false;
 
   return (
@@ -1436,6 +1441,7 @@ export default function ImageGen() {
                     onRemix={() => handleRemix(img)}
                     onSendToImage={() => handleSendToImage(img)}
                     onSendToVideo={() => sendToVideo(img)}
+                    onSendToThreejs={() => handleSendToThreejs(img)}
                     onDelete={() => handleDelete(img.filename)}
                     onToggleHidden={() => handleToggleHidden(item)}
                     {...getCardProps(item.key)}
@@ -1469,6 +1475,7 @@ export default function ImageGen() {
                     onRemix={() => handleRemix(img)}
                     onSendToImage={() => handleSendToImage(img)}
                     onSendToVideo={() => sendToVideo(img)}
+                    onSendToThreejs={() => handleSendToThreejs(img)}
                     onDelete={() => handleDelete(img.filename)}
                     onToggleHidden={() => handleToggleHidden(item)}
                     {...getCardProps(item.key)}
@@ -1489,6 +1496,7 @@ export default function ImageGen() {
         onRemix={(item) => item?.raw && handleRemix(item.raw)}
         onSendToImage={(item) => item?.raw?.filename && handleSendToImage(item.raw)}
         onSendToVideo={(item) => item?.raw?.filename && sendToVideo(item.raw)}
+        onSendToThreejs={(item) => item?.raw?.filename && handleSendToThreejs(item.raw)}
         onClean={(item) => handleClean(item?.raw)}
         onRegenerate={(item, opts) => handleRegenerate(item?.raw, opts)}
         onRemoveWatermark={(item) => handleRemoveWatermark(item?.raw)}

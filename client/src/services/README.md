@@ -97,6 +97,7 @@ toasts on throw). **Custom catch ⇒ `silent: true`** — otherwise toasts fire 
 | `apiCreativeCommission.js` | Creative Commissions (Autonomous Creation Engine — standing recurring briefs). |
 | `apiMusicVideo.js` | Music Video projects + scene board + audio analysis. |
 | `apiSprites.js` | Sprite Manager records, asset library, production-set import (#2895), reference workflow: create/generate/lock (#2896), walk workflow: generate/approve/trim/postprocess (#2897). |
+| `apiThreejsModels.js` | Procedural Three.js model workspaces: gallery-image generation, refinement, source export, and deletion. |
 | `apiPipeline.js` | Pipeline (issues + stages + canon). |
 | `apiUniverseBuilder.js` | Universe Builder (generate + edit + commit). |
 | `apiAuthors.js` | Author personas (name, writing style, bio, headshot description/style). |
