@@ -25,6 +25,7 @@ import { findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { spriteDir, resolveSpriteAssetPath } from './paths.js';
 import { requireCharacter } from './reference.js';
+import { withWalkWriteTail } from './walk.js';
 
 const TRIMS_DIR = 'walk/trims';
 const MAX_TRIM_VERSION = 999;
@@ -70,8 +71,15 @@ async function encodeTrimGif(frames, fps, destAbs) {
  * Save one loop trim for a packaged run. `payload` is route-validated
  * (spriteWalkTrimSchema): runId, enabledColumns, optional fps and slug.
  * Geometry and labels are derived from the run's postprocess manifest.
+ * Runs inside the per-record walk write tail — nextTrimPrefix is a
+ * scan-then-write, so two concurrent trims could otherwise both claim the
+ * same -vNNN and interleave writes over each other's artifacts.
  */
-export async function saveLoopTrim(recordId, payload) {
+export function saveLoopTrim(recordId, payload) {
+  return withWalkWriteTail(recordId, () => saveLoopTrimImpl(recordId, payload));
+}
+
+async function saveLoopTrimImpl(recordId, payload) {
   await requireCharacter(recordId);
   const { runId, enabledColumns } = payload;
   const run = await readJSONFile(join(spriteDir(recordId), 'grok', runId, RUN_RECORD_NAME), null);

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Check, Film, RefreshCw, Scissors, Lock } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
@@ -124,11 +124,16 @@ function DirectionCard({
         <StripLoop recordId={recordId} stripPath={run.stripPreview.stripPath} />
       )}
 
-      {run?.status === 'error' && (
+      {/* Retry also covers a run wedged at 'postprocessing' (crash between
+          the video copy and the packaged save) — the endpoint is the
+          documented recovery path and validates readiness server-side. */}
+      {(run?.status === 'error' || run?.status === 'postprocessing') && (
         <div className="space-y-1">
-          <p className="text-[10px] text-port-error break-words">{run.postprocessError || 'postprocess failed'}</p>
+          {run.status === 'error' && (
+            <p className="text-[10px] text-port-error break-words">{run.postprocessError || 'postprocess failed'}</p>
+          )}
           <button onClick={() => onRetry(run)} className="px-2 py-0.5 text-[10px] bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent">
-            Retry postprocess
+            {run.status === 'postprocessing' ? 'Re-run postprocess' : 'Retry postprocess'}
           </button>
         </div>
       )}
@@ -197,6 +202,17 @@ export default function WalkWorkflow({ record, reference, walk, onChanged }) {
     sweepDelays: () => [1500, 8000],
     failMessage: (direction, job) => `Walk render failed for ${direction}: ${job?.error || 'see media jobs'}`,
   });
+
+  // The deterministic postprocess runs server-side AFTER the video job
+  // completes (frame extraction + per-pixel un-key can take many seconds on
+  // slower machines) — the job-completion sweeps alone can both land while a
+  // run is still 'postprocessing', which would strand the card on
+  // "packaging…" forever. Keep refreshing until no run is packaging.
+  useEffect(() => {
+    if (!runs.some((r) => r.status === 'postprocessing')) return undefined;
+    const timer = setInterval(onChanged, 4000);
+    return () => clearInterval(timer);
+  }, [runs, onChanged]);
 
   const latestRunByDirection = useMemo(() => {
     const byDir = {};

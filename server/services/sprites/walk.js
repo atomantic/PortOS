@@ -43,9 +43,13 @@ const runRelPath = (runId) => `grok/${runId}`;
 const RUN_RECORD_NAME = 'animation-run.json';
 
 // Serialize walk-state read-modify-writes per record (run records, the
-// selection file, and the walk set share one lifecycle) — same convention as
-// reference.js's manifestWriteTail.
+// selection file, the walk set, and trim versioning share one lifecycle) —
+// same convention as reference.js's manifestWriteTail. Exported for
+// walkTrims.js so its scan-then-write version claim can't race an attach or
+// a concurrent trim.
 const walkWriteTail = createKeyCachedQueue();
+
+export const withWalkWriteTail = (recordId, fn) => walkWriteTail(recordId, fn);
 
 async function loadWalkSet(recordId) {
   return readJSONFile(join(spriteDir(recordId), walkSetRelPath(recordId)), null);
@@ -243,8 +247,24 @@ async function attachWalkVideoImpl({ recordId, runId, filename, jobId }) {
     console.error(`❌ sprite walk run record missing for ${recordId}/${runId} — skipping attach`);
     return null;
   }
+  // Immutability guard, mirroring the rerun path: a Render Queue retry of a
+  // terminal job re-carries the spriteWalk tag, so a clip can land AFTER the
+  // run was approved (or the set finalized) — attaching would silently
+  // replace frozen evidence and break the selection's recorded sha256s.
+  if (await loadWalkSet(recordId)) {
+    console.error(`❌ sprite walk attach skipped for ${recordId}/${runId} — walk set is finalized`);
+    return null;
+  }
+  const selection = await loadSelection(recordId);
+  if (selection?.directions?.[run.direction]?.runId === runId) {
+    console.error(`❌ sprite walk attach skipped for ${recordId}/${runId} — run is approved (immutable)`);
+    return null;
+  }
   const src = join(PATHS.videos, filename);
-  if (!await pathExists(src)) return null;
+  if (!await pathExists(src)) {
+    console.error(`❌ sprite walk video missing for ${recordId}/${runId} (${filename}) — skipping attach`);
+    return null;
+  }
   const runAbs = join(spriteDir(recordId), runRelPath(runId));
   const videoAbs = join(runAbs, 'generated', 'source-video.mp4');
   await ensureDir(join(runAbs, 'generated'));
