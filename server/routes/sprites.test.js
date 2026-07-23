@@ -42,6 +42,10 @@ vi.mock('../services/sprites/publish.js', () => ({
   publishAtlas: vi.fn(async () => ({ published: true, publication: { version: 1 } })),
 }));
 
+vi.mock('../services/sprites/assets.js', () => ({
+  deleteSpriteAsset: vi.fn(async (id, path) => ({ deleted: true, removed: path })),
+}));
+
 import * as records from '../services/sprites/records.js';
 import * as importer from '../services/sprites/importer.js';
 import * as reference from '../services/sprites/reference.js';
@@ -49,6 +53,7 @@ import * as walk from '../services/sprites/walk.js';
 import * as walkTrims from '../services/sprites/walkTrims.js';
 import * as atlas from '../services/sprites/atlas.js';
 import * as publish from '../services/sprites/publish.js';
+import * as assets from '../services/sprites/assets.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import spriteRoutes from './sprites.js';
 
@@ -252,6 +257,20 @@ describe('sprites routes', () => {
     const r = await request(app).delete('/api/sprites/pioneer');
     expect(r.status).toBe(200);
     expect(records.deleteRecord).toHaveBeenCalledWith('pioneer');
+  });
+
+  it('DELETE /:id/assets deletes an on-disk asset by record-relative path', async () => {
+    const r = await request(app)
+      .delete(`/api/sprites/pioneer/assets?path=${encodeURIComponent('runtime/v9/pioneer-animation-atlas-v9.png')}`);
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ deleted: true, removed: 'runtime/v9/pioneer-animation-atlas-v9.png' });
+    expect(assets.deleteSpriteAsset).toHaveBeenCalledWith('pioneer', 'runtime/v9/pioneer-animation-atlas-v9.png');
+  });
+
+  it('DELETE /:id/assets rejects a missing path at the schema', async () => {
+    const r = await request(app).delete('/api/sprites/pioneer/assets');
+    expect(r.status).toBe(400);
+    expect(assets.deleteSpriteAsset).not.toHaveBeenCalled();
   });
 
   it('GET /:id includes the walk state for characters only', async () => {

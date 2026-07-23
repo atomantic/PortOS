@@ -8,8 +8,8 @@
  * optionally loop-trims, and approves per direction; when all 8 directions
  * are approved the finalized walk-set manifest freezes the set.
  *
- * Disk layout mirrors the source pipeline (and phase 1's importer contract):
- *   grok/walk-<direction>-<runId8>/animation-run.json + generated/…
+ * Disk layout (vendor-neutral runs/ tree; the provider is a run-record field):
+ *   runs/walk-<direction>-<runId8>/animation-run.json + generated/…
  *   walk/<id>-walk-selection-v1.json, walk/<id>-walk-set-v1.json
  *   walk/trims/<slug>-vNNN-{strip.png,.gif,.json}
  *
@@ -42,7 +42,19 @@ import { GROK_VIDEO_DURATIONS } from '../videoGen/grok.js';
 const selectionRelPath = (id) => `walk/${id}-walk-selection-v1.json`;
 // Exported: atlas.js (phase 4) reads the finalized walk set as compile input.
 export const walkSetRelPath = (id) => `walk/${id}-walk-set-v1.json`;
-const runRelPath = (runId) => `grok/${runId}`;
+// Native generations store one run per directory under a VENDOR-NEUTRAL `runs/`
+// tree — the provider (grok, or a future agent service) is recorded as the run
+// record's `provider` field, never encoded in the path. Migration 202 renamed
+// the historical `grok/<runId>/` layout into this one; the reader still scans
+// `grok/` too (RUN_SCAN_DIRS) for pre-migration installs and forks, and
+// RUN_DIR_MATCH (paths.js) still accepts both prefixes.
+const runRelPath = (runId) => `runs/${runId}`;
+// The two on-disk homes a native candidate run can be found in: the neutral
+// `runs/` layout (all new generations, post-migration) and the legacy `grok/`
+// layout (a straggler on an un-migrated install/fork). Approved runs resolve
+// through their selection entry regardless, so this scan only has to cover
+// unapproved candidates.
+const RUN_SCAN_DIRS = ['runs', 'grok'];
 const RUN_RECORD_NAME = 'animation-run.json';
 
 // Serialize walk-state read-modify-writes per record (run records, the
@@ -92,7 +104,10 @@ async function loadRunRecordAt(recordId, runDirRel) {
 }
 
 async function loadRunRecord(recordId, runId) {
-  return loadRunRecordAt(recordId, runRelPath(runId));
+  // Prefer the neutral runs/ layout; fall back to legacy grok/ so approve /
+  // rerun / attach still resolve a candidate on an un-migrated install or fork.
+  return (await loadRunRecordAt(recordId, `runs/${runId}`))
+    || loadRunRecordAt(recordId, `grok/${runId}`);
 }
 
 async function saveRunRecord(recordId, run) {
@@ -222,8 +237,8 @@ async function loadRedrawRun(recordId, direction, entry) {
  * fourth layout means another branch here, not another append-and-dedupe
  * block in `getWalkState`:
  *
- *   grok/<run-id>/  → PortOS's own generations (animation-run.json)
- *   runs/<run-id>/  → the source-pipeline importer's layout (same record)
+ *   runs/<run-id>/  → PortOS's own generations + the importer's layout
+ *   grok/<run-id>/  → legacy native generations (pre-migration-202 / forks)
  *   anything else   → an imagegen/vN redraw manifest (#2924), synthesized
  *
  * Every branch returns the same run-shaped object, so routes and the client
@@ -249,15 +264,21 @@ async function loadRunForEntry(recordId, direction, entry) {
  *
  * The selection (or the finalized walk set) is the index: each approved
  * direction resolves through `loadRunForEntry`, whatever layout it names.
- * The `grok/` directory scan then only has to cover runs that have NO
+ * The directory scan (RUN_SCAN_DIRS) then only has to cover runs that have NO
  * selection entry by definition — unapproved candidates and in-flight
- * generations, which PortOS always writes under `grok/`.
+ * generations, which PortOS writes under the neutral `runs/` tree.
  */
 export async function getWalkState(recordId) {
   // The scan is independent of the index — start it first so the two reads
-  // overlap, as they did when the scan WAS the entry point.
-  const scanPromise = readdir(join(spriteDir(recordId), 'grok'), { withFileTypes: true })
-    .catch(() => []); // no native runs yet
+  // overlap, as they did when the scan WAS the entry point. Scan both the
+  // neutral runs/ tree and the legacy grok/ tree, remembering each entry's
+  // parent so the run loads from where it actually lives (a name could only
+  // appear in one post-migration, but a fork/un-migrated install may still
+  // have grok/).
+  const scanPromise = Promise.all(RUN_SCAN_DIRS.map((base) => readdir(join(spriteDir(recordId), base), { withFileTypes: true })
+    .then((entries) => entries.filter((e) => e.isDirectory() && e.name.startsWith('walk-')).map((e) => ({ base, name: e.name })))
+    .catch(() => []))) // dir absent → no runs there yet
+    .then((lists) => lists.flat());
   const [selection, walkSet] = await Promise.all([loadSelection(recordId), loadWalkSet(recordId)]);
 
   const approvedDirections = walkSet?.directions || selection?.directions || {};
@@ -281,13 +302,17 @@ export async function getWalkState(recordId) {
 
   const scannedRuns = (await Promise.all(
     (await scanPromise)
-      .filter((e) => e.isDirectory() && e.name.startsWith('walk-') && !resolvedRunIds.has(e.name))
-      .map((e) => loadRunRecord(recordId, e.name)
-        .then((run) => (run ? normalizeRunRecord(recordId, run, runRelPath(e.name)) : null))),
+      .filter(({ name }) => !resolvedRunIds.has(name))
+      .map(({ base, name }) => {
+        const runDirRel = `${base}/${name}`;
+        return loadRunRecordAt(recordId, runDirRel)
+          .then((run) => (run ? normalizeRunRecord(recordId, run, runDirRel) : null));
+      }),
   )).filter(Boolean)
     // Second pass: a record whose own `id` differs from its directory name is
-    // already covered by an entry that named it by id.
-    .filter((run) => !resolvedRunIds.has(run.id));
+    // already covered by an entry that named it by id. Dedupe on id too, so a
+    // run that somehow exists under both scan roots surfaces once.
+    .filter((run, i, all) => !resolvedRunIds.has(run.id) && all.findIndex((r) => r.id === run.id) === i);
 
   const allRuns = [...entryRuns, ...scannedRuns]
     .sort((a, b) => runCreatedAtMs(b.createdAt) - runCreatedAtMs(a.createdAt));
@@ -346,6 +371,9 @@ async function startWalkGenerationImpl(recordId, body) {
   const run = {
     schemaVersion: 1,
     kind: 'grok-game-animation-frames-run',
+    // Vendor recorded as metadata, not baked into the storage path — a future
+    // non-grok source stamps its own provider and stores under the same runs/ tree.
+    provider: 'grok',
     status: 'queued',
     id: runId,
     jobId: null,
@@ -513,7 +541,7 @@ export function approveWalkDirection(recordId, args) {
  * deliberate way back to the editable state (#2933 follow-up): it removes the
  * frozen walk-set file and resets the per-direction selection to in-progress,
  * so every direction returns to the generate/regenerate/approve flow with its
- * already-rendered clips preserved on disk (the `grok/<runId>/` run records are
+ * already-rendered clips preserved on disk (the `runs/<runId>/` run records are
  * never touched). Re-approving all 8 directions re-freezes the set exactly as
  * the original finalize did. The record status drops back to
  * `reference-complete` (all anchors locked, walk in progress).

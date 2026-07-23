@@ -112,7 +112,7 @@ function AssetCard({ recordId, asset, actions, onInspect }) {
  * here in the caller: an asset whose `runId` is an approved run is promoted to
  * `approved` for its badge, keeping the classifier free of workflow state.
  */
-export default function AssetCollection({ recordId, assets, actions = null, approvedRunIds }) {
+export default function AssetCollection({ recordId, assets, actions = null, approvedRunIds, onDeleted = null }) {
   const [inspecting, setInspecting] = useState(null);
   const groups = useMemo(() => {
     const grouped = groupSpriteAssetsByRole(assets);
@@ -152,7 +152,12 @@ export default function AssetCollection({ recordId, assets, actions = null, appr
           </div>
         </div>
       ))}
-      <AssetInspector recordId={recordId} asset={inspecting} onClose={() => setInspecting(null)} />
+      <AssetInspector
+        recordId={recordId}
+        asset={inspecting}
+        onClose={() => setInspecting(null)}
+        onDeleted={onDeleted}
+      />
     </div>
   );
 }

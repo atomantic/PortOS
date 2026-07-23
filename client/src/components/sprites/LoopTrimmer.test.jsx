@@ -89,9 +89,17 @@ describe('LoopTrimmer', () => {
     expect(trimSpriteWalk.mock.calls[0][1]).toMatchObject({ slug: 'east-loop-v2' });
   });
 
-  it('disables Save for a read-only (imported) source', () => {
+  it('offers Save for an imported/redraw run (strip outside grok/ is trimmable now)', () => {
     renderTrimmer({
-      walk: { runs: [{ ...grokRun, stripPreview: { ...grokRun.stripPreview, stripPath: 'runs/import-east/generated/strip.png' } }] },
+      walk: { runs: [{ ...grokRun, stripPreview: { ...grokRun.stripPreview, stripPath: 'imagegen/v19/clean-alpha.png' } }] },
+    });
+    expect(screen.getByRole('button', { name: /Save trim/ })).not.toBeDisabled();
+  });
+
+  it('disables Save for a read-only source (a saved trim has no run to re-trim)', () => {
+    renderTrimmer({
+      walk: { runs: [] },
+      assets: [{ path: 'walk/trims/east-loop-v001-strip.png', width: 96 * 7, height: 96 }],
     });
     expect(screen.getByRole('button', { name: /Save trim/ })).toBeDisabled();
   });

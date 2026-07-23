@@ -80,11 +80,13 @@ function DirectionCard({
 }) {
   const [confirming, setConfirming] = useState(false);
   const candidate = run?.status === 'candidate' ? run : null;
-  // Only a run whose strip was packaged under `grok/` can be trimmed — the trim
-  // endpoint reads `grok/<runId>/animation-run.json` hard-coded (an imported
-  // `runs/<id>/` strip 404s). The link stands for approved and finalized runs
-  // too, since a trim is a non-destructive derived artifact under `walk/trims/`.
-  const trimmable = Boolean(run?.stripPreview?.stripPath?.startsWith('grok/'));
+  // Any run that carries a packed strip preview is trimmable — the trim service
+  // resolves geometry from the run's own manifest/stripPreview regardless of
+  // on-disk layout (native `runs/`, legacy `grok/`, imported `runs/`, or an
+  // imagegen redraw), so there's no vendor-directory coupling here anymore. The
+  // link stands for approved and finalized runs too, since a trim is a
+  // non-destructive derived artifact under `walk/trims/`.
+  const trimmable = Boolean(run?.stripPreview?.stripPath);
   const statusLabel = approved ? 'approved'
     : pending ? 'rendering…'
       : run?.status === 'postprocessing' ? 'packaging…'

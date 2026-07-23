@@ -101,8 +101,8 @@ describe('WalkWorkflow loop preview', () => {
 // Loop trimming moved to its own deep-linkable workspace (#2933): the inline
 // TrimPanel is gone and each card just links into the trimmer. The link stands
 // for approved/finalized directions too (a trim is a non-destructive artifact),
-// and only for a run whose strip was packaged under `grok/` (the endpoint reads
-// `grok/<runId>/…` hard-coded — an imported strip would 404).
+// and now for ANY run that carries a packed strip — the trim service resolves
+// geometry layout-agnostically, so the old `grok/`-only gate is gone.
 describe('WalkWorkflow loop trimmer link', () => {
   it('offers "Edit in Loop Trimmer" for an approved grok run and fires with its id', () => {
     const onOpenTrimmer = vi.fn();
@@ -117,10 +117,15 @@ describe('WalkWorkflow loop trimmer link', () => {
     expect(screen.queryByRole('button', { name: /Save trim/ })).toBeNull();
   });
 
-  it('hides the link for a run whose strip is not under grok/ (not trimmable)', () => {
+  it('offers the link for an imported/redraw run whose strip is not under grok/', () => {
+    // The exact case that left pioneer's east without a trim button: a strip
+    // outside grok/ (imported runs/ or an imagegen redraw) is now trimmable.
+    const onOpenTrimmer = vi.fn();
     renderWalk({
-      stripPath: 'runs/import-east/generated/strip.png', frameCount: 8, fps: 12, cellWidth: 384, cellHeight: 384,
-    }, { onOpenTrimmer: vi.fn() });
-    expect(screen.queryByRole('button', { name: /Edit in Loop Trimmer/ })).toBeNull();
+      stripPath: 'imagegen/v19/clean-alpha.png', frameCount: 12, fps: 12, cellWidth: 384, cellHeight: 384,
+    }, { onOpenTrimmer });
+    const link = screen.getByRole('button', { name: /Edit in Loop Trimmer/ });
+    link.click();
+    expect(onOpenTrimmer).toHaveBeenCalledWith('run-east');
   });
 });

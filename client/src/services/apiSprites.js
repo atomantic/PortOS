@@ -17,6 +17,15 @@ export const updateSpriteRecord = (id, patch, options = {}) => request(`/sprites
   method: 'PATCH', body: JSON.stringify(patch), ...options,
 });
 
+// Delete one on-disk asset by its record-relative path — an old runtime atlas
+// version (PNG + manifest removed together) or a superseded reference /
+// candidate render. Refuses the live atlas (409 ATLAS_IN_USE) and the record's
+// state index files (409 PROTECTED_STATE_FILE). Returns { deleted, removed }.
+export const deleteSpriteAsset = (id, path, options = {}) => request(
+  `/sprites/${encodeURIComponent(id)}/assets?path=${encodeURIComponent(path)}`,
+  { method: 'DELETE', ...options },
+);
+
 // Import approved production assets from a source pipeline checkout.
 // Returns { results: [...perSubject], totals }.
 export const importSprites = (body, options = {}) => request('/sprites/import', {

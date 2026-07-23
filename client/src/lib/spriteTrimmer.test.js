@@ -86,10 +86,13 @@ describe('buildTrimmerSources', () => {
     ]);
   });
 
-  it('marks only grok/ runs trimmable; imported runs and saved trims are preview-only', () => {
+  it('marks every packed-strip run trimmable regardless of layout; saved trims stay preview-only', () => {
     const out = buildTrimmerSources(walk, assets);
     expect(out.find((s) => s.id === 'run:walk-east-1').trimmable).toBe(true);
-    expect(out.find((s) => s.id === 'run:import-north').trimmable).toBe(false);
+    // Imported/redraw runs (strip outside grok/) are now trimmable too — the
+    // service resolves geometry layout-agnostically.
+    expect(out.find((s) => s.id === 'run:import-north').trimmable).toBe(true);
+    // A saved trim has no run behind it to re-trim.
     expect(out.find((s) => s.kind === 'trim').trimmable).toBe(false);
   });
 

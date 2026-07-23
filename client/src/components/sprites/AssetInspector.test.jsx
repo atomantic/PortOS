@@ -15,6 +15,9 @@ import { hasSpritePreview } from './spriteAssets.js';
 const copyToClipboard = vi.fn();
 vi.mock('../../lib/clipboard.js', () => ({ copyToClipboard: (...a) => copyToClipboard(...a) }));
 
+const deleteSpriteAsset = vi.fn();
+vi.mock('../../services/apiSprites.js', () => ({ deleteSpriteAsset: (...a) => deleteSpriteAsset(...a) }));
+
 const IMAGE = {
   path: 'reference/main.png',
   size: 2048,
@@ -25,7 +28,7 @@ const IMAGE = {
   frameCount: 1,
 };
 
-beforeEach(() => copyToClipboard.mockClear());
+beforeEach(() => { copyToClipboard.mockClear(); deleteSpriteAsset.mockReset(); });
 
 describe('hasSpritePreview', () => {
   it('follows the server probe rather than the file extension', () => {
@@ -125,5 +128,41 @@ describe('AssetInspector', () => {
   it('renders nothing when no asset is selected', () => {
     const { container } = render(<AssetInspector recordId="trail-hand" asset={null} onClose={() => {}} />);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it('offers no Delete action unless an onDeleted handler is wired', () => {
+    render(<AssetInspector recordId="trail-hand" asset={IMAGE} onClose={() => {}} />);
+    expect(screen.queryByRole('button', { name: /^delete$/i })).not.toBeInTheDocument();
+  });
+
+  it('deletes through a two-button confirm, then refreshes and closes', async () => {
+    deleteSpriteAsset.mockResolvedValue({ deleted: true, removed: 'reference/main.png' });
+    const onClose = vi.fn();
+    const onDeleted = vi.fn();
+    render(<AssetInspector recordId="trail-hand" asset={IMAGE} onClose={onClose} onDeleted={onDeleted} />);
+
+    // Arming reveals a discoverable Cancel/Delete pair (no window.confirm, no
+    // two-click-arm on the same button).
+    await userEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+    expect(screen.getByRole('button', { name: /^cancel$/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+
+    expect(deleteSpriteAsset).toHaveBeenCalledWith('trail-hand', 'reference/main.png', { silent: true });
+    expect(onDeleted).toHaveBeenCalledTimes(1);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the server refusal inline and keeps the asset (no close)', async () => {
+    deleteSpriteAsset.mockRejectedValue(Object.assign(new Error('This is the current runtime atlas'), { status: 409 }));
+    const onClose = vi.fn();
+    const onDeleted = vi.fn();
+    render(<AssetInspector recordId="trail-hand" asset={IMAGE} onClose={onClose} onDeleted={onDeleted} />);
+
+    await userEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^delete$/i }));
+
+    expect(await screen.findByText(/current runtime atlas/i)).toBeInTheDocument();
+    expect(onDeleted).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

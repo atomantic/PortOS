@@ -590,7 +590,7 @@ export async function prepareWalkAnchorInput(anchorAbs, destAbs, chromaKey) {
 /**
  * The full deterministic postprocess for one completed walk video.
  *
- * `runRel` is the record-relative run root (`grok/walk-<dir>-<jobId>`); all
+ * `runRel` is the record-relative run root (`runs/walk-<dir>-<jobId>`); all
  * artifacts are written under `<runAbs>/generated/` and all manifest paths
  * are record-relative, matching what the phase-1 importer expects.
  */

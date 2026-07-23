@@ -75,6 +75,40 @@ async function characterWithRun(id) {
   return id;
 }
 
+// An imagegen redraw run (source pipeline's video-first path): a real packed
+// strip under imagegen/vN plus a redraw manifest and an approved selection
+// entry — no grok/ run record. getWalkState synthesizes the run from these.
+const REDRAW_CELL = 8;
+const REDRAW_COLORS = [
+  [255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255],
+  [255, 255, 0, 255], [255, 0, 255, 255], [0, 255, 255, 255],
+];
+async function characterWithRedrawRun(id, { frameCount = 6 } = {}) {
+  await records.createRecord({ kind: 'character', name: 'Redraw' }, id);
+  const width = REDRAW_CELL * frameCount;
+  const buf = Buffer.alloc(width * REDRAW_CELL * 4);
+  for (let y = 0; y < REDRAW_CELL; y++) {
+    for (let x = 0; x < width; x++) {
+      buf.set(REDRAW_COLORS[Math.floor(x / REDRAW_CELL)], (y * width + x) * 4);
+    }
+  }
+  const igDir = join(TEST_ROOT, 'sprites', id, 'imagegen', 'v1');
+  await mkdir(igDir, { recursive: true });
+  await sharp(buf, { raw: { width, height: REDRAW_CELL, channels: 4 } }).png()
+    .toFile(join(igDir, 'clean-alpha.png'));
+  const manifestRel = 'imagegen/v1/redraw-manifest.json';
+  await writeFile(join(TEST_ROOT, 'sprites', id, manifestRel), JSON.stringify({
+    schemaVersion: 1, characterId: id, direction: 'east', cellSize: REDRAW_CELL,
+    cycle: { frameCount, referenceFps: 10, stripAlpha: 'imagegen/v1/clean-alpha.png' },
+  }));
+  await mkdir(join(TEST_ROOT, 'sprites', id, 'walk'), { recursive: true });
+  await writeFile(join(TEST_ROOT, 'sprites', id, 'walk', `${id}-walk-selection-v1.json`), JSON.stringify({
+    schemaVersion: 1, kind: 'reviewed-directional-walk-selection', characterId: id, status: 'in-progress',
+    directions: { east: { status: 'approved', runId: `${id}-redraw-east`, runManifest: manifestRel, approvedAt: 'v1' } },
+  }));
+  return `${id}-redraw-east`;
+}
+
 beforeEach(() => {
   runFfmpegProcess.mockClear();
   rmSync(join(TEST_ROOT, 'sprite-records.json'), { force: true });
@@ -134,6 +168,40 @@ describe('saveLoopTrim', () => {
     expect(gifArgs[gifArgs.indexOf('-framerate') + 1]).toBe('6');
     const third = await saveLoopTrim(id, { runId: RUN_ID, enabledColumns: [0, 1] });
     expect(third.strip).toBe('walk/trims/east-loop-v002-strip.png');
+  });
+
+  // The whole point of the vendor-neutral trim path: a direction whose art came
+  // from the source pipeline's imagegen redraw (e.g. pioneer's east) has no
+  // grok/ run behind it, yet its packed strip is trimmable all the same —
+  // geometry now comes from the run's stripPreview, resolved layout-agnostically.
+  it('trims an imagegen-redraw run resolved by stripPreview (no grok/ dir)', async () => {
+    const id = newId();
+    const runId = await characterWithRedrawRun(id, { frameCount: 6 });
+
+    const result = await saveLoopTrim(id, { runId, enabledColumns: [0, 2, 4] });
+    expect(result).toMatchObject({
+      strip: 'walk/trims/east-loop-v001-strip.png',
+      frameCount: 3,
+      disabledFrameCount: 3,
+    });
+    const { data, info } = await sharp(join(TEST_ROOT, 'sprites', id, result.strip))
+      .raw().toBuffer({ resolveWithObject: true });
+    expect(info.width).toBe(REDRAW_CELL * 3);
+    const px = (x) => [...data.subarray(x * 4, x * 4 + 4)];
+    expect(px(0)).toEqual(REDRAW_COLORS[0]);           // column 0
+    expect(px(REDRAW_CELL)).toEqual(REDRAW_COLORS[2]); // column 2
+    expect(px(REDRAW_CELL * 2)).toEqual(REDRAW_COLORS[4]); // column 4
+
+    const manifest = JSON.parse(await readFile(join(TEST_ROOT, 'sprites', id, result.manifest), 'utf8'));
+    expect(manifest).toMatchObject({
+      runId, // the redraw run id round-trips (not a walk-<dir>-<hex> shape)
+      sourceAtlasPath: 'imagegen/v1/clean-alpha.png',
+      fps: 10, // from the redraw cycle's referenceFps
+      allAtlasColumns: [0, 1, 2, 3, 4, 5],
+      enabledAtlasColumns: [0, 2, 4],
+    });
+    // No named gait phases on a redraw cycle → columns label numerically.
+    expect(manifest.selectedFrames.map((f) => f.sourceFrameLabel)).toEqual(['0', '2', '4']);
   });
 
   it('rejects unknown runs, unpackaged runs, and out-of-strip columns', async () => {
