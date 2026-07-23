@@ -237,7 +237,12 @@ function DirectionCard({
           trim request from the asset collection must open even for an
           approved direction or a finalized walk set. */}
       {trimRun && (
+        // Keyed by run id: a new trim request (from an asset card) can target a
+        // DIFFERENT run than the one currently open — remount so the panel's
+        // enabled-frame selection and last saved result don't leak from the
+        // previous run into the new one.
         <TrimPanel
+          key={trimRun.id}
           recordId={recordId}
           run={trimRun}
           onClose={() => { setTrimming(false); onTrimClose(); }}

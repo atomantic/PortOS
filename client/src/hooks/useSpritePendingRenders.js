@@ -70,6 +70,13 @@ export function useSpritePendingRenders({
   // state drop the entry and fire the workflow's refetch sweep(s).
   useEffect(() => {
     if (Object.keys(pendingJobs).length === 0) return undefined;
+    // Torn down when the effect re-runs (any pendingJobs change) — including
+    // the clear-on-record-switch. A poll's `getMediaJob` await can resolve
+    // AFTER that teardown; without this flag it would delete a key from the
+    // NEW record's freshly-rehydrated map (re-enabling Generate mid-render) or
+    // toast a failure for a record no longer shown. Guard every post-await
+    // mutation on it.
+    let cancelled = false;
     const timer = setInterval(async () => {
       const entries = Object.entries(pendingJobs).filter(([, jobId]) => jobId !== 'submitting');
       const results = await Promise.all(entries.map(async ([key, jobId]) => {
@@ -82,6 +89,7 @@ export function useSpritePendingRenders({
           return { key, job: null, gone: err?.status === 404 };
         }
       }));
+      if (cancelled) return; // record switched (or map changed) during the await — don't touch the new map
       const finished = results.filter(({ job, gone }) => (job ? ['completed', 'failed', 'canceled'].includes(job.status) : gone));
       if (finished.length === 0) return;
       setPendingJobs((prev) => {
@@ -100,7 +108,7 @@ export function useSpritePendingRenders({
       }
     }, 4000);
     // sweepDelays/failMessage are per-workflow config, not reactive inputs.
-    return () => clearInterval(timer);
+    return () => { cancelled = true; clearInterval(timer); };
   }, [pendingJobs, onChanged]);
 
   // Sentinel jobId while the enqueue request is in flight — reserves the key

@@ -39,6 +39,16 @@ describe('classifySpriteAsset — role', () => {
     expect(facets('walk/trims/east-loop-v001-strip.png').role).toBe('strip');
     expect(facets('walk/trims/east-loop-v001.gif').role).toBe('animation');
   });
+
+  it('classifies imported strips whose filename is not the native `-strip` infix', () => {
+    // Imported layouts name strips `strip.png` or `strip-video-…` — the native
+    // `-strip` infix test dropped these into the generic sprite bucket, losing
+    // their Strips group + inline actions.
+    expect(facets('runs/imported-7/generated/strip.png').role).toBe('strip');
+    expect(facets('imagegen/v19/strip-video-12-clean-alpha.png').role).toBe('strip');
+    // A word that merely contains "strip" as a substring must not match.
+    expect(facets('reference/pinstripe-swatch.png').role).not.toBe('strip');
+  });
 });
 
 describe('classifySpriteAsset — status', () => {
@@ -48,7 +58,8 @@ describe('classifySpriteAsset — status', () => {
     expect(facets('reference/candidates/walk-east-candidate-1.png').status).toBe('candidate');
     expect(facets('reference/uploads/design.png').status).toBe('source');
     expect(facets('grok/walk-east-abc12345/generated/example-walk-east-strip.png').status).toBe('candidate');
-    expect(facets('walk/trims/east-loop-v001-strip.png').status).toBe('approved');
+    // A saved trim is a draft loop, not an approved artifact.
+    expect(facets('walk/trims/east-loop-v001-strip.png').status).toBe('candidate');
   });
 
   it('honors an imported rejected/ segment', () => {
@@ -106,12 +117,14 @@ describe('classifySpriteAssets — supersede', () => {
     expect(rows.every((r) => r.facets.status === 'approved')).toBe(true);
   });
 
-  it('matches a trim strip to its own stem across the -strip suffix', () => {
+  it('leaves trim versions as candidates — supersede only demotes approved artifacts', () => {
+    // Trims are draft loops (status candidate), so the approved-only supersede
+    // pass never reclassifies them; both versions stay candidate.
     const rows = classifySpriteAssets([
       { path: 'walk/trims/east-loop-v001-strip.png' },
       { path: 'walk/trims/east-loop-v002-strip.png' },
     ]);
-    expect(rows.map((r) => r.facets.status)).toEqual(['superseded', 'approved']);
+    expect(rows.map((r) => r.facets.status)).toEqual(['candidate', 'candidate']);
   });
 
   it('leaves runtime atlases alone — the publish pointer decides which is live', () => {
