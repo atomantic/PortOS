@@ -165,26 +165,20 @@ function UniverseRouteRedirect({ fromPrefix, canon = false }) {
   return <Navigate to={target} replace />;
 }
 
-// Redirect legacy /media/creative-director/* deep-links to the top-level
-// /creative-director/* route (Creative Director moved out of the Media Gen
-// tabs into its own Create page). Preserves the trailing path (id + tab),
-// query string, and hash.
-function CreativeDirectorLegacyRedirect() {
+// Rebase a legacy route prefix onto its current one, preserving the trailing
+// path (ids, tabs), query string, and hash. Every page promoted out of the
+// Media Gen tab shell into its own Create page needs exactly this — Creative
+// Director (`/media/creative-director/:id/:tab`) and Sprites
+// (`/media/sprites/:id`) so far — so it's parameterized rather than copied per
+// move. `from` must be an anchored regex so it can only match the prefix.
+function PrefixRedirect({ from, to }) {
   const { pathname, search, hash } = useLocation();
-  const rest = pathname.replace(/^\/media\/creative-director/, '');
-  return <Navigate to={`/creative-director${rest}${search}${hash}`} replace />;
+  const rest = pathname.replace(from, '');
+  return <Navigate to={`${to}${rest}${search}${hash}`} replace />;
 }
 
-// Sprite Manager moved from the Media Gen tab shell to the top-level /sprites
-// route (Create sidebar link). Rebases a legacy /media/sprites/:id URL onto it,
-// preserving the id, query string, and hash so bookmarks and media-job
-// completion deep-links keep resolving. (The bare /media/sprites index needs no
-// id rebase and uses RedirectWithSearch.)
-function SpritesLegacyRedirect() {
-  const { pathname, search, hash } = useLocation();
-  const rest = pathname.replace(/^\/media\/sprites/, '');
-  return <Navigate to={`/sprites${rest}${search}${hash}`} replace />;
-}
+const MEDIA_CREATIVE_DIRECTOR_PREFIX = /^\/media\/creative-director/;
+const MEDIA_SPRITES_PREFIX = /^\/media\/sprites/;
 
 // Normalize a tab-less /creative-director/:id URL to its overview tab while
 // preserving any query string + hash. A bare `<Navigate to="overview">` would
@@ -334,15 +328,15 @@ export default function App() {
                 (Create sidebar link). These redirects keep legacy
                 /media/creative-director bookmarks + in-app deep-links working. */}
             <Route path="creative-director" element={<RedirectWithSearch to="/creative-director" />} />
-            <Route path="creative-director/:id" element={<CreativeDirectorLegacyRedirect />} />
-            <Route path="creative-director/:id/:tab" element={<CreativeDirectorLegacyRedirect />} />
+            <Route path="creative-director/:id" element={<PrefixRedirect from={MEDIA_CREATIVE_DIRECTOR_PREFIX} to="/creative-director" />} />
+            <Route path="creative-director/:id/:tab" element={<PrefixRedirect from={MEDIA_CREATIVE_DIRECTOR_PREFIX} to="/creative-director" />} />
             <Route path="music-video" element={<MusicVideo />} />
             <Route path="music-video/:projectId" element={<MusicVideo />} />
             {/* Sprites live at /sprites (Create sidebar link). These redirects
                 keep legacy /media/sprites bookmarks working after the MediaGen
                 tab was removed. */}
-            <Route path="sprites" element={<RedirectWithSearch to="/sprites" />} />
-            <Route path="sprites/:id" element={<SpritesLegacyRedirect />} />
+            <Route path="sprites" element={<PrefixRedirect from={MEDIA_SPRITES_PREFIX} to="/sprites" />} />
+            <Route path="sprites/:id" element={<PrefixRedirect from={MEDIA_SPRITES_PREFIX} to="/sprites" />} />
             <Route path="timeline" element={<VideoTimeline />} />
             <Route path="timeline/:projectId" element={<VideoTimelineEditor />} />
             <Route path="models" element={<MediaModels />} />

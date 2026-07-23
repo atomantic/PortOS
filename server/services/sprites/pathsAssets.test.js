@@ -48,14 +48,32 @@ describe('listSpriteAssets image metadata', () => {
     });
     expect(assets['reference/main.png'].size).toBeGreaterThan(0);
 
-    // Corrupt + non-image rows keep the base shape with NO image fields, so
-    // the client can distinguish "not an image / unreadable" from a real value.
+    // Both degrade to the base shape with no dimensions — but they must stay
+    // DISTINGUISHABLE: "sharp tried and failed" carries imageError, "never an
+    // image" carries nothing. The inspector words the two differently.
     for (const p of ['reference/corrupt.png', 'reference/main.generation.json']) {
       expect(assets[p]).toHaveProperty('size');
       expect(assets[p]).toHaveProperty('mtime');
       expect(assets[p]).not.toHaveProperty('width');
       expect(assets[p]).not.toHaveProperty('format');
     }
+    expect(assets['reference/corrupt.png'].imageError).toBe(true);
+    expect(assets['reference/main.generation.json']).not.toHaveProperty('imageError');
+  });
+
+  it('reuses the cached probe until the file changes on disk', async () => {
+    const spinner = join(recDir, 'reference', 'cached.png');
+    await sharp({
+      create: { width: 4, height: 4, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
+    }).png().toFile(spinner);
+    expect(byPath(await listSpriteAssets(RECORD))['reference/cached.png'].width).toBe(4);
+
+    // Rewrite at a different size — mtime AND size both move, so the cache key
+    // changes and the new dimensions must be picked up rather than served stale.
+    await sharp({
+      create: { width: 16, height: 16, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
+    }).png().toFile(spinner);
+    expect(byPath(await listSpriteAssets(RECORD))['reference/cached.png'].width).toBe(16);
   });
 
   it('counts pages for an animated image', async () => {

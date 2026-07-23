@@ -5,18 +5,21 @@ export const spriteAssetUrl = (recordId, relPath) => `/data/sprites/${encodeURIC
 // Every sprite asset is a transparent-capable PNG/GIF, and PortOS's dark
 // surfaces are near-black — so alpha regions are indistinguishable from black
 // pixels on a plain background. Every surface that can show one paints this
-// checkerboard behind it instead (#2930).
-const CHECKER_DARK = '#191919';
-const CHECKER_LIGHT = '#2e2e2e';
+// checkerboard behind it instead (#2930). Read through CSS custom properties
+// so a light theme can re-map them in index.css; the literals are the dark
+// defaults, since a theme that sets neither still needs a working checker.
+const CHECKER_DARK = 'var(--sprite-checker-dark, #191919)';
+const CHECKER_LIGHT = 'var(--sprite-checker-light, #2e2e2e)';
 
 /**
  * Inline style for a transparency checkerboard. `cell` is the square size in
- * px — use a smaller cell on thumbnails so the pattern stays legible.
- * Returns a fresh object each call (React style props must not be shared and
- * mutated), and only sets background-* properties so it composes with any
- * caller-supplied sizing/border classes.
+ * px — thumbnails want a smaller cell so the pattern stays legible, the
+ * inspector a larger one. Inline rather than a CSS class because the cell size
+ * varies per surface. Returns a fresh object each call (React style props must
+ * not be shared and mutated), and only sets background-* properties so it
+ * composes with any caller-supplied sizing/border classes.
  */
-export function checkerboardStyle(cell = 8) {
+export function checkerboardStyle(cell = 6) {
   const tile = cell * 2;
   return {
     backgroundColor: CHECKER_DARK,
@@ -31,13 +34,16 @@ export function checkerboardStyle(cell = 8) {
   };
 }
 
-// Pixel art must never be smoothed on upscale.
-export const PIXELATED = { imageRendering: 'pixelated' };
+// Pixel art must never be smoothed on upscale. Frozen and shared — it's a
+// constant, and every consumer treats React style props as read-only.
+export const PIXELATED = Object.freeze({ imageRendering: 'pixelated' });
 
 /**
- * Checkerboard + pixelated in one style object, for an <img> that paints its
- * own background (the common case — the checker shows through the alpha).
+ * Can this asset row be previewed inline? Driven by the SERVER's probe result
+ * (`listSpriteAssets` sets `format`/`width`/`height` only for images it read
+ * successfully) rather than by a client-side extension list. Two reasons:
+ * a second copy of the extension regex would silently drift from the server's,
+ * and a truncated PNG passes any extension test but would render as a broken
+ * <img> — here it correctly falls through to the plain file row.
  */
-export function spritePreviewStyle(cell = 8) {
-  return { ...checkerboardStyle(cell), ...PIXELATED };
-}
+export const hasSpritePreview = (asset) => Boolean(asset?.format && asset?.width && asset?.height);

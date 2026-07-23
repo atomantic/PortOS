@@ -8,8 +8,9 @@ import AppContextPicker from '../components/AppContextPicker.jsx';
 import ReferenceWorkflow from '../components/sprites/ReferenceWorkflow.jsx';
 import WalkWorkflow from '../components/sprites/WalkWorkflow.jsx';
 import PublishWorkflow from '../components/sprites/PublishWorkflow.jsx';
-import AssetInspector, { isImageAsset } from '../components/sprites/AssetInspector.jsx';
-import { spriteAssetUrl, spritePreviewStyle } from '../components/sprites/spriteAssets.js';
+import AssetInspector from '../components/sprites/AssetInspector.jsx';
+import SpritePreview from '../components/sprites/SpritePreview.jsx';
+import { hasSpritePreview } from '../components/sprites/spriteAssets.js';
 import { useAsyncAction } from '../hooks/useAsyncAction.js';
 import { formatBytes, timeAgo } from '../utils/formatters.js';
 
@@ -249,41 +250,22 @@ function AssetGroups({ recordId, assets }) {
             <span className="text-xs text-gray-500 font-normal">({files.length})</span>
           </h4>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
-            {files.map((a) => (isImageAsset(a.path) ? (
+            {files.map((a) => (
               <button
                 key={a.path}
                 onClick={() => setInspecting(a)}
-                className="bg-port-bg border border-port-border rounded p-1 hover:border-port-accent"
+                className="bg-port-bg border border-port-border rounded p-1 text-left hover:border-port-accent"
                 title={a.path}
               >
-                {/* Checkerboard on the tile, not the <img>: object-contain
-                    letterboxes the image, and a background on the img itself
-                    would only paint the letterboxed box, not the tile. */}
-                <span className="block rounded" style={spritePreviewStyle(6)}>
-                  <img
-                    src={spriteAssetUrl(recordId, a.path)}
-                    alt={a.path}
-                    loading="lazy"
-                    className="w-full h-20 object-contain"
-                    style={{ imageRendering: 'pixelated' }}
-                  />
-                </span>
-                <span className="block text-[10px] text-gray-500 truncate">{a.path.split('/').pop()}</span>
-                {a.width && a.height && (
-                  <span className="block text-[10px] text-gray-600">{a.width}×{a.height}</span>
+                {hasSpritePreview(a) && (
+                  <SpritePreview recordId={recordId} path={a.path} className="h-20 rounded" />
                 )}
+                <span className="block text-[10px] text-gray-500 truncate">{a.path.split('/').pop()}</span>
+                <span className="block text-[10px] text-gray-600">
+                  {hasSpritePreview(a) ? `${a.width}×${a.height}` : formatBytes(a.size)}
+                </span>
               </button>
-            ) : (
-              <button
-                key={a.path}
-                onClick={() => setInspecting(a)}
-                className="bg-port-bg border border-port-border rounded p-2 text-xs text-gray-400 hover:border-gray-500 text-left truncate"
-                title={a.path}
-              >
-                {a.path.split('/').pop()}
-                <span className="block text-[10px] text-gray-600">{formatBytes(a.size)}</span>
-              </button>
-            )))}
+            ))}
           </div>
         </div>
       ))}

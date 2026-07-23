@@ -9,7 +9,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import AssetInspector, { isImageAsset } from './AssetInspector.jsx';
+import AssetInspector from './AssetInspector.jsx';
+import { hasSpritePreview } from './spriteAssets.js';
 
 const copyToClipboard = vi.fn();
 vi.mock('../../lib/clipboard.js', () => ({ copyToClipboard: (...a) => copyToClipboard(...a) }));
@@ -26,10 +27,14 @@ const IMAGE = {
 
 beforeEach(() => copyToClipboard.mockClear());
 
-describe('isImageAsset', () => {
-  it('accepts the formats the server probes and rejects sidecars', () => {
-    for (const p of ['a.png', 'a.GIF', 'a.webp', 'a.jpeg', 'a.jpg']) expect(isImageAsset(p)).toBe(true);
-    for (const p of ['a.json', 'a.mp4', 'manifest']) expect(isImageAsset(p)).toBe(false);
+describe('hasSpritePreview', () => {
+  it('follows the server probe rather than the file extension', () => {
+    expect(hasSpritePreview(IMAGE)).toBe(true);
+    // A .png the server could not read has no dimensions — it must NOT be
+    // previewed, or the grid renders a broken <img>.
+    expect(hasSpritePreview({ path: 'a.png', size: 3, imageError: true })).toBe(false);
+    expect(hasSpritePreview({ path: 'a.json', size: 3 })).toBe(false);
+    expect(hasSpritePreview(null)).toBe(false);
   });
 });
 
@@ -57,7 +62,7 @@ describe('AssetInspector', () => {
     expect(screen.getByAltText('reference/main.png')).toHaveStyle({ imageRendering: 'pixelated' });
   });
 
-  it('omits image rows entirely for an asset the server could not probe', () => {
+  it('omits image rows entirely for a non-image sidecar', () => {
     render(
       <AssetInspector
         recordId="trail-hand"
@@ -68,6 +73,20 @@ describe('AssetInspector', () => {
     expect(screen.queryByText('Dimensions')).not.toBeInTheDocument();
     expect(screen.queryByText('Format')).not.toBeInTheDocument();
     expect(screen.getByText(/no inline preview/i)).toBeInTheDocument();
+  });
+
+  it('says an image was unreadable rather than reusing the sidecar wording', () => {
+    render(
+      <AssetInspector
+        recordId="trail-hand"
+        asset={{ path: 'reference/corrupt.png', size: 12, mtime: Date.now(), imageError: true }}
+        onClose={() => {}}
+      />,
+    );
+    expect(screen.getByText(/could not read it/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no inline preview/i)).not.toBeInTheDocument();
+    // Still downloadable — the user may want to inspect the broken bytes.
+    expect(screen.getByRole('link', { name: /download/i })).toBeInTheDocument();
   });
 
   it('renders nothing when no asset is selected', () => {

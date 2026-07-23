@@ -320,7 +320,7 @@ const NAV_COVERAGE_OPT_OUT = new Map([
 // Element wrappers that forward to another route rather than render a page. A
 // NEW redirect wrapper must be added here, or the scanner will treat it as a
 // real page and (loudly, not silently) demand a nav entry for its route.
-const REDIRECT_ELEMENT = /element=\{<\s*(Navigate|RedirectWithSearch|CanonRedirect|UniverseRouteRedirect)\b/;
+const REDIRECT_ELEMENT = /element=\{<\s*(Navigate|RedirectWithSearch|PrefixRedirect|CanonRedirect|UniverseRouteRedirect)\b/;
 
 // Flatten a stack of (possibly multi-segment, possibly "/") route path pieces
 // into a single absolute path: ['/', 'media', 'image'] → '/media/image'.
