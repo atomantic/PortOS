@@ -535,6 +535,22 @@ describe('getWalkState', () => {
     expect((await getWalkState(id)).runs).toEqual([]);
   });
 
+  // The scan path needs the same id fallback: without it an idless scanned
+  // run keys off `undefined`, which collapses the server-side dedup and makes
+  // the client's `runs.find(r => r.id === sel.runId)` match the wrong
+  // direction. Reverting the scan to normalizeStripPreview must fail here.
+  it('keys an idless scanned grok run by its directory', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const runId = 'walk-east-scanidless';
+    await mkdir(join(TEST_ROOT, 'sprites', id, 'grok', runId), { recursive: true });
+    await writeFile(join(TEST_ROOT, 'sprites', id, 'grok', runId, 'animation-run.json'), JSON.stringify({
+      kind: 'grok-walk-animation-run', status: 'candidate', characterId: id, direction: 'east',
+    }));
+    const { runs } = await getWalkState(id);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].id).toBe(runId);
+  });
+
   // Unapproved candidates and in-flight generations have no selection entry
   // by definition, so the grok/ scan is still what surfaces them alongside
   // the entry-resolved approved run.

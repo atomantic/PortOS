@@ -120,9 +120,15 @@ function normalizeStripPreview(recordId, run) {
 
 // PortOS stamps `id` on every run record it writes; imported source-pipeline
 // records don't carry one at all (see importer.test.js's fixtures). The run
-// DIRECTORY is the run id under both layouts, so fall back to it — the client
-// keys the run list by `id`, and an undefined id would collide every idless
-// run into one entry. In-memory only, like normalizeStripPreview.
+// DIRECTORY is the run id under both layouts, so fall back to it. Two
+// consumers break on an undefined id, which is why this isn't cosmetic:
+//   - WalkWorkflow.jsx's `runs.find((r) => r.id === sel.runId)` — an imported
+//     entry's `sel.runId` is ALSO undefined, so `undefined === undefined`
+//     matches the first idless run in the list whatever its direction, and
+//     that run gets pinned to the wrong direction's card.
+//   - the `resolvedRunIds` dedup below, where every idless run collapses onto
+//     the single `undefined` key.
+// In-memory only, like normalizeStripPreview — never written back to disk.
 function normalizeRunRecord(recordId, run, runDirRel) {
   const withId = run.id ? run : { ...run, id: runDirRel.split('/')[1] };
   return normalizeStripPreview(recordId, withId);
