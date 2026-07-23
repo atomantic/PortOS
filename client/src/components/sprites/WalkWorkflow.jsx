@@ -55,7 +55,9 @@ function StripLoop({ recordId, stripPreview }) {
       style={{
         width: CELL_PX,
         height,
-        backgroundImage: `url(${spriteAssetUrl(recordId, stripPreview.stripPath)})`,
+        // Quoted: encodeURIComponent leaves `(`/`)` intact, and an externally
+        // authored redraw filename containing one would end the url() token early.
+        backgroundImage: `url("${spriteAssetUrl(recordId, stripPreview.stripPath)}")`,
         backgroundSize: `${scrub}px ${height}px`,
         imageRendering: 'pixelated',
         '--sprite-walk-loop-end': `-${scrub}px`,
@@ -76,6 +78,9 @@ function TrimPanel({ recordId, run, onClose }) {
     return Array.from({ length: frameCount }, (_, i) => i);
   }, [run?.stripPreview]);
   const [enabled, setEnabled] = useState(() => new Set(columns));
+  // Re-seed when the strip changes under a mounted panel — a stale `enabled`
+  // holding out-of-range indices 400s the trim endpoint.
+  useEffect(() => setEnabled(new Set(columns)), [columns]);
   const [result, setResult] = useState(null);
   const toggle = (i) => setEnabled((prev) => {
     const next = new Set(prev);

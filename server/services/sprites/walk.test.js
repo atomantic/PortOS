@@ -482,6 +482,30 @@ describe('getWalkState', () => {
           startColumn: 0,
         },
       });
+      // toMatchObject asserts presence, not absence: pin that the redraw
+      // manifest does NOT land on postprocessManifest, which approve/trim
+      // resolve as a packaged grok manifest (frames[] + alignment).
+      expect(runs[0].postprocessManifest).toBeUndefined();
+    });
+
+    it('ignores a traversal-shaped runManifest', async () => {
+      const id = newId();
+      await characterWithRedrawEast(id);
+      const selectionAbs = join(TEST_ROOT, 'sprites', id, 'walk', `${id}-walk-selection-v1.json`);
+      const selection = JSON.parse(await readFile(selectionAbs, 'utf8'));
+      selection.directions.east.runManifest = '../../../etc/passwd.json';
+      await writeFile(selectionAbs, JSON.stringify(selection));
+      expect((await getWalkState(id)).runs).toEqual([]);
+    });
+
+    it('ignores an entry whose direction was not approved', async () => {
+      const id = newId();
+      await characterWithRedrawEast(id);
+      const selectionAbs = join(TEST_ROOT, 'sprites', id, 'walk', `${id}-walk-selection-v1.json`);
+      const selection = JSON.parse(await readFile(selectionAbs, 'utf8'));
+      selection.directions.east.status = 'rejected';
+      await writeFile(selectionAbs, JSON.stringify(selection));
+      expect((await getWalkState(id)).runs).toEqual([]);
     });
 
     it('falls back to the keyed strip when the clean-alpha derivative is absent on disk', async () => {
