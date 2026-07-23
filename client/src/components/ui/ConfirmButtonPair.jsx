@@ -7,10 +7,11 @@ import { Loader2 } from 'lucide-react';
 //
 // Tones pre-compose full Tailwind class names — the JIT scans for complete
 // tokens, so `bg-port-${tone}/20` would NOT generate the utility. Spell it out.
-// Only `error` ships today (every confirm pair is destructive); add a map entry
-// when a non-destructive tone is actually needed.
+// `error` for destructive confirms; `warning` for expensive-but-safe confirms
+// (e.g. unlocking a frozen walk set) where the action isn't destructive.
 const TONES = {
   error: 'bg-port-error/20 text-port-error hover:bg-port-error/30',
+  warning: 'bg-port-warning/20 text-port-warning hover:bg-port-warning/30',
 };
 
 export default function ConfirmButtonPair({

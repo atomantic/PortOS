@@ -18,7 +18,7 @@
  */
 
 import { join } from 'path';
-import { copyFile, readdir } from 'fs/promises';
+import { copyFile, readdir, rm } from 'fs/promises';
 import { randomUUID } from 'crypto';
 import {
   PATHS, ensureDir, atomicWrite, readJSONFile, pathExists, sha256File,
@@ -57,6 +57,19 @@ export const withWalkWriteTail = (recordId, fn) => walkWriteTail(recordId, fn);
 async function loadWalkSet(recordId) {
   return readJSONFile(join(spriteDir(recordId), walkSetRelPath(recordId)), null);
 }
+
+// A phase-1 imported walk set (#2895) is copied verbatim from the source
+// pipeline: its selectionPath is repo-root-anchored (`art-source/sprites/…`)
+// and its packaged per-frame PNGs were never imported. Such a set has no
+// regenerable clips behind it, so it can neither be recompiled (atlas.js) nor
+// unlocked (unlockWalkSet) — both surface `LEGACY_IMPORTED_WALK_SET`. Single
+// source of truth for the marker so the three call sites (here, atlas.js, and
+// the client via the getWalkState flag) can't drift. The marker can sit at any
+// index (absolute/repo-prefixed variants), matching the importer's own
+// relToCharacterDir recognition — hence `includes`, not a prefix test.
+export const isImportedWalkSet = (walkSet) => (
+  typeof walkSet?.selectionPath === 'string' && walkSet.selectionPath.includes('art-source/sprites/')
+);
 
 async function loadSelection(recordId) {
   return readJSONFile(join(spriteDir(recordId), selectionRelPath(recordId)), null);
@@ -278,7 +291,10 @@ export async function getWalkState(recordId) {
 
   const allRuns = [...entryRuns, ...scannedRuns]
     .sort((a, b) => runCreatedAtMs(b.createdAt) - runCreatedAtMs(a.createdAt));
-  return { runs: allRuns, selection, walkSet };
+  // Stamp the imported flag so the client reads intent (`walkSet.imported`)
+  // instead of re-deriving the source-pipeline path convention itself.
+  const stampedWalkSet = walkSet ? { ...walkSet, imported: isImportedWalkSet(walkSet) } : null;
+  return { runs: allRuns, selection, walkSet: stampedWalkSet };
 }
 
 /**
@@ -486,6 +502,57 @@ async function rerunWalkPostprocessImpl(recordId, runId) {
  */
 export function approveWalkDirection(recordId, args) {
   return walkWriteTail(recordId, () => approveWalkDirectionImpl(recordId, args));
+}
+
+/**
+ * Unlock (un-freeze) a finalized walk set so it can be revised in place.
+ *
+ * The finalized walk set is normally one-way — `requireUnfinalized` 409s every
+ * mutating walk op while `walk/<id>-walk-set-v1.json` exists — with "a new
+ * character version" as the only escape. This gives the single user a
+ * deliberate way back to the editable state (#2933 follow-up): it removes the
+ * frozen walk-set file and resets the per-direction selection to in-progress,
+ * so every direction returns to the generate/regenerate/approve flow with its
+ * already-rendered clips preserved on disk (the `grok/<runId>/` run records are
+ * never touched). Re-approving all 8 directions re-freezes the set exactly as
+ * the original finalize did. The record status drops back to
+ * `reference-complete` (all anchors locked, walk in progress).
+ *
+ * Legacy source-pipeline imports (#2895) are refused: their walk set was copied
+ * byte-for-byte from `art-source/sprites/` with no `grok/` candidate runs behind
+ * it, so unlocking would strand the record with nothing to regenerate from —
+ * the same reason atlas.js refuses to recompile them (#2918).
+ */
+export function unlockWalkSet(recordId) {
+  return walkWriteTail(recordId, () => unlockWalkSetImpl(recordId));
+}
+
+async function unlockWalkSetImpl(recordId) {
+  await requireCharacter(recordId);
+  const walkSet = await loadWalkSet(recordId);
+  if (!walkSet) {
+    throw new ServerError('No finalized walk set to unlock', { status: 409, code: 'WALK_SET_NOT_FINAL' });
+  }
+  if (isImportedWalkSet(walkSet)) {
+    throw new ServerError(
+      'This walk set was imported from the source pipeline and has no regenerable clips — unlocking is not supported. Create a new character version to revise it.',
+      { status: 409, code: 'LEGACY_IMPORTED_WALK_SET' },
+    );
+  }
+  // Order mirrors finalize's inverse: drop the canonical "finalized" signal
+  // (the walk-set file) first so a crash mid-unlock can only leave a cosmetic
+  // stale record status, never a walk-complete record with no frozen set.
+  await rm(join(spriteDir(recordId), walkSetRelPath(recordId)), { force: true });
+  // Reset the selection to in-progress: with the walk set gone `finalized` is
+  // false, but each direction still reads `approved` from the selection, which
+  // keeps the generate/regenerate buttons gated off. Seeding a fresh selection
+  // re-opens every direction; the rendered runs remain, so re-approval is a
+  // single click per direction the user is happy with. (atomicWrite ensures the
+  // walk/ dir, which already exists since we just removed the walk-set file.)
+  await atomicWrite(join(spriteDir(recordId), selectionRelPath(recordId)), seedSelection(recordId));
+  await updateRecord(recordId, { status: 'reference-complete' });
+  console.log(`🔓 sprite walk set unlocked for ${recordId}`);
+  return getWalkState(recordId);
 }
 
 async function approveWalkDirectionImpl(recordId, { direction, runId }) {

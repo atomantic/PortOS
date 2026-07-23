@@ -66,6 +66,11 @@ export const postprocessSpriteWalk = (id, body, options = {}) => request(`/sprit
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 
+// Un-freeze a finalized walk set so its directions can be regenerated/re-approved.
+export const unlockSpriteWalk = (id, options = {}) => request(`/sprites/${encodeURIComponent(id)}/walk/unlock`, {
+  method: 'POST', ...options,
+});
+
 // Save a non-destructive loop trim (strip + GIF + manifest, versioned).
 export const trimSpriteWalk = (id, body, options = {}) => request(`/sprites/${encodeURIComponent(id)}/walk/trim`, {
   method: 'POST', body: JSON.stringify(body), ...options,

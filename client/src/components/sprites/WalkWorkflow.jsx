@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Check, Film, RefreshCw, Scissors, Lock } from 'lucide-react';
+import { Check, Film, RefreshCw, Scissors, Lock, Unlock } from 'lucide-react';
 import toast from '../ui/Toast';
-import { approveSpriteWalk, postprocessSpriteWalk } from '../../services/apiSprites.js';
+import { approveSpriteWalk, postprocessSpriteWalk, unlockSpriteWalk } from '../../services/apiSprites.js';
+import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import { spriteAssetUrl, checkerboardStyle, PIXELATED } from './spriteAssets.js';
 import { WALK_PHASES } from '../../lib/spriteTrimmer.js';
@@ -170,6 +171,11 @@ export default function WalkWorkflow({
   const runs = walk?.runs || [];
   const selection = walk?.selection || null;
   const finalized = Boolean(walk?.walkSet);
+  // A source-pipeline import (#2895) has no regenerable grok clips behind its
+  // frozen set, so the server refuses to unlock it — hide the affordance and
+  // show why rather than offering a button that always 409s. The server stamps
+  // this flag on the walk state so the client doesn't re-derive the path convention.
+  const importedWalkSet = Boolean(walk?.walkSet?.imported);
 
   // direction → jobId for in-flight video renders. The hook instance is owned
   // by the Sprites page and shared with the asset collection (#2931) so both
@@ -230,6 +236,17 @@ export default function WalkWorkflow({
     onChanged();
   }, { errorMessage: 'Postprocess failed' });
 
+  // Unlock (un-freeze) the finalized walk set. Irreversible-ish (it re-opens
+  // every direction), so it's gated behind an inline confirm per the repo's
+  // confirmation UX — not a hidden two-click arm or a browser dialog.
+  const [unlockConfirm, setUnlockConfirm] = useState(false);
+  const [unlock, unlocking] = useAsyncAction(async () => {
+    await unlockSpriteWalk(recordId, { silent: true });
+    setUnlockConfirm(false);
+    toast.success('Walk set unlocked — directions are editable again');
+    onChanged();
+  }, { errorMessage: 'Unlock failed' });
+
   // The walk workflow only becomes actionable once the main is frozen (the
   // south anchor IS the main); hide it entirely before that.
   if (!manifest?.mainReference?.locked) return null;
@@ -248,9 +265,36 @@ export default function WalkWorkflow({
           </span>
         </h3>
         {finalized ? (
-          <p className="text-xs text-port-success flex items-center gap-1">
-            <Lock className="w-3 h-3" /> walk set frozen · immutable
-          </p>
+          <div className="flex items-center gap-2">
+            <p className="text-xs text-port-success flex items-center gap-1">
+              <Lock className="w-3 h-3" /> walk set frozen · immutable
+            </p>
+            {importedWalkSet ? (
+              <span className="text-[10px] text-gray-500" title="Imported from the source pipeline — no regenerable clips">
+                imported · new version to revise
+              </span>
+            ) : unlockConfirm ? (
+              <ConfirmButtonPair
+                prompt="Re-open all directions?"
+                confirmText="Unlock"
+                confirmIcon={Unlock}
+                busy={unlocking}
+                busyText="Unlocking…"
+                tone="warning"
+                ariaLabel="Confirm unlock walk set"
+                onConfirm={() => unlock()}
+                onCancel={() => setUnlockConfirm(false)}
+              />
+            ) : (
+              <button
+                onClick={() => setUnlockConfirm(true)}
+                title="Un-freeze the walk set to regenerate or re-approve directions (rendered clips are kept)"
+                className="flex items-center gap-1 px-1.5 py-0.5 text-xs bg-port-bg border border-port-border rounded text-gray-400 hover:border-port-accent hover:text-white"
+              >
+                <Unlock className="w-3 h-3" /> Unlock
+              </button>
+            )}
+          </div>
         ) : (
           <label className="flex items-center gap-2 text-xs text-gray-400">
             Clip length
