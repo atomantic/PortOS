@@ -51,6 +51,8 @@ import {
   SONGBOOK_ATTACHMENT_EXTENSIONS,
   saveBase64Upload,
   serveLocalFile,
+  loadSlashdoLib,
+  loadSlashdoFile,
 } from './fileUtils.js';
 import { copyFileSync, existsSync, mkdirSync } from 'fs';
 import { dirname } from 'path';
@@ -59,6 +61,57 @@ import { fileURLToPath } from 'url';
 const __dirname_test = dirname(fileURLToPath(import.meta.url));
 
 describe('fileUtils', () => {
+  // Regression guard for the CoS review-loop bug: PortOS inlines slashdo lib
+  // markdown into headless CoS-agent prompts WITHOUT going through slashdo's
+  // own per-environment installer, so it must resolve the `<!-- if:teams -->`
+  // conditionals itself. Leaving both branches in shipped a self-contradictory
+  // reviewer spec (in-process Agent tool AND `claude -p`) to a codex agent,
+  // which then improvised its own `claude` invocation via a dozen probe calls.
+  describe('loadSlashdoLib', () => {
+    it('resolves if:teams conditionals to the non-teams (subprocess) branch by default', async () => {
+      const body = await loadSlashdoLib('local-agent-review-loop');
+      expect(body).toBeTruthy();
+      // No conditional markers survive — both branches must be resolved, not inlined.
+      expect(body).not.toMatch(/<!--\s*(if:|else|\/if:)/);
+      // The subprocess reviewer invocation (else branch) is present…
+      expect(body).toContain('claude -p "$LOCAL_PROMPT"');
+      // …and the Claude-Code-only in-process Agent-tool branch is stripped.
+      expect(body).not.toMatch(/in-process sub-agent via the .?Agent.? tool/i);
+    });
+
+    it('keeps the teams (in-process Agent-tool) branch when teams=true', async () => {
+      const body = await loadSlashdoLib('local-agent-review-loop', { teams: true });
+      expect(body).toBeTruthy();
+      expect(body).not.toMatch(/<!--\s*(if:|else|\/if:)/);
+      expect(body).toMatch(/in-process sub-agent via the .?Agent.? tool/i);
+    });
+
+    it('returns null for a lib file that does not exist', async () => {
+      expect(await loadSlashdoLib('no-such-lib-file-xyz')).toBeNull();
+    });
+  });
+
+  describe('loadSlashdoFile', () => {
+    // `better.md` ships both `if:teams` conditional blocks and `!`cat`` includes
+    // of shell-heavy lib files, and is reachable as a user-dispatched CoS command
+    // — so it exercises both fixes below.
+    it('resolves if:teams conditionals in a command body (not just libs)', async () => {
+      const body = await loadSlashdoFile('better');
+      expect(body).toBeTruthy();
+      expect(body).not.toMatch(/<!--\s*(if:|else|\/if:)/);
+    });
+
+    it('inlines lib includes literally — no $-token blowup or corruption', async () => {
+      const body = await loadSlashdoFile('better');
+      // A bare-string String.replace would interpret `$\``/`$'` tokens in the
+      // shell-heavy libs and splice the pre-match content in, ballooning a ~66KB
+      // command past 2MB. The function-form replacer keeps it near the sum of the
+      // raw sizes (~240KB) and preserves `$`-tokens verbatim.
+      expect(body.length).toBeLessThan(600_000);
+      expect(body).toContain('$LOCAL_PROMPT');
+    });
+  });
+
   describe('isValidJSON', () => {
     it('should return true for valid JSON object', () => {
       expect(isValidJSON('{"key": "value"}')).toBe(true);

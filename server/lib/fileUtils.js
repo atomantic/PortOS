@@ -858,8 +858,68 @@ export function formatDuration(ms) {
 }
 
 /**
- * Load a slashdo command markdown file, resolving !`cat ~/.claude/lib/...` includes.
- * Optionally strips YAML frontmatter.
+ * Resolve all `!`cat ~/.claude/lib/<name>`` include directives in `content` by
+ * inlining the referenced slashdo lib file. Iterates so an inlined lib that
+ * itself carries a `!`cat`` include is resolved too (bounded to avoid a cyclic
+ * include spinning forever). Shared by loadSlashdoFile and loadSlashdoLib.
+ */
+async function resolveSlashdoIncludes(content, libDir) {
+  for (let pass = 0; pass < 5; pass++) {
+    const matches = [...content.matchAll(/!`cat ~\/.claude\/lib\/([^`]+)`/g)];
+    if (matches.length === 0) break;
+    const replacements = await Promise.all(matches.map(async (match) => {
+      const libContent = await readFile(join(libDir, match[1]), 'utf-8').catch(() => null);
+      return { pattern: match[0], content: libContent };
+    }));
+    let changed = false;
+    for (const { pattern, content: libContent } of replacements) {
+      // Replace via a function, NOT a string: a string replacement makes
+      // String.replace interpret `$&`/`$\``/`$'`/`$n` tokens, and the shell-heavy
+      // lib files are full of `$` — a bare-string replacement both corrupts the
+      // inlined text and balloons it (a `$\`` token splices in everything before
+      // the match, blowing a 66KB command up to ~2.5MB). A function replacer
+      // inserts libContent verbatim.
+      if (libContent) { content = content.replace(pattern, () => libContent); changed = true; }
+    }
+    if (!changed) break;
+  }
+  return content;
+}
+
+/**
+ * Resolve slashdo's `<!-- if:<cap> -->…<!-- else -->…<!-- /if:<cap> -->`
+ * conditional blocks — the same templating slashdo's own installer resolves
+ * per target environment (see `lib/slashdo/src/transformer.js`). PortOS inlines
+ * slashdo markdown into CoS-agent prompts WITHOUT going through that installer,
+ * so unless we resolve these here the agent receives BOTH branches verbatim
+ * (e.g. the Claude-Code-only "in-process Agent tool" reviewer branch AND the
+ * `claude -p` subprocess branch), which is self-contradictory and makes a
+ * headless agent improvise its own reviewer invocation.
+ *
+ * Only the `teams` capability is recognized (matching slashdo's
+ * CONDITIONAL_CAPABILITIES). `teams=false` keeps the `else` branch — the
+ * subprocess (`claude -p …`) reviewer path that works from any host — which is
+ * the correct choice for PortOS's headless CoS agents (they have no in-process
+ * Agent tool and are not billing against an interactive Claude Code plan).
+ * Unknown capabilities are left untouched so a stray comment never deletes
+ * content. Blocks do not nest.
+ */
+function resolveSlashdoConditionals(content, { teams = false } = {}) {
+  const blockRe = /<!--\s*if:([a-zA-Z]+)\s*-->\n?([\s\S]*?)(?:<!--\s*else\s*-->\n?([\s\S]*?))?<!--\s*\/if:\1\s*-->\n?/g;
+  return content.replace(blockRe, (match, cap, ifContent, elseContent = '') => {
+    if (cap !== 'teams') return match;
+    return teams ? ifContent : elseContent;
+  });
+}
+
+/**
+ * Load a slashdo command markdown file, resolving !`cat ~/.claude/lib/...`
+ * includes AND the `<!-- if:teams -->` conditional blocks (to the non-teams
+ * `else` branch — see resolveSlashdoConditionals). Both are needed because
+ * PortOS inlines these command bodies into headless CoS-agent prompts without
+ * running slashdo's own installer: e.g. `commands/do/better.md` ships an
+ * `if:teams` block, and a `/do:better` CoS dispatch would otherwise hand the
+ * agent both contradictory branches. Optionally strips YAML frontmatter.
  *
  * Cached: slashdo files are static within a server lifetime (submodule updates
  * require restart). Cache resets on process restart, which is the right behavior.
@@ -875,16 +935,32 @@ export async function loadSlashdoFile(commandName, { stripFrontmatter = false } 
   if (stripFrontmatter) {
     content = content.replace(/^---[\s\S]*?---\s*/, '');
   }
-  const libDir = join(PATHS.slashdo, 'lib');
-  const matches = [...content.matchAll(/!`cat ~\/.claude\/lib\/([^`]+)`/g)];
-  const replacements = await Promise.all(matches.map(async (match) => {
-    const libContent = await readFile(join(libDir, match[1]), 'utf-8').catch(() => null);
-    return { pattern: match[0], content: libContent };
-  }));
-  for (const { pattern, content: libContent } of replacements) {
-    if (libContent) content = content.replace(pattern, libContent);
-  }
+  content = await resolveSlashdoIncludes(content, join(PATHS.slashdo, 'lib'));
+  content = resolveSlashdoConditionals(content);
   slashdoFileCache.set(cacheKey, content);
+  return content;
+}
+
+/**
+ * Load a slashdo *lib* file (`lib/slashdo/lib/<name>.md`) — the shared
+ * procedure fragments that command files `!`cat``-include — for inlining
+ * directly into a CoS-agent prompt. Same include + conditional resolution as
+ * loadSlashdoFile; the differences are that this reads the `lib/` dir (not
+ * `commands/do/`) and exposes the `teams` override (loadSlashdoFile always
+ * resolves to the non-teams branch). Defaults to the non-teams (`else`) branch
+ * so a headless agent gets the subprocess reviewer invocation, not both.
+ */
+const slashdoLibCache = new Map();
+export async function loadSlashdoLib(libName, { teams = false } = {}) {
+  const cacheKey = `${libName}::${teams}`;
+  if (slashdoLibCache.has(cacheKey)) return slashdoLibCache.get(cacheKey);
+
+  const libDir = join(PATHS.slashdo, 'lib');
+  let content = await readFile(join(libDir, `${libName}.md`), 'utf-8').catch(() => null);
+  if (!content) return null;
+  content = await resolveSlashdoIncludes(content, libDir);
+  content = resolveSlashdoConditionals(content, { teams });
+  slashdoLibCache.set(cacheKey, content);
   return content;
 }
 

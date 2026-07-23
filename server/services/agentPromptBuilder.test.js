@@ -63,7 +63,7 @@ vi.mock('./codeReview.js', () => ({
   getCodeReviewDefaults: vi.fn().mockResolvedValue({ reviewers: ['copilot'] }),
 }));
 
-import { buildLightContextPrompt, buildAgentPrompt, buildCompletionGuidelineBullet, reconcileSplitContext } from './agentPromptBuilder.js';
+import { buildLightContextPrompt, buildAgentPrompt, buildCompletionGuidelineBullet, reconcileSplitContext, buildReviewLoopFollowUpSection } from './agentPromptBuilder.js';
 import { getCodeReviewDefaults } from './codeReview.js'; // mocked above — control the configured default
 import { isTruthyMeta } from './agentState.js';
 import { buildPrompt } from './promptService.js'; // mocked above — inspect call args
@@ -1220,5 +1220,52 @@ describe('buildAgentPrompt — reviewer resolution honors Code Review Defaults (
     const prompt = await buildAgentPrompt(reviewLoopTask(), {}, '/r', { branchName: 'b', worktreePath: '/tmp/wt' }, isTruthyMeta, claudeCliOpts);
     expect(prompt).toMatch(/`\/do:pr`/);
     expect(prompt).not.toMatch(/--review-with claude/);
+  });
+});
+
+describe('buildReviewLoopFollowUpSection — CLI reviewer procedure inlining', () => {
+  // The follow-up agent used to receive only "invoke that CLI to review this
+  // branch's diff", so a headless codex agent reverse-engineered the `claude`
+  // invocation with a dozen probe calls. It now inlines slashdo's local-agent
+  // review-loop recipe (passed in as localAgentLoopBody) whenever a spawnable
+  // CLI reviewer is configured — never for a copilot/@github-only loop.
+  const LOOP_SENTINEL = 'SLASHDO-LOCAL-AGENT-LOOP-BODY-SENTINEL';
+  const baseMeta = {
+    reviewLoopFollowUp: true,
+    sourceTaskId: 't1',
+    reviewLoopPRUrl: 'https://github.com/o/r/pull/1',
+    reviewLoopPRBranch: 'feature-b',
+  };
+
+  for (const verbose of [false, true]) {
+    it(`inlines the CLI Reviewer Procedure for a CLI reviewer (verbose=${verbose})`, () => {
+      const out = buildReviewLoopFollowUpSection(
+        { ...baseMeta, reviewLoopReviewers: ['claude'] },
+        { verbose, localAgentLoopBody: LOOP_SENTINEL }
+      );
+      expect(out).toContain('CLI Reviewer Procedure');
+      expect(out).toContain(LOOP_SENTINEL);
+      // The vague invocation step points the agent at the inlined procedure.
+      expect(out).toMatch(/do NOT probe the CLI/i);
+    });
+  }
+
+  it('does NOT inline the procedure for a copilot-only loop', () => {
+    const out = buildReviewLoopFollowUpSection(
+      { ...baseMeta, reviewLoopReviewers: ['copilot'] },
+      { verbose: false, localAgentLoopBody: LOOP_SENTINEL }
+    );
+    expect(out).not.toContain('CLI Reviewer Procedure');
+    expect(out).not.toContain(LOOP_SENTINEL);
+  });
+
+  it('degrades gracefully when no loop body is available (CLI reviewer, body null)', () => {
+    const out = buildReviewLoopFollowUpSection(
+      { ...baseMeta, reviewLoopReviewers: ['codex'] },
+      { verbose: false, localAgentLoopBody: null }
+    );
+    expect(out).not.toContain('CLI Reviewer Procedure');
+    // Still emits the base invocation step so the loop is not broken.
+    expect(out).toMatch(/codex/);
   });
 });

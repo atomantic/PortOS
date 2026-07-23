@@ -15,7 +15,7 @@ import { buildPrompt } from './promptService.js';
 import { getToolsSummaryForPrompt } from './tools.js';
 import { getActiveProvider } from './providers.js';
 import { runPromptThroughProvider } from '../lib/promptRunner.js';
-import { readJSONFile, loadSlashdoFile, PATHS, tryReadFile } from '../lib/fileUtils.js';
+import { readJSONFile, loadSlashdoFile, loadSlashdoLib, PATHS, tryReadFile } from '../lib/fileUtils.js';
 import { DEFAULT_REVIEWER, DEFAULT_REVIEWERS, DEFAULT_REVIEW_STOP_MODE, LOCAL_LLM_REVIEWERS, MODEL_CAPABLE_CLI_REVIEWERS, normalizeReviewers, normalizeReviewUsernames, normalizeOptionalReviewers, resolveReviewUsernames, resolveOptionalReviewers, resolveKeyedReviewers, buildReviewWithArgs } from '../lib/validation.js';
 import { PROVIDER_TYPES } from '../lib/aiToolkit/constants.js';
 import { isOpencodeCommand } from '../lib/providerModels.js';
@@ -310,9 +310,14 @@ export function reconcileSplitContext(task) {
  *   `/do:rpr` reference. When false, emit the compact list the light path uses.
  * @param {string|null} [opts.rprBody=null] - The loaded `/do:rpr` slashdo body.
  *   Only appended in verbose mode; ignored in compact mode.
+ * @param {string|null} [opts.localAgentLoopBody=null] - The loaded slashdo
+ *   `lib/local-agent-review-loop.md` body (conditionals resolved to the
+ *   subprocess/`else` branch). Inlined when a spawnable CLI reviewer
+ *   (codex/antigravity/claude/grok) is in the list so the agent gets the exact
+ *   headless invocation and review-only contract instead of improvising it.
  * @returns {string}
  */
-export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false, rprBody = null } = {}) {
+export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false, rprBody = null, localAgentLoopBody = null } = {}) {
   const prUrl = metadata.reviewLoopPRUrl || '';
   const prBranch = metadata.reviewLoopPRBranch || '';
   const prNumber = metadata.reviewLoopPRNumber ?? '';
@@ -363,6 +368,15 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   const reviewerModelNote = reviewerModelEntries.length
     ? ` When invoking a reviewer with a pinned model, pass it: ${reviewerModelEntries.join(', ')}.`
     : '';
+  // When the slashdo local-agent review loop is inlined below (a spawnable CLI
+  // reviewer is in the list), point the invocation step at it so the agent runs
+  // the exact headless recipe instead of probing the CLI's flags / hand-rolling
+  // an invocation — the failure mode that had a codex CoS agent burn a dozen
+  // exploratory `claude --help` / `claude -p 'hello'` / `--tools ''` probes
+  // before it stumbled into a working review call.
+  const cliProcedurePointer = (hasCli && localAgentLoopBody)
+    ? ' Follow the **CLI Reviewer Procedure** section below for the exact headless invocation and review-only contract — do NOT probe the CLI or guess flags.'
+    : '';
   // "multi" reflects the TOTAL number of review sources (keyed reviewers +
   // username reviewers) so the ordered per-reviewer loop wording kicks in as
   // soon as there's more than one thing to satisfy.
@@ -394,11 +408,11 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
     hasCopilot ? `**copilot**: ${copilotIsFirst
       ? 'wait for the initial Copilot review the system already pre-requested (Copilot leads the list)'
       : 'request a Copilot review when you reach its turn'} (poll every 5–15s, max 5 min/round), then re-request on later rounds.` : null,
-    hasCli ? `**codex / antigravity / claude / grok**: invoke that CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works).${reviewerModelNote}` : null,
+    hasCli ? `**codex / antigravity / claude / grok**: invoke that CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works).${reviewerModelNote}${cliProcedurePointer}` : null,
     hasLocalLlm ? `**lmstudio / ollama**: ${localLlmInvocation}` : null,
     hasGithubUser ? `**@github reviewers**: ${githubUsersInvocation}` : null,
   ].filter(Boolean).join(' ');
-  const singleCliInvocation = `Invoke the ${reviewerLabel} CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works). Capture its findings as concrete issues to address.${reviewerModelNote}`;
+  const singleCliInvocation = `Invoke the ${reviewerLabel} CLI to review this branch's diff against its base (use the CLI's own base-diff mode or \`git diff <base-branch>...HEAD\`; on GitHub \`gh pr diff ${prNumber || ''}\` also works). Capture its findings as concrete issues to address.${reviewerModelNote}${cliProcedurePointer}`;
   // Resolved sequentially so a future reviewer kind only adds one branch
   // instead of deepening the nested ternary.
   let waitOrInvokeStep;
@@ -441,6 +455,19 @@ export function buildReviewLoopFollowUpSection(metadata = {}, { verbose = false,
   ].join('\n');
   const extraNotes = [stopModeNote, applyNote].filter(Boolean);
 
+  // Inline slashdo's local-agent review loop verbatim when a spawnable CLI
+  // reviewer is configured. This is the maintained, precise recipe — exact
+  // per-CLI headless invocation (`claude -p "$LOCAL_PROMPT" --dangerously-skip-permissions`,
+  // `codex --sandbox read-only review --base …`, etc.), the review-only /
+  // no-sub-agent-fan-out `$LOCAL_PROMPT` contract, and the parse-and-apply
+  // handling. Without it the agent only sees "invoke that CLI" and reverse-
+  // engineers the invocation, wasting calls. Conditionals were resolved to the
+  // subprocess (`else`) branch by loadSlashdoLib, so no in-process-Agent-tool
+  // branch leaks in to confuse a non-Claude-Code host.
+  const cliReviewerProcedure = (hasCli && localAgentLoopBody)
+    ? `\n### CLI Reviewer Procedure (codex / antigravity / claude / grok)\n\nDrive each spawnable CLI reviewer EXACTLY as the slashdo local-agent review loop below specifies — use its per-CLI invocation and review-only prompt contract verbatim; do NOT probe the CLI's \`--help\`, test it with throwaway prompts, or hand-roll flags. Run the reviewer once per round, capture its findings, and (unless reviewer-applies is set) apply the fixes yourself.\n\n${localAgentLoopBody}\n`
+    : '';
+
   if (verbose) {
     return `
 ## Review-Loop Follow-up (PRIMARY OBJECTIVE)
@@ -475,7 +502,7 @@ ${prNumber !== '' ? `- **Number**: ${prNumber}` : ''}
 ${prOwner && prRepo ? `- **Repo**: ${prOwner}/${prRepo}` : ''}
 - **Source task**: ${sourceTaskId}
 - **Reviewers**: ${reviewerLabel}
-${rprBody ? `\n### /do:rpr Reference (full procedure)\n\nWhen following the procedure below, run it once per reviewer in the list (${reviewerLabel}); substitute the active reviewer for any reference to Copilot — the loop structure is the same but the reviewer source differs.\n\n${rprBody}\n` : ''}`;
+${cliReviewerProcedure}${(rprBody && (hasCopilot || hasGithubUser)) ? `\n### /do:rpr Reference — Copilot / @github reviewers (full procedure)\n\nThis is the PR-comment review loop for the **copilot** and **@github** reviewers only (request a review on the PR, poll for comments, resolve threads). It does NOT apply to the local CLI reviewers — for those, follow the **CLI Reviewer Procedure** above instead.\n\n${rprBody}\n` : ''}`;
   }
 
   // Compact light-path variant.
@@ -501,7 +528,8 @@ ${rprBody ? `\n### /do:rpr Reference (full procedure)\n\nWhen following the proc
     '**Hard stop:** if a reviewer is not converged after 10 rounds, post a PR comment summarising blockers and exit.',
     repeatedCommentsNote,
     '',
-    challengeProtocolNote
+    challengeProtocolNote,
+    cliReviewerProcedure
   ].filter(Boolean).join('\n');
 }
 
@@ -692,8 +720,16 @@ export async function buildAgentPrompt(task, config, workspaceDir, worktreeInfo 
   const codeReviewDefaults = await getCodeReviewDefaults().catch(() => null);
   const defaultReviewers = codeReviewDefaults?.reviewers;
 
+  // Preload slashdo's local-agent review-loop recipe once for review-loop
+  // follow-up tasks; both the light/TUI path (via lightOptions) and the full
+  // path (the verbose builder below) reuse this single value to inline the exact
+  // CLI-reviewer invocation. Cheap + cached; only read for follow-ups.
+  const localAgentLoopBody = isTruthyMetaFn(task.metadata?.reviewLoopFollowUp)
+    ? await loadSlashdoLib('local-agent-review-loop').catch(() => null)
+    : null;
+
   if (LIGHT_CONTEXT_PROVIDER_TYPES.has(providerType)) {
-    const lightOptions = { isTui, providerId, providerCommand, leanMode: options.leanMode === true, defaultReviewers, codeReviewDefaults };
+    const lightOptions = { isTui, providerId, providerCommand, leanMode: options.leanMode === true, defaultReviewers, codeReviewDefaults, localAgentLoopBody };
     return options.split === true
       ? buildLightContextPromptParts(task, workspaceDir, worktreeInfo, isTruthyMetaFn, lightOptions)
       : buildLightContextPrompt(task, workspaceDir, worktreeInfo, isTruthyMetaFn, lightOptions);
@@ -853,7 +889,10 @@ After your task completes, the system will spawn a follow-up agent that runs the
   let reviewLoopFollowUpSection = '';
   if (isReviewLoopFollowUp) {
     const rprBody = await loadSlashdoFile('rpr').catch(() => null);
-    reviewLoopFollowUpSection = buildReviewLoopFollowUpSection(task.metadata || {}, { verbose: true, rprBody });
+    // localAgentLoopBody (the CLI-reviewer recipe) was already preloaded at the
+    // top of buildAgentPrompt under the same reviewLoopFollowUp guard — reuse it
+    // rather than re-reading the lib a second time.
+    reviewLoopFollowUpSection = buildReviewLoopFollowUpSection(task.metadata || {}, { verbose: true, rprBody, localAgentLoopBody });
   }
 
   // Build JIRA context section if applicable
@@ -1054,7 +1093,7 @@ export function buildLightContextPromptParts(task, workspaceDir, worktreeInfo, i
 
 const BEGIN_WORKING_LINE = 'Begin working on the task now.';
 
-function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMetaFn, { isTui = true, providerId = null, providerCommand = null, leanMode = false, defaultReviewers, codeReviewDefaults } = {}) {
+function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMetaFn, { isTui = true, providerId = null, providerCommand = null, leanMode = false, defaultReviewers, codeReviewDefaults, localAgentLoopBody = null } = {}) {
   // Idempotent with the reconcile in buildAgentPrompt; also protects the
   // directly-exported buildLightContextPrompt/Parts entry points.
   task = reconcileSplitContext(task);
@@ -1184,7 +1223,7 @@ function buildLightContextSections(task, workspaceDir, worktreeInfo, isTruthyMet
       sentinelPath: `${worktreeInfo?.worktreePath || workspaceDir}/.agent-done`,
     }));
   } else if (isReviewLoopFollowUp) {
-    sections.push(buildReviewLoopFollowUpSection(task.metadata || {}, { verbose: false }));
+    sections.push(buildReviewLoopFollowUpSection(task.metadata || {}, { verbose: false, localAgentLoopBody }));
   } else if (isTui) {
     sections.push(buildTuiCompletionSection({
       willOpenPR, willReviewLoop, simplifyEnabled, providerId, slashdoFree: tuiSlashdoFree,
