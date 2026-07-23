@@ -526,7 +526,7 @@ const gateOnDatabase = async () => {
   if (dbEscapeHatch && !dbReady) {
     console.warn(`⚠️  PostgreSQL unavailable (${health.error || 'no schema'}) — booting via escape hatch; catalog/DB features are disabled.`);
   }
-  return { dbReady };
+  return { dbReady, ensureSchema };
 };
 
 /**
@@ -535,7 +535,7 @@ const gateOnDatabase = async () => {
  * tolerates an empty catalog and the user can re-trigger via the admin
  * endpoint) EXCEPT the versioned DB-migration runner, which is fatal.
  */
-const runDbAndCatalogMigrations = async (dbReady) => {
+const runDbAndCatalogMigrations = async (dbReady, ensureSchema) => {
   try {
     // Two early exits guard the migrations below: (1) the fail-fast
     // process.exit(1) in gateOnDatabase when the DB is required but missing,
@@ -544,7 +544,6 @@ const runDbAndCatalogMigrations = async (dbReady) => {
     if (!dbReady) {
       return;
     }
-    const { ensureSchema } = await import('../lib/db.js');
     await ensureSchema();
     // Versioned DB-migration runner (#1029): apply ordered schema-DELTA
     // migrations (renames / type changes / data transforms / embedding-dim
@@ -743,8 +742,8 @@ export const runBootSequence = ({ io, httpServer, localHttpServer, httpsEnabled,
       });
     })
     .then(async () => {
-      const { dbReady } = await gateOnDatabase();
-      await runDbAndCatalogMigrations(dbReady);
+      const { dbReady, ensureSchema } = await gateOnDatabase();
+      await runDbAndCatalogMigrations(dbReady, ensureSchema);
       // Skipped when not dbReady (escape hatch), matching the migrations above.
       if (dbReady) await warmMandatoryStores();
     })
