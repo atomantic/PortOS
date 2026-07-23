@@ -104,10 +104,16 @@ async function loadRunRecordAt(recordId, runDirRel) {
 }
 
 async function loadRunRecord(recordId, runId) {
-  // Prefer the neutral runs/ layout; fall back to legacy grok/ so approve /
-  // rerun / attach still resolve a candidate on an un-migrated install or fork.
-  return (await loadRunRecordAt(recordId, `runs/${runId}`))
-    || loadRunRecordAt(recordId, `grok/${runId}`);
+  // Runs the write-actions (generate/attach/rerun/approve) touch always live
+  // under the neutral runs/ layout: new generations write there, and migration
+  // 202 moves every legacy grok/ run there at boot before the first request.
+  // So resolve runs/ only — do NOT fall back to grok/ here. A grok/ straggler
+  // (un-migrated fork, or a record migration 202 skipped on a collision) is
+  // still DISPLAYED via getWalkState's dual-dir scan, but a mutation would need
+  // its files where the persisted runPath (runs/) and packageRun's output dir
+  // point, so acting on it before migration completes returns RUN_NOT_FOUND
+  // rather than silently splitting the run across two directories.
+  return loadRunRecordAt(recordId, runRelPath(runId));
 }
 
 async function saveRunRecord(recordId, run) {
