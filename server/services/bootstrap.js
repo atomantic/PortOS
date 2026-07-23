@@ -80,6 +80,7 @@ import { recoverStuckAnalyses } from './writersRoom/evaluator.js';
 import { recoverStuckAutoRuns } from './pipeline/autoRunner.js';
 import { recoverStuckAutopilots } from './pipeline/seriesAutopilot.js';
 import { recoverInFlightProjects } from './creativeDirector/recovery.js';
+import { recoverInterruptedModels as recoverInterruptedThreejsModels } from './threejsModels/index.js';
 import { ensureSelf, startPolling } from './instances.js';
 import { initSyncLog } from './brainSyncLog.js';
 import { backfillOriginInstanceId, brainCollectionStores } from './brainStorage.js';
@@ -302,6 +303,10 @@ const startBackgroundServices = ({ spawnerReady }) => {
   recoverStuckAnalyses().catch(err => console.error(`❌ Writers Room recovery failed: ${err.message}`));
   recoverStuckAutoRuns().catch(err => console.error(`❌ Pipeline auto-run recovery failed: ${err.message}`));
   recoverStuckAutopilots().catch(err => console.error(`❌ Pipeline autopilot recovery failed: ${err.message}`));
+  // A provider child cannot survive a server restart. Make interrupted
+  // Three.js generations retryable; this is state recovery only, never a
+  // cold-bootstrap provider call.
+  recoverInterruptedThreejsModels().catch(err => console.error(`❌ Three.js model recovery failed: ${err.message}`));
   // Initialize brain scheduler for daily digests and weekly reviews
   startBrainScheduler();
   // Initialize activity-digest scheduler — OFF by default; drafts daily-log

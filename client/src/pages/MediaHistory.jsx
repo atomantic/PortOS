@@ -155,6 +155,11 @@ export default function MediaHistory() {
     }
   };
 
+  const handleSendToThreejs = (item) => {
+    if (item?.kind !== 'image' || !item.filename) return;
+    navigate(`/media/threejs?image=${encodeURIComponent(item.filename)}`);
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between gap-2 flex-wrap">
@@ -255,6 +260,7 @@ export default function MediaHistory() {
                 onRemix={!stitchMode ? handleRemix : undefined}
                 onSendToImage={!stitchMode ? handleSendToImage : undefined}
                 onSendToVideo={!stitchMode ? handleSendToVideo : undefined}
+                onSendToThreejs={!stitchMode ? handleSendToThreejs : undefined}
                 onContinue={!stitchMode ? handleContinue : undefined}
                 onUpscale={!stitchMode && it.kind === 'video' ? handleUpscale : undefined}
                 onDelete={!stitchMode ? handleDelete : undefined}
@@ -280,6 +286,7 @@ export default function MediaHistory() {
         onRemix={handleRemix}
         onSendToImage={handleSendToImage}
         onSendToVideo={handleSendToVideo}
+        onSendToThreejs={handleSendToThreejs}
         onContinue={handleContinue}
         onClean={(item) => handleClean(item?.raw)}
         onRemoveWatermark={(item) => handleRemoveWatermark(item?.raw)}

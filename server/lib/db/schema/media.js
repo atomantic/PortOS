@@ -29,6 +29,23 @@ export const mediaDdl = [
     `ALTER TABLE creative_director_projects ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ`,
     `CREATE INDEX IF NOT EXISTS idx_creative_director_projects_live ON creative_director_projects (deleted) WHERE deleted = FALSE`,
 
+    // Three.js procedural models. The user-authored/generative record (gallery
+    // image reference, provider/model attribution, validated scene spec, status,
+    // and refinement history) lives in JSONB; generated image bytes remain in
+    // data/images and are referenced by filename. Soft deletes keep recovery and
+    // future peer-sync additive. Mirrors init-db.sql.
+    `CREATE TABLE IF NOT EXISTS threejs_models (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'draft',
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_threejs_models_live_updated ON threejs_models (updated_at DESC) WHERE deleted = FALSE`,
+
     // Music Video projects (issue #1760). The director scene board's db-primary
     // record: id/status/created_at/updated_at mirrored as columns, the full
     // project (track link, cached audioAnalysis, scenes[]) in `data` JSONB —

@@ -41,6 +41,7 @@ export * as socketValidation from './socketValidation.js';
 export * as storyBuilderValidation from './storyBuilderValidation.js';
 export * as telegramValidation from './telegramValidation.js';
 export * from './validation.js';
+export * from './threejsModel.js';
 
 // === Story & narrative ===
 export * from './bibleExtractor.js';

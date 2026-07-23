@@ -112,6 +112,7 @@ import creativeCommissionRoutes from './routes/creativeCommissions.js';
 import musicVideoRoutes from './routes/musicVideo.js';
 import spriteRoutes from './routes/sprites.js';
 import moodBoardRoutes from './routes/moodBoard.js';
+import threejsModelsRoutes from './routes/threejsModels.js';
 import privacyRoutes from './routes/privacy.js';
 import writersRoomRoutes from './routes/writersRoom.js';
 import universeBuilderRoutes from './routes/universeBuilder.js';
@@ -335,6 +336,7 @@ app.use('/api/creative-commission', creativeCommissionRoutes);
 app.use('/api/music-video', musicVideoRoutes);
 app.use('/api/sprites', spriteRoutes);
 app.use('/api/mood-boards', moodBoardRoutes);
+app.use('/api/threejs-models', threejsModelsRoutes);
 app.use('/api/privacy', privacyRoutes);
 app.use('/api/writers-room', writersRoomRoutes);
 app.use('/api/universe-builder', universeBuilderRoutes);
@@ -459,4 +461,3 @@ app.use(errorMiddleware);
 runBootSequence({ io, httpServer, localHttpServer, httpsEnabled, port: PORT, host: HOST, spawnerReady });
 
 registerShutdownHandlers({ io, httpServer, localHttpServer });
-
