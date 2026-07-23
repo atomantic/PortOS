@@ -205,7 +205,11 @@ export async function getWalkState(recordId) {
   const scannedRunIds = new Set(runs.map((run) => run.id));
   const redrawRuns = (await Promise.all(
     Object.entries(approvedDirections)
-      .filter(([, entry]) => entry?.runId && entry?.runManifest && !scannedRunIds.has(entry.runId))
+      // Gate on `approved` because loadRedrawRun stamps that status
+      // unconditionally — a rejected/pending entry must not surface as an
+      // approved run next to live Generate/Approve buttons.
+      .filter(([, entry]) => entry?.status === 'approved' && entry.runId && entry.runManifest
+        && !scannedRunIds.has(entry.runId))
       .map(([direction, entry]) => loadRedrawRun(recordId, direction, entry)),
   )).filter(Boolean);
 

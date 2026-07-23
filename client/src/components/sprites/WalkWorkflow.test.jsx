@@ -64,6 +64,10 @@ describe('WalkWorkflow loop preview', () => {
     expect(loop.style.animation).toContain('1.000s');
     expect(loop.style.backgroundSize).toBe(`${CELL_PX * 12}px ${CELL_PX}px`);
     expect(loop.style.getPropertyValue('--sprite-walk-loop-end')).toBe(`-${CELL_PX * 12}px`);
+    // The custom property and the @keyframes rule are two halves of one
+    // mechanism — pinning only the property would let the keyframe revert to
+    // its pre-fix hardcoded -768px scrub with the suite still green.
+    expect(document.querySelector('style').textContent).toContain('var(--sprite-walk-loop-end)');
     expect(loop.style.backgroundImage).toContain('/data/sprites/example-walker/imagegen/v19/strip-video-12-clean-alpha.png');
   });
 
