@@ -75,6 +75,16 @@ export function resolveSpriteAssetPath(recordId, relPath) {
   return abs;
 }
 
+/**
+ * The two on-disk layouts that hold an animation run: PortOS's own
+ * generations write `grok/<run-id>/`, while the source-pipeline importer
+ * (#2895) preserves its own `runs/<run-id>/` tree. Matches the run directory
+ * at the head of a record-relative path — `walk.js`'s per-entry run resolver
+ * (#2928) dispatches on it, and the raw-intermediate exclusion below extends
+ * it, so the prefix set is stated exactly once.
+ */
+export const RUN_DIR_MATCH = /^(grok|runs)\/[^/]+/;
+
 // Raw ffmpeg-extracted frame intermediates inside an animation run (30–96
 // near-identical PNGs per run, `grok|runs/<run>/generated/raw/`). Kept on
 // disk for the postprocessor but omitted from the asset listing — they'd
@@ -82,7 +92,7 @@ export function resolveSpriteAssetPath(recordId, relPath) {
 // (which also skips frames/ and review/ to minimize cross-machine copies):
 // the packaged phase frames and the contrast review sheet exist FOR human
 // review, so the local browser keeps them.
-const RUN_RAW_INTERMEDIATE = /^(grok|runs)\/[^/]+\/generated\/raw\//;
+const RUN_RAW_INTERMEDIATE = new RegExp(`${RUN_DIR_MATCH.source}/generated/raw/`);
 
 /**
  * Recursively list a record's on-disk assets as `[{ path, size, mtime }]`

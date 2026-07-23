@@ -29,7 +29,9 @@ import { enqueueJob } from '../mediaJobQueue/index.js';
 import { IMAGE_GEN_MODE } from '../imageGen/modes.js';
 import { getSettings } from '../settings.js';
 import { updateRecord } from './records.js';
-import { spriteDir, resolveSpriteAssetPath, toRecordRelativeAssetPath } from './paths.js';
+import {
+  spriteDir, resolveSpriteAssetPath, toRecordRelativeAssetPath, RUN_DIR_MATCH,
+} from './paths.js';
 import { requireCharacter, loadManifest } from './reference.js';
 import { SPRITE_DIRECTIONS, anchorIdForDirection, buildWalkVideoPrompt } from './prompts.js';
 import {
@@ -42,12 +44,6 @@ const selectionRelPath = (id) => `walk/${id}-walk-selection-v1.json`;
 export const walkSetRelPath = (id) => `walk/${id}-walk-set-v1.json`;
 const runRelPath = (runId) => `grok/${runId}`;
 const RUN_RECORD_NAME = 'animation-run.json';
-// The two on-disk layouts that carry a full `animation-run.json` record:
-// PortOS's own generations write `grok/<run-id>/`, while the source-pipeline
-// importer (#2895) preserves its own `runs/<run-id>/` tree. Same reader, same
-// record shape — only the prefix differs. Kept in sync with paths.js's
-// RUN_RAW_INTERMEDIATE, which excludes raw frames under either prefix.
-const RUN_RECORD_LAYOUT = /^(grok|runs)\/[^/]+/;
 
 // Serialize walk-state read-modify-writes per record (run records, the
 // selection file, the walk set, and trim versioning share one lifecycle) —
@@ -207,7 +203,7 @@ async function loadRunForEntry(recordId, direction, entry) {
   const layoutPath = toRecordRelativeAssetPath(recordId, entry.runPath)
     || toRecordRelativeAssetPath(recordId, entry.runManifest);
   if (!layoutPath) return null;
-  const runDirRel = RUN_RECORD_LAYOUT.exec(layoutPath)?.[0];
+  const runDirRel = RUN_DIR_MATCH.exec(layoutPath)?.[0];
   if (runDirRel) {
     const run = await loadRunRecordAt(recordId, runDirRel);
     return run ? normalizeStripPreview(recordId, run) : null;
@@ -226,6 +222,10 @@ async function loadRunForEntry(recordId, direction, entry) {
  * generations, which PortOS always writes under `grok/`.
  */
 export async function getWalkState(recordId) {
+  // The scan is independent of the index — start it first so the two reads
+  // overlap, as they did when the scan WAS the entry point.
+  const scanPromise = readdir(join(spriteDir(recordId), 'grok'), { withFileTypes: true })
+    .catch(() => []); // no native runs yet
   const [selection, walkSet] = await Promise.all([loadSelection(recordId), loadWalkSet(recordId)]);
 
   const approvedDirections = walkSet?.directions || selection?.directions || {};
@@ -241,14 +241,8 @@ export async function getWalkState(recordId) {
   )).filter(Boolean);
   const resolvedRunIds = new Set(entryRuns.map((run) => run.id));
 
-  let dirEntries = [];
-  try {
-    dirEntries = await readdir(join(spriteDir(recordId), 'grok'), { withFileTypes: true });
-  } catch {
-    // no native runs yet
-  }
   const scannedRuns = (await Promise.all(
-    dirEntries
+    (await scanPromise)
       .filter((e) => e.isDirectory() && e.name.startsWith('walk-') && !resolvedRunIds.has(e.name))
       .map((e) => loadRunRecord(recordId, e.name)),
   )).filter(Boolean)
