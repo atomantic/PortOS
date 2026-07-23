@@ -35,7 +35,7 @@ import { sanitizeOllamaName } from '../lib/localLlmDisk.js'
 import { recommendEditorialModel, isVisionModel, isVisionCapableCliProvider, isToolUseModel } from '../lib/localModelHeuristics.js'
 import * as ollamaManager from './ollamaManager.js'
 import * as lmStudioManager from './lmStudioManager.js'
-import { getProviderById, getAllProviders, updateProvider } from './providers.js'
+import { getProviderById, getAllProviders, updateProvider, refreshProviderModels, isOllamaBackedProvider } from './providers.js'
 
 const execFileAsync = promisify(execFile)
 const ENV_PATH = join(PATHS.root, '.env')
@@ -809,13 +809,36 @@ async function listVisionCliModels() {
 // ---- install / delete --------------------------------------------------------
 
 /**
+ * Push a live model-list refresh to every provider backed by the Ollama daemon,
+ * so an install/delete on the Local LLMs tab is immediately reflected in every
+ * provider/model picker (task scheduler, pipeline stages, etc.) without the user
+ * having to find and click "Refresh Models" on the AI Providers page. Fire-and-
+ * forget from the caller's perspective — the install/delete response shouldn't
+ * wait on an extra round-trip to Ollama per matching provider. Best-effort per
+ * provider — one failing refresh (e.g. Ollama briefly unreachable mid-pull)
+ * must not block the others.
+ */
+function refreshOllamaBackedProviders() {
+  getAllProviders().then(({ providers }) => {
+    const targets = (providers || []).filter(isOllamaBackedProvider)
+    return Promise.all(targets.map((p) => refreshProviderModels(p.id).catch((err) => {
+      console.error(`⚠️ Failed to refresh models for provider ${p.id} after Ollama model change: ${err.message}`)
+    })))
+  }).catch((err) => {
+    console.error(`⚠️ Failed to list providers for post-install Ollama refresh: ${err.message}`)
+  })
+}
+
+/**
  * Install (pull/download) a model on a backend.
  * @param {(p) => void} [onProgress] - streaming progress (Ollama only)
  */
 export async function installModel(backend, modelId, onProgress) {
   if (!isBackend(backend)) return { success: false, error: `Unknown backend: ${backend}` }
   if (backend === 'ollama') {
-    return ollamaManager.pullModel(modelId, onProgress)
+    const result = await ollamaManager.pullModel(modelId, onProgress)
+    if (result.success) refreshOllamaBackedProviders()
+    return result
   }
   // LM Studio: prefer the `lms` CLI (real, blocking download), fall back to the
   // REST hook.
@@ -842,7 +865,9 @@ export async function installModel(backend, modelId, onProgress) {
 export async function deleteModel(backend, modelId) {
   if (!isBackend(backend)) return { success: false, error: `Unknown backend: ${backend}` }
   if (backend === 'ollama') {
-    return ollamaManager.deleteModel(modelId)
+    const result = await ollamaManager.deleteModel(modelId)
+    if (result.success) refreshOllamaBackedProviders()
+    return result
   }
   // LM Studio has no delete in its REST API and the `lms` CLI has no `rm`
   // command — deleteModel removes the model's on-disk folder directly.

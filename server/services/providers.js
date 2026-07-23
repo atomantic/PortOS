@@ -10,6 +10,11 @@ import { setAIToolkitInstance, requireToolkit } from '../lib/aiToolkitState.js';
 // providers / runner / promptService all observe the same instance.
 export const setAIToolkit = setAIToolkitInstance;
 
+// Pure classification helper, not a toolkit-instance method — a direct
+// re-export (no requireToolkit() indirection needed) so callers can classify
+// a provider shape without an initialized toolkit instance.
+export { isOllamaBackedProvider } from '../lib/aiToolkit/providers.js';
+
 export async function getAllProviders() {
   return requireToolkit().services.providers.getAllProviders();
 }
