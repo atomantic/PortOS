@@ -33,7 +33,7 @@ const WALK_DURATIONS = [6, 10];
  */
 function stripGeometry(stripPreview) {
   const rawCount = Math.round(Number(stripPreview?.frameCount));
-  const frameCount = Number.isInteger(rawCount) && rawCount > 1 ? rawCount : WALK_PHASES.length;
+  const frameCount = rawCount > 1 ? rawCount : WALK_PHASES.length; // NaN > 1 is false
   const fps = Number(stripPreview?.fps) > 0 ? Number(stripPreview.fps) : 12;
   const cellWidth = Number(stripPreview?.cellWidth);
   const cellHeight = Number(stripPreview?.cellHeight);
