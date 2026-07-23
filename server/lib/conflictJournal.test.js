@@ -40,6 +40,12 @@ const uni = (over = {}) => ({ id: 'u-1', name: 'X', starterPrompt: 'base', updat
 // the issue conflict hash (renumber-managed; see HASH_EXCLUDED_FIELDS).
 const iss = (over = {}) => ({ id: 'iss-1', seriesId: 'ser-1', title: 'T', number: 1, status: 'draft', stages: {}, updatedAt: '2026-05-01T00:00:00Z', ...over });
 
+// Minimal track-shaped record — sanitizeRecordForWire('track', …) passes the
+// content through verbatim (whole-record LWW). `chiptuneScore`/`chiptunePrompt`
+// default to their "untouched" shape (null/'') so a fixture that omits them
+// still round-trips exactly like a pre-#2911 track.
+const trk = (over = {}) => ({ id: 't-1', title: 'Song', albumId: 'al-1', artistId: 'ar-1', renders: [], chiptuneScore: null, chiptunePrompt: '', updatedAt: '2026-05-01T00:00:00Z', ...over });
+
 const pendingEntries = async () => cj.conflictJournalStore().loadAll();
 
 describe('conflictJournal', () => {
@@ -257,6 +263,51 @@ describe('conflictJournal', () => {
     expect(fields).not.toContain('seriesId');
     // Base advanced to remote → an idempotent replay must NOT re-journal.
     expect(await cj.getSyncBaseHash('issue', 'iss-1')).toBe(cj.contentHashForRecord('issue', remote));
+  });
+
+  describe('track content hash — version-gated additive fields (#2912)', () => {
+    it('still ignores renders (server-managed take history, permanently excluded)', () => {
+      const base = cj.contentHashForRecord('track', trk());
+      const withRenders = cj.contentHashForRecord('track', trk({ renders: [{ id: 'r-1', url: 'a.wav' }] }));
+      expect(withRenders).toBe(base);
+    });
+
+    it('at the current version, chiptuneScore/chiptunePrompt DO participate in the hash (no longer excluded)', () => {
+      const base = cj.contentHashForRecord('track', trk());
+      const withScore = cj.contentHashForRecord('track', trk({ chiptuneScore: { bpm: 120 }, chiptunePrompt: 'farm loop' }));
+      expect(withScore).not.toBe(base);
+    });
+
+    it('a base hash stamped BEFORE the field existed (version 2) does not churn when only chiptuneScore differs', async () => {
+      // Simulate the pre-#2912 base: hashed with maxVersion 2, so chiptuneScore/
+      // chiptunePrompt (introduced at tracks v3) were never part of it — the
+      // same shape `HASH_EXCLUDED_FIELDS` used to produce permanently.
+      const legacyBase = trk({ chiptuneScore: null, chiptunePrompt: '' });
+      const legacyHash = cj.contentHashForRecord('track', legacyBase, { maxVersion: 2 });
+      await cj.setSyncBaseHash('track', 't-1', legacyHash, { version: 2 });
+
+      // Nobody has touched chiptuneScore since; only unrelated fields exist
+      // identically on both sides.
+      const local = trk();
+      const remote = trk();
+      const { isConflict, baseHash, localHash } = await cj.detectConflict({ kind: 'track', id: 't-1', local, remote });
+      expect(baseHash).toBe(legacyHash);
+      expect(localHash).toBe(legacyHash); // compared at the STORED (v2) version — no false divergence
+      expect(isConflict).toBe(false);
+    });
+
+    it('two peers independently composing a chiptune score off a CURRENT-version base trips a real conflict', async () => {
+      const base = trk({ chiptuneScore: null, chiptunePrompt: '' });
+      // setSyncBaseHash with no explicit version stamps the CURRENT (v3) version.
+      await cj.setSyncBaseHash('track', 't-1', cj.contentHashForRecord('track', base));
+
+      const local = trk({ chiptuneScore: { bpm: 120 }, chiptunePrompt: 'mine', updatedAt: '2026-05-02T00:00:00Z' });
+      const remote = trk({ chiptuneScore: { bpm: 90 }, chiptunePrompt: 'theirs', updatedAt: '2026-05-03T00:00:00Z' });
+      await cj.maybeJournalBeforeOverwrite({ kind: 'track', id: 't-1', local, remote, source: { via: 'sync' } });
+      const entries = await pendingEntries();
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({ recordKind: 'track', recordId: 't-1', status: 'pending' });
+    });
   });
 
   it('does NOT journal when the local side is a tombstone (no content to lose)', async () => {

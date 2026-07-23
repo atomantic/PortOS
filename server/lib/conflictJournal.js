@@ -89,12 +89,62 @@ const MEDIA_COLLECTION_SCALAR_FIELDS = Object.freeze(['name', 'description', 'co
 // (local and remote both differ from a base computed without renders). Excluding
 // it from the hash keeps base-hash compatibility; render-only divergences are
 // LWW-ordered by `updatedAt` regardless, and renders stays restorable (below).
-// track: renders (server-managed take history) and the additive chiptune
-// fields (#2911) stay out of the content hash — an older peer's copy simply
-// lacks the keys, and including them would leave mixed-version peers with a
-// permanent base-hash mismatch (the churn the wire comments warn about).
-// Score changes still propagate via the whole-record LWW merge (updatedAt).
-const HASH_EXCLUDED_FIELDS = Object.freeze({ issue: ['number'], track: ['renders', 'chiptuneScore', 'chiptunePrompt'] });
+// This is for fields that are GENUINELY server-managed (mutate without a user
+// edit) and must NEVER participate in conflict detection — contrast with
+// HASH_FIELDS below, for user-authored additive fields that SHOULD eventually
+// participate once it's safe to.
+const HASH_EXCLUDED_FIELDS = Object.freeze({ issue: ['number'], track: ['renders'] });
+
+// User-authored fields that were added to a kind's wire shape at a later
+// point, keyed by a LOCAL version number (this mechanism's own — deliberately
+// independent of PORTOS_SCHEMA_VERSIONS in schemaVersions.js, which gates
+// cross-peer WIRE compatibility, a different concern from "which fields does
+// the local base-hash store already know about"). Unlike HASH_EXCLUDED_FIELDS
+// these DO belong in conflict detection — the problem #2912 solves isn't
+// "never hash this," it's "don't let adding it retroactively invalidate every
+// base hash stamped before it existed." `contentHashForRecord`'s `maxVersion`
+// option drops any field introduced after that version; `setSyncBaseHash`
+// always stamps at the CURRENT (highest defined) version for the kind, and
+// `detectConflict` recomputes local/remote at the STORED base's version so
+// the comparison is apples-to-apples. A base hash predating the field will
+// therefore MISS a divergence limited to that field until the next successful
+// sync re-stamps it at the current version — the same one-time-miss tradeoff
+// this file already accepts for `baseHash == null` (see the module doc
+// comment above).
+const HASH_FIELDS = Object.freeze({
+  // v3 (#2911): chiptuneScore/chiptunePrompt. Previously permanently excluded
+  // via HASH_EXCLUDED_FIELDS; migrated here by #2912 so two peers that both
+  // understand the field (base stamped at v3+) get real conflict detection on
+  // it instead of silent LWW. The version number "3" is chosen to match
+  // PORTOS_SCHEMA_VERSIONS.tracks for a human reading both files side by side
+  // — nothing enforces the two staying in lockstep; it's fine for them to
+  // diverge (a wire-compat bump doesn't always change what the local hash
+  // cares about, and vice versa).
+  track: Object.freeze({ 3: Object.freeze(['chiptuneScore', 'chiptunePrompt']) }),
+});
+
+// Precomputed field→version lookup per kind, inverted from HASH_FIELDS once
+// at module load (HASH_FIELDS is static, so rebuilding this per hash call —
+// on every record write in the system — would be pure waste).
+const HASH_FIELD_VERSION_BY_KIND = Object.freeze(Object.fromEntries(
+  Object.entries(HASH_FIELDS).map(([kind, versioned]) => {
+    const byField = new Map();
+    for (const [v, fields] of Object.entries(versioned)) {
+      for (const f of fields) byField.set(f, Number(v));
+    }
+    return [kind, byField];
+  }),
+));
+
+// The highest HASH_FIELDS version defined for `kind` — the version
+// `setSyncBaseHash` stamps new base hashes at. Kinds with no HASH_FIELDS
+// entry have nothing to gate; the fallback of 1 is inert for them (no field
+// is ever excluded by a maxVersion check that never finds a match).
+function currentHashVersionForKind(kind) {
+  const versioned = HASH_FIELDS[kind];
+  if (!versioned) return 1;
+  return Math.max(1, ...Object.keys(versioned).map(Number));
+}
 
 /**
  * sha256 of the canonical content projection. Reuses sanitizeRecordForWire +
@@ -106,16 +156,28 @@ const HASH_EXCLUDED_FIELDS = Object.freeze({ issue: ['number'], track: ['renders
  * the base hash stays consistent across peers. Returns null when the record has
  * no wire form (ephemeral non-tombstone, or invalid) — callers treat a null
  * hash as "cannot compare".
+ *
+ * `maxVersion` (see HASH_FIELDS above) restricts the hash to fields introduced
+ * at or below that version — pass the STORED base hash's version when
+ * recomputing for comparison so an old base isn't compared against a
+ * differently-shaped hash. Omitted (the default, used when stamping a NEW base
+ * hash) means "include every field at the current version."
  */
-export function contentHashForRecord(kind, record) {
+export function contentHashForRecord(kind, record, { maxVersion } = {}) {
   const wire = sanitizeRecordForWire(kind, record);
   if (!wire) return null;
   let hashInput = wire;
   if (kind === 'mediaCollection') {
     hashInput = projectCollectionScalars(wire);
-  } else if (HASH_EXCLUDED_FIELDS[kind]) {
-    const excluded = HASH_EXCLUDED_FIELDS[kind];
-    hashInput = Object.fromEntries(Object.entries(wire).filter(([k]) => !excluded.includes(k)));
+  } else if (HASH_EXCLUDED_FIELDS[kind] || HASH_FIELD_VERSION_BY_KIND[kind]) {
+    const excluded = HASH_EXCLUDED_FIELDS[kind] || [];
+    const introducedAt = HASH_FIELD_VERSION_BY_KIND[kind];
+    hashInput = Object.fromEntries(Object.entries(wire).filter(([k]) => {
+      if (excluded.includes(k)) return false;
+      const fieldVersion = introducedAt?.get(k);
+      if (fieldVersion == null) return true; // not a versioned field — always included
+      return maxVersion == null || fieldVersion <= maxVersion;
+    }));
   }
   return createHash('sha256').update(canonicalStringify(hashInput)).digest('hex');
 }
@@ -134,7 +196,12 @@ function projectCollectionScalars(wire) {
 
 // ---- base-hash side store (in-memory cache, batched write-through) ----
 
-let _baseHashes = null;       // Map<`${kind}:${id}`, sha256>
+// Map<`${kind}:${id}`, sha256 | { h: sha256, v: number }>. A bare string is a
+// legacy entry written before #2912 (or a v1 entry — the two are equivalent,
+// see readBaseEntry's "absent = v1" fallback); new entries are always written
+// as `{ h, v }` so the hash-fields version travels with the hash it was
+// computed under.
+let _baseHashes = null;
 let _loadPromise = null;
 let _baseDirty = false;
 let _flushTail = Promise.resolve();
@@ -157,17 +224,45 @@ async function ensureBaseLoaded() {
   return _loadPromise;
 }
 
-export async function getSyncBaseHash(kind, id) {
-  const map = await ensureBaseLoaded();
-  return map.get(baseKey(kind, id)) ?? null;
+// Normalize a raw map value (legacy bare string, or `{ h, v }`) to
+// `{ hash, version }`. Absent version defaults to 1 — the pre-#2912 hash
+// never included any HASH_FIELDS-versioned field, so it's the correct floor.
+function readBaseEntry(raw) {
+  if (raw == null) return null;
+  if (typeof raw === 'string') return { hash: raw, version: 1 };
+  const version = Number.isInteger(raw.v) ? raw.v : 1;
+  return { hash: raw.h ?? null, version };
 }
 
-/** Set the base hash in memory (write-through deferred to flushBaseHashes). */
-export async function setSyncBaseHash(kind, id, hash) {
+/** Shared lookup behind getSyncBaseHash and detectConflict — one place that
+ *  loads the map and normalizes the stored entry. */
+async function readStoredBaseEntry(kind, id) {
+  const map = await ensureBaseLoaded();
+  return readBaseEntry(map.get(baseKey(kind, id)));
+}
+
+/** The stored base hash for (kind, id), or null. String-only for backward
+ *  compatibility with every existing caller/test — use detectConflict (which
+ *  reads the paired version internally) when the version matters. */
+export async function getSyncBaseHash(kind, id) {
+  return (await readStoredBaseEntry(kind, id))?.hash ?? null;
+}
+
+/**
+ * Set the base hash in memory (write-through deferred to flushBaseHashes).
+ * Stamps the CURRENT hash-fields version for `kind` (see
+ * currentHashVersionForKind) unless `version` is explicitly given — tests use
+ * the override to plant a hash computed at an older version, simulating a
+ * base stamped before an additive HASH_FIELDS entry existed.
+ */
+export async function setSyncBaseHash(kind, id, hash, { version } = {}) {
   const map = await ensureBaseLoaded();
   if (!hash) return;
-  if (map.get(baseKey(kind, id)) === hash) return;
-  map.set(baseKey(kind, id), hash);
+  const v = Number.isInteger(version) ? version : currentHashVersionForKind(kind);
+  const key = baseKey(kind, id);
+  const existing = readBaseEntry(map.get(key));
+  if (existing?.hash === hash && existing?.version === v) return;
+  map.set(key, { h: hash, v });
   _baseDirty = true;
 }
 
@@ -288,11 +383,19 @@ export async function withBaseHashFlushBatch(fn) {
 /**
  * Detect a true 3-way divergence for a record about to be overwritten.
  * Returns `{ isConflict, baseHash, localHash, remoteHash }`.
+ *
+ * local/remote are recomputed at the STORED base's hash-fields version (see
+ * HASH_FIELDS), not the current one — so a base stamped before an additive
+ * field existed is compared apples-to-apples against the same field set it
+ * was originally built from, instead of unconditionally mismatching the
+ * moment the field starts appearing in the wire shape.
  */
 export async function detectConflict({ kind, id, local, remote }) {
-  const baseHash = await getSyncBaseHash(kind, id);
-  const localHash = contentHashForRecord(kind, local);
-  const remoteHash = contentHashForRecord(kind, remote);
+  const base = await readStoredBaseEntry(kind, id);
+  const baseHash = base?.hash ?? null;
+  const maxVersion = base ? base.version : undefined;
+  const localHash = contentHashForRecord(kind, local, { maxVersion });
+  const remoteHash = contentHashForRecord(kind, remote, { maxVersion });
   const isConflict = baseHash != null && localHash != null && remoteHash != null
     && localHash !== baseHash && remoteHash !== baseHash && localHash !== remoteHash;
   return { isConflict, baseHash, localHash, remoteHash };
@@ -322,9 +425,10 @@ export const RESTORABLE_FIELDS = Object.freeze({
   // `renders` IS restorable (a conflict restore must bring back the local render
   // history) but is EXCLUDED FROM THE CONTENT HASH — see HASH_EXCLUDED_FIELDS for
   // why (base-hash compatibility for this additive backfilled field).
-  // `chiptuneScore`/`chiptunePrompt` (#2911) follow the `renders` pattern:
-  // restorable (a conflict restore must bring back the local composition) but
-  // excluded from the content hash for cross-version base-hash stability.
+  // `chiptuneScore`/`chiptunePrompt` (#2911) are also restorable and, as of
+  // #2912, DO participate in the content hash via the version-gated HASH_FIELDS
+  // mechanism (see above) — a base hash predating the field just compares at
+  // its own stored version until the next sync re-stamps it.
   track: ['title', 'albumId', 'artistId', 'artist', 'lyrics', 'prompt', 'engine', 'modelId', 'durationSec', 'audioFilename', 'renders', 'chiptuneScore', 'chiptunePrompt'],
   // Issue: the user-authored content the merge can restore. `stages` carries
   // the bulk of the work (prose, comic pages, render metadata). Server-owned /

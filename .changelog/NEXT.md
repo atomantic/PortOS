@@ -2,6 +2,7 @@
 
 ## Music studio
 
+- **[issue-2912] Chiptune score edits on two synced machines now show up as a real conflict** — if you compose a chiptune score for the same track on two federated installs before they sync with each other, that divergence now surfaces in Sharing → Conflicts (so you can review and choose which version to keep) instead of one edit silently overwriting the other.
 - **[issue-2911] Compose looping 8-bit game music from a prompt** — the Track editor gains a "Chiptune score" generation mode alongside the on-device audio models: describe the music, pick any configured AI provider/model, and it composes a structured NES-style score (two pulse channels, triangle bass, noise drums) that plays as a seamless loop right in the browser. Revise it conversationally ("more drums", "make it spookier") or start fresh, render takes into the track's regular render history as audio loops, and publish straight into a managed game app's repo (default `game/assets/music/`) as a game-ready OGG plus its editable score source — so a Godot game can drop the loop in as background music. The provider pin and publish target are remembered between sessions.
 
 ## Sprite Manager
