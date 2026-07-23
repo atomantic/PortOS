@@ -40,7 +40,7 @@ import {
   sampleBorderKey, validateMeasuredKey, recoverAlphaFrame, despillKeyFrame,
   alphaBbox, compositeOnto, sha256Buffer,
 } from './walkPostprocess.js';
-import { withWalkWriteTail, walkSetRelPath } from './walk.js';
+import { withWalkWriteTail, walkSetRelPath, isImportedWalkSet } from './walk.js';
 
 // Player atlas contract (source pipeline runtime_publish.py): 96px cells,
 // pivot (48,88) — silhouette centered on x=48, feet on the y=88 ground line —
@@ -188,12 +188,9 @@ export async function validateForCompile(recordId) {
   // frames/ to minimize copies). Recompiling them here is structurally
   // impossible; say so plainly instead of a misleading tamper error. Their
   // already-published runtime atlases were imported and remain browsable.
-  // Match the importer's own legacy-path recognition (relToCharacterDir):
-  // the marker can sit at any index (absolute/repo-prefixed variants), not
-  // just the string start.
-  if (
-    typeof walkSet.selectionPath === 'string' && walkSet.selectionPath.includes('art-source/sprites/')
-  ) {
+  // Shared predicate (walk.js) so this recompile guard and unlockWalkSet's
+  // stay in lockstep on what counts as a legacy import.
+  if (isImportedWalkSet(walkSet)) {
     throw new ServerError(
       'This walk set was imported from the source pipeline — its packaged frames were not imported, so PortOS cannot recompile it. Imported runtime atlases remain available in the asset library; to compile here, run the walk workflow on a new character.',
       { status: 409, code: 'LEGACY_IMPORTED_WALK_SET' },

@@ -37,7 +37,7 @@ import {
   getReferenceSet, startReferenceGeneration, lockReference, patchSpriteRecord,
 } from '../services/sprites/reference.js';
 import {
-  getWalkState, startWalkGeneration, approveWalkDirection, rerunWalkPostprocess,
+  getWalkState, startWalkGeneration, approveWalkDirection, rerunWalkPostprocess, unlockWalkSet,
 } from '../services/sprites/walk.js';
 import { saveLoopTrim } from '../services/sprites/walkTrims.js';
 import { compileAtlas, getAtlasState } from '../services/sprites/atlas.js';
@@ -126,6 +126,13 @@ router.post('/:id/walk/generate', asyncHandler(async (req, res) => {
 router.post('/:id/walk/approve', asyncHandler(async (req, res) => {
   const body = validateRequest(spriteWalkApproveSchema, req.body);
   res.json(await approveWalkDirection(req.params.id, body));
+}));
+
+// Un-freeze a finalized walk set so it can be revised in place (#2933
+// follow-up): removes the frozen walk-set file and re-opens every direction,
+// preserving the rendered clips. 409s a legacy source-pipeline import. No body.
+router.post('/:id/walk/unlock', asyncHandler(async (req, res) => {
+  res.json(await unlockWalkSet(req.params.id));
 }));
 
 // Re-run the deterministic postprocess for a run whose video already landed

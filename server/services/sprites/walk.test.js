@@ -69,7 +69,7 @@ const records = await import('./records.js');
 const { listSpriteAssets } = await import('./paths.js');
 const { lockReference } = await import('./reference.js');
 const {
-  getWalkState, startWalkGeneration, attachWalkVideo, approveWalkDirection, rerunWalkPostprocess,
+  getWalkState, startWalkGeneration, attachWalkVideo, approveWalkDirection, rerunWalkPostprocess, unlockWalkSet,
 } = await import('./walk.js');
 const { SPRITE_DIRECTIONS, ANCHOR_DIRECTIONS } = await import('./prompts.js');
 
@@ -342,6 +342,55 @@ describe('approveWalkDirection', () => {
       .rejects.toMatchObject({ code: 'WALK_SET_FINAL' });
     await expect(rerunWalkPostprocess(id, { runId: eastRun }))
       .rejects.toMatchObject({ code: 'WALK_SET_FINAL' });
+  });
+});
+
+describe('unlockWalkSet', () => {
+  async function finalizedCharacter() {
+    const id = await characterWithLockedAnchors(newId(), ANCHOR_DIRECTIONS);
+    for (const direction of SPRITE_DIRECTIONS) {
+      const { runId } = await makeCandidateRun(id, direction);
+      await approveWalkDirection(id, { direction, runId });
+    }
+    return id;
+  }
+
+  it('409s when there is no finalized walk set', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    await expect(unlockWalkSet(id)).rejects.toMatchObject({ code: 'WALK_SET_NOT_FINAL' });
+  });
+
+  it('un-freezes the set, re-opens every direction, and reverts the record status', async () => {
+    const id = await finalizedCharacter();
+    expect((await records.getRecord(id)).status).toBe('walk-complete');
+
+    const state = await unlockWalkSet(id);
+    // The frozen set is gone and the selection is back to an editable, empty set.
+    expect(state.walkSet).toBeNull();
+    expect(state.selection.status).toBe('in-progress');
+    expect(state.selection.directions).toEqual({});
+    expect((await records.getRecord(id)).status).toBe('reference-complete');
+
+    // Regeneration/approval is allowed again (no WALK_SET_FINAL), and the
+    // already-rendered clips remain on disk to re-approve.
+    const { runId } = await makeCandidateRun(id, 'east');
+    const reapproved = await approveWalkDirection(id, { direction: 'east', runId });
+    expect(reapproved.selection.directions.east.status).toBe('approved');
+  });
+
+  it('refuses to unlock a legacy source-pipeline import', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    await mkdir(join(TEST_ROOT, 'sprites', id, 'walk'), { recursive: true });
+    await writeFile(join(TEST_ROOT, 'sprites', id, 'walk', `${id}-walk-set-v1.json`), JSON.stringify({
+      schemaVersion: 1,
+      kind: 'finalized-eight-direction-walk-set',
+      characterId: id,
+      status: 'final',
+      // The importer copies this source-repo-anchored, which marks it legacy.
+      selectionPath: `art-source/sprites/${id}/walk/${id}-walk-selection-v1.json`,
+      directions: {},
+    }));
+    await expect(unlockWalkSet(id)).rejects.toMatchObject({ code: 'LEGACY_IMPORTED_WALK_SET' });
   });
 });
 
