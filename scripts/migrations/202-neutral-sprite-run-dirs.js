@@ -60,7 +60,16 @@ const NEUTRAL_DIR = 'runs';
 const exists = (abs) => stat(abs).then(() => true, () => false);
 const sha256File = async (abs) => createHash('sha256').update(await readFile(abs)).digest('hex');
 const readJson = async (abs) => { try { return JSON.parse(await readFile(abs, 'utf8')); } catch { return null; } };
-const writeJson = (abs, obj) => writeFile(abs, `${JSON.stringify(obj, null, 2)}\n`);
+// Atomic write (temp + rename) so a crash mid-migration can never leave a torn,
+// unparseable state file (selection / walk-set / pointer) behind — the prior
+// file stays intact and the idempotent gate re-triggers cleanly on the retry.
+// Inlined rather than importing server/lib/fileUtils so the migration keeps its
+// minimal fs+crypto dependency surface.
+const writeJson = async (abs, obj) => {
+  const tmp = `${abs}.202.tmp`;
+  await writeFile(tmp, `${JSON.stringify(obj, null, 2)}\n`);
+  await rename(tmp, abs);
+};
 
 // Rewrite a record-relative path VALUE that starts with `grok/`. Only the
 // path prefix is matched, so provenance strings that merely CONTAIN "grok"
