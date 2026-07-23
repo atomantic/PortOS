@@ -880,8 +880,10 @@ describe('peerSync', () => {
       // in-memory map and would pass even if the terminal flush never wrote. A
       // present-on-disk entry proves the batch's coalesced write actually ran
       // inside the awaited fan-out (no drain).
+      // On-disk entries are `{ h, v }` (#2912 — the hash-fields version travels
+      // with the hash it was computed under); `.h` is the plain hash string.
       const onDisk = JSON.parse(await readFile(join(tmp, 'sharing', 'sync_base_hashes.json'), 'utf8'));
-      expect(onDisk['universe:u1']).toBe(contentHashForRecord('universe', { id: 'u1', name: 'U1' }));
+      expect(onDisk['universe:u1'].h).toBe(contentHashForRecord('universe', { id: 'u1', name: 'U1' }));
     });
   });
 
@@ -1033,9 +1035,10 @@ describe('peerSync', () => {
       // Both records' stamps are in the single on-disk file — read it directly
       // (not getSyncBaseHash's in-memory map) so the assertion proves the
       // coalesced terminal flush wrote all N stamps before the helper returned.
+      // On-disk entries are `{ h, v }` (#2912) — `.h` is the plain hash string.
       const onDisk = JSON.parse(await readFile(join(tmp, 'sharing', 'sync_base_hashes.json'), 'utf8'));
-      expect(onDisk['universe:u1']).toBe(contentHashForRecord('universe', { id: 'u1', name: 'U1' }));
-      expect(onDisk['universe:u2']).toBe(contentHashForRecord('universe', { id: 'u2', name: 'U2' }));
+      expect(onDisk['universe:u1'].h).toBe(contentHashForRecord('universe', { id: 'u1', name: 'U1' }));
+      expect(onDisk['universe:u2'].h).toBe(contentHashForRecord('universe', { id: 'u2', name: 'U2' }));
     });
 
     it('drops ephemeral records before computing the set-diff', async () => {
