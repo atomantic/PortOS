@@ -35,7 +35,18 @@ export default function AssetInspector({ recordId, asset, onClose }) {
   const previewable = hasSpritePreview(asset);
 
   return (
-    <Modal open onClose={onClose} size="2xl" ariaLabel={`Asset ${asset.path}`}>
+    <Modal
+      open
+      onClose={onClose}
+      size="2xl"
+      ariaLabel={`Asset ${asset.path}`}
+      // The dialog panel needs its own opaque fill — without it the metadata
+      // and buttons render straight onto the semi-transparent backdrop and the
+      // page bleeds through, making the text unreadable (matches the imagegen
+      // MediaLightbox, which pairs a denser backdrop with a solid card).
+      backdropClassName="bg-black/90"
+      panelClassName="bg-port-card border border-port-border rounded-lg p-4 shadow-2xl"
+    >
       <div className="space-y-3">
         <div className="flex items-start justify-between gap-3">
           <h3 className="text-sm font-semibold text-white break-all">{fileName}</h3>
