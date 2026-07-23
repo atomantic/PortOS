@@ -74,6 +74,28 @@ export function buildMainReferencePrompt({ name, designPrompt, chromaKey }) {
 }
 
 /**
+ * Stage-3 motion prompt (issue #2897): the walk-video instruction handed to
+ * the grok i2v lane along with the prepared transparent anchor. PortOS's
+ * grok video wrapper (videoGen/grok.js buildGrokVideoPrompt) owns the tool
+ * mechanics (one image_to_video call, save one MP4), so this carries only
+ * the identity/matte/motion constraints — the source pipeline's
+ * `animation_prompt` minus its CLI/tool scaffolding.
+ */
+export function buildWalkVideoPrompt({ name, direction, chromaKey }) {
+  const facing = REFERENCE_FACING[direction] || direction;
+  return (
+    `The source image is the locked directional identity anchor for the game character ${name}, `
+    + `${facing}. Animate a walk-in-place loop, walking ${direction}. `
+    + 'Preserve identity, palette, proportions, facing, and physical-left and physical-right '
+    + 'accessories exactly. Use a locked camera and an exactly uniform, non-emissive '
+    + `${keyColorPhrase(chromaKey)} background that acts only as a compositing matte: no rim light, `
+    + 'bounce light, reflections, color cast, glow, or shadow on the character. Keep a stable '
+    + 'pivot and ground line with loop-friendly walk-in-place motion. No scenery, no text, no '
+    + 'labels, no camera motion, no extra figures.'
+  );
+}
+
+/**
  * Stage-2 prompt: derive one directional anchor from the attached frozen
  * main reference.
  */
