@@ -11,7 +11,11 @@ export default function AppContextPicker({
   className = '',
   selectClassName = 'w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm min-h-[44px]',
   showRepoPath = true,
-  repoLabel = 'Repository'
+  repoLabel = 'Repository',
+  // Shown in the repo-path box when nothing is selected. Pickers that do NOT
+  // fall back to PortOS (e.g. sprite import, where the app IS the source)
+  // override this — the default text would lie about what happens.
+  emptyRepoText = 'using default PortOS context'
 }) {
   const selectedApp = apps.find(app => app.id === value);
   const sortedApps = [...apps].sort((a, b) =>
@@ -51,7 +55,7 @@ export default function AppContextPicker({
               </div>
             </div>
           ) : (
-            <div>{repoLabel}: using default PortOS context</div>
+            <div>{repoLabel}: {emptyRepoText}</div>
           )}
         </div>
       )}

@@ -3,6 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { PersonStanding, Package, Download, FolderOpen, X, RefreshCw, Plus } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import { listSpriteRecords, getSpriteRecord, importSprites, createSpriteRecord } from '../services/apiSprites.js';
+import { getApps } from '../services/apiApps.js';
+import AppContextPicker from '../components/AppContextPicker.jsx';
 import ReferenceWorkflow from '../components/sprites/ReferenceWorkflow.jsx';
 import WalkWorkflow from '../components/sprites/WalkWorkflow.jsx';
 import PublishWorkflow from '../components/sprites/PublishWorkflow.jsx';
@@ -27,16 +29,29 @@ function topLevelGroup(assetPath) {
 
 function ImportPanel({ onImported }) {
   const [open, setOpen] = useState(false);
-  const [sourceRoot, setSourceRoot] = useState('');
+  const [apps, setApps] = useState([]);
+  const [appId, setAppId] = useState('');
   const [includeProps, setIncludeProps] = useState(true);
   const [importing, setImporting] = useState(false);
   const [importErrors, setImportErrors] = useState([]);
+
+  // Sprite sources are managed apps (we import/sync from an app's checkout),
+  // so the picker is the source of truth for the path — no free-text root.
+  // Archived apps and apps with no repoPath can't be a source.
+  useEffect(() => {
+    if (!open) return;
+    getApps({ silent: true })
+      .then((list) => setApps((list || []).filter((a) => a.repoPath && !a.archived)))
+      .catch(() => setApps([]));
+  }, [open]);
+
+  const sourceRoot = apps.find((a) => a.id === appId)?.repoPath || '';
 
   const runImport = async () => {
     setImporting(true);
     setImportErrors([]);
     try {
-      const { results, totals } = await importSprites({ sourceRoot: sourceRoot.trim(), includeProps });
+      const { results, totals } = await importSprites({ sourceRoot, includeProps });
       if (totals.errors > 0) {
         // Keep the panel open and show WHICH files failed — a count alone
         // gives the user nothing to repair.
@@ -74,20 +89,20 @@ function ImportPanel({ onImported }) {
         </button>
       </div>
       <p className="text-xs text-gray-400">
-        Point at a sprite-pipeline checkout (expects <code>art-pipeline/characters/</code> and/or <code>game/assets/sprites/</code>).
-        Only approved/final assets import — reference candidates and raw run intermediates stay behind.
+        Pick the managed app holding the sprite pipeline (expects <code>art-pipeline/characters/</code> and/or <code>game/assets/sprites/</code>
+        in its repo). Only approved/final assets import — reference candidates and raw run intermediates stay behind.
       </p>
-      <div>
-        <label htmlFor="sprite-import-source" className="block text-xs text-gray-400 mb-1">Source root path</label>
-        <input
-          id="sprite-import-source"
-          type="text"
-          value={sourceRoot}
-          onChange={(e) => setSourceRoot(e.target.value)}
-          placeholder="~/path/to/game-project"
-          className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white"
-        />
-      </div>
+      <AppContextPicker
+        apps={apps}
+        value={appId}
+        onChange={setAppId}
+        label="Source app"
+        placeholder="Select an app…"
+        ariaLabel="Sprite source app"
+        repoLabel="Source root"
+        emptyRepoText="pick an app to import from"
+        selectClassName="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white min-h-[44px]"
+      />
       <label htmlFor="sprite-import-props" className="flex items-center gap-2 text-sm text-gray-300">
         <input
           id="sprite-import-props"
@@ -99,7 +114,7 @@ function ImportPanel({ onImported }) {
       </label>
       <button
         onClick={runImport}
-        disabled={importing || !sourceRoot.trim()}
+        disabled={importing || !sourceRoot}
         className="flex items-center gap-2 px-3 py-1.5 bg-port-accent hover:bg-blue-600 disabled:opacity-50 text-white rounded text-sm"
       >
         {importing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
