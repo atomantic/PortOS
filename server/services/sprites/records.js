@@ -52,10 +52,13 @@ export async function createRecord(input, id) {
 }
 
 /**
- * Create a character record (the reference-workflow entry point) — derives
- * the id from the name when not supplied. Props families stay import-only.
+ * Create a sprite record (the reference-workflow entry point for characters) —
+ * derives the id from the name when not supplied. `kind` defaults to
+ * `character`; the UI also creates `place`/`object` records here (#2932).
+ * `props` families stay import-only. Only character records unlock the
+ * reference → walk → publish workflows (gated client-side on kind).
  */
-export async function createCharacter({ id, name, spec = null }) {
+export async function createCharacter({ id, name, spec = null, kind = 'character' }) {
   const recordId = id || deriveSpriteId(name);
   if (!isValidSpriteId(recordId)) {
     throw new ServerError(`Cannot derive a valid sprite id from "${name}" — pass an explicit id`, { status: 400, code: 'INVALID_SPRITE_ID' });
@@ -67,7 +70,10 @@ export async function createCharacter({ id, name, spec = null }) {
   if (existing?.deleted) {
     throw new ServerError(`A deleted record still holds the id "${recordId}" (its assets remain on disk) — pass a different id`, { status: 409, code: 'ID_TOMBSTONED' });
   }
-  return createRecord({ kind: 'character', name, spec }, recordId);
+  // buildSpriteRecord validates kind against SPRITE_RECORD_KINDS and falls
+  // back to 'character' for anything unexpected — the Zod schema enum-gates it
+  // before this point, so an out-of-set value can't reach here from the route.
+  return createRecord({ kind, name, spec }, recordId);
 }
 
 export async function updateRecord(id, patch) {

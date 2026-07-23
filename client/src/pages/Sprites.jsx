@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { PersonStanding, Package, Download, X, RefreshCw, Plus } from 'lucide-react';
+import { PersonStanding, MapPin, Package, Download, X, RefreshCw, Plus, ChevronRight, ChevronDown } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
   listSpriteRecords, getSpriteRecord, importSprites, createSpriteRecord,
@@ -17,7 +17,14 @@ import AssetCollection from '../components/sprites/AssetCollection.jsx';
 import { useAsyncAction } from '../hooks/useAsyncAction.js';
 import { useSpritePendingRenders } from '../hooks/useSpritePendingRenders.js';
 import { buildCollectionActions } from '../lib/spriteCollectionActions.js';
+import {
+  groupSpriteRecords, filterSpriteRecords, groupKeyForKind, NEW_SPRITE_KINDS,
+} from '../lib/spriteRecordGroups.js';
 import { timeAgo } from '../utils/formatters.js';
+
+// Per-group sidebar icons — the pure grouping lib keys each group; the page
+// owns the lucide component mapping so the lib stays React-free.
+const GROUP_ICONS = { characters: PersonStanding, places: MapPin, objects: Package };
 
 // Sprite Manager: library over imported production sprites — characters
 // (reference sets, walk strips, runtime atlases) and props atlas families —
@@ -129,21 +136,24 @@ function ImportPanel({ onImported }) {
   );
 }
 
-function NewCharacterPanel({ onCreated }) {
+function NewSpritePanel({ onCreated }) {
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [id, setId] = useState('');
+  const [kind, setKind] = useState('character');
 
   const [create, creating] = useAsyncAction(async () => {
     const record = await createSpriteRecord({
       name: name.trim(),
+      kind,
       ...(id.trim() ? { id: id.trim() } : {}),
     }, { silent: true });
     setOpen(false);
     setName('');
     setId('');
+    setKind('character');
     onCreated(record);
-  }, { errorMessage: 'Failed to create character' });
+  }, { errorMessage: 'Failed to create sprite' });
 
   if (!open) {
     return (
@@ -151,7 +161,7 @@ function NewCharacterPanel({ onCreated }) {
         onClick={() => setOpen(true)}
         className="flex items-center gap-2 px-3 py-1.5 bg-port-card border border-port-border hover:border-port-accent text-gray-300 rounded text-sm"
       >
-        <Plus className="w-4 h-4" /> New Character
+        <Plus className="w-4 h-4" /> New Sprite
       </button>
     );
   }
@@ -159,10 +169,28 @@ function NewCharacterPanel({ onCreated }) {
   return (
     <div className="w-full bg-port-card border border-port-border rounded-lg p-4 space-y-3">
       <div className="flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-white">New character</h3>
-        <button onClick={() => setOpen(false)} aria-label="Close new character panel" className="text-gray-400 hover:text-white">
+        <h3 className="text-sm font-semibold text-white">New sprite</h3>
+        <button onClick={() => setOpen(false)} aria-label="Close new sprite panel" className="text-gray-400 hover:text-white">
           <X className="w-4 h-4" />
         </button>
+      </div>
+      <div>
+        <label htmlFor="sprite-new-kind" className="block text-xs text-gray-400 mb-1">Kind</label>
+        <select
+          id="sprite-new-kind"
+          value={kind}
+          onChange={(e) => setKind(e.target.value)}
+          className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white"
+        >
+          {NEW_SPRITE_KINDS.map((k) => (
+            <option key={k.value} value={k.value}>{k.label}</option>
+          ))}
+        </select>
+        {kind !== 'character' && (
+          <p className="mt-1 text-xs text-gray-600">
+            Reference, walk, and publish workflows are character-only — a {kind} holds imported/uploaded assets.
+          </p>
+        )}
       </div>
       <div>
         <label htmlFor="sprite-new-name" className="block text-xs text-gray-400 mb-1">Name</label>
@@ -225,11 +253,127 @@ function RecordSection({ title, icon: Icon, items, selectedId, onSelect }) {
   );
 }
 
-function RecordList({ records, selectedId, onSelect }) {
+// Autocomplete record picker (#2932): a labelled combobox that filters the
+// library by name/id/kind and navigates on Enter/click, with the full grouped
+// list tucked behind a "Browse all" disclosure so the search replaces the
+// DEFAULT wall of names, not the ability to browse.
+function RecordPicker({ records, selectedId, onSelect }) {
+  const [query, setQuery] = useState('');
+  const [activeIndex, setActiveIndex] = useState(-1);
+  const [browseOpen, setBrowseOpen] = useState(false);
+  const inputId = 'sprite-search';
+  const listId = 'sprite-search-listbox';
+
+  const suggestions = useMemo(() => filterSpriteRecords(records, query), [records, query]);
+  const groups = useMemo(() => groupSpriteRecords(records), [records]);
+  const showSuggestions = query.trim().length > 0;
+
+  // A changed query invalidates the highlighted row's index.
+  useEffect(() => { setActiveIndex(-1); }, [query]);
+
+  const commit = (record) => {
+    if (!record) return;
+    onSelect(record.id);
+    setQuery('');
+    setActiveIndex(-1);
+  };
+
+  const onKeyDown = (e) => {
+    if (!showSuggestions) return;
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActiveIndex((i) => Math.min(i + 1, suggestions.length - 1));
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActiveIndex((i) => Math.max(i - 1, 0));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      commit(activeIndex >= 0 ? suggestions[activeIndex] : suggestions[0]);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      setQuery('');
+      setActiveIndex(-1);
+    }
+  };
+
+  const activeId = activeIndex >= 0 && suggestions[activeIndex]
+    ? `sprite-opt-${suggestions[activeIndex].id}` : undefined;
+
   return (
-    <div className="space-y-4">
-      <RecordSection title="Characters" icon={PersonStanding} items={records.filter((r) => r.kind === 'character')} selectedId={selectedId} onSelect={onSelect} />
-      <RecordSection title="Props" icon={Package} items={records.filter((r) => r.kind !== 'character')} selectedId={selectedId} onSelect={onSelect} />
+    <div className="space-y-3">
+      <div>
+        <label htmlFor={inputId} className="block text-xs text-gray-400 mb-1">Search sprites</label>
+        <div className="relative">
+          <input
+            id={inputId}
+            type="search"
+            role="combobox"
+            aria-expanded={showSuggestions}
+            aria-controls={listId}
+            aria-autocomplete="list"
+            aria-activedescendant={activeId}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder="Filter by name, id, or kind…"
+            className="w-full bg-port-bg border border-port-border rounded px-3 py-1.5 text-sm text-white"
+          />
+          {showSuggestions && (
+            <ul
+              id={listId}
+              role="listbox"
+              aria-label="Matching sprites"
+              className="absolute z-10 mt-1 w-full max-h-72 overflow-y-auto bg-port-card border border-port-border rounded-lg shadow-lg"
+            >
+              {suggestions.length === 0 ? (
+                <li className="px-3 py-2 text-xs text-gray-500">No matches</li>
+              ) : suggestions.map((r, i) => {
+                const Icon = GROUP_ICONS[groupKeyForKind(r.kind)] || Package;
+                return (
+                  <li key={r.id} id={`sprite-opt-${r.id}`} role="option" aria-selected={i === activeIndex}>
+                    <button
+                      type="button"
+                      onClick={() => commit(r)}
+                      onMouseEnter={() => setActiveIndex(i)}
+                      className={`w-full flex items-center gap-2 text-left px-3 py-2 text-sm ${i === activeIndex ? 'bg-port-accent/20 text-white' : 'text-gray-300 hover:bg-port-bg'}`}
+                    >
+                      <Icon className="w-3.5 h-3.5 shrink-0 text-gray-500" />
+                      <span className="font-medium truncate">{r.name}</span>
+                      <span className="ml-auto text-xs text-gray-500 shrink-0">{r.kind}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </div>
+
+      <div>
+        <button
+          type="button"
+          onClick={() => setBrowseOpen((o) => !o)}
+          aria-expanded={browseOpen}
+          className="flex items-center gap-1.5 text-xs text-gray-400 hover:text-white"
+        >
+          {browseOpen ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+          Browse all ({records.length})
+        </button>
+        {browseOpen && (
+          <div className="mt-2 space-y-4">
+            {groups.map((g) => (
+              <RecordSection
+                key={g.key}
+                title={g.label}
+                icon={GROUP_ICONS[g.key]}
+                items={g.records}
+                selectedId={selectedId}
+                onSelect={onSelect}
+              />
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -419,7 +563,7 @@ export default function Sprites() {
       </div>
       <div className="flex flex-col md:flex-row gap-4">
         <aside className="md:w-64 shrink-0 space-y-3">
-          <NewCharacterPanel onCreated={(record) => { refresh(); navigate(`/sprites/${record.id}`); }} />
+          <NewSpritePanel onCreated={(record) => { refresh(); navigate(`/sprites/${record.id}`); }} />
           {/* Re-import while a sprite is open must refresh the open detail too,
               not just the sidebar list. */}
           <ImportPanel onImported={() => { refresh(); if (id) setRetryTick((t) => t + 1); }} />
@@ -430,7 +574,7 @@ export default function Sprites() {
               No sprites yet. Import a production set from a sprite-pipeline checkout to get started.
             </p>
           ) : (
-            <RecordList records={records} selectedId={id} onSelect={(rid) => navigate(`/sprites/${rid}`)} />
+            <RecordPicker records={records} selectedId={id} onSelect={(rid) => navigate(`/sprites/${rid}`)} />
           )}
         </aside>
         <section className="flex-1 min-w-0">
@@ -452,7 +596,10 @@ export default function Sprites() {
             <div className="space-y-4">
               <div>
                 <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-                  {detail.record.kind === 'character' ? <PersonStanding className="w-5 h-5" /> : <Package className="w-5 h-5" />}
+                  {(() => {
+                    const Icon = GROUP_ICONS[groupKeyForKind(detail.record.kind)] || Package;
+                    return <Icon className="w-5 h-5" />;
+                  })()}
                   {detail.record.name}
                 </h2>
                 <p className="text-xs text-gray-500">

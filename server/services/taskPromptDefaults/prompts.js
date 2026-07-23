@@ -338,8 +338,8 @@ Create the worktree on a branch named \`claim/<slug>\`. This branch name is the 
 
 \`\`\`bash
 SLUG=<picked-slug>
-WORKTREE="data/cos/worktrees/claim-\${SLUG}"
-mkdir -p data/cos/worktrees
+WORKTREE="{worktreesRoot}/claim-\${SLUG}"
+mkdir -p {worktreesRoot}
 git fetch origin main
 git worktree add -b "claim/\${SLUG}" "\${WORKTREE}" origin/main
 cd "\${WORKTREE}"
@@ -535,8 +535,8 @@ Create the worktree on a branch named \`claim/issue-<num>\`, then set the cross-
 
 \`\`\`bash
 NUM=<picked-number>
-WORKTREE="data/cos/worktrees/claim-issue-\${NUM}"
-mkdir -p data/cos/worktrees
+WORKTREE="{worktreesRoot}/claim-issue-\${NUM}"
+mkdir -p {worktreesRoot}
 git fetch origin main
 git worktree add -b "claim/issue-\${NUM}" "\${WORKTREE}" origin/main
 # Cross-machine claim markers (best-effort — do not abort the run if these fail):
@@ -667,8 +667,8 @@ Detect the default branch first (forge-agnostic), then create the worktree on \`
 NUM=<picked-number>
 DEFAULT_BRANCH="$(git symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')"
 DEFAULT_BRANCH="\${DEFAULT_BRANCH:-main}"
-WORKTREE="data/cos/worktrees/claim-issue-\${NUM}"
-mkdir -p data/cos/worktrees
+WORKTREE="{worktreesRoot}/claim-issue-\${NUM}"
+mkdir -p {worktreesRoot}
 git fetch origin "\${DEFAULT_BRANCH}"
 git worktree add -b "claim/issue-\${NUM}" "\${WORKTREE}" "origin/\${DEFAULT_BRANCH}"
 # Cross-machine claim markers (best-effort — do not abort the run if these fail).
@@ -804,8 +804,8 @@ Then create the worktree on a branch named \`claim/<KEY>\`. Do all editing insid
 KEY=<picked-key>
 DEFAULT_BRANCH="$(git -C {repoPath} symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's@^origin/@@')"
 DEFAULT_BRANCH="\${DEFAULT_BRANCH:-main}"
-WORKTREE="{repoPath}/data/cos/worktrees/claim-\${KEY}"
-mkdir -p "{repoPath}/data/cos/worktrees"
+WORKTREE="{worktreesRoot}/claim-\${KEY}"
+mkdir -p "{worktreesRoot}"
 git -C {repoPath} fetch origin "\${DEFAULT_BRANCH}"
 git -C {repoPath} worktree add -b "claim/\${KEY}" "\${WORKTREE}" "origin/\${DEFAULT_BRANCH}"
 cd "\${WORKTREE}"
