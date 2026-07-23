@@ -6,7 +6,7 @@
  *   GET  /:id/task-types             → { taskTypeOverrides }
  *   GET  /:id/work-tracker           → { tracker info }
  *   GET  /:id/layered-intelligence           → { config, isPortos }
- *   GET  /:id/layered-intelligence/outcomes  → { stats, rejections, recent }
+ *   GET  /:id/layered-intelligence/outcomes  → { stats, execution, rejections, recent }
  *   PUT  /:id/task-types/all         → { success, taskTypeOverrides }
  *   PUT  /:id/task-types/:taskType   → { success, taskTypeOverrides }
  *
@@ -21,7 +21,7 @@ import { sanitizeTaskMetadata } from '../../lib/validation.js';
 import { parseCronToNextRun } from '../../services/eventScheduler.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
 import { SELF_IMPROVEMENT_TASK_TYPES } from '../../services/taskSchedule.js';
-import { summarizeOutcomeStats } from '../../services/layeredIntelligence.js';
+import { summarizeOutcomeStats, computePostApprovalCompletion } from '../../services/layeredIntelligence.js';
 import { listOutcomesResult } from '../../services/layeredIntelligenceOutcomes.js';
 import { summarizeRejectionReasons } from '../../services/layeredIntelligenceRejections.js';
 import { loadApp } from './shared.js';
@@ -79,10 +79,10 @@ router.get('/:id/layered-intelligence', loadApp, asyncHandler(async (req, res) =
 
 // GET /api/apps/:id/layered-intelligence/outcomes - Read-only dashboard of how
 // this app's filed LI proposals fared (#2689). Composes the same pure aggregators
-// the reasoner prompt reasons over — summarizeOutcomeStats (merge-rate math) and
-// the rejection taxonomy (summarizeRejectionReasons) — plus a capped recent list,
-// so the diagnostics the loop already produces are visible to the user. Only reads
-// the outcome store: no tracker fetch, no LLM call.
+// the reasoner prompt reasons over — merge-rate, post-approval execution, and
+// rejection taxonomy — plus a capped recent list, so the diagnostics the loop
+// already produces are visible to the user. Only reads the outcome store: no tracker
+// fetch, no LLM call.
 //
 // `read: false` is surfaced verbatim from listOutcomesResult so the UI can say
 // "couldn't load" rather than the lie "nothing has ever been filed" — the same
@@ -108,7 +108,7 @@ router.get('/:id/layered-intelligence/outcomes', loadApp, asyncHandler(async (re
   const tracked = !!config?.sources?.outcomes;
   const { read, outcomes } = await listOutcomesResult({ appId: app.id });
   if (!read) {
-    return res.json({ appId: app.id, appName: app.name, read: false, tracked, stats: null, rejections: null, recent: [] });
+    return res.json({ appId: app.id, appName: app.name, read: false, tracked, stats: null, execution: null, rejections: null, recent: [] });
   }
   const { total, merged, rejected, abandoned, pending, resolved, rawMergeRate } = summarizeOutcomeStats(outcomes);
   const rejections = summarizeRejectionReasons(outcomes);
@@ -130,6 +130,7 @@ router.get('/:id/layered-intelligence/outcomes', loadApp, asyncHandler(async (re
     // `mergeRate` is the raw 0–100 percentage over RESOLVED proposals, or null when
     // none have resolved (still-pending ≠ 0% merged). The client rounds for display.
     stats: { total, merged, rejected, abandoned, pending, resolved, mergeRate: rawMergeRate },
+    execution: computePostApprovalCompletion(outcomes),
     rejections,
     recent
   });

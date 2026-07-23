@@ -7,7 +7,7 @@
  * self-eval summary (suppressed issues, rejection reasons, LI execution health).
  */
 
-import { DAY } from '../../lib/fileUtils.js';
+import { DAY, formatDuration } from '../../lib/fileUtils.js';
 import { computeEffectiveSuccessRate } from '../taskLearning/store.js';
 import { formatRejectionReasons, formatRejectionReason, REJECTION_REASONS } from '../layeredIntelligenceRejections.js';
 import { formatExecutionFailures } from '../layeredIntelligenceExecutionFailures.js';
@@ -16,6 +16,7 @@ import {
   LI_DEGRADED_SUCCESS_THRESHOLD, LI_HARD_GATE_EXECUTION_THRESHOLD, CLOSED_SUPPRESSION_MS,
 } from './constants.js';
 import { normalizeSlug, extractSlugFromBody, isIssueWithinDedupWindow } from './dedup.js';
+import { computePostApprovalCompletion } from './awareness.js';
 
 /**
  * Derive a resolved outcome for a filed proposal from its live tracker issue.
@@ -111,6 +112,25 @@ export function computeOutcomesReport({ outcomes = [], hasPlannedWork = false } 
   // no hand-off has failed, so the line below is omitted rather than contradicting a
   // clean execution record.
   const executionFailures = formatExecutionFailures(filed, 5);
+  const postApproval = computePostApprovalCompletion(filed);
+  const postApprovalScopeLines = Object.entries(postApproval.byScope)
+    .sort((a, b) => b[1].approved - a[1].approved)
+    .map(([scope, summary]) => {
+      const rate = summary.completionRate == null ? 'no completed hand-offs yet' : `${Math.round(summary.completionRate)}% completed`;
+      const duration = summary.duration.medianMs == null
+        ? 'no completion-time sample yet'
+        : `median filed-to-completed ${formatDuration(summary.duration.medianMs)} (p90 ${formatDuration(summary.duration.p90Ms)})`;
+      return `- ${scope}: ${summary.completed} completed, ${summary.abandoned} abandoned, ${summary.awaitingExecution} awaiting execution; ${rate}; ${duration}`;
+    });
+  const postApprovalLines = postApproval.approved === 0 ? [] : [
+    '',
+    'Post-approval LI hand-off follow-through:',
+    `- Approved proposals: ${postApproval.approved}; ${postApproval.completed} completed, ${postApproval.abandoned} abandoned, ${postApproval.awaitingExecution} awaiting execution.`,
+    `- Completion rate: ${postApproval.completionRate == null ? 'no terminal hand-offs yet' : `${Math.round(postApproval.completionRate)}% (${postApproval.completed}/${postApproval.attempted} attempted)`}.`,
+    `- Filed-to-completed duration: ${postApproval.duration.medianMs == null ? 'no valid completion-time sample yet' : `average ${formatDuration(postApproval.duration.averageMs)}, median ${formatDuration(postApproval.duration.medianMs)}, p90 ${formatDuration(postApproval.duration.p90Ms)} (${postApproval.duration.count} completed)`}.`,
+    '- By approved proposal scope:',
+    ...(postApprovalScopeLines.length ? postApprovalScopeLines : ['- (none)'])
+  ];
 
   // Low-merge-rate alarm (#2698). `rawMergeRate` is measured over RESOLVED
   // proposals only and is null when none have resolved — see summarizeOutcomeStats
@@ -150,6 +170,7 @@ export function computeOutcomesReport({ outcomes = [], hasPlannedWork = false } 
     // an app whose proposals were never handed off (or all succeeded) shows nothing
     // here rather than a misleading "no failures" line.
     ...(executionFailures ? [`Why LI's own hand-offs failed when implemented: ${executionFailures}`] : []),
+    ...postApprovalLines,
     ...lowMergeWarning
   ].join('\n');
 }

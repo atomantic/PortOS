@@ -45,6 +45,7 @@ import {
   LI_DEGRADED_MIN_SAMPLE,
   computeScopeAwareness,
   computeExecutionByDomain,
+  computePostApprovalCompletion,
   computeProposalExecutionAwareness,
   computeCrossReferenceAnalysis,
   computeHandoffRouting,
@@ -503,6 +504,75 @@ describe('computeExecutionByDomain (#2765)', () => {
     expect(computeExecutionByDomain()).toEqual({});
     expect(computeExecutionByDomain(null)).toEqual({});
     expect(computeExecutionByDomain([])).toEqual({});
+  });
+});
+
+describe('computePostApprovalCompletion (#2944)', () => {
+  it('separates approved hand-off completion states and summarizes duration by scope', () => {
+    const out = computePostApprovalCompletion([
+      {
+        scope: 'app-improvement', outcome: 'merged', executionOutcome: 'success',
+        filedAt: '2026-07-01T00:00:00.000Z', executionAt: '2026-07-01T01:00:00.000Z'
+      },
+      {
+        scope: 'app-improvement', outcome: 'merged', executionOutcome: 'failure',
+        filedAt: '2026-07-01T00:00:00.000Z', executionAt: '2026-07-01T02:00:00.000Z'
+      },
+      {
+        scope: 'app-data-gap', outcome: 'merged', executionOutcome: null,
+        filedAt: '2026-07-01T00:00:00.000Z'
+      },
+      // Rejected proposals never enter the post-approval denominator.
+      {
+        scope: 'app-improvement', outcome: 'rejected', executionOutcome: 'success',
+        filedAt: '2026-07-01T00:00:00.000Z', executionAt: '2026-07-01T03:00:00.000Z'
+      },
+      // Invalid chronology must not poison duration telemetry.
+      {
+        scope: 'loop-meta', outcome: 'merged', executionOutcome: 'success',
+        filedAt: '2026-07-02T00:00:00.000Z', executionAt: '2026-07-01T00:00:00.000Z'
+      }
+    ]);
+
+    expect(out).toMatchObject({
+      approved: 4,
+      completed: 2,
+      abandoned: 1,
+      awaitingExecution: 1,
+      attempted: 3
+    });
+    expect(out.completionRate).toBeCloseTo(200 / 3, 10);
+    expect(out.duration).toEqual({
+      count: 1,
+      averageMs: 3_600_000,
+      medianMs: 3_600_000,
+      p90Ms: 3_600_000,
+      minMs: 3_600_000,
+      maxMs: 3_600_000
+    });
+    expect(out.byScope['app-improvement']).toMatchObject({
+      approved: 2, completed: 1, abandoned: 1, awaitingExecution: 0, attempted: 2, completionRate: 50
+    });
+    expect(out.byScope['app-data-gap']).toMatchObject({
+      approved: 1, completed: 0, abandoned: 0, awaitingExecution: 1, attempted: 0, completionRate: null
+    });
+  });
+
+  it('calculates median and p90 from the completed duration distribution', () => {
+    const filedAt = '2026-07-01T00:00:00.000Z';
+    const out = computePostApprovalCompletion([1, 2, 3, 4].map(hours => ({
+      scope: 'app-data-gap', outcome: 'merged', executionOutcome: 'success', filedAt,
+      executionAt: `2026-07-01T${String(hours).padStart(2, '0')}:00:00.000Z`
+    })));
+
+    expect(out.duration).toEqual({
+      count: 4,
+      averageMs: 9_000_000,
+      medianMs: 9_000_000,
+      p90Ms: 14_400_000,
+      minMs: 3_600_000,
+      maxMs: 14_400_000
+    });
   });
 });
 
@@ -1214,6 +1284,28 @@ describe('computeOutcomesReport', () => {
     expect(report).toContain('app-improvement: 2 filed, 0 merged (0%)');
     // The taxonomy gloss (#2689), not the raw tracker string this used to echo.
     expect(report).toContain('Why non-merged proposals were closed: already tracked elsewhere (duplicate) (1)');
+  });
+
+  it('adds post-approval completion rates and filed-to-completed duration distribution (#2944)', () => {
+    const report = computeOutcomesReport({
+      outcomes: [
+        {
+          scope: 'app-improvement', outcome: 'merged', executionOutcome: 'success',
+          filedAt: '2026-07-01T00:00:00.000Z', executionAt: '2026-07-01T01:00:00.000Z'
+        },
+        {
+          scope: 'app-improvement', outcome: 'merged', executionOutcome: 'failure',
+          filedAt: '2026-07-01T00:00:00.000Z', executionAt: '2026-07-01T02:00:00.000Z'
+        },
+        { scope: 'app-data-gap', outcome: 'merged', executionOutcome: null }
+      ]
+    });
+
+    expect(report).toContain('Post-approval LI hand-off follow-through:');
+    expect(report).toContain('Approved proposals: 3; 1 completed, 1 abandoned, 1 awaiting execution.');
+    expect(report).toContain('Completion rate: 50% (1/2 attempted).');
+    expect(report).toContain('average 1h 0m, median 1h 0m, p90 1h 0m (1 completed)');
+    expect(report).toContain('app-improvement: 1 completed, 1 abandoned, 0 awaiting execution; 50% completed');
   });
 
   it('surfaces the execution-failure taxonomy line only when a hand-off has failed (#2764 §1)', () => {
