@@ -1,5 +1,7 @@
-import { useMemo, useRef, useState } from 'react';
-import { Lock, Sparkles, RefreshCw, Upload } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Lock, Sparkles, RefreshCw, Upload, ChevronDown, ChevronRight,
+} from 'lucide-react';
 import toast from '../ui/Toast';
 import { generateSpriteReference, lockSpriteReference, updateSpriteRecord } from '../../services/apiSprites.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
@@ -68,6 +70,19 @@ export default function ReferenceWorkflow({ record, reference, renders, backends
   const manifest = reference?.manifest || null;
   const candidates = reference?.candidates || [];
   const mainLocked = manifest?.mainReference?.locked === true;
+  // Once every anchor is locked this grid is just static previews of files the
+  // "Reference set" file browser below already lists (and makes inspectable /
+  // downloadable), so it reads as duplicate content. Collapse it by default
+  // when complete — the grid stays the authoritative surface WHILE you're
+  // generating/locking, and the browser stays the one place to inspect the
+  // frozen files. Toggle re-arms per character; a mid-session lock leaves the
+  // grid as the user left it.
+  const anchorList = manifest?.anchors || [];
+  const allAnchorsLocked = anchorList.length > 0 && anchorList.every((a) => a.status === 'locked');
+  const [anchorsOpen, setAnchorsOpen] = useState(!allAnchorsLocked);
+  // Reset the default on record switch only (deps: recordId), so it never
+  // fights a user toggle within one character.
+  useEffect(() => { setAnchorsOpen(!allAnchorsLocked); }, [recordId]);
 
   // Image-backend availability + the selected `mode` are page-owned (#2938) so
   // that the Sprites page's asset-card Regenerate re-rolls through the SAME
@@ -249,9 +264,26 @@ export default function ReferenceWorkflow({ record, reference, renders, backends
       {mainLocked && (
         <div className="space-y-2">
           <div className="flex items-center gap-3">
-            <h4 className="text-xs uppercase tracking-wide text-gray-500">Directional anchors</h4>
-            {modePicker}
+            <button
+              type="button"
+              onClick={() => setAnchorsOpen((o) => !o)}
+              aria-expanded={anchorsOpen}
+              className="flex items-center gap-1 text-xs uppercase tracking-wide text-gray-500 hover:text-gray-300"
+            >
+              {anchorsOpen ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+              Directional anchors
+              {allAnchorsLocked && (
+                <span className="text-[10px] text-port-success normal-case tracking-normal flex items-center gap-0.5">
+                  · <Lock className="w-2.5 h-2.5" /> all locked
+                </span>
+              )}
+            </button>
+            {anchorsOpen && modePicker}
           </div>
+          {!anchorsOpen && allAnchorsLocked && (
+            <p className="text-[10px] text-gray-600">Locked anchors are listed under “Reference set” below.</p>
+          )}
+          {anchorsOpen && (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             {manifest.anchors.map((anchor) => (
               <div key={anchor.id} className="bg-port-bg border border-port-border rounded p-2 space-y-1.5">
@@ -280,6 +312,7 @@ export default function ReferenceWorkflow({ record, reference, renders, backends
               </div>
             ))}
           </div>
+          )}
         </div>
       )}
     </div>
