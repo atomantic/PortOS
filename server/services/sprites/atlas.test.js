@@ -14,6 +14,7 @@ import { join } from 'path';
 import sharp from 'sharp';
 import { mkdir, writeFile, readFile } from 'fs/promises';
 import { createHash } from 'crypto';
+import { lockAllAnchors as lockAllAnchorsFixture } from './spriteTestFixtures.js';
 
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-atlas-test-'));
 
@@ -48,30 +49,9 @@ let seq = 0;
 const newId = () => `atlas-char-${++seq}`;
 const sha256 = (buf) => createHash('sha256').update(buf).digest('hex');
 
-async function writeCandidatePng(path) {
-  const w = 64; const h = 64;
-  const buf = Buffer.alloc(w * h * 3);
-  for (let p = 0; p < w * h; p++) buf.set([255, 0, 255], p * 3);
-  for (let y = 10; y < 40; y++) for (let x = 22; x < 32; x++) buf.set([23, 107, 101], (y * w + x) * 3);
-  await mkdir(join(path, '..'), { recursive: true });
-  await sharp(buf, { raw: { width: w, height: h, channels: 3 } }).png().toFile(path);
-}
-
-async function placeCandidate(recordId, target, name) {
-  const candDir = join(TEST_ROOT, 'sprites', recordId, 'reference', 'candidates');
-  await writeCandidatePng(join(candDir, name));
-  await writeFile(join(candDir, `${name.replace(/\.png$/, '')}.generation.json`), JSON.stringify({
-    schemaVersion: 1, target, chromaKey: '#FF00FF',
-  }));
-  return `reference/candidates/${name}`;
-}
-
 async function lockAllAnchors(id) {
   await records.createRecord({ kind: 'character', name: 'Atlas Walker' }, id);
-  await lockReference(id, { target: 'main', candidate: await placeCandidate(id, 'main', 'walk-south-candidate-01.png') });
-  for (const dir of SPRITE_DIRECTIONS.filter((d) => d !== 'south')) {
-    await lockReference(id, { target: dir, candidate: await placeCandidate(id, dir, `walk-${dir}-candidate-01.png`) });
-  }
+  await lockAllAnchorsFixture(TEST_ROOT, id, { lockReference, directions: SPRITE_DIRECTIONS });
 }
 
 /** Transparent 40×40 RGBA frame with an opaque 20×30 figure. */
