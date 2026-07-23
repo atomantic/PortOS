@@ -562,7 +562,7 @@ export default function SongBookViewer() {
                 id="song-stage"
                 value={song.stage || 'new'}
                 onChange={(e) => onStageChange(e.target.value)}
-                className={`text-xs rounded-full border px-2 py-2 min-h-[44px] focus:outline-none ${stageClass}`}
+                className={`text-xs rounded-full border px-2 py-2 min-h-[44px] focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent ${stageClass}`}
               >
                 {SONG_STAGES.map((s) => <option key={s.id} value={s.id} className="bg-port-card text-white">{s.label}</option>)}
               </select>

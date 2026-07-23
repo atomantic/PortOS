@@ -767,6 +767,7 @@ export default function EditAppDrawer({ app, onClose, onSave }) {
                               <button
                                 type="button"
                                 onClick={() => selectProject('')}
+                                aria-label="Clear JIRA project"
                                 className="absolute right-2 top-8 text-gray-500 hover:text-white text-sm"
                               >
                                 x

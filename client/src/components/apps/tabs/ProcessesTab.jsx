@@ -146,6 +146,8 @@ export default function ProcessesTab({ pm2ProcessNames, filterFn }) {
                     <td className="px-4 py-3">
                       <button
                         onClick={() => toggleExpand(proc.name)}
+                        aria-expanded={expandedProcess === proc.name}
+                        aria-label={`${expandedProcess === proc.name ? 'Collapse' : 'Expand'} details for ${proc.name}`}
                         className="text-gray-400 hover:text-white transition-transform"
                       >
                         <span className={`inline-block transition-transform ${expandedProcess === proc.name ? 'rotate-90' : ''}`}>▶</span>

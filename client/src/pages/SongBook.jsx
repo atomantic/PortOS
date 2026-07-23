@@ -229,7 +229,7 @@ export default function SongBook() {
                   value={song.stage || 'new'}
                   onChange={(e) => onStageChange(song.id, e.target.value)}
                   aria-label={`Stage for ${song.title}`}
-                  className={`text-xs rounded-full border px-2 py-1 focus:outline-none ${SONG_STAGE_COLORS[song.stage] || SONG_STAGE_COLORS.new}`}
+                  className={`text-xs rounded-full border px-2 py-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-port-accent ${SONG_STAGE_COLORS[song.stage] || SONG_STAGE_COLORS.new}`}
                 >
                   {SONG_STAGES.map((s) => <option key={s.id} value={s.id} className="bg-port-card text-white">{s.label}</option>)}
                 </select>

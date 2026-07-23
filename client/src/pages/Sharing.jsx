@@ -663,9 +663,11 @@ function SettingsPanel({ bucket, onToggleMode, onRequestDelete, onConfirmDelete,
           <span className={`text-sm ${bucket.mode === 'inbox' ? 'text-white' : 'text-gray-500'}`}>Inbox (review)</span>
           <button
             type="button"
+            role="switch"
+            aria-checked={bucket.mode === 'auto-merge'}
             onClick={onToggleMode}
             className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${bucket.mode === 'auto-merge' ? 'bg-port-accent' : 'bg-port-border'}`}
-            aria-label="Toggle mode"
+            aria-label="Auto-merge incoming records (off queues them in the inbox for review)"
           >
             <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${bucket.mode === 'auto-merge' ? 'translate-x-5' : 'translate-x-1'}`} />
           </button>

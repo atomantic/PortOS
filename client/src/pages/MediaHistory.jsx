@@ -165,6 +165,7 @@ export default function MediaHistory() {
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
+              aria-label="Search media history"
               placeholder="Search prompt, model, character, place…"
               className="w-full pl-7 pr-7 py-1 bg-port-bg border border-port-border rounded text-xs text-white placeholder-gray-500 focus:outline-none focus:border-port-accent"
             />

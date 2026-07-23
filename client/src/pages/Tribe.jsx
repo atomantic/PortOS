@@ -424,6 +424,7 @@ function MemoryLinksPanel({ personId }) {
       </div>
       <div className="mt-3 grid gap-2">
         <select
+          aria-label="Brain memory"
           value={memoryId}
           onChange={(event) => setMemoryId(event.target.value)}
           className="w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white outline-none focus:border-port-accent"
@@ -436,6 +437,7 @@ function MemoryLinksPanel({ personId }) {
         <input
           value={note}
           onChange={(event) => setNote(event.target.value)}
+          aria-label="Why this memory matters"
           className="w-full rounded border border-port-border bg-port-bg px-3 py-2 text-sm text-white outline-none focus:border-port-accent"
           placeholder="Why this memory matters"
         />

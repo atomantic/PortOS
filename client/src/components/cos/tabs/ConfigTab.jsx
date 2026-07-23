@@ -511,6 +511,10 @@ export default function ConfigTab({ config, onUpdate, onEvaluate, avatarStyle, s
               <p className="text-xs text-gray-600 mt-0.5">Auto-switch style based on task type, provider, or priority</p>
             </div>
             <button
+              type="button"
+              role="switch"
+              aria-checked={!!config?.dynamicAvatar}
+              aria-label="Dynamic Avatar"
               onClick={async () => {
                 const newVal = !config?.dynamicAvatar;
                 await api.updateCosConfig({ dynamicAvatar: newVal });

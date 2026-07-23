@@ -240,6 +240,7 @@ export default function RapidReader({
               onClick={() => setChunkSize(1)}
               className={`px-2 py-1 text-xs ${chunkSize === 1 ? 'bg-port-accent/20 text-port-accent' : 'text-gray-400 hover:text-white'}`}
               aria-pressed={chunkSize === 1}
+              aria-label="Show one word at a time"
             >
               1w
             </button>
@@ -248,6 +249,7 @@ export default function RapidReader({
               onClick={() => setChunkSize(2)}
               className={`px-2 py-1 text-xs ${chunkSize === 2 ? 'bg-port-accent/20 text-port-accent' : 'text-gray-400 hover:text-white'}`}
               aria-pressed={chunkSize === 2}
+              aria-label="Show two words at a time"
             >
               2w
             </button>

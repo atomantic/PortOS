@@ -189,6 +189,8 @@ export function AgentsPage() {
                   <td className="px-4 py-4">
                     <button
                       onClick={() => toggleExpand(agent.pid)}
+                      aria-expanded={expandedPid === agent.pid}
+                      aria-label={`${expandedPid === agent.pid ? 'Collapse' : 'Expand'} details for agent ${agent.pid}`}
                       className="text-gray-400 hover:text-white transition-transform"
                     >
                       <span className={`inline-block transition-transform ${expandedPid === agent.pid ? 'rotate-90' : ''}`}>▶</span>

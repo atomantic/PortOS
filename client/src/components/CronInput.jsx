@@ -39,6 +39,7 @@ export default function CronInput({ value, onSave, onCancel, className = '' }) {
           <button
             type="button"
             onClick={onCancel}
+            aria-label="Cancel custom cron expression"
             className="px-1.5 py-1 text-gray-500 hover:text-gray-300 rounded text-xs"
           >
             X

@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { PersonStanding, Package, Download, FolderOpen, X, RefreshCw, Plus } from 'lucide-react';
 import toast from '../components/ui/Toast';
+import Modal from '../components/ui/Modal.jsx';
 import { listSpriteRecords, getSpriteRecord, importSprites, createSpriteRecord } from '../services/apiSprites.js';
 import { getApps } from '../services/apiApps.js';
 import AppContextPicker from '../components/AppContextPicker.jsx';
@@ -279,19 +280,27 @@ function AssetGroups({ recordId, assets }) {
           </div>
         </div>
       ))}
-      {preview && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
-          role="dialog"
-          aria-label={`Preview ${preview.path}`}
+      {/* Shared Modal for the lightbox: Esc-to-close, focus trap, and
+          focus restore to the thumbnail that opened it — the hand-rolled
+          overlay this replaced was click-to-dismiss only. */}
+      <Modal
+        open={!!preview}
+        onClose={() => setPreview(null)}
+        size="none"
+        backdropClassName="bg-black/80"
+        ariaLabel={preview ? `Preview ${preview.path}` : undefined}
+        panelClassName="max-w-full max-h-full"
+      >
+        <img src={preview?.url} alt={preview?.path || ''} className="max-w-full max-h-[85vh] object-contain" style={{ imageRendering: 'pixelated' }} />
+        <p className="text-center text-xs text-gray-400 mt-2">{preview?.path}</p>
+        <button
+          type="button"
           onClick={() => setPreview(null)}
+          className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:right-2 focus:bg-port-card focus:text-white focus:px-3 focus:py-1 focus:rounded"
         >
-          <div className="max-w-full max-h-full">
-            <img src={preview.url} alt={preview.path} className="max-w-full max-h-[85vh] object-contain" style={{ imageRendering: 'pixelated' }} />
-            <p className="text-center text-xs text-gray-400 mt-2">{preview.path}</p>
-          </div>
-        </div>
-      )}
+          Close preview
+        </button>
+      </Modal>
     </div>
   );
 }

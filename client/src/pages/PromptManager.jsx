@@ -457,6 +457,7 @@ export default function PromptManager() {
                       </div>
                       {!stageConfig.provider ? (
                         <select
+                          aria-label="Model tier"
                           value={stageConfig.model || 'default'}
                           onChange={(e) => setStageConfig({ ...stageConfig, model: e.target.value })}
                           className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"
@@ -827,6 +828,7 @@ export default function PromptManager() {
                   </div>
                   {!newStageForm.provider ? (
                     <select
+                      aria-label="Model tier"
                       value={newStageForm.model}
                       onChange={(e) => setNewStageForm({ ...newStageForm, model: e.target.value })}
                       className="w-full px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden"

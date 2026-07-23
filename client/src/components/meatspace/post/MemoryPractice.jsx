@@ -774,8 +774,8 @@ function SpeedRunLine({ line, index, onResult }) {
           </span>
           {marked === null && (
             <div className="flex gap-1 shrink-0">
-              <button onClick={() => mark(true)} className="p-1 text-port-success hover:bg-port-success/10 rounded"><Check size={14} /></button>
-              <button onClick={() => mark(false)} className="p-1 text-port-error hover:bg-port-error/10 rounded"><X size={14} /></button>
+              <button onClick={() => mark(true)} aria-label={`Mark line ${index + 1} correct`} className="p-1 text-port-success hover:bg-port-success/10 rounded"><Check size={14} /></button>
+              <button onClick={() => mark(false)} aria-label={`Mark line ${index + 1} incorrect`} className="p-1 text-port-error hover:bg-port-error/10 rounded"><X size={14} /></button>
             </div>
           )}
         </div>

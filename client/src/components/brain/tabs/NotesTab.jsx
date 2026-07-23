@@ -657,19 +657,14 @@ function VaultSetup({ detectedVaults, vaults, customPath, setCustomPath, adding,
       {vaults.length > 0 && (
         <div>
           <h3 className="text-sm font-medium text-gray-400 mb-2">Connected Vaults</h3>
+          {/* No remove affordance on these rows: VaultSetup is never handed a
+              delete handler, and an inert trash button is worse than none — it
+              is focusable, unlabeled, and implies an action that never runs. */}
           <div className="space-y-2">
             {vaults.map(v => (
-              <div key={v.id} className="flex items-center justify-between p-3 rounded-lg bg-port-card border border-port-border">
-                <div>
-                  <span className="text-white font-medium">{v.name}</span>
-                  <span className="text-xs text-gray-500 block truncate">{v.path}</span>
-                </div>
-                <button
-                  onClick={() => onAdd === null ? null : null} // placeholder, actual delete handled separately
-                  className="text-gray-500 hover:text-port-error p-1"
-                >
-                  <Trash2 size={14} />
-                </button>
+              <div key={v.id} className="p-3 rounded-lg bg-port-card border border-port-border">
+                <span className="text-white font-medium">{v.name}</span>
+                <span className="text-xs text-gray-500 block truncate">{v.path}</span>
               </div>
             ))}
           </div>

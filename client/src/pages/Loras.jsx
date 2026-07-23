@@ -268,6 +268,7 @@ export default function Loras() {
             type="text"
             value={installUrl}
             onChange={(e) => setInstallUrl(e.target.value)}
+            aria-label="Civitai model URL"
             placeholder="https://civitai.com/models/2600698/realstagram"
             className="flex-1 bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600"
             disabled={installing}
@@ -301,6 +302,7 @@ export default function Loras() {
             type="text"
             value={hfUrl}
             onChange={(e) => setHfUrl(e.target.value)}
+            aria-label="HuggingFace video LoRA URL"
             placeholder="https://huggingface.co/fal/ltx2.3-audio-reactive-lora"
             className="flex-1 bg-port-bg border border-port-border rounded px-3 py-2 text-sm text-gray-200 placeholder:text-gray-600"
             disabled={hfInstalling}

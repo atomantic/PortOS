@@ -389,6 +389,10 @@ export default function AccountsTab() {
           {/* Ingestion toggle */}
           <div className="flex items-center gap-3">
             <button
+              type="button"
+              role="switch"
+              aria-checked={!!form.ingestionEnabled}
+              aria-label="Enable content ingestion"
               onClick={() => setForm(prev => ({ ...prev, ingestionEnabled: !prev.ingestionEnabled }))}
               className={`relative w-10 h-5 rounded-full transition-colors ${
                 form.ingestionEnabled ? 'bg-port-accent' : 'bg-gray-600'

@@ -336,6 +336,7 @@ ${prompt.trim()}`;
       <div className="flex flex-wrap gap-3">
         {/* Workspace */}
         <select
+          aria-label="Workspace"
           value={selectedAppId}
           onChange={(e) => setSelectedAppId(e.target.value)}
           className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
@@ -349,6 +350,7 @@ ${prompt.trim()}`;
           <>
             {/* Provider */}
             <select
+              aria-label="AI provider"
               value={selectedProvider}
               onChange={(e) => {
                 setSelectedProvider(e.target.value);
@@ -365,6 +367,7 @@ ${prompt.trim()}`;
             {/* Model */}
             {filterSelectableModels(currentProvider?.models).length > 0 && (
               <select
+                aria-label="Model"
                 value={selectedModel}
                 onChange={(e) => setSelectedModel(e.target.value)}
                 className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
@@ -379,6 +382,7 @@ ${prompt.trim()}`;
             <div className="flex items-center gap-2">
               <Clock size={16} className="text-gray-400" />
               <select
+                aria-label="Timeout"
                 value={timeout}
                 onChange={(e) => setTimeout(Number(e.target.value))}
                 className="px-3 py-2 bg-port-bg border border-port-border rounded-lg text-white text-sm"
@@ -440,6 +444,7 @@ ${prompt.trim()}`;
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
+            aria-label="AI prompt"
             placeholder="Describe what you want the AI to do..."
             rows={3}
             className="flex-1 px-3 sm:px-4 py-3 bg-port-bg border border-port-border rounded-lg text-white focus:border-port-accent focus:outline-hidden resize-none text-sm sm:text-base"
@@ -469,6 +474,7 @@ ${prompt.trim()}`;
               value={command}
               onChange={(e) => setCommand(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && !running && handleRunCommand()}
+              aria-label="Command to run"
               placeholder="Enter command (e.g., npm run build)"
               className="flex-1 px-3 sm:px-4 py-3 bg-port-bg border border-port-border rounded-lg text-white font-mono focus:border-port-accent focus:outline-hidden text-sm sm:text-base"
             />
