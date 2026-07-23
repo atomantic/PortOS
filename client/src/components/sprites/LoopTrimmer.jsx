@@ -103,22 +103,6 @@ export default function LoopTrimmer({
   const cellW = img && frameCount > 0 ? img.naturalWidth / frameCount : 0;
   const cellH = img ? img.naturalHeight : 0;
 
-  // Main preview canvas — repaints on frame/geometry change.
-  const mainRef = useRef(null);
-  const aspect = cellW > 0 && cellH > 0 ? cellH / cellW : 1;
-  const mainH = Math.round(MAIN_PX * aspect);
-  useEffect(() => {
-    const canvas = mainRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    paintCheckerboard(ctx, canvas.width, canvas.height, 8);
-    if (img && cellW > 0 && cellH > 0) {
-      ctx.imageSmoothingEnabled = false;
-      ctx.drawImage(img, frameIndex * cellW, 0, cellW, cellH, 0, 0, canvas.width, canvas.height);
-    }
-  }, [img, frameIndex, cellW, cellH, mainH]);
-
   // Playback cycles the ENABLED frames in order (that IS the trimmed loop).
   useEffect(() => {
     if (!playing) return undefined;
@@ -244,7 +228,7 @@ export default function LoopTrimmer({
             className="border border-port-border rounded overflow-hidden mx-auto"
             style={{ width: MAIN_PX, maxWidth: '100%' }}
           >
-            <canvas ref={mainRef} width={MAIN_PX} height={mainH} className="w-full h-auto block" />
+            <FrameCanvas img={img} col={frameIndex} cellW={cellW} cellH={cellH} size={MAIN_PX} />
           </div>
           <div className="flex items-center justify-center gap-2 mt-2">
             <button
