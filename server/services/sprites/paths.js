@@ -50,7 +50,10 @@ export function toRecordRelativeAssetPath(recordId, rawPath) {
   if (typeof rawPath !== 'string' || !rawPath) return null;
   const marker = `art-source/sprites/${recordId}/`;
   const idx = rawPath.indexOf(marker);
-  const rel = idx >= 0 ? rawPath.slice(idx + marker.length) : rawPath;
+  // Match importer.js's relToCharacterDir: an already-relative path may still
+  // carry a leading slash (an absolute-style source value) — strip it before
+  // validating, same as the importer's twin function does.
+  const rel = idx >= 0 ? rawPath.slice(idx + marker.length) : rawPath.replace(/^\/+/, '');
   if (idx < 0 && /^(art-pipeline|art-source|game)\//.test(rel)) return null;
   if (!rel || rel.split(/[\\/]/).some((seg) => seg === '..' || seg === '')) return null;
   return rel;
