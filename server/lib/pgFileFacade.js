@@ -90,9 +90,10 @@ export function createPgFileFacade({ makeFile, makePg, isFile = isFileBackend })
 /**
  * Memoized backend selector for stores whose backends are whole MODULES
  * (`import('./projectsFile.js')` vs `import('./projectsDB.js')`) rather than
- * objects built from `db.js` — Creative Director, Music Video, Sprites (#2899).
- * Each had hand-rolled the identical dispatcher, and they had already drifted
- * (differing error text, differing test-mode predicate).
+ * objects built from `db.js` — Creative Director, Music Video, Sprites (#2899),
+ * plus Artists, Tracks, Albums, Authors (#2909). Each had hand-rolled the
+ * identical dispatcher, and they had already drifted (differing error text,
+ * differing test-mode predicate).
  *
  * Same posture as `createPgFileFacade` (do NOT weaken it): the dev/test escape
  * hatch selects the file backend with NO database contact at all; otherwise
@@ -161,9 +162,9 @@ export function createRecordStoreBackendSelector({
     /** Name of the active backend, or null before first selection (diagnostics/tests). */
     getBackendName: () => backendName,
     /**
-     * Test seam — drop the memoized selection so a suite can re-select. Mirrors
+     * Test seam — drop the memoized selection so a suite can re-select. Backs
      * the `_reset<X>Backend()` exports the artists/tracks/albums/authors stores
-     * carry, so folding those in later needs no new surface here.
+     * carry.
      */
     reset: () => { facade.reset(); backendName = null; },
   };
