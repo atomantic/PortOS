@@ -11,7 +11,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { checkHealth, ensureSchema } from '../../lib/db.js';
+import { createRecordStoreBackendSelector } from '../../lib/pgFileFacade.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 import { makeRender as makeRenderLogic } from './logic.js';
 
@@ -36,25 +36,14 @@ export {
   deleteRenderPatch,
 } from './logic.js';
 
-let backend = null;
-let backendName = null;
-
-async function selectBackend() {
-  if (backend) return backend;
-  if (process.env.MEMORY_BACKEND === 'file' || process.env.NODE_ENV === 'test') {
-    backend = await import('./file.js');
-    backendName = 'file';
-    return backend;
-  }
-  const health = await checkHealth();
-  if (!health.connected) {
-    throw new Error('Tracks require PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file in .env for the unsupported file backend)');
-  }
-  await ensureSchema();
-  backend = await import('./db.js');
-  backendName = 'postgres';
-  return backend;
-}
+// Shared dispatcher (#2909). ensureSchema() runs inside the selector so the
+// backend is self-sufficient regardless of boot ordering.
+const { selectBackend, getBackendName, reset } = createRecordStoreBackendSelector({
+  label: 'Tracks',
+  loadFileBackend: () => import('./file.js'),
+  loadDbBackend: () => import('./db.js'),
+  requireDbMessage: 'Tracks require PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file in .env for the unsupported file backend)',
+});
 
 /**
  * Mint a new render (unique id + timestamp) and return the appended history +
@@ -69,13 +58,12 @@ export function buildRenderAppend(track, renderInput) {
 
 /** Name of the active backend, or null before first call (for diagnostics/tests). */
 export function getTracksBackendName() {
-  return backendName;
+  return getBackendName();
 }
 
 /** Test seam — drop the memoized backend so a suite can re-select. */
 export function _resetTracksBackend() {
-  backend = null;
-  backendName = null;
+  reset();
 }
 
 export async function listTracks(options = {}) {

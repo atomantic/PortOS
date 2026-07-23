@@ -14,7 +14,7 @@
  * path only needs the (idempotent) ensureSchema() that creates the table.
  */
 
-import { checkHealth, ensureSchema } from '../../lib/db.js';
+import { createRecordStoreBackendSelector } from '../../lib/pgFileFacade.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 
 export {
@@ -28,38 +28,25 @@ export {
   headshotImageFilename,
 } from './logic.js';
 
-let backend = null;
-let backendName = null;
-
-async function selectBackend() {
-  if (backend) return backend;
-  if (process.env.MEMORY_BACKEND === 'file' || process.env.NODE_ENV === 'test') {
-    backend = await import('./file.js');
-    backendName = 'file';
-    return backend;
-  }
-  // The boot DB gate fail-fasts a required-but-missing DB, but a route can call
-  // in before that gate runs ensureSchema(), so bring the schema up here
-  // (idempotent) — the authors table is created on first use either way.
-  const health = await checkHealth();
-  if (!health.connected) {
-    throw new Error('Authors require PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file in .env for the unsupported file backend)');
-  }
-  await ensureSchema();
-  backend = await import('./db.js');
-  backendName = 'postgres';
-  return backend;
-}
+// Shared dispatcher (#2909). The boot DB gate fail-fasts a required-but-missing
+// DB, but a route can call in before that gate runs ensureSchema() — the selector
+// runs it (idempotently) on the PG path, so the authors table is created on first
+// use either way.
+const { selectBackend, getBackendName, reset } = createRecordStoreBackendSelector({
+  label: 'Authors',
+  loadFileBackend: () => import('./file.js'),
+  loadDbBackend: () => import('./db.js'),
+  requireDbMessage: 'Authors require PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file in .env for the unsupported file backend)',
+});
 
 /** Name of the active backend, or null before first call (for diagnostics/tests). */
 export function getAuthorsBackendName() {
-  return backendName;
+  return getBackendName();
 }
 
 /** Test seam — drop the memoized backend so a suite can re-select. */
 export function _resetAuthorsBackend() {
-  backend = null;
-  backendName = null;
+  reset();
 }
 
 export async function listAuthors(options = {}) {
