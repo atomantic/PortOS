@@ -10,7 +10,7 @@
  * federate when peers enable the Albums sync category.
  */
 
-import { checkHealth, ensureSchema } from '../../lib/db.js';
+import { createRecordStoreBackendSelector } from '../../lib/pgFileFacade.js';
 import { emitRecordUpdated, emitRecordDeleted, autoSubscribeRecordToAllPeers } from '../sharing/recordEvents.js';
 
 export {
@@ -28,35 +28,23 @@ export {
   coverImageFilename,
 } from './logic.js';
 
-let backend = null;
-let backendName = null;
-
-async function selectBackend() {
-  if (backend) return backend;
-  if (process.env.MEMORY_BACKEND === 'file' || process.env.NODE_ENV === 'test') {
-    backend = await import('./file.js');
-    backendName = 'file';
-    return backend;
-  }
-  const health = await checkHealth();
-  if (!health.connected) {
-    throw new Error('Albums require PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file in .env for the unsupported file backend)');
-  }
-  await ensureSchema();
-  backend = await import('./db.js');
-  backendName = 'postgres';
-  return backend;
-}
+// Shared dispatcher (#2909). ensureSchema() runs inside the selector so the
+// backend is self-sufficient regardless of boot ordering.
+const { selectBackend, getBackendName, reset } = createRecordStoreBackendSelector({
+  label: 'Albums',
+  loadFileBackend: () => import('./file.js'),
+  loadDbBackend: () => import('./db.js'),
+  requireDbMessage: 'Albums require PostgreSQL — run `npm run setup:db` (dev/test only: set MEMORY_BACKEND=file in .env for the unsupported file backend)',
+});
 
 /** Name of the active backend, or null before first call (for diagnostics/tests). */
 export function getAlbumsBackendName() {
-  return backendName;
+  return getBackendName();
 }
 
 /** Test seam — drop the memoized backend so a suite can re-select. */
 export function _resetAlbumsBackend() {
-  backend = null;
-  backendName = null;
+  reset();
 }
 
 export async function listAlbums(options = {}) {
