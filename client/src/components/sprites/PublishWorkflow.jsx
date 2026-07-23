@@ -35,12 +35,15 @@ export default function PublishWorkflow({ record, walk, atlas, onChanged }) {
   // refused with PUBLISH_DEST_OCCUPIED and needs explicit consent.
   const [confirmStage, setConfirmStage] = useState(null);
 
-  // Re-seed the form when the server-side binding changes (save round-trip).
+  // Re-seed the form when the server-side binding changes (save round-trip)
+  // — and drop any pending confirmation: consent given for one destination
+  // must never carry over to a different binding.
   useEffect(() => {
     setAppId(saved?.appId || '');
     setDestPath(saved?.atlasDestPath || '');
     setCodePath(saved?.codeBinding?.path || '');
     setResourcePath(saved?.codeBinding?.resourcePath || '');
+    setConfirmStage(null);
   }, [saved?.appId, saved?.atlasDestPath, saved?.codeBinding?.path, saved?.codeBinding?.resourcePath]);
 
   const [compile, compiling] = useAsyncAction(async () => {
@@ -64,8 +67,9 @@ export default function PublishWorkflow({ record, walk, atlas, onChanged }) {
     return result;
   }, { errorMessage: 'Could not save the publish binding' });
 
+  // The confirm row stays mounted while the request is in flight (so the
+  // "Publishing…" label is actually visible) and clears on completion.
   const [publish, publishing] = useAsyncAction(async (acknowledgeOverwrite) => {
-    setConfirmStage(null);
     const body = acknowledgeOverwrite ? { acknowledgeOverwrite: true } : {};
     const result = await publishSpriteAtlas(record.id, body, { silent: true }).catch((err) => {
       // The destination holds an atlas PortOS never published — escalate to
@@ -74,10 +78,17 @@ export default function PublishWorkflow({ record, walk, atlas, onChanged }) {
         setConfirmStage('overwrite');
         return null;
       }
+      setConfirmStage(null);
       throw err;
     });
     if (result) {
-      toast.success(result.published ? `Atlas v${result.publication.version} published` : 'Destination already up to date');
+      setConfirmStage(null);
+      const rewriteNote = result.codeBinding?.rewritten || result.publication?.codeBinding?.rewritten
+        ? ' — code binding rewritten to the new resource path'
+        : '';
+      toast.success(result.published
+        ? `Atlas v${result.publication.version} published${rewriteNote}`
+        : `Destination already up to date${rewriteNote}`);
       onChanged?.();
     }
     return result;
@@ -85,13 +96,35 @@ export default function PublishWorkflow({ record, walk, atlas, onChanged }) {
 
   if (!finalized) return null;
 
+  // Phase-1 imported walk sets carry source-pipeline paths and no packaged
+  // frames — the server refuses to recompile them (LEGACY_IMPORTED_WALK_SET).
+  // Show why instead of offering a button that always fails.
+  if (walk.walkSet.selectionPath?.startsWith('art-source/')) {
+    return (
+      <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-1">
+        <h3 className="text-sm font-medium text-gray-200 flex items-center gap-2">
+          <Package size={16} className="text-port-accent" /> Runtime Atlas
+        </h3>
+        <p className="text-xs text-gray-500">
+          This walk set was imported from the source pipeline, which kept its packaged frames —
+          PortOS cannot recompile it. The imported runtime atlases remain in the asset library
+          below; to compile and publish from PortOS, run the walk workflow on a new character.
+        </p>
+      </div>
+    );
+  }
+
   const bindingDirty = (saved?.appId || '') !== appId
     || (saved?.atlasDestPath || '') !== destPath.trim()
     || (saved?.codeBinding?.path || '') !== codePath.trim()
     || (saved?.codeBinding?.resourcePath || '') !== resourcePath.trim();
   // Publish reads the SAVED binding server-side — gate on it, and hold while
-  // a binding save is in flight so a click can't race the PUT.
-  const canPublish = Boolean(saved?.appId && saved?.atlasDestPath) && !bindingDirty && !savingBinding && !publishing;
+  // a binding save is in flight so a click can't race the PUT. The confirm
+  // row uses bindingSettled (not canPublish) so it stays mounted while the
+  // publish itself is in flight, but disappears the moment the binding is
+  // edited — consent never carries across a binding change.
+  const bindingSettled = Boolean(saved?.appId && saved?.atlasDestPath) && !bindingDirty && !savingBinding;
+  const canPublish = bindingSettled && !publishing;
   const boundApp = apps.find((a) => a.id === saved?.appId);
   const destLabel = `${boundApp?.name || saved?.appId}: ${saved?.atlasDestPath}`;
 
@@ -166,21 +199,21 @@ export default function PublishWorkflow({ record, walk, atlas, onChanged }) {
               </button>
             )}
           </div>
-          {confirmStage === 'publish' && (
+          {confirmStage === 'publish' && bindingSettled && (
             <InlineConfirmRow
               question={`Replace ${destLabel}?`}
               confirmText={publishing ? 'Publishing…' : 'Publish'}
               tone="warning"
-              onConfirm={() => publish(false)}
+              onConfirm={() => { if (!publishing) publish(false); }}
               onCancel={() => setConfirmStage(null)}
             />
           )}
-          {confirmStage === 'overwrite' && (
+          {confirmStage === 'overwrite' && bindingSettled && (
             <InlineConfirmRow
               question={`${destLabel} already contains an atlas PortOS did not publish. Overwrite it?`}
               confirmText={publishing ? 'Publishing…' : 'Overwrite'}
               tone="error"
-              onConfirm={() => publish(true)}
+              onConfirm={() => { if (!publishing) publish(true); }}
               onCancel={() => setConfirmStage(null)}
             />
           )}

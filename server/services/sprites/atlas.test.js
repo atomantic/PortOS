@@ -250,6 +250,24 @@ describe('compileAtlas', () => {
     expect(meta.height).toBe(64 * 8);
   });
 
+  it('refuses an imported legacy walk set with an explicit code (not a tamper error)', async () => {
+    const id = await finalizedCharacter();
+    const setAbs = join(TEST_ROOT, 'sprites', id, `walk/${id}-walk-set-v1.json`);
+    const walkSet = JSON.parse(await readFile(setAbs, 'utf8'));
+    walkSet.selectionPath = `art-source/sprites/${id}/walk/${id}-walk-selection-v1.json`;
+    await writeFile(setAbs, JSON.stringify(walkSet));
+    await expect(compileAtlas(id)).rejects.toMatchObject({ status: 409, code: 'LEGACY_IMPORTED_WALK_SET' });
+  });
+
+  it('self-heals a deleted versioned atlas instead of returning a dangling pointer', async () => {
+    const id = await finalizedCharacter();
+    const first = await compileAtlas(id);
+    rmSync(join(TEST_ROOT, 'sprites', id, first.atlasPath));
+    const again = await compileAtlas(id);
+    expect(again.version).toBe(first.version); // re-writes the same version, not a new one
+    expect(await readFile(join(TEST_ROOT, 'sprites', id, first.atlasPath))).toBeTruthy();
+  });
+
   it('rejects geometry whose content bounds cannot fit the cell', async () => {
     const id = await finalizedCharacter();
     await expect(compileAtlas(id, { geometry: { cellSize: 64, targetMaxWidth: 64 } }))

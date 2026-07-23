@@ -29,7 +29,9 @@ import {
   atomicWrite, ensureDir, pathExists, readJSONFile, tryReadFile,
 } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { spriteDir, RUNTIME_POINTER_REL, RUNTIME_PUBLICATIONS_REL } from './paths.js';
+import {
+  spriteDir, resolveSpriteAssetPath, RUNTIME_POINTER_REL, RUNTIME_PUBLICATIONS_REL,
+} from './paths.js';
 import { requireCharacter, loadManifest } from './reference.js';
 import { SPRITE_DIRECTIONS } from './prompts.js';
 import { keyChannelSplit } from './chromaKey.js';
@@ -153,18 +155,20 @@ async function normalizeCellFrame(source, scale, label, geometry) {
  * reference set's anchors. Returns everything the compiler consumes.
  */
 export async function validateForCompile(recordId) {
-  const dir = spriteDir(recordId);
   // Every hashed input is read exactly once: verify the bytes in memory and
   // hand those same bytes to the compiler, so the pixels compiled are
-  // provably the pixels verified (no re-read between check and use).
+  // provably the pixels verified (no re-read between check and use). Paths
+  // come from server-owned manifests but still route through the record-dir
+  // confinement gate (resolveSpriteAssetPath) per the paths.js contract.
   const readVerified = async (relPath, expectedSha, label) => {
-    const bytes = await readFile(join(dir, relPath)).catch(() => null);
+    const bytes = await readFile(resolveSpriteAssetPath(recordId, relPath)).catch(() => null);
     if (!bytes || sha256Buffer(bytes) !== expectedSha) {
       throw compileError(`${label} no longer matches its recorded sha256`);
     }
     return bytes;
   };
 
+  const dir = spriteDir(recordId);
   const walkSetRel = walkSetRelPath(recordId);
   const walkSetBytes = await readFile(join(dir, walkSetRel)).catch(() => null);
   if (!walkSetBytes) throw compileError('No finalized walk set — approve all 8 directions first', 'WALK_SET_REQUIRED');
@@ -178,6 +182,21 @@ export async function validateForCompile(recordId) {
     throw compileError('Walk set manifest is not a finalized eight-direction walk set');
   }
   if (walkSet.characterId !== recordId) throw compileError('Walk set characterId mismatch');
+  // Phase-1 imported walk sets are copied verbatim from the source pipeline:
+  // their paths are repo-root (`art-source/sprites/<id>/…`) and — decisively —
+  // the packaged per-frame PNGs were never imported (the importer skips
+  // frames/ to minimize copies). Recompiling them here is structurally
+  // impossible; say so plainly instead of a misleading tamper error. Their
+  // already-published runtime atlases were imported and remain browsable.
+  const legacyPrefix = 'art-source/';
+  if (
+    typeof walkSet.selectionPath === 'string' && walkSet.selectionPath.startsWith(legacyPrefix)
+  ) {
+    throw new ServerError(
+      'This walk set was imported from the source pipeline — its packaged frames were not imported, so PortOS cannot recompile it. Imported runtime atlases remain available in the asset library; to compile here, run the walk workflow on a new character.',
+      { status: 409, code: 'LEGACY_IMPORTED_WALK_SET' },
+    );
+  }
   if (JSON.stringify(walkSet.directionOrder) !== JSON.stringify(SPRITE_DIRECTIONS)) {
     throw compileError('Walk set direction order does not match the runtime contract');
   }
@@ -362,9 +381,15 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
   // skip the whole pixel pipeline. The evidence chain was still revalidated
   // above; the post-encode sha comparison below stays as the fallback for a
   // pointer whose geometry fields predate a shape change.
+  // Both idempotent early-returns require the pointed-at atlas file to still
+  // exist — otherwise a deleted runtime/vN PNG would loop forever ("recompile"
+  // → pointer returned untouched → still missing); falling through re-writes
+  // the same version (nextAtlasVersion only counts versions whose PNG exists).
   const current = await readJSONFile(join(dir, RUNTIME_POINTER_REL), null);
+  const currentAtlasOnDisk = current ? await pathExists(join(dir, current.atlasPath)) : false;
   if (
     current
+    && currentAtlasOnDisk
     && current.walkSetSha256 === validated.walkSetSha256
     && current.geometry?.cellSize === geometry.cellSize
     && JSON.stringify(current.geometry?.pivot) === JSON.stringify(geometry.pivot)
@@ -391,7 +416,7 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
     .toBuffer();
   const atlasSha256 = sha256Buffer(atlasBuffer);
 
-  if (current && current.walkSetSha256 === validated.walkSetSha256 && current.atlasSha256 === atlasSha256) {
+  if (current && currentAtlasOnDisk && current.walkSetSha256 === validated.walkSetSha256 && current.atlasSha256 === atlasSha256) {
     return { ...current, created: false };
   }
 
@@ -403,6 +428,32 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
   const manifestRel = `${versionRel}/${stem}-v${version}-manifest.json`;
   await ensureDir(join(dir, versionRel));
   await writeImmutable(join(dir, atlasRel), atlasBuffer);
+
+  // Self-heal: when re-writing a version whose PNG was deleted, the version's
+  // manifest usually survives — reuse it verbatim when it vouches for these
+  // exact atlas bytes, since a freshly-built one would differ only in
+  // createdAt and trip the immutable-write refusal.
+  const manifestAbs = join(dir, manifestRel);
+  const survivingManifest = await readJSONFile(manifestAbs, null);
+  if (survivingManifest?.atlasSha256 === atlasSha256) {
+    const survivingBuffer = await readFile(manifestAbs);
+    const pointer = {
+      schemaVersion: 1,
+      kind: 'runtime-atlas-selection',
+      characterId: recordId,
+      version,
+      atlasPath: atlasRel,
+      atlasSha256,
+      manifestPath: manifestRel,
+      manifestSha256: sha256Buffer(survivingBuffer),
+      walkSetSha256: validated.walkSetSha256,
+      geometry: survivingManifest.geometry,
+      compiledAt: survivingManifest.createdAt,
+    };
+    await atomicWrite(join(dir, RUNTIME_POINTER_REL), pointer);
+    console.log(`🧩 sprite atlas re-materialized for ${recordId} → v${version}`);
+    return { ...pointer, created: true };
+  }
 
   const manifest = {
     schemaVersion: 1,
@@ -448,7 +499,7 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
     })),
   };
   const manifestBuffer = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
-  await writeImmutable(join(dir, manifestRel), manifestBuffer);
+  await writeImmutable(manifestAbs, manifestBuffer);
 
   const pointer = {
     schemaVersion: 1,

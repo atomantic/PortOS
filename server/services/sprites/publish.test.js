@@ -215,28 +215,87 @@ describe('publishAtlas', () => {
     expect((await readFile(join(APP_REPO, BINDING.atlasDestPath))).toString()).toBe('atlas-png-bytes-v1');
   });
 
-  it('rewrites an occurrence-guarded moved resource path', async () => {
+  it('rewrites the code binding on a real destination move (baseline follows the file, not the dest)', async () => {
+    const { id } = await characterWithAtlas();
+    const oldResource = 'res://assets/sprites/hero/old-name.png';
+    const newResource = 'res://assets/sprites/hero/new-name.png';
+    await mkdir(join(APP_REPO, 'src'), { recursive: true });
+    await writeFile(join(APP_REPO, 'src/Hero.cs'), `var atlas = load("${oldResource}");\n`);
+
+    await setPublishBinding(id, {
+      appId: 'game-app',
+      atlasDestPath: 'assets/sprites/hero/old-name.png',
+      codeBinding: { path: 'src/Hero.cs', resourcePath: oldResource },
+    });
+    await publishAtlas(id);
+
+    // Real move: atlasDestPath AND resourcePath both change. The code-binding
+    // baseline must be found via the file (appId + codeBinding.path), because
+    // no publication exists for the NEW destination yet.
+    await setPublishBinding(id, {
+      appId: 'game-app',
+      atlasDestPath: 'assets/sprites/hero/new-name.png',
+      codeBinding: { path: 'src/Hero.cs', resourcePath: newResource },
+    });
+    const result = await publishAtlas(id);
+    expect(result.published).toBe(true);
+    expect(result.publication.codeBinding).toMatchObject({ rewritten: true, previousResourcePath: oldResource });
+    expect(await readFile(join(APP_REPO, 'src/Hero.cs'), 'utf8')).toContain(newResource);
+  });
+
+  it('records a publication when an up-to-date publish rewrites the code binding', async () => {
     const { id } = await characterWithAtlas();
     const oldResource = 'res://assets/sprites/hero/old-atlas.png';
     const newResource = 'res://assets/sprites/hero/hero-atlas.png';
     await mkdir(join(APP_REPO, 'src'), { recursive: true });
     await writeFile(join(APP_REPO, 'src/Hero.cs'), `var atlas = load("${oldResource}");\n`);
-
-    // Simulate a previous publish that recorded the old resource path.
-    await setPublishBinding(id, {
-      ...BINDING,
-      codeBinding: { path: 'src/Hero.cs', resourcePath: oldResource },
-    });
+    await setPublishBinding(id, { ...BINDING, codeBinding: { path: 'src/Hero.cs', resourcePath: oldResource } });
     await publishAtlas(id);
 
-    // Destination moved: same dest bytes, new resource path in the binding.
-    await setPublishBinding(id, {
-      ...BINDING,
-      codeBinding: { path: 'src/Hero.cs', resourcePath: newResource },
-    });
+    // Same dest bytes, new resource path → binding-only fix, but the game
+    // source WAS mutated, so history must say so.
+    await setPublishBinding(id, { ...BINDING, codeBinding: { path: 'src/Hero.cs', resourcePath: newResource } });
     const result = await publishAtlas(id);
-    expect(result.published).toBe(false); // dest bytes unchanged — binding-only fix
+    expect(result.published).toBe(false);
     expect(result.codeBinding).toMatchObject({ rewritten: true, previousResourcePath: oldResource });
-    expect(await readFile(join(APP_REPO, 'src/Hero.cs'), 'utf8')).toContain(newResource);
+    expect(result.publication).toMatchObject({ upToDateBaseline: true });
+    const history = JSON.parse(await readFile(join(TEST_ROOT, 'sprites', id, 'runtime/publications.json'), 'utf8'));
+    expect(history).toHaveLength(2);
+    // The recorded baseline lets a THIRD publish see the current resource path.
+    const third = await publishAtlas(id);
+    expect(third.published).toBe(false);
+    expect(third.codeBinding).toMatchObject({ rewritten: false });
+  });
+
+  it('seeds a history baseline when the first publish finds its own bytes already at the destination', async () => {
+    const { id, atlasBytes } = await characterWithAtlas();
+    await setPublishBinding(id, BINDING);
+    await mkdir(join(APP_REPO, 'assets/sprites/hero'), { recursive: true });
+    await writeFile(join(APP_REPO, BINDING.atlasDestPath), atlasBytes);
+
+    const first = await publishAtlas(id);
+    expect(first.upToDate).toBe(true);
+    expect(first.publication).toMatchObject({ upToDateBaseline: true });
+
+    // A later changed atlas now reads as DIVERGED-checkable, not OCCUPIED.
+    const nextBytes = 'atlas-png-bytes-v2';
+    const nextRel = `runtime/v2/${id}-animation-atlas-v2.png`;
+    await mkdir(join(TEST_ROOT, 'sprites', id, 'runtime/v2'), { recursive: true });
+    await writeFile(join(TEST_ROOT, 'sprites', id, nextRel), nextBytes);
+    compileAtlasInTail.mockResolvedValue({
+      created: true, version: 2, atlasPath: nextRel, atlasSha256: sha256(Buffer.from(nextBytes)),
+    });
+    const second = await publishAtlas(id);
+    expect(second.published).toBe(true);
+  });
+
+  it('refuses to ship a tampered or missing compiled atlas file', async () => {
+    const { id, atlasRel } = await characterWithAtlas();
+    await setPublishBinding(id, BINDING);
+    await writeFile(join(TEST_ROOT, 'sprites', id, atlasRel), 'tampered-after-compile');
+    await expect(publishAtlas(id)).rejects.toMatchObject({ status: 422, code: 'ATLAS_OUTPUT_TAMPERED' });
+    rmSync(join(TEST_ROOT, 'sprites', id, atlasRel));
+    await expect(publishAtlas(id)).rejects.toMatchObject({ status: 422, code: 'ATLAS_OUTPUT_MISSING' });
+    expect(await readFile(join(APP_REPO, BINDING.atlasDestPath)).catch(() => null)).toBeNull();
   });
 });

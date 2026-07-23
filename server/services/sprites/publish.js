@@ -31,11 +31,12 @@ import { ServerError } from '../../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
 import { getAppById } from '../apps.js';
 import { isDeploying } from '../appDeployer.js';
-import { spriteDir, RUNTIME_PUBLICATIONS_REL } from './paths.js';
+import { spriteDir, RUNTIME_POINTER_REL, RUNTIME_PUBLICATIONS_REL } from './paths.js';
 import { requireCharacter } from './reference.js';
 import { updateRecord } from './records.js';
 import { withWalkWriteTail } from './walk.js';
 import { compileAtlasInTail } from './atlas.js';
+import { sha256Buffer } from './walkPostprocess.js';
 
 // Per-repo serialization: keyed by the resolved repoPath (matching
 // appDeployer's `deployingApps` key), so two app records pointing at the
@@ -159,7 +160,20 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
   }
   const { app, repoRoot } = await requireAppRepo(binding.appId, 409);
 
-  const compiled = await compileAtlasInTail(recordId);
+  const dir = spriteDir(recordId);
+  // Reuse the current pointer's geometry so publish ships the atlas the user
+  // compiled and previewed — a bare default-geometry recompile would silently
+  // discard a custom-geometry compile and flip the pointer back to defaults.
+  const pointer = await readJSONFile(join(dir, RUNTIME_POINTER_REL), null);
+  const geometryOverride = pointer?.geometry
+    ? {
+      cellSize: pointer.geometry.cellSize,
+      pivot: pointer.geometry.pivot,
+      targetMaxHeight: pointer.geometry.targetMaxHeight,
+      targetMaxWidth: pointer.geometry.targetMaxWidth,
+    }
+    : undefined;
+  const compiled = await compileAtlasInTail(recordId, { geometry: geometryOverride });
 
   return repoPublishTail(resolve(repoRoot), async () => {
     // Don't mutate a tree a deploy is currently building from — appDeployer
@@ -168,22 +182,64 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
     if (isDeploying(repoRoot)) {
       throw new ServerError(`App ${app.name || binding.appId} is deploying — retry when the deploy finishes`, { status: 409, code: 'APP_DEPLOY_IN_PROGRESS' });
     }
-    const dir = spriteDir(recordId);
     const destAbs = anchorRepoPath(repoRoot, binding.atlasDestPath, 'atlasDestPath');
-    const atlasBuffer = await readFile(join(dir, compiled.atlasPath));
+    const atlasBuffer = await readFile(join(dir, compiled.atlasPath)).catch(() => null);
+    if (!atlasBuffer) {
+      throw new ServerError('Compiled atlas file is missing on disk — recompile before publishing', { status: 422, code: 'ATLAS_OUTPUT_MISSING' });
+    }
+    // The only path that writes outside data/ ships exactly the bytes the
+    // evidence chain vouched for — never a tampered runtime/vN file.
+    if (sha256Buffer(atlasBuffer) !== compiled.atlasSha256) {
+      throw new ServerError('Compiled atlas bytes no longer match their recorded sha256 — recompile before publishing', { status: 422, code: 'ATLAS_OUTPUT_TAMPERED' });
+    }
 
     const publications = await readJSONFile(join(dir, RUNTIME_PUBLICATIONS_REL), []);
     const previous = [...publications].reverse().find(
       (p) => p.appId === binding.appId && p.atlasDestPath === binding.atlasDestPath,
     );
+    // The code-binding baseline follows the FILE, not the destination — a
+    // destination move changes atlasDestPath, and the rewrite exists exactly
+    // for that case, so a dest-keyed lookup would never find the old
+    // resource path to rewrite from.
+    const previousForCode = binding.codeBinding
+      ? [...publications].reverse().find(
+        (p) => p.appId === binding.appId && p.codeBinding?.path === binding.codeBinding.path,
+      )
+      : null;
+
+    const recordPublication = async (extra) => {
+      const publication = {
+        publishedAt: new Date().toISOString(),
+        characterId: recordId,
+        version: compiled.version,
+        atlasPath: compiled.atlasPath,
+        atlasSha256: compiled.atlasSha256,
+        appId: binding.appId,
+        appName: app.name || null,
+        atlasDestPath: binding.atlasDestPath,
+        ...extra,
+      };
+      publications.push(publication);
+      await atomicWrite(join(dir, RUNTIME_PUBLICATIONS_REL), publications);
+      return publication;
+    };
 
     const destSha256 = (await pathExists(destAbs)) ? await sha256File(destAbs) : null;
     if (destSha256 === compiled.atlasSha256) {
       // Verify the code binding even on a no-op so drift never hides.
       const codeBinding = binding.codeBinding
-        ? await applyCodeBinding(repoRoot, binding.codeBinding, previous?.codeBinding?.resourcePath)
+        ? await applyCodeBinding(repoRoot, binding.codeBinding, previousForCode?.codeBinding?.resourcePath)
         : null;
-      return { published: false, upToDate: true, compiled, codeBinding };
+      // The destination already holds the current bytes, but two sub-cases
+      // still mutate durable state and must be recorded: a code-binding
+      // rewrite just changed the game's source, and a first-ever publish
+      // finding its own bytes needs a history baseline (otherwise the next
+      // changed-atlas publish reads the dest as foreign and 409s OCCUPIED).
+      let publication = null;
+      if ((codeBinding?.rewritten || !previous)) {
+        publication = await recordPublication({ destPreviousSha256: destSha256, codeBinding, upToDateBaseline: true });
+      }
+      return { published: false, upToDate: true, compiled, codeBinding, publication };
     }
     if (previous && destSha256 !== null && destSha256 !== previous.atlasSha256) {
       throw new ServerError(
@@ -204,25 +260,12 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
     // Verify/rewrite the code binding BEFORE replacing the atlas so a drifted
     // binding aborts the publish with the game repo untouched.
     const codeBinding = binding.codeBinding
-      ? await applyCodeBinding(repoRoot, binding.codeBinding, previous?.codeBinding?.resourcePath)
+      ? await applyCodeBinding(repoRoot, binding.codeBinding, previousForCode?.codeBinding?.resourcePath)
       : null;
 
     await atomicWrite(destAbs, atlasBuffer);
 
-    const publication = {
-      publishedAt: new Date().toISOString(),
-      characterId: recordId,
-      version: compiled.version,
-      atlasPath: compiled.atlasPath,
-      atlasSha256: compiled.atlasSha256,
-      appId: binding.appId,
-      appName: app.name || null,
-      atlasDestPath: binding.atlasDestPath,
-      destPreviousSha256: destSha256,
-      codeBinding,
-    };
-    publications.push(publication);
-    await atomicWrite(join(dir, RUNTIME_PUBLICATIONS_REL), publications);
+    const publication = await recordPublication({ destPreviousSha256: destSha256, codeBinding });
     console.log(`🚚 sprite atlas v${compiled.version} published for ${recordId} → ${app.name || binding.appId}:${binding.atlasDestPath}`);
     return { published: true, publication, compiled };
   });
