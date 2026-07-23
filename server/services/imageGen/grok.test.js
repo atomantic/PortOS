@@ -253,9 +253,16 @@ describe('grok provider — directed-path harvest', () => {
     }
     expect(failedListener).toHaveBeenCalledTimes(1);
     expect(failedListener.mock.calls[0][0].error).toMatch(/non-image file/);
-    // The rejected junk never reaches the gallery, and the scratch dir is gone.
+    // The rejected junk never reaches the gallery. Scratch-dir removal is
+    // fire-and-forget alongside the 'failed' event (not awaited before it),
+    // so give it a moment to land on disk rather than racing it.
     expect(existsSync(join(FAKE_IMAGES_DIR, job.filename))).toBe(false);
-    expect(existsSync(join(tmpdir(), `portos-grok-${job.jobId}`))).toBe(false);
+    const scratchDir = join(tmpdir(), `portos-grok-${job.jobId}`);
+    const scratchDeadline = Date.now() + 3000;
+    while (Date.now() < scratchDeadline && existsSync(scratchDir)) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(existsSync(scratchDir)).toBe(false);
   }, 12000);
 
   it('fails with the stdout narration when grok exits 0 but wrote no file', async () => {

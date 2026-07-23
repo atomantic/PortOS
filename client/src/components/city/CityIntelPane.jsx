@@ -339,9 +339,9 @@ function TimelineView({ logs }) {
 // `cityPane` values so the desktop tab and the compact disclosure sheet address the
 // same surface through one URL param.
 export const CITY_INTEL_TABS = [
-  { id: 'attention', label: 'ATTENTION' },
-  { id: 'timeline', label: 'TIMELINE' },
-  { id: 'activity', label: 'ACTIVITY' },
+  { id: 'attention', label: 'ATTENTION', hint: 'Things needing your attention' },
+  { id: 'timeline', label: 'TIMELINE', hint: 'Recent-action timeline' },
+  { id: 'activity', label: 'ACTIVITY', hint: 'Live event log' },
 ];
 
 // Renders just the body for a given intel tab — reused by the desktop cockpit pane
@@ -370,73 +370,103 @@ export default function CityIntelPane({ apps, cosAgents, reviewCounts, instances
   const criticalCount = items.filter(i => i.severity === 'critical').length;
   const selectTab = (id) => { setActivePane(id); setCollapsed(false); };
 
+  // Roving tabindex: only the selected tab is in the sequential tab order, and
+  // Left/Right/Home/End move selection *and* focus between tabs (WAI-ARIA
+  // automatic-activation tabs pattern).
+  const tabRefs = useRef({});
+  const onTabKeyDown = (e) => {
+    const dir = { ArrowRight: 1, ArrowLeft: -1 }[e.key];
+    let next = null;
+    if (dir) {
+      const i = CITY_INTEL_TABS.findIndex(t => t.id === tab);
+      next = CITY_INTEL_TABS[(i + dir + CITY_INTEL_TABS.length) % CITY_INTEL_TABS.length].id;
+    } else if (e.key === 'Home') next = CITY_INTEL_TABS[0].id;
+    else if (e.key === 'End') next = CITY_INTEL_TABS[CITY_INTEL_TABS.length - 1].id;
+    if (!next) return;
+    e.preventDefault();
+    selectTab(next);
+    tabRefs.current[next]?.focus();
+  };
+
+  const tabCount = (id) => {
+    if (id === 'attention') return items.length;
+    if (id === 'activity') return eventLogs?.length || 0;
+    return 0;
+  };
+
   return (
     <div className={`absolute top-16 right-3 ${collapsed ? '' : 'bottom-20'} w-72 pointer-events-auto`}>
       <div className={`${collapsed ? '' : 'h-full'} bg-black/85 backdrop-blur-sm border border-cyan-500/30 rounded-lg overflow-hidden flex flex-col`}>
-        <div className="flex items-stretch border-b border-cyan-500/20" role="tablist" aria-label="Intel">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === 'attention' && !collapsed}
-            onClick={() => selectTab('attention')}
-            className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 transition-colors ${
-              tab === 'attention' && !collapsed
-                ? 'bg-cyan-500/10 text-cyan-400'
-                : 'text-cyan-500/50 hover:bg-cyan-500/5'
-            }`}
-            title="Things needing your attention"
-          >
-            <span className="font-pixel text-[10px] tracking-wider font-bold">ATTENTION</span>
-            {items.length > 0 && (
-              <span className={`font-pixel text-[9px] px-1 rounded ${
-                criticalCount > 0 ? 'bg-port-error/30 text-port-error' : 'bg-cyan-500/20 text-cyan-300'
-              }`}>
-                {items.length}
-              </span>
-            )}
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === 'timeline' && !collapsed}
-            onClick={() => selectTab('timeline')}
-            className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 border-l border-cyan-500/20 transition-colors ${
-              tab === 'timeline' && !collapsed
-                ? 'bg-cyan-500/10 text-cyan-400'
-                : 'text-cyan-500/50 hover:bg-cyan-500/5'
-            }`}
-            title="Recent-action timeline"
-          >
-            <span className="font-pixel text-[10px] tracking-wider font-bold">TIMELINE</span>
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === 'activity' && !collapsed}
-            onClick={() => selectTab('activity')}
-            className={`flex-1 flex items-center justify-center gap-1.5 px-2 py-2 border-l border-cyan-500/20 transition-colors ${
-              tab === 'activity' && !collapsed
-                ? 'bg-cyan-500/10 text-cyan-400'
-                : 'text-cyan-500/50 hover:bg-cyan-500/5'
-            }`}
-            title="Live event log"
-          >
-            <span className="font-pixel text-[10px] tracking-wider font-bold">ACTIVITY</span>
-            {eventLogs?.length > 0 && (
-              <span className="font-pixel text-[9px] text-cyan-500/40">{eventLogs.length}</span>
-            )}
-          </button>
+        <div className="flex items-stretch border-b border-cyan-500/20">
+          {/* Deliberately NOT `ui/TabPills`: this bar wears the immersive CyberCity
+              HUD skin (cyan-on-black, `font-pixel` micro-caps, per-tab severity-tinted
+              count chips) that the shared component hardcodes as port-accent, and it
+              can only be expressed there by adding a one-off variant that no other
+              call site would use. The ARIA/roving-tabindex wiring below mirrors
+              TabPills' contract, so audits can skip this divergence. */}
+          <div className="flex-1 flex items-stretch min-w-0" role="tablist" aria-label="Intel">
+            {CITY_INTEL_TABS.map((t, i) => {
+              const active = t.id === tab;
+              const count = tabCount(t.id);
+              return (
+                <button
+                  key={t.id}
+                  ref={(el) => { tabRefs.current[t.id] = el; }}
+                  type="button"
+                  role="tab"
+                  id={`city-intel-tab-${t.id}`}
+                  aria-selected={active}
+                  // Only one panel is mounted at a time, so only the selected tab
+                  // owns an `aria-controls` — an inactive tab would otherwise point
+                  // at an element that doesn't exist.
+                  aria-controls={active && !collapsed ? `city-intel-panel-${t.id}` : undefined}
+                  tabIndex={active ? 0 : -1}
+                  onKeyDown={onTabKeyDown}
+                  onClick={() => selectTab(t.id)}
+                  className={`flex-1 min-w-0 flex items-center justify-center gap-1.5 px-2 py-2 transition-colors ${
+                    i > 0 ? 'border-l border-cyan-500/20' : ''
+                  } ${active ? 'bg-cyan-500/10 text-cyan-400' : 'text-cyan-500/50 hover:bg-cyan-500/5'}`}
+                  title={t.hint}
+                >
+                  <span className="font-pixel text-[10px] tracking-wider font-bold">{t.label}</span>
+                  {count > 0 && (t.id === 'attention' ? (
+                    <span className={`font-pixel text-[9px] px-1 rounded ${
+                      criticalCount > 0 ? 'bg-port-error/30 text-port-error' : 'bg-cyan-500/20 text-cyan-300'
+                    }`}>
+                      {count}
+                    </span>
+                  ) : (
+                    <span className="font-pixel text-[9px] text-cyan-500/40">{count}</span>
+                  ))}
+                </button>
+              );
+            })}
+          </div>
           <button
             type="button"
             onClick={() => setCollapsed(c => !c)}
             className="px-2 py-2 border-l border-cyan-500/20 text-cyan-500/50 hover:bg-cyan-500/5 hover:text-cyan-400 transition-colors"
             title={collapsed ? 'Expand' : 'Collapse'}
+            aria-expanded={!collapsed}
+            aria-controls={collapsed ? undefined : `city-intel-panel-${tab}`}
             aria-label={collapsed ? 'Expand intel pane' : 'Collapse intel pane'}
           >
             <span className="font-pixel text-[11px]">{collapsed ? '[+]' : '[-]'}</span>
           </button>
         </div>
-        {!collapsed && <CityIntelContent tab={tab} items={items} eventLogs={eventLogs} />}
+        {!collapsed && (
+          <div
+            role="tabpanel"
+            id={`city-intel-panel-${tab}`}
+            aria-labelledby={`city-intel-tab-${tab}`}
+            // An empty tab renders no focusable children, so the panel itself has to
+            // be a tab stop or keyboard users can't reach its content at all.
+            tabIndex={0}
+            className="flex-1 min-h-0 flex flex-col focus:outline-none focus-visible:ring-1 focus-visible:ring-cyan-400/60"
+          >
+            <CityIntelContent tab={tab} items={items} eventLogs={eventLogs} />
+          </div>
+        )}
       </div>
     </div>
   );
