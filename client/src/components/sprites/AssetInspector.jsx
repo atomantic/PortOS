@@ -60,8 +60,8 @@ export default function AssetInspector({ recordId, asset, onClose }) {
           />
         ) : isVideoAsset(asset) ? (
           // A walk run's grok source clip lives in the listing; play it here
-          // rather than forcing a download just to review a render.
-          // eslint-disable-next-line jsx-a11y/media-has-caption
+          // rather than forcing a download just to review a render. No <track>:
+          // these are silent generated animation clips with nothing to caption.
           <video src={url} controls className="w-full max-h-[55vh] bg-port-bg rounded border border-port-border" />
         ) : (
           <p className="text-xs text-gray-500 border border-port-border rounded p-4 text-center">
