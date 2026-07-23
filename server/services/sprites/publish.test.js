@@ -289,6 +289,24 @@ describe('publishAtlas', () => {
     expect(second.published).toBe(true);
   });
 
+  it('reuses the current pointer geometry when compiling for publish', async () => {
+    const { id } = await characterWithAtlas();
+    await setPublishBinding(id, BINDING);
+
+    // No pointer yet → default geometry (undefined override).
+    await publishAtlas(id);
+    expect(compileAtlasInTail).toHaveBeenLastCalledWith(id, { geometry: undefined });
+
+    // A pointer with custom geometry → publish compiles with exactly it.
+    const geometry = { cellSize: 64, pivot: [32, 56], targetMaxHeight: 44, targetMaxWidth: 52 };
+    await writeFile(
+      join(TEST_ROOT, 'sprites', id, 'runtime/current.json'),
+      JSON.stringify({ version: 1, atlasPath: `runtime/v1/${id}-animation-atlas-v1.png`, geometry }),
+    );
+    await publishAtlas(id);
+    expect(compileAtlasInTail).toHaveBeenLastCalledWith(id, { geometry });
+  });
+
   it('refuses to ship a tampered or missing compiled atlas file', async () => {
     const { id, atlasRel } = await characterWithAtlas();
     await setPublishBinding(id, BINDING);

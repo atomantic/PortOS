@@ -268,6 +268,23 @@ describe('compileAtlas', () => {
     expect(await readFile(join(TEST_ROOT, 'sprites', id, first.atlasPath))).toBeTruthy();
   });
 
+  it('skips a PNG-missing slot whose surviving manifest vouches for different bytes', async () => {
+    const id = await finalizedCharacter();
+    const first = await compileAtlas(id);
+    // Delete the v1 PNG, then change the inputs (geometry) so the recompile
+    // produces DIFFERENT bytes — it must land in v2, not poison v1.
+    rmSync(join(TEST_ROOT, 'sprites', id, first.atlasPath));
+    const next = await compileAtlas(id, {
+      geometry: { cellSize: 64, pivot: [32, 56], targetMaxHeight: 44, targetMaxWidth: 52 },
+    });
+    expect(next.version).toBe(first.version + 1);
+    // v1's surviving manifest is untouched and still describes the original.
+    const v1Manifest = JSON.parse(
+      await readFile(join(TEST_ROOT, 'sprites', id, first.manifestPath), 'utf8'),
+    );
+    expect(v1Manifest.atlasSha256).toBe(first.atlasSha256);
+  });
+
   it('rejects geometry whose content bounds cannot fit the cell', async () => {
     const id = await finalizedCharacter();
     await expect(compileAtlas(id, { geometry: { cellSize: 64, targetMaxWidth: 64 } }))

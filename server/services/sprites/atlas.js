@@ -188,9 +188,11 @@ export async function validateForCompile(recordId) {
   // frames/ to minimize copies). Recompiling them here is structurally
   // impossible; say so plainly instead of a misleading tamper error. Their
   // already-published runtime atlases were imported and remain browsable.
-  const legacyPrefix = 'art-source/';
+  // Match the importer's own legacy-path recognition (relToCharacterDir):
+  // the marker can sit at any index (absolute/repo-prefixed variants), not
+  // just the string start.
   if (
-    typeof walkSet.selectionPath === 'string' && walkSet.selectionPath.startsWith(legacyPrefix)
+    typeof walkSet.selectionPath === 'string' && walkSet.selectionPath.includes('art-source/sprites/')
   ) {
     throw new ServerError(
       'This walk set was imported from the source pipeline — its packaged frames were not imported, so PortOS cannot recompile it. Imported runtime atlases remain available in the asset library; to compile here, run the walk workflow on a new character.',
@@ -422,7 +424,17 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
 
   const stem = atlasStem(recordId);
   const runtimeAbs = join(dir, RUNTIME_DIR);
-  const version = await nextAtlasVersion(runtimeAbs, stem);
+  let version = await nextAtlasVersion(runtimeAbs, stem);
+  // Never adopt a PNG-missing slot whose surviving manifest vouches for
+  // DIFFERENT bytes — writing there would land a PNG its own manifest
+  // contradicts and then 409 on the manifest write, poisoning the version
+  // dir. Advance until the slot is empty or its manifest matches these bytes
+  // (the re-materialize case).
+  for (;;) {
+    const survivor = await readJSONFile(join(runtimeAbs, `v${version}`, `${stem}-v${version}-manifest.json`), null);
+    if (!survivor || survivor.atlasSha256 === atlasSha256) break;
+    version += 1;
+  }
   const versionRel = `${RUNTIME_DIR}/v${version}`;
   const atlasRel = `${versionRel}/${stem}-v${version}.png`;
   const manifestRel = `${versionRel}/${stem}-v${version}-manifest.json`;

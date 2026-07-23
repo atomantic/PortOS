@@ -99,7 +99,7 @@ export default function PublishWorkflow({ record, walk, atlas, onChanged }) {
   // Phase-1 imported walk sets carry source-pipeline paths and no packaged
   // frames — the server refuses to recompile them (LEGACY_IMPORTED_WALK_SET).
   // Show why instead of offering a button that always fails.
-  if (walk.walkSet.selectionPath?.startsWith('art-source/')) {
+  if (walk.walkSet.selectionPath?.includes('art-source/sprites/')) {
     return (
       <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-1">
         <h3 className="text-sm font-medium text-gray-200 flex items-center gap-2">

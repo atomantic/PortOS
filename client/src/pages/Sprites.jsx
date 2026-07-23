@@ -387,7 +387,10 @@ export default function Sprites() {
                   walk={detail.walk}
                   onChanged={onWorkflowChanged}
                 />
+                {/* Keyed by record so form state and an armed publish/overwrite
+                    confirmation never survive switching characters. */}
                 <PublishWorkflow
+                  key={detail.record.id}
                   record={detail.record}
                   walk={detail.walk}
                   atlas={detail.atlas}
