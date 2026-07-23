@@ -1,18 +1,21 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { PersonStanding, Package, Download, FolderOpen, X, RefreshCw, Plus } from 'lucide-react';
+import { PersonStanding, Package, Download, X, RefreshCw, Plus } from 'lucide-react';
 import toast from '../components/ui/Toast';
-import { listSpriteRecords, getSpriteRecord, importSprites, createSpriteRecord } from '../services/apiSprites.js';
+import {
+  listSpriteRecords, getSpriteRecord, importSprites, createSpriteRecord,
+  generateSpriteWalk, generateSpriteReference,
+} from '../services/apiSprites.js';
 import { getApps } from '../services/apiApps.js';
 import AppContextPicker from '../components/AppContextPicker.jsx';
 import ReferenceWorkflow from '../components/sprites/ReferenceWorkflow.jsx';
-import WalkWorkflow from '../components/sprites/WalkWorkflow.jsx';
+import WalkWorkflow, { WALK_WORKFLOW_DOM_ID, WALK_DURATIONS } from '../components/sprites/WalkWorkflow.jsx';
 import PublishWorkflow from '../components/sprites/PublishWorkflow.jsx';
-import AssetInspector from '../components/sprites/AssetInspector.jsx';
-import SpritePreview from '../components/sprites/SpritePreview.jsx';
-import { hasSpritePreview } from '../components/sprites/spriteAssets.js';
+import AssetCollection from '../components/sprites/AssetCollection.jsx';
 import { useAsyncAction } from '../hooks/useAsyncAction.js';
-import { formatBytes, timeAgo } from '../utils/formatters.js';
+import { useSpritePendingRenders } from '../hooks/useSpritePendingRenders.js';
+import { buildCollectionActions } from '../lib/spriteCollectionActions.js';
+import { timeAgo } from '../utils/formatters.js';
 
 // Sprite Manager: library over imported production sprites — characters
 // (reference sets, walk strips, runtime atlases) and props atlas families —
@@ -21,11 +24,6 @@ import { formatBytes, timeAgo } from '../utils/formatters.js';
 // the 8 directional anchors — #2896), and the phase-3 walk workflow (one
 // grok i2v clip per anchor, deterministic packaging, per-direction approval
 // into the finalized walk set — #2897). Publish lands in phase 4.
-
-function topLevelGroup(assetPath) {
-  const idx = assetPath.indexOf('/');
-  return idx < 0 ? '' : assetPath.slice(0, idx);
-}
 
 function ImportPanel({ onImported }) {
   const [open, setOpen] = useState(false);
@@ -234,46 +232,6 @@ function RecordList({ records, selectedId, onSelect }) {
   );
 }
 
-function AssetGroups({ recordId, assets }) {
-  const [inspecting, setInspecting] = useState(null);
-  const groups = useMemo(() => assets.reduce((acc, a) => {
-    const g = topLevelGroup(a.path) || 'files';
-    (acc[g] ||= []).push(a);
-    return acc;
-  }, {}), [assets]);
-  return (
-    <div className="space-y-4">
-      {Object.entries(groups).map(([group, files]) => (
-        <div key={group}>
-          <h4 className="flex items-center gap-1.5 text-sm font-semibold text-gray-300 mb-2">
-            <FolderOpen className="w-4 h-4" /> {group}
-            <span className="text-xs text-gray-500 font-normal">({files.length})</span>
-          </h4>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
-            {files.map((a) => (
-              <button
-                key={a.path}
-                onClick={() => setInspecting(a)}
-                className="bg-port-bg border border-port-border rounded p-1 text-left hover:border-port-accent"
-                title={a.path}
-              >
-                {hasSpritePreview(a) && (
-                  <SpritePreview recordId={recordId} path={a.path} className="h-20 rounded" />
-                )}
-                <span className="block text-[10px] text-gray-500 truncate">{a.path.split('/').pop()}</span>
-                <span className="block text-[10px] text-gray-600">
-                  {hasSpritePreview(a) ? `${a.width}×${a.height}` : formatBytes(a.size)}
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-      ))}
-      <AssetInspector recordId={recordId} asset={inspecting} onClose={() => setInspecting(null)} />
-    </div>
-  );
-}
-
 export default function Sprites() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -312,6 +270,93 @@ export default function Sprites() {
       .catch((err) => { if (!stale) setDetailState(err?.status === 404 || err?.status === 400 ? 'missing' : 'error'); });
     return () => { stale = true; };
   }, [id, retryTick]);
+
+  // In-flight render tracking is owned HERE rather than inside each workflow
+  // (#2931): the asset collection's Regenerate buttons fire the same two
+  // endpoints the workflows do, so they must share one map — two hook
+  // instances would each rehydrate independently and let a Regenerate in the
+  // collection leave the workflow's Generate button enabled (a second paid
+  // render for the same direction). Hooks can't be conditional, so both run
+  // for every record and no-op on a null/props record.
+  const walkRenders = useSpritePendingRenders({
+    recordId: id || null,
+    kind: 'video',
+    tagKey: 'spriteWalk',
+    tagField: 'direction',
+    onChanged: onWorkflowChanged,
+    sweepDelays: () => [1500, 8000],
+    failMessage: (direction, job) => `Walk render failed for ${direction}: ${job?.error || 'see media jobs'}`,
+  });
+  const referenceRenders = useSpritePendingRenders({
+    recordId: id || null,
+    kind: 'image',
+    tagKey: 'spriteRef',
+    tagField: 'target',
+    onChanged: onWorkflowChanged,
+  });
+
+  // Which run the Loop Trimmer panel is open for. Phase 5 (#2933) turns this
+  // into a `?spriteTab=trimmer&run=<id>` deep link; until then it routes the
+  // collection's request into WalkWorkflow's existing inline TrimPanel so
+  // there is still exactly one trim UI.
+  const [trimRunId, setTrimRunId] = useState(null);
+  useEffect(() => setTrimRunId(null), [id]);
+
+  // Clip length lives here rather than inside WalkWorkflow so a Regenerate
+  // fired from an asset card honors the length the user picked in the walk
+  // panel instead of silently falling back to the server default.
+  const [duration, setDuration] = useState(WALK_DURATIONS[0]);
+
+  // Both generators share the reserve → submit → resolve/cancel dance; only
+  // the endpoint, its args, and the fail message differ. The hook's setters
+  // are stable identities, so depending on THEM (not the whole render-tracking
+  // object, which is a fresh literal each render) keeps the memoized action
+  // closures below from rebuilding every render.
+  const { beginSubmit: walkBegin, resolveSubmit: walkResolve, cancelSubmit: walkCancel } = walkRenders;
+  const { beginSubmit: refBegin, resolveSubmit: refResolve, cancelSubmit: refCancel } = referenceRenders;
+  const submitRender = useCallback(async (begin, resolve, cancel, key, call, failMessage) => {
+    begin(key);
+    try {
+      const { jobId } = await call();
+      resolve(key, jobId);
+    } catch (err) {
+      cancel(key);
+      toast.error(err?.message || failMessage);
+    }
+  }, []);
+
+  const generateWalk = useCallback((direction) => submitRender(
+    walkBegin, walkResolve, walkCancel, direction,
+    () => generateSpriteWalk(id, { direction, duration }, { silent: true }),
+    `Failed to queue ${direction} walk`,
+  ), [id, duration, walkBegin, walkResolve, walkCancel, submitRender]);
+
+  const generateAnchor = useCallback((direction) => submitRender(
+    refBegin, refResolve, refCancel, direction,
+    // The server falls back to the install's configured image backend — the
+    // asset-card path deliberately doesn't thread ReferenceWorkflow's backend
+    // picker (that state lives in the workflow); a re-roll uses the default.
+    () => generateSpriteReference(id, { target: direction }, { silent: true }),
+    `Failed to queue ${direction} render`,
+  ), [id, refBegin, refResolve, refCancel, submitRender]);
+
+  const collectionActions = useMemo(() => {
+    if (detail?.record?.kind !== 'character') return null;
+    return buildCollectionActions({
+      detail,
+      walkPending: walkRenders.pendingJobs,
+      referencePending: referenceRenders.pendingJobs,
+      generateWalk,
+      generateAnchor,
+      onRequestTrim: (runId) => {
+        setTrimRunId(runId);
+        // The trimmer lives inside WalkWorkflow further up the page; a request
+        // from an asset card near the bottom must bring it into view or the
+        // click looks like it did nothing.
+        document.getElementById(WALK_WORKFLOW_DOM_ID)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      },
+    });
+  }, [detail, walkRenders.pendingJobs, referenceRenders.pendingJobs, generateWalk, generateAnchor]);
 
   return (
     <div className="space-y-4">
@@ -377,12 +422,19 @@ export default function Sprites() {
                   <ReferenceWorkflow
                     record={detail.record}
                     reference={detail.reference}
+                    renders={referenceRenders}
                     onChanged={onWorkflowChanged}
                   />
                   <WalkWorkflow
                     record={detail.record}
                     reference={detail.reference}
                     walk={detail.walk}
+                    renders={walkRenders}
+                    duration={duration}
+                    onDurationChange={setDuration}
+                    onGenerate={generateWalk}
+                    trimRunId={trimRunId}
+                    onTrimClose={() => setTrimRunId(null)}
                     onChanged={onWorkflowChanged}
                   />
                   {/* Keyed by record so form state and an armed publish/overwrite
@@ -399,7 +451,11 @@ export default function Sprites() {
               {detail.assets.length === 0 ? (
                 <p className="text-sm text-gray-500">No assets on disk for this record.</p>
               ) : (
-                <AssetGroups recordId={detail.record.id} assets={detail.assets} />
+                <AssetCollection
+                  recordId={detail.record.id}
+                  assets={detail.assets}
+                  actions={collectionActions}
+                />
               )}
             </div>
           )}
