@@ -308,6 +308,35 @@ describe('conflictJournal', () => {
       expect(entries).toHaveLength(1);
       expect(entries[0]).toMatchObject({ recordKind: 'track', recordId: 't-1', status: 'pending' });
     });
+
+    it('a base advanced THROUGH maybeJournalBeforeOverwrite is re-stamped at the CURRENT version, not mislabeled at the old comparison version', async () => {
+      // Regression: maybeJournalBeforeOverwrite used to advance the base with
+      // the version-RESTRICTED remoteHash from detectConflict, which
+      // setSyncBaseHash then tagged with the CURRENT version anyway — a
+      // mislabeled entry whose stored hash bytes never included
+      // chiptuneScore/chiptunePrompt, but whose version tag claimed they did.
+      // Every later comparison would then include those fields (trusting the
+      // tag) against hash bytes that never had them present at all —
+      // permanent, guaranteed churn even when nobody touched the field.
+      const legacyBase = trk({ chiptuneScore: null, chiptunePrompt: '' });
+      const legacyHash = cj.contentHashForRecord('track', legacyBase, { maxVersion: 2 });
+      await cj.setSyncBaseHash('track', 't-1', legacyHash, { version: 2 });
+
+      // First sync after the base was seeded: remote is byte-identical to the
+      // legacy base's content (no one has touched chiptuneScore yet) — a
+      // clean fast-forward, not a conflict, and it advances the base.
+      const remote1 = trk();
+      await cj.maybeJournalBeforeOverwrite({ kind: 'track', id: 't-1', local: legacyBase, remote: remote1, source: { via: 'sync' } });
+      expect(await pendingEntries()).toHaveLength(0);
+
+      // Now a SINGLE peer composes a chiptune score; the other side (`remote2`
+      // here, standing in for what's already persisted) is untouched. This
+      // must be a clean LWW update, not a conflict — the base should already
+      // reflect remote1's full-field content, so only one side has diverged.
+      const local2 = trk({ chiptuneScore: { bpm: 120 }, chiptunePrompt: 'solo edit', updatedAt: '2026-05-02T00:00:00Z' });
+      const { isConflict } = await cj.detectConflict({ kind: 'track', id: 't-1', local: local2, remote: remote1 });
+      expect(isConflict).toBe(false);
+    });
   });
 
   it('does NOT journal when the local side is a tombstone (no content to lose)', async () => {
