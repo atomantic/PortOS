@@ -21,7 +21,7 @@
 
 import sharp from 'sharp';
 import { join } from 'path';
-import { readdir } from 'fs/promises';
+import { readdir, writeFile } from 'fs/promises';
 import { createHash } from 'crypto';
 import { ensureDir, atomicWrite, sha256File } from '../../lib/fileUtils.js';
 import { findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
@@ -87,10 +87,14 @@ export async function decodeRgbaFrame(src) {
   return { data, width: info.width, height: info.height };
 }
 
-async function encodePng(frame, dest, channels = 4) {
-  await sharp(frame.data, { raw: { width: frame.width, height: frame.height, channels } })
+// Encode + write + hash in one pass — hashing the in-memory PNG buffer saves
+// reading every just-written artifact back off disk purely to checksum it.
+async function encodePngWithHash(frame, dest, channels = 4) {
+  const buf = await sharp(frame.data, { raw: { width: frame.width, height: frame.height, channels } })
     .png()
-    .toFile(dest);
+    .toBuffer();
+  await writeFile(dest, buf);
+  return sha256Buffer(buf);
 }
 
 /**
@@ -579,8 +583,8 @@ export async function prepareWalkAnchorInput(anchorAbs, destAbs, chromaKey) {
     prepared = recoverAlphaFrame(frame, measured, split);
   }
   prepared = despillKeyFrame(prepared, split);
-  await encodePng(prepared, destAbs);
-  return { preparation: 'measured-key-alpha-recovery-plus-despill' };
+  const sha256 = await encodePngWithHash(prepared, destAbs);
+  return { preparation: 'measured-key-alpha-recovery-plus-despill', sha256 };
 }
 
 /**
@@ -599,14 +603,12 @@ export async function runWalkPostprocess({
   const rawDir = join(generatedAbs, 'raw');
 
   const rawNames = await extractVideoFrames(videoAbs, rawDir);
-  const rawFrames = [];
   const recovered = [];
   const measuredKeys = [];
   for (const name of rawNames) {
     const frame = await decodeRgbaFrame(join(rawDir, name));
     const measured = sampleBorderKey(frame);
     validateMeasuredKey(measured, split, chromaKey);
-    rawFrames.push(frame);
     measuredKeys.push(measured);
     recovered.push(recoverAlphaFrame(frame, measured, split));
   }
@@ -625,8 +627,6 @@ export async function runWalkPostprocess({
   for (let i = 0; i < despilled.length; i++) {
     const phase = WALK_PHASES[i];
     const name = `${String(i).padStart(2, '0')}-${phase}.png`;
-    const dest = join(framesDir, name);
-    await encodePng(despilled[i], dest);
     frameRecords.push({
       outputIndex: i,
       phase,
@@ -635,20 +635,17 @@ export async function runWalkPostprocess({
       sourceSha256: await sha256File(join(rawDir, rawNames[indices[i]])),
       measuredKeyRgb: measuredKeys[indices[i]],
       path: `${generatedRel}/frames/${name}`,
-      sha256: await sha256File(dest),
+      sha256: await encodePngWithHash(despilled[i], join(framesDir, name)),
     });
   }
 
   const stripName = `${recordId}-walk-${direction}-strip.png`;
-  const stripAbs = join(generatedAbs, stripName);
-  await encodePng(packStrip(despilled), stripAbs);
+  const stripSha256 = await encodePngWithHash(packStrip(despilled), join(generatedAbs, stripName));
 
   const reviewDir = join(generatedAbs, 'review');
   await ensureDir(reviewDir);
   const contrastName = `${recordId}-walk-${direction}-contrast-review.png`;
-  const contrastAbs = join(reviewDir, contrastName);
-  const sheet = await buildContrastSheet(despilled);
-  await encodePng(sheet, contrastAbs, 3);
+  const comparisonSha256 = await encodePngWithHash(await buildContrastSheet(despilled), join(reviewDir, contrastName), 3);
 
   const manifestName = `${recordId}-walk-${direction}-manifest.json`;
   const manifest = {
@@ -677,9 +674,9 @@ export async function runWalkPostprocess({
     validation,
     frames: frameRecords,
     stripPath: `${generatedRel}/${stripName}`,
-    stripSha256: await sha256File(stripAbs),
+    stripSha256,
     comparisonPath: `${generatedRel}/review/${contrastName}`,
-    comparisonSha256: await sha256File(contrastAbs),
+    comparisonSha256,
   };
   await atomicWrite(join(generatedAbs, manifestName), manifest);
 

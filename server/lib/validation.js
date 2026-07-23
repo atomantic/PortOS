@@ -1031,20 +1031,15 @@ export const spriteWalkPostprocessSchema = z.object({
   runId: spriteWalkRunIdSchema,
 });
 
-const trimColumnsSchema = z.array(z.number().int().min(0).max(255)).min(2).max(256)
-  .refine((cols) => new Set(cols).size === cols.length, { message: 'columns must be unique' });
-
+// Trim geometry (strip path, cell size, frame labels) derives server-side
+// from the run's packaged manifest — the client only names the run and
+// which frames stay enabled.
 export const spriteWalkTrimSchema = z.object({
-  slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,79}$/),
-  atlasPath: z.string().min(1).max(500),
-  row: z.number().int().min(0).max(63),
-  cellWidth: z.number().int().min(1).max(4096),
-  cellHeight: z.number().int().min(1).max(4096),
-  fps: z.number().int().min(1).max(60),
-  allColumns: trimColumnsSchema,
-  enabledColumns: trimColumnsSchema,
-  sourceFrameIndices: z.array(z.number().int().min(0)).max(256).optional(),
-  sourceFrameLabels: z.array(z.string().max(200)).max(256).optional(),
+  runId: spriteWalkRunIdSchema,
+  enabledColumns: z.array(z.number().int().min(0).max(63)).min(2).max(64)
+    .refine((cols) => new Set(cols).size === cols.length, { message: 'columns must be unique' }),
+  fps: z.number().int().min(1).max(60).optional(),
+  slug: z.string().regex(/^[a-z0-9][a-z0-9-]{0,79}$/).optional(),
 });
 
 // =============================================================================

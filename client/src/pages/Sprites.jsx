@@ -218,17 +218,8 @@ function RecordList({ records, selectedId, onSelect }) {
   );
 }
 
-// Raw ffmpeg-extracted frame intermediates (30–96 PNGs per walk run) would
-// swamp the asset browser — hide them, matching the importer's exclusion of
-// raw/ from cross-machine copies. They stay on disk for the postprocessor.
-const RUN_RAW_INTERMEDIATE = /^grok\/[^/]+\/generated\/raw\//;
-
-function AssetGroups({ recordId, assets: allAssets }) {
+function AssetGroups({ recordId, assets }) {
   const [preview, setPreview] = useState(null);
-  const assets = useMemo(
-    () => allAssets.filter((a) => !RUN_RAW_INTERMEDIATE.test(a.path)),
-    [allAssets],
-  );
   const groups = useMemo(() => assets.reduce((acc, a) => {
     const g = topLevelGroup(a.path) || 'files';
     (acc[g] ||= []).push(a);

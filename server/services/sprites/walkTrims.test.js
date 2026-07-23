@@ -1,7 +1,8 @@
 /**
- * Loop trimmer (#2897): non-destructive re-pack of enabled atlas cells into
- * versioned strip + GIF + manifest. ffmpeg is mocked (the GIF encode is a
- * spawn); the pixel re-pack is asserted for real via sharp.
+ * Loop trimmer (#2897): non-destructive re-pack of enabled strip cells into
+ * versioned strip + GIF + manifest, with all geometry derived from the run's
+ * packaged manifest. ffmpeg is mocked (the GIF encode is a spawn); the pixel
+ * re-pack is asserted for real via sharp.
  */
 
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest';
@@ -39,11 +40,13 @@ const CELL = 8;
 const CELL_COLORS = [
   [255, 0, 0, 255], [0, 255, 0, 255], [0, 0, 255, 255], [255, 255, 0, 255],
 ];
+const PHASES4 = ['left-contact', 'left-down', 'left-passing', 'left-up'];
+const RUN_ID = 'walk-east-00000000';
 
 let seq = 0;
 const newId = () => `trimmer-${++seq}`;
 
-async function characterWithAtlas(id) {
+async function characterWithRun(id) {
   await records.createRecord({ kind: 'character', name: 'Trimmer' }, id);
   const width = CELL * CELL_COLORS.length;
   const buf = Buffer.alloc(width * CELL * 4);
@@ -52,22 +55,25 @@ async function characterWithAtlas(id) {
       buf.set(CELL_COLORS[Math.floor(x / CELL)], (y * width + x) * 4);
     }
   }
-  const dir = join(TEST_ROOT, 'sprites', id, 'grok', 'walk-east-00000000', 'generated');
-  await mkdir(dir, { recursive: true });
-  await sharp(buf, { raw: { width, height: CELL, channels: 4 } }).png().toFile(join(dir, 'strip.png'));
-  return { id, atlasPath: 'grok/walk-east-00000000/generated/strip.png' };
+  const runDir = join(TEST_ROOT, 'sprites', id, 'grok', RUN_ID);
+  await mkdir(join(runDir, 'generated'), { recursive: true });
+  const stripRel = `grok/${RUN_ID}/generated/strip.png`;
+  await sharp(buf, { raw: { width, height: CELL, channels: 4 } }).png()
+    .toFile(join(runDir, 'generated', 'strip.png'));
+  const manifestRel = `grok/${RUN_ID}/generated/manifest.json`;
+  await writeFile(join(runDir, 'generated', 'manifest.json'), JSON.stringify({
+    schemaVersion: 1,
+    stripPath: stripRel,
+    frameRate: 12,
+    frameCount: 4,
+    alignment: { cellSize: CELL },
+    frames: PHASES4.map((phase, outputIndex) => ({ outputIndex, phase })),
+  }));
+  await writeFile(join(runDir, 'animation-run.json'), JSON.stringify({
+    schemaVersion: 1, id: RUN_ID, status: 'candidate', direction: 'east', postprocessManifest: manifestRel,
+  }));
+  return id;
 }
-
-const basePayload = (atlasPath) => ({
-  slug: 'east-loop',
-  atlasPath,
-  row: 0,
-  cellWidth: CELL,
-  cellHeight: CELL,
-  fps: 12,
-  allColumns: [0, 1, 2, 3],
-  enabledColumns: [0, 2, 3],
-});
 
 beforeEach(() => {
   runFfmpegProcess.mockClear();
@@ -76,9 +82,9 @@ beforeEach(() => {
 afterAll(() => rmSync(TEST_ROOT, { recursive: true, force: true }));
 
 describe('saveLoopTrim', () => {
-  it('re-packs only the enabled cells, in order, without resampling', async () => {
-    const { id, atlasPath } = await characterWithAtlas(newId());
-    const result = await saveLoopTrim(id, basePayload(atlasPath));
+  it('re-packs only the enabled cells with manifest-derived geometry and labels', async () => {
+    const id = await characterWithRun(newId());
+    const result = await saveLoopTrim(id, { runId: RUN_ID, enabledColumns: [0, 2, 3] });
     expect(result).toMatchObject({
       strip: 'walk/trims/east-loop-v001-strip.png',
       loop: 'walk/trims/east-loop-v001.gif',
@@ -99,41 +105,48 @@ describe('saveLoopTrim', () => {
     expect(manifest).toMatchObject({
       kind: 'animation-loop-trim',
       status: 'candidate',
-      sourceAtlasPath: atlasPath,
+      runId: RUN_ID,
+      sourceAtlasPath: `grok/${RUN_ID}/generated/strip.png`,
       row: 0,
-      fps: 12,
+      cellWidth: CELL,
+      fps: 12, // derived from the run manifest's frameRate
       allAtlasColumns: [0, 1, 2, 3],
       enabledAtlasColumns: [0, 2, 3],
       disabledAtlasColumns: [1],
     });
     expect(manifest.selectedFrames).toEqual([
-      { outputIndex: 0, atlasColumn: 0, sourceFrameIndex: 0, sourceFrameLabel: '0' },
-      { outputIndex: 1, atlasColumn: 2, sourceFrameIndex: 2, sourceFrameLabel: '2' },
-      { outputIndex: 2, atlasColumn: 3, sourceFrameIndex: 3, sourceFrameLabel: '3' },
+      { outputIndex: 0, atlasColumn: 0, sourceFrameIndex: 0, sourceFrameLabel: 'left-contact' },
+      { outputIndex: 1, atlasColumn: 2, sourceFrameIndex: 2, sourceFrameLabel: 'left-passing' },
+      { outputIndex: 2, atlasColumn: 3, sourceFrameIndex: 3, sourceFrameLabel: 'left-up' },
     ]);
     expect(manifest.sourceAtlasSha256).toMatch(/^[0-9a-f]{64}$/);
-    // GIF encoded through the ffmpeg primitive with the requested fps.
+    // GIF encoded through the ffmpeg primitive with the manifest fps.
     const gifArgs = runFfmpegProcess.mock.calls[0][0].args;
-    expect(gifArgs).toContain('-framerate');
     expect(gifArgs[gifArgs.indexOf('-framerate') + 1]).toBe('12');
   });
 
-  it('versions successive trims of the same slug', async () => {
-    const { id, atlasPath } = await characterWithAtlas(newId());
-    await saveLoopTrim(id, basePayload(atlasPath));
-    const second = await saveLoopTrim(id, basePayload(atlasPath));
-    expect(second.strip).toBe('walk/trims/east-loop-v002-strip.png');
+  it('versions successive trims and honors fps/slug overrides', async () => {
+    const id = await characterWithRun(newId());
+    await saveLoopTrim(id, { runId: RUN_ID, enabledColumns: [0, 1] });
+    const second = await saveLoopTrim(id, { runId: RUN_ID, enabledColumns: [0, 1], fps: 6, slug: 'custom' });
+    expect(second.strip).toBe('walk/trims/custom-v001-strip.png');
+    const gifArgs = runFfmpegProcess.mock.calls[1][0].args;
+    expect(gifArgs[gifArgs.indexOf('-framerate') + 1]).toBe('6');
+    const third = await saveLoopTrim(id, { runId: RUN_ID, enabledColumns: [0, 1] });
+    expect(third.strip).toBe('walk/trims/east-loop-v002-strip.png');
   });
 
-  it('rejects a non-subset, mismatched labels, and out-of-bounds cells', async () => {
-    const { id, atlasPath } = await characterWithAtlas(newId());
-    await expect(saveLoopTrim(id, { ...basePayload(atlasPath), enabledColumns: [0, 9] }))
+  it('rejects unknown runs, unpackaged runs, and out-of-strip columns', async () => {
+    const id = await characterWithRun(newId());
+    await expect(saveLoopTrim(id, { runId: 'walk-east-deadbeef', enabledColumns: [0, 1] }))
+      .rejects.toMatchObject({ code: 'RUN_NOT_FOUND' });
+    await expect(saveLoopTrim(id, { runId: RUN_ID, enabledColumns: [0, 9] }))
       .rejects.toMatchObject({ code: 'TRIM_COLUMNS_INVALID' });
-    await expect(saveLoopTrim(id, { ...basePayload(atlasPath), sourceFrameLabels: ['only-one'] }))
-      .rejects.toMatchObject({ code: 'TRIM_COLUMNS_INVALID' });
-    await expect(saveLoopTrim(id, { ...basePayload(atlasPath), allColumns: [0, 1, 2, 3, 4], enabledColumns: [0, 4] }))
-      .rejects.toMatchObject({ code: 'TRIM_BOUNDS_INVALID' });
-    await expect(saveLoopTrim(id, { ...basePayload(atlasPath), atlasPath: 'grok/nope.png' }))
-      .rejects.toMatchObject({ code: 'ATLAS_NOT_FOUND' });
+    const runDir = join(TEST_ROOT, 'sprites', id, 'grok', RUN_ID);
+    await writeFile(join(runDir, 'animation-run.json'), JSON.stringify({
+      schemaVersion: 1, id: RUN_ID, status: 'queued', direction: 'east',
+    }));
+    await expect(saveLoopTrim(id, { runId: RUN_ID, enabledColumns: [0, 1] }))
+      .rejects.toMatchObject({ code: 'RUN_NOT_CANDIDATE' });
   });
 });

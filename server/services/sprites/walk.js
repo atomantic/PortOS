@@ -33,7 +33,7 @@ import { spriteDir, resolveSpriteAssetPath } from './paths.js';
 import { requireCharacter, loadManifest } from './reference.js';
 import { SPRITE_DIRECTIONS, anchorIdForDirection, buildWalkVideoPrompt } from './prompts.js';
 import {
-  prepareWalkAnchorInput, runWalkPostprocess, WALK_FPS, WALK_CELL_SIZE, WALK_FRAME_COUNT,
+  prepareWalkAnchorInput, runWalkPostprocess, WALK_FPS, WALK_FRAME_COUNT,
 } from './walkPostprocess.js';
 import { GROK_VIDEO_DURATIONS } from '../videoGen/grok.js';
 
@@ -93,18 +93,18 @@ export async function getWalkState(recordId) {
   } catch {
     // no runs yet
   }
-  const runs = (await Promise.all(
-    entries
-      .filter((e) => e.isDirectory() && e.name.startsWith('walk-'))
-      .map((e) => loadRunRecord(recordId, e.name)),
-  ))
-    .filter(Boolean)
-    .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-  return {
-    runs,
-    selection: await loadSelection(recordId),
-    walkSet: await loadWalkSet(recordId),
-  };
+  const [runs, selection, walkSet] = await Promise.all([
+    Promise.all(
+      entries
+        .filter((e) => e.isDirectory() && e.name.startsWith('walk-'))
+        .map((e) => loadRunRecord(recordId, e.name)),
+    ).then((loaded) => loaded
+      .filter(Boolean)
+      .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))),
+    loadSelection(recordId),
+    loadWalkSet(recordId),
+  ]);
+  return { runs, selection, walkSet };
 }
 
 /**
@@ -143,7 +143,7 @@ async function startWalkGenerationImpl(recordId, body) {
   // Transparent i2v motion input derived from the locked anchor without
   // mutating it (measured-key alpha recovery + despill).
   const inputAbs = join(generatedAbs, 'input-anchor-transparent.png');
-  const { preparation } = await prepareWalkAnchorInput(anchorAbs, inputAbs, chromaKey);
+  const { preparation, sha256: inputSha256 } = await prepareWalkAnchorInput(anchorAbs, inputAbs, chromaKey);
 
   const settings = await getSettings();
   const duration = GROK_VIDEO_DURATIONS.includes(Number(body.duration)) ? Number(body.duration) : GROK_VIDEO_DURATIONS[0];
@@ -165,7 +165,7 @@ async function startWalkGenerationImpl(recordId, body) {
     anchorPath: anchor.path,
     anchorSha256: anchor.sha256 || await sha256File(anchorAbs),
     animationInputPath: `${runRel}/generated/input-anchor-transparent.png`,
-    animationInputSha256: await sha256File(inputAbs),
+    animationInputSha256: inputSha256,
     animationInputPreparation: preparation,
     createdAt: now,
   };
@@ -192,6 +192,42 @@ async function startWalkGenerationImpl(recordId, body) {
 }
 
 /**
+ * Run the deterministic postprocess for a run and apply the outcome to the
+ * run record (candidate on success, captured error otherwise) — shared by
+ * the completion-hook attach and the manual rerun so the two can't drift.
+ * The caller persists the mutated record.
+ */
+async function packageRun(recordId, run) {
+  const runRel = runRelPath(run.id);
+  const runAbs = join(spriteDir(recordId), runRel);
+  try {
+    const manifest = await loadManifest(recordId);
+    const anchor = manifest?.anchors?.find((a) => a.direction === run.direction);
+    if (!anchor?.path) throw new Error(`No locked ${run.direction} anchor in the reference manifest`);
+    const result = await runWalkPostprocess({
+      recordId,
+      direction: run.direction,
+      chromaKey: run.chromaKey || manifest.chromaKey,
+      runAbs,
+      runRel,
+      anchorRel: anchor.path,
+      anchorAbs: resolveSpriteAssetPath(recordId, anchor.path),
+      videoAbs: join(runAbs, 'generated', 'source-video.mp4'),
+    });
+    run.status = 'candidate';
+    run.postprocessManifest = result.manifestPath;
+    run.stripPreview = result.stripPreview;
+    delete run.postprocessError;
+  } catch (err) {
+    // May run outside the request lifecycle (hook) — capture, don't crash.
+    run.status = 'error';
+    run.postprocessError = err.message;
+    console.error(`❌ sprite walk postprocess failed ${recordId}/${run.id}: ${err.message}`);
+  }
+  run.completedAt = new Date().toISOString();
+}
+
+/**
  * Completion-hook attach: copy the finished grok video into the run root and
  * run the deterministic postprocess. Errors are captured onto the run record
  * (status 'error') so the UI can surface them — the hook context has no
@@ -201,7 +237,7 @@ export function attachWalkVideo(ctx) {
   return walkWriteTail(ctx.recordId, () => attachWalkVideoImpl(ctx));
 }
 
-async function attachWalkVideoImpl({ recordId, direction, runId, filename, jobId }) {
+async function attachWalkVideoImpl({ recordId, runId, filename, jobId }) {
   const run = await loadRunRecord(recordId, runId);
   if (!run) {
     console.error(`❌ sprite walk run record missing for ${recordId}/${runId} — skipping attach`);
@@ -209,8 +245,7 @@ async function attachWalkVideoImpl({ recordId, direction, runId, filename, jobId
   }
   const src = join(PATHS.videos, filename);
   if (!await pathExists(src)) return null;
-  const runRel = runRelPath(runId);
-  const runAbs = join(spriteDir(recordId), runRel);
+  const runAbs = join(spriteDir(recordId), runRelPath(runId));
   const videoAbs = join(runAbs, 'generated', 'source-video.mp4');
   await ensureDir(join(runAbs, 'generated'));
   await copyFile(src, videoAbs);
@@ -219,32 +254,7 @@ async function attachWalkVideoImpl({ recordId, direction, runId, filename, jobId
   run.status = 'postprocessing';
   await saveRunRecord(recordId, run);
 
-  try {
-    const manifest = await loadManifest(recordId);
-    const anchor = manifest?.anchors?.find((a) => a.direction === direction);
-    if (!anchor?.path) throw new Error(`No locked ${direction} anchor in the reference manifest`);
-    const result = await runWalkPostprocess({
-      recordId,
-      direction,
-      chromaKey: run.chromaKey || manifest.chromaKey,
-      runAbs,
-      runRel,
-      anchorRel: anchor.path,
-      anchorAbs: resolveSpriteAssetPath(recordId, anchor.path),
-      videoAbs,
-    });
-    run.status = 'candidate';
-    run.completedAt = new Date().toISOString();
-    run.postprocessManifest = result.manifestPath;
-    run.stripPreview = result.stripPreview;
-    delete run.postprocessError;
-  } catch (err) {
-    // Outside the request lifecycle — capture instead of crashing the hook.
-    run.status = 'error';
-    run.completedAt = new Date().toISOString();
-    run.postprocessError = err.message;
-    console.error(`❌ sprite walk postprocess failed ${recordId}/${runId}: ${err.message}`);
-  }
+  await packageRun(recordId, run);
   await saveRunRecord(recordId, run);
   return { runId, status: run.status };
 }
@@ -267,37 +277,11 @@ async function rerunWalkPostprocessImpl(recordId, runId) {
   if (selection?.directions?.[run.direction]?.runId === runId) {
     throw new ServerError('Run is approved — approved runs are immutable', { status: 409, code: 'RUN_APPROVED' });
   }
-  const runRel = runRelPath(runId);
-  const runAbs = join(spriteDir(recordId), runRel);
-  const videoAbs = join(runAbs, 'generated', 'source-video.mp4');
+  const videoAbs = join(spriteDir(recordId), runRelPath(runId), 'generated', 'source-video.mp4');
   if (!await pathExists(videoAbs)) {
     throw new ServerError('Run has no source video yet', { status: 409, code: 'VIDEO_NOT_READY' });
   }
-  const manifest = await loadManifest(recordId);
-  const anchor = manifest?.anchors?.find((a) => a.direction === run.direction);
-  if (!anchor?.path) {
-    throw new ServerError(`No locked ${run.direction} anchor in the reference manifest`, { status: 409, code: 'ANCHOR_NOT_LOCKED' });
-  }
-  try {
-    const result = await runWalkPostprocess({
-      recordId,
-      direction: run.direction,
-      chromaKey: run.chromaKey || manifest.chromaKey,
-      runAbs,
-      runRel,
-      anchorRel: anchor.path,
-      anchorAbs: resolveSpriteAssetPath(recordId, anchor.path),
-      videoAbs,
-    });
-    run.status = 'candidate';
-    run.completedAt = new Date().toISOString();
-    run.postprocessManifest = result.manifestPath;
-    run.stripPreview = result.stripPreview;
-    delete run.postprocessError;
-  } catch (err) {
-    run.status = 'error';
-    run.postprocessError = err.message;
-  }
+  await packageRun(recordId, run);
   await saveRunRecord(recordId, run);
   if (run.status === 'error') {
     throw new ServerError(`Postprocess failed: ${run.postprocessError}`, { status: 422, code: 'POSTPROCESS_FAILED' });
@@ -376,5 +360,3 @@ async function approveWalkDirectionImpl(recordId, { direction, runId }) {
   console.log(`✅ sprite walk ${recordId}/${direction} approved from ${runId}`);
   return getWalkState(recordId);
 }
-
-export { WALK_CELL_SIZE, WALK_FPS, WALK_FRAME_COUNT };

@@ -1,20 +1,26 @@
 /**
  * Sprites — non-destructive loop trimmer (issue #2897, phase 3).
  *
- * Port of the source pipeline's `loop_trims.save_loop_trim`: crop the
- * enabled cells out of a packed atlas row (never mutating the atlas),
- * re-pack them as a trimmed strip + preview GIF + manifest, versioned
- * `<slug>-vNNN` so every trim is additive evidence. PortOS scopes trims to
- * the record (`walk/trims/`) instead of the source's global debug-captures
- * root, and encodes the GIF with ffmpeg (palettegen/paletteuse with
- * transparency) since PIL's GIF writer has no Node sibling.
+ * Port of the source pipeline's `loop_trims.save_loop_trim`, re-anchored on
+ * the run manifest: the caller names a packaged candidate run and which of
+ * its frames stay enabled; the strip path, cell geometry, fps, and frame
+ * labels all come from the run's own postprocess manifest (the server-owned
+ * source of truth), never from client-echoed geometry. Enabled cells are
+ * cropped out of the packed strip (never mutating it) and re-packed as a
+ * trimmed strip + preview GIF + manifest, versioned `<slug>-vNNN` so every
+ * trim is additive evidence. Trims land under the record's `walk/trims/`
+ * (the source pipeline's global debug-captures root, scoped per record);
+ * the GIF is encoded with ffmpeg (palettegen/paletteuse with transparency)
+ * since PIL's GIF writer has no Node sibling.
  */
 
 import { join } from 'path';
-import { mkdtemp, rm } from 'fs/promises';
+import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import sharp from 'sharp';
-import { ensureDir, atomicWrite, pathExists, sha256File } from '../../lib/fileUtils.js';
+import {
+  ensureDir, atomicWrite, pathExists, sha256File, readJSONFile,
+} from '../../lib/fileUtils.js';
 import { findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { spriteDir, resolveSpriteAssetPath } from './paths.js';
@@ -22,6 +28,7 @@ import { requireCharacter } from './reference.js';
 
 const TRIMS_DIR = 'walk/trims';
 const MAX_TRIM_VERSION = 999;
+const RUN_RECORD_NAME = 'animation-run.json';
 
 // First free -vNNN triple (strip + gif + json all absent), matching the
 // source's next_trim_prefix scan.
@@ -60,90 +67,95 @@ async function encodeTrimGif(frames, fps, destAbs) {
 }
 
 /**
- * Save one loop trim. `payload` is route-validated (spriteWalkTrimSchema):
- * slug, atlasPath (record-relative), row, cellWidth/cellHeight, fps,
- * allColumns, enabledColumns (subset), optional sourceFrameIndices/Labels.
+ * Save one loop trim for a packaged run. `payload` is route-validated
+ * (spriteWalkTrimSchema): runId, enabledColumns, optional fps and slug.
+ * Geometry and labels are derived from the run's postprocess manifest.
  */
 export async function saveLoopTrim(recordId, payload) {
   await requireCharacter(recordId);
-  const {
-    slug, atlasPath, row, cellWidth, cellHeight, fps, allColumns, enabledColumns,
-  } = payload;
-  if (!enabledColumns.every((c) => allColumns.includes(c))) {
-    throw new ServerError('enabledColumns must be a subset of allColumns', { status: 400, code: 'TRIM_COLUMNS_INVALID' });
+  const { runId, enabledColumns } = payload;
+  const run = await readJSONFile(join(spriteDir(recordId), 'grok', runId, RUN_RECORD_NAME), null);
+  if (!run) throw new ServerError(`Unknown walk run: ${runId}`, { status: 404, code: 'RUN_NOT_FOUND' });
+  if (!run.postprocessManifest) {
+    throw new ServerError('Run has no packaged candidate to trim', { status: 409, code: 'RUN_NOT_CANDIDATE' });
   }
-  const sourceFrameIndices = payload.sourceFrameIndices ?? enabledColumns;
-  if (sourceFrameIndices.length !== enabledColumns.length) {
-    throw new ServerError('sourceFrameIndices must match enabledColumns length', { status: 400, code: 'TRIM_COLUMNS_INVALID' });
+  const packaged = await readJSONFile(resolveSpriteAssetPath(recordId, run.postprocessManifest), null);
+  if (!packaged?.stripPath || !packaged.alignment?.cellSize || !Array.isArray(packaged.frames)) {
+    throw new ServerError('Packaged run manifest is missing or inconsistent', { status: 409, code: 'RUN_MANIFEST_INVALID' });
   }
-  const sourceFrameLabels = (payload.sourceFrameLabels ?? sourceFrameIndices.map(String))
-    .map((l) => String(l).slice(0, 80));
-  if (sourceFrameLabels.length !== enabledColumns.length) {
-    throw new ServerError('sourceFrameLabels must match enabledColumns length', { status: 400, code: 'TRIM_COLUMNS_INVALID' });
+  const cellSize = packaged.alignment.cellSize;
+  const allColumns = packaged.frames.map((f) => f.outputIndex);
+  const invalid = enabledColumns.filter((c) => !allColumns.includes(c));
+  if (invalid.length) {
+    throw new ServerError(`Enabled frames not in the packed strip: ${invalid.join(', ')}`, { status: 400, code: 'TRIM_COLUMNS_INVALID' });
   }
+  const enabled = [...enabledColumns].sort((a, b) => a - b);
+  const fps = payload.fps ?? packaged.frameRate;
+  const slug = payload.slug || `${run.direction}-loop`;
 
-  const atlasAbs = resolveSpriteAssetPath(recordId, atlasPath);
+  const atlasAbs = resolveSpriteAssetPath(recordId, packaged.stripPath);
   if (!await pathExists(atlasAbs)) {
-    throw new ServerError(`Atlas not found: ${atlasPath}`, { status: 404, code: 'ATLAS_NOT_FOUND' });
+    throw new ServerError(`Packed strip not found: ${packaged.stripPath}`, { status: 404, code: 'ATLAS_NOT_FOUND' });
   }
   const { data, info } = await sharp(atlasAbs).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
-  const maxColumn = Math.max(...allColumns);
-  if ((maxColumn + 1) * cellWidth > info.width || (row + 1) * cellHeight > info.height) {
-    throw new ServerError('Requested cells fall outside the atlas', { status: 400, code: 'TRIM_BOUNDS_INVALID' });
+  if ((Math.max(...allColumns) + 1) * cellSize > info.width || cellSize > info.height) {
+    throw new ServerError('Packed strip does not match its manifest geometry', { status: 409, code: 'RUN_STRIP_INVALID' });
   }
 
   // Crop the enabled cells — straight pixel copies, no resampling.
-  const frames = enabledColumns.map((col) => {
-    const out = Buffer.alloc(cellWidth * cellHeight * 4);
-    for (let y = 0; y < cellHeight; y++) {
-      const srcStart = (((row * cellHeight) + y) * info.width + col * cellWidth) * 4;
-      data.copy(out, y * cellWidth * 4, srcStart, srcStart + cellWidth * 4);
+  const frames = enabled.map((col) => {
+    const out = Buffer.alloc(cellSize * cellSize * 4);
+    for (let y = 0; y < cellSize; y++) {
+      const srcStart = (y * info.width + col * cellSize) * 4;
+      data.copy(out, y * cellSize * 4, srcStart, srcStart + cellSize * 4);
     }
-    return { data: out, width: cellWidth, height: cellHeight };
+    return { data: out, width: cellSize, height: cellSize };
   });
 
   const trimsAbs = join(spriteDir(recordId), TRIMS_DIR);
   await ensureDir(trimsAbs);
   const prefix = await nextTrimPrefix(trimsAbs, slug);
 
-  const strip = Buffer.alloc(cellWidth * frames.length * cellHeight * 4);
+  const strip = Buffer.alloc(cellSize * frames.length * cellSize * 4);
   frames.forEach((frame, i) => {
-    for (let y = 0; y < cellHeight; y++) {
+    for (let y = 0; y < cellSize; y++) {
       frame.data.copy(
         strip,
-        (y * cellWidth * frames.length + i * cellWidth) * 4,
-        y * cellWidth * 4,
-        (y + 1) * cellWidth * 4,
+        (y * cellSize * frames.length + i * cellSize) * 4,
+        y * cellSize * 4,
+        (y + 1) * cellSize * 4,
       );
     }
   });
   const stripName = `${prefix}-strip.png`;
-  const stripAbs = join(trimsAbs, stripName);
-  await sharp(strip, { raw: { width: cellWidth * frames.length, height: cellHeight, channels: 4 } })
+  const stripBuf = await sharp(strip, { raw: { width: cellSize * frames.length, height: cellSize, channels: 4 } })
     .png()
-    .toFile(stripAbs);
+    .toBuffer();
+  await writeFile(join(trimsAbs, stripName), stripBuf);
 
   const gifName = `${prefix}.gif`;
   await encodeTrimGif(frames, fps, join(trimsAbs, gifName));
 
+  const phaseByColumn = Object.fromEntries(packaged.frames.map((f) => [f.outputIndex, f.phase]));
   const manifest = {
     schemaVersion: 1,
     kind: 'animation-loop-trim',
     status: 'candidate',
-    sourceAtlasPath: atlasPath,
+    runId,
+    sourceAtlasPath: packaged.stripPath,
     sourceAtlasSha256: await sha256File(atlasAbs),
-    row,
-    cellWidth,
-    cellHeight,
+    row: 0,
+    cellWidth: cellSize,
+    cellHeight: cellSize,
     fps,
     allAtlasColumns: allColumns,
-    enabledAtlasColumns: enabledColumns,
-    disabledAtlasColumns: allColumns.filter((c) => !enabledColumns.includes(c)),
-    selectedFrames: enabledColumns.map((atlasColumn, outputIndex) => ({
+    enabledAtlasColumns: enabled,
+    disabledAtlasColumns: allColumns.filter((c) => !enabled.includes(c)),
+    selectedFrames: enabled.map((atlasColumn, outputIndex) => ({
       outputIndex,
       atlasColumn,
-      sourceFrameIndex: sourceFrameIndices[outputIndex],
-      sourceFrameLabel: sourceFrameLabels[outputIndex],
+      sourceFrameIndex: atlasColumn,
+      sourceFrameLabel: phaseByColumn[atlasColumn] || String(atlasColumn),
     })),
     stripPath: `${TRIMS_DIR}/${stripName}`,
     gifPath: `${TRIMS_DIR}/${gifName}`,
