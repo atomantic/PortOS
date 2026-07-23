@@ -14,10 +14,12 @@
  * The gating deliberately TRACKS the authoritative workflow surfaces rather
  * than inventing its own rules — a walk direction is regenerable on the same
  * finalized/approved/anchor-locked/in-flight conditions `WalkWorkflow` gates
- * its Generate button on. The anchor path is intentionally looser than
- * `ReferenceWorkflow`'s: it omits the backend-availability (`!mode`) gate,
- * because the asset card doesn't own the backend picker and a re-roll falls
- * back to the install's configured image backend server-side.
+ * its Generate button on, and an anchor re-roll mirrors `ReferenceWorkflow`'s
+ * own backend-availability gate: when no image backend is configured the
+ * button is disabled with the same guidance, rather than queuing a job that
+ * fails with a toast (#2938). The selected backend `mode` is threaded from the
+ * page (the same state `ReferenceWorkflow`'s picker drives) so a card re-roll
+ * uses the same backend the workflow would, not a server default.
  */
 
 // Roles that represent a walk run's rendered output. A manifest or a review
@@ -29,14 +31,20 @@ const WALK_OUTPUT_ROLES = new Set(['strip', 'animation', 'frame']);
  * @param walkPending       direction → jobId map for in-flight walk videos
  * @param referencePending  target → jobId map for in-flight reference images
  * @param generateWalk      (direction) => void — fires the walk render
- * @param generateAnchor    (direction) => void — fires the anchor render
+ * @param generateAnchor    (direction, mode) => void — fires the anchor render
  * @param onRequestTrim     (runId) => void — opens the Loop Trimmer for a run
+ * @param hasBackend        whether an image backend is configured (gates the
+ *                          anchor re-roll — defaults true so callers that don't
+ *                          know the backend state keep the pre-#2938 behavior)
+ * @param mode              the workflow-selected image backend id, threaded
+ *                          into the anchor re-roll so it matches the workflow
  * @returns `{ regenerateFor(asset), trimFor(asset) }`, each returning null for
  *          an asset it can't act on.
  */
 export function buildCollectionActions({
   detail, walkPending = {}, referencePending = {},
   generateWalk, generateAnchor, onRequestTrim,
+  hasBackend = true, mode,
 }) {
   const walk = detail?.walk || null;
   const finalized = Boolean(walk?.walkSet);
@@ -88,9 +96,11 @@ export function buildCollectionActions({
       return {
         kind: 'reference',
         pending,
-        disabled: locked || pending,
-        title: locked ? 'This anchor is locked — its reference set is frozen' : 'Render another candidate for this anchor',
-        onClick: () => generateAnchor(direction),
+        disabled: !hasBackend || locked || pending,
+        title: !hasBackend
+          ? 'No image backend configured — enable one in Settings → Image Gen'
+          : locked ? 'This anchor is locked — its reference set is frozen' : 'Render another candidate for this anchor',
+        onClick: () => generateAnchor(direction, mode),
       };
     }
 

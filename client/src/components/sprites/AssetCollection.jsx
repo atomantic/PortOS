@@ -103,10 +103,29 @@ function AssetCard({ recordId, asset, actions, onInspect }) {
  * reference workflow to re-fire). Shape:
  *   { regenerateFor(asset) → { run, disabled, pending, title, kind } | null,
  *     trimFor(asset)       → { run } | null }
+ *
+ * `approvedRunIds` (#2938) is the set of run ids the walk selection has
+ * approved. A run's strip/frames never move on approval — approval lives in
+ * `walk.selection.directions[dir]`, not the path — so `spriteFacets.js` (a pure
+ * PATH classifier) still reads their status as `candidate`. This is the ONE
+ * facet that needs the record's live selection state, so the enrichment lands
+ * here in the caller: an asset whose `runId` is an approved run is promoted to
+ * `approved` for its badge, keeping the classifier free of workflow state.
  */
-export default function AssetCollection({ recordId, assets, actions = null }) {
+export default function AssetCollection({ recordId, assets, actions = null, approvedRunIds }) {
   const [inspecting, setInspecting] = useState(null);
-  const groups = useMemo(() => groupSpriteAssetsByRole(assets), [assets]);
+  const groups = useMemo(() => {
+    const grouped = groupSpriteAssetsByRole(assets);
+    if (!approvedRunIds || approvedRunIds.size === 0) return grouped;
+    return grouped.map((group) => ({
+      ...group,
+      assets: group.assets.map((row) => (
+        row.facets.status === 'candidate' && row.facets.runId && approvedRunIds.has(row.facets.runId)
+          ? { ...row, facets: { ...row.facets, status: 'approved' } }
+          : row
+      )),
+    }));
+  }, [assets, approvedRunIds]);
 
   return (
     <div className="space-y-4">
