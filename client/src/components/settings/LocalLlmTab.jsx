@@ -734,7 +734,7 @@ export function LocalLlmTab() {
 
         {/* Free-text install + search */}
         <div className="flex flex-col sm:flex-row gap-2">
-          <div className="flex-1 flex items-center gap-2 bg-port-bg border border-port-border rounded-lg px-3">
+          <div className="flex-1 flex items-center gap-2 bg-port-bg border border-port-border rounded-lg px-3 focus-within:border-port-accent">
             <Search size={14} className="text-gray-500" />
             <label htmlFor="llm-catalog-search" className="sr-only">{`Search the ${labelFor(selected)} model catalog`}</label>
             <input

@@ -276,3 +276,36 @@ Deferred from the fix that makes `server/services/localLlm.js#installModel`/`del
 
 - [ ] **Dedup the refresh fan-out by daemon base URL instead of by provider.** When N providers (the built-in `ollama` provider plus one or more Claude/Codex/Gemini-over-Ollama CLI/TUI providers) all resolve to the same Ollama daemon (commonly the shared `http://localhost:11434` default — see `ollamaBaseFromProvider` in `server/lib/aiToolkit/providers.js` ~line 124), `refreshOllamaBackedProviders`'s `Promise.all` currently calls `refreshProviderModels(p.id)` once per provider, each independently re-fetching `/api/tags` and re-running the full per-model `/api/show` tool-capability probe against the identical daemon/model set. Fix by grouping providers by normalized base URL, computing the tool-capable model list once per unique base, and applying it to every provider sharing that base. Flagged by the `/simplify` efficiency review — deferred because it needs a "compute without persisting" variant exposed from `server/lib/aiToolkit/providers.js` (see next item), which is a larger surface change than a `localLlm.js`-only fix.
 - [ ] **`refreshProviderModels` does one full `providers.json` write per call — batch writes when refreshing multiple providers.** `server/lib/aiToolkit/providers.js#refreshProviderModels` (~line 646) does `loadProviders()` → mutate → `saveProviders(data)` per call, and `saveProviders` invalidates the provider cache and `atomicWrite`s the entire file. `refreshOllamaBackedProviders`'s concurrent fan-out means N Ollama-backed providers produce N full-file writes landing in quick succession (each superseded by the next) and N cache invalidate/repopulate cycles for any concurrent `getAllProviders()`/`getProviderById()` reader. Fix by adding a batch-refresh entry point to the toolkit's provider service that computes all the new model lists first, then applies + persists once. Flagged by the `/simplify` efficiency review — deferred as an `aiToolkit/providers.js` API change, out of scope for the triggering bug fix.
+
+### Accessibility: unlabeled form controls outside `FormField` (audit pass 4 backlog)
+
+The 2026-07-23 audit pass fixed the toggle-switch, icon-button, focus-indicator, and
+lightbox-dialog gaps, plus ~20 unlabeled controls on the highest-traffic pages
+(RunnerPage, Review, Wiki, Tribe, Loras, MediaHistory, MediaCollections,
+PromptManager). What remains is the long tail of standalone `<select>`/`<input>`/
+`<textarea>` that sit in toolbars and inline rows rather than inside a labeling
+wrapper (`client/src/components/ui/FormField.jsx`, or a local `Field` that wraps
+children in a `<label>`). A placeholder is not a label — it disappears on input and
+is not reliably announced.
+
+- [ ] **Sweep the remaining unlabeled controls.** The scan that produced this list
+  is: for every git-tracked `client/src/**/*.jsx`, parse each `<input|select|textarea>`
+  opening tag (brace-aware, so `className={`…`}` containing `>` doesn't truncate it);
+  skip tags carrying `aria-label`/`aria-labelledby`/`type="hidden"`, tags whose `id`
+  is targeted by an `htmlFor` in the same file, and tags whose preceding ~14 lines
+  contain `<FormField`/`<label`/`<Field`/`label=`/`sr-only`. That yields ~400 hits,
+  but the true-positive rate is roughly half — the rest are `<img>`/`<select>`
+  mentions inside comments and wrappers the lookback window missed. **Verify each
+  candidate by reading its context before labeling it**; do not mass-apply. Highest
+  value first: `Instances.jsx` (~10), `PipelineSeries.jsx`, `VideoTimelineEditor.jsx`,
+  `CatalogIngredient.jsx`, `CharacterSheet.jsx`, `GitHub.jsx`, `Sharing.jsx`,
+  `MoodBoardDetail.jsx`, `OpenClaw.jsx`, `LoraDatasetDetail.jsx`, `Browser.jsx`.
+  Prefer wrapping in `FormField` (visible label + `htmlFor`/`id` pairing) over an
+  `aria-label` when the surface has room for a visible label.
+- [ ] **Consider `eslint-plugin-jsx-a11y` in `client/eslint.config.js`.** It would
+  enforce this class automatically instead of relying on periodic audits. Skipped in
+  this pass because enabling it surfaces hundreds of findings at once and would fail
+  CI until the backlog above is drained — sequence it after the sweep, and start with
+  only the rules the repo already honors (`jsx-a11y/alt-text`,
+  `jsx-a11y/aria-props`, `jsx-a11y/role-has-required-aria-props`,
+  `jsx-a11y/label-has-associated-control`) rather than the full `recommended` set.

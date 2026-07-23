@@ -127,6 +127,7 @@ export default function MediaCollections() {
           value={name}
           onChange={(e) => setName(e.target.value)}
           maxLength={80}
+          aria-label="New collection name"
           placeholder="New collection name"
           className="flex-1 bg-port-card border border-port-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-port-accent"
         />

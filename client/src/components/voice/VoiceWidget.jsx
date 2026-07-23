@@ -744,7 +744,7 @@ export default function VoiceWidget() {
         )}
         <form
           onSubmit={(e) => { e.preventDefault(); handleSend(); }}
-          className={`flex items-center gap-1 bg-port-card/95 backdrop-blur border rounded-full pl-4 pr-1 py-1 w-full ${fabSurface}`}
+          className={`flex items-center gap-1 bg-port-card/95 backdrop-blur border rounded-full pl-4 pr-1 py-1 w-full focus-within:border-port-accent ${fabSurface}`}
         >
           <input
             type="text"

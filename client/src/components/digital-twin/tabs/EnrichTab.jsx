@@ -578,6 +578,7 @@ export default function EnrichTab({ onRefresh }) {
                     <button
                       type="button"
                       onClick={() => removeWritingSample(index)}
+                      aria-label={`Remove writing sample ${index + 1}`}
                       className="absolute top-2 right-2 text-gray-500 hover:text-red-400"
                     >
                       ×

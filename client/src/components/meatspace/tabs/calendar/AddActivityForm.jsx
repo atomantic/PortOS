@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { Plus } from 'lucide-react';
 import { ICON_MAP, IconForName } from './icons';
 import { FormField } from '../../../ui/FormField';
@@ -9,6 +9,7 @@ export default function AddActivityForm({ onAdd }) {
   const [cadence, setCadence] = useState('day');
   const [frequency, setFrequency] = useState('1');
   const [icon, setIcon] = useState('circle');
+  const iconLabelId = useId();
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -48,13 +49,17 @@ export default function AddActivityForm({ onAdd }) {
           />
         </FormField>
         <div>
-          <label className="text-xs text-gray-400 mb-1 block">Icon</label>
-          <div className="flex gap-1 flex-wrap">
+          {/* A bare <label> with no control is inert for assistive tech — this
+              names the button group instead. */}
+          <span id={iconLabelId} className="text-xs text-gray-400 mb-1 block">Icon</span>
+          <div className="flex gap-1 flex-wrap" role="group" aria-labelledby={iconLabelId}>
             {iconOptions.map(ic => (
               <button
                 key={ic}
                 type="button"
                 onClick={() => setIcon(ic)}
+                aria-label={`Icon: ${ic}`}
+                aria-pressed={icon === ic}
                 className={`p-1.5 rounded ${icon === ic ? 'bg-port-accent/20 text-port-accent' : 'text-gray-500 hover:text-white'}`}
               >
                 <IconForName name={ic} size={14} />

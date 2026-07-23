@@ -666,7 +666,7 @@ export default function UniverseCanonSection({
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {seriesOptions.length > 1 ? (
-            <label className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded bg-port-bg border border-port-border text-gray-300 text-xs">
+            <label className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded bg-port-bg border border-port-border text-gray-300 text-xs focus-within:border-port-accent">
               <Filter size={12} className="text-gray-500" />
               <span className="sr-only">Filter by series</span>
               <select

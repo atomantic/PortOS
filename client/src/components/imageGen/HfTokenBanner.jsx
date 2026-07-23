@@ -49,7 +49,7 @@ export default function HfTokenBanner({ modelLabel, licenseUrl, onSaved }) {
         and paste it below.
       </div>
       <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center">
-        <div className="flex items-center gap-1.5 flex-1 bg-port-bg border border-port-border rounded-lg px-2 py-1.5">
+        <div className="flex items-center gap-1.5 flex-1 bg-port-bg border border-port-border rounded-lg px-2 py-1.5 focus-within:border-port-accent">
           <Key size={14} className="text-gray-400 flex-shrink-0" />
           <input
             type="password"

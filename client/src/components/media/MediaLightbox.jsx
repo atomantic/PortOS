@@ -10,6 +10,7 @@ import MediaImage from '../MediaImage';
 import { useScrollLock } from '../../hooks/useScrollLock';
 import { useSwipeNav } from '../../hooks/useSwipeNav';
 import { isEditableTarget } from '../../hooks/useKeyboardShortcuts';
+import useFocusTrap from '../../hooks/useFocusTrap.js';
 import { copyToClipboard } from '../../lib/clipboard';
 import { IMAGE_GEN_MODE } from '../../lib/imageGenBackends';
 import { formatDateTime } from '../../utils/formatters';
@@ -30,6 +31,9 @@ import { formatDateTime } from '../../utils/formatters';
 //     keydown listener.
 // (A mobile tap-to-open bottom-sheet drawer existed pre-ed0e4859 and was
 // removed because it covered the image area in fullscreen.)
+// Opting out means owning the dialog semantics Modal would have supplied:
+// the overlay carries role="dialog"/aria-modal and runs useFocusTrap itself,
+// and `a11yConventions.test.js` allowlists it on that basis.
 
 const NOTE_MAX = 2000;
 const NOTE_DEBOUNCE_MS = 500;
@@ -112,6 +116,13 @@ export default function MediaLightbox({
   const refs = useRef({ onClose, onPrevious, onNext, onAnnotationChange, starred });
   useEffect(() => { refs.current = { onClose, onPrevious, onNext, onAnnotationChange, starred }; });
   const videoRef = useRef(null);
+  // The overlay opts out of <ui/Modal> (see the note at the top of the file),
+  // so it has to bring its own dialog semantics: without the trap, Tab walks
+  // straight out of the lightbox into the page underneath it, and focus never
+  // returns to the thumbnail that opened it (WCAG 2.4.3 / 2.1.2). Esc is
+  // already handled by the window-level cascade below.
+  const overlayRef = useRef(null);
+  useFocusTrap(!!item, overlayRef);
   // Play videos with SOUND on open. The declarative `muted autoPlay` baseline
   // (on the <video> below) is what lets the clip start at all on mobile —
   // iOS/Android block *unmuted* autoplay that isn't tied to a user gesture. But
@@ -225,7 +236,10 @@ export default function MediaLightbox({
 
   return (
     <div
-      role="presentation"
+      ref={overlayRef}
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Media viewer — ${item.filename || item.key || 'item'}`}
       className={`fixed inset-0 z-50 bg-black/90 flex items-center justify-center ${overlayPad}`}
       onClick={onClose}
       onKeyDown={(e) => e.key === 'Escape' && onClose()}

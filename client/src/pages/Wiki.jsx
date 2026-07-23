@@ -181,6 +181,7 @@ export default function Wiki() {
             <span className="text-sm text-gray-500">{stats.rawSources} sources</span>
             {vaults.length > 1 && (
               <select
+                aria-label="Vault"
                 value={selectedVaultId || ''}
                 onChange={e => selectVault(e.target.value)}
                 className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"

@@ -186,6 +186,7 @@ export default function FolderPicker({ value, onChange, defaultPath }) {
                   <button
                     type="button"
                     onClick={() => handleNavigate(parentPath)}
+                    aria-label="Go to parent folder"
                     className="w-full flex items-center gap-3 px-3 py-2 text-left rounded-lg hover:bg-port-border/50 text-gray-400 hover:text-white transition-colors"
                   >
                     <ChevronUp size={18} />
