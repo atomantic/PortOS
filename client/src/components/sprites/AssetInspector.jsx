@@ -9,12 +9,14 @@
  * handling, focus trap, and focus restore to the thumbnail that opened it.
  */
 
-import { Download, ClipboardCopy, ExternalLink, X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Download, ClipboardCopy, ExternalLink, Trash2, X } from 'lucide-react';
 import Modal from '../ui/Modal.jsx';
 import SpritePreview from './SpritePreview.jsx';
 import { spriteAssetUrl, hasSpritePreview, isVideoAsset } from './spriteAssets.js';
 import { formatBytes, timeAgo } from '../../utils/formatters.js';
 import { copyToClipboard } from '../../lib/clipboard.js';
+import { deleteSpriteAsset } from '../../services/apiSprites.js';
 
 function Row({ label, value }) {
   // `frameCount: 0` is meaningful, so only null/undefined/'' are omitted.
@@ -27,12 +29,34 @@ function Row({ label, value }) {
   );
 }
 
-export default function AssetInspector({ recordId, asset, onClose }) {
+export default function AssetInspector({ recordId, asset, onClose, onDeleted = null }) {
+  const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState(null);
+
+  // Reset per-open: switching which asset is inspected (or closing) clears any
+  // half-armed confirm / stale error from the previously-inspected asset.
+  const assetPath = asset?.path ?? null;
+  useEffect(() => {
+    setConfirming(false);
+    setDeleteError(null);
+  }, [assetPath]);
+
   if (!asset) return null;
 
   const url = spriteAssetUrl(recordId, asset.path);
   const fileName = asset.path.split('/').pop();
   const previewable = hasSpritePreview(asset);
+
+  const runDelete = () => {
+    setDeleting(true);
+    setDeleteError(null);
+    // Custom inline error UI below → silence request()'s auto-toast.
+    deleteSpriteAsset(recordId, asset.path, { silent: true })
+      .then(() => { onDeleted?.(); onClose?.(); })
+      .catch((err) => setDeleteError(err?.message || 'Delete failed'))
+      .finally(() => setDeleting(false));
+  };
 
   return (
     <Modal
@@ -119,7 +143,47 @@ export default function AssetInspector({ recordId, asset, onClose }) {
           >
             <ClipboardCopy className="w-3.5 h-3.5" /> Copy path
           </button>
+          {onDeleted && !confirming && (
+            <button
+              type="button"
+              onClick={() => { setDeleteError(null); setConfirming(true); }}
+              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs bg-port-bg border border-port-border hover:border-port-error text-gray-300 hover:text-port-error rounded ml-auto"
+            >
+              <Trash2 className="w-3.5 h-3.5" /> Delete
+            </button>
+          )}
         </div>
+
+        {onDeleted && confirming && (
+          // Inline confirm row (project convention: no window.confirm, and no
+          // two-click-arm — a discoverable Cancel/Delete pair instead).
+          <div className="space-y-2 border border-port-error/40 bg-port-error/10 rounded p-2">
+            <p className="text-xs text-gray-200">
+              Delete <span className="font-semibold break-all">{fileName}</span> from disk?
+              {/^runtime\/v\d+\//.test(asset.path) && ' Its sidecar manifest is removed too.'}
+              {' '}This can’t be undone.
+            </p>
+            {deleteError && <p className="text-xs text-port-error break-all">{deleteError}</p>}
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={runDelete}
+                disabled={deleting}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs bg-port-error hover:bg-red-600 text-white rounded disabled:opacity-50"
+              >
+                <Trash2 className="w-3.5 h-3.5" /> {deleting ? 'Deleting…' : 'Delete'}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setConfirming(false); setDeleteError(null); }}
+                disabled={deleting}
+                className="px-2.5 py-1.5 text-xs bg-port-bg border border-port-border hover:border-port-accent text-gray-300 rounded disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </Modal>
   );

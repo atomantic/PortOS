@@ -23,13 +23,13 @@ import {
 } from '../../lib/fileUtils.js';
 import { findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { spriteDir, resolveSpriteAssetPath } from './paths.js';
+import { resolveSpriteAssetPath, spriteDir } from './paths.js';
 import { requireCharacter } from './reference.js';
-import { withWalkWriteTail } from './walk.js';
+import { withWalkWriteTail, getWalkState } from './walk.js';
+import { WALK_FPS } from './walkPostprocess.js';
 
 const TRIMS_DIR = 'walk/trims';
 const MAX_TRIM_VERSION = 999;
-const RUN_RECORD_NAME = 'animation-run.json';
 
 // First free -vNNN triple (strip + gif + json all absent), matching the
 // source's next_trim_prefix scan.
@@ -79,31 +79,73 @@ export function saveLoopTrim(recordId, payload) {
   return withWalkWriteTail(recordId, () => saveLoopTrimImpl(recordId, payload));
 }
 
+/**
+ * Normalize a run — whatever its on-disk layout — into the geometry the trim
+ * re-pack needs: `{ direction, stripPath, cellSize, allColumns, phaseByColumn,
+ * defaultFps }`. The run is resolved through the single layout-agnostic
+ * resolver (`getWalkState`), so a native run (`runs/`, or legacy `grok/`), an
+ * imported run, and an imagegen redraw run all trim through one path — no
+ * vendor directory is assumed. A native packaged run derives its geometry from
+ * the authoritative postprocess manifest (per-column gait-phase labels);
+ * anything else derives it from the run's own `stripPreview` (a packed row of
+ * `frameCount` square cells) and labels columns numerically.
+ */
+async function resolveTrimSource(recordId, runId) {
+  const state = await getWalkState(recordId);
+  const run = state.runs.find((r) => r.id === runId);
+  if (!run) throw new ServerError(`Unknown walk run: ${runId}`, { status: 404, code: 'RUN_NOT_FOUND' });
+
+  if (run.postprocessManifest) {
+    const packaged = await readJSONFile(resolveSpriteAssetPath(recordId, run.postprocessManifest), null);
+    if (!packaged?.stripPath || !packaged.alignment?.cellSize || !Array.isArray(packaged.frames)) {
+      throw new ServerError('Packaged run manifest is missing or inconsistent', { status: 409, code: 'RUN_MANIFEST_INVALID' });
+    }
+    return {
+      direction: run.direction,
+      stripPath: packaged.stripPath,
+      cellSize: packaged.alignment.cellSize,
+      allColumns: packaged.frames.map((f) => f.outputIndex),
+      phaseByColumn: Object.fromEntries(packaged.frames.map((f) => [f.outputIndex, f.phase])),
+      defaultFps: packaged.frameRate,
+    };
+  }
+
+  const sp = run.stripPreview;
+  const cellSize = Number(sp?.cellHeight) || Number(sp?.cellWidth);
+  const frameCount = Number(sp?.frameCount);
+  if (!sp?.stripPath || !Number.isInteger(frameCount) || frameCount < 2 || !(cellSize > 0)) {
+    throw new ServerError('Run has no packaged candidate to trim', { status: 409, code: 'RUN_NOT_CANDIDATE' });
+  }
+  // The re-pack crops square cells; a non-square-celled strip isn't trimmable.
+  if (sp.cellWidth && sp.cellHeight && Number(sp.cellWidth) !== Number(sp.cellHeight)) {
+    throw new ServerError('Non-square strip cells are not trimmable', { status: 409, code: 'RUN_STRIP_INVALID' });
+  }
+  return {
+    direction: run.direction,
+    stripPath: sp.stripPath,
+    cellSize,
+    allColumns: Array.from({ length: frameCount }, (_, i) => i),
+    phaseByColumn: {},
+    defaultFps: Number(sp.fps) > 0 ? Number(sp.fps) : WALK_FPS,
+  };
+}
+
 async function saveLoopTrimImpl(recordId, payload) {
   await requireCharacter(recordId);
   const { runId, enabledColumns } = payload;
-  const run = await readJSONFile(join(spriteDir(recordId), 'grok', runId, RUN_RECORD_NAME), null);
-  if (!run) throw new ServerError(`Unknown walk run: ${runId}`, { status: 404, code: 'RUN_NOT_FOUND' });
-  if (!run.postprocessManifest) {
-    throw new ServerError('Run has no packaged candidate to trim', { status: 409, code: 'RUN_NOT_CANDIDATE' });
-  }
-  const packaged = await readJSONFile(resolveSpriteAssetPath(recordId, run.postprocessManifest), null);
-  if (!packaged?.stripPath || !packaged.alignment?.cellSize || !Array.isArray(packaged.frames)) {
-    throw new ServerError('Packaged run manifest is missing or inconsistent', { status: 409, code: 'RUN_MANIFEST_INVALID' });
-  }
-  const cellSize = packaged.alignment.cellSize;
-  const allColumns = packaged.frames.map((f) => f.outputIndex);
+  const source = await resolveTrimSource(recordId, runId);
+  const { stripPath, cellSize, allColumns, phaseByColumn } = source;
   const invalid = enabledColumns.filter((c) => !allColumns.includes(c));
   if (invalid.length) {
     throw new ServerError(`Enabled frames not in the packed strip: ${invalid.join(', ')}`, { status: 400, code: 'TRIM_COLUMNS_INVALID' });
   }
   const enabled = [...enabledColumns].sort((a, b) => a - b);
-  const fps = payload.fps ?? packaged.frameRate;
-  const slug = payload.slug || `${run.direction}-loop`;
+  const fps = payload.fps ?? source.defaultFps;
+  const slug = payload.slug || `${source.direction}-loop`;
 
-  const atlasAbs = resolveSpriteAssetPath(recordId, packaged.stripPath);
+  const atlasAbs = resolveSpriteAssetPath(recordId, stripPath);
   if (!await pathExists(atlasAbs)) {
-    throw new ServerError(`Packed strip not found: ${packaged.stripPath}`, { status: 404, code: 'ATLAS_NOT_FOUND' });
+    throw new ServerError(`Packed strip not found: ${stripPath}`, { status: 404, code: 'ATLAS_NOT_FOUND' });
   }
   const { data, info } = await sharp(atlasAbs).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   if ((Math.max(...allColumns) + 1) * cellSize > info.width || cellSize > info.height) {
@@ -144,13 +186,12 @@ async function saveLoopTrimImpl(recordId, payload) {
   const gifName = `${prefix}.gif`;
   await encodeTrimGif(frames, fps, join(trimsAbs, gifName));
 
-  const phaseByColumn = Object.fromEntries(packaged.frames.map((f) => [f.outputIndex, f.phase]));
   const manifest = {
     schemaVersion: 1,
     kind: 'animation-loop-trim',
     status: 'candidate',
     runId,
-    sourceAtlasPath: packaged.stripPath,
+    sourceAtlasPath: stripPath,
     sourceAtlasSha256: await sha256File(atlasAbs),
     row: 0,
     cellWidth: cellSize,

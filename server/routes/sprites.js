@@ -26,6 +26,7 @@ import {
   spritePublishBindingSchema,
   spriteAtlasCompileSchema,
   spriteAtlasPublishSchema,
+  spriteAssetDeleteSchema,
 } from '../lib/validation.js';
 import { z } from 'zod';
 import { optionalUploadFields } from '../lib/multipart.js';
@@ -42,6 +43,7 @@ import {
 import { saveLoopTrim } from '../services/sprites/walkTrims.js';
 import { compileAtlas, getAtlasState } from '../services/sprites/atlas.js';
 import { setPublishBinding, publishAtlas } from '../services/sprites/publish.js';
+import { deleteSpriteAsset } from '../services/sprites/assets.js';
 
 const router = Router();
 
@@ -176,6 +178,15 @@ router.post('/:id/atlas/publish', asyncHandler(async (req, res) => {
 router.patch('/:id', asyncHandler(async (req, res) => {
   const patch = validateRequest(spriteRecordUpdateSchema, req.body);
   res.json(await patchSpriteRecord(req.params.id, patch));
+}));
+
+// Delete one on-disk asset — an old runtime atlas version (PNG + manifest
+// removed together) or a superseded reference/candidate render — by its
+// record-relative `path`. Refuses the live atlas + the state index files;
+// confinement and the per-record write tail live in the service.
+router.delete('/:id/assets', asyncHandler(async (req, res) => {
+  const { path } = validateRequest(spriteAssetDeleteSchema, req.query);
+  res.json(await deleteSpriteAsset(req.params.id, path));
 }));
 
 router.delete('/:id', asyncHandler(async (req, res) => {

@@ -18,8 +18,8 @@ import {
 // source Sprite Manager's feature set to the browser — pick an animation source,
 // scrub/play the loop on a checkerboarded canvas, toggle individual frames, tune
 // fps, name the output, and save through the existing
-// `POST /api/sprites/:id/walk/trim`. Only a packaged `grok/` run is trimmable;
-// imported runs and previously saved trims load read-only for review.
+// `POST /api/sprites/:id/walk/trim`. Every packed-strip run is trimmable (any
+// layout); previously saved trims load read-only for review.
 
 const MAIN_PX = 192;
 const THUMB_PX = 64;

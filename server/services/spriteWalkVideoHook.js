@@ -3,7 +3,7 @@
  *
  * Subscribes to mediaJobEvents and, for each completed VIDEO job carrying
  * `params.spriteWalk`, copies the finished grok clip into that run's
- * `grok/<runId>/generated/source-video.mp4` and runs the deterministic
+ * `runs/<runId>/generated/source-video.mp4` and runs the deterministic
  * postprocess (frame harvest → un-key → cycle select → align → despill →
  * strip/manifest) server-side — a slow cloud render still packages after the
  * user navigated away. Runs accumulate as reviewable candidates (no

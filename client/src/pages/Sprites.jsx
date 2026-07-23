@@ -698,6 +698,7 @@ export default function Sprites() {
                       assets={detail.assets}
                       actions={collectionActions}
                       approvedRunIds={approvedRunIds}
+                      onDeleted={onWorkflowChanged}
                     />
                   )}
                 </>

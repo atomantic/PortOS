@@ -964,6 +964,13 @@ export const spriteImportRequestSchema = z.object({
   includeProps: z.boolean().optional(),
 });
 
+// Delete one on-disk asset by its record-relative `path` (the same value the
+// listing and static route use). Shape gate only — confinement, the live-atlas
+// refusal, and the per-record write tail are the service's job (assets.js).
+export const spriteAssetDeleteSchema = z.object({
+  path: z.string().min(1).max(1024),
+});
+
 export const spriteRecordUpdateSchema = z.object({
   name: z.string().min(1).max(200).optional(),
   // Reclassify an existing record between the noun kinds (#2932). `props` is
@@ -1076,11 +1083,23 @@ export const spriteWalkPostprocessSchema = z.object({
   runId: spriteWalkRunIdSchema,
 });
 
+// The trimmer targets ANY resolvable run, not just native `walk-<dir>-<hex>`
+// generations: an imported run's id is its directory slug, and a redraw run's
+// id is a record-relative manifest path. The trim service resolves the id
+// against server-owned walk state and only ever dereferences paths the state
+// itself recorded (through resolveSpriteAssetPath), so this bounds shape/length
+// only — safe charset, no traversal. (Approve/postprocess stay strict because
+// they only ever act on native runs.)
+const spriteTrimRunIdSchema = z.string().min(1).max(1024)
+  .refine((v) => /^[A-Za-z0-9._/-]+$/.test(v) && !v.split('/').includes('..'), {
+    message: 'invalid run id',
+  });
+
 // Trim geometry (strip path, cell size, frame labels) derives server-side
 // from the run's packaged manifest — the client only names the run and
 // which frames stay enabled.
 export const spriteWalkTrimSchema = z.object({
-  runId: spriteWalkRunIdSchema,
+  runId: spriteTrimRunIdSchema,
   enabledColumns: z.array(z.number().int().min(0).max(63)).min(2).max(64)
     .refine((cols) => new Set(cols).size === cols.length, { message: 'columns must be unique' }),
   fps: z.number().int().min(1).max(60).optional(),

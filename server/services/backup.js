@@ -64,8 +64,8 @@ export const DEFAULT_EXCLUDES = [
   // Sprite animation-run raw intermediates: 30–96 ffmpeg-extracted PNGs per
   // run, byte-for-byte regenerable from the archived source video by the
   // deterministic postprocess (walkPostprocess.js). The source video, packaged
-  // frames, strips, manifests, and runtime atlases ARE backed up. `grok/` is
-  // the live layout; `runs/` covers imported legacy runs.
+  // frames, strips, manifests, and runtime atlases ARE backed up. `runs/` is
+  // the live (vendor-neutral) layout; `grok/` covers pre-migration-202 runs.
   { path: '/sprites/*/grok/*/generated/raw/', reason: 'Sprite walk-run raw extracted frames — regenerable from the archived source video', overridable: true },
   { path: '/sprites/*/runs/*/generated/raw/', reason: 'Imported sprite-run raw extracted frames — regenerable from the archived source video', overridable: true }
   // NOTE: legacy file→Postgres migration artifacts (`.imported` / `.bak-NNN`)

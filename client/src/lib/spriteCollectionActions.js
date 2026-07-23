@@ -54,14 +54,14 @@ export function buildCollectionActions({
     anchors.filter((a) => a.status === 'locked').map((a) => a.direction),
   );
   const knownDirections = new Set(anchors.map((a) => a.direction));
-  // Only a run whose postprocess packed a strip UNDER `grok/` can be trimmed:
-  // the trim endpoint reads `grok/<runId>/animation-run.json` hard-coded, so a
-  // strip from an imported `runs/<id>/` layout would 404 (`RUN_NOT_FOUND`).
-  // Gate on the strip path's prefix, not just its presence, so the button is
-  // never offered for a run the server can't trim.
+  // Any run that packed a strip can be trimmed: the trim service resolves the
+  // run by id and derives geometry from its own manifest/stripPreview
+  // regardless of on-disk layout (native `runs/`, legacy `grok/`, imported
+  // `runs/`, or an imagegen redraw), so the gate is strip PRESENCE, not a
+  // vendor-directory prefix.
   const trimmableRunIds = new Set(
     (walk?.runs || [])
-      .filter((r) => r?.stripPreview?.stripPath?.startsWith('grok/'))
+      .filter((r) => r?.stripPreview?.stripPath)
       .map((r) => r.id),
   );
 

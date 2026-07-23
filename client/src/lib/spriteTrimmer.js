@@ -82,11 +82,12 @@ export function sanitizeTrimSlug(name) {
 /**
  * Ordered animation sources for the trimmer's source select: every packaged
  * walk run that carries a preview strip, followed by the record's saved trims
- * (read from the asset listing). Only a run whose strip lives under `grok/` is
- * `trimmable` — the trim endpoint reads `grok/<runId>/animation-run.json`
- * hard-coded, so an imported `runs/<id>/` strip or a saved trim is preview-only
- * (playback + scrubbing, no re-save). This mirrors `spriteCollectionActions`'
- * `trimmableRunIds` gate so the two surfaces agree on what can be trimmed.
+ * (read from the asset listing). Every run with a strip is `trimmable` — the
+ * trim service resolves geometry layout-agnostically (native `runs/`, legacy
+ * `grok/`, imported `runs/`, or an imagegen redraw), so there's no vendor
+ * coupling here anymore. A saved trim is preview-only (no run behind it to
+ * re-trim). This mirrors `spriteCollectionActions`' `trimmableRunIds` gate so
+ * the two surfaces agree on what can be trimmed.
  *
  * Each source: `{ id, kind: 'run'|'trim', runId, direction, label, stripPath,
  * frameCount, fps, trimmable }`. `runId` is null for a saved-trim source.
@@ -106,7 +107,9 @@ export function buildTrimmerSources(walk, assets = []) {
       stripPath,
       frameCount,
       fps,
-      trimmable: stripPath.startsWith('grok/'),
+      // Any run with a packed strip can be re-trimmed — the service resolves it
+      // by id regardless of on-disk layout.
+      trimmable: true,
     });
   }
 

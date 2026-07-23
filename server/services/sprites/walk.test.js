@@ -85,7 +85,7 @@ async function characterWithLockedAnchors(id, directions = ['east']) {
 
 async function makeCandidateRun(recordId, direction, { stripBytes = `strip-${direction}` } = {}) {
   const runId = `walk-${direction}-${(seq++).toString(16).padStart(8, '0')}`;
-  const runDir = join(TEST_ROOT, 'sprites', recordId, 'grok', runId, 'generated');
+  const runDir = join(TEST_ROOT, 'sprites', recordId, 'runs', runId, 'generated');
   await mkdir(runDir, { recursive: true });
   const stripName = `${recordId}-walk-${direction}-strip.png`;
   await writeFile(join(runDir, stripName), stripBytes);
@@ -96,12 +96,12 @@ async function makeCandidateRun(recordId, direction, { stripBytes = `strip-${dir
     direction,
     frameRate: 12,
     frameCount: 8,
-    stripPath: `grok/${runId}/generated/${stripName}`,
+    stripPath: `runs/${runId}/generated/${stripName}`,
     stripSha256: sha256(Buffer.from(stripBytes)),
   };
-  const manifestRel = `grok/${runId}/generated/${recordId}-walk-${direction}-manifest.json`;
+  const manifestRel = `runs/${runId}/generated/${recordId}-walk-${direction}-manifest.json`;
   await writeFile(join(runDir, `${recordId}-walk-${direction}-manifest.json`), JSON.stringify(packaged));
-  await writeFile(join(TEST_ROOT, 'sprites', recordId, 'grok', runId, 'animation-run.json'), JSON.stringify({
+  await writeFile(join(TEST_ROOT, 'sprites', recordId, 'runs', runId, 'animation-run.json'), JSON.stringify({
     schemaVersion: 1,
     kind: 'grok-game-animation-frames-run',
     status: 'candidate',
@@ -145,7 +145,7 @@ describe('startWalkGeneration', () => {
     expect(call.params.videoMode).toBe('image');
     expect(call.params.grokPath).toBe('/usr/local/bin/grok');
     expect(call.params.sourceImagePath).toBe(
-      join(TEST_ROOT, 'sprites', id, 'grok', result.runId, 'generated', 'input-anchor-transparent.png'),
+      join(TEST_ROOT, 'sprites', id, 'runs', result.runId, 'generated', 'input-anchor-transparent.png'),
     );
     expect(call.params.prompt).toContain('walking east');
     expect(call.params.prompt).toContain('magenta (#FF00FF)');
@@ -187,13 +187,13 @@ describe('attachWalkVideo (completion hook)', () => {
     expect(result).toEqual({ runId, status: 'candidate' });
     expect(runWalkPostprocess).toHaveBeenCalledOnce();
     const ppArgs = runWalkPostprocess.mock.calls[0][0];
-    expect(ppArgs).toMatchObject({ recordId: id, direction: 'east', chromaKey: '#FF00FF', runRel: `grok/${runId}` });
-    const video = await readFile(join(TEST_ROOT, 'sprites', id, 'grok', runId, 'generated', 'source-video.mp4'), 'utf8');
+    expect(ppArgs).toMatchObject({ recordId: id, direction: 'east', chromaKey: '#FF00FF', runRel: `runs/${runId}` });
+    const video = await readFile(join(TEST_ROOT, 'sprites', id, 'runs', runId, 'generated', 'source-video.mp4'), 'utf8');
     expect(video).toBe('fake-mp4-bytes');
     const { runs } = await getWalkState(id);
     expect(runs[0]).toMatchObject({
       status: 'candidate',
-      postprocessManifest: `grok/${runId}/generated/manifest.json`,
+      postprocessManifest: `runs/${runId}/generated/manifest.json`,
     });
     expect(runs[0].stripPreview.frameCount).toBe(8);
     expect(runs[0].sourceVideoSha256).toBe(sha256(Buffer.from('fake-mp4-bytes')));
@@ -266,14 +266,14 @@ describe('rerunWalkPostprocess', () => {
   it('re-packages a landed video and 409s an approved run', async () => {
     const id = await characterWithLockedAnchors(newId(), ['east']);
     const { runId } = await startWalkGeneration(id, { direction: 'east' });
-    const videoAbs = join(TEST_ROOT, 'sprites', id, 'grok', runId, 'generated', 'source-video.mp4');
+    const videoAbs = join(TEST_ROOT, 'sprites', id, 'runs', runId, 'generated', 'source-video.mp4');
     await writeFile(videoAbs, 'landed');
     const run = await rerunWalkPostprocess(id, { runId });
     expect(run.status).toBe('candidate');
 
     // Approve it (needs a packaged manifest + strip on disk), then rerun 409s.
     const { runId: approvedRun } = await makeCandidateRun(id, 'east');
-    await writeFile(join(TEST_ROOT, 'sprites', id, 'grok', approvedRun, 'generated', 'source-video.mp4'), 'landed');
+    await writeFile(join(TEST_ROOT, 'sprites', id, 'runs', approvedRun, 'generated', 'source-video.mp4'), 'landed');
     await approveWalkDirection(id, { direction: 'east', runId: approvedRun });
     await expect(rerunWalkPostprocess(id, { runId: approvedRun }))
       .rejects.toMatchObject({ code: 'RUN_APPROVED' });
@@ -297,7 +297,7 @@ describe('approveWalkDirection', () => {
     const id = await characterWithLockedAnchors(newId(), ['east']);
     const { runId } = await makeCandidateRun(id, 'east');
     await writeFile(
-      join(TEST_ROOT, 'sprites', id, 'grok', runId, 'generated', `${id}-walk-east-strip.png`),
+      join(TEST_ROOT, 'sprites', id, 'runs', runId, 'generated', `${id}-walk-east-strip.png`),
       'tampered',
     );
     await expect(approveWalkDirection(id, { direction: 'east', runId }))
@@ -311,7 +311,7 @@ describe('approveWalkDirection', () => {
     expect(state.selection.kind).toBe('reviewed-directional-walk-selection');
     expect(state.selection.status).toBe('in-progress');
     expect(state.selection.directions.east).toMatchObject({
-      status: 'approved', runId, runPath: `grok/${runId}`, runManifest: manifestRel,
+      status: 'approved', runId, runPath: `runs/${runId}`, runManifest: manifestRel,
     });
     expect(state.selection.directions.east.runManifestSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(state.walkSet).toBeNull();
