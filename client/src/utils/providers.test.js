@@ -117,9 +117,16 @@ describe('provider type predicates', () => {
     // inferred from ANTHROPIC_BASE_URL (port 11434 or "ollama" host)
     expect(isOllamaBackedProvider({ envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434' } })).toBe(true);
     expect(isOllamaBackedProvider({ envVars: { ANTHROPIC_BASE_URL: 'http://my-ollama:1234' } })).toBe(true);
+    // the built-in `ollama` API provider itself (endpoint carries the daemon
+    // URL, not envVars) — id match regardless of endpoint/envVars shape
+    expect(isOllamaBackedProvider({ id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1' })).toBe(true);
+    // any other api-type provider whose endpoint points at Ollama
+    expect(isOllamaBackedProvider({ id: 'local-llm', type: 'api', endpoint: 'http://192.168.1.5:11434/v1' })).toBe(true);
+    expect(isOllamaBackedProvider({ id: 'renamed', type: 'api', endpoint: 'https://my-ollama-box.example.com/v1' })).toBe(true);
     // plain claude TUI / cloud providers are NOT ollama-backed
     expect(isOllamaBackedProvider({ type: 'tui', command: 'claude' })).toBe(false);
     expect(isOllamaBackedProvider({ type: 'cli', command: 'claude', envVars: {} })).toBe(false);
+    expect(isOllamaBackedProvider({ id: 'anthropic', type: 'api', endpoint: 'https://api.anthropic.com' })).toBe(false);
     expect(isOllamaBackedProvider(null)).toBe(false);
   });
 

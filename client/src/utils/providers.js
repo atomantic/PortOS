@@ -414,17 +414,21 @@ export const enabledApiProviderFilter = (provider) => Boolean(provider?.enabled)
 export const isProcessProvider = (provider) => isCliProvider(provider) || isTuiProvider(provider);
 
 /**
- * A `claude` CLI/TUI provider is "Ollama-backed" — the Claude Ollama pattern —
- * when it carries the `ollamaBacked` marker or its ANTHROPIC_BASE_URL points at
- * an Ollama daemon. Such a provider runs the Claude Code harness but generates
- * tokens locally, so its model list is refreshed from Ollama (including the TUI
- * variant, which the server refreshes via the `type==='tui' && ollamaBacked`
- * branch). MIRROR of `isOllamaBackedProvider` in server/lib/aiToolkit/providers.js.
- * @param {{ollamaBacked?:boolean,envVars?:Record<string,string>}} provider
+ * Whether `provider` is served by an Ollama daemon rather than its nominal
+ * cloud/CLI backend: the built-in `ollama` API provider itself (id match), an
+ * `api`-type provider whose `endpoint` points at Ollama, or the Claude-Ollama
+ * CLI/TUI pattern — a `claude` process carrying the `ollamaBacked` marker or an
+ * `ANTHROPIC_BASE_URL` pointed at Ollama, which runs the Claude Code harness but
+ * generates tokens locally, so its model list is refreshed from Ollama
+ * (including the TUI variant, which the server refreshes via the
+ * `type==='tui' && ollamaBacked` branch). MIRROR of `isOllamaBackedProvider` in
+ * server/lib/aiToolkit/providers.js.
+ * @param {{id?:string,endpoint?:string,ollamaBacked?:boolean,envVars?:Record<string,string>}} provider
  */
 export const isOllamaBackedProvider = (provider) => {
+  if (provider?.id === 'ollama') return true;
   if (provider?.ollamaBacked === true) return true;
-  const base = String(provider?.envVars?.ANTHROPIC_BASE_URL || '');
+  const base = String(provider?.envVars?.ANTHROPIC_BASE_URL || provider?.endpoint || '');
   return /:11434\b/.test(base) || /ollama/i.test(base);
 };
 
