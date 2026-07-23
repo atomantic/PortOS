@@ -92,7 +92,8 @@ import {
   Music,
   Workflow as WorkflowIcon,
   ChartGantt,
-  Clapperboard
+  Clapperboard,
+  PersonStanding
 } from 'lucide-react';
 /* global __APP_VERSION__ */
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
@@ -230,6 +231,7 @@ const navItems = [
       { to: '/rounds', label: 'Rounds', icon: Music },
       { to: '/pipeline', label: 'Series Pipeline', icon: WorkflowIcon, dynamic: 'pipelineSeries' },
       { to: '/sharing', label: 'Sharing', icon: Share2 },
+      { to: '/sprites', label: 'Sprites', icon: PersonStanding },
       { to: '/start-story', label: 'Start a Story', icon: Rocket },
       { to: '/story-builder', label: 'Story Builder', icon: Wand2 },
       { to: '/universes', label: 'Universes', icon: Globe, dynamic: 'universes' },

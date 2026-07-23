@@ -175,6 +175,17 @@ function CreativeDirectorLegacyRedirect() {
   return <Navigate to={`/creative-director${rest}${search}${hash}`} replace />;
 }
 
+// Sprite Manager moved from the Media Gen tab shell to the top-level /sprites
+// route (Create sidebar link). Rebases a legacy /media/sprites/:id URL onto it,
+// preserving the id, query string, and hash so bookmarks and media-job
+// completion deep-links keep resolving. (The bare /media/sprites index needs no
+// id rebase and uses RedirectWithSearch.)
+function SpritesLegacyRedirect() {
+  const { pathname, search, hash } = useLocation();
+  const rest = pathname.replace(/^\/media\/sprites/, '');
+  return <Navigate to={`/sprites${rest}${search}${hash}`} replace />;
+}
+
 // Normalize a tab-less /creative-director/:id URL to its overview tab while
 // preserving any query string + hash. A bare `<Navigate to="overview">` would
 // drop them; building the relative target from useLocation keeps deep-link
@@ -327,8 +338,11 @@ export default function App() {
             <Route path="creative-director/:id/:tab" element={<CreativeDirectorLegacyRedirect />} />
             <Route path="music-video" element={<MusicVideo />} />
             <Route path="music-video/:projectId" element={<MusicVideo />} />
-            <Route path="sprites" element={<Sprites />} />
-            <Route path="sprites/:id" element={<Sprites />} />
+            {/* Sprites live at /sprites (Create sidebar link). These redirects
+                keep legacy /media/sprites bookmarks working after the MediaGen
+                tab was removed. */}
+            <Route path="sprites" element={<RedirectWithSearch to="/sprites" />} />
+            <Route path="sprites/:id" element={<SpritesLegacyRedirect />} />
             <Route path="timeline" element={<VideoTimeline />} />
             <Route path="timeline/:projectId" element={<VideoTimelineEditor />} />
             <Route path="models" element={<MediaModels />} />
@@ -347,6 +361,11 @@ export default function App() {
               carrying any query string + hash (relative Navigate preserves the
               :id in the path) so a deep-link like /creative-director/abc?x#y
               lands on /creative-director/abc/overview?x#y intact. */}
+          {/* Sprite Manager — a top-level Create page (moved out of the Media
+              Gen tabs). The record id is the URL, per the ID-based deep-linking
+              convention. */}
+          <Route path="sprites" element={<Sprites />} />
+          <Route path="sprites/:id" element={<Sprites />} />
           <Route path="creative-director" element={<CreativeDirector />} />
           <Route path="creative-director/:id" element={<CreativeDirectorOverviewRedirect />} />
           <Route path="creative-director/:id/:tab" element={<CreativeDirectorDetail />} />

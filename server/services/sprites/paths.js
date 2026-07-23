@@ -13,6 +13,7 @@
 
 import { join, resolve } from 'path';
 import { readdir, stat } from 'fs/promises';
+import sharp from 'sharp';
 import { PATHS, isPathInsideDir } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { isValidSpriteId } from './recordsLogic.js';
@@ -84,11 +85,44 @@ export function resolveSpriteAssetPath(recordId, relPath) {
 // review, so the local browser keeps them.
 const RUN_RAW_INTERMEDIATE = /^(grok|runs)\/[^/]+\/generated\/raw\//;
 
+// Extensions sharp can parse a header for. Anything else (JSON manifests,
+// videos, text) skips the metadata probe entirely.
+const IMAGE_METADATA_EXT = /\.(png|gif|webp|jpe?g|avif|tiff?)$/i;
+
 /**
- * Recursively list a record's on-disk assets as `[{ path, size, mtime }]`
- * with `path` relative (posix separators) to the record dir. Dotfiles and
- * raw run intermediates are skipped; per-directory stats and subdirectory
- * descents run in parallel. A record with no directory yet returns [].
+ * Header-only image metadata for the asset inspector: `{ width, height,
+ * format, frameCount }`. Returns `{}` for a non-image extension OR an
+ * unreadable/corrupt file — the inspector renders "unknown" for a missing
+ * field, which is strictly better than the whole record detail 500-ing
+ * because one truncated PNG landed in the tree. sharp only reads the header
+ * here (no decode), so this stays cheap across a few hundred frames.
+ */
+async function readImageMetadata(absPath) {
+  if (!IMAGE_METADATA_EXT.test(absPath)) return {};
+  try {
+    const meta = await sharp(absPath).metadata();
+    return {
+      width: meta.width ?? null,
+      height: meta.height ?? null,
+      format: meta.format ?? null,
+      // `pages` is only set for multi-page formats (animated GIF/WebP); a
+      // still PNG has exactly one frame.
+      frameCount: meta.pages ?? 1,
+    };
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Recursively list a record's on-disk assets as
+ * `[{ path, size, mtime, width?, height?, format?, frameCount? }]` with
+ * `path` relative (posix separators) to the record dir. Dotfiles and raw run
+ * intermediates are skipped; per-directory stats, image-metadata probes, and
+ * subdirectory descents run in parallel. A record with no directory yet
+ * returns []. The image fields are absent (not null) on non-images and on
+ * files sharp can't read, so a corrupt asset degrades to the plain
+ * `{ path, size, mtime }` row.
  */
 export async function listSpriteAssets(recordId) {
   const dir = spriteDir(recordId);
@@ -107,8 +141,9 @@ export async function listSpriteAssets(recordId) {
         if (RUN_RAW_INTERMEDIATE.test(`${rel}/`)) return;
         await walk(join(current, entry.name), rel);
       } else if (entry.isFile()) {
-        const s = await stat(join(current, entry.name));
-        out.push({ path: rel, size: s.size, mtime: s.mtimeMs });
+        const abs = join(current, entry.name);
+        const [s, meta] = await Promise.all([stat(abs), readImageMetadata(abs)]);
+        out.push({ path: rel, size: s.size, mtime: s.mtimeMs, ...meta });
       }
     }));
   }

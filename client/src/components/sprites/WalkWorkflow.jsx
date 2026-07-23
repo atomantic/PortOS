@@ -6,7 +6,7 @@ import {
 } from '../../services/apiSprites.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import { useSpritePendingRenders } from '../../hooks/useSpritePendingRenders.js';
-import { spriteAssetUrl } from './spriteAssets.js';
+import { spriteAssetUrl, spritePreviewStyle } from './spriteAssets.js';
 
 // Walk workflow (issue #2897): one grok image_to_video clip per locked
 // directional anchor, deterministic server-side packaging into the 8-phase
@@ -48,22 +48,29 @@ function StripLoop({ recordId, stripPreview }) {
   const { frameCount, fps, height } = stripGeometry(stripPreview);
   const scrub = CELL_PX * frameCount;
   return (
+    // The loop itself paints the strip as its own background-image, so the
+    // checkerboard can't share that property — it goes on a wrapper sized to
+    // match, and shows through the frame's alpha (#2930).
     <div
-      role="img"
-      aria-label="walk loop preview"
-      className="bg-port-bg border border-port-border rounded"
-      style={{
-        width: CELL_PX,
-        height,
-        // Quoted: encodeURIComponent leaves `(`/`)` intact, and an externally
-        // authored redraw filename containing one would end the url() token early.
-        backgroundImage: `url("${spriteAssetUrl(recordId, stripPreview.stripPath)}")`,
-        backgroundSize: `${scrub}px ${height}px`,
-        imageRendering: 'pixelated',
-        '--sprite-walk-loop-end': `-${scrub}px`,
-        animation: `sprite-walk-loop ${(frameCount / fps).toFixed(3)}s steps(${frameCount}) infinite`,
-      }}
-    />
+      className="border border-port-border rounded"
+      style={{ width: CELL_PX, height, ...spritePreviewStyle(6) }}
+    >
+      <div
+        role="img"
+        aria-label="walk loop preview"
+        style={{
+          width: CELL_PX,
+          height,
+          // Quoted: encodeURIComponent leaves `(`/`)` intact, and an externally
+          // authored redraw filename containing one would end the url() token early.
+          backgroundImage: `url("${spriteAssetUrl(recordId, stripPreview.stripPath)}")`,
+          backgroundSize: `${scrub}px ${height}px`,
+          imageRendering: 'pixelated',
+          '--sprite-walk-loop-end': `-${scrub}px`,
+          animation: `sprite-walk-loop ${(frameCount / fps).toFixed(3)}s steps(${frameCount}) infinite`,
+        }}
+      />
+    </div>
   );
 }
 
@@ -124,8 +131,8 @@ function TrimPanel({ recordId, run, onClose }) {
           <img
             src={spriteAssetUrl(recordId, result.loop)}
             alt="trimmed loop"
-            className="w-24 h-24 object-contain bg-port-card border border-port-border rounded"
-            style={{ imageRendering: 'pixelated' }}
+            className="w-24 h-24 object-contain border border-port-border rounded"
+            style={spritePreviewStyle(6)}
           />
           <p className="text-[10px] text-gray-500 break-all">{result.loop}</p>
         </div>

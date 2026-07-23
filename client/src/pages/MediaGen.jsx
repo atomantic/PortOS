@@ -1,5 +1,5 @@
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
-import { Layers, Image as ImageIcon, Film, History, HardDrive, Scissors, FolderOpen, Sparkles, GraduationCap, Music, PersonStanding } from 'lucide-react';
+import { Layers, Image as ImageIcon, Film, History, HardDrive, Scissors, FolderOpen, Sparkles, GraduationCap, Music } from 'lucide-react';
 import TabPills from '../components/ui/TabPills';
 
 const TABS = [
@@ -7,7 +7,6 @@ const TABS = [
   { id: 'video', label: 'Video', icon: Film },
   { id: 'timeline', label: 'Timeline', icon: Scissors },
   { id: 'music-video', label: 'Music Video', icon: Music },
-  { id: 'sprites', label: 'Sprites', icon: PersonStanding },
   { id: 'history', label: 'History', icon: History },
   { id: 'collections', label: 'Collections', icon: FolderOpen },
   { id: 'loras', label: 'LoRAs', icon: Sparkles },

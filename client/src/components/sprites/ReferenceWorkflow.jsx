@@ -6,7 +6,7 @@ import { getSettings } from '../../services/apiSystem.js';
 import { deriveAvailableBackends } from '../../lib/imageGenBackends.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import { useSpritePendingRenders } from '../../hooks/useSpritePendingRenders.js';
-import { spriteAssetUrl } from './spriteAssets.js';
+import { spriteAssetUrl, spritePreviewStyle } from './spriteAssets.js';
 
 // Reference workflow (issue #2896): generate main-reference candidates from
 // text + optional uploaded design image, freeze the approved main, then
@@ -25,7 +25,10 @@ function SpriteImg({ recordId, path, className }) {
       alt={path}
       loading="lazy"
       className={className}
-      style={{ imageRendering: 'pixelated' }}
+      // Checkerboard behind the alpha — reference candidates are transparent
+      // PNGs and PortOS's surfaces are near-black, so without it a cut-out
+      // region is indistinguishable from a black pixel (#2930).
+      style={spritePreviewStyle(6)}
     />
   );
 }

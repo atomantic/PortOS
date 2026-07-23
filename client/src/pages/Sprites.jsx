@@ -2,14 +2,14 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { PersonStanding, Package, Download, FolderOpen, X, RefreshCw, Plus } from 'lucide-react';
 import toast from '../components/ui/Toast';
-import Modal from '../components/ui/Modal.jsx';
 import { listSpriteRecords, getSpriteRecord, importSprites, createSpriteRecord } from '../services/apiSprites.js';
 import { getApps } from '../services/apiApps.js';
 import AppContextPicker from '../components/AppContextPicker.jsx';
 import ReferenceWorkflow from '../components/sprites/ReferenceWorkflow.jsx';
 import WalkWorkflow from '../components/sprites/WalkWorkflow.jsx';
 import PublishWorkflow from '../components/sprites/PublishWorkflow.jsx';
-import { spriteAssetUrl } from '../components/sprites/spriteAssets.js';
+import AssetInspector, { isImageAsset } from '../components/sprites/AssetInspector.jsx';
+import { spriteAssetUrl, spritePreviewStyle } from '../components/sprites/spriteAssets.js';
 import { useAsyncAction } from '../hooks/useAsyncAction.js';
 import { formatBytes, timeAgo } from '../utils/formatters.js';
 
@@ -20,8 +20,6 @@ import { formatBytes, timeAgo } from '../utils/formatters.js';
 // the 8 directional anchors — #2896), and the phase-3 walk workflow (one
 // grok i2v clip per anchor, deterministic packaging, per-direction approval
 // into the finalized walk set — #2897). Publish lands in phase 4.
-
-const IMAGE_EXT = /\.(png|gif|webp|jpe?g)$/i;
 
 function topLevelGroup(assetPath) {
   const idx = assetPath.indexOf('/');
@@ -236,7 +234,7 @@ function RecordList({ records, selectedId, onSelect }) {
 }
 
 function AssetGroups({ recordId, assets }) {
-  const [preview, setPreview] = useState(null);
+  const [inspecting, setInspecting] = useState(null);
   const groups = useMemo(() => assets.reduce((acc, a) => {
     const g = topLevelGroup(a.path) || 'files';
     (acc[g] ||= []).push(a);
@@ -251,56 +249,45 @@ function AssetGroups({ recordId, assets }) {
             <span className="text-xs text-gray-500 font-normal">({files.length})</span>
           </h4>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
-            {files.map((a) => {
-              const url = spriteAssetUrl(recordId, a.path);
-              return IMAGE_EXT.test(a.path) ? (
-                <button
-                  key={a.path}
-                  onClick={() => setPreview({ url, path: a.path })}
-                  className="bg-port-bg border border-port-border rounded p-1 hover:border-port-accent"
-                  title={a.path}
-                >
-                  <img src={url} alt={a.path} loading="lazy" className="w-full h-20 object-contain" style={{ imageRendering: 'pixelated' }} />
-                  <span className="block text-[10px] text-gray-500 truncate">{a.path.split('/').pop()}</span>
-                </button>
-              ) : (
-                <a
-                  key={a.path}
-                  href={url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="bg-port-bg border border-port-border rounded p-2 text-xs text-gray-400 hover:border-gray-500 truncate"
-                  title={a.path}
-                >
-                  {a.path.split('/').pop()}
-                  <span className="block text-[10px] text-gray-600">{formatBytes(a.size)}</span>
-                </a>
-              );
-            })}
+            {files.map((a) => (isImageAsset(a.path) ? (
+              <button
+                key={a.path}
+                onClick={() => setInspecting(a)}
+                className="bg-port-bg border border-port-border rounded p-1 hover:border-port-accent"
+                title={a.path}
+              >
+                {/* Checkerboard on the tile, not the <img>: object-contain
+                    letterboxes the image, and a background on the img itself
+                    would only paint the letterboxed box, not the tile. */}
+                <span className="block rounded" style={spritePreviewStyle(6)}>
+                  <img
+                    src={spriteAssetUrl(recordId, a.path)}
+                    alt={a.path}
+                    loading="lazy"
+                    className="w-full h-20 object-contain"
+                    style={{ imageRendering: 'pixelated' }}
+                  />
+                </span>
+                <span className="block text-[10px] text-gray-500 truncate">{a.path.split('/').pop()}</span>
+                {a.width && a.height && (
+                  <span className="block text-[10px] text-gray-600">{a.width}×{a.height}</span>
+                )}
+              </button>
+            ) : (
+              <button
+                key={a.path}
+                onClick={() => setInspecting(a)}
+                className="bg-port-bg border border-port-border rounded p-2 text-xs text-gray-400 hover:border-gray-500 text-left truncate"
+                title={a.path}
+              >
+                {a.path.split('/').pop()}
+                <span className="block text-[10px] text-gray-600">{formatBytes(a.size)}</span>
+              </button>
+            )))}
           </div>
         </div>
       ))}
-      {/* Shared Modal for the lightbox: Esc-to-close, focus trap, and
-          focus restore to the thumbnail that opened it — the hand-rolled
-          overlay this replaced was click-to-dismiss only. */}
-      <Modal
-        open={!!preview}
-        onClose={() => setPreview(null)}
-        size="none"
-        backdropClassName="bg-black/80"
-        ariaLabel={preview ? `Preview ${preview.path}` : undefined}
-        panelClassName="max-w-full max-h-full"
-      >
-        <img src={preview?.url} alt={preview?.path || ''} className="max-w-full max-h-[85vh] object-contain" style={{ imageRendering: 'pixelated' }} />
-        <p className="text-center text-xs text-gray-400 mt-2">{preview?.path}</p>
-        <button
-          type="button"
-          onClick={() => setPreview(null)}
-          className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:right-2 focus:bg-port-card focus:text-white focus:px-3 focus:py-1 focus:rounded"
-        >
-          Close preview
-        </button>
-      </Modal>
+      <AssetInspector recordId={recordId} asset={inspecting} onClose={() => setInspecting(null)} />
     </div>
   );
 }
@@ -345,91 +332,97 @@ export default function Sprites() {
   }, [id, retryTick]);
 
   return (
-    <div className="flex flex-col md:flex-row gap-4 h-full">
-      <aside className="md:w-64 shrink-0 space-y-3">
-        <NewCharacterPanel onCreated={(record) => { refresh(); navigate(`/media/sprites/${record.id}`); }} />
-        {/* Re-import while a sprite is open must refresh the open detail too,
-            not just the sidebar list. */}
-        <ImportPanel onImported={() => { refresh(); if (id) setRetryTick((t) => t + 1); }} />
-        {records === null ? (
-          <p className="text-sm text-gray-500">Loading…</p>
-        ) : records.length === 0 ? (
-          <p className="text-sm text-gray-500">
-            No sprites yet. Import a production set from a sprite-pipeline checkout to get started.
-          </p>
-        ) : (
-          <RecordList records={records} selectedId={id} onSelect={(rid) => navigate(`/media/sprites/${rid}`)} />
-        )}
-      </aside>
-      <section className="flex-1 min-w-0">
-        {!id ? (
-          <p className="text-sm text-gray-500">Select a sprite to browse its reference set, animation strips, and atlases.</p>
-        ) : detailState === 'missing' ? (
-          <div className="text-sm text-gray-400">
-            Sprite not found.{' '}
-            <button onClick={() => navigate('/media/sprites')} className="text-port-accent hover:underline">Back to library</button>
-          </div>
-        ) : detailState === 'error' ? (
-          <div className="text-sm text-gray-400">
-            Failed to load this sprite.{' '}
-            <button onClick={() => setRetryTick((t) => t + 1)} className="text-port-accent hover:underline">Retry</button>
-          </div>
-        ) : !detail ? (
-          <p className="text-sm text-gray-500">Loading…</p>
-        ) : (
-          <div className="space-y-4">
-            <div>
-              <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-                {detail.record.kind === 'character' ? <PersonStanding className="w-5 h-5" /> : <Package className="w-5 h-5" />}
-                {detail.record.name}
-              </h2>
-              <p className="text-xs text-gray-500">
-                {detail.record.kind} · {detail.record.status}
-                {detail.record.chromaKey && (
-                  <>
-                    {' · chroma key '}
-                    <span className="inline-block w-3 h-3 rounded-sm align-middle border border-port-border" style={{ backgroundColor: detail.record.chromaKey }} />{' '}
-                    {detail.record.chromaKey}
-                  </>
+    <div className="space-y-4">
+      <div className="flex items-center gap-3">
+        <PersonStanding className="w-6 h-6 text-port-accent" />
+        <h1 className="text-2xl font-bold text-white">Sprite Manager</h1>
+      </div>
+      <div className="flex flex-col md:flex-row gap-4">
+        <aside className="md:w-64 shrink-0 space-y-3">
+          <NewCharacterPanel onCreated={(record) => { refresh(); navigate(`/sprites/${record.id}`); }} />
+          {/* Re-import while a sprite is open must refresh the open detail too,
+              not just the sidebar list. */}
+          <ImportPanel onImported={() => { refresh(); if (id) setRetryTick((t) => t + 1); }} />
+          {records === null ? (
+            <p className="text-sm text-gray-500">Loading…</p>
+          ) : records.length === 0 ? (
+            <p className="text-sm text-gray-500">
+              No sprites yet. Import a production set from a sprite-pipeline checkout to get started.
+            </p>
+          ) : (
+            <RecordList records={records} selectedId={id} onSelect={(rid) => navigate(`/sprites/${rid}`)} />
+          )}
+        </aside>
+        <section className="flex-1 min-w-0">
+          {!id ? (
+            <p className="text-sm text-gray-500">Select a sprite to browse its reference set, animation strips, and atlases.</p>
+          ) : detailState === 'missing' ? (
+            <div className="text-sm text-gray-400">
+              Sprite not found.{' '}
+              <button onClick={() => navigate('/sprites')} className="text-port-accent hover:underline">Back to library</button>
+            </div>
+          ) : detailState === 'error' ? (
+            <div className="text-sm text-gray-400">
+              Failed to load this sprite.{' '}
+              <button onClick={() => setRetryTick((t) => t + 1)} className="text-port-accent hover:underline">Retry</button>
+            </div>
+          ) : !detail ? (
+            <p className="text-sm text-gray-500">Loading…</p>
+          ) : (
+            <div className="space-y-4">
+              <div>
+                <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                  {detail.record.kind === 'character' ? <PersonStanding className="w-5 h-5" /> : <Package className="w-5 h-5" />}
+                  {detail.record.name}
+                </h2>
+                <p className="text-xs text-gray-500">
+                  {detail.record.kind} · {detail.record.status}
+                  {detail.record.chromaKey && (
+                    <>
+                      {' · chroma key '}
+                      <span className="inline-block w-3 h-3 rounded-sm align-middle border border-port-border" style={{ backgroundColor: detail.record.chromaKey }} />{' '}
+                      {detail.record.chromaKey}
+                    </>
+                  )}
+                  {detail.record.importedFrom?.importedAt && ` · imported ${timeAgo(detail.record.importedFrom.importedAt)}`}
+                </p>
+                {detail.record.spec?.archetype && (
+                  <p className="text-xs text-gray-500">archetype: {detail.record.spec.archetype}</p>
                 )}
-                {detail.record.importedFrom?.importedAt && ` · imported ${timeAgo(detail.record.importedFrom.importedAt)}`}
-              </p>
-              {detail.record.spec?.archetype && (
-                <p className="text-xs text-gray-500">archetype: {detail.record.spec.archetype}</p>
+              </div>
+              {detail.record.kind === 'character' && (
+                <>
+                  <ReferenceWorkflow
+                    record={detail.record}
+                    reference={detail.reference}
+                    onChanged={onWorkflowChanged}
+                  />
+                  <WalkWorkflow
+                    record={detail.record}
+                    reference={detail.reference}
+                    walk={detail.walk}
+                    onChanged={onWorkflowChanged}
+                  />
+                  {/* Keyed by record so form state and an armed publish/overwrite
+                      confirmation never survive switching characters. */}
+                  <PublishWorkflow
+                    key={detail.record.id}
+                    record={detail.record}
+                    walk={detail.walk}
+                    atlas={detail.atlas}
+                    onChanged={onWorkflowChanged}
+                  />
+                </>
+              )}
+              {detail.assets.length === 0 ? (
+                <p className="text-sm text-gray-500">No assets on disk for this record.</p>
+              ) : (
+                <AssetGroups recordId={detail.record.id} assets={detail.assets} />
               )}
             </div>
-            {detail.record.kind === 'character' && (
-              <>
-                <ReferenceWorkflow
-                  record={detail.record}
-                  reference={detail.reference}
-                  onChanged={onWorkflowChanged}
-                />
-                <WalkWorkflow
-                  record={detail.record}
-                  reference={detail.reference}
-                  walk={detail.walk}
-                  onChanged={onWorkflowChanged}
-                />
-                {/* Keyed by record so form state and an armed publish/overwrite
-                    confirmation never survive switching characters. */}
-                <PublishWorkflow
-                  key={detail.record.id}
-                  record={detail.record}
-                  walk={detail.walk}
-                  atlas={detail.atlas}
-                  onChanged={onWorkflowChanged}
-                />
-              </>
-            )}
-            {detail.assets.length === 0 ? (
-              <p className="text-sm text-gray-500">No assets on disk for this record.</p>
-            ) : (
-              <AssetGroups recordId={detail.record.id} assets={detail.assets} />
-            )}
-          </div>
-        )}
-      </section>
+          )}
+        </section>
+      </div>
     </div>
   );
 }
