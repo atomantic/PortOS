@@ -417,6 +417,95 @@ describe('getWalkState', () => {
     expect(await readFile(legacyPath)).toEqual(legacyBytesBefore);
   });
 
+  // Issue #2928: the importer also lays source-pipeline runs down under
+  // `runs/<run-id>/` rather than `grok/<run-id>/`. The selection entry names
+  // the layout, so resolving runs off the entry (not off a grok-only
+  // directory scan) surfaces it with no per-layout special case.
+  it('resolves an approved direction whose runPath is under runs/<run-id>/', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const runId = 'walk-east-imported1';
+    const stripRel = `runs/${runId}/generated/${id}-walk-east-strip.png`;
+    const runDir = join(TEST_ROOT, 'sprites', id, 'runs', runId, 'generated');
+    await mkdir(runDir, { recursive: true });
+    await writeFile(join(runDir, `${id}-walk-east-strip.png`), 'imported-strip');
+    await writeFile(join(TEST_ROOT, 'sprites', id, 'runs', runId, 'animation-run.json'), JSON.stringify({
+      schemaVersion: 1,
+      kind: 'grok-game-animation-frames-run',
+      status: 'candidate',
+      id: runId,
+      characterId: id,
+      direction: 'east',
+      createdAt: 1700000000.123456,
+      stripPreview: {
+        // Source-repo-anchored, exactly as the importer copies it.
+        path: `art-source/sprites/${id}/${stripRel}`,
+        frameCount: 8, fps: 12, cellWidth: 384, cellHeight: 384, row: 0, startColumn: 0,
+      },
+    }));
+    await mkdir(join(TEST_ROOT, 'sprites', id, 'walk'), { recursive: true });
+    await writeFile(join(TEST_ROOT, 'sprites', id, 'walk', `${id}-walk-selection-v1.json`), JSON.stringify({
+      schemaVersion: 1,
+      kind: 'reviewed-directional-walk-selection',
+      characterId: id,
+      status: 'in-progress',
+      directions: {
+        east: {
+          status: 'approved',
+          runId,
+          runPath: `art-source/sprites/${id}/runs/${runId}`,
+          runManifest: `art-source/sprites/${id}/runs/${runId}/generated/manifest.json`,
+          approvedAt: '2026-07-01T00:00:00.000Z',
+        },
+      },
+    }));
+
+    const { runs } = await getWalkState(id);
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      id: runId,
+      direction: 'east',
+      kind: 'grok-game-animation-frames-run',
+      // The record's own source-repo-anchored stripPreview is normalized the
+      // same way a grok/-layout imported run's is.
+      stripPreview: { stripPath: stripRel, frameCount: 8 },
+    });
+  });
+
+  // A `runs/`-layout entry whose record is missing on disk must surface
+  // nothing rather than a half-shaped run — the grok scan can't cover it.
+  it('surfaces nothing for a runs/<run-id>/ entry with no run record on disk', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    await mkdir(join(TEST_ROOT, 'sprites', id, 'walk'), { recursive: true });
+    await writeFile(join(TEST_ROOT, 'sprites', id, 'walk', `${id}-walk-selection-v1.json`), JSON.stringify({
+      schemaVersion: 1,
+      kind: 'reviewed-directional-walk-selection',
+      characterId: id,
+      status: 'in-progress',
+      directions: {
+        east: {
+          status: 'approved', runId: 'walk-east-ghost001', runPath: 'runs/walk-east-ghost001', approvedAt: 'x',
+        },
+      },
+    }));
+    expect((await getWalkState(id)).runs).toEqual([]);
+  });
+
+  // Unapproved candidates and in-flight generations have no selection entry
+  // by definition, so the grok/ scan is still what surfaces them alongside
+  // the entry-resolved approved run.
+  it('unions entry-resolved approved runs with unapproved scanned grok runs', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east', 'west']);
+    const { runId: approvedRunId } = await makeCandidateRun(id, 'east');
+    await approveWalkDirection(id, { direction: 'east', runId: approvedRunId });
+    const { runId: pendingRunId } = await startWalkGeneration(id, { direction: 'west' });
+
+    const { runs } = await getWalkState(id);
+    expect(runs).toHaveLength(2);
+    expect(runs.map((r) => r.id).sort()).toEqual([approvedRunId, pendingRunId].sort());
+    // The approved run is not duplicated by the scan.
+    expect(runs.filter((r) => r.id === approvedRunId)).toHaveLength(1);
+  });
+
   // Issue #2924: a direction approved from the source pipeline's video-first
   // imagegen REDRAW path has no grok/ run directory at all — its selection
   // entry points at imagegen/vN. Synthesize the preview from that manifest's

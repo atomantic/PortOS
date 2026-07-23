@@ -42,6 +42,12 @@ const selectionRelPath = (id) => `walk/${id}-walk-selection-v1.json`;
 export const walkSetRelPath = (id) => `walk/${id}-walk-set-v1.json`;
 const runRelPath = (runId) => `grok/${runId}`;
 const RUN_RECORD_NAME = 'animation-run.json';
+// The two on-disk layouts that carry a full `animation-run.json` record:
+// PortOS's own generations write `grok/<run-id>/`, while the source-pipeline
+// importer (#2895) preserves its own `runs/<run-id>/` tree. Same reader, same
+// record shape — only the prefix differs. Kept in sync with paths.js's
+// RUN_RAW_INTERMEDIATE, which excludes raw frames under either prefix.
+const RUN_RECORD_LAYOUT = /^(grok|runs)\/[^/]+/;
 
 // Serialize walk-state read-modify-writes per record (run records, the
 // selection file, the walk set, and trim versioning share one lifecycle) —
@@ -70,8 +76,14 @@ function seedSelection(recordId) {
   };
 }
 
+// Read a run record by its directory (record-relative), so `grok/<id>/` and
+// the importer's `runs/<id>/` share one reader.
+async function loadRunRecordAt(recordId, runDirRel) {
+  return readJSONFile(join(spriteDir(recordId), runDirRel, RUN_RECORD_NAME), null);
+}
+
 async function loadRunRecord(recordId, runId) {
-  return readJSONFile(join(spriteDir(recordId), runRelPath(runId), RUN_RECORD_NAME), null);
+  return loadRunRecordAt(recordId, runRelPath(runId));
 }
 
 async function saveRunRecord(recordId, run) {
@@ -176,44 +188,74 @@ async function loadRedrawRun(recordId, direction, entry) {
 }
 
 /**
+ * Resolve the run behind ONE selection/walk-set entry (issue #2928). The
+ * entry names its own storage layout via `runPath`/`runManifest`, so this is
+ * the single dispatch point every walk source routes through — adding a
+ * fourth layout means another branch here, not another append-and-dedupe
+ * block in `getWalkState`:
+ *
+ *   grok/<run-id>/  → PortOS's own generations (animation-run.json)
+ *   runs/<run-id>/  → the source-pipeline importer's layout (same record)
+ *   anything else   → an imagegen/vN redraw manifest (#2924), synthesized
+ *
+ * Every branch returns the same run-shaped object, so routes and the client
+ * are layout-agnostic. Returns null when the entry names nothing readable.
+ */
+async function loadRunForEntry(recordId, direction, entry) {
+  // The run directory names the layout; fall back to the manifest's own path
+  // for an entry that carries only a manifest.
+  const layoutPath = toRecordRelativeAssetPath(recordId, entry.runPath)
+    || toRecordRelativeAssetPath(recordId, entry.runManifest);
+  if (!layoutPath) return null;
+  const runDirRel = RUN_RECORD_LAYOUT.exec(layoutPath)?.[0];
+  if (runDirRel) {
+    const run = await loadRunRecordAt(recordId, runDirRel);
+    return run ? normalizeStripPreview(recordId, run) : null;
+  }
+  return loadRedrawRun(recordId, direction, entry);
+}
+
+/**
  * Walk-workflow view for the detail endpoint: every animation run (newest
  * first), the per-direction selection, and the finalized set when present.
+ *
+ * The selection (or the finalized walk set) is the index: each approved
+ * direction resolves through `loadRunForEntry`, whatever layout it names.
+ * The `grok/` directory scan then only has to cover runs that have NO
+ * selection entry by definition — unapproved candidates and in-flight
+ * generations, which PortOS always writes under `grok/`.
  */
 export async function getWalkState(recordId) {
-  const grokDir = join(spriteDir(recordId), 'grok');
-  let entries = [];
-  try {
-    entries = await readdir(grokDir, { withFileTypes: true });
-  } catch {
-    // no runs yet
-  }
-  const [runs, selection, walkSet] = await Promise.all([
-    Promise.all(
-      entries
-        .filter((e) => e.isDirectory() && e.name.startsWith('walk-'))
-        .map((e) => loadRunRecord(recordId, e.name)),
-    ).then((loaded) => loaded
-      .filter(Boolean)
-      .map((run) => normalizeStripPreview(recordId, run))),
-    loadSelection(recordId),
-    loadWalkSet(recordId),
-  ]);
+  const [selection, walkSet] = await Promise.all([loadSelection(recordId), loadWalkSet(recordId)]);
 
-  // Directions approved from an imported redraw manifest have no grok run
-  // record to scan — synthesize their preview from the manifest (#2924).
   const approvedDirections = walkSet?.directions || selection?.directions || {};
-  const scannedRunIds = new Set(runs.map((run) => run.id));
-  const redrawRuns = (await Promise.all(
+  const entryRuns = (await Promise.all(
     Object.entries(approvedDirections)
       // Gate on `approved` because loadRedrawRun stamps that status
       // unconditionally — a rejected/pending entry must not surface as an
-      // approved run next to live Generate/Approve buttons.
-      .filter(([, entry]) => entry?.status === 'approved' && entry.runId && entry.runManifest
-        && !scannedRunIds.has(entry.runId))
-      .map(([direction, entry]) => loadRedrawRun(recordId, direction, entry)),
+      // approved run next to live Generate/Approve buttons. A rejected grok
+      // entry still surfaces via the scan below, with its own real status.
+      .filter(([, entry]) => entry?.status === 'approved' && entry.runId
+        && (entry.runPath || entry.runManifest))
+      .map(([direction, entry]) => loadRunForEntry(recordId, direction, entry)),
   )).filter(Boolean);
+  const resolvedRunIds = new Set(entryRuns.map((run) => run.id));
 
-  const allRuns = [...runs, ...redrawRuns]
+  let dirEntries = [];
+  try {
+    dirEntries = await readdir(join(spriteDir(recordId), 'grok'), { withFileTypes: true });
+  } catch {
+    // no native runs yet
+  }
+  const scannedRuns = (await Promise.all(
+    dirEntries
+      .filter((e) => e.isDirectory() && e.name.startsWith('walk-') && !resolvedRunIds.has(e.name))
+      .map((e) => loadRunRecord(recordId, e.name)),
+  )).filter(Boolean)
+    .filter((run) => !resolvedRunIds.has(run.id))
+    .map((run) => normalizeStripPreview(recordId, run));
+
+  const allRuns = [...entryRuns, ...scannedRuns]
     .sort((a, b) => runCreatedAtMs(b.createdAt) - runCreatedAtMs(a.createdAt));
   return { runs: allRuns, selection, walkSet };
 }
