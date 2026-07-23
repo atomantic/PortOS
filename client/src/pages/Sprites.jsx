@@ -331,7 +331,7 @@ function RecordPicker({ records, selectedId, onSelect }) {
                   <li key={r.id} id={`sprite-opt-${r.id}`} role="option" aria-selected={i === activeIndex}>
                     <button
                       type="button"
-                      onMouseDown={(e) => { e.preventDefault(); commit(r); }}
+                      onClick={() => commit(r)}
                       onMouseEnter={() => setActiveIndex(i)}
                       className={`w-full flex items-center gap-2 text-left px-3 py-2 text-sm ${i === activeIndex ? 'bg-port-accent/20 text-white' : 'text-gray-300 hover:bg-port-bg'}`}
                     >
