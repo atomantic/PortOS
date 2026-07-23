@@ -5,7 +5,6 @@ import { generateSpriteReference, lockSpriteReference, updateSpriteRecord } from
 import { getSettings } from '../../services/apiSystem.js';
 import { deriveAvailableBackends } from '../../lib/imageGenBackends.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
-import { useSpritePendingRenders } from '../../hooks/useSpritePendingRenders.js';
 import SpritePreview from './SpritePreview.jsx';
 
 // Reference workflow (issue #2896): generate main-reference candidates from
@@ -66,7 +65,7 @@ function CandidateTile({ recordId, candidate, locking, onLock, clipRisk }) {
   );
 }
 
-export default function ReferenceWorkflow({ record, reference, onChanged }) {
+export default function ReferenceWorkflow({ record, reference, renders, onChanged }) {
   const recordId = record.id;
   const manifest = reference?.manifest || null;
   const candidates = reference?.candidates || [];
@@ -78,11 +77,10 @@ export default function ReferenceWorkflow({ record, reference, onChanged }) {
   const [designPrompt, setDesignPrompt] = useState(manifest?.designPrompt || '');
   const [uploadFile, setUploadFile] = useState(null);
   const fileInputRef = useRef(null);
-  // target → jobId for in-flight renders; rehydrated + polled by the shared
-  // sprite render-tracking hook until each candidate lands.
-  const { pendingJobs, beginSubmit, resolveSubmit, cancelSubmit } = useSpritePendingRenders({
-    recordId, kind: 'image', tagKey: 'spriteRef', tagField: 'target', onChanged,
-  });
+  // target → jobId for in-flight renders. Owned by the Sprites page and shared
+  // with the asset collection's anchor Regenerate buttons (#2931) so both gate
+  // on one map — see the matching note in WalkWorkflow.
+  const { pendingJobs, beginSubmit, resolveSubmit, cancelSubmit } = renders;
 
   useEffect(() => {
     getSettings({ silent: true })

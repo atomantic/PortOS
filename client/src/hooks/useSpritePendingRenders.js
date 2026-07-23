@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import toast from '../components/ui/Toast';
 import { getMediaJob, listMediaJobs } from '../services/apiMediaJobs.js';
 import useMounted from './useMounted.js';
@@ -34,11 +34,21 @@ export function useSpritePendingRenders({
   // sweep for the component's whole dev lifetime.
   const mountedRef = useMounted();
 
+  // The map is keyed by direction/target, NOT by record — so a record switch
+  // must clear it or character B inherits character A's in-flight entries and
+  // shows "Rendering…" on a direction nothing is rendering. Runs before the
+  // rehydrate below (effect order), whose async merge then refills it with
+  // B's real jobs. Load-bearing now that the hook is owned by the page and
+  // survives switching records (#2931) — previously it unmounted with the
+  // workflow only when the character had no locked main.
+  useEffect(() => { setPendingJobs({}); }, [recordId]);
+
   // Rehydrate in-flight renders on mount/record switch — a reload or
   // navigate-away-and-back would otherwise lose the map and re-enable
   // Generate mid-render, inviting a duplicate paid render for the same key.
   // Locally-started jobs win over the snapshot on key collision.
   useEffect(() => {
+    if (!recordId) return undefined;
     let stale = false;
     listMediaJobs({ kind, owner: 'sprites' }, { silent: true })
       .then((jobs) => {
@@ -95,14 +105,17 @@ export function useSpritePendingRenders({
 
   // Sentinel jobId while the enqueue request is in flight — reserves the key
   // immediately so a double-click (or a slow multipart upload) can't submit
-  // two paid renders. The poll skips sentinel entries.
-  const beginSubmit = (key) => setPendingJobs((prev) => ({ ...prev, [key]: 'submitting' }));
-  const resolveSubmit = (key, jobId) => setPendingJobs((prev) => ({ ...prev, [key]: jobId }));
-  const cancelSubmit = (key) => setPendingJobs((prev) => {
+  // two paid renders. The poll skips sentinel entries. Stable identities
+  // (`useCallback([])`, closing only over `setPendingJobs`) so a consumer can
+  // depend on them in its own `useCallback`/`useMemo` without churning every
+  // render — the Sprites page (#2931) memoizes its action closures on these.
+  const beginSubmit = useCallback((key) => setPendingJobs((prev) => ({ ...prev, [key]: 'submitting' })), []);
+  const resolveSubmit = useCallback((key, jobId) => setPendingJobs((prev) => ({ ...prev, [key]: jobId })), []);
+  const cancelSubmit = useCallback((key) => setPendingJobs((prev) => {
     const next = { ...prev };
     if (next[key] === 'submitting') delete next[key];
     return next;
-  });
+  }), []);
 
   return { pendingJobs, beginSubmit, resolveSubmit, cancelSubmit };
 }

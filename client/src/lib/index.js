@@ -104,6 +104,8 @@ export * from './singToScore.js';
 export * from './songCraft.js';
 export * from './songPlayback.js';
 export * from './songProgress.js';
+export * from './spriteCollectionActions.js';
+export * from './spriteFacets.js';
 export * from './streakGlyph.js';
 export * from './syncCounts.js';
 export * from './tabNotation.js';

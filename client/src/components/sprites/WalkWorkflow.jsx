@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Check, Film, RefreshCw, Scissors, Lock } from 'lucide-react';
 import toast from '../ui/Toast';
-import {
-  generateSpriteWalk, approveSpriteWalk, postprocessSpriteWalk, trimSpriteWalk,
-} from '../../services/apiSprites.js';
+import { approveSpriteWalk, postprocessSpriteWalk, trimSpriteWalk } from '../../services/apiSprites.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
-import { useSpritePendingRenders } from '../../hooks/useSpritePendingRenders.js';
 import { spriteAssetUrl, checkerboardStyle, PIXELATED } from './spriteAssets.js';
 import SpritePreview from './SpritePreview.jsx';
+
+// Scroll anchor for the asset collection's "Edit in Loop Trimmer" action
+// (#2931) — the trimmer lives in this card, potentially far above the asset
+// grid that requested it.
+export const WALK_WORKFLOW_DOM_ID = 'sprite-walk-workflow';
 
 // Walk workflow (issue #2897): one grok image_to_video clip per locked
 // directional anchor, deterministic server-side packaging into the 8-phase
@@ -26,7 +28,10 @@ const CELL_PX = 96; // preview cell size — the strip animates at 96px/frame
 // rule reads it from a per-preview custom property instead of hardcoding 8.
 const LOOP_KEYFRAMES = '@keyframes sprite-walk-loop { to { background-position-x: var(--sprite-walk-loop-end) } }';
 // Grok image_to_video clip lengths (videoGen/grok.js GROK_VIDEO_DURATIONS).
-const WALK_DURATIONS = [6, 10];
+// Exported so the Sprites page can seed the lifted `duration` state with the
+// same default — the asset collection's Regenerate must honor whatever the
+// user picked here rather than silently falling back to the server default.
+export const WALK_DURATIONS = [6, 10];
 
 /**
  * Strip geometry for a preview/trim UI, defaulting to the native 8-phase
@@ -145,11 +150,20 @@ function TrimPanel({ recordId, run, onClose }) {
 }
 
 function DirectionCard({
-  recordId, direction, anchorLocked, run, approved, finalized, pending, onGenerate, onApprove, onRetry,
+  recordId, direction, anchorLocked, run, approved, finalized, pending,
+  trimRequestRun = null, onTrimClose, onGenerate, onApprove, onRetry,
 }) {
   const [confirming, setConfirming] = useState(false);
   const [trimming, setTrimming] = useState(false);
   const candidate = run?.status === 'candidate' ? run : null;
+  // Two ways in: this card's own Scissors toggle (the direction's current
+  // candidate, as before) and an explicit request routed from an asset card
+  // (#2931), which names the exact run — possibly an older or APPROVED one,
+  // and possibly under a finalized walk set. That's sound: trims are
+  // non-destructive derived artifacts under `walk/trims/` and the server only
+  // requires a packaged manifest. It stays request-driven rather than becoming
+  // a new always-on affordance on approved directions.
+  const trimRun = trimRequestRun || (trimming ? candidate : null);
   const statusLabel = approved ? 'approved'
     : pending ? 'rendering…'
       : run?.status === 'postprocessing' ? 'packaging…'
@@ -216,36 +230,40 @@ function DirectionCard({
               </div>
             )
           )}
-          {trimming && candidate && (
-            <TrimPanel recordId={recordId} run={candidate} onClose={() => setTrimming(false)} />
-          )}
         </div>
+      )}
+
+      {/* Outside the !finalized && !approved block on purpose: an explicit
+          trim request from the asset collection must open even for an
+          approved direction or a finalized walk set. */}
+      {trimRun && (
+        <TrimPanel
+          recordId={recordId}
+          run={trimRun}
+          onClose={() => { setTrimming(false); onTrimClose(); }}
+        />
       )}
     </div>
   );
 }
 
-export default function WalkWorkflow({ record, reference, walk, onChanged }) {
+export default function WalkWorkflow({
+  record, reference, walk, renders, duration, onDurationChange, onGenerate,
+  trimRunId = null, onTrimClose = () => {}, onChanged,
+}) {
   const recordId = record.id;
   const manifest = reference?.manifest || null;
   const runs = walk?.runs || [];
   const selection = walk?.selection || null;
   const finalized = Boolean(walk?.walkSet);
-  const [duration, setDuration] = useState(WALK_DURATIONS[0]);
 
-  // direction → jobId for in-flight video renders — rehydrated + polled by
-  // the shared sprite render-tracking hook. The deterministic postprocess
-  // runs server-side after the job completes, so the sweeps land later (and
-  // twice) compared to the reference workflow's instant candidate copy.
-  const { pendingJobs, beginSubmit, resolveSubmit, cancelSubmit } = useSpritePendingRenders({
-    recordId,
-    kind: 'video',
-    tagKey: 'spriteWalk',
-    tagField: 'direction',
-    onChanged,
-    sweepDelays: () => [1500, 8000],
-    failMessage: (direction, job) => `Walk render failed for ${direction}: ${job?.error || 'see media jobs'}`,
-  });
+  // direction → jobId for in-flight video renders. The hook instance is owned
+  // by the Sprites page and shared with the asset collection (#2931) so both
+  // Generate buttons gate on ONE map — a second instance here would let a
+  // Regenerate fired from an asset card leave this button enabled, inviting a
+  // duplicate paid render for the same direction. The generate ACTION lives up
+  // there too, so both entry points submit through one code path.
+  const { pendingJobs } = renders;
 
   // The deterministic postprocess runs server-side AFTER the video job
   // completes (frame extraction + per-pixel un-key can take many seconds on
@@ -273,6 +291,13 @@ export default function WalkWorkflow({ record, reference, walk, onChanged }) {
     return () => clearInterval(timer);
   }, [packaging, awaitingAttach, onChanged]);
 
+  // Resolved by id, not by direction: the asset collection can name any run
+  // that packed a strip, including one older than the direction's latest.
+  const requestedTrimRun = useMemo(
+    () => (trimRunId ? runs.find((r) => r.id === trimRunId) || null : null),
+    [runs, trimRunId],
+  );
+
   const latestRunByDirection = useMemo(() => {
     const byDir = {};
     for (const run of runs) {
@@ -285,17 +310,6 @@ export default function WalkWorkflow({ record, reference, walk, onChanged }) {
     }
     return byDir;
   }, [runs, selection]);
-
-  const generate = async (direction) => {
-    beginSubmit(direction);
-    try {
-      const { jobId } = await generateSpriteWalk(recordId, { direction, duration }, { silent: true });
-      resolveSubmit(direction, jobId);
-    } catch (err) {
-      cancelSubmit(direction);
-      toast.error(err?.message || `Failed to queue ${direction} walk`);
-    }
-  };
 
   const [approve] = useAsyncAction(async (direction, runId) => {
     await approveSpriteWalk(recordId, { direction, runId }, { silent: true });
@@ -317,7 +331,7 @@ export default function WalkWorkflow({ record, reference, walk, onChanged }) {
     .filter((d) => d?.status === 'approved').length;
 
   return (
-    <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
+    <div id={WALK_WORKFLOW_DOM_ID} className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
       <style>{LOOP_KEYFRAMES}</style>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold text-white flex items-center gap-1.5">
@@ -335,7 +349,7 @@ export default function WalkWorkflow({ record, reference, walk, onChanged }) {
             Clip length
             <select
               value={duration}
-              onChange={(e) => setDuration(Number(e.target.value))}
+              onChange={(e) => onDurationChange(Number(e.target.value))}
               className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
             >
               {WALK_DURATIONS.map((d) => <option key={d} value={d}>{d}s</option>)}
@@ -354,7 +368,9 @@ export default function WalkWorkflow({ record, reference, walk, onChanged }) {
             approved={selection?.directions?.[anchor.direction]?.status === 'approved'}
             finalized={finalized}
             pending={Boolean(pendingJobs[anchor.direction])}
-            onGenerate={generate}
+            trimRequestRun={requestedTrimRun?.direction === anchor.direction ? requestedTrimRun : null}
+            onTrimClose={onTrimClose}
+            onGenerate={onGenerate}
             onApprove={approve}
             onRetry={retryPostprocess}
           />

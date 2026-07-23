@@ -13,17 +13,17 @@ vi.mock('../../services/apiSprites.js', () => ({
   trimSpriteWalk: vi.fn(),
 }));
 
-vi.mock('../../hooks/useSpritePendingRenders.js', () => ({
-  useSpritePendingRenders: () => ({
-    pendingJobs: {}, beginSubmit: vi.fn(), resolveSubmit: vi.fn(), cancelSubmit: vi.fn(),
-  }),
-}));
-
 import WalkWorkflow from './WalkWorkflow';
 
 const CELL_PX = 96;
 
-const renderWalk = (stripPreview) => {
+// The render-tracking hook is owned by the Sprites page now (#2931) and passed
+// in, so the suite supplies it as a prop instead of mocking the module.
+const noRenders = () => ({
+  pendingJobs: {}, beginSubmit: vi.fn(), resolveSubmit: vi.fn(), cancelSubmit: vi.fn(),
+});
+
+const renderWalk = (stripPreview, props = {}) => {
   const run = {
     id: 'run-east', direction: 'east', status: 'approved', stripPreview,
   };
@@ -36,10 +36,20 @@ const renderWalk = (stripPreview) => {
         selection: { directions: { east: { status: 'approved', runId: 'run-east' } } },
         walkSet: null,
       }}
+      renders={noRenders()}
+      duration={6}
+      onDurationChange={vi.fn()}
+      onGenerate={vi.fn()}
       onChanged={vi.fn()}
+      {...props}
     />,
   );
   return screen.getByRole('img', { name: 'walk loop preview' });
+};
+
+const APPROVED_STRIP = {
+  stripPath: 'grok/run-east/generated/example-walk-east-strip.png',
+  frameCount: 8, fps: 12, cellWidth: 384, cellHeight: 384,
 };
 
 describe('WalkWorkflow loop preview', () => {
@@ -86,5 +96,27 @@ describe('WalkWorkflow loop preview', () => {
     // fills it, so the computed cell height is asserted on the parent.
     expect(loop.parentElement.style.height).toBe(`${CELL_PX / 2}px`);
     expect(loop.style.backgroundSize).toBe(`${CELL_PX * 8}px ${CELL_PX / 2}px`);
+  });
+});
+
+// The asset collection's "Edit in Loop Trimmer" (#2931) routes back into this
+// component's one TrimPanel. The run in this fixture is APPROVED, which the
+// pre-existing Scissors toggle never reaches — so the panel has to render
+// outside the `!finalized && !approved` action block or the action silently
+// does nothing on exactly the assets most worth trimming.
+describe('WalkWorkflow trim requests', () => {
+  it('shows no trim panel until a run is requested', () => {
+    renderWalk(APPROVED_STRIP);
+    expect(screen.queryByRole('button', { name: /Save trim/ })).toBeNull();
+  });
+
+  it('opens the trim panel for an approved run named by id', () => {
+    renderWalk(APPROVED_STRIP, { trimRunId: 'run-east' });
+    expect(screen.getByRole('button', { name: /Save trim \(8\/8\)/ })).toBeTruthy();
+  });
+
+  it('ignores a run id that is not in this record listing', () => {
+    renderWalk(APPROVED_STRIP, { trimRunId: 'run-that-does-not-exist' });
+    expect(screen.queryByRole('button', { name: /Save trim/ })).toBeNull();
   });
 });
