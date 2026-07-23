@@ -72,7 +72,12 @@ export default function LoopTrimmer({
 
   const [enabled, setEnabled] = useState(() => new Set());
   const [frameIndex, setFrameIndex] = useState(0);
-  const [playing, setPlaying] = useState(false);
+  // Auto-play by default: the trimmer is conditionally mounted when its tab
+  // becomes active (#2933), so "mounts" == "tab activated" — starting playback
+  // here means the loop preview animates the moment the user opens the tab,
+  // without a manual Play click. The playback effect below no-ops until the
+  // enabled-frame set is seeded, so there's nothing to animate before then.
+  const [playing, setPlaying] = useState(true);
   const [fps, setFps] = useState(12);
   const [outputName, setOutputName] = useState('');
   const [result, setResult] = useState(null);
@@ -80,10 +85,12 @@ export default function LoopTrimmer({
 
   // Re-seed everything the moment the source changes — a stale enabled set from
   // a previous strip could hold out-of-range indices and 400 the endpoint.
+  // Playback re-arms (true) rather than stopping so switching the animation
+  // source keeps the preview live, consistent with the auto-play-on-open above.
   useEffect(() => {
     setEnabled(new Set(allColumns(frameCount)));
     setFrameIndex(0);
-    setPlaying(false);
+    setPlaying(true);
     setResult(null);
     setOutputName('');
     setFps(source?.fps || 12);
