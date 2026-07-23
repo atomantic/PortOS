@@ -27,7 +27,7 @@ const statusClass = {
 
 export default function ThreejsModels() {
   const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const imageFromRoute = searchParams.get('image') || '';
   const [models, setModels] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -55,16 +55,28 @@ export default function ThreejsModels() {
       .finally(() => setLoading(false));
   }, []);
 
+  useEffect(() => {
+    const currentFilename = selectedImage?.filename || '';
+    if (currentFilename === imageFromRoute) return;
+    setSelectedImage(imageFromRoute
+      ? { filename: imageFromRoute, previewUrl: `/data/images/${encodeURIComponent(imageFromRoute)}` }
+      : null);
+    setName((currentName) => (
+      !currentName.trim() || currentName === nameFromFilename(currentFilename)
+        ? nameFromFilename(imageFromRoute)
+        : currentName
+    ));
+  }, [imageFromRoute, selectedImage?.filename]);
+
   const canCreate = useMemo(
     () => selectedImage?.filename && name.trim() && selectedProviderId && !creating,
     [selectedImage, name, selectedProviderId, creating],
   );
 
   const handlePick = (item) => {
-    setSelectedImage(item);
-    if (!name.trim() || name === nameFromFilename(selectedImage?.filename)) {
-      setName(nameFromFilename(item.filename));
-    }
+    const nextParams = new URLSearchParams(searchParams);
+    nextParams.set('image', item.filename);
+    setSearchParams(nextParams);
   };
 
   const handleCreate = async (event) => {

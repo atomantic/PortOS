@@ -84,5 +84,6 @@ describe('buildThreejsFactorySource', () => {
     expect(source).toContain('export function createExampleCrateModel()');
     expect(source).toContain('root.userData.sculptRuntime');
     expect(source).toContain("case 'custom'");
+    expect(source).toContain('new THREE.MeshBasicMaterial(unlit)');
   });
 });
