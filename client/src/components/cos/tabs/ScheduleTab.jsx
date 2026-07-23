@@ -11,10 +11,13 @@ import AppTaskTypeSection from './schedule/AppTaskTypeSection';
 import TaskConfigDrawer from './schedule/TaskConfigDrawer';
 import { TASK_FILTERS, DEFAULT_FILTER_ID } from './schedule/scheduleConstants';
 
-export default function ScheduleTab({ apps }) {
+// `providers` is owned by ChiefOfStaff (30s poll, see useAutoRefetch there) and
+// passed down — same convention as TasksTab/AgentsTab — so this tab's provider/
+// model pickers stay live without standing up a second independent poll of the
+// same data.
+export default function ScheduleTab({ apps, providers }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [schedule, setSchedule] = useState(null);
-  const [providers, setProviders] = useState(null);
   const [loading, setLoading] = useState(true);
 
   const filterParam = searchParams.get('filter');
@@ -41,15 +44,9 @@ export default function ScheduleTab({ apps }) {
     setLoading(false);
   }, []);
 
-  const fetchProviders = useCallback(async () => {
-    const data = await api.getProviders().catch(() => null);
-    setProviders(data?.providers || []);
-  }, []);
-
   useEffect(() => {
     fetchSchedule();
-    fetchProviders();
-  }, [fetchSchedule, fetchProviders]);
+  }, [fetchSchedule]);
 
   const handleUpdateTask = async (taskType, settings) => {
     const result = await api.updateCosTaskInterval(taskType, settings, { silent: true }).catch(err => {

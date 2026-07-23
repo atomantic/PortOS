@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdir, rm, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
-import { createProviderService } from './providers.js';
+import { createProviderService, isOllamaBackedProvider } from './providers.js';
 
 const TEST_DATA_DIR = join(process.cwd(), 'test-data');
 
@@ -798,5 +798,32 @@ describe('Provider Service', () => {
       const { activeProvider } = await providerService.getAllProviders();
       expect(['__proto__', 'constructor', 'toString', 'hasOwnProperty']).not.toContain(activeProvider);
     });
+  });
+});
+
+describe('isOllamaBackedProvider', () => {
+  it('matches the built-in ollama API provider by id, regardless of endpoint/envVars', () => {
+    expect(isOllamaBackedProvider({ id: 'ollama', type: 'api', endpoint: 'http://localhost:11434/v1', envVars: {} })).toBe(true);
+  });
+
+  it('matches an api-type provider whose endpoint points at an Ollama daemon', () => {
+    expect(isOllamaBackedProvider({ id: 'local-llm', type: 'api', endpoint: 'http://192.168.1.5:11434/v1' })).toBe(true);
+    expect(isOllamaBackedProvider({ id: 'renamed', type: 'api', endpoint: 'https://my-ollama-box.example.com/v1' })).toBe(true);
+  });
+
+  it('matches a cli/tui provider carrying the ollamaBacked marker or an Ollama ANTHROPIC_BASE_URL', () => {
+    expect(isOllamaBackedProvider({ id: 'claude-ollama', type: 'tui', ollamaBacked: true })).toBe(true);
+    expect(isOllamaBackedProvider({ id: 'claude', type: 'cli', envVars: { ANTHROPIC_BASE_URL: 'http://localhost:11434' } })).toBe(true);
+  });
+
+  it('does not match a cloud provider with an unrelated endpoint', () => {
+    expect(isOllamaBackedProvider({ id: 'anthropic', type: 'api', endpoint: 'https://api.anthropic.com' })).toBe(false);
+    expect(isOllamaBackedProvider({ id: 'openai', type: 'api', endpoint: 'https://api.openai.com/v1' })).toBe(false);
+  });
+
+  it('handles missing/null provider input without throwing', () => {
+    expect(isOllamaBackedProvider(null)).toBe(false);
+    expect(isOllamaBackedProvider(undefined)).toBe(false);
+    expect(isOllamaBackedProvider({})).toBe(false);
   });
 });
