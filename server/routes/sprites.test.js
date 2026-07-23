@@ -21,9 +21,22 @@ vi.mock('../services/sprites/reference.js', () => ({
   patchSpriteRecord: vi.fn(async (id, patch) => ({ id, ...patch })),
 }));
 
+vi.mock('../services/sprites/walk.js', () => ({
+  getWalkState: vi.fn(async () => ({ runs: [], selection: null, walkSet: null })),
+  startWalkGeneration: vi.fn(async () => ({ jobId: 'v1', runId: 'walk-east-0a1b2c3d', direction: 'east', duration: 6 })),
+  approveWalkDirection: vi.fn(async () => ({ runs: [], selection: { status: 'in-progress' }, walkSet: null })),
+  rerunWalkPostprocess: vi.fn(async () => ({ id: 'walk-east-0a1b2c3d', status: 'candidate' })),
+}));
+
+vi.mock('../services/sprites/walkTrims.js', () => ({
+  saveLoopTrim: vi.fn(async () => ({ strip: 'walk/trims/t-v001-strip.png', loop: 'walk/trims/t-v001.gif', manifest: 'walk/trims/t-v001.json', frameCount: 3, disabledFrameCount: 1 })),
+}));
+
 import * as records from '../services/sprites/records.js';
 import * as importer from '../services/sprites/importer.js';
 import * as reference from '../services/sprites/reference.js';
+import * as walk from '../services/sprites/walk.js';
+import * as walkTrims from '../services/sprites/walkTrims.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import spriteRoutes from './sprites.js';
 
@@ -215,5 +228,73 @@ describe('sprites routes', () => {
     const r = await request(app).delete('/api/sprites/pioneer');
     expect(r.status).toBe(200);
     expect(records.deleteRecord).toHaveBeenCalledWith('pioneer');
+  });
+
+  it('GET /:id includes the walk state for characters only', async () => {
+    records.getRecordWithAssets.mockResolvedValueOnce({
+      record: { id: 'pioneer', kind: 'character' }, assets: [],
+    });
+    const r = await request(app).get('/api/sprites/pioneer');
+    expect(r.body.walk).toEqual({ runs: [], selection: null, walkSet: null });
+    expect(walk.getWalkState).toHaveBeenCalledWith('pioneer');
+
+    records.getRecordWithAssets.mockResolvedValueOnce({
+      record: { id: 'crates', kind: 'props' }, assets: [],
+    });
+    const props = await request(app).get('/api/sprites/crates');
+    expect(props.body.walk).toBeNull();
+  });
+
+  it('POST /:id/walk/generate validates direction and duration', async () => {
+    const r = await request(app).post('/api/sprites/pioneer/walk/generate')
+      .send({ direction: 'east', duration: 10 });
+    expect(r.status).toBe(200);
+    expect(walk.startWalkGeneration).toHaveBeenCalledWith('pioneer', { direction: 'east', duration: 10 });
+
+    expect((await request(app).post('/api/sprites/pioneer/walk/generate')
+      .send({ direction: 'up' })).status).toBe(400);
+    expect((await request(app).post('/api/sprites/pioneer/walk/generate')
+      .send({ direction: 'east', duration: 7 })).status).toBe(400);
+    // south is animatable (its anchor is the frozen main).
+    expect((await request(app).post('/api/sprites/pioneer/walk/generate')
+      .send({ direction: 'south' })).status).toBe(200);
+  });
+
+  it('POST /:id/walk/approve validates the run id shape', async () => {
+    const r = await request(app).post('/api/sprites/pioneer/walk/approve')
+      .send({ direction: 'east', runId: 'walk-east-0a1b2c3d' });
+    expect(r.status).toBe(200);
+    expect(walk.approveWalkDirection).toHaveBeenCalledWith('pioneer', { direction: 'east', runId: 'walk-east-0a1b2c3d' });
+
+    expect((await request(app).post('/api/sprites/pioneer/walk/approve')
+      .send({ direction: 'east', runId: '../escape' })).status).toBe(400);
+    expect(walk.approveWalkDirection).toHaveBeenCalledOnce();
+  });
+
+  it('POST /:id/walk/postprocess delegates the rerun', async () => {
+    const r = await request(app).post('/api/sprites/pioneer/walk/postprocess')
+      .send({ runId: 'walk-east-0a1b2c3d' });
+    expect(r.status).toBe(200);
+    expect(walk.rerunWalkPostprocess).toHaveBeenCalledWith('pioneer', { runId: 'walk-east-0a1b2c3d' });
+  });
+
+  it('POST /:id/walk/trim validates and 201s', async () => {
+    const payload = {
+      slug: 'east-loop',
+      atlasPath: 'grok/walk-east-0a1b2c3d/generated/strip.png',
+      row: 0, cellWidth: 384, cellHeight: 384, fps: 12,
+      allColumns: [0, 1, 2, 3], enabledColumns: [0, 2],
+    };
+    const r = await request(app).post('/api/sprites/pioneer/walk/trim').send(payload);
+    expect(r.status).toBe(201);
+    expect(walkTrims.saveLoopTrim).toHaveBeenCalledWith('pioneer', payload);
+
+    expect((await request(app).post('/api/sprites/pioneer/walk/trim')
+      .send({ ...payload, slug: 'Bad Slug!' })).status).toBe(400);
+    expect((await request(app).post('/api/sprites/pioneer/walk/trim')
+      .send({ ...payload, enabledColumns: [0] })).status).toBe(400);
+    expect((await request(app).post('/api/sprites/pioneer/walk/trim')
+      .send({ ...payload, allColumns: [0, 0, 1, 2] })).status).toBe(400);
+    expect(walkTrims.saveLoopTrim).toHaveBeenCalledOnce();
   });
 });

@@ -64,7 +64,7 @@ function rebaseLegacyPath(p, recordId) {
   return typeof p === 'string' && p.startsWith(marker) ? p.slice(marker.length) : p;
 }
 
-async function loadManifest(recordId) {
+export async function loadManifest(recordId) {
   const manifest = await readJSONFile(join(spriteDir(recordId), manifestRelPath(recordId)), null);
   if (!manifest) return null;
   if (manifest.mainReference) {
@@ -105,7 +105,7 @@ function seedManifest(recordId) {
   };
 }
 
-async function requireCharacter(recordId) {
+export async function requireCharacter(recordId) {
   const record = await getRecord(recordId);
   if (!record) throw new ServerError('Sprite record not found', { status: 404, code: 'NOT_FOUND' });
   if (record.kind !== 'character') {
