@@ -118,6 +118,16 @@ function normalizeStripPreview(recordId, run) {
   return { ...run, stripPreview: { ...run.stripPreview, stripPath } };
 }
 
+// PortOS stamps `id` on every run record it writes; imported source-pipeline
+// records don't carry one at all (see importer.test.js's fixtures). The run
+// DIRECTORY is the run id under both layouts, so fall back to it — the client
+// keys the run list by `id`, and an undefined id would collide every idless
+// run into one entry. In-memory only, like normalizeStripPreview.
+function normalizeRunRecord(recordId, run, runDirRel) {
+  const withId = run.id ? run : { ...run, id: runDirRel.split('/')[1] };
+  return normalizeStripPreview(recordId, withId);
+}
+
 // Strip candidates on an imported redraw manifest, in preference order. The
 // clean straight-alpha derivative comes first so the preview matches native
 // runs (which are always transparent); the keyed matte is the last resort
@@ -163,7 +173,10 @@ async function loadRedrawRun(recordId, direction, entry) {
     schemaVersion: 1,
     kind: 'imported-redraw-walk-cycle',
     status: 'approved',
-    id: entry.runId,
+    // Imported entries carry no runId (it is an approveWalkDirection field),
+    // so fall back to the manifest path — stable across reads and unique per
+    // direction, which is all the client's list key needs.
+    id: entry.runId || manifestRel,
     characterId: recordId,
     direction,
     createdAt: entry.approvedAt,
@@ -206,7 +219,7 @@ async function loadRunForEntry(recordId, direction, entry) {
   const runDirRel = RUN_DIR_MATCH.exec(layoutPath)?.[0];
   if (runDirRel) {
     const run = await loadRunRecordAt(recordId, runDirRel);
-    return run ? normalizeStripPreview(recordId, run) : null;
+    return run ? normalizeRunRecord(recordId, run, runDirRel) : null;
   }
   return loadRedrawRun(recordId, direction, entry);
 }
@@ -235,7 +248,13 @@ export async function getWalkState(recordId) {
       // unconditionally — a rejected/pending entry must not surface as an
       // approved run next to live Generate/Approve buttons. A rejected grok
       // entry still surfaces via the scan below, with its own real status.
-      .filter(([, entry]) => entry?.status === 'approved' && entry.runId
+      //
+      // Deliberately NOT gated on `entry.runId`: that field is written only by
+      // approveWalkDirection, so IMPORTED entries — the whole population this
+      // read path exists for — never carry one (importer.test.js's walk-set
+      // fixtures are runId-less). Gating on it filtered out every imported
+      // direction and made the layout dispatch below unreachable for them.
+      .filter(([, entry]) => entry?.status === 'approved'
         && (entry.runPath || entry.runManifest))
       .map(([direction, entry]) => loadRunForEntry(recordId, direction, entry)),
   )).filter(Boolean);
@@ -244,10 +263,12 @@ export async function getWalkState(recordId) {
   const scannedRuns = (await Promise.all(
     (await scanPromise)
       .filter((e) => e.isDirectory() && e.name.startsWith('walk-') && !resolvedRunIds.has(e.name))
-      .map((e) => loadRunRecord(recordId, e.name)),
+      .map((e) => loadRunRecord(recordId, e.name)
+        .then((run) => (run ? normalizeRunRecord(recordId, run, runRelPath(e.name)) : null))),
   )).filter(Boolean)
-    .filter((run) => !resolvedRunIds.has(run.id))
-    .map((run) => normalizeStripPreview(recordId, run));
+    // Second pass: a record whose own `id` differs from its directory name is
+    // already covered by an entry that named it by id.
+    .filter((run) => !resolvedRunIds.has(run.id));
 
   const allRuns = [...entryRuns, ...scannedRuns]
     .sort((a, b) => runCreatedAtMs(b.createdAt) - runCreatedAtMs(a.createdAt));
