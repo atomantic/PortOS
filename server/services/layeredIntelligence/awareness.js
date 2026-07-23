@@ -182,6 +182,72 @@ export function computeExecutionByDomain(outcomes = []) {
 }
 
 /**
+ * Summarize what happens after a proposal has been approved/merged. The existing
+ * outcome store already persists both sides of this lifecycle: `outcome: 'merged'`
+ * marks approval, while `executionOutcome` records the terminal LI hand-off result.
+ * Keep this derivation pure so the prompt and dashboard cannot disagree about the
+ * post-approval completion signal.
+ *
+ * Duration is measured from filing to a successful hand-off completion. That is the
+ * only timestamp pair available for every tracker and remains meaningful when the
+ * coding hand-off finishes before the tracker issue is reconciled as merged.
+ */
+export function computePostApprovalCompletion(outcomes = []) {
+  const approved = (Array.isArray(outcomes) ? outcomes : []).filter(record =>
+    record && typeof record === 'object' && record.outcome === 'merged'
+  );
+
+  const summarize = (records) => {
+    const completedRecords = records.filter(record => record.executionOutcome === 'success');
+    const abandoned = records.filter(record => record.executionOutcome === 'failure').length;
+    const completed = completedRecords.length;
+    const attempted = completed + abandoned;
+    const durations = completedRecords
+      .map(record => Date.parse(record.executionAt) - Date.parse(record.filedAt))
+      .filter(duration => Number.isFinite(duration) && duration >= 0)
+      .sort((a, b) => a - b);
+    const percentile = (fraction) => {
+      if (durations.length === 0) return null;
+      return durations[Math.max(0, Math.ceil(durations.length * fraction) - 1)];
+    };
+    const median = durations.length % 2 === 1
+      ? durations[Math.floor(durations.length / 2)]
+      : Math.round((durations[(durations.length / 2) - 1] + durations[durations.length / 2]) / 2);
+    const duration = durations.length === 0
+      ? { count: 0, averageMs: null, medianMs: null, p90Ms: null, minMs: null, maxMs: null }
+      : {
+          count: durations.length,
+          averageMs: Math.round(durations.reduce((sum, value) => sum + value, 0) / durations.length),
+          medianMs: median,
+          p90Ms: percentile(0.9),
+          minMs: durations[0],
+          maxMs: durations.at(-1)
+        };
+    return {
+      approved: records.length,
+      completed,
+      abandoned,
+      awaitingExecution: records.length - attempted,
+      attempted,
+      completionRate: attempted > 0 ? (completed / attempted) * 100 : null,
+      duration
+    };
+  };
+
+  const recordsByScope = new Map();
+  for (const record of approved) {
+    const scope = typeof record.scope === 'string' && record.scope.trim() ? record.scope.trim() : 'unknown';
+    const records = recordsByScope.get(scope) || [];
+    records.push(record);
+    recordsByScope.set(scope, records);
+  }
+  const byScope = Object.create(null);
+  for (const [scope, records] of recordsByScope) byScope[scope] = summarize(records);
+
+  return { ...summarize(approved), byScope };
+}
+
+/**
  * Render the dominant execution-failure causes from a domain's `failureSummary`
  * (#2764 §3) as a compact clause for the per-domain avoid line. Reuses the shared
  * `formatExecutionFailure` gloss so the wording matches the install-wide failure line

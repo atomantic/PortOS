@@ -12,6 +12,16 @@ const ready = (overrides = {}) => ({
   read: true,
   tracked: true,
   stats: { total: 4, merged: 1, rejected: 1, abandoned: 1, pending: 1, resolved: 3, mergeRate: 100 / 3 },
+  execution: {
+    approved: 1, completed: 1, abandoned: 0, awaitingExecution: 0, attempted: 1, completionRate: 100,
+    duration: { count: 1, averageMs: 3_600_000, medianMs: 3_600_000, p90Ms: 3_600_000, minMs: 3_600_000, maxMs: 3_600_000 },
+    byScope: {
+      'app-improvement': {
+        approved: 1, completed: 1, abandoned: 0, awaitingExecution: 0, attempted: 1, completionRate: 100,
+        duration: { count: 1, averageMs: 3_600_000, medianMs: 3_600_000, p90Ms: 3_600_000, minMs: 3_600_000, maxMs: 3_600_000 }
+      }
+    }
+  },
   rejections: { entries: [{ reason: 'user-rejected', count: 1 }], unknown: 1, unclassified: 0, diagnosed: 1, total: 2 },
   recent: [
     { slug: 'add-metrics', scope: 'app-improvement', outcome: 'merged', rejectionReason: null, filedAt: '2026-07-04T00:00:00.000Z', outcomeAt: '2026-07-05T00:00:00.000Z' },
@@ -41,6 +51,9 @@ describe('LayeredIntelligenceOutcomes', () => {
     expect(screen.getByText(/closed with no recorded reason/)).toBeInTheDocument();
     expect(screen.getByText('add-metrics')).toBeInTheDocument();
     expect(screen.getByText('drop-feature')).toBeInTheDocument();
+    expect(screen.getByText('post-approval hand-off completion')).toBeInTheDocument();
+    expect(screen.getByText(/Filed → completed: median 1h 0m/)).toBeInTheDocument();
+    expect(screen.getByText('app-improvement')).toBeInTheDocument();
     expect(getAppLayeredIntelligenceOutcomes).toHaveBeenCalledWith('app-001');
   });
 

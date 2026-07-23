@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { BarChart3 } from 'lucide-react';
 import Banner from '../ui/Banner';
 import * as api from '../../services/api';
-import { timeAgo } from '../../utils/formatters';
+import { formatDurationMs, timeAgo } from '../../utils/formatters';
 import { formatLiRejectionReason } from '../../utils/layeredIntelligenceReasons';
 
 // Read-only dashboard (#2689): how this app's filed Layered Intelligence proposals
@@ -82,7 +82,7 @@ export default function LayeredIntelligenceOutcomes({ appId }) {
     );
   }
 
-  const { stats, rejections, recent, tracked = true } = state.data;
+  const { stats, execution, rejections, recent, tracked = true } = state.data;
 
   if (!stats || stats.total === 0) {
     return (
@@ -117,6 +117,7 @@ export default function LayeredIntelligenceOutcomes({ appId }) {
   // the API caps `recent` at a limit above what we render, so `recent.length` would
   // undercount the real remainder for an app with a long proposal history.
   const hiddenCount = Math.max(0, stats.total - visible.length);
+  const executionScopes = Object.entries(execution?.byScope || {});
 
   return (
     <div className="space-y-3 bg-port-bg border border-port-border rounded-lg px-3 py-3">
@@ -152,6 +153,37 @@ export default function LayeredIntelligenceOutcomes({ appId }) {
           );
         })}
       </div>
+
+      {execution?.approved > 0 && (
+        <div className="space-y-1 border-t border-port-border pt-3">
+          <div className="flex items-baseline gap-2">
+            <span className="text-sm font-semibold text-white">
+              {execution.completionRate == null ? '—' : `${Math.round(execution.completionRate)}%`}
+            </span>
+            <span className="text-xs text-gray-500">post-approval hand-off completion</span>
+          </div>
+          <p className="text-xs text-gray-500">
+            {execution.completed} completed · {execution.abandoned} abandoned · {execution.awaitingExecution} awaiting execution
+          </p>
+          {execution.duration?.count > 0 && (
+            <p className="text-xs text-gray-500">
+              Filed → completed: median {formatDurationMs(execution.duration.medianMs)} · p90 {formatDurationMs(execution.duration.p90Ms)}
+            </p>
+          )}
+          {executionScopes.length > 0 && (
+            <ul className="space-y-0.5">
+              {executionScopes.map(([scope, summary]) => (
+                <li key={scope} className="text-xs text-gray-500 flex justify-between gap-2">
+                  <span className="min-w-0 break-all">{scope}</span>
+                  <span className="shrink-0">
+                    {summary.completionRate == null ? 'awaiting' : `${Math.round(summary.completionRate)}%`} · {summary.completed}/{summary.attempted || 0}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {(rejectionEntries.length > 0 || unknown > 0 || unclassified > 0) && (
         <div className="space-y-1">
