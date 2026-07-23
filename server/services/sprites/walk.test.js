@@ -330,6 +330,8 @@ describe('approveWalkDirection', () => {
       status: 'final',
       characterId: id,
       directionOrder: SPRITE_DIRECTIONS,
+      // A native walk set is NOT an import, so the client gets its Unlock button.
+      imported: false,
     });
     expect(Object.keys(state.walkSet.directions)).toHaveLength(8);
     expect((await records.getRecord(id)).status).toBe('walk-complete');
@@ -390,6 +392,10 @@ describe('unlockWalkSet', () => {
       selectionPath: `art-source/sprites/${id}/walk/${id}-walk-selection-v1.json`,
       directions: {},
     }));
+    // The client keys its Unlock affordance off this flag: a legacy import
+    // must surface imported:true so the button is hidden rather than offered
+    // and then 409'd.
+    expect((await getWalkState(id)).walkSet.imported).toBe(true);
     await expect(unlockWalkSet(id)).rejects.toMatchObject({ code: 'LEGACY_IMPORTED_WALK_SET' });
   });
 });
