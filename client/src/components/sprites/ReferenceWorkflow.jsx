@@ -6,7 +6,7 @@ import { getSettings } from '../../services/apiSystem.js';
 import { deriveAvailableBackends } from '../../lib/imageGenBackends.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import { useSpritePendingRenders } from '../../hooks/useSpritePendingRenders.js';
-import { spriteAssetUrl } from './spriteAssets.js';
+import SpritePreview from './SpritePreview.jsx';
 
 // Reference workflow (issue #2896): generate main-reference candidates from
 // text + optional uploaded design image, freeze the approved main, then
@@ -18,16 +18,11 @@ import { spriteAssetUrl } from './spriteAssets.js';
 // import server modules).
 const CHROMA_KEYS = ['#FF00FF', '#00FF00', '#0000FF'];
 
+// Thin alias so the existing call sites keep their `className` semantics
+// (sizing on the box) while the checkerboard + pixelation rules live in one
+// place — see SpritePreview.
 function SpriteImg({ recordId, path, className }) {
-  return (
-    <img
-      src={spriteAssetUrl(recordId, path)}
-      alt={path}
-      loading="lazy"
-      className={className}
-      style={{ imageRendering: 'pixelated' }}
-    />
-  );
+  return <SpritePreview recordId={recordId} path={path} className={className} />;
 }
 
 // Candidate thumbnail with an inline lock confirm (locking is irreversible —

@@ -6,7 +6,8 @@ import {
 } from '../../services/apiSprites.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import { useSpritePendingRenders } from '../../hooks/useSpritePendingRenders.js';
-import { spriteAssetUrl } from './spriteAssets.js';
+import { spriteAssetUrl, checkerboardStyle, PIXELATED } from './spriteAssets.js';
+import SpritePreview from './SpritePreview.jsx';
 
 // Walk workflow (issue #2897): one grok image_to_video clip per locked
 // directional anchor, deterministic server-side packaging into the 8-phase
@@ -48,22 +49,31 @@ function StripLoop({ recordId, stripPreview }) {
   const { frameCount, fps, height } = stripGeometry(stripPreview);
   const scrub = CELL_PX * frameCount;
   return (
+    // The loop paints the strip as its OWN background-image, so it can't also
+    // carry the checkerboard — that goes on a wrapper sized to match, and shows
+    // through the frame's alpha (#2930). SpritePreview doesn't fit here: there
+    // is no <img>, the animation is a stepped background scrub.
+    // `overflow-hidden` matters: the strip is painted by the INNER div, whose
+    // corners are square, so without clipping it covers the rounded corners.
     <div
-      role="img"
-      aria-label="walk loop preview"
-      className="bg-port-bg border border-port-border rounded"
-      style={{
-        width: CELL_PX,
-        height,
-        // Quoted: encodeURIComponent leaves `(`/`)` intact, and an externally
-        // authored redraw filename containing one would end the url() token early.
-        backgroundImage: `url("${spriteAssetUrl(recordId, stripPreview.stripPath)}")`,
-        backgroundSize: `${scrub}px ${height}px`,
-        imageRendering: 'pixelated',
-        '--sprite-walk-loop-end': `-${scrub}px`,
-        animation: `sprite-walk-loop ${(frameCount / fps).toFixed(3)}s steps(${frameCount}) infinite`,
-      }}
-    />
+      className="border border-port-border rounded overflow-hidden"
+      style={{ width: CELL_PX, height, ...checkerboardStyle(6) }}
+    >
+      <div
+        role="img"
+        aria-label="walk loop preview"
+        className="w-full h-full"
+        style={{
+          // Quoted: encodeURIComponent leaves `(`/`)` intact, and an externally
+          // authored redraw filename containing one would end the url() token early.
+          backgroundImage: `url("${spriteAssetUrl(recordId, stripPreview.stripPath)}")`,
+          backgroundSize: `${scrub}px ${height}px`,
+          ...PIXELATED,
+          '--sprite-walk-loop-end': `-${scrub}px`,
+          animation: `sprite-walk-loop ${(frameCount / fps).toFixed(3)}s steps(${frameCount}) infinite`,
+        }}
+      />
+    </div>
   );
 }
 
@@ -121,11 +131,11 @@ function TrimPanel({ recordId, run, onClose }) {
       </div>
       {result && (
         <div className="flex items-center gap-2">
-          <img
-            src={spriteAssetUrl(recordId, result.loop)}
+          <SpritePreview
+            recordId={recordId}
+            path={result.loop}
             alt="trimmed loop"
-            className="w-24 h-24 object-contain bg-port-card border border-port-border rounded"
-            style={{ imageRendering: 'pixelated' }}
+            className="w-24 h-24 shrink-0 border border-port-border rounded"
           />
           <p className="text-[10px] text-gray-500 break-all">{result.loop}</p>
         </div>

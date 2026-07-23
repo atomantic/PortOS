@@ -82,7 +82,9 @@ describe('WalkWorkflow loop preview', () => {
       stripPath: 'grok/walk-east-abc/generated/strip.png',
       frameCount: 8, fps: 12, cellWidth: 384, cellHeight: 192,
     });
-    expect(loop.style.height).toBe(`${CELL_PX / 2}px`);
+    // The box is the checkerboarded wrapper (#2930) — the scrubbing element
+    // fills it, so the computed cell height is asserted on the parent.
+    expect(loop.parentElement.style.height).toBe(`${CELL_PX / 2}px`);
     expect(loop.style.backgroundSize).toBe(`${CELL_PX * 8}px ${CELL_PX / 2}px`);
   });
 });

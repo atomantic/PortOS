@@ -9,7 +9,7 @@ import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import AppContextPicker from '../AppContextPicker.jsx';
 import InlineConfirmRow from '../ui/InlineConfirmRow.jsx';
 import { FormField } from '../ui/FormField.jsx';
-import { spriteAssetUrl } from './spriteAssets.js';
+import SpritePreview from './SpritePreview.jsx';
 import { timeAgo } from '../../utils/formatters.js';
 
 // Publish workflow (issue #2898): compile the immutable runtime atlas from
@@ -142,11 +142,12 @@ export default function PublishWorkflow({ record, walk, atlas, onChanged }) {
       <div className="flex flex-col sm:flex-row gap-3">
         <div className="space-y-2">
           {current && (
-            <img
-              src={spriteAssetUrl(record.id, current.atlasPath)}
+            <SpritePreview
+              recordId={record.id}
+              path={current.atlasPath}
               alt="compiled runtime atlas"
-              className="w-full sm:w-60 object-contain bg-port-bg border border-port-border rounded"
-              style={{ imageRendering: 'pixelated' }}
+              className="w-full sm:w-60 border border-port-border rounded"
+              imgClassName="w-full object-contain"
             />
           )}
           <button
