@@ -70,3 +70,22 @@ export const postprocessSpriteWalk = (id, body, options = {}) => request(`/sprit
 export const trimSpriteWalk = (id, body, options = {}) => request(`/sprites/${encodeURIComponent(id)}/walk/trim`, {
   method: 'POST', body: JSON.stringify(body), ...options,
 });
+
+// Phase 4 (#2898): runtime atlas compile + publish into a managed app.
+
+// Compile (idempotently) the immutable runtime atlas from the finalized walk
+// set. Returns the current pointer ({ version, atlasPath, atlasSha256, ... }
+// plus created).
+export const compileSpriteAtlas = (id, body = {}, options = {}) => request(`/sprites/${encodeURIComponent(id)}/atlas/compile`, {
+  method: 'POST', body: JSON.stringify(body), ...options,
+});
+
+// Set (binding object) or clear (null) the record's publish binding.
+export const setSpritePublishBinding = (id, binding, options = {}) => request(`/sprites/${encodeURIComponent(id)}/publish-binding`, {
+  method: 'PUT', body: JSON.stringify({ binding }), ...options,
+});
+
+// Publish the compiled atlas into the bound managed app's repo.
+export const publishSpriteAtlas = (id, options = {}) => request(`/sprites/${encodeURIComponent(id)}/atlas/publish`, {
+  method: 'POST', body: JSON.stringify({}), ...options,
+});

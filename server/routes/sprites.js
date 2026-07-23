@@ -23,7 +23,10 @@ import {
   spriteWalkApproveSchema,
   spriteWalkPostprocessSchema,
   spriteWalkTrimSchema,
+  spritePublishBindingSchema,
+  spriteAtlasCompileSchema,
 } from '../lib/validation.js';
+import { z } from 'zod';
 import { optionalUploadFields } from '../lib/multipart.js';
 import {
   listRecords, getRecordWithAssets, createCharacter, deleteRecord,
@@ -36,6 +39,8 @@ import {
   getWalkState, startWalkGeneration, approveWalkDirection, rerunWalkPostprocess,
 } from '../services/sprites/walk.js';
 import { saveLoopTrim } from '../services/sprites/walkTrims.js';
+import { compileAtlas, getAtlasState } from '../services/sprites/atlas.js';
+import { setPublishBinding, publishAtlas } from '../services/sprites/publish.js';
 
 const router = Router();
 
@@ -72,9 +77,14 @@ router.get('/:id', asyncHandler(async (req, res) => {
   const detail = await getRecordWithAssets(req.params.id);
   if (!detail) throw new ServerError('Sprite record not found', { status: 404, code: 'NOT_FOUND' });
   const isCharacter = detail.record.kind === 'character';
-  const reference = isCharacter ? await getReferenceSet(req.params.id) : null;
-  const walk = isCharacter ? await getWalkState(req.params.id) : null;
-  res.json({ ...detail, reference, walk });
+  const [reference, walk, atlas] = isCharacter
+    ? await Promise.all([
+      getReferenceSet(req.params.id),
+      getWalkState(req.params.id),
+      getAtlasState(req.params.id),
+    ])
+    : [null, null, null];
+  res.json({ ...detail, reference, walk, atlas });
 }));
 
 // Queue one reference candidate render (main or a directional anchor).
@@ -129,6 +139,26 @@ router.post('/:id/walk/postprocess', asyncHandler(async (req, res) => {
 router.post('/:id/walk/trim', asyncHandler(async (req, res) => {
   const body = validateRequest(spriteWalkTrimSchema, req.body);
   res.status(201).json(await saveLoopTrim(req.params.id, body));
+}));
+
+// Phase 4 (#2898): atlas compile + publish-to-managed-app. Compile is
+// deterministic local work (no AI call); publish additionally requires a
+// configured binding and is the only path that writes outside data/.
+router.post('/:id/atlas/compile', asyncHandler(async (req, res) => {
+  const body = validateRequest(spriteAtlasCompileSchema, req.body ?? {});
+  res.json(await compileAtlas(req.params.id, body));
+}));
+
+// Set (or clear, with binding: null) the publish binding. App existence and
+// path anchoring are validated here so a bad binding fails at save time, not
+// at publish time.
+router.put('/:id/publish-binding', asyncHandler(async (req, res) => {
+  const { binding } = validateRequest(z.object({ binding: spritePublishBindingSchema }), req.body);
+  res.json(await setPublishBinding(req.params.id, binding));
+}));
+
+router.post('/:id/atlas/publish', asyncHandler(async (req, res) => {
+  res.json(await publishAtlas(req.params.id));
 }));
 
 // Chroma-key changes route through patchSpriteRecord, which re-checks the

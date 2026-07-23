@@ -32,11 +32,23 @@ vi.mock('../services/sprites/walkTrims.js', () => ({
   saveLoopTrim: vi.fn(async () => ({ strip: 'walk/trims/t-v001-strip.png', loop: 'walk/trims/t-v001.gif', manifest: 'walk/trims/t-v001.json', frameCount: 3, disabledFrameCount: 1 })),
 }));
 
+vi.mock('../services/sprites/atlas.js', () => ({
+  compileAtlas: vi.fn(async () => ({ created: true, version: 1, atlasPath: 'runtime/v1/pioneer-animation-atlas-v1.png' })),
+  getAtlasState: vi.fn(async () => ({ current: null, publications: [] })),
+}));
+
+vi.mock('../services/sprites/publish.js', () => ({
+  setPublishBinding: vi.fn(async (id, binding) => ({ id, publishBinding: binding })),
+  publishAtlas: vi.fn(async () => ({ published: true, publication: { version: 1 } })),
+}));
+
 import * as records from '../services/sprites/records.js';
 import * as importer from '../services/sprites/importer.js';
 import * as reference from '../services/sprites/reference.js';
 import * as walk from '../services/sprites/walk.js';
 import * as walkTrims from '../services/sprites/walkTrims.js';
+import * as atlas from '../services/sprites/atlas.js';
+import * as publish from '../services/sprites/publish.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 import spriteRoutes from './sprites.js';
 
@@ -293,5 +305,45 @@ describe('sprites routes', () => {
     expect((await request(app).post('/api/sprites/pioneer/walk/trim')
       .send({ runId: '../escape', enabledColumns: [0, 2] })).status).toBe(400);
     expect(walkTrims.saveLoopTrim).toHaveBeenCalledOnce();
+  });
+
+  it('POST /:id/atlas/compile validates and delegates (geometry optional)', async () => {
+    const r = await request(app).post('/api/sprites/pioneer/atlas/compile').send({});
+    expect(r.status).toBe(200);
+    expect(atlas.compileAtlas).toHaveBeenCalledWith('pioneer', {});
+
+    const withGeometry = { geometry: { cellSize: 64, pivot: [32, 56] } };
+    await request(app).post('/api/sprites/pioneer/atlas/compile').send(withGeometry);
+    expect(atlas.compileAtlas).toHaveBeenLastCalledWith('pioneer', withGeometry);
+
+    expect((await request(app).post('/api/sprites/pioneer/atlas/compile')
+      .send({ geometry: { cellSize: 4 } })).status).toBe(400);
+  });
+
+  it('PUT /:id/publish-binding validates the binding shape and delegates', async () => {
+    const binding = { appId: 'game-app', atlasDestPath: 'assets/sprites/hero/atlas.png' };
+    const r = await request(app).put('/api/sprites/pioneer/publish-binding').send({ binding });
+    expect(r.status).toBe(200);
+    expect(publish.setPublishBinding).toHaveBeenCalledWith('pioneer', binding);
+
+    // null clears the binding
+    await request(app).put('/api/sprites/pioneer/publish-binding').send({ binding: null });
+    expect(publish.setPublishBinding).toHaveBeenLastCalledWith('pioneer', null);
+
+    // traversal / absolute destinations die at the schema
+    expect((await request(app).put('/api/sprites/pioneer/publish-binding')
+      .send({ binding: { ...binding, atlasDestPath: '../escape.png' } })).status).toBe(400);
+    expect((await request(app).put('/api/sprites/pioneer/publish-binding')
+      .send({ binding: { ...binding, atlasDestPath: '/abs.png' } })).status).toBe(400);
+    expect((await request(app).put('/api/sprites/pioneer/publish-binding')
+      .send({ binding: { ...binding, codeBinding: { path: 'src/Hero.cs', resourcePath: '' } } })).status).toBe(400);
+    expect(publish.setPublishBinding).toHaveBeenCalledTimes(2);
+  });
+
+  it('POST /:id/atlas/publish delegates to publishAtlas', async () => {
+    const r = await request(app).post('/api/sprites/pioneer/atlas/publish').send({});
+    expect(r.status).toBe(200);
+    expect(publish.publishAtlas).toHaveBeenCalledWith('pioneer');
+    expect(r.body.published).toBe(true);
   });
 });

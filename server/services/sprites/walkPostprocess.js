@@ -369,7 +369,7 @@ function cropFrame(frame, bbox) {
 
 // sharp premultiplies alpha before resampling and unpremultiplies after —
 // the same alpha-weighted LANCZOS the source's premultiplied_resize does.
-async function premultipliedResize(frame, width, height) {
+export async function premultipliedResize(frame, width, height) {
   const data = await sharp(frame.data, { raw: { width: frame.width, height: frame.height, channels: 4 } })
     .resize(width, height, { kernel: 'lanczos3', fit: 'fill' })
     .raw()

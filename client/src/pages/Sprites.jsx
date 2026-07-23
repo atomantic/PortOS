@@ -5,6 +5,7 @@ import toast from '../components/ui/Toast';
 import { listSpriteRecords, getSpriteRecord, importSprites, createSpriteRecord } from '../services/apiSprites.js';
 import ReferenceWorkflow from '../components/sprites/ReferenceWorkflow.jsx';
 import WalkWorkflow from '../components/sprites/WalkWorkflow.jsx';
+import PublishWorkflow from '../components/sprites/PublishWorkflow.jsx';
 import { spriteAssetUrl } from '../components/sprites/spriteAssets.js';
 import { useAsyncAction } from '../hooks/useAsyncAction.js';
 import { formatBytes, timeAgo } from '../utils/formatters.js';
@@ -384,6 +385,12 @@ export default function Sprites() {
                   record={detail.record}
                   reference={detail.reference}
                   walk={detail.walk}
+                  onChanged={onWorkflowChanged}
+                />
+                <PublishWorkflow
+                  record={detail.record}
+                  walk={detail.walk}
+                  atlas={detail.atlas}
                   onChanged={onWorkflowChanged}
                 />
               </>
