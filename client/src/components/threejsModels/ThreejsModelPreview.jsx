@@ -43,19 +43,22 @@ function Geometry({ definition }) {
 }
 
 function Material({ definition }) {
-  const common = {
+  const unlit = {
     color: definition.color,
-    emissive: definition.emissive,
-    emissiveIntensity: definition.emissiveIntensity,
     opacity: definition.opacity,
     transparent: definition.transparent,
     wireframe: definition.wireframe,
   };
-  if (definition.type === 'basic') return <meshBasicMaterial {...common} />;
+  if (definition.type === 'basic') return <meshBasicMaterial {...unlit} />;
+  const lit = {
+    ...unlit,
+    emissive: definition.emissive,
+    emissiveIntensity: definition.emissiveIntensity,
+  };
   if (definition.type === 'physical') {
     return (
       <meshPhysicalMaterial
-        {...common}
+        {...lit}
         metalness={definition.metalness}
         roughness={definition.roughness}
         clearcoat={definition.clearcoat}
@@ -65,7 +68,7 @@ function Material({ definition }) {
   }
   return (
     <meshStandardMaterial
-      {...common}
+      {...lit}
       metalness={definition.metalness}
       roughness={definition.roughness}
     />

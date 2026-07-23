@@ -261,28 +261,30 @@ function createGeometry(definition) {
 }
 
 function createMaterial(definition) {
-  const common = {
+  const unlit = {
     color: definition.color,
-    metalness: definition.metalness,
-    roughness: definition.roughness,
-    emissive: definition.emissive,
-    emissiveIntensity: definition.emissiveIntensity,
     opacity: definition.opacity,
     transparent: definition.transparent,
     wireframe: definition.wireframe,
   };
   if (definition.type === 'basic') {
-    const { metalness, roughness, ...basic } = common;
-    return new THREE.MeshBasicMaterial(basic);
+    return new THREE.MeshBasicMaterial(unlit);
   }
+  const lit = {
+    ...unlit,
+    metalness: definition.metalness,
+    roughness: definition.roughness,
+    emissive: definition.emissive,
+    emissiveIntensity: definition.emissiveIntensity,
+  };
   if (definition.type === 'physical') {
     return new THREE.MeshPhysicalMaterial({
-      ...common,
+      ...lit,
       clearcoat: definition.clearcoat,
       clearcoatRoughness: definition.clearcoatRoughness,
     });
   }
-  return new THREE.MeshStandardMaterial(common);
+  return new THREE.MeshStandardMaterial(lit);
 }
 
 function createPart(definition, materials, nodes) {

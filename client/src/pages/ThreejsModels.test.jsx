@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import ThreejsModels from './ThreejsModels';
 
@@ -25,10 +25,21 @@ vi.mock('../components/ProviderModelSelector', () => ({
 }));
 
 vi.mock('../components/imageGen/GalleryImagePicker', () => ({
-  default: () => null,
+  default: ({ open, onSelect }) => open ? (
+    <button
+      type="button"
+      onClick={() => onSelect({ filename: 'alternate-beacon.png', previewUrl: '/data/images/alternate-beacon.png' })}
+    >
+      Pick alternate beacon
+    </button>
+  ) : null,
 }));
 
 import { createThreejsModel, listThreejsModels } from '../services/api';
+
+function LocationProbe() {
+  return <output aria-label="Current query">{useLocation().search}</output>;
+}
 
 describe('ThreejsModels', () => {
   beforeEach(() => {
@@ -61,5 +72,23 @@ describe('ThreejsModels', () => {
       model: 'vision-pro',
     }, { silent: true }));
     expect(await screen.findByText('Model workspace opened')).toBeInTheDocument();
+  });
+
+  it('keeps a newly picked gallery image in the shareable URL', async () => {
+    render(
+      <MemoryRouter initialEntries={['/media/threejs?image=example-robot.png']}>
+        <Routes>
+          <Route path="/media/threejs" element={<><ThreejsModels /><LocationProbe /></>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /Change image/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Pick alternate beacon' }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('Current query')).toHaveTextContent('?image=alternate-beacon.png');
+      expect(screen.getByLabelText('Model name')).toHaveValue('Alternate Beacon');
+    });
   });
 });
