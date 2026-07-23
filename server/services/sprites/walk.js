@@ -33,7 +33,7 @@ import { spriteDir, resolveSpriteAssetPath, toRecordRelativeAssetPath } from './
 import { requireCharacter, loadManifest } from './reference.js';
 import { SPRITE_DIRECTIONS, anchorIdForDirection, buildWalkVideoPrompt } from './prompts.js';
 import {
-  prepareWalkAnchorInput, runWalkPostprocess, WALK_FPS, WALK_FRAME_COUNT,
+  prepareWalkAnchorInput, runWalkPostprocess, WALK_FPS, WALK_FRAME_COUNT, WALK_CELL_SIZE,
 } from './walkPostprocess.js';
 import { GROK_VIDEO_DURATIONS } from '../videoGen/grok.js';
 
@@ -110,6 +110,68 @@ function normalizeStripPreview(recordId, run) {
   return { ...run, stripPreview: { ...run.stripPreview, stripPath } };
 }
 
+// Strip candidates on an imported redraw manifest, in preference order. The
+// clean straight-alpha derivative comes first so the preview matches native
+// runs (which are always transparent); the keyed matte is the last resort
+// because it renders with the chroma background baked in.
+const REDRAW_STRIP_FIELDS = ['stripAlpha', 'stripAlphaOriginal', 'stripKeyed'];
+
+/**
+ * Synthesize a preview-only run object for a direction approved from an
+ * imagegen **redraw** manifest (issue #2924) rather than a grok walk run.
+ *
+ * The source pipeline's video-first redraw path (e.g. pioneer's east, packaged
+ * as `imagegen/vN/…-manifest.json` with a 12-frame cycle) predates PortOS's own
+ * grok-direct walk workflow, so the selection's `runPath` points at an
+ * `imagegen/` directory with no matching `grok/` run record — `getWalkState`
+ * surfaced nothing and the direction rendered its "approved" badge with no
+ * loop preview. Rather than model a second full run-record type, read the
+ * redraw manifest's `cycle` block and shape the minimum the UI needs. Returns
+ * null when the manifest isn't a redraw cycle or its strip is missing on disk,
+ * so a genuinely absent run stays absent instead of rendering a broken image.
+ */
+async function loadRedrawRun(recordId, direction, entry) {
+  const manifestRel = toRecordRelativeAssetPath(recordId, entry.runManifest);
+  if (!manifestRel) return null;
+  const manifest = await readJSONFile(join(spriteDir(recordId), manifestRel), null);
+  const cycle = manifest?.cycle;
+  const frameCount = Number(cycle?.frameCount);
+  if (!Number.isInteger(frameCount) || frameCount < 2) return null;
+
+  let stripPath = null;
+  for (const field of REDRAW_STRIP_FIELDS) {
+    const rel = toRecordRelativeAssetPath(recordId, cycle[field]);
+    // eslint-disable-next-line no-await-in-loop -- ordered preference: stop at the first strip that exists
+    if (rel && await pathExists(join(spriteDir(recordId), rel))) {
+      stripPath = rel;
+      break;
+    }
+  }
+  if (!stripPath) return null;
+
+  const cellSize = Number(manifest.cellSize) > 0 ? Number(manifest.cellSize) : WALK_CELL_SIZE;
+  const fps = Number(cycle.referenceFps) > 0 ? Number(cycle.referenceFps) : WALK_FPS;
+  return {
+    schemaVersion: 1,
+    kind: 'imported-redraw-walk-cycle',
+    status: 'approved',
+    id: entry.runId,
+    characterId: recordId,
+    direction,
+    createdAt: entry.approvedAt,
+    postprocessManifest: manifestRel,
+    stripPreview: {
+      stripPath,
+      frameCount,
+      fps,
+      cellWidth: cellSize,
+      cellHeight: cellSize,
+      row: 0,
+      startColumn: 0,
+    },
+  };
+}
+
 /**
  * Walk-workflow view for the detail endpoint: every animation run (newest
  * first), the per-direction selection, and the finalized set when present.
@@ -129,12 +191,24 @@ export async function getWalkState(recordId) {
         .map((e) => loadRunRecord(recordId, e.name)),
     ).then((loaded) => loaded
       .filter(Boolean)
-      .map((run) => normalizeStripPreview(recordId, run))
-      .sort((a, b) => runCreatedAtMs(b.createdAt) - runCreatedAtMs(a.createdAt))),
+      .map((run) => normalizeStripPreview(recordId, run))),
     loadSelection(recordId),
     loadWalkSet(recordId),
   ]);
-  return { runs, selection, walkSet };
+
+  // Directions approved from an imported redraw manifest have no grok run
+  // record to scan — synthesize their preview from the manifest (#2924).
+  const approvedDirections = walkSet?.directions || selection?.directions || {};
+  const scannedRunIds = new Set(runs.map((run) => run.id));
+  const redrawRuns = (await Promise.all(
+    Object.entries(approvedDirections)
+      .filter(([, entry]) => entry?.runId && entry?.runManifest && !scannedRunIds.has(entry.runId))
+      .map(([direction, entry]) => loadRedrawRun(recordId, direction, entry)),
+  )).filter(Boolean);
+
+  const allRuns = [...runs, ...redrawRuns]
+    .sort((a, b) => runCreatedAtMs(b.createdAt) - runCreatedAtMs(a.createdAt));
+  return { runs: allRuns, selection, walkSet };
 }
 
 /**

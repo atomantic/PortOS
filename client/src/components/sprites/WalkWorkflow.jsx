@@ -19,15 +19,34 @@ const WALK_PHASES = [
   'left-contact', 'left-down', 'left-passing', 'left-up',
   'right-contact', 'right-down', 'right-passing', 'right-up',
 ];
-const ALL_COLUMNS = WALK_PHASES.map((_, i) => i);
 const CELL_PX = 96; // preview cell size — the strip animates at 96px/frame
-const LOOP_KEYFRAMES = `@keyframes sprite-walk-loop { to { background-position-x: -${CELL_PX * 8}px } }`;
+// The scrub distance varies with the strip's frame count (a native run packs
+// 8, an imported redraw cycle can pack 12 — #2924), so the single keyframe
+// rule reads it from a per-preview custom property instead of hardcoding 8.
+const LOOP_KEYFRAMES = '@keyframes sprite-walk-loop { to { background-position-x: var(--sprite-walk-loop-end) } }';
 // Grok image_to_video clip lengths (videoGen/grok.js GROK_VIDEO_DURATIONS).
 const WALK_DURATIONS = [6, 10];
 
-// Animated preview of a packed 8-frame strip: the strip PNG as a stepped
-// background animation (8 frames at 12fps ≈ 0.67s per loop).
-function StripLoop({ recordId, stripPath }) {
+/**
+ * Strip geometry for a preview/trim UI, defaulting to the native 8-phase
+ * packaging when a run predates (or omits) the richer stripPreview fields.
+ */
+function stripGeometry(stripPreview) {
+  const rawCount = Math.round(Number(stripPreview?.frameCount));
+  const frameCount = Number.isInteger(rawCount) && rawCount > 1 ? rawCount : WALK_PHASES.length;
+  const fps = Number(stripPreview?.fps) > 0 ? Number(stripPreview.fps) : 12;
+  const cellWidth = Number(stripPreview?.cellWidth);
+  const cellHeight = Number(stripPreview?.cellHeight);
+  const aspect = cellWidth > 0 && cellHeight > 0 ? cellHeight / cellWidth : 1;
+  return { frameCount, fps, height: Math.round(CELL_PX * aspect) };
+}
+
+// Animated preview of a packed strip: the strip PNG as a stepped background
+// animation (8 frames at 12fps ≈ 0.67s per loop for a native run; an imported
+// 12-frame redraw cycle steps 12 times over 1s).
+function StripLoop({ recordId, stripPreview }) {
+  const { frameCount, fps, height } = stripGeometry(stripPreview);
+  const scrub = CELL_PX * frameCount;
   return (
     <div
       role="img"
@@ -35,11 +54,12 @@ function StripLoop({ recordId, stripPath }) {
       className="bg-port-bg border border-port-border rounded"
       style={{
         width: CELL_PX,
-        height: CELL_PX,
-        backgroundImage: `url(${spriteAssetUrl(recordId, stripPath)})`,
-        backgroundSize: `${CELL_PX * 8}px ${CELL_PX}px`,
+        height,
+        backgroundImage: `url(${spriteAssetUrl(recordId, stripPreview.stripPath)})`,
+        backgroundSize: `${scrub}px ${height}px`,
         imageRendering: 'pixelated',
-        animation: 'sprite-walk-loop 0.667s steps(8) infinite',
+        '--sprite-walk-loop-end': `-${scrub}px`,
+        animation: `sprite-walk-loop ${(frameCount / fps).toFixed(3)}s steps(${frameCount}) infinite`,
       }}
     />
   );
@@ -49,7 +69,13 @@ function StripLoop({ recordId, stripPath }) {
 // server derives the strip geometry from the run manifest and re-packs the
 // enabled frames into a versioned strip + GIF.
 function TrimPanel({ recordId, run, onClose }) {
-  const [enabled, setEnabled] = useState(() => new Set(ALL_COLUMNS));
+  // Column count follows the packaged strip rather than the 8-phase constant,
+  // so a longer imported cycle trims every frame it actually contains (#2924).
+  const columns = useMemo(() => {
+    const { frameCount } = stripGeometry(run?.stripPreview);
+    return Array.from({ length: frameCount }, (_, i) => i);
+  }, [run?.stripPreview]);
+  const [enabled, setEnabled] = useState(() => new Set(columns));
   const [result, setResult] = useState(null);
   const toggle = (i) => setEnabled((prev) => {
     const next = new Set(prev);
@@ -68,12 +94,15 @@ function TrimPanel({ recordId, run, onClose }) {
   return (
     <div className="bg-port-bg border border-port-border rounded p-2 space-y-2">
       <div className="grid grid-cols-4 gap-1">
-        {WALK_PHASES.map((phase, i) => (
-          <label key={phase} className="flex items-center gap-1 text-[10px] text-gray-400 cursor-pointer">
-            <input type="checkbox" checked={enabled.has(i)} onChange={() => toggle(i)} />
-            <span className="truncate" title={phase}>{i}·{phase}</span>
-          </label>
-        ))}
+        {columns.map((i) => {
+          const phase = WALK_PHASES[i] || `frame ${i}`;
+          return (
+            <label key={i} className="flex items-center gap-1 text-[10px] text-gray-400 cursor-pointer">
+              <input type="checkbox" checked={enabled.has(i)} onChange={() => toggle(i)} />
+              <span className="truncate" title={phase}>{i}·{phase}</span>
+            </label>
+          );
+        })}
       </div>
       <div className="flex items-center gap-2">
         <button
@@ -81,7 +110,7 @@ function TrimPanel({ recordId, run, onClose }) {
           disabled={saving || enabled.size < 2}
           className="px-2 py-0.5 text-xs bg-port-accent text-white rounded disabled:opacity-50"
         >
-          {saving ? 'Saving…' : `Save trim (${enabled.size}/8)`}
+          {saving ? 'Saving…' : `Save trim (${enabled.size}/${columns.length})`}
         </button>
         <button onClick={onClose} className="px-2 py-0.5 text-xs text-gray-400 hover:text-white">Close</button>
       </div>
@@ -121,7 +150,7 @@ function DirectionCard({
       </p>
 
       {(approved || candidate) && run?.stripPreview?.stripPath && (
-        <StripLoop recordId={recordId} stripPath={run.stripPreview.stripPath} />
+        <StripLoop recordId={recordId} stripPreview={run.stripPreview} />
       )}
 
       {/* Retry also covers a run wedged at 'postprocessing' (crash between

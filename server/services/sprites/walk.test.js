@@ -416,4 +416,110 @@ describe('getWalkState', () => {
     // hash-pinned provenance) is never rewritten on disk.
     expect(await readFile(legacyPath)).toEqual(legacyBytesBefore);
   });
+
+  // Issue #2924: a direction approved from the source pipeline's video-first
+  // imagegen REDRAW path has no grok/ run directory at all — its selection
+  // entry points at imagegen/vN. Synthesize the preview from that manifest's
+  // cycle block so the card animates instead of showing a bare badge.
+  describe('imagegen-redraw approved directions', () => {
+    const REDRAW_MANIFEST_REL = 'imagegen/v19/walk-east-v19-manifest.json';
+
+    async function characterWithRedrawEast(id, { cycle, cellSize = 384, strips = ['clean-alpha.png'] } = {}) {
+      await characterWithLockedAnchors(id, ['east']);
+      const dir = join(TEST_ROOT, 'sprites', id, 'imagegen', 'v19');
+      await mkdir(dir, { recursive: true });
+      for (const name of strips) await writeFile(join(dir, name), `strip:${name}`);
+      await writeFile(join(TEST_ROOT, 'sprites', id, REDRAW_MANIFEST_REL), JSON.stringify({
+        schemaVersion: 1,
+        characterId: id,
+        direction: 'east',
+        pipeline: 'game-animation-frames-video-first',
+        cellSize,
+        cycle: cycle ?? {
+          frameCount: 12,
+          referenceFps: 12,
+          // Source-repo-anchored, exactly as the importer copies it.
+          stripAlpha: `art-source/sprites/${id}/imagegen/v19/clean-alpha.png`,
+          stripKeyed: `art-source/sprites/${id}/imagegen/v19/keyed.png`,
+        },
+      }));
+      await mkdir(join(TEST_ROOT, 'sprites', id, 'walk'), { recursive: true });
+      await writeFile(join(TEST_ROOT, 'sprites', id, 'walk', `${id}-walk-selection-v1.json`), JSON.stringify({
+        schemaVersion: 1,
+        kind: 'reviewed-directional-walk-selection',
+        characterId: id,
+        status: 'in-progress',
+        directions: {
+          east: {
+            status: 'approved',
+            runId: `${id}-v19-east`,
+            runPath: `art-source/sprites/${id}/imagegen/v19`,
+            runManifest: `art-source/sprites/${id}/${REDRAW_MANIFEST_REL}`,
+            approvedAt: 'established-production-v19',
+          },
+        },
+      }));
+    }
+
+    it('synthesizes a run with the redraw cycle geometry and the clean-alpha strip', async () => {
+      const id = newId();
+      await characterWithRedrawEast(id);
+      const { runs } = await getWalkState(id);
+      expect(runs).toHaveLength(1);
+      expect(runs[0]).toMatchObject({
+        id: `${id}-v19-east`,
+        direction: 'east',
+        status: 'approved',
+        kind: 'imported-redraw-walk-cycle',
+        postprocessManifest: REDRAW_MANIFEST_REL,
+        stripPreview: {
+          stripPath: 'imagegen/v19/clean-alpha.png',
+          frameCount: 12,
+          fps: 12,
+          cellWidth: 384,
+          cellHeight: 384,
+          row: 0,
+          startColumn: 0,
+        },
+      });
+    });
+
+    it('falls back to the keyed strip when the clean-alpha derivative is absent on disk', async () => {
+      const id = newId();
+      await characterWithRedrawEast(id, { strips: ['keyed.png'] });
+      const { runs } = await getWalkState(id);
+      expect(runs[0].stripPreview.stripPath).toBe('imagegen/v19/keyed.png');
+    });
+
+    it('surfaces nothing when no strip exists, rather than a broken preview', async () => {
+      const id = newId();
+      await characterWithRedrawEast(id, { strips: [] });
+      expect((await getWalkState(id)).runs).toEqual([]);
+    });
+
+    it('ignores a manifest with no usable cycle frame count', async () => {
+      const id = newId();
+      await characterWithRedrawEast(id, {
+        cycle: { frameCount: 1, stripAlpha: 'imagegen/v19/clean-alpha.png' },
+      });
+      expect((await getWalkState(id)).runs).toEqual([]);
+    });
+
+    it('does not shadow a direction that DOES have a scanned grok run', async () => {
+      const id = await characterWithLockedAnchors(newId(), ['east']);
+      const { runId } = await startWalkGeneration(id, { direction: 'east' });
+      await mkdir(join(TEST_ROOT, 'sprites', id, 'walk'), { recursive: true });
+      await writeFile(join(TEST_ROOT, 'sprites', id, 'walk', `${id}-walk-selection-v1.json`), JSON.stringify({
+        schemaVersion: 1,
+        characterId: id,
+        status: 'in-progress',
+        directions: {
+          east: { status: 'approved', runId, runManifest: `grok/${runId}/animation-run.json` },
+        },
+      }));
+      const { runs } = await getWalkState(id);
+      expect(runs).toHaveLength(1);
+      expect(runs[0].kind).toBe('grok-game-animation-frames-run');
+    });
+  });
 });
