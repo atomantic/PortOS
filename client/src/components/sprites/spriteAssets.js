@@ -38,6 +38,29 @@ export function checkerboardStyle(cell = 6) {
 // constant, and every consumer treats React style props as read-only.
 export const PIXELATED = Object.freeze({ imageRendering: 'pixelated' });
 
+// Canvas equivalent of the CSS checkerboard above (#2933). A `<canvas>` can't
+// read `var(--sprite-checker-*)` or paint a CSS gradient, so the Loop Trimmer's
+// canvases resolve the same custom properties off the document root (falling
+// back to the dark literals when a theme sets neither) and fill the squares by
+// hand. Kept next to `checkerboardStyle` so the two stay the same pattern.
+function checkerColor(name, fallback) {
+  if (typeof window === 'undefined' || typeof getComputedStyle !== 'function') return fallback;
+  const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return value || fallback;
+}
+
+export function paintCheckerboard(ctx, width, height, cell = 6) {
+  if (!ctx) return; // jsdom / a context-less canvas — nothing to paint
+  ctx.fillStyle = checkerColor('--sprite-checker-dark', '#191919');
+  ctx.fillRect(0, 0, width, height);
+  ctx.fillStyle = checkerColor('--sprite-checker-light', '#2e2e2e');
+  for (let y = 0; y < height; y += cell) {
+    for (let x = 0; x < width; x += cell) {
+      if ((Math.floor(x / cell) + Math.floor(y / cell)) % 2 === 0) ctx.fillRect(x, y, cell, cell);
+    }
+  }
+}
+
 // sharp can probe more formats than a browser can paint — a TIFF yields clean
 // metadata but renders as a broken-image icon in Chrome/Firefox. So the server
 // probe list (for metadata) and this list (for "can I put it in an <img>") are

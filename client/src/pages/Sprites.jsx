@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { PersonStanding, MapPin, Package, Download, X, RefreshCw, Plus, ChevronRight, ChevronDown } from 'lucide-react';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { PersonStanding, MapPin, Package, Download, X, RefreshCw, Plus, ChevronRight, ChevronDown, Images, Scissors } from 'lucide-react';
 import toast from '../components/ui/Toast';
 import {
   listSpriteRecords, getSpriteRecord, importSprites, createSpriteRecord,
@@ -11,9 +11,12 @@ import { getSettings } from '../services/apiSystem.js';
 import { deriveAvailableBackends } from '../lib/imageGenBackends.js';
 import AppContextPicker from '../components/AppContextPicker.jsx';
 import ReferenceWorkflow from '../components/sprites/ReferenceWorkflow.jsx';
-import WalkWorkflow, { WALK_WORKFLOW_DOM_ID, WALK_DURATIONS } from '../components/sprites/WalkWorkflow.jsx';
+import WalkWorkflow, { WALK_DURATIONS } from '../components/sprites/WalkWorkflow.jsx';
+import LoopTrimmer from '../components/sprites/LoopTrimmer.jsx';
 import PublishWorkflow from '../components/sprites/PublishWorkflow.jsx';
 import AssetCollection from '../components/sprites/AssetCollection.jsx';
+import TabPills from '../components/ui/TabPills.jsx';
+import useDrawerTab from '../hooks/useDrawerTab.js';
 import { useAsyncAction } from '../hooks/useAsyncAction.js';
 import { useSpritePendingRenders } from '../hooks/useSpritePendingRenders.js';
 import { buildCollectionActions } from '../lib/spriteCollectionActions.js';
@@ -441,12 +444,24 @@ export default function Sprites() {
     onChanged: onWorkflowChanged,
   });
 
-  // Which run the Loop Trimmer panel is open for. Phase 5 (#2933) turns this
-  // into a `?spriteTab=trimmer&run=<id>` deep link; until then it routes the
-  // collection's request into WalkWorkflow's existing inline TrimPanel so
-  // there is still exactly one trim UI.
-  const [trimRunId, setTrimRunId] = useState(null);
-  useEffect(() => setTrimRunId(null), [id]);
+  // Workspace tab (Library / Loop Trimmer) and the run the trimmer is open for
+  // live in the URL (#2933) so the active workspace is deep-linkable
+  // (`?spriteTab=trimmer&run=<runId>`) — the same "URL is the source of truth
+  // for what's open" rule the rest of the app follows. Switching records via
+  // navigate() drops the search entirely, resetting the tab to Library.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [spriteTab, setSpriteTab] = useDrawerTab('spriteTab', 'library', ['library', 'trimmer']);
+  const trimRunParam = searchParams.get('run');
+  // Open the trimmer deep-linked to a run. `replace` keeps an in-trimmer source
+  // switch out of history; the default push lets Back return to the Library.
+  const openTrimmer = useCallback((runId, { replace = false } = {}) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('spriteTab', 'trimmer');
+      if (runId) next.set('run', runId); else next.delete('run');
+      return next;
+    }, replace ? { replace: true } : undefined);
+  }, [setSearchParams]);
 
   // Clip length lives here rather than inside WalkWorkflow so a Regenerate
   // fired from an asset card honors the length the user picked in the walk
@@ -545,15 +560,11 @@ export default function Sprites() {
       generateAnchor,
       hasBackend: hasImageBackend,
       mode: imageMode,
-      onRequestTrim: (runId) => {
-        setTrimRunId(runId);
-        // The trimmer lives inside WalkWorkflow further up the page; a request
-        // from an asset card near the bottom must bring it into view or the
-        // click looks like it did nothing.
-        document.getElementById(WALK_WORKFLOW_DOM_ID)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      },
+      // "Edit in Loop Trimmer" from an asset card now switches to the trimmer
+      // workspace deep-linked to the run, instead of scrolling to an inline panel.
+      onRequestTrim: (runId) => openTrimmer(runId),
     });
-  }, [detail, walkRenders.pendingJobs, referenceRenders.pendingJobs, generateWalk, generateAnchor, hasImageBackend, imageMode]);
+  }, [detail, walkRenders.pendingJobs, referenceRenders.pendingJobs, generateWalk, generateAnchor, hasImageBackend, imageMode, openTrimmer]);
 
   return (
     <div className="space-y-4">
@@ -617,49 +628,79 @@ export default function Sprites() {
                   <p className="text-xs text-gray-500">archetype: {detail.record.spec.archetype}</p>
                 )}
               </div>
+              {/* Library / Loop Trimmer workspaces (#2933). The trimmer is
+                  character-only (it trims packaged walk runs), so non-character
+                  records skip the tab bar and always show their asset library. */}
               {detail.record.kind === 'character' && (
-                <>
-                  <ReferenceWorkflow
-                    record={detail.record}
-                    reference={detail.reference}
-                    renders={referenceRenders}
-                    backends={imageBackends}
-                    mode={imageMode}
-                    onModeChange={setImageMode}
-                    onChanged={onWorkflowChanged}
-                  />
-                  <WalkWorkflow
-                    record={detail.record}
-                    reference={detail.reference}
-                    walk={detail.walk}
-                    renders={walkRenders}
-                    duration={duration}
-                    onDurationChange={setDuration}
-                    onGenerate={generateWalk}
-                    trimRunId={trimRunId}
-                    onTrimClose={() => setTrimRunId(null)}
-                    onChanged={onWorkflowChanged}
-                  />
-                  {/* Keyed by record so form state and an armed publish/overwrite
-                      confirmation never survive switching characters. */}
-                  <PublishWorkflow
-                    key={detail.record.id}
-                    record={detail.record}
-                    walk={detail.walk}
-                    atlas={detail.atlas}
-                    onChanged={onWorkflowChanged}
-                  />
-                </>
-              )}
-              {detail.assets.length === 0 ? (
-                <p className="text-sm text-gray-500">No assets on disk for this record.</p>
-              ) : (
-                <AssetCollection
-                  recordId={detail.record.id}
-                  assets={detail.assets}
-                  actions={collectionActions}
-                  approvedRunIds={approvedRunIds}
+                <TabPills
+                  variant="pills"
+                  size="sm"
+                  mobileDropdown
+                  mobileSelectId="sprite-workspace-tab"
+                  ariaLabel="Sprite workspace"
+                  tabs={[
+                    { id: 'library', label: 'Library', icon: Images },
+                    { id: 'trimmer', label: 'Loop Trimmer', icon: Scissors },
+                  ]}
+                  activeTab={spriteTab}
+                  onChange={setSpriteTab}
                 />
+              )}
+              {detail.record.kind === 'character' && spriteTab === 'trimmer' ? (
+                <LoopTrimmer
+                  record={detail.record}
+                  walk={detail.walk}
+                  assets={detail.assets}
+                  runId={trimRunParam}
+                  onSelectRun={(runId) => openTrimmer(runId, { replace: true })}
+                  onSaved={onWorkflowChanged}
+                />
+              ) : (
+                <>
+                  {detail.record.kind === 'character' && (
+                    <>
+                      <ReferenceWorkflow
+                        record={detail.record}
+                        reference={detail.reference}
+                        renders={referenceRenders}
+                        backends={imageBackends}
+                        mode={imageMode}
+                        onModeChange={setImageMode}
+                        onChanged={onWorkflowChanged}
+                      />
+                      <WalkWorkflow
+                        record={detail.record}
+                        reference={detail.reference}
+                        walk={detail.walk}
+                        renders={walkRenders}
+                        duration={duration}
+                        onDurationChange={setDuration}
+                        onGenerate={generateWalk}
+                        onOpenTrimmer={openTrimmer}
+                        onChanged={onWorkflowChanged}
+                      />
+                      {/* Keyed by record so form state and an armed publish/overwrite
+                          confirmation never survive switching characters. */}
+                      <PublishWorkflow
+                        key={detail.record.id}
+                        record={detail.record}
+                        walk={detail.walk}
+                        atlas={detail.atlas}
+                        onChanged={onWorkflowChanged}
+                      />
+                    </>
+                  )}
+                  {detail.assets.length === 0 ? (
+                    <p className="text-sm text-gray-500">No assets on disk for this record.</p>
+                  ) : (
+                    <AssetCollection
+                      recordId={detail.record.id}
+                      assets={detail.assets}
+                      actions={collectionActions}
+                      approvedRunIds={approvedRunIds}
+                    />
+                  )}
+                </>
               )}
             </div>
           )}
