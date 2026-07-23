@@ -783,6 +783,28 @@ describe('Provider Service', () => {
       const result = await providerService.refreshProviderModels(p.id);
       expect(result).toBeNull();
     });
+
+    it('persists a legitimately empty model list rather than treating it as a failed fetch', async () => {
+      // The last installed Ollama model was just deleted — /api/tags succeeds
+      // with zero entries. This must NOT collapse into the same `null` result
+      // as an unreachable endpoint, or a deleted model stays stuck in the
+      // provider's persisted list forever.
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ models: [] }),
+      }));
+
+      const p = await providerService.createProvider({
+        name: 'Ollama',
+        type: 'api',
+        endpoint: 'http://localhost:11434',
+        models: ['llama3.2'], // stale — the model was just deleted
+      });
+
+      const updated = await providerService.refreshProviderModels(p.id);
+      expect(updated).not.toBeNull();
+      expect(updated.models).toEqual([]);
+    });
   });
 
   describe('reserved-key prototype safety (#2521)', () => {

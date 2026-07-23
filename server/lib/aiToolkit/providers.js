@@ -659,7 +659,14 @@ export function createProviderService(config = {}) {
         return null;
       }
 
-      let models = [];
+      // `null` = no refreshable branch matched below (provider type/shape isn't
+      // refreshable — the pre-existing no-op case); an array = a completed
+      // fetch, which may legitimately be empty (e.g. an Ollama-backed provider
+      // whose only installed model was just deleted). Only the `null` sentinel
+      // means "nothing to persist" — a `.length === 0` check here would also
+      // swallow that legitimate empty result and leave a deleted model stuck
+      // in the provider's persisted list.
+      let models = null;
 
       try {
         if (provider.type === 'api') {
@@ -677,7 +684,7 @@ export function createProviderService(config = {}) {
         return null;
       }
 
-      if (!models || models.length === 0) {
+      if (models === null) {
         return null;
       }
 
