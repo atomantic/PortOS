@@ -10,7 +10,6 @@ vi.mock('../../services/apiSprites.js', () => ({
   generateSpriteWalk: vi.fn(),
   approveSpriteWalk: vi.fn(),
   postprocessSpriteWalk: vi.fn(),
-  trimSpriteWalk: vi.fn(),
 }));
 
 import WalkWorkflow from './WalkWorkflow';
@@ -99,24 +98,29 @@ describe('WalkWorkflow loop preview', () => {
   });
 });
 
-// The asset collection's "Edit in Loop Trimmer" (#2931) routes back into this
-// component's one TrimPanel. The run in this fixture is APPROVED, which the
-// pre-existing Scissors toggle never reaches — so the panel has to render
-// outside the `!finalized && !approved` action block or the action silently
-// does nothing on exactly the assets most worth trimming.
-describe('WalkWorkflow trim requests', () => {
-  it('shows no trim panel until a run is requested', () => {
-    renderWalk(APPROVED_STRIP);
+// Loop trimming moved to its own deep-linkable workspace (#2933): the inline
+// TrimPanel is gone and each card just links into the trimmer. The link stands
+// for approved/finalized directions too (a trim is a non-destructive artifact),
+// and only for a run whose strip was packaged under `grok/` (the endpoint reads
+// `grok/<runId>/…` hard-coded — an imported strip would 404).
+describe('WalkWorkflow loop trimmer link', () => {
+  it('offers "Edit in Loop Trimmer" for an approved grok run and fires with its id', () => {
+    const onOpenTrimmer = vi.fn();
+    renderWalk(APPROVED_STRIP, { onOpenTrimmer });
+    const link = screen.getByRole('button', { name: /Edit in Loop Trimmer/ });
+    link.click();
+    expect(onOpenTrimmer).toHaveBeenCalledWith('run-east');
+  });
+
+  it('renders no inline trim panel', () => {
+    renderWalk(APPROVED_STRIP, { onOpenTrimmer: vi.fn() });
     expect(screen.queryByRole('button', { name: /Save trim/ })).toBeNull();
   });
 
-  it('opens the trim panel for an approved run named by id', () => {
-    renderWalk(APPROVED_STRIP, { trimRunId: 'run-east' });
-    expect(screen.getByRole('button', { name: /Save trim \(8\/8\)/ })).toBeTruthy();
-  });
-
-  it('ignores a run id that is not in this record listing', () => {
-    renderWalk(APPROVED_STRIP, { trimRunId: 'run-that-does-not-exist' });
-    expect(screen.queryByRole('button', { name: /Save trim/ })).toBeNull();
+  it('hides the link for a run whose strip is not under grok/ (not trimmable)', () => {
+    renderWalk({
+      stripPath: 'runs/import-east/generated/strip.png', frameCount: 8, fps: 12, cellWidth: 384, cellHeight: 384,
+    }, { onOpenTrimmer: vi.fn() });
+    expect(screen.queryByRole('button', { name: /Edit in Loop Trimmer/ })).toBeNull();
   });
 });

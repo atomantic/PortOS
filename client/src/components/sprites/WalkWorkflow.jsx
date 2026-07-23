@@ -1,27 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Check, Film, RefreshCw, Scissors, Lock } from 'lucide-react';
 import toast from '../ui/Toast';
-import { approveSpriteWalk, postprocessSpriteWalk, trimSpriteWalk } from '../../services/apiSprites.js';
+import { approveSpriteWalk, postprocessSpriteWalk } from '../../services/apiSprites.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import { spriteAssetUrl, checkerboardStyle, PIXELATED } from './spriteAssets.js';
-import SpritePreview from './SpritePreview.jsx';
-
-// Scroll anchor for the asset collection's "Edit in Loop Trimmer" action
-// (#2931) — the trimmer lives in this card, potentially far above the asset
-// grid that requested it.
-export const WALK_WORKFLOW_DOM_ID = 'sprite-walk-workflow';
+import { WALK_PHASES } from '../../lib/spriteTrimmer.js';
 
 // Walk workflow (issue #2897): one grok image_to_video clip per locked
 // directional anchor, deterministic server-side packaging into the 8-phase
-// strip, per-direction review (loop preview + optional trim) and approval.
-// The server's run records / selection / walk-set are the source of truth;
-// this component renders them and fires generate/approve/trim.
+// strip, per-direction review (loop preview) and approval. Loop trimming moved
+// to its own deep-linkable workspace (#2933) — each card links into it. The
+// server's run records / selection / walk-set are the source of truth; this
+// component renders them and fires generate/approve.
 
-// Mirrors server/services/sprites/walkPostprocess.js WALK_PHASES.
-const WALK_PHASES = [
-  'left-contact', 'left-down', 'left-passing', 'left-up',
-  'right-contact', 'right-down', 'right-passing', 'right-up',
-];
 const CELL_PX = 96; // preview cell size — the strip animates at 96px/frame
 // The scrub distance varies with the strip's frame count (a native run packs
 // 8, an imported redraw cycle can pack 12 — #2924), so the single keyframe
@@ -82,88 +73,17 @@ function StripLoop({ recordId, stripPreview }) {
   );
 }
 
-// Frame enable/disable trimmer for one packaged run — non-destructive: the
-// server derives the strip geometry from the run manifest and re-packs the
-// enabled frames into a versioned strip + GIF.
-function TrimPanel({ recordId, run, onClose }) {
-  // Column count follows the packaged strip rather than the 8-phase constant,
-  // so a longer imported cycle trims every frame it actually contains (#2924).
-  const columns = useMemo(() => {
-    const { frameCount } = stripGeometry(run?.stripPreview);
-    return Array.from({ length: frameCount }, (_, i) => i);
-  }, [run?.stripPreview]);
-  const [enabled, setEnabled] = useState(() => new Set(columns));
-  // Re-seed when the strip changes under a mounted panel — a stale `enabled`
-  // holding out-of-range indices 400s the trim endpoint.
-  useEffect(() => setEnabled(new Set(columns)), [columns]);
-  const [result, setResult] = useState(null);
-  const toggle = (i) => setEnabled((prev) => {
-    const next = new Set(prev);
-    if (next.has(i)) next.delete(i); else next.add(i);
-    return next;
-  });
-  const [save, saving] = useAsyncAction(async () => {
-    const trim = await trimSpriteWalk(recordId, {
-      runId: run.id,
-      enabledColumns: [...enabled].sort((a, b) => a - b),
-    }, { silent: true });
-    setResult(trim);
-    toast.success(`Trim saved (${trim.frameCount} frames)`);
-  }, { errorMessage: 'Trim failed' });
-
-  return (
-    <div className="bg-port-bg border border-port-border rounded p-2 space-y-2">
-      <div className="grid grid-cols-4 gap-1">
-        {columns.map((i) => {
-          const phase = WALK_PHASES[i] || `frame ${i}`;
-          return (
-            <label key={i} className="flex items-center gap-1 text-[10px] text-gray-400 cursor-pointer">
-              <input type="checkbox" checked={enabled.has(i)} onChange={() => toggle(i)} />
-              <span className="truncate" title={phase}>{i}·{phase}</span>
-            </label>
-          );
-        })}
-      </div>
-      <div className="flex items-center gap-2">
-        <button
-          onClick={save}
-          disabled={saving || enabled.size < 2}
-          className="px-2 py-0.5 text-xs bg-port-accent text-white rounded disabled:opacity-50"
-        >
-          {saving ? 'Saving…' : `Save trim (${enabled.size}/${columns.length})`}
-        </button>
-        <button onClick={onClose} className="px-2 py-0.5 text-xs text-gray-400 hover:text-white">Close</button>
-      </div>
-      {result && (
-        <div className="flex items-center gap-2">
-          <SpritePreview
-            recordId={recordId}
-            path={result.loop}
-            alt="trimmed loop"
-            className="w-24 h-24 shrink-0 border border-port-border rounded"
-          />
-          <p className="text-[10px] text-gray-500 break-all">{result.loop}</p>
-        </div>
-      )}
-    </div>
-  );
-}
-
 function DirectionCard({
   recordId, direction, anchorLocked, run, approved, finalized, pending,
-  trimRequestRun = null, onTrimClose, onGenerate, onApprove, onRetry,
+  onOpenTrimmer, onGenerate, onApprove, onRetry,
 }) {
   const [confirming, setConfirming] = useState(false);
-  const [trimming, setTrimming] = useState(false);
   const candidate = run?.status === 'candidate' ? run : null;
-  // Two ways in: this card's own Scissors toggle (the direction's current
-  // candidate, as before) and an explicit request routed from an asset card
-  // (#2931), which names the exact run — possibly an older or APPROVED one,
-  // and possibly under a finalized walk set. That's sound: trims are
-  // non-destructive derived artifacts under `walk/trims/` and the server only
-  // requires a packaged manifest. It stays request-driven rather than becoming
-  // a new always-on affordance on approved directions.
-  const trimRun = trimRequestRun || (trimming ? candidate : null);
+  // Only a run whose strip was packaged under `grok/` can be trimmed — the trim
+  // endpoint reads `grok/<runId>/animation-run.json` hard-coded (an imported
+  // `runs/<id>/` strip 404s). The link stands for approved and finalized runs
+  // too, since a trim is a non-destructive derived artifact under `walk/trims/`.
+  const trimmable = Boolean(run?.stripPreview?.stripPath?.startsWith('grok/'));
   const statusLabel = approved ? 'approved'
     : pending ? 'rendering…'
       : run?.status === 'postprocessing' ? 'packaging…'
@@ -216,37 +136,26 @@ function DirectionCard({
                 <button onClick={() => setConfirming(false)} className="px-1.5 py-0.5 text-gray-400 hover:text-white">No</button>
               </div>
             ) : (
-              <div className="flex gap-1">
-                <button onClick={() => setConfirming(true)} className="flex-1 px-2 py-0.5 text-xs bg-port-success/20 border border-port-success rounded text-port-success">
-                  Approve
-                </button>
-                <button
-                  onClick={() => setTrimming((t) => !t)}
-                  title="Trim loop frames"
-                  className="px-2 py-0.5 text-xs bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent"
-                >
-                  <Scissors className="w-3 h-3" />
-                </button>
-              </div>
+              <button onClick={() => setConfirming(true)} className="w-full px-2 py-0.5 text-xs bg-port-success/20 border border-port-success rounded text-port-success">
+                Approve
+              </button>
             )
           )}
         </div>
       )}
 
-      {/* Outside the !finalized && !approved block on purpose: an explicit
-          trim request from the asset collection must open even for an
-          approved direction or a finalized walk set. */}
-      {trimRun && (
-        // Keyed by run id: a new trim request (from an asset card) can target a
-        // DIFFERENT run than the one currently open — remount so the panel's
-        // enabled-frame selection and last saved result don't leak from the
-        // previous run into the new one.
-        <TrimPanel
-          key={trimRun.id}
-          recordId={recordId}
-          run={trimRun}
-          onClose={() => { setTrimming(false); onTrimClose(); }}
-        />
+      {/* The single trim UI now lives in the Loop Trimmer workspace (#2933);
+          each card just links into it, deep-linked to this run. Shown for
+          approved and finalized directions too — the trim is a non-destructive
+          derived artifact, so trimming an approved loop is always allowed. */}
+      {trimmable && (
+        <button
+          onClick={() => onOpenTrimmer(run.id)}
+          title="Open this run in the Loop Trimmer"
+          className="flex items-center gap-1 w-full justify-center px-2 py-0.5 text-xs bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent"
+        >
+          <Scissors className="w-3 h-3" /> Edit in Loop Trimmer
+        </button>
       )}
     </div>
   );
@@ -254,7 +163,7 @@ function DirectionCard({
 
 export default function WalkWorkflow({
   record, reference, walk, renders, duration, onDurationChange, onGenerate,
-  trimRunId = null, onTrimClose = () => {}, onChanged,
+  onOpenTrimmer = () => {}, onChanged,
 }) {
   const recordId = record.id;
   const manifest = reference?.manifest || null;
@@ -296,13 +205,6 @@ export default function WalkWorkflow({
     return () => clearInterval(timer);
   }, [packaging, awaitingAttach, onChanged]);
 
-  // Resolved by id, not by direction: the asset collection can name any run
-  // that packed a strip, including one older than the direction's latest.
-  const requestedTrimRun = useMemo(
-    () => (trimRunId ? runs.find((r) => r.id === trimRunId) || null : null),
-    [runs, trimRunId],
-  );
-
   const latestRunByDirection = useMemo(() => {
     const byDir = {};
     for (const run of runs) {
@@ -336,7 +238,7 @@ export default function WalkWorkflow({
     .filter((d) => d?.status === 'approved').length;
 
   return (
-    <div id={WALK_WORKFLOW_DOM_ID} className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
+    <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
       <style>{LOOP_KEYFRAMES}</style>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold text-white flex items-center gap-1.5">
@@ -373,8 +275,7 @@ export default function WalkWorkflow({
             approved={selection?.directions?.[anchor.direction]?.status === 'approved'}
             finalized={finalized}
             pending={Boolean(pendingJobs[anchor.direction])}
-            trimRequestRun={requestedTrimRun?.direction === anchor.direction ? requestedTrimRun : null}
-            onTrimClose={onTrimClose}
+            onOpenTrimmer={onOpenTrimmer}
             onGenerate={onGenerate}
             onApprove={approve}
             onRetry={retryPostprocess}
