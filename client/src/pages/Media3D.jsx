@@ -1,11 +1,55 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { Boxes, CheckCircle2, Download, AlertTriangle, Loader2, ExternalLink, ImagePlus, Sparkles } from 'lucide-react';
-import { getImageTo3dTargets } from '../services/api';
+import { Boxes, CheckCircle2, Download, AlertTriangle, Loader2, ExternalLink, ImagePlus, Sparkles, KeyRound } from 'lucide-react';
+import { getImageTo3dTargets, createImageTo3dModel, getImageTo3dModel } from '../services/api';
+import { useAutoRefetch } from '../hooks/useAutoRefetch';
+import useMounted from '../hooks/useMounted';
+import { nameFromImageFilename } from '../utils/formatters';
 import RuntimeInstallModal from '../components/install/RuntimeInstallModal';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import GlbViewer from '../components/media/GlbViewer';
 import MediaImage from '../components/MediaImage';
+
+// Poll cadence while a render is in flight (a real TRELLIS.2 render is multi-minute).
+const POLL_INTERVAL_MS = 2500;
+
+// Targets that download gated Hugging Face models on first run. Keyed by target id
+// so the page can warn about the (free, one-time) HF sign-in + terms acceptance
+// BEFORE a render fails opaquely. TRELLIS.2 pulls DINOv3 (image conditioning) and
+// RMBG-2.0 (background removal), both gated Meta/BRIA repos.
+const HF_GATED_MODELS = {
+  trellis2: [
+    { label: 'facebook/dinov3-vitl16-pretrain-lvd1689m', url: 'https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m' },
+    { label: 'briaai/RMBG-2.0', url: 'https://huggingface.co/briaai/RMBG-2.0' },
+  ],
+};
+
+// Prerequisite notice for a target that needs gated Hugging Face access. Shown once
+// the gated target is selectable so the user accepts terms + signs in up front.
+function HfAccessNotice({ models }) {
+  if (!models?.length) return null;
+  return (
+    <div className="rounded-lg border border-port-warning/40 bg-port-warning/10 p-3 text-xs text-gray-300">
+      <div className="mb-1 flex items-center gap-1.5 font-medium text-port-warning">
+        <KeyRound className="h-3.5 w-3.5" /> Needs a free Hugging Face account
+      </div>
+      <p className="text-gray-400">
+        On first render this downloads two <strong>gated</strong> models. Accept their terms (signed in to Hugging Face), then
+        authenticate the machine with <code className="rounded bg-port-bg px-1">huggingface-cli login</code> or an{' '}
+        <code className="rounded bg-port-bg px-1">HF_TOKEN</code>:
+      </p>
+      <ul className="mt-1.5 space-y-1">
+        {models.map((m) => (
+          <li key={m.url}>
+            <a href={m.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-port-accent hover:underline">
+              <ExternalLink className="h-3 w-3" /> {m.label}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
 
 // Human-readable reasons a target can't run on this host, keyed by the stable
 // reason code the registry returns (server/services/imageTo3d/targets.js).
@@ -113,6 +157,14 @@ export default function Media3D() {
   // The target whose install modal is open (only local-install targets); null = closed.
   const [installTarget, setInstallTarget] = useState(null);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // Render lifecycle: a create kicks off an on-device render, then we poll the
+  // record (via useAutoRefetch below) until it lands (ready → preview) or fails
+  // (error → surfaced inline, where the runner's actionable HF-auth message shows).
+  const [generating, setGenerating] = useState(false);
+  const [genError, setGenError] = useState(null);
+  const [genPercent, setGenPercent] = useState(null);
+  const [modelId, setModelId] = useState(null);
+  const mountedRef = useMounted(); // gate setState after the create/poll awaits
 
   const load = useCallback(() => {
     setLoading(true);
@@ -163,18 +215,54 @@ export default function Media3D() {
 
   const handlePick = (item) => { setParam('image', item.filename); setPickerOpen(false); };
 
-  // The image→mesh runner (POST generate + landed .glb) lands with #2952. Until a
-  // producer exists the workspace only *stages* the source image + target, so the
-  // Generate action is always gated — this returns the reason it's blocked, and the
-  // button stays disabled whenever a reason is present (which, today, is always,
-  // via the terminal "coming next" branch — so no inert-but-enabled button leaks).
+  // One poll tick against the in-flight record. Let a transient GET *throw* so
+  // useAutoRefetch logs and retries next tick — a multi-minute render must not be
+  // abandoned on a single network blip; a genuine render failure comes back as a
+  // `failed` record, handled below. Reaching a terminal state clears `generating`,
+  // which flips the hook's `enabled` off and stops the interval.
+  const pollTick = useCallback(async () => {
+    if (!modelId) return;
+    const model = await getImageTo3dModel(modelId, { silent: true });
+    if (!mountedRef.current) return;
+    const latest = Array.isArray(model.runs) && model.runs.length ? model.runs[model.runs.length - 1] : null;
+    if (Number.isFinite(latest?.percent)) setGenPercent(latest.percent);
+    if (model.status === 'ready' && model.assetPath) {
+      setGenPercent(100); setParam('glb', model.assetPath); setGenerating(false);
+    } else if (model.status === 'failed' || model.status === 'canceled') {
+      // model.error carries the runner's actionable message (e.g. the HF-auth guidance).
+      setGenError(model.error || 'The render did not finish.'); setGenerating(false);
+    }
+    // else still draft/generating → the hook re-polls after POLL_INTERVAL_MS.
+  }, [modelId, setParam, mountedRef]);
+
+  useAutoRefetch(pollTick, POLL_INTERVAL_MS, { pollOnly: true, enabled: generating && !!modelId });
+
+  const handleGenerate = useCallback(async () => {
+    if (!selectedImage || !selectedTarget) return;
+    setGenError(null); setGenPercent(0); setModelId(null);
+    setParam('glb', ''); // clear any previously-previewed mesh
+    const created = await createImageTo3dModel(
+      { name: nameFromImageFilename(selectedImage.filename), filename: selectedImage.filename, target: selectedTarget.id },
+      { silent: true },
+    ).catch((err) => {
+      if (mountedRef.current) setGenError(err?.message || 'Could not start the render.');
+      return null;
+    });
+    if (created && mountedRef.current) { setModelId(created.id); setGenerating(true); }
+  }, [selectedImage, selectedTarget, setParam, mountedRef]);
+
+  // Why the Generate action is blocked, or null when it's ready to run. The runner
+  // (POST create → on-device render → landed .glb) is wired, so the terminal state
+  // is "ready", not a placeholder.
   const generateGatedReason = (() => {
     if (!selectedImage) return 'Pick a source image to continue.';
     if (!selectedTarget) return 'No image-to-3D model is registered.';
     if (!selectedTarget.available) return REASON_LABEL[selectedTarget.unavailableReason] || 'This model can’t run on this host.';
     if (selectedTarget.installed === false) return `Install ${selectedTarget.label} below before generating.`;
-    return 'Generation lands with the on-device runner — coming next.';
+    return null;
   })();
+
+  const gatedHfModels = selectedTarget?.available ? HF_GATED_MODELS[selectedTarget?.id] : null;
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -189,8 +277,7 @@ export default function Media3D() {
         </p>
       </header>
 
-      {/* Generation workspace — source image + target selection + preview. The
-          create/generate call is wired when the runner (#2952) lands. */}
+      {/* Generation workspace — source image + target selection → on-device render. */}
       <section className="mb-6 grid gap-4 rounded-xl border border-port-border bg-port-card p-4 sm:grid-cols-[200px_1fr]">
         <button
           type="button"
@@ -244,22 +331,35 @@ export default function Media3D() {
             )}
           </div>
 
+          {gatedHfModels && <HfAccessNotice models={gatedHfModels} />}
+
           <div className="mt-auto flex flex-col items-start gap-2">
             <button
               type="button"
-              disabled={!!generateGatedReason}
-              title={generateGatedReason}
+              onClick={handleGenerate}
+              disabled={!!generateGatedReason || generating}
+              title={generateGatedReason || undefined}
               className="inline-flex items-center gap-2 rounded-lg bg-port-accent px-4 py-2 text-sm text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
             >
-              <Sparkles className="h-4 w-4" /> Generate 3D
+              {generating
+                ? <><Loader2 className="h-4 w-4 animate-spin" /> Generating{Number.isFinite(genPercent) ? ` ${Math.round(genPercent)}%` : '…'}</>
+                : <><Sparkles className="h-4 w-4" /> Generate 3D</>}
             </button>
-            <p className="text-xs text-gray-500">{generateGatedReason}</p>
+            {genError ? (
+              <p className="flex items-start gap-1.5 text-xs text-port-error">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /> {genError}
+              </p>
+            ) : (
+              <p className="text-xs text-gray-500">
+                {generating ? 'Rendering on-device — this takes a few minutes.' : (generateGatedReason || 'Ready to render on-device.')}
+              </p>
+            )}
           </div>
         </div>
       </section>
 
-      {/* Generated-mesh preview. Driven by `?glb=` so a finished render (#2952)
-          is a shareable, reload-safe deep link; empty until one lands. */}
+      {/* Generated-mesh preview. Driven by `?glb=` so a finished render is a
+          shareable, reload-safe deep link; empty until one lands. */}
       {glbFromRoute && (
         <section className="mb-6">
           <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Mesh preview</h2>
@@ -306,7 +406,7 @@ export default function Media3D() {
         runtime={installTarget?.id}
         label={installTarget?.label}
         installUrlBase="/api/image-to-3d/trellis2/install"
-        description="Cloning the TRELLIS.2 (Apple Silicon) port and installing its Python environment. The model weights are a large download on first run (~15 GB)."
+        description="Cloning the TRELLIS.2 (Apple Silicon) port and installing its Python environment (~15 GB on first run). It also pulls two gated Hugging Face models on first render — accept their terms and sign in with huggingface-cli login / HF_TOKEN (see the note on the 3D page)."
         onClose={() => setInstallTarget(null)}
         onComplete={() => { setInstallTarget(null); load(); }}
       />
