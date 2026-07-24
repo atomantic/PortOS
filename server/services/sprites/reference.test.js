@@ -65,7 +65,35 @@ async function createCharacter(id, input = {}) {
 
 const placeCandidate = (recordId, target, name, opts) => placeCandidateFixture(TEST_ROOT, recordId, target, name, opts);
 
+async function lockTurnaround(recordId) {
+  const rel = await placeCandidate(recordId, 'turnaround', 'turnaround-candidate-01.png');
+  return lockReference(recordId, { target: 'turnaround', candidate: rel });
+}
+
+// Walks the turnaround-first order (#2979): the sheet freezes the key, then the
+// main descends from it. Anchor tests start from here.
 async function lockMain(recordId) {
+  await lockTurnaround(recordId);
+  const rel = await placeCandidate(recordId, 'main', 'walk-south-candidate-01.png');
+  return lockReference(recordId, { target: 'main', candidate: rel });
+}
+
+// A pre-#2979 record: main-first manifest (schemaVersion 1, no turnaround
+// block), written straight to disk the way an install upgraded from phase 2
+// would have it, then locked through the legacy main path.
+async function legacyLockedMain(recordId) {
+  const dir = join(TEST_ROOT, 'sprites', recordId, 'reference');
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, `${recordId}-reference-set-v1.json`), JSON.stringify({
+    schemaVersion: 1,
+    manifestId: `${recordId}-reference-set-v1`,
+    status: 'needs-main-reference',
+    characterFamily: recordId,
+    chromaKey: null,
+    mainReference: { path: null, role: 'immutable-root', background: 'chroma-key', locked: false },
+    anchors: ['south', 'south-east', 'east', 'north-east', 'north', 'north-west', 'west', 'south-west']
+      .map((direction) => ({ id: `walk-${direction}`, kind: 'walk-anchor', direction, status: 'pending' })),
+  }));
   const rel = await placeCandidate(recordId, 'main', 'walk-south-candidate-01.png');
   return lockReference(recordId, { target: 'main', candidate: rel });
 }
@@ -85,18 +113,18 @@ describe('startReferenceGeneration', () => {
       .rejects.toMatchObject({ code: 'NOT_A_CHARACTER' });
   });
 
-  it('requires a design prompt or upload for the main target', async () => {
+  it('requires a design prompt or upload for the turnaround target', async () => {
     const id = newId();
     await createCharacter(id);
-    await expect(startReferenceGeneration(id, { target: 'main' }))
+    await expect(startReferenceGeneration(id, { target: 'turnaround' }))
       .rejects.toMatchObject({ code: 'DESIGN_INPUT_REQUIRED' });
   });
 
-  it('queues a main render with the sprite tag and seeds the manifest', async () => {
+  it('queues a turnaround render with the sprite tag and seeds the manifest', async () => {
     const id = newId();
     await createCharacter(id);
-    const result = await startReferenceGeneration(id, { target: 'main', designPrompt: 'a wiry ranger' });
-    expect(result).toMatchObject({ jobId: 'job-1234567890', mode: 'codex', target: 'main', anchorId: 'walk-south' });
+    const result = await startReferenceGeneration(id, { target: 'turnaround', designPrompt: 'a wiry ranger' });
+    expect(result).toMatchObject({ jobId: 'job-1234567890', mode: 'codex', target: 'turnaround', anchorId: 'turnaround' });
 
     const call = enqueueJob.mock.calls[0][0];
     expect(call.kind).toBe('image');
@@ -105,15 +133,20 @@ describe('startReferenceGeneration', () => {
     expect(call.params.prompt).toContain('named Hero');
     expect(call.params.prompt).toContain('a wiry ranger');
     expect(call.params.prompt).toContain('magenta (#FF00FF)');
+    // The panels, in order, and the constraint the sheet exists to enforce.
+    expect(call.params.prompt).toContain('1) front view');
+    expect(call.params.prompt).toContain('3) back view');
+    expect(call.params.prompt).toContain('SAME anatomical side');
     expect(call.params.spriteRef).toMatchObject({
-      recordId: id, target: 'main', anchorId: 'walk-south', chromaKey: '#FF00FF',
+      recordId: id, target: 'turnaround', anchorId: 'turnaround', chromaKey: '#FF00FF',
       // Provenance records the model the provider will actually run, not
       // null on the default path.
       model: 'gpt-5.6-luna',
     });
 
     const { manifest } = await getReferenceSet(id);
-    expect(manifest.status).toBe('needs-main-reference');
+    expect(manifest.schemaVersion).toBe(2);
+    expect(manifest.status).toBe('needs-turnaround');
     expect(manifest.anchors).toHaveLength(8);
     expect(manifest.designPrompt).toBe('a wiry ranger');
   });
@@ -123,32 +156,63 @@ describe('startReferenceGeneration', () => {
     await createCharacter(id);
     const tmp = join(TEST_ROOT, 'upload-tmp.png');
     await writeCandidatePng(tmp);
-    await startReferenceGeneration(id, { target: 'main' }, { tempPath: tmp, originalname: 'concept.png' });
+    await startReferenceGeneration(id, { target: 'turnaround' }, { tempPath: tmp, originalname: 'concept.png' });
     const call = enqueueJob.mock.calls[0][0];
     expect(call.params.spriteRef.designReferencePath).toMatch(/^reference\/uploads\/.+concept\.png$/);
     expect(call.params.initImagePath).toContain('/reference/uploads/');
     expect(call.params.initImageStrength).toBe(0.65);
   });
 
-  it('refuses anchors before the main is locked, and south always', async () => {
+  it('refuses the main and anchors before the turnaround is locked, and south always', async () => {
     const id = newId();
     await createCharacter(id);
-    await startReferenceGeneration(id, { target: 'main', designPrompt: 'x' });
+    await startReferenceGeneration(id, { target: 'turnaround', designPrompt: 'x' });
+    await expect(startReferenceGeneration(id, { target: 'main', designPrompt: 'x' }))
+      .rejects.toMatchObject({ code: 'TURNAROUND_NOT_LOCKED', status: 409 });
     await expect(startReferenceGeneration(id, { target: 'east' }))
-      .rejects.toMatchObject({ code: 'MAIN_NOT_LOCKED' });
+      .rejects.toMatchObject({ code: 'TURNAROUND_NOT_LOCKED', status: 409 });
     // 'south' is not a valid anchor target at all (schema also blocks it).
     await expect(startReferenceGeneration(id, { target: 'south' }))
       .rejects.toMatchObject({ code: 'INVALID_TARGET' });
   });
 
-  it('derives anchors from the locked main via i2i with the selected key in the prompt', async () => {
+  it('refuses anchors between the turnaround lock and the main lock', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await lockTurnaround(id);
+    await expect(startReferenceGeneration(id, { target: 'east' }))
+      .rejects.toMatchObject({ code: 'MAIN_NOT_LOCKED', status: 409 });
+  });
+
+  it('derives the main from the locked turnaround via i2i', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await startReferenceGeneration(id, { target: 'turnaround', designPrompt: 'a wiry ranger' });
+    enqueueJob.mockClear();
+    await lockTurnaround(id);
+    const result = await startReferenceGeneration(id, { target: 'main' });
+    expect(result.anchorId).toBe('walk-south');
+    const call = enqueueJob.mock.calls[0][0];
+    expect(call.params.initImagePath).toContain(`${id}-turnaround-v1.png`);
+    expect(call.params.initImageStrength).toBe(0.8);
+    expect(call.params.prompt).toContain('turnaround model sheet');
+    expect(call.params.prompt).toContain('facing the viewer (front)');
+    // The design prompt persists from the turnaround step — the main render
+    // still describes the character even though the body carried no prompt.
+    expect(call.params.prompt).toContain('a wiry ranger');
+  });
+
+  it('derives anchors from the locked turnaround via i2i with the selected key in the prompt', async () => {
     const id = newId();
     await createCharacter(id);
     await lockMain(id);
+    enqueueJob.mockClear();
     const result = await startReferenceGeneration(id, { target: 'east' });
     expect(result.anchorId).toBe('walk-east');
     const call = enqueueJob.mock.calls[0][0];
-    expect(call.params.initImagePath).toContain(`${id}-walk-south-v1.png`);
+    expect(call.params.initImagePath).toContain(`${id}-turnaround-v1.png`);
+    expect(call.params.prompt).toContain('turnaround model sheet');
+    expect(call.params.prompt).toContain('not multiple figures and not panels');
     // The queue's providers re-validate initImagePath through the approved
     // image-input roots — a sprite path must survive that gate or the i2i
     // silently degrades to text-to-image (identity drift).
@@ -282,7 +346,137 @@ describe('attachReferenceCandidate', () => {
   });
 });
 
+describe('lockReference — turnaround (#2979)', () => {
+  it('locks the sheet: freezes the key off its holistic palette and advances the status', async () => {
+    const id = newId();
+    await createCharacter(id);
+    const result = await lockTurnaround(id);
+
+    expect(result.manifest.turnaround.locked).toBe(true);
+    expect(result.manifest.turnaround.path).toBe(`reference/${id}-turnaround-v1.png`);
+    expect(result.manifest.turnaround.sha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.manifest.turnaround.role).toBe('identity-root');
+    expect(result.manifest.turnaround.views).toEqual(['south', 'east', 'north', 'west']);
+    // The sheet, not the main, is what chooses the canonical key now.
+    expect(result.manifest.chromaKey).toBe('#FF00FF'); // green char → magenta kept
+    expect(result.manifest.chromaKeyAutoSelected).toBe(true);
+    expect(result.manifest.status).toBe('needs-main-reference');
+    expect(result.manifest.mainReference.locked).toBe(false);
+
+    const record = await records.getRecord(id);
+    expect(record.chromaKey).toBe('#FF00FF');
+    expect(record.status).toBe('reference');
+  });
+
+  it('re-keys the sheet without reframing it to a single-figure square', async () => {
+    const id = newId();
+    await createCharacter(id, { chromaKey: '#0000FF' }); // pin, so lock re-keys
+    const rel = await placeCandidate(id, 'turnaround', 'turnaround-candidate-01.png');
+    await lockReference(id, { target: 'turnaround', candidate: rel });
+    // The fixture candidate is 64×64; normalizeFromAnalysis would rebuild it
+    // around the 10×30 figure bbox. recompositeOnKey must leave it alone.
+    const meta = await sharp(join(TEST_ROOT, 'sprites', id, `reference/${id}-turnaround-v1.png`)).metadata();
+    expect([meta.width, meta.height]).toEqual([64, 64]);
+  });
+
+  it('409s a clip-risk sheet lock until accepted', async () => {
+    const id = newId();
+    await createCharacter(id);
+    // A magenta-ish character on the magenta generation key: near-key detail is
+    // already masked away, so locking it is lossy.
+    const rel = await placeCandidate(id, 'turnaround', 'turnaround-candidate-01.png', {
+      fg: { r: 255, g: 80, b: 230 }, // pink outfit near the magenta key
+    });
+    await expect(lockReference(id, { target: 'turnaround', candidate: rel }))
+      .rejects.toMatchObject({ status: 409, code: 'CHROMA_CLIP_RISK' });
+    const accepted = await lockReference(id, { target: 'turnaround', candidate: rel, acceptClipRisk: true });
+    expect(accepted.manifest.turnaround.locked).toBe(true);
+  });
+
+  it('409s a relock and enforces the candidate filename prefix', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await lockTurnaround(id);
+    const second = await placeCandidate(id, 'turnaround', 'turnaround-candidate-02.png');
+    await expect(lockReference(id, { target: 'turnaround', candidate: second }))
+      .rejects.toMatchObject({ status: 409, code: 'REFERENCE_LOCKED' });
+
+    const other = newId();
+    await createCharacter(other);
+    const mismatched = await placeCandidate(other, 'turnaround', 'walk-east-candidate-01.png');
+    await expect(lockReference(other, { target: 'turnaround', candidate: mismatched }))
+      .rejects.toMatchObject({ status: 400, code: 'CANDIDATE_TARGET_MISMATCH' });
+  });
+
+  it('does not reselect the key when the main lock already froze one (legacy backfill)', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await legacyLockedMain(id);
+    const before = await getReferenceSet(id);
+    expect(before.manifest.schemaVersion).toBe(1);
+    expect(before.manifest.chromaKey).toBe('#FF00FF');
+    const recordBefore = await records.getRecord(id);
+
+    const result = await lockTurnaround(id);
+    expect(result.manifest.turnaround.locked).toBe(true);
+    // Key stays exactly as the main lock froze it, and the legacy manifest is
+    // NOT silently upgraded to the turnaround-first schema.
+    expect(result.manifest.chromaKey).toBe('#FF00FF');
+    expect(result.manifest.schemaVersion).toBe(1);
+    // A backfill has nothing to say about the record — the main lock set it.
+    const recordAfter = await records.getRecord(id);
+    expect(recordAfter.chromaKey).toBe(recordBefore.chromaKey);
+    expect(recordAfter.status).toBe(recordBefore.status);
+  });
+
+  it('unblocks anchor derivation on a legacy record once the sheet is backfilled', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await legacyLockedMain(id);
+    await expect(startReferenceGeneration(id, { target: 'east' }))
+      .rejects.toMatchObject({ code: 'TURNAROUND_NOT_LOCKED', status: 409 });
+    await lockTurnaround(id);
+    enqueueJob.mockClear();
+    await startReferenceGeneration(id, { target: 'east' });
+    const call = enqueueJob.mock.calls[0][0];
+    expect(call.params.initImagePath).toContain(`${id}-turnaround-v1.png`);
+    expect(call.params.prompt).toContain('turnaround model sheet');
+  });
+
+  it('freezes the key against a post-turnaround repin', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await lockTurnaround(id);
+    await expect(patchSpriteRecord(id, { chromaKey: '#00FF00' }))
+      .rejects.toMatchObject({ status: 409, code: 'CHROMA_KEY_LOCKED' });
+  });
+
+  it('groups a sidecarless turnaround candidate under its own target', async () => {
+    const id = newId();
+    await createCharacter(id);
+    const candDir = join(TEST_ROOT, 'sprites', id, 'reference', 'candidates');
+    await mkdir(candDir, { recursive: true });
+    await writeCandidatePng(join(candDir, 'turnaround-candidate-01.png')); // no sidecar
+    const { candidates } = await getReferenceSet(id);
+    expect(candidates.find((c) => c.path.endsWith('turnaround-candidate-01.png')).target).toBe('turnaround');
+  });
+});
+
 describe('lockReference', () => {
+  it('does not reselect the key when the sheet already froze one', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await lockTurnaround(id);
+    // A magenta-ish main would auto-select AWAY from magenta if the main lock
+    // still ran selection — it must inherit the sheet's frozen key instead.
+    const rel = await placeCandidate(id, 'main', 'walk-south-candidate-01.png', {
+      fg: { r: 255, g: 80, b: 230 },
+    });
+    const result = await lockReference(id, { target: 'main', candidate: rel, acceptClipRisk: true });
+    expect(result.manifest.chromaKey).toBe('#FF00FF');
+    expect(result.manifest.mainReference.clipWarning).toMatch(/generation key #FF00FF/);
+  });
+
   it('locks the main: normalizes, auto-selects the chroma key, freezes the manifest + record', async () => {
     const id = newId();
     await createCharacter(id);
@@ -369,7 +563,7 @@ describe('lockReference', () => {
   it('threads the saved local model into local-mode renders and provenance', async () => {
     const id = newId();
     await createCharacter(id);
-    await startReferenceGeneration(id, { target: 'main', designPrompt: 'x', mode: 'local' });
+    await startReferenceGeneration(id, { target: 'turnaround', designPrompt: 'x', mode: 'local' });
     const call = enqueueJob.mock.calls[0][0];
     expect(call.params.mode).toBe('local');
     expect(call.params.modelId).toBe('flux-dev-4bit');
@@ -397,9 +591,12 @@ describe('lockReference', () => {
     expect(manifest.mainReference.path).toBe(`reference/${id}-walk-south-v1.png`);
     expect(manifest.anchors[0].path).toBe(`reference/${id}-walk-south-v1.png`);
 
-    // Anchor derivation must resolve the rebased main as its i2i init.
-    const result = await startReferenceGeneration(id, { target: 'east' });
-    expect(result.anchorId).toBe('walk-east');
+    // An imported record is main-first with no sheet, so anchors are gated on
+    // the backfill — which must resolve the REBASED main as its i2i init.
+    await expect(startReferenceGeneration(id, { target: 'east' }))
+      .rejects.toMatchObject({ code: 'TURNAROUND_NOT_LOCKED', status: 409 });
+    const result = await startReferenceGeneration(id, { target: 'turnaround' });
+    expect(result.anchorId).toBe('turnaround');
     expect(enqueueJob.mock.calls[0][0].params.initImagePath).toBe(join(TEST_ROOT, 'sprites', id, `reference/${id}-walk-south-v1.png`));
   });
 
@@ -500,14 +697,14 @@ describe('lockReference', () => {
   });
 });
 
-describe('main-reference i2i seed sources', () => {
-  it('seeds the main from a gallery image (initImageGalleryFile)', async () => {
+describe('turnaround i2i seed sources', () => {
+  it('seeds the turnaround from a gallery image (initImageGalleryFile)', async () => {
     const id = newId();
     await createCharacter(id);
     // resolveGalleryImage resolves a basename under PATHS.images (the test root).
     const galleryName = 'render-history-pick.png';
     await writeCandidatePng(join(TEST_ROOT, 'images', galleryName));
-    await startReferenceGeneration(id, { target: 'main', designPrompt: 'red coat', initImageGalleryFile: galleryName });
+    await startReferenceGeneration(id, { target: 'turnaround', designPrompt: 'red coat', initImageGalleryFile: galleryName });
     const call = enqueueJob.mock.calls[0][0];
     expect(call.params.initImagePath).toBe(join(TEST_ROOT, 'images', galleryName));
     expect(call.params.initImageStrength).toBe(0.65);
@@ -517,47 +714,69 @@ describe('main-reference i2i seed sources', () => {
   it('400s a gallery pick that is not in the gallery', async () => {
     const id = newId();
     await createCharacter(id);
-    await expect(startReferenceGeneration(id, { target: 'main', designPrompt: 'x', initImageGalleryFile: 'ghost.png' }))
+    await expect(startReferenceGeneration(id, { target: 'turnaround', designPrompt: 'x', initImageGalleryFile: 'ghost.png' }))
       .rejects.toMatchObject({ code: 'INIT_IMAGE_NOT_FOUND', status: 400 });
   });
 
-  it('seeds the main from another sprite\'s locked reference (initImageSpriteId)', async () => {
+  it('seeds from another sprite\'s locked turnaround, preferring the sheet over its main', async () => {
     const source = newId();
     await createCharacter(source);
-    await lockMain(source);
+    await lockMain(source); // locks the sheet AND the main
     const dest = newId();
     await createCharacter(dest);
     enqueueJob.mockClear();
-    await startReferenceGeneration(dest, { target: 'main', designPrompt: 'now with a hat', initImageSpriteId: source });
+    await startReferenceGeneration(dest, { target: 'turnaround', designPrompt: 'now with a hat', initImageSpriteId: source });
     const call = enqueueJob.mock.calls[0][0];
-    expect(call.params.initImagePath).toBe(join(TEST_ROOT, 'sprites', source, `reference/${source}-walk-south-v1.png`));
-    expect(call.params.spriteRef.designReferencePath).toBe(`sprite:${source}/reference/${source}-walk-south-v1.png`);
+    // The sheet carries every side, so a derive inherits accessory placement.
+    expect(call.params.initImagePath).toBe(join(TEST_ROOT, 'sprites', source, `reference/${source}-turnaround-v1.png`));
+    expect(call.params.spriteRef.designReferencePath).toBe(`sprite:${source}/reference/${source}-turnaround-v1.png`);
   });
 
-  it('400s seeding from a source with no locked main', async () => {
+  it('falls back to a legacy source\'s locked main when it has no sheet', async () => {
+    const source = newId();
+    await createCharacter(source);
+    await legacyLockedMain(source);
+    const dest = newId();
+    await createCharacter(dest);
+    enqueueJob.mockClear();
+    await startReferenceGeneration(dest, { target: 'turnaround', designPrompt: 'x', initImageSpriteId: source });
+    const call = enqueueJob.mock.calls[0][0];
+    expect(call.params.initImagePath).toBe(join(TEST_ROOT, 'sprites', source, `reference/${source}-walk-south-v1.png`));
+  });
+
+  it('400s seeding from a source with no locked reference', async () => {
     const source = newId();
     await createCharacter(source); // never locked
     const dest = newId();
     await createCharacter(dest);
-    await expect(startReferenceGeneration(dest, { target: 'main', designPrompt: 'x', initImageSpriteId: source }))
+    await expect(startReferenceGeneration(dest, { target: 'turnaround', designPrompt: 'x', initImageSpriteId: source }))
       .rejects.toMatchObject({ code: 'SOURCE_REFERENCE_MISSING', status: 400 });
   });
 });
 
 describe('listReferenceSources', () => {
-  it('returns only characters whose main reference is locked', async () => {
+  it('returns characters with a locked reference, preferring the turnaround sheet', async () => {
     const locked = newId();
     await createCharacter(locked, { name: 'Locked One' });
     await lockMain(locked);
+    const legacy = newId();
+    await createCharacter(legacy, { name: 'Legacy One' });
+    await legacyLockedMain(legacy);
     const draft = newId();
-    await createCharacter(draft, { name: 'Draft One' }); // no main lock
+    await createCharacter(draft, { name: 'Draft One' }); // nothing locked
     const sources = await listReferenceSources();
     const ids = sources.map((s) => s.id);
     expect(ids).toContain(locked);
+    expect(ids).toContain(legacy);
     expect(ids).not.toContain(draft);
     const entry = sources.find((s) => s.id === locked);
     expect(entry).toMatchObject({ id: locked, name: 'Locked One', kind: 'character' });
-    expect(entry.path).toContain(`${locked}-walk-south-v1.png`);
+    expect(entry.path).toContain(`${locked}-turnaround-v1.png`);
+    expect(entry.turnaroundPath).toContain(`${locked}-turnaround-v1.png`);
+    // A legacy source is still seedable — it just has no sheet to advertise.
+    const legacyEntry = sources.find((s) => s.id === legacy);
+    expect(legacyEntry.path).toContain(`${legacy}-walk-south-v1.png`);
+    expect(legacyEntry.turnaroundPath).toBeNull();
   });
 });
 
@@ -596,13 +815,14 @@ describe('listSpriteThumbnails', () => {
 });
 
 describe('forkSprite', () => {
-  it('creates a new character and queues its main seeded from the source reference', async () => {
+  it('creates a new character and queues its turnaround seeded from the source sheet', async () => {
     const source = newId();
     await createCharacter(source, { name: 'Origin' });
     await lockMain(source);
     enqueueJob.mockClear();
     const { record, jobId, target } = await forkSprite(source, { name: 'Origin Fork', designPrompt: 'wearing a red coat' });
-    expect(target).toBe('main');
+    // A fork enters the same turnaround-first workflow every new character does.
+    expect(target).toBe('turnaround');
     expect(jobId).toBe('job-1234567890');
     expect(record.kind).toBe('character');
     expect(record.name).toBe('Origin Fork');
@@ -610,7 +830,7 @@ describe('forkSprite', () => {
     expect(await records.getRecord(record.id)).toBeTruthy();
     const call = enqueueJob.mock.calls[0][0];
     expect(call.params.spriteRef.recordId).toBe(record.id);
-    expect(call.params.initImagePath).toBe(join(TEST_ROOT, 'sprites', source, `reference/${source}-walk-south-v1.png`));
+    expect(call.params.initImagePath).toBe(join(TEST_ROOT, 'sprites', source, `reference/${source}-turnaround-v1.png`));
   });
 
   it('400s forking a source with no locked main and creates no orphan record', async () => {

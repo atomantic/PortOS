@@ -1039,7 +1039,9 @@ export const spriteCreateSchema = z.object({
   spec: z.record(z.string(), z.unknown()).nullable().optional(),
 });
 
-const spriteReferenceTargetSchema = z.enum(['main', ...ANCHOR_DIRECTIONS]);
+// 'turnaround' is the identity root of the turnaround-first workflow (#2979) —
+// generated and locked before the main, which the anchors then descend from.
+const spriteReferenceTargetSchema = z.enum(['turnaround', 'main', ...ANCHOR_DIRECTIONS]);
 
 // Multipart callers send numbers as form-field strings — coerce before range
 // checks ('' → undefined so an empty field doesn't become 0).

@@ -38,11 +38,16 @@ export async function placeCandidate(testRoot, recordId, target, name, opts = {}
   return `reference/candidates/${name}`;
 }
 
-// Locks 'main' plus every other direction in `directions`, in south-first
-// order — the shape shared by walk.test.js's characterWithLockedAnchors and
-// atlas.test.js's lockAllAnchors (which only differ in which directions they
-// pass and how they name/create the character beforehand).
+// Locks the turnaround sheet, then 'main', then every other direction in
+// `directions` — the shape shared by walk.test.js's characterWithLockedAnchors
+// and atlas.test.js's lockAllAnchors (which only differ in which directions
+// they pass and how they name/create the character beforehand). The turnaround
+// comes first because anchors are gated on it (#2979).
 export async function lockAllAnchors(testRoot, recordId, { lockReference, directions }) {
+  await lockReference(recordId, {
+    target: 'turnaround',
+    candidate: await placeCandidate(testRoot, recordId, 'turnaround', 'turnaround-candidate-01.png'),
+  });
   await lockReference(recordId, {
     target: 'main',
     candidate: await placeCandidate(testRoot, recordId, 'main', 'walk-south-candidate-01.png'),

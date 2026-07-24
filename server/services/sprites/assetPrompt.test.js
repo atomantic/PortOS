@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { mkdir, writeFile } from 'fs/promises';
+import { mkdir, writeFile, rm } from 'fs/promises';
 import { writeCandidatePng, placeCandidate as placeCandidateFixture } from './spriteTestFixtures.js';
 
 const TEST_ROOT = mkdtempSync(join(tmpdir(), 'sprite-assetprompt-test-'));
@@ -109,6 +109,70 @@ describe('resolveSpriteAssetPrompt', () => {
     expect(res).not.toBeNull();
     expect(res.prompt).toContain('named Hero');
     expect(res.prompt).toContain('walk-south identity reference');
+  });
+
+  it('resolves the locked turnaround sheet through the manifest (#2979)', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await lockReference(id, { target: 'turnaround', candidate: await placeCandidate(id, 'turnaround', 'turnaround-candidate-01.png') });
+    const { manifest } = await getReferenceSet(id);
+
+    const res = await resolveSpriteAssetPrompt(id, manifest.turnaround.path);
+    expect(res).not.toBeNull();
+    expect(res.prompt).toContain('turnaround model sheet');
+    expect(res.prompt).toContain('named Hero');
+  });
+
+  it('reconstructs a turnaround-candidate prompt when the sidecar predates prompt capture', async () => {
+    const id = newId();
+    await createCharacter(id);
+    const candDir = join(TEST_ROOT, 'sprites', id, 'reference', 'candidates');
+    await mkdir(candDir, { recursive: true });
+    await writeFile(join(candDir, 'turnaround-candidate-01.generation.json'), JSON.stringify({
+      target: 'turnaround', chromaKey: '#00FF00', designPrompt: 'a wiry ranger',
+    }));
+    const res = await resolveSpriteAssetPrompt(id, 'reference/candidates/turnaround-candidate-01.png');
+    expect(res.source).toBe('candidate-reconstructed');
+    expect(res.prompt).toContain('turnaround model sheet');
+    expect(res.prompt).toContain('a wiry ranger');
+    expect(res.prompt).toContain('green (#00FF00)');
+  });
+
+  it('rebuilds anchors on a turnaround-first record with the sheet-aware copy', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await lockReference(id, { target: 'turnaround', candidate: await placeCandidate(id, 'turnaround', 'turnaround-candidate-01.png') });
+    await lockReference(id, { target: 'main', candidate: await placeCandidate(id, 'main', 'walk-south-candidate-01.png') });
+    await lockReference(id, { target: 'east', candidate: await placeCandidate(id, 'east', 'walk-east-candidate-01.png') });
+    const { manifest } = await getReferenceSet(id);
+    // Drop the source sidecar so the deterministic rebuild is what answers.
+    const anchor = manifest.anchors.find((a) => a.id === 'walk-east');
+    await rm(join(TEST_ROOT, 'sprites', id, 'reference', 'candidates', 'walk-east-candidate-01.generation.json'));
+
+    const res = await resolveSpriteAssetPrompt(id, anchor.path);
+    expect(res.source).toBe('reference-anchor');
+    expect(res.prompt).toContain('turnaround model sheet');
+    expect(res.prompt).toContain('strict right-facing side profile');
+  });
+
+  it('a backfilled sheet rebuilds with the inherited key, not the default', async () => {
+    // The sheet did NOT choose the key here — the main lock did, before the
+    // backfill — so the sheet was rendered against the already-frozen key.
+    const id = newId();
+    await createCharacter(id);
+    await lockReference(id, { target: 'main', candidate: await placeCandidate(id, 'main', 'walk-south-candidate-01.png', { fg: { r: 255, g: 80, b: 230 }, sidecarKey: '#FF00FF' }), acceptClipRisk: true });
+    let manifest = (await getReferenceSet(id)).manifest;
+    expect(manifest.chromaKeyAutoSelected).toBe(true);
+    const frozen = manifest.chromaKey;
+    expect(frozen).not.toBe('#FF00FF'); // auto-selected away from the clash
+
+    await lockReference(id, { target: 'turnaround', candidate: await placeCandidate(id, 'turnaround', 'turnaround-candidate-01.png') });
+    manifest = (await getReferenceSet(id)).manifest;
+    await rm(join(TEST_ROOT, 'sprites', id, 'reference', 'candidates', 'turnaround-candidate-01.generation.json'));
+
+    const res = await resolveSpriteAssetPrompt(id, manifest.turnaround.path);
+    expect(res.source).toBe('reference-turnaround');
+    expect(res.prompt).toContain(frozen);
   });
 
   it('main manifest-fallback uses the generation-time default key, not the auto-selected lock key', async () => {

@@ -10,7 +10,9 @@ import { mkdtempSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import sharp from 'sharp';
-import { normalizeAnchorFrame, extractForegroundPalette, hexToRgb } from './normalize.js';
+import {
+  normalizeAnchorFrame, extractForegroundPalette, hexToRgb, recompositeOnKey, analyzeForeground,
+} from './normalize.js';
 
 let dir;
 beforeAll(() => { dir = mkdtempSync(join(tmpdir(), 'sprite-normalize-test-')); });
@@ -167,5 +169,78 @@ describe('hexToRgb', () => {
 
   it('throws on junk', () => {
     expect(() => hexToRgb('red')).toThrow(/Invalid hex/);
+  });
+});
+
+describe('recompositeOnKey (#2979 — turnaround sheet re-key)', () => {
+  it('preserves the original canvas instead of reframing onto a square', async () => {
+    // A wide multi-figure sheet: normalizeFromAnalysis would crop to the
+    // figures' bbox and rebuild an 80%-height square, which is meaningless for
+    // a model sheet. The re-key must leave geometry alone.
+    const src = join(dir, 'sheet.png');
+    const dest = join(dir, 'sheet-out.png');
+    const w = 128; const h = 48;
+    const buf = Buffer.alloc(w * h * 3);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        // Four green figures spread across the sheet.
+        const inFigure = (x % 32) >= 12 && (x % 32) < 20 && y >= 8 && y < 40;
+        const c = inFigure ? GREEN : MAGENTA;
+        const i = (y * w + x) * 3;
+        buf[i] = c.r; buf[i + 1] = c.g; buf[i + 2] = c.b;
+      }
+    }
+    await sharp(buf, { raw: { width: w, height: h, channels: 3 } }).png().toFile(src);
+
+    const analysis = await analyzeForeground(src, '#FF00FF');
+    const result = await recompositeOnKey(analysis, src, dest, '#0000FF');
+    expect(result).toMatchObject({ width: w, height: h });
+
+    const img = await readRaw(dest);
+    expect(img.width).toBe(w);
+    expect(img.height).toBe(h);
+    // Background is exactly the new key; every figure pixel survives untouched.
+    const at = (x, y) => [img.data[(y * w + x) * 3], img.data[(y * w + x) * 3 + 1], img.data[(y * w + x) * 3 + 2]];
+    expect(at(0, 0)).toEqual([0, 0, 255]);
+    expect(at(64, 0)).toEqual([0, 0, 255]);
+    expect(at(14, 20)).toEqual([0, 255, 0]);
+    expect(at(110, 20)).toEqual([0, 255, 0]); // the last panel, not cropped away
+  });
+
+  it('decontaminates fringe carrying the old key on a swap', async () => {
+    const src = join(dir, 'sheet-fringe.png');
+    const dest = join(dir, 'sheet-fringe-out.png');
+    await writeFringeCandidate(src);
+    const analysis = await analyzeForeground(src, '#FF00FF');
+    await recompositeOnKey(analysis, src, dest, '#0000FF');
+    const img = await readRaw(dest);
+    let magentaTinted = 0;
+    for (let p = 0; p < img.width * img.height; p++) {
+      const [r, g, b] = [img.data[p * 3], img.data[p * 3 + 1], img.data[p * 3 + 2]];
+      if (r === 204 && g === 51 && b === 204) magentaTinted++;
+    }
+    // The 0.8-magenta blend is shifted toward the new key, not left as a
+    // magenta halo around the figure.
+    expect(magentaTinted).toBe(0);
+  });
+
+  it('is a plain re-encode when the key does not change', async () => {
+    const src = join(dir, 'sheet-samekey.png');
+    const dest = join(dir, 'sheet-samekey-out.png');
+    await writeCandidate(src);
+    const analysis = await analyzeForeground(src, '#FF00FF');
+    await recompositeOnKey(analysis, src, dest, '#FF00FF');
+    const before = await readRaw(src);
+    const after = await readRaw(dest);
+    expect(after.width).toBe(before.width);
+    expect(Buffer.compare(Buffer.from(after.data), Buffer.from(before.data))).toBe(0);
+  });
+
+  it('copies through a sheet with no detectable foreground', async () => {
+    const src = join(dir, 'sheet-blank.png');
+    const dest = join(dir, 'sheet-blank-out.png');
+    await writeCandidate(src, { fg: MAGENTA });
+    const analysis = await analyzeForeground(src, '#FF00FF');
+    expect((await recompositeOnKey(analysis, src, dest, '#00FF00')).copiedThrough).toBe(true);
   });
 });

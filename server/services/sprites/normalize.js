@@ -183,6 +183,50 @@ export async function normalizeFromAnalysis(analysis, src, dest, canvasKeyHex) {
 }
 
 /**
+ * Re-key an analyzed image onto `canvasKeyHex` WITHOUT reframing it (issue
+ * #2979). Same canvas dimensions, every non-foreground pixel replaced by the
+ * canonical key, surviving fringe run through the same decontaminator
+ * normalizeFromAnalysis uses.
+ *
+ * This is the turnaround sheet's lock path: `normalizeFromAnalysis`'s
+ * single-figure geometry (character at 80% of a square, feet 7% up) is
+ * meaningless for a multi-figure model sheet, but the key swap still matters —
+ * the locked sheet is the i2i init image for the main and every anchor, whose
+ * prompts name the canonical key, so a sheet still wearing its generation key
+ * would contradict the instruction it is attached to.
+ *
+ * A no-op re-encode when the mask key already equals the canvas key (the
+ * decontaminator is null and the fill matches), which is the common case for a
+ * legacy record whose key was frozen before the sheet was ever generated.
+ */
+export async function recompositeOnKey(analysis, src, dest, canvasKeyHex) {
+  const { data, width, height, mask, bbox, maskKey } = analysis;
+  if (!bbox) {
+    await copyFile(src, dest);
+    return { copiedThrough: true };
+  }
+  const fill = hexToRgb(canvasKeyHex);
+  const canvas = Buffer.alloc(width * height * 3, Buffer.from([fill.r, fill.g, fill.b]));
+  const decon = buildKeyDecontaminator(maskKey, canvasKeyHex);
+  for (let p = 0; p < width * height; p++) {
+    if (!mask[p]) continue;
+    const i = p * 3;
+    if (decon) {
+      const share = decon.share(data, i);
+      canvas[i] = clampByte(data[i] + share * decon.delta[0]);
+      canvas[i + 1] = clampByte(data[i + 1] + share * decon.delta[1]);
+      canvas[i + 2] = clampByte(data[i + 2] + share * decon.delta[2]);
+    } else {
+      canvas[i] = data[i];
+      canvas[i + 1] = data[i + 1];
+      canvas[i + 2] = data[i + 2];
+    }
+  }
+  await sharp(canvas, { raw: { width, height, channels: 3 } }).png().toFile(dest);
+  return { width, height };
+}
+
+/**
  * One-shot normalize: mask `src` against the key it was GENERATED on, then
  * composite onto the SELECTED key. An image with no detectable foreground
  * copies through unchanged, mirroring the source behavior.

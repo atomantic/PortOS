@@ -130,8 +130,11 @@ router.post('/:id/reference/generate', referenceUpload, asyncHandler(async (req,
   const upload = file ? { tempPath: file.path, originalname: file.originalname } : null;
   if (upload) res.on('close', () => { unlink(upload.tempPath).catch(() => {}); });
   const body = validateRequest(spriteReferenceGenerateSchema, req.body ?? {});
-  if (upload && body.target !== 'main') {
-    throw new ServerError('Reference image uploads apply to the main target only — anchors always derive from the locked main', { status: 400, code: 'UPLOAD_MAIN_ONLY' });
+  // A design upload seeds the identity root only. That's the turnaround sheet
+  // on a turnaround-first record and the main on a legacy one (#2979) — the
+  // service decides which applies; everything downstream derives from the sheet.
+  if (upload && body.target !== 'turnaround' && body.target !== 'main') {
+    throw new ServerError('Reference image uploads seed the turnaround sheet or the main reference — directional anchors always derive from the locked turnaround', { status: 400, code: 'UPLOAD_MAIN_ONLY' });
   }
   res.json(await startReferenceGeneration(req.params.id, body, upload));
 }));
