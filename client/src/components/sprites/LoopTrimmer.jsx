@@ -368,11 +368,21 @@ export default function LoopTrimmer({
       {/* Every frame the run's clip produced, plus the in-place re-derive
           (#2980). Run sources only: a saved trim has no run (and no clip)
           behind it, so there is nothing to enumerate or re-derive. */}
-      {/* `onSaved` is passed straight through: the parent already hands down a
-          stable callback, and the panel is memoized so it doesn't re-render on
-          every loop-preview tick. */}
+      {/* `key` is load-bearing, not cosmetic: extraction is a multi-second POST,
+          and switching the animation source mid-flight would otherwise resolve
+          into the SAME instance — writing one run's frames and lock state into a
+          panel now labelled another run. Remounting per run makes the stale
+          response a no-op, covering the extract, refresh and load paths at once.
+          `onSaved` is passed straight through (the parent hands down a stable
+          callback, and the panel is memoized so it doesn't re-render on every
+          loop-preview tick). */}
       {source?.kind === 'run' && source.runId && (
-        <WalkSourceFrames recordId={recordId} runId={source.runId} onSaved={onSaved} />
+        <WalkSourceFrames
+          key={source.runId}
+          recordId={recordId}
+          runId={source.runId}
+          onSaved={onSaved}
+        />
       )}
 
       {/* Save + result */}

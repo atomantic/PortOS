@@ -215,6 +215,13 @@ router.get('/:id/walk/runs/:runId/source-frames', asyncHandler(async (req, res) 
 // so every imported run would otherwise spawn an ffmpeg decode (~96 PNGs) just
 // from rendering the trimmer — this keeps the work behind an explicit click. No
 // AI call; deterministic ffmpeg only.
+//
+// Deliberately NOT gated on an unfinalized set, unlike its neighbours: it writes
+// only re-derivable intermediates into the run's own `raw/` directory and
+// touches no packaged artifact, manifest or record — and inspecting a finalized
+// direction's source frames is exactly how the user decides whether to unlock it
+// at all. The immutability guards stay where they matter, on the ops that change
+// what the atlas compiles.
 router.post('/:id/walk/runs/:runId/source-frames/extract', asyncHandler(async (req, res) => {
   const { runId } = validateRequest(spriteWalkSourceFramesParamsSchema, req.params);
   res.json(await getWalkSourceFrames(req.params.id, runId, { extract: true }));

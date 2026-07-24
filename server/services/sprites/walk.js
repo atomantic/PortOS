@@ -1146,9 +1146,11 @@ async function listRawFrameNames(recordId, rawRel) {
  * window's first raw frame. Without this translation the highlight would sit
  * `span.start` frames to the left of the frames it claims to cover.
  *
- * Each field degrades to null independently rather than collapsing the whole
- * block, so a manifest that records the window but no frames[] still reports the
- * window length it selected.
+ * `windowEndFrame` is EXCLUSIVE — it is the seam frame the packer scored the
+ * window's endpoints against, not a member of the cycle. Only ever called for a
+ * manifest whose packed frames were verified against disk (see
+ * `manifestCycleProvenance`), so the per-field null degradation below covers a
+ * malformed `cycleSelection`, not a missing `frames[]`.
  */
 function cycleWindowOf(packaged) {
   const cycle = packaged?.cycleSelection;
@@ -1176,30 +1178,49 @@ function cycleWindowOf(packaged) {
  * re-extracted by this install's ffmpeg (`fps=12`, first 8s). If those two
  * extractions disagree at all, the indices address different PNGs and the panel
  * would confidently mark the wrong frames as "the gait cycle" and "packed into
- * the strip" — a false claim about provenance is worse than no claim. The
- * manifest already records each packed frame's `sourcePath`, so verify the
- * basenames are among the files on disk and report:
+ * the strip" — a false claim about provenance is worse than no claim.
  *
- *   'verified'  the manifest's source frames are all present → markers are real
+ * **Presence is not identity, which is why this hashes.** Both extractions name
+ * their output `source-%04d.png`, so a source pipeline that sampled at 24fps
+ * declares a `source-0010.png` that also exists here — holding a different
+ * moment of the clip. A basename check would call that 'verified' and mark the
+ * wrong frames, i.e. miss the exact hazard it exists for. The packer records
+ * `sourceSha256` per frame (walkPostprocess.js), so compare one declared frame's
+ * bytes; a manifest too old to carry hashes falls back to presence, which is
+ * still better than nothing and never worse than not checking.
+ *
+ *   'verified'  the declared source frames are the ones on disk → markers are real
  *   'stale'     they are not → markers withheld, and the client says why
  *   'none'      the run carries no packaged cycle to map (never packaged, or a
  *               minimal manifest) → nothing to verify, nothing to withhold
  */
-function manifestCycleProvenance(packaged, names) {
+async function manifestCycleProvenance(recordId, rawRel, packaged, names) {
   const packedFrames = Array.isArray(packaged?.frames) ? packaged.frames : [];
   const indices = packedFrames
     .map((frame) => frame?.sourceFrameIndex)
     .filter((index) => Number.isInteger(index));
-  if (!indices.length) return { cycle: null, selectedSourceIndices: [], cycleProvenance: 'none' };
+  const withheld = { cycle: null, selectedSourceIndices: [], cycleProvenance: 'stale' };
+  if (!indices.length) return { ...withheld, cycleProvenance: 'none' };
+  const declared = packedFrames.map((frame) => (typeof frame?.sourcePath === 'string'
+    ? { name: frame.sourcePath.split('/').pop(), sha256: frame.sourceSha256 }
+    : null));
+  // Partial declaration is not partial evidence: two of twelve frames naming a
+  // path that happens to exist says nothing about the other ten, so treat an
+  // incompletely-declared manifest as unverifiable rather than verified. A
+  // manifest that declares NOTHING (older/minimal packaging) is taken at its
+  // word — there is nothing to compare, and withholding the markers would punish
+  // a record for being terse rather than wrong.
+  if (!declared.some(Boolean)) {
+    return { cycle: cycleWindowOf(packaged), selectedSourceIndices: indices, cycleProvenance: 'verified' };
+  }
   const onDisk = new Set(names);
-  const declared = packedFrames
-    .map((frame) => (typeof frame?.sourcePath === 'string' ? frame.sourcePath.split('/').pop() : null))
-    .filter(Boolean);
-  // A manifest that declares no sourcePath at all (older/minimal packaging) is
-  // taken at its word — there is nothing to compare, and withholding the markers
-  // would punish a record for being terse rather than wrong.
-  const matches = !declared.length || declared.every((name) => onDisk.has(name));
-  if (!matches) return { cycle: null, selectedSourceIndices: [], cycleProvenance: 'stale' };
+  if (!declared.every((frame) => frame && onDisk.has(frame.name))) return withheld;
+  // One hash settles it: the declared frames come from a single extraction, so
+  // if one is byte-identical the numbering they share is the numbering on disk.
+  const hashed = declared.find((frame) => typeof frame.sha256 === 'string' && frame.sha256);
+  if (hashed && await sha256File(join(spriteDir(recordId), rawRel, hashed.name)) !== hashed.sha256) {
+    return withheld;
+  }
   return {
     cycle: cycleWindowOf(packaged),
     selectedSourceIndices: indices,
@@ -1340,7 +1361,7 @@ export async function getWalkSourceFrames(recordId, runId, { extract = false } =
     // with different remedies — the second is one click from recoverable.
     reason: frames.length > 0 ? null : (clipRel ? 'raw-frames-cleaned' : 'no-source-video'),
     frames,
-    ...manifestCycleProvenance(packaged, names),
+    ...(await manifestCycleProvenance(recordId, rawRel, packaged, names)),
     editable: !lockReason,
     lockReason,
   });

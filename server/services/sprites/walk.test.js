@@ -1100,7 +1100,9 @@ describe('getWalkSourceFrames', () => {
   // degenerate span.start = 0 case, where `windowStart + 1` and
   // `frames[0].sourceFrameIndex` coincide and a translation that ignored the
   // packed frames entirely would still look correct.
-  async function stampCycleProvenance(id, runId, direction = 'east', { sourcePaths = true } = {}) {
+  async function stampCycleProvenance(id, runId, direction = 'east', {
+    sourcePaths = true, shas = true, partial = false,
+  } = {}) {
     const manifestAbs = join(
       TEST_ROOT, 'sprites', id, 'runs', runId, 'generated', `${id}-walk-${direction}-manifest.json`,
     );
@@ -1108,11 +1110,15 @@ describe('getWalkSourceFrames', () => {
     manifest.cycleSelection = {
       windowStart: 2, windowLength: 4, endpointSeamScore: 1.25, medianMotionScore: 3.5,
     };
-    manifest.frames = [5, 7].map((index) => ({
+    manifest.frames = [5, 7].map((index, i) => ({
       sourceFrameIndex: index,
-      ...(sourcePaths
+      // `partial` declares a path on only the first frame — evidence about one
+      // frame is not evidence about the rest.
+      ...(sourcePaths && !(partial && i > 0)
         ? { sourcePath: `runs/${runId}/generated/raw/${rawName(index)}` }
         : {}),
+      // The bytes `seedRawFrames` writes, so a matching hash is the healthy case.
+      ...(shas && !(partial && i > 0) ? { sourceSha256: sha256(Buffer.from(`raw-${index}`)) } : {}),
     }));
     await writeFile(manifestAbs, JSON.stringify(manifest));
   }
@@ -1207,17 +1213,44 @@ describe('getWalkSourceFrames', () => {
     expect(out.selectedSourceIndices).toEqual([]);
   });
 
-  // A minimal manifest that declares no sourcePath has nothing to verify — take
-  // it at its word rather than punishing it for being terse.
-  it('trusts a manifest that declares no source paths', async () => {
+  // The subtle case a filename check cannot catch: BOTH extractions name their
+  // output source-%04d.png, so a source pipeline that sampled at a different fps
+  // declares files that all "exist" here while holding different moments of the
+  // clip. The bytes are what settle it.
+  it('withholds the markers when the declared frames are present but not the same bytes', async () => {
     const id = await characterWithLockedAnchors(newId(), ['east']);
     const { runId } = await makeCandidateRun(id, 'east');
-    await seedRawFrames(join(TEST_ROOT, 'sprites', id, 'runs', runId), 4);
-    await stampCycleProvenance(id, runId, 'east', { sourcePaths: false });
+    const runAbs = join(TEST_ROOT, 'sprites', id, 'runs', runId);
+    await seedRawFrames(runAbs, 8);
+    await stampCycleProvenance(id, runId);
+    // Same filename, different content — exactly a re-extraction at another fps.
+    await writeFile(join(runAbs, 'generated', 'raw', rawName(5)), 'a-different-moment');
 
     const out = await getWalkSourceFrames(id, runId);
-    expect(out.cycleProvenance).toBe('verified');
-    expect(out.selectedSourceIndices).toEqual([5, 7]);
+    expect(out.cycleProvenance).toBe('stale');
+    expect(out.cycle).toBeNull();
+    expect(out.selectedSourceIndices).toEqual([]);
+  });
+
+  // A minimal manifest that declares no sourcePath has nothing to verify — take
+  // it at its word rather than punishing it for being terse. A PARTIALLY
+  // declared one is different: evidence about one frame is not evidence about
+  // the rest, so it stays unverified.
+  it('trusts a manifest that declares no source paths, but not a partial one', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const bare = await makeCandidateRun(id, 'east');
+    await seedRawFrames(join(TEST_ROOT, 'sprites', id, 'runs', bare.runId), 8);
+    await stampCycleProvenance(id, bare.runId, 'east', { sourcePaths: false, shas: false });
+    const bareOut = await getWalkSourceFrames(id, bare.runId);
+    expect(bareOut.cycleProvenance).toBe('verified');
+    expect(bareOut.selectedSourceIndices).toEqual([5, 7]);
+
+    const half = await makeCandidateRun(id, 'east');
+    await seedRawFrames(join(TEST_ROOT, 'sprites', id, 'runs', half.runId), 8);
+    await stampCycleProvenance(id, half.runId, 'east', { partial: true });
+    const halfOut = await getWalkSourceFrames(id, half.runId);
+    expect(halfOut.cycleProvenance).toBe('stale');
+    expect(halfOut.selectedSourceIndices).toEqual([]);
   });
 
   it('reports no-source-video rather than an empty-looking success', async () => {
