@@ -33,6 +33,7 @@ import taskTypeRoutes from './taskTypes.js';
 import launchRoutes from './launch.js';
 import documentRoutes from './documents.js';
 import agentRoutes from './agents.js';
+import spriteBindingRoutes from './spriteBindings.js';
 
 const router = Router();
 
@@ -45,5 +46,6 @@ router.use(taskTypeRoutes);
 router.use(launchRoutes);
 router.use(documentRoutes);
 router.use(agentRoutes);
+router.use(spriteBindingRoutes);
 
 export default router;

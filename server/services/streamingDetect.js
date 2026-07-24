@@ -10,6 +10,19 @@ import { detectAppIcon } from './appIconDetect.js';
 export const NON_PM2_TYPES = new Set(['ios-native', 'macos-native', 'xcode', 'swift']);
 
 /**
+ * App types that run a GUI/desktop process with no HTTP port (e.g. a Godot
+ * game binary). These are still supervised through PM2, but launched from the
+ * app's own `startCommands` — never an ecosystem web-server config — and with
+ * autorestart OFF: the user closing the window is a NORMAL exit (code 0), not a
+ * crash to relaunch. Port-dependent surfaces (Open UI, HTTP probes) branch on
+ * "has a port" rather than assuming one.
+ */
+export const DESKTOP_TYPES = new Set(['desktop']);
+
+/** Check if an app type is a portless GUI/desktop process. */
+export const isDesktopType = (type) => DESKTOP_TYPES.has(type);
+
+/**
  * Ecosystem config filenames in the order they're resolved. The READER
  * (parseEcosystemFromPath) and the WRITER (writeEcosystemPorts) must agree on
  * this order: if a repo has both, the writer has to rewrite the same file the

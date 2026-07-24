@@ -476,8 +476,16 @@ export async function getLogs(name, lines = 100, pm2Home = null) {
  * @param {string} name PM2 process name
  * @param {string} cwd Working directory
  * @param {string} command Command to run (e.g., "npm run dev")
+ * @param {object} [options]
+ * @param {boolean} [options.autorestart=true] When false, PM2 will NOT relaunch
+ *   the process after it exits. Portless/desktop apps (a game window) pass false:
+ *   the user closing the window is a normal exit, not a crash to loop on. The
+ *   restart-tuning fields (max_restarts/min_uptime/restart_delay) are omitted in
+ *   that mode since they only apply when autorestart is on.
+ * @param {number} [options.maxRestarts=10] Restart cap when autorestart is on.
  */
-export async function startWithCommand(name, cwd, command) {
+export async function startWithCommand(name, cwd, command, options = {}) {
+  const { autorestart = true, maxRestarts = 10 } = options;
   // Parse with quote-awareness so `node --opt "arg with spaces"` survives;
   // a bare split(' ') would shred quoted segments. PM2 accepts `args` as an
   // array, which avoids re-joining and re-splitting on the way through.
@@ -491,11 +499,16 @@ export async function startWithCommand(name, cwd, command) {
         args,
         cwd,
         watch: false,
-        autorestart: true,
-        max_restarts: 10,
-        min_uptime: '10s',
-        restart_delay: 5000,
-        max_memory_restart: '500M',
+        autorestart,
+        // Restart tuning only matters when autorestart is on; a desktop process
+        // exiting cleanly should stay stopped, not be nursed back up. This
+        // includes max_memory_restart: PM2's memory monitor relaunches the
+        // process independently of autorestart, so leaving a 500M cap on a
+        // desktop app (a game window routinely exceeds it) would kill and
+        // respawn the live window — exactly the relaunch loop this avoids.
+        ...(autorestart
+          ? { max_restarts: maxRestarts, min_uptime: '10s', restart_delay: 5000, max_memory_restart: '500M' }
+          : {}),
         windowsHide: IS_WIN
       };
 

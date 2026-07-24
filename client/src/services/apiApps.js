@@ -4,6 +4,10 @@ import { request, API_BASE } from './apiCore.js';
 // Apps
 export const getApps = (options) => request('/apps', options);
 export const getApp = (id) => request(`/apps/${id}`);
+// Reverse lookup (#2991): sprite records whose publishBinding.appId targets this
+// app. Read-only; the caller owns a .catch fallback, so default to silent.
+export const getAppSpriteBindings = (id, options) =>
+  request(`/apps/${id}/sprite-bindings`, { silent: true, ...options });
 // Resolves what the app's `workTracker` field ('auto' or explicit) actually
 // points to: { configured, resolved, host, forge, source }. Read-only — the
 // caller (EditAppDrawer) owns its own .catch fallback, so default to silent.

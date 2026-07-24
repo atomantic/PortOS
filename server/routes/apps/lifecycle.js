@@ -22,7 +22,7 @@ import * as appUpdater from '../../services/appUpdater.js';
 import * as appBuilder from '../../services/appBuilder.js';
 import { logAction } from '../../services/history.js';
 import { asyncHandler, ServerError } from '../../lib/errorHandler.js';
-import { parseEcosystemFromPath, usesPm2 } from '../../services/streamingDetect.js';
+import { parseEcosystemFromPath, usesPm2, isDesktopType } from '../../services/streamingDetect.js';
 import { detectAppIcon, isUsableSvg } from '../../services/appIconDetect.js';
 import { loadApp, pathExists, deriveUiPort } from './shared.js';
 
@@ -41,11 +41,18 @@ router.post('/:id/start', loadApp, asyncHandler(async (req, res) => {
 
   const processNames = app.pm2ProcessNames || [app.name.toLowerCase().replace(/\s+/g, '-')];
 
-  // Check if ecosystem config exists - prefer using it for proper env var handling
+  // Desktop/GUI apps (a game window) are driven from their own startCommands with
+  // autorestart OFF — never wrapped in a web-server ecosystem config. A window
+  // closing is a normal exit, and relaunching it would loop forever.
+  const desktop = isDesktopType(app.type);
+
+  // Check if ecosystem config exists - prefer using it for proper env var handling.
+  // A desktop app is command-launched even if the repo also ships an ecosystem
+  // config for its (unrelated) web processes.
   const ecosystemChecks = await Promise.all(
     ['ecosystem.config.cjs', 'ecosystem.config.js'].map(f => pathExists(`${app.repoPath}/${f}`))
   );
-  const hasEcosystem = ecosystemChecks.some(Boolean);
+  const hasEcosystem = !desktop && ecosystemChecks.some(Boolean);
 
   let results = {};
 
@@ -64,7 +71,18 @@ router.post('/:id/start', loadApp, asyncHandler(async (req, res) => {
     for (let i = 0; i < processNames.length; i++) {
       const name = processNames[i];
       const command = commands[i] || commands[0];
-      const result = await pm2Service.startWithCommand(name, app.repoPath, command)
+      // Single instance: a desktop/GUI process that is already up — or in the
+      // transient `launching` state a slow game build sits in — must not be
+      // relaunched into a second window. Matching more than the steady `online`
+      // is what stops a click during a slow launch from spawning a duplicate.
+      if (desktop) {
+        const current = await pm2Service.getAppStatus(name, app.pm2Home).catch(() => null);
+        if (['online', 'launching'].includes(current?.status)) {
+          results[name] = { success: true, alreadyRunning: true };
+          continue;
+        }
+      }
+      const result = await pm2Service.startWithCommand(name, app.repoPath, command, desktop ? { autorestart: false } : {})
         .catch(err => ({ success: false, error: err.message }));
       results[name] = result;
     }
