@@ -110,6 +110,13 @@ export const postprocessSpriteWalk = (id, body, options = {}) => request(`/sprit
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 
+// Pin the walk set's cycle target (#2985). Body: { frameCount, fps }. Returns
+// the refreshed walk state, whose `walkTarget` carries the resolved value, its
+// provenance, and the packaged directions that now drift from it.
+export const setSpriteWalkTarget = (id, body, options = {}) => request(`/sprites/${encodeURIComponent(id)}/walk/target`, {
+  method: 'PUT', body: JSON.stringify(body), ...options,
+});
+
 // Un-freeze a finalized walk set so its directions can be regenerated/re-approved.
 export const unlockSpriteWalk = (id, options = {}) => request(`/sprites/${encodeURIComponent(id)}/walk/unlock`, {
   method: 'POST', ...options,

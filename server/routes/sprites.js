@@ -24,6 +24,7 @@ import {
   spriteWalkApproveSchema,
   spriteWalkReopenSchema,
   spriteWalkPostprocessSchema,
+  spriteWalkTargetSchema,
   spriteWalkTrimSchema,
   spritePublishBindingSchema,
   spriteAtlasCompileSchema,
@@ -43,7 +44,7 @@ import {
 import { resolveSpriteAssetPrompt } from '../services/sprites/assetPrompt.js';
 import {
   getWalkState, startWalkGeneration, approveWalkDirection, rerunWalkPostprocess, unlockWalkSet,
-  reopenWalkDirection,
+  reopenWalkDirection, setWalkTarget,
 } from '../services/sprites/walk.js';
 import { saveLoopTrim } from '../services/sprites/walkTrims.js';
 import { compileAtlas, getAtlasState } from '../services/sprites/atlas.js';
@@ -182,6 +183,14 @@ router.post('/:id/walk/unlock', asyncHandler(async (req, res) => {
 router.post('/:id/walk/reopen', asyncHandler(async (req, res) => {
   const body = validateRequest(spriteWalkReopenSchema, req.body);
   res.json(await reopenWalkDirection(req.params.id, body));
+}));
+
+// Pin the walk track's cycle target for the whole set (#2985) — the deliberate
+// set-level action that replaces the old per-render frame-count/fps sliders.
+// 409s when the publish binding's runtime contract pins a different value.
+router.put('/:id/walk/target', asyncHandler(async (req, res) => {
+  const body = validateRequest(spriteWalkTargetSchema, req.body);
+  res.json(await setWalkTarget(req.params.id, body));
 }));
 
 // Re-run the deterministic postprocess for a run whose video already landed

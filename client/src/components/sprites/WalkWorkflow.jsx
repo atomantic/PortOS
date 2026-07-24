@@ -6,6 +6,7 @@ import {
 import toast from '../ui/Toast';
 import {
   approveSpriteWalk, postprocessSpriteWalk, unlockSpriteWalk, reopenSpriteWalk,
+  setSpriteWalkTarget,
 } from '../../services/apiSprites.js';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
@@ -35,9 +36,14 @@ export const WALK_DEFAULT_DURATION = 6;
 
 // Deterministic-postprocess authoring knobs (mirror walkPostprocess.js
 // WALK_DEFAULT_*/WALK_MIN/MAX_*). Frame count = how many frames the packed cycle
-// holds (more = smoother); fps = playback speed (lower = slower, more
+// holds (more = smoother); fps = preview playback speed (lower = slower, more
 // deliberate). Cycle duration = frameCount / fps seconds. Defaults pack a
 // fuller, slower cycle (12 frames @ 10fps = 1.2s) so a walk reads as a walk.
+//
+// Both are pinned at the SET level (#2985), not per render: a walk cycle is N
+// contiguous atlas columns × 8 direction rows, so every direction must agree or
+// the atlas cannot compile. The server resolves the target and refuses a
+// disagreeing render; these constants only seed the dropdown option lists.
 export const WALK_DEFAULT_FRAME_COUNT = 12;
 export const WALK_DEFAULT_FPS = 10;
 export const WALK_FRAME_COUNT_RANGE = { min: 6, max: 16 };
@@ -52,7 +58,15 @@ const seq = (min, max, step) => {
   return out;
 };
 const FRAME_COUNT_OPTIONS = seq(WALK_FRAME_COUNT_RANGE.min, WALK_FRAME_COUNT_RANGE.max, 1);
+// The speed picker offers even steps to keep the list short, but the server
+// accepts ANY integer in range — an imported set (or a direct API call) can pin
+// an odd fps like 15. A <select> whose value matches no <option> silently
+// displays the FIRST option, so the control would claim "4 fps" while the set is
+// really at 15. Splice the current value in so the control never lies.
 const FPS_OPTIONS = seq(WALK_FPS_RANGE.min, WALK_FPS_RANGE.max, 2);
+const fpsOptionsFor = (fps) => (FPS_OPTIONS.includes(fps) || !Number.isFinite(fps)
+  ? FPS_OPTIONS
+  : [...FPS_OPTIONS, fps].sort((a, b) => a - b));
 
 /**
  * Strip geometry for a preview/trim UI, defaulting to the native 8-phase
@@ -127,10 +141,101 @@ function StripLoop({ recordId, stripPreview }) {
   );
 }
 
+// How a drifted direction gets back onto the target, given what it still has
+// behind it. Named rather than inlined as a nested ternary so the three cases
+// read as the decision they are.
+const driftRemedy = ({ approved, hasSourceClip, imported }) => {
+  // A source-pipeline import has no regenerable clips, so the server refuses
+  // BOTH reopen and unlock on it — pointing there would advise an action that
+  // always 409s, and imported sets are the population most likely to drift
+  // (they never passed the queue-time gate).
+  if (imported) return 'create a new character version to revise it';
+  if (approved) return 'reopen this direction to re-derive it';
+  return hasSourceClip
+    ? 'reprocess it from its clip'
+    : 'import this direction\'s source clip to re-derive it';
+};
+
+/**
+ * The SET-level cycle target (#2985) — one control for the whole walk, not a
+ * per-render slider that can drift between directions. Saving PUTs the target
+ * and refreshes the walk state; while that write is in flight every render
+ * action is disabled by the parent, so a click can't queue against a value the
+ * server has not persisted yet.
+ */
+function CycleTarget({
+  recordId, target, disabled, onChanged, onSavingChange,
+}) {
+  const [save, saving] = useAsyncAction(async (next) => {
+    onSavingChange(true);
+    try {
+      await setSpriteWalkTarget(recordId, next, { silent: true });
+      toast.success(`Cycle target set · ${next.frameCount}f @ ${next.fps}fps`);
+      onChanged();
+    } finally {
+      onSavingChange(false);
+    }
+  }, { errorMessage: 'Could not set the cycle target' });
+
+  const cycleSeconds = (target.frameCount / target.fps).toFixed(2);
+
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+      <label className="flex items-center gap-1.5 text-xs text-gray-400" htmlFor={`walk-target-frames-${recordId}`}>
+        Cycle target
+        <select
+          id={`walk-target-frames-${recordId}`}
+          value={target.frameCount}
+          disabled={disabled || saving || target.frameCountLocked}
+          onChange={(e) => save({ frameCount: Number(e.target.value), fps: target.fps })}
+          title="Frames in the walk cycle — shared by all 8 directions, because the atlas is a rectangular grid"
+          className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white disabled:opacity-60"
+        >
+          {FRAME_COUNT_OPTIONS.map((n) => <option key={n} value={n}>{n} frames</option>)}
+        </select>
+      </label>
+      <label className="flex items-center gap-1.5 text-xs text-gray-400" htmlFor={`walk-target-fps-${recordId}`}>
+        {/* fps is an AUTHORING/preview speed: it drives this page's loop preview
+            and is stamped on the manifest, but the consuming app decides how
+            fast the sprite actually walks in-game. It lives in the target
+            anyway because the atlas requires every direction to agree on it. */}
+        <span className="flex items-center gap-1"><Gauge className="w-3 h-3" /> Preview speed</span>
+        <select
+          id={`walk-target-fps-${recordId}`}
+          value={target.fps}
+          disabled={disabled || saving || target.fpsLocked}
+          onChange={(e) => save({ frameCount: target.frameCount, fps: Number(e.target.value) })}
+          title="Preview/authoring speed — the consuming app determines real in-game playback. Pinned per set because the atlas needs every direction to agree."
+          className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white disabled:opacity-60"
+        >
+          {fpsOptionsFor(target.fps).map((n) => <option key={n} value={n}>{n} fps</option>)}
+        </select>
+      </label>
+      <span
+        className="text-[11px] text-gray-500 tabular-nums"
+        title="cycle duration = frames ÷ preview speed"
+      >
+        {cycleSeconds}s / cycle
+      </span>
+      <span
+        className="text-[10px] text-gray-500"
+        title={target.source === 'app'
+          ? 'The bound app declares what its atlas may hold — retarget it in the Publish panel below.'
+          : undefined}
+      >
+        {/* Provenance wording is stamped by the server (describeTargetSource), so
+            this label and the 409 the user may hit always agree. */}
+        {saving ? 'saving…' : target.sourceLabel || target.source}
+        {target.source === 'app' && ' · change it in Publish below'}
+      </span>
+    </div>
+  );
+}
+
 function DirectionCard({
   recordId, direction, anchorLocked, run, approved, finalized, pending,
   onOpenTrimmer, onGenerate, onApprove, onRetry, onReprocess, onReopen,
-  reprocessing, cycleLabel,
+  reprocessing, retrying, cycleLabel, drift, targetSaving, imported,
 }) {
   const [confirming, setConfirming] = useState(false);
   const [reopening, setReopening] = useState(false);
@@ -140,7 +245,11 @@ function DirectionCard({
   // Generate (server truth, since the client pending flag drops once the run is
   // persisted). Only 'rendering' has a live Shell session to link to.
   const rendering = run?.status === 'rendering';
-  const busy = pending || rendering || run?.status === 'postprocessing';
+  // `targetSaving` blocks the render actions without claiming the direction is
+  // rendering: the set's cycle target is mid-PATCH, so a queue now would be
+  // gated against a value the server hasn't persisted yet (409 target mismatch).
+  const inFlight = pending || rendering || run?.status === 'postprocessing';
+  const busy = inFlight || targetSaving;
   // Any run that carries a packed strip preview is trimmable — the trim service
   // resolves geometry from the run's own manifest/stripPreview regardless of
   // on-disk layout (native `runs/`, legacy `grok/`, imported `runs/`, or an
@@ -166,6 +275,23 @@ function DirectionCard({
         <StripLoop recordId={recordId} stripPreview={run.stripPreview} />
       )}
 
+      {/* This direction is packaged at a geometry the set is no longer targeting
+          (#2985) — surfaced HERE rather than at atlas-compile time, which used to
+          be the first and only place a ragged set showed up. The remedy depends
+          on what the direction still has behind it: an unapproved candidate can
+          be re-derived from its on-disk clip with the Reprocess button below, an
+          approved one has to be reopened first, and an import with no clip needs
+          the source clip imported before it can be re-derived at all. */}
+      {drift && (
+        <p className="text-[10px] text-port-warning border border-port-warning/60 rounded px-1.5 py-1 leading-tight">
+          {[drift.frameCountDrifts && `${drift.frameCount}f`, drift.fpsDrifts && `${drift.fps}fps`]
+            .filter(Boolean).join(' · ')} · re-derive to {cycleLabel}
+          <span className="block text-gray-400">
+            {driftRemedy({ approved, hasSourceClip: Boolean(run?.sourceVideoPath), imported })}
+          </span>
+        </p>
+      )}
+
       {/* The server dropped this run's stripPath because its packed strip is
           gone on disk (stripMissing) — render an explicit indicator in place of
           the blank loop, pointing at the recovery that actually works for this
@@ -175,7 +301,11 @@ function DirectionCard({
           "Retry postprocess" that 409s for a finalized/approved run. */}
       {(approved || candidate) && run?.stripMissing && (
         <p className="text-[10px] text-port-error border border-port-error/60 rounded px-1.5 py-1 leading-tight">
-          Walk strip missing on disk — {finalized ? 'unlock the set to regenerate this direction' : 'regenerate to repack it'}.
+          {/* An import is always finalized AND refuses unlock, so naming unlock
+              here would advise the same guaranteed-409 the drift badge and the
+              hidden Reopen/Unlock buttons already avoid. */}
+          Walk strip missing on disk — {imported ? 'create a new character version to revise it'
+            : finalized ? 'unlock the set to regenerate this direction' : 'regenerate to repack it'}.
         </p>
       )}
 
@@ -215,8 +345,17 @@ function DirectionCard({
           {run.status === 'error' && (
             <p className="text-[10px] text-port-error break-words">{run.postprocessError || 'postprocess failed'}</p>
           )}
-          <button onClick={() => onRetry(run)} className="px-2 py-0.5 text-[10px] bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent">
-            {run.status === 'postprocessing' ? 'Re-run postprocess' : 'Retry postprocess'}
+          {/* Gated on the in-flight target write (it repacks against the set
+              target, so firing it before a target PATCH lands would use the
+              value the server still holds) — but deliberately NOT on `busy`:
+              that includes status==='postprocessing', which is precisely the
+              wedged state this button exists to recover (attachTuiWalkResult
+              persists 'postprocessing' before packaging, and nothing normalizes
+              it if the server dies mid-package). Disabling on `busy` would make
+              the "Re-run postprocess" branch permanently unclickable and leave
+              that direction with no enabled action at all. */}
+          <button onClick={() => onRetry(run)} disabled={pending || targetSaving || retrying} className="px-2 py-0.5 text-[10px] bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent disabled:opacity-50">
+            {retrying ? 'Repacking…' : run.status === 'postprocessing' ? 'Re-run postprocess' : 'Retry postprocess'}
           </button>
         </div>
       )}
@@ -229,7 +368,7 @@ function DirectionCard({
             title={anchorLocked ? undefined : 'Lock this direction\'s reference anchor first'}
             className="flex items-center gap-1 w-full justify-center px-2 py-1 text-xs bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent disabled:opacity-50"
           >
-            {busy
+            {inFlight
               ? <><RefreshCw className="w-3 h-3 animate-spin" /> {run?.status === 'postprocessing' ? 'Packaging…' : 'Rendering…'}</>
               : <><Film className="w-3 h-3" /> {candidate ? 'Regenerate' : 'Generate walk'}</>}
           </button>
@@ -256,7 +395,16 @@ function DirectionCard({
                 <button onClick={() => setConfirming(false)} className="px-1.5 py-0.5 text-gray-400 hover:text-white">No</button>
               </div>
             ) : (
-              <button onClick={() => setConfirming(true)} className="w-full px-2 py-0.5 text-xs bg-port-success/20 border border-port-success rounded text-port-success">
+              // Approval is where a direction's geometry gets frozen into the
+              // set the atlas compiles, so a drifted candidate can't be approved
+              // — the server refuses it, and offering the button anyway would
+              // just hand back a 409 after the click.
+              <button
+                onClick={() => setConfirming(true)}
+                disabled={Boolean(drift)}
+                title={drift ? `Re-derive this direction to ${cycleLabel} before approving it` : undefined}
+                className="w-full px-2 py-0.5 text-xs bg-port-success/20 border border-port-success rounded text-port-success disabled:opacity-50"
+              >
                 Approve
               </button>
             )
@@ -268,8 +416,12 @@ function DirectionCard({
           reprocessed / re-approved — for when one walk is too fast or wrong and
           the rest are fine. Un-freezes a finalized set but keeps the other seven
           approvals; the rendered clip is preserved, so re-approval is one click.
-          Inline confirm (not a hidden two-click arm) per the repo's UX. */}
-      {approved && (
+          Inline confirm (not a hidden two-click arm) per the repo's UX.
+          Hidden for a source-pipeline import, whose set has no regenerable clips
+          behind it — the server refuses reopen there (LEGACY_IMPORTED_WALK_SET)
+          exactly as it refuses unlock, so offering the button would guarantee a
+          409 on click. Mirrors how the header hides Unlock for imports. */}
+      {approved && !imported && (
         reopening ? (
           <ConfirmButtonPair
             prompt={finalized ? 'Reopen (un-freezes set)?' : 'Reopen this direction?'}
@@ -310,11 +462,24 @@ function DirectionCard({
 
 export default function WalkWorkflow({
   record, reference, walk, renders, duration, onDurationChange, onGenerate,
-  frameCount = WALK_DEFAULT_FRAME_COUNT, fps = WALK_DEFAULT_FPS,
-  onFrameCountChange = () => {}, onFpsChange = () => {},
   onOpenTrimmer = () => {}, onChanged,
 }) {
   const recordId = record.id;
+  // The cycle target is server-resolved (app contract → set pin → first approved
+  // direction → default) so the client never re-derives the precedence chain.
+  // The fallback only covers a walk state fetched by an older client/peer.
+  const target = walk?.walkTarget || {
+    frameCount: WALK_DEFAULT_FRAME_COUNT, fps: WALK_DEFAULT_FPS, source: 'default', drift: [],
+  };
+  const { frameCount, fps } = target;
+  const driftByDirection = useMemo(
+    () => Object.fromEntries((target.drift || []).map((d) => [d.direction, d])),
+    [target.drift],
+  );
+  // Every render action is gated on the target PATCH settling — otherwise the
+  // user picks a new target and clicks Generate before the server has it, and
+  // the queue-time guard 409s on a value they already changed.
+  const [targetSaving, setTargetSaving] = useState(false);
   const manifest = reference?.manifest || null;
   const runs = walk?.runs || [];
   const selection = walk?.selection || null;
@@ -384,10 +549,13 @@ export default function WalkWorkflow({
   // Re-run the deterministic packer on a run's ON-DISK clip at the CURRENT
   // frame-count/speed — the one call shared by the errored-run "Retry" and the
   // candidate "Reprocess" buttons (no grok, no regeneration).
-  const postprocessRun = (run) => postprocessSpriteWalk(recordId, { runId: run.id, frameCount, fps }, { silent: true });
+  // Geometry is deliberately NOT sent: the server adopts the set's pinned target
+  // for an omitted count/fps, so the request can't 409 against a target this
+  // page's state is one refetch behind on (#2985).
+  const postprocessRun = (run) => postprocessSpriteWalk(recordId, { runId: run.id }, { silent: true });
 
   // Retry a wedged/errored run so a recovery also picks up the chosen cycle look.
-  const [retryPostprocess] = useAsyncAction(async (run) => {
+  const [retryPostprocess, retrying] = useAsyncAction(async (run) => {
     await postprocessRun(run);
     toast.success('Postprocess complete');
     onChanged();
@@ -431,8 +599,8 @@ export default function WalkWorkflow({
   const approvedCount = Object.values(selection?.directions || {})
     .filter((d) => d?.status === 'approved').length;
 
-  const cycleSeconds = (frameCount / fps).toFixed(2);
   const cycleLabel = `${frameCount}f @ ${fps}fps`;
+  const driftCount = (target.drift || []).length;
 
   return (
     <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
@@ -477,29 +645,17 @@ export default function WalkWorkflow({
           </div>
         ) : (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-            <label className="flex items-center gap-1.5 text-xs text-gray-400">
-              Frames
-              <select
-                value={frameCount}
-                onChange={(e) => onFrameCountChange(Number(e.target.value))}
-                className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
-              >
-                {FRAME_COUNT_OPTIONS.map((n) => <option key={n} value={n}>{n}</option>)}
-              </select>
-            </label>
-            <label className="flex items-center gap-1.5 text-xs text-gray-400">
-              <span className="flex items-center gap-1"><Gauge className="w-3 h-3" /> Speed</span>
-              <select
-                value={fps}
-                onChange={(e) => onFpsChange(Number(e.target.value))}
-                className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
-              >
-                {FPS_OPTIONS.map((n) => <option key={n} value={n}>{n} fps</option>)}
-              </select>
-            </label>
-            <label className="flex items-center gap-1.5 text-xs text-gray-400" title="grok renders 6s or 10s clips; length only affects how much source footage the packer has to choose from">
+            <CycleTarget
+              recordId={recordId}
+              target={target}
+              disabled={finalized}
+              onChanged={onChanged}
+              onSavingChange={setTargetSaving}
+            />
+            <label className="flex items-center gap-1.5 text-xs text-gray-400" htmlFor={`walk-clip-${recordId}`} title="grok renders 6s or 10s clips; length only affects how much source footage the packer has to choose from">
               Clip
               <select
+                id={`walk-clip-${recordId}`}
                 value={duration}
                 onChange={(e) => onDurationChange(Number(e.target.value))}
                 className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
@@ -507,12 +663,20 @@ export default function WalkWorkflow({
                 {WALK_DURATIONS.map((d) => <option key={d} value={d}>{d}s</option>)}
               </select>
             </label>
-            <span className="text-[11px] text-gray-500 tabular-nums" title="cycle duration = frames ÷ speed">
-              {cycleSeconds}s / cycle
-            </span>
           </div>
         )}
       </div>
+
+      {/* Set-level drift summary: visible BEFORE eight renders are spent, rather
+          than as an atlas-compile wall afterwards. Legacy mixed sets (generated
+          back when the count/fps were per-render page state) land here on load. */}
+      {driftCount > 0 && (
+        <p className="text-xs text-port-warning border border-port-warning/60 rounded px-2 py-1.5">
+          {driftCount === 1
+            ? `1 of 8 packaged directions differs from the ${cycleLabel} target — re-derive it before compiling the atlas.`
+            : `${driftCount} of 8 packaged directions differ from the ${cycleLabel} target — re-derive them before compiling the atlas.`}
+        </p>
+      )}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {(manifest.anchors || []).map((anchor) => (
           <DirectionCard
@@ -524,10 +688,14 @@ export default function WalkWorkflow({
             approved={selection?.directions?.[anchor.direction]?.status === 'approved'}
             finalized={finalized}
             pending={Boolean(pendingJobs[anchor.direction])}
+            targetSaving={targetSaving}
+            drift={driftByDirection[anchor.direction] || null}
+            imported={importedWalkSet}
             onOpenTrimmer={onOpenTrimmer}
             onGenerate={onGenerate}
             onApprove={approve}
             onRetry={retryPostprocess}
+            retrying={retrying}
             onReprocess={reprocess}
             onReopen={reopen}
             reprocessing={reprocessingDir === anchor.direction}

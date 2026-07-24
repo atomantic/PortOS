@@ -1,5 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, act } from '@testing-library/react';
+import {
+  render, screen, act, fireEvent,
+} from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 // Coverage for the walk viewer's loop preview (#2924). The load-bearing behavior:
@@ -13,10 +15,11 @@ vi.mock('../../services/apiSprites.js', () => ({
   postprocessSpriteWalk: vi.fn(() => Promise.resolve({})),
   unlockSpriteWalk: vi.fn(() => Promise.resolve({})),
   reopenSpriteWalk: vi.fn(() => Promise.resolve({})),
+  setSpriteWalkTarget: vi.fn(() => Promise.resolve({})),
 }));
 
 import WalkWorkflow from './WalkWorkflow';
-import { postprocessSpriteWalk, reopenSpriteWalk } from '../../services/apiSprites.js';
+import { postprocessSpriteWalk, reopenSpriteWalk, setSpriteWalkTarget } from '../../services/apiSprites.js';
 
 const CELL_PX = 96;
 
@@ -210,17 +213,26 @@ describe('WalkWorkflow loop trimmer link', () => {
 
 // Render the workflow with a single run of the given shape. Router-wrapped so
 // the card's <Link> (shown while rendering) resolves in every case.
-const renderRun = (run) => render(
+// `walkTarget` is the server-resolved set-level cycle target (#2985); tests that
+// care about provenance/drift override it, the rest get the plain default.
+const renderRun = (run, { walkTarget, onChanged = vi.fn() } = {}) => render(
   <MemoryRouter>
     <WalkWorkflow
       record={{ id: 'example-walker' }}
       reference={{ manifest: { mainReference: { locked: true }, anchors: [{ direction: 'east', status: 'locked' }] } }}
-      walk={{ runs: [run], selection: { directions: {} }, walkSet: null }}
+      walk={{
+        runs: [run],
+        selection: { directions: {} },
+        walkSet: null,
+        walkTarget: walkTarget || {
+          track: 'walk', frameCount: 12, fps: 10, source: 'default', drift: [],
+        },
+      }}
       renders={noRenders()}
       duration={2}
       onDurationChange={vi.fn()}
       onGenerate={vi.fn()}
-      onChanged={vi.fn()}
+      onChanged={onChanged}
     />
   </MemoryRouter>,
 );
@@ -266,32 +278,158 @@ describe('WalkWorkflow observable render', () => {
     });
     expect(screen.queryByRole('link', { name: /Watch in Shell/ })).toBeNull();
   });
+
+  it('keeps "Re-run postprocess" clickable on a run wedged at packaging', () => {
+    // attachTuiWalkResult persists 'postprocessing' before packaging and nothing
+    // normalizes it, so a server death mid-package strands the run there — this
+    // button is the documented way out. Gating it on the generic `busy` (which
+    // includes status==='postprocessing') would make it permanently dead and
+    // leave the direction with no enabled action at all.
+    renderRun({
+      id: 'walk-east-abc12345', direction: 'east', status: 'postprocessing',
+    });
+    expect(screen.getByRole('button', { name: /Re-run postprocess/ })).not.toBeDisabled();
+  });
 });
 
 describe('WalkWorkflow authoring controls', () => {
-  it('offers Frames, Speed, and grok-real Clip options plus a cycle readout', () => {
+  it('offers a set-level Cycle target, Preview speed, and grok-real Clip options', () => {
     renderRun({ id: 'walk-east-deadbeef', direction: 'east', status: 'error', postprocessError: 'x' });
     // Clip length is now just grok's real 6s/10s options (shorter was a no-op).
     const clip = screen.getByRole('combobox', { name: /Clip/ });
     expect([...clip.options].map((o) => o.value)).toEqual(['6', '10']);
-    // Frame count + speed controls exist…
-    expect(screen.getByRole('combobox', { name: /Frames/ })).toBeTruthy();
-    expect(screen.getByRole('combobox', { name: /Speed/ })).toBeTruthy();
+    // Frame count + speed are ONE set-level target now (#2985), not per-render
+    // inputs that can drift between directions.
+    expect(screen.getByRole('combobox', { name: /Cycle target/ })).toBeTruthy();
+    expect(screen.getByRole('combobox', { name: /Preview speed/ })).toBeTruthy();
     // …and the cycle-duration readout reflects the defaults (12f / 10fps = 1.20s).
     expect(screen.getByText(/1\.20s \/ cycle/)).toBeTruthy();
+  });
+
+  it('labels the target with where the value came from', () => {
+    renderRun(
+      { id: 'walk-east-deadbeef', direction: 'east', status: 'error', postprocessError: 'x' },
+      {
+        walkTarget: {
+          frameCount: 8, fps: 12, source: 'derived', sourceLabel: 'from the first approved direction', drift: [],
+        },
+      },
+    );
+    // The provenance wording is stamped by the server, not re-mapped here, so
+    // the label and the 409 message can never describe the target differently.
+    expect(screen.getByText('from the first approved direction')).toBeTruthy();
+    expect(screen.getByRole('combobox', { name: /Cycle target/ }).value).toBe('8');
+  });
+
+  it('renders the target read-only and names the app when the publish binding pins it', () => {
+    renderRun(
+      { id: 'walk-east-deadbeef', direction: 'east', status: 'error', postprocessError: 'x' },
+      {
+        walkTarget: {
+          frameCount: 16,
+          fps: 10,
+          source: 'app',
+          sourceLabel: 'locked by example-game',
+          frameCountLocked: true,
+          appId: 'example-game',
+          drift: [],
+        },
+      },
+    );
+    expect(screen.getByRole('combobox', { name: /Cycle target/ }).disabled).toBe(true);
+    expect(screen.getByText(/locked by example-game · change it in Publish below/)).toBeTruthy();
+    // fps is not in the contract, so it stays editable.
+    expect(screen.getByRole('combobox', { name: /Preview speed/ }).disabled).toBe(false);
+  });
+
+  it('shows an odd target fps the even-step picker does not list', () => {
+    // The speed picker offers even steps, but the server accepts any integer in
+    // range — an imported set can be pinned at 15fps. A <select> whose value
+    // matches no <option> silently displays the FIRST one, so the control would
+    // have claimed "4 fps" while the set was really at 15.
+    renderRun(
+      { id: 'walk-east-deadbeef', direction: 'east', status: 'error', postprocessError: 'x' },
+      {
+        walkTarget: {
+          frameCount: 12, fps: 15, source: 'derived', sourceLabel: 'from the first approved direction', drift: [],
+        },
+      },
+    );
+    const speed = screen.getByRole('combobox', { name: /Preview speed/ });
+    expect(speed.value).toBe('15');
+    expect([...speed.options].map((o) => o.value)).toContain('15');
+  });
+
+  it('saves a new target to the set and refreshes', async () => {
+    const onChanged = vi.fn();
+    renderRun(
+      { id: 'walk-east-deadbeef', direction: 'east', status: 'error', postprocessError: 'x' },
+      { onChanged },
+    );
+    const select = screen.getByRole('combobox', { name: /Cycle target/ });
+    await act(async () => {
+      fireEvent.change(select, { target: { value: '14' } });
+    });
+    expect(setSpriteWalkTarget).toHaveBeenCalledWith(
+      'example-walker', { frameCount: 14, fps: 10 }, { silent: true },
+    );
+    expect(onChanged).toHaveBeenCalled();
+  });
+});
+
+describe('WalkWorkflow cycle-target drift', () => {
+  const DRIFTED = {
+    walkTarget: {
+      frameCount: 12,
+      fps: 10,
+      source: 'set',
+      drift: [{
+        direction: 'east', frameCount: 8, fps: 10, frameCountDrifts: true, fpsDrifts: false,
+      }],
+    },
+  };
+
+  it('badges a packaged direction that no longer matches the target', () => {
+    renderRun({
+      id: 'walk-east-abc12345',
+      direction: 'east',
+      status: 'candidate',
+      sourceVideoPath: 'runs/walk-east-abc12345/generated/source-video.mp4',
+      stripPreview: { stripPath: 'runs/walk-east-abc12345/generated/strip.png', frameCount: 8, fps: 10, cellWidth: 384, cellHeight: 384 },
+    }, DRIFTED);
+    expect(screen.getByText(/8f · re-derive to 12f @ 10fps/)).toBeTruthy();
+    expect(screen.getByText('reprocess it from its clip')).toBeTruthy();
+    // …and a set-level summary so it is visible before eight renders are spent.
+    expect(screen.getByText(/1 of 8 packaged directions differs from the 12f @ 10fps target/)).toBeTruthy();
+    // Approving a drifted candidate would freeze a ragged set the atlas can
+    // never compile — the server refuses it, so the button doesn't offer it.
+    expect(screen.getByRole('button', { name: 'Approve' }).disabled).toBe(true);
+  });
+
+  it('points a drifted direction with no source clip at an import instead', () => {
+    renderRun({
+      id: 'imported-east',
+      direction: 'east',
+      status: 'candidate',
+      stripPreview: { stripPath: 'runs/imported-east/generated/strip.png', frameCount: 8, fps: 10, cellWidth: 384, cellHeight: 384 },
+    }, DRIFTED);
+    expect(screen.getByText('import this direction\'s source clip to re-derive it')).toBeTruthy();
   });
 });
 
 describe('WalkWorkflow reprocess + reopen', () => {
-  it('reprocesses a candidate from its on-disk clip at the current count/fps', async () => {
+  it('reprocesses a candidate from its on-disk clip, letting the server apply the set target', async () => {
     renderRun({
       id: 'walk-east-abc12345', direction: 'east', status: 'candidate',
       stripPreview: { stripPath: 'runs/walk-east-abc12345/generated/strip.png', frameCount: 12, fps: 10, cellWidth: 384, cellHeight: 384 },
     });
     await act(async () => { screen.getByRole('button', { name: /Reprocess/ }).click(); });
+    // Geometry is deliberately omitted — the server adopts the set's pinned
+    // target, so the request can't 409 against a target this page is one
+    // refetch behind on (#2985).
     expect(postprocessSpriteWalk).toHaveBeenCalledWith(
       'example-walker',
-      { runId: 'walk-east-abc12345', frameCount: 12, fps: 10 },
+      { runId: 'walk-east-abc12345' },
       { silent: true },
     );
   });
@@ -319,5 +457,34 @@ describe('WalkWorkflow reprocess + reopen', () => {
     // Inline confirm surfaces, then the confirm fires the API.
     await act(async () => { screen.getByRole('button', { name: /^Reopen$/ }).click(); });
     expect(reopenSpriteWalk).toHaveBeenCalledWith('example-walker', { direction: 'east' }, { silent: true });
+  });
+
+  it('hides Reopen on a source-pipeline import, whose server refuses it', async () => {
+    // An imported set has no regenerable clips behind it, so reopen (like
+    // unlock) always 409s LEGACY_IMPORTED_WALK_SET — offering the button would
+    // guarantee an error on click. The remedy is a new character version.
+    render(
+      <MemoryRouter>
+        <WalkWorkflow
+          record={{ id: 'example-walker' }}
+          reference={{ manifest: { mainReference: { locked: true }, anchors: [{ direction: 'east', status: 'locked' }] } }}
+          walk={{
+            runs: [{ id: 'run-east', direction: 'east', status: 'approved', stripPreview: { stripPath: 'runs/run-east/generated/strip.png', frameCount: 12, fps: 10, cellWidth: 384, cellHeight: 384 } }],
+            selection: { directions: { east: { status: 'approved', runId: 'run-east' } } },
+            walkSet: { imported: true, directions: { east: { status: 'approved' } } },
+            walkTarget: {
+              frameCount: 12, fps: 10, source: 'derived', sourceLabel: 'from the first approved direction', drift: [],
+            },
+          }}
+          renders={noRenders()}
+          duration={6}
+          onDurationChange={vi.fn()}
+          onGenerate={vi.fn()}
+          onChanged={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole('button', { name: /^Reopen$/ })).toBeNull();
+    expect(screen.getByText(/imported · new version to revise/)).toBeTruthy();
   });
 });

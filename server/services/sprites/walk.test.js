@@ -81,7 +81,7 @@ const { listSpriteAssets } = await import('./paths.js');
 const { lockReference } = await import('./reference.js');
 const {
   getWalkState, startWalkGeneration, attachTuiWalkResult, approveWalkDirection, rerunWalkPostprocess, unlockWalkSet,
-  reopenWalkDirection,
+  reopenWalkDirection, setWalkTarget,
 } = await import('./walk.js');
 const { SPRITE_DIRECTIONS, ANCHOR_DIRECTIONS } = await import('./prompts.js');
 
@@ -99,7 +99,9 @@ async function characterWithLockedAnchors(id, directions = ['east']) {
 // it (#2978): every embedded path stays anchored at the SOURCE repo root
 // (`art-source/sprites/<id>/…`) because the importer copies manifests
 // byte-for-byte against pinned hashes. Readers must re-anchor at read time.
-async function makeCandidateRun(recordId, direction, { stripBytes = `strip-${direction}`, anchored = false } = {}) {
+async function makeCandidateRun(recordId, direction, {
+  stripBytes = `strip-${direction}`, anchored = false, frameCount = 8, fps = 12,
+} = {}) {
   const runId = `walk-${direction}-${(seq++).toString(16).padStart(8, '0')}`;
   const runDir = join(TEST_ROOT, 'sprites', recordId, 'runs', runId, 'generated');
   await mkdir(runDir, { recursive: true });
@@ -112,8 +114,8 @@ async function makeCandidateRun(recordId, direction, { stripBytes = `strip-${dir
     kind: 'deterministically-packaged-grok-walk-video',
     characterId: recordId,
     direction,
-    frameRate: 12,
-    frameCount: 8,
+    frameRate: fps,
+    frameCount,
     stripPath: anchor(stripRel),
     stripSha256: sha256(Buffer.from(stripBytes)),
   };
@@ -136,7 +138,7 @@ async function makeCandidateRun(recordId, direction, { stripBytes = `strip-${dir
     // The importer stamps it as `path` (repo-anchored); PortOS uses `stripPath`.
     stripPreview: {
       ...(anchored ? { path: anchor(stripRel) } : { stripPath: stripRel }),
-      frameCount: 8, fps: 12, cellWidth: 384, cellHeight: 384, row: 0, startColumn: 0,
+      frameCount, fps, cellWidth: 384, cellHeight: 384, row: 0, startColumn: 0,
     },
   }));
   return { runId, manifestRel };
@@ -209,6 +211,9 @@ describe('startWalkGeneration', () => {
 
   it('stores the chosen frame count + fps on the run and passes them to the packer', async () => {
     const id = await characterWithLockedAnchors(newId(), ['east']);
+    // Frame count / fps are pinned at the SET level now (#2985) — a render must
+    // agree with the target, so pin it first, then generate against it.
+    await setWalkTarget(id, { frameCount: 14, fps: 8 });
     executeTuiRun.mockImplementationOnce(async ({ workspacePath }) => {
       await writeFile(join(workspacePath, 'source-video.mp4'), 'grok-clip-bytes');
     });
@@ -359,15 +364,219 @@ describe('rerunWalkPostprocess', () => {
 
   it('reprocesses the on-disk clip at a new frame count + fps (no regeneration)', async () => {
     const id = await characterWithLockedAnchors(newId(), ['east']);
+    await setWalkTarget(id, { frameCount: 8, fps: 12 });
     const { runId } = await startWalkGeneration(id, { direction: 'east', frameCount: 8, fps: 12 });
     await writeFile(join(TEST_ROOT, 'sprites', id, 'runs', runId, 'generated', 'source-video.mp4'), 'landed');
     runWalkPostprocess.mockClear();
+    // Retargeting the SET is what unlocks a reprocess at a new geometry — the
+    // reprocess is how a drifted direction is brought back into line.
+    await setWalkTarget(id, { frameCount: 16, fps: 6 });
     const run = await rerunWalkPostprocess(id, { runId, frameCount: 16, fps: 6 });
     // The override reaches the deterministic packer — same clip, new count/fps.
     expect(runWalkPostprocess).toHaveBeenCalledOnce();
     expect(runWalkPostprocess.mock.calls[0][0]).toMatchObject({ frameCount: 16, fps: 6 });
     // …and is stamped back onto the run record so the card reflects the choice.
     expect(run).toMatchObject({ frameCount: 16, fps: 6 });
+  });
+});
+
+// #2985: the cycle geometry is pinned per SET and enforced when each render is
+// queued, instead of surfacing as an atlas-compile wall eight renders later.
+describe('walk cycle target', () => {
+  const readSelection = (id) => readFile(
+    join(TEST_ROOT, 'sprites', id, 'walk', `${id}-walk-selection-v1.json`), 'utf8',
+  ).then(JSON.parse);
+
+  it('derives the target from the first packaged direction and reports drift', async () => {
+    // The exact shape this issue exists for: one direction packed at 12 frames
+    // and the rest at 8. It must LOAD, resolve a target, and name the drifted
+    // directions — not throw, and not wait until compile to complain.
+    const id = await characterWithLockedAnchors(newId(), SPRITE_DIRECTIONS);
+    await makeCandidateRun(id, 'south', { frameCount: 12, fps: 10 });
+    await makeCandidateRun(id, 'east');
+    await makeCandidateRun(id, 'west');
+    const { walkTarget } = await getWalkState(id);
+    expect(walkTarget).toMatchObject({ frameCount: 12, fps: 10, source: 'derived' });
+    expect(walkTarget.drift.map((d) => d.direction).sort()).toEqual(['east', 'west']);
+    expect(walkTarget.drift[0]).toMatchObject({ frameCount: 8, fps: 12, frameCountDrifts: true });
+  });
+
+  it('resolves the target from the bound app\'s runtime contract and refuses to override it', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    await records.updateRecord(id, {
+      publishBinding: { appId: 'example-game', runtimeContract: { walkFrameCount: 16 } },
+    });
+    const { walkTarget } = await getWalkState(id);
+    expect(walkTarget).toMatchObject({
+      frameCount: 16, source: 'app', frameCountLocked: true, appId: 'example-game',
+    });
+    // Per-render override → refused; the app decides what its atlas may hold.
+    await expect(startWalkGeneration(id, { direction: 'east', frameCount: 12, fps: 10 }))
+      .rejects.toMatchObject({ code: 'WALK_TARGET_MISMATCH' });
+    // …and so is retargeting the set behind the contract's back.
+    await expect(setWalkTarget(id, { frameCount: 12, fps: 10 }))
+      .rejects.toMatchObject({ code: 'WALK_TARGET_LOCKED' });
+  });
+
+  it('409s a generate whose geometry disagrees with the target, naming both values', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east', 'west']);
+    await setWalkTarget(id, { frameCount: 12, fps: 10 });
+    await expect(startWalkGeneration(id, { direction: 'east', frameCount: 8, fps: 10 }))
+      .rejects.toMatchObject({
+        code: 'WALK_TARGET_MISMATCH',
+        status: 409,
+        message: expect.stringContaining('targets 12 frames @ 10fps'),
+      });
+    await expect(startWalkGeneration(id, { direction: 'east', frameCount: 12, fps: 24 }))
+      .rejects.toMatchObject({ code: 'WALK_TARGET_MISMATCH' });
+    expect(executeTuiRun).not.toHaveBeenCalled();
+    // A matching request goes through, and an omitted geometry adopts the target.
+    const matching = await startWalkGeneration(id, { direction: 'east', frameCount: 12, fps: 10 });
+    expect(matching.runId).toMatch(/^walk-east-/);
+    await startWalkGeneration(id, { direction: 'west' });
+    const { runs } = await getWalkState(id);
+    expect(runs.every((r) => r.frameCount === 12 && r.fps === 10)).toBe(true);
+  });
+
+  it('409s a reprocess whose geometry disagrees with the target', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const { runId } = await startWalkGeneration(id, { direction: 'east' });
+    await writeFile(join(TEST_ROOT, 'sprites', id, 'runs', runId, 'generated', 'source-video.mp4'), 'landed');
+    runWalkPostprocess.mockClear();
+    await expect(rerunWalkPostprocess(id, { runId, frameCount: 6, fps: 10 }))
+      .rejects.toMatchObject({ code: 'WALK_TARGET_MISMATCH' });
+    expect(runWalkPostprocess).not.toHaveBeenCalled();
+    // Omitting the geometry adopts the target rather than 409ing.
+    await rerunWalkPostprocess(id, { runId });
+    expect(runWalkPostprocess.mock.calls[0][0]).toMatchObject({ frameCount: 12, fps: 10 });
+  });
+
+  it('persists an explicit target track-keyed, preserving an unknown sibling track', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    await setWalkTarget(id, { frameCount: 12, fps: 10 });
+    // Simulate a newer PortOS (or a peer) having written a track this build
+    // knows nothing about — it must survive the next write untouched.
+    const selection = await readSelection(id);
+    selection.animationTargets.scanner = { frameCount: 4, fps: 6, source: 'set' };
+    await writeFile(
+      join(TEST_ROOT, 'sprites', id, 'walk', `${id}-walk-selection-v1.json`),
+      JSON.stringify(selection),
+    );
+    const state = await setWalkTarget(id, { frameCount: 14, fps: 8 });
+    expect(state.walkTarget).toMatchObject({ frameCount: 14, fps: 8, source: 'set' });
+    expect(await readSelection(id)).toMatchObject({
+      animationTargets: {
+        walk: { frameCount: 14, fps: 8, source: 'set' },
+        scanner: { frameCount: 4, fps: 6, source: 'set' },
+      },
+    });
+  });
+
+  it('lazily pins a derived target on the first write, stamped as derived', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east', 'west']);
+    await makeCandidateRun(id, 'east');
+    // Nothing written yet — a read never mutates the record, so an older peer
+    // keeps seeing exactly what it wrote.
+    expect((await getWalkState(id)).walkTarget).toMatchObject({ frameCount: 8, fps: 12, source: 'derived' });
+    await expect(readSelection(id)).rejects.toThrow();
+    // The first write path resolves it and records it, so it stops being implicit.
+    await startWalkGeneration(id, { direction: 'west', frameCount: 8, fps: 12 });
+    expect((await readSelection(id)).animationTargets.walk)
+      .toEqual({ frameCount: 8, fps: 12, source: 'derived' });
+    expect((await getWalkState(id)).walkTarget).toMatchObject({ source: 'derived' });
+  });
+
+  it('409s approving a direction that drifts from the target, so a ragged set can\'t finalize', async () => {
+    // Retargeting mid-set is a sanctioned action, so the queue-time gate alone
+    // leaves a hole: approve one direction at the old target, retarget, approve
+    // the rest, and the ragged set only fails at atlas-compile time — exactly
+    // the failure this issue moves earlier. Approval is where geometry is frozen
+    // into the compiled set, so the target has to hold there too.
+    const id = await characterWithLockedAnchors(newId(), SPRITE_DIRECTIONS);
+    const { runId } = await makeCandidateRun(id, 'south', { frameCount: 12, fps: 10 });
+    await approveWalkDirection(id, { direction: 'south', runId });
+    const { runId: eastId } = await makeCandidateRun(id, 'east', { frameCount: 8, fps: 10 });
+    await expect(approveWalkDirection(id, { direction: 'east', runId: eastId }))
+      .rejects.toMatchObject({
+        code: 'WALK_TARGET_MISMATCH',
+        message: expect.stringContaining('targets 12 frames @ 10fps'),
+      });
+    // The drifted direction stays unapproved rather than half-recorded.
+    const { selection } = await getWalkState(id);
+    expect(selection.directions.east).toBeUndefined();
+  });
+
+  it('refuses to FINALIZE a set whose earlier approvals drifted from a retarget', async () => {
+    // Retargeting mid-set is sanctioned, so the per-direction gate alone isn't
+    // enough: a direction approved under the OLD target stays drifted while
+    // every later approval matches the new one, and the 8th approval would
+    // otherwise freeze a ragged set for atlas.js to reject.
+    const id = await characterWithLockedAnchors(newId(), SPRITE_DIRECTIONS);
+    const { runId: southId } = await makeCandidateRun(id, 'south', { frameCount: 12, fps: 10 });
+    await approveWalkDirection(id, { direction: 'south', runId: southId });
+    await setWalkTarget(id, { frameCount: 8, fps: 10 });
+    const rest = SPRITE_DIRECTIONS.filter((d) => d !== 'south');
+    for (const direction of rest.slice(0, -1)) {
+      const { runId } = await makeCandidateRun(id, direction, { frameCount: 8, fps: 10 });
+      await approveWalkDirection(id, { direction, runId });
+    }
+    const last = rest[rest.length - 1];
+    const { runId: lastId } = await makeCandidateRun(id, last, { frameCount: 8, fps: 10 });
+    await expect(approveWalkDirection(id, { direction: last, runId: lastId }))
+      .rejects.toMatchObject({
+        code: 'WALK_TARGET_MISMATCH',
+        message: expect.stringContaining('south'),
+      });
+    // Nothing was frozen, and the drifted direction is still named.
+    const { walkSet, walkTarget } = await getWalkState(id);
+    expect(walkSet).toBeNull();
+    expect(walkTarget.drift.map((d) => d.direction)).toContain('south');
+  });
+
+  it('does not derive the target from a direction whose packed strip is gone', async () => {
+    // A stripMissing run keeps its stripPreview (only stripPath is dropped), so
+    // without an explicit exclusion it could win the first-packaged slot and
+    // derive the whole set's target from artwork that no longer exists.
+    const id = await characterWithLockedAnchors(newId(), SPRITE_DIRECTIONS);
+    const { runId } = await makeCandidateRun(id, 'south', { frameCount: 16, fps: 24 });
+    await rm(join(TEST_ROOT, 'sprites', id, 'runs', runId, 'generated', `${id}-walk-south-strip.png`));
+    await makeCandidateRun(id, 'east', { frameCount: 8, fps: 12 });
+    const { runs, walkTarget } = await getWalkState(id);
+    expect(runs.find((r) => r.direction === 'south').stripMissing).toBe(true);
+    // 'east' — the live direction — sets the target, not the dead 'south'.
+    expect(walkTarget).toMatchObject({ frameCount: 8, fps: 12, source: 'derived' });
+    expect(walkTarget.drift).toEqual([]);
+  });
+
+  it('preserves the pinned target across unlock and reopen', async () => {
+    // Both paths reseed the selection; dropping animationTargets there would
+    // silently re-derive the target from whichever direction is re-approved
+    // first, so this pins the preservation the reseeds depend on.
+    const id = await characterWithLockedAnchors(newId(), SPRITE_DIRECTIONS);
+    await setWalkTarget(id, { frameCount: 8, fps: 12 });
+    for (const direction of SPRITE_DIRECTIONS) {
+      const { runId } = await makeCandidateRun(id, direction);
+      await approveWalkDirection(id, { direction, runId });
+    }
+    await unlockWalkSet(id);
+    expect((await readSelection(id)).animationTargets.walk)
+      .toEqual({ frameCount: 8, fps: 12, source: 'set' });
+    // …and re-approving one direction then reopening it keeps the pin too.
+    const { runId } = await makeCandidateRun(id, 'south');
+    await approveWalkDirection(id, { direction: 'south', runId });
+    await reopenWalkDirection(id, { direction: 'south' });
+    expect((await readSelection(id)).animationTargets.walk)
+      .toEqual({ frameCount: 8, fps: 12, source: 'set' });
+  });
+
+  it('409s a retarget on a finalized set', async () => {
+    const id = await characterWithLockedAnchors(newId(), SPRITE_DIRECTIONS);
+    for (const direction of SPRITE_DIRECTIONS) {
+      const { runId } = await makeCandidateRun(id, direction);
+      await approveWalkDirection(id, { direction, runId });
+    }
+    await expect(setWalkTarget(id, { frameCount: 14, fps: 8 }))
+      .rejects.toMatchObject({ code: 'WALK_SET_FINAL' });
   });
 });
 
@@ -586,7 +795,24 @@ describe('listSpriteAssets run-intermediate exclusion', () => {
 describe('getWalkState', () => {
   it('returns empty state for a fresh character and newest-first runs', async () => {
     const id = await characterWithLockedAnchors(newId(), ['east', 'west']);
-    expect(await getWalkState(id)).toEqual({ runs: [], selection: null, walkSet: null });
+    expect(await getWalkState(id)).toEqual({
+      runs: [],
+      selection: null,
+      walkSet: null,
+      // A fresh set has nothing pinned and nothing packaged, so the target is
+      // the documented default with no drift (#2985).
+      walkTarget: {
+        track: 'walk',
+        frameCount: 12,
+        fps: 10,
+        source: 'default',
+        sourceLabel: 'default',
+        frameCountLocked: false,
+        fpsLocked: false,
+        appId: null,
+        drift: [],
+      },
+    });
     await startWalkGeneration(id, { direction: 'east' });
     await new Promise((r) => { setTimeout(r, 5); });
     const second = await startWalkGeneration(id, { direction: 'west' });
