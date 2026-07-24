@@ -153,7 +153,7 @@ describe('startWalkGeneration', () => {
     const id = await characterWithLockedAnchors(newId(), ['east']);
     const result = await startWalkGeneration(id, { direction: 'east' });
     expect(result.runId).toMatch(/^walk-east-[0-9a-f]{8}$/);
-    expect(result.duration).toBe(2); // walk default (WALK_DEFAULT_DURATION)
+    expect(result.duration).toBe(6); // walk default (WALK_DEFAULT_DURATION — grok's real floor)
     // The shell session id is the run id, so the card can deep-link to /shell/<id>.
     expect(result.shellSession).toBe(result.runId);
 
@@ -189,11 +189,12 @@ describe('startWalkGeneration', () => {
     expect(executeTuiRun.mock.calls[0][0].prompt).toContain('for 10 seconds');
   });
 
-  it('honors a short 2s clip length', async () => {
+  it('falls back to the default clip length for a duration grok does not offer', async () => {
+    // Values outside GROK_VIDEO_DURATIONS fall back to WALK_DEFAULT_DURATION (6).
     const id = await characterWithLockedAnchors(newId(), ['east']);
-    const result = await startWalkGeneration(id, { direction: 'east', duration: 2 });
-    expect(result.duration).toBe(2);
-    expect(executeTuiRun.mock.calls[0][0].prompt).toContain('for 2 seconds');
+    const result = await startWalkGeneration(id, { direction: 'east', duration: 5 });
+    expect(result.duration).toBe(6);
+    expect(executeTuiRun.mock.calls[0][0].prompt).toContain('for 6 seconds');
   });
 
   it('stores the chosen frame count + fps on the run and passes them to the packer', async () => {
