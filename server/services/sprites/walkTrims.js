@@ -23,7 +23,7 @@ import {
 } from '../../lib/fileUtils.js';
 import { findFfmpeg, runFfmpegProcess } from '../../lib/ffmpeg.js';
 import { ServerError } from '../../lib/errorHandler.js';
-import { resolveSpriteAssetPath, spriteDir } from './paths.js';
+import { resolveSpriteAssetPath, spriteDir, toRecordRelativeAssetPath } from './paths.js';
 import { requireCharacter } from './reference.js';
 import { withWalkWriteTail, getWalkState } from './walk.js';
 import { WALK_FPS } from './walkPostprocess.js';
@@ -95,14 +95,27 @@ async function resolveTrimSource(recordId, runId) {
   const run = state.runs.find((r) => r.id === runId);
   if (!run) throw new ServerError(`Unknown walk run: ${runId}`, { status: 404, code: 'RUN_NOT_FOUND' });
 
-  if (run.postprocessManifest) {
-    const packaged = await readJSONFile(resolveSpriteAssetPath(recordId, run.postprocessManifest), null);
-    if (!packaged?.stripPath || !packaged.alignment?.cellSize || !Array.isArray(packaged.frames)) {
+  // `getWalkState` re-anchors an imported run's `postprocessManifest` for us
+  // (walk.js#normalizePostprocessManifest), so this is already record-relative.
+  // Absent vs. malformed are deliberately NOT collapsed (#2978): a manifest file
+  // that simply isn't there falls through to the stripPreview branch below, which
+  // carries everything a trim needs; a manifest that EXISTS but is malformed is
+  // real corruption and still throws. Conflating the two either blocks trimming a
+  // perfectly good strip or silently papers over a broken manifest.
+  const manifestAbs = run.postprocessManifest
+    ? resolveSpriteAssetPath(recordId, run.postprocessManifest)
+    : null;
+  if (manifestAbs && await pathExists(manifestAbs)) {
+    const packaged = await readJSONFile(manifestAbs, null);
+    // An imported manifest's own stripPath is repo-anchored (`art-source/…`) —
+    // re-anchor it before it reaches resolveSpriteAssetPath downstream.
+    const stripPath = toRecordRelativeAssetPath(recordId, packaged?.stripPath);
+    if (!stripPath || !packaged.alignment?.cellSize || !Array.isArray(packaged.frames)) {
       throw new ServerError('Packaged run manifest is missing or inconsistent', { status: 409, code: 'RUN_MANIFEST_INVALID' });
     }
     return {
       direction: run.direction,
-      stripPath: packaged.stripPath,
+      stripPath,
       cellSize: packaged.alignment.cellSize,
       allColumns: packaged.frames.map((f) => f.outputIndex),
       phaseByColumn: Object.fromEntries(packaged.frames.map((f) => [f.outputIndex, f.phase])),
