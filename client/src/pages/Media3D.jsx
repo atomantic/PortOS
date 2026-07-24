@@ -141,35 +141,40 @@ export default function Media3D() {
   }, [targets, targetFromRoute]);
 
   // Keep the URL honest: if a bare `/media/3d` resolved a default target, reflect
-  // it so the selection is shareable/reload-safe (URL as source of truth).
+  // it so the selection is shareable/reload-safe (URL as source of truth). The
+  // functional updater reads the freshest params, so this effect depends only on
+  // the resolved target — not on every unrelated `?image=`/`?glb=` change.
   useEffect(() => {
     if (!selectedTarget || targetFromRoute === selectedTarget.id) return;
-    const next = new URLSearchParams(searchParams);
-    next.set('target', selectedTarget.id);
-    setSearchParams(next, { replace: true });
-  }, [selectedTarget, targetFromRoute, searchParams, setSearchParams]);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('target', selectedTarget.id);
+      return next;
+    }, { replace: true });
+  }, [selectedTarget, targetFromRoute, setSearchParams]);
 
   const setParam = useCallback((key, value) => {
-    const next = new URLSearchParams(searchParams);
-    if (value) next.set(key, value); else next.delete(key);
-    setSearchParams(next);
-  }, [searchParams, setSearchParams]);
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      if (value) next.set(key, value); else next.delete(key);
+      return next;
+    });
+  }, [setSearchParams]);
 
   const handlePick = (item) => { setParam('image', item.filename); setPickerOpen(false); };
 
-  const ready = isTargetReady(selectedTarget);
-  // The image→mesh runner (POST generate + landed .glb) lands with #2952; until
-  // then the workspace lets the user stage the source image + target and preview
-  // any produced mesh, but the Generate action stays gated rather than pretending.
-  const generateGatedReason = !selectedImage
-    ? 'Pick a source image to continue.'
-    : !selectedTarget
-      ? 'No image-to-3D model is registered.'
-      : !selectedTarget.available
-        ? (REASON_LABEL[selectedTarget.unavailableReason] || 'This model can’t run on this host.')
-        : selectedTarget.installed === false
-          ? `Install ${selectedTarget.label} below before generating.`
-          : 'Generation lands with the on-device runner — coming next.';
+  // The image→mesh runner (POST generate + landed .glb) lands with #2952. Until a
+  // producer exists the workspace only *stages* the source image + target, so the
+  // Generate action is always gated — this returns the reason it's blocked, and the
+  // button stays disabled whenever a reason is present (which, today, is always,
+  // via the terminal "coming next" branch — so no inert-but-enabled button leaks).
+  const generateGatedReason = (() => {
+    if (!selectedImage) return 'Pick a source image to continue.';
+    if (!selectedTarget) return 'No image-to-3D model is registered.';
+    if (!selectedTarget.available) return REASON_LABEL[selectedTarget.unavailableReason] || 'This model can’t run on this host.';
+    if (selectedTarget.installed === false) return `Install ${selectedTarget.label} below before generating.`;
+    return 'Generation lands with the on-device runner — coming next.';
+  })();
 
   return (
     <div className="mx-auto max-w-4xl">
@@ -242,7 +247,7 @@ export default function Media3D() {
           <div className="mt-auto flex flex-col items-start gap-2">
             <button
               type="button"
-              disabled={!ready || !selectedImage}
+              disabled={!!generateGatedReason}
               title={generateGatedReason}
               className="inline-flex items-center gap-2 rounded-lg bg-port-accent px-4 py-2 text-sm text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
             >

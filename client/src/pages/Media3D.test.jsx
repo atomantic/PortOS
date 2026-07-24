@@ -108,9 +108,13 @@ describe('Media3D — generation workspace', () => {
     expect(screen.queryByText(/Pick a source image to continue/i)).not.toBeInTheDocument();
   });
 
-  it('enables Generate when an image is chosen and the target is ready', async () => {
+  it('keeps Generate disabled with a "coming next" reason once an image + ready target are staged', async () => {
+    // Generation is deferred to the runner (#2952); even a fully-staged workspace
+    // must not present a live-but-inert button.
     renderAt('/media/3d?image=example-robot.png');
-    expect(await screen.findByRole('button', { name: /Generate 3D/i })).toBeEnabled();
+    const btn = await screen.findByRole('button', { name: /Generate 3D/i });
+    expect(btn).toBeDisabled();
+    expect(screen.getByText(/Generation lands with the on-device runner/i)).toBeInTheDocument();
   });
 
   it('keeps Generate disabled and explains why when no image is picked', async () => {

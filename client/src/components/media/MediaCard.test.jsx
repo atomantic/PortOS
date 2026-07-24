@@ -77,23 +77,23 @@ describe('MediaCard', () => {
   });
 
   it('offers the image-to-Three.js handoff only when its handler is provided', () => {
-    const onSendToThreejs = vi.fn();
+    const onSendTo3d = vi.fn();
     const { rerender } = render(
       <MediaCard
         item={imageItem}
-        onSendToThreejs={onSendToThreejs}
+        onSendTo3d={onSendTo3d}
         showCollectionMenu={false}
         showMoodBoardMenu={false}
       />
     );
 
     fireEvent.click(screen.getByRole('button', { name: 'Send to Three.js Models' }));
-    expect(onSendToThreejs).toHaveBeenCalledWith(imageItem);
+    expect(onSendTo3d).toHaveBeenCalledWith(imageItem);
 
     rerender(
       <MediaCard
         item={{ ...imageItem, kind: 'video' }}
-        onSendToThreejs={onSendToThreejs}
+        onSendTo3d={onSendTo3d}
         showCollectionMenu={false}
         showMoodBoardMenu={false}
       />

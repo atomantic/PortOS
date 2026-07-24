@@ -127,6 +127,14 @@ export default function useMediaPreviewActions({ onCleanComplete = null } = {}) 
     navigate(`/media/video?${params}`);
   }, [navigate]);
 
+  // Send to 3D: open the image-to-3D workspace (/media/3d) with this image as the
+  // source. Images only — the 3D page resolves `?image=<filename>` against the
+  // gallery (URL is the source of truth for the staged source image).
+  const handleSendTo3d = useCallback((item) => {
+    if (!item?.filename || item.kind === 'video') return;
+    navigate(`/media/3d?image=${encodeURIComponent(item.filename)}`);
+  }, [navigate]);
+
   // Continue: extract the LAST frame of a video clip and seed Video Gen
   // with it as the i2v source — the canonical "extend this take" path.
   // `item.id` is the video job id; extractLastFrame returns the new image
@@ -182,5 +190,5 @@ export default function useMediaPreviewActions({ onCleanComplete = null } = {}) 
     return variant;
   }, [onCleanComplete]);
 
-  return { handleRemix, handleSendToImage, handleSendToVideo, handleContinue, handleClean, handleRemoveWatermark };
+  return { handleRemix, handleSendToImage, handleSendToVideo, handleSendTo3d, handleContinue, handleClean, handleRemoveWatermark };
 }

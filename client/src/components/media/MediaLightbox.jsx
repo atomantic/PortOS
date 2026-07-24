@@ -90,7 +90,7 @@ export default function MediaLightbox({
   onRemix,
   onSendToImage,
   onSendToVideo,
-  onSendToThreejs,
+  onSendTo3d,
   onContinue,
   onClean,
   onRegenerate,
@@ -347,7 +347,7 @@ export default function MediaLightbox({
             onRemix={onRemix}
             onSendToImage={onSendToImage}
             onSendToVideo={onSendToVideo}
-            onSendToThreejs={onSendToThreejs}
+            onSendTo3d={onSendTo3d}
             onContinue={onContinue}
             onClean={onClean}
             onRegenerate={onRegenerate}
@@ -395,7 +395,7 @@ function PeerNotes({ others }) {
 
 function SettingsPane({
   item, meta, isVideo,
-  onClose, onRemix, onSendToImage, onSendToVideo, onSendToThreejs, onContinue, onClean, onRegenerate, onRemoveWatermark, regenAvailable, regenBounds,
+  onClose, onRemix, onSendToImage, onSendToVideo, onSendTo3d, onContinue, onClean, onRegenerate, onRemoveWatermark, regenAvailable, regenBounds,
   copy, onRefine,
   annotation, onAnnotationChange,
   variantGroup, onSelectVariant,
@@ -670,10 +670,10 @@ function SettingsPane({
             <Film className="w-3.5 h-3.5" /> Send to Video
           </button>
         )}
-        {!isVideo && onSendToThreejs && (
+        {!isVideo && onSendTo3d && (
           <button
             type="button"
-            onClick={() => closeThenRun(onSendToThreejs)}
+            onClick={() => closeThenRun(onSendTo3d)}
             className="flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs bg-purple-600/80 text-white hover:opacity-90 rounded"
           >
             <Box className="w-3.5 h-3.5" /> Send to 3D
