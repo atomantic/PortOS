@@ -119,6 +119,11 @@ describe('buildTurnaroundPrompt (#2979)', () => {
     // The reported failure: a front-worn hip bag surviving into the back panel.
     expect(p).toContain('hip bag or pouch worn at the front');
     expect(p).toContain('hidden by the body and must not be drawn');
+    // The side rule must not claim far-side gear is visible in BOTH profiles —
+    // that contradicts the per-panel occlusion rules and invites the model to
+    // draw a right-hip bag straight through the torso in the west panel.
+    expect(p).not.toContain('in both profiles');
+    expect(p).toContain('visible only in the panels where that side of the body faces the viewer');
     TURNAROUND_VIEWS.forEach((view, i) => {
       expect(p).toContain(`Panel ${i + 1} (${REFERENCE_FACING[view]}): ${viewGeometryClause(view)}`);
     });
@@ -175,8 +180,19 @@ describe('derive prompts carry the geometry rule (#3004)', () => {
     for (const d of ANCHOR_DIRECTIONS) {
       const p = buildAnchorPrompt({ name: 'Scout', direction: d, chromaKey: '#FF00FF' });
       expect(p).toContain('not a mirrored copy of the reference');
+      // toContain('') is vacuously true, so pin the clause is non-empty first —
+      // otherwise a viewGeometryClause regressed to '' would still pass here.
+      expect(viewGeometryClause(d), d).not.toBe('');
       expect(p).toContain(viewGeometryClause(d));
     }
+    // Concrete anchors on each axis. north is a straight-on rear view, so it
+    // carries the depth rule and no near-side clause; east carries the reverse.
+    const north = buildAnchorPrompt({ name: 'Scout', direction: 'north', chromaKey: '#FF00FF' });
+    expect(north).toContain('hidden by the body and must not be drawn');
+    expect(north).not.toContain('occluded by the torso');
+    const east = buildAnchorPrompt({ name: 'Scout', direction: 'east', chromaKey: '#FF00FF' });
+    expect(east).toContain('right-side gear reads fully');
+    expect(east).not.toContain('behind the character');
   });
 
   it('keeps the main reference free of back-mounted gear', () => {
