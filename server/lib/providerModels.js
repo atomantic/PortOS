@@ -262,9 +262,9 @@ export function prefixOpencodeModel(provider, model) {
 
 /**
  * Claude Code on AWS Bedrock wants region-prefixed model ids
- * (`global.anthropic.claude-opus-4-8`, `us.anthropic.claude-opus-4-1-...-v1:0`).
+ * (`global.anthropic.claude-opus-5`, `us.anthropic.claude-opus-4-1-...-v1:0`).
  * When `CLAUDE_CODE_USE_BEDROCK` is set on the box, passing a bare
- * `claude --model claude-opus-4-8` is rejected ("provided model identifier is
+ * `claude --model claude-opus-5` is rejected ("provided model identifier is
  * invalid") — which is exactly how a bare-id `claude-code` provider config
  * breaks autopilot/pipeline runs on a Bedrock host. The helpers below map a
  * bare id to its Bedrock form just-in-time at CLI-argv build time; the stored

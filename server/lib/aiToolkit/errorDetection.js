@@ -69,8 +69,8 @@ const ERROR_PATTERNS = [
   {
     // "model identifier is invalid" is Bedrock's wording when the runner passes
     // a model id the backend doesn't recognize (e.g. a bare Anthropic id like
-    // `claude-opus-4-8` to a Bedrock-backed Claude Code, which wants
-    // `global.anthropic.claude-opus-4-8`). Categorize it alongside the
+    // `claude-opus-5` to a Bedrock-backed Claude Code, which wants
+    // `global.anthropic.claude-opus-5`). Categorize it alongside the
     // not-found/invalid-model phrasings so the cooldown + fallback path treats
     // it as the config problem it is.
     pattern: /model.*(not found|does not exist|unavailable)|invalid model|model identifier is invalid/i,

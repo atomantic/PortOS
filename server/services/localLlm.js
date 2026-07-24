@@ -788,7 +788,7 @@ export async function listVisionModels() {
 /**
  * Vision-capable CLI providers (codex / claude-code), expanded to one entry per
  * configured model so the caption picker can offer e.g. "codex / gpt-5" or
- * "claude-code / claude-opus-4-8". A disabled provider is skipped. Each entry
+ * "claude-code / claude-opus-5". A disabled provider is skipped. Each entry
  * mirrors the local-backend shape with `backend: 'cli'`. Best-effort: a load
  * failure yields no CLI entries rather than breaking the whole picker.
  */

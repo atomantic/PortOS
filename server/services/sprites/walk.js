@@ -46,6 +46,7 @@ import {
 import {
   WALK_TRACK, resolveAnimationTarget, withTrackTarget, targetDrift, describeTargetSource,
 } from './animationTargets.js';
+import { verifyPackagedFrames } from './walkFrames.js';
 import { GROK_VIDEO_DURATIONS } from '../videoGen/grok.js';
 
 // grok's image_to_video honors only 6s/10s and clamps shorter requests to ~6s,
@@ -1605,17 +1606,15 @@ async function approveWalkDirectionImpl(recordId, { direction, runId }) {
   // here (exactly the shape a source-pipeline import has: its manifest was copied,
   // its frames/ was not) would sail through the strip check above and surface at
   // compile time as an unexplained sha mismatch. Refuse it where the cause is
-  // still legible, and name the remedy. A minimal manifest that declares no
-  // frames[] is unchanged — the strip sha stays the primary tamper check. (#2993)
-  const framePaths = (Array.isArray(packaged.frames) ? packaged.frames : [])
-    .map((frame) => toRecordRelativeAssetPath(recordId, frame?.path))
-    .filter(Boolean);
-  const framesOnDisk = await Promise.all(framePaths
-    .map((rel) => pathExists(join(spriteDir(recordId), rel))));
-  const missingFrames = framesOnDisk.filter((present) => !present).length;
+  // still legible, and name the remedy. This is the SAME frame-validity definition
+  // the compiler uses (verifyPackagedFrames) run in its existence-only mode, so
+  // the approve gate is a strict prefix of the compile gate and the two can no
+  // longer disagree (#3001). A minimal manifest that declares no frames[] is
+  // unchanged — the strip sha stays the primary tamper check. (#2993)
+  const { total: declaredFrames, missing: missingFrames } = await verifyPackagedFrames(recordId, packaged);
   if (missingFrames) {
     throw new ServerError(
-      `${missingFrames} of this run's ${framePaths.length} packaged frames are missing on disk — reprocess the direction from its source clip to re-derive them before approving.`,
+      `${missingFrames} of this run's ${declaredFrames} packaged frames are missing on disk — reprocess the direction from its source clip to re-derive them before approving.`,
       { status: 409, code: 'RUN_FRAMES_MISSING' },
     );
   }
