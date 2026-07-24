@@ -3,6 +3,7 @@
 ## Internal
 
 - **[issue-2951] Image-to-3D target registry (foundation)** — added a pluggable `server/services/imageTo3d/targets.js` registry (mirroring `imageGen/modes.js`) that models image→3D models as selectable targets with hardware-gated availability resolution, TRELLIS.2 registered as the first target, and a read-only `GET /api/image-to-3d/targets` endpoint. Backend groundwork for the forthcoming 3D page under Create (#2952 install/runner, #2953 page/viewer, #2954 CUDA lane); no user-visible surface yet.
+- **[issue-2952] TRELLIS.2 local runner scaffolding** — added `server/services/imageTo3d/trellis2.js`: on-disk install detection, pure install/generate command builders, a format-agnostic `generate.py` progress parser, and a guarded generate runner (throws unless installed; never auto-runs). `GET /api/image-to-3d/targets` now also reports each target's `installed` state. The real ~15 GB install + live GPU render are user-triggered and validated hands-on (remainder of #2952); no user-visible surface yet.
 
 ## Music studio
 
