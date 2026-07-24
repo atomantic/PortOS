@@ -530,7 +530,11 @@ describe('forkSprite', () => {
   it('400s forking a source with no locked main and creates no orphan record', async () => {
     const source = newId();
     await createCharacter(source);
+    const before = (await records.listRecords()).length;
     await expect(forkSprite(source, { name: 'Bad Fork', designPrompt: 'x' }))
       .rejects.toMatchObject({ code: 'SOURCE_REFERENCE_MISSING', status: 400 });
+    // The invariant this test names: the source is resolved BEFORE the record is
+    // created, so a rejected fork leaves no orphan character behind.
+    expect((await records.listRecords()).length).toBe(before);
   });
 });
