@@ -73,7 +73,7 @@ If your app *is* time-driven, pick its own frame rate. Do not read `previewFps` 
 
 ## Frame count is a coordinated cross-repo change
 
-Column layout is the one thing an app genuinely has to agree with PortOS about. Changing `N` shifts every column after `idle` — a game that reads walk columns 1–8 out of a 13-column atlas renders the wrong phases and samples past the end of the walk it thinks it has. No crash, no log.
+Column layout is the one thing an app genuinely has to agree with PortOS about. Changing `N` shifts every column after `idle` — a game that reads walk columns 1–8 out of a 13-column atlas renders the wrong phases. And an app built against the pre-#2986 10-column grid that still reads column 9 as `scanner` now samples off the right edge of a recompiled 9-column atlas. No crash, no log.
 
 Two mechanisms guard that:
 
