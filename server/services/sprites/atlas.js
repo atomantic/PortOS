@@ -50,6 +50,7 @@ import { ATLAS_IDLE_COLUMN } from './walkBounds.js';
 import {
   withWalkWriteTail, walkSetRelPath, importedWalkDirections,
 } from './walk.js';
+import { verifyPackagedFrames } from './walkFrames.js';
 
 // Player atlas contract (source pipeline runtime_publish.py): 96px cells,
 // pivot (48,88) — silhouette centered on x=48, feet on the y=88 ground line —
@@ -304,13 +305,12 @@ export async function validateForCompile(recordId) {
     } else if (dirFps !== walkFps) {
       throw compileError(`Direction ${direction} plays at ${dirFps} fps but the set uses ${walkFps} — reprocess all directions to the same speed before compiling`);
     }
-    const frameBytes = [];
-    for (let i = 0; i < frames.length; i++) {
-      if (frames[i].phase !== walkLabels[i] || frames[i].outputIndex !== i) {
-        throw compileError(`Direction ${direction} frame ${i} is out of gait-phase order`);
-      }
-      frameBytes.push(await readVerified(frames[i].path, frames[i].sha256, `Direction ${direction} frame ${frames[i].phase}`));
-    }
+    // Same frame-validity definition the approve gate uses (verifyPackagedFrames),
+    // here in its byte-verifying mode: existence + per-frame sha256 + gait-phase/
+    // order, reading each frame's bytes exactly once for read-once-verify-in-memory.
+    // Approve runs the existence-only prefix, so a set that passed approve cannot
+    // fail this for frame-existence reasons (#3001).
+    const { frameBytes } = await verifyPackagedFrames(recordId, manifest, { bytes: true });
     runs[direction] = { runId: entry.runId, manifestPath: entry.runManifest, manifest, frameBytes };
   }
 
