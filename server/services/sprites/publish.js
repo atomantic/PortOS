@@ -45,10 +45,8 @@ import { updateRecord } from './records.js';
 import { withWalkWriteTail } from './walk.js';
 import { compileAtlasInTail } from './atlas.js';
 import { sha256Buffer } from './walkPostprocess.js';
-import { walkPhaseLabels, WALK_MIN_FRAME_COUNT, WALK_MAX_FRAME_COUNT } from './walkBounds.js';
-import {
-  buildAtlasLayout, layoutSidecarPath, runtimeContractMismatch, resolveWalkFrameCount,
-} from './atlasLayout.js';
+import { spriteRuntimeContractSchema } from '../../lib/validation.js';
+import { buildAtlasLayout, layoutSidecarPath, runtimeContractMismatch } from './atlasLayout.js';
 
 // Per-repo serialization: keyed by the resolved repoPath (matching
 // appDeployer's `deployingApps` key), so two app records pointing at the
@@ -88,42 +86,29 @@ async function requireAppRepo(appId, status) {
   return { app, repoRoot: app.repoPath };
 }
 
-const isPositiveInt = (v) => Number.isInteger(v) && v > 0;
-
 /**
  * Validate the optional runtimeContract — the grid the consuming app was built
- * against (#2982). `walkFrameCount` is required when a contract is present (it
- * is the whole point of declaring one); `cellSize` and `columnCount` are
- * optional extra assertions. The fields are NOT cross-checked against each
- * other here: what counts as a consistent column layout is the compiler's
- * business and changes with the grid (#2986 drops the scanner column), so a
- * stale count surfaces at publish with both numbers named rather than as an
- * unexplained 400 at save.
+ * against (#2982). Shape and bounds come from the SAME Zod schema the route
+ * parses, so a non-route caller (importer, peer sync, a test) can't persist a
+ * contract the route would have rejected.
+ *
+ * `walkFrameCount` is required once a contract is present (it is the whole
+ * point of declaring one); `cellSize` and `columnCount` are optional extra
+ * assertions. The fields are NOT cross-checked against each other: what counts
+ * as a consistent column layout is the compiler's business and changes with the
+ * grid (#2986 drops the scanner column), so a stale count surfaces at publish
+ * with both numbers named rather than as an unexplained 400 at save.
  */
 function validateRuntimeContract(runtimeContract) {
   if (runtimeContract === undefined || runtimeContract === null) return null;
-  if (typeof runtimeContract !== 'object' || Array.isArray(runtimeContract)) {
-    throw bindingError('runtimeContract must be an object', 'INVALID_RUNTIME_CONTRACT');
+  const parsed = spriteRuntimeContractSchema.safeParse(runtimeContract);
+  if (!parsed.success) {
+    const issue = parsed.error.issues?.[0];
+    const field = issue?.path?.length ? `runtimeContract.${issue.path.join('.')}` : 'runtimeContract';
+    throw bindingError(`${field}: ${issue?.message || 'invalid'}`, 'INVALID_RUNTIME_CONTRACT');
   }
-  const { walkFrameCount, cellSize, columnCount } = runtimeContract;
-  if (!Number.isInteger(walkFrameCount)
-    || walkFrameCount < WALK_MIN_FRAME_COUNT || walkFrameCount > WALK_MAX_FRAME_COUNT) {
-    throw bindingError(
-      `runtimeContract.walkFrameCount must be an integer between ${WALK_MIN_FRAME_COUNT} and ${WALK_MAX_FRAME_COUNT}`,
-      'INVALID_RUNTIME_CONTRACT',
-    );
-  }
-  if (cellSize !== undefined && cellSize !== null && !isPositiveInt(cellSize)) {
-    throw bindingError('runtimeContract.cellSize must be a positive integer', 'INVALID_RUNTIME_CONTRACT');
-  }
-  if (columnCount !== undefined && columnCount !== null && !isPositiveInt(columnCount)) {
-    throw bindingError('runtimeContract.columnCount must be a positive integer', 'INVALID_RUNTIME_CONTRACT');
-  }
-  return {
-    walkFrameCount,
-    cellSize: isPositiveInt(cellSize) ? cellSize : null,
-    columnCount: isPositiveInt(columnCount) ? columnCount : null,
-  };
+  const { walkFrameCount, cellSize, columnCount } = parsed.data;
+  return { walkFrameCount, cellSize: cellSize ?? null, columnCount: columnCount ?? null };
 }
 
 /** Validate a publishBinding shape (null clears it). */
@@ -241,34 +226,30 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
     : undefined;
   const compiled = await compileAtlasInTail(recordId, { geometry: geometryOverride });
 
-  // Export contract (#2982): refuse a publish the bound app cannot consume,
-  // BEFORE taking the repo write lock — the game tree stays untouched and the
-  // message names both the actual and expected counts. No declared contract ⇒
-  // unchanged, unchecked behavior.
+  // Export contract (#2982). Everything below runs BEFORE the repo write lock,
+  // so a publish the bound app cannot consume leaves the game tree untouched.
+  // One geometry assertion serves both the contract compare and the sidecar.
   const appLabel = app.name || binding.appId;
-  const mismatch = runtimeContractMismatch(compiled.geometry, binding.runtimeContract, appLabel);
-  if (mismatch) {
-    throw new ServerError(mismatch.message, { status: 409, code: mismatch.code });
-  }
-
-  // The sidecar describing the grid PortOS actually produced. Built here (pure,
-  // lock-free) so a geometry the compiler can't describe fails before any
-  // write, and so the same bytes are used by both the write and the up-to-date
-  // comparison below. It carries no timestamp: identical geometry ⇒ identical
-  // bytes ⇒ a republish is a genuine no-op.
   if (!Array.isArray(compiled.geometry?.columns)) {
     throw new ServerError(
-      'The compiled atlas reports no column layout, so its layout sidecar cannot be written — recompile the atlas before publishing.',
+      'The compiled atlas reports no column layout, so neither its export contract nor its layout sidecar can be resolved — recompile the atlas before publishing.',
       { status: 422, code: 'ATLAS_GEOMETRY_UNKNOWN' },
     );
   }
+  // No declared contract ⇒ unchanged, unchecked behavior.
+  const mismatch = runtimeContractMismatch(compiled.geometry, binding.runtimeContract, appLabel);
+  if (mismatch) throw new ServerError(mismatch, { status: 409, code: 'PUBLISH_CONTRACT_MISMATCH' });
+
+  // The sidecar describing the grid PortOS actually produced. Built here (pure,
+  // lock-free) so the same bytes serve both the write and the up-to-date
+  // comparison below. It carries no timestamp: identical geometry ⇒ identical
+  // bytes ⇒ a republish is a genuine no-op.
   const layout = buildAtlasLayout({
     characterId: recordId,
     geometry: compiled.geometry,
     atlasSha256: compiled.atlasSha256,
     version: compiled.version,
     atlasDestPath: binding.atlasDestPath,
-    walkLabels: walkPhaseLabels(resolveWalkFrameCount(compiled.geometry)),
   });
   const layoutBuffer = Buffer.from(`${JSON.stringify(layout, null, 2)}\n`);
   const layoutSha256 = sha256Buffer(layoutBuffer);
@@ -279,7 +260,7 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
     // keys its lock by repoPath, so honor it here (the reverse direction —
     // deploy checking publishes — isn't needed; publishes are sub-second).
     if (isDeploying(repoRoot)) {
-      throw new ServerError(`App ${app.name || binding.appId} is deploying — retry when the deploy finishes`, { status: 409, code: 'APP_DEPLOY_IN_PROGRESS' });
+      throw new ServerError(`App ${appLabel} is deploying — retry when the deploy finishes`, { status: 409, code: 'APP_DEPLOY_IN_PROGRESS' });
     }
     const destAbs = anchorRepoPath(repoRoot, binding.atlasDestPath, 'atlasDestPath');
     // The sidecar is repo-anchored and written inside this same per-repo tail
@@ -291,8 +272,8 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
     // mutated — an atlas already at the destination but MISSING its sidecar
     // still gets one, so the two can never be permanently out of step.
     const writeLayoutSidecar = async () => {
-      const existingLayoutSha = (await pathExists(layoutAbs)) ? await sha256File(layoutAbs) : null;
-      if (existingLayoutSha === layoutSha256) return false;
+      const existing = await readFile(layoutAbs).catch(() => null);
+      if (existing?.equals(layoutBuffer)) return false;
       await atomicWrite(layoutAbs, layoutBuffer);
       return true;
     };
@@ -396,7 +377,7 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
     const publication = await recordPublication({
       destPreviousSha256: destSha256, codeBinding, layoutDestPath, layoutSha256,
     });
-    console.log(`🚚 sprite atlas v${compiled.version} published for ${recordId} → ${app.name || binding.appId}:${binding.atlasDestPath}`);
+    console.log(`🚚 sprite atlas v${compiled.version} published for ${recordId} → ${appLabel}:${binding.atlasDestPath}`);
     return { published: true, publication, compiled, layoutWritten, layoutDestPath };
   });
 }

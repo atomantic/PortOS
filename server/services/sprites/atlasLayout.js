@@ -27,9 +27,13 @@
  * it rides along as `previewFps`, explicitly labeled as authoring metadata the
  * consumer must ignore.
  *
- * Pure and dependency-free (no fs, no sharp): publish.js builds the payload
- * before taking any write lock, and the shape is unit-testable on its own.
+ * Pure and dependency-free (no image graph, no state): publish.js builds the
+ * payload before taking any write lock, and the shape is unit-testable on its
+ * own.
  */
+
+import { basename } from 'path';
+import { ATLAS_IDLE_COLUMN, ATLAS_SCANNER_COLUMN } from './walkBounds.js';
 
 // Bump only on a breaking shape change. Adding a field (or a new track) is
 // additive — consumers read `tracks`/`columns` by name, not by position.
@@ -41,8 +45,6 @@ export const ATLAS_LAYOUT_KIND = 'portos-sprite-atlas-layout';
 export const PREVIEW_FPS_NOTE = 'Authoring metadata only — the speed PortOS previews this walk at. '
   + 'The consuming app determines real playback (e.g. from movement distance); do not use this as a runtime frame rate.';
 
-const IDLE_COLUMN = 'idle';
-const SCANNER_COLUMN = 'scanner';
 const WALK_TRACK = 'walk';
 
 /**
@@ -57,30 +59,41 @@ export function layoutSidecarPath(atlasDestPath) {
 }
 
 /**
+ * The walk-phase columns of a compiled grid: everything that is neither the
+ * idle anchor nor the scanner placeholder. Derived from the ACTUAL column
+ * names rather than from `walkPhaseLabels(count)`, so a grid whose columns are
+ * positional (`frame-00…`) groups into one walk span just like the named
+ * 8-frame gait phases — and so a scanner-less grid (#2986) still resolves.
+ */
+const walkColumnsOf = (columns) =>
+  columns.filter((c) => c !== ATLAS_IDLE_COLUMN && c !== ATLAS_SCANNER_COLUMN);
+
+/**
  * Walk frame count for a compiled atlas. Pointers written before #2970 have no
- * `walkFrameCount`, so fall back to counting the columns that are neither the
- * idle anchor nor the scanner placeholder — which also survives #2986 dropping
- * the scanner column from the grid.
+ * `walkFrameCount`, so fall back to counting the walk columns themselves.
  */
 export function resolveWalkFrameCount(geometry) {
   if (Number.isInteger(geometry?.walkFrameCount)) return geometry.walkFrameCount;
   if (!Array.isArray(geometry?.columns)) return null;
-  return geometry.columns.filter((c) => c !== IDLE_COLUMN && c !== SCANNER_COLUMN).length;
+  return walkColumnsOf(geometry.columns).length;
 }
 
 /**
  * Group the flat column list into named tracks of contiguous column spans:
- * `{ idle: { start: 0, count: 1 }, walk: { start: 1, count: 8 }, … }`. Every
- * walk-phase column collapses into the single `walk` track; any other column
- * becomes a track of its own named for the column. A future four-frame scanner
- * action therefore lands as `scanner: { start, count: 4 }` with no shape change
- * on either side of the boundary.
+ * `{ idle: { start: 0, count: 1 }, walk: { start: 1, count: 8 }, … }`. The walk
+ * track is the `walkFrameCount` columns following the idle anchor — positional,
+ * per the grid contract, so it doesn't care whether those columns carry named
+ * gait phases or positional `frame-NN` labels. Every other column becomes a
+ * track of its own named for the column, so a future four-frame scanner action
+ * lands as `scanner: { start, count: 4 }` with no shape change on either side
+ * of the boundary.
  */
-export function deriveTracks(columns, walkLabels = []) {
-  const walkColumns = new Set(walkLabels);
+export function deriveTracks(columns, walkFrameCount) {
+  const walkStart = columns[0] === ATLAS_IDLE_COLUMN ? 1 : 0;
+  const walkEnd = walkStart + (Number.isInteger(walkFrameCount) ? walkFrameCount : 0);
   const tracks = {};
   columns.forEach((column, index) => {
-    const name = walkColumns.has(column) ? WALK_TRACK : column;
+    const name = index >= walkStart && index < walkEnd ? WALK_TRACK : column;
     const existing = tracks[name];
     if (!existing) {
       tracks[name] = { start: index, count: 1 };
@@ -105,7 +118,7 @@ export function deriveTracks(columns, walkLabels = []) {
  * path compares hashes to decide whether anything actually changed).
  */
 export function buildAtlasLayout({
-  characterId, geometry, atlasSha256, version, atlasDestPath, walkLabels,
+  characterId, geometry, atlasSha256, version, atlasDestPath,
 }) {
   const columns = geometry?.columns;
   if (!Array.isArray(columns) || !columns.length) {
@@ -118,7 +131,7 @@ export function buildAtlasLayout({
     characterId,
     // Basename only: the sidecar sits beside the atlas, so a repo-relative
     // path would just be a second copy of where the reader already is.
-    atlasFile: atlasDestPath.split('/').pop(),
+    atlasFile: basename(atlasDestPath),
     atlasVersion: version ?? null,
     sourceAtlasSha256: atlasSha256,
     cellSize: geometry.cellSize ?? null,
@@ -126,7 +139,7 @@ export function buildAtlasLayout({
     rowOrder: Array.isArray(geometry.directionOrder) ? [...geometry.directionOrder] : null,
     columns: [...columns],
     columnCount: columns.length,
-    tracks: deriveTracks(columns, walkLabels ?? []),
+    tracks: deriveTracks(columns, walkFrameCount),
     walkFrameCount,
     previewFps: Number.isFinite(geometry.walkFps) ? geometry.walkFps : null,
     previewFpsNote: PREVIEW_FPS_NOTE,
@@ -136,48 +149,38 @@ export function buildAtlasLayout({
 /**
  * Compare compiled atlas geometry against an app's declared runtime contract.
  * Returns `null` when they agree (or when no contract was declared — an absent
- * contract publishes unchecked, exactly as before this existed), otherwise
- * `{ code, message }` naming BOTH the actual and expected numbers and the two
- * ways to resolve the disagreement.
+ * contract publishes unchecked, exactly as before this existed), otherwise a
+ * message naming BOTH the actual and expected numbers and the two ways to
+ * resolve the disagreement.
+ *
+ * Callers pass describable geometry (a column list); publish.js asserts that
+ * once, up front, for both this and `buildAtlasLayout`.
  */
 export function runtimeContractMismatch(geometry, contract, appLabel = 'the bound app') {
   if (!contract) return null;
 
-  const actualColumns = Array.isArray(geometry?.columns) ? geometry.columns.length : null;
+  const actualColumns = geometry.columns.length;
   const actualFrames = resolveWalkFrameCount(geometry);
-  if (actualColumns === null || actualFrames === null) {
-    return {
-      code: 'ATLAS_GEOMETRY_UNKNOWN',
-      message: `The compiled atlas reports no column layout, so the runtime contract declared by ${appLabel} cannot be verified — recompile the atlas before publishing.`,
-    };
-  }
-
   const { walkFrameCount: expectedFrames, columnCount: expectedColumns, cellSize: expectedCellSize } = contract;
   const actualDesc = `Atlas has ${actualColumns} columns (${actualFrames} walk frames)`;
   const expectedDesc = Number.isInteger(expectedColumns)
     ? `${expectedColumns} (${expectedFrames} walk frames)`
     : `${expectedFrames} walk frames`;
+  const countMismatch = (resolution) => `${actualDesc} but ${appLabel} expects ${expectedDesc}. ${resolution}`;
 
   if (Number.isInteger(expectedFrames) && expectedFrames !== actualFrames) {
-    return {
-      code: 'PUBLISH_CONTRACT_MISMATCH',
-      message: `${actualDesc} but ${appLabel} expects ${expectedDesc}. `
-        + `Update the game's walk-frame constant and its cycle distance, or reprocess this walk set to ${expectedFrames} frames before publishing.`,
-    };
+    return countMismatch(
+      `Update the game's walk-frame constant and its cycle distance, or reprocess this walk set to ${expectedFrames} frames before publishing.`,
+    );
   }
   if (Number.isInteger(expectedColumns) && expectedColumns !== actualColumns) {
-    return {
-      code: 'PUBLISH_CONTRACT_MISMATCH',
-      message: `${actualDesc} but ${appLabel} expects ${expectedDesc}. `
-        + `The grid shape changed — update the app's expected column layout, or re-bind its runtime contract to ${actualColumns} columns before publishing.`,
-    };
+    return countMismatch(
+      `The grid shape changed — update the app's expected column layout, or re-bind its runtime contract to ${actualColumns} columns before publishing.`,
+    );
   }
   if (Number.isInteger(expectedCellSize) && expectedCellSize !== geometry.cellSize) {
-    return {
-      code: 'PUBLISH_CONTRACT_MISMATCH',
-      message: `Atlas cells are ${geometry.cellSize}px but ${appLabel} expects ${expectedCellSize}px. `
-        + `Recompile this atlas at ${expectedCellSize}px cells, or update the app's cell-size constant before publishing.`,
-    };
+    return `Atlas cells are ${geometry.cellSize}px but ${appLabel} expects ${expectedCellSize}px. `
+      + `Recompile this atlas at ${expectedCellSize}px cells, or update the app's cell-size constant before publishing.`;
   }
   return null;
 }
