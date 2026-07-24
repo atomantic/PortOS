@@ -115,14 +115,14 @@ describe('runTrellis2Generate', () => {
     const child = new EventEmitter();
     child.stdout = new EventEmitter();
     child.stderr = new EventEmitter();
+    child.kill = vi.fn();
     return child;
   };
 
   it('rejects without spawning when the model is not installed', async () => {
     const spawnImpl = vi.fn();
-    await expect(
-      runTrellis2Generate({ imagePath: 'a.png', base: BASE, exists: () => false, spawnImpl }),
-    ).rejects.toMatchObject({ code: 'TRELLIS2_NOT_INSTALLED' });
+    const { promise } = runTrellis2Generate({ imagePath: 'a.png', base: BASE, exists: () => false, spawnImpl });
+    await expect(promise).rejects.toMatchObject({ code: 'TRELLIS2_NOT_INSTALLED' });
     expect(spawnImpl).not.toHaveBeenCalled();
   });
 
@@ -130,7 +130,7 @@ describe('runTrellis2Generate', () => {
     const child = makeChild();
     const spawnImpl = vi.fn(() => child);
     const frames = [];
-    const promise = runTrellis2Generate({
+    const { promise } = runTrellis2Generate({
       imagePath: 'a.png',
       base: BASE,
       exists: installed,
@@ -154,7 +154,7 @@ describe('runTrellis2Generate', () => {
 
   it('rejects on a non-zero exit', async () => {
     const child = makeChild();
-    const promise = runTrellis2Generate({
+    const { promise } = runTrellis2Generate({
       imagePath: 'a.png',
       outputPath: '/out/a.glb',
       base: BASE,
@@ -167,13 +167,27 @@ describe('runTrellis2Generate', () => {
 
   it('rejects when it exits 0 but never reported a .glb', async () => {
     const child = makeChild();
-    const promise = runTrellis2Generate({
+    const { promise } = runTrellis2Generate({
       imagePath: 'a.png',
       base: BASE,
       exists: installed,
       spawnImpl: () => child,
     });
     child.emit('close', 0);
+    await expect(promise).rejects.toMatchObject({ code: 'TRELLIS2_GENERATE_FAILED' });
+  });
+
+  it('kill() SIGTERMs the running child so a deleted render terminates promptly', async () => {
+    const child = makeChild();
+    const { promise, kill } = runTrellis2Generate({
+      imagePath: 'a.png',
+      base: BASE,
+      exists: installed,
+      spawnImpl: () => child,
+    });
+    kill();
+    expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    child.emit('close', null); // SIGTERM lands as a non-zero/null exit
     await expect(promise).rejects.toMatchObject({ code: 'TRELLIS2_GENERATE_FAILED' });
   });
 });

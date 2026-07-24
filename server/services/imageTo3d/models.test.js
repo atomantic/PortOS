@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('node:fs/promises', async (importOriginal) => ({
+  ...(await importOriginal()),
+  rm: vi.fn(() => Promise.resolve()),
+}));
+
 vi.mock('../../lib/fileUtils.js', () => ({
   PATHS: { imageTo3d: '/mock/data/image-to-3d' },
   resolveGalleryImage: vi.fn((filename) => (
@@ -20,7 +25,11 @@ vi.mock('./targets.js', () => ({
 
 vi.mock('./trellis2.js', () => ({
   isTrellis2Installed: vi.fn(() => true),
-  runTrellis2Generate: vi.fn(() => Promise.resolve({ assetPath: '/mock/data/image-to-3d/x/model.glb' })),
+  // The runner returns a { promise, kill } pair (see runTrellis2Generate).
+  runTrellis2Generate: vi.fn(() => ({
+    promise: Promise.resolve({ assetPath: '/mock/data/image-to-3d/x/model.glb' }),
+    kill: vi.fn(),
+  })),
 }));
 
 vi.mock('./db.js', () => ({
@@ -32,10 +41,14 @@ vi.mock('./db.js', () => ({
   recoverInterruptedModels: vi.fn(),
 }));
 
+import { rm } from 'node:fs/promises';
+import { ensureDir } from '../../lib/fileUtils.js';
 import { resolveTarget } from './targets.js';
 import { isTrellis2Installed, runTrellis2Generate } from './trellis2.js';
 import * as store from './db.js';
-import { createModel, startGeneration, getModelAsset, recoverInterruptedModels } from './models.js';
+import {
+  createModel, startGeneration, getModelAsset, recoverInterruptedModels, deleteModel,
+} from './models.js';
 
 const draftRecord = () => ({
   id: 'image3d-example',
@@ -57,7 +70,10 @@ describe('image-to-3D model orchestration', () => {
         ? { targetId: 'trellis2', target: { id: 'trellis2', label: 'TRELLIS.2' }, available: true, reason: null }
         : { targetId: id, target: null, available: false, reason: 'unknown-target' }
     ));
-    runTrellis2Generate.mockResolvedValue({ assetPath: '/mock/data/image-to-3d/x/model.glb' });
+    runTrellis2Generate.mockReturnValue({
+      promise: Promise.resolve({ assetPath: '/mock/data/image-to-3d/x/model.glb' }),
+      kill: vi.fn(),
+    });
   });
 
   it('rejects a source that is no longer in the gallery', async () => {
@@ -125,7 +141,10 @@ describe('image-to-3D model orchestration', () => {
       if (next) current = next;
       return current;
     });
-    runTrellis2Generate.mockRejectedValue(new Error('TRELLIS.2 generate exited 1'));
+    runTrellis2Generate.mockImplementation(() => ({
+      promise: Promise.reject(new Error('TRELLIS.2 generate exited 1')),
+      kill: vi.fn(),
+    }));
 
     await createModel({ name: 'Beacon', filename: 'example.png' });
     await vi.waitFor(() => expect(current.status).toBe('failed'));
@@ -140,6 +159,91 @@ describe('image-to-3D model orchestration', () => {
     // The whole point of boot recovery: mark interrupted renders failed-retryable
     // WITHOUT relaunching any GPU work (CLAUDE.md no-cold-bootstrap policy).
     expect(runTrellis2Generate).not.toHaveBeenCalled();
+  });
+
+  it('deleting a record mid-render kills the child and leaves no orphaned GLB', async () => {
+    let current = draftRecord();
+    const killSpy = vi.fn();
+    let rejectRender;
+    runTrellis2Generate.mockReturnValue({
+      promise: new Promise((_, reject) => { rejectRender = reject; }),
+      kill: killSpy,
+    });
+    store.createModel.mockImplementation(async () => current);
+    store.getModel.mockImplementation(async () => current);
+    store.mutateModel.mockImplementation(async (_id, mutate) => {
+      const next = mutate(current);
+      if (next) current = next;
+      return current;
+    });
+    store.deleteModel.mockImplementation(async () => {
+      current = {
+        ...current,
+        status: current.status === 'generating' ? 'canceled' : current.status,
+        deleted: true,
+      };
+      return { ok: true };
+    });
+
+    await createModel({ name: 'Beacon', filename: 'example.png' });
+    // The render subprocess spawns inside executeRender (setImmediate) — wait until the
+    // kill handle is registered before deleting.
+    await vi.waitFor(() => expect(runTrellis2Generate).toHaveBeenCalled());
+    expect(current.status).toBe('generating');
+
+    await deleteModel('image3d-example');
+    // The in-flight subprocess is SIGTERM'd promptly.
+    expect(killSpy).toHaveBeenCalled();
+    expect(current.deleted).toBe(true);
+
+    // The killed child settles; executeRender's finally then removes the orphaned dir.
+    rejectRender(Object.assign(new Error('killed'), { code: 'TRELLIS2_GENERATE_FAILED' }));
+    await vi.waitFor(() => expect(rm).toHaveBeenCalledWith(
+      '/mock/data/image-to-3d/image3d-example',
+      expect.objectContaining({ recursive: true, force: true }),
+    ));
+  });
+
+  it('terminates a render whose delete landed before the kill handle was registered', async () => {
+    // The pre-registration window: beginRender flips the record to `generating` and
+    // schedules executeRender, but the kill handle isn't in activeRenders until the
+    // render actually spawns. A delete arriving in that window must still stop the
+    // render once it spawns — executeRender re-checks `deleted` after registering.
+    let current = draftRecord();
+    let rejectRender;
+    const renderPromise = new Promise((_, reject) => { rejectRender = reject; });
+    const killSpy = vi.fn(() => rejectRender(
+      Object.assign(new Error('killed'), { code: 'TRELLIS2_GENERATE_FAILED' }),
+    ));
+    runTrellis2Generate.mockReturnValue({ promise: renderPromise, kill: killSpy });
+
+    // Pause executeRender at `await ensureDir`, before it spawns/registers the handle.
+    let releaseEnsureDir;
+    ensureDir.mockImplementationOnce(() => new Promise((resolve) => { releaseEnsureDir = resolve; }));
+
+    store.createModel.mockImplementation(async () => current);
+    store.getModel.mockImplementation(async () => current);
+    store.mutateModel.mockImplementation(async (_id, mutate) => {
+      const next = mutate(current);
+      if (next) current = next;
+      return current;
+    });
+    store.deleteModel.mockImplementation(async () => {
+      current = { ...current, status: 'canceled', deleted: true };
+      return { ok: true };
+    });
+
+    await createModel({ name: 'Beacon', filename: 'example.png' });
+    await vi.waitFor(() => expect(ensureDir).toHaveBeenCalled());
+    expect(runTrellis2Generate).not.toHaveBeenCalled(); // spawn hasn't happened yet
+
+    // Delete lands in the window — no live handle, so deleteModel can't kill directly.
+    await deleteModel('image3d-example');
+    expect(killSpy).not.toHaveBeenCalled();
+
+    // Render spawns; executeRender registers the handle, re-checks deleted, and kills it.
+    releaseEnsureDir();
+    await vi.waitFor(() => expect(killSpy).toHaveBeenCalled());
   });
 
   it('getModelAsset 409s until a mesh is rendered, then returns the download path', async () => {
