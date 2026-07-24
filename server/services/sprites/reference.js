@@ -33,7 +33,7 @@ import { getSettings } from '../settings.js';
 import { getRecord, updateRecord, listRecords, createCharacter } from './records.js';
 import { spriteDir, resolveSpriteAssetPath, listSpriteAssets } from './paths.js';
 import {
-  SPRITE_DIRECTIONS, ANCHOR_DIRECTIONS, anchorIdForDirection, TURNAROUND_VIEWS,
+  SPRITE_DIRECTIONS, ANCHOR_DIRECTIONS, anchorIdForDirection, TURNAROUND_VIEWS, TURNAROUND_ID,
   buildMainReferencePrompt, buildAnchorPrompt, buildTurnaroundPrompt,
 } from './prompts.js';
 import { pickChromaKey, keyProximityWarning, CHROMA_KEY_HEXES, DEFAULT_CHROMA_KEY } from './chromaKey.js';
@@ -49,9 +49,9 @@ import {
 const ANCHOR_DEFAULT_STRENGTH = 0.8;
 const UPLOAD_DEFAULT_STRENGTH = 0.65;
 
-// The turnaround sheet's candidate/asset id — the `anchorIdForDirection`
-// analogue for the one reference artifact that has no direction.
-const TURNAROUND_ID = 'turnaround';
+// Sidecarless turnaround candidate (crash between the PNG copy and the sidecar
+// write) — module-scope so the candidate listing doesn't recompile it per file.
+const TURNAROUND_CANDIDATE_RE = /^turnaround-candidate-\d+\.png$/;
 
 // Manifests seeded from #2979 onward are turnaround-first: the sheet is the
 // identity root, the main descends from it, and so does every anchor. A v1
@@ -232,7 +232,7 @@ export async function getReferenceSet(recordId) {
       // Sidecarless (crash between copy and sidecar write): infer the target
       // from the filename so the client can't group it under the wrong slot.
       const inferredDirection = /^walk-(.+)-candidate-\d+\.png$/.exec(name)?.[1] || null;
-      const inferred = new RegExp(`^${TURNAROUND_ID}-candidate-\\d+\\.png$`).test(name)
+      const inferred = TURNAROUND_CANDIDATE_RE.test(name)
         ? TURNAROUND_ID
         : (inferredDirection === 'south' ? 'main' : inferredDirection);
       return {
@@ -282,20 +282,21 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
   let correctionPrompt;
 
   const turnaroundLocked = manifest.turnaround?.locked === true;
+  const designPrompt = typeof body.designPrompt === 'string' ? body.designPrompt.trim() : '';
+  // A render that establishes the character's look needs SOME input: a prompt,
+  // an uploaded image, a gallery pick, or another sprite's reference to seed
+  // from. `alsoSeeded` covers a source the branch supplies itself (the legacy
+  // main a backfilled sheet expands, the sheet the main descends from).
+  const requireDesignInput = (alsoSeeded = false) => {
+    if (designPrompt || alsoSeeded || upload || body.initImageGalleryFile || body.initImageSpriteId) return;
+    throw new ServerError('Provide a design prompt and/or a reference image', { status: 400, code: 'DESIGN_INPUT_REQUIRED' });
+  };
 
   if (target === TURNAROUND_ID) {
     if (turnaroundLocked) {
       throw new ServerError('Turnaround sheet is locked — corrections require a new character version, never regeneration', { status: 409, code: 'REFERENCE_LOCKED' });
     }
-    const designPrompt = typeof body.designPrompt === 'string' ? body.designPrompt.trim() : '';
-    // The sheet is the first render, so it needs SOME design input: a prompt,
-    // an uploaded image, a gallery pick, another sprite's reference to seed
-    // from — or, on a legacy record, the already-locked main it backfills from.
-    const backfillFrom = !designPrompt && manifest.mainReference.locked ? manifest.mainReference.path : null;
-    const hasInitSource = !!upload || !!body.initImageGalleryFile || !!body.initImageSpriteId || !!backfillFrom;
-    if (!designPrompt && !hasInitSource) {
-      throw new ServerError('Provide a design prompt and/or a reference image', { status: 400, code: 'DESIGN_INPUT_REQUIRED' });
-    }
+    requireDesignInput(manifest.mainReference.locked);
     anchorId = TURNAROUND_ID;
     prompt = buildTurnaroundPrompt({
       name: record.name,
@@ -307,17 +308,17 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
     // one view we already have into the full sheet rather than inventing a new
     // character from text.
     if (!initImagePath && manifest.mainReference.locked) {
-      initImagePath = resolveSpriteAssetPath(recordId, manifest.mainReference.path);
-      if (!await pathExists(initImagePath)) {
-        throw new ServerError('Locked main reference file is missing on disk', { status: 500, code: 'MAIN_REFERENCE_MISSING' });
-      }
+      initImagePath = await requireLockedArtifactPath(recordId, manifest.mainReference.path, {
+        message: 'Locked main reference file is missing on disk', code: 'MAIN_REFERENCE_MISSING',
+      });
       designReferencePath = manifest.mainReference.path;
     }
     if (initImagePath) initImageStrength ??= UPLOAD_DEFAULT_STRENGTH;
     if (designPrompt) manifest.designPrompt = designPrompt;
-    // Only the turnaround/main branches mutate (or may have just seeded) the
-    // manifest — the anchor branch requires locked predecessors, so its
-    // manifest already exists on disk unchanged.
+    // The sheet is the first render, so this save may be persisting a manifest
+    // that was only just seeded — it runs unconditionally. The later branches
+    // require locked predecessors, so their manifest is already on disk and
+    // only needs writing back when the design prompt actually changed.
     await saveManifest(recordId, manifest);
   } else if (target === 'main') {
     if (manifest.mainReference.locked) {
@@ -330,7 +331,6 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
     if (!turnaroundLocked && isTurnaroundFirst(manifest)) {
       throw new ServerError('Lock the turnaround sheet before deriving the main reference', { status: 409, code: 'TURNAROUND_NOT_LOCKED' });
     }
-    const designPrompt = typeof body.designPrompt === 'string' ? body.designPrompt.trim() : '';
     anchorId = anchorIdForDirection('south');
     direction = 'south';
     prompt = buildMainReferencePrompt({
@@ -343,17 +343,18 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
       initImagePath = await requireLockedTurnaroundPath(recordId, manifest);
       initImageStrength ??= ANCHOR_DEFAULT_STRENGTH;
     } else {
-      // Legacy v1 main: a prompt, an uploaded image, a gallery pick, or another
-      // sprite's reference — one of them is required.
-      const hasInitSource = !!upload || !!body.initImageGalleryFile || !!body.initImageSpriteId;
-      if (!designPrompt && !hasInitSource) {
-        throw new ServerError('Provide a design prompt and/or a reference image', { status: 400, code: 'DESIGN_INPUT_REQUIRED' });
-      }
+      // Legacy v1 main, still on the main-first flow: a prompt, an uploaded
+      // image, a gallery pick, or another sprite's reference is required.
+      requireDesignInput();
       ({ initImagePath, designReferencePath } = await resolveSeedSource(recordId, body, upload));
       if (initImagePath) initImageStrength ??= UPLOAD_DEFAULT_STRENGTH;
     }
-    if (designPrompt) manifest.designPrompt = designPrompt;
-    await saveManifest(recordId, manifest);
+    // Nothing else in this branch mutates the manifest, so skip the write —
+    // and its per-record serialization — on the common no-prompt re-roll.
+    if (designPrompt) {
+      manifest.designPrompt = designPrompt;
+      await saveManifest(recordId, manifest);
+    }
   } else {
     if (!ANCHOR_DIRECTIONS.includes(target)) {
       throw new ServerError(`Unknown reference target: ${target}`, { status: 400, code: 'INVALID_TARGET' });
@@ -424,18 +425,31 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
 }
 
 /**
- * The locked turnaround sheet as an on-disk init image. Every render that
- * descends from the sheet routes through here so a manifest that claims a lock
- * whose file vanished fails loudly instead of silently degrading to
- * text-to-image (which would reintroduce the invented-sides bug).
+ * A locked artifact's record-relative path resolved to an on-disk init image.
+ * Every render that descends from a locked reference routes through here so a
+ * manifest claiming a lock whose file vanished fails loudly instead of silently
+ * degrading to text-to-image (which would reintroduce the invented-sides bug).
  */
-async function requireLockedTurnaroundPath(recordId, manifest) {
-  const abs = resolveSpriteAssetPath(recordId, manifest.turnaround.path);
-  if (!await pathExists(abs)) {
-    throw new ServerError('Locked turnaround sheet file is missing on disk', { status: 500, code: 'TURNAROUND_MISSING' });
-  }
+async function requireLockedArtifactPath(recordId, relPath, { message, code }) {
+  const abs = resolveSpriteAssetPath(recordId, relPath);
+  if (!await pathExists(abs)) throw new ServerError(message, { status: 500, code });
   return abs;
 }
+
+const requireLockedTurnaroundPath = (recordId, manifest) => requireLockedArtifactPath(
+  recordId, manifest.turnaround.path,
+  { message: 'Locked turnaround sheet file is missing on disk', code: 'TURNAROUND_MISSING' },
+);
+
+/**
+ * The locked artifact a derive should seed from: the turnaround sheet when the
+ * record has one (all sides, so accessory placement carries over), else the
+ * locked main. One definition so the "select a reference sprite" picker can
+ * never advertise a different image than the render actually attaches.
+ */
+const lockedSeedArtifact = (manifest) => (
+  [manifest?.turnaround, manifest?.mainReference].find((a) => a?.locked && a.path) || null
+);
 
 /**
  * Resolve the optional i2i seed image from exactly one source — an upload wins,
@@ -480,15 +494,13 @@ async function resolveSeedSource(recordId, body, upload) {
 async function resolveSourceReference(sourceId) {
   // loadManifest, not getReferenceSet — we only need the locked artifacts, and
   // the latter also enumerates + reads every candidate sidecar (wasted here).
-  const manifest = await loadManifest(sourceId);
-  const best = [manifest?.turnaround, manifest?.mainReference].find((a) => a?.locked && a.path);
+  const best = lockedSeedArtifact(await loadManifest(sourceId));
   if (!best) {
     throw new ServerError('The source sprite has no locked reference to seed from', { status: 400, code: 'SOURCE_REFERENCE_MISSING' });
   }
-  const absPath = resolveSpriteAssetPath(sourceId, best.path);
-  if (!await pathExists(absPath)) {
-    throw new ServerError('The source sprite reference file is missing on disk', { status: 500, code: 'SOURCE_REFERENCE_FILE_MISSING' });
-  }
+  const absPath = await requireLockedArtifactPath(sourceId, best.path, {
+    message: 'The source sprite reference file is missing on disk', code: 'SOURCE_REFERENCE_FILE_MISSING',
+  });
   return { absPath, relPath: best.path };
 }
 
@@ -509,12 +521,13 @@ export async function listReferenceSources() {
   for (const r of records) {
     if (r.kind !== 'character' || r.deleted) continue;
     const manifest = await loadManifest(r.id);
-    const turnaround = manifest?.turnaround?.locked && manifest.turnaround.path ? manifest.turnaround.path : null;
-    const main = manifest?.mainReference?.locked && manifest.mainReference.path ? manifest.mainReference.path : null;
-    const path = turnaround || main;
-    if (path) {
+    // Same picker resolveSourceReference uses, so the advertised image is
+    // exactly the one a seed will attach.
+    const seed = lockedSeedArtifact(manifest);
+    if (seed) {
+      const turnaround = manifest?.turnaround?.locked ? manifest.turnaround.path : null;
       out.push({
-        id: r.id, name: r.name, kind: r.kind, path, turnaroundPath: turnaround, mainPath: main,
+        id: r.id, name: r.name, kind: r.kind, path: seed.path, turnaroundPath: turnaround,
       });
     }
   }
@@ -763,8 +776,9 @@ async function lockReferenceImpl(recordId, { target, candidate, acceptClipRisk =
     // Record BEFORE manifest: a crash between the two leaves the record
     // updated but the manifest unlocked — recoverable by re-locking. The
     // reverse order would wedge (locked manifest + stale record, with both
-    // relock and key PATCH returning 409 forever).
-    await updateRecord(recordId, { chromaKey: selectedKey, status: 'reference' });
+    // relock and key PATCH returning 409 forever). Skipped entirely when the
+    // turnaround lock already froze the key and set the status.
+    if (!frozenKey) await updateRecord(recordId, { chromaKey: selectedKey, status: 'reference' });
     await saveManifest(recordId, manifest);
   } else {
     if (!ANCHOR_DIRECTIONS.includes(target)) {

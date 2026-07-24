@@ -108,6 +108,26 @@ function buildKeyDecontaminator(maskKeyHex, canvasKeyHex) {
 }
 
 /**
+ * Write one masked foreground pixel into the destination canvas, shifting it
+ * off the old key when the composite re-keys onto a different one. Shared by
+ * both compositors (the reframing `normalizeFromAnalysis` and the
+ * geometry-preserving `recompositeOnKey`) so the fringe math — the subtlest
+ * code in this module — has exactly one definition.
+ */
+function writeForegroundPixel(canvas, dstI, data, srcI, decon) {
+  if (!decon) {
+    canvas[dstI] = data[srcI];
+    canvas[dstI + 1] = data[srcI + 1];
+    canvas[dstI + 2] = data[srcI + 2];
+    return;
+  }
+  const share = decon.share(data, srcI);
+  canvas[dstI] = clampByte(data[srcI] + share * decon.delta[0]);
+  canvas[dstI + 1] = clampByte(data[srcI + 1] + share * decon.delta[1]);
+  canvas[dstI + 2] = clampByte(data[srcI + 2] + share * decon.delta[2]);
+}
+
+/**
  * Histogram the foreground (non-key) pixels of an analysis, quantized to 4
  * bits per channel so anti-aliased shades collapse into their parent color.
  * Returns `[{ r, g, b, count }]` sorted by count desc — pickChromaKey's input.
@@ -166,16 +186,7 @@ export async function normalizeFromAnalysis(analysis, src, dest, canvasKeyHex) {
       if (!mask[y * width + x]) continue;
       const srcI = (y * width + x) * 3;
       const dstI = ((offsetY + (y - bbox.top)) * side + offsetX + (x - bbox.left)) * 3;
-      if (decon) {
-        const share = decon.share(data, srcI);
-        canvas[dstI] = clampByte(data[srcI] + share * decon.delta[0]);
-        canvas[dstI + 1] = clampByte(data[srcI + 1] + share * decon.delta[1]);
-        canvas[dstI + 2] = clampByte(data[srcI + 2] + share * decon.delta[2]);
-      } else {
-        canvas[dstI] = data[srcI];
-        canvas[dstI + 1] = data[srcI + 1];
-        canvas[dstI + 2] = data[srcI + 2];
-      }
+      writeForegroundPixel(canvas, dstI, data, srcI, decon);
     }
   }
   await sharp(canvas, { raw: { width: side, height: side, channels: 3 } }).png().toFile(dest);
@@ -210,17 +221,8 @@ export async function recompositeOnKey(analysis, src, dest, canvasKeyHex) {
   const decon = buildKeyDecontaminator(maskKey, canvasKeyHex);
   for (let p = 0; p < width * height; p++) {
     if (!mask[p]) continue;
-    const i = p * 3;
-    if (decon) {
-      const share = decon.share(data, i);
-      canvas[i] = clampByte(data[i] + share * decon.delta[0]);
-      canvas[i + 1] = clampByte(data[i + 1] + share * decon.delta[1]);
-      canvas[i + 2] = clampByte(data[i + 2] + share * decon.delta[2]);
-    } else {
-      canvas[i] = data[i];
-      canvas[i + 1] = data[i + 1];
-      canvas[i + 2] = data[i + 2];
-    }
+    // Geometry is preserved, so source and destination indices coincide.
+    writeForegroundPixel(canvas, p * 3, data, p * 3, decon);
   }
   await sharp(canvas, { raw: { width, height, channels: 3 } }).png().toFile(dest);
   return { width, height };

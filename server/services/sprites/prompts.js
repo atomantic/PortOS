@@ -62,13 +62,10 @@ export function keyColorPhrase(hex) {
 // read a given facing from.
 export const TURNAROUND_VIEWS = ['south', 'east', 'north', 'west'];
 
-// How each turnaround panel is described inside the sheet prompt.
-const TURNAROUND_PANEL_LABEL = {
-  south: 'front view, facing the viewer',
-  east: 'right-side profile, facing due east',
-  north: 'back view, facing directly away from the viewer (no face)',
-  west: 'left-side profile, facing due west',
-};
+// The sheet's candidate/asset id — the `anchorIdForDirection` analogue for the
+// one reference artifact that has no direction. Lives here with the other
+// target vocabulary so validation.js and the services share one spelling.
+export const TURNAROUND_ID = 'turnaround';
 
 /**
  * Stage-0 prompt (issue #2979): the character turnaround sheet — the identity
@@ -80,8 +77,12 @@ export function buildTurnaroundPrompt({ name, designPrompt, chromaKey }) {
   const description = (typeof designPrompt === 'string' && designPrompt.trim())
     ? designPrompt.trim()
     : 'Use the attached visual reference as the character design.';
+  // Panels are described with the SAME facing clauses the derive prompts use
+  // (`fromTurnaroundClause` below tells the model to find "the panel that shows
+  // the character <facing>") — two vocabularies would let the sheet's labels
+  // drift out of sync with the prompt that points into it.
   const panels = TURNAROUND_VIEWS
-    .map((view, i) => `${i + 1}) ${TURNAROUND_PANEL_LABEL[view] || view}`)
+    .map((view, i) => `${i + 1}) ${REFERENCE_FACING[view] || view}`)
     .join(', ');
   return (
     `Create a character turnaround model sheet for a game character named ${name}. `

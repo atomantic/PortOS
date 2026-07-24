@@ -94,10 +94,9 @@ describe('buildTurnaroundPrompt (#2979)', () => {
     expect(p).toContain('named Scout');
     expect(p).toContain('a wiry ranger');
     expect(p).toContain(`exactly ${TURNAROUND_VIEWS.length} full-body figures`);
-    expect(p).toContain('1) front view, facing the viewer');
-    expect(p).toContain('2) right-side profile');
-    expect(p).toContain('3) back view');
-    expect(p).toContain('4) left-side profile');
+    // Panels reuse REFERENCE_FACING so the sheet's labels and the derive
+    // prompt that points into it can't drift apart.
+    TURNAROUND_VIEWS.forEach((view, i) => expect(p).toContain(`${i + 1}) ${REFERENCE_FACING[view]}`));
     // The constraint the sheet exists to enforce.
     expect(p).toContain('SAME anatomical side');
     expect(p).toContain('green (#00FF00) background');

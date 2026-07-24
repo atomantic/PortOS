@@ -23,6 +23,10 @@ import CorrectionNote, { correctionPromptPayload } from './CorrectionNote.jsx';
 // import server modules).
 const CHROMA_KEYS = ['#FF00FF', '#00FF00', '#0000FF'];
 
+// Lock confirmations for the two directionless identity artifacts; every other
+// target is a named direction.
+const LOCK_TOAST = { turnaround: 'Turnaround sheet frozen', main: 'Main reference frozen' };
+
 // Thin alias so the existing call sites keep their `className` semantics
 // (sizing on the box) while the checkerboard + pixelation rules live in one
 // place — see SpritePreview. Every reference-set image is click-to-enlarge
@@ -200,9 +204,7 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
       delete next[candidate.path];
       return next;
     });
-    toast.success(target === 'turnaround' ? 'Turnaround sheet frozen'
-      : target === 'main' ? 'Main reference frozen'
-        : `Anchor ${target} locked`);
+    toast.success(LOCK_TOAST[target] || `Anchor ${target} locked`);
     onChanged();
   }, { errorMessage: 'Lock failed' });
 
@@ -381,7 +383,9 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
                 className="flex items-center gap-1.5 px-3 py-1 bg-port-accent hover:bg-blue-600 disabled:opacity-50 text-white rounded text-sm"
               >
                 {pendingJobs.turnaround ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                {pendingJobs.turnaround ? 'Rendering…' : backfilling ? 'Generate from locked main' : 'Generate candidate'}
+                {pendingJobs.turnaround ? 'Rendering…'
+                  : backfilling ? 'Generate from locked main'
+                    : (candidatesByTarget.turnaround || []).length ? 'Regenerate' : 'Generate candidate'}
               </button>
             </div>
             {(candidatesByTarget.turnaround || []).length > 0 && (
@@ -502,7 +506,10 @@ export default function ReferenceWorkflow({ record, reference, renders, correcti
                     />
                     <button
                       onClick={() => generate(anchor.direction)}
-                      disabled={!mode || !!pendingJobs[anchor.direction]}
+                      // Gated on the sheet, matching the server's
+                      // TURNAROUND_NOT_LOCKED 409 and the note above — a
+                      // pre-#2979 character must backfill one first.
+                      disabled={!mode || !turnaroundLocked || !!pendingJobs[anchor.direction]}
                       className="flex items-center gap-1 w-full justify-center px-2 py-1 text-xs bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent disabled:opacity-50"
                     >
                       {pendingJobs[anchor.direction]

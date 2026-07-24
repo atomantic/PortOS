@@ -30,7 +30,7 @@ import { spriteDir, resolveSpriteAssetPath, RUN_DIR_MATCH } from './paths.js';
 import { getRecord } from './records.js';
 import { loadManifest } from './reference.js';
 import {
-  buildMainReferencePrompt, buildAnchorPrompt, buildWalkVideoPrompt, buildTurnaroundPrompt,
+  buildMainReferencePrompt, buildAnchorPrompt, buildWalkVideoPrompt, buildTurnaroundPrompt, TURNAROUND_ID,
 } from './prompts.js';
 import { DEFAULT_CHROMA_KEY } from './chromaKey.js';
 
@@ -41,18 +41,22 @@ const CANDIDATE_RE = /^reference\/candidates\/(.+)\.png$/i;
  * source }` result — the stored literal prompt when captured, otherwise a
  * faithful rebuild from the parameters the sidecar did record.
  */
-function fromCandidateSidecar(sidecar, name, { fromTurnaround = false } = {}) {
+function fromCandidateSidecar(sidecar, name, fromTurnaround = false) {
   if (!sidecar) return null;
   if (typeof sidecar.prompt === 'string' && sidecar.prompt) {
     return { prompt: sidecar.prompt, designPrompt: sidecar.designPrompt || null, source: 'candidate' };
   }
   // Pre-capture candidate — rebuild with the builder that produced it.
-  const prompt = sidecar.target === 'turnaround'
-    ? buildTurnaroundPrompt({ name, designPrompt: sidecar.designPrompt, chromaKey: sidecar.chromaKey })
-    : sidecar.target === 'main'
-      ? buildMainReferencePrompt({ name, designPrompt: sidecar.designPrompt, chromaKey: sidecar.chromaKey, fromTurnaround })
-      : buildAnchorPrompt({ name, direction: sidecar.direction || sidecar.target, chromaKey: sidecar.chromaKey, fromTurnaround });
-  return { prompt, designPrompt: sidecar.designPrompt || null, source: 'candidate-reconstructed' };
+  const { designPrompt, chromaKey } = sidecar;
+  let prompt;
+  if (sidecar.target === TURNAROUND_ID) {
+    prompt = buildTurnaroundPrompt({ name, designPrompt, chromaKey });
+  } else if (sidecar.target === 'main') {
+    prompt = buildMainReferencePrompt({ name, designPrompt, chromaKey, fromTurnaround });
+  } else {
+    prompt = buildAnchorPrompt({ name, direction: sidecar.direction || sidecar.target, chromaKey, fromTurnaround });
+  }
+  return { prompt, designPrompt: designPrompt || null, source: 'candidate-reconstructed' };
 }
 
 async function candidateSidecarFor(recordId, candidateStem) {
@@ -81,23 +85,28 @@ export async function resolveSpriteAssetPrompt(recordId, relPath) {
   if (/^reference\//i.test(relPath)) {
     const manifest = await loadManifest(recordId);
     if (manifest) {
-      // Everything below the sheet was derived from it (#2979), so a rebuild
-      // must use the turnaround-aware copy or it won't match what was sent.
-      const derived = { fromTurnaround: manifest.turnaround?.locked === true };
       const turnaround = manifest.turnaround;
-      // `manifest.chromaKey` is the key FROZEN at a lock — which, when
-      // auto-selected (user didn't pin), differs from the key the artifact that
-      // TRIGGERED that selection was generated against: it was rendered before
-      // the key existed, so its prompt embedded the default. Exactly one lock
-      // per character freezes the key — the turnaround's on a turnaround-first
-      // record, the main's on a legacy one (including a backfilled sheet, which
-      // locks later and inherits) — so compare lock times to find it.
-      const wasFreezer = (artifact) => {
-        const other = artifact === turnaround ? manifest.mainReference : turnaround;
-        return !other?.lockedAt || !artifact?.lockedAt || artifact.lockedAt <= other.lockedAt;
-      };
-      const renderKey = (artifact) => (
-        manifest.chromaKeyAutoSelected && wasFreezer(artifact) ? DEFAULT_CHROMA_KEY : manifest.chromaKey
+      const main = manifest.mainReference;
+      // Both rebuild inputs below turn on the order the two identity artifacts
+      // were locked in, so express that once. `lockedBefore(a, b)` is true when
+      // `a` was frozen first (or `b` was never frozen at all).
+      const lockedBefore = (a, b) => !b?.lockedAt || !a?.lockedAt || a.lockedAt <= b.lockedAt;
+      // 1. Was this artifact derived FROM the sheet? Only if the sheet was
+      //    already frozen when it locked — an anchor frozen before a legacy
+      //    record backfilled its sheet was drawn from the main, so rebuilding
+      //    it with the sheet-aware copy would misstate what was attached.
+      const fromTurnaround = (artifact) => (
+        turnaround?.locked === true && !lockedBefore(artifact, turnaround)
+      );
+      // 2. `manifest.chromaKey` is the key FROZEN at a lock — which, when
+      //    auto-selected (user didn't pin), differs from the key the artifact
+      //    that TRIGGERED that selection was generated against: it was rendered
+      //    before the key existed, so its prompt embedded the default. Exactly
+      //    one lock per character freezes the key — the turnaround's on a
+      //    turnaround-first record, the main's on a legacy one (a backfilled
+      //    sheet locks later and inherits).
+      const renderKey = (artifact, other) => (
+        manifest.chromaKeyAutoSelected && lockedBefore(artifact, other) ? DEFAULT_CHROMA_KEY : manifest.chromaKey
       );
       if (turnaround?.path === relPath) {
         const stem = candidateStem(turnaround.lockedFrom);
@@ -106,25 +115,24 @@ export async function resolveSpriteAssetPrompt(recordId, relPath) {
           prompt: buildTurnaroundPrompt({
             name,
             designPrompt: manifest.designPrompt,
-            chromaKey: renderKey(turnaround),
+            chromaKey: renderKey(turnaround, main),
           }),
           designPrompt: manifest.designPrompt || null,
           source: 'reference-turnaround',
         };
       }
-      const main = manifest.mainReference;
       if (main?.path === relPath) {
         // Prefer the frozen candidate's literal prompt; fall back to a rebuild
         // from the manifest's own recorded design prompt + key.
         const stem = candidateStem(main.lockedFrom);
-        const fromCandidate = stem ? fromCandidateSidecar(await candidateSidecarFor(recordId, stem), name, derived) : null;
+        const fromCandidate = stem ? fromCandidateSidecar(await candidateSidecarFor(recordId, stem), name, fromTurnaround(main)) : null;
         // Fallback (source candidate sidecar gone): rebuild from the manifest.
         return fromCandidate || {
           prompt: buildMainReferencePrompt({
             name,
             designPrompt: manifest.designPrompt,
-            chromaKey: renderKey(main),
-            ...derived,
+            chromaKey: renderKey(main, turnaround),
+            fromTurnaround: fromTurnaround(main),
           }),
           designPrompt: manifest.designPrompt || null,
           source: 'reference-main',
@@ -133,11 +141,11 @@ export async function resolveSpriteAssetPrompt(recordId, relPath) {
       const anchor = (manifest.anchors || []).find((a) => a.path === relPath);
       if (anchor) {
         const stem = candidateStem(anchor.lockedFrom);
-        const fromCandidate = stem ? fromCandidateSidecar(await candidateSidecarFor(recordId, stem), name, derived) : null;
+        const fromCandidate = stem ? fromCandidateSidecar(await candidateSidecarFor(recordId, stem), name, fromTurnaround(anchor)) : null;
         return fromCandidate || {
           // An anchor always locks after the key is frozen, so the frozen key
           // is what its prompt embedded — no default-key caveat here.
-          prompt: buildAnchorPrompt({ name, direction: anchor.direction, chromaKey: manifest.chromaKey, ...derived }),
+          prompt: buildAnchorPrompt({ name, direction: anchor.direction, chromaKey: manifest.chromaKey, fromTurnaround: fromTurnaround(anchor) }),
           designPrompt: null,
           source: 'reference-anchor',
         };

@@ -134,8 +134,8 @@ describe('startReferenceGeneration', () => {
     expect(call.params.prompt).toContain('a wiry ranger');
     expect(call.params.prompt).toContain('magenta (#FF00FF)');
     // The panels, in order, and the constraint the sheet exists to enforce.
-    expect(call.params.prompt).toContain('1) front view');
-    expect(call.params.prompt).toContain('3) back view');
+    expect(call.params.prompt).toContain('1) facing the viewer (front)');
+    expect(call.params.prompt).toContain('3) facing directly away from the viewer');
     expect(call.params.prompt).toContain('SAME anatomical side');
     expect(call.params.spriteRef).toMatchObject({
       recordId: id, target: 'turnaround', anchorId: 'turnaround', chromaKey: '#FF00FF',
