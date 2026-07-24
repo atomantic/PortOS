@@ -4,7 +4,7 @@
 // forkSpriteRecord → the server creates the record and queues the main render;
 // on success we hand the new record back so the page can navigate to it.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { GitFork, RefreshCw, X } from 'lucide-react';
 import Modal from '../ui/Modal';
 import toast from '../ui/Toast';
@@ -18,6 +18,13 @@ export default function ForkSpriteModal({ open, onClose, source, referencePath, 
   const [designPrompt, setDesignPrompt] = useState('');
   const [forkMode, setForkMode] = useState(mode || '');
   const [strength, setStrength] = useState(0.65);
+
+  // The page's image `mode` can resolve AFTER this modal mounts (settings fetch
+  // lands after the locked-main detail renders, and the modal is mounted
+  // eagerly while `mainLocked`). Backfill an empty selection when it arrives so
+  // the Backend select — and the canSubmit gate that requires it — aren't
+  // stuck empty; a user's explicit pick (non-empty) is preserved.
+  useEffect(() => { setForkMode((m) => m || mode || ''); }, [mode]);
 
   const hasBackends = Array.isArray(backends) && backends.length > 0;
 
