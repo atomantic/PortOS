@@ -179,6 +179,31 @@ function normalizeStripPreview(recordId, run) {
   return { ...run, stripPreview: { ...run.stripPreview, stripPath } };
 }
 
+// A candidate/approved run's stripPreview names a packed strip PNG on disk. If
+// that file has since gone missing — a botched migration dropped it, a manual
+// cleanup nuked it — the run record still advertises the path, so the native
+// render path (unlike loadRedrawRun, which returns null on a missing strip)
+// hands the client a healthy-looking run and StripLoop paints a blank
+// background-image with no signal that anything is wrong. That's exactly how the
+// pioneer north/west strips vanished silently. Surface it as an error at read
+// time — never persisted — so the card shows the missing-strip message + a
+// regenerate affordance instead of a mystery blank, and drop the dangling
+// stripPath so StripLoop and the trim button don't try to render it. A run with
+// no stripPreview (rendering/postprocessing/pre-package) is untouched.
+async function normalizeMissingStrip(recordId, run) {
+  const stripPath = run?.stripPreview?.stripPath;
+  if (!stripPath) return run;
+  if (await pathExists(join(spriteDir(recordId), stripPath))) return run;
+  const { stripPath: _dropped, ...stripPreviewRest } = run.stripPreview;
+  return {
+    ...run,
+    status: 'error',
+    stripMissing: true,
+    postprocessError: 'Packed walk strip is missing on disk — regenerate this direction to repack it.',
+    stripPreview: stripPreviewRest,
+  };
+}
+
 // PortOS stamps `id` on every run record it writes; imported source-pipeline
 // records don't carry one at all (see importer.test.js's fixtures). The run
 // DIRECTORY is the run id under both layouts, so fall back to it. Two
@@ -347,9 +372,11 @@ export async function getWalkState(recordId) {
     // run that somehow exists under both scan roots surfaces once.
     .filter((run, i, all) => !resolvedRunIds.has(run.id) && all.findIndex((r) => r.id === run.id) === i);
 
-  const allRuns = [...entryRuns, ...scannedRuns]
-    .map(normalizeStaleRendering)
-    .sort((a, b) => runCreatedAtMs(b.createdAt) - runCreatedAtMs(a.createdAt));
+  const allRuns = (await Promise.all(
+    [...entryRuns, ...scannedRuns]
+      .map(normalizeStaleRendering)
+      .map((run) => normalizeMissingStrip(recordId, run)),
+  )).sort((a, b) => runCreatedAtMs(b.createdAt) - runCreatedAtMs(a.createdAt));
   // Stamp the imported flag so the client reads intent (`walkSet.imported`)
   // instead of re-deriving the source-pipeline path convention itself.
   const stampedWalkSet = walkSet ? { ...walkSet, imported: isImportedWalkSet(walkSet) } : null;

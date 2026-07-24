@@ -49,6 +49,30 @@ function stripGeometry(stripPreview) {
 function StripLoop({ recordId, stripPreview }) {
   const { frameCount, fps, height } = stripGeometry(stripPreview);
   const scrub = CELL_PX * frameCount;
+  const url = spriteAssetUrl(recordId, stripPreview.stripPath);
+  // The strip paints as a CSS background-image, which fires no onError — a
+  // missing/404 file just renders blank. The server now surfaces a missing
+  // strip as an error run (dropping stripPath so we never get here), but keep a
+  // client-side preload probe as defense-in-depth: a strip that fails to load
+  // for any other reason shows an explicit placeholder instead of a silent gap.
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    setFailed(false);
+    const img = new Image();
+    img.onerror = () => setFailed(true);
+    img.src = url;
+    return () => { img.onerror = null; };
+  }, [url]);
+  if (failed) {
+    return (
+      <div
+        className="border border-port-error/60 rounded flex items-center justify-center text-[9px] leading-tight text-port-error text-center px-1"
+        style={{ width: CELL_PX, height }}
+      >
+        strip missing
+      </div>
+    );
+  }
   return (
     // The loop paints the strip as its OWN background-image, so it can't also
     // carry the checkerboard — that goes on a wrapper sized to match, and shows
@@ -67,7 +91,7 @@ function StripLoop({ recordId, stripPreview }) {
         style={{
           // Quoted: encodeURIComponent leaves `(`/`)` intact, and an externally
           // authored redraw filename containing one would end the url() token early.
-          backgroundImage: `url("${spriteAssetUrl(recordId, stripPreview.stripPath)}")`,
+          backgroundImage: `url("${url}")`,
           backgroundSize: `${scrub}px ${height}px`,
           ...PIXELATED,
           '--sprite-walk-loop-end': `-${scrub}px`,
