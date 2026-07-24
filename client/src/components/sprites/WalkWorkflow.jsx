@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Check, Film, RefreshCw, Scissors, Lock, Unlock, Terminal } from 'lucide-react';
+import {
+  Check, Film, RefreshCw, Scissors, Lock, Unlock, Terminal, Gauge, RotateCcw,
+} from 'lucide-react';
 import toast from '../ui/Toast';
-import { approveSpriteWalk, postprocessSpriteWalk, unlockSpriteWalk } from '../../services/apiSprites.js';
+import {
+  approveSpriteWalk, postprocessSpriteWalk, unlockSpriteWalk, reopenSpriteWalk,
+} from '../../services/apiSprites.js';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import { spriteAssetUrl, checkerboardStyle, PIXELATED } from './spriteAssets.js';
@@ -20,14 +24,24 @@ const CELL_PX = 96; // preview cell size — the strip animates at 96px/frame
 // 8, an imported redraw cycle can pack 12 — #2924), so the single keyframe
 // rule reads it from a per-preview custom property instead of hardcoding 8.
 const LOOP_KEYFRAMES = '@keyframes sprite-walk-loop { to { background-position-x: var(--sprite-walk-loop-end) } }';
-// Grok image_to_video clip lengths (videoGen/grok.js GROK_VIDEO_DURATIONS).
-// Exported so the Sprites page can seed the lifted `duration` state with the
-// same default — the asset collection's Regenerate must honor whatever the
-// user picked here rather than silently falling back to the server default.
-// A looping walk cycle only needs one gait cycle (~8 frames), so short clips
-// render much faster; the default is deliberately short.
-export const WALK_DURATIONS = [1, 2, 3, 6, 10];
-export const WALK_DEFAULT_DURATION = 2;
+// Grok image_to_video clip lengths. In practice grok's tool only honors its
+// documented 6s/10s options and clamps anything shorter to ~6s — so the picker
+// offers just those two rather than lying about 1/2/3s. A 6s clip yields plenty
+// of source frames for the packer; the CYCLE'S look (walk vs run) is set by the
+// frame-count + speed controls below, not the clip length. Exported so the
+// Sprites page can seed the lifted `duration` state with the same default.
+export const WALK_DURATIONS = [6, 10];
+export const WALK_DEFAULT_DURATION = 6;
+
+// Deterministic-postprocess authoring knobs (mirror walkPostprocess.js
+// WALK_DEFAULT_*/WALK_MIN/MAX_*). Frame count = how many frames the packed cycle
+// holds (more = smoother); fps = playback speed (lower = slower, more
+// deliberate). Cycle duration = frameCount / fps seconds. Defaults pack a
+// fuller, slower cycle (12 frames @ 10fps = 1.2s) so a walk reads as a walk.
+export const WALK_DEFAULT_FRAME_COUNT = 12;
+export const WALK_DEFAULT_FPS = 10;
+export const WALK_FRAME_COUNT_RANGE = { min: 6, max: 16 };
+export const WALK_FPS_RANGE = { min: 4, max: 24 };
 
 /**
  * Strip geometry for a preview/trim UI, defaulting to the native 8-phase
@@ -104,9 +118,11 @@ function StripLoop({ recordId, stripPreview }) {
 
 function DirectionCard({
   recordId, direction, anchorLocked, run, approved, finalized, pending,
-  onOpenTrimmer, onGenerate, onApprove, onRetry,
+  onOpenTrimmer, onGenerate, onApprove, onRetry, onReprocess, onReopen,
+  reprocessing, cycleLabel,
 }) {
   const [confirming, setConfirming] = useState(false);
+  const [reopening, setReopening] = useState(false);
   const candidate = run?.status === 'candidate' ? run : null;
   // grok renders as an observable TUI session while status is 'rendering'; the
   // deterministic packaging follows as 'postprocessing'. Both block a second
@@ -206,6 +222,21 @@ function DirectionCard({
               ? <><RefreshCw className="w-3 h-3 animate-spin" /> {run?.status === 'postprocessing' ? 'Packaging…' : 'Rendering…'}</>
               : <><Film className="w-3 h-3" /> {candidate ? 'Regenerate' : 'Generate walk'}</>}
           </button>
+          {/* Re-derive the loop from the clip ALREADY on disk at the current
+              frame-count/speed — no grok call, no new paid render. This is the
+              "make a better/slower cycle from what we have" action. */}
+          {candidate && (
+            <button
+              onClick={() => onReprocess(run)}
+              disabled={busy || reprocessing}
+              title={`Rebuild this loop from the existing clip at ${cycleLabel} (no regeneration)`}
+              className="flex items-center gap-1 w-full justify-center px-2 py-0.5 text-xs bg-port-bg border border-port-border rounded text-gray-300 hover:border-port-accent disabled:opacity-50"
+            >
+              {reprocessing
+                ? <><RefreshCw className="w-3 h-3 animate-spin" /> Reprocessing…</>
+                : <><Gauge className="w-3 h-3" /> Reprocess · {cycleLabel}</>}
+            </button>
+          )}
           {candidate && (
             confirming ? (
               <div className="flex items-center gap-1 text-xs">
@@ -220,6 +251,33 @@ function DirectionCard({
             )
           )}
         </div>
+      )}
+
+      {/* Re-open just THIS approved direction so it can be regenerated /
+          reprocessed / re-approved — for when one walk is too fast or wrong and
+          the rest are fine. Un-freezes a finalized set but keeps the other seven
+          approvals; the rendered clip is preserved, so re-approval is one click.
+          Inline confirm (not a hidden two-click arm) per the repo's UX. */}
+      {approved && (
+        reopening ? (
+          <ConfirmButtonPair
+            prompt={finalized ? 'Reopen (un-freezes set)?' : 'Reopen this direction?'}
+            confirmText="Reopen"
+            confirmIcon={RotateCcw}
+            tone="warning"
+            ariaLabel={`Confirm reopen ${direction}`}
+            onConfirm={() => { setReopening(false); onReopen(direction); }}
+            onCancel={() => setReopening(false)}
+          />
+        ) : (
+          <button
+            onClick={() => setReopening(true)}
+            title="Re-open this direction to regenerate or reprocess it (rendered clip is kept)"
+            className="flex items-center gap-1 w-full justify-center px-2 py-0.5 text-xs bg-port-bg border border-port-border rounded text-gray-400 hover:border-port-accent hover:text-white"
+          >
+            <RotateCcw className="w-3 h-3" /> Reopen
+          </button>
+        )
       )}
 
       {/* The single trim UI now lives in the Loop Trimmer workspace (#2933);
@@ -241,6 +299,8 @@ function DirectionCard({
 
 export default function WalkWorkflow({
   record, reference, walk, renders, duration, onDurationChange, onGenerate,
+  frameCount = WALK_DEFAULT_FRAME_COUNT, fps = WALK_DEFAULT_FPS,
+  onFrameCountChange = () => {}, onFpsChange = () => {},
   onOpenTrimmer = () => {}, onChanged,
 }) {
   const recordId = record.id;
@@ -310,11 +370,34 @@ export default function WalkWorkflow({
     onChanged();
   }, { errorMessage: 'Approve failed' });
 
+  // Retry a wedged/errored run — re-runs the packer at the CURRENT frame-count
+  // and speed so a recovery also picks up the user's chosen cycle look.
   const [retryPostprocess] = useAsyncAction(async (run) => {
-    await postprocessSpriteWalk(recordId, { runId: run.id }, { silent: true });
+    await postprocessSpriteWalk(recordId, { runId: run.id, frameCount, fps }, { silent: true });
     toast.success('Postprocess complete');
     onChanged();
   }, { errorMessage: 'Postprocess failed' });
+
+  // Reprocess a candidate from its ON-DISK clip at the current frame-count/speed
+  // (no grok call). Track the in-flight direction so only that card spins.
+  const [reprocessingDir, setReprocessingDir] = useState(null);
+  const [reprocess] = useAsyncAction(async (run) => {
+    setReprocessingDir(run.direction);
+    try {
+      await postprocessSpriteWalk(recordId, { runId: run.id, frameCount, fps }, { silent: true });
+      toast.success(`Walk ${run.direction} reprocessed · ${frameCount}f @ ${fps}fps`);
+      onChanged();
+    } finally {
+      setReprocessingDir(null);
+    }
+  }, { errorMessage: 'Reprocess failed' });
+
+  // Re-open ONE approved direction (finer-grained than the set-wide Unlock).
+  const [reopen] = useAsyncAction(async (direction) => {
+    await reopenSpriteWalk(recordId, { direction }, { silent: true });
+    toast.success(`Walk ${direction} reopened — regenerate or reprocess it`);
+    onChanged();
+  }, { errorMessage: 'Reopen failed' });
 
   // Unlock (un-freeze) the finalized walk set. Irreversible-ish (it re-opens
   // every direction), so it's gated behind an inline confirm per the repo's
@@ -333,6 +416,17 @@ export default function WalkWorkflow({
 
   const approvedCount = Object.values(selection?.directions || {})
     .filter((d) => d?.status === 'approved').length;
+
+  const range = (min, max, step = 2) => {
+    const out = [];
+    for (let v = min; v <= max; v += step) out.push(v);
+    if (out[out.length - 1] !== max) out.push(max);
+    return out;
+  };
+  const frameCountOptions = range(WALK_FRAME_COUNT_RANGE.min, WALK_FRAME_COUNT_RANGE.max, 1);
+  const fpsOptions = range(WALK_FPS_RANGE.min, WALK_FPS_RANGE.max, 2);
+  const cycleSeconds = (frameCount / fps).toFixed(2);
+  const cycleLabel = `${frameCount}f @ ${fps}fps`;
 
   return (
     <div className="bg-port-card border border-port-border rounded-lg p-4 space-y-3">
@@ -376,16 +470,41 @@ export default function WalkWorkflow({
             )}
           </div>
         ) : (
-          <label className="flex items-center gap-2 text-xs text-gray-400">
-            Clip length
-            <select
-              value={duration}
-              onChange={(e) => onDurationChange(Number(e.target.value))}
-              className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
-            >
-              {WALK_DURATIONS.map((d) => <option key={d} value={d}>{d}s</option>)}
-            </select>
-          </label>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+            <label className="flex items-center gap-1.5 text-xs text-gray-400">
+              Frames
+              <select
+                value={frameCount}
+                onChange={(e) => onFrameCountChange(Number(e.target.value))}
+                className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
+              >
+                {frameCountOptions.map((n) => <option key={n} value={n}>{n}</option>)}
+              </select>
+            </label>
+            <label className="flex items-center gap-1.5 text-xs text-gray-400">
+              <span className="flex items-center gap-1"><Gauge className="w-3 h-3" /> Speed</span>
+              <select
+                value={fps}
+                onChange={(e) => onFpsChange(Number(e.target.value))}
+                className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
+              >
+                {fpsOptions.map((n) => <option key={n} value={n}>{n} fps</option>)}
+              </select>
+            </label>
+            <label className="flex items-center gap-1.5 text-xs text-gray-400" title="grok renders 6s or 10s clips; length only affects how much source footage the packer has to choose from">
+              Clip
+              <select
+                value={duration}
+                onChange={(e) => onDurationChange(Number(e.target.value))}
+                className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white"
+              >
+                {WALK_DURATIONS.map((d) => <option key={d} value={d}>{d}s</option>)}
+              </select>
+            </label>
+            <span className="text-[11px] text-gray-500 tabular-nums" title="cycle duration = frames ÷ speed">
+              {cycleSeconds}s / cycle
+            </span>
+          </div>
         )}
       </div>
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -403,6 +522,10 @@ export default function WalkWorkflow({
             onGenerate={onGenerate}
             onApprove={approve}
             onRetry={retryPostprocess}
+            onReprocess={reprocess}
+            onReopen={reopen}
+            reprocessing={reprocessingDir === anchor.direction}
+            cycleLabel={cycleLabel}
           />
         ))}
       </div>
