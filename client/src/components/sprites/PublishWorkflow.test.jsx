@@ -107,6 +107,18 @@ describe('PublishWorkflow runtime contract', () => {
     expect(binding.runtimeContract).toEqual({ walkFrameCount: 12, cellSize: 96, columnCount: 13 });
   });
 
+  it('lets an unbind proceed even while a saved contract is displayed', async () => {
+    renderWorkflow(savedContractBinding);
+
+    // Unbinding (app → "— none —") must not be blocked by the seeded, untouched
+    // contract — the binding:null it sends clears the contract server-side.
+    fireEvent.change(screen.getByLabelText('Managed app'), { target: { value: '' } });
+    expect(screen.getByText('Save binding')).not.toBeDisabled();
+    await act(async () => { fireEvent.click(screen.getByText('Save binding')); });
+
+    expect(lastBindingArg()).toBeNull();
+  });
+
   it('blocks a contract with no app/destination and explains why', () => {
     renderWorkflow(null, atlasWith());
 
