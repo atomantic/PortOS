@@ -132,7 +132,7 @@ export default function MediaHistory() {
   // the cleaned image to the top of the local list) is page-specific —
   // wired through `onCleanComplete` so the cleaned record lands in `items`
   // without a full gallery refetch.
-  const { handleRemix, handleSendToImage, handleSendToVideo, handleContinue, handleClean, handleRemoveWatermark } = useMediaPreviewActions({
+  const { handleRemix, handleSendToImage, handleSendToVideo, handleSendTo3d, handleContinue, handleClean, handleRemoveWatermark } = useMediaPreviewActions({
     onCleanComplete: (cleaned) => {
       const normalized = normalizeImage(cleaned);
       setItems((prev) => [normalized, ...prev.filter((x) => x.key !== normalized.key)]);
@@ -155,12 +155,6 @@ export default function MediaHistory() {
     }
   };
 
-  // "Send to 3D" opens the image-to-3D workspace (/media/3d) with this render as
-  // the source image — deep-linked via ?image= (URL is the source of truth).
-  const handleSendToThreejs = (item) => {
-    if (item?.kind !== 'image' || !item.filename) return;
-    navigate(`/media/3d?image=${encodeURIComponent(item.filename)}`);
-  };
 
   return (
     <div className="space-y-4">
@@ -262,7 +256,7 @@ export default function MediaHistory() {
                 onRemix={!stitchMode ? handleRemix : undefined}
                 onSendToImage={!stitchMode ? handleSendToImage : undefined}
                 onSendToVideo={!stitchMode ? handleSendToVideo : undefined}
-                onSendToThreejs={!stitchMode ? handleSendToThreejs : undefined}
+                onSendTo3d={!stitchMode ? handleSendTo3d : undefined}
                 onContinue={!stitchMode ? handleContinue : undefined}
                 onUpscale={!stitchMode && it.kind === 'video' ? handleUpscale : undefined}
                 onDelete={!stitchMode ? handleDelete : undefined}
@@ -288,7 +282,7 @@ export default function MediaHistory() {
         onRemix={handleRemix}
         onSendToImage={handleSendToImage}
         onSendToVideo={handleSendToVideo}
-        onSendToThreejs={handleSendToThreejs}
+        onSendTo3d={handleSendTo3d}
         onContinue={handleContinue}
         onClean={(item) => handleClean(item?.raw)}
         onRemoveWatermark={(item) => handleRemoveWatermark(item?.raw)}

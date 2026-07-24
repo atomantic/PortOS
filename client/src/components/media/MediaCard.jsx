@@ -18,7 +18,7 @@ export default function MediaCard({
   onRemix,
   onSendToImage,
   onSendToVideo,
-  onSendToThreejs,
+  onSendTo3d,
   onContinue,
   onUpscale,
   onDelete,
@@ -169,10 +169,10 @@ export default function MediaCard({
                 <Film className="w-3 h-3" />
               </button>
             )}
-            {!isVideo && onSendToThreejs && (
+            {!isVideo && onSendTo3d && (
               <button
                 type="button"
-                onClick={() => onSendToThreejs(item)}
+                onClick={() => onSendTo3d(item)}
                 className="shrink-0 px-1.5 py-1 bg-purple-600/20 hover:bg-purple-600/40 text-purple-300 text-[10px] rounded flex items-center justify-center"
                 title="Build a procedural Three.js model"
                 aria-label="Send to Three.js Models"

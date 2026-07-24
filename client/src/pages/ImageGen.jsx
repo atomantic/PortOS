@@ -1051,7 +1051,7 @@ export default function ImageGen() {
 
   // "Send to 3D" opens the image-to-3D workspace (/media/3d) with this render as
   // the source image — deep-linked via ?image= (URL is the source of truth).
-  const handleSendToThreejs = (img) => {
+  const handleSendTo3d = (img) => {
     if (!img?.filename) return;
     navigate(`/media/3d?image=${encodeURIComponent(img.filename)}`);
   };
@@ -1443,7 +1443,7 @@ export default function ImageGen() {
                     onRemix={() => handleRemix(img)}
                     onSendToImage={() => handleSendToImage(img)}
                     onSendToVideo={() => sendToVideo(img)}
-                    onSendToThreejs={() => handleSendToThreejs(img)}
+                    onSendTo3d={() => handleSendTo3d(img)}
                     onDelete={() => handleDelete(img.filename)}
                     onToggleHidden={() => handleToggleHidden(item)}
                     {...getCardProps(item.key)}
@@ -1477,7 +1477,7 @@ export default function ImageGen() {
                     onRemix={() => handleRemix(img)}
                     onSendToImage={() => handleSendToImage(img)}
                     onSendToVideo={() => sendToVideo(img)}
-                    onSendToThreejs={() => handleSendToThreejs(img)}
+                    onSendTo3d={() => handleSendTo3d(img)}
                     onDelete={() => handleDelete(img.filename)}
                     onToggleHidden={() => handleToggleHidden(item)}
                     {...getCardProps(item.key)}
@@ -1498,7 +1498,7 @@ export default function ImageGen() {
         onRemix={(item) => item?.raw && handleRemix(item.raw)}
         onSendToImage={(item) => item?.raw?.filename && handleSendToImage(item.raw)}
         onSendToVideo={(item) => item?.raw?.filename && sendToVideo(item.raw)}
-        onSendToThreejs={(item) => item?.raw?.filename && handleSendToThreejs(item.raw)}
+        onSendTo3d={(item) => item?.raw?.filename && handleSendTo3d(item.raw)}
         onClean={(item) => handleClean(item?.raw)}
         onRegenerate={(item, opts) => handleRegenerate(item?.raw, opts)}
         onRemoveWatermark={(item) => handleRemoveWatermark(item?.raw)}

@@ -1,4 +1,4 @@
-import { Suspense, useEffect } from 'react';
+import { Suspense } from 'react';
 import { Canvas } from '@react-three/fiber';
 import { Bounds, OrbitControls, useGLTF } from '@react-three/drei';
 import { Download, Rotate3d } from 'lucide-react';
@@ -18,10 +18,11 @@ function filenameFromSrc(src) {
 }
 
 function GlbModel({ src }) {
+  // `useGLTF` keys drei's global cache on the URL, so a new generation (a new
+  // `src`) parses fresh while revisiting the same mesh reuses the cache — no
+  // manual cache-clear needed (clearing on unmount would force a full multi-MB
+  // re-fetch every time the viewer remounts for the same URL).
   const { scene } = useGLTF(src);
-  // drei caches loaded GLTFs globally; clear this entry on unmount/src-change so a
-  // re-render after a new generation doesn't show the stale cached mesh.
-  useEffect(() => () => useGLTF.clear(src), [src]);
   return <primitive object={scene} />;
 }
 
