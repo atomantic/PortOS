@@ -40,6 +40,16 @@ vi.mock('../services/sprites/walk.js', () => ({
     walkSet: null,
     walkTarget: { track: 'walk', frameCount: 14, fps: 8, source: 'set' },
   })),
+  getWalkSourceFrames: vi.fn(async () => ({
+    available: true,
+    reason: null,
+    frames: [{ index: 1, path: 'runs/walk-east-0a1b2c3d/generated/raw/source-0001.png' }],
+    cycle: { windowStart: 2, windowLength: 12, windowStartFrame: 5, windowEndFrame: 17 },
+    selectedSourceIndices: [5, 7],
+    current: { frameCount: 8, fps: 12 },
+    editable: true,
+    lockReason: null,
+  })),
 }));
 
 vi.mock('../services/sprites/walkTrims.js', () => ({
@@ -453,9 +463,17 @@ describe('sprites routes', () => {
     expect(r.status).toBe(200);
     expect(walk.approveWalkDirection).toHaveBeenCalledWith('pioneer', { direction: 'east', runId: 'walk-east-0a1b2c3d' });
 
+    // An imported run's id is its source-named directory — approve has been
+    // layout-aware since #2993, so the reopen → re-derive → re-approve flow
+    // must survive its last click.
+    const imported = await request(app).post('/api/sprites/pioneer/walk/approve')
+      .send({ direction: 'east', runId: 'run-3' });
+    expect(imported.status).toBe(200);
+    expect(walk.approveWalkDirection).toHaveBeenCalledWith('pioneer', { direction: 'east', runId: 'run-3' });
+
     expect((await request(app).post('/api/sprites/pioneer/walk/approve')
       .send({ direction: 'east', runId: '../escape' })).status).toBe(400);
-    expect(walk.approveWalkDirection).toHaveBeenCalledOnce();
+    expect(walk.approveWalkDirection).toHaveBeenCalledTimes(2);
   });
 
   it('POST /:id/walk/postprocess delegates the rerun (with optional reprocess count/fps)', async () => {
@@ -471,6 +489,54 @@ describe('sprites routes', () => {
     expect(walk.rerunWalkPostprocess).toHaveBeenCalledWith('pioneer', { runId: 'walk-east-0a1b2c3d', frameCount: 16, fps: 6 });
     expect((await request(app).post('/api/sprites/pioneer/walk/postprocess')
       .send({ runId: 'walk-east-0a1b2c3d', frameCount: 3 })).status).toBe(400);
+  });
+
+  it('GET /:id/walk/runs/:runId/source-frames delegates with the decoded run id', async () => {
+    const r = await request(app).get('/api/sprites/pioneer/walk/runs/walk-east-0a1b2c3d/source-frames');
+    expect(r.status).toBe(200);
+    expect(r.body.frames).toHaveLength(1);
+    expect(walk.getWalkSourceFrames).toHaveBeenCalledWith('pioneer', 'walk-east-0a1b2c3d');
+
+    // An imported run's id is its source-named directory, not the native
+    // `walk-<dir>-<hex>` shape — the whole population this endpoint exists for.
+    walk.getWalkSourceFrames.mockClear();
+    expect((await request(app).get('/api/sprites/pioneer/walk/runs/run-3/source-frames')).status).toBe(200);
+    expect(walk.getWalkSourceFrames).toHaveBeenCalledWith('pioneer', 'run-3');
+
+    // Traversal is refused before the service is reached (%2E%2E%2F = `../`).
+    walk.getWalkSourceFrames.mockClear();
+    expect((await request(app).get('/api/sprites/pioneer/walk/runs/%2E%2E%2Fescape/source-frames')).status).toBe(400);
+    expect(walk.getWalkSourceFrames).not.toHaveBeenCalled();
+  });
+
+  // The GET must never extract — the importer leaves every imported run without
+  // `raw/`, so a side-effecting read would spawn ffmpeg per direction on render.
+  it('only asks the service to extract from the explicit extract endpoint', async () => {
+    await request(app).get('/api/sprites/pioneer/walk/runs/walk-east-0a1b2c3d/source-frames');
+    expect(walk.getWalkSourceFrames).toHaveBeenCalledWith('pioneer', 'walk-east-0a1b2c3d');
+
+    walk.getWalkSourceFrames.mockClear();
+    const r = await request(app).post('/api/sprites/pioneer/walk/runs/run-3/source-frames/extract');
+    expect(r.status).toBe(200);
+    expect(walk.getWalkSourceFrames).toHaveBeenCalledWith('pioneer', 'run-3', { extract: true });
+
+    walk.getWalkSourceFrames.mockClear();
+    expect((await request(app).post('/api/sprites/pioneer/walk/runs/%2E%2E%2Fescape/source-frames/extract')).status).toBe(400);
+    expect(walk.getWalkSourceFrames).not.toHaveBeenCalled();
+  });
+
+  // Since #2993 the reprocess re-derives an IMPORTED run in place, so the route
+  // has to accept an imported run id — the strict native shape made the one path
+  // back onto the set's target unreachable for exactly those runs.
+  it('POST /:id/walk/postprocess accepts an imported run id but still refuses traversal', async () => {
+    walk.rerunWalkPostprocess.mockClear();
+    const r = await request(app).post('/api/sprites/pioneer/walk/postprocess').send({ runId: 'run-3' });
+    expect(r.status).toBe(200);
+    expect(walk.rerunWalkPostprocess).toHaveBeenCalledWith('pioneer', { runId: 'run-3' });
+
+    expect((await request(app).post('/api/sprites/pioneer/walk/postprocess')
+      .send({ runId: '../escape' })).status).toBe(400);
+    expect(walk.rerunWalkPostprocess).toHaveBeenCalledOnce();
   });
 
   it('POST /:id/walk/trim validates and 201s', async () => {

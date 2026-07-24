@@ -128,6 +128,25 @@ export const reopenSpriteWalk = (id, body, options = {}) => request(`/sprites/${
   method: 'POST', body: JSON.stringify(body), ...options,
 });
 
+// Every frame one run's source video produced (#2980): `{ available, reason,
+// frames, cycle, selectedSourceIndices, cycleProvenance, current, target,
+// editable, lockReason }`. Strictly read-only. `available: false` carries a
+// reason ('no-source-video' | 'raw-frames-cleaned' | 'run-not-packaged') rather
+// than an empty list, so "nothing to show" never reads like "no frames".
+export const getSpriteWalkSourceFrames = (id, runId, options = {}) => request(
+  `/sprites/${encodeURIComponent(id)}/walk/runs/${encodeURIComponent(runId)}/source-frames`,
+  options,
+);
+
+// Re-extract a run's raw frames from its on-disk clip (the 'raw-frames-cleaned'
+// remedy) and return the same payload. Deliberately a separate, user-triggered
+// call: the read above must not spawn ffmpeg for every imported run just because
+// the trimmer rendered.
+export const extractSpriteWalkSourceFrames = (id, runId, options = {}) => request(
+  `/sprites/${encodeURIComponent(id)}/walk/runs/${encodeURIComponent(runId)}/source-frames/extract`,
+  { method: 'POST', ...options },
+);
+
 // Save a non-destructive loop trim (strip + GIF + manifest, versioned).
 export const trimSpriteWalk = (id, body, options = {}) => request(`/sprites/${encodeURIComponent(id)}/walk/trim`, {
   method: 'POST', body: JSON.stringify(body), ...options,

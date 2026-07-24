@@ -9,6 +9,7 @@ import { trimSpriteWalk } from '../../services/apiSprites.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import { spriteAssetUrl, checkerboardStyle, PIXELATED } from './spriteAssets.js';
 import SpritePreview from './SpritePreview.jsx';
+import WalkSourceFrames from './WalkSourceFrames.jsx';
 import {
   buildTrimmerSources, allColumns, invertColumns, phaseLabelFor, sanitizeTrimSlug,
 } from '../../lib/spriteTrimmer.js';
@@ -140,7 +141,16 @@ export default function LoopTrimmer({
     image.onload = () => setImg(image);
     image.src = spriteAssetUrl(recordId, source.stripPath);
     return () => { image.onload = null; };
-  }, [source?.id, source?.stripPath, recordId]);
+    // Geometry is in the deps, not just the path: a re-derive (#2980) repacks the
+    // strip at the SAME path, so nothing else here changes and the <img> would
+    // never be re-requested — it would keep painting the old column count. Keying
+    // on the refreshed frameCount/fps also sequences the reload correctly: it
+    // fires when the parent's new walk state lands, so `cellW` can never slice a
+    // freshly-loaded 12-column strip by the stale count of 8. (The asset mount
+    // serves max-age=0 with an ETag, so the re-request revalidates for free; a
+    // re-derive at unchanged geometry is deterministic and byte-identical, so
+    // skipping the reload there is correct rather than a missed refresh.)
+  }, [source?.id, source?.stripPath, recordId, frameCount, source?.fps]);
 
   const cellW = img && frameCount > 0 ? img.naturalWidth / frameCount : 0;
   const cellH = img ? img.naturalHeight : 0;
@@ -354,6 +364,26 @@ export default function LoopTrimmer({
           </div>
         </div>
       </div>
+
+      {/* Every frame the run's clip produced, plus the in-place re-derive
+          (#2980). Run sources only: a saved trim has no run (and no clip)
+          behind it, so there is nothing to enumerate or re-derive. */}
+      {/* `key` is load-bearing, not cosmetic: extraction is a multi-second POST,
+          and switching the animation source mid-flight would otherwise resolve
+          into the SAME instance — writing one run's frames and lock state into a
+          panel now labelled another run. Remounting per run makes the stale
+          response a no-op, covering the extract, refresh and load paths at once.
+          `onSaved` is passed straight through (the parent hands down a stable
+          callback, and the panel is memoized so it doesn't re-render on every
+          loop-preview tick). */}
+      {source?.kind === 'run' && source.runId && (
+        <WalkSourceFrames
+          key={source.runId}
+          recordId={recordId}
+          runId={source.runId}
+          onSaved={onSaved}
+        />
+      )}
 
       {/* Save + result */}
       <div className="flex flex-wrap items-center gap-3 border-t border-port-border pt-3">

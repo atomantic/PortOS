@@ -25,6 +25,7 @@ import {
   spriteWalkReopenSchema,
   spriteWalkPostprocessSchema,
   spriteWalkTargetSchema,
+  spriteWalkSourceFramesParamsSchema,
   spriteWalkTrimSchema,
   spritePublishBindingSchema,
   spriteAtlasCompileSchema,
@@ -44,7 +45,7 @@ import {
 import { resolveSpriteAssetPrompt } from '../services/sprites/assetPrompt.js';
 import {
   getWalkState, startWalkGeneration, approveWalkDirection, rerunWalkPostprocess, unlockWalkSet,
-  reopenWalkDirection, setWalkTarget,
+  reopenWalkDirection, setWalkTarget, getWalkSourceFrames,
 } from '../services/sprites/walk.js';
 import { saveLoopTrim } from '../services/sprites/walkTrims.js';
 import { compileAtlas, getAtlasState } from '../services/sprites/atlas.js';
@@ -198,6 +199,32 @@ router.put('/:id/walk/target', asyncHandler(async (req, res) => {
 router.post('/:id/walk/postprocess', asyncHandler(async (req, res) => {
   const body = validateRequest(spriteWalkPostprocessSchema, req.body);
   res.json(await rerunWalkPostprocess(req.params.id, body));
+}));
+
+// Every frame the run's source video produced (#2980), the cycle window the
+// packer selected out of them, and which became packed columns — the Loop
+// Trimmer's window onto the raw intermediates `listSpriteAssets` excludes.
+// Strictly read-only. Multi-segment, so it can't be captured by the `/:id` GET.
+router.get('/:id/walk/runs/:runId/source-frames', asyncHandler(async (req, res) => {
+  const { runId } = validateRequest(spriteWalkSourceFramesParamsSchema, req.params);
+  res.json(await getWalkSourceFrames(req.params.id, runId));
+}));
+
+// Re-extract a run's raw frames from the clip already on disk, then return the
+// same payload. Separate from the GET because the importer never copies `raw/`,
+// so every imported run would otherwise spawn an ffmpeg decode (~96 PNGs) just
+// from rendering the trimmer — this keeps the work behind an explicit click. No
+// AI call; deterministic ffmpeg only.
+//
+// Deliberately NOT gated on an unfinalized set, unlike its neighbours: it writes
+// only re-derivable intermediates into the run's own `raw/` directory and
+// touches no packaged artifact, manifest or record — and inspecting a finalized
+// direction's source frames is exactly how the user decides whether to unlock it
+// at all. The immutability guards stay where they matter, on the ops that change
+// what the atlas compiles.
+router.post('/:id/walk/runs/:runId/source-frames/extract', asyncHandler(async (req, res) => {
+  const { runId } = validateRequest(spriteWalkSourceFramesParamsSchema, req.params);
+  res.json(await getWalkSourceFrames(req.params.id, runId, { extract: true }));
 }));
 
 // Non-destructive loop trim: re-pack enabled frames from a packed strip into

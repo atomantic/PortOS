@@ -6,12 +6,14 @@ import {
 import toast from '../ui/Toast';
 import {
   approveSpriteWalk, postprocessSpriteWalk, unlockSpriteWalk, reopenSpriteWalk,
-  setSpriteWalkTarget,
 } from '../../services/apiSprites.js';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
+import CycleTarget from './CycleTarget.jsx';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import { spriteAssetUrl, checkerboardStyle, PIXELATED } from './spriteAssets.js';
-import { WALK_PHASES } from '../../lib/spriteTrimmer.js';
+import {
+  WALK_PHASES, WALK_DEFAULT_FRAME_COUNT, WALK_DEFAULT_FPS,
+} from '../../lib/spriteTrimmer.js';
 
 // Walk workflow (issue #2897): one grok image_to_video clip per locked
 // directional anchor, deterministic server-side packaging into the 8-phase
@@ -34,39 +36,10 @@ const LOOP_KEYFRAMES = '@keyframes sprite-walk-loop { to { background-position-x
 export const WALK_DURATIONS = [6, 10];
 export const WALK_DEFAULT_DURATION = 6;
 
-// Deterministic-postprocess authoring knobs (mirror walkPostprocess.js
-// WALK_DEFAULT_*/WALK_MIN/MAX_*). Frame count = how many frames the packed cycle
-// holds (more = smoother); fps = preview playback speed (lower = slower, more
-// deliberate). Cycle duration = frameCount / fps seconds. Defaults pack a
-// fuller, slower cycle (12 frames @ 10fps = 1.2s) so a walk reads as a walk.
-//
-// Both are pinned at the SET level (#2985), not per render: a walk cycle is N
-// contiguous atlas columns × 8 direction rows, so every direction must agree or
-// the atlas cannot compile. The server resolves the target and refuses a
-// disagreeing render; these constants only seed the dropdown option lists.
-export const WALK_DEFAULT_FRAME_COUNT = 12;
-export const WALK_DEFAULT_FPS = 10;
-export const WALK_FRAME_COUNT_RANGE = { min: 6, max: 16 };
-export const WALK_FPS_RANGE = { min: 4, max: 24 };
-
-// Inclusive integer sequence [min..max] by step. Both dropdown option lists are
-// derived from module-level constants, so build them once at load rather than
-// on every render.
-const seq = (min, max, step) => {
-  const out = [];
-  for (let v = min; v <= max; v += step) out.push(v);
-  return out;
-};
-const FRAME_COUNT_OPTIONS = seq(WALK_FRAME_COUNT_RANGE.min, WALK_FRAME_COUNT_RANGE.max, 1);
-// The speed picker offers even steps to keep the list short, but the server
-// accepts ANY integer in range — an imported set (or a direct API call) can pin
-// an odd fps like 15. A <select> whose value matches no <option> silently
-// displays the FIRST option, so the control would claim "4 fps" while the set is
-// really at 15. Splice the current value in so the control never lies.
-const FPS_OPTIONS = seq(WALK_FPS_RANGE.min, WALK_FPS_RANGE.max, 2);
-const fpsOptionsFor = (fps) => (FPS_OPTIONS.includes(fps) || !Number.isFinite(fps)
-  ? FPS_OPTIONS
-  : [...FPS_OPTIONS, fps].sort((a, b) => a - b));
+// The deterministic-postprocess authoring knobs (frame count + preview fps) and
+// their option lists moved to lib/spriteTrimmer.js (#2980) — the Loop Trimmer's
+// re-derive control offers the same set-level target, and two copies of the
+// bounds would be exactly the drift #2985 exists to prevent.
 
 /**
  * Strip geometry for a preview/trim UI, defaulting to the native 8-phase
@@ -167,82 +140,6 @@ const driftRemedy = ({ approved, hasSourceClip, imported }) => {
   if (approved) return 'reopen this direction to re-derive it from its clip';
   return 'reprocess it from its clip';
 };
-
-/**
- * The SET-level cycle target (#2985) — one control for the whole walk, not a
- * per-render slider that can drift between directions. Saving PUTs the target
- * and refreshes the walk state; while that write is in flight every render
- * action is disabled by the parent, so a click can't queue against a value the
- * server has not persisted yet.
- */
-function CycleTarget({
-  recordId, target, disabled, onChanged, onSavingChange,
-}) {
-  const [save, saving] = useAsyncAction(async (next) => {
-    onSavingChange(true);
-    try {
-      await setSpriteWalkTarget(recordId, next, { silent: true });
-      toast.success(`Cycle target set · ${next.frameCount}f @ ${next.fps}fps`);
-      onChanged();
-    } finally {
-      onSavingChange(false);
-    }
-  }, { errorMessage: 'Could not set the cycle target' });
-
-  const cycleSeconds = (target.frameCount / target.fps).toFixed(2);
-
-  return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-      <label className="flex items-center gap-1.5 text-xs text-gray-400" htmlFor={`walk-target-frames-${recordId}`}>
-        Cycle target
-        <select
-          id={`walk-target-frames-${recordId}`}
-          value={target.frameCount}
-          disabled={disabled || saving || target.frameCountLocked}
-          onChange={(e) => save({ frameCount: Number(e.target.value), fps: target.fps })}
-          title="Frames in the walk cycle — shared by all 8 directions, because the atlas is a rectangular grid"
-          className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white disabled:opacity-60"
-        >
-          {FRAME_COUNT_OPTIONS.map((n) => <option key={n} value={n}>{n} frames</option>)}
-        </select>
-      </label>
-      <label className="flex items-center gap-1.5 text-xs text-gray-400" htmlFor={`walk-target-fps-${recordId}`}>
-        {/* fps is an AUTHORING/preview speed: it drives this page's loop preview
-            and is stamped on the manifest, but the consuming app decides how
-            fast the sprite actually walks in-game. It lives in the target
-            anyway because the atlas requires every direction to agree on it. */}
-        <span className="flex items-center gap-1"><Gauge className="w-3 h-3" /> Preview speed</span>
-        <select
-          id={`walk-target-fps-${recordId}`}
-          value={target.fps}
-          disabled={disabled || saving || target.fpsLocked}
-          onChange={(e) => save({ frameCount: target.frameCount, fps: Number(e.target.value) })}
-          title="Preview/authoring speed — the consuming app determines real in-game playback. Pinned per set because the atlas needs every direction to agree."
-          className="bg-port-bg border border-port-border rounded px-2 py-1 text-sm text-white disabled:opacity-60"
-        >
-          {fpsOptionsFor(target.fps).map((n) => <option key={n} value={n}>{n} fps</option>)}
-        </select>
-      </label>
-      <span
-        className="text-[11px] text-gray-500 tabular-nums"
-        title="cycle duration = frames ÷ preview speed"
-      >
-        {cycleSeconds}s / cycle
-      </span>
-      <span
-        className="text-[10px] text-gray-500"
-        title={target.source === 'app'
-          ? 'The bound app declares what its atlas may hold — retarget it in the Publish panel below.'
-          : undefined}
-      >
-        {/* Provenance wording is stamped by the server (describeTargetSource), so
-            this label and the 409 the user may hit always agree. */}
-        {saving ? 'saving…' : target.sourceLabel || target.source}
-        {target.source === 'app' && ' · change it in Publish below'}
-      </span>
-    </div>
-  );
-}
 
 function DirectionCard({
   recordId, direction, anchorLocked, run, approved, finalized, pending,
