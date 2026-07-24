@@ -569,6 +569,41 @@ describe('WalkWorkflow reprocess + reopen', () => {
     expect(screen.getByRole('button', { name: /^Reopen$/ })).toBeTruthy();
   });
 
+  // Once a set is un-frozen (an unlock, or a reopen of some OTHER direction)
+  // there is no walkSet to carry the imported flag — but the still-approved
+  // directions behind it must stay gated, or a clipless one is strandable by
+  // clicking twice. The run's own `importedPackaging` is what survives.
+  it('keeps a clipless imported direction gated after the set is un-frozen', async () => {
+    render(
+      <MemoryRouter>
+        <WalkWorkflow
+          record={{ id: 'example-walker' }}
+          reference={{ manifest: { mainReference: { locked: true }, anchors: [{ direction: 'east', status: 'locked' }] } }}
+          walk={{
+            runs: [{
+              id: 'run-east',
+              direction: 'east',
+              status: 'approved',
+              importedPackaging: true,
+              stripPreview: { stripPath: 'grok/run-east/generated/strip.png', frameCount: 12, fps: 10, cellWidth: 384, cellHeight: 384 },
+            }],
+            selection: { directions: { east: { status: 'approved', runId: 'run-east' } } },
+            walkSet: null,
+            walkTarget: {
+              frameCount: 12, fps: 10, source: 'derived', sourceLabel: 'from the first approved direction', drift: [],
+            },
+          }}
+          renders={noRenders()}
+          duration={6}
+          onDurationChange={vi.fn()}
+          onGenerate={vi.fn()}
+          onChanged={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+    expect(screen.queryByRole('button', { name: /^Reopen$/ })).toBeNull();
+  });
+
   // The set-level flag stays true while ANY direction is still source-packaged,
   // so a card must read the per-direction list the server stamps — otherwise a
   // direction already re-derived here keeps being treated as un-reopenable.

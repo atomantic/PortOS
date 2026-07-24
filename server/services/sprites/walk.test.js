@@ -938,6 +938,14 @@ describe('imported walk sets — evidence-based re-derive', () => {
     expect(state.walkSet).toBeNull();
     expect(state.selection.directions.east).toBeUndefined();
     expect(state.selection.directions.north.status).toBe('approved');
+
+    // …and STILL refuses north now that the set is un-frozen. Reopen un-freezes,
+    // so a gate keyed only on the frozen walk set would be dead from here on and
+    // north could be stranded by simply clicking twice — which is what the unlock
+    // refusal's own "reopen them one at a time" advice would have walked into.
+    await expect(reopenWalkDirection(id, { direction: 'north' }))
+      .rejects.toMatchObject({ code: 'LEGACY_IMPORTED_WALK_SET' });
+    expect((await getWalkState(id)).selection.directions.north.status).toBe('approved');
   });
 
   // The acceptance case: an imported 8-frame direction brought up to 12 with no

@@ -34,21 +34,6 @@ export const RUNTIME_POINTER_REL = 'runtime/current.json';
 export const RUNTIME_PUBLICATIONS_REL = 'runtime/publications.json';
 
 /**
- * Normalize an asset-path field read out of an imported manifest to the
- * record-relative form `spriteAssetUrl`/`resolveSpriteAssetPath` expect. The
- * source pipeline embeds paths anchored at ITS repo root
- * (`art-source/sprites/<recordId>/...`) inside every manifest, and the
- * importer copies those manifests byte-for-byte — their hashes are pinned
- * and verified against the source, so importer.js never rewrites the copied
- * JSON content. Readers that treat an embedded path as record-relative (the
- * convention every PortOS-generated manifest already follows) must strip
- * that source-repo prefix at read time instead. Returns null for a path
- * that isn't inside this record (repo-anchored provenance, e.g. a pipeline
- * script path) or for missing/empty/traversal-shaped input. A path with no
- * repo-anchor segment is assumed already record-relative and passed through
- * unchanged — this is what makes the helper a no-op for PortOS's own runs.
- */
-/**
  * The path prefix the source art pipeline anchors every embedded reference at.
  * A copied manifest names `art-source/sprites/<recordId>/…` for a file that, on
  * this side, sits at the record root — so this marker is what distinguishes
@@ -64,6 +49,21 @@ export const isSourcePipelinePath = (p) => typeof p === 'string' && p.includes(S
 // postprocess reads it, and the walk service re-derives from it.
 export const SOURCE_CLIP_NAME = 'source-video.mp4';
 
+/**
+ * Normalize an asset-path field read out of an imported manifest to the
+ * record-relative form `spriteAssetUrl`/`resolveSpriteAssetPath` expect. The
+ * source pipeline embeds paths anchored at ITS repo root
+ * (`art-source/sprites/<recordId>/...`) inside every manifest, and the
+ * importer copies those manifests byte-for-byte — their hashes are pinned
+ * and verified against the source, so importer.js never rewrites the copied
+ * JSON content. Readers that treat an embedded path as record-relative (the
+ * convention every PortOS-generated manifest already follows) must strip
+ * that source-repo prefix at read time instead. Returns null for a path
+ * that isn't inside this record (repo-anchored provenance, e.g. a pipeline
+ * script path) or for missing/empty/traversal-shaped input. A path with no
+ * repo-anchor segment is assumed already record-relative and passed through
+ * unchanged — this is what makes the helper a no-op for PortOS's own runs.
+ */
 export function toRecordRelativeAssetPath(recordId, rawPath) {
   if (typeof rawPath !== 'string' || !rawPath) return null;
   const marker = `${SOURCE_PIPELINE_ANCHOR}${recordId}/`;

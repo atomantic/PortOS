@@ -273,7 +273,10 @@ function DirectionCard({
   // The dead end: still packaged by the source pipeline AND no clip to re-derive
   // from. Everything the server refuses for this direction refuses on exactly
   // this, so every affordance below reads it rather than the import label alone.
-  const importedNoClip = imported && !hasSourceClip;
+  // `run.importedPackaging` is the load-bearing half: the set-level `imported`
+  // prop comes off the frozen walk set, which is GONE after an unlock or the
+  // first reopen — exactly when the remaining directions still need gating.
+  const importedNoClip = (imported || Boolean(run?.importedPackaging)) && !hasSourceClip;
   const statusLabel = approved ? 'approved'
     : (pending || rendering) ? 'rendering…'
       : run?.status === 'postprocessing' ? 'packaging…'

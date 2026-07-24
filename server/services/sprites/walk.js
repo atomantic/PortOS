@@ -30,7 +30,7 @@ import { GROK_TUI_ID } from '../../lib/grok.js';
 import { getSettings } from '../settings.js';
 import { getRecord, updateRecord } from './records.js';
 import {
-  spriteDir, resolveSpriteAssetPath, toRecordRelativeAssetPath, RUN_DIR_MATCH, altRunLayoutPath,
+  spriteDir, resolveSpriteAssetPath, toRecordRelativeAssetPath, altRunLayoutPath,
   runDirOfPath, resolveDriftTolerantRel, isSourcePipelinePath, SOURCE_CLIP_NAME,
 } from './paths.js';
 import { requireCharacter, loadManifest } from './reference.js';
@@ -1160,12 +1160,25 @@ async function assertSetReDerivable(recordId, walkSet) {
   );
 }
 
-/** Reopen's per-direction twin of the gate above. */
-async function assertDirectionReDerivable(recordId, walkSet, direction) {
-  if (!isImportedWalkSet(walkSet)) return;
-  const stranded = await directionsWithoutClip(recordId, walkSet, [direction]);
-  if (!stranded.length) return;
-  throw notReDerivable(`This walk set was imported from the source pipeline and the ${direction} direction has no source clip on disk — reopening is not supported, because there would be nothing to re-derive from.`);
+/**
+ * Reopen's per-direction twin of the gate above.
+ *
+ * Keyed on the DIRECTION's own entry as well as the frozen set, because reopen
+ * un-freezes: after the first one `loadWalkSet` returns null, so a gate that
+ * consulted only the walk set would be dead for every reopen after it — and a
+ * clipless source-packaged direction could still be stranded, two clicks in,
+ * by following the advice the unlock refusal prints. The entry survives the
+ * un-freeze and carries the same provenance. The set-level marker stays in the
+ * OR so a copied `selectionPath` with entries that name no run at all is still
+ * refused, as it was before evidence entered the picture.
+ */
+async function assertDirectionReDerivable(recordId, walkSet, entry, direction) {
+  const imported = isSourcePipelinePath(entry?.runPath)
+    || isSourcePipelinePath(entry?.runManifest)
+    || isImportedWalkSet(walkSet);
+  if (!imported) return;
+  if (await directionClipRel(recordId, entry)) return;
+  throw notReDerivable(`The ${direction} direction is still packaged by the source pipeline and has no source clip on disk — reopening is not supported, because there would be nothing to re-derive from and its packaged frames were never imported.`);
 }
 
 // Un-finalize: drop the canonical "finalized" signal (the walk-set file) FIRST,
@@ -1223,9 +1236,11 @@ export function reopenWalkDirection(recordId, { direction }) {
 
 async function reopenWalkDirectionImpl(recordId, direction) {
   await requireCharacter(recordId);
-  const walkSet = await loadWalkSet(recordId);
-  await assertDirectionReDerivable(recordId, walkSet, direction);
-  const selection = (await loadSelection(recordId)) || seedSelection(recordId);
+  const [walkSet, loaded] = await Promise.all([loadWalkSet(recordId), loadSelection(recordId)]);
+  const selection = loaded || seedSelection(recordId);
+  // The selection entry is the gate's evidence, so it is read BEFORE the
+  // re-derivability check (which needs it) and before the approval check.
+  await assertDirectionReDerivable(recordId, walkSet, selection.directions?.[direction], direction);
   if (selection.directions?.[direction]?.status !== 'approved') {
     throw new ServerError(`Direction ${direction} is not approved`, { status: 409, code: 'DIRECTION_NOT_APPROVED' });
   }
