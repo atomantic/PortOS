@@ -215,6 +215,34 @@ describe('startWalkGeneration', () => {
     expect(runs[0].postprocessError).toMatch(/without writing the walk video/);
     expect(runWalkPostprocess).not.toHaveBeenCalled();
   });
+
+  it('refuses a second render while one is already in flight for the direction', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    // Default executeTuiRun mock never resolves → the first run stays 'rendering'.
+    await startWalkGeneration(id, { direction: 'east' });
+    await expect(startWalkGeneration(id, { direction: 'east' }))
+      .rejects.toMatchObject({ code: 'WALK_RENDER_IN_PROGRESS' });
+    expect(executeTuiRun).toHaveBeenCalledTimes(1); // the second never dispatched
+  });
+
+  it('treats a long-stale rendering run as errored and allows regenerating it', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    // A run left 'rendering' by a server that died mid-render, well past the cap.
+    const staleId = 'walk-east-deadbeef';
+    await mkdir(join(TEST_ROOT, 'sprites', id, 'runs', staleId, 'generated'), { recursive: true });
+    await writeFile(join(TEST_ROOT, 'sprites', id, 'runs', staleId, 'animation-run.json'), JSON.stringify({
+      schemaVersion: 1, id: staleId, status: 'rendering', characterId: id, direction: 'east',
+      chromaKey: '#FF00FF', createdAt: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+    }));
+    const { runs } = await getWalkState(id);
+    const stale = runs.find((r) => r.id === staleId);
+    expect(stale.status).toBe('error');
+    expect(stale.postprocessError).toMatch(/interrupted/);
+    // The in-flight guard must NOT treat a stale run as live — regeneration works.
+    const result = await startWalkGeneration(id, { direction: 'east' });
+    expect(result.runId).toMatch(/^walk-east-[0-9a-f]{8}$/);
+    expect(result.runId).not.toBe(staleId);
+  });
 });
 
 describe('attachTuiWalkResult (grok-tui completion)', () => {

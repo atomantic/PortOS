@@ -151,6 +151,20 @@ function runCreatedAtMs(createdAt) {
   return Number.isNaN(ms) ? 0 : ms;
 }
 
+// A 'rendering' run's status is flipped to a terminal state by attachTuiWalkResult
+// when executeTuiRun settles — including on grok's 30-min hard timeout. So a run
+// still 'rendering' well past that cap can only be stranded: the server process
+// died mid-render (the in-memory PTY run and its completion handler went with it).
+// Present it as an error at read time — never persisted — so the UI stops polling
+// forever, surfaces regenerate, and the in-flight guard in startWalkGeneration
+// stops treating it as live. RENDER_STALE_MS is the hard cap plus a buffer.
+const RENDER_STALE_MS = WALK_TUI_TIMEOUT_MS + 60_000;
+function normalizeStaleRendering(run) {
+  if (run?.status !== 'rendering') return run;
+  if (Date.now() - runCreatedAtMs(run.createdAt) <= RENDER_STALE_MS) return run;
+  return { ...run, status: 'error', postprocessError: 'Walk render was interrupted (server restart or timeout) — regenerate to retry.' };
+}
+
 // PortOS's own postprocess stamps `stripPreview.stripPath` record-relative
 // (walkPostprocess.js). The imported source pipeline stamps the same field
 // as `stripPreview.path`, anchored at ITS repo root — the importer copies
@@ -334,6 +348,7 @@ export async function getWalkState(recordId) {
     .filter((run, i, all) => !resolvedRunIds.has(run.id) && all.findIndex((r) => r.id === run.id) === i);
 
   const allRuns = [...entryRuns, ...scannedRuns]
+    .map(normalizeStaleRendering)
     .sort((a, b) => runCreatedAtMs(b.createdAt) - runCreatedAtMs(a.createdAt));
   // Stamp the imported flag so the client reads intent (`walkSet.imported`)
   // instead of re-deriving the source-pipeline path convention itself.
@@ -369,6 +384,17 @@ async function startWalkGenerationImpl(recordId, body) {
   const chromaKey = manifest.chromaKey;
   if (!chromaKey) {
     throw new ServerError('Reference set has no frozen chroma key', { status: 409, code: 'MAIN_NOT_LOCKED' });
+  }
+  // Refuse a second render for a direction already in flight. A fresh runId per
+  // call is the only reservation, and the client's Generate button can briefly
+  // re-enable between the media-poll eviction of its optimistic key and the next
+  // getWalkState refetch — without this backstop, a click in that window fires a
+  // second paid grok render for the same direction. Serialized by the write tail,
+  // so no TOCTOU. getWalkState normalizes a stale 'rendering' run (server died
+  // mid-render) to 'error', so this blocks only a genuinely live render.
+  const { runs: inFlight } = await getWalkState(recordId);
+  if (inFlight.some((r) => r.direction === direction && (r.status === 'rendering' || r.status === 'postprocessing'))) {
+    throw new ServerError(`A walk render for ${direction} is already in progress`, { status: 409, code: 'WALK_RENDER_IN_PROGRESS' });
   }
   const anchorAbs = resolveSpriteAssetPath(recordId, anchor.path);
   if (!await pathExists(anchorAbs)) {

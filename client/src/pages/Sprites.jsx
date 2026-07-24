@@ -510,7 +510,7 @@ export default function Sprites() {
   // the switch already wiped A's sentinel, so there's nothing to clean up.
   const idRef = useRef(id);
   useEffect(() => { idRef.current = id; }, [id]);
-  const submitRender = useCallback(async (begin, resolve, cancel, key, call, failMessage) => {
+  const submitRender = useCallback(async (begin, resolve, cancel, key, call, failMessage, onSuccess) => {
     const startId = idRef.current;
     begin(key);
     try {
@@ -518,7 +518,7 @@ export default function Sprites() {
       // is an observable grok-tui run (runId, no media job). Either reserves
       // the key so a double-submit can't fire two paid renders.
       const result = await call();
-      if (idRef.current === startId) resolve(key, result?.jobId || result?.runId);
+      if (idRef.current === startId) { resolve(key, result?.jobId || result?.runId); onSuccess?.(); }
     } catch (err) {
       if (idRef.current === startId) cancel(key);
       toast.error(err?.message || failMessage);
@@ -529,7 +529,12 @@ export default function Sprites() {
     walkBegin, walkResolve, walkCancel, direction,
     () => generateSpriteWalk(id, { direction, duration }, { silent: true }),
     `Failed to queue ${direction} walk`,
-  ), [id, duration, walkBegin, walkResolve, walkCancel, submitRender]);
+    // Refetch immediately so the server's 'rendering' run lands before the
+    // media-job poll evicts the optimistic key (~4s) — otherwise the Generate
+    // button briefly re-enables and a second click would 409 the in-flight
+    // render. The server guard is the real backstop; this closes the UI gap.
+    onWorkflowChanged,
+  ), [id, duration, walkBegin, walkResolve, walkCancel, submitRender, onWorkflowChanged]);
 
   // `mode` is the workflow-selected backend, threaded from the asset card via
   // buildCollectionActions (#2938) so a re-roll uses the same backend the
