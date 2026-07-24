@@ -7,11 +7,13 @@ import {
   trellis2GenerateScript,
   isTrellis2Installed,
   buildInstallSteps,
+  trellis2OutputStem,
   buildGenerateArgs,
   parseGenerateProgress,
   runTrellis2Generate,
   installTrellis2,
   isTransientInstallError,
+  isHfAuthError,
 } from './trellis2.js';
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -68,6 +70,21 @@ describe('buildInstallSteps', () => {
   });
 });
 
+describe('trellis2OutputStem', () => {
+  it('strips a single trailing .glb (the port appends the extension itself)', () => {
+    expect(trellis2OutputStem('/data/image-to-3d/abc/model.glb')).toBe('/data/image-to-3d/abc/model');
+  });
+
+  it('is case-insensitive on the extension', () => {
+    expect(trellis2OutputStem('/out/Model.GLB')).toBe('/out/Model');
+  });
+
+  it('leaves a stem with no .glb extension untouched (and does not eat a mid-path .glb)', () => {
+    expect(trellis2OutputStem('/out/model')).toBe('/out/model');
+    expect(trellis2OutputStem('/out/model.glb.tmp')).toBe('/out/model.glb.tmp');
+  });
+});
+
 describe('buildGenerateArgs', () => {
   it('invokes the venv python with generate.py and the image', () => {
     const { command, args } = buildGenerateArgs({ imagePath: '/data/images/x.png', base: BASE });
@@ -75,9 +92,9 @@ describe('buildGenerateArgs', () => {
     expect(args).toEqual([trellis2GenerateScript(BASE), '/data/images/x.png']);
   });
 
-  it('appends --output when an output path is given', () => {
-    const { args } = buildGenerateArgs({ imagePath: 'in.png', outputPath: 'out.glb', base: BASE });
-    expect(args).toEqual([trellis2GenerateScript(BASE), 'in.png', '--output', 'out.glb']);
+  it('passes --output as a STEM — the port appends .glb, so a full path would double it', () => {
+    const { args } = buildGenerateArgs({ imagePath: 'in.png', outputPath: '/out/model.glb', base: BASE });
+    expect(args).toEqual([trellis2GenerateScript(BASE), 'in.png', '--output', '/out/model']);
   });
 
   it('throws when no source image is given', () => {
@@ -86,23 +103,52 @@ describe('buildGenerateArgs', () => {
 });
 
 describe('parseGenerateProgress', () => {
-  it('extracts a percentage as a generating frame', () => {
-    expect(parseGenerateProgress('sampling 42%')).toMatchObject({ stage: 'generating', percent: 42 });
+  // The real generate.py banners (see the module's GENERATE_STAGE_SIGNATURES),
+  // in the order the port prints them, and the monotonic percent each maps to.
+  it.each([
+    ['Loading pipeline...', 'loading', 3],
+    ['Device: MPS', 'loading', 5],
+    ['Generating 3D model (pipeline=512, seed=42)...', 'generating', 10],
+    ['Mesh: 812,043 vertices, 1,604,201 triangles', 'meshing', 55],
+    ['Generation time: 214.7s', 'meshing', 58],
+    ['Baking PBR textures via KDTree (1024x1024)...', 'texturing', 65],
+    ['  UV unwrapping with xatlas...', 'texturing', 72],
+    ['  Simplifying mesh: 1,604,201 -> ~200,000 faces', 'texturing', 72],
+  ])('maps the %o banner to a %s frame at %i%%', (line, stage, percent) => {
+    expect(parseGenerateProgress(line)).toMatchObject({ stage, percent, message: line.trim() });
   });
 
-  it('clamps an over-100 percentage', () => {
-    expect(parseGenerateProgress('999%').percent).toBe(100);
+  it('the banner percents increase monotonically in emission order', () => {
+    const order = [
+      'Loading pipeline...', 'Device: MPS', 'Generating 3D model (pipeline=512)...',
+      'Mesh: 8 vertices, 8 triangles', 'Generation time: 1s',
+      'Baking PBR textures via Metal (1024x1024)...',
+    ];
+    const percents = order.map((l) => parseGenerateProgress(l).percent);
+    for (let i = 1; i < percents.length; i += 1) expect(percents[i]).toBeGreaterThan(percents[i - 1]);
   });
 
-  it('recognizes a written .glb as an export frame carrying the asset path', () => {
-    expect(parseGenerateProgress('saved /out/model.glb')).toMatchObject({
+  it('recognizes a written .glb as the terminal export frame carrying the asset path', () => {
+    expect(parseGenerateProgress('  Saved: /out/model.glb')).toMatchObject({
       stage: 'export',
+      percent: 92,
       assetPath: '/out/model.glb',
     });
   });
 
+  it('scales a bare per-phase tqdm bar into the sampling band [10,50] (never fills early)', () => {
+    // tqdm hits 100% once per sampling phase (three phases); a raw pass-through would
+    // fill the whole-render bar during phase 1. Scaled, even 100% stays inside sampling.
+    expect(parseGenerateProgress('Sampling: 100%|██████████| 12/12').percent).toBe(50);
+    expect(parseGenerateProgress('Sampling:   0%|          | 0/12').percent).toBe(10);
+    expect(parseGenerateProgress('Sampling:  50%|█████     | 6/12')).toMatchObject({
+      stage: 'generating', percent: 30,
+    });
+  });
+
   it('returns null for lines with no signal, and for blank lines', () => {
-    expect(parseGenerateProgress('loading pipeline weights')).toBeNull();
+    expect(parseGenerateProgress('Input: /tmp/shoe.png (1024x1024)')).toBeNull();
+    expect(parseGenerateProgress('Saved: /out/model.obj')).toBeNull(); // .obj sidecar, not the GLB
     expect(parseGenerateProgress('   ')).toBeNull();
     expect(parseGenerateProgress(undefined)).toBeNull();
   });
@@ -142,14 +188,38 @@ describe('runTrellis2Generate', () => {
       [trellis2GenerateScript(BASE), 'a.png'],
       { cwd: trellis2Root(BASE) },
     );
-    child.stdout.emit('data', 'sampling 50%\n');
-    child.stdout.emit('data', 'saved /out/a.glb\n');
+    child.stdout.emit('data', 'Generating 3D model (pipeline=512, seed=42)...\n');
+    child.stdout.emit('data', 'Sampling:  50%|█████     | 6/12\n');
+    child.stdout.emit('data', '  Saved: /out/a.glb\n');
     child.emit('close', 0);
     await expect(promise).resolves.toEqual({ assetPath: '/out/a.glb' });
     expect(frames).toEqual([
-      { stage: 'generating', percent: 50, message: 'sampling 50%' },
-      { stage: 'export', assetPath: '/out/a.glb', message: 'saved /out/a.glb' },
+      { stage: 'generating', percent: 10, message: 'Generating 3D model (pipeline=512, seed=42)...' },
+      { stage: 'generating', percent: 30, message: 'Sampling:  50%|█████     | 6/12' },
+      { stage: 'export', percent: 92, assetPath: '/out/a.glb', message: 'Saved: /out/a.glb' },
     ]);
+  });
+
+  it('parses every tqdm frame in a \\r-redrawn chunk, not just the first', async () => {
+    // tqdm redraws the sampling bar in place with carriage returns, so one stdout
+    // chunk can carry several frames separated only by \r. Progress must reflect the
+    // LAST (highest) frame, not the first — otherwise sampling under-reports.
+    const child = makeChild();
+    const frames = [];
+    const { promise } = runTrellis2Generate({
+      imagePath: 'a.png',
+      outputPath: '/out/a.glb',
+      base: BASE,
+      exists: installed,
+      spawnImpl: () => child,
+      onProgress: (f) => frames.push(f),
+    });
+    child.stdout.emit('data', 'Sampling:   0%\rSampling:  50%\rSampling: 100%\r');
+    child.stdout.emit('data', '  Saved: /out/a.glb\n');
+    child.emit('close', 0);
+    await expect(promise).resolves.toEqual({ assetPath: '/out/a.glb' });
+    // 0/50/100 scale into the [10,50] band → 10/30/50; the last frame is 50.
+    expect(frames.map((f) => f.percent)).toEqual([10, 30, 50, 92]);
   });
 
   it('rejects on a non-zero exit', async () => {
@@ -163,6 +233,27 @@ describe('runTrellis2Generate', () => {
     });
     child.emit('close', 1);
     await expect(promise).rejects.toMatchObject({ code: 'TRELLIS2_GENERATE_FAILED' });
+  });
+
+  it('classifies a gated-repo / HF-auth failure as a distinct, actionable error', async () => {
+    // The real #2952 on-device failure: the pipeline pulls a gated dependency model
+    // and, with no HF_TOKEN, from_pretrained raises GatedRepoError → non-zero exit.
+    const child = makeChild();
+    const { promise } = runTrellis2Generate({
+      imagePath: 'a.png',
+      outputPath: '/out/a.glb',
+      base: BASE,
+      exists: installed,
+      spawnImpl: () => child,
+    });
+    child.stderr.emit('data',
+      'huggingface_hub.errors.GatedRepoError: 401 Client Error. '
+      + 'Access to model facebook/dinov3-vitl16-pretrain-lvd1689m is restricted.\n');
+    child.emit('close', 1);
+    await expect(promise).rejects.toMatchObject({
+      code: 'TRELLIS2_HF_AUTH_REQUIRED',
+      message: expect.stringMatching(/hugging face/i),
+    });
   });
 
   it('rejects when it exits 0 but never reported a .glb', async () => {
@@ -226,6 +317,29 @@ describe('isTransientInstallError', () => {
     undefined,
   ])('does NOT flag a non-transient/real failure: %s', (line) => {
     expect(isTransientInstallError(line)).toBe(false);
+  });
+});
+
+describe('isHfAuthError', () => {
+  it.each([
+    'huggingface_hub.errors.GatedRepoError: 401 Client Error.',
+    'Access to model facebook/dinov3-vitl16-pretrain-lvd1689m is restricted.',
+    'You must have access to it and be authenticated to access it. Please log in.',
+    'OSError: You are trying to access a gated repo.',
+    'Invalid user token.',
+  ])('flags an HF auth / gated-repo failure: %s', (line) => {
+    expect(isHfAuthError(line)).toBe(true);
+  });
+
+  it.each([
+    'RuntimeError: MPS backend out of memory',
+    'IndexError: max(): Expected reduction dim 0 to have non-zero size',
+    'AssertionError: BVH needs at least 8 triangles, got 0',
+    '',
+    null,
+    undefined,
+  ])('does NOT flag a non-auth failure: %s', (line) => {
+    expect(isHfAuthError(line)).toBe(false);
   });
 });
 
