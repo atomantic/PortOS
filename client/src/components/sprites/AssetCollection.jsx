@@ -16,7 +16,7 @@
  */
 
 import { useMemo, useState } from 'react';
-import { FolderOpen, RefreshCw, Scissors, Sparkles, Film } from 'lucide-react';
+import { FolderOpen, RefreshCw, Scissors, Sparkles, Film, FileJson } from 'lucide-react';
 import AssetInspector from './AssetInspector.jsx';
 import SpritePreview from './SpritePreview.jsx';
 import { hasSpritePreview } from './spriteAssets.js';
@@ -47,6 +47,10 @@ function AssetCard({ recordId, asset, actions, onInspect }) {
   const name = asset.path.split('/').pop();
   const regenerate = actions?.regenerateFor(asset);
   const trim = actions?.trimFor(asset);
+  // A runtime atlas carries its per-version sidecar manifest. Rather
+  // than a standalone "Manifests" group of lookalike JSON cards, the atlas card
+  // links to its own build metadata — geometry, chroma key, provenance.
+  const manifest = asset.manifest;
 
   return (
     <div className="bg-port-bg border border-port-border rounded p-1 space-y-1">
@@ -65,7 +69,7 @@ function AssetCard({ recordId, asset, actions, onInspect }) {
           {hasSpritePreview(asset) ? `${asset.width}×${asset.height}` : formatBytes(asset.size)}
         </span>
       </button>
-      {(regenerate || trim) && (
+      {(regenerate || trim || manifest) && (
         <div className="flex gap-1">
           {regenerate && (
             <button
@@ -90,6 +94,17 @@ function AssetCard({ recordId, asset, actions, onInspect }) {
               className="px-1.5 py-0.5 text-[10px] bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent"
             >
               <Scissors className="w-3 h-3" />
+            </button>
+          )}
+          {manifest && (
+            <button
+              type="button"
+              onClick={() => onInspect(manifest)}
+              title="View the atlas build manifest — geometry, chroma key, and provenance the compiler recorded"
+              aria-label={`View build manifest for ${name}`}
+              className="flex-1 flex items-center justify-center gap-1 px-1 py-0.5 text-[10px] bg-port-card border border-port-border rounded text-gray-300 hover:border-port-accent"
+            >
+              <FileJson className="w-3 h-3" /> Manifest
             </button>
           )}
         </div>
@@ -136,10 +151,13 @@ export default function AssetCollection({ recordId, assets, actions = null, appr
             <span className="text-xs text-gray-500 font-normal">({rows.length})</span>
           </h4>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2">
-            {/* `actions` is the SINGLE gate on which cards get buttons — its
-                two resolvers return null for an asset they can't act on (a
-                manifest, an upload, a locked anchor), so there is no second
-                role allow-list here to drift out of sync. */}
+            {/* Two kinds of card button, by design: the WORKFLOW actions
+                (Regenerate / Trim) are gated solely by the `actions` resolvers,
+                which return null for an asset they can't act on — no second
+                role allow-list to drift. The atlas "Manifest" button is
+                separate: a pure inspect affordance driven by `asset.manifest`
+                (attached in groupSpriteAssetsByRole), needing none of the live
+                workflow state `actions` carries. */}
             {rows.map((asset) => (
               <AssetCard
                 key={asset.path}

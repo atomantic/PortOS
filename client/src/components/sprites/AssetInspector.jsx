@@ -14,6 +14,7 @@ import { Download, ClipboardCopy, ExternalLink, Trash2, X } from 'lucide-react';
 import Modal from '../ui/Modal.jsx';
 import SpritePreview from './SpritePreview.jsx';
 import { spriteAssetUrl, hasSpritePreview, isVideoAsset } from './spriteAssets.js';
+import { isRuntimeVersionPath, isRuntimeSidecarManifest } from '../../lib/spriteFacets.js';
 import { formatBytes, timeAgo } from '../../utils/formatters.js';
 import { copyToClipboard } from '../../lib/clipboard.js';
 import { deleteSpriteAsset } from '../../services/apiSprites.js';
@@ -47,6 +48,12 @@ export default function AssetInspector({ recordId, asset, onClose, onDeleted = n
   const url = spriteAssetUrl(recordId, asset.path);
   const fileName = asset.path.split('/').pop();
   const previewable = hasSpritePreview(asset);
+  // A runtime version lives in `runtime/vN/` as an atlas PNG + its sidecar
+  // manifest, deleted together as a unit by the server. Reuse the classifier's
+  // grammar (spriteFacets) so this stays one definition — the delete copy fires
+  // for either half; the note only for the manifest sidecar.
+  const isRuntimeVersionFile = isRuntimeVersionPath(asset.path);
+  const isRuntimeManifest = isRuntimeSidecarManifest(asset.path);
 
   const runDelete = () => {
     setDeleting(true);
@@ -109,6 +116,15 @@ export default function AssetInspector({ recordId, asset, onClose, onDeleted = n
           </p>
         )}
 
+        {isRuntimeManifest && (
+          <p className="text-xs text-gray-400 border border-port-border rounded p-2 bg-port-bg">
+            This is the atlas <span className="text-gray-200">build manifest</span> — the geometry,
+            chroma key, and source provenance the compiler recorded for its sprite sheet. It’s
+            behind-the-scenes metadata for the atlas in this same runtime version and is removed
+            together with it, not a separately publishable asset.
+          </p>
+        )}
+
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
           <Row label="Path" value={asset.path} />
           <Row label="Dimensions" value={previewable ? `${asset.width} × ${asset.height}` : null} />
@@ -160,7 +176,7 @@ export default function AssetInspector({ recordId, asset, onClose, onDeleted = n
           <div className="space-y-2 border border-port-error/40 bg-port-error/10 rounded p-2">
             <p className="text-xs text-gray-200">
               Delete <span className="font-semibold break-all">{fileName}</span> from disk?
-              {/^runtime\/v\d+\//.test(asset.path) && ' Its sidecar manifest is removed too.'}
+              {isRuntimeVersionFile && ' The whole runtime version — atlas sprite sheet and its sidecar manifest — is removed together.'}
               {' '}This can’t be undone.
             </p>
             {deleteError && <p className="text-xs text-port-error break-all">{deleteError}</p>}

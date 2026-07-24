@@ -44,8 +44,30 @@ describe('AssetCollection grouping', () => {
   it('groups by semantic role in the declared order, not by path segment', () => {
     render(<AssetCollection recordId="example-walker" assets={ASSETS} />);
     // Pre-#2931 this was `reference` / `grok` (raw first path segments) — the
-    // strip and its sidecar manifest sat in one undifferentiated bucket.
-    expect(groupHeadings()).toEqual(['Reference set(2)', 'Strips(1)', 'Manifests(1)']);
+    // strip and its sidecar manifest sat in one undifferentiated bucket. The
+    // manifest JSON is no longer surfaced as its own "Manifests" group —
+    // behind-the-scenes metadata isn't a browsable asset card.
+    expect(groupHeadings()).toEqual(['Reference set(2)', 'Strips(1)']);
+    expect(screen.queryByRole('heading', { name: /Manifests/ })).toBeNull();
+  });
+
+  it('folds a runtime atlas sidecar manifest onto the atlas card as a View-manifest action', async () => {
+    const user = userEvent.setup();
+    render(
+      <AssetCollection
+        recordId="example-walker"
+        assets={[
+          image('runtime/v3/example-animation-atlas-v3.png'),
+          asset('runtime/v3/example-animation-atlas-v3-manifest.json'),
+        ]}
+      />,
+    );
+    // Exactly one group (Atlases) — the manifest is not its own card.
+    expect(groupHeadings()).toEqual(['Atlases(1)']);
+    // The atlas card exposes a labeled manifest affordance; clicking it opens
+    // the inspector on the sidecar JSON with its explanatory note.
+    await user.click(screen.getByRole('button', { name: /View build manifest/ }));
+    expect(await screen.findByText(/build manifest/i)).toBeTruthy();
   });
 
   it('badges each asset with its lifecycle status, including the cross-set supersede', () => {
