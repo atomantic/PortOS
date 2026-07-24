@@ -15,11 +15,8 @@
  *   game/assets/sprites/<family>/                props atlas families (PNG + README)
  *
  * Only approved/final artifacts import: reference candidates and extracted
- * frame intermediates stay behind. A run's `generated/source-video.mp4` DOES
- * import (#2984) — with authorable frame counts (#2970) it is the input to
- * re-deriving a walk cycle, not a spent intermediate.
- *
- * Where a source manifest carries a
+ * frame intermediates stay behind, while a run's source clip does come across
+ * (#2984 — see SOURCE_CLIP_REF). Where a source manifest carries a
  * sha256 for a file, the copied bytes are verified against it — a mismatch is
  * recorded per-item (the import continues) so one corrupt file can't abort a
  * whole tree. Runs on demand only (a user action) — never at boot.
@@ -30,7 +27,7 @@ import { readdir, copyFile, rm } from 'fs/promises';
 import { PATHS, ensureDir, sha256File, atomicWrite, pathExists, readJSONFile, expandHome } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { upsertImportedRecord } from './records.js';
-import { spriteDir, RUN_DIR_MATCH } from './paths.js';
+import { spriteDir, RUN_DIR_MATCH, altRunLayoutPath } from './paths.js';
 import { isValidSpriteId } from './recordsLogic.js';
 
 // The source pipeline keys everything on magenta; imported characters carry it
@@ -153,7 +150,7 @@ const ASSET_REF = /\.(png|gif|json)$/i;
 // excluded below — ~5× the bytes of the clip they were extracted from, and
 // re-derivation re-extracts them on demand.
 const SOURCE_CLIP_NAME = 'source-video.mp4';
-const SOURCE_CLIP_REF = new RegExp(`${RUN_DIR_MATCH.source}/generated/${SOURCE_CLIP_NAME.replace(/\./g, '\\.')}$`);
+const SOURCE_CLIP_REF = new RegExp(`${RUN_DIR_MATCH.source}/generated/source-video\\.mp4$`);
 const EXCLUDED_RUN_SEGMENTS = /(^|\/)(raw|frames|review)\//;
 // Free-text log fields in run records can contain path-looking strings that
 // were never assets — don't traverse them.
@@ -163,17 +160,6 @@ function importableRel(value, characterId) {
   const rel = relToCharacterDir(value, characterId);
   if (!rel || EXCLUDED_RUN_SEGMENTS.test(rel)) return null;
   return ASSET_REF.test(rel) || SOURCE_CLIP_REF.test(rel) ? rel : null;
-}
-
-// Source-tree layout drift: a run's files can sit under `grok/<run-id>/` while
-// the manifests naming them say `runs/<run-id>/` (or the reverse) — the two
-// trees are the same run under two prefixes, which is exactly the dual-root
-// tolerance `getWalkState` already applies on read (walk.js RUN_SCAN_DIRS).
-// Returns the twin path under the other run-dir prefix, or null for a path
-// that isn't inside a run dir at all.
-function altRunLayoutRel(rel) {
-  const match = /^(grok|runs)(\/.+)$/.exec(rel);
-  return match ? `${match[1] === 'grok' ? 'runs' : 'grok'}${match[2]}` : null;
 }
 
 /**
@@ -208,21 +194,25 @@ function collectManifestRefs(node, characterId, refs, expectations) {
   }
 }
 
-// Resolve a declared path against the SOURCE tree, tolerating run-layout
-// drift: returns whichever path actually exists (the declared one, or its twin
-// under the other run-dir prefix), or null when neither does.
+// Resolve a declared path against the SOURCE tree, tolerating run-layout drift
+// (`altRunLayoutPath`): returns whichever path actually exists — the declared
+// one or its twin — or null when neither does.
 async function resolveSourceRel(srcCharDir, rel) {
   if (await pathExists(join(srcCharDir, rel))) return rel;
-  const alt = altRunLayoutRel(rel);
+  const alt = altRunLayoutPath(rel);
   return alt && (await pathExists(join(srcCharDir, alt))) ? alt : null;
 }
 
-// Read a character-dir JSON through the same drift tolerance, so a manifest
+// Read a character-dir JSON with the same drift tolerance, so a manifest
 // naming `runs/<run-id>/…` still expands when the source stores that run under
-// `grok/<run-id>/`. Absent/corrupt → null, like every other manifest read here.
+// `grok/<run-id>/`. Read-then-fall-back rather than probe-then-read: readJson
+// already collapses a missing/corrupt file to null, so the twin costs a
+// syscall only when the declared path really isn't there.
 async function readCharJson(srcCharDir, rel) {
-  const srcRel = await resolveSourceRel(srcCharDir, rel);
-  return srcRel ? readJson(join(srcCharDir, srcRel)) : null;
+  const direct = await readJson(join(srcCharDir, rel));
+  if (direct) return direct;
+  const alt = altRunLayoutPath(rel);
+  return alt ? readJson(join(srcCharDir, alt)) : null;
 }
 
 // Copy one character-dir file, always landing it at the DECLARED path: the
@@ -263,7 +253,10 @@ async function importApprovedDirection({ srcCharDir, destDir, characterId, direc
   if (dir.runManifestSha256) hashExpectations.push({ relPath: manifestRel, sha256: dir.runManifestSha256 });
 
   const refs = new Set();
-  collectManifestRefs(await readCharJson(srcCharDir, manifestRel), characterId, refs, hashExpectations);
+  // Read the copy just made rather than the source: same bytes, one fewer
+  // resolution + read, and it matches how the reference/ and walk/ loops below
+  // expand their manifests.
+  collectManifestRefs(await readJson(join(destDir, manifestRel)), characterId, refs, hashExpectations);
   const runRel = relToCharacterDir(dir.runPath, characterId);
   if (runRel && (await resolveSourceRel(srcCharDir, `${runRel}/generated/review-preview.json`))) {
     refs.add(`${runRel}/generated/review-preview.json`);
@@ -271,14 +264,13 @@ async function importApprovedDirection({ srcCharDir, destDir, characterId, direc
   // The source clip (#2984). Most packaged manifests name it (so the generic
   // collector already has it, hash pin included), but an older imported
   // manifest may not — and a direction with no clip can never be re-derived at
-  // a different frame count. Probe the run dir under both layouts, keeping the
-  // ENTRY's layout as the reference so the clip lands beside the rest of this
-  // run's files.
-  const clipRel = runRel ? `${runRel}/generated/${SOURCE_CLIP_NAME}` : null;
-  // SOURCE_CLIP_REF re-gates the probe so this stays the same narrow rule the
-  // manifest collector applies — an imagegen redraw entry (no run dir) never
-  // acquires a clip through the back door.
-  if (clipRel && SOURCE_CLIP_REF.test(clipRel) && !refs.has(clipRel) && (await resolveSourceRel(srcCharDir, clipRel))) {
+  // a different frame count. The RUN_DIR_MATCH gate keeps this to real run
+  // entries (an imagegen redraw entry has no run dir and no clip), and the
+  // twin check keeps a manifest that named the clip under the OTHER layout
+  // from copying the same bytes to two destinations.
+  const clipRel = runRel && `${runRel}/generated/${SOURCE_CLIP_NAME}`;
+  if (clipRel && RUN_DIR_MATCH.test(runRel) && !refs.has(clipRel) && !refs.has(altRunLayoutPath(clipRel))
+      && (await resolveSourceRel(srcCharDir, clipRel))) {
     refs.add(clipRel);
   }
   // One extra expansion level: packaged manifests / previews the run record

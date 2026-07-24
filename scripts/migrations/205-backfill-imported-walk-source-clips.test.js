@@ -62,6 +62,13 @@ describe('migration 205 — backfill imported walk source clips', () => {
     });
     // Run C: no clip anywhere inside the record — a re-import is the remedy.
     await writeRun('runs', 'walk-west-cccc3333', {});
+    // Run D: stored under the legacy grok/ layout (so the scan must cover both
+    // dirs), with the record naming a clip that is already exactly there — the
+    // record's declared path wins over the conventional one.
+    await writeRun('grok', 'walk-north-dddd4444', {
+      sourceVideoPath: `art-source/sprites/${ID}/runs/walk-north-dddd4444/generated/source-video.mp4`,
+      clipAt: 'runs/walk-north-dddd4444/generated/source-video.mp4',
+    });
 
     const result = await migration.up({ rootDir: ROOT });
     expect(result).toEqual({ ok: true, migrated: 1 });
@@ -72,6 +79,9 @@ describe('migration 205 — backfill imported walk source clips', () => {
     expect(await exists(join(sprites(), ID, 'grok/walk-south-aaaa1111/generated/source-video.mp4'))).toBe(true);
     expect(await readFile(join(sprites(), ID, 'runs/walk-east-bbbb2222/generated/source-video.mp4'), 'utf8')).toBe(CLIP_BYTES);
     expect(await exists(join(sprites(), ID, 'runs/walk-west-cccc3333/generated/source-video.mp4'))).toBe(false);
+    // Run D was already satisfied at its DECLARED path — nothing copied into
+    // the grok/ directory the run record itself lives in.
+    expect(await exists(join(sprites(), ID, 'grok/walk-north-dddd4444/generated/source-video.mp4'))).toBe(false);
 
     // Run records are never rewritten — they are hash-pinned and the read
     // layer re-anchors their paths in memory.

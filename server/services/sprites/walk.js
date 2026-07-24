@@ -192,10 +192,9 @@ function normalizeStripPreview(recordId, run) {
 // INSIDE the record (so the traversal gate passes) but does not exist. That
 // 409'd every loop-trim save on an imported record (#2978), would have failed
 // approveRun the same way, and would leave an imported run's freshly-imported
-// clip (#2984) unfindable — so re-derivation could never see it. Normalizing
-// here — the one choke point every run reader passes through — fixes every
-// consumer at once, and stays a single helper so the two fields can't drift.
-// In memory only, never written back to the hash-pinned record.
+// clip (#2984) unfindable. Normalizing here — the one choke point every run
+// reader passes through — fixes every consumer at once. In memory only, never
+// written back to the hash-pinned record.
 // A path toRecordRelativeAssetPath can't re-anchor (it returns null for a
 // repo-anchored path belonging to some OTHER record, e.g. pipeline provenance)
 // is left untouched rather than blanked, so a genuinely foreign pointer stays
@@ -203,11 +202,12 @@ function normalizeStripPreview(recordId, run) {
 const REPO_ANCHORED_RUN_FIELDS = ['postprocessManifest', 'sourceVideoPath'];
 
 function normalizeRunAssetPaths(recordId, run) {
-  return REPO_ANCHORED_RUN_FIELDS.reduce((acc, field) => {
-    if (!acc?.[field]) return acc;
-    const rel = toRecordRelativeAssetPath(recordId, acc[field]);
-    return !rel || rel === acc[field] ? acc : { ...acc, [field]: rel };
-  }, run);
+  let out = run;
+  for (const field of REPO_ANCHORED_RUN_FIELDS) {
+    const rel = out[field] && toRecordRelativeAssetPath(recordId, out[field]);
+    if (rel && rel !== out[field]) out = { ...out, [field]: rel };
+  }
+  return out;
 }
 
 // A candidate/approved run's stripPreview names a packed strip PNG on disk. If

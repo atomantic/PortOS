@@ -63,20 +63,23 @@ const altRunLayoutRel = (rel) => {
 };
 
 /**
- * Backfill one run. Returns 'copied' when the clip was placed, 'present' when
- * it already was, 'missing' when it is not reachable inside the record, or
- * 'skip' for a directory that holds no run record at all (so a leftover twin
- * directory can't inflate the "needs a re-import" count).
+ * Backfill one run. Returns 'copied' when the clip was placed, 'missing' when
+ * it is not reachable inside the record, or null when there is nothing to do
+ * (the clip is already in place, or the directory holds no run record at all —
+ * neither should inflate the "needs a re-import" count).
  */
 async function backfillRun(recDir, recordId, runDirRel) {
   const record = await readJson(join(recDir, runDirRel, RUN_RECORD_NAME));
-  if (!record) return 'skip';
+  if (!record) return null;
   // Where the clip belongs: what the record declares (re-anchored), else the
   // conventional spot inside the run directory.
-  const destRel = recordRelative(recordId, record.sourceVideoPath) || `${runDirRel}/generated/${CLIP_NAME}`;
-  if (await exists(join(recDir, destRel))) return 'present';
+  const conventionalRel = `${runDirRel}/generated/${CLIP_NAME}`;
+  const destRel = recordRelative(recordId, record.sourceVideoPath) || conventionalRel;
+  if (await exists(join(recDir, destRel))) return null;
 
-  const candidates = [`${runDirRel}/generated/${CLIP_NAME}`, altRunLayoutRel(destRel), altRunLayoutRel(`${runDirRel}/generated/${CLIP_NAME}`)]
+  // Everywhere the clip could still be sitting inside this record: the
+  // conventional spot, and either path's twin under the other run layout.
+  const candidates = [...new Set([conventionalRel, altRunLayoutRel(destRel), altRunLayoutRel(conventionalRel)])]
     .filter((rel) => rel && rel !== destRel);
   for (const rel of candidates) {
     // eslint-disable-next-line no-await-in-loop -- ordered probe, stops at the first hit
@@ -98,7 +101,7 @@ async function migrateRecord(recDir, recordId) {
       if (!entry.isDirectory()) continue;
       // eslint-disable-next-line no-await-in-loop -- per-run sequential is fine (≤8 runs/record)
       const outcome = await backfillRun(recDir, recordId, `${base}/${entry.name}`);
-      if (outcome === 'copied' || outcome === 'missing') tally[outcome] += 1;
+      if (outcome) tally[outcome] += 1;
     }
   }
   return tally;
