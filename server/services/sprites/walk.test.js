@@ -95,12 +95,18 @@ async function characterWithLockedAnchors(id, directions = ['east']) {
   return id;
 }
 
-async function makeCandidateRun(recordId, direction, { stripBytes = `strip-${direction}` } = {}) {
+// `anchored: true` builds the run the way the source-pipeline importer leaves
+// it (#2978): every embedded path stays anchored at the SOURCE repo root
+// (`art-source/sprites/<id>/…`) because the importer copies manifests
+// byte-for-byte against pinned hashes. Readers must re-anchor at read time.
+async function makeCandidateRun(recordId, direction, { stripBytes = `strip-${direction}`, anchored = false } = {}) {
   const runId = `walk-${direction}-${(seq++).toString(16).padStart(8, '0')}`;
   const runDir = join(TEST_ROOT, 'sprites', recordId, 'runs', runId, 'generated');
   await mkdir(runDir, { recursive: true });
   const stripName = `${recordId}-walk-${direction}-strip.png`;
   await writeFile(join(runDir, stripName), stripBytes);
+  const anchor = (rel) => (anchored ? `art-source/sprites/${recordId}/${rel}` : rel);
+  const stripRel = `runs/${runId}/generated/${stripName}`;
   const packaged = {
     schemaVersion: 1,
     kind: 'deterministically-packaged-grok-walk-video',
@@ -108,7 +114,7 @@ async function makeCandidateRun(recordId, direction, { stripBytes = `strip-${dir
     direction,
     frameRate: 12,
     frameCount: 8,
-    stripPath: `runs/${runId}/generated/${stripName}`,
+    stripPath: anchor(stripRel),
     stripSha256: sha256(Buffer.from(stripBytes)),
   };
   const manifestRel = `runs/${runId}/generated/${recordId}-walk-${direction}-manifest.json`;
@@ -122,10 +128,11 @@ async function makeCandidateRun(recordId, direction, { stripBytes = `strip-${dir
     direction,
     chromaKey: '#FF00FF',
     createdAt: new Date().toISOString(),
-    postprocessManifest: manifestRel,
+    postprocessManifest: anchor(manifestRel),
     // Real candidate records carry the packed-strip preview the UI renders.
+    // The importer stamps it as `path` (repo-anchored); PortOS uses `stripPath`.
     stripPreview: {
-      stripPath: `runs/${runId}/generated/${stripName}`,
+      ...(anchored ? { path: anchor(stripRel) } : { stripPath: stripRel }),
       frameCount: 8, fps: 12, cellWidth: 384, cellHeight: 384, row: 0, startColumn: 0,
     },
   }));
@@ -396,6 +403,22 @@ describe('approveWalkDirection', () => {
     });
     expect(state.selection.directions.east.runManifestSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(state.walkSet).toBeNull();
+  });
+
+  // #2978: an imported run's postprocessManifest and the manifest's own
+  // stripPath are both anchored at the source repo root. Resolved raw they
+  // produce a doubled non-existent path, so approval 409'd RUN_MANIFEST_INVALID
+  // on art that is present and intact.
+  it('approves an imported run whose manifest paths are art-source/-anchored', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const { runId, manifestRel } = await makeCandidateRun(id, 'east', { anchored: true });
+    const state = await approveWalkDirection(id, { direction: 'east', runId });
+    expect(state.selection.directions.east).toMatchObject({
+      // The selection stores the RE-ANCHORED path — it's PortOS-owned state,
+      // unlike the hash-pinned imported manifest it points at.
+      status: 'approved', runId, runManifest: manifestRel,
+    });
+    expect(state.selection.directions.east.runManifestSha256).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('finalizes the walk set on the 8th approval and freezes the record', async () => {

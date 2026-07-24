@@ -109,6 +109,55 @@ async function characterWithRedrawRun(id, { frameCount = 6 } = {}) {
   return `${id}-redraw-east`;
 }
 
+// An IMPORTED source-pipeline run (#2978): the importer copies manifests
+// byte-for-byte (their hashes are pinned against the source), so every embedded
+// path stays anchored at the SOURCE repo root — `stripPreview.path`,
+// `postprocessManifest`, and the manifest's own `stripPath`. Readers must
+// re-anchor at read time; left raw they resolve to
+// `data/sprites/<id>/art-source/sprites/<id>/…`, which is inside the record dir
+// (so the traversal gate passes) but does not exist.
+async function characterWithImportedRun(id, { manifest = 'valid' } = {}) {
+  await records.createRecord({ kind: 'character', name: 'Imported' }, id);
+  const width = CELL * CELL_COLORS.length;
+  const buf = Buffer.alloc(width * CELL * 4);
+  for (let y = 0; y < CELL; y++) {
+    for (let x = 0; x < width; x++) {
+      buf.set(CELL_COLORS[Math.floor(x / CELL)], (y * width + x) * 4);
+    }
+  }
+  const runDir = join(TEST_ROOT, 'sprites', id, 'runs', RUN_ID);
+  await mkdir(join(runDir, 'generated'), { recursive: true });
+  await sharp(buf, { raw: { width, height: CELL, channels: 4 } }).png()
+    .toFile(join(runDir, 'generated', 'strip.png'));
+  const anchored = (rel) => `art-source/sprites/${id}/${rel}`;
+  const stripRel = `runs/${RUN_ID}/generated/strip.png`;
+  const manifestRel = `runs/${RUN_ID}/generated/manifest.json`;
+  if (manifest !== 'absent') {
+    await writeFile(join(runDir, 'generated', 'manifest.json'), manifest === 'malformed'
+      ? JSON.stringify({ schemaVersion: 1, stripPath: anchored(stripRel) }) // no cellSize, no frames
+      : JSON.stringify({
+        schemaVersion: 1,
+        stripPath: anchored(stripRel),
+        frameRate: 12,
+        frameCount: 4,
+        alignment: { cellSize: CELL },
+        frames: PHASES4.map((phase, outputIndex) => ({ outputIndex, phase })),
+      }));
+  }
+  await writeFile(join(runDir, 'animation-run.json'), JSON.stringify({
+    schemaVersion: 1,
+    id: RUN_ID,
+    status: 'candidate',
+    direction: 'east',
+    postprocessManifest: anchored(manifestRel),
+    // The importer's shape: `path`, not `stripPath`, and repo-anchored.
+    stripPreview: {
+      path: anchored(stripRel), frameCount: 4, fps: 12, cellWidth: CELL, cellHeight: CELL, row: 0, startColumn: 0,
+    },
+  }));
+  return id;
+}
+
 beforeEach(() => {
   runFfmpegProcess.mockClear();
   rmSync(join(TEST_ROOT, 'sprite-records.json'), { force: true });
@@ -202,6 +251,50 @@ describe('saveLoopTrim', () => {
     });
     // No named gait phases on a redraw cycle → columns label numerically.
     expect(manifest.selectedFrames.map((f) => f.sourceFrameLabel)).toEqual(['0', '2', '4']);
+  });
+
+  // #2978: every path an imported run carries is anchored at the SOURCE repo
+  // root. Before the fix, resolving `postprocessManifest` raw produced a
+  // doubled non-existent path and 409'd RUN_MANIFEST_INVALID on every save —
+  // the whole trim feature was dead for imported records.
+  it('trims an imported run whose paths are all art-source/-anchored', async () => {
+    const id = await characterWithImportedRun(newId());
+    const result = await saveLoopTrim(id, { runId: RUN_ID, enabledColumns: [0, 2, 3] });
+    expect(result).toMatchObject({ frameCount: 3, disabledFrameCount: 1 });
+
+    const { data, info } = await sharp(join(TEST_ROOT, 'sprites', id, result.strip))
+      .raw().toBuffer({ resolveWithObject: true });
+    expect(info.width).toBe(CELL * 3);
+    const px = (x) => [...data.subarray(x * 4, x * 4 + 4)];
+    expect(px(0)).toEqual(CELL_COLORS[0]);
+    expect(px(CELL)).toEqual(CELL_COLORS[2]);
+    expect(px(CELL * 2)).toEqual(CELL_COLORS[3]);
+
+    const manifest = JSON.parse(await readFile(join(TEST_ROOT, 'sprites', id, result.manifest), 'utf8'));
+    // The trim records a RECORD-relative source path, not the source repo's.
+    expect(manifest.sourceAtlasPath).toBe(`runs/${RUN_ID}/generated/strip.png`);
+    // Manifest read successfully → real gait-phase labels, not numeric fallbacks.
+    expect(manifest.selectedFrames.map((f) => f.sourceFrameLabel))
+      .toEqual(['left-contact', 'left-passing', 'left-up']);
+  });
+
+  // Absent vs. malformed must NOT collapse: a missing manifest file is a
+  // degraded-but-trimmable run (stripPreview carries the geometry), while a
+  // manifest that exists but is inconsistent is real corruption.
+  it('falls back to stripPreview when the packaged manifest file is absent', async () => {
+    const id = await characterWithImportedRun(newId(), { manifest: 'absent' });
+    const result = await saveLoopTrim(id, { runId: RUN_ID, enabledColumns: [0, 1] });
+    expect(result).toMatchObject({ frameCount: 2, disabledFrameCount: 2 });
+    const manifest = JSON.parse(await readFile(join(TEST_ROOT, 'sprites', id, result.manifest), 'utf8'));
+    expect(manifest.sourceAtlasPath).toBe(`runs/${RUN_ID}/generated/strip.png`);
+    // No manifest → no phase labels; columns label numerically.
+    expect(manifest.selectedFrames.map((f) => f.sourceFrameLabel)).toEqual(['0', '1']);
+  });
+
+  it('still rejects a manifest that exists but is inconsistent', async () => {
+    const id = await characterWithImportedRun(newId(), { manifest: 'malformed' });
+    await expect(saveLoopTrim(id, { runId: RUN_ID, enabledColumns: [0, 1] }))
+      .rejects.toMatchObject({ code: 'RUN_MANIFEST_INVALID' });
   });
 
   it('rejects unknown runs, unpackaged runs, and out-of-strip columns', async () => {
