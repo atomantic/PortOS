@@ -316,6 +316,43 @@ export function installTrellis2({
 }
 
 /**
+ * Signatures of a Hugging Face **auth / gated-repo** failure during a render. The
+ * TRELLIS.2 pipeline pulls a gated dependency model (`facebook/dinov3-…`) at load
+ * time; on a host with no `HF_TOKEN` (or one whose account hasn't accepted that
+ * model's terms) `from_pretrained` raises `GatedRepoError` / a `401` and the render
+ * exits non-zero — which is otherwise indistinguishable from a real crash. Detecting
+ * it lets the runner surface an actionable "authenticate with Hugging Face" message
+ * instead of a bare "exited 1". Confirmed against the real failure during #2952
+ * on-device validation (gated `facebook/dinov3-vitl16-pretrain-lvd1689m`).
+ */
+const HF_AUTH_ERROR_RE = new RegExp(
+  [
+    'GatedRepoError', 'gated repo', 'access to model .* is restricted',
+    'You must have access to it', 'must be authenticated to access',
+    'Please log in', 'Access to model .* is restricted', 'RepositoryNotFoundError',
+    '401 Client Error', 'Invalid user token', 'Repo .* is gated',
+  ].join('|'),
+  'i',
+);
+
+/**
+ * Whether a captured chunk of render output looks like a Hugging Face auth/gated-repo
+ * failure (see `HF_AUTH_ERROR_RE`). Exported so the runner and tests share one
+ * classification.
+ * @param {string} text
+ * @returns {boolean}
+ */
+export function isHfAuthError(text) {
+  return HF_AUTH_ERROR_RE.test(String(text ?? ''));
+}
+
+/** Human-actionable guidance for the gated-dependency failure above. */
+const HF_AUTH_HELP = 'TRELLIS.2 could not download a gated model dependency from '
+  + 'Hugging Face. Accept the terms for facebook/dinov3-vitl16-pretrain-lvd1689m at '
+  + 'https://huggingface.co/facebook/dinov3-vitl16-pretrain-lvd1689m, then authenticate '
+  + '(set HF_TOKEN or run `huggingface-cli login`) and try again.';
+
+/**
  * Run a single image→GLB generation. The one real-subprocess boundary — GUARDED:
  * throws `TRELLIS2_NOT_INSTALLED` unless the model is present, so it can never run
  * from a cold boot. `spawnImpl`/`exists` are injectable so the wiring (right command,
@@ -350,8 +387,12 @@ export function runTrellis2Generate({
   // throw into the request lifecycle (CLAUDE.md child-process exception).
   const child = spawnImpl(command, args, { cwd: trellis2Root(base) });
   let assetPath = outputPath || null;
+  // Retain a bounded tail of combined output so a non-zero exit can be classified
+  // (HF auth/gated-repo vs. a real crash) — the clue is in the text, not the code.
+  let outputTail = '';
   const promise = new Promise((resolve, reject) => {
     const ingest = (buf) => {
+      outputTail = `${outputTail}${buf}`.slice(-4000);
       for (const line of String(buf).split('\n')) {
         const frame = parseGenerateProgress(line);
         if (!frame) continue;
@@ -365,6 +406,14 @@ export function runTrellis2Generate({
     child.on('close', (code) => {
       if (code === 0 && assetPath) {
         resolve({ assetPath });
+        return;
+      }
+      // A gated-dependency / HF-auth failure is a user-fixable setup problem, not a
+      // crash — surface it as such with actionable guidance instead of "exited N".
+      if (code !== 0 && isHfAuthError(outputTail)) {
+        const err = new Error(HF_AUTH_HELP);
+        err.code = 'TRELLIS2_HF_AUTH_REQUIRED';
+        reject(err);
         return;
       }
       const err = new Error(

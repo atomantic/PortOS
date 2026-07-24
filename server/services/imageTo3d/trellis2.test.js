@@ -13,6 +13,7 @@ import {
   runTrellis2Generate,
   installTrellis2,
   isTransientInstallError,
+  isHfAuthError,
 } from './trellis2.js';
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -212,6 +213,27 @@ describe('runTrellis2Generate', () => {
     await expect(promise).rejects.toMatchObject({ code: 'TRELLIS2_GENERATE_FAILED' });
   });
 
+  it('classifies a gated-repo / HF-auth failure as a distinct, actionable error', async () => {
+    // The real #2952 on-device failure: the pipeline pulls a gated dependency model
+    // and, with no HF_TOKEN, from_pretrained raises GatedRepoError → non-zero exit.
+    const child = makeChild();
+    const { promise } = runTrellis2Generate({
+      imagePath: 'a.png',
+      outputPath: '/out/a.glb',
+      base: BASE,
+      exists: installed,
+      spawnImpl: () => child,
+    });
+    child.stderr.emit('data',
+      'huggingface_hub.errors.GatedRepoError: 401 Client Error. '
+      + 'Access to model facebook/dinov3-vitl16-pretrain-lvd1689m is restricted.\n');
+    child.emit('close', 1);
+    await expect(promise).rejects.toMatchObject({
+      code: 'TRELLIS2_HF_AUTH_REQUIRED',
+      message: expect.stringMatching(/hugging face/i),
+    });
+  });
+
   it('rejects when it exits 0 but never reported a .glb', async () => {
     const child = makeChild();
     const { promise } = runTrellis2Generate({
@@ -273,6 +295,29 @@ describe('isTransientInstallError', () => {
     undefined,
   ])('does NOT flag a non-transient/real failure: %s', (line) => {
     expect(isTransientInstallError(line)).toBe(false);
+  });
+});
+
+describe('isHfAuthError', () => {
+  it.each([
+    'huggingface_hub.errors.GatedRepoError: 401 Client Error.',
+    'Access to model facebook/dinov3-vitl16-pretrain-lvd1689m is restricted.',
+    'You must have access to it and be authenticated to access it. Please log in.',
+    'OSError: You are trying to access a gated repo.',
+    'Invalid user token.',
+  ])('flags an HF auth / gated-repo failure: %s', (line) => {
+    expect(isHfAuthError(line)).toBe(true);
+  });
+
+  it.each([
+    'RuntimeError: MPS backend out of memory',
+    'IndexError: max(): Expected reduction dim 0 to have non-zero size',
+    'AssertionError: BVH needs at least 8 triangles, got 0',
+    '',
+    null,
+    undefined,
+  ])('does NOT flag a non-auth failure: %s', (line) => {
+    expect(isHfAuthError(line)).toBe(false);
   });
 });
 
