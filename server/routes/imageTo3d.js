@@ -1,16 +1,37 @@
 import { Router } from 'express';
-import { asyncHandler } from '../lib/errorHandler.js';
+import { createReadStream } from 'node:fs';
+import { z } from 'zod';
+import { asyncHandler, ServerError, sendErrorResponse } from '../lib/errorHandler.js';
+import { validateRequest } from '../lib/validation.js';
 import {
   listTargets,
   detectHostCapabilities,
   isTargetAvailable,
   unavailableReason,
+  IMAGE_TO_3D_TARGET_IDS,
 } from '../services/imageTo3d/targets.js';
 import { isTrellis2Installed, installTrellis2, trellis2Root } from '../services/imageTo3d/trellis2.js';
+import {
+  listModels,
+  getModel,
+  createModel,
+  startGeneration,
+  deleteModel,
+  getModelAsset,
+} from '../services/imageTo3d/models.js';
 import { createInstallLogger } from '../lib/installLogger.js';
 import { openSseStream } from '../lib/sseDownload.js';
 
 const router = Router();
+
+const galleryFilenameSchema = z.string().trim().min(1).max(256)
+  .regex(/^[^/\\]+\.(png|jpe?g|webp)$/i, 'filename must be a gallery image basename');
+
+const createModelSchema = z.object({
+  name: z.string().trim().min(1).max(120),
+  filename: galleryFilenameSchema,
+  target: z.enum([...IMAGE_TO_3D_TARGET_IDS]).optional(),
+});
 
 // In-flight singleton — a rapid double-click would otherwise race two clone/setup
 // processes against the same install dir. isTrellis2Installed() can't gate the
@@ -98,6 +119,63 @@ router.get('/trellis2/install', asyncHandler(async (req, res) => {
 
   // Cancel the (multi-GB) install if the client navigates away mid-bootstrap.
   req.on('close', () => { installLog.cancel(); kill(); safeEnd(); });
+}));
+
+// ── Image-to-3D model records ─────────────────────────────────────────────
+// Namespaced under /models so `/:id` never shadows the `/targets` and
+// `/trellis2/install` routes above. These drive the /media/3d page: create a
+// record from a gallery image (which kicks off the local render), poll the
+// record for status, re-generate, delete, and download the exported GLB.
+
+router.get('/models', asyncHandler(async (_req, res) => {
+  res.json(await listModels());
+}));
+
+router.post('/models', asyncHandler(async (req, res) => {
+  const input = validateRequest(createModelSchema, req.body);
+  const model = await createModel(input);
+  res.status(202).json(model);
+}));
+
+router.get('/models/:id/asset', asyncHandler(async (req, res) => {
+  const { path, filename } = await getModelAsset(req.params.id);
+  res.set('Content-Type', 'model/gltf-binary');
+  res.set('Content-Disposition', `attachment; filename="${filename}"`);
+  // The 'error' event fires outside the asyncHandler promise chain, so a throw
+  // here would crash the process — route it through sendErrorResponse (the shared
+  // envelope + headers-sent guard) instead. A file removed between the readiness
+  // check and the stream just 404s the download.
+  const stream = createReadStream(path);
+  stream.on('error', (err) => {
+    console.warn(`⚠️ Image-to-3D asset stream error: ${err.code || err.message}`);
+    // Pre-stream (common: file removed after the readiness check) → shared 404
+    // envelope. Mid-stream (headers already flushed) → tear the socket down, since
+    // sendErrorResponse no-ops once headers are sent.
+    if (res.headersSent) {
+      res.destroy(err);
+    } else {
+      // Drop the GLB download headers set above so the JSON error body isn't
+      // offered to the browser as a "<name>.glb" attachment.
+      res.removeHeader('Content-Disposition');
+      sendErrorResponse(res, new ServerError('Mesh file not found', { status: 404, code: 'ASSET_MISSING' }));
+    }
+  });
+  stream.pipe(res);
+}));
+
+router.get('/models/:id', asyncHandler(async (req, res) => {
+  const model = await getModel(req.params.id);
+  if (!model) throw new ServerError('Image-to-3D model not found', { status: 404, code: 'NOT_FOUND' });
+  res.json(model);
+}));
+
+router.post('/models/:id/generate', asyncHandler(async (req, res) => {
+  const model = await startGeneration(req.params.id);
+  res.status(202).json(model);
+}));
+
+router.delete('/models/:id', asyncHandler(async (req, res) => {
+  res.json(await deleteModel(req.params.id));
 }));
 
 export default router;

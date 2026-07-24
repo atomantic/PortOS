@@ -117,6 +117,10 @@ export const PATHS = {
   // (sprites/<id>/{reference,walk,runs,runtime,atlas}/...). Records live in
   // Postgres (sprite_records); only binary artifacts + manifests live here.
   sprites: join(INSTALL_ROOT, 'data/sprites'),
+  // Image-to-3D (issue #2952): per-record GLB meshes rendered locally by a
+  // target (TRELLIS.2 today), stored as image-to-3d/<id>/model.glb. Records
+  // live in Postgres (image_to_3d_models); only the binary GLB lives here.
+  imageTo3d: join(INSTALL_ROOT, 'data/image-to-3d'),
   // Persisted audio renders (voice-over lines). Kept distinct from
   // the in-memory voice-agent synthesis path in services/voice/ — that path
   // streams WAV over Socket.IO without ever touching disk.

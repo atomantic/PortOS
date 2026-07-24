@@ -1,5 +1,8 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import express from 'express';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { writeFile, rm } from 'node:fs/promises';
 import { request } from '../lib/testHelper.js';
 import { errorMiddleware } from '../lib/errorHandler.js';
 
@@ -19,6 +22,7 @@ vi.mock('../services/imageTo3d/targets.js', () => ({
   ]),
   isTargetAvailable: vi.fn(() => true),
   unavailableReason: vi.fn(() => 'requires-apple-silicon'),
+  IMAGE_TO_3D_TARGET_IDS: ['trellis2'],
 }));
 
 vi.mock('../services/imageTo3d/trellis2.js', () => ({
@@ -31,8 +35,18 @@ vi.mock('../services/imageTo3d/trellis2.js', () => ({
   }),
 }));
 
+vi.mock('../services/imageTo3d/models.js', () => ({
+  listModels: vi.fn(),
+  getModel: vi.fn(),
+  createModel: vi.fn(),
+  startGeneration: vi.fn(),
+  deleteModel: vi.fn(),
+  getModelAsset: vi.fn(),
+}));
+
 import * as targets from '../services/imageTo3d/targets.js';
 import * as trellis2 from '../services/imageTo3d/trellis2.js';
+import * as models from '../services/imageTo3d/models.js';
 import routes from './imageTo3d.js';
 
 const makeApp = () => {
@@ -123,5 +137,81 @@ describe('GET /trellis2/install (SSE)', () => {
     const frames = sseFrames(res.text);
     expect(frames.at(-1)).toMatchObject({ type: 'error', message: expect.stringMatching(/requires-apple-silicon/) });
     expect(trellis2.installTrellis2).not.toHaveBeenCalled();
+  });
+});
+
+describe('image-to-3d model records', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('GET /models lists records', async () => {
+    models.listModels.mockResolvedValue([{ id: 'image3d-1', status: 'ready' }]);
+    const res = await request(makeApp()).get('/api/image-to-3d/models');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([{ id: 'image3d-1', status: 'ready' }]);
+  });
+
+  it('POST /models creates a record (202) from a validated gallery image', async () => {
+    models.createModel.mockResolvedValue({ id: 'image3d-1', status: 'generating' });
+    const res = await request(makeApp())
+      .post('/api/image-to-3d/models')
+      .send({ name: 'Beacon', filename: 'shot.png' });
+    expect(res.status).toBe(202);
+    expect(res.body).toMatchObject({ id: 'image3d-1', status: 'generating' });
+    expect(models.createModel).toHaveBeenCalledWith(expect.objectContaining({ name: 'Beacon', filename: 'shot.png' }));
+  });
+
+  it('POST /models 400s on a non-image filename', async () => {
+    const res = await request(makeApp())
+      .post('/api/image-to-3d/models')
+      .send({ name: 'Beacon', filename: 'not-an-image.txt' });
+    expect(res.status).toBe(400);
+    expect(models.createModel).not.toHaveBeenCalled();
+  });
+
+  it('POST /models 400s on a path-traversal filename', async () => {
+    const res = await request(makeApp())
+      .post('/api/image-to-3d/models')
+      .send({ name: 'Beacon', filename: '../secrets.png' });
+    expect(res.status).toBe(400);
+    expect(models.createModel).not.toHaveBeenCalled();
+  });
+
+  it('GET /models/:id 404s when absent', async () => {
+    models.getModel.mockResolvedValue(null);
+    const res = await request(makeApp()).get('/api/image-to-3d/models/nope');
+    expect(res.status).toBe(404);
+  });
+
+  it('POST /models/:id/generate re-renders (202)', async () => {
+    models.startGeneration.mockResolvedValue({ id: 'image3d-1', status: 'generating' });
+    const res = await request(makeApp()).post('/api/image-to-3d/models/image3d-1/generate');
+    expect(res.status).toBe(202);
+    expect(models.startGeneration).toHaveBeenCalledWith('image3d-1');
+  });
+
+  it('DELETE /models/:id soft-deletes', async () => {
+    models.deleteModel.mockResolvedValue({ ok: true });
+    const res = await request(makeApp()).delete('/api/image-to-3d/models/image3d-1');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+  });
+
+  it('GET /models/:id/asset streams the GLB with a download filename', async () => {
+    const tmp = join(tmpdir(), `it-asset-${process.pid}.glb`);
+    await writeFile(tmp, 'GLB-BYTES');
+    models.getModelAsset.mockResolvedValue({ path: tmp, filename: 'beacon.glb' });
+    const res = await request(makeApp()).get('/api/image-to-3d/models/image3d-1/asset');
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toMatch(/model\/gltf-binary/);
+    expect(res.headers['content-disposition']).toMatch(/beacon\.glb/);
+    expect(res.text).toBe('GLB-BYTES');
+    await rm(tmp, { force: true });
+  });
+
+  it('GET /models/:id/asset 409s when the mesh is not ready', async () => {
+    const { ServerError } = await import('../lib/errorHandler.js');
+    models.getModelAsset.mockRejectedValue(new ServerError('not ready', { status: 409, code: 'MODEL_NOT_READY' }));
+    const res = await request(makeApp()).get('/api/image-to-3d/models/image3d-1/asset');
+    expect(res.status).toBe(409);
   });
 });

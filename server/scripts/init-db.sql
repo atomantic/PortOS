@@ -702,6 +702,23 @@ CREATE TABLE IF NOT EXISTS threejs_models (
 );
 CREATE INDEX IF NOT EXISTS idx_threejs_models_live_updated ON threejs_models (updated_at DESC) WHERE deleted = FALSE;
 
+-- Image-to-3D models (issue #2952). Neural image→GLB records — distinct from
+-- threejs_models above (procedural JS source vs. a real .glb mesh). The GLB
+-- binary stays on disk at data/image-to-3d/<id>/model.glb; each row owns the
+-- source gallery image reference, selected target, generation state, run
+-- history, and the exported GLB's served path. Not federated in this phase.
+CREATE TABLE IF NOT EXISTS image_to_3d_models (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'draft',
+  data JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  deleted BOOLEAN DEFAULT FALSE,
+  deleted_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS idx_image_to_3d_models_live_updated ON image_to_3d_models (updated_at DESC) WHERE deleted = FALSE;
+
 -- Music Video projects (issue #1760). The director scene board's db-primary
 -- record: id/status/created_at/updated_at mirrored as columns, the full project
 -- (track link, cached audioAnalysis, scenes[]) in `data` JSONB — same shape as
@@ -1335,6 +1352,8 @@ DROP TRIGGER IF EXISTS trg_creative_director_projects_audit ON creative_director
 CREATE TRIGGER trg_creative_director_projects_audit AFTER UPDATE OR DELETE ON creative_director_projects FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_threejs_models_audit ON threejs_models;
 CREATE TRIGGER trg_threejs_models_audit AFTER UPDATE OR DELETE ON threejs_models FOR EACH ROW EXECUTE FUNCTION record_audit_log();
+DROP TRIGGER IF EXISTS trg_image_to_3d_models_audit ON image_to_3d_models;
+CREATE TRIGGER trg_image_to_3d_models_audit AFTER UPDATE OR DELETE ON image_to_3d_models FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_mood_boards_audit ON mood_boards;
 CREATE TRIGGER trg_mood_boards_audit AFTER UPDATE OR DELETE ON mood_boards FOR EACH ROW EXECUTE FUNCTION record_audit_log();
 DROP TRIGGER IF EXISTS trg_lora_training_runs_audit ON lora_training_runs;
