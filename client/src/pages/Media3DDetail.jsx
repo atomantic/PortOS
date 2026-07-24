@@ -39,14 +39,22 @@ export default function Media3DDetail() {
     return next;
   }, [id, mountedRef]);
 
-  useEffect(() => { load({ initial: true }); }, [load]);
+  // Re-fetch from scratch whenever the routed id changes — reset loading/notFound
+  // so switching between two `/media/3d/:id` records shows a spinner instead of
+  // the previous record's content (and doesn't carry a stale not-found flag).
+  useEffect(() => {
+    setLoading(true); setNotFound(false);
+    load({ initial: true });
+  }, [load]);
 
   // Poll only while generating (the initial fetch above owns the first load, so
   // immediate:false); `load` owns its own state + error handling, so pollOnly.
+  // Gate off notFound too: if the record is deleted out from under a live poll
+  // (another tab / peer), stop polling instead of 404-ing every tick.
   useAutoRefetch(load, POLL_INTERVAL_MS, {
     pollOnly: true,
     immediate: false,
-    enabled: record?.status === 'generating',
+    enabled: !notFound && record?.status === 'generating',
   });
 
   const handleRegenerate = useCallback(async () => {
