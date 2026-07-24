@@ -19,6 +19,7 @@ import { randomUUID } from 'crypto';
 import { join } from 'node:path';
 import { ServerError } from '../../lib/errorHandler.js';
 import { PATHS, resolveGalleryImage, ensureDir } from '../../lib/fileUtils.js';
+import { slugifyForFilename } from '../../lib/civitai.js';
 import { detectHostCapabilities, resolveTarget, DEFAULT_IMAGE_TO_3D_TARGET } from './targets.js';
 import { isTrellis2Installed, runTrellis2Generate } from './trellis2.js';
 import * as store from './db.js';
@@ -38,9 +39,6 @@ const TARGET_RUNNERS = {
 
 const trimRuns = (runs) => runs.slice(-MAX_RUNS);
 const cleanError = (error) => String(error?.message || error || 'Render failed').slice(0, 2_000);
-
-const slugify = (name) => String(name || '')
-  .toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
 /** The served URL for a record's exported GLB (static-mounted under /data). */
 const assetUrl = (id) => `/data/image-to-3d/${id}/model.glb`;
@@ -162,9 +160,13 @@ export async function createModel(input, { caps = detectHostCapabilities() } = {
   const targetId = input.target || DEFAULT_IMAGE_TO_3D_TARGET;
   // Validate the target is runnable BEFORE persisting a record so we never leave
   // a dangling draft when the host can't render / the model isn't installed.
-  assertTargetReady(targetId, caps);
+  const runner = assertTargetReady(targetId, caps);
   const created = await store.createModel({ ...input, target: targetId });
-  return startGeneration(created.id, { caps });
+  // Thread the already-validated runner + resolved source straight into the
+  // render — createModel and startGeneration share `beginRender`, so the create
+  // path does NOT re-resolve the gallery image, re-assert readiness, or re-fetch
+  // the row it just wrote.
+  return beginRender(created, runner, sourcePath);
 }
 
 export async function startGeneration(id, { caps = detectHostCapabilities() } = {}) {
@@ -180,7 +182,18 @@ export async function startGeneration(id, { caps = detectHostCapabilities() } = 
   if (!sourcePath) {
     throw new ServerError('The source gallery image is no longer available', { status: 409, code: 'GALLERY_IMAGE_NOT_FOUND' });
   }
+  return beginRender(current, runner, sourcePath);
+}
 
+/**
+ * Flip a validated record to `generating`, append a run, and dispatch the async
+ * render. The single write path shared by create + regenerate — callers do the
+ * validation (target readiness, gallery-image resolution) and pass the resolved
+ * runner + source through. The transactional `status==='generating'` guard here
+ * is the authoritative race check (the callers' pre-check is just a fast 409).
+ */
+async function beginRender(record, runner, sourcePath) {
+  const { id } = record;
   const operationId = randomUUID();
   const startedAt = new Date().toISOString();
   const next = await store.mutateModel(id, (fresh) => {
@@ -224,7 +237,7 @@ export async function getModelAsset(id) {
   if (model.status !== 'ready' || !model.assetPath) {
     throw new ServerError('This model has no generated mesh yet', { status: 409, code: 'MODEL_NOT_READY' });
   }
-  return { path: assetDiskPath(id), filename: `${slugify(model.name) || 'model'}.glb` };
+  return { path: assetDiskPath(id), filename: `${slugifyForFilename(model.name)}.glb` };
 }
 
 export async function recoverInterruptedModels() {

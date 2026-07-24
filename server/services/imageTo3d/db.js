@@ -93,10 +93,6 @@ export async function mutateModel(id, mutate, { includeDeleted = false } = {}) {
   });
 }
 
-export function updateModel(id, patch) {
-  return mutateModel(id, (current) => ({ ...current, ...patch }));
-}
-
 export async function deleteModel(id) {
   const now = new Date().toISOString();
   await mutateModel(id, (current) => ({

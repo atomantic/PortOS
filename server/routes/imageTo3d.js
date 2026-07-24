@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { createReadStream } from 'node:fs';
 import { z } from 'zod';
-import { asyncHandler, ServerError } from '../lib/errorHandler.js';
+import { asyncHandler, ServerError, sendErrorResponse } from '../lib/errorHandler.js';
 import { validateRequest } from '../lib/validation.js';
 import {
   listTargets,
@@ -142,16 +142,17 @@ router.get('/models/:id/asset', asyncHandler(async (req, res) => {
   res.set('Content-Type', 'model/gltf-binary');
   res.set('Content-Disposition', `attachment; filename="${filename}"`);
   // The 'error' event fires outside the asyncHandler promise chain, so a throw
-  // here would crash the process — emit the error envelope instead (a file
-  // removed between the readiness check and the stream just 404s the download).
+  // here would crash the process — route it through sendErrorResponse (the shared
+  // envelope + headers-sent guard) instead. A file removed between the readiness
+  // check and the stream just 404s the download.
   const stream = createReadStream(path);
   stream.on('error', (err) => {
     console.warn(`⚠️ Image-to-3D asset stream error: ${err.code || err.message}`);
-    if (!res.headersSent) {
-      res.status(404).json({ error: 'Mesh file not found', code: 'ASSET_MISSING', timestamp: new Date().toISOString() });
-    } else {
-      res.destroy(err);
-    }
+    // Pre-stream (common: file removed after the readiness check) → shared 404
+    // envelope. Mid-stream (headers already flushed) → tear the socket down, since
+    // sendErrorResponse no-ops once headers are sent.
+    if (res.headersSent) res.destroy(err);
+    else sendErrorResponse(res, new ServerError('Mesh file not found', { status: 404, code: 'ASSET_MISSING' }));
   });
   stream.pipe(res);
 }));
