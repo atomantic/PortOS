@@ -87,7 +87,7 @@ describe('MediaCard', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Send to Three.js Models' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send to 3D' }));
     expect(onSendTo3d).toHaveBeenCalledWith(imageItem);
 
     rerender(
@@ -98,6 +98,6 @@ describe('MediaCard', () => {
         showMoodBoardMenu={false}
       />
     );
-    expect(screen.queryByRole('button', { name: 'Send to Three.js Models' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Send to 3D' })).toBeNull();
   });
 });
