@@ -94,7 +94,8 @@ import {
   ChartGantt,
   Clapperboard,
   PersonStanding,
-  Box
+  Box,
+  Boxes
 } from 'lucide-react';
 /* global __APP_VERSION__ */
 import { safeReadStorage, safeWriteStorage } from '../lib/safeStorage';
@@ -219,6 +220,7 @@ const navItems = [
     icon: Sparkles,
     defaultTo: '/media',
     children: [
+      { to: '/media/3d', label: '3D', icon: Boxes },
       { to: '/authors', label: 'Authors', icon: FilePen },
       { to: '/catalog', label: 'Catalog', icon: Sparkles },
       { to: '/creative-commission', label: 'Creative Commissions', icon: CalendarClock },
