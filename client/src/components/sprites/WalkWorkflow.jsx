@@ -145,15 +145,18 @@ function StripLoop({ recordId, stripPreview }) {
 // behind it. Named rather than inlined as a nested ternary so the three cases
 // read as the decision they are.
 const driftRemedy = ({ approved, hasSourceClip, imported }) => {
-  // A source-pipeline import has no regenerable clips, so the server refuses
-  // BOTH reopen and unlock on it — pointing there would advise an action that
-  // always 409s, and imported sets are the population most likely to drift
-  // (they never passed the queue-time gate).
-  if (imported) return 'create a new character version to revise it';
-  if (approved) return 'reopen this direction to re-derive it';
-  return hasSourceClip
-    ? 'reprocess it from its clip'
-    : 'import this direction\'s source clip to re-derive it';
+  // Evidence, not provenance: the server gates re-derivation on whether the
+  // direction's clip is actually on disk, so an imported direction whose clip
+  // came across re-derives exactly like a native one. Only a direction with no
+  // clip behind it is a dead end — and for an import the fix is re-importing the
+  // character, not authoring a new version by hand.
+  if (!hasSourceClip) {
+    return imported
+      ? 're-import this character to bring its source clip across'
+      : 'import this direction\'s source clip to re-derive it';
+  }
+  if (approved) return 'reopen this direction to re-derive it from its clip';
+  return 'reprocess it from its clip';
 };
 
 /**
@@ -257,6 +260,11 @@ function DirectionCard({
   // link stands for approved and finalized runs too, since a trim is a
   // non-destructive derived artifact under `walk/trims/`.
   const trimmable = Boolean(run?.stripPreview?.stripPath);
+  // Whether this direction can be re-derived without a new render: the server
+  // resolves `sourceVideoPath` against disk and flags `sourceClipMissing` when
+  // the clip the record names isn't there, so declaring a clip and having one
+  // never read the same. Every reopen/reprocess affordance below gates on this.
+  const hasSourceClip = Boolean(run?.sourceVideoPath) && !run?.sourceClipMissing;
   const statusLabel = approved ? 'approved'
     : (pending || rendering) ? 'rendering…'
       : run?.status === 'postprocessing' ? 'packaging…'
@@ -287,7 +295,7 @@ function DirectionCard({
           {[drift.frameCountDrifts && `${drift.frameCount}f`, drift.fpsDrifts && `${drift.fps}fps`]
             .filter(Boolean).join(' · ')} · re-derive to {cycleLabel}
           <span className="block text-gray-400">
-            {driftRemedy({ approved, hasSourceClip: Boolean(run?.sourceVideoPath), imported })}
+            {driftRemedy({ approved, hasSourceClip, imported })}
           </span>
         </p>
       )}
@@ -301,10 +309,12 @@ function DirectionCard({
           "Retry postprocess" that 409s for a finalized/approved run. */}
       {(approved || candidate) && run?.stripMissing && (
         <p className="text-[10px] text-port-error border border-port-error/60 rounded px-1.5 py-1 leading-tight">
-          {/* An import is always finalized AND refuses unlock, so naming unlock
-              here would advise the same guaranteed-409 the drift badge and the
-              hidden Reopen/Unlock buttons already avoid. */}
-          Walk strip missing on disk — {imported ? 'create a new character version to revise it'
+          {/* An import with no clip behind it still refuses unlock/reopen, so
+              naming them there would advise a guaranteed-409 the drift badge and
+              the hidden Reopen/Unlock buttons already avoid. With a clip it
+              recovers exactly like a native direction. */}
+          Walk strip missing on disk — {imported && !hasSourceClip
+            ? 're-import this character to bring its source clip across'
             : finalized ? 'unlock the set to regenerate this direction' : 'regenerate to repack it'}.
         </p>
       )}
@@ -330,7 +340,7 @@ function DirectionCard({
           {/* Even when packaging failed, grok still produced a clip — show it so
               the render isn't a dead end. The raw clip carries its own magenta
               matte (not transparent), so no checkerboard behind it. */}
-          {run.status === 'error' && run.sourceVideoPath && (
+          {run.status === 'error' && hasSourceClip && (
             <video
               src={spriteAssetUrl(recordId, run.sourceVideoPath)}
               className="w-full rounded border border-port-border"
@@ -417,11 +427,12 @@ function DirectionCard({
           the rest are fine. Un-freezes a finalized set but keeps the other seven
           approvals; the rendered clip is preserved, so re-approval is one click.
           Inline confirm (not a hidden two-click arm) per the repo's UX.
-          Hidden for a source-pipeline import, whose set has no regenerable clips
-          behind it — the server refuses reopen there (LEGACY_IMPORTED_WALK_SET)
-          exactly as it refuses unlock, so offering the button would guarantee a
-          409 on click. Mirrors how the header hides Unlock for imports. */}
-      {approved && !imported && (
+          Hidden only for an imported direction with NO clip on disk — there the
+          server refuses reopen (LEGACY_IMPORTED_WALK_SET) exactly as it refuses
+          unlock, so offering the button would guarantee a 409 on click. An
+          imported direction whose clip came across reopens like any other.
+          Mirrors how the header gates Unlock. */}
+      {approved && (!imported || hasSourceClip) && (
         reopening ? (
           <ConfirmButtonPair
             prompt={finalized ? 'Reopen (un-freezes set)?' : 'Reopen this direction?'}
@@ -484,11 +495,17 @@ export default function WalkWorkflow({
   const runs = walk?.runs || [];
   const selection = walk?.selection || null;
   const finalized = Boolean(walk?.walkSet);
-  // A source-pipeline import (#2895) has no regenerable grok clips behind its
-  // frozen set, so the server refuses to unlock it — hide the affordance and
-  // show why rather than offering a button that always 409s. The server stamps
-  // this flag on the walk state so the client doesn't re-derive the path convention.
+  // A source-pipeline import (#2895) still carries directions PortOS cannot
+  // compile from. The server stamps this flag on the walk state so the client
+  // doesn't re-derive the path convention itself.
   const importedWalkSet = Boolean(walk?.walkSet?.imported);
+  // …but since #2984 imports each run's clip, such a set is only a dead end when
+  // NOTHING behind it can be re-derived — which is exactly when the server
+  // refuses to unlock it. Gate the affordance on that, not on the import label,
+  // so an import with its clips intact gets the real Unlock button instead of a
+  // "new version to revise" note that is no longer true.
+  const unlockBlocked = importedWalkSet
+    && !(walk?.runs || []).some((run) => run.sourceVideoPath && !run.sourceClipMissing);
 
   // direction → jobId for in-flight video renders. The hook instance is owned
   // by the Sprites page and shared with the asset collection (#2931) so both
@@ -617,9 +634,9 @@ export default function WalkWorkflow({
             <p className="text-xs text-port-success flex items-center gap-1">
               <Lock className="w-3 h-3" /> walk set frozen · immutable
             </p>
-            {importedWalkSet ? (
-              <span className="text-[10px] text-gray-500" title="Imported from the source pipeline — no regenerable clips">
-                imported · new version to revise
+            {unlockBlocked ? (
+              <span className="text-[10px] text-gray-500" title="Imported from the source pipeline with no source clips on disk — re-import the character to bring them across">
+                imported · no clips to re-derive
               </span>
             ) : unlockConfirm ? (
               <ConfirmButtonPair
