@@ -431,6 +431,8 @@ describe('effectiveModelContextWindow', () => {
     expect(effectiveModelContextWindow({ type: 'tui' }, 'gpt-5.4')).toBe(1_000_000);
     expect(effectiveModelContextWindow({ type: 'tui' }, 'gpt-5.4-mini')).toBe(400_000);
     expect(effectiveModelContextWindow({ type: 'tui' }, 'gpt-5.4-nano')).toBe(128_000);
+    expect(effectiveModelContextWindow({ type: 'tui' }, 'claude-opus-5')).toBe(1_000_000);
+    expect(effectiveModelContextWindow({ type: 'tui' }, 'global.anthropic.claude-opus-5')).toBe(1_000_000);
     expect(effectiveModelContextWindow({ type: 'tui' }, 'claude-opus-4-8')).toBe(1_000_000);
     expect(effectiveModelContextWindow({ type: 'api', endpoint: 'https://api.example.test/v1' }, 'claude-sonnet-5')).toBe(1_000_000);
     expect(effectiveModelContextWindow({ type: 'api', endpoint: 'https://api.example.test/v1' }, 'claude-sonnet-4-6')).toBe(1_000_000);

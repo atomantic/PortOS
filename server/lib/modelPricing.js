@@ -28,6 +28,7 @@ const EXACT_RATES = {
   // Anthropic
   'claude-fable-5': [10.0, 50.0],
   'claude-mythos-5': [10.0, 50.0],
+  'claude-opus-5': [5.0, 25.0],
   'claude-opus-4-8': [5.0, 25.0],
   'claude-opus-4-7': [5.0, 25.0],
   'claude-opus-4-6': [5.0, 25.0],
@@ -71,7 +72,7 @@ const EXACT_RATES = {
 
 // Exact keys sorted longest-first for the substring pass in
 // resolveModelRates — a suffixed/prefixed variant of a known id
-// (`gpt-5.6-terra-2026-06-01`, `global.anthropic.claude-opus-4-8`) resolves to
+// (`gpt-5.6-terra-2026-06-01`, `global.anthropic.claude-opus-5`) resolves to
 // its base rates without needing a hand-written regex per model, and
 // longest-first makes `gpt-5.5-pro` win over `gpt-5.5`. (Keys are all
 // lowercase, so matching against a lowercased id needs no re-mapping.)
@@ -85,7 +86,7 @@ const EXACT_KEYS_BY_LENGTH = Object.keys(EXACT_RATES).sort((a, b) => b.length - 
  */
 const FAMILY_RULES = [
   { test: /fable|mythos/i, rateModel: 'claude-fable-5' },
-  { test: /opus/i, rateModel: 'claude-opus-4-8' },
+  { test: /opus/i, rateModel: 'claude-opus-5' },
   { test: /sonnet[-.]?5/i, rateModel: 'claude-sonnet-5' },
   { test: /sonnet/i, rateModel: 'claude-sonnet-4-5' },
   { test: /haiku/i, rateModel: 'claude-haiku-4-5' },
