@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   SPRITE_DIRECTIONS, ANCHOR_DIRECTIONS, REFERENCE_FACING, anchorIdForDirection,
   keyColorPhrase, buildMainReferencePrompt, buildAnchorPrompt, buildTurnaroundPrompt,
-  TURNAROUND_VIEWS,
+  buildWalkVideoPrompt, viewGeometryClause, TURNAROUND_VIEWS,
 } from './prompts.js';
 
 describe('sprite direction contracts', () => {
@@ -107,11 +107,122 @@ describe('buildTurnaroundPrompt (#2979)', () => {
     expect(p).toContain('Use the attached visual reference as the character design.');
   });
 
+  it('forbids mirroring and gives every panel its own occlusion rule (#3004)', () => {
+    const p = buildTurnaroundPrompt({ name: 'Scout', designPrompt: 'a wiry ranger', chromaKey: '#FF00FF' });
+    // Rotation, not reflection — the instruction that kills the mirrored-front bug.
+    expect(p).toContain('rotated in place about a vertical axis');
+    expect(p).toContain('No panel is a horizontal flip, mirror, or copy of another panel');
+    // "Same anatomical side" is now paired with where that lands on screen, so
+    // the rule can't be satisfied by leaving the item in the same pixels.
+    expect(p).toContain('viewer\'s left in the front panel');
+    expect(p).toContain('viewer\'s right in the back panel');
+    // The reported failure: a front-worn hip bag surviving into the back panel.
+    expect(p).toContain('hip bag or pouch worn at the front');
+    expect(p).toContain('hidden by the body and must not be drawn');
+    // The side rule governs WHICH SIDE and WHERE IN FRAME only. If it also
+    // asserted visibility it would contradict the per-panel rules — placing a
+    // front-worn bag "toward the viewer's right in the back panel" that Panel 3
+    // erases — and the model could resolve that by drawing it through the body.
+    expect(p).not.toContain('in both profiles');
+    expect(p).toContain('Whether it is visible at all in a given panel is decided by that panel\'s rule below');
+    TURNAROUND_VIEWS.forEach((view, i) => {
+      expect(viewGeometryClause(view), view).not.toBe('');  // toContain('') is vacuously true
+      expect(p).toContain(`Panel ${i + 1} (${REFERENCE_FACING[view]}): ${viewGeometryClause(view)}`);
+    });
+  });
+
   it('panel order matches SPRITE_DIRECTIONS\' cardinal facings', () => {
     // The sheet's four panels are the cardinal directions; the three-quarter
     // facings interpolate between adjacent ones.
     expect(TURNAROUND_VIEWS).toEqual(['south', 'east', 'north', 'west']);
     for (const v of TURNAROUND_VIEWS) expect(SPRITE_DIRECTIONS).toContain(v);
+  });
+});
+
+describe('viewGeometryClause (#3004)', () => {
+  it('hides front-mounted gear from every rear-ish facing', () => {
+    for (const d of ['north', 'north-east', 'north-west']) {
+      const c = viewGeometryClause(d);
+      expect(c).toContain('behind the character');
+      expect(c).toContain('hip bag or pouch worn at the front');
+      // A mirrored front view keeps the face — say so explicitly.
+      expect(c).toContain('no face');
+    }
+    // Absolute only head-on. At 45 degrees a near-hip item still peeks past the
+    // hip, so an absolute erase there makes gear pop in and out across anchors.
+    expect(viewGeometryClause('north')).toContain('must not be drawn');
+    for (const d of ['north-east', 'north-west']) {
+      expect(viewGeometryClause(d)).toContain('almost entirely hidden by the body');
+      expect(viewGeometryClause(d)).not.toContain('must not be drawn');
+    }
+  });
+
+  it('hides back-mounted gear from every front-ish facing', () => {
+    for (const d of ['south', 'south-east', 'south-west']) {
+      const c = viewGeometryClause(d);
+      expect(c).toContain('in front of the character');
+      expect(c).toContain('backpack');
+      expect(c).not.toContain('no face');
+    }
+  });
+
+  it('hedges the far-side occlusion on the diagonals only', () => {
+    for (const d of ['east', 'west']) {
+      expect(viewGeometryClause(d)).toContain('is occluded by the torso');
+      expect(viewGeometryClause(d)).not.toContain('mostly occluded');
+    }
+    for (const d of ['south-east', 'north-east', 'north-west', 'south-west']) {
+      expect(viewGeometryClause(d)).toContain('mostly occluded by the torso');
+    }
+  });
+
+  it('names the near side correctly for each profile', () => {
+    // Facing due east the character looks screen-right, so the viewer stands
+    // off their right shoulder (face east and south is on your right).
+    for (const d of ['east', 'south-east', 'north-east']) {
+      expect(viewGeometryClause(d)).toContain('character\'s right side');
+    }
+    for (const d of ['west', 'south-west', 'north-west']) {
+      expect(viewGeometryClause(d)).toContain('character\'s left side');
+    }
+  });
+
+  it('covers every sprite direction and stays silent on unknown ones', () => {
+    for (const d of SPRITE_DIRECTIONS) expect(viewGeometryClause(d)).not.toBe('');
+    expect(viewGeometryClause('nowhere')).toBe('');
+  });
+});
+
+describe('derive prompts carry the geometry rule (#3004)', () => {
+  it('appends the facing\'s occlusion rule to every anchor prompt', () => {
+    for (const d of ANCHOR_DIRECTIONS) {
+      const p = buildAnchorPrompt({ name: 'Scout', direction: d, chromaKey: '#FF00FF' });
+      expect(p).toContain('not a mirrored copy of the reference');
+      // toContain('') is vacuously true, so pin the clause is non-empty first —
+      // otherwise a viewGeometryClause regressed to '' would still pass here.
+      expect(viewGeometryClause(d), d).not.toBe('');
+      expect(p).toContain(viewGeometryClause(d));
+    }
+    // Concrete anchors on each axis. north is a straight-on rear view, so it
+    // carries the depth rule and no near-side clause; east carries the reverse.
+    const north = buildAnchorPrompt({ name: 'Scout', direction: 'north', chromaKey: '#FF00FF' });
+    expect(north).toContain('hidden by the body and must not be drawn');
+    expect(north).not.toContain('occluded by the torso');
+    const east = buildAnchorPrompt({ name: 'Scout', direction: 'east', chromaKey: '#FF00FF' });
+    expect(east).toContain('right-side gear reads fully');
+    expect(east).not.toContain('behind the character');
+  });
+
+  it('keeps the main reference free of back-mounted gear', () => {
+    const p = buildMainReferencePrompt({ name: 'Scout', designPrompt: 'x', chromaKey: '#FF00FF' });
+    expect(viewGeometryClause('south')).not.toBe('');  // toContain('') is vacuously true
+    expect(p).toContain(viewGeometryClause('south'));
+  });
+
+  it('stops the walk video from inventing gear the anchor hides', () => {
+    const p = buildWalkVideoPrompt({ name: 'Scout', direction: 'north', chromaKey: '#FF00FF' });
+    expect(p).toContain('do not add gear that the source image does not show');
+    expect(p).toContain('stays hidden for the whole loop');
   });
 });
 
@@ -134,6 +245,24 @@ describe('fromTurnaround prompt variants (#2979)', () => {
     });
     expect(p.indexOf('turnaround model sheet')).toBeLessThan(p.indexOf('Important correction'));
     expect(p.trimEnd().endsWith('satchel on the left hip')).toBe(true);
+  });
+
+  it('sends a diagonal facing to the two panels it sits between (#3004)', () => {
+    // The sheet only has the 4 cardinals, so naming "the panel that shows a
+    // three-quarter rear view" points the model at a panel that isn't there.
+    const p = buildAnchorPrompt({
+      name: 'Scout', direction: 'north-east', chromaKey: '#FF00FF', fromTurnaround: true,
+    });
+    expect(p).toContain('The sheet has no panel at this exact angle');
+    expect(p).toContain(REFERENCE_FACING.north);
+    expect(p).toContain(REFERENCE_FACING.east);
+    expect(p).not.toContain(`Read the panel that shows the character ${REFERENCE_FACING['north-east']}`);
+    // A cardinal facing still reads its own single panel.
+    const cardinal = buildAnchorPrompt({
+      name: 'Scout', direction: 'east', chromaKey: '#FF00FF', fromTurnaround: true,
+    });
+    expect(cardinal).toContain(`Read the panel that shows the character ${REFERENCE_FACING.east}`);
+    expect(cardinal).not.toContain('no panel at this exact angle');
   });
 
   it('is opt-in — the default stays the legacy single-reference copy', () => {

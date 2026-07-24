@@ -34,7 +34,8 @@ import {
   unregisterSpawnedAgent,
   getRunningAgents,
   killProcess,
-  getProcessInfo
+  getProcessInfo,
+  isAgentProcessCommand
 } from './agents.js';
 
 // Helper to simulate exec callback.
@@ -207,6 +208,24 @@ describe('agents.js', () => {
       expect(claudeAgents[0].startTime).toBeGreaterThan(claudeAgents[1].startTime);
     });
 
+    it('skips macOS native CursorUIViewService (framework/XPC helper), not the Cursor editor', async () => {
+      // The `cursor` grep also matches the native TextInputUI helper — a text-caret
+      // UI service, not the Cursor AI editor. It must never appear in the agent list.
+      const nativeCursorHelper =
+        '/System/Library/PrivateFrameworks/TextInputUIMacHelper.framework/Versions/A/XPCServices/CursorUIViewService.xpc/Contents/MacOS/CursorUIViewService';
+      mockExecWith((cmd) =>
+        cmd.includes('cursor')
+          ? `6001  1  0.0  0.1  02:00  ${nativeCursorHelper}\n` +
+            '6002  1  0.5  0.2  01:00  /usr/local/bin/cursor-agent --print\n'
+          : ''
+      );
+
+      const agents = await getRunningAgents();
+      const pids = agents.map(a => a.pid);
+      expect(pids).not.toContain(6001);
+      expect(pids).toContain(6002);
+    });
+
     it('skips lines containing "grep" or "ps -eo"', async () => {
       mockExecWith(
         '5000  1  0.0  0.0  00:01  grep claude\n' +
@@ -237,6 +256,34 @@ describe('agents.js', () => {
       const found = agents.find(a => a.pid === pid);
       expect(found?.command).toBe('claude --model opus --print /tmp/prompt.md');
       unregisterSpawnedAgent(pid);
+    });
+  });
+
+  // ===========================================================================
+  // isAgentProcessCommand — pure predicate
+  // ===========================================================================
+  describe('isAgentProcessCommand', () => {
+    it('accepts real agent CLI invocations', () => {
+      expect(isAgentProcessCommand('/usr/local/bin/claude --print')).toBe(true);
+      expect(isAgentProcessCommand('/usr/local/bin/cursor-agent --print')).toBe(true);
+      expect(isAgentProcessCommand('codex')).toBe(true);
+    });
+
+    it('rejects the scanner itself and its grep', () => {
+      expect(isAgentProcessCommand('grep -i cursor')).toBe(false);
+      expect(isAgentProcessCommand('ps -eo pid,command')).toBe(false);
+    });
+
+    it('rejects macOS app bundles, framework, and XPC helpers', () => {
+      expect(isAgentProcessCommand('/Applications/Cursor.app/Contents/MacOS/Cursor')).toBe(false);
+      expect(isAgentProcessCommand(
+        '/System/Library/PrivateFrameworks/TextInputUIMacHelper.framework/Versions/A/XPCServices/CursorUIViewService.xpc/Contents/MacOS/CursorUIViewService'
+      )).toBe(false);
+    });
+
+    it('rejects empty/undefined commands', () => {
+      expect(isAgentProcessCommand('')).toBe(false);
+      expect(isAgentProcessCommand(undefined)).toBe(false);
     });
   });
 
