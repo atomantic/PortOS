@@ -296,7 +296,7 @@ export default function Media3D() {
             </span>
           )}
           {selectedImage && (
-            <span className="absolute inset-x-2 bottom-2 rounded bg-black/70 px-2 py-1 text-center text-xs text-white">
+            <span className="absolute inset-x-2 bottom-2 rounded bg-black/90 px-2 py-1 text-center text-xs font-medium text-white">
               Change image
             </span>
           )}
