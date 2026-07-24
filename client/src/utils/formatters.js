@@ -377,6 +377,21 @@ export function getAppName(appId, apps, fallback = null) {
 }
 
 /**
+ * Derive a human-friendly default record name from a gallery-image filename:
+ * drop the path + extension, turn `-`/`_` separators into spaces, title-case,
+ * and cap at 120 chars (the server-side name limit). Shared by the "image → 3D
+ * model" pages (Three.js Models and image-to-3D) so their defaults don't drift.
+ * @param {string} filename
+ * @param {string} [fallback='Untitled 3D model'] - used when the filename is empty
+ * @returns {string}
+ */
+export function nameFromImageFilename(filename, fallback = 'Untitled 3D model') {
+  const base = String(filename || '').split('/').pop().replace(/\.[^.]+$/, '');
+  const name = base.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()).trim().slice(0, 120);
+  return name || fallback;
+}
+
+/**
  * Format a cooldown countdown in milliseconds as "M:SS" (e.g., "1:05", "0:09").
  * @param {number} ms - Remaining milliseconds (negative values clamp to 0:00)
  * @returns {string} Minutes:seconds countdown string
