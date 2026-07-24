@@ -46,6 +46,26 @@ export const mediaDdl = [
     )`,
     `CREATE INDEX IF NOT EXISTS idx_threejs_models_live_updated ON threejs_models (updated_at DESC) WHERE deleted = FALSE`,
 
+    // Image-to-3D models (issue #2952). The neural image→GLB record — distinct
+    // from the procedural threejs_models above (that authors JS source; this
+    // lands a real .glb mesh). Source gallery image reference, selected target
+    // (trellis2 today), status, run history, and the exported GLB's served path
+    // live in JSONB; the binary GLB stays on disk at data/image-to-3d/<id>/
+    // model.glb and is referenced by path. Soft deletes keep recovery and future
+    // peer-sync additive (the GLB is a local, host-specific render, so this is
+    // NOT federated in this phase — like threejs_models). Mirrors init-db.sql.
+    `CREATE TABLE IF NOT EXISTS image_to_3d_models (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      status VARCHAR(32) NOT NULL DEFAULT 'draft',
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      deleted BOOLEAN DEFAULT FALSE,
+      deleted_at TIMESTAMPTZ
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_image_to_3d_models_live_updated ON image_to_3d_models (updated_at DESC) WHERE deleted = FALSE`,
+
     // Music Video projects (issue #1760). The director scene board's db-primary
     // record: id/status/created_at/updated_at mirrored as columns, the full
     // project (track link, cached audioAnalysis, scenes[]) in `data` JSONB —

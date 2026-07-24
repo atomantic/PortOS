@@ -89,7 +89,7 @@ export const auditedTables = [
     'universes', 'universe_runs', 'pipeline_series', 'pipeline_issues',
     'story_builder_sessions', 'writers_room_works', 'writers_room_folders',
     'writers_room_draft_versions', 'catalog_ingredients', 'catalog_scraps',
-    'catalog_user_types', 'creative_director_projects', 'threejs_models', 'mood_boards',
+    'catalog_user_types', 'creative_director_projects', 'threejs_models', 'image_to_3d_models', 'mood_boards',
     'lora_training_runs', 'authors', 'artists', 'albums', 'tracks', 'tribe_people', 'tribe_touchpoints',
 ];
 

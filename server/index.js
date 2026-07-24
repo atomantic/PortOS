@@ -386,6 +386,9 @@ app.use('/data/video-thumbnails', express.static(PATHS.videoThumbnails, ASSET_ST
 // Sprite Manager library previews (anchors, strips, atlases) render inline
 // via <img src="/data/sprites/<id>/<rel>"> (#2895).
 app.use('/data/sprites', express.static(PATHS.sprites, ASSET_STATIC_OPTS));
+// Image-to-3D GLB meshes (#2952) — the /media/3d R3F viewer loads them inline
+// via drei useGLTF from <model.assetPath> (/data/image-to-3d/<id>/model.glb).
+app.use('/data/image-to-3d', express.static(PATHS.imageTo3d, ASSET_STATIC_OPTS));
 // Voice-over WAVs rendered by the pipeline audio stage — the AudioStage UI
 // pulls them inline via <audio src="/data/audio/<filename>">.
 app.use('/data/audio', express.static(PATHS.audio));
