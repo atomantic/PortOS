@@ -82,7 +82,15 @@ router.get('/trellis2/install', asyncHandler(async (req, res) => {
   trellis2InstallInFlight = promise;
   promise
     .then(() => installLog.success())
-    .catch((err) => emit({ type: 'error', message: err?.message || 'Install failed', stage: err?.stage }))
+    .catch((err) => {
+      // A transient network drop that survived the in-install retries: the partial
+      // clones on disk are idempotent (setup.sh's `if [ ! -d ]` guards + git's
+      // failed-clone cleanup), so re-running Install resumes rather than restarts.
+      const hint = err?.transient
+        ? ' This looks like a network hiccup — click Install again to resume (already-downloaded pieces are kept).'
+        : '';
+      emit({ type: 'error', message: `${err?.message || 'Install failed'}${hint}`, stage: err?.stage });
+    })
     .finally(() => {
       trellis2InstallInFlight = null;
       safeEnd();

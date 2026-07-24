@@ -114,6 +114,40 @@ export function parseGenerateProgress(line) {
 }
 
 /**
+ * Signatures of a *transient* network failure during the install's git clones /
+ * pip fetches — the kind that self-heals on a retry rather than indicating a real
+ * config/hardware problem. The reference failure (#2952) was a mid-clone
+ * `curl 56 Recv failure: Connection reset by peer` → `early EOF` →
+ * `fetch-pack: invalid index-pack output` → git exiting 128 while cloning one of
+ * `setup.sh`'s ~half-dozen deps. Kept broad (git-over-HTTPS, DNS, TLS, pip) because
+ * every match only *earns a retry* of an idempotent step — a false positive costs
+ * one extra attempt, never a wrong install.
+ */
+const TRANSIENT_INSTALL_ERROR_RE = new RegExp(
+  [
+    'curl\\s+\\d+', 'RPC failed', 'early EOF', 'fetch-pack', 'index-pack',
+    'unexpected disconnect', 'Connection reset', 'Recv failure', 'Send failure',
+    'Could not resolve host', 'Failed to connect', 'Operation timed out',
+    'Connection timed out', 'timed out', 'TLS', 'SSL', 'gnutls', 'GnuTLS',
+    'Temporary failure in name resolution', 'Broken pipe', 'ECONNRESET', 'ETIMEDOUT',
+    'Read error', 'transfer closed', 'Network is unreachable',
+    'Retrieving .* failed', 'Connection aborted', 'IncompleteRead',
+  ].join('|'),
+  'i',
+);
+
+/**
+ * Whether a captured chunk of install output looks like a transient network error
+ * (see `TRANSIENT_INSTALL_ERROR_RE`). Exported so the route/UI and tests can share
+ * the exact classification instead of re-implementing the pattern.
+ * @param {string} text
+ * @returns {boolean}
+ */
+export function isTransientInstallError(text) {
+  return TRANSIENT_INSTALL_ERROR_RE.test(String(text ?? ''));
+}
+
+/**
  * Run the install as a killable, event-emitting job: execute `buildInstallSteps()`
  * sequentially (clone the MPS port → run its `setup.sh`, ~15 GB), emitting a
  * `{ type:'stage' }` per step, `{ type:'log' }` for subprocess output, and a
@@ -122,10 +156,27 @@ export function parseGenerateProgress(line) {
  * only. `spawnImpl` injectable so the step sequencing / cancel / failure paths are
  * unit-testable without a real 15 GB install.
  *
- * @param {{base?: string, onEvent?: (ev: object) => void, spawnImpl?: Function}} [opts]
+ * **Transient-failure retry.** A multi-GB install over `setup.sh`'s ~half-dozen git
+ * clones routinely eats a mid-transfer `Connection reset` / `early EOF` (#2952) that
+ * exits git 128. Both steps are *idempotent* — git removes a failed clone's target
+ * dir, our top-level clone re-clones cleanly, and `setup.sh`'s `if [ ! -d ]` guards
+ * skip already-cloned deps and resume from the one that dropped — so a step whose
+ * output matches a transient-network signature is retried in place up to `maxRetries`
+ * times with a short backoff, rather than aborting the whole install on one blip.
+ * A non-transient failure (bad config, unsupported host, real setup error) is NOT
+ * retried — it fails fast. `sleep` is injectable so tests don't wait on real backoff.
+ *
+ * @param {{base?: string, onEvent?: (ev: object) => void, spawnImpl?: Function,
+ *          maxRetries?: number, sleep?: (ms: number) => Promise<void>}} [opts]
  * @returns {{promise: Promise<{ok: true}>, kill: () => void}}
  */
-export function installTrellis2({ base, onEvent = () => {}, spawnImpl = spawn } = {}) {
+export function installTrellis2({
+  base,
+  onEvent = () => {},
+  spawnImpl = spawn,
+  maxRetries = 3,
+  sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+} = {}) {
   const steps = buildInstallSteps(base);
   let currentChild = null;
   let canceled = false;
@@ -136,9 +187,14 @@ export function installTrellis2({ base, onEvent = () => {}, spawnImpl = spawn } 
     // request lifecycle (CLAUDE.md child-process exception).
     const child = spawnImpl(step.command, step.args, step.cwd ? { cwd: step.cwd } : {});
     currentChild = child;
+    // Retain a bounded tail of combined output so a non-zero exit can be classified
+    // as transient-network vs. a real failure (the clue is in the subprocess text,
+    // not the exit code — git exits 128 for both a network drop and a bad ref).
+    let outputTail = '';
     const log = (buf) => {
       const message = String(buf).trim();
       if (message) onEvent({ type: 'log', stage: step.stage, message });
+      outputTail = `${outputTail}${buf}`.slice(-4000);
     };
     child.stdout?.on('data', log);
     child.stderr?.on('data', log);
@@ -151,9 +207,37 @@ export function installTrellis2({ base, onEvent = () => {}, spawnImpl = spawn } 
       const err = new Error(`TRELLIS.2 install step '${step.stage}' exited ${code}`);
       err.code = 'TRELLIS2_INSTALL_FAILED';
       err.stage = step.stage;
+      err.transient = isTransientInstallError(outputTail);
       reject(err);
     });
   });
+
+  // Retry an idempotent step in place while its failure looks like a transient
+  // network drop and attempts remain; otherwise surface the error unchanged.
+  const runStepWithRetry = async (step) => {
+    for (let attempt = 0; ; attempt += 1) {
+      if (canceled) {
+        const err = new Error('TRELLIS.2 install canceled');
+        err.code = 'TRELLIS2_INSTALL_CANCELED';
+        throw err;
+      }
+      try {
+        await runStep(step);
+        return;
+      } catch (err) {
+        const canRetry = err?.code === 'TRELLIS2_INSTALL_FAILED'
+          && err.transient && attempt < maxRetries && !canceled;
+        if (!canRetry) throw err;
+        const backoffMs = Math.min(30000, 2000 * 2 ** attempt);
+        onEvent({
+          type: 'log',
+          stage: step.stage,
+          message: `⚠️ Transient network error — retrying in ${Math.round(backoffMs / 1000)}s (attempt ${attempt + 2}/${maxRetries + 1})…`,
+        });
+        await sleep(backoffMs);
+      }
+    }
+  };
 
   const promise = (async () => {
     for (const step of steps) {
@@ -162,7 +246,7 @@ export function installTrellis2({ base, onEvent = () => {}, spawnImpl = spawn } 
         err.code = 'TRELLIS2_INSTALL_CANCELED';
         throw err;
       }
-      await runStep(step);
+      await runStepWithRetry(step);
     }
     onEvent({ type: 'complete', message: 'TRELLIS.2 installed.' });
     return { ok: true };

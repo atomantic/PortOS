@@ -79,6 +79,41 @@ describe('GET /trellis2/install (SSE)', () => {
     expect(trellis2.installTrellis2).not.toHaveBeenCalled();
   });
 
+  it('appends a resume hint when the install fails with a transient network error', async () => {
+    trellis2.isTrellis2Installed.mockReturnValueOnce(false);
+    targets.isTargetAvailable.mockReturnValueOnce(true);
+    trellis2.installTrellis2.mockImplementationOnce(() => ({
+      promise: Promise.reject(Object.assign(
+        new Error("TRELLIS.2 install step 'setup' exited 128"),
+        { code: 'TRELLIS2_INSTALL_FAILED', stage: 'setup', transient: true },
+      )),
+      kill: vi.fn(),
+    }));
+    const res = await request(makeApp()).get('/api/image-to-3d/trellis2/install');
+    const frames = sseFrames(res.text);
+    expect(frames.at(-1)).toMatchObject({
+      type: 'error',
+      stage: 'setup',
+      message: expect.stringMatching(/exited 128.*network hiccup — click Install again to resume/is),
+    });
+  });
+
+  it('does NOT append the resume hint for a non-transient failure', async () => {
+    trellis2.isTrellis2Installed.mockReturnValueOnce(false);
+    targets.isTargetAvailable.mockReturnValueOnce(true);
+    trellis2.installTrellis2.mockImplementationOnce(() => ({
+      promise: Promise.reject(Object.assign(
+        new Error('TRELLIS.2 install step \'setup\' exited 1'),
+        { code: 'TRELLIS2_INSTALL_FAILED', stage: 'setup', transient: false },
+      )),
+      kill: vi.fn(),
+    }));
+    const res = await request(makeApp()).get('/api/image-to-3d/trellis2/install');
+    const frames = sseFrames(res.text);
+    expect(frames.at(-1)).toMatchObject({ type: 'error', message: expect.stringMatching(/exited 1$/) });
+    expect(frames.at(-1).message).not.toMatch(/network hiccup/i);
+  });
+
   it('refuses on unsupported hardware', async () => {
     trellis2.installTrellis2.mockClear();
     trellis2.isTrellis2Installed.mockReturnValueOnce(false);

@@ -3,6 +3,7 @@
 ## 3D
 
 - **[issue-2953] Install image-to-3D models from a new 3D page** — a new **3D** page under Create lists the available image-to-3D models (starting with Microsoft TRELLIS.2) and shows each one's state at a glance: **Ready**, an **Install** button, or a note explaining why your hardware can't run it (e.g. needs an Apple Silicon Mac with enough memory). Installing runs entirely on-device with a live progress log — the same in-app install experience as the image generators — so you never touch a terminal. Reachable from the sidebar, ⌘K, and voice. (Turning one of your rendered images into a 3D mesh from this page lands next.)
+- **[issue-2952] TRELLIS.2 install now survives network hiccups** — the multi-gigabyte TRELLIS.2 install pulls from several code repositories, and a single dropped connection mid-download used to abort the whole thing with a cryptic error. The installer now automatically retries a step that fails from a transient network drop (with a short backoff), and already-downloaded pieces are kept — so a flaky connection resumes instead of starting over. If it still can't finish, the error now says plainly that it was a network hiccup and that clicking **Install** again picks up where it left off.
 
 ## Internal
 
