@@ -129,6 +129,27 @@ describe('Apps Lifecycle Routes', () => {
       // Single instance: no second launch.
       expect(pm2Service.startWithCommand).not.toHaveBeenCalled();
     });
+
+    it('treats a transient launching state as already-running (no duplicate window, #2991)', async () => {
+      const mockApp = {
+        id: 'game-001',
+        name: 'The Game',
+        type: 'desktop',
+        repoPath: '/tmp',
+        pm2ProcessNames: ['the-game'],
+        startCommands: ['./scripts/game run']
+      };
+      appsService.getAppById.mockResolvedValue(mockApp);
+      // A slow launch is mid-flight — a second Start click must not spawn a duplicate.
+      pm2Service.getAppStatus.mockResolvedValue({ status: 'launching' });
+      history.logAction.mockResolvedValue();
+
+      const response = await request(app).post('/api/apps/game-001/start');
+
+      expect(response.status).toBe(200);
+      expect(response.body.results['the-game']).toEqual({ success: true, alreadyRunning: true });
+      expect(pm2Service.startWithCommand).not.toHaveBeenCalled();
+    });
   });
 
   describe('POST /api/apps/:id/stop', () => {

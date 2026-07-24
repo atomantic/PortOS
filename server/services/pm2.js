@@ -501,9 +501,14 @@ export async function startWithCommand(name, cwd, command, options = {}) {
         watch: false,
         autorestart,
         // Restart tuning only matters when autorestart is on; a desktop process
-        // exiting cleanly should stay stopped, not be nursed back up.
-        ...(autorestart ? { max_restarts: maxRestarts, min_uptime: '10s', restart_delay: 5000 } : {}),
-        max_memory_restart: '500M',
+        // exiting cleanly should stay stopped, not be nursed back up. This
+        // includes max_memory_restart: PM2's memory monitor relaunches the
+        // process independently of autorestart, so leaving a 500M cap on a
+        // desktop app (a game window routinely exceeds it) would kill and
+        // respawn the live window — exactly the relaunch loop this avoids.
+        ...(autorestart
+          ? { max_restarts: maxRestarts, min_uptime: '10s', restart_delay: 5000, max_memory_restart: '500M' }
+          : {}),
         windowsHide: IS_WIN
       };
 
