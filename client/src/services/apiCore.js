@@ -90,10 +90,6 @@ export async function request(endpoint, options = {}) {
 // Search
 export const search = (q) => request(`/search?q=${encodeURIComponent(q)}`);
 
-// Image-to-3D: the selectable targets (TRELLIS.2, …) annotated with host
-// availability + install status, for the /media/3d management page.
-export const getImageTo3dTargets = () => request('/image-to-3d/targets');
-
 // Default export for simplified imports
 export default {
   get: (endpoint, options) => request(endpoint, { method: 'GET', ...options }),
