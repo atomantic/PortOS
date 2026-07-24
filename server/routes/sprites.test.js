@@ -23,6 +23,10 @@ vi.mock('../services/sprites/reference.js', () => ({
   forkSprite: vi.fn(async (sourceId, body) => ({ record: { id: 'pioneer-fork', kind: 'character', name: body.name }, jobId: 'j1', mode: 'codex', target: 'main', anchorId: 'walk-south' })),
 }));
 
+vi.mock('../services/sprites/assetPrompt.js', () => ({
+  resolveSpriteAssetPrompt: vi.fn(async () => ({ prompt: 'the built prompt', designPrompt: 'a knight', source: 'candidate' })),
+}));
+
 vi.mock('../services/sprites/walk.js', () => ({
   getWalkState: vi.fn(async () => ({ runs: [], selection: null, walkSet: null })),
   startWalkGeneration: vi.fn(async () => ({ jobId: 'v1', runId: 'walk-east-0a1b2c3d', direction: 'east', duration: 6 })),
@@ -51,6 +55,7 @@ vi.mock('../services/sprites/assets.js', () => ({
 import * as records from '../services/sprites/records.js';
 import * as importer from '../services/sprites/importer.js';
 import * as reference from '../services/sprites/reference.js';
+import * as assetPrompt from '../services/sprites/assetPrompt.js';
 import * as walk from '../services/sprites/walk.js';
 import * as walkTrims from '../services/sprites/walkTrims.js';
 import * as atlas from '../services/sprites/atlas.js';
@@ -108,6 +113,21 @@ describe('sprites routes', () => {
     expect(reference.listReferenceSources).toHaveBeenCalled();
     // The literal path must not be swallowed by the /:id route.
     expect(records.getRecordWithAssets).not.toHaveBeenCalled();
+  });
+
+  it('GET /:id/asset-prompt resolves an asset prompt by record-relative path', async () => {
+    const r = await request(app).get(`/api/sprites/pioneer/asset-prompt?path=${encodeURIComponent('reference/candidates/walk-south-candidate-01.png')}`);
+    expect(r.status).toBe(200);
+    expect(r.body).toEqual({ prompt: 'the built prompt', designPrompt: 'a knight', source: 'candidate' });
+    expect(assetPrompt.resolveSpriteAssetPrompt).toHaveBeenCalledWith('pioneer', 'reference/candidates/walk-south-candidate-01.png');
+    // Two segments — the single-segment /:id GET must not swallow it.
+    expect(records.getRecordWithAssets).not.toHaveBeenCalled();
+  });
+
+  it('GET /:id/asset-prompt rejects a missing path at the schema', async () => {
+    const bad = await request(app).get('/api/sprites/pioneer/asset-prompt');
+    expect(bad.status).toBe(400);
+    expect(assetPrompt.resolveSpriteAssetPrompt).not.toHaveBeenCalled();
   });
 
   it('POST /:id/fork validates and delegates to forkSprite', async () => {

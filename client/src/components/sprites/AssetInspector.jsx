@@ -13,6 +13,7 @@ import { useEffect, useState } from 'react';
 import { Download, ClipboardCopy, ExternalLink, Trash2, X } from 'lucide-react';
 import Modal from '../ui/Modal.jsx';
 import SpritePreview from './SpritePreview.jsx';
+import AssetPromptSection from './AssetPromptSection.jsx';
 import { spriteAssetUrl, hasSpritePreview, isVideoAsset } from './spriteAssets.js';
 import { isRuntimeVersionPath, isRuntimeSidecarManifest } from '../../lib/spriteFacets.js';
 import { formatBytes, timeAgo } from '../../utils/formatters.js';
@@ -133,6 +134,8 @@ export default function AssetInspector({ recordId, asset, onClose, onDeleted = n
           <Row label="Size" value={formatBytes(asset.size)} />
           <Row label="Modified" value={asset.mtime ? timeAgo(asset.mtime) : null} />
         </dl>
+
+        <AssetPromptSection recordId={recordId} path={asset.path} />
 
         <div className="flex flex-wrap items-center gap-2">
           <a

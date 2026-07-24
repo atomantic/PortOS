@@ -20,6 +20,15 @@ export const listSpriteReferenceSources = (options = {}) => request('/sprites/re
 // asset. Records with no usable image are omitted.
 export const listSpriteThumbnails = (options = {}) => request('/sprites/thumbnails', options);
 
+// The generation prompt behind one on-disk asset (record-relative `path`) —
+// reference candidate, locked main/anchor, or walk render. Returns
+// `{ prompt, designPrompt, source }` or `null` when the asset has no prompt
+// provenance. Callers own their (best-effort) UI, so pass `{ silent: true }`.
+export const getSpriteAssetPrompt = (id, path, options = {}) => request(
+  `/sprites/${encodeURIComponent(id)}/asset-prompt?path=${encodeURIComponent(path)}`,
+  options,
+);
+
 export const createSpriteRecord = (body, options = {}) => request('/sprites', {
   method: 'POST', body: JSON.stringify(body), ...options,
 });

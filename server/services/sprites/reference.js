@@ -461,6 +461,11 @@ export async function attachReferenceCandidate(ctx) {
     // rewrites top-level params but carries the original tag through, so the
     // tag's model can be stale provenance.
     model: ctx.job?.params?.model || ctx.job?.params?.modelId || ctx.model || null,
+    // The literal prompt sent to the provider — the completed job's live params
+    // are canonical (Render Queue's Edit & Retry can rewrite it). Persisting it
+    // lets the preview modals show exactly what was rendered; older sidecars
+    // without it fall back to a deterministic rebuild (services/sprites/assetPrompt.js).
+    prompt: ctx.job?.params?.prompt || null,
     jobId: ctx.jobId || null,
     ...(ctx.designPrompt ? { designPrompt: ctx.designPrompt } : {}),
     ...(ctx.designReferencePath ? { designReferencePath: ctx.designReferencePath } : {}),
