@@ -147,15 +147,41 @@ describe('classifySpriteAssets — supersede', () => {
 });
 
 describe('groupSpriteAssetsByRole', () => {
-  it('returns only non-empty roles, in the declared render order', () => {
+  it('returns only non-empty roles, in the declared render order, and never a Manifests group', () => {
     const groups = groupSpriteAssetsByRole([
-      { path: 'runtime/current.json' },
+      { path: 'runtime/current.json' }, // a publish-pointer manifest — behind-the-scenes, not shown
       { path: 'grok/walk-east-abc12345/generated/example-walk-east-strip.png' },
       { path: 'reference/example-walk-east-v1.png' },
     ]);
-    expect(groups.map((g) => g.role)).toEqual(['reference', 'strip', 'manifest']);
+    expect(groups.map((g) => g.role)).toEqual(['reference', 'strip']);
+    expect(groups.some((g) => g.role === 'manifest')).toBe(false);
     expect(groups[0].label).toBe(SPRITE_ROLE_LABELS.reference);
     expect(groups.every((g) => g.assets.length > 0)).toBe(true);
+  });
+
+  it('folds a runtime version manifest onto its atlas row instead of a Manifests group', () => {
+    const groups = groupSpriteAssetsByRole([
+      { path: 'runtime/v3/hero-animation-atlas-v3.png' },
+      { path: 'runtime/v3/hero-animation-atlas-v3-manifest.json' },
+    ]);
+    expect(groups.map((g) => g.role)).toEqual(['atlas']);
+    const [atlasRow] = groups[0].assets;
+    expect(atlasRow.manifest?.path).toBe('runtime/v3/hero-animation-atlas-v3-manifest.json');
+    // The manifest row is not double-counted as its own asset.
+    expect(groups[0].assets).toHaveLength(1);
+  });
+
+  it('does not attach the publish pointer to an atlas — only the per-version sidecar', () => {
+    const groups = groupSpriteAssetsByRole([
+      { path: 'runtime/v2/hero-animation-atlas-v2.png' },
+      { path: 'runtime/current.json' },
+      { path: 'atlas/props-sheet.png' }, // imported props atlas — no sidecar
+    ]);
+    const atlas = groups.find((g) => g.role === 'atlas');
+    const runtimeRow = atlas.assets.find((a) => a.path.startsWith('runtime/'));
+    const importedRow = atlas.assets.find((a) => a.path.startsWith('atlas/'));
+    expect(runtimeRow.manifest).toBeUndefined();
+    expect(importedRow.manifest).toBeUndefined();
   });
 
   it('labels every declared role', () => {

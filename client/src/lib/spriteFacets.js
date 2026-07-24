@@ -30,10 +30,13 @@ export const SPRITE_DIRECTIONS = [
 ];
 
 /**
- * Every role, in the order the collection renders its groups. `manifest` is a
- * PortOS addition to the source's role set: sidecar JSON is a real category
- * here (run records, reference sets, atlas manifests, the publish pointer) and
- * folding it into `sprite` would put JSON in the image grid.
+ * Every role. The first seven, in this order, are the groups the collection
+ * renders. `manifest` is a PortOS addition to the source's role set — sidecar
+ * JSON (run records, reference sets, atlas manifests, the publish pointer) is a
+ * real classifier category so it doesn't land in the image grid — but it is NOT
+ * rendered as its own group: `groupSpriteAssetsByRole` folds each
+ * runtime atlas's sidecar manifest onto its atlas row and omits the rest. The
+ * role stays here so the classifier and its label map remain total.
  */
 export const SPRITE_ASSET_ROLES = [
   'reference', 'strip', 'animation', 'frame', 'atlas', 'evidence', 'sprite', 'manifest',
@@ -71,7 +74,9 @@ const ANIMATION_EXT = /\.(gif|mp4|webm|mov|m4v)$/i;
 // strip it of its Regenerate/Trim actions). `stripe.png` stays excluded.
 const STRIP_FILE = /(^|[-_])strips?([-_.]|$)/i;
 // `runtime/vN/` — the published-atlas version lives in the directory, not the
-// filename, so supersede detection has to read it from there.
+// filename, so supersede detection has to read it from there. This is the one
+// source of truth for the `runtime/vN` grammar; `runtimeVersionDir` /
+// `isRuntimeVersionPath` derive from it rather than re-anchoring the pattern.
 const RUNTIME_VERSION_DIR = /^runtime\/v(\d+)\//;
 // `-v3.png`, `-v001-strip.png` — a trailing version marker on the filename.
 const FILE_VERSION = /-v(\d+)(?=(-[a-z0-9-]+)?\.[a-z0-9]+$)/i;
@@ -167,6 +172,33 @@ export function classifySpriteAsset(path) {
 }
 
 /**
+ * The `runtime/vN` directory of a path (no trailing slash), or null. This is
+ * the pairing key that ties an atlas PNG to its per-version sidecar manifest —
+ * and it deliberately does NOT match `runtime/current.json` /
+ * `runtime/publications.json`, which live in the top-level `runtime/` dir, so
+ * the publish pointers are never mistaken for a version sidecar.
+ */
+export function runtimeVersionDir(path) {
+  const m = typeof path === 'string' ? RUNTIME_VERSION_DIR.exec(path) : null;
+  return m ? path.slice(0, m[0].length - 1) : null;
+}
+
+/** True for any file inside a `runtime/vN/` version directory (PNG or sidecar). */
+export function isRuntimeVersionPath(path) {
+  return runtimeVersionDir(path) !== null;
+}
+
+/**
+ * True for the JSON sidecar of a runtime atlas — a `manifest`-role file living
+ * in a `runtime/vN/` dir. Reuses the classifier's role so the "is this a build
+ * manifest" definition lives in exactly one place (`roleFor`), not a second
+ * regex in a component.
+ */
+export function isRuntimeSidecarManifest(path) {
+  return isRuntimeVersionPath(path) && classifySpriteAsset(path).role === 'manifest';
+}
+
+/**
  * Classify a whole listing, adding the one facet that is only knowable across
  * the set: an `approved` asset that is NOT the highest version of its stem is
  * `superseded`. Deliberately scoped to `approved` — a runtime atlas stays
@@ -201,14 +233,42 @@ export function classifySpriteAssets(assets) {
 /**
  * Classified assets grouped into render-ready role sections, in
  * `SPRITE_ASSET_ROLES` order. Empty roles are omitted.
+ *
+ * The `manifest` role is intentionally NOT rendered as its own group.
+ * A runtime atlas's sidecar manifest is metadata FOR that atlas — same
+ * `runtime/vN/` dir, 1:1, deleted as a unit — so it is folded onto its atlas
+ * row as `row.manifest` (surfaced by the atlas card as a "View manifest"
+ * affordance) rather than shown as a lookalike JSON card that reads as a
+ * separate concern from the PNG it describes. The remaining JSON the classifier
+ * tags `manifest` (publish pointers, run records, the reference-set manifest)
+ * is behind-the-scenes state, not a browsable asset, so it is omitted from the
+ * grid entirely.
  */
 export function groupSpriteAssetsByRole(assets) {
   const rows = classifySpriteAssets(assets);
+
+  // Index each per-version sidecar manifest by its `runtime/vN` dir so the
+  // atlas PNG sharing that dir can carry it along.
+  const manifestByRuntimeDir = new Map();
+  for (const row of rows) {
+    if (row.facets.role !== 'manifest') continue;
+    const dir = runtimeVersionDir(row.path);
+    if (dir) manifestByRuntimeDir.set(dir, row);
+  }
+
   const byRole = new Map();
   for (const row of rows) {
-    const list = byRole.get(row.facets.role);
-    if (list) list.push(row); else byRole.set(row.facets.role, [row]);
+    if (row.facets.role === 'manifest') continue; // folded onto its atlas / hidden
+    let enriched = row;
+    if (row.facets.role === 'atlas') {
+      const manifest = manifestByRuntimeDir.get(runtimeVersionDir(row.path));
+      if (manifest) enriched = { ...row, manifest };
+    }
+    const list = byRole.get(enriched.facets.role);
+    if (list) list.push(enriched); else byRole.set(enriched.facets.role, [enriched]);
   }
+  // `manifest` keys are never inserted (folded/skipped above), so filtering on
+  // `byRole.has(role)` alone already excludes the Manifests group.
   return SPRITE_ASSET_ROLES
     .filter((role) => byRole.has(role))
     .map((role) => ({ role, label: SPRITE_ROLE_LABELS[role], assets: byRole.get(role) }));
