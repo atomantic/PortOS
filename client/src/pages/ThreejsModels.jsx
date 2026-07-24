@@ -7,16 +7,14 @@ import ProviderModelSelector from '../components/ProviderModelSelector';
 import useProviderModels from '../hooks/useProviderModels';
 import { createThreejsModel, listThreejsModels } from '../services/api';
 import toast from '../components/ui/Toast';
-import { timeAgo } from '../utils/formatters';
+import { timeAgo, nameFromImageFilename } from '../utils/formatters';
 
 const providerFilter = (provider) =>
   provider.enabled !== false && ['api', 'cli', 'tui'].includes(provider.type);
 
-const nameFromFilename = (filename) => String(filename || '')
-  .replace(/\.png$/i, '')
-  .replace(/[-_]+/g, ' ')
-  .replace(/\b\w/g, (char) => char.toUpperCase())
-  .slice(0, 120);
+// Shared with the image-to-3D page — see utils/formatters. Aliased to keep the
+// existing call sites below unchanged.
+const nameFromFilename = nameFromImageFilename;
 
 const statusClass = {
   ready: 'bg-port-success/15 text-port-success',

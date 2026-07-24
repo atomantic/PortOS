@@ -4,8 +4,12 @@ import { MemoryRouter, useLocation } from 'react-router-dom';
 import Media3D from './Media3D';
 
 const getImageTo3dTargets = vi.fn();
+const createImageTo3dModel = vi.fn();
+const getImageTo3dModel = vi.fn();
 vi.mock('../services/api', () => ({
   getImageTo3dTargets: (...a) => getImageTo3dTargets(...a),
+  createImageTo3dModel: (...a) => createImageTo3dModel(...a),
+  getImageTo3dModel: (...a) => getImageTo3dModel(...a),
 }));
 
 // Stub the shared install modal so the test doesn't open a real EventSource;
@@ -108,13 +112,40 @@ describe('Media3D — generation workspace', () => {
     expect(screen.queryByText(/Pick a source image to continue/i)).not.toBeInTheDocument();
   });
 
-  it('keeps Generate disabled with a "coming next" reason once an image + ready target are staged', async () => {
-    // Generation is deferred to the runner (#2952); even a fully-staged workspace
-    // must not present a live-but-inert button.
+  it('enables Generate when an image + ready target are staged, and previews the produced mesh', async () => {
+    createImageTo3dModel.mockResolvedValue({ id: 'm1', status: 'generating', assetPath: null, runs: [] });
+    getImageTo3dModel.mockResolvedValue({
+      id: 'm1', status: 'ready', assetPath: '/data/image-to-3d/m1/model.glb', runs: [{ percent: 100 }],
+    });
     renderAt('/media/3d?image=example-robot.png');
     const btn = await screen.findByRole('button', { name: /Generate 3D/i });
-    expect(btn).toBeDisabled();
-    expect(screen.getByText(/Generation lands with the on-device runner/i)).toBeInTheDocument();
+    expect(btn).toBeEnabled();
+    fireEvent.click(btn);
+    await waitFor(() => expect(createImageTo3dModel).toHaveBeenCalledWith(
+      expect.objectContaining({ filename: 'example-robot.png', target: 'trellis2', name: 'Example Robot' }),
+      expect.anything(),
+    ));
+    expect(await screen.findByTestId('glb-viewer')).toHaveTextContent('/data/image-to-3d/m1/model.glb');
+  });
+
+  it('surfaces the render error (e.g. the Hugging Face auth guidance) on failure', async () => {
+    createImageTo3dModel.mockResolvedValue({ id: 'm2', status: 'generating', runs: [] });
+    getImageTo3dModel.mockResolvedValue({
+      id: 'm2', status: 'failed', assetPath: null,
+      error: 'TRELLIS.2 could not download a gated model dependency from Hugging Face. Accept the terms … huggingface-cli login',
+    });
+    renderAt('/media/3d?image=example-robot.png');
+    fireEvent.click(await screen.findByRole('button', { name: /Generate 3D/i }));
+    expect(await screen.findByText(/could not download a gated model dependency from Hugging Face/i)).toBeInTheDocument();
+    // No mesh preview on failure.
+    expect(screen.queryByTestId('glb-viewer')).toBeNull();
+  });
+
+  it('shows the Hugging Face gated-model prerequisite for the TRELLIS.2 target', async () => {
+    renderAt('/media/3d?image=example-robot.png');
+    expect(await screen.findByText(/needs a free Hugging Face account/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /dinov3-vitl16-pretrain-lvd1689m/i })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /RMBG-2\.0/i })).toBeInTheDocument();
   });
 
   it('keeps Generate disabled and explains why when no image is picked', async () => {
