@@ -16,8 +16,9 @@
  */
 
 import { useMemo, useState } from 'react';
-import { FolderOpen, RefreshCw, Scissors, Sparkles, Film, FileJson } from 'lucide-react';
+import { FolderOpen, RefreshCw, Scissors, Sparkles, Film, FileJson, NotebookPen } from 'lucide-react';
 import AssetInspector from './AssetInspector.jsx';
+import CorrectionNote from './CorrectionNote.jsx';
 import SpritePreview from './SpritePreview.jsx';
 import { hasSpritePreview } from './spriteAssets.js';
 import { groupSpriteAssetsByRole } from '../../lib/spriteFacets.js';
@@ -42,7 +43,7 @@ function StatusBadge({ status }) {
   );
 }
 
-function AssetCard({ recordId, asset, actions, onInspect }) {
+function AssetCard({ recordId, asset, actions, corrections, onCorrectionChange, onInspect }) {
   const { facets } = asset;
   const name = asset.path.split('/').pop();
   const regenerate = actions?.regenerateFor(asset);
@@ -51,6 +52,16 @@ function AssetCard({ recordId, asset, actions, onInspect }) {
   // than a standalone "Manifests" group of lookalike JSON cards, the atlas card
   // links to its own build metadata — geometry, chroma key, provenance.
   const manifest = asset.manifest;
+
+  // Inline anchor-correction note (#2964): an anchor re-roll can carry the same
+  // per-direction correction the ReferenceWorkflow grid drives, so a note typed
+  // on either surface is visible on both and rides the re-roll. Only reference
+  // regenerates expose a `direction`; walk regenerates and non-character records
+  // (no `onCorrectionChange`) never show the affordance.
+  const correctionDir = regenerate?.kind === 'reference' ? regenerate.direction : null;
+  const canCorrect = Boolean(correctionDir && onCorrectionChange);
+  const correctionValue = canCorrect ? (corrections?.[correctionDir] || '') : '';
+  const [noteOpen, setNoteOpen] = useState(Boolean(correctionValue));
 
   return (
     <div className="bg-port-bg border border-port-border rounded p-1 space-y-1">
@@ -85,6 +96,18 @@ function AssetCard({ recordId, asset, actions, onInspect }) {
               {regenerate.pending ? 'Rendering…' : 'Regenerate'}
             </button>
           )}
+          {canCorrect && (
+            <button
+              type="button"
+              onClick={() => setNoteOpen((o) => !o)}
+              aria-expanded={noteOpen}
+              aria-label={`${noteOpen ? 'Hide' : 'Show'} correction note for ${name}`}
+              title={correctionValue ? `Correction: ${correctionValue}` : 'Add a correction for this anchor re-roll'}
+              className={`px-1.5 py-0.5 text-[10px] bg-port-card border rounded hover:border-port-accent ${correctionValue ? 'border-port-accent text-port-accent' : 'border-port-border text-gray-300'}`}
+            >
+              <NotebookPen className="w-3 h-3" />
+            </button>
+          )}
           {trim && (
             <button
               type="button"
@@ -109,6 +132,14 @@ function AssetCard({ recordId, asset, actions, onInspect }) {
           )}
         </div>
       )}
+      {canCorrect && noteOpen && (
+        <CorrectionNote
+          direction={correctionDir}
+          value={correctionValue}
+          onChange={onCorrectionChange}
+          className="text-[10px]"
+        />
+      )}
     </div>
   );
 }
@@ -116,8 +147,14 @@ function AssetCard({ recordId, asset, actions, onInspect }) {
 /**
  * `actions` is null for a non-character record (props families have no walk /
  * reference workflow to re-fire). Shape:
- *   { regenerateFor(asset) → { run, disabled, pending, title, kind } | null,
- *     trimFor(asset)       → { run } | null }
+ *   { regenerateFor(asset) → { kind, disabled, pending, title, onClick, direction? } | null,
+ *     trimFor(asset)       → { onClick } | null }
+ *
+ * `corrections` / `onCorrectionChange` (#2964) are the page-owned per-direction
+ * anchor correction map and its setter, shared with `ReferenceWorkflow` so a
+ * note typed on an anchor card is visible on the reference-workflow grid (and
+ * vice versa) and rides the re-roll as `correctionPrompt`. Both are null for a
+ * non-character record.
  *
  * `approvedRunIds` (#2938) is the set of run ids the walk selection has
  * approved. A run's strip/frames never move on approval — approval lives in
@@ -127,7 +164,10 @@ function AssetCard({ recordId, asset, actions, onInspect }) {
  * here in the caller: an asset whose `runId` is an approved run is promoted to
  * `approved` for its badge, keeping the classifier free of workflow state.
  */
-export default function AssetCollection({ recordId, assets, actions = null, approvedRunIds, onDeleted = null }) {
+export default function AssetCollection({
+  recordId, assets, actions = null, approvedRunIds,
+  corrections = null, onCorrectionChange = null, onDeleted = null,
+}) {
   const [inspecting, setInspecting] = useState(null);
   const groups = useMemo(() => {
     const grouped = groupSpriteAssetsByRole(assets);
@@ -164,6 +204,8 @@ export default function AssetCollection({ recordId, assets, actions = null, appr
                 recordId={recordId}
                 asset={asset}
                 actions={actions}
+                corrections={corrections}
+                onCorrectionChange={onCorrectionChange}
                 onInspect={setInspecting}
               />
             ))}

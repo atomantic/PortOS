@@ -10,6 +10,7 @@ import SpritePreview from './SpritePreview.jsx';
 import GalleryImagePicker from '../imageGen/GalleryImagePicker.jsx';
 import SpriteReferencePicker from './SpriteReferencePicker.jsx';
 import ForkSpriteModal from './ForkSpriteModal.jsx';
+import CorrectionNote from './CorrectionNote.jsx';
 
 // Reference workflow (issue #2896): generate main-reference candidates from
 // text + optional uploaded design image, freeze the approved main, then
@@ -72,7 +73,7 @@ function CandidateTile({ recordId, candidate, locking, onLock, clipRisk }) {
   );
 }
 
-export default function ReferenceWorkflow({ record, reference, renders, backends, mode, onModeChange, onChanged, onForked }) {
+export default function ReferenceWorkflow({ record, reference, renders, corrections, onCorrectionChange, backends, mode, onModeChange, onChanged, onForked }) {
   const recordId = record.id;
   const manifest = reference?.manifest || null;
   const candidates = reference?.candidates || [];
@@ -88,10 +89,10 @@ export default function ReferenceWorkflow({ record, reference, renders, backends
   const allAnchorsLocked = anchorList.length > 0 && anchorList.every((a) => a.status === 'locked');
   const [anchorsOpen, setAnchorsOpen] = useState(!allAnchorsLocked);
   // Reset the default on record switch only (deps: recordId), so it never
-  // fights a user toggle within one character. Also drop any per-direction
-  // correction text — the 8 anchor direction keys are identical across
-  // characters, so a leftover note would otherwise bleed into the next sprite.
-  useEffect(() => { setAnchorsOpen(!allAnchorsLocked); setCorrections({}); }, [recordId]);
+  // fights a user toggle within one character. The per-direction correction
+  // text is now page-owned (#2964) and reset there on record switch, so this
+  // effect no longer clears it.
+  useEffect(() => { setAnchorsOpen(!allAnchorsLocked); }, [recordId]);
 
   // Image-backend availability + the selected `mode` are page-owned (#2938) so
   // that the Sprites page's asset-card Regenerate re-rolls through the SAME
@@ -111,7 +112,9 @@ export default function ReferenceWorkflow({ record, reference, renders, backends
   // Per-direction free-text correction re-appended to an anchor re-roll (e.g.
   // "no pocket on the right sleeve"). Keyed by direction because the anchor
   // grid renders all directions at once — unlike the single main designPrompt.
-  const [corrections, setCorrections] = useState({});
+  // Page-owned (#2964) and passed in as `corrections` / `onCorrectionChange` so
+  // this grid and the asset-collection Regenerate button share one source: a
+  // note typed on either surface is visible on the other and rides the re-roll.
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [spritePickerOpen, setSpritePickerOpen] = useState(false);
   const [forkOpen, setForkOpen] = useState(false);
@@ -420,14 +423,13 @@ export default function ReferenceWorkflow({ record, reference, renders, backends
                   <div className="space-y-1.5">
                     {/* Optional correction guidance re-appended to the prompt on
                         each re-roll — without it, regenerating with the same
-                        inputs tends to reproduce the same mistake. */}
-                    <textarea
-                      value={corrections[anchor.direction] || ''}
-                      onChange={(e) => setCorrections((prev) => ({ ...prev, [anchor.direction]: e.target.value }))}
-                      rows={2}
-                      aria-label={`Correction guidance for the ${anchor.direction} pose`}
-                      placeholder="Correction (optional), e.g. no pocket on the right sleeve"
-                      className="w-full px-1.5 py-1 text-[11px] bg-port-bg border border-port-border rounded text-gray-300 placeholder-gray-600 resize-y focus:border-port-accent focus:outline-none"
+                        inputs tends to reproduce the same mistake. Shared with
+                        the asset card so both surfaces write one source (#2964). */}
+                    <CorrectionNote
+                      direction={anchor.direction}
+                      value={corrections[anchor.direction]}
+                      onChange={onCorrectionChange}
+                      className="text-[11px]"
                     />
                     <button
                       onClick={() => generate(anchor.direction)}

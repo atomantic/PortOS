@@ -436,6 +436,16 @@ export default function Sprites() {
     onChanged: onWorkflowChanged,
   });
 
+  // Per-direction anchor correction guidance is page-owned (#2964) so the
+  // ReferenceWorkflow anchor grid and the asset-collection Regenerate button
+  // read/write ONE source: a correction typed on either surface applies to the
+  // other AND rides along as `correctionPrompt` on whichever re-roll fires.
+  // Keyed by direction — the 8 anchor keys are identical across characters, so
+  // reset on record switch to keep a leftover note from bleeding into the next
+  // sprite (the reset ReferenceWorkflow used to own before the state was lifted).
+  const [corrections, setCorrections] = useState({});
+  useEffect(() => { setCorrections({}); }, [id]);
+
   // Workspace tab (Library / Loop Trimmer) and the run the trimmer is open for
   // live in the URL (#2933) so the active workspace is deep-linkable
   // (`?spriteTab=trimmer&run=<runId>`) — the same "URL is the source of truth
@@ -546,14 +556,21 @@ export default function Sprites() {
   // `mode` is the workflow-selected backend, threaded from the asset card via
   // buildCollectionActions (#2938) so a re-roll uses the same backend the
   // Reference workflow would, not the server default. Falls back to the
-  // page-level selection when a caller omits it.
-  const generateAnchor = useCallback((direction, mode) => submitRender(
-    refBegin, refResolve, refCancel, direction,
-    () => generateSpriteReference(id, {
-      target: direction, ...((mode || imageMode) ? { mode: mode || imageMode } : {}),
-    }, { silent: true }),
-    `Failed to queue ${direction} render`,
-  ), [id, imageMode, refBegin, refResolve, refCancel, submitRender]);
+  // page-level selection when a caller omits it. The direction's shared
+  // correction (#2964) rides along as `correctionPrompt` so the asset-card
+  // re-roll sends the SAME guidance the ReferenceWorkflow anchor re-roll does.
+  const generateAnchor = useCallback((direction, mode) => {
+    const correction = corrections[direction]?.trim();
+    return submitRender(
+      refBegin, refResolve, refCancel, direction,
+      () => generateSpriteReference(id, {
+        target: direction,
+        ...((mode || imageMode) ? { mode: mode || imageMode } : {}),
+        ...(correction ? { correctionPrompt: correction } : {}),
+      }, { silent: true }),
+      `Failed to queue ${direction} render`,
+    );
+  }, [id, imageMode, corrections, refBegin, refResolve, refCancel, submitRender]);
 
   const collectionActions = useMemo(() => {
     if (detail?.record?.kind !== 'character') return null;
@@ -673,6 +690,8 @@ export default function Sprites() {
                         record={detail.record}
                         reference={detail.reference}
                         renders={referenceRenders}
+                        corrections={corrections}
+                        onCorrectionChange={setCorrections}
                         backends={imageBackends}
                         mode={imageMode}
                         onModeChange={setImageMode}
@@ -713,6 +732,8 @@ export default function Sprites() {
                       assets={detail.assets}
                       actions={collectionActions}
                       approvedRunIds={approvedRunIds}
+                      corrections={corrections}
+                      onCorrectionChange={setCorrections}
                       onDeleted={onWorkflowChanged}
                     />
                   )}
