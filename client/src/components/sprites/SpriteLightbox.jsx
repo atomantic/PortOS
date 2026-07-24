@@ -12,6 +12,7 @@
 
 import { X } from 'lucide-react';
 import Modal from '../ui/Modal.jsx';
+import AssetPromptSection from './AssetPromptSection.jsx';
 import { checkerboardStyle, spriteAssetUrl, PIXELATED } from './spriteAssets.js';
 
 export default function SpriteLightbox({ recordId, path, alt, onClose }) {
@@ -48,6 +49,7 @@ export default function SpriteLightbox({ recordId, path, alt, onClose }) {
             style={PIXELATED}
           />
         </span>
+        <AssetPromptSection recordId={recordId} path={path} />
       </div>
     </Modal>
   );

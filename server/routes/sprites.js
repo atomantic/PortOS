@@ -39,6 +39,7 @@ import {
   getReferenceSet, startReferenceGeneration, lockReference, patchSpriteRecord,
   listReferenceSources, listSpriteThumbnails, forkSprite,
 } from '../services/sprites/reference.js';
+import { resolveSpriteAssetPrompt } from '../services/sprites/assetPrompt.js';
 import {
   getWalkState, startWalkGeneration, approveWalkDirection, rerunWalkPostprocess, unlockWalkSet,
 } from '../services/sprites/walk.js';
@@ -103,6 +104,16 @@ router.get('/:id', asyncHandler(async (req, res) => {
     ])
     : [null, null, null];
   res.json({ ...detail, reference, walk, atlas });
+}));
+
+// The generation prompt behind one on-disk asset (record-relative `path`) —
+// reference candidate, locked main/anchor, or walk-animation render — so the
+// client's preview modals can show + copy it. Returns `null` for an asset with
+// no prompt provenance (imports, manifests). Two path segments, so it never
+// collides with the single-segment `/:id` GET above.
+router.get('/:id/asset-prompt', asyncHandler(async (req, res) => {
+  const { path } = validateRequest(z.object({ path: z.string().min(1) }), req.query);
+  res.json(await resolveSpriteAssetPrompt(req.params.id, path));
 }));
 
 // Queue one reference candidate render (main or a directional anchor).

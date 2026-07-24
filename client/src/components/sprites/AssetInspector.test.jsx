@@ -16,7 +16,11 @@ const copyToClipboard = vi.fn();
 vi.mock('../../lib/clipboard.js', () => ({ copyToClipboard: (...a) => copyToClipboard(...a) }));
 
 const deleteSpriteAsset = vi.fn();
-vi.mock('../../services/apiSprites.js', () => ({ deleteSpriteAsset: (...a) => deleteSpriteAsset(...a) }));
+const getSpriteAssetPrompt = vi.fn(() => Promise.resolve(null));
+vi.mock('../../services/apiSprites.js', () => ({
+  deleteSpriteAsset: (...a) => deleteSpriteAsset(...a),
+  getSpriteAssetPrompt: (...a) => getSpriteAssetPrompt(...a),
+}));
 
 const IMAGE = {
   path: 'reference/main.png',
@@ -28,7 +32,12 @@ const IMAGE = {
   frameCount: 1,
 };
 
-beforeEach(() => { copyToClipboard.mockClear(); deleteSpriteAsset.mockReset(); });
+beforeEach(() => {
+  copyToClipboard.mockClear();
+  deleteSpriteAsset.mockReset();
+  getSpriteAssetPrompt.mockReset();
+  getSpriteAssetPrompt.mockResolvedValue(null);
+});
 
 describe('hasSpritePreview', () => {
   it('follows the server probe rather than the file extension', () => {
@@ -123,6 +132,24 @@ describe('AssetInspector', () => {
     const open = screen.getByRole('link', { name: /^open$/i });
     expect(open).toHaveAttribute('target', '_blank');
     expect(open).not.toHaveAttribute('download');
+  });
+
+  it('shows the generation prompt with a copy button once it resolves', async () => {
+    getSpriteAssetPrompt.mockResolvedValue({ prompt: 'a brave knight, magenta background', designPrompt: 'a brave knight', source: 'candidate' });
+    render(<AssetInspector recordId="trail-hand" asset={IMAGE} onClose={() => {}} />);
+
+    expect(getSpriteAssetPrompt).toHaveBeenCalledWith('trail-hand', 'reference/main.png', { silent: true });
+    expect(await screen.findByText('a brave knight, magenta background')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /copy prompt/i }));
+    expect(copyToClipboard).toHaveBeenCalledWith('a brave knight, magenta background', 'Prompt copied');
+  });
+
+  it('omits the prompt block for an asset with no prompt provenance', async () => {
+    getSpriteAssetPrompt.mockResolvedValue(null);
+    render(<AssetInspector recordId="trail-hand" asset={IMAGE} onClose={() => {}} />);
+    // Give the effect a tick to resolve before asserting absence.
+    await screen.findByText('reference/main.png');
+    expect(screen.queryByRole('button', { name: /copy prompt/i })).not.toBeInTheDocument();
   });
 
   it('renders nothing when no asset is selected', () => {
