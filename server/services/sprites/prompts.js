@@ -97,10 +97,16 @@ export function buildWalkVideoPrompt({ name, direction, chromaKey }) {
 
 /**
  * Stage-2 prompt: derive one directional anchor from the attached frozen
- * main reference.
+ * main reference. `correctionPrompt` is optional free-text the user adds when
+ * re-rolling a candidate that came out wrong (e.g. "no pocket on the right
+ * sleeve") — appended as an explicit, high-priority correction so the re-roll
+ * diverges from the previous render instead of reproducing the same mistake.
  */
-export function buildAnchorPrompt({ name, direction, chromaKey }) {
+export function buildAnchorPrompt({ name, direction, chromaKey, correctionPrompt }) {
   const facing = REFERENCE_FACING[direction] || direction;
+  const correction = (typeof correctionPrompt === 'string' && correctionPrompt.trim())
+    ? ` Important correction — apply this over the attached reference: ${correctionPrompt.trim()}`
+    : '';
   return (
     `Redraw the attached ${name} character as one `
     + `full-body figure in a neutral standing pose, ${facing}. Keep the exact same `
@@ -108,5 +114,6 @@ export function buildAnchorPrompt({ name, direction, chromaKey }) {
     + 'same anatomical side as the attached reference. Flat, non-isometric view; a '
     + `single centered figure; plain flat ${keyColorPhrase(chromaKey)} background; no labels, no `
     + 'grid lines, no wireframe or guide colors. Return exactly one PNG.'
+    + correction
   );
 }

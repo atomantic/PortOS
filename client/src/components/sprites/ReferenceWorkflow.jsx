@@ -106,6 +106,10 @@ export default function ReferenceWorkflow({ record, reference, renders, backends
   //        | { type:'sprite', id, name, path }
   const [refSource, setRefSource] = useState(null);
   const [strength, setStrength] = useState(0.65);
+  // Per-direction free-text correction re-appended to an anchor re-roll (e.g.
+  // "no pocket on the right sleeve"). Keyed by direction because the anchor
+  // grid renders all directions at once — unlike the single main designPrompt.
+  const [corrections, setCorrections] = useState({});
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [spritePickerOpen, setSpritePickerOpen] = useState(false);
   const [forkOpen, setForkOpen] = useState(false);
@@ -139,6 +143,7 @@ export default function ReferenceWorkflow({ record, reference, renders, backends
 
   const generate = async (target) => {
     beginSubmit(target);
+    const correction = corrections[target]?.trim();
     try {
       const { jobId } = await generateSpriteReference(recordId, {
         target,
@@ -149,7 +154,9 @@ export default function ReferenceWorkflow({ record, reference, renders, backends
           ...(refSource?.type === 'gallery' ? { initImageGalleryFile: refSource.filename } : {}),
           ...(refSource?.type === 'sprite' ? { initImageSpriteId: refSource.id } : {}),
           ...(refSource ? { initImageStrength: strength } : {}),
-        } : {}),
+        } : {
+          ...(correction ? { correctionPrompt: correction } : {}),
+        }),
       }, { silent: true });
       resolveSubmit(target, jobId);
       if (target === 'main') clearSource();
@@ -397,7 +404,9 @@ export default function ReferenceWorkflow({ record, reference, renders, backends
           )}
           {anchorsOpen && (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {manifest.anchors.map((anchor) => (
+            {manifest.anchors.map((anchor) => {
+              const cands = candidatesByTarget[anchor.direction] || [];
+              return (
               <div key={anchor.id} className="bg-port-bg border border-port-border rounded p-2 space-y-1.5">
                 <p className="text-xs text-gray-400 flex items-center justify-between">
                   {anchor.direction}
@@ -407,6 +416,17 @@ export default function ReferenceWorkflow({ record, reference, renders, backends
                   <SpriteImg recordId={recordId} path={anchor.path} className="w-full h-24 object-contain" />
                 ) : (
                   <div className="space-y-1.5">
+                    {/* Optional correction guidance re-appended to the prompt on
+                        each re-roll — without it, regenerating with the same
+                        inputs tends to reproduce the same mistake. */}
+                    <textarea
+                      value={corrections[anchor.direction] || ''}
+                      onChange={(e) => setCorrections((prev) => ({ ...prev, [anchor.direction]: e.target.value }))}
+                      rows={2}
+                      aria-label={`Correction guidance for the ${anchor.direction} pose`}
+                      placeholder="Correction (optional), e.g. no pocket on the right sleeve"
+                      className="w-full px-1.5 py-1 text-[11px] bg-port-bg border border-port-border rounded text-gray-300 placeholder-gray-600 resize-y focus:border-port-accent focus:outline-none"
+                    />
                     <button
                       onClick={() => generate(anchor.direction)}
                       disabled={!mode || !!pendingJobs[anchor.direction]}
@@ -414,15 +434,18 @@ export default function ReferenceWorkflow({ record, reference, renders, backends
                     >
                       {pendingJobs[anchor.direction]
                         ? <><RefreshCw className="w-3 h-3 animate-spin" /> Rendering…</>
-                        : <><Sparkles className="w-3 h-3" /> Generate</>}
+                        : cands.length
+                          ? <><RefreshCw className="w-3 h-3" /> Regenerate</>
+                          : <><Sparkles className="w-3 h-3" /> Generate</>}
                     </button>
-                    {(candidatesByTarget[anchor.direction] || []).map((c) => (
+                    {cands.map((c) => (
                       <CandidateTile key={c.path} recordId={recordId} candidate={c} locking={locking} clipRisk={clipRisks[c.path]} onLock={(cand, accept) => lock(anchor.direction, cand, accept)} />
                     ))}
                   </div>
                 )}
               </div>
-            ))}
+              );
+            })}
           </div>
           )}
         </div>

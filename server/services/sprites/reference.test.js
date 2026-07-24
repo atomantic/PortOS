@@ -159,6 +159,27 @@ describe('startReferenceGeneration', () => {
     expect(call.params.prompt).toContain('magenta (#FF00FF)'); // green char kept magenta
   });
 
+  it('threads a correction prompt into the anchor prompt and provenance tag', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await lockMain(id);
+    await startReferenceGeneration(id, { target: 'north-east', correctionPrompt: '  no pocket on the right sleeve  ' });
+    const call = enqueueJob.mock.calls[0][0];
+    expect(call.params.prompt).toContain('Important correction — apply this over the attached reference: no pocket on the right sleeve');
+    // Trimmed and carried on the tag so the completion hook's sidecar records it.
+    expect(call.params.spriteRef.correctionPrompt).toBe('no pocket on the right sleeve');
+  });
+
+  it('omits the correction from the tag when blank', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await lockMain(id);
+    await startReferenceGeneration(id, { target: 'east', correctionPrompt: '   ' });
+    const call = enqueueJob.mock.calls[0][0];
+    expect(call.params.prompt).not.toContain('Important correction');
+    expect(call.params.spriteRef).not.toHaveProperty('correctionPrompt');
+  });
+
   it('409s generation for a locked target', async () => {
     const id = newId();
     await createCharacter(id);

@@ -233,6 +233,7 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
   let anchorId;
   let direction;
   let designReferencePath;
+  let correctionPrompt;
 
   if (target === 'main') {
     if (manifest.mainReference.locked) {
@@ -292,7 +293,10 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
     if (anchor?.status === 'locked') {
       throw new ServerError(`Anchor ${anchorId} is locked — locked anchors are immutable`, { status: 409, code: 'REFERENCE_LOCKED' });
     }
-    prompt = buildAnchorPrompt({ name: record.name, direction, chromaKey: genKey });
+    // Optional user correction re-appended on every re-roll — diverges the
+    // render from the previous candidate rather than reproducing its mistakes.
+    correctionPrompt = typeof body.correctionPrompt === 'string' ? body.correctionPrompt.trim() : '';
+    prompt = buildAnchorPrompt({ name: record.name, direction, chromaKey: genKey, correctionPrompt });
     initImagePath = resolveSpriteAssetPath(recordId, manifest.mainReference.path);
     if (!await pathExists(initImagePath)) {
       throw new ServerError('Locked main reference file is missing on disk', { status: 500, code: 'MAIN_REFERENCE_MISSING' });
@@ -322,6 +326,7 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
     spriteRef: {
       recordId, target, direction, anchorId, chromaKey: genKey, mode, model: effectiveModel,
       ...(target === 'main' && body.designPrompt ? { designPrompt: body.designPrompt } : {}),
+      ...(correctionPrompt ? { correctionPrompt } : {}),
       ...(designReferencePath ? { designReferencePath } : {}),
     },
   };
@@ -468,6 +473,7 @@ export async function attachReferenceCandidate(ctx) {
     prompt: ctx.job?.params?.prompt || null,
     jobId: ctx.jobId || null,
     ...(ctx.designPrompt ? { designPrompt: ctx.designPrompt } : {}),
+    ...(ctx.correctionPrompt ? { correctionPrompt: ctx.correctionPrompt } : {}),
     ...(ctx.designReferencePath ? { designReferencePath: ctx.designReferencePath } : {}),
     generatedAt: new Date().toISOString(),
     candidatePath: relPath,
