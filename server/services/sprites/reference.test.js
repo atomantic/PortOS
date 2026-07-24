@@ -78,30 +78,48 @@ async function lockMain(recordId) {
   return lockReference(recordId, { target: 'main', candidate: rel });
 }
 
-// A pre-#2979 manifest: main-first (schemaVersion 1, no turnaround block),
-// nothing locked — written straight to disk the way an install upgraded from
-// phase 2 would have it mid-workflow.
-async function writeLegacyManifest(recordId) {
+const DIRECTIONS = ['south', 'south-east', 'east', 'north-east', 'north', 'north-west', 'west', 'south-west'];
+
+// Write a pre-#2979 manifest verbatim to disk — main-first, schemaVersion 1, no
+// turnaround block. `lockedMain` produces what an install upgraded from phase 2
+// actually holds (the frozen PNG + a locked mainReference + the key it froze),
+// which is the ONLY v1 shape that survives upgradeManifestShape; the unlocked
+// variant is a mid-workflow draft, which normalizes to v2 on read.
+//
+// These are written straight to disk rather than locked through lockReference,
+// because that path would normalize the draft to v2 first and so could never
+// reproduce a genuine v1-with-locked-main.
+async function writeLegacyManifest(recordId, { lockedMain = false } = {}) {
   const dir = join(TEST_ROOT, 'sprites', recordId, 'reference');
   await mkdir(dir, { recursive: true });
+  const mainPath = `reference/${recordId}-walk-south-v1.png`;
+  if (lockedMain) await writeCandidatePng(join(TEST_ROOT, 'sprites', recordId, mainPath));
   await writeFile(join(dir, `${recordId}-reference-set-v1.json`), JSON.stringify({
     schemaVersion: 1,
     manifestId: `${recordId}-reference-set-v1`,
-    status: 'needs-main-reference',
+    status: lockedMain ? 'in-progress' : 'needs-main-reference',
     characterFamily: recordId,
-    chromaKey: null,
-    mainReference: { path: null, role: 'immutable-root', background: 'chroma-key', locked: false },
-    anchors: ['south', 'south-east', 'east', 'north-east', 'north', 'north-west', 'west', 'south-west']
-      .map((direction) => ({ id: `walk-${direction}`, kind: 'walk-anchor', direction, status: 'pending' })),
+    chromaKey: lockedMain ? '#FF00FF' : null,
+    ...(lockedMain ? { chromaKeyAutoSelected: true } : {}),
+    mainReference: {
+      path: lockedMain ? mainPath : null,
+      role: 'immutable-root',
+      background: 'chroma-key',
+      locked: lockedMain,
+      ...(lockedMain ? { lockedFrom: 'reference/candidates/walk-south-candidate-01.png', lockedAt: '2026-01-01T00:00:00.000Z' } : {}),
+    },
+    anchors: DIRECTIONS.map((direction) => ({
+      id: `walk-${direction}`,
+      kind: 'walk-anchor',
+      direction,
+      status: lockedMain && direction === 'south' ? 'locked' : 'pending',
+      ...(lockedMain && direction === 'south' ? { path: mainPath } : {}),
+    })),
   }));
+  if (lockedMain) await records.updateRecord(recordId, { chromaKey: '#FF00FF', status: 'reference' });
 }
 
-// …and the same record with its main locked through the legacy main-first path.
-async function legacyLockedMain(recordId) {
-  await writeLegacyManifest(recordId);
-  const rel = await placeCandidate(recordId, 'main', 'walk-south-candidate-01.png');
-  return lockReference(recordId, { target: 'main', candidate: rel });
-}
+const legacyLockedMain = (recordId) => writeLegacyManifest(recordId, { lockedMain: true });
 
 beforeEach(() => {
   enqueueJob.mockClear();
@@ -221,14 +239,36 @@ describe('startReferenceGeneration', () => {
     await writeCandidatePng(tmp);
     await expect(startReferenceGeneration(id, { target: 'main' }, { tempPath: tmp, originalname: 'concept.png' }))
       .rejects.toMatchObject({ code: 'SEED_NOT_APPLICABLE', status: 400 });
-    // A legacy record's main still accepts one — the gate is sheet-conditional,
-    // not a blanket ban on seeding the main.
-    const legacy = newId();
-    await createCharacter(legacy);
-    await writeLegacyManifest(legacy);
-    enqueueJob.mockClear();
-    await startReferenceGeneration(legacy, { target: 'main', designPrompt: 'x', initImageGalleryFile: galleryName });
-    expect(enqueueJob.mock.calls[0][0].params.initImagePath).toBe(join(TEST_ROOT, 'images', galleryName));
+  });
+
+  it('normalizes an unlocked legacy manifest to turnaround-first on read (#2996)', async () => {
+    // A v1 draft has frozen nothing, so moving it onto the current standard
+    // costs the user nothing — and it means no reachable main generate can
+    // observe the old main-first flow.
+    const id = newId();
+    await createCharacter(id);
+    await writeLegacyManifest(id); // schemaVersion 1, nothing locked
+    const { manifest } = await getReferenceSet(id);
+    expect(manifest.schemaVersion).toBe(2);
+    expect(manifest.status).toBe('needs-turnaround');
+    expect(manifest.turnaround).toMatchObject({ locked: false, role: 'identity-root' });
+    await expect(startReferenceGeneration(id, { target: 'main', designPrompt: 'x' }))
+      .rejects.toMatchObject({ code: 'TURNAROUND_NOT_LOCKED', status: 409 });
+  });
+
+  it('never normalizes — or rewrites — a legacy manifest holding a locked main', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await legacyLockedMain(id);
+    const abs = join(TEST_ROOT, 'sprites', id, 'reference', `${id}-reference-set-v1.json`);
+    const before = await readFile(abs, 'utf8');
+
+    const { manifest } = await getReferenceSet(id);
+    expect(manifest.schemaVersion).toBe(1);
+    expect(manifest.turnaround).toBeUndefined();
+    expect(manifest.chromaKey).toBe('#FF00FF');
+    // Locked evidence is never rewritten as a side effect of a read.
+    expect(await readFile(abs, 'utf8')).toBe(before);
   });
 
   it('derives anchors from the locked turnaround via i2i with the selected key in the prompt', async () => {

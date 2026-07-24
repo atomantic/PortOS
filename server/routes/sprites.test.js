@@ -242,18 +242,17 @@ describe('sprites routes', () => {
     return Buffer.concat(parts);
   };
 
-  it('POST /:id/reference/generate accepts a multipart design-image upload for main', async () => {
+  it('POST /:id/reference/generate rejects an upload for main — the sheet is the only seedable target', async () => {
+    // #2996: the main derives from the locked turnaround, so a seed sent with it
+    // has nowhere to go. Accepting one silently discarded it.
     const boundary = '----spritetest';
     const res = await request(app)
       .post('/api/sprites/pioneer/reference/generate')
       .set('content-type', `multipart/form-data; boundary=${boundary}`)
       .send(buildMultipart(boundary, { fields: { target: 'main', designPrompt: 'a ranger' } }));
-    expect(res.status).toBe(200);
-    expect(reference.startReferenceGeneration).toHaveBeenCalledWith(
-      'pioneer',
-      expect.objectContaining({ target: 'main', designPrompt: 'a ranger' }),
-      expect.objectContaining({ originalname: 'design.png', tempPath: expect.any(String) }),
-    );
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('UPLOAD_TURNAROUND_ONLY');
+    expect(reference.startReferenceGeneration).not.toHaveBeenCalled();
   });
 
   it('POST /:id/reference/generate accepts a multipart design-image upload for the turnaround', async () => {
@@ -277,7 +276,7 @@ describe('sprites routes', () => {
       .set('content-type', `multipart/form-data; boundary=${boundary}`)
       .send(buildMultipart(boundary, { fields: { target: 'east' } }));
     expect(res.status).toBe(400);
-    expect(res.body.code).toBe('UPLOAD_MAIN_ONLY');
+    expect(res.body.code).toBe('UPLOAD_TURNAROUND_ONLY');
     expect(reference.startReferenceGeneration).not.toHaveBeenCalled();
   });
 

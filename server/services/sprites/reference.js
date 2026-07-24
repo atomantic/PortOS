@@ -57,12 +57,14 @@ const UPLOAD_DEFAULT_STRENGTH = 0.65;
 // write) — module-scope so the candidate listing doesn't recompile it per file.
 const TURNAROUND_CANDIDATE_RE = /^turnaround-candidate-\d+\.png$/;
 
-// Manifests seeded from #2979 onward are turnaround-first: the sheet is the
-// identity root, the main descends from it, and so does every anchor. A v1
-// manifest was main-first (key frozen at main lock) and keeps that flow — it
-// only has to backfill a sheet before deriving further anchors.
+// Manifests are turnaround-first from #2979 onward: the sheet is the identity
+// root, the main descends from it, and so does every anchor. A v1 manifest was
+// main-first; `upgradeManifestShape` on read moves the ones holding no locked
+// evidence onto v2, so the ONLY v1 manifests left in play are those with a
+// frozen main — which keep their locked artifacts and backfill a sheet before
+// deriving further anchors. Every branch below therefore reads the record's
+// actual state (`turnaround.locked`), never its schema version.
 const TURNAROUND_FIRST_SCHEMA = 2;
-const isTurnaroundFirst = (manifest) => (manifest?.schemaVersion || 1) >= TURNAROUND_FIRST_SCHEMA;
 
 const manifestRelPath = (id) => `reference/${id}-reference-set-v1.json`;
 
@@ -82,9 +84,34 @@ function rebaseLegacyPath(p, recordId) {
   return typeof p === 'string' && p.startsWith(marker) ? p.slice(marker.length) : p;
 }
 
+/**
+ * Move a pre-#2979 manifest onto the turnaround-first shape — but ONLY when it
+ * holds no locked evidence.
+ *
+ * A manifest whose main is not locked has frozen nothing, so nothing is lost by
+ * putting it on the current standard: the user generates a sheet first, which is
+ * what they'd do for a new character anyway. A manifest WITH a locked main is
+ * returned untouched — its locked artifacts are immutable evidence, and it
+ * backfills a sheet from that main instead (see the turnaround generate branch).
+ *
+ * This is the whole migration. The upgraded shape reaches disk on the next
+ * `saveManifest`, which for an unlocked draft is the very next generate; a
+ * record holding locked evidence is never rewritten as a side effect of a read.
+ */
+function upgradeManifestShape(manifest) {
+  if (manifest.schemaVersion >= TURNAROUND_FIRST_SCHEMA || manifest.mainReference?.locked) return manifest;
+  manifest.schemaVersion = TURNAROUND_FIRST_SCHEMA;
+  manifest.turnaround = manifest.turnaround || {
+    path: null, role: 'identity-root', background: 'chroma-key', locked: false, views: TURNAROUND_VIEWS,
+  };
+  if (!manifest.status || manifest.status === 'needs-main-reference') manifest.status = 'needs-turnaround';
+  return manifest;
+}
+
 export async function loadManifest(recordId) {
   const manifest = await readJSONFile(join(spriteDir(recordId), manifestRelPath(recordId)), null);
   if (!manifest) return null;
+  upgradeManifestShape(manifest);
   if (manifest.mainReference) {
     manifest.mainReference.path = rebaseLegacyPath(manifest.mainReference.path, recordId);
     manifest.mainReference.lockedFrom = rebaseLegacyPath(manifest.mainReference.lockedFrom, recordId);
@@ -289,20 +316,18 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
 
   const turnaroundLocked = manifest.turnaround?.locked === true;
   const designPrompt = typeof body.designPrompt === 'string' ? body.designPrompt.trim() : '';
-  // A render that establishes the character's look needs SOME input: a prompt,
-  // an uploaded image, a gallery pick, or another sprite's reference to seed
-  // from. `alsoSeeded` covers a source the branch supplies itself (the legacy
-  // main a backfilled sheet expands, the sheet the main descends from).
-  const requireDesignInput = (alsoSeeded = false) => {
-    if (designPrompt || alsoSeeded || upload || body.initImageGalleryFile || body.initImageSpriteId) return;
-    throw new ServerError('Provide a design prompt and/or a reference image', { status: 400, code: 'DESIGN_INPUT_REQUIRED' });
-  };
 
   if (target === TURNAROUND_ID) {
     if (turnaroundLocked) {
       throw new ServerError('Turnaround sheet is locked — corrections require a new character version, never regeneration', { status: 409, code: 'REFERENCE_LOCKED' });
     }
-    requireDesignInput(manifest.mainReference.locked);
+    // The sheet establishes the character's look, so it needs SOME input: a
+    // prompt, an uploaded image, a gallery pick, another sprite's reference —
+    // or, on a legacy record, the locked main this backfill expands.
+    if (!designPrompt && !upload && !body.initImageGalleryFile && !body.initImageSpriteId
+        && !manifest.mainReference.locked) {
+      throw new ServerError('Provide a design prompt and/or a reference image', { status: 400, code: 'DESIGN_INPUT_REQUIRED' });
+    }
     anchorId = TURNAROUND_ID;
     prompt = buildTurnaroundPrompt({
       name: record.name,
@@ -330,11 +355,11 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
     if (manifest.mainReference.locked) {
       throw new ServerError('Main reference is locked — corrections require a new character version, never regeneration', { status: 409, code: 'REFERENCE_LOCKED' });
     }
-    // Turnaround-first (#2979): on a manifest seeded under the new standard the
-    // main is the sheet's front view, so the sheet must exist first. A legacy
-    // v1 manifest predates the sheet and keeps its main-first flow — it only
-    // has to backfill a sheet before deriving further anchors.
-    if (!turnaroundLocked && isTurnaroundFirst(manifest)) {
+    // The main is always the sheet's front view: a manifest that reaches here
+    // with no locked sheet was either seeded turnaround-first or upgraded to it
+    // on read (upgradeManifestShape), and the only manifests that skip that
+    // upgrade have a locked main — which threw REFERENCE_LOCKED just above.
+    if (!turnaroundLocked) {
       throw new ServerError('Lock the turnaround sheet before deriving the main reference', { status: 409, code: 'TURNAROUND_NOT_LOCKED' });
     }
     anchorId = anchorIdForDirection('south');
@@ -343,24 +368,15 @@ async function startReferenceGenerationImpl(recordId, body, upload = null) {
       name: record.name,
       designPrompt: designPrompt || manifest.designPrompt,
       chromaKey: genKey,
-      fromTurnaround: turnaroundLocked,
+      fromTurnaround: true,
     });
-    if (turnaroundLocked) {
-      // The sheet IS the seed here, so a caller-supplied one has nowhere to go.
-      // Reject rather than silently dropping it (the route accepts an upload for
-      // this target because a legacy record's main does take one).
-      if (upload || body.initImageGalleryFile || body.initImageSpriteId) {
-        throw new ServerError('The main reference derives from the locked turnaround sheet — seed a new design through the sheet, not the main', { status: 400, code: 'SEED_NOT_APPLICABLE' });
-      }
-      initImagePath = await requireLockedTurnaroundPath(recordId, manifest);
-      initImageStrength ??= ANCHOR_DEFAULT_STRENGTH;
-    } else {
-      // Legacy v1 main, still on the main-first flow: a prompt, an uploaded
-      // image, a gallery pick, or another sprite's reference is required.
-      requireDesignInput();
-      ({ initImagePath, designReferencePath } = await resolveSeedSource(recordId, body, upload));
-      if (initImagePath) initImageStrength ??= UPLOAD_DEFAULT_STRENGTH;
+    // The sheet IS the seed here, so a caller-supplied one has nowhere to go.
+    // Reject rather than silently dropping it.
+    if (upload || body.initImageGalleryFile || body.initImageSpriteId) {
+      throw new ServerError('The main reference derives from the locked turnaround sheet — seed a new design through the sheet, not the main', { status: 400, code: 'SEED_NOT_APPLICABLE' });
     }
+    initImagePath = await requireLockedTurnaroundPath(recordId, manifest);
+    initImageStrength ??= ANCHOR_DEFAULT_STRENGTH;
     // Nothing else in this branch mutates the manifest, so skip the write —
     // and its per-record serialization — on the common no-prompt re-roll.
     if (designPrompt) {
