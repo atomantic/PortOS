@@ -1,5 +1,9 @@
 # Unreleased
 
+## 3D
+
+- **[issue-2953] Install image-to-3D models from a new 3D page** — a new **3D** page under Create lists the available image-to-3D models (starting with Microsoft TRELLIS.2) and shows each one's state at a glance: **Ready**, an **Install** button, or a note explaining why your hardware can't run it (e.g. needs an Apple Silicon Mac with enough memory). Installing runs entirely on-device with a live progress log — the same in-app install experience as the image generators — so you never touch a terminal. Reachable from the sidebar, ⌘K, and voice. (Turning one of your rendered images into a 3D mesh from this page lands next.)
+
 ## Internal
 
 - **[issue-2951] Image-to-3D target registry (foundation)** — added a pluggable `server/services/imageTo3d/targets.js` registry (mirroring `imageGen/modes.js`) that models image→3D models as selectable targets with hardware-gated availability resolution, TRELLIS.2 registered as the first target, and a read-only `GET /api/image-to-3d/targets` endpoint. Backend groundwork for the forthcoming 3D page under Create (#2952 install/runner, #2953 page/viewer, #2954 CUDA lane); no user-visible surface yet.
