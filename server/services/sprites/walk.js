@@ -439,6 +439,14 @@ async function loadRedrawRun(recordId, direction, entry) {
     // manifest (frames[] + alignment), and approve/trim resolve it as one. A
     // redraw manifest is a different schema, so it gets a distinct field.
     redrawManifest: manifestRel,
+    // …which is also why the flag `normalizeRunAssetPaths` stamps off
+    // `postprocessManifest` has to be set explicitly here: a synthesized redraw
+    // run never passes through that normalizer, so without this it reads as
+    // PortOS-owned once the frozen walk set is gone, and the client would offer a
+    // Reopen the server refuses (a redraw entry names no run dir, so it has no
+    // clip to re-derive from — this is the pioneer `east` shape).
+    ...(isSourcePipelinePath(entry.runManifest) || isSourcePipelinePath(entry.runPath)
+      ? { importedPackaging: true } : {}),
     stripPreview: {
       stripPath,
       frameCount,

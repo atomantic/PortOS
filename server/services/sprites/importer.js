@@ -163,7 +163,7 @@ const ASSET_REF = /\.(png|gif|json)$/i;
 // excluded below — ~5× the bytes of the clip they were extracted from, and
 // re-derivation re-extracts them on demand. (The name itself lives in paths.js —
 // the importer, the postprocess, and the walk service all key on it.)
-const SOURCE_CLIP_REF = new RegExp(`${RUN_DIR_MATCH.source}/generated/source-video\\.mp4$`);
+const SOURCE_CLIP_REF = new RegExp(`${RUN_DIR_MATCH.source}/generated/${SOURCE_CLIP_NAME.replace('.', '\\.')}$`);
 const EXCLUDED_RUN_SEGMENTS = /(^|\/)(raw|frames|review)\//;
 // Free-text log fields in run records can contain path-looking strings that
 // were never assets — don't traverse them.

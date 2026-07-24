@@ -1445,6 +1445,10 @@ describe('getWalkState', () => {
         status: 'approved',
         kind: 'imported-redraw-walk-cycle',
         redrawManifest: REDRAW_MANIFEST_REL,
+        // A redraw entry names no run directory, so it has no clip to re-derive
+        // from and the server refuses to reopen it. The flag is what still says
+        // so once the frozen walk set — the client's other signal — is gone.
+        importedPackaging: true,
         stripPreview: {
           stripPath: 'imagegen/v19/clean-alpha.png',
           frameCount: 12,
