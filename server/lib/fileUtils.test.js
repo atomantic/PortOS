@@ -67,48 +67,52 @@ describe('fileUtils', () => {
   // conditionals itself. Leaving both branches in shipped a self-contradictory
   // reviewer spec (in-process Agent tool AND `claude -p`) to a codex agent,
   // which then improvised its own `claude` invocation via a dozen probe calls.
-  describe('loadSlashdoLib', () => {
-    it('resolves if:teams conditionals to the non-teams (subprocess) branch by default', async () => {
-      const body = await loadSlashdoLib('local-agent-review-loop');
-      expect(body).toBeTruthy();
-      // No conditional markers survive — both branches must be resolved, not inlined.
-      expect(body).not.toMatch(/<!--\s*(if:|else|\/if:)/);
-      // The subprocess reviewer invocation (else branch) is present…
-      expect(body).toContain('claude -p "$LOCAL_PROMPT"');
-      // …and the Claude-Code-only in-process Agent-tool branch is stripped.
-      expect(body).not.toMatch(/in-process sub-agent via the .?Agent.? tool/i);
+  describe('slashdo loaders (loadSlashdoFile / loadSlashdoLib)', () => {
+    // Driven from controlled fixtures via the mocked `readFile`, NOT the vendored
+    // submodule's live content — so the assertions can't drift with a slashdo
+    // version bump. Each test resets `readFile` to clean real-delegation first: a
+    // `mockRejectedValueOnce` leaked from an earlier suite would otherwise null out
+    // a load and fail here (the flake that reddened CI), and the reset also lets
+    // `mockResolvedValueOnce` feed a fixture as the next read.
+    let realReadFile;
+    beforeEach(async () => {
+      realReadFile = (await vi.importActual('fs/promises')).readFile;
+      vi.mocked(fsPromises.readFile).mockReset();
+      vi.mocked(fsPromises.readFile).mockImplementation((...args) => realReadFile(...args));
     });
 
-    it('keeps the teams (in-process Agent-tool) branch when teams=true', async () => {
-      const body = await loadSlashdoLib('local-agent-review-loop', { teams: true });
-      expect(body).toBeTruthy();
-      expect(body).not.toMatch(/<!--\s*(if:|else|\/if:)/);
-      expect(body).toMatch(/in-process sub-agent via the .?Agent.? tool/i);
+    it('loadSlashdoLib resolves if:teams to the else branch by default and the if branch under teams:true', async () => {
+      const fixture = 'A<!-- if:teams -->IF<!-- else -->ELSE<!-- /if:teams -->B';
+      vi.mocked(fsPromises.readFile).mockResolvedValueOnce(fixture);
+      expect(await loadSlashdoLib('cond-fixture-else')).toBe('AELSEB');
+      vi.mocked(fsPromises.readFile).mockResolvedValueOnce(fixture);
+      expect(await loadSlashdoLib('cond-fixture-if', { teams: true })).toBe('AIFB');
     });
 
-    it('returns null for a lib file that does not exist', async () => {
+    it('loadSlashdoLib leaves a non-teams conditional block untouched', async () => {
+      const fixture = 'A<!-- if:other -->X<!-- /if:other -->B';
+      vi.mocked(fsPromises.readFile).mockResolvedValueOnce(fixture);
+      expect(await loadSlashdoLib('cond-fixture-other')).toBe(fixture);
+    });
+
+    it('loadSlashdoLib returns null for a lib file that does not exist', async () => {
       expect(await loadSlashdoLib('no-such-lib-file-xyz')).toBeNull();
     });
-  });
 
-  describe('loadSlashdoFile', () => {
-    // `better.md` ships both `if:teams` conditional blocks and `!`cat`` includes
-    // of shell-heavy lib files, and is reachable as a user-dispatched CoS command
-    // — so it exercises both fixes below.
-    it('resolves if:teams conditionals in a command body (not just libs)', async () => {
-      const body = await loadSlashdoFile('better');
-      expect(body).toBeTruthy();
-      expect(body).not.toMatch(/<!--\s*(if:|else|\/if:)/);
-    });
-
-    it('inlines lib includes literally — no $-token blowup or corruption', async () => {
-      const body = await loadSlashdoFile('better');
-      // A bare-string String.replace would interpret `$\``/`$'` tokens in the
-      // shell-heavy libs and splice the pre-match content in, ballooning a ~66KB
-      // command past 2MB. The function-form replacer keeps it near the sum of the
-      // raw sizes (~240KB) and preserves `$`-tokens verbatim.
-      expect(body.length).toBeLessThan(600_000);
-      expect(body).toContain('$LOCAL_PROMPT');
+    it('loadSlashdoFile inlines includes with $-tokens verbatim and resolves conditionals', async () => {
+      // A shell-heavy lib whose `$&` / `$`-backtick tokens must survive a
+      // String.replace (a bare-string replacement would interpret them and splice
+      // pre-match content in, corrupting the text and ballooning the output).
+      const libBody = 'run claude -p "$LOCAL_PROMPT" $& $`tail';
+      const cmdBody = 'HEAD\n!`cat ~/.claude/lib/some-lib.md`\n<!-- if:teams -->TEAMS<!-- else -->SUB<!-- /if:teams -->\nTAIL';
+      vi.mocked(fsPromises.readFile)
+        .mockResolvedValueOnce(cmdBody)   // the command file
+        .mockResolvedValueOnce(libBody);  // the included lib
+      const body = await loadSlashdoFile('cmd-fixture-dollar');
+      expect(body).toContain('claude -p "$LOCAL_PROMPT" $& $`tail'); // $-tokens verbatim, no blowup
+      expect(body).toContain('SUB');                                 // else branch kept
+      expect(body).not.toContain('TEAMS');                           // if branch stripped
+      expect(body).not.toMatch(/<!--\s*(if:|else|\/if:)/);           // markers gone
     });
   });
 
