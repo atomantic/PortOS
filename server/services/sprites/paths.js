@@ -141,14 +141,25 @@ export async function resolveDriftTolerantRel(baseDir, rel) {
   return alt && (await pathExists(join(baseDir, alt))) ? alt : null;
 }
 
-// Raw ffmpeg-extracted frame intermediates inside an animation run (30–96
-// near-identical PNGs per run, `grok|runs/<run>/generated/raw/`). Kept on
-// disk for the postprocessor but omitted from the asset listing — they'd
-// swamp the browser. Narrower than the importer's EXCLUDED_RUN_SEGMENTS
-// (which also skips frames/ and review/ to minimize cross-machine copies):
-// the packaged phase frames and the contrast review sheet exist FOR human
-// review, so the local browser keeps them.
-const RUN_RAW_INTERMEDIATE = new RegExp(`${RUN_DIR_MATCH.source}/generated/raw/`);
+/**
+ * Raw ffmpeg-extracted frame intermediates inside an animation run (30–96
+ * near-identical PNGs per run) — where they live and what they are named.
+ *
+ * Stated here, beside the exclusion built from it, because two readers disagree
+ * about them by design: `listSpriteAssets` skips the directory (the frames would
+ * swamp the asset browser) while the Loop Trimmer's source-frame endpoint (#2980)
+ * is the sanctioned narrow window onto it. Split those definitions and moving the
+ * directory — or widening the counter past four digits — silently publishes ~73
+ * PNGs into the browser while the trimmer reads an empty tree.
+ *
+ * The exclusion is narrower than the importer's EXCLUDED_RUN_SEGMENTS (which also
+ * skips frames/ and review/ to minimize cross-machine copies): the packaged phase
+ * frames and the contrast review sheet exist FOR human review, so the local
+ * browser keeps them.
+ */
+export const rawFramesRelOf = (runDirRel) => `${runDirRel}/generated/raw`;
+export const RAW_FRAME_NAME = /^source-(\d{4})\.png$/;
+const RUN_RAW_INTERMEDIATE = new RegExp(`${RUN_DIR_MATCH.source}${rawFramesRelOf('')}/`);
 
 // Extensions sharp can parse a header for. Anything else (JSON manifests,
 // videos, text) skips the metadata probe entirely.

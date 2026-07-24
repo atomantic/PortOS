@@ -32,6 +32,7 @@ import { getRecord, updateRecord } from './records.js';
 import {
   spriteDir, resolveSpriteAssetPath, toRecordRelativeAssetPath, altRunLayoutPath,
   runDirOfPath, resolveDriftTolerantRel, isSourcePipelinePath, SOURCE_CLIP_NAME,
+  rawFramesRelOf, RAW_FRAME_NAME,
 } from './paths.js';
 import { requireCharacter, loadManifest } from './reference.js';
 import { SPRITE_DIRECTIONS, anchorIdForDirection, buildWalkVideoPrompt } from './prompts.js';
@@ -230,10 +231,14 @@ async function resolveRunClipRel(recordId, run, runDirRel) {
   return resolved.find(Boolean) || null;
 }
 
+// What a frozen set says when a mutating op reaches it. A factory rather than a
+// literal because two paths raise it: this guard, and the shared re-derive gate
+// below (which resolves the frozen set from state it already loaded rather than
+// re-reading the file). One producer, so the two can't drift apart.
+const walkSetFinalError = () => new ServerError('Walk set is finalized — revisions require a new character version', { status: 409, code: 'WALK_SET_FINAL' });
+
 async function requireUnfinalized(recordId) {
-  if (await loadWalkSet(recordId)) {
-    throw new ServerError('Walk set is finalized — revisions require a new character version', { status: 409, code: 'WALK_SET_FINAL' });
-  }
+  if (await loadWalkSet(recordId)) throw walkSetFinalError();
 }
 
 // PortOS stamps createdAt as an ISO string (Date.parse handles it); imported
@@ -501,14 +506,25 @@ async function directionClipRel(recordId, entry) {
 }
 
 /**
+ * The cycle geometry ONE run was packed at.
+ *
+ * Native runs stamp `frameCount`/`fps` on the run record; imported and redraw
+ * runs only carry them inside `stripPreview`, and older native records predate
+ * the run-level fields entirely — so every reader has to look through both, and
+ * they do it through here rather than each re-deriving the fallback order.
+ * Absent reports as null rather than a default, so "unknown" can't masquerade as
+ * "packed at the default".
+ */
+const runCycleOf = (run) => ({
+  frameCount: run?.frameCount ?? run?.stripPreview?.frameCount ?? null,
+  fps: run?.fps ?? run?.stripPreview?.fps ?? null,
+});
+
+/**
  * The packed geometry of each direction that actually carries one, in ATLAS
  * order (SPRITE_DIRECTIONS) so "the first packaged direction" means the same
  * thing here as it does in the compiler's first-wins rule. An approved run wins
  * over a candidate for the same direction — approval is what the atlas compiles.
- *
- * Native runs stamp `frameCount`/`fps` on the run record; imported and redraw
- * runs only carry them inside `stripPreview`, so read through both or every
- * imported set would resolve as "no packaged geometry" and drift silently.
  *
  * A run the server flagged `stripMissing` contributes nothing: its packed strip
  * is gone from disk, so it can never compile, and letting it win the
@@ -528,11 +544,7 @@ function packagedCyclesFrom(runs, approvedDirections) {
       || forDirection.find((r) => r.status === 'approved')
       || forDirection.find((r) => r.status === 'candidate');
     if (!run || run.stripMissing) return [];
-    return [{
-      direction,
-      frameCount: run.frameCount ?? run.stripPreview?.frameCount,
-      fps: run.fps ?? run.stripPreview?.fps,
-    }];
+    return [{ direction, ...runCycleOf(run) }];
   });
 }
 
@@ -1066,7 +1078,7 @@ function reDeriveLockReason({
 }
 
 const RE_DERIVE_REFUSALS = {
-  finalized: () => new ServerError('Walk set is finalized — revisions require a new character version', { status: 409, code: 'WALK_SET_FINAL' }),
+  finalized: walkSetFinalError,
   approved: () => new ServerError('Run is approved — approved runs are immutable', { status: 409, code: 'RUN_APPROVED' }),
   'no-source-video': () => new ServerError('Run has no source video yet', { status: 409, code: 'VIDEO_NOT_READY' }),
 };
@@ -1113,13 +1125,9 @@ async function rerunWalkPostprocessImpl(recordId, runId, overrides) {
   return run;
 }
 
-// The ffmpeg intermediates a run's clip was extracted into (#2980). Named here
-// rather than rebuilt at each call site because `paths.js` excludes exactly this
-// directory from `listSpriteAssets` (RUN_RAW_INTERMEDIATE) — the reader below is
-// the sanctioned narrow window onto it, and the two must name the same place.
-const RAW_FRAME_NAME = /^source-(\d{4})\.png$/;
-const rawFramesRelOf = (runDirRel) => `${runDirRel}/generated/raw`;
-
+// The raw-frame location + naming come from paths.js, which builds
+// `listSpriteAssets`' exclusion from the same two values — this reader is the
+// sanctioned narrow window onto the directory that listing deliberately skips.
 async function listRawFrameNames(recordId, rawRel) {
   const names = await readdir(join(spriteDir(recordId), rawRel)).catch(() => []);
   return names.filter((name) => RAW_FRAME_NAME.test(name)).sort();
@@ -1154,35 +1162,39 @@ function cycleWindowOf(packaged) {
     windowStartFrame,
     windowEndFrame: windowStartFrame !== null && windowLength !== null
       ? windowStartFrame + windowLength : null,
-    endpointSeamScore: cycle.endpointSeamScore ?? null,
-    medianMotionScore: cycle.medianMotionScore ?? null,
   };
 }
 
 /**
- * The fields every source-frame response carries, whatever it found — so the
- * "nothing to show" shape stays as informative as the populated one (the client
- * still seeds its re-derive control from `target` and labels the run's current
- * geometry) instead of degenerating into a bare flag.
+ * One source-frame response, defaulted to the "nothing to show" shape and
+ * overridden with whatever was actually found.
+ *
+ * Written as one builder rather than two hand-assembled object literals so that
+ * adding a field is one edit: the absent case has to stay as informative as the
+ * populated one (the client still seeds its re-derive control from `target` and
+ * labels the run's current geometry off `current`), and a shape that only two
+ * thirds matched would defeat that quietly.
  */
-function sourceFrameHeader(runId, run, walkTarget) {
+function sourceFrameResponse(runId, run, walkTarget, found) {
   return {
     runId,
     direction: run?.direction || null,
     extractionFps: WALK_FPS,
     maxSourceSeconds: MAX_SOURCE_SECONDS,
-    // Older run records predate the persisted frameCount/fps fields, so the
-    // packed preview is the fallback — and null (rather than a default) when
-    // neither exists, so "unknown" can't masquerade as "packed at 12".
-    current: {
-      frameCount: run?.frameCount ?? run?.stripPreview?.frameCount ?? null,
-      fps: run?.fps ?? run?.stripPreview?.fps ?? null,
-    },
+    current: runCycleOf(run),
     // The set-level cycle target (#2985) — the re-derive control's bounds come
     // from here, not from a free authoring range: re-deriving ONE direction to a
     // geometry the rest of the set doesn't share just recreates a ragged set from
     // the other end (and the reprocess would 409 WALK_TARGET_MISMATCH anyway).
     target: walkTarget,
+    available: false,
+    reason: null,
+    frames: [],
+    cycle: null,
+    selectedSourceIndices: [],
+    editable: false,
+    lockReason: null,
+    ...found,
   };
 }
 
@@ -1212,10 +1224,11 @@ function sourceFrameHeader(runId, run, walkTarget) {
  * idempotent), inside the per-record write tail like every other walk write.
  */
 export async function getWalkSourceFrames(recordId, runId) {
-  await requireCharacter(recordId);
-  // The state read serves the target, the approval check and the redraw fallback
-  // below; it is independent of resolving the run, so overlap them.
-  const [found, state] = await Promise.all([
+  // All three reads are independent — the character gate, the run lookup, and
+  // the walk state (which serves the target, the lock gate, and the redraw
+  // fallback below) — so pay for them once, concurrently.
+  const [, found, state] = await Promise.all([
+    requireCharacter(recordId),
     resolveRunById(recordId, runId),
     getWalkState(recordId),
   ]);
@@ -1227,22 +1240,25 @@ export async function getWalkSourceFrames(recordId, runId) {
     // unknown id earns.
     const known = state.runs.find((r) => r.id === runId);
     if (!known) throw new ServerError(`Unknown walk run: ${runId}`, { status: 404, code: 'RUN_NOT_FOUND' });
-    return {
-      ...sourceFrameHeader(runId, known, walkTarget),
-      available: false,
+    return sourceFrameResponse(runId, known, walkTarget, {
       reason: 'run-not-packaged',
-      frames: [],
-      cycle: null,
-      selectedSourceIndices: [],
-      editable: false,
       lockReason: 'no-source-video',
-    };
+    });
   }
   const { runDirRel } = found;
   const run = normalizeRunRecord(recordId, found.run, runDirRel);
-  const clipRel = await resolveRunClipRel(recordId, run, runDirRel);
   const rawRel = rawFramesRelOf(runDirRel);
-  let names = await listRawFrameNames(recordId, rawRel);
+  // Three independent probes (the clip, the raw listing, the packaged manifest)
+  // — none feeds the next, so they overlap rather than serializing three round
+  // trips onto a read the trimmer makes on every source switch.
+  const [clipRel, listed, packaged] = await Promise.all([
+    resolveRunClipRel(recordId, run, runDirRel),
+    listRawFrameNames(recordId, rawRel),
+    run.postprocessManifest
+      ? readJSONFile(join(spriteDir(recordId), run.postprocessManifest), null)
+      : null,
+  ]);
+  let names = listed;
   if (!names.length && clipRel) {
     await walkWriteTail(recordId, () => extractVideoFrames(
       resolveSpriteAssetPath(recordId, clipRel),
@@ -1252,9 +1268,6 @@ export async function getWalkSourceFrames(recordId, runId) {
     // raw frame is defined in exactly one place.
     names = await listRawFrameNames(recordId, rawRel);
   }
-  const packaged = run.postprocessManifest
-    ? await readJSONFile(join(spriteDir(recordId), run.postprocessManifest), null)
-    : null;
   const frames = names.map((name) => ({
     index: Number(RAW_FRAME_NAME.exec(name)[1]),
     path: `${rawRel}/${name}`,
@@ -1262,8 +1275,7 @@ export async function getWalkSourceFrames(recordId, runId) {
   const lockReason = reDeriveLockReason({
     walkSet, selection, run, runId, clipRel,
   });
-  return {
-    ...sourceFrameHeader(runId, run, walkTarget),
+  return sourceFrameResponse(runId, run, walkTarget, {
     available: frames.length > 0,
     reason: frames.length > 0 ? null : 'no-source-video',
     frames,
@@ -1273,7 +1285,7 @@ export async function getWalkSourceFrames(recordId, runId) {
       .filter((index) => Number.isInteger(index)),
     editable: !lockReason,
     lockReason,
-  };
+  });
 }
 
 /**

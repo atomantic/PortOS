@@ -1,18 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Film, ChevronDown, ChevronRight, Gauge, RefreshCw, RotateCcw, Unlock,
+  memo, useCallback, useEffect, useMemo, useState,
+} from 'react';
+import {
+  Film, ChevronDown, ChevronRight, RefreshCw, RotateCcw, Unlock,
 } from 'lucide-react';
 import toast from '../ui/Toast';
 import {
-  getSpriteWalkSourceFrames, postprocessSpriteWalk, setSpriteWalkTarget,
+  getSpriteWalkSourceFrames, postprocessSpriteWalk,
   unlockSpriteWalk, reopenSpriteWalk,
 } from '../../services/apiSprites.js';
 import { useAsyncAction } from '../../hooks/useAsyncAction.js';
 import ConfirmButtonPair from '../ui/ConfirmButtonPair.jsx';
+import CycleTarget from './CycleTarget.jsx';
 import { spriteAssetUrl, PIXELATED } from './spriteAssets.js';
-import {
-  WALK_FRAME_COUNT_OPTIONS, walkFpsOptionsFor,
-} from '../../lib/spriteTrimmer.js';
 
 // Source frames + re-derive (#2980), inside the Loop Trimmer.
 //
@@ -24,12 +24,14 @@ import {
 // window the packer chose and which frames became packed columns, and re-derives
 // the loop from that SAME on-disk clip at a new geometry — no new paid render.
 //
-// The re-derive's frame count / fps are the SET-level cycle target (#2985), not
-// a free per-run range: every direction of one walk occupies the same atlas
-// columns, so re-deriving one direction to a value the rest of the set doesn't
-// share just recreates a ragged set from the other end (and the server would
-// 409 WALK_TARGET_MISMATCH anyway). Changing them here retargets the whole set,
-// which is stated inline.
+// The geometry knob is the shared SET-level <CycleTarget> (#2985), not a free
+// per-run range: every direction of one walk occupies the same atlas columns, so
+// re-deriving one direction to a value the rest of the set doesn't share just
+// recreates a ragged set from the other end (and the server would 409
+// WALK_TARGET_MISMATCH anyway). Re-derive itself sends only the run id and lets
+// the server adopt the pinned target — the same request WalkWorkflow's Reprocess
+// makes, so a target this panel's fetch is one refetch behind on can't 409 a
+// value the user never chose.
 
 // Why a run has no frames to show. Both are real states on this install, and
 // neither is an error — the panel explains rather than rendering an empty grid.
@@ -64,17 +66,20 @@ const LOCK_COPY = {
 // cells: these are pre-key frames that still carry the solid chroma matte, so
 // there is no alpha for a checkerboard to show through — painting one behind
 // them would imply a transparency they don't have.
-function RawFrame({ recordId, frame, inWindow, packed }) {
+// Memoized: the trimmer this panel lives in re-renders 12–24×/second while its
+// loop preview plays, and a run holds ~73 of these.
+const RawFrame = memo(function RawFrame({
+  recordId, frame, inWindow, packed,
+}) {
   const marks = [
     inWindow ? 'in the selected cycle window' : null,
     packed ? 'packed into the strip' : null,
   ].filter(Boolean);
+  const tone = packed ? 'border-port-accent ring-1 ring-port-accent'
+    : inWindow ? 'border-port-warning/70' : 'border-port-border opacity-60';
   return (
     <div
-      className={`rounded overflow-hidden border ${
-        packed ? 'border-port-accent ring-1 ring-port-accent'
-          : inWindow ? 'border-port-warning/70' : 'border-port-border'
-      } ${inWindow || packed ? '' : 'opacity-60'}`}
+      className={`rounded overflow-hidden border ${tone}`}
       title={`source frame ${frame.index}${marks.length ? ` — ${marks.join(', ')}` : ''}`}
     >
       <img
@@ -89,35 +94,25 @@ function RawFrame({ recordId, frame, inWindow, packed }) {
       </span>
     </div>
   );
-}
+});
 
-export default function WalkSourceFrames({ recordId, runId, onSaved = () => {} }) {
+function WalkSourceFrames({ recordId, runId, onSaved = () => {} }) {
   const [data, setData] = useState(null);
   const [loadError, setLoadError] = useState(null);
-  const [loading, setLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const [confirming, setConfirming] = useState(false);
-  // The re-derive geometry. Seeded from the resolved SET target on every load so
-  // the control can never show a value the set isn't actually on.
-  const [frameCount, setFrameCount] = useState(null);
-  const [fps, setFps] = useState(null);
-  // The target PUT is a separate request from the reprocess; while it is in
-  // flight the reprocess would be gated against a value the server has not
-  // persisted yet, so it holds its own flag rather than riding on the action's.
+  // The cycle target's PUT is its own request; the re-derive below reads the
+  // target server-side, so it must not fire against a value the server has not
+  // persisted yet (CLAUDE.md: "in-flight saves must gate dependent actions").
   const [targetSaving, setTargetSaving] = useState(false);
 
   const load = useCallback(async () => {
-    setLoading(true);
     setLoadError(null);
     // The component owns its own error UI (the line below), so the request is
     // silent — otherwise the helper toasts and this renders the same failure.
     const next = await getSpriteWalkSourceFrames(recordId, runId, { silent: true })
       .catch((err) => { setLoadError(err?.message || 'Could not read this run\'s source frames'); return null; });
-    setLoading(false);
-    if (!next) return;
-    setData(next);
-    setFrameCount(next.target?.frameCount ?? next.current?.frameCount ?? null);
-    setFps(next.target?.fps ?? next.current?.fps ?? null);
+    if (next) setData(next);
   }, [recordId, runId]);
 
   useEffect(() => {
@@ -132,40 +127,32 @@ export default function WalkSourceFrames({ recordId, runId, onSaved = () => {} }
     [data?.selectedSourceIndices],
   );
 
-  const target = data?.target || null;
-  const retargets = Boolean(target) && (frameCount !== target.frameCount || fps !== target.fps);
+  // Every mutation refreshes BOTH this panel (its own frames/lock state) and the
+  // trimmer around it (the repacked strip and its frame toggles).
+  const refresh = useCallback(async () => { onSaved(); await load(); }, [onSaved, load]);
 
   const [redrive, redriving] = useAsyncAction(async () => {
-    // A geometry the set isn't on must be pinned at the SET level first — the
-    // reprocess is refused (409 WALK_TARGET_MISMATCH) against a target it
-    // disagrees with, by design.
-    if (retargets) {
-      setTargetSaving(true);
-      try {
-        await setSpriteWalkTarget(recordId, { frameCount, fps }, { silent: true });
-      } finally {
-        setTargetSaving(false);
-      }
-    }
-    await postprocessSpriteWalk(recordId, { runId, frameCount, fps }, { silent: true });
-    toast.success(`Re-derived from the source clip · ${frameCount}f @ ${fps}fps`);
-    onSaved();
-    await load();
+    // Geometry deliberately NOT sent: the server adopts the set's pinned target
+    // for an omitted count/fps, so the request can't 409 against a target this
+    // panel's fetch is one refetch behind on (#2985) — same call WalkWorkflow's
+    // Reprocess makes.
+    await postprocessSpriteWalk(recordId, { runId }, { silent: true });
+    toast.success(`Re-derived from the source clip · ${data.target?.frameCount}f @ ${data.target?.fps}fps`);
+    await refresh();
   }, { errorMessage: 'Could not re-derive this loop' });
 
   const [unlock, unlocking] = useAsyncAction(async () => {
     if (data.lockReason === 'finalized') {
       await unlockSpriteWalk(recordId, { silent: true });
-      toast.success('Walk set unlocked — every direction is editable again');
+      toast.success('Walk set unlocked — directions are editable again');
     } else {
       await reopenSpriteWalk(recordId, { direction: data.direction }, { silent: true });
-      toast.success(`${data.direction} reopened`);
+      toast.success(`Walk ${data.direction} reopened`);
     }
-    onSaved();
-    await load();
+    await refresh();
   }, { errorMessage: 'Could not unlock this direction' });
 
-  const busy = loading || redriving || unlocking || targetSaving;
+  const busy = redriving || unlocking || targetSaving;
   const lock = data && !data.editable ? LOCK_COPY[data.lockReason] : null;
   const frames = data?.frames || [];
 
@@ -249,52 +236,39 @@ export default function WalkSourceFrames({ recordId, runId, onSaved = () => {} }
       )}
 
       {/* Re-derive. Present whenever the run has a clip behind it — the source
-          grid above is context, not a precondition. */}
+          grid above is context, not a precondition. The geometry knob is the
+          shared set-level control, so changing it here means the same thing (and
+          carries the same app-lock explanation) as changing it in the walk
+          workflow; the button then repacks THIS run onto it. */}
       <div className="border-t border-port-border pt-3 space-y-2">
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          <label className="flex items-center gap-1.5 text-xs text-gray-400" htmlFor="trimmer-derive-frames">
-            Re-derive at
-            <select
-              id="trimmer-derive-frames"
-              value={frameCount ?? ''}
-              disabled={busy || !data.editable || Boolean(target?.frameCountLocked)}
-              onChange={(e) => setFrameCount(Number(e.target.value))}
-              title="Frames in the walk cycle — shared by all 8 directions, because the atlas is a rectangular grid"
-              className="bg-port-card border border-port-border rounded px-2 py-1 text-sm text-white disabled:opacity-60"
-            >
-              {WALK_FRAME_COUNT_OPTIONS.map((n) => <option key={n} value={n}>{n} frames</option>)}
-            </select>
-          </label>
-          <label className="flex items-center gap-1.5 text-xs text-gray-400" htmlFor="trimmer-derive-fps">
-            <span className="flex items-center gap-1"><Gauge className="w-3 h-3" /> Preview speed</span>
-            <select
-              id="trimmer-derive-fps"
-              value={fps ?? ''}
-              disabled={busy || !data.editable || Boolean(target?.fpsLocked)}
-              onChange={(e) => setFps(Number(e.target.value))}
-              title="Preview/authoring speed — the consuming app decides real in-game playback"
-              className="bg-port-card border border-port-border rounded px-2 py-1 text-sm text-white disabled:opacity-60"
-            >
-              {walkFpsOptionsFor(fps).map((n) => <option key={n} value={n}>{n} fps</option>)}
-            </select>
-          </label>
+          {data.target && (
+            <CycleTarget
+              recordId={recordId}
+              target={data.target}
+              disabled={busy}
+              onChanged={refresh}
+              onSavingChange={setTargetSaving}
+              surfaceClass="bg-port-card"
+              appRetargetHint="change it in the Publish panel"
+            />
+          )}
           <button
             onClick={redrive}
-            disabled={busy || !data.editable || !frameCount || !fps}
+            disabled={busy || !data.editable}
             title={data.editable
               ? 'Rebuild this loop from the clip already on disk — no new render'
               : 'This run is locked — see below'}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-port-accent hover:bg-blue-600 disabled:opacity-50 text-white rounded text-xs"
           >
-            {redriving || targetSaving
-              ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Re-deriving…</>
-              : <><RefreshCw className="w-3.5 h-3.5" /> Re-derive from clip</>}
+            <RefreshCw className={`w-3.5 h-3.5 ${redriving ? 'animate-spin' : ''}`} />
+            {redriving ? 'Re-deriving…' : 'Re-derive from clip'}
           </button>
         </div>
         <p className="text-[11px] text-gray-500">
-          {retargets
-            ? `Changing the cycle re-targets the whole set to ${frameCount}f @ ${fps}fps — the other directions will need re-deriving too.`
-            : `The set targets ${target?.frameCount}f @ ${target?.fps}fps (${target?.sourceLabel || target?.source || 'default'}). Re-deriving repacks this run from its clip — no AI call, no new render.`}
+          Re-deriving repacks this run from its clip onto the set&apos;s cycle target — no AI
+          call, no new render. Changing the target re-targets every direction, so the others
+          will need re-deriving too.
         </p>
 
         {lock && (
@@ -327,3 +301,7 @@ export default function WalkSourceFrames({ recordId, runId, onSaved = () => {} }
     </div>
   );
 }
+
+// Memoized for the same reason RawFrame is: the trimmer around this panel
+// re-renders on every loop-preview tick, and nothing here depends on that.
+export default memo(WalkSourceFrames);

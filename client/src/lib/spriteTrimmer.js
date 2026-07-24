@@ -33,8 +33,10 @@ const DEFAULT_FPS = 12;
 // walk workflow's set-level picker and the Loop Trimmer's re-derive (#2980).
 export const WALK_DEFAULT_FRAME_COUNT = 12;
 export const WALK_DEFAULT_FPS = 10;
-export const WALK_FRAME_COUNT_RANGE = { min: 6, max: 16 };
-export const WALK_FPS_RANGE = { min: 4, max: 24 };
+// Module-local: callers pick from the option lists below rather than re-deriving
+// them, so the bounds themselves have no consumer outside this file.
+const WALK_FRAME_COUNT_RANGE = { min: 6, max: 16 };
+const WALK_FPS_RANGE = { min: 4, max: 24 };
 
 // Inclusive integer sequence [min..max] by step. Both option lists derive from
 // module constants, so build them once at load rather than on every render.

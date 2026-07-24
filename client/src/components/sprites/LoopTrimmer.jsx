@@ -118,10 +118,11 @@ export default function LoopTrimmer({
   const [outputName, setOutputName] = useState('');
   const [result, setResult] = useState(null);
   const [img, setImg] = useState(null);
-  // Bumped when the run is re-derived (#2980): the repacked strip lands at the
-  // SAME path, so without a cache-buster the browser would keep painting the old
-  // geometry — the loaded <img> wouldn't even be re-requested, since its src
-  // never changed.
+  // Bumped when the run is re-derived (#2980). The repacked strip lands at the
+  // SAME path, so nothing in the load effect's other deps changes and the <img>
+  // would never be re-requested — it would keep painting the old geometry. The
+  // asset mount serves `max-age=0` with an ETag, so the re-request itself
+  // revalidates and picks up the new bytes; only the trigger was missing.
   const [stripVersion, setStripVersion] = useState(0);
 
   // Re-seed everything the moment the source changes — a stale enabled set from
@@ -144,8 +145,7 @@ export default function LoopTrimmer({
     if (!source) return undefined;
     const image = new Image();
     image.onload = () => setImg(image);
-    const url = spriteAssetUrl(recordId, source.stripPath);
-    image.src = stripVersion ? `${url}?v=${stripVersion}` : url;
+    image.src = spriteAssetUrl(recordId, source.stripPath);
     return () => { image.onload = null; };
   }, [source?.id, source?.stripPath, recordId, stripVersion]);
 
@@ -178,6 +178,13 @@ export default function LoopTrimmer({
     setPlaying(false);
     setFrameIndex((prev) => (prev + delta + frameCount) % frameCount);
   };
+
+  // Stable identity so the memoized source-frames panel doesn't re-render on
+  // every loop-preview tick (the playback interval fires 12–24×/second).
+  const onSourceFramesSaved = useCallback(() => {
+    setStripVersion((v) => v + 1);
+    onSaved();
+  }, [onSaved]);
 
   const slug = sanitizeTrimSlug(outputName);
   const [save, saving] = useAsyncAction(async () => {
@@ -366,11 +373,7 @@ export default function LoopTrimmer({
           (#2980). Run sources only: a saved trim has no run (and no clip)
           behind it, so there is nothing to enumerate or re-derive. */}
       {source?.kind === 'run' && source.runId && (
-        <WalkSourceFrames
-          recordId={recordId}
-          runId={source.runId}
-          onSaved={() => { setStripVersion((v) => v + 1); onSaved(); }}
-        />
+        <WalkSourceFrames recordId={recordId} runId={source.runId} onSaved={onSourceFramesSaved} />
       )}
 
       {/* Save + result */}

@@ -98,37 +98,32 @@ describe('WalkSourceFrames', () => {
     expect(cellFor(7).getAttribute('title')).toBe('source frame 7');
   });
 
-  it('re-derives the SELECTED run at the set target without retargeting it', async () => {
+  // Geometry is deliberately omitted so the server adopts the pinned target: a
+  // panel one refetch behind must not 409 on a value the user never chose.
+  it('re-derives the SELECTED run by id alone, letting the server adopt the target', async () => {
     await renderPanel();
     fireEvent.click(deriveButton());
     await act(async () => {});
 
     expect(setSpriteWalkTarget).not.toHaveBeenCalled();
     expect(postprocessSpriteWalk).toHaveBeenCalledWith(
-      'example-walker',
-      { runId: RUN_ID, frameCount: 8, fps: 12 },
-      { silent: true },
+      'example-walker', { runId: RUN_ID }, { silent: true },
     );
     // The trimmer reloads its strip + toggles against the new geometry.
     expect(onSaved).toHaveBeenCalled();
   });
 
-  it('pins the set target first when the user picks a different cycle', async () => {
+  // The geometry knob is the shared SET-level control, not a per-run one — the
+  // whole point of #2985 is that one direction cannot diverge from the set.
+  it('changes the cycle through the shared set target', async () => {
     await renderPanel();
-    fireEvent.change(screen.getByLabelText(/Re-derive at/), { target: { value: '12' } });
-    // The retarget is stated before it happens — one direction cannot diverge.
-    expect(screen.getByText(/re-targets the whole set to 12f @ 12fps/)).toBeTruthy();
-
-    fireEvent.click(deriveButton());
+    fireEvent.change(screen.getByLabelText(/Cycle target/), { target: { value: '12' } });
     await act(async () => {});
     expect(setSpriteWalkTarget).toHaveBeenCalledWith(
       'example-walker', { frameCount: 12, fps: 12 }, { silent: true },
     );
-    expect(postprocessSpriteWalk).toHaveBeenCalledWith(
-      'example-walker',
-      { runId: RUN_ID, frameCount: 12, fps: 12 },
-      { silent: true },
-    );
+    // A retarget refreshes the trimmer around it as well as this panel.
+    expect(onSaved).toHaveBeenCalled();
   });
 
   it('disables the controls while the re-derive is in flight', async () => {
@@ -138,8 +133,22 @@ describe('WalkSourceFrames', () => {
 
     fireEvent.click(deriveButton());
     expect(deriveButton()).toBeDisabled();
-    expect(screen.getByLabelText(/Re-derive at/)).toBeDisabled();
+    expect(screen.getByLabelText(/Cycle target/)).toBeDisabled();
     expect(screen.getByLabelText(/Preview speed/)).toBeDisabled();
+
+    await act(async () => { release({}); });
+    expect(deriveButton()).not.toBeDisabled();
+  });
+
+  // The dependent action must not fire against a target the server has not
+  // persisted yet (CLAUDE.md: in-flight saves gate dependent actions).
+  it('disables the re-derive while the target PUT is in flight', async () => {
+    let release;
+    setSpriteWalkTarget.mockReturnValue(new Promise((resolve) => { release = resolve; }));
+    await renderPanel();
+
+    fireEvent.change(screen.getByLabelText(/Cycle target/), { target: { value: '12' } });
+    expect(deriveButton()).toBeDisabled();
 
     await act(async () => { release({}); });
     expect(deriveButton()).not.toBeDisabled();
