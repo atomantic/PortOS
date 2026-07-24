@@ -105,13 +105,19 @@ async function verifyHashes(destDir, expectations, errors, copiedThisRun) {
       // a clean re-import.
       if (SOURCE_CLIP_REF.test(relPath)) {
         await rm(join(destDir, relPath), { force: true });
-        return { error: `run ${relPath.split('/')[1]}: source clip failed sha256 verification — not imported` };
+        return { dropped: true, error: `run ${relPath.split('/')[1]}: source clip failed sha256 verification — not imported` };
       }
       return { error: `sha256 mismatch: ${relPath}` };
     }),
   );
   for (const o of outcomes) if (o.error) errors.push(o.error);
-  return outcomes.filter((o) => o.verified).length;
+  // `dropped` feeds back into the caller's file count: a clip removed here was
+  // counted when it was copied, and an import summary must not claim a file it
+  // deliberately deleted.
+  return {
+    verified: outcomes.filter((o) => o.verified).length,
+    dropped: outcomes.filter((o) => o.dropped).length,
+  };
 }
 
 // Manifest paths reference files repo-relative (art-source/sprites/<id>/…) or
@@ -398,7 +404,9 @@ async function importCharacter({ sourceRoot, characterId, spec, specPath, select
     }
   }
 
-  result.verified = await verifyHashes(destDir, hashExpectations, result.errors, copiedThisRun);
+  const { verified, dropped } = await verifyHashes(destDir, hashExpectations, result.errors, copiedThisRun);
+  result.verified = verified;
+  result.files -= dropped;
 
   const record = await upsertImportedRecord(characterId, {
     kind: 'character',

@@ -379,6 +379,10 @@ describe('walk-run source clips', () => {
   it('refuses a clip whose bytes disagree with the manifest\'s sourceVideoSha256, naming the run', () => {
     expect(drifter.errors).toContain('run run-b: source clip failed sha256 verification — not imported');
     expect(existsSync(join(drifterDir(), 'runs/run-b/generated/source-video.mp4'))).toBe(false);
+    // …and the summary doesn't claim a file the import deliberately deleted:
+    // spec + walk set + 2 run records + 2 packaged manifests + strip + south
+    // clip = 8, with the dropped east clip subtracted back out.
+    expect(drifter.files).toBe(8);
     // The rest of that run still imported — one bad clip isn't a run-wide abort.
     expect(existsSync(join(drifterDir(), 'runs/run-b/animation-run.json'))).toBe(true);
   });
