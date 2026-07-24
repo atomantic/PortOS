@@ -10,6 +10,7 @@ import {
   buildGenerateArgs,
   parseGenerateProgress,
   runTrellis2Generate,
+  installTrellis2,
 } from './trellis2.js';
 
 const BASE = '/tmp/portos-test-home';
@@ -161,5 +162,62 @@ describe('runTrellis2Generate', () => {
     });
     child.emit('close', 0);
     await expect(promise).rejects.toMatchObject({ code: 'TRELLIS2_GENERATE_FAILED' });
+  });
+});
+
+describe('installTrellis2', () => {
+  const makeChild = () => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = vi.fn();
+    return child;
+  };
+
+  it('runs each install step in order and emits stage + complete events', async () => {
+    const children = [makeChild(), makeChild()];
+    let i = 0;
+    const spawnImpl = vi.fn(() => children[i++]);
+    const events = [];
+    const { promise } = installTrellis2({ base: BASE, spawnImpl, onEvent: (e) => events.push(e) });
+
+    // step 1 (clone) — first spawn call, then close it 0 to advance to step 2
+    expect(spawnImpl).toHaveBeenNthCalledWith(1, 'git', expect.arrayContaining(['clone']), {});
+    children[0].emit('close', 0);
+    await Promise.resolve(); // let the await in the loop advance
+    expect(spawnImpl).toHaveBeenNthCalledWith(2, 'bash', ['setup.sh'], { cwd: trellis2Root(BASE) });
+    children[1].emit('close', 0);
+    await expect(promise).resolves.toEqual({ ok: true });
+
+    expect(events.filter((e) => e.type === 'stage').map((e) => e.stage)).toEqual(['clone', 'setup']);
+    expect(events.at(-1)).toMatchObject({ type: 'complete' });
+  });
+
+  it('forwards subprocess output as log events', async () => {
+    const child = makeChild();
+    const events = [];
+    const { promise } = installTrellis2({ base: BASE, spawnImpl: () => child, onEvent: (e) => events.push(e) });
+    child.stdout.emit('data', 'Cloning into trellis2...\n');
+    child.emit('error', Object.assign(new Error('boom'), {})); // abort so the promise settles
+    await promise.catch(() => {});
+    expect(events).toContainEqual({ type: 'log', stage: 'clone', message: 'Cloning into trellis2...' });
+  });
+
+  it('rejects with the failing stage when a step exits non-zero', async () => {
+    const child = makeChild();
+    const { promise } = installTrellis2({ base: BASE, spawnImpl: () => child });
+    child.emit('close', 1);
+    await expect(promise).rejects.toMatchObject({ code: 'TRELLIS2_INSTALL_FAILED', stage: 'clone' });
+  });
+
+  it('kill() SIGTERMs the running child and cancels before the next step', async () => {
+    const children = [makeChild(), makeChild()];
+    let i = 0;
+    const { promise, kill } = installTrellis2({ base: BASE, spawnImpl: () => children[i++] });
+    kill();
+    expect(children[0].kill).toHaveBeenCalledWith('SIGTERM');
+    children[0].emit('close', 0); // step 1 finishes, but canceled flag stops step 2
+    await expect(promise).rejects.toMatchObject({ code: 'TRELLIS2_INSTALL_CANCELED' });
+    expect(i).toBe(1); // the second step never spawned
   });
 });
