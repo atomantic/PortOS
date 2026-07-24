@@ -57,7 +57,7 @@ const { SPRITE_DIRECTIONS: DIRECTIONS } = await import('./prompts.js');
 // The geometry block a real compile writes into the runtime pointer — the
 // publish path reads it for the contract guard and the layout sidecar.
 const atlasGeometry = (walkFrameCount = 8, overrides = {}) => ({
-  columns: ['idle', ...walkPhaseLabels(walkFrameCount), 'scanner'],
+  columns: ['idle', ...walkPhaseLabels(walkFrameCount)],
   directionOrder: DIRECTIONS,
   rows: DIRECTIONS.length,
   cellSize: 96,
@@ -65,6 +65,13 @@ const atlasGeometry = (walkFrameCount = 8, overrides = {}) => ({
   walkFps: 12,
   ...overrides,
 });
+// A pre-#2986 / imported grid, which still carries the trailing scanner
+// placeholder. Publishing one must still work and must describe it honestly.
+const legacyAtlasGeometry = (walkFrameCount = 8, overrides = {}) =>
+  atlasGeometry(walkFrameCount, {
+    columns: ['idle', ...walkPhaseLabels(walkFrameCount), 'scanner'],
+    ...overrides,
+  });
 
 const sidecarPath = (destPath) => destPath.replace(/\.png$/, '.layout.json');
 const readSidecar = async (destPath) =>
@@ -142,10 +149,10 @@ describe('validatePublishBinding / setPublishBinding', () => {
     const { id } = await characterWithAtlas();
     const saved = await setPublishBinding(id, {
       ...BINDING,
-      runtimeContract: { walkFrameCount: 8, cellSize: 96, columnCount: 10 },
+      runtimeContract: { walkFrameCount: 8, cellSize: 96, columnCount: 9 },
     });
     expect(saved.publishBinding.runtimeContract).toEqual({
-      walkFrameCount: 8, cellSize: 96, columnCount: 10,
+      walkFrameCount: 8, cellSize: 96, columnCount: 9,
     });
 
     for (const bad of [
@@ -401,7 +408,7 @@ describe('runtime contract guard (#2982)', () => {
     const { id } = await characterWithAtlas();
     await setPublishBinding(id, {
       ...BINDING,
-      runtimeContract: { walkFrameCount: 8, cellSize: 96, columnCount: 10 },
+      runtimeContract: { walkFrameCount: 8, cellSize: 96, columnCount: 9 },
     });
     const result = await publishAtlas(id);
     expect(result.published).toBe(true);
@@ -411,10 +418,10 @@ describe('runtime contract guard (#2982)', () => {
     const { id } = await characterWithAtlas('atlas-png-bytes-12f', atlasGeometry(12));
     await setPublishBinding(id, {
       ...BINDING,
-      runtimeContract: { walkFrameCount: 8, cellSize: 96, columnCount: 10 },
+      runtimeContract: { walkFrameCount: 8, cellSize: 96, columnCount: 9 },
     });
     await expect(publishAtlas(id)).rejects.toMatchObject({ status: 409, code: 'PUBLISH_CONTRACT_MISMATCH' });
-    await expect(publishAtlas(id)).rejects.toThrow(/14 columns \(12 walk frames\).*expects 10 \(8 walk frames\)/s);
+    await expect(publishAtlas(id)).rejects.toThrow(/13 columns \(12 walk frames\).*expects 9 \(8 walk frames\)/s);
     await expect(publishAtlas(id)).rejects.toThrow(/reprocess this walk set to 8 frames/);
     // Nothing landed in the game repo — not the atlas, not the sidecar.
     expect(await readFile(join(APP_REPO, BINDING.atlasDestPath)).catch(() => null)).toBeNull();
@@ -451,22 +458,38 @@ describe('layout sidecar (#2982)', () => {
       cellSize: 96,
       rows: 8,
       walkFrameCount: 12,
-      columnCount: 14,
+      columnCount: 13,
       previewFps: 12,
       sourceAtlasSha256: sha256(Buffer.from(atlasBytes)),
     });
     expect(layout.columns[0]).toBe('idle');
-    expect(layout.columns.at(-1)).toBe('scanner');
-    expect(layout.columns).toHaveLength(14);
+    // idle + 12 walk phases — the sidecar advertises no scanner span, because
+    // the atlas beside it no longer has that column (#2986).
+    expect(layout.columns).not.toContain('scanner');
+    expect(layout.columns).toHaveLength(13);
     // Per-track spans so a future multi-frame track is additive, not a rewrite.
     expect(layout.tracks).toEqual({
       idle: { start: 0, count: 1 },
       walk: { start: 1, count: 12 },
-      scanner: { start: 13, count: 1 },
     });
     // previewFps travels labeled as authoring-only — the app must not animate from it.
     expect(layout.previewFpsNote).toMatch(/Authoring metadata only/);
     expect(result.publication).toMatchObject({ layoutDestPath: 'assets/sprites/hero/hero-atlas.layout.json' });
+  });
+
+  it('still describes a pre-#2986 atlas that carries a scanner column', async () => {
+    // Imported/legacy atlases keep publishing unchanged — the sidecar reports
+    // the grid the PNG actually is, scanner span and all, rather than the shape
+    // the current compiler would emit.
+    const { id } = await characterWithAtlas('atlas-png-bytes-legacy', legacyAtlasGeometry(8));
+    await setPublishBinding(id, BINDING);
+    const result = await publishAtlas(id);
+
+    expect(result.published).toBe(true);
+    const layout = await readSidecar(BINDING.atlasDestPath);
+    expect(layout.columnCount).toBe(10);
+    expect(layout.walkFrameCount).toBe(8);
+    expect(layout.tracks.scanner).toEqual({ start: 9, count: 1 });
   });
 
   it('is a no-op on an unchanged republish but self-heals a deleted sidecar', async () => {
@@ -513,7 +536,7 @@ describe('layout sidecar (#2982)', () => {
     expect(result.layoutWritten).toBe(true);
     const layout = await readSidecar(BINDING.atlasDestPath);
     expect(layout).toMatchObject({
-      walkFrameCount: 10, columnCount: 12, atlasVersion: 2, sourceAtlasSha256: sha256(Buffer.from(nextBytes)),
+      walkFrameCount: 10, columnCount: 11, atlasVersion: 2, sourceAtlasSha256: sha256(Buffer.from(nextBytes)),
     });
   });
 

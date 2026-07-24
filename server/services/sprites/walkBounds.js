@@ -21,10 +21,13 @@ export const WALK_PHASES = [
 // Legacy default / fallback frame count for manifests (or clients) that omit it.
 export const WALK_FRAME_COUNT = 8;
 
-// The two non-walk columns of the runtime atlas grid, named once so the
-// compiler that WRITES them (atlas.js `atlasColumns`) and the layout sidecar
-// that DESCRIBES them (atlasLayout.js) can never disagree on a column's
-// identity — the same reason walkPhaseLabels lives here.
+// The non-walk columns of the runtime atlas grid, named once so the compiler
+// that WRITES them (atlas.js `atlasColumns`) and the layout sidecar that
+// DESCRIBES them (atlasLayout.js) can never disagree on a column's identity —
+// the same reason walkPhaseLabels lives here. `scanner` is READ-ONLY now: the
+// compiler stopped emitting that duplicate-of-idle column (#2986), but
+// imported/pre-#2986 grids still carry it, so the sidecar must keep
+// recognizing it by name.
 export const ATLAS_IDLE_COLUMN = 'idle';
 export const ATLAS_SCANNER_COLUMN = 'scanner';
 

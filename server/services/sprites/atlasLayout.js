@@ -60,10 +60,12 @@ export function layoutSidecarPath(atlasDestPath) {
 
 /**
  * The walk-phase columns of a compiled grid: everything that is neither the
- * idle anchor nor the scanner placeholder. Derived from the ACTUAL column
+ * idle anchor nor a legacy scanner placeholder. Derived from the ACTUAL column
  * names rather than from `walkPhaseLabels(count)`, so a grid whose columns are
  * positional (`frame-00…`) groups into one walk span just like the named
- * 8-frame gait phases — and so a scanner-less grid (#2986) still resolves.
+ * 8-frame gait phases. The compiler no longer emits a scanner column (#2986),
+ * but imported/pre-#2986 grids still carry one, so it stays filtered here —
+ * otherwise their walk-frame count would come back one too high.
  */
 const walkColumnsOf = (columns) =>
   columns.filter((c) => c !== ATLAS_IDLE_COLUMN && c !== ATLAS_SCANNER_COLUMN);
@@ -80,13 +82,14 @@ export function resolveWalkFrameCount(geometry) {
 
 /**
  * Group the flat column list into named tracks of contiguous column spans:
- * `{ idle: { start: 0, count: 1 }, walk: { start: 1, count: 8 }, … }`. The walk
+ * `{ idle: { start: 0, count: 1 }, walk: { start: 1, count: 8 } }`. The walk
  * track is the `walkFrameCount` columns following the idle anchor — positional,
  * per the grid contract, so it doesn't care whether those columns carry named
  * gait phases or positional `frame-NN` labels. Every other column becomes a
  * track of its own named for the column, so a future four-frame scanner action
  * lands as `scanner: { start, count: 4 }` with no shape change on either side
- * of the boundary.
+ * of the boundary — and so a legacy grid's one-column `scanner` placeholder is
+ * still described honestly rather than folded into the walk span.
  */
 export function deriveTracks(columns, walkFrameCount) {
   const walkStart = columns[0] === ATLAS_IDLE_COLUMN ? 1 : 0;

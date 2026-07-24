@@ -1,7 +1,7 @@
 /**
  * Runtime atlas compiler (#2898): evidence-chain validation (walk set,
  * selection, run manifests, frame + anchor sha256s), the geometry contract
- * (10×8 grid, per-direction single scale, pivot ground line), immutable
+ * (9×8 grid, per-direction single scale, pivot ground line), immutable
  * versioning, and compile idempotency. Fixtures lock a real reference set
  * (real normalize + chroma-key selection) and hand-write the walk artifacts
  * with a correct hash chain.
@@ -148,7 +148,7 @@ beforeEach(() => {
 afterAll(() => rmSync(TEST_ROOT, { recursive: true, force: true }));
 
 describe('compileAtlas', () => {
-  it('compiles the 10×8 player atlas with full provenance and a current pointer', async () => {
+  it('compiles the 9×8 player atlas with full provenance and a current pointer', async () => {
     const id = await finalizedCharacter();
     const result = await compileAtlas(id);
 
@@ -164,15 +164,16 @@ describe('compileAtlas', () => {
 
     const manifest = JSON.parse(await readFile(join(TEST_ROOT, 'sprites', id, result.manifestPath), 'utf8'));
     expect(manifest.kind).toBe('reviewed-walk-set-runtime-atlas');
-    expect(manifest.geometry.columns).toEqual(['idle', ...WALK_PHASES, 'scanner']);
+    // idle + 8 walk phases — no trailing scanner placeholder (#2986).
+    expect(manifest.geometry.columns).toEqual(['idle', ...WALK_PHASES]);
     expect(manifest.geometry.directionOrder).toEqual(SPRITE_DIRECTIONS);
     expect(manifest.directions).toHaveLength(8);
     for (const row of manifest.directions) {
-      expect(row.cells).toHaveLength(10);
+      expect(row.cells).toHaveLength(9);
       expect(row.cells[0].policy).toBe('locked-directional-reference-anchor');
-      expect(row.cells[9].policy).toBe('locked-idle-placeholder');
-      // Scanner mirrors the idle cell's placement exactly.
-      expect(row.cells[9].occupiedBounds).toEqual(row.cells[0].occupiedBounds);
+      expect(row.cells.map((c) => c.column)).not.toContain('scanner');
+      expect(row.cells.some((c) => c.policy === 'locked-idle-placeholder')).toBe(false);
+      expect(row).not.toHaveProperty('scannerPolicy');
       for (const cell of row.cells) {
         // Feet on the pivot ground line: bounds bottom (top + height - 1) = pivot y.
         expect(cell.occupiedBounds.top + cell.occupiedBounds.height - 1).toBe(DEFAULT_ATLAS_GEOMETRY.pivot[1]);
@@ -196,16 +197,42 @@ describe('compileAtlas', () => {
     const result = await compileAtlas(id);
 
     const meta = await sharp(join(TEST_ROOT, 'sprites', id, result.atlasPath)).metadata();
-    // idle + 12 walk phases + scanner = 14 columns.
-    expect(meta.width).toBe(DEFAULT_ATLAS_GEOMETRY.cellSize * 14);
+    // idle + 12 walk phases = 13 columns.
+    expect(meta.width).toBe(DEFAULT_ATLAS_GEOMETRY.cellSize * 13);
     expect(meta.height).toBe(DEFAULT_ATLAS_GEOMETRY.cellSize * SPRITE_DIRECTIONS.length);
 
     const manifest = JSON.parse(await readFile(join(TEST_ROOT, 'sprites', id, result.manifestPath), 'utf8'));
-    expect(manifest.geometry.columns).toEqual(['idle', ...walkPhaseLabels(12), 'scanner']);
+    expect(manifest.geometry.columns).toEqual(['idle', ...walkPhaseLabels(12)]);
     expect(manifest.geometry.walkFrameCount).toBe(12);
     expect(manifest.geometry.walkFps).toBe(8);
-    expect(manifest.geometry.widthPx).toBe(DEFAULT_ATLAS_GEOMETRY.cellSize * 14);
-    for (const row of manifest.directions) expect(row.cells).toHaveLength(14);
+    expect(manifest.geometry.widthPx).toBe(DEFAULT_ATLAS_GEOMETRY.cellSize * 13);
+    for (const row of manifest.directions) expect(row.cells).toHaveLength(13);
+  });
+
+  it('recompiles a set whose pointer still describes the pre-#2986 scanner grid', async () => {
+    const id = await finalizedCharacter();
+    const first = await compileAtlas(id);
+
+    // Simulate a pointer written by the old compiler: same walk set, same cell
+    // metrics, but the wider `idle + N + scanner` column list (and therefore
+    // different atlas bytes). Every field the cheap pre-pixel idempotency check
+    // looks at is identical EXCEPT the column list — so without that comparison
+    // the stale wider grid would be reported as up-to-date and never recompile.
+    const pointerAbs = join(TEST_ROOT, 'sprites', id, 'runtime/current.json');
+    const pointer = JSON.parse(await readFile(pointerAbs, 'utf8'));
+    pointer.atlasSha256 = 'f'.repeat(64);
+    pointer.geometry = {
+      ...pointer.geometry,
+      columns: [...pointer.geometry.columns, 'scanner'],
+      widthPx: pointer.geometry.widthPx + pointer.geometry.cellSize,
+    };
+    await writeFile(pointerAbs, JSON.stringify(pointer));
+
+    const again = await compileAtlas(id);
+    expect(again.created).toBe(true);
+    expect(again.version).toBe(first.version + 1);
+    expect(again.geometry.columns).toEqual(['idle', ...WALK_PHASES]);
+    expect(again.geometry.widthPx).toBe(DEFAULT_ATLAS_GEOMETRY.cellSize * 9);
   });
 
   it('refuses to compile a set whose directions disagree on frame count', async () => {
@@ -279,7 +306,7 @@ describe('compileAtlas', () => {
       geometry: { cellSize: 64, pivot: [32, 56], targetMaxHeight: 44, targetMaxWidth: 52 },
     });
     const meta = await sharp(join(TEST_ROOT, 'sprites', id, result.atlasPath)).metadata();
-    expect(meta.width).toBe(64 * 10);
+    expect(meta.width).toBe(64 * 9);
     expect(meta.height).toBe(64 * 8);
   });
 
