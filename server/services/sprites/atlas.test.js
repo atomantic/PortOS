@@ -43,7 +43,7 @@ const records = await import('./records.js');
 const { lockReference, loadManifest } = await import('./reference.js');
 const { compileAtlas, getAtlasState, ATLAS_COLUMNS, DEFAULT_ATLAS_GEOMETRY } = await import('./atlas.js');
 const { SPRITE_DIRECTIONS } = await import('./prompts.js');
-const { WALK_PHASES } = await import('./walkPostprocess.js');
+const { WALK_PHASES, walkPhaseLabels } = await import('./walkPostprocess.js');
 
 let seq = 0;
 const newId = () => `atlas-char-${++seq}`;
@@ -67,10 +67,11 @@ async function walkFramePng(path, tint) {
   await sharp(buf, { raw: { width: w, height: h, channels: 4 } }).png().toFile(path);
 }
 
-async function buildFinalizedWalkSet(recordId) {
+async function buildFinalizedWalkSet(recordId, { frameCount = WALK_PHASES.length, fps } = {}) {
   const manifest = await loadManifest(recordId);
   const chromaKey = manifest.chromaKey;
   const dir = join(TEST_ROOT, 'sprites', recordId);
+  const labels = walkPhaseLabels(frameCount);
   const selection = {
     schemaVersion: 1,
     kind: 'reviewed-directional-walk-selection',
@@ -82,13 +83,13 @@ async function buildFinalizedWalkSet(recordId) {
     const runId = `walk-${direction}-${(seq++).toString(16).padStart(8, '0')}`;
     const generatedRel = `grok/${runId}/generated`;
     const frames = [];
-    for (let i = 0; i < WALK_PHASES.length; i++) {
-      const name = `${String(i).padStart(2, '0')}-${WALK_PHASES[i]}.png`;
+    for (let i = 0; i < labels.length; i++) {
+      const name = `${String(i).padStart(2, '0')}-${labels[i]}.png`;
       const rel = `${generatedRel}/frames/${name}`;
       await walkFramePng(join(dir, rel), 20 + i * 8);
       frames.push({
         outputIndex: i,
-        phase: WALK_PHASES[i],
+        phase: labels[i],
         path: rel,
         sha256: sha256(await readFile(join(dir, rel))),
       });
@@ -99,6 +100,8 @@ async function buildFinalizedWalkSet(recordId) {
       characterId: recordId,
       direction,
       chromaKey,
+      frameCount,
+      ...(fps != null ? { frameRate: fps } : {}),
       frames,
     };
     const manifestRel = `${generatedRel}/${recordId}-walk-${direction}-manifest.json`;
@@ -184,6 +187,56 @@ describe('compileAtlas', () => {
     expect(state.current.version).toBe(1);
     expect(state.current.walkSetSha256).toMatch(/^[0-9a-f]{64}$/);
     expect(state.publications).toEqual([]);
+  });
+
+  it('compiles a variable-frame (12-frame) walk set into a wider atlas + geometry', async () => {
+    const id = newId();
+    await lockAllAnchors(id);
+    await buildFinalizedWalkSet(id, { frameCount: 12, fps: 8 });
+    const result = await compileAtlas(id);
+
+    const meta = await sharp(join(TEST_ROOT, 'sprites', id, result.atlasPath)).metadata();
+    // idle + 12 walk phases + scanner = 14 columns.
+    expect(meta.width).toBe(DEFAULT_ATLAS_GEOMETRY.cellSize * 14);
+    expect(meta.height).toBe(DEFAULT_ATLAS_GEOMETRY.cellSize * SPRITE_DIRECTIONS.length);
+
+    const manifest = JSON.parse(await readFile(join(TEST_ROOT, 'sprites', id, result.manifestPath), 'utf8'));
+    expect(manifest.geometry.columns).toEqual(['idle', ...walkPhaseLabels(12), 'scanner']);
+    expect(manifest.geometry.walkFrameCount).toBe(12);
+    expect(manifest.geometry.walkFps).toBe(8);
+    expect(manifest.geometry.widthPx).toBe(DEFAULT_ATLAS_GEOMETRY.cellSize * 14);
+    for (const row of manifest.directions) expect(row.cells).toHaveLength(14);
+  });
+
+  it('refuses to compile a set whose directions disagree on frame count', async () => {
+    const id = newId();
+    await lockAllAnchors(id);
+    await buildFinalizedWalkSet(id, { frameCount: 12, fps: 10 });
+    // Corrupt ONE direction's run manifest to carry 8 frames instead of 12, and
+    // re-hash the selection entry so the tamper check passes and the frame-count
+    // mismatch is what trips compile (not a broken evidence chain).
+    const dir = join(TEST_ROOT, 'sprites', id);
+    const selectionRel = `walk/${id}-walk-selection-v1.json`;
+    const selection = JSON.parse(await readFile(join(dir, selectionRel), 'utf8'));
+    const entry = selection.directions.east;
+    const eightFrames = walkPhaseLabels(8).map((phase, i) => ({
+      outputIndex: i, phase, path: `x/${i}.png`, sha256: 'deadbeef',
+    }));
+    const tampered = JSON.stringify({
+      schemaVersion: 1, kind: 'deterministically-packaged-grok-walk-video',
+      characterId: id, direction: 'east', chromaKey: '#FF00FF', frameCount: 8, frames: eightFrames,
+    });
+    await writeFile(join(dir, entry.runManifest), tampered);
+    entry.runManifestSha256 = sha256(Buffer.from(tampered));
+    const walkSetRel = `walk/${id}-walk-set-v1.json`;
+    const walkSet = JSON.parse(await readFile(join(dir, walkSetRel), 'utf8'));
+    walkSet.directions.east = entry;
+    const selectionBytes = JSON.stringify(selection);
+    await writeFile(join(dir, selectionRel), selectionBytes);
+    walkSet.selectionSha256 = sha256(Buffer.from(selectionBytes));
+    await writeFile(join(dir, walkSetRel), JSON.stringify(walkSet));
+
+    await expect(compileAtlas(id)).rejects.toMatchObject({ code: 'ATLAS_COMPILE_INVALID' });
   });
 
   it('is idempotent for the same finalized set — and versions on a changed one', async () => {

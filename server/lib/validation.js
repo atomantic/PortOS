@@ -1093,6 +1093,13 @@ const spriteWalkDirectionSchema = z.enum(SPRITE_DIRECTIONS);
 
 const spriteWalkRunIdSchema = z.string().regex(/^walk-[a-z-]+-[0-9a-f]{8}$/);
 
+// Walk-cycle authoring bounds. Mirror walkPostprocess.js WALK_MIN/MAX_* — kept
+// as literals here so the validation graph doesn't pull sharp/ffmpeg in via
+// walkPostprocess. The server re-clamps into the same range, so these are a
+// guard, not the source of truth: frame count 6–16, playback fps 4–24.
+const spriteWalkFrameCountSchema = z.number().int().min(6).max(16);
+const spriteWalkFpsSchema = z.number().int().min(4).max(24);
+
 export const spriteWalkGenerateSchema = z.object({
   direction: spriteWalkDirectionSchema,
   // Clip length in seconds (see GROK_VIDEO_DURATIONS). Short clips are ample
@@ -1100,6 +1107,10 @@ export const spriteWalkGenerateSchema = z.object({
   duration: z.union([
     z.literal(1), z.literal(2), z.literal(3), z.literal(6), z.literal(10),
   ]).optional(),
+  // Deterministic-postprocess knobs (not grok's): how many frames the packed
+  // cycle holds and how fast it plays back. Omitted → service defaults.
+  frameCount: spriteWalkFrameCountSchema.optional(),
+  fps: spriteWalkFpsSchema.optional(),
 });
 
 export const spriteWalkApproveSchema = z.object({
@@ -1107,8 +1118,16 @@ export const spriteWalkApproveSchema = z.object({
   runId: spriteWalkRunIdSchema,
 });
 
+export const spriteWalkReopenSchema = z.object({
+  direction: spriteWalkDirectionSchema,
+});
+
 export const spriteWalkPostprocessSchema = z.object({
   runId: spriteWalkRunIdSchema,
+  // Reprocess the on-disk clip at a new count/fps without regenerating. Omitted
+  // fields keep the run's stored values.
+  frameCount: spriteWalkFrameCountSchema.optional(),
+  fps: spriteWalkFpsSchema.optional(),
 });
 
 // The trimmer targets ANY resolvable run, not just native `walk-<dir>-<hex>`

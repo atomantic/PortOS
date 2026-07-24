@@ -2,10 +2,13 @@
  * Sprites — runtime atlas compiler (issue #2898, phase 4).
  *
  * Compiles the immutable runtime sprite-sheet from a finalized eight-direction
- * walk set: a 10-column × 8-row grid (idle, the 8 named gait phases, scanner ×
- * S/SE/E/NE/N/NW/W/SW) of fixed-size cells, each frame scaled once per
- * direction and translated so its silhouette centers on the pivot x and its
- * feet land exactly on the pivot ground line. Ports the source pipeline's
+ * walk set: an (idle + N walk phases + scanner)-column × 8-row grid (× S/SE/E/
+ * NE/N/NW/W/SW) of fixed-size cells, each frame scaled once per direction and
+ * translated so its silhouette centers on the pivot x and its feet land exactly
+ * on the pivot ground line. N (the walk frame count) is read from the approved
+ * run manifests — every direction must share it — so the atlas width tracks the
+ * authored count (historically 8; variable per #sprite-walk-variable-frames).
+ * Ports the source pipeline's
  * `runtime_publish.py` compile stage; all math preserves Python semantics
  * (banker's rounding via pyRound, exclusive-bbox bounds) so cell placement
  * matches the production atlases the importer brought over.
@@ -36,7 +39,9 @@ import { requireCharacter, loadManifest } from './reference.js';
 import { SPRITE_DIRECTIONS } from './prompts.js';
 import { keyChannelSplit } from './chromaKey.js';
 import {
-  WALK_PHASES, pyRound, pyRoundTo, median, decodeRgbaFrame, premultipliedResize,
+  WALK_PHASES, walkPhaseLabels, WALK_MIN_FRAME_COUNT, WALK_MAX_FRAME_COUNT,
+  WALK_MIN_FPS, WALK_MAX_FPS, WALK_FPS,
+  pyRound, pyRoundTo, median, decodeRgbaFrame, premultipliedResize,
   sampleBorderKey, validateMeasuredKey, recoverAlphaFrame, despillKeyFrame,
   alphaBbox, compositeOnto, sha256Buffer,
 } from './walkPostprocess.js';
@@ -45,7 +50,15 @@ import { withWalkWriteTail, walkSetRelPath, isImportedWalkSet } from './walk.js'
 // Player atlas contract (source pipeline runtime_publish.py): 96px cells,
 // pivot (48,88) — silhouette centered on x=48, feet on the y=88 ground line —
 // content bounded to 86×74 so nothing touches a cell edge.
-export const ATLAS_COLUMNS = ['idle', ...WALK_PHASES, 'scanner'];
+//
+// The runtime grid is `idle` + the N walk-phase columns + `scanner`. N is the
+// walk set's frame count (variable-frame walks: #sprite-walk-variable-frames);
+// it is read from the approved run manifests, not hardcoded, so the atlas width
+// grows/shrinks with the chosen count. ATLAS_COLUMNS is the historical 8-frame
+// layout, kept as the default/fallback; atlasColumns(labels) builds the actual
+// column list a given compile uses.
+export const atlasColumns = (walkLabels) => ['idle', ...walkLabels, 'scanner'];
+export const ATLAS_COLUMNS = atlasColumns(WALK_PHASES);
 export const DEFAULT_ATLAS_GEOMETRY = {
   cellSize: 96,
   pivot: [48, 88],
@@ -219,6 +232,11 @@ export async function validateForCompile(recordId) {
   }
 
   const runs = {};
+  // Resolved from the first approved direction, then enforced identical across
+  // the rest (see the loop body). null until the first direction is read.
+  let frameCount = null;
+  let walkFps = null;
+  let walkLabels = null;
   for (const direction of SPRITE_DIRECTIONS) {
     const entry = walkSet.directions?.[direction];
     if (!entry || entry.status !== 'approved') throw compileError(`Direction ${direction} is not approved`);
@@ -233,12 +251,38 @@ export async function validateForCompile(recordId) {
       throw compileError(`Run manifest for ${direction} is unreadable or mislabeled`);
     }
     const frames = manifest.frames || [];
-    if (frames.length !== WALK_PHASES.length) {
-      throw compileError(`Direction ${direction} has ${frames.length} frames — expected ${WALK_PHASES.length}`);
+    // Frame count is variable, but every direction in ONE atlas MUST share it —
+    // the atlas is a rectangular grid, so a ragged set can't compile. The first
+    // approved direction sets N; the rest must match. N must also be in range and
+    // agree with the manifest's declared frameCount.
+    if (frameCount === null) {
+      frameCount = frames.length;
+      if (!Number.isInteger(frameCount)
+        || frameCount < WALK_MIN_FRAME_COUNT || frameCount > WALK_MAX_FRAME_COUNT) {
+        throw compileError(`Direction ${direction} has ${frames.length} frames — outside the supported ${WALK_MIN_FRAME_COUNT}–${WALK_MAX_FRAME_COUNT} range`);
+      }
+      walkLabels = walkPhaseLabels(frameCount);
+    } else if (frames.length !== frameCount) {
+      throw compileError(`Direction ${direction} has ${frames.length} frames but the set uses ${frameCount} — reprocess all directions to the same frame count before compiling`);
+    }
+    if (Number.isInteger(manifest.frameCount) && manifest.frameCount !== frames.length) {
+      throw compileError(`Direction ${direction} manifest declares ${manifest.frameCount} frames but carries ${frames.length}`);
+    }
+    // Playback fps likewise must agree across directions so the whole walk set
+    // animates at one speed. Range-checked; falls back to the legacy 12 for
+    // pre-fps manifests so older sets still compile.
+    const dirFps = Number.isFinite(manifest.frameRate) ? manifest.frameRate : WALK_FPS;
+    if (dirFps < WALK_MIN_FPS || dirFps > WALK_MAX_FPS) {
+      throw compileError(`Direction ${direction} playback fps ${dirFps} is outside the supported ${WALK_MIN_FPS}–${WALK_MAX_FPS} range`);
+    }
+    if (walkFps === null) {
+      walkFps = dirFps;
+    } else if (dirFps !== walkFps) {
+      throw compileError(`Direction ${direction} plays at ${dirFps} fps but the set uses ${walkFps} — reprocess all directions to the same speed before compiling`);
     }
     const frameBytes = [];
     for (let i = 0; i < frames.length; i++) {
-      if (frames[i].phase !== WALK_PHASES[i] || frames[i].outputIndex !== i) {
+      if (frames[i].phase !== walkLabels[i] || frames[i].outputIndex !== i) {
         throw compileError(`Direction ${direction} frame ${i} is out of gait-phase order`);
       }
       frameBytes.push(await readVerified(frames[i].path, frames[i].sha256, `Direction ${direction} frame ${frames[i].phase}`));
@@ -254,6 +298,9 @@ export async function validateForCompile(recordId) {
     chromaKey,
     anchors,
     runs,
+    walkFrameCount: frameCount,
+    walkFps,
+    walkLabels,
   };
 }
 
@@ -265,7 +312,7 @@ async function compileDirectionRow(recordId, direction, validated, geometry) {
   for (const bytes of frameBytes) {
     walkSources.push(await transparentSource(bytes, split, validated.chromaKey));
   }
-  const dims = walkSources.map((f, i) => occupiedDimensions(f, ALPHA_THRESHOLD, `${direction}-${WALK_PHASES[i]}`));
+  const dims = walkSources.map((f, i) => occupiedDimensions(f, ALPHA_THRESHOLD, `${direction}-${manifest.frames[i].phase}`));
   const directionScale = Math.min(
     geometry.targetMaxHeight / Math.max(...dims.map((d) => d.height)),
     geometry.targetMaxWidth / Math.max(...dims.map((d) => d.width)),
@@ -404,7 +451,9 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
   }
 
   const { cellSize } = geometry;
-  const atlasWidth = cellSize * ATLAS_COLUMNS.length;
+  // Columns/width follow the set's actual frame count, not the historical 8.
+  const columns = atlasColumns(validated.walkLabels);
+  const atlasWidth = cellSize * columns.length;
   const atlasHeight = cellSize * SPRITE_DIRECTIONS.length;
   const atlas = { data: Buffer.alloc(atlasWidth * atlasHeight * 4), width: atlasWidth, height: atlasHeight };
   for (let r = 0; r < rows.length; r++) {
@@ -477,7 +526,7 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
     atlasPath: atlasRel,
     atlasSha256,
     geometry: {
-      columns: ATLAS_COLUMNS,
+      columns,
       directionOrder: SPRITE_DIRECTIONS,
       rows: SPRITE_DIRECTIONS.length,
       cellSize,
@@ -486,6 +535,10 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
       targetMaxWidth: geometry.targetMaxWidth,
       widthPx: atlasWidth,
       heightPx: atlasHeight,
+      // Runtime playback metadata: the external game reads these to animate the
+      // walk row at the authored speed over the right number of columns.
+      walkFrameCount: validated.walkFrameCount,
+      walkFps: validated.walkFps,
     },
     directions: rows.map((row) => ({
       direction: row.direction,

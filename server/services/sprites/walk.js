@@ -35,7 +35,10 @@ import {
 import { requireCharacter, loadManifest } from './reference.js';
 import { SPRITE_DIRECTIONS, anchorIdForDirection, buildWalkVideoPrompt } from './prompts.js';
 import {
-  prepareWalkAnchorChromaInput, runWalkPostprocess, WALK_FPS, WALK_FRAME_COUNT, WALK_CELL_SIZE,
+  prepareWalkAnchorChromaInput, runWalkPostprocess, WALK_CELL_SIZE, WALK_FPS,
+  WALK_DEFAULT_FRAME_COUNT, WALK_DEFAULT_FPS,
+  WALK_MIN_FRAME_COUNT, WALK_MAX_FRAME_COUNT, WALK_MIN_FPS, WALK_MAX_FPS,
+  clampFrameCount, clampFps,
 } from './walkPostprocess.js';
 import { GROK_VIDEO_DURATIONS } from '../videoGen/grok.js';
 
@@ -448,6 +451,13 @@ async function startWalkGenerationImpl(recordId, body) {
     getSettings(),
   ]);
   const duration = GROK_VIDEO_DURATIONS.includes(Number(body.duration)) ? Number(body.duration) : WALK_DEFAULT_DURATION;
+  // Frame count + playback fps are the deterministic-postprocess knobs, not the
+  // grok clip's — grok animates the same clip regardless, and the packer
+  // resamples/labels the cycle afterward. Stored on the run so the completion
+  // hook's packageRun (and any later reprocess) applies the count/fps the user
+  // chose at generate time. Clamped here so a bad body can't reach the packer.
+  const frameCount = clampFrameCount(body.frameCount ?? WALK_DEFAULT_FRAME_COUNT);
+  const fps = clampFps(body.fps ?? WALK_DEFAULT_FPS);
   const prompt = buildWalkVideoPrompt({ name: record.name, direction, chromaKey });
   const videoAbs = join(generatedAbs, 'source-video.mp4');
   const grokPath = settings.imageGen?.grok?.grokPath;
@@ -471,6 +481,8 @@ async function startWalkGenerationImpl(recordId, body) {
     direction,
     chromaKey,
     duration,
+    frameCount,
+    fps,
     anchorPath: anchor.path,
     anchorSha256: anchor.sha256 || await sha256File(anchorAbs),
     animationInputPath: `${runRel}/generated/input-anchor-chroma.png`,
@@ -572,9 +584,17 @@ export async function attachTuiWalkResult(recordId, runId, videoAbs) {
  * the completion-hook attach and the manual rerun so the two can't drift.
  * The caller persists the mutated record.
  */
-async function packageRun(recordId, run) {
+async function packageRun(recordId, run, overrides = {}) {
   const runRel = runRelPath(run.id);
   const runAbs = join(spriteDir(recordId), runRel);
+  // Frame count + playback fps: an explicit reprocess override wins, else the
+  // values stored at generate time, else the current defaults (older runs
+  // predate the fields). Clamped + stamped back onto the run so the record
+  // always reflects exactly what was packed and a later reprocess can reuse it.
+  const frameCount = clampFrameCount(overrides.frameCount ?? run.frameCount ?? WALK_DEFAULT_FRAME_COUNT);
+  const fps = clampFps(overrides.fps ?? run.fps ?? WALK_DEFAULT_FPS);
+  run.frameCount = frameCount;
+  run.fps = fps;
   // Record-relative path to grok's raw clip, stamped BEFORE the (possibly
   // failing) postprocess so a run that errors in packaging still surfaces the
   // video grok actually produced in the UI, not just the error text. Set here
@@ -593,6 +613,8 @@ async function packageRun(recordId, run) {
       anchorRel: anchor.path,
       anchorAbs: resolveSpriteAssetPath(recordId, anchor.path),
       videoAbs: join(runAbs, 'generated', 'source-video.mp4'),
+      frameCount,
+      fps,
     });
     run.status = 'candidate';
     run.postprocessManifest = result.manifestPath;
@@ -612,11 +634,11 @@ async function packageRun(recordId, run) {
  * landed (crash recovery, or determinism verification). Approved/finalized
  * runs are immutable.
  */
-export function rerunWalkPostprocess(recordId, { runId }) {
-  return walkWriteTail(recordId, () => rerunWalkPostprocessImpl(recordId, runId));
+export function rerunWalkPostprocess(recordId, { runId, frameCount, fps }) {
+  return walkWriteTail(recordId, () => rerunWalkPostprocessImpl(recordId, runId, { frameCount, fps }));
 }
 
-async function rerunWalkPostprocessImpl(recordId, runId) {
+async function rerunWalkPostprocessImpl(recordId, runId, overrides = {}) {
   await requireCharacter(recordId);
   await requireUnfinalized(recordId);
   const run = await loadRunRecord(recordId, runId);
@@ -629,7 +651,13 @@ async function rerunWalkPostprocessImpl(recordId, runId) {
   if (!await pathExists(videoAbs)) {
     throw new ServerError('Run has no source video yet', { status: 409, code: 'VIDEO_NOT_READY' });
   }
-  await packageRun(recordId, run);
+  // Reprocess the SAME on-disk clip at a (possibly) new frame count / playback
+  // speed — no grok call, no regeneration. Only fields present in the override
+  // change; omitted ones fall through to the run's stored values in packageRun.
+  await packageRun(recordId, run, {
+    ...(overrides.frameCount != null ? { frameCount: overrides.frameCount } : {}),
+    ...(overrides.fps != null ? { fps: overrides.fps } : {}),
+  });
   await saveRunRecord(recordId, run);
   if (run.status === 'error') {
     throw new ServerError(`Postprocess failed: ${run.postprocessError}`, { status: 422, code: 'POSTPROCESS_FAILED' });
@@ -697,6 +725,53 @@ async function unlockWalkSetImpl(recordId) {
   return getWalkState(recordId);
 }
 
+/**
+ * Re-open ONE approved direction so it returns to the generate / regenerate /
+ * reprocess / approve flow — without disturbing the other directions' approvals.
+ *
+ * This is the finer-grained sibling of unlockWalkSet: the user notices one walk
+ * is too fast (or wrong) and wants to redo just that direction. Removing a
+ * direction's approval necessarily un-finalizes a frozen set (a walk set is
+ * "final" only when all 8 are approved), so when a walk-set file exists we drop
+ * it and downgrade the record status the same way unlock does — but we keep
+ * every OTHER direction's selection entry intact, so re-freezing is a single
+ * re-approval of the one direction rather than all eight. The rendered clip is
+ * preserved on disk, so the reopened direction can be reprocessed at a new
+ * speed/frame-count with no regeneration. Imported sets have no regenerable
+ * clips and are refused (mirrors unlock).
+ */
+export function reopenWalkDirection(recordId, { direction }) {
+  return walkWriteTail(recordId, () => reopenWalkDirectionImpl(recordId, direction));
+}
+
+async function reopenWalkDirectionImpl(recordId, direction) {
+  await requireCharacter(recordId);
+  const walkSet = await loadWalkSet(recordId);
+  if (walkSet && isImportedWalkSet(walkSet)) {
+    throw new ServerError(
+      'This walk set was imported from the source pipeline and has no regenerable clips — reopening is not supported. Create a new character version to revise it.',
+      { status: 409, code: 'LEGACY_IMPORTED_WALK_SET' },
+    );
+  }
+  const selection = (await loadSelection(recordId)) || seedSelection(recordId);
+  if (selection.directions?.[direction]?.status !== 'approved') {
+    throw new ServerError(`Direction ${direction} is not approved`, { status: 409, code: 'DIRECTION_NOT_APPROVED' });
+  }
+  // If the set was finalized, un-finalize it FIRST (drop the canonical signal)
+  // so a crash mid-reopen can only leave a cosmetic stale record status, never a
+  // walk-complete record with a hole in its set. Other approvals are untouched.
+  if (walkSet) {
+    await rm(join(spriteDir(recordId), walkSetRelPath(recordId)), { force: true });
+    await updateRecord(recordId, { status: 'reference-complete' });
+  }
+  delete selection.directions[direction];
+  selection.status = 'in-progress';
+  await ensureDir(join(spriteDir(recordId), 'walk'));
+  await atomicWrite(join(spriteDir(recordId), selectionRelPath(recordId)), selection);
+  console.log(`🔓 sprite walk direction ${recordId}/${direction} reopened`);
+  return getWalkState(recordId);
+}
+
 async function approveWalkDirectionImpl(recordId, { direction, runId }) {
   await requireCharacter(recordId);
   await requireUnfinalized(recordId);
@@ -709,10 +784,24 @@ async function approveWalkDirectionImpl(recordId, { direction, runId }) {
     throw new ServerError('Run has no packaged candidate to approve', { status: 409, code: 'RUN_NOT_CANDIDATE' });
   }
   // Tamper check: the packaged manifest and strip must still be on disk with
-  // the packaged geometry before their approval is frozen into the selection.
+  // self-consistent geometry before their approval is frozen into the selection.
+  // Frame count / fps are no longer pinned to a single value (variable-frame
+  // walks) — instead they must fall inside the supported authoring range and the
+  // declared frameCount must match the actual packed frames. Cross-direction
+  // consistency (all approved directions sharing one count/fps) is enforced at
+  // atlas-compile time, where the whole set is visible at once.
   const manifestAbs = resolveSpriteAssetPath(recordId, run.postprocessManifest);
   const packaged = await readJSONFile(manifestAbs, null);
-  if (!packaged || packaged.frameCount !== WALK_FRAME_COUNT || packaged.frameRate !== WALK_FPS
+  const frameCountValid = Number.isInteger(packaged?.frameCount)
+    && packaged.frameCount >= WALK_MIN_FRAME_COUNT && packaged.frameCount <= WALK_MAX_FRAME_COUNT
+    // If the manifest carries its frames[], they must agree with the declared
+    // count (deep per-frame validation happens at atlas compile). A minimal
+    // manifest that omits frames[] still approves — the strip sha below is the
+    // primary tamper check.
+    && (!Array.isArray(packaged.frames) || packaged.frames.length === packaged.frameCount);
+  const fpsValid = Number.isFinite(packaged?.frameRate)
+    && packaged.frameRate >= WALK_MIN_FPS && packaged.frameRate <= WALK_MAX_FPS;
+  if (!packaged || !frameCountValid || !fpsValid
     || packaged.direction !== direction || packaged.characterId !== recordId) {
     throw new ServerError('Packaged run manifest is missing or inconsistent', { status: 409, code: 'RUN_MANIFEST_INVALID' });
   }
