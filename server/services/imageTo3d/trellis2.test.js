@@ -48,13 +48,23 @@ describe('isTrellis2Installed', () => {
 });
 
 describe('buildInstallSteps', () => {
-  it('clones the MPS port then runs its setup.sh', () => {
-    const steps = buildInstallSteps(BASE);
+  it('clones the MPS port then runs its setup.sh when nothing is on disk', () => {
+    const steps = buildInstallSteps(BASE, { exists: () => false });
     expect(steps.map((s) => s.stage)).toEqual(['clone', 'setup']);
     expect(steps[0]).toMatchObject({ command: 'git' });
     expect(steps[0].args).toContain(TRELLIS2_REPO);
     expect(steps[0].args).toContain(trellis2Root(BASE));
     expect(steps[1]).toMatchObject({ command: 'bash', args: ['setup.sh'], cwd: trellis2Root(BASE) });
+  });
+
+  it('skips the clone step and resumes at setup.sh when the repo is already present', () => {
+    // A prior install cloned the top-level repo but failed inside setup.sh (the
+    // #2952 case). Re-cloning into the non-empty root would abort, so resume must
+    // begin at the idempotent setup.sh.
+    const gitDir = `${trellis2Root(BASE)}/.git`;
+    const steps = buildInstallSteps(BASE, { exists: (p) => p === gitDir });
+    expect(steps.map((s) => s.stage)).toEqual(['setup']);
+    expect(steps[0]).toMatchObject({ command: 'bash', args: ['setup.sh'], cwd: trellis2Root(BASE) });
   });
 });
 
@@ -248,6 +258,21 @@ describe('installTrellis2', () => {
     const { promise } = installTrellis2({ base: BASE, spawnImpl: () => child });
     child.emit('close', 1);
     await expect(promise).rejects.toMatchObject({ code: 'TRELLIS2_INSTALL_FAILED', stage: 'clone' });
+  });
+
+  it('resumes at setup (no re-clone) when the repo is already on disk', async () => {
+    // Re-running Install after a setup-stage failure must NOT re-clone into the
+    // existing root; it must go straight to the idempotent setup.sh.
+    const child = makeChild();
+    const spawnImpl = vi.fn(() => child);
+    const gitDir = `${trellis2Root(BASE)}/.git`;
+    const { promise } = installTrellis2({
+      base: BASE, spawnImpl, exists: (p) => p === gitDir, sleep: () => Promise.resolve(),
+    });
+    expect(spawnImpl).toHaveBeenCalledTimes(1);
+    expect(spawnImpl).toHaveBeenNthCalledWith(1, 'bash', ['setup.sh'], { cwd: trellis2Root(BASE) });
+    child.emit('close', 0);
+    await expect(promise).resolves.toEqual({ ok: true });
   });
 
   it('retries a transient network failure in place and succeeds on the retry', async () => {
