@@ -52,6 +52,7 @@ const SyncView = lazyWithReload(() => import('./pages/SyncView'));
 const MediaModels = lazyWithReload(() => import('./pages/MediaModels'));
 const ThreejsModels = lazyWithReload(() => import('./pages/ThreejsModels'));
 const Media3D = lazyWithReload(() => import('./pages/Media3D'));
+const Media3DDetail = lazyWithReload(() => import('./pages/Media3DDetail'));
 const ThreejsModelDetail = lazyWithReload(() => import('./pages/ThreejsModelDetail'));
 const Loras = lazyWithReload(() => import('./pages/Loras'));
 const LoraTraining = lazyWithReload(() => import('./pages/LoraTraining'));
@@ -346,6 +347,7 @@ export default function App() {
             <Route path="threejs" element={<ThreejsModels />} />
             <Route path="threejs/:id" element={<ThreejsModelDetail />} />
             <Route path="3d" element={<Media3D />} />
+            <Route path="3d/:id" element={<Media3DDetail />} />
             <Route path="loras" element={<Loras />} />
             <Route path="training" element={<LoraTraining />} />
             <Route path="training/:datasetId" element={<LoraDatasetDetail />} />

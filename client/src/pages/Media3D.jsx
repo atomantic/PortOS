@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Boxes, CheckCircle2, Download, AlertTriangle, Loader2, ExternalLink, ImagePlus, Sparkles, KeyRound } from 'lucide-react';
-import { getImageTo3dTargets, createImageTo3dModel, getImageTo3dModel } from '../services/api';
+import { getImageTo3dTargets, createImageTo3dModel, getImageTo3dModel, listImageTo3dModels } from '../services/api';
 import { useAutoRefetch } from '../hooks/useAutoRefetch';
 import useMounted from '../hooks/useMounted';
-import { nameFromImageFilename } from '../utils/formatters';
+import { nameFromImageFilename, timeAgo } from '../utils/formatters';
 import RuntimeInstallModal from '../components/install/RuntimeInstallModal';
 import GalleryImagePicker from '../components/imageGen/GalleryImagePicker';
 import GlbViewer from '../components/media/GlbViewer';
@@ -58,6 +58,15 @@ const REASON_LABEL = {
   'insufficient-memory': 'Needs 24 GB+ of unified memory',
   'requires-cuda': 'Requires an NVIDIA CUDA GPU',
   'unknown-target': 'Unavailable',
+};
+
+// Per-record status pill for the "Your 3D models" library grid.
+const RECORD_STATUS = {
+  ready: { label: 'Ready', className: 'text-port-success' },
+  generating: { label: 'Rendering…', className: 'text-port-accent' },
+  draft: { label: 'Queued', className: 'text-gray-400' },
+  failed: { label: 'Failed', className: 'text-port-error' },
+  canceled: { label: 'Canceled', className: 'text-gray-500' },
 };
 
 const LANE_LABEL = {
@@ -164,6 +173,9 @@ export default function Media3D() {
   const [genError, setGenError] = useState(null);
   const [genPercent, setGenPercent] = useState(null);
   const [modelId, setModelId] = useState(null);
+  // Existing image-to-3D records (newest-first) so the page doubles as a library:
+  // each links to its `/media/3d/:id` detail view.
+  const [records, setRecords] = useState([]);
   const mountedRef = useMounted(); // gate setState after the create/poll awaits
 
   const load = useCallback(() => {
@@ -174,7 +186,14 @@ export default function Media3D() {
       .finally(() => setLoading(false));
   }, []);
 
+  const loadRecords = useCallback(() => {
+    listImageTo3dModels({ silent: true })
+      .then((data) => { if (mountedRef.current) setRecords(Array.isArray(data) ? data : []); })
+      .catch(() => { /* the library section just stays empty on a transient failure */ });
+  }, [mountedRef]);
+
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadRecords(); }, [loadRecords]);
 
   const selectedImage = useMemo(
     () => (imageFromRoute
@@ -227,13 +246,13 @@ export default function Media3D() {
     const latest = Array.isArray(model.runs) && model.runs.length ? model.runs[model.runs.length - 1] : null;
     if (Number.isFinite(latest?.percent)) setGenPercent(latest.percent);
     if (model.status === 'ready' && model.assetPath) {
-      setGenPercent(100); setParam('glb', model.assetPath); setGenerating(false);
+      setGenPercent(100); setParam('glb', model.assetPath); setGenerating(false); loadRecords();
     } else if (model.status === 'failed' || model.status === 'canceled') {
       // model.error carries the runner's actionable message (e.g. the HF-auth guidance).
-      setGenError(model.error || 'The render did not finish.'); setGenerating(false);
+      setGenError(model.error || 'The render did not finish.'); setGenerating(false); loadRecords();
     }
     // else still draft/generating → the hook re-polls after POLL_INTERVAL_MS.
-  }, [modelId, setParam, mountedRef]);
+  }, [modelId, setParam, mountedRef, loadRecords]);
 
   useAutoRefetch(pollTick, POLL_INTERVAL_MS, { pollOnly: true, enabled: generating && !!modelId });
 
@@ -248,8 +267,8 @@ export default function Media3D() {
       if (mountedRef.current) setGenError(err?.message || 'Could not start the render.');
       return null;
     });
-    if (created && mountedRef.current) { setModelId(created.id); setGenerating(true); }
-  }, [selectedImage, selectedTarget, setParam, mountedRef]);
+    if (created && mountedRef.current) { setModelId(created.id); setGenerating(true); loadRecords(); }
+  }, [selectedImage, selectedTarget, setParam, mountedRef, loadRecords]);
 
   // Why the Generate action is blocked, or null when it's ready to run. The runner
   // (POST create → on-device render → landed .glb) is wired, so the terminal state
@@ -367,6 +386,49 @@ export default function Media3D() {
         </section>
       )}
 
+      {/* Library of existing renders — each opens its `/media/3d/:id` detail
+          view (GLB viewer + download). URL is the source of truth for what's
+          open, so every card is a deep link. */}
+      {records.length > 0 && (
+        <section className="mb-6">
+          <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Your 3D models</h2>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+            {records.map((record) => {
+              const status = RECORD_STATUS[record.status] || RECORD_STATUS.draft;
+              return (
+                <Link
+                  key={record.id}
+                  to={`/media/3d/${record.id}`}
+                  className="group overflow-hidden rounded-lg border border-port-border bg-port-card hover:border-port-accent"
+                >
+                  <div className="relative aspect-square bg-port-bg">
+                    {record.sourceImage?.path && (
+                      <MediaImage
+                        src={record.sourceImage.path}
+                        alt={record.name || 'Source image'}
+                        className="h-full w-full object-cover opacity-90 group-hover:opacity-100"
+                      />
+                    )}
+                    {record.status === 'ready' && (
+                      <span className="absolute right-1.5 top-1.5 rounded bg-black/80 p-1 text-port-success">
+                        <Boxes className="h-3.5 w-3.5" />
+                      </span>
+                    )}
+                  </div>
+                  <div className="p-2">
+                    <p className="truncate text-xs font-medium text-white" title={record.name}>{record.name || 'Untitled'}</p>
+                    <div className="mt-0.5 flex items-center justify-between gap-1">
+                      <span className={`text-[11px] ${status.className}`}>{status.label}</span>
+                      <span className="text-[11px] text-gray-500">{timeAgo(record.updatedAt)}</span>
+                    </div>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       <h2 className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-400">Models &amp; runtimes</h2>
 
       {loading && (
@@ -397,7 +459,7 @@ export default function Media3D() {
 
       {/* Searchable render-history picker (reused from Image Gen). Selecting an
           image drives `?image=` so the choice is deep-linkable. */}
-      <GalleryImagePicker open={pickerOpen} onClose={() => setPickerOpen(false)} onSelect={handlePick} />
+      <GalleryImagePicker open={pickerOpen} onClose={() => setPickerOpen(false)} onSelect={handlePick} allowUpload />
 
       {/* TRELLIS.2 (and any future local-install target) streams its clone +
           setup.sh install through the shared runtime-install modal. */}

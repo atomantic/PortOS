@@ -7,6 +7,17 @@ vi.mock('../../services/apiImageVideo', () => ({
   listImageGallery: (...args) => listImageGallery(...args),
 }));
 
+const uploadGalleryImage = vi.fn();
+vi.mock('../../services/apiSystem', () => ({
+  uploadGalleryImage: (...args) => uploadGalleryImage(...args),
+}));
+
+vi.mock('../../utils/fileUpload', () => ({
+  readFileAsBase64: vi.fn().mockResolvedValue('ZmFrZS1iYXNlNjQ='),
+}));
+
+vi.mock('../ui/Toast', () => ({ default: { error: vi.fn(), success: vi.fn() } }));
+
 const GALLERY = [
   { filename: 'neon.png', path: '/data/images/neon.png', prompt: 'a neon sunset', modelId: 'flux2', seed: 1 },
   { filename: 'forest.png', path: '/data/images/forest.png', prompt: 'a quiet forest', modelId: 'sdxl', seed: 2 },
@@ -54,5 +65,27 @@ describe('GalleryImagePicker', () => {
     listImageGallery.mockResolvedValue([]);
     render(<GalleryImagePicker open onClose={vi.fn()} onSelect={vi.fn()} />);
     expect(await screen.findByText(/No images in your gallery yet/i)).toBeTruthy();
+  });
+
+  it('hides the Upload control unless allowUpload is set', async () => {
+    render(<GalleryImagePicker open onClose={vi.fn()} onSelect={vi.fn()} />);
+    await screen.findByAltText('a neon sunset');
+    expect(screen.queryByText(/Upload/i)).toBeNull();
+  });
+
+  it('uploads a picked file into the gallery, then selects it and closes', async () => {
+    uploadGalleryImage.mockResolvedValue({ filename: 'upload-abcd1234.png', path: '/data/images/upload-abcd1234.png' });
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    render(<GalleryImagePicker open allowUpload onSelect={onSelect} onClose={onClose} />);
+    await screen.findByAltText('a neon sunset');
+    // Modal portals to <body>, so query the whole document for the file input.
+    const fileInput = document.querySelector('input[type="file"]');
+    const file = new File(['x'], 'photo.png', { type: 'image/png' });
+    fireEvent.change(fileInput, { target: { files: [file] } });
+    await waitFor(() => expect(uploadGalleryImage).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(onSelect).toHaveBeenCalledTimes(1));
+    expect(onSelect.mock.calls[0][0]).toMatchObject({ filename: 'upload-abcd1234.png', previewUrl: '/data/images/upload-abcd1234.png' });
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

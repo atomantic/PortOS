@@ -6,10 +6,12 @@ import Media3D from './Media3D';
 const getImageTo3dTargets = vi.fn();
 const createImageTo3dModel = vi.fn();
 const getImageTo3dModel = vi.fn();
+const listImageTo3dModels = vi.fn();
 vi.mock('../services/api', () => ({
   getImageTo3dTargets: (...a) => getImageTo3dTargets(...a),
   createImageTo3dModel: (...a) => createImageTo3dModel(...a),
   getImageTo3dModel: (...a) => getImageTo3dModel(...a),
+  listImageTo3dModels: (...a) => listImageTo3dModels(...a),
 }));
 
 // Stub the shared install modal so the test doesn't open a real EventSource;
@@ -63,7 +65,7 @@ function renderAt(entry = '/media/3d', extra = null) {
 }
 
 describe('Media3D — models & install', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => { vi.clearAllMocks(); listImageTo3dModels.mockResolvedValue([]); });
 
   it('shows an Install button for an available, not-installed target and opens the modal', async () => {
     getImageTo3dTargets.mockResolvedValue({ capabilities: {}, targets: [target()] });
@@ -103,6 +105,7 @@ describe('Media3D — models & install', () => {
 describe('Media3D — generation workspace', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    listImageTo3dModels.mockResolvedValue([]);
     getImageTo3dTargets.mockResolvedValue({ targets: [target({ installed: true })] });
   });
 
@@ -182,5 +185,14 @@ describe('Media3D — generation workspace', () => {
   it('renders the mesh preview from a ?glb= deep link', async () => {
     renderAt('/media/3d?image=example-robot.png&glb=%2Fdata%2Fmodels3d%2Frobot.glb');
     expect(await screen.findByTestId('glb-viewer')).toHaveTextContent('/data/models3d/robot.glb');
+  });
+
+  it('lists existing 3D records as deep links to their detail route', async () => {
+    listImageTo3dModels.mockResolvedValue([
+      { id: 'image3d-abc', name: 'Example Beacon', status: 'ready', updatedAt: new Date(0).toISOString(), sourceImage: { path: '/data/images/beacon.png' } },
+    ]);
+    renderAt();
+    const link = await screen.findByRole('link', { name: /Example Beacon/i });
+    expect(link.getAttribute('href')).toBe('/media/3d/image3d-abc');
   });
 });

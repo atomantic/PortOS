@@ -1,0 +1,184 @@
+import { useCallback, useEffect, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { ArrowLeft, Boxes, AlertTriangle, Loader2, RefreshCw, Trash2 } from 'lucide-react';
+import { getImageTo3dModel, generateImageTo3dModel, deleteImageTo3dModel } from '../services/api';
+import useMounted from '../hooks/useMounted';
+import { timeAgo } from '../utils/formatters';
+import GlbViewer from '../components/media/GlbViewer';
+import MediaImage from '../components/MediaImage';
+import InlineConfirmRow from '../components/ui/InlineConfirmRow';
+import toast from '../components/ui/Toast';
+
+// Friendly `.glb` download filename from the record name (mirrors the server's
+// slugifyForFilename so the download matches the asset endpoint's attachment).
+const slugifyName = (s) =>
+  String(s || 'model').toLowerCase().trim().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) || 'model';
+
+// Poll cadence while a render is in flight (a real TRELLIS.2 render is multi-minute).
+const POLL_INTERVAL_MS = 2500;
+
+const STATUS_LABEL = {
+  ready: 'Ready',
+  generating: 'Rendering on-device…',
+  draft: 'Queued',
+  failed: 'Render failed',
+  canceled: 'Canceled',
+};
+
+// Per-record detail view for an image-to-3D model (`/media/3d/:id`). The record
+// id is the URL, so a finished mesh is a shareable, reload-safe deep link. Mounts
+// the reusable GlbViewer once the render lands (status `ready` + `assetPath`),
+// with a Download .glb, and offers re-render / delete. Polls while generating.
+export default function Media3DDetail() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  const mountedRef = useMounted();
+  const [record, setRecord] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [notFound, setNotFound] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  const load = useCallback(async ({ initial = false } = {}) => {
+    const next = await getImageTo3dModel(id, { silent: true }).catch((err) => {
+      if (err?.status === 404) { if (mountedRef.current) setNotFound(true); }
+      else if (initial) toast.error(err?.message || 'Failed to load 3D model');
+      return null;
+    });
+    if (next && mountedRef.current) { setRecord(next); setNotFound(false); }
+    if (initial && mountedRef.current) setLoading(false);
+    return next;
+  }, [id, mountedRef]);
+
+  useEffect(() => { load({ initial: true }); }, [load]);
+
+  // Poll only while generating; a terminal state stops the interval.
+  useEffect(() => {
+    if (record?.status !== 'generating') return undefined;
+    const handle = setInterval(() => { void load(); }, POLL_INTERVAL_MS);
+    return () => clearInterval(handle);
+  }, [record?.status, load]);
+
+  const handleRegenerate = useCallback(async () => {
+    if (busy || record?.status === 'generating') return;
+    setBusy(true);
+    const next = await generateImageTo3dModel(id, { silent: true }).catch((err) => {
+      toast.error(err?.message || 'Could not start the render.');
+      return null;
+    });
+    if (mountedRef.current) setBusy(false);
+    if (next && mountedRef.current) setRecord(next);
+  }, [busy, record?.status, id, mountedRef]);
+
+  const handleDelete = useCallback(async () => {
+    const ok = await deleteImageTo3dModel(id, { silent: true }).then(() => true).catch((err) => {
+      toast.error(err?.message || 'Delete failed');
+      return false;
+    });
+    if (ok) navigate('/media/3d');
+  }, [id, navigate]);
+
+  if (loading) {
+    return (
+      <div className="mx-auto flex max-w-4xl items-center gap-2 py-16 text-sm text-gray-400">
+        <Loader2 className="h-4 w-4 animate-spin" /> Loading 3D model…
+      </div>
+    );
+  }
+
+  if (notFound || !record) {
+    return (
+      <div className="mx-auto max-w-4xl py-16 text-center">
+        <p className="text-sm text-gray-400">This 3D model no longer exists.</p>
+        <Link to="/media/3d" className="mt-3 inline-flex items-center gap-1.5 text-sm text-port-accent hover:underline">
+          <ArrowLeft className="h-4 w-4" /> Back to 3D
+        </Link>
+      </div>
+    );
+  }
+
+  const isGenerating = record.status === 'generating';
+  const latestRun = Array.isArray(record.runs) && record.runs.length ? record.runs[record.runs.length - 1] : null;
+  const percent = Number.isFinite(latestRun?.percent) ? Math.round(latestRun.percent) : null;
+  const downloadName = `${slugifyName(record.name)}.glb`;
+
+  return (
+    <div className="mx-auto max-w-4xl">
+      <header className="mb-4">
+        <Link to="/media/3d" className="inline-flex items-center gap-1.5 text-xs text-gray-400 hover:text-white">
+          <ArrowLeft className="h-3.5 w-3.5" /> Back to 3D
+        </Link>
+        <div className="mt-2 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Boxes className="h-5 w-5 text-port-accent" />
+            <h1 className="text-lg font-semibold text-white">{record.name || 'Untitled 3D model'}</h1>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleRegenerate}
+              disabled={busy || isGenerating}
+              className="inline-flex items-center gap-1.5 rounded-md border border-port-border px-3 py-1.5 text-xs text-gray-300 hover:border-port-accent hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`} /> {record.status === 'ready' ? 'Re-render' : 'Retry'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirmingDelete(true)}
+              className="inline-flex items-center gap-1.5 rounded-md border border-port-error/40 px-3 py-1.5 text-xs text-port-error hover:bg-port-error/10"
+            >
+              <Trash2 className="h-3.5 w-3.5" /> Delete
+            </button>
+          </div>
+        </div>
+        <p className="mt-1 text-xs text-gray-500">
+          {STATUS_LABEL[record.status] || record.status}
+          {isGenerating && percent !== null ? ` · ${percent}%` : ''} · updated {timeAgo(record.updatedAt)}
+        </p>
+      </header>
+
+      {confirmingDelete && (
+        <InlineConfirmRow
+          className="mb-4"
+          question={`Delete "${record.name || 'this model'}"?`}
+          onConfirm={handleDelete}
+          onCancel={() => setConfirmingDelete(false)}
+        />
+      )}
+
+      {record.status === 'failed' && record.error && (
+        <div className="mb-4 flex items-start gap-1.5 rounded-lg border border-port-error/30 bg-port-error/10 px-3 py-2 text-sm text-port-error">
+          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /> {record.error}
+        </div>
+      )}
+
+      <section className="grid gap-4 sm:grid-cols-[200px_1fr]">
+        <div>
+          <span className="mb-1 block text-xs text-gray-400">Source image</span>
+          <div className="aspect-square overflow-hidden rounded-lg border border-port-border bg-port-bg">
+            {record.sourceImage?.path && (
+              <MediaImage src={record.sourceImage.path} alt="Source image" className="h-full w-full object-cover" />
+            )}
+          </div>
+        </div>
+
+        <div>
+          <span className="mb-1 block text-xs text-gray-400">Mesh</span>
+          {record.status === 'ready' && record.assetPath ? (
+            <GlbViewer src={record.assetPath} downloadName={downloadName} />
+          ) : (
+            <div className="flex aspect-square items-center justify-center rounded-xl border border-dashed border-port-border bg-port-bg text-center text-sm text-gray-500">
+              {isGenerating ? (
+                <span className="inline-flex items-center gap-2 text-port-accent">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Rendering{percent !== null ? ` ${percent}%` : '…'}
+                </span>
+              ) : (
+                'No mesh yet — run a render to generate one.'
+              )}
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
