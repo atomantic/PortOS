@@ -162,3 +162,59 @@ describe('AssetCollection inline actions', () => {
     expect(screen.getByText('Copy path')).toBeTruthy();
   });
 });
+
+describe('AssetCollection anchor correction note (#2964)', () => {
+  const CANDIDATE = 'reference/candidates/walk-east-candidate-1.png';
+  // An anchor re-roll is only offered for an UNLOCKED candidate.
+  const unlockedEast = { reference: { manifest: { anchors: [{ direction: 'east', status: 'pending' }] } } };
+  const candidateAssets = [image(CANDIDATE)];
+  const candidateCard = () => screen.getByTitle(CANDIDATE).parentElement;
+
+  it('shows a correction-note toggle only when the card can write the shared state', () => {
+    // No onCorrectionChange → no affordance even though the re-roll is offered.
+    render(
+      <AssetCollection recordId="example-walker" assets={candidateAssets} actions={actionsFor(unlockedEast)} />,
+    );
+    expect(within(candidateCard()).queryByRole('button', { name: /correction note/i })).toBeNull();
+  });
+
+  it('binds the note to the shared per-direction corrections map and writes through it', async () => {
+    const onCorrectionChange = vi.fn();
+    render(
+      <AssetCollection
+        recordId="example-walker"
+        assets={candidateAssets}
+        actions={actionsFor(unlockedEast)}
+        corrections={{ east: 'no pocket on the right sleeve' }}
+        onCorrectionChange={onCorrectionChange}
+      />,
+    );
+    const card = candidateCard();
+    // An existing correction auto-opens the note and prefills the shared value.
+    const textarea = within(card).getByLabelText(/Correction guidance for the east pose/i);
+    expect(textarea).toHaveValue('no pocket on the right sleeve');
+    // Typing routes an updater up to the page-owned state that merges by
+    // direction key, preserving sibling directions' notes.
+    await userEvent.type(textarea, '!');
+    expect(onCorrectionChange).toHaveBeenCalled();
+    const updater = onCorrectionChange.mock.calls[0][0];
+    const merged = updater({ west: 'keep me' });
+    expect(merged.west).toBe('keep me');
+    expect(merged).toHaveProperty('east');
+  });
+
+  it('keeps the note collapsed by default when no correction exists yet', () => {
+    render(
+      <AssetCollection
+        recordId="example-walker"
+        assets={candidateAssets}
+        actions={actionsFor(unlockedEast)}
+        corrections={{}}
+        onCorrectionChange={vi.fn()}
+      />,
+    );
+    const card = candidateCard();
+    expect(within(card).queryByLabelText(/Correction guidance/i)).toBeNull();
+    expect(within(card).getByRole('button', { name: /Show correction note/i })).toBeTruthy();
+  });
+});
