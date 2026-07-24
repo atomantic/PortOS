@@ -157,11 +157,15 @@ export function buildTurnaroundPrompt({ name, designPrompt, chromaKey }) {
     + 'actually exposes, including the parts of the body and gear it hides. '
     // Left/right axis (unchanged rule) — now paired with the screen-position
     // consequence, so "same side" can't be satisfied by never moving the item.
+    // Deliberately phrased as "never moves to the other side" rather than
+    // "appears in every panel": the per-panel rules below hide far-side gear in
+    // the profiles, and a blanket "visible in both profiles" would contradict
+    // them and invite the model to draw a right-hip bag through the torso.
     + 'Every accessory (bag, strap, pouch, pocket, weapon) stays on the SAME anatomical side of '
-    + 'the body in every panel — an item worn on the character\'s right hip is on the right hip '
-    + 'from the front, from behind, and in both profiles. Because the character turns, that item '
-    + 'is drawn toward the viewer\'s left in the front panel and toward the viewer\'s right in '
-    + 'the back panel. '
+    + 'the body in every panel — an item worn on the character\'s right hip is never moved to '
+    + 'the left hip. Because the character turns, that item is drawn toward the viewer\'s left in '
+    + 'the front panel and toward the viewer\'s right in the back panel, and it is visible only '
+    + 'in the panels where that side of the body faces the viewer. '
     + `${panelRules} `
     + 'Flat non-isometric pixel-art game sprite '
     + `reference on a plain exact ${keyColorPhrase(chromaKey)} background. No panel borders, `
