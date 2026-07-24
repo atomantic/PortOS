@@ -5,10 +5,12 @@ describe('resolveModelRates', () => {
   it('matches exact model ids', () => {
     const r = resolveModelRates('claude-code', 'claude-opus-4-8');
     expect(r).toMatchObject({ rateModel: 'claude-opus-4-8', inputPer1M: 5, outputPer1M: 25, matched: 'exact' });
+    const r5 = resolveModelRates('claude-code', 'claude-opus-5');
+    expect(r5).toMatchObject({ rateModel: 'claude-opus-5', inputPer1M: 5, outputPer1M: 25, matched: 'exact' });
   });
 
   it('resolves CLI shorthand model names via family rules', () => {
-    expect(resolveModelRates('claude-code', 'opus')).toMatchObject({ rateModel: 'claude-opus-4-8', matched: 'family' });
+    expect(resolveModelRates('claude-code', 'opus')).toMatchObject({ rateModel: 'claude-opus-5', matched: 'family' });
     expect(resolveModelRates('claude-code', 'sonnet')).toMatchObject({ rateModel: 'claude-sonnet-4-5', matched: 'family' });
     expect(resolveModelRates('claude-code', 'haiku')).toMatchObject({ rateModel: 'claude-haiku-4-5', matched: 'family' });
   });
@@ -21,6 +23,8 @@ describe('resolveModelRates', () => {
   it('resolves Bedrock-prefixed ids through family rules', () => {
     const r = resolveModelRates('claude-code-bedrock', 'global.anthropic.claude-opus-4-8');
     expect(r).toMatchObject({ rateModel: 'claude-opus-4-8', matched: 'family' });
+    const r5 = resolveModelRates('claude-code-bedrock', 'global.anthropic.claude-opus-5');
+    expect(r5).toMatchObject({ rateModel: 'claude-opus-5', matched: 'family' });
   });
 
   it('resolves configured-default sentinels to their provider family', () => {

@@ -123,7 +123,7 @@ export function buildCliArgs(provider) {
   // cli — respect user-baked model flags.
   const args = [...baseArgs, '-p', '-'];
   if (effectiveDefaultModel && !hasModelFlag(baseArgs)) {
-    // On a Bedrock box a bare `claude-opus-4-8` is rejected — map it to the
+    // On a Bedrock box a bare `claude-opus-5` is rejected — map it to the
     // region-prefixed Bedrock id just-in-time (no-op off Bedrock / for
     // already-prefixed ids). provider.envVars carries CLAUDE_CODE_USE_BEDROCK
     // for the bedrock provider variants; process.env covers a Bedrock host.
