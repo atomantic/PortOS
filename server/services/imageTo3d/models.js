@@ -145,6 +145,12 @@ async function executeRender({ id, operationId, runner, sourcePath }) {
       },
     });
     activeRenders.set(operationId, kill);
+    // Close the pre-registration window: if the record was deleted between
+    // beginRender flipping it to `generating` and this point (deleteModel's kill
+    // lookup found no handle yet and took its dir-cleanup branch), terminate the
+    // render we just spawned so it doesn't run to completion on a deleted record.
+    const preDeleted = await store.getModel(id, { includeDeleted: true }).catch(() => null);
+    if (preDeleted?.deleted) kill();
     await promise;
 
     const completedAt = new Date().toISOString();
@@ -190,8 +196,10 @@ export const getModel = store.getModel;
  * burning GPU the moment the user walks away. The soft-delete write itself stays a
  * clean no-op on the record. When a live render exists we SIGTERM it and let
  * executeRender's `finally` remove the orphaned GLB once the child settles (avoids a
- * delete-then-rewrite race); with no live render (e.g. a stale `generating` row that
- * survived a restart) we clean any orphaned mesh directly.
+ * delete-then-rewrite race). With no live render — a stale `generating` row that
+ * survived a restart, OR a render still in the pre-registration window (spawned
+ * momentarily later) — we clean any orphaned mesh directly; in the latter case
+ * executeRender's own post-registration `deleted` re-check terminates the child.
  */
 export async function deleteModel(id) {
   const current = await store.getModel(id, { includeDeleted: true });
