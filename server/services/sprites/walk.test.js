@@ -131,6 +131,9 @@ async function makeCandidateRun(recordId, direction, {
     chromaKey: '#FF00FF',
     createdAt: new Date().toISOString(),
     postprocessManifest: anchor(manifestRel),
+    // The run's i2v clip — imported alongside the run since #2984, and
+    // anchored the same way every other imported path is.
+    sourceVideoPath: anchor(`runs/${runId}/generated/source-video.mp4`),
     // Real candidate records carry the packed-strip preview the UI renders.
     // The importer stamps it as `path` (repo-anchored); PortOS uses `stripPath`.
     stripPreview: {
@@ -816,6 +819,34 @@ describe('getWalkState', () => {
     const { runs } = await getWalkState(id);
     expect(runs).toHaveLength(2);
     expect(runs[0].id).toBe(second.runId);
+  });
+
+  // #2984: an imported run's `sourceVideoPath` is anchored at the SOURCE repo
+  // root, like every other path the importer copies byte-for-byte. Left raw it
+  // resolves to `data/sprites/<id>/art-source/sprites/<id>/…` — inside the
+  // record (so the traversal gate passes) but non-existent — which would make
+  // the freshly-imported clip unfindable and re-derivation impossible. It is
+  // re-anchored at read time, alongside postprocessManifest, never on disk.
+  it('re-anchors an imported run\'s sourceVideoPath to record-relative at read time', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const { runId } = await makeCandidateRun(id, 'east', { anchored: true });
+    const runRecordPath = join(TEST_ROOT, 'sprites', id, 'runs', runId, 'animation-run.json');
+    const bytesBefore = await readFile(runRecordPath);
+
+    const { runs } = await getWalkState(id);
+    const run = runs.find((r) => r.id === runId);
+    expect(run.sourceVideoPath).toBe(`runs/${runId}/generated/source-video.mp4`);
+    // In memory only — the hash-pinned record on disk keeps its source anchor.
+    expect(await readFile(runRecordPath)).toEqual(bytesBefore);
+  });
+
+  // A PortOS-native run already stamps the record-relative form, so the
+  // re-anchor is a no-op there — it must not mangle a path it doesn't own.
+  it('leaves a native run\'s already record-relative sourceVideoPath alone', async () => {
+    const id = await characterWithLockedAnchors(newId(), ['east']);
+    const { runId } = await makeCandidateRun(id, 'east');
+    const { runs } = await getWalkState(id);
+    expect(runs.find((r) => r.id === runId).sourceVideoPath).toBe(`runs/${runId}/generated/source-video.mp4`);
   });
 
   // A candidate/approved run whose packed strip PNG has gone missing on disk

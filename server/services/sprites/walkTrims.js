@@ -96,7 +96,7 @@ async function resolveTrimSource(recordId, runId) {
   if (!run) throw new ServerError(`Unknown walk run: ${runId}`, { status: 404, code: 'RUN_NOT_FOUND' });
 
   // `getWalkState` re-anchors an imported run's `postprocessManifest` for us
-  // (walk.js#normalizePostprocessManifest), so this is already record-relative.
+  // (walk.js#normalizeRunAssetPaths), so this is already record-relative.
   // Absent vs. malformed are deliberately NOT collapsed (#2978): a manifest file
   // that simply isn't there falls through to the stripPreview branch below, which
   // carries everything a trim needs; a manifest that EXISTS but is malformed is

@@ -2,7 +2,7 @@
  * Sprites — runtime atlas compiler (issue #2898, phase 4).
  *
  * Compiles the immutable runtime sprite-sheet from a finalized eight-direction
- * walk set: an (idle + N walk phases + scanner)-column × 8-row grid (× S/SE/E/
+ * walk set: an (idle + N walk phases)-column × 8-row grid (× S/SE/E/
  * NE/N/NW/W/SW) of fixed-size cells, each frame scaled once per direction and
  * translated so its silhouette centers on the pivot x and its feet land exactly
  * on the pivot ground line. N (the walk frame count) is read from the approved
@@ -45,19 +45,27 @@ import {
   sampleBorderKey, validateMeasuredKey, recoverAlphaFrame, despillKeyFrame,
   alphaBbox, compositeOnto, sha256Buffer,
 } from './walkPostprocess.js';
+import { ATLAS_IDLE_COLUMN } from './walkBounds.js';
 import { withWalkWriteTail, walkSetRelPath, isImportedWalkSet } from './walk.js';
 
 // Player atlas contract (source pipeline runtime_publish.py): 96px cells,
 // pivot (48,88) — silhouette centered on x=48, feet on the y=88 ground line —
 // content bounded to 86×74 so nothing touches a cell edge.
 //
-// The runtime grid is `idle` + the N walk-phase columns + `scanner`. N is the
-// walk set's frame count (variable-frame walks: #sprite-walk-variable-frames);
-// it is read from the approved run manifests, not hardcoded, so the atlas width
+// The runtime grid is `idle` + the N walk-phase columns. N is the walk set's
+// frame count (variable-frame walks: #sprite-walk-variable-frames); it is read
+// from the approved run manifests, not hardcoded, so the atlas width
 // grows/shrinks with the chosen count. ATLAS_COLUMNS is the historical 8-frame
 // layout, kept as the default/fallback; atlasColumns(labels) builds the actual
 // column list a given compile uses.
-export const atlasColumns = (walkLabels) => ['idle', ...walkLabels, 'scanner'];
+//
+// A trailing `scanner` column used to follow the walk phases — a verbatim copy
+// of the idle cell that no consumer ever sampled (#2986). It is no longer
+// compiled: an action animation is its own named track (per-track spans in the
+// layout sidecar, atlasLayout.js), not a column bolted onto the walk cycle.
+// Imported/legacy atlases and manifests that still carry the column keep
+// loading and displaying unchanged — this is a write-side change only.
+export const atlasColumns = (walkLabels) => [ATLAS_IDLE_COLUMN, ...walkLabels];
 export const ATLAS_COLUMNS = atlasColumns(WALK_PHASES);
 export const DEFAULT_ATLAS_GEOMETRY = {
   cellSize: 96,
@@ -329,7 +337,7 @@ async function compileDirectionRow(recordId, direction, validated, geometry) {
     throw compileError(`${direction} idle height ${idle.meta.occupiedBounds.height} misses the walk median ${pyRoundTo(desiredIdleHeight, 2)}`);
   }
   cells.push({
-    column: 'idle',
+    column: ATLAS_IDLE_COLUMN,
     ...idle,
     sourcePath: anchor.path,
     sourceSha256: anchor.sha256,
@@ -342,17 +350,6 @@ async function compileDirectionRow(recordId, direction, validated, geometry) {
     cells.push({ column: frame.phase, ...normalized, sourcePath: frame.path, sourceSha256: frame.sha256 });
   }
 
-  // Cell frames are read-only after normalization, so the scanner placeholder
-  // can share the idle cell's buffer outright.
-  cells.push({
-    column: 'scanner',
-    cell: idle.cell,
-    meta: idle.meta,
-    sourcePath: anchor.path,
-    sourceSha256: anchor.sha256,
-    policy: 'locked-idle-placeholder',
-  });
-
   return {
     direction,
     runId,
@@ -360,7 +357,6 @@ async function compileDirectionRow(recordId, direction, validated, geometry) {
     walkDirectionScale: pyRoundTo(directionScale, 8),
     idleScale: pyRoundTo(idleScale, 8),
     idlePolicy: 'locked-directional-reference-anchor',
-    scannerPolicy: 'locked-idle-placeholder',
     cells,
   };
 }
@@ -422,11 +418,20 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
   const validated = await validateForCompile(recordId);
   const dir = spriteDir(recordId);
 
+  // Columns/width follow the set's actual frame count, not the historical 8.
+  const columns = atlasColumns(validated.walkLabels);
+
   // Pre-pixel idempotency: the compile is deterministic, so an unchanged
   // walk set + identical geometry means identical bytes by construction —
   // skip the whole pixel pipeline. The evidence chain was still revalidated
   // above; the post-encode sha comparison below stays as the fallback for a
   // pointer whose geometry fields predate a shape change.
+  // The COLUMN LIST is part of that geometry comparison, not just the cell
+  // metrics: a grid-shape change (#2986 dropping the trailing scanner column)
+  // leaves every cell metric identical, so without it a pre-#2986 pointer would
+  // be returned as up-to-date and the stale wider atlas would never recompile.
+  // A pointer predating the columns field at all (undefined) also falls through,
+  // which is correct — the post-encode sha compare then decides.
   // Both idempotent early-returns require the pointed-at atlas file to still
   // exist — otherwise a deleted runtime/vN PNG would loop forever ("recompile"
   // → pointer returned untouched → still missing); falling through re-writes
@@ -441,6 +446,7 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
     && JSON.stringify(current.geometry?.pivot) === JSON.stringify(geometry.pivot)
     && current.geometry?.targetMaxHeight === geometry.targetMaxHeight
     && current.geometry?.targetMaxWidth === geometry.targetMaxWidth
+    && JSON.stringify(current.geometry?.columns) === JSON.stringify(columns)
   ) {
     return { ...current, created: false };
   }
@@ -451,8 +457,6 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
   }
 
   const { cellSize } = geometry;
-  // Columns/width follow the set's actual frame count, not the historical 8.
-  const columns = atlasColumns(validated.walkLabels);
   const atlasWidth = cellSize * columns.length;
   const atlasHeight = cellSize * SPRITE_DIRECTIONS.length;
   const atlas = { data: Buffer.alloc(atlasWidth * atlasHeight * 4), width: atlasWidth, height: atlasHeight };
@@ -547,7 +551,6 @@ export async function compileAtlasInTail(recordId, { geometry: geometryOverride 
       walkDirectionScale: row.walkDirectionScale,
       idleScale: row.idleScale,
       idlePolicy: row.idlePolicy,
-      scannerPolicy: row.scannerPolicy,
       cells: row.cells.map((cell, c) => ({
         column: cell.column,
         columnIndex: c,

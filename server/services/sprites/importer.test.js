@@ -48,7 +48,10 @@ const southRunRecord = JSON.stringify({
 }, null, 2);
 const southPackagedManifest = JSON.stringify({
   kind: 'deterministically-packaged-grok-walk-video', direction: 'south',
+  // Hash-pinned via the <base>Path/<base>Sha256 sibling convention: the clip
+  // imports (#2984) and its copied bytes must verify against this.
   sourceVideoPath: 'art-source/sprites/hero/grok/run-1/generated/source-video.mp4',
+  sourceVideoSha256: sha256('FAKE-VIDEO'),
   frames: [{ path: 'art-source/sprites/hero/grok/run-1/generated/frames/f0.png' }],
   // Hash-pinned asset record: the copied strip must verify against this.
   assets: [{ path: 'art-source/sprites/hero/grok/run-1/generated/south-strip.png', sha256: sha256('FAKE-STRIP') }],
@@ -186,8 +189,8 @@ describe('importFromSource', () => {
     const hero = results.find((r) => r.id === 'hero');
     expect(hero.kind).toBe('character');
     // south anchor + pinned walk selection + south run record + pinned south
-    // strip + east manifest + hash-pinned runtime atlas
-    expect(hero.verified).toBe(6);
+    // strip + south source clip + east manifest + hash-pinned runtime atlas
+    expect(hero.verified).toBe(7);
     expect(hero.errors).toEqual([
       'walk set east: referenced asset missing: imagegen/v2/gone.png',
       'walk set west: not approved (pending) — skipped',
@@ -207,7 +210,9 @@ describe('importFromSource', () => {
     expect(existsSync(join(heroDir, 'grok/run-1/generated/south-manifest.json'))).toBe(true);
     expect(existsSync(join(heroDir, 'grok/run-1/generated/south-strip.png'))).toBe(true);
     expect(existsSync(join(heroDir, 'grok/run-1/generated/review-preview.json'))).toBe(true);
-    expect(existsSync(join(heroDir, 'grok/run-1/generated/source-video.mp4'))).toBe(false);
+    // the source clip imports (#2984 — the input to re-deriving the cycle at a
+    // new frame count); its raw extracted frames still don't
+    expect(existsSync(join(heroDir, 'grok/run-1/generated/source-video.mp4'))).toBe(true);
     expect(existsSync(join(heroDir, 'grok/run-1/generated/raw/frame-000.png'))).toBe(false);
     expect(existsSync(join(heroDir, 'grok/run-1/generated/frames/f0.png'))).toBe(false);
     // approved imagegen run: manifest + selected strip only
@@ -283,6 +288,138 @@ describe('importFromSource', () => {
     const empty = mkdtempSync(join(tmpdir(), 'sprite-importer-empty-'));
     await expect(importFromSource({ sourceRoot: empty })).rejects.toMatchObject({ code: 'INVALID_SOURCE_ROOT' });
     rmSync(empty, { recursive: true, force: true });
+  });
+});
+
+/**
+ * #2984 — the run's source clip is the input to re-deriving a walk cycle at a
+ * different frame count, so it imports. This fixture is the shape that makes
+ * that non-trivial: a walk set whose entries name `runs/<run-id>` beside a
+ * source tree that actually stores one of those runs under `grok/<run-id>`,
+ * plus a run whose clip bytes disagree with the hash its manifest pins, plus a
+ * stale run directory no walk-set entry names.
+ */
+describe('walk-run source clips', () => {
+  const CLIP_BYTES = 'DRIFTER-CLIP';
+  const drifterSouthRun = JSON.stringify({
+    kind: 'grok-walk-animation-run', status: 'candidate', characterId: 'drifter', direction: 'south',
+    postprocessManifest: 'art-source/sprites/drifter/runs/run-a/generated/south-manifest.json',
+  }, null, 2);
+  const drifterEastRun = JSON.stringify({
+    kind: 'grok-walk-animation-run', status: 'candidate', characterId: 'drifter', direction: 'east',
+    postprocessManifest: 'art-source/sprites/drifter/runs/run-b/generated/east-manifest.json',
+  }, null, 2);
+  const drifterWestRun = JSON.stringify({
+    kind: 'grok-walk-animation-run', status: 'candidate', characterId: 'drifter', direction: 'west',
+    postprocessManifest: 'art-source/sprites/drifter/runs/run-c/generated/west-manifest.json',
+  }, null, 2);
+  let drifter;
+
+  beforeAll(async () => {
+    writeTree(SOURCE_ROOT, {
+      'art-pipeline/characters/drifter.json': {
+        schemaVersion: 1, characterId: 'drifter', displayName: 'Drifter', archetype: 'adult-humanoid-v1',
+      },
+      'art-source/sprites/drifter/walk/drifter-walk-set-v1.json': {
+        schemaVersion: 1, kind: 'finalized-eight-direction-walk-set', characterId: 'drifter', status: 'final',
+        directions: {
+          // Both entries name the neutral runs/ layout; run-a is only on disk
+          // under grok/ — the layout drift the importer must tolerate.
+          south: {
+            status: 'approved',
+            runPath: 'art-source/sprites/drifter/runs/run-a',
+            runManifest: 'art-source/sprites/drifter/runs/run-a/animation-run.json',
+            runManifestSha256: sha256(drifterSouthRun),
+          },
+          east: {
+            status: 'approved',
+            runPath: 'art-source/sprites/drifter/runs/run-b',
+            runManifest: 'art-source/sprites/drifter/runs/run-b/animation-run.json',
+            runManifestSha256: sha256(drifterEastRun),
+          },
+          // run-c's PACKAGED manifest names the clip under the grok/ layout
+          // while the entry says runs/ — the probe must recognize that as the
+          // same file, not import a second copy under the entry's layout.
+          west: {
+            status: 'approved',
+            runPath: 'art-source/sprites/drifter/runs/run-c',
+            runManifest: 'art-source/sprites/drifter/runs/run-c/animation-run.json',
+            runManifestSha256: sha256(drifterWestRun),
+          },
+        },
+      },
+      'art-source/sprites/drifter/grok/run-a/animation-run.json': drifterSouthRun,
+      'art-source/sprites/drifter/grok/run-a/generated/south-manifest.json': {
+        kind: 'deterministically-packaged-grok-walk-video', direction: 'south',
+        stripPath: 'art-source/sprites/drifter/runs/run-a/generated/south-strip.png',
+        sourceVideoPath: 'art-source/sprites/drifter/runs/run-a/generated/source-video.mp4',
+        sourceVideoSha256: sha256(CLIP_BYTES),
+      },
+      'art-source/sprites/drifter/grok/run-a/generated/south-strip.png': 'DRIFTER-STRIP',
+      'art-source/sprites/drifter/grok/run-a/generated/source-video.mp4': CLIP_BYTES,
+      'art-source/sprites/drifter/grok/run-a/generated/raw/frame-000.png': 'RAW-INTERMEDIATE',
+      'art-source/sprites/drifter/runs/run-b/animation-run.json': drifterEastRun,
+      'art-source/sprites/drifter/runs/run-b/generated/east-manifest.json': {
+        kind: 'deterministically-packaged-grok-walk-video', direction: 'east',
+        sourceVideoPath: 'art-source/sprites/drifter/runs/run-b/generated/source-video.mp4',
+        // Pins bytes the on-disk clip does not have.
+        sourceVideoSha256: sha256('THE-CLIP-THE-MANIFEST-EXPECTS'),
+      },
+      'art-source/sprites/drifter/runs/run-b/generated/source-video.mp4': 'TAMPERED-CLIP',
+      'art-source/sprites/drifter/runs/run-c/animation-run.json': drifterWestRun,
+      'art-source/sprites/drifter/runs/run-c/generated/west-manifest.json': {
+        kind: 'deterministically-packaged-grok-walk-video', direction: 'west',
+        sourceVideoPath: 'art-source/sprites/drifter/grok/run-c/generated/source-video.mp4',
+      },
+      'art-source/sprites/drifter/grok/run-c/generated/source-video.mp4': CLIP_BYTES,
+      // Never named by the walk set — must contribute nothing, silently.
+      'art-source/sprites/drifter/runs/run-stale/animation-run.json': '{"status":"orphan"}',
+      'art-source/sprites/drifter/runs/run-stale/generated/source-video.mp4': 'ORPHAN-CLIP',
+    });
+    const { results } = await importFromSource({ sourceRoot: SOURCE_ROOT, characters: ['drifter'], includeProps: false });
+    drifter = results.find((r) => r.id === 'drifter');
+  });
+
+  const drifterDir = () => join(SPRITES_ROOT, 'drifter');
+
+  it('imports a run\'s clip whichever run layout the source stores it under, and still leaves raw frames behind', async () => {
+    // Declared as runs/, found under grok/ — landed at the DECLARED path so
+    // the manifest value that names it resolves after import.
+    expect(readFileSync(join(drifterDir(), 'runs/run-a/generated/source-video.mp4'), 'utf8')).toBe(CLIP_BYTES);
+    expect(existsSync(join(drifterDir(), 'runs/run-a/animation-run.json'))).toBe(true);
+    expect(existsSync(join(drifterDir(), 'runs/run-a/generated/south-strip.png'))).toBe(true);
+    expect(existsSync(join(drifterDir(), 'grok/run-a'))).toBe(false);
+    // ~5× the clip's bytes and re-extractable on demand — still excluded.
+    expect(existsSync(join(drifterDir(), 'runs/run-a/generated/raw/frame-000.png'))).toBe(false);
+    // All three run records verify (each entry pins one) plus the south clip.
+    // The east clip does NOT — its bytes disagree with the hash its manifest
+    // pins — and the west manifest pins no clip hash at all.
+    expect(drifter.verified).toBe(4);
+  });
+
+  it('imports a manifest-declared clip exactly once when the manifest and the walk-set entry disagree on layout', () => {
+    // run-c's manifest declares the clip under grok/ while its entry says
+    // runs/. The bytes land at the DECLARED (manifest) path — the value the
+    // read layer re-anchors — and the run-dir probe must not add a second copy
+    // under the entry's layout.
+    expect(readFileSync(join(drifterDir(), 'grok/run-c/generated/source-video.mp4'), 'utf8')).toBe(CLIP_BYTES);
+    expect(existsSync(join(drifterDir(), 'runs/run-c/generated/source-video.mp4'))).toBe(false);
+  });
+
+  it('refuses a clip whose bytes disagree with the manifest\'s sourceVideoSha256, naming the run', () => {
+    expect(drifter.errors).toContain('run run-b: source clip failed sha256 verification — not imported');
+    expect(existsSync(join(drifterDir(), 'runs/run-b/generated/source-video.mp4'))).toBe(false);
+    // …and the summary doesn't claim a file the import deliberately deleted:
+    // spec + walk set + 3 run records + 3 packaged manifests + strip + the
+    // south and west clips = 11, with the dropped east clip subtracted back out.
+    expect(drifter.files).toBe(11);
+    // The rest of that run still imported — one bad clip isn't a run-wide abort.
+    expect(existsSync(join(drifterDir(), 'runs/run-b/animation-run.json'))).toBe(true);
+  });
+
+  it('skips a source run directory no walk-set entry names, without an error', () => {
+    expect(existsSync(join(drifterDir(), 'runs/run-stale'))).toBe(false);
+    expect(drifter.errors.some((e) => e.includes('run-stale'))).toBe(false);
   });
 });
 

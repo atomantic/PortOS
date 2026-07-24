@@ -18,6 +18,14 @@
  * drift. Engine sidecars (e.g. Godot .png.import) are the game repo's
  * concern and are never touched.
  *
+ * The optional runtimeContract (#2982) is the reverse direction: the app
+ * declares the grid it was built against ({ walkFrameCount, cellSize,
+ * columnCount }) and a publish whose compiled geometry disagrees is refused
+ * instead of silently shifting every column the game reads. Alongside the PNG,
+ * publish writes a `<atlas-stem>.layout.json` sidecar describing the grid
+ * PortOS actually produced, so the app can resolve columns by name rather than
+ * by memory. An absent contract publishes unchecked, exactly as before.
+ *
  * Publishes serialize on a per-app queue (the appDeployer per-app-lock
  * posture) nested inside the record's walk write tail.
  */
@@ -25,7 +33,7 @@
 import { join, resolve } from 'path';
 import { readFile, stat } from 'fs/promises';
 import {
-  atomicWrite, isPathInsideDir, readJSONFile, sha256File, pathExists,
+  atomicWrite, isPathInsideDir, readJSONFile, safeJSONParse, sha256File, pathExists,
 } from '../../lib/fileUtils.js';
 import { ServerError } from '../../lib/errorHandler.js';
 import { createKeyCachedQueue } from '../../lib/createKeyCachedQueue.js';
@@ -37,6 +45,10 @@ import { updateRecord } from './records.js';
 import { withWalkWriteTail } from './walk.js';
 import { compileAtlasInTail } from './atlas.js';
 import { sha256Buffer } from './walkPostprocess.js';
+import { spriteRuntimeContractSchema } from '../../lib/validation.js';
+import {
+  ATLAS_LAYOUT_KIND, buildAtlasLayout, layoutSidecarPath, runtimeContractMismatch,
+} from './atlasLayout.js';
 
 // Per-repo serialization: keyed by the resolved repoPath (matching
 // appDeployer's `deployingApps` key), so two app records pointing at the
@@ -76,12 +88,40 @@ async function requireAppRepo(appId, status) {
   return { app, repoRoot: app.repoPath };
 }
 
+/**
+ * Validate the optional runtimeContract — the grid the consuming app was built
+ * against (#2982). Shape and bounds come from the SAME Zod schema the route
+ * parses, so a non-route caller (importer, peer sync, a test) can't persist a
+ * contract the route would have rejected.
+ *
+ * `walkFrameCount` is required once a contract is present (it is the whole
+ * point of declaring one); `cellSize` and `columnCount` are optional extra
+ * assertions. The fields are NOT cross-checked against each other: what counts
+ * as a consistent column layout is the compiler's business and changes with the
+ * grid (#2986 drops the scanner column), so a stale count surfaces at publish
+ * with both numbers named rather than as an unexplained 400 at save.
+ */
+function validateRuntimeContract(runtimeContract) {
+  if (runtimeContract === undefined || runtimeContract === null) return null;
+  const parsed = spriteRuntimeContractSchema.safeParse(runtimeContract);
+  if (!parsed.success) {
+    const issue = parsed.error.issues?.[0];
+    const field = issue?.path?.length ? `runtimeContract.${issue.path.join('.')}` : 'runtimeContract';
+    throw bindingError(`${field}: ${issue?.message || 'invalid'}`, 'INVALID_RUNTIME_CONTRACT');
+  }
+  const { walkFrameCount, cellSize, columnCount } = parsed.data;
+  return { walkFrameCount, cellSize: cellSize ?? null, columnCount: columnCount ?? null };
+}
+
 /** Validate a publishBinding shape (null clears it). */
 export async function validatePublishBinding(binding) {
   if (binding === null) return null;
-  const { appId, atlasDestPath, codeBinding } = binding;
+  const { appId, atlasDestPath, codeBinding, runtimeContract } = binding;
   const { app } = await requireAppRepo(appId, 400);
   anchorRepoPath(app.repoPath, atlasDestPath, 'atlasDestPath');
+  // The sidecar lands beside the atlas, so its path must anchor too — catch a
+  // destination whose sidecar would escape the repo at SAVE time, not mid-publish.
+  anchorRepoPath(app.repoPath, layoutSidecarPath(atlasDestPath), 'atlas layout sidecar');
   if (codeBinding) {
     anchorRepoPath(app.repoPath, codeBinding.path, 'codeBinding.path');
     if (typeof codeBinding.resourcePath !== 'string' || !codeBinding.resourcePath.trim()) {
@@ -98,13 +138,32 @@ export async function validatePublishBinding(binding) {
         requiredOccurrenceCount: codeBinding.requiredOccurrenceCount ?? 1,
       }
       : null,
+    // `undefined` (key absent) is distinct from `null` (explicit clear) — see
+    // setPublishBinding, which carries an absent contract over from the stored
+    // binding so a client that predates the field can't silently wipe it.
+    runtimeContract: validateRuntimeContract(runtimeContract),
   };
 }
 
-/** Persist a validated binding on the record. */
+/**
+ * Persist a validated binding on the record. A binding that omits
+ * `runtimeContract` entirely INHERITS the stored one (absent ≠ empty): the
+ * publish form saves appId/dest/codeBinding only, and a form save must not
+ * silently drop the contract an app declared through the API. Pass
+ * `runtimeContract: null` to clear it, or `binding: null` to clear everything.
+ *
+ * The inheritance is scoped to the SAME app — a contract describes the grid one
+ * particular app was built against, so carrying it across a re-point would make
+ * every publish to the new app 409 against an expectation that app never
+ * declared (and, with no UI for the field, leave no way out).
+ */
 export async function setPublishBinding(recordId, binding) {
-  await requireCharacter(recordId);
+  const record = await requireCharacter(recordId);
   const validated = await validatePublishBinding(binding);
+  const stored = record.publishBinding;
+  if (validated && binding.runtimeContract === undefined && validated.appId === stored?.appId) {
+    validated.runtimeContract = stored.runtimeContract ?? null;
+  }
   return updateRecord(recordId, { publishBinding: validated });
 }
 
@@ -175,14 +234,77 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
     : undefined;
   const compiled = await compileAtlasInTail(recordId, { geometry: geometryOverride });
 
+  // Export contract (#2982). Everything below runs BEFORE the repo write lock,
+  // so a publish the bound app cannot consume leaves the game tree untouched.
+  // One geometry assertion serves both the contract compare and the sidecar.
+  const appLabel = app.name || binding.appId;
+  if (!Array.isArray(compiled.geometry?.columns)) {
+    throw new ServerError(
+      'The compiled atlas reports no column layout, so neither its export contract nor its layout sidecar can be resolved — recompile the atlas before publishing.',
+      { status: 422, code: 'ATLAS_GEOMETRY_UNKNOWN' },
+    );
+  }
+  // No declared contract ⇒ unchanged, unchecked behavior.
+  const mismatch = runtimeContractMismatch(compiled.geometry, binding.runtimeContract, appLabel);
+  if (mismatch) throw new ServerError(mismatch, { status: 409, code: 'PUBLISH_CONTRACT_MISMATCH' });
+
+  // The sidecar describing the grid PortOS actually produced. Built here (pure,
+  // lock-free) so the same bytes serve both the write and the up-to-date
+  // comparison below. It carries no timestamp: identical geometry ⇒ identical
+  // bytes ⇒ a republish is a genuine no-op.
+  const layout = buildAtlasLayout({
+    characterId: recordId,
+    geometry: compiled.geometry,
+    atlasSha256: compiled.atlasSha256,
+    version: compiled.version,
+    atlasDestPath: binding.atlasDestPath,
+  });
+  const layoutBuffer = Buffer.from(`${JSON.stringify(layout, null, 2)}\n`);
+  const layoutSha256 = sha256Buffer(layoutBuffer);
+  const layoutDestPath = layoutSidecarPath(binding.atlasDestPath);
+
   return repoPublishTail(resolve(repoRoot), async () => {
     // Don't mutate a tree a deploy is currently building from — appDeployer
     // keys its lock by repoPath, so honor it here (the reverse direction —
     // deploy checking publishes — isn't needed; publishes are sub-second).
     if (isDeploying(repoRoot)) {
-      throw new ServerError(`App ${app.name || binding.appId} is deploying — retry when the deploy finishes`, { status: 409, code: 'APP_DEPLOY_IN_PROGRESS' });
+      throw new ServerError(`App ${appLabel} is deploying — retry when the deploy finishes`, { status: 409, code: 'APP_DEPLOY_IN_PROGRESS' });
     }
     const destAbs = anchorRepoPath(repoRoot, binding.atlasDestPath, 'atlasDestPath');
+    // The sidecar is repo-anchored and written inside this same per-repo tail
+    // as the PNG, so the pair is never interleaved with another publish into
+    // the same checkout.
+    const layoutAbs = anchorRepoPath(repoRoot, layoutDestPath, 'atlas layout sidecar');
+    const existingLayout = await readFile(layoutAbs).catch(() => null);
+    const layoutUpToDate = Boolean(existingLayout?.equals(layoutBuffer));
+    // Occupied-destination guard, mirroring the atlas's: PortOS owns files it
+    // stamped with its own `kind`, and will regenerate one freely, but a JSON
+    // file it never wrote sitting at that path is somebody else's — replacing
+    // it needs the same explicit acknowledgment replacing a foreign atlas does.
+    // A malformed/non-JSON file counts as foreign too: a parse failure must
+    // not become a 500, and must not license an overwrite.
+    //
+    // Split from the write and asserted BEFORE applyCodeBinding, which mutates
+    // the game's source file — a refusal after that rewrite would leave the
+    // source pointing at an atlas this publish then declined to write.
+    const assertLayoutDestWritable = () => {
+      if (layoutUpToDate || acknowledgeOverwrite || !existingLayout) return;
+      if (safeJSONParse(existingLayout.toString('utf8'))?.kind !== ATLAS_LAYOUT_KIND) {
+        throw new ServerError(
+          `${layoutDestPath} already exists and was not written by PortOS — confirm the overwrite to replace it.`,
+          { status: 409, code: 'PUBLISH_LAYOUT_OCCUPIED' },
+        );
+      }
+    };
+    // Write only when the content actually differs, so a republish that changes
+    // nothing stays a genuine no-op. Returns whether the repo was mutated — an
+    // atlas already at the destination but MISSING its sidecar still gets one,
+    // so the two can never be permanently out of step.
+    const writeLayoutSidecar = async () => {
+      if (layoutUpToDate) return false;
+      await atomicWrite(layoutAbs, layoutBuffer);
+      return true;
+    };
     const atlasBuffer = await readFile(join(dir, compiled.atlasPath)).catch(() => null);
     if (!atlasBuffer) {
       throw new ServerError('Compiled atlas file is missing on disk — recompile before publishing', { status: 422, code: 'ATLAS_OUTPUT_MISSING' });
@@ -226,20 +348,30 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
 
     const destSha256 = (await pathExists(destAbs)) ? await sha256File(destAbs) : null;
     if (destSha256 === compiled.atlasSha256) {
+      assertLayoutDestWritable();
       // Verify the code binding even on a no-op so drift never hides.
       const codeBinding = binding.codeBinding
         ? await applyCodeBinding(repoRoot, binding.codeBinding, previousForCode?.codeBinding?.resourcePath)
         : null;
-      // The destination already holds the current bytes, but two sub-cases
+      // An up-to-date atlas can still be missing (or carrying a stale) layout
+      // sidecar — from a publish that predates it, or a hand-deleted file.
+      // Reconcile it here so the pair converges on the next publish.
+      const layoutWritten = await writeLayoutSidecar();
+      // The destination already holds the current bytes, but three sub-cases
       // still mutate durable state and must be recorded: a code-binding
-      // rewrite just changed the game's source, and a first-ever publish
-      // finding its own bytes needs a history baseline (otherwise the next
-      // changed-atlas publish reads the dest as foreign and 409s OCCUPIED).
+      // rewrite just changed the game's source, the sidecar was just written,
+      // and a first-ever publish finding its own bytes needs a history
+      // baseline (otherwise the next changed-atlas publish reads the dest as
+      // foreign and 409s OCCUPIED).
       let publication = null;
-      if ((codeBinding?.rewritten || !previous)) {
-        publication = await recordPublication({ destPreviousSha256: destSha256, codeBinding, upToDateBaseline: true });
+      if ((codeBinding?.rewritten || layoutWritten || !previous)) {
+        publication = await recordPublication({
+          destPreviousSha256: destSha256, codeBinding, layoutDestPath, layoutSha256, upToDateBaseline: true,
+        });
       }
-      return { published: false, upToDate: true, compiled, codeBinding, publication };
+      return {
+        published: false, upToDate: true, compiled, codeBinding, publication, layoutWritten, layoutDestPath,
+      };
     }
     if (previous && destSha256 !== null && destSha256 !== previous.atlasSha256) {
       throw new ServerError(
@@ -258,15 +390,25 @@ async function publishAtlasImpl(recordId, { acknowledgeOverwrite = false } = {})
     }
 
     // Verify/rewrite the code binding BEFORE replacing the atlas so a drifted
-    // binding aborts the publish with the game repo untouched.
+    // binding aborts the publish with the game repo untouched — and assert the
+    // sidecar destination first, since that rewrite is itself a mutation.
+    assertLayoutDestWritable();
     const codeBinding = binding.codeBinding
       ? await applyCodeBinding(repoRoot, binding.codeBinding, previousForCode?.codeBinding?.resourcePath)
       : null;
 
+    // Sidecar BEFORE the atlas. Either order has a crash window, but only this
+    // one fails loudly: the layout carries `sourceAtlasSha256`, so a sidecar
+    // that landed without its atlas is DETECTABLE by the consumer, whereas a
+    // new atlas under a stale/absent layout is exactly the silent column shift
+    // this whole contract exists to prevent.
+    const layoutWritten = await writeLayoutSidecar();
     await atomicWrite(destAbs, atlasBuffer);
 
-    const publication = await recordPublication({ destPreviousSha256: destSha256, codeBinding });
-    console.log(`🚚 sprite atlas v${compiled.version} published for ${recordId} → ${app.name || binding.appId}:${binding.atlasDestPath}`);
-    return { published: true, publication, compiled };
+    const publication = await recordPublication({
+      destPreviousSha256: destSha256, codeBinding, layoutDestPath, layoutSha256,
+    });
+    console.log(`🚚 sprite atlas v${compiled.version} published for ${recordId} → ${appLabel}:${binding.atlasDestPath}`);
+    return { published: true, publication, compiled, layoutWritten, layoutDestPath };
   });
 }
