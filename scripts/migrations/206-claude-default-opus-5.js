@@ -88,7 +88,11 @@ const sameArray = (a, b) => {
 const swapOpusPointers = (provider, opusMap) => {
   let changed = false;
   for (const key of POINTER_KEYS) {
-    const mapped = opusMap[provider[key]];
+    // `Object.hasOwn` before the lookup: a bare `opusMap[provider[key]]` would
+    // inherit an Object.prototype member for a pointer literally named
+    // `constructor`/`toString`. Unreachable via the UI or any seed, but the
+    // guard costs nothing and keeps the map lookup honest.
+    const mapped = Object.hasOwn(opusMap, provider[key]) ? opusMap[provider[key]] : null;
     if (mapped) {
       provider[key] = mapped;
       changed = true;

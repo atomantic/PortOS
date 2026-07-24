@@ -28,7 +28,19 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const SERVER_PATH = resolve(__dirname, 'stageRunner.js');
 const CLIENT_PATH = resolve(__dirname, '../../client/src/utils/providers.js');
 
-const MIRRORED_NAMES = ['KNOWN_MODEL_CONTEXT_WINDOWS'];
+// The table's rows are `[/regex/i, SOME_CONTEXT_WINDOW]` — the *values* are
+// symbols defined separately in each file, so pinning the table text alone
+// leaves the exact hole this test exists to close: edit `CODEX_CONTEXT_WINDOW`
+// on one side only and the table still matches byte-for-byte while the two
+// ends silently disagree about the window. Pin the constants too.
+const MIRRORED_NAMES = [
+  'DEFAULT_LARGE_CONTEXT_WINDOW',
+  'CODEX_CONTEXT_WINDOW',
+  'GEMINI_CONTEXT_WINDOW',
+  'GROK_CONTEXT_WINDOW',
+  'KIMI_CONTEXT_WINDOW',
+  'KNOWN_MODEL_CONTEXT_WINDOWS',
+];
 
 describe('stageRunner↔client providers context-window mirror parity', () => {
   const serverSrc = readFileSync(SERVER_PATH, 'utf8');
