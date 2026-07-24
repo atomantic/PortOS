@@ -242,6 +242,37 @@ describe('attachReferenceCandidate', () => {
     expect(sidecar.model).toBe('retried-model');
   });
 
+  it('records an anchor correction prompt in the sidecar as provenance', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await mkdir(join(TEST_ROOT, 'images'), { recursive: true });
+    await writeCandidatePng(join(TEST_ROOT, 'images', 'render-3.png'));
+    await attachReferenceCandidate({
+      recordId: id, target: 'north-east', direction: 'north-east', anchorId: 'walk-north-east',
+      chromaKey: '#FF00FF', mode: 'codex', model: 'm', jobId: 'j3',
+      correctionPrompt: 'no pocket on the right sleeve', filename: 'render-3.png',
+    });
+    const sidecar = JSON.parse(await readFile(
+      join(TEST_ROOT, 'sprites', id, 'reference', 'candidates', 'walk-north-east-candidate-01.generation.json'), 'utf8',
+    ));
+    expect(sidecar.correctionPrompt).toBe('no pocket on the right sleeve');
+  });
+
+  it('omits correctionPrompt from the sidecar when absent', async () => {
+    const id = newId();
+    await createCharacter(id);
+    await mkdir(join(TEST_ROOT, 'images'), { recursive: true });
+    await writeCandidatePng(join(TEST_ROOT, 'images', 'render-4.png'));
+    await attachReferenceCandidate({
+      recordId: id, target: 'east', direction: 'east', anchorId: 'walk-east',
+      chromaKey: '#FF00FF', mode: 'codex', model: 'm', jobId: 'j4', filename: 'render-4.png',
+    });
+    const sidecar = JSON.parse(await readFile(
+      join(TEST_ROOT, 'sprites', id, 'reference', 'candidates', 'walk-east-candidate-01.generation.json'), 'utf8',
+    ));
+    expect(sidecar).not.toHaveProperty('correctionPrompt');
+  });
+
   it('returns null when the gallery file is gone', async () => {
     const id = newId();
     await createCharacter(id);

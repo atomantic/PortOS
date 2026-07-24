@@ -88,8 +88,10 @@ export default function ReferenceWorkflow({ record, reference, renders, backends
   const allAnchorsLocked = anchorList.length > 0 && anchorList.every((a) => a.status === 'locked');
   const [anchorsOpen, setAnchorsOpen] = useState(!allAnchorsLocked);
   // Reset the default on record switch only (deps: recordId), so it never
-  // fights a user toggle within one character.
-  useEffect(() => { setAnchorsOpen(!allAnchorsLocked); }, [recordId]);
+  // fights a user toggle within one character. Also drop any per-direction
+  // correction text — the 8 anchor direction keys are identical across
+  // characters, so a leftover note would otherwise bleed into the next sprite.
+  useEffect(() => { setAnchorsOpen(!allAnchorsLocked); setCorrections({}); }, [recordId]);
 
   // Image-backend availability + the selected `mode` are page-owned (#2938) so
   // that the Sprites page's asset-card Regenerate re-rolls through the SAME
