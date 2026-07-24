@@ -200,6 +200,28 @@ describe('runTrellis2Generate', () => {
     ]);
   });
 
+  it('parses every tqdm frame in a \\r-redrawn chunk, not just the first', async () => {
+    // tqdm redraws the sampling bar in place with carriage returns, so one stdout
+    // chunk can carry several frames separated only by \r. Progress must reflect the
+    // LAST (highest) frame, not the first — otherwise sampling under-reports.
+    const child = makeChild();
+    const frames = [];
+    const { promise } = runTrellis2Generate({
+      imagePath: 'a.png',
+      outputPath: '/out/a.glb',
+      base: BASE,
+      exists: installed,
+      spawnImpl: () => child,
+      onProgress: (f) => frames.push(f),
+    });
+    child.stdout.emit('data', 'Sampling:   0%\rSampling:  50%\rSampling: 100%\r');
+    child.stdout.emit('data', '  Saved: /out/a.glb\n');
+    child.emit('close', 0);
+    await expect(promise).resolves.toEqual({ assetPath: '/out/a.glb' });
+    // 0/50/100 scale into the [10,50] band → 10/30/50; the last frame is 50.
+    expect(frames.map((f) => f.percent)).toEqual([10, 30, 50, 92]);
+  });
+
   it('rejects on a non-zero exit', async () => {
     const child = makeChild();
     const { promise } = runTrellis2Generate({

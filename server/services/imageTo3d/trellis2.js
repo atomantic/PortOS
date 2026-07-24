@@ -415,7 +415,11 @@ export function runTrellis2Generate({
   const promise = new Promise((resolve, reject) => {
     const ingest = (buf) => {
       outputTail = appendTail(outputTail, buf);
-      for (const line of String(buf).split('\n')) {
+      // Split on \r AND \n: tqdm redraws its sampling bar in place with carriage
+      // returns, so a single chunk can carry several progress frames separated only
+      // by \r. Splitting on \n alone would treat them as one line and parse just the
+      // first (lowest) percent — under-reporting progress during the long sampling phase.
+      for (const line of String(buf).split(/[\r\n]+/)) {
         const frame = parseGenerateProgress(line);
         if (!frame) continue;
         if (frame.assetPath) assetPath = frame.assetPath;
