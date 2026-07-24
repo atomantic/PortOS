@@ -7,6 +7,15 @@ import { installTestStorage } from './storagePolyfill.js';
 // of how jsdom exposes Storage in this environment. See storagePolyfill.js / #1438.
 installTestStorage();
 
+// jsdom doesn't implement Element.prototype.scrollIntoView; components call it
+// (often from a requestAnimationFrame callback that can fire AFTER a test unmounts),
+// and the resulting unhandled error fails the whole run despite passing assertions
+// (#2958). Stub it once, guarded so it never clobbers a real implementation — on real
+// DOM elements scrollIntoView is always present, so production is unaffected.
+if (!Element.prototype.scrollIntoView) {
+  Element.prototype.scrollIntoView = () => {};
+}
+
 // Fail any test that triggers React's "not wrapped in act(...)" warning (#2406).
 // These mark unsettled async state updates — usually a mount-effect fetch whose
 // mocked promise resolves after the sync test body — which vitest hides locally
