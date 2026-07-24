@@ -11,8 +11,10 @@ import {
 import { walkPhaseLabels } from './walkBounds.js';
 
 const DIRECTIONS = ['S', 'SE', 'E', 'NE', 'N', 'NW', 'W', 'SW'];
+// The grid the compiler emits today: idle + N walk phases (#2986 dropped the
+// trailing scanner placeholder).
 const geometryFor = (walkFrameCount, overrides = {}) => ({
-  columns: ['idle', ...walkPhaseLabels(walkFrameCount), 'scanner'],
+  columns: ['idle', ...walkPhaseLabels(walkFrameCount)],
   directionOrder: DIRECTIONS,
   rows: DIRECTIONS.length,
   cellSize: 96,
@@ -20,6 +22,13 @@ const geometryFor = (walkFrameCount, overrides = {}) => ({
   walkFps: 10,
   ...overrides,
 });
+// A pre-#2986 / imported grid, which still carries the scanner column. The
+// sidecar is the READ side of the contract, so it must keep describing these.
+const legacyGeometryFor = (walkFrameCount, overrides = {}) =>
+  geometryFor(walkFrameCount, {
+    columns: ['idle', ...walkPhaseLabels(walkFrameCount), 'scanner'],
+    ...overrides,
+  });
 
 describe('layoutSidecarPath', () => {
   it('swaps the .png extension for .layout.json', () => {
@@ -32,18 +41,25 @@ describe('layoutSidecarPath', () => {
 describe('resolveWalkFrameCount', () => {
   it('prefers the declared count and falls back to counting non-anchor columns', () => {
     expect(resolveWalkFrameCount(geometryFor(12))).toBe(12);
+    expect(resolveWalkFrameCount(legacyGeometryFor(12))).toBe(12);
     // Pre-#2970 pointers carry no walkFrameCount.
-    expect(resolveWalkFrameCount({ columns: ['idle', 'a', 'b', 'c', 'scanner'] })).toBe(3);
-    // A scanner-less grid (#2986) still resolves.
     expect(resolveWalkFrameCount({ columns: ['idle', 'a', 'b'] })).toBe(2);
+    // …and a pre-#2986 one is counted without its scanner placeholder.
+    expect(resolveWalkFrameCount({ columns: ['idle', 'a', 'b', 'c', 'scanner'] })).toBe(3);
     expect(resolveWalkFrameCount({})).toBeNull();
   });
 });
 
 describe('deriveTracks', () => {
   it('collapses the walk columns into one span and gives every other column its own', () => {
-    const columns = ['idle', ...walkPhaseLabels(6), 'scanner'];
-    expect(deriveTracks(columns, 6)).toEqual({
+    // The compiled grid is idle + walk only (#2986) — no third track.
+    expect(deriveTracks(['idle', ...walkPhaseLabels(6)], 6)).toEqual({
+      idle: { start: 0, count: 1 },
+      walk: { start: 1, count: 6 },
+    });
+    // A pre-#2986 grid still describes its scanner placeholder honestly rather
+    // than folding it into the walk span.
+    expect(deriveTracks(['idle', ...walkPhaseLabels(6), 'scanner'], 6)).toEqual({
       idle: { start: 0, count: 1 },
       walk: { start: 1, count: 6 },
       scanner: { start: 7, count: 1 },
@@ -52,8 +68,8 @@ describe('deriveTracks', () => {
 
   it('spans the walk by position, so positional frame-NN labels group too', () => {
     // A grid whose columns are `frame-00…` rather than the named gait phases
-    // must still describe ONE walk track, not eight singletons.
-    const columns = ['idle', ...walkPhaseLabels(10), 'scanner'];
+    // must still describe ONE walk track, not ten singletons.
+    const columns = ['idle', ...walkPhaseLabels(10)];
     expect(deriveTracks(columns, 10).walk).toEqual({ start: 1, count: 10 });
   });
 
@@ -90,15 +106,31 @@ describe('buildAtlasLayout', () => {
       cellSize: 96,
       rows: 8,
       rowOrder: DIRECTIONS,
-      columnCount: 10,
+      columnCount: 9,
       walkFrameCount: 8,
       previewFps: 10,
     });
-    expect(layout.tracks.walk).toEqual({ start: 1, count: 8 });
+    expect(layout.columns).toEqual(['idle', ...walkPhaseLabels(8)]);
+    // The compiled grid has exactly two tracks — the scanner span is gone with
+    // the column it described (#2986).
+    expect(layout.tracks).toEqual({ idle: { start: 0, count: 1 }, walk: { start: 1, count: 8 } });
     expect(layout.previewFpsNote).toMatch(/do not use this as a runtime frame rate/);
     // No timestamp: identical geometry must produce byte-identical content so
     // an unchanged republish stays a no-op.
     expect(JSON.stringify(layout)).not.toMatch(/publishedAt/);
+  });
+
+  it('still describes a pre-#2986 grid that carries a scanner column', () => {
+    const layout = buildAtlasLayout({
+      characterId: 'example-character',
+      geometry: legacyGeometryFor(8),
+      atlasSha256: 'abc123',
+      version: 2,
+      atlasDestPath: 'assets/sprites/hero/hero-atlas.png',
+    });
+    expect(layout.columnCount).toBe(10);
+    expect(layout.walkFrameCount).toBe(8);
+    expect(layout.tracks.scanner).toEqual({ start: 9, count: 1 });
   });
 
   it('refuses geometry with no column list', () => {
@@ -108,7 +140,7 @@ describe('buildAtlasLayout', () => {
 });
 
 describe('runtimeContractMismatch', () => {
-  const contract = { walkFrameCount: 8, cellSize: 96, columnCount: 10 };
+  const contract = { walkFrameCount: 8, cellSize: 96, columnCount: 9 };
 
   it('passes an absent contract and a matching one', () => {
     expect(runtimeContractMismatch(geometryFor(12), null)).toBeNull();
@@ -118,17 +150,17 @@ describe('runtimeContractMismatch', () => {
 
   it('names both counts and both resolutions on a frame-count mismatch', () => {
     const message = runtimeContractMismatch(geometryFor(12), contract, 'Example App');
-    expect(message).toContain('Atlas has 14 columns (12 walk frames)');
-    expect(message).toContain('Example App expects 10 (8 walk frames)');
+    expect(message).toContain('Atlas has 13 columns (12 walk frames)');
+    expect(message).toContain('Example App expects 9 (8 walk frames)');
     expect(message).toMatch(/walk-frame constant/);
     expect(message).toMatch(/reprocess this walk set to 8 frames/);
   });
 
   it('flags a column-count-only mismatch as a grid-shape change', () => {
-    // The scanner column removed (#2986) against a contract that still expects it.
-    const geometry = { columns: ['idle', ...walkPhaseLabels(8)], cellSize: 96, walkFrameCount: 8 };
-    const message = runtimeContractMismatch(geometry, contract, 'Example App');
-    expect(message).toContain('Atlas has 9 columns (8 walk frames)');
+    // A pre-#2986 atlas (still carrying the scanner column) against a contract
+    // re-bound to the current 9-column grid: same walk frames, wrong shape.
+    const message = runtimeContractMismatch(legacyGeometryFor(8), contract, 'Example App');
+    expect(message).toContain('Atlas has 10 columns (8 walk frames)');
     expect(message).toMatch(/grid shape changed/);
   });
 
